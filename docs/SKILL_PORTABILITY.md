@@ -82,7 +82,7 @@ env NIGHTGAUGE_PIPELINE_STAGE_MODEL_<STAGE>
 
 Tier names are the **canonical** vocabulary; each adapter resolves them at spawn
 time (e.g. Codex `sonnet → gpt-5.4`). The resolution chain lives in
-`packages/nightgauge-vscode/src/utils/resolvers/stageResolver.ts`
+`packages/nightgauge/src/utils/resolvers/stageResolver.ts`
 (`getStageModel` / `DEFAULT_STAGE_MODELS`); tier→model translation for every
 adapter resolves through the provider-aware model registry
 (`packages/nightgauge-sdk/src/eval/model-registry.json`, consumed via

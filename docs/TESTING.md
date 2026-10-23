@@ -91,7 +91,7 @@ the change in front of you; do not reconstruct an inventory.
 
 ### VSCode Extension Test Tiers
 
-The extension package (`packages/nightgauge-vscode/`) has four test tiers
+The extension package (`packages/nightgauge/`) has four test tiers
 across three runners. A file's extension says which runner owns it — there is
 no fourth convention and no file matched by more than one runner or by none
 (enforced by `scripts/check-test-runner-coverage.sh`, below). The data-arrival
@@ -110,21 +110,21 @@ Run each tier locally:
 
 ```bash
 # Unit / integration
-npx -w packages/nightgauge-vscode vitest run
+npx -w packages/nightgauge vitest run
 
 # Data arrival only
-npx -w packages/nightgauge-vscode vitest run tests/arrival
+npx -w packages/nightgauge vitest run tests/arrival
 
 # Browser-driven webview (generates the real dashboard HTML fixture first —
 # a bare `playwright test` skips that and ~30% of the suite fails on a
 # missing file)
-npm run -w packages/nightgauge-vscode test:e2e
+npm run -w packages/nightgauge test:e2e
 
 # Extension host smoke (downloads VSCode on first run and opens a real
 # window; `npm run build` must have run, because the host loads
 # dist/extension.cjs rather than src/). On Linux, prefix with
 # `xvfb-run --auto-servernum`.
-npm run -w packages/nightgauge-vscode test:host
+npm run -w packages/nightgauge test:host
 ```
 
 ### The vitest suite provisions its own packaging artifacts (#1400)
@@ -196,7 +196,7 @@ opens a throwaway empty folder as the workspace, and inside that window:
   `tests/fixtures/vscode-host/populated/` into it.
 
 The tier's backend is the demo daemon
-`packages/nightgauge-vscode/demo/ipc-stub.cjs` (#2103, #2105, ADR-026), set
+`packages/nightgauge/demo/ipc-stub.cjs` (#2103, #2105, ADR-026), set
 through `nightgauge.backend.binaryPath`. It answers each IPC request from
 in-memory demo state, makes no network call and logs each request with
 whether it had an answer; the harness writes a marker before each case, and an
@@ -217,10 +217,10 @@ they happen, so a slow machine delays the checkpoints without hiding one.
 After both windows the launcher runs the demo drift guard (#2109): it fails,
 naming the method, when the extension called a method the daemon does not
 answer or that `demo/ipc-inventory.json` does not list, or when a protocol
-version differs. `npm run -w packages/nightgauge-vscode demo:inventory` runs the tier
+version differs. `npm run -w packages/nightgauge demo:inventory` runs the tier
 and rewrites `demo/ipc-inventory.json`: each method the UI called, the cases
 it was called during, a redacted sample of its params and the result type the
-typed client declares. `npm run -w packages/nightgauge-vscode demo` opens a demo
+typed client declares. `npm run -w packages/nightgauge demo` opens a demo
 session of its own (#2110); `scripts/demo-session.ts` documents its options.
 
 Three implementation notes that are load-bearing rather than incidental:
@@ -252,7 +252,7 @@ Three implementation notes that are load-bearing rather than incidental:
 
 Findings the tier recorded on its first run — real defects, deliberately not
 fixed in the PR that found them — live in
-`packages/nightgauge-vscode/tests/vscode-host/known-issues.ts` as shrinking
+`packages/nightgauge/tests/vscode-host/known-issues.ts` as shrinking
 baselines: a new occurrence fails the run, and each listed entry is expected
 to be deleted when its issue is fixed.
 
@@ -565,7 +565,7 @@ Before submitting changes:
 
 ## VSCode Extension Testing
 
-The `packages/nightgauge-vscode` package contains TypeScript code that is
+The `packages/nightgauge` package contains TypeScript code that is
 tested using Vitest. This section covers testing patterns for the extension.
 
 ### Running Tests
@@ -576,18 +576,18 @@ tested using Vitest. This section covers testing patterns for the extension.
 > enters **interactive watch mode** and hangs indefinitely — blocking CI, AI
 > agents, and any automated pipeline.
 >
-> | Command                                        | Behavior                          |
-> | ---------------------------------------------- | --------------------------------- |
-> | `vitest run`                                   | ✅ Runs once and exits            |
-> | `npx -w packages/nightgauge-vscode vitest run` | ✅ Runs once and exits (monorepo) |
-> | `npx -w @nightgauge/sdk vitest run`            | ✅ Runs once and exits (SDK)      |
-> | `vitest`                                       | ❌ Enters watch mode — **hangs**  |
-> | `npm run test` (calls bare `vitest`)           | ❌ Enters watch mode — **hangs**  |
+> | Command                                 | Behavior                          |
+> | --------------------------------------- | --------------------------------- |
+> | `vitest run`                            | ✅ Runs once and exits            |
+> | `npx -w packages/nightgauge vitest run` | ✅ Runs once and exits (monorepo) |
+> | `npx -w @nightgauge/sdk vitest run`     | ✅ Runs once and exits (SDK)      |
+> | `vitest`                                | ❌ Enters watch mode — **hangs**  |
+> | `npm run test` (calls bare `vitest`)    | ❌ Enters watch mode — **hangs**  |
 >
 > Always use `vitest run` for any non-interactive context.
 
 ```bash
-cd packages/nightgauge-vscode
+cd packages/nightgauge
 
 # Run tests once (CI-safe)
 npx vitest run
@@ -643,27 +643,27 @@ describe("MyModule", () => {
 
 ### Where extension tests must live
 
-`packages/nightgauge-vscode/vitest.config.ts` sets
+`packages/nightgauge/vitest.config.ts` sets
 `include: ["tests/**/*.test.ts"]`. **A test placed anywhere else is silently
 never run** — it is not skipped, not reported, and not counted; it simply does
 not exist as far as CI is concerned.
 
-| Package             | Tests live in | Also collected from `src/**/__tests__/`? |
-| ------------------- | ------------- | ---------------------------------------- |
-| `nightgauge-vscode` | `tests/**`    | **No**                                   |
-| `nightgauge-sdk`    | `tests/**`    | **Yes**                                  |
+| Package          | Tests live in | Also collected from `src/**/__tests__/`? |
+| ---------------- | ------------- | ---------------------------------------- |
+| `nightgauge`     | `tests/**`    | **No**                                   |
+| `nightgauge-sdk` | `tests/**`    | **Yes**                                  |
 
 The two configs differ, which is exactly how the mistake gets made (Issue
 #732: nine `.test.ts` files sat under
-`packages/nightgauge-vscode/src/**/__tests__/`, never collected, until they
+`packages/nightgauge/src/**/__tests__/`, never collected, until they
 were moved into `tests/**` and made to pass). Before adding a test to the
 extension, confirm it appears in the run count; a green suite is not evidence
 that your file was in it.
 
-`packages/nightgauge-vscode/scripts/check-test-collection.sh` makes the class
+`packages/nightgauge/scripts/check-test-collection.sh` makes the class
 unrepeatable: it fails if any `*.test.ts` file exists under
-`packages/nightgauge-vscode/` outside `tests/**`, and runs automatically as
-`pretest` before `npm run test -w packages/nightgauge-vscode` (and therefore as part of
+`packages/nightgauge/` outside `tests/**`, and runs automatically as
+`pretest` before `npm run test -w packages/nightgauge` (and therefore as part of
 `bash scripts/ci-local.sh`). Its own coverage lives in
 `scripts/test-check-test-collection.sh`, which plants a fixture file outside
 `tests/` and asserts the guard catches it before asserting the clean-tree case
@@ -783,10 +783,10 @@ it, silently, because a single-writer test can never observe it.
 Two fix idioms are in play, one per package, and both give the same
 guarantee (unique temp name per write, cleanup on failure):
 
-- `packages/nightgauge-vscode/src/utils/atomicWrite.ts` (`writeFileAtomic`):
+- `packages/nightgauge/src/utils/atomicWrite.ts` (`writeFileAtomic`):
   temp name `${target}.${pid}.${random hex}.tmp`, write, rename, delete the
   writer's own temp file on failure before rethrowing. Every
-  `node:fs/promises` write-then-rename site in `nightgauge-vscode` should use
+  `node:fs/promises` write-then-rename site in `nightgauge` should use
   this.
 - `packages/nightgauge-sdk/src/context/ContextManager.ts` (`atomicWriteJSON`,
   exported from `@nightgauge/sdk`): temp name `${target}.${crypto.randomUUID()}.tmp`,
@@ -797,14 +797,14 @@ guarantee (unique temp name per write, cleanup on failure):
   and #786 brought the two calibration-service sites that had drifted from it
   into line rather than introducing a third helper.
 
-**#786 audited every write-then-rename site under `packages/nightgauge-vscode/src`
+**#786 audited every write-then-rename site under `packages/nightgauge/src`
 and `packages/nightgauge-sdk/src`:**
 
 - **Fixed in this issue:**
   - The former `appendObservationToYAML` helper was later retired because a
     section-only write could discard the rest of the complexity model. Model
     feedback now persists through the full-document Go transaction broker.
-  - `packages/nightgauge-vscode/src/services/TelemetryUploaderService.ts`
+  - `packages/nightgauge/src/services/TelemetryUploaderService.ts`
     (`saveWatermarks`) — this one writes through `vscode.workspace.fs`, not
     `node:fs/promises`, so it can't call the shared helper directly; it now
     applies the same idiom (pid + random-hex temp suffix, cleanup-on-failure)
@@ -814,12 +814,12 @@ and `packages/nightgauge-sdk/src`:**
     (`save`) — both wrote a fixed `${calibrationPath}.tmp`, the same shape
     #777 fixed. Both call sites sit inside `PostPipelineAnalyzer` behind a
     `try/catch` that only `logger.debug`s on failure
-    (`packages/nightgauge-vscode/src/services/PostPipelineAnalyzer.ts`), so
+    (`packages/nightgauge/src/services/PostPipelineAnalyzer.ts`), so
     the race was invisible in practice — the calibration table would
     silently stop updating rather than surface an error. Both now delegate to
     `atomicWriteJSON` instead of hand-rolling the write+rename.
 - **Already fixed, no change needed:**
-  `packages/nightgauge-vscode/src/utils/executionHistoryWriter.ts`
+  `packages/nightgauge/src/utils/executionHistoryWriter.ts`
   (`writeHistoryIndex`) already calls `writeFileAtomic` — landed by
   `2dc8dfcb` / #1212 (2026-08-30), an unrelated fix for #1210's torn-read
   problem that happened to also give this site the #777 shape. #786's own
@@ -828,13 +828,13 @@ and `packages/nightgauge-sdk/src`:**
 - **Already safe, do not re-audit:** these all rename onto a target from a
   temp/source name that already varies per writer, so two concurrent writers
   can never collide on one temp file:
-  - `packages/nightgauge-vscode/src/services/TelemetryStore.ts`
+  - `packages/nightgauge/src/services/TelemetryStore.ts`
     (`writeIndex`) — pid + random suffix (the original #777 fix).
-  - `packages/nightgauge-vscode/src/services/usage/claudeStatusLineSetup.ts`
+  - `packages/nightgauge/src/services/usage/claudeStatusLineSetup.ts`
     — pid + timestamp suffix.
-  - `packages/nightgauge-vscode/src/services/usage/ClaudeRateLimitStore.ts`
+  - `packages/nightgauge/src/services/usage/ClaudeRateLimitStore.ts`
     — pid + counter suffix.
-  - `packages/nightgauge-vscode/src/commands/migrateConfig.ts` — renames a
+  - `packages/nightgauge/src/commands/migrateConfig.ts` — renames a
     pre-existing **legacy** config file to its new name; there is exactly one
     such file per workspace, so there is nothing for a second writer to race
     against.
@@ -848,7 +848,7 @@ packages --include='*.ts'`, which matches only a same-name-every-write temp
 path and returns nothing (besides comments and test fixtures) on a tree where
 every production site uses one of the two unique-suffix idioms above. The
 sweep must cover `packages/`, not one package under it — #786's own first
-pass scoped this grep to `packages/nightgauge-vscode/src` alone and missed
+pass scoped this grep to `packages/nightgauge/src` alone and missed
 the two `nightgauge-sdk` sites above; do not repeat that scoping.
 
 ### No contract test may depend on live GitHub quota
@@ -1399,7 +1399,7 @@ sanctioned:
    `resolveTerminalFunnelTarget` in `bootstrap/services.ts`.
 2. **Assert against the source text**, when the fix is a _deletion_ and there
    is no runnable logic left to exercise — the resurrection-pin idiom of
-   `packages/nightgauge-vscode/tests/bootstrap/*Removed.test.ts`. A source pin
+   `packages/nightgauge/tests/bootstrap/*Removed.test.ts`. A source pin
    is also the right tool for a call site that no behavioral case can reach.
 
 Reimplementing is never the third option: "the bootstrap is impractical to
@@ -1556,7 +1556,7 @@ Or individually:
 go test ./internal/ipc/... -run TestIPCPlatform -v -count=1
 
 # TypeScript — PlatformApiClient ↔ mock HTTP server
-npx -w packages/nightgauge-vscode vitest run tests/integration/authFlowsIntegration.test.ts
+npx -w packages/nightgauge vitest run tests/integration/authFlowsIntegration.test.ts
 ```
 
 **What's covered (mock mode):**
@@ -1586,7 +1586,7 @@ Or manually:
 ```bash
 export PLATFORM_TEST_URL=http://localhost:3000
 go test ./internal/ipc/... -run TestIPCPlatform -v -count=1
-npx -w packages/nightgauge-vscode vitest run tests/integration/authFlowsIntegration.test.ts
+npx -w packages/nightgauge vitest run tests/integration/authFlowsIntegration.test.ts
 ```
 
 The `scripts/test-e2e-platform.sh` script automates the full lifecycle: start
@@ -1851,17 +1851,17 @@ When writing or reviewing tests, ask:
 ## E2E Tests — VSCode Extension
 
 End-to-end tests for the VSCode extension live in
-`packages/nightgauge-vscode/tests/e2e/`. They wire real service classes
+`packages/nightgauge/tests/e2e/`. They wire real service classes
 together with only the outermost boundary (IPC / filesystem) mocked.
 
 ### Running E2E Tests
 
 ```bash
 # Run all E2E tests (from repo root)
-npx -w packages/nightgauge-vscode vitest run tests/e2e/
+npx -w packages/nightgauge vitest run tests/e2e/
 
 # Run a specific file
-npx -w packages/nightgauge-vscode vitest run tests/e2e/pipeline-execution.test.ts
+npx -w packages/nightgauge vitest run tests/e2e/pipeline-execution.test.ts
 ```
 
 ### Test Files

@@ -14,7 +14,7 @@ import (
 func tsInterfaceFile(t *testing.T) string {
 	t.Helper()
 	root := findTSRepoRoot(t)
-	p := filepath.Join(root, "packages", "nightgauge-vscode", "src", "services", "IpcClientBase.ts")
+	p := filepath.Join(root, "packages", "nightgauge", "src", "services", "IpcClientBase.ts")
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("IpcClientBase.ts not found at %s — skipping TS contract tests", p)
 	}

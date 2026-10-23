@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
-const PKG_DIR = path.join(REPO_ROOT, "packages", "nightgauge-vscode");
+const PKG_DIR = path.join(REPO_ROOT, "packages", "nightgauge");
 const NOTICES = path.join(PKG_DIR, "THIRD_PARTY_NOTICES");
 const BUNDLE = path.join(PKG_DIR, "dist", "extension.cjs");
 const MARKER = "NIGHTGAUGE:THIRD_PARTY_NOTICES";

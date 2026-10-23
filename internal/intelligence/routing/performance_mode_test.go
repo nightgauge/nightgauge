@@ -33,7 +33,7 @@ func TestDashboardPerformanceMode(t *testing.T) {
 // parity (ModeEnvelope.ThinkingPolicy ⇄ modeProfiles.ts `thinkingPolicy`),
 // and NO mode declares a value yet — adding the axis is behavior-preserving
 // by construction. The TS twin assertion lives in
-// packages/nightgauge-vscode/tests/utils/modeProfiles.test.ts; a mode that
+// packages/nightgauge/tests/utils/modeProfiles.test.ts; a mode that
 // gains a policy must update both tables and both pins in one commit, like
 // every other mode-profile mirror.
 func TestModeEnvelopeThinkingPolicyColumnIsEmpty(t *testing.T) {

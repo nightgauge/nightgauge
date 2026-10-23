@@ -138,12 +138,12 @@ entry in `.nightgauge/config.yaml` (or `config.local.yaml`) with
   value; `persistMaxConcurrent` now targets the `pipeline:` block specifically
   (previously it would silently update whichever `max_concurrent` line came
   first in the file).
-- `packages/nightgauge-vscode/src/utils/resolvers/otherResolver.ts` —
+- `packages/nightgauge/src/utils/resolvers/otherResolver.ts` —
   `getConcurrentPipelineConfig()` parses both blocks and falls back to
   `autonomous.max_concurrent` with a one-time warning.
-- `packages/nightgauge-vscode/src/commands/setConcurrentSlots.ts` —
+- `packages/nightgauge/src/commands/setConcurrentSlots.ts` —
   no longer dual-writes; only updates `pipeline.max_concurrent`.
-- `packages/nightgauge-vscode/src/utils/maxConcurrentMigration.ts` —
+- `packages/nightgauge/src/utils/maxConcurrentMigration.ts` —
   new activation-time migration described above.
 
 **Removal milestone**: When the next deprecation window closes, drop the

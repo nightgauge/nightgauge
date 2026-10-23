@@ -78,11 +78,11 @@ func TestBuildStageExitRecordFromIPC_AllFieldsCarriedVerbatim(t *testing.T) {
 		Signal:              "SIGKILL",
 		SignalSource:        "stall-kill",
 		SessionID:           "abc-def-123",
-		LastBashCommand:     "npm run -w nightgauge-vscode vitest run",
+		LastBashCommand:     "npm run -w packages/nightgauge vitest run",
 		LastBashExit:        &bashExit,
 		RecentBash: []diagnostics.RecentBashEntry{
 			{Cmd: "go build ./...", Exit: &okExit},
-			{Cmd: "npm run -w nightgauge-vscode vitest run", Exit: &bashExit},
+			{Cmd: "npm run -w packages/nightgauge vitest run", Exit: &bashExit},
 		},
 		StopHookErrored: true,
 		StderrTail:      "[skillRunner] idle threshold exceeded\n",

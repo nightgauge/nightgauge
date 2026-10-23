@@ -74,7 +74,7 @@ PLATFORM_TEST_URL="$PLATFORM_TEST_URL" go test ./internal/ipc/... -run TestIPCPl
 # Run TypeScript integration tests
 echo ""
 echo "--- Running TypeScript integration tests ---"
-PLATFORM_TEST_URL="$PLATFORM_TEST_URL" npx -w packages/nightgauge-vscode vitest run tests/integration/authFlowsIntegration.test.ts
+PLATFORM_TEST_URL="$PLATFORM_TEST_URL" npx -w packages/nightgauge vitest run tests/integration/authFlowsIntegration.test.ts
 
 echo ""
 echo "=== E2E platform tests complete ==="

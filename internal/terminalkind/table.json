@@ -11,7 +11,7 @@
     "       GENERATED from this file by `make generate-terminal-kind-table`; classifyTerminalKind",
     "       interprets it. A drift check (pre-commit, ci-local, and a Go test) fails if the",
     "       generated module is not byte-identical to what this file renders.",
-    "  Ext  packages/nightgauge-vscode/src/services/terminalKindSignal.ts runs the SAME ladder",
+    "  Ext  packages/nightgauge/src/services/terminalKindSignal.ts runs the SAME ladder",
     "       and returns the winning rule's kind only when that rule is `signal: true`, so on",
     "       every rule it either answers Go's answer or answers nothing. The single declared",
     "       exception is signal_extensions below, and it is data, not code.",

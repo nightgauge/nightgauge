@@ -278,7 +278,7 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken p
 // source and compares.
 func TestPhaseStreamPrefixParityWithTypeScript(t *testing.T) {
 	root := phaseRecorderRepoRoot(t)
-	path := filepath.Join(root, "packages", "nightgauge-vscode", "src", "services", "prStagePhaseStream.ts")
+	path := filepath.Join(root, "packages", "nightgauge", "src", "services", "prStagePhaseStream.ts")
 	src, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read prStagePhaseStream.ts: %v", err)

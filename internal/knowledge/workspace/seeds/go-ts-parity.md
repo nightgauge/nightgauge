@@ -22,7 +22,7 @@ split: **determinism lives in Go, UX lives in TypeScript.**
 - Epic / sub-issue graph traversal
 - Knowledge base scaffolding primitives (this file was produced by one)
 
-### TypeScript (`packages/nightgauge-sdk`, `packages/nightgauge-vscode`)
+### TypeScript (`packages/nightgauge-sdk`, `packages/nightgauge`)
 
 - Agent orchestration and the prompt surface to Claude
 - VSCode UI, webviews, tree views, dashboards

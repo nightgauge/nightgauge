@@ -440,7 +440,7 @@ func TestQuotedScalarsSurvive(t *testing.T) {
 // and nothing else in CI compares them.
 func TestRoleEnumMatchesExtension(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..",
-		"packages", "nightgauge-vscode", "src", "utils", "workspaceDetection.ts"))
+		"packages", "nightgauge", "src", "utils", "workspaceDetection.ts"))
 	if err != nil {
 		t.Skipf("extension source unavailable: %v", err)
 	}

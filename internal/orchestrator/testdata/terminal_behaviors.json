@@ -12,7 +12,7 @@
     "here, with the call-site anchor on each path, or an explicit pathSpecific reason (and,",
     "where the gap is a defect, the tracking issue). Two test suites enforce this manifest \u2014",
     "internal/orchestrator/terminal_parity_test.go and",
-    "packages/nightgauge-vscode/tests/services/terminalParity.test.ts:",
+    "packages/nightgauge/tests/services/terminalParity.test.ts:",
     "  1. every anchor listed here must exist in its file (a rename/removal fails both suites);",
     "  2. the fenced terminal-funnel regions (terminal-parity markers in scheduler.go and",
     "     ConcurrentPipelineManager.ts) are content-pinned by sha256 of their normalized source.",
@@ -38,7 +38,7 @@
         "anchor": "s.CompleteQueueItem(item.Repo, item.Number)"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
         "anchor": "await this.completeQueueItem("
       }
     },
@@ -50,7 +50,7 @@
         "anchor": "s.onPipelineComplete(item.Repo, item.Number, snap, pipelineSuccess)"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/bootstrap/services.ts",
+        "file": "packages/nightgauge/src/bootstrap/services.ts",
         "anchor": ".autonomousComplete("
       }
     },
@@ -61,19 +61,19 @@
         "anchor": "if gate, ok := s.stageGates[stage]; ok && gate != nil {"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
+        "file": "packages/nightgauge/src/services/HeadlessOrchestrator.ts",
         "anchor": "private async runPostConditionGate("
       }
     },
     {
       "name": "board-status-failure-sync",
-      "note": "Terminal board status intentionally differs today: Go moves to Ready/Backlog (FailPipeline), the extension moves to In review with the autonomous layer re-reverting to Ready. Parity here asserts both paths sync SOMETHING, not that the target status matches.\n\n#875 changed WHEN the Go side skips the revert, not whether it syncs. skipBoardRevert now reads the run's `workRecovered` flag instead of inferring recovery from terminalFailureKind == worktree_uncommitted. The revert is harmful whenever a recovery commit exists \u2014 a re-dispatch regenerates the work in a fresh worktree while the preserved commit sits on a branch nobody re-runs \u2014 and that is true whatever NAME the failure ended up with. Keying it on the kind meant the protection could only be kept by RENAMING the run's failure after a rescue, which is how a run that could not compose its SKILL.md came to file its post-mortem under a hygiene condition. Strictly wider than before: every kind previously listed still skips.\n\nNO EXTENSION CHANGE IS OWED. The extension has no equivalent coupling to break: its rescue (HeadlessOrchestrator.recoverStrandedWork, #223) never reclassifies the terminal kind \u2014 it recovers and deliberately leaves the gate's own diagnosis intact \u2014 and its terminal board sync is not conditioned on worktree_uncommitted. The extension already behaved the way #875 asks; this brings Go into line with it.\n\n#1170 NARROWS WHEN THE EXTENSION SYNCS AT ALL, AND OWES GO NOTHING EITHER. A run REFUSED AT `pipeline-start` \u2014 zero tokens, no AI stage \u2014 no longer takes this safety net: the guard reads the typed `startRefusal` union on the PipelineRunResult (adapter-auth-failed, github-auth-failed, github-quota-low, github-network-outage, issue-closed, epic-with-open-sub-issues, budget-cancelled-by-user), never a substring of the error text. The net exists so a failed run cannot strand an issue looking active; a refusal has nothing to strand. On the Go-dispatched path the scheduler set the board to In progress at dispatch and its OWN failure routing has already reverted it to Ready for exactly these kinds (revertFailedIssueStatus on the adapter_auth_failed / github_quota_low / transient-infra branches in autonomous.go); on the extension-only path nothing moved the issue off Ready at all, because HeadlessOrchestrator.markStatusInReviewOnFailure is gated on completedStages.includes(\"issue-pickup\") and a refusal never completes it. So this write was not a net but the ONLY producer of \"In review\" for such a run, overwriting a correct Ready with a status claiming there is work to review \u2014 five issues across five repositories were left that way by one logged-out `claude` CLI. Suppressing it leaves Ready on both paths, and Go's revert is the thing that makes that true, so the parity answer is 'Go already does the right thing here', not 'port this'. A run that ENTERED the pipeline and then failed carries no `startRefusal` and still syncs to In review \u2014 the behaviour is narrowed, not removed, and packages/nightgauge-vscode/tests/services/ConcurrentPipelineManager.startRefusal.test.ts pins both halves.\n\n#1969 ADDS A FIFTH SKIP CONDITION, FOR THE OPPOSITE REASON FROM #875's recovery-commit cases: not \"there is unseen work,\" but \"the forge already gave a verdict and a later stage's failure must not relitigate it.\" shouldSkipBoardRevert (extracted to a pure function in scheduler.go so #1969's condition is unit-testable without standing up runPipeline) now also skips when snap.MergedCommitSha != \"\" \u2014 the post-merge ground-truth breadcrumb, set ONLY by verifyPRMergeForStage after the PR's MERGED state is confirmed and checkEpicCompletion has run, never on a pr-merge stage that itself failed to verify. #1650's run merged PR #1966, then failed at spike-materialize (unregistered in StageSkillDirs \u2014 Ask 1 of this same issue) and still reverted Status to Ready \u2014 a terminal verdict contradicting observable forge state, the same class of defect as #1848.\n\nNO EXTENSION CHANGE IS OWED HERE EITHER. The #4133 breadcrumb (RuntimeState.MergedCommitSha/MergedAt) is Go-only \u2014 nothing on the extension path (IPC pipeline.notifyComplete, HeadlessOrchestrator, ConcurrentPipelineManager) reads or writes an equivalent merge ground-truth field, so there is no signal to condition an equivalent skip on. Separately, the extension's failure-path write targets \"In review\", not \"Ready\" \u2014 landing on a still-open-for-review status does not silently re-dispatch the issue the way Go's FailPipeline-to-Ready does, so the harm #1969 fixes on the Go side has no direct analogue to port.",
+      "note": "Terminal board status intentionally differs today: Go moves to Ready/Backlog (FailPipeline), the extension moves to In review with the autonomous layer re-reverting to Ready. Parity here asserts both paths sync SOMETHING, not that the target status matches.\n\n#875 changed WHEN the Go side skips the revert, not whether it syncs. skipBoardRevert now reads the run's `workRecovered` flag instead of inferring recovery from terminalFailureKind == worktree_uncommitted. The revert is harmful whenever a recovery commit exists \u2014 a re-dispatch regenerates the work in a fresh worktree while the preserved commit sits on a branch nobody re-runs \u2014 and that is true whatever NAME the failure ended up with. Keying it on the kind meant the protection could only be kept by RENAMING the run's failure after a rescue, which is how a run that could not compose its SKILL.md came to file its post-mortem under a hygiene condition. Strictly wider than before: every kind previously listed still skips.\n\nNO EXTENSION CHANGE IS OWED. The extension has no equivalent coupling to break: its rescue (HeadlessOrchestrator.recoverStrandedWork, #223) never reclassifies the terminal kind \u2014 it recovers and deliberately leaves the gate's own diagnosis intact \u2014 and its terminal board sync is not conditioned on worktree_uncommitted. The extension already behaved the way #875 asks; this brings Go into line with it.\n\n#1170 NARROWS WHEN THE EXTENSION SYNCS AT ALL, AND OWES GO NOTHING EITHER. A run REFUSED AT `pipeline-start` \u2014 zero tokens, no AI stage \u2014 no longer takes this safety net: the guard reads the typed `startRefusal` union on the PipelineRunResult (adapter-auth-failed, github-auth-failed, github-quota-low, github-network-outage, issue-closed, epic-with-open-sub-issues, budget-cancelled-by-user), never a substring of the error text. The net exists so a failed run cannot strand an issue looking active; a refusal has nothing to strand. On the Go-dispatched path the scheduler set the board to In progress at dispatch and its OWN failure routing has already reverted it to Ready for exactly these kinds (revertFailedIssueStatus on the adapter_auth_failed / github_quota_low / transient-infra branches in autonomous.go); on the extension-only path nothing moved the issue off Ready at all, because HeadlessOrchestrator.markStatusInReviewOnFailure is gated on completedStages.includes(\"issue-pickup\") and a refusal never completes it. So this write was not a net but the ONLY producer of \"In review\" for such a run, overwriting a correct Ready with a status claiming there is work to review \u2014 five issues across five repositories were left that way by one logged-out `claude` CLI. Suppressing it leaves Ready on both paths, and Go's revert is the thing that makes that true, so the parity answer is 'Go already does the right thing here', not 'port this'. A run that ENTERED the pipeline and then failed carries no `startRefusal` and still syncs to In review \u2014 the behaviour is narrowed, not removed, and packages/nightgauge/tests/services/ConcurrentPipelineManager.startRefusal.test.ts pins both halves.\n\n#1969 ADDS A FIFTH SKIP CONDITION, FOR THE OPPOSITE REASON FROM #875's recovery-commit cases: not \"there is unseen work,\" but \"the forge already gave a verdict and a later stage's failure must not relitigate it.\" shouldSkipBoardRevert (extracted to a pure function in scheduler.go so #1969's condition is unit-testable without standing up runPipeline) now also skips when snap.MergedCommitSha != \"\" \u2014 the post-merge ground-truth breadcrumb, set ONLY by verifyPRMergeForStage after the PR's MERGED state is confirmed and checkEpicCompletion has run, never on a pr-merge stage that itself failed to verify. #1650's run merged PR #1966, then failed at spike-materialize (unregistered in StageSkillDirs \u2014 Ask 1 of this same issue) and still reverted Status to Ready \u2014 a terminal verdict contradicting observable forge state, the same class of defect as #1848.\n\nNO EXTENSION CHANGE IS OWED HERE EITHER. The #4133 breadcrumb (RuntimeState.MergedCommitSha/MergedAt) is Go-only \u2014 nothing on the extension path (IPC pipeline.notifyComplete, HeadlessOrchestrator, ConcurrentPipelineManager) reads or writes an equivalent merge ground-truth field, so there is no signal to condition an equivalent skip on. Separately, the extension's failure-path write targets \"In review\", not \"Ready\" \u2014 landing on a still-open-for-review status does not silently re-dispatch the issue the way Go's FailPipeline-to-Ready does, so the harm #1969 fixes on the Go side has no direct analogue to port.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.stateSvc.FailPipeline(context.Background(), item.ID, targetStatus)"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
         "anchor": "const revertResult = await updateProjectItemStatus("
       }
     },
@@ -119,7 +119,7 @@
         "anchor": "s.execMgr.CleanupWorktree(item.Repo, item.Number)"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
         "anchor": "await this.cleanupSlot(slot, preserveWorktree, deleteMergedBranch)"
       }
     },
@@ -152,7 +152,7 @@
         "anchor": "s.execMgr.CleanupBranchAndRemoteIfMerged(item.Repo, branchName)"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
         "anchor": "const deleteMergedBranch = pipelineSucceeded && !slot.userCancelled;"
       },
       "note": "#1561 CHANGES THE GO SIDE'S ORDER AND ITS REPORT; THE EXTENSION OWES NOTHING. Go used to delete the feature branch BEFORE removing the run's worktree, and git refuses to delete a branch a worktree still holds \u2014 so on the success path, where the run's own worktree is the holder, `git branch -D` failed on EVERY successful run. CleanupBranch deletes origin's copy first and unconditionally, so the two sides ended asymmetric: the remote gone, the local ref standing and now the only copy, and the run logging \"cleaned up feature branch\" two lines under the WARN that said otherwise. THE EXTENSION ALREADY DID THIS CORRECTLY, and its own comment is the argument: `git branch -D` (a live worktree blocks the branch delete, so order matters) \u2014 ConcurrentPipelineManager.cleanupSlot passes deleteBranch into worktreeManager.cleanup, which tears the worktree down first (legacy issue 3969). This brings Go into line with the extension rather than asking the extension for anything. The second half is reporting: CleanupLocalBranch / CleanupBranch / CleanupBranchAndRemoteIfMerged now return whether the local ref is actually gone. The error stays nil \u2014 #1020 decided a leftover branch must not fail a shipped run, and that decision is unchanged \u2014 but the caller now logs what happened instead of what it attempted. The extension needs no equivalent: it makes no per-branch success claim, and its startup sweep already reports the branches it actually deleted.\n\n#1901 REORDERS AND RETYPES THE GO REPORT; THE EXTENSION STILL OWES NOTHING. CleanupBranchAndRemoteIfMerged now observes which copies exist BEFORE the content-diff gate runs, judges origin's copy when the local ref is already gone, deletes only what it saw, and returns a ShippedBranchCleanup the scheduler renders through describeShippedBranchCleanup. The old single bool made the caller print \"NOT removed locally ... the only copy\" for a branch whose both copies were already gone and whose gate had failed with exit 128 for lack of a ref. The extension makes no per-branch claim, so there is nothing to port."
@@ -185,7 +185,7 @@
         "anchor": "input.MainChecks = s.mainCheckReaderFn(s.client)"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
+        "file": "packages/nightgauge/src/services/HeadlessOrchestrator.ts",
         "anchor": "timeout: POST_MERGE_HOOK_TIMEOUT_MS"
       }
     },
@@ -197,7 +197,7 @@
         "anchor": "s.raiseBudgetCeilingHit(item.Repo, item.Number, runtime.RunID"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
+        "file": "packages/nightgauge/src/services/HeadlessOrchestrator.ts",
         "anchor": "producer: \"budget-ceiling\","
       }
     },
@@ -208,7 +208,7 @@
         "pathSpecific": "By design extension-only: the Go scheduler's terminal defer runs in the same goroutine as its stage loop, so nothing else can declare a run abandoned while that defer is still owed. There is no Go force-clear funnel, and therefore no Go condition to card."
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
         "anchor": "alreadyClaimed ? \"claim-taken-then-wedged\" : \"slot-worktree-preserved\""
       }
     },
@@ -219,19 +219,19 @@
         "pathSpecific": "By design extension-only: the fork that produces this terminal \u2014 HeadlessOrchestrator.evaluateFailedStageFeedback's post-validate consult of the deliverable's feedback[] (#1142) \u2014 exists only on the extension path. The Go scheduler has no out-of-scope classification and therefore no condition to record, comment or card. If that fork is ever ported, this row becomes a both-paths anchor."
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
         "anchor": "!pipelineResult.blocked?.outOfScopeFinding &&"
       }
     },
     {
       "name": "terminal-kind-classification",
-      "note": "ONE TABLE, THREE INTERPRETERS (#306). Terminal-kind classification is no longer written down three times: the ordered rule table lives at internal/terminalkind/table.json, Go embeds it (internal/terminalkind, which orchestrator.ClassifyTerminalKind delegates to as a body-checked one-line delegation), and packages/nightgauge-sdk/src/analysis/health/terminalKindTable.generated.ts is GENERATED from it by `make generate-terminal-kind-table`. The SDK's classifyTerminalKind and the extension's classifyTerminalKindForSignal both interpret that generated table. Before this there were three hand-written ladders held aligned by comments, disagreeing on 19 of 98 real and synthetic inputs.\n\nTHE SIGNAL SIDE CANNOT OVERRIDE THE RECORD, WITH ONE DECLARED EXCEPTION. Go's NotifyComplete uses a non-empty kind from the extension VERBATIM, so the extension runs the FULL ladder and projects the winning rule only when that rule is declared `signal: true`. On every RULE its answer is therefore either nothing or exactly what Go records \u2014 bounded above and below, per row, by `expected_signal` in the shared corpus. The exception is the table's `signal_extensions` section: reaction-only rules, consulted ONLY when the rule ladder projects no SIGNAL, so an extension can never overrule a kind projected by a `signal: true` RULE \u2014 the widest it can reach is text the signal SUBSET ignores. A kind the record names through a NON-signal rule is not protected, and that is not hypothetical. There is exactly one extension today \u2014 session-usage-limit-quota, the #3792 defense-in-depth for an Anthropic/Codex session-or-usage-limit line \u2014 and it covers BOTH cases: a bare quota line, which no rule classifies at all, and a quota line that NAMES A MODEL, which the non-signal model-unavailable rule classifies, so the record says model_unavailable and the fleet reacts rate_limit_quota_exhausted. That pair is main's exact behaviour, and of round 2's two record-vs-reaction divergences it is the one that did NOT dissolve: it is now declared as data with a written reason and pinned by the corpus rows order-model-unavailable-beats-quota-wording and model-unavailable-predicate-by-model-id, whose expected_signal differs from expected. (The other \u2014 an overload carrying an explicit quota marker \u2014 did dissolve under one table with one precedence.) The corpus well-formedness test permits expected_signal != expected for declared extensions and for nothing else; a further test requires every extension CLAUSE to be necessary to such a row; another requires every `~` word-bounded term to have a row that moves when its boundary is dropped, with a derived input and corpus rows for EACH EDGE independently (the boundary is a conjunction of two tests, and sampling only the right edge left the left conjunct deletable in one line with every suite green and every artifact byte-identical); and the ORDER of the projection's two stages \u2014 rule ladder first, extensions second, which is the only thing that makes the bound above true \u2014 is pinned by inputs carrying BOTH a signal marker and extension wording, since without them reversing the two blocks of SignalKind moved no answer anywhere.\n\nWHAT IS PINNED, AND BY WHAT. (1) Behaviour: internal/terminalkind/testdata/corpus.json \u2014 every row carries a mandatory written rationale \u2014 read by internal/terminalkind/corpus_test.go, packages/nightgauge-sdk/tests/analysis/health/terminalKind.corpusParity.test.ts and packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts; its core rows are real failure text captured from live telemetry by scripts/capture-terminal-kind-fixture.sh. (2) Conjunctions: TestEveryConjunctionHalfIsPinnedByANegativeRow DERIVES the requirement from the table \u2014 for every multi-term clause and every half of it, widening that clause to the half alone must change at least one corpus row's answer \u2014 so an AND quietly widened into an OR is red rather than merely diffed. (3) Equivalence: internal/terminalkind/stress.go and its verbatim TypeScript twin derive an input for every clause, every term, BOTH EDGES of every `~` word-bounded term, every signal-extension clause, every ordered rule pair and every `signal: true` rule composed with every extension clause in both orders, FROM the table, and all three suites must reproduce testdata/stress-golden.json, so deleting a clause, dropping one half of a word boundary, swapping two rules or swapping the two stages of the signal projection changes a committed answer. (4) Distribution: the generated SDK module and the golden are byte-compared by TestGeneratedTypeScriptIsInSync / TestStressGoldenIsInSync, .husky/pre-commit and scripts/ci-local.sh, so a consumer cannot be edited on its own. (5) The interpreters themselves: every string literal in the internal/terminalkind package and in the SDK's terminalKind.ts must appear in an explicit allowlist, whole-file and both directions in both languages; so must every rune literal and every IMPORT, because a file fence has an outside and a marker declared in a neighbouring module and merely NAMED in the guarded one introduces no literal at all; the one predicate's registry FIELD reads are pinned as an exact set from a single shared poison fixture that both languages drive; and bootstrap/services.ts \u2014 which assembles the value sent over IPC \u2014 is asserted to be a bare single-assignment delegation. The perimeter is those four surfaces plus the body of orchestrator.ClassifyTerminalKind; downstream consumers can still override the answer and nothing here claims otherwise. (6) Taxonomy: a TerminalKind constant with no rule and no corpus row is red.\n\nALSO PINNED NOW: ConcurrentPipelineManager's isTransientNetworkFailureText and the haltQueueOnSlotFailure skip-branches were four more private ladders carrying 'keep aligned' comments; they resolve the kind through the table and test set membership (tests/services/concurrentPipelineManager.haltPolicy.test.ts). One deliberate raw-text condition survives there and is documented in place \u2014 the same session/usage-limit wording the signal extension carries, kept as a local queue-halt policy because a halt decision is not a kind.",
+      "note": "ONE TABLE, THREE INTERPRETERS (#306). Terminal-kind classification is no longer written down three times: the ordered rule table lives at internal/terminalkind/table.json, Go embeds it (internal/terminalkind, which orchestrator.ClassifyTerminalKind delegates to as a body-checked one-line delegation), and packages/nightgauge-sdk/src/analysis/health/terminalKindTable.generated.ts is GENERATED from it by `make generate-terminal-kind-table`. The SDK's classifyTerminalKind and the extension's classifyTerminalKindForSignal both interpret that generated table. Before this there were three hand-written ladders held aligned by comments, disagreeing on 19 of 98 real and synthetic inputs.\n\nTHE SIGNAL SIDE CANNOT OVERRIDE THE RECORD, WITH ONE DECLARED EXCEPTION. Go's NotifyComplete uses a non-empty kind from the extension VERBATIM, so the extension runs the FULL ladder and projects the winning rule only when that rule is declared `signal: true`. On every RULE its answer is therefore either nothing or exactly what Go records \u2014 bounded above and below, per row, by `expected_signal` in the shared corpus. The exception is the table's `signal_extensions` section: reaction-only rules, consulted ONLY when the rule ladder projects no SIGNAL, so an extension can never overrule a kind projected by a `signal: true` RULE \u2014 the widest it can reach is text the signal SUBSET ignores. A kind the record names through a NON-signal rule is not protected, and that is not hypothetical. There is exactly one extension today \u2014 session-usage-limit-quota, the #3792 defense-in-depth for an Anthropic/Codex session-or-usage-limit line \u2014 and it covers BOTH cases: a bare quota line, which no rule classifies at all, and a quota line that NAMES A MODEL, which the non-signal model-unavailable rule classifies, so the record says model_unavailable and the fleet reacts rate_limit_quota_exhausted. That pair is main's exact behaviour, and of round 2's two record-vs-reaction divergences it is the one that did NOT dissolve: it is now declared as data with a written reason and pinned by the corpus rows order-model-unavailable-beats-quota-wording and model-unavailable-predicate-by-model-id, whose expected_signal differs from expected. (The other \u2014 an overload carrying an explicit quota marker \u2014 did dissolve under one table with one precedence.) The corpus well-formedness test permits expected_signal != expected for declared extensions and for nothing else; a further test requires every extension CLAUSE to be necessary to such a row; another requires every `~` word-bounded term to have a row that moves when its boundary is dropped, with a derived input and corpus rows for EACH EDGE independently (the boundary is a conjunction of two tests, and sampling only the right edge left the left conjunct deletable in one line with every suite green and every artifact byte-identical); and the ORDER of the projection's two stages \u2014 rule ladder first, extensions second, which is the only thing that makes the bound above true \u2014 is pinned by inputs carrying BOTH a signal marker and extension wording, since without them reversing the two blocks of SignalKind moved no answer anywhere.\n\nWHAT IS PINNED, AND BY WHAT. (1) Behaviour: internal/terminalkind/testdata/corpus.json \u2014 every row carries a mandatory written rationale \u2014 read by internal/terminalkind/corpus_test.go, packages/nightgauge-sdk/tests/analysis/health/terminalKind.corpusParity.test.ts and packages/nightgauge/tests/services/terminalKindSignal.corpusParity.test.ts; its core rows are real failure text captured from live telemetry by scripts/capture-terminal-kind-fixture.sh. (2) Conjunctions: TestEveryConjunctionHalfIsPinnedByANegativeRow DERIVES the requirement from the table \u2014 for every multi-term clause and every half of it, widening that clause to the half alone must change at least one corpus row's answer \u2014 so an AND quietly widened into an OR is red rather than merely diffed. (3) Equivalence: internal/terminalkind/stress.go and its verbatim TypeScript twin derive an input for every clause, every term, BOTH EDGES of every `~` word-bounded term, every signal-extension clause, every ordered rule pair and every `signal: true` rule composed with every extension clause in both orders, FROM the table, and all three suites must reproduce testdata/stress-golden.json, so deleting a clause, dropping one half of a word boundary, swapping two rules or swapping the two stages of the signal projection changes a committed answer. (4) Distribution: the generated SDK module and the golden are byte-compared by TestGeneratedTypeScriptIsInSync / TestStressGoldenIsInSync, .husky/pre-commit and scripts/ci-local.sh, so a consumer cannot be edited on its own. (5) The interpreters themselves: every string literal in the internal/terminalkind package and in the SDK's terminalKind.ts must appear in an explicit allowlist, whole-file and both directions in both languages; so must every rune literal and every IMPORT, because a file fence has an outside and a marker declared in a neighbouring module and merely NAMED in the guarded one introduces no literal at all; the one predicate's registry FIELD reads are pinned as an exact set from a single shared poison fixture that both languages drive; and bootstrap/services.ts \u2014 which assembles the value sent over IPC \u2014 is asserted to be a bare single-assignment delegation. The perimeter is those four surfaces plus the body of orchestrator.ClassifyTerminalKind; downstream consumers can still override the answer and nothing here claims otherwise. (6) Taxonomy: a TerminalKind constant with no rule and no corpus row is red.\n\nALSO PINNED NOW: ConcurrentPipelineManager's isTransientNetworkFailureText and the haltQueueOnSlotFailure skip-branches were four more private ladders carrying 'keep aligned' comments; they resolve the kind through the table and test set membership (tests/services/concurrentPipelineManager.haltPolicy.test.ts). One deliberate raw-text condition survives there and is documented in place \u2014 the same session/usage-limit wording the signal extension carries, kept as a local queue-halt policy because a halt decision is not a kind.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "terminalFailureKind = ClassifyTerminalKind(errMsg)"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/bootstrap/services.ts",
+        "file": "packages/nightgauge/src/bootstrap/services.ts",
         "anchor": "classifyTerminalKindForSignal(errMsg)"
       }
     },
@@ -243,7 +243,7 @@
         "anchor": "paused := s.pauseQueuedItemsUnlocked(reason)"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
         "anchor": "await this.haltQueueOnSlotFailure(slot, pipelineResult)"
       }
     },
@@ -254,7 +254,7 @@
         "anchor": "s.writeStageExitRecord(item, stage, runtime, result, exitCode, err,"
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
+        "file": "packages/nightgauge/src/services/HeadlessOrchestrator.ts",
         "anchor": "private async recordStageExitDiagnostic("
       }
     },
@@ -287,7 +287,7 @@
         "pathSpecific": "Extension-only UX affordance: the interactive mode posts the failure comment where the operator is looking; the autonomous Go path surfaces failures through attention cards and board state instead."
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
         "anchor": "await postFailureComment({"
       }
     },
@@ -297,7 +297,7 @@
         "pathSpecific": "Extension-only (#3926): auto-retro analysis runs in the interactive mode; the Go path's failures are analyzed by the batch retro skill instead."
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
+        "file": "packages/nightgauge/src/services/HeadlessOrchestrator.ts",
         "anchor": "void AutoRetroService.runAfterFailure("
       }
     },
@@ -534,7 +534,7 @@
         "pathSpecific": "By design extension-only: the Go scheduler's terminal defer runs in the same goroutine as its stage loop, so nothing else can declare the run abandoned while that defer is still owed. There is no Go-side force-clear, and therefore no second Go funnel to keep in parity. Go is BYTE-IDENTICAL to main for this change \u2014 see the KNOWN EXPOSURE paragraph in `accounting`."
       },
       "extension": {
-        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
         "anchor": "await this.forceClearStuckSlots()"
       }
     },
@@ -573,14 +573,14 @@
     },
     {
       "id": "extension-runSlotPipeline-finally",
-      "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+      "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
       "begin": "terminal-parity:begin runSlotPipeline-finally",
       "end": "terminal-parity:end runSlotPipeline-finally",
       "sha256": "7f2bd1c179cb4c2d5d83e688f66cf37511c4ab6eee11bd5645998f68cb1a4986"
     },
     {
       "id": "extension-force-clear-funnel",
-      "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+      "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
       "begin": "terminal-parity:begin force-clear-funnel",
       "end": "terminal-parity:end force-clear-funnel",
       "sha256": "0dba86f6a1dade817abc84c9057f0eff6205558f8c312eef069770c67847d049"

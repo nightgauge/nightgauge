@@ -326,7 +326,7 @@ func runPrePushStaticChecks(ctx context.Context, runner CmdRunner, workDir strin
 	result.ValidationPhases["static_checks"] = "passed"
 
 	// Check IPC client generated file sync
-	ipcFile := filepath.Join(workDir, "packages", "nightgauge-vscode", "src", "services", "IpcClient.generated.ts")
+	ipcFile := filepath.Join(workDir, "packages", "nightgauge", "src", "services", "IpcClient.generated.ts")
 	if fileExists(ipcFile) {
 		if out, err := runner.Run(ctx, workDir, "git", "diff", "--exit-code", ipcFile); err != nil {
 			result.ValidationPhases["static_checks"] = "failed"

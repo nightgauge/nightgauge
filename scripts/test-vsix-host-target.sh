@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-vsix-host-target.sh — regression suite for
-# packages/nightgauge-vscode/scripts/vsix-host-target.sh (#2309).
+# packages/nightgauge/scripts/vsix-host-target.sh (#2309).
 # dev-install.sh --from-release once installed the linux-x64 VSIX on an arm64
 # Mac because it took whichever downloaded file sorted first. Every supported
 # host must map to its own target, and an unsupported host must fail instead
@@ -8,8 +8,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TARGET="$ROOT/packages/nightgauge-vscode/scripts/vsix-host-target.sh"
-DEV_INSTALL="$ROOT/packages/nightgauge-vscode/scripts/dev-install.sh"
+TARGET="$ROOT/packages/nightgauge/scripts/vsix-host-target.sh"
+DEV_INSTALL="$ROOT/packages/nightgauge/scripts/dev-install.sh"
 
 PASS=0
 FAIL=0

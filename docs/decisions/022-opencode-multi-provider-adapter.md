@@ -672,7 +672,7 @@ and stops the stage when its last allowed step asks for another: SIGTERM to
 the process group, SIGKILL after the grace period, a check once the stage is
 reaped that no member is left, and the stamp `stage_budget_exceeded:turns`,
 which classifies as `budget_exceeded`. The extension's dispatch counts the
-same events (`packages/nightgauge-vscode/src/utils/stageBudget.ts`, #1668).
+same events (`packages/nightgauge/src/utils/stageBudget.ts`, #1668).
 The wall-clock and token budgets bound the stage the same way. In the test
 above, with a turn budget of 12, the stage made 12 requests and was stopped
 in about 6 s. A subagent's steps never reach the stream (§ 3), so the turn

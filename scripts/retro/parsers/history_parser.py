@@ -8,8 +8,8 @@ Each line is one JSON object conforming to the ExecutionHistoryRunRecordV2 or
 ExecutionOutcomeRecordV2 schema (schema_version "1" records are also accepted).
 
 Canonical schema source:
-  packages/nightgauge-vscode/src/utils/executionHistoryWriter.ts
-  packages/nightgauge-vscode/src/schemas/executionHistory.ts
+  packages/nightgauge/src/utils/executionHistoryWriter.ts
+  packages/nightgauge/src/schemas/executionHistory.ts
 """
 
 import json

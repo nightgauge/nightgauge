@@ -19,7 +19,7 @@ import (
 // resolvers: routing and the adapter registry both import platform).
 //
 // The field set is pinned against the TypeScript ExecutionProfile
-// (packages/nightgauge-vscode/src/services/executionProfile.ts) by
+// (packages/nightgauge/src/services/executionProfile.ts) by
 // executionProfileFields.test.ts: add a field here and there together.
 type ExecutionProfile struct {
 	Adapter               string `json:"adapter"`

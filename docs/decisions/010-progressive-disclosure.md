@@ -13,7 +13,7 @@
 The six core pipeline-stage `SKILL.md` files have grown to 1,294–2,224 lines
 each. Both skill runtimes inject the **entire** skill body into the agent's
 stdin prompt on every stage run (Go `internal/execution/skill.go` `BuildPrompt`;
-TS `packages/nightgauge-vscode/src/utils/skillRunner.ts`
+TS `packages/nightgauge/src/utils/skillRunner.ts`
 `buildStagePrompt`), so the agent pays the full body cost regardless of which
 conditional phases actually fire.
 
@@ -44,7 +44,7 @@ receives a pre-expanded blob.
 - **Go**: `internal/execution/skill.go` — `expandIncludes` (line 116) matches
   only `<!-- include: (.+?) -->` via `includePattern`; `BuildPrompt` (line 90)
   writes `skillContent` directly to the prompt.
-- **TS**: `packages/nightgauge-vscode/src/utils/skillRunner.ts` —
+- **TS**: `packages/nightgauge/src/utils/skillRunner.ts` —
   `expandIncludes` (~line 1189) uses the same regex; the expanded body is
   injected as stdin; the agent is spawned with `cwd: workspaceRoot` (~line 2486)
   so a relative `Read skills/.../X.md` resolves.
@@ -158,5 +158,5 @@ A skill refactored under this ADR must satisfy:
 - [docs/SKILL_PROGRESSIVE_DISCLOSURE.md](../SKILL_PROGRESSIVE_DISCLOSURE.md) —
   authoring convention
 - `internal/execution/skill.go` — Go runtime (`expandIncludes`, `BuildPrompt`)
-- `packages/nightgauge-vscode/src/utils/skillRunner.ts` — TS runtime
+- `packages/nightgauge/src/utils/skillRunner.ts` — TS runtime
   (`expandIncludes`, `parseSkillContent`, spawn `cwd`)

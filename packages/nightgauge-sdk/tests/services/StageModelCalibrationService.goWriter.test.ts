@@ -27,7 +27,7 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(
   HERE,
-  "../../../nightgauge-vscode/tests/fixtures/history/go-writer-runs.jsonl"
+  "../../../nightgauge/tests/fixtures/history/go-writer-runs.jsonl"
 );
 
 interface StageUsage {

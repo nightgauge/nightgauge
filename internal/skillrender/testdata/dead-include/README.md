@@ -28,7 +28,7 @@ scripts/capture-skill-render.sh pr-merge \
 `scripts/capture-skill-render.sh` is committed alongside the fixture so the
 capture is repeatable. It shells out to `nightgauge skill render`, which is the
 same code path the VSCode extension spawns
-(`packages/nightgauge-vscode/src/utils/skillRunner.ts` → `renderSkill()`), so
+(`packages/nightgauge/src/utils/skillRunner.ts` → `renderSkill()`), so
 its stdout **is** the stage prompt.
 
 Captured from `main` at `8c942971`, before any of this branch's skill edits.

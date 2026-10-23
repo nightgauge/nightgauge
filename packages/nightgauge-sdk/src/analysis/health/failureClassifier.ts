@@ -207,7 +207,7 @@ export function classifyFailureCategory(
  * the run"; the category answers "who/what is to blame".
  *
  * Mirrors the Zod `TerminalFailureKindSchema` in
- * `packages/nightgauge-vscode/src/schemas/executionHistory.ts`.
+ * `packages/nightgauge/src/schemas/executionHistory.ts`.
  */
 export type TerminalFailureKind =
   | "stall_kill"

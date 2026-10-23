@@ -112,7 +112,7 @@ components:
 
 | Component            | Location                       | Purpose                               |
 | -------------------- | ------------------------------ | ------------------------------------- |
-| **VSCode Extension** | `packages/nightgauge-vscode/`  | Primary UI for pipeline orchestration |
+| **VSCode Extension** | `packages/nightgauge/`         | Primary UI for pipeline orchestration |
 | **Go Binary**        | `cmd/nightgauge/`, `internal/` | Deterministic layer (compiled CLI)    |
 | **SDK**              | `packages/nightgauge-sdk/`     | Programmatic access and core logic    |
 | **Skills**           | `skills/`                      | Portable instruction files            |
@@ -142,7 +142,7 @@ The VSCode extension is the primary user interface for Nightgauge.
 ### Setup
 
 ```bash
-cd packages/nightgauge-vscode
+cd packages/nightgauge
 npm install
 npm run build
 ```
@@ -577,11 +577,11 @@ npm run setup-hooks
 
 The pre-commit hook validates that three generated files match their source inputs:
 
-| Generated File                                                   | Regeneration Command                                                              |
-| ---------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `packages/nightgauge-vscode/src/services/IpcClient.generated.ts` | `make generate-ipc-client`                                                        |
-| `api/generated/ts/platform-api.ts`                               | `npm run generate:types`                                                          |
-| `packages/nightgauge-vscode/package.json` (contributions)        | `npx -w packages/nightgauge-vscode tsx scripts/generate-package-contributions.ts` |
+| Generated File                                            | Regeneration Command                                                       |
+| --------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `packages/nightgauge/src/services/IpcClient.generated.ts` | `make generate-ipc-client`                                                 |
+| `api/generated/ts/platform-api.ts`                        | `npm run generate:types`                                                   |
+| `packages/nightgauge/package.json` (contributions)        | `npx -w packages/nightgauge tsx scripts/generate-package-contributions.ts` |
 
 If any file is out of sync, the commit is blocked with an error message showing the exact command to fix it.
 

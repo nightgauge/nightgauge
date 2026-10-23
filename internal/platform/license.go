@@ -13,7 +13,7 @@ import (
 )
 
 // License status values — mirrors TS LicenseStatus in
-// packages/nightgauge-vscode/src/platform/types.ts. Kept as plain
+// packages/nightgauge/src/platform/types.ts. Kept as plain
 // strings (not a Go-side enum type) so they round-trip through JSON and the
 // IPC layer without conversion.
 const (

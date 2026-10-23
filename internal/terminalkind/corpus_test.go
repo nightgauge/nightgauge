@@ -7,7 +7,7 @@ package terminalkind
 // answer. The same file is read by the SDK and the extension suites:
 //
 //	packages/nightgauge-sdk/tests/analysis/health/terminalKind.corpusParity.test.ts
-//	packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts
+//	packages/nightgauge/tests/services/terminalKindSignal.corpusParity.test.ts
 //
 // `expected` is what the run record will say; `expected_signal` is what the
 // extension may forward to Go over IPC ("" = defer). Because all three sides

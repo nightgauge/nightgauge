@@ -1,0 +1,16477 @@
+/**
+ * HeadlessOrchestrator - Orchestrate full pipeline execution via headless CLI
+ *
+ * Provides an alternative to SDK-based orchestration by running each stage
+ * through the Claude CLI in headless mode. This maintains context isolation
+ * while enabling full pipeline runs without requiring SDK integration.
+ *
+ * Each stage:
+ * 1. Reads SKILL.md instructions
+ * 2. Passes them as a prompt to `claude -p --output-format stream-json`
+ * 3. Waits for completion (or approval gates)
+ * 4. Proceeds to next stage
+ *
+ * @see docs/ARCHITECTURE_DIAGRAMS.md - Pipeline Execution Architecture
+ * @see Issue #327 - Repository-scoped context loading
+ */
+
+import * as vscode from "vscode";
+import { confirmAndReportPrivateRun } from "./RunVisibility";
+import * as fs from "fs";
+import * as path from "path";
+import {
+  checkoutDir,
+  checkoutPath,
+  isUsableWorkspaceRoot,
+  pipelineStateDir,
+  PIPELINE_STATE_DISPLAY,
+} from "../utils/cloneLayout";
+import { exec, execFile } from "child_process";
+import { promisify } from "util";
+
+// #2884: All subprocess calls in this file MUST use async variants.
+// `execFileSync` / `execSync` block the VSCode extension host event loop
+// for up to their timeout (typically 30s); a single rate-limited `gh`
+// call cascades into the "Window is not responding" dialog. The eslint
+// rule in eslint.config.js blocks re-introducing the sync variants for
+// any file under packages/nightgauge/src/services/.
+const execFileAsync = promisify(execFile);
+import { BinaryResolver } from "./BinaryResolver";
+import { IpcClient } from "./IpcClient";
+import { runWithPhaseStream, type PrStagePhaseTransition } from "./prStagePhaseStream";
+import type { AttentionRaiseCheck } from "./IpcClientBase";
+import {
+  isGithubRateLimitError,
+  noteRateLimitOk,
+  tripBreakerIfRateLimited,
+} from "../utils/rateLimitCircuitBreaker";
+import { isConnectivityError } from "../utils/networkOutageCircuitBreaker";
+import { StageRunnerRegistry } from "../orchestrator/stages/StageRunnerRegistry";
+import type {
+  StageExitTelemetry,
+  StageRunContext,
+  StageRunResult,
+} from "../orchestrator/stages/StageRunner";
+import { SkillLoader } from "../orchestrator/skills/SkillLoader";
+import {
+  ContextAssembler,
+  STAGE_OUTPUT_CONTEXT_TYPE,
+  STAGE_OUTPUT_SCHEMA,
+  STAGE_INPUT_PREREQUISITES,
+  OPTIONAL_CONTEXT_STAGES,
+} from "../orchestrator/context/ContextAssembler";
+import { OrchestratorEventDispatcher } from "../orchestrator/events/OrchestratorEventDispatcher";
+import { WorktreeManager } from "../utils/WorktreeManager";
+import { isValidBranchName } from "../utils/branchUtils";
+import { epicBranchParent } from "../utils/epicBranchParent";
+import { readEpicSubIssues } from "../utils/epicSubIssues";
+import { getRoutedTierEnvelope } from "../utils/modeProfiles";
+
+const execAsync = promisify(exec);
+import {
+  updateProjectItemStatus,
+  ensureIssueOnProject,
+  getProjectItemStatus,
+  type ProjectStatusValue,
+} from "../utils/projectFieldWriter";
+import { BOARD_STATUS, boardStatusEquals } from "../utils/projectFieldMapping";
+import type { PipelineStage, IssueMetadata } from "@nightgauge/sdk";
+import {
+  IssueContextSchema,
+  PlanningContextSchema,
+  DevContextSchema,
+  ValidateContextSchema,
+  PRContextSchema,
+  FeedbackContextSchema,
+  type PipelineFeedbackSignal,
+  FeedbackLearningService,
+  AuditEventClient,
+  MissingInputFile,
+  ContextSchemaError,
+  StageGraph,
+  loadStageGraphFromManifests,
+  runAdapterAuthPreflight,
+  createDefaultPreflightRunner,
+  uuidV7,
+  applyDeliverablePolicy,
+  deliverableKindForStage,
+  stampPolicyMarker,
+  summarizePolicy,
+  sanitizeStagedAgentsMd,
+  guardUpstreamHead,
+  type NightgaugeAdapter,
+  type RecoveryAction,
+  type RecoveryRequiredPayload,
+} from "@nightgauge/sdk";
+import type { ExecutionAdapter } from "../utils/resolvers/modelResolver";
+import type { NotifyStageProgressParams } from "./ipcNotifyParams";
+import { handleIpcRejection } from "./ipcRejection";
+import { computeRecoveryRequired } from "../orchestrator/recovery/computeRecoveryRequired";
+import { type ZodSchema, type ZodError } from "zod";
+import {
+  runStageSkillHeadless,
+  resolveModel,
+  getNextStage,
+  getStageLabel,
+  hasActiveProcess,
+  killAllActiveProcesses,
+  findSkillFile,
+  type SkillRunResult,
+  type SkillProcessHandle,
+} from "../utils/skillRunner";
+import type { PipelineStateService, PipelineOutcomeType } from "./PipelineStateService";
+import { countFailedStages } from "../utils/failedStages";
+import { createDeterministicPhaseReporter } from "../utils/deterministicPhases";
+import { SUCCESS_OUTCOMES } from "../utils/telemetryEventBuilder";
+import type { RepositoryContextLoader, ContextFileType } from "./RepositoryContextLoader";
+import type { Logger } from "../utils/logger";
+import { resolveRuntimeSnapshotPath } from "../utils/runtimeSnapshotResolver";
+import type { IssueQueueService } from "./IssueQueueService";
+import { requeueOptionsFor, type QueueItem } from "../types/queue";
+import type { ProjectBoardService } from "./ProjectBoardService";
+import type { RoutingDecision } from "../utils/routingDecision";
+import {
+  makeRoutingDecision,
+  buildPickupRecommendation,
+  DEFAULT_ROUTING_CONFIG,
+  type RoutingConfig,
+} from "../utils/routingDecision";
+import type { ChangeAnalysis } from "../utils/changeAnalyzer";
+import {
+  isRetryableApiError,
+  isRateLimitError,
+  calculateBackoffDelay,
+  sanitizeApiError,
+} from "../utils/retryHelpers";
+import {
+  getRetryConfig,
+  getBudgetEnforcementConfig,
+  getOutputTokenLimitOverrides,
+  getContextBudgetConfig,
+  getAlertingConfig,
+  getExecutionAdapter,
+  getPipelineCeilingConfig,
+  getMaxBacktracks,
+  getMaxEscalationsPerStage,
+  getEscalatedModelWithin,
+  getMaxModel,
+  getPerformanceMode,
+  getAuditConfig,
+  getContextSchemaRepairConfig,
+  getSkipAuthPreflight,
+  isAdaptiveBudgetEnabled,
+  type ContextSchemaRepairConfig,
+  type PipelineModelOverride,
+} from "../utils/nightgaugeConfig";
+import { formatZodErrorsForPrompt } from "../utils/zodErrorFormatter";
+import {
+  BudgetEnforcer,
+  DEFAULT_SIZE_AWARE_BUDGETS,
+  resolveEffectiveSize,
+  resolveStageCostUsd,
+  type PlanningBudgetHint,
+  type SizeAwareBudget,
+  type SizeLabel,
+} from "../utils/budgetEnforcer";
+import { ContextBudgetEnforcer } from "../utils/contextBudgetEnforcer";
+import {
+  ARCHITECTURE_APPROVAL_REQUIRED_MARKER,
+  postBlockedFindingComment,
+} from "../utils/failureComment";
+import {
+  blockedFindingPath,
+  describeBlockedFinding,
+  readBlockedFinding,
+  writeBlockedFinding,
+  type BlockedFinding,
+} from "../utils/blockedFinding";
+import { clearAdapterAuthNotice, reportAdapterAuthFailure } from "../utils/adapterAuthNotice";
+import { loadAdaptiveBudgetOverrides, resolveMainRepoRoot } from "../utils/adaptiveBudgetLoader";
+import type { EstimateSource } from "../utils/adaptiveBudgetLoader";
+import { PipelineBudgetCeiling } from "../utils/pipelineBudgetCeiling";
+import { nextBudgetActions, livePipelineCostUsd } from "../utils/budgetStreamEnforcement";
+import { sumTokenUsage, type ParsedTokenUsage } from "../utils/tokenParser";
+import {
+  runPreFlightBudgetCheck,
+  captureEstimatorInputs,
+  buildBudgetRetro,
+  BurnRateProjector,
+} from "../utils/budgetIntelligence";
+import { ExecutionHistoryReader } from "../utils/executionHistoryReader";
+import { analyzeChange } from "../utils/changeAnalyzer";
+import type { ExecutionHistoryRecord } from "../schemas/executionHistory";
+import { PostPipelineAnalyzer, type PostPipelineAnalysisResult } from "./PostPipelineAnalyzer";
+import { HealthActionService } from "./HealthActionService";
+import { AutoRetroService } from "./AutoRetroService";
+import { withComplexityModelService } from "./ComplexityModelLock";
+import { checkPipelineAlerts } from "../utils/pipelineAlertChecker";
+import {
+  checkCostCapTightness,
+  getCostCapWarningMultiplier,
+  getStageCostWarnMultiplier,
+} from "../utils/resolvers/monitoringResolver";
+
+/**
+ * First-output watchdog (#252): a stage that produces NO session output at all
+ * within this window is presumed wedged (an unbounded pre-spawn await in the
+ * skill-runner preamble, or a session that spawned but never streamed). Every
+ * other kill gate is cost- or event-driven and structurally blind to a silent
+ * stage — in the 2026-07-18 incident three runs hung 9+ hours this way. The
+ * pre-spawn preamble takes seconds and a live session streams its first event
+ * within seconds, so 10 minutes is generous.
+ */
+const STAGE_NO_OUTPUT_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * Ceilings on the post-loop completion path's network-bound awaits (#253).
+ * reconcileCompletionSideEffects / diagnosePrMergeBlocker call `gh` with no
+ * timeout of their own; a wedge there stranded run #236 for 8.5 hours with no
+ * terminal record. Degrading (skip closure sync / null diagnosis) is always
+ * better than never completing the run.
+ */
+const COMPLETION_RECONCILE_TIMEOUT_MS = 240 * 1000;
+const PR_MERGE_DIAGNOSIS_TIMEOUT_MS = 120 * 1000;
+/**
+ * Upper bound on `nightgauge hook post-merge` (#1249). The hook polls the merge
+ * commit's check runs on the base branch for up to hooks.DefaultMainCheckTimeout
+ * (20 min); this is that budget plus headroom for the issue-close, board-sync
+ * and epic-rollup calls around it. Killing the hook mid-poll records nothing.
+ */
+const POST_MERGE_HOOK_TIMEOUT_MS = 25 * 60 * 1000;
+/**
+ * Upper bound on a `git push` (#2365). A push runs the repository's pre-push
+ * hook first, and a hook may scan what it is about to send: nightgauge's
+ * publication guard runs the boundary checker over the pushed commits, which
+ * takes several seconds a scan and much longer on a loaded machine. The old 60 s
+ * bound killed such pushes mid-scan. A killed push sends nothing, so the bound
+ * only has to catch a push that is really stuck.
+ */
+const GIT_PUSH_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * Reject `promise` if it hasn't settled within `timeoutMs`. The underlying
+ * operation is NOT cancelled (there is no generic way to abort a wedged `gh`
+ * exec from here) — the caller degrades and moves on, which is the point:
+ * completing the run in a degraded mode beats stranding it forever (#253).
+ */
+function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`)),
+      timeoutMs
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+import {
+  PhaseTimeoutManager,
+  DEFAULT_PHASE_TIMEOUT_CONFIG,
+  type PhaseTimeoutEvent,
+  type PhaseStaleEvent,
+} from "../utils/PhaseTimeoutManager";
+import { TelemetryService } from "./TelemetryService";
+
+/**
+ * Result of a full pipeline run
+ */
+/**
+ * First-class blocked terminal state (#190): the run ended with the PR
+ * unmerged because of a blocker no retry can clear (repo-config: branch
+ * protection, required-check config mismatch). Distinct from success and
+ * from crash — carries the classification, the human remediation, and the
+ * PR ref so the operator can never mistake the run for complete.
+ */
+export interface BlockedTerminalState {
+  /** Blocker classification, e.g. "repo-config: required-check-config-mismatch:Sentry Smoke" */
+  blocker: string;
+  /** Human-readable action that unblocks the run */
+  remediation?: string;
+  /** The unmerged PR */
+  prNumber?: number;
+  /**
+   * True when this `blocked` terminal came from a stage's out-of-scope signal
+   * AND the durable finding was recorded (#1147).
+   *
+   * A typed flag rather than a prefix test on `blocker`, because it gates
+   * behaviour in another service: `ConcurrentPipelineManager` suppresses its
+   * generic failure comment when it is set, since the orchestrator has already
+   * posted the finding. The other producer of `blocked` — the #190 pr-merge
+   * dead ends — must keep the failure comment, so sniffing a substring out of
+   * `blocker` would make the two indistinguishable the first time either
+   * string is reworded.
+   */
+  outOfScopeFinding?: boolean;
+}
+
+/**
+ * Feedback signal types a backtrack can actually serve (#1142).
+ *
+ * All three mean "a different plan, or a different implementation of THIS
+ * issue, would fix it" — which is exactly what rewinding buys. The remaining
+ * types in the schema do not: ACCEPTANCE_CRITERIA_AMBIGUOUS needs a human to
+ * settle the criterion and COMPLEXITY_UNDERESTIMATED is a sizing fact that
+ * another lap cannot shrink (MODEL_ESCALATION_NEEDED never reaches here —
+ * `readFeedbackSignals` excludes it because escalation retries the same stage).
+ * Anything not listed here terminates the run as `blocked`.
+ *
+ * @see packages/nightgauge-sdk/src/context/schemas/feedback.ts
+ */
+const REWINDABLE_SIGNAL_TYPES: ReadonlySet<string> = new Set([
+  "PLAN_REVISION_NEEDED",
+  "SCOPE_DISCOVERED",
+  "CONFLICT_RESOLUTION_NEEDED",
+]);
+
+/**
+ * Signal types that are TERMINAL by construction — they carry no rewind target
+ * because there is no stage to rewind to (#1241).
+ *
+ * `readFeedbackSignals` requires `backtrack_target_stage != null`, which is
+ * right for every type that existed when it was written: all of them ask for a
+ * lap of the pipeline, and one that names no target is malformed. It is exactly
+ * wrong for a signal whose whole content is "no lap of this pipeline can
+ * produce this deliverable" — such a signal would have to invent a rewind
+ * target it does not mean in order to be READ, and the reader would then drop
+ * it for being unrewindable if it named none. The one declaration the blocked
+ * fork exists to serve was the one declaration it could not receive.
+ *
+ * Membership here is the declared exemption from the target requirement.
+ * Nothing else changes: the signal still has to be `blocking`, and
+ * `notRewindableReason` still decides what happens to it.
+ */
+const TERMINAL_BLOCKING_SIGNAL_TYPES: ReadonlySet<string> = new Set(["NOT_PIPELINE_ACTIONABLE"]);
+
+/**
+ * The label that takes an issue out of the autonomous dispatch pool.
+ *
+ * It is the DEFAULT sole entry of `autonomous.exclude_labels`
+ * (internal/config.DefaultExcludeLabels), and the scheduler's candidate filter
+ * has honored it since #317. What never existed is a producer: the label was
+ * only ever applied by a human who already knew the issue was human-only, which
+ * is precisely the knowledge the dispatcher lacks. #1241 gives the pipeline a
+ * way to write down what it discovered, so the loop closes instead of
+ * rediscovering the same wall on the next tick.
+ */
+const OWNER_ACTION_LABEL = "owner-action";
+
+/**
+ * Declared, machine-readable "this needs work outside the issue" marker in a
+ * signal's `evidence` array (#1142) — the same convention the schema already
+ * uses for provenance (`"operator-origin: action-center"`). It is deliberately
+ * a prefix match on a structured entry, NOT a search of the free-text
+ * `rationale`.
+ */
+const EXTERNAL_BLOCKER_EVIDENCE = /^\s*(blocked-on|blocked-by|external-blocker|out-of-scope)\s*:/i;
+
+/**
+ * The first `evidence` entry declaring an out-of-scope blocker, or undefined
+ * (#1504).
+ *
+ * Two call sites need this answer: `readFeedbackSignals`, which must KEEP such
+ * a signal even though it names no rewind target, and `notRewindableReason`,
+ * which must route it to `blocked` and quote the entry back to the operator.
+ * They ask the same question of the same field, so they share one reader — the
+ * regex above stays the single definition of the marker's shape, and neither
+ * site can drift into a private variant of it.
+ */
+function externalBlockerEvidence(signal: PipelineFeedbackSignal): string | undefined {
+  const declared = (signal.evidence ?? []).find((entry) =>
+    EXTERNAL_BLOCKER_EVIDENCE.test(String(entry))
+  );
+  return declared === undefined ? undefined : String(declared);
+}
+
+/** Whether a signal declares work outside this issue's scope (#1504). */
+function declaresExternalBlocker(signal: PipelineFeedbackSignal): boolean {
+  return externalBlockerEvidence(signal) !== undefined;
+}
+
+/** What the post-validate gate must do with a failed stage's feedback (#1142). */
+type FailedStageDisposition =
+  | { kind: "rewind"; targetIndex: number }
+  | { kind: "blocked"; signal: PipelineFeedbackSignal; reason: string }
+  | { kind: "halt" };
+
+/**
+ * Why a run was refused at `pipeline-start` — before any AI stage ran, with
+ * ZERO tokens spent (#1170).
+ *
+ * A CLOSED UNION, not a boolean and not a substring test on the error text,
+ * for the same reason `BlockedTerminalState.outOfScopeFinding` is a typed flag
+ * (#1147): it gates behaviour in another service. `ConcurrentPipelineManager`
+ * suppresses BOTH its "safety net" board move to "In review" AND its generic
+ * failure comment when it is set, because neither reaction is true of a run
+ * that never started — "In review" claims there is work to review, and the
+ * comment writes an environmental or scheduling condition into the permanent
+ * public history of an issue that has nothing wrong with it.
+ *
+ * Every member is a refusal that (a) spent no AI tokens, (b) happened before
+ * any stage, and (c) says nothing about the issue's own content that a human
+ * reviewer could act on. A run that ENTERED the pipeline and then failed — any
+ * `failedStage` past `pipeline-start` — carries no value here and keeps both
+ * reactions. Adding a member is a deliberate act: `tests/services/
+ * pipelineStartRefusalCoverage.test.ts` fails when a new `pipeline-start`
+ * refusal is added without one, so the choice is made rather than defaulted.
+ */
+export type PipelineStartRefusal =
+  /** The adapter auth pre-flight refused to launch — the adapter CLI is logged out, or its probe timed out. Operator-local credential state (#312, the #1170 incident). */
+  | "adapter-auth-failed"
+  /** The `gh` auth pre-check failed — no token or missing scopes. The `gh`-CLI sibling of the above; equally operator-local (#1141). */
+  | "github-auth-failed"
+  /** The GitHub API rate-limit bucket was below the headroom for one run. Environmental and self-clearing within the hour (#3896). */
+  | "github-quota-low"
+  /** api.github.com was unreachable. Environmental and transient (#4002). */
+  | "github-network-outage"
+  /** The issue was already CLOSED at pickup. Zero-token non-failure; the board target is Done, never "In review". */
+  | "issue-closed"
+  /** An epic with open sub-issues was dispatched. A scheduler eligibility fault, not an issue defect — the remedy is on the sub-issues. */
+  | "epic-with-open-sub-issues"
+  /** The operator cancelled at the pre-flight budget warning. A deliberate stop, mirroring the existing `slot.userCancelled` suppression. */
+  | "budget-cancelled-by-user";
+
+/**
+ * A queue item the main orchestrator dequeued for an auto-start (#2397):
+ * which `queue.complete` releases it, whether its run began, and whether it
+ * has been released already.
+ */
+interface AutoStartedQueueItem {
+  /** The item as it was dequeued, to put it back when its run never starts. */
+  item: QueueItem;
+  repo: string;
+  issueNumber: number;
+  /** runPipeline took the issue: its end completes the item, never puts it back. */
+  started: boolean;
+  released: boolean;
+}
+
+/**
+ * A remote run request's pin (#1656, ADR-022 § 2): the adapter and model a
+ * dashboard or mobile trigger asked this run to execute on, already accepted
+ * by Go's queue.validatePin. `model` is the `-m` value for opencode.
+ */
+export interface RequestedPin {
+  adapter: string;
+  model?: string;
+}
+
+export interface PipelineRunResult {
+  success: boolean;
+  completedStages: PipelineStage[];
+  skippedStages: PipelineStage[];
+  /** Stages deferred for human action (e.g., pr-merge awaiting review) */
+  deferredStages: PipelineStage[];
+  failedStage?: PipelineStage;
+  error?: Error;
+  /**
+   * Structured terminal kind from the failing stage's post-condition gate
+   * (#283) — e.g. "validation_error" for a schema-mismatched handoff. Lets
+   * downstream consumers (haltQueueOnSlotFailure → autonomous.pause → the
+   * terminal-failure card) classify a harness/bookkeeping fault as such
+   * instead of hardcoding "unclassified" into the generic failure branch.
+   */
+  terminalKind?: string;
+  /** Set when the run ended blocked — PR unmerged behind a non-retryable blocker (#190) */
+  blocked?: BlockedTerminalState;
+  /**
+   * Set when the run was refused at `pipeline-start` with zero tokens spent
+   * (#1170). See {@link PipelineStartRefusal} for the closed set and for what
+   * consumers must NOT do on such a run.
+   */
+  startRefusal?: PipelineStartRefusal;
+  /**
+   * True when pickup DEFERRED because the issue's native blockedBy
+   * dependencies are still open (#189/#305). A deferral is NOT a failure:
+   * `success` is false but `failedStage`/`error` are unset, and the run is
+   * booked with outcome="cancelled" + outcome_type="deferred" and NO
+   * terminal_failure_kind. Consumers must route this away from the failure
+   * path (no failure notification, no autonomous pause) and keep the issue
+   * eligible — the Go blocker-close requeue re-dispatches it later.
+   */
+  deferred?: boolean;
+  totalDurationMs: number;
+  /** Pipeline outcome classification for cost tracking (Issue #709) */
+  outcomeType?: PipelineOutcomeType;
+  /** Post-pipeline model routing analysis result (Issue #943) */
+  analysisResult?: PostPipelineAnalysisResult | null;
+  /** Active health policies applied during this run (Issue #1395) */
+  activePolicies?: import("./PipelinePolicyOverrides").PipelinePolicyOverrides | null;
+  /**
+   * True when the pipeline failed due to budget exhaustion and the user
+   * chose "Save Work & Stop". The worktree should be preserved so the
+   * user can inspect or resume work.
+   *
+   * @see Issue #1935 - Budget-pause instead of budget-kill
+   */
+  budgetExceeded?: boolean;
+}
+
+/**
+ * Result of a single stage run
+ */
+/**
+ * Re-exported from StageRunner to avoid a circular import chain.
+ * @see packages/nightgauge/src/orchestrator/stages/StageRunner.ts
+ */
+export type { StageRunResult } from "../orchestrator/stages/StageRunner";
+
+interface CompletionReconciliationResult {
+  verified: boolean;
+  issueClosed: boolean;
+  mergedPrNumber?: number;
+  epicSweepClosed?: number;
+  /** True when issue intentionally stays open (epic sub-issue deferred to epic merge). */
+  epicDeferred?: boolean;
+  error?: string;
+}
+
+/**
+ * Callbacks for pipeline execution events
+ */
+/**
+ * Tool call data extracted from stream-json output (Issue #639)
+ */
+export interface ToolCallData {
+  tool: string;
+  target: string;
+  durationMs?: number;
+  args?: Record<string, unknown>;
+  result?: string;
+  error?: string;
+}
+
+export interface PipelineCallbacks {
+  onStageStart?: (stage: PipelineStage) => void;
+  onStageComplete?: (stage: PipelineStage, result: StageRunResult) => void;
+  onStageError?: (stage: PipelineStage, error: Error) => void;
+  onStageSkipped?: (stage: PipelineStage, reason: string) => void;
+  onStdout?: (stage: PipelineStage, data: string) => void;
+  onStderr?: (stage: PipelineStage, data: string) => void;
+  onApprovalRequired?: (stage: PipelineStage) => Promise<boolean>;
+  onPipelineComplete?: (result: PipelineRunResult) => void;
+  /** Called when a backward stage transition requires user confirmation */
+  onBackwardTransitionConfirm?: (stage: PipelineStage, message: string) => Promise<boolean>;
+  /** Called when routing decision is loaded after issue-pickup */
+  onRoutingDecisionLoaded?: (decision: RoutingDecision) => void;
+  /** Called when a tool call is detected during stage execution (Issue #639) */
+  onToolCall?: (stage: PipelineStage, toolCall: ToolCallData) => void;
+  /** Called when pipeline short-circuits due to early-exit signal (Issue #708) */
+  onEarlyExit?: (issueNumber: number, reason: string) => void;
+  /** Called when a stage completes after a stall warning was shown (Issue #797) */
+  onStallWarningClear?: (stage: PipelineStage) => void;
+  /** Called when a phase starts within a stage (Issue #1029) */
+  onPhaseStart?: (
+    stage: PipelineStage,
+    phaseName: string,
+    phaseIndex: number,
+    totalPhases: number
+  ) => void;
+  /**
+   * Called for a phase the run advanced beyond without ever reporting it
+   * (#1924). Terminal on arrival — see OrchestratorEventDispatcher.onPhasePassed.
+   */
+  onPhasePassed?: (
+    stage: PipelineStage,
+    phaseName: string,
+    phaseIndex: number,
+    totalPhases: number
+  ) => void;
+  /** Called when a phase completes within a stage (Issue #1029) */
+  onPhaseComplete?: (
+    stage: PipelineStage,
+    phaseName: string,
+    phaseIndex: number,
+    totalPhases: number,
+    durationMs: number
+  ) => void;
+  /** Called when a backtrack is triggered by a feedback signal (Issue #1342) */
+  onBacktrackTriggered?: (record: import("../schemas/pipelineState").BacktrackRecord) => void;
+  /** Called when a backtrack is blocked (limit exceeded or oscillation) (Issue #1342) */
+  onBacktrackBlocked?: (
+    reason: string,
+    signal: import("@nightgauge/sdk").PipelineFeedbackSignal
+  ) => void;
+  /** Called when a model escalation is triggered (Issue #1343) */
+  onModelEscalated?: (record: import("../schemas/pipelineState").ModelEscalationRecord) => void;
+  /** Called when model escalation is blocked (ceiling or limit exceeded) (Issue #1343) */
+  onEscalationBlocked?: (
+    reason: string,
+    signal: import("@nightgauge/sdk").PipelineFeedbackSignal
+  ) => void;
+  /** Called when a proactive model escalation is applied before a stage runs (Issue #1394) */
+  onProactiveEscalation?: (
+    record: import("../schemas/pipelineState").ProactiveEscalationRecord
+  ) => void;
+  /** Called when health-gated policies are activated at pipeline start (Issue #1395) */
+  onHealthPoliciesApplied?: (
+    policies: import("./PipelinePolicyOverrides").PipelinePolicyOverrides
+  ) => void;
+  /**
+   * Called when a stage cannot start because its required input context
+   * file is missing, schema-invalid, or run-state is unrecoverable. The
+   * payload carries the deterministically computed action set; UI should
+   * present the Recovery Dialog instead of a flat error toast (Issue #3239).
+   */
+  onRecoveryRequired?: (payload: import("@nightgauge/sdk").RecoveryRequiredPayload) => void;
+}
+
+/**
+ * Configuration for pipeline execution
+ */
+export interface PipelineExecutionConfig {
+  /** Whether to auto-continue between stages (default: true) */
+  autoContinue?: boolean;
+  /** Delay between stages in ms (default: 1000) */
+  stageContinueDelay?: number;
+  /** Stages that require approval before continuing */
+  approvalGates?: PipelineStage[];
+  /** Whether to skip validation stage (default: false) */
+  skipValidation?: boolean;
+  /** Routing configuration for complexity-based stage skipping */
+  routing?: RoutingConfig;
+  /** Force full pipeline regardless of routing (overrides routing.skip_stages) */
+  forceFullPipeline?: boolean;
+  /**
+   * Maximum time to wait for a context file after a stage reports success.
+   * Helps absorb short file-system/eventual-write races.
+   * Applies to all skill stages that produce output context files.
+   * @default 5000
+   * @see Issue #637 - Generalized from issuePickupContextWaitMs
+   */
+  contextFileWaitMs?: number;
+  /**
+   * Whether to defer pr-merge stage (requires manual PR review before merge).
+   * When false (default), pr-merge runs automatically as part of the pipeline.
+   * When true, pr-merge is deferred and the user must run it manually.
+   * Maps to config.yaml pr.auto_merge (inverted: auto_merge=true → deferMerge=false).
+   * @default false
+   * @see Issue #628 - Queue falsely pauses when pr-merge awaits review
+   */
+  deferMerge?: boolean;
+  /**
+   * Whether to force a re-run even if the issue is already closed.
+   * When false (default), the pipeline halts immediately for closed issues
+   * with zero AI tokens consumed. When true, the closed-issue guard is
+   * bypassed for legitimate re-runs.
+   * @default false
+   * @see Issue #696 - Orchestrator must pre-check issue state before running pipeline
+   */
+  forceRerun?: boolean;
+  /**
+   * How often the stage loop re-checks `isPaused()` while holding at a pause
+   * boundary (#423), in ms. Test-only knob — production code relies on the
+   * default; tests shrink it so a pause/resume cycle doesn't cost real wall
+   * time.
+   * @default 1000
+   */
+  pausePollIntervalMs?: number;
+}
+
+/**
+ * How often the stage loop re-checks `isPaused()` while holding at a pause
+ * boundary (#423). `isPaused()` is a cheap in-memory read
+ * (`PipelineStateService._lastState.paused`), not an IPC round trip, so a
+ * short interval costs nothing while keeping resume latency low. Declared
+ * ahead of `DEFAULT_CONFIG`, which references it — both are module-level
+ * `const`s evaluated in file order.
+ */
+const PAUSE_POLL_INTERVAL_MS = 1000;
+
+/**
+ * Default execution configuration
+ */
+const DEFAULT_CONFIG: Required<PipelineExecutionConfig> = {
+  autoContinue: true,
+  stageContinueDelay: 200,
+  approvalGates: [],
+  skipValidation: false,
+  routing: DEFAULT_ROUTING_CONFIG,
+  forceFullPipeline: false,
+  contextFileWaitMs: 5000,
+  deferMerge: false,
+  forceRerun: false,
+  pausePollIntervalMs: PAUSE_POLL_INTERVAL_MS,
+};
+
+/**
+ * Pipeline stages in execution order
+ *
+ * Includes bookend stages (pipeline-start, pipeline-finish) for reliable
+ * synchronization points. These are deterministic orchestration stages
+ * that execute synchronously with zero AI token consumption.
+ */
+const STAGE_ORDER: PipelineStage[] = [
+  "pipeline-start",
+  "issue-pickup",
+  "feature-planning",
+  "feature-dev",
+  "feature-validate",
+  "pr-create",
+  "pr-merge",
+  "pipeline-finish",
+];
+
+/**
+ * The AI stages a run can skip when the issue already has an open PR (#1531).
+ * pr-create is deliberately absent: it is marked complete rather than skipped,
+ * because its deliverable (`pr-{N}.json`) genuinely exists and pr-merge's
+ * pre-condition check validates it.
+ */
+const RESUMABLE_PRE_MERGE_STAGES: PipelineStage[] = [
+  "issue-pickup",
+  "feature-planning",
+  "feature-dev",
+  "feature-validate",
+];
+
+/**
+ * Stages with a registered, non-NoOp post-condition gate (Issue #210).
+ * Mirrors `internal/orchestrator/gates/registry.go`'s `Default()` map, minus
+ * the bookend stages (`pipeline-start`, `pipeline-finish`), which have no
+ * gate registered at all. Used by the completion-time
+ * `logGateNotInvoked` guard to know which completed stages are expected to
+ * have produced a gate result.
+ */
+const PIPELINE_STAGE_GATE_STAGES: PipelineStage[] = [
+  "issue-pickup",
+  "feature-planning",
+  "feature-dev",
+  "feature-validate",
+  "pr-create",
+  "pr-merge",
+];
+
+/**
+ * Skill-based stages that run through Claude CLI
+ * Excludes bookend stages which are executed synchronously
+ */
+const SKILL_STAGES: PipelineStage[] = [
+  "issue-pickup",
+  "feature-planning",
+  "feature-dev",
+  "feature-validate",
+  "pr-create",
+  "pr-merge",
+];
+
+// STAGE_OUTPUT_CONTEXT_TYPE, STAGE_OUTPUT_SCHEMA, STAGE_INPUT_PREREQUISITES, OPTIONAL_CONTEXT_STAGES
+// moved to ContextAssembler (Issue #2770 — Part 3). STAGE_OUTPUT_CONTEXT_TYPE
+// now lives in orchestrator/context/stageContextFiles and is re-exported from
+// ContextAssembler (Issue #1143).
+
+/**
+ * Stages whose deliverable is read for backward `feedback[]` signals.
+ *
+ * This is POLICY — which stages the backtrack engine listens to — and is
+ * deliberately kept separate from STAGE_OUTPUT_CONTEXT_TYPE, which is the
+ * naming FACT of what file a stage writes. Conflating the two is how three
+ * hand-written `{ "feature-dev": "dev", "feature-validate": "validate" }`
+ * literals ended up in this file.
+ *
+ * @see Issue #1342 — backtrack engine
+ * @see Issue #1143 — one shared stage → filename mapping
+ */
+const FEEDBACK_EMITTING_STAGES: ReadonlySet<PipelineStage> = new Set<PipelineStage>([
+  // #1241 added feature-planning. It is the FIRST stage that reads the issue
+  // with a model, so it is the first that can tell an issue asking for code
+  // from one asking for a signature — and the only one that can say so before
+  // feature-dev's spend. In the specimen run planning ran to completion,
+  // handed dev a plan for a legal review, and dev burned another $0.25 to
+  // reach the verdict planning already had the evidence for.
+  "feature-planning",
+  "feature-dev",
+  "feature-validate",
+]);
+
+/**
+ * Stages that require human action and are deferred when deferMerge is enabled.
+ * When deferMerge is false (default), these stages run automatically.
+ * When deferMerge is true, they are not failures — they simply can't proceed
+ * without manual review/approval.
+ * @see Issue #628 - Queue falsely pauses when pr-merge awaits review
+ */
+const DEFERRABLE_STAGES: PipelineStage[] = ["pr-merge", "pipeline-finish"];
+
+/**
+ * Maps pipeline stages to project board Status field values.
+ * Replaces the old STAGE_STATUS_LABELS that wrote labels.
+ * @see Issue #1714 - Write project fields directly
+ */
+const STAGE_STATUS_VALUES: Partial<Record<PipelineStage, ProjectStatusValue>> = {
+  "issue-pickup": "In progress",
+  "feature-planning": "In progress",
+  "feature-dev": "In progress",
+  "feature-validate": "In progress",
+  "pr-create": "In review",
+  "pr-merge": "Done",
+};
+
+/**
+ * Check if a stage is a bookend stage (synchronous, zero AI tokens)
+ */
+/**
+ * Build the synthetic Error used when a stage is forcibly terminated by the
+ * idle-stall watchdog. Preserves any upstream kill marker text (e.g.
+ * `[rate-limit-quota-exhausted]` from #3386) that arrived on the original
+ * skillRunner error so downstream classifiers (the extension's signal ladder in
+ * services/terminalKindSignal.ts, Go's ClassifyTerminalKind fallback) can still
+ * match. See Issue #3442 — pre-fix this code discarded `result.error` and
+ * synthesized a generic message, which broke the global quota cooldown
+ * (#3434) by routing every quota-exhausted kill into the GENERIC failure
+ * branch.
+ *
+ * @internal Exported for testing only.
+ */
+export function composeStallKilledError(
+  stage: string,
+  durationMs: number,
+  upstreamError: Error | undefined
+): Error {
+  const upstreamMarker = upstreamError?.message?.trim() ?? "";
+  const carriesRecognizedMarker =
+    upstreamMarker.length > 0 &&
+    (upstreamMarker.includes("[rate-limit-quota-exhausted]") ||
+      upstreamMarker.includes("rate-limit-quota-exhausted") ||
+      /stream\s+idle\s+timeout/i.test(upstreamMarker));
+  const stallExplanation =
+    `[stall-killed] ${stage} terminated: subagent process exceeded stall kill threshold. ` +
+    `The process ran for ${Math.round(durationMs / 1000)}s without completing. ` +
+    `Configure pipeline.stall_kill_multiplier or pipeline.stage_hard_caps to adjust (0 to disable).`;
+  return new Error(
+    carriesRecognizedMarker
+      ? `${stallExplanation}\nUpstream signal: ${upstreamMarker}`
+      : stallExplanation
+  );
+}
+
+function isBookendStage(stage: PipelineStage): boolean {
+  return stage === "pipeline-start" || stage === "pipeline-finish";
+}
+
+/**
+ * Detect an Anthropic usage/session/quota-limit signal in a stage error message.
+ *
+ * Matches the canonical `[rate-limit-quota-exhausted]` marker (skillRunner #3386)
+ * and the plain session/usage-limit phrasings the CLI surfaces. Used to decide
+ * whether a Fable stage should degrade to Opus (a separate Max-plan quota bucket)
+ * rather than routing straight to the global quota cooldown.
+ *
+ * @internal Exported for testing only.
+ */
+export function isUsageLimitError(message: string | undefined): boolean {
+  if (!message) return false;
+  return (
+    message.includes("rate-limit-quota-exhausted") ||
+    /session limit|usage limit|reached your[^.\n]*limit|limit reached/i.test(message)
+  );
+}
+
+/**
+ * Render a deterministically-known pr-merge blocker into a single,
+ * classifier-friendly line (#3924). A PR can be OPEN-but-unmergeable for
+ * reasons that are correct to decline — a failing non-required check
+ * (mergeStateStatus=UNSTABLE), a required review, or a merge conflict. The
+ * pre-#3924 path discarded this and surfaced a generic "reported success but
+ * not merged" alarm; naming the blocker lets the operator and the retro
+ * classifier (`merge-blocked`, not `unknown`) see the real reason.
+ *
+ * Mirrors the reason strings the Go `prmerge.Decide()` punt path emits so
+ * classification is consistent across the deterministic and IPC paths.
+ */
+export function describeMergeBlocker(
+  mergeable: string,
+  mergeStateStatus: string,
+  failedChecks: Array<{ name: string; conclusion: string }>
+): string {
+  if (failedChecks.length > 0) {
+    const names = failedChecks.map((c) => `"${c.name}"`).join(", ");
+    return `blocked by failing check ${names} (mergeStateStatus=${mergeStateStatus}).`;
+  }
+  if (mergeable === "CONFLICTING" || mergeStateStatus === "DIRTY") {
+    return `blocked by merge conflict (mergeStateStatus=${mergeStateStatus}).`;
+  }
+  if (mergeStateStatus === "BEHIND") {
+    return `blocked by non-mergeable state: branch is BEHIND base (mergeStateStatus=${mergeStateStatus}).`;
+  }
+  if (mergeStateStatus === "BLOCKED") {
+    return `blocked by required review or branch protection (mergeStateStatus=${mergeStateStatus}).`;
+  }
+  return `blocked by non-mergeable state (mergeable=${mergeable}, mergeStateStatus=${mergeStateStatus}).`;
+}
+
+/**
+ * The raw `gh pr view` projection for a PR the deterministic merge declined
+ * (#305). Sent verbatim to `attention.raise`, where the daemon runs the same
+ * `stages.Decide()` matrix the Go pr-merge path uses.
+ *
+ * Structured, not prose, deliberately: `describeMergeBlocker` renders a
+ * human-facing sentence and the Go path renders a machine reason code. Sending
+ * the sentence would put a visibly different string on the card depending on
+ * which path saw the block, with nothing failing.
+ *
+ * @internal Exported for testing.
+ */
+export interface MergeBlockerSnapshot {
+  prState: string;
+  mergeable: string;
+  mergeStateStatus: string;
+  /** "" means the branch ruleset requires no reviewers — not "unknown". */
+  reviewDecision: string;
+  /**
+   * `conclusion` is "" for a check that has NOT concluded — GitHub returns null
+   * for an in-flight run, and "" is what the daemon's
+   * `stages.MergeBlockedByPendingCI` reads as "CI is still going". Never
+   * substitute a placeholder here: the payload would lose the only signal that
+   * distinguishes "wait, this clears itself" from "a human must fix this".
+   *
+   * Typed as the wire row (`AttentionRaiseCheck`) rather than an inline shape:
+   * the generated client's signature is `checks?: unknown[]` (the codegen only
+   * imports RESULT types), so this declaration is where the contract is
+   * actually enforced. Leaving it structural made `AttentionRaiseCheck` a
+   * type nothing referenced, which read as an enforced contract and was not.
+   */
+  checks: AttentionRaiseCheck[];
+}
+
+/**
+ * One run-scoped Action Center raise from the extension path (#305).
+ *
+ * The producer is a CLOSED union mirroring the daemon's allowlist, and there is
+ * deliberately no place here for an option, a verb, or an args map: card
+ * options are executed by the daemon on resolve, so a surface that could
+ * describe them could mint a legitimate-looking card offering an arbitrary
+ * operation on an arbitrary issue. The extension reports a CONDITION; the
+ * daemon decides what the card says and what it offers.
+ *
+ * @internal Exported for testing.
+ */
+export interface RunScopedAttentionRaise {
+  producer: "budget-ceiling" | "branch-protection" | "abandoned-dispatch" | "out-of-scope-blocker";
+  issueNumber: number;
+  /**
+   * budget-ceiling carries NO fields at all, and that is the security boundary
+   * rather than an omission (fixed in review). The card's primary option is
+   * `budget.raiseCeiling`, whose resolution persists a workspace-global runtime
+   * ceiling override; while the spend and the enforced ceiling were params, any
+   * caller on the workspace socket could choose the number that override would
+   * be written with. Both are now read daemon-side — the ceiling in-process via
+   * `orchestrator.PipelineBudgetCeilingUSD`, the spend from the run's own
+   * recorded RuntimeState. The extension says the condition happened; it does
+   * not get to say what it cost.
+   */
+
+  /** branch-protection: the blocked PR plus the raw `gh pr view` projection.
+   * The daemon classifies with stages.Decide; prose never crosses the wire. */
+  pr?: number;
+  prState?: string;
+  mergeable?: string;
+  mergeStateStatus?: string;
+  reviewDecision?: string;
+  checks?: AttentionRaiseCheck[];
+  /** abandoned-dispatch / branch-protection: the last stage observed. */
+  stage?: string;
+}
+
+/**
+ * Result of reconcileBookkeepingFromDiskState — the in-memory arrays plus
+ * a list of stages that were recovered from disk and a flag indicating
+ * whether anything changed.
+ *
+ * @internal Exported for testing.
+ */
+export interface BookkeepingReconciliationResult {
+  completedStages: PipelineStage[];
+  skippedStages: PipelineStage[];
+  deferredStages: PipelineStage[];
+  recovered: PipelineStage[];
+  changed: boolean;
+}
+
+/**
+ * Reconcile in-memory pipeline bookkeeping against the authoritative state
+ * stored on disk (state.json), for the runPipeline() success-classification
+ * path. Returns updated arrays that include any stages that completed/skipped/
+ * deferred on disk but were missed by the in-memory pushes.
+ *
+ * The in-memory `completedStages`/`skippedStages`/`deferredStages` arrays are
+ * built by pushes inside the runPipeline() stage loop. The loop has many
+ * early-exit paths (abort signal, isPaused trip after pr-merge, post-merge
+ * verify, backtrack, approval gates, deferral) and several of those drop the
+ * pipeline out before pipeline-finish runs without ever setting `failedStage`.
+ *
+ * Without reconciliation, the post-loop `pipelineComplete` evaluation
+ * (`!failedStage && (completed + skipped + deferred).length === STAGE_ORDER.length`)
+ * yields `false` even when the pipeline actually finished — producing an
+ * impossible `{ success: false, failedStage: undefined }` return that
+ * ConcurrentPipelineManager.processSlot routes through haltQueueOnSlotFailure
+ * as "failed at unknown" and that the autonomous scheduler counts toward the
+ * lifetime failure cap.
+ *
+ * This helper trusts state.json as the source of truth for stage completion.
+ * It NEVER overrides a real failure — callers must skip this when
+ * `failedStage !== undefined`. If state.json doesn't show every stage
+ * terminal, no reconciliation happens (changed=false).
+ *
+ * @see Issue #3450 — $21.26 successful run misclassified as "failed at unknown"
+ */
+export function reconcileBookkeepingFromDiskState(
+  inMemory: {
+    completedStages: PipelineStage[];
+    skippedStages: PipelineStage[];
+    deferredStages: PipelineStage[];
+  },
+  stagesOnDisk: Record<string, { status?: string }>,
+  stageOrder: PipelineStage[]
+): BookkeepingReconciliationResult {
+  const isTerminal = (s: { status?: string } | undefined) =>
+    s != null && (s.status === "complete" || s.status === "skipped" || s.status === "deferred");
+
+  // Only reconcile when state.json reports every canonical stage terminal —
+  // matches the terminal-stage invariant used by the authoritative history
+  // writer (defense-in-depth, see #2994). If even one stage is still
+  // running/pending/failed on disk, fall through with no changes so the
+  // existing failure/pause/abort handling stays authoritative.
+  const allTerminalOnDisk = stageOrder.every((stage) => isTerminal(stagesOnDisk[stage]));
+  if (!allTerminalOnDisk) {
+    return {
+      completedStages: inMemory.completedStages,
+      skippedStages: inMemory.skippedStages,
+      deferredStages: inMemory.deferredStages,
+      recovered: [],
+      changed: false,
+    };
+  }
+
+  // Mutable copies — never mutate the caller's arrays directly so the helper
+  // is side-effect free and trivially testable.
+  const completedStages = [...inMemory.completedStages];
+  const skippedStages = [...inMemory.skippedStages];
+  const deferredStages = [...inMemory.deferredStages];
+
+  const inMemorySet = new Set<PipelineStage>([
+    ...completedStages,
+    ...skippedStages,
+    ...deferredStages,
+  ]);
+
+  const recovered: PipelineStage[] = [];
+  for (const stage of stageOrder) {
+    if (inMemorySet.has(stage)) continue;
+    const onDisk = stagesOnDisk[stage];
+    if (onDisk?.status === "complete") {
+      completedStages.push(stage);
+      recovered.push(stage);
+    } else if (onDisk?.status === "skipped") {
+      skippedStages.push(stage);
+      recovered.push(stage);
+    } else if (onDisk?.status === "deferred") {
+      deferredStages.push(stage);
+      recovered.push(stage);
+    }
+    // No else: isTerminal guard above already rejected non-terminal stages.
+  }
+
+  return {
+    completedStages,
+    skippedStages,
+    deferredStages,
+    recovered,
+    changed: recovered.length > 0,
+  };
+}
+
+/**
+ * HeadlessOrchestrator - Orchestrate pipeline execution via headless CLI
+ *
+ * @example
+ * ```typescript
+ * const orchestrator = new HeadlessOrchestrator(stateService, logger);
+ *
+ * // Run full pipeline
+ * const result = await orchestrator.runPipeline(42, {
+ *   onStageComplete: (stage, result) => console.log(`${stage} done`),
+ *   onApprovalRequired: async (stage) => {
+ *     // Show approval dialog and return result
+ *     return await showApprovalDialog();
+ *   },
+ * });
+ *
+ * // Or run a single stage
+ * const stageResult = await orchestrator.runStage('feature-dev', 42, callbacks);
+ * ```
+ */
+
+/**
+ * Convert a VSCode `ExecutionAdapter` into the SDK `NightgaugeAdapter` form.
+ *
+ * Centralized so the per-stage resolver landing in epic #3212 (B2) can swap
+ * its single call site without touching the auth pre-flight.
+ *
+ * @see Issue #3222 - validateAdapterAuth pre-flight checker per adapter
+ */
+export function toNightgaugeAdapter(
+  adapter: ExecutionAdapter,
+  _env: NodeJS.ProcessEnv = process.env
+): NightgaugeAdapter {
+  switch (adapter) {
+    case "claude":
+      // The Marketplace extension never embeds Anthropic's commercially
+      // licensed Agent SDK. Claude runs through the user's separately installed
+      // and authenticated CLI; direct Agent SDK mode remains available only to
+      // SDK-library consumers who explicitly install the optional peer.
+      return "claude-headless";
+    case "codex":
+      return "codex";
+    case "gemini":
+      return "gemini";
+    case "gemini-sdk":
+      return "gemini-sdk";
+    case "openai-compatible":
+      return "openai-compatible";
+    case "copilot":
+      return "copilot";
+    case "grok":
+      return "grok";
+    case "opencode":
+      return "opencode";
+  }
+}
+
+/**
+ * Decide whether an unattended budget/ceiling escalation should proceed
+ * (Issue #3851).
+ *
+ * #3811's feature-dev burned $112 because the unattended auto-escalation
+ * doubled the budget/ceiling UNCONDITIONALLY (gated only on the escalation
+ * count). This gates it on PRODUCTIVE progress instead: the caller snapshots
+ * the stage's productive-progress counter (commits / new-file writes / phase
+ * markers / CI progress) at the previous escalation and passes it as
+ * `lastSnapshot`; `currentProductive` is the value now.
+ *
+ * - `lastSnapshot < 0` → no prior escalation baseline; the FIRST escalation is
+ *   always permitted (a single ceiling hit on healthy work should not be
+ *   blocked).
+ * - `delta > 0` → the stage made real forward progress since the last
+ *   escalation; escalate (the spend is buying work).
+ * - `delta <= 0` → flat productive progress = churn; do NOT escalate (stop and
+ *   save work instead — the proximate fix for the $112 burn).
+ *
+ * @param lastSnapshot       productive-progress count at the previous escalation, or <0 if none
+ * @param currentProductive  productive-progress count now (from `handle.getProductiveProgressDelta()`)
+ */
+export function decideProgressGatedEscalation(
+  lastSnapshot: number,
+  currentProductive: number
+): { escalate: boolean; current: number; delta: number } {
+  const current = Number.isFinite(currentProductive) ? currentProductive : 0;
+  if (lastSnapshot < 0) {
+    return { escalate: true, current, delta: current };
+  }
+  const delta = current - lastSnapshot;
+  return { escalate: delta > 0, current, delta };
+}
+
+export class HeadlessOrchestrator implements vscode.Disposable {
+  private isRunning = false;
+  private currentStage: PipelineStage | null = null;
+  private currentProcess: SkillProcessHandle | null = null;
+  private abortController: AbortController | null = null;
+  private disposables: vscode.Disposable[] = [];
+
+  private config: Required<PipelineExecutionConfig>;
+
+  /**
+   * Tracks stages that have already been completed in the current pipeline run.
+   * Prevents duplicate "Stage completed" log emissions when a stage's onComplete
+   * callback fires multiple times (e.g., during retry/recovery).
+   * @see Issue #698 - Duplicate completed log emissions
+   */
+  private completedStageSet: Set<PipelineStage> = new Set();
+
+  private shouldStopQueueAfterCurrent = false;
+
+  // Routing decision for complexity-based stage skipping
+  private currentRoutingDecision: RoutingDecision | null = null;
+
+  // Cached routing telemetry for JSONL execution history (Issue #1005)
+  // Set when loadRoutingDecision succeeds; cleared in the finally block.
+  private cachedRoutingTelemetry: {
+    complexity_score: number;
+    path: string;
+    skip_stages: string[];
+  } | null = null;
+
+  // Queue service for auto-start on pipeline completion
+  private queueService: IssueQueueService | null = null;
+
+  /**
+   * The queue item handleQueueAutoStart dequeued for the run it starts
+   * (#2397). The dequeue marks it `processing` in the daemon's queue, which
+   * keeps the issue from being queued again, refuses Remove from Queue, and
+   * answers a remote trigger `busy`; this orchestrator is the only one that
+   * knows when that run ends, so it sends `queue.complete` for the item —
+   * exactly once — when the run reaches a terminal state, when its start
+   * fails, or when a stop lands during the auto-start delay.
+   */
+  private autoStartedQueueItem: AutoStartedQueueItem | null = null;
+
+  /** Ends the auto-start delay early, when stop() lands during it (#2397). */
+  private cancelAutoStartDelay: (() => void) | null = null;
+
+  // Context loader for repository-scoped paths (Issue #327)
+  private contextLoader: RepositoryContextLoader | null = null;
+
+  // Extracted classes (Issue #2770 — Part 3 decomposition)
+  private skillLoader: SkillLoader;
+  private contextAssembler: ContextAssembler;
+  private eventDispatcher: OrchestratorEventDispatcher;
+
+  /**
+   * Stage producer/consumer graph derived from skill manifests, used by
+   * the Recovery Dialog (Issue #3239) to map a missing context file to
+   * its producing stage. Lazily built on first use; falls back to the
+   * in-process producer table when manifests are unreachable.
+   */
+  private stageGraph: StageGraph | null = null;
+
+  // Project board service for dependency-aware operations (Issue #443)
+  private projectBoardService: ProjectBoardService | null = null;
+
+  // Default callbacks applied to queue-initiated pipeline runs
+  private defaultPipelineCallbacks: PipelineCallbacks | null = null;
+
+  // Cached issue metadata for AutoModelSelector (Issue #732)
+  private cachedIssueMetadata: IssueMetadata | null = null;
+
+  /** Whether a ceiling checkpoint signal file was written during this pipeline run (Issue #1047) */
+  private ceilingCheckpointWritten = false;
+
+  /** Whether the last pipeline run's cost exceeded the anomaly threshold (Issue #1335) */
+  private _lastCostAnomalyExceeded = false;
+
+  /**
+   * Execution-path decision per stage for the current run (Issue #297). The
+   * deterministic-first pr-create/pr-merge hooks record whether the stage was
+   * completed deterministically (`path: "deterministic"`) or fell through to
+   * the LLM skill (`path: "llm"`, with the machine-readable `puntReason`).
+   * Passed through `pipeline.notifyComplete` so Go's authoritative history
+   * writer can persist `execution_path` + `punt_reason` on each stage record.
+   */
+  private stageExecutionPaths = new Map<
+    string,
+    { path: "deterministic" | "llm"; puntReason?: string }
+  >();
+
+  /** Tracks whether pr-create validation retry has been attempted per issue (Issue #1139) */
+  private prCreateRetryAttempted: Set<number> = new Set();
+
+  /** Phase timeout manager for detecting stuck/stale phases (Issue #1187) */
+  private phaseTimeoutManager: PhaseTimeoutManager | null = null;
+
+  /**
+   * Backtrack engine state (Issue #1342)
+   * Reset at the start of each runPipeline() call and in the finally block.
+   */
+  private backtrackCount = 0;
+  private traversedEdges: Set<string> = new Set();
+
+  /**
+   * Escalation engine state (Issue #1343)
+   * Reset at the start of each runPipeline() call and in the finally block.
+   */
+  /** Per-stage escalation counts for current pipeline run (Issue #1343) */
+  private stageEscalationCounts = new Map<PipelineStage, number>();
+
+  /** Per-stage model overrides set by escalation (Issue #1343) or user override (Issue #1610) */
+  private stageModelOverrides = new Map<
+    PipelineStage,
+    import("../utils/nightgaugeConfig").DefaultModel
+  >();
+
+  /**
+   * Stages that already fell back Fable → Opus after a usage-limit this run.
+   * Guards the downgrade-and-retry to once per stage (a genuine account-wide
+   * limit falls through to the global quota cooldown on the second hit).
+   */
+  private fableQuotaFallbackApplied = new Set<PipelineStage>();
+
+  /**
+   * Fable → Opus usage-limit fallbacks applied this run, in order. Mirrored into
+   * pipeline_meta via setMeta() so the notifiers (Discord/Mattermost) surface the
+   * graceful downgrade in real time (Issue #26). Reset at the same points as
+   * {@link fableQuotaFallbackApplied}.
+   */
+  private fableFallbacks: Array<{ stage: string; from: string; to: string }> = [];
+
+  /** Whether the current run has a user-initiated model override (Issue #1610) */
+  private userModelOverride: PipelineModelOverride | null = null;
+
+  /**
+   * The current run's remote run request pin (#1656), or null. Every stage
+   * dispatches on it as a strict adapter pin plus model: no escalation,
+   * fallback or band translation rewrites it.
+   */
+  private requestedPin: RequestedPin | null = null;
+
+  /**
+   * The refusal a model-swap retry meets on a pinned run (#1656), or null when
+   * the run is not pinned. A pinned run never swaps its model: the stage
+   * fails with `cause` and a reason naming the pin.
+   */
+  private pinnedModelSwapRefusal(swapTo: string, cause: string): Error | null {
+    const pin = this.requestedPin;
+    if (!pin) return null;
+    const pinned = pin.model ? `${pin.adapter} ${pin.model}` : pin.adapter;
+    return new Error(
+      `${cause} — not retried on ${swapTo}: this run is pinned to ${pinned} by a remote ` +
+        `run request, and a pinned run never swaps its model`
+    );
+  }
+
+  /** Pending model override set via setNextRunModelOverride(), consumed by runPipeline() (Issue #1610) */
+  private pendingUserModelOverride: PipelineModelOverride | null = null;
+
+  /** Whether a proactive escalation has already been applied this run (Issue #1394) */
+  private proactiveEscalationApplied = false;
+
+  /**
+   * Per-run pipeline-ceiling override (#253). Set when the operator (or the
+   * unattended escalation path) confirms "Increase Ceiling & Continue".
+   * Consulted by every subsequent ceiling construction/check in the run so the
+   * override actually survives stage boundaries — before #253 it only muted
+   * warnings for the current stage and the next stage stopped the pipeline
+   * anyway. Cleared in runPipeline()'s finally.
+   */
+  private ceilingOverrideUsd: number | null = null;
+
+  /** Health-gated policy overrides for current pipeline run (Issue #1395) */
+  private policyRetryBudgetIncrease = 0;
+  private pauseAutoRouting = false;
+  /**
+   * Workspace root pinned at the start of runPipeline(). Used as CWD for all
+   * stages so that a repo switch mid-pipeline doesn't break the run.
+   * @see Issue #1592
+   */
+  private pinnedWorkspaceRoot: string | undefined;
+  /**
+   * Worktree override — when set, this path is used as the working directory
+   * instead of auto-detecting from workspace folders. Used for concurrent
+   * pipeline execution where each orchestrator runs in its own git worktree.
+   * @see Issue #1621 - Git worktree-based concurrent pipeline execution
+   */
+  private worktreeOverride: string | undefined;
+  /**
+   * Main repository root for writing execution history and other persistent
+   * data that must survive worktree cleanup. When running in a worktree,
+   * getWorkingDirectory() returns the worktree path (correct for skill
+   * execution) but history must be written to the main repo so the dashboard
+   * can read it.
+   */
+  private mainRepoRoot: string | undefined;
+  /**
+   * Filesystem root of the repo THIS RUN targets (#305 review).
+   *
+   * Distinct from {@link mainRepoRoot}, which is the RUNNER's root: the slot
+   * factory seeds it once from `resolveAgentRunnerRoot`, so every slot shares
+   * it even when a cross-repo item runs out of a sibling repo's worktree. The
+   * budget-ceiling remedy needs the other one. `budget.raiseCeiling` persists
+   * `pipelineStateDir(root)/budget-override.json` under the CARD's repo root
+   * (`Server.repoRoot(repo)`, the same per-repo registry that scopes
+   * runtime-{N}.json), so a run that reads its ceiling from anywhere else — the
+   * runner root, or `workspaceFolders[0]`, which is what the read side used
+   * before this — silently ignores the raise the operator just clicked and
+   * stops on the same ceiling again.
+   *
+   * Set by `ConcurrentPipelineManager.startSlotInner` from the slot's own
+   * `WorktreeManager.getRepoRoot()`. Unset on the interactive path, where
+   * {@link getRunRepoRoot} falls back to the persistent root.
+   */
+  private runRepoRoot: string | undefined;
+  /**
+   * Worktree lifecycle manager for the completion-funnel cleanup call (#106).
+   * Lazily constructed against getPersistentRoot() the first time it's needed
+   * — mainRepoRoot is not guaranteed set at HeadlessOrchestrator construction
+   * time, matching how other repo-rooted utilities in this class defer root
+   * resolution.
+   */
+  private worktreeManager: WorktreeManager | undefined;
+  /**
+   * Cross-repo override — when set, all `gh issue view` calls use `--repo`
+   * flag instead of relying on CWD-based repo detection. Required for
+   * multi-repo pipelines where the worktree belongs to repo A but the issue
+   * is in repo B (e.g., acme-mobile issues run in nightgauge
+   * worktrees).
+   * Format: "owner/repo" (e.g., "acme/mobile")
+   */
+  private repoOverride: string | undefined;
+  /**
+   * True when this orchestrator runs unattended (autonomous concurrent slot).
+   * Gates interactive prompts into auto-resolving behavior. @see setUnattended
+   */
+  private unattended = false;
+  /**
+   * Blocked terminal state for the current run (#190). Set by the pr-merge
+   * dead-end paths (non-retryable repo-config blocker, or retry exhausted
+   * with the PR still OPEN); consumed by outcome classification and the
+   * final PipelineRunResult so a run that did not deliver its PR can never
+   * present as complete. Reset at every runPipeline() entry.
+   */
+  private blockedTerminalState: BlockedTerminalState | null = null;
+  /**
+   * Ground-truth flag (#266): set true the instant the run's PR is confirmed
+   * MERGED on the forge — either by the post-merge verification gate passing or
+   * by the post-merge kill override (a late runaway/stall/budget kill that
+   * fired AFTER the merge already landed). Threaded into pipeline.notifyComplete
+   * so the Go recording boundary honors merge ground truth and never books a
+   * merged run as a phantom stall_kill failure. Reset at every runPipeline()
+   * entry.
+   */
+  private prMergedGroundTruth = false;
+  /**
+   * Estimator input snapshot pinned at pipeline start (#198): calibration
+   * table, labels/title, and performance mode as-of run start. Reused for
+   * every estimate and post-run comparison in the run. Reset per run.
+   */
+  private estimatorSnapshot: import("../utils/budgetIntelligence").EstimatorInputSnapshot | null =
+    null;
+  private activePolicies: import("./PipelinePolicyOverrides").PipelinePolicyOverrides | null = null;
+
+  /**
+   * Audit event client for emitting structured pipeline audit events.
+   * Instantiated at the start of runPipeline() when audit.enabled is true.
+   * Disposed in the finally block. Null when audit is disabled.
+   *
+   * @see Issue #1582 - Pipeline execution audit trail emission
+   */
+  private auditClient: AuditEventClient | null = null;
+
+  /**
+   * Stable UUID for correlating this orchestrator's AUDIT events with each
+   * other. Generated at the start of runPipeline(), cleared in the finally
+   * block. A `crypto.randomUUID()` v4 — deliberately NOT the run identity.
+   *
+   * IT MUST NEVER TOUCH THE WIRE (ADR-017, #370). It is not a UUIDv7, the Go
+   * side has never seen it, and it is minted per `runPipeline` invocation
+   * rather than per dispatch. The run's identity lives on the state service
+   * (`stateService.getRunId()`) and is the only value any `pipeline.*` call
+   * may carry. The old name — `currentPipelineRunId` — invited exactly the
+   * confusion this rename removes.
+   *
+   * @see Issue #1582 - Pipeline execution audit trail emission
+   */
+  private auditCorrelationId: string | null = null;
+
+  constructor(
+    private stateService: PipelineStateService | null,
+    private logger: Logger,
+    config?: PipelineExecutionConfig
+  ) {
+    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.skillLoader = new SkillLoader(logger);
+    this.contextAssembler = new ContextAssembler(
+      logger,
+      () => this.getWorkingDirectory(),
+      null, // contextLoader set later via setContextLoader()
+      this.skillLoader,
+      // ADR-017 step 3: the assembler's schema-repair re-invocation is part
+      // of the run that is executing when it fires, so it reads the identity
+      // then rather than capturing one now.
+      () => this.stateService?.getRunId() ?? undefined
+    );
+    this.eventDispatcher = new OrchestratorEventDispatcher(undefined, logger);
+  }
+
+  /**
+   * Lazy-initialize the phase timeout manager (Issue #1187).
+   * Deferred from constructor to avoid requiring vscode.EventEmitter in test mocks.
+   * Returns null if EventEmitter is unavailable (test environments).
+   */
+  private getPhaseTimeoutManager(): PhaseTimeoutManager | null {
+    if (!this.phaseTimeoutManager) {
+      try {
+        this.phaseTimeoutManager = new PhaseTimeoutManager(DEFAULT_PHASE_TIMEOUT_CONFIG);
+        this.disposables.push(this.phaseTimeoutManager);
+      } catch {
+        // vscode.EventEmitter not available (test environment)
+        return null;
+      }
+    }
+    return this.phaseTimeoutManager;
+  }
+
+  /**
+   * Set the queue service for auto-start on pipeline completion
+   *
+   * @param queueService - The IssueQueueService singleton
+   */
+  setQueueService(queueService: IssueQueueService): void {
+    this.queueService = queueService;
+  }
+
+  /**
+   * Set the context loader for repository-scoped paths
+   *
+   * When set, context files and working directory will be resolved from
+   * the current repository context.
+   *
+   * @param contextLoader - The RepositoryContextLoader instance
+   * @see Issue #327 - Repository-scoped context loading
+   */
+  setContextLoader(contextLoader: RepositoryContextLoader): void {
+    this.contextLoader = contextLoader;
+    this.contextAssembler.setContextLoader(contextLoader);
+  }
+
+  /**
+   * Set the project board service for dependency-aware operations
+   *
+   * @param projectBoardService - The ProjectBoardService instance
+   * @see Issue #443 - Auto-selection and Ready View Should Skip Blocked Issues
+   */
+  setProjectBoardService(projectBoardService: ProjectBoardService): void {
+    this.projectBoardService = projectBoardService;
+  }
+
+  /**
+   * Set default callbacks for queue-initiated pipeline runs
+   *
+   * These callbacks are merged into pipeline runs triggered by queue
+   * auto-start or manual resume, providing OutputWindow integration
+   * without the orchestrator needing a direct OutputWindow reference.
+   */
+  setDefaultPipelineCallbacks(callbacks: PipelineCallbacks): void {
+    this.defaultPipelineCallbacks = callbacks;
+  }
+
+  /**
+   * Set a worktree override path for concurrent pipeline execution.
+   *
+   * When set, this path is used as the working directory instead of
+   * auto-detecting from workspace folders or context loader.
+   *
+   * @see Issue #1621 - Git worktree-based concurrent pipeline execution
+   */
+  setWorktreeOverride(worktreePath: string): void {
+    this.worktreeOverride = worktreePath;
+  }
+
+  /**
+   * Set the main repository root for persistent data writes (execution
+   * history, retros, etc.) that must survive worktree cleanup.
+   */
+  setMainRepoRoot(repoRoot: string): void {
+    this.mainRepoRoot = repoRoot;
+  }
+
+  /**
+   * Set the filesystem root of the repo THIS RUN targets. @see runRepoRoot
+   */
+  setRunRepoRoot(repoRoot: string): void {
+    this.runRepoRoot = repoRoot;
+  }
+
+  /**
+   * Set cross-repo override for multi-repo pipelines.
+   * When set, all `gh issue view` calls include `--repo owner/repo`.
+   * @param ownerSlashRepo - e.g. "acme/mobile"
+   */
+  setRepoOverride(ownerSlashRepo: string): void {
+    this.repoOverride = ownerSlashRepo;
+  }
+
+  /**
+   * Mark this orchestrator as running unattended (an autonomous concurrent
+   * slot — see ConcurrentPipelineManager). In unattended mode, decisions that
+   * would otherwise block on an interactive `vscode.window.showWarningMessage`
+   * (notably the per-stage budget-escalation prompt) instead resolve
+   * automatically — escalating up to the existing cap and surfacing every
+   * step in the log + a non-blocking notification — because there is no human
+   * watching the modal. Interactive single-issue runs leave this false and
+   * keep the prompt. @see Issue: autonomous self-heal (acmeapp #8)
+   */
+  setUnattended(unattended: boolean): void {
+    this.unattended = unattended;
+  }
+
+  /**
+   * Return the cross-repo override slug ("owner/repo") when set, or undefined.
+   * Callers (e.g. pipeline-complete refresh hooks) use this to scope GitHub
+   * cache invalidation to just the pipeline's target repo — without it, the
+   * extension falls back to detecting the repo from the active workspace
+   * root, which may not match in multi-repo workspaces.
+   */
+  getRepoOverride(): string | undefined {
+    return this.repoOverride;
+  }
+
+  /** Return ['--repo', override] when a repo override is set, or [] otherwise. */
+  private ghRepoArgs(): string[] {
+    return this.repoOverride ? ["--repo", this.repoOverride] : [];
+  }
+
+  /**
+   * Single funnel for pipeline-completion: dispatches the in-process callback
+   * (UI refresh, queue auto-start) and emits the terminal platform telemetry
+   * (`pipeline_done`) via the run's state service. Every completion path —
+   * success, early-exit (closed/quota/auth/preflight), cancellation, epic —
+   * routes through here so the live Pipelines view always transitions the run
+   * out of 'running'. Telemetry is fire-and-forget and never blocks the run.
+   */
+  private firePipelineComplete(result: PipelineRunResult, issueNumber?: number): void {
+    // #1127: the run is terminal and every post-run `setMeta` enrichment (the
+    // health score among them) has already landed. Announce that before any
+    // other completion work so the notifiers render their card from the state
+    // as it finally stands, instead of from whichever instant their own
+    // debounce happened to sample. Best-effort — a notifier must never be able
+    // to fail a run.
+    try {
+      this.stateService?.finalizeRun();
+    } catch {
+      /* a subscriber threw; the run outcome is unaffected */
+    }
+
+    this.eventDispatcher.onPipelineComplete(result);
+    // #297/#309: flatten the per-stage execution-path decisions accumulated
+    // across the run into plain records for the IPC wire, so the Go
+    // notifyComplete handler can stamp execution_path / punt_reason onto the
+    // authoritative history stage records. The map is fully populated by the
+    // time this single completion funnel fires (all stages have run); it is
+    // cleared at the next runPipeline start.
+    const stageExecutionPaths: Record<string, string> = {};
+    const stagePuntReasons: Record<string, string> = {};
+    for (const [stage, decision] of this.stageExecutionPaths) {
+      stageExecutionPaths[stage] = decision.path;
+      if (decision.puntReason) {
+        stagePuntReasons[stage] = decision.puntReason;
+      }
+    }
+    // Best-effort terminal telemetry — must never throw out of the completion
+    // path (which runs on every exit, including failures).
+    try {
+      void this.stateService?.notifyPipelineComplete({
+        success: result.success,
+        totalDurationMs: result.totalDurationMs,
+        stagesRun: result.completedStages,
+        // #266: forge-confirmed merge ground truth. Lets the Go recording
+        // boundary book a MERGED run as complete even if a late per-stage kill
+        // reported the run failed at pr-merge.
+        prMerged: this.prMergedGroundTruth,
+        // #305: a blockedBy deferral is a non-failure. The Go notifyComplete
+        // handler books it as outcome="cancelled" with outcome_type="deferred"
+        // and NO terminal_failure_kind, instead of failed/subagent_crash.
+        deferred: result.deferred ?? false,
+        stageExecutionPaths,
+        stagePuntReasons,
+        // #1329: the failure reason. For a run that latched terminal before
+        // any stage started this is the ONLY copy that reaches disk — the Go
+        // handler persists it as terminal_failure_detail and writes the
+        // pre-dispatch exit record from it. Success sends nothing.
+        failureDetail: result.success ? undefined : result.error?.message || undefined,
+      });
+    } catch {
+      /* telemetry is best-effort; the run outcome is recorded regardless */
+    }
+
+    // Worktree/branch cleanup on every terminal outcome — success, failure,
+    // blocked — not only success (#106). A `deferred: true` run is NOT
+    // terminal in the product sense (the issue stays eligible for a later
+    // requeue via the blockedBy-close path), so its worktree must survive
+    // for the resumed run — skip cleanup for it. Local branch deletion is
+    // only ever attempted when the PR is forge-confirmed merged
+    // (prMergedGroundTruth); WorktreeManager.cleanup's own content-diff
+    // guard is the actual safety gate against deleting an unmerged branch.
+    // Mirrors the try/catch immediately above — cleanup must never throw out
+    // of the completion funnel.
+    if (issueNumber !== undefined && result.deferred !== true) {
+      try {
+        void this.getWorktreeManager()
+          .cleanup(issueNumber, this.prMergedGroundTruth === true)
+          .catch((err) => {
+            console.warn(
+              `[HeadlessOrchestrator] worktree cleanup failed for issue #${issueNumber}: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          });
+      } catch (err) {
+        console.warn(
+          `[HeadlessOrchestrator] worktree cleanup threw for issue #${issueNumber}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    }
+  }
+
+  /**
+   * Lazily construct the WorktreeManager against the persistent repo root
+   * (survives worktree cleanup itself, mirroring getPersistentRoot's other
+   * consumers).
+   */
+  private getWorktreeManager(): WorktreeManager {
+    if (!this.worktreeManager) {
+      this.worktreeManager = new WorktreeManager(this.getPersistentRoot());
+    }
+    return this.worktreeManager;
+  }
+
+  /**
+   * Startup reconcile sweep for the TS side (#106, Requirement 5). Shells out
+   * to the existing `nightgauge worktree sweep --json` CLI
+   * (cmd/nightgauge/worktree.go) rather than reimplementing the
+   * content-diff/skip-reason reclamation logic in TypeScript — this mirrors
+   * the Go non-autonomous scheduler's own startup sweep
+   * (Scheduler.sweepMergedWorktrees) added in the same issue. Best-effort:
+   * a missing binary or a failed sweep is logged and does not block startup.
+   *
+   * #410 changed what the command does under this call, in two ways that matter
+   * here:
+   *
+   * - it now sweeps EVERY repo root in the workspace, and the JSON is one
+   *   result per root (`results[]`) rather than a single bare object. A run's
+   *   worktree lives in its target repo, so the old single-root shape could not
+   *   describe the sweep this call actually wants;
+   * - it derives its in-flight set from each root's runtime snapshots, so a live
+   *   run's worktree is protected. Before that this call passed no in-flight set
+   *   at all: an extension restart during any run past its merge could reclaim
+   *   the directory that run was still executing in.
+   *
+   * `warnings` and `skippedRoots` are logged rather than dropped — a root that
+   * was not swept, or an issue the in-flight scan declined to protect, is the
+   * only evidence that this pass was narrower than it looks. Each skipped root
+   * carries its own `reason`, which is rendered verbatim.
+   *
+   * The document shape is pinned on the Go side by
+   * TestWorktreeSweep_JSONContractMatchesTheExtensionParser
+   * (cmd/nightgauge/worktree_sweep_test.go), which decodes `--json` into the same
+   * field names read below — so renaming `results`, `door`, `warnings` or
+   * `skippedRoots` fails a test instead of silently muting this log.
+   */
+  async runStartupWorktreeSweep(): Promise<void> {
+    try {
+      const cwd = this.getPersistentRoot();
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        this.logger.debug("Startup worktree sweep skipped — nightgauge binary not resolved");
+        return;
+      }
+      const { stdout } = await execFileAsync(binary, ["worktree", "sweep", "--json"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: 30_000,
+      });
+      const result = JSON.parse(stdout.toString()) as {
+        results?: Array<{
+          repoRoot?: string;
+          reclaimed?: Array<{
+            path: string;
+            branch: string;
+            issueNumber: number;
+            door?: string;
+          }>;
+          errors?: string[];
+        }>;
+        warnings?: string[];
+        skippedRoots?: Array<{ root?: string; reason?: string }>;
+      };
+      for (const perRoot of result.results ?? []) {
+        for (const wt of perRoot.reclaimed ?? []) {
+          // The door is logged because the sweep has two reclaim rules and only
+          // one of them compares content — a removal line that names neither is
+          // unauditable after the fact.
+          this.logger.info(
+            `worktree-reconcile: reclaimed ${wt.path} (branch ${wt.branch}, issue #${wt.issueNumber}, door ${wt.door ?? "unreported"})`
+          );
+        }
+        if (perRoot.errors?.length) {
+          this.logger.warn(
+            `worktree-reconcile: ${perRoot.errors.length} removal failure(s) in ${perRoot.repoRoot ?? cwd}`,
+            { errors: perRoot.errors }
+          );
+        }
+      }
+      if (result.warnings?.length) {
+        this.logger.warn(
+          `worktree-reconcile: ${result.warnings.length} in-flight scan warning(s)`,
+          { warnings: result.warnings }
+        );
+      }
+      if (result.skippedRoots?.length) {
+        // The REASON is logged as given, never assumed. Three different failures
+        // land in this list — a root that resolves to no main checkout, one whose
+        // in-flight set was unreadable, and one whose git sweep failed after the
+        // in-flight set read fine — and asserting one cause for all three is the
+        // same defect as the reclaim line that named a check it never ran.
+        const detail = result.skippedRoots
+          .map((s) => `${s.root ?? "<unnamed root>"} (${s.reason ?? "unreported"})`)
+          .join(", ");
+        this.logger.warn(
+          `worktree-reconcile: ${result.skippedRoots.length} root(s) NOT swept — ${detail}`,
+          { skippedRoots: result.skippedRoots }
+        );
+      }
+    } catch (err) {
+      this.logger.debug("Startup worktree sweep failed — continuing", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Resolve the run's target repo slug ("owner/name"). Prefers the explicit
+   * cross-repo override (set for autonomous concurrent slots); otherwise reads
+   * the active workspace's git remote via `gh`. Returns "" when unresolvable —
+   * callers treat that as "no run-creation context" rather than emitting a
+   * malformed repo. Best-effort and non-throwing.
+   *
+   * PUBLIC because `ConcurrentPipelineManager.startSlotInner` needs the same
+   * answer BEFORE it installs the slot's identity (ADR-017 Decision 10): the
+   * workspace-manifest lookup it prefers reads `Repository.github`, a getter
+   * over a config that nobody has necessarily loaded yet, so without this
+   * last resort a same-repo slot dispatch can install `repo: ""` — and with
+   * no repo Go keeps the runtime snapshot off disk entirely (#307).
+   */
+  async resolveRunRepoSlug(): Promise<string> {
+    if (this.repoOverride?.includes("/")) {
+      return this.repoOverride;
+    }
+    try {
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        {
+          encoding: "utf-8" as const,
+          cwd: this.pinnedWorkspaceRoot ?? this.getWorkingDirectory(),
+          timeout: 15_000,
+        }
+      );
+      const nwo = stdout.trim();
+      return nwo.includes("/") ? nwo : "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Read THIS issue's run id from run-state.json, or "" when there is none.
+   *
+   * Deliberately read here rather than resolved daemon-side from the runtime
+   * registry: that registry is keyed by bare issue number today, and adding a
+   * reader would both give #370 one more site to re-key and mis-stamp the card
+   * when a re-dispatch for the same issue is already in flight. An empty run id
+   * is a handled case — the card simply carries no trace back-reference.
+   *
+   * GUARDED ON issue_number, exactly as this class's sibling reader of the same
+   * file does (`readRecoveryRunStateView`) — the codebase already treats a
+   * mismatched run-state.json as a live risk on this path. `getWorkingDirectory()`
+   * falls back to the first workspace folder when there is no worktree override,
+   * so a non-worktree run for #42 executing at a root where #37's run-state.json
+   * still sits would otherwise stamp #42's card with #37's run_id and trace_ref,
+   * and `nightgauge trace show` on that card would resolve to an unrelated run.
+   * A fabricated identity in the audit trail is worse than an honest empty gap —
+   * the same reasoning the force-clear arm applies when it declines to synthesise
+   * a run id.
+   */
+  private readCurrentRunId(issueNumber: number): string {
+    try {
+      const runStatePath = checkoutPath(this.getWorkingDirectory(), "runState");
+      const parsed = JSON.parse(fs.readFileSync(runStatePath, "utf-8")) as {
+        run_id?: string;
+        issue_number?: number;
+      };
+      if (parsed.issue_number !== undefined && parsed.issue_number !== issueNumber) {
+        return "";
+      }
+      return parsed.run_id ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Raise a RUN-SCOPED Action Center card for a condition this run just hit
+   * (#305).
+   *
+   * The extension operating mode could not do this at all before: every
+   * run-scoped producer hung off the Go scheduler, so a headless run — the
+   * operating mode for the overwhelming majority of dispatches — detected these
+   * conditions, logged them, and dropped them. `attention.raise` takes a CLOSED
+   * producer id plus typed scalars; the daemon builds the card with the same
+   * builders the Go scheduler uses and writes it through the same single store,
+   * so dedup, fingerprint semantics, and resolve/verb execution are inherited
+   * rather than reimplemented here.
+   *
+   * FAIL-OPEN, unconditionally. Every existing raise path is fail-open by
+   * contract (orchestrator.raiseThrough logs and returns), and this one crosses
+   * an IPC boundary that adds failure modes the in-process path never had — no
+   * daemon, request timeout, store unconfigured. A throw from here would turn
+   * an FYI into a run-killer.
+   */
+  private async raiseRunScopedAttention(params: RunScopedAttentionRaise): Promise<void> {
+    try {
+      const repo = await this.resolveRunRepoSlug();
+      if (!repo) {
+        // No resolvable repo identity is a legitimate local state, not a
+        // failure to report — the same stance attention.sweep takes.
+        this.logger.debug?.("attention.raise skipped: no resolvable repo slug", {
+          producer: params.producer,
+          issueNumber: params.issueNumber,
+        });
+        return;
+      }
+      const result = await IpcClient.getInstance().attentionRaise(
+        params.producer,
+        repo,
+        params.issueNumber,
+        this.readCurrentRunId(params.issueNumber),
+        params.pr,
+        params.prState,
+        params.mergeable,
+        params.mergeStateStatus,
+        params.reviewDecision,
+        params.checks,
+        params.stage
+      );
+      this.logger.info("Action Center card raised", {
+        producer: params.producer,
+        issueNumber: params.issueNumber,
+        outcome: result.outcome,
+        requestId: result.id,
+      });
+    } catch (err) {
+      this.logger.warn("attention.raise failed (fail-open)", {
+        producer: params.producer,
+        issueNumber: params.issueNumber,
+        err,
+      });
+    }
+  }
+
+  /**
+   * Get the root directory for persistent data that must survive worktree
+   * cleanup. Returns mainRepoRoot if set, otherwise falls back to
+   * getWorkingDirectory().
+   */
+  private getPersistentRoot(): string {
+    return this.mainRepoRoot ?? this.getWorkingDirectory();
+  }
+
+  /**
+   * Root of the repo THIS RUN targets — the one whose
+   * `pipelineStateDir(root)/budget-override.json` the daemon writes when the
+   * operator resolves a budget-ceiling card. @see runRepoRoot
+   *
+   * Falls back to the persistent root (interactive path, and any slot started
+   * before the pin), which is the same repo in a single-repo workspace.
+   */
+  private getRunRepoRoot(): string {
+    if (this.runRepoRoot) return this.runRepoRoot;
+    // Derive it rather than falling back to `getPersistentRoot()` (#1229).
+    // `mainRepoRoot` is seeded from the RUNNER root and is one fixed path for
+    // every slot, so on any cross-repo dispatch that did not go through
+    // `setRunRepoRoot()` — the interactive `setRepoOverride()` path — it names
+    // the wrong repo. The working directory always belongs to the run, and
+    // `resolveMainRepoRoot()` walks a worktree back to its owning repo, so this
+    // is correct for every path and identical in a single-repo workspace.
+    return resolveMainRepoRoot(this.getWorkingDirectory());
+  }
+
+  /**
+   * Whether the last completed pipeline run's cost exceeded the anomaly threshold.
+   * Reset to false at the start of each runPipeline() call.
+   * @see Issue #1335 - Cost anomaly alerting
+   */
+  getLastCostAnomalyExceeded(): boolean {
+    return this._lastCostAnomalyExceeded;
+  }
+
+  /**
+   * Get the working directory for skill execution
+   *
+   * Priority:
+   * 1. Worktree override (for concurrent pipeline execution)
+   * 2. Context loader (for multi-repo workspace support)
+   * 3. First workspace folder
+   * 4. process.cwd() fallback
+   */
+  /**
+   * Auto-commit any uncommitted work in the worktree before killing a stage.
+   * This preserves work-in-progress on the branch so it isn't lost when the
+   * worktree is cleaned up after pipeline failure.
+   *
+   * @see Issue #1935 - Budget-pause: save work before stopping
+   */
+  private async autoCommitWorktreeWIP(issueNumber: number, stage: string): Promise<void> {
+    const workDir = this.getWorkingDirectory();
+    try {
+      // Check if there are any changes to commit
+      const { stdout: statusOut } = await execAsync("git status --porcelain", {
+        cwd: workDir,
+        timeout: 10_000,
+      });
+
+      if (!statusOut.trim()) {
+        this.logger.info("No uncommitted work to save in worktree", {
+          issueNumber,
+          stage,
+          workDir,
+        });
+        return;
+      }
+
+      // Stage all changes and commit
+      await execAsync("git add -A", { cwd: workDir, timeout: 10_000 });
+      // Never publish the ephemeral Codex steering block (issue 1675).
+      await sanitizeStagedAgentsMd(workDir);
+      const commitMsg =
+        `WIP: budget-exceeded checkpoint for #${issueNumber} (${stage})\n\n` +
+        `Auto-committed by pipeline budget-pause (Issue #1935).\n` +
+        `This commit preserves work-in-progress that would otherwise be lost.`;
+      await execFileAsync("git", ["commit", "-m", commitMsg], {
+        cwd: workDir,
+        timeout: 15_000,
+      });
+
+      this.logger.info("Auto-committed WIP before budget termination", {
+        issueNumber,
+        stage,
+        workDir,
+      });
+
+      // Push to remote so partial work survives for retry (Issue #2338)
+      try {
+        await execAsync("git push", { cwd: workDir, timeout: GIT_PUSH_TIMEOUT_MS });
+        this.logger.info("Pushed WIP commit to remote", {
+          issueNumber,
+          stage,
+        });
+      } catch (pushErr) {
+        this.logger.warn("Failed to push WIP commit (non-fatal)", {
+          issueNumber,
+          stage,
+          error: pushErr instanceof Error ? pushErr.message : "Unknown error",
+        });
+      }
+    } catch (err) {
+      this.logger.warn("Failed to auto-commit WIP (non-fatal)", {
+        issueNumber,
+        stage,
+        error: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  }
+
+  private getWorkingDirectory(): string {
+    // Worktree override takes highest priority (Issue #1621)
+    if (this.worktreeOverride) {
+      return this.worktreeOverride;
+    }
+
+    if (this.contextLoader) {
+      return this.contextLoader.getWorkingDirectory();
+    }
+
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    return workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+  }
+
+  /**
+   * Deterministically sync GitHub label/project status for stage transitions.
+   *
+   * This ensures status progression is adapter-agnostic:
+   * - issue-pickup      -> "In progress"
+   * - feature-planning  -> "In progress" (reinforcement, idempotent)
+   * - feature-dev       -> "In progress" (reinforcement)
+   * - feature-validate  -> "In progress" (reinforcement)
+   * - pr-create         -> "In review"
+   * - pr-merge          -> "Done"
+   *
+   * @see Issue #1714 - Write project fields directly via GraphQL
+   */
+  private async syncStageStatusTransition(
+    stage: PipelineStage,
+    issueNumber: number
+  ): Promise<void> {
+    const statusValue = STAGE_STATUS_VALUES[stage];
+    if (!statusValue) {
+      return;
+    }
+
+    // Unit tests run without workspace folders; skip external side effects.
+    if (
+      !this.contextLoader &&
+      (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0)
+    ) {
+      this.logger.debug("Skipping status sync (no workspace folder)", {
+        stage,
+        issueNumber,
+        statusValue,
+      });
+      return;
+    }
+
+    // Use main repo root for config resolution — worktree paths don't
+    // have .nightgauge/config.yaml.
+    const workspaceRoot = this.getPersistentRoot();
+
+    // Defense-in-depth: don't downgrade a closed issue's project status.
+    // The pre-check in runPipeline() should prevent this, but if a re-run
+    // bypasses it (e.g., forceRerun), we still guard here. @see Issue #699
+    //
+    // Optimization: only run the guard on status-changing transitions
+    // (issue-pickup, pr-create). Mid-pipeline stages that repeat the same
+    // value (feature-planning/dev/validate all set "In progress") skip
+    // this API call — the issue can't have been closed mid-pipeline.
+    const isStatusChange = stage === "issue-pickup" || stage === "pr-create";
+    if (isStatusChange && statusValue !== BOARD_STATUS.done) {
+      try {
+        // `currentStatus` is a RAW board read: getProjectItemStatus returns the
+        // single-select option label verbatim off
+        // ProjectV2ItemFieldSingleSelectValue, so it is spelled however the
+        // board's creator typed it ("Done" / "done" / "DONE"). Comparing it
+        // with `===` makes the guard silently miss on any board that
+        // capitalizes differently — the #623 failure shape — and a forceRerun
+        // would then overwrite a CLOSED issue's Done column with "In progress".
+        // Fold instead. @see Issue #623
+        const currentStatus = await getProjectItemStatus(
+          issueNumber,
+          workspaceRoot,
+          this.logger,
+          this.repoOverride
+        );
+        if (boardStatusEquals(currentStatus, BOARD_STATUS.done)) {
+          this.logger.info("Skipping status sync — issue is CLOSED with Done status", {
+            stage,
+            issueNumber,
+            statusValue,
+          });
+          return;
+        }
+      } catch (err) {
+        // Non-fatal: if we can't check, proceed with the update.
+        this.logger.debug("Could not pre-check issue state for status guard", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Cross-repo identity: when the pipeline is running on an issue that
+    // lives outside the workspace's primary repo (e.g. an
+    // acme-platform issue resolved from nightgauge), the
+    // project-board lookups must target THAT repo, not the config default.
+    // Falls back to undefined for single-repo runs (preserves prior behavior).
+    // @see Issue #2867
+    const issueRepo = this.repoOverride;
+
+    // On issue-pickup, ensure the issue is on the project board first.
+    if (stage === "issue-pickup") {
+      try {
+        await ensureIssueOnProject(issueNumber, workspaceRoot, this.logger, issueRepo);
+      } catch (err) {
+        this.logger.warn("ensureIssueOnProject failed (non-blocking)", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Update project board Status field via GraphQL
+    try {
+      const result = await updateProjectItemStatus(
+        issueNumber,
+        statusValue,
+        workspaceRoot,
+        this.logger,
+        issueRepo
+      );
+      if (result.success) {
+        this.logger.info("Synced stage status transition", {
+          stage,
+          issueNumber,
+          statusValue,
+          method: "graphql",
+        });
+      } else {
+        this.logger.warn("Failed to sync stage status transition", {
+          stage,
+          issueNumber,
+          statusValue,
+          error: result.error,
+        });
+      }
+    } catch (err) {
+      this.logger.warn("Failed to sync stage status transition", {
+        stage,
+        issueNumber,
+        statusValue,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Move the failed issue to "In review" on the project board so it leaves the
+   * Ready tree (not eligible for re-dequeue or drag pickup) without getting
+   * permanently stuck at "In progress".
+   *
+   * Prior behavior reverted to "Ready", which silently put failed issues back
+   * in line for re-processing. That produced cross-issue conflicts when some
+   * epic children completed and others failed — see Issue #2967.
+   *
+   * Non-blocking: failures are logged but never throw.
+   * @see Issue #1115 - Stale status after pipeline failure
+   * @see Issue #2967 - Failed pipelines must not silently return issues to Ready
+   */
+  private async markStatusInReviewOnFailure(issueNumber: number): Promise<void> {
+    if (
+      !this.contextLoader &&
+      (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0)
+    ) {
+      return;
+    }
+    // Use the main repo root (not worktree path) so config.yaml is found.
+    const workspaceRoot = this.getPersistentRoot();
+    const issueRepo = this.repoOverride;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const result = await updateProjectItemStatus(
+          issueNumber,
+          "In review",
+          workspaceRoot,
+          this.logger,
+          issueRepo
+        );
+        if (result.success) {
+          this.logger.info(
+            "Moved project status to In review after failure (awaiting human review)",
+            { issueNumber }
+          );
+          return;
+        }
+        this.logger.warn("Failed to move project status to In review after failure", {
+          issueNumber,
+          error: result.error,
+          attempt,
+        });
+      } catch (err) {
+        this.logger.warn("Failed to move project status to In review after failure", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+          attempt,
+        });
+      }
+      // Brief delay before retry
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
+  }
+
+  /**
+   * Get the path to a pipeline context file.
+   *
+   * Uses context loader if available for repository-scoped paths.
+   *
+   * @param type - The context file type (e.g., 'issue', 'planning', 'dev', 'pr')
+   * @param issueNumber - The issue number
+   * @returns Absolute path to the context file
+   * @see Issue #637 - Generalized from getIssueContextPath()
+   */
+  private getContextPath(type: ContextFileType, issueNumber: number): string {
+    return this.contextAssembler.getContextPath(type, issueNumber);
+  }
+
+  /**
+   * Get the path to an issue context file.
+   * Thin wrapper around getContextPath() for backward compatibility.
+   */
+  private getIssueContextPath(issueNumber: number): string {
+    return this.getContextPath("issue", issueNumber);
+  }
+
+  /**
+   * Wait briefly for a stage output context file to appear after the stage reports success.
+   *
+   * This covers races where the stage process exits before the context file is fully
+   * materialized on disk. Returns immediately when the file is present.
+   *
+   * @param type - The context file type to wait for
+   * @param issueNumber - The issue number
+   * @param maxWaitMs - Maximum time to wait in milliseconds
+   * @returns File path if found, null if timeout
+   * @see Issue #637 - Generalized from waitForIssueContextFile()
+   */
+  private async waitForContextFile(
+    type: ContextFileType,
+    issueNumber: number,
+    maxWaitMs: number
+  ): Promise<string | null> {
+    return this.contextAssembler.waitForContextFile(type, issueNumber, maxWaitMs);
+  }
+
+  /**
+   * Validate that a stage wrote its expected output context file.
+   *
+   * Delegates to ContextAssembler.validateStageContextOutput().
+   *
+   * @returns null if validation passed or not applicable; Error if validation failed
+   * @see Issue #637 - Context file handoff validation
+   * @see Issue #2770 - Extracted to ContextAssembler (Part 3)
+   */
+  private async validateStageContextOutput(
+    stage: PipelineStage,
+    issueNumber: number
+  ): Promise<Error | null> {
+    const repairConfig = getContextSchemaRepairConfig(
+      this.pinnedWorkspaceRoot ?? this.getWorkingDirectory()
+    );
+    this.contextAssembler.setContextFileWaitMs(this.config.contextFileWaitMs);
+
+    const result = await this.contextAssembler.validateStageContextOutput(
+      stage,
+      issueNumber,
+      repairConfig
+    );
+
+    return result.error;
+  }
+
+  /**
+   * Deterministic post-pr-merge verification gate.
+   *
+   * After the pr-merge skill reports success, verify that:
+   * 1. The PR was actually merged (state === MERGED)
+   * 2. CI checks passed (all checks concluded SUCCESS)
+   *
+   * This catches cases where the AI agent chose to merge despite failing CI
+   * or where it reported success without actually merging. The skill is
+   * AI-interpreted and can make bad decisions — this is the safety net.
+   *
+   * @see Issue #1819 - PRs merged with failing CI checks
+   */
+  private async verifyPostMergeState(
+    issueNumber: number,
+    attempt: number = 1,
+    maxAttempts: number = 2
+  ): Promise<Error | null> {
+    // Issue #3266: this body is now a thin shell over the Go binary's
+    // pr-merge stage gate (`nightgauge gate verify pr-merge <N>`).
+    // The gate logic lives in `internal/orchestrator/gates/pr_merge_gate.go`
+    // — single source of truth, used by the Go scheduler stage loop too.
+    // The function's external shape is preserved exactly (`Promise<Error |
+    // null>` plus a "state: OPEN" substring in the error message so the
+    // call site at runPipeline() can decide to retry pr-merge).
+    try {
+      const prContextPath = this.getContextPath("pr", issueNumber);
+      if (!fs.existsSync(prContextPath)) {
+        this.logger.warn("Post-merge verification: no pr context file, skipping check", {
+          issueNumber,
+        });
+        return null;
+      }
+
+      const prContext = JSON.parse(fs.readFileSync(prContextPath, "utf-8"));
+      const prNumber = prContext.pr_number;
+      if (!prNumber) {
+        this.logger.warn("Post-merge verification: no PR number in context, skipping check", {
+          issueNumber,
+        });
+        return null;
+      }
+
+      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+
+      // Resolve binary. When unavailable (developer build, fresh checkout),
+      // skip the gate rather than blocking — the legacy behaviour pre-#3266
+      // was to do nothing in that case and the orchestrator does not retry.
+      const resolver = BinaryResolver.fromVSCode();
+      const binary = await resolver.resolve();
+      if (!binary) {
+        this.logger.warn(
+          "Post-merge verification: nightgauge binary not resolved — skipping deterministic gate",
+          { issueNumber, prNumber }
+        );
+        return null;
+      }
+
+      // Spawn `nightgauge gate verify pr-merge <N> --workdir <cwd> --json`.
+      // The binary exits 0 on passed=true and 2 on passed=false, with the
+      // JSON GateResult on stdout in either case. Other exit codes mean the
+      // CLI itself failed (no gate registered, IO error, etc.).
+      let gateResult: {
+        passed: boolean;
+        reason: string;
+        gate_name?: string;
+        evidence?: string[];
+      } | null = null;
+      let binaryError: unknown = null;
+      try {
+        const { stdout } = await execFileAsync(
+          binary,
+          [
+            "gate",
+            "verify",
+            "pr-merge",
+            String(issueNumber),
+            "--workdir",
+            cwd,
+            "--json",
+            "--timeout",
+            "60",
+            "--record",
+            // #1054: --workdir is the run's WORKTREE, because that is where the
+            // gate reads issue-N.json / dev-N.json from. But the daemon socket
+            // and the run snapshot both live at the repo root, so the record
+            // must be addressed there separately. Before --record-root existed
+            // the CLI derived both from --workdir: the dial always failed and
+            // the direct write landed in a directory with no snapshot, so every
+            // gate on every worktree run recorded nowhere — which is why the
+            // end-of-run audit reported [gate-not-invoked] for gates that had
+            // demonstrably passed. #1021 fixed the run id in the payload, not
+            // the address it was sent to, which is why it changed nothing.
+            "--record-root",
+            this.getRunRepoRoot(),
+            // #1054 round two: the daemon listens at the workspace root serve
+            // was started with, NOT at the run's repo root. In a multi-repo
+            // workspace those differ, so pointing the dial at the run root left
+            // it failing on every run. Verified live: the socket existed only
+            // under the persistent root while the run executed in a sibling
+            // repo. The file fallback cannot cover for this — the durable
+            // record is built by the daemon from its in-memory RuntimeState and
+            // never reads that file.
+            "--daemon-root",
+            this.getPersistentRoot(),
+            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
+          ],
+          { encoding: "utf-8", cwd, timeout: 90_000 }
+        );
+        gateResult = JSON.parse(stdout);
+      } catch (err) {
+        const e = err as { stdout?: string; code?: number };
+        // Exit code 2 with stdout = gate ran and reported passed=false.
+        if (e.stdout && e.code === 2) {
+          try {
+            gateResult = JSON.parse(e.stdout);
+          } catch {
+            binaryError = err;
+          }
+        } else {
+          binaryError = err;
+        }
+      }
+
+      if (!gateResult) {
+        // Binary blew up entirely — escalate as unverified per the existing
+        // path. The PR is already merged on GitHub by hypothesis; we just
+        // can't confirm it programmatically.
+        this.logger.error(
+          "Post-merge verification: gate binary produced no parseable result — escalating",
+          { issueNumber, prNumber, error: binaryError }
+        );
+        await this.escalateUnverifiedMerge(
+          prNumber,
+          issueNumber,
+          cwd,
+          binaryError ?? new Error("gate binary produced no output")
+        );
+        return null;
+      }
+
+      if (gateResult.passed) {
+        this.logger.info("Post-merge verification passed", {
+          issueNumber,
+          prNumber,
+          gateName: gateResult.gate_name,
+        });
+        return null;
+      }
+
+      // Gate failed. Extract the PR state from the evidence array (the gate
+      // emits "state=OPEN" / "state=CLOSED" etc. as evidence) so we can
+      // preserve the existing call-site contract that looks for "state: OPEN"
+      // to decide whether to retry pr-merge.
+      const evidenceJoined = (gateResult.evidence ?? []).join(" ");
+      const stateMatch = evidenceJoined.match(/state=([A-Z_]+)/);
+      const prState = stateMatch ? stateMatch[1] : "UNKNOWN";
+      const isTerminal = attempt >= maxAttempts;
+
+      if (isTerminal) {
+        this.logger.error("Post-merge verification FAILED: PR not merged (terminal)", {
+          issueNumber,
+          prNumber,
+          prState,
+          gateReason: gateResult.reason,
+          attempt,
+          maxAttempts,
+          isTerminal,
+        });
+      } else {
+        this.logger.warn(
+          "Post-merge verification: pr-merge exited without merging — retrying once",
+          {
+            issueNumber,
+            prNumber,
+            prState,
+            gateReason: gateResult.reason,
+            attempt,
+            maxAttempts,
+            isTerminal,
+          }
+        );
+      }
+
+      // Issue #3259: deterministic merge fallback. The gate confirmed the
+      // PR is OPEN; if the PR is independently clean, run the merge here
+      // rather than reporting failure. This still needs `gh pr view` for
+      // mergeable/mergeStateStatus which the gate doesn't expose — the
+      // gate only answers "is it MERGED yet".
+      let blockerReason: string | undefined;
+      if (isTerminal && prState === "OPEN") {
+        const fb = await this.tryDeterministicMergeFallback(prNumber, issueNumber, cwd);
+        if (fb.merged) {
+          // Same correction as the pr-create fallback below (#122): this branch
+          // is only reachable after the LLM skill ran and its post-condition
+          // gate failed, so the stage already cost full LLM price. Recording
+          // "deterministic" — which the schema defines as "skill skipped" —
+          // credited that spend to the deterministic path.
+          this.stageExecutionPaths.set("pr-merge", {
+            path: "llm",
+            puntReason:
+              "deterministic-recovery: fallback merged the PR after the LLM path's gate failed",
+          });
+          return null;
+        }
+        blockerReason = fb.blocker;
+        // The deterministic merge declined; the LLM path is what ran. Capture
+        // the machine-readable blocker as the punt reason so history/telemetry
+        // answer WHY the expensive path was needed (Issue #297).
+        if (blockerReason) {
+          this.stageExecutionPaths.set("pr-merge", { path: "llm", puntReason: blockerReason });
+        }
+        // #305: a branch-protection / required-check / review block is a
+        // human-needed dead end no retry can clear — the Go scheduler has
+        // carded it since ADR 015 §F #6, and until now the extension path
+        // recorded it as punt telemetry and nothing else. The daemon decides
+        // whether this particular block IS branch protection and stays silent
+        // if not.
+        //
+        // The commonest not-applicable case is in-flight CI. This fallback
+        // takes ONE `gh pr view` sample with no CI wait (the EC budget above is
+        // eventual-consistency, not a CI wait), and pr-merge runs right after
+        // pr-create, so on a repo whose CI takes minutes that sample is
+        // routinely BLOCKED/UNSTABLE with checks still queued. The daemon gates
+        // on `stages.MergeBlockedByPendingCI` — the same predicate the Go
+        // runner uses before its bounded CI wait — and returns `not_applicable`
+        // for exactly that shape. Which is why `checks[].conclusion` must reach
+        // it un-coerced (see fetchPrData).
+        if (fb.snapshot) {
+          await this.raiseRunScopedAttention({
+            producer: "branch-protection",
+            issueNumber,
+            pr: prNumber,
+            prState: fb.snapshot.prState,
+            mergeable: fb.snapshot.mergeable,
+            mergeStateStatus: fb.snapshot.mergeStateStatus,
+            reviewDecision: fb.snapshot.reviewDecision,
+            checks: fb.snapshot.checks,
+          });
+        }
+      }
+
+      return new Error(
+        `pr-merge reported success but PR #${prNumber} is not merged (state: ${prState}). ` +
+          // #3924 — when the PR is held open by a deterministically-known
+          // blocker (failing non-required check → UNSTABLE, review, conflict),
+          // name it so the operator and the retro classifier see the real
+          // reason instead of a generic "not merged" alarm.
+          (blockerReason ? `${blockerReason} ` : "") +
+          (isTerminal
+            ? `Pipeline halted after ${maxAttempts} verification attempts.`
+            : `The skill may have exited without actually merging. Retrying once.`)
+      );
+    } catch (err) {
+      this.logger.warn("Post-merge verification failed with unexpected error, continuing", {
+        issueNumber,
+        error: err,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Classify whether an OPEN-PR merge blocker is worth an automatic pr-merge
+   * retry (#185). Repo-config blockers — unresolved ruleset blockers, or a
+   * required check produced by a `continue-on-error` job that is currently
+   * failing (#184's config-mismatch probe) — are deterministically
+   * unwinnable: re-running the stage re-derives the same dead end at full
+   * token cost and ends in the same rejection. Delegates to the Go binary's
+   * `pr ruleset-precheck --json` (single source of truth for ruleset state).
+   *
+   * Fails open: if the binary is unavailable or the probe errors, returns
+   * retryable=true so genuinely transient conditions keep the legacy retry.
+   */
+  private async classifyMergeBlockerRetryability(
+    issueNumber: number,
+    cwd: string
+  ): Promise<{ retryable: boolean; reason?: string }> {
+    try {
+      const prContextPath = this.getContextPath("pr", issueNumber);
+      if (!fs.existsSync(prContextPath)) {
+        return { retryable: true };
+      }
+      const prNumber = JSON.parse(fs.readFileSync(prContextPath, "utf-8")).pr_number;
+      if (!prNumber) {
+        return { retryable: true };
+      }
+
+      const resolver = BinaryResolver.fromVSCode();
+      const binary = await resolver.resolve();
+      if (!binary) {
+        return { retryable: true };
+      }
+
+      const args = ["pr", "ruleset-precheck", String(prNumber), "--json"];
+      const repoSlug = await this.resolveRunRepoSlug();
+      if (repoSlug.includes("/")) {
+        const [owner, repo] = repoSlug.split("/");
+        args.push("--owner", owner, "--repo", repo);
+      }
+
+      const { stdout } = await execFileAsync(binary, args, {
+        encoding: "utf-8",
+        cwd,
+        timeout: 90_000,
+      });
+      const precheck = JSON.parse(stdout) as {
+        blockers?: string[];
+        allowed_to_merge?: boolean;
+        config_mismatches?: Array<{ check: string; failing?: boolean; remediation?: string }>;
+      };
+
+      const failingMismatch = (precheck.config_mismatches ?? []).find((m) => m.failing);
+      if (failingMismatch) {
+        return {
+          retryable: false,
+          reason:
+            failingMismatch.remediation ??
+            `required check "${failingMismatch.check}" is continue-on-error in the workflow but required by branch rules — repo config must change`,
+        };
+      }
+      if (precheck.allowed_to_merge === false) {
+        return {
+          retryable: false,
+          reason: `unresolved branch ruleset blockers: ${(precheck.blockers ?? []).join(", ")}`,
+        };
+      }
+      return { retryable: true };
+    } catch (err) {
+      this.logger.warn(
+        "Merge blocker classification failed — defaulting to retryable (legacy behavior)",
+        { issueNumber, error: err }
+      );
+      return { retryable: true };
+    }
+  }
+
+  /**
+   * Read the structured blocker record from pr-{N}.json (#190). This is the
+   * stage contract that replaces the agent-invented
+   * `requires_manual_intervention` convention (which had zero consumers —
+   * the remediation the agent computed died in the JSON file). The pr-merge
+   * skill writes `blocker: { classification, remediation, non_retryable }`
+   * when it hits a non-retryable merge blocker; the orchestrator reads it to
+   * populate the blocked terminal state. Returns null when absent/unreadable.
+   */
+  private readPrBlockerRecord(
+    issueNumber: number
+  ): { classification?: string; remediation?: string; prNumber?: number } | null {
+    try {
+      const prContextPath = this.getContextPath("pr", issueNumber);
+      if (!fs.existsSync(prContextPath)) {
+        return null;
+      }
+      const prContext = JSON.parse(fs.readFileSync(prContextPath, "utf-8")) as {
+        pr_number?: number;
+        blocker?: { classification?: string; remediation?: string };
+      };
+      if (!prContext.blocker) {
+        return null;
+      }
+      return {
+        classification: prContext.blocker.classification,
+        remediation: prContext.blocker.remediation,
+        prNumber: prContext.pr_number,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Merge a PR_MERGE_RETRY signal into feedback-{N}.json so the retried
+   * pr-merge stage sees attempt 1's blocker instead of re-deriving everything
+   * from scratch (#185 — the retry prompt was previously rebuilt
+   * byte-identical with zero feedback carryover). severity is "warning" so
+   * the Go RetryEngine's backtrack evaluation (blocking-only) ignores it.
+   * Best-effort: failures log and never block the retry.
+   */
+  private writePrMergeRetryFeedback(
+    issueNumber: number,
+    rationale: string,
+    evidence: string[]
+  ): void {
+    try {
+      const feedbackPath = path.join(
+        path.dirname(this.getContextPath("pr", issueNumber)),
+        `feedback-${issueNumber}.json`
+      );
+      let ctx: { schema_version?: string; issue_number?: number; signals?: unknown[] } = {};
+      if (fs.existsSync(feedbackPath)) {
+        try {
+          ctx = JSON.parse(fs.readFileSync(feedbackPath, "utf-8"));
+        } catch {
+          ctx = {};
+        }
+      }
+      const signals = Array.isArray(ctx.signals) ? ctx.signals : [];
+      signals.push({
+        signal_type: "PR_MERGE_RETRY",
+        emitted_by_stage: "pr-merge",
+        backtrack_target_stage: "pr-merge",
+        rationale,
+        evidence,
+        severity: "warning",
+      });
+      fs.writeFileSync(
+        feedbackPath,
+        JSON.stringify(
+          {
+            schema_version: ctx.schema_version ?? "1.1",
+            issue_number: ctx.issue_number ?? issueNumber,
+            signals,
+          },
+          null,
+          2
+        )
+      );
+    } catch (err) {
+      this.logger.warn("Failed to write pr-merge retry feedback (non-blocking)", {
+        issueNumber,
+        error: err,
+      });
+    }
+  }
+
+  /**
+   * Post-condition verification for pr-create (Issue #3869). Confirms a PR
+   * actually exists on GitHub after the pr-create skill reports success.
+   *
+   * The pr-create skill is AI-interpreted: when a push is blocked (e.g. the
+   * destructive-git hook rejects a heredoc body) or an interactive prompt is
+   * dismissed in autonomous mode, it can exit 0 having written a context /
+   * assessment file but never actually opened a PR. The Go scheduler runs
+   * `PrCreateGate` inline on a clean exit, but this legacy TS path did not —
+   * so a false `success=true` slipped through (AcmeApp #42 / #3867:
+   * pr-create "success" with no pr-{N}.json and no PR → pr-merge then failed →
+   * autonomous paused). This is the TS-side mirror of the pr-merge gate.
+   *
+   * Thin shell over `nightgauge gate verify pr-create <N>` — the gate
+   * logic stays single-sourced in `internal/orchestrator/gates/pr_create_gate.go`.
+   * The binary exits 0 on passed=true and 2 on passed=false, emitting the JSON
+   * GateResult on stdout either way.
+   *
+   * Returns an Error on a confirmed false success (no OPEN PR / missing pr
+   * context), or null when the PR is verified OPEN or the gate cannot run
+   * (binary unresolved → skip rather than block, matching verifyPostMergeState).
+   */
+  /**
+   * Resolve the pipeline's GitHub token via the Go binary and export it to
+   * process.env (GH_TOKEN + GITHUB_TOKEN) so every `gh`/`gh api` subprocess this
+   * extension host spawns authenticates as the configured identity rather than
+   * the machine's ambient active gh account (#3892).
+   *
+   * Idempotent and best-effort: if GH_TOKEN is already set we leave it; if the
+   * binary or resolution fails we log debug and proceed (subprocesses fall back
+   * to whatever they used before — no regression).
+   */
+  private async ensureGitHubTokenInProcessEnv(cwd: string): Promise<void> {
+    if (process.env.GH_TOKEN && process.env.GITHUB_TOKEN) {
+      return;
+    }
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        this.logger.debug("Token export skipped — nightgauge binary not resolved");
+        return;
+      }
+      const { stdout } = await execFileAsync(binary, ["forge", "auth", "token"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: 15_000,
+      });
+      const token = stdout.toString().trim();
+      if (!token) {
+        this.logger.debug("Token export skipped — forge auth token resolved empty");
+        return;
+      }
+      process.env.GH_TOKEN = token;
+      process.env.GITHUB_TOKEN = token;
+      this.logger.info(
+        "Exported pipeline GitHub token to process env for gh subprocesses (board status, gates)"
+      );
+    } catch (err) {
+      this.logger.debug("Token export skipped — forge auth token failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Architecture-approval pre-check for feature-dev (Issue #4222). A high-impact
+   * architectural decision stays human-owned: feature-dev must not implement it
+   * until a human approves it (the `approved:architecture` label or an approval
+   * file). The gate also runs inside feature-dev's own preflight, but a block
+   * there exits the subagent without a context file — which the
+   * deterministic-context fallback papered over, so the run then bled into
+   * feature-validate (~$20) and surfaced as a generic `missing-implementation`
+   * (#4220). Running the deterministic `approval-gate` binary HERE, before
+   * feature-dev launches, halts cleanly with an actionable "awaiting approval"
+   * alert and ZERO dev/validate spend.
+   *
+   * Deterministic (a Go binary, not the LLM) → model-independent. Fail-open: an
+   * unresolved binary or an unparseable/errored result returns null (the skill's
+   * inline gate and the post-validate gate remain as backstops). Returns an
+   * Error carrying {@link ARCHITECTURE_APPROVAL_REQUIRED_MARKER} ONLY when the
+   * gate positively reports the decision requires approval.
+   */
+  private async verifyArchitectureApproval(issueNumber: number): Promise<Error | null> {
+    try {
+      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+      const resolver = BinaryResolver.fromVSCode();
+      const binary = await resolver.resolve();
+      if (!binary) {
+        this.logger.debug(
+          "Architecture-approval pre-check: binary not resolved — skipping (skill inline gate remains)",
+          { issueNumber }
+        );
+        return null;
+      }
+
+      let result: { requires_approval?: boolean; reasons?: string[] } | null = null;
+      try {
+        // Exit 0 → proceed (not high-impact, already approved, or gate disabled).
+        const { stdout } = await execFileAsync(
+          binary,
+          ["approval-gate", String(issueNumber), "--workdir", cwd, "--json"],
+          { encoding: "utf-8", cwd, timeout: 30_000 }
+        );
+        try {
+          result = JSON.parse(stdout);
+        } catch {
+          // Exit code 0 IS the verdict (proceed) — an unparseable stdout is a
+          // formatting quirk, not a binary error. Older binaries printed plain
+          // text on the gate-disabled path, which this parse used to mislabel
+          // as "binary error" on every run.
+          return null;
+        }
+      } catch (err) {
+        const e = err as { stdout?: string; stderr?: string; code?: number | string };
+        // Exit 1 → requires approval; the JSON verdict is on stdout.
+        if (e.stdout && e.code === 1) {
+          try {
+            result = JSON.parse(e.stdout);
+          } catch {
+            return null; // unparseable — fail open
+          }
+        } else {
+          this.logger.debug("Architecture-approval pre-check: binary error — skipping", {
+            issueNumber,
+            code: e.code,
+            stderr: typeof e.stderr === "string" ? e.stderr.slice(0, 300) : undefined,
+          });
+          return null; // binary/other error — fail open
+        }
+      }
+
+      if (!result?.requires_approval) {
+        return null;
+      }
+
+      const reasons =
+        Array.isArray(result.reasons) && result.reasons.length > 0
+          ? result.reasons.join("; ")
+          : "high-impact architectural decision";
+      return new Error(
+        `${ARCHITECTURE_APPROVAL_REQUIRED_MARKER} — issue #${issueNumber} is a high-impact ` +
+          `decision that must be human-approved before feature-dev implements it. Why: ${reasons}. ` +
+          `This is NOT a failure and NO development or validation cost was incurred — the pipeline ` +
+          `halted before implementation. To proceed: add the \`approved:architecture\` label to the ` +
+          `issue (or write ${PIPELINE_STATE_DISPLAY}/approval-${issueNumber}.json with ` +
+          `{"approved": true}), then re-queue. To turn the gate off entirely, set ` +
+          `pipeline.architecture_approval.enabled: false.`
+      );
+    } catch (err) {
+      this.logger.debug("Architecture-approval pre-check skipped (unexpected error)", {
+        issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null; // fail-open
+    }
+  }
+
+  /**
+   * Post-condition verification for feature-validate (Issue #4220). The
+   * validate skill exits 0 even on a hard-gate failure: it writes
+   * `validation_status: "failed"` (+ an `errorCategory`) and leaves the code
+   * uncommitted for retry rather than exiting non-zero, delegating the halt
+   * decision to the orchestrator (the commit lives in feature-validate Phase 5
+   * and is skipped when validation fails). This gate reads that verdict and
+   * converts a failed validation into a real stage failure so the pipeline
+   * does NOT advance into a doomed pr-create (no commit to push → the
+   * no-commits-ahead gate fails it anyway, but only after wasting the
+   * pr-create spend and, once the worktree is pruned, the uncommitted code).
+   * The Go scheduler runs FeatureValidateGate inline; this is the TS mirror.
+   *
+   * `validation_status` is read directly from the JSON (and matched
+   * case-insensitively) so this gate is unaffected by any `errorCategory`
+   * enum drift — the failure signal does not depend on the strict enum.
+   *
+   * Fail-open: a missing / unreadable / verdict-less context returns null (the
+   * pre-condition and post-create gates remain as backstops). It returns an
+   * Error ONLY when it positively reads a failed verdict.
+   */
+  /**
+   * Runs the deterministic feature-validate gate so it can supersede a `passed`
+   * verdict with `passed_unverified` when the run introduced a test suite that
+   * no executed tier could have run (#152).
+   *
+   * The derivation deliberately lives in one place — `internal/deliverable`,
+   * reached through `nightgauge gate verify feature-validate` — rather than
+   * being reimplemented here. A TypeScript copy would be a second
+   * implementation of a classification rule, and two copies of one rule is
+   * precisely how the tool-call shapes drifted apart in #169.
+   *
+   * The gate's pass/fail verdict is intentionally discarded: on this path
+   * `verifyPostValidateState` below already owns the halt decision, and taking
+   * it from two places would let them disagree. What is wanted here is only the
+   * gate's side effect on the artifact. Every error is swallowed — a binary
+   * that will not resolve, a timeout, or exit 2 all leave the artifact exactly
+   * as the skill wrote it, which is the direction that never accuses a run of
+   * something it cannot demonstrate.
+   */
+  private async deriveUnexercisedDeliverable(issueNumber: number): Promise<void> {
+    try {
+      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        return;
+      }
+      await execFileAsync(
+        binary,
+        [
+          "gate",
+          "verify",
+          "feature-validate",
+          String(issueNumber),
+          "--workdir",
+          cwd,
+          "--json",
+          "--timeout",
+          "60",
+          "--record",
+          // #1054: --workdir is the worktree the gate reads its inputs from;
+          // the daemon socket and the run snapshot live at the repo root, so
+          // the record is addressed there separately. See the note at the
+          // post-condition gate call.
+          "--record-root",
+          this.getRunRepoRoot(),
+          // #1054 round two — see the note at the post-condition gate call.
+          "--daemon-root",
+          this.getPersistentRoot(),
+          ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
+        ],
+        { encoding: "utf-8", cwd, timeout: 90_000 }
+      );
+    } catch {
+      // See the doc comment: silence is the conservative direction here.
+    }
+  }
+
+  private verifyPostValidateState(issueNumber: number): Error | null {
+    try {
+      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+      const ctxPath = path.join(pipelineStateDir(cwd), `validate-${issueNumber}.json`);
+      if (!fs.existsSync(ctxPath)) {
+        // No verdict to judge — the pre-condition gate handles a missing file.
+        return null;
+      }
+      const parsed = JSON.parse(fs.readFileSync(ctxPath, "utf-8")) as {
+        validation_status?: string;
+        errorCategory?: string | null;
+      };
+      const status = (parsed.validation_status ?? "").trim().toLowerCase();
+      if (status === "failed") {
+        const category = parsed.errorCategory ? ` (${parsed.errorCategory})` : "";
+        // Stable `[validation-failed]` marker (#326) so ClassifyTerminalKind /
+        // classifyTerminalKind record the honest organic quality-gate failure
+        // instead of falling through to the generic subagent_crash fallback —
+        // this is feature-validate correctly catching a real implementation
+        // defect, not a process crash.
+        return new Error(
+          `[validation-failed] feature-validate reported validation_status="failed"${category}. ` +
+            `The validated code was intentionally NOT committed or pushed — the ` +
+            `skill leaves it on disk for retry. Advancing to pr-create would push ` +
+            `an empty branch and fail the no-commits-ahead gate. Halting at ` +
+            `feature-validate so the failure is surfaced for retry/triage instead.`
+        );
+      }
+      if (status === "inconclusive") {
+        // Stable `[validation-inconclusive]` marker (#221), mirroring
+        // `[validation-failed]` above, so ClassifyTerminalKind records
+        // TerminalKindValidationInconclusive instead of falling through to
+        // the generic subagent_crash fallback — a zero-test run is an
+        // environmental misconfiguration, not a process crash.
+        return new Error(
+          `[validation-inconclusive] feature-validate reported validation_status="inconclusive" ` +
+            `(unit-test tier ran but executed zero tests). The validated code was intentionally ` +
+            `NOT committed or pushed. Halting at feature-validate so this is retried as a ` +
+            `recoverable, non-lifetime-counted outcome instead of advancing to pr-create.`
+        );
+      }
+      return null;
+    } catch (err) {
+      // Unreadable/invalid context — fail open (do not block on a parse error;
+      // the pre-condition and post-create gates remain as backstops).
+      this.logger.warn("Post-validate verification skipped — context unreadable", {
+        issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Deterministic backstop for the Issue #1608 commit contract: feature-validate
+   * owns "commit and push validated code" (its Phase 5), but that phase is an
+   * LLM step and can be skipped — observed in a production autonomous run, where the
+   * validate skill saw a *prior issue's* similarly-titled commit on main,
+   * concluded "feature-dev already committed" (feature-dev never commits), and
+   * skipped Phase 5. The branch went to pr-create with zero commits ahead of
+   * base, pr-create pushed an empty branch and confabulated "already merged",
+   * and the validated-but-uncommitted implementation was destroyed with the
+   * worktree — a total loss of the run's spend.
+   *
+   * Runs ONLY after a passed validate verdict (verifyPostValidateState). Logic:
+   *   1. If dev context claims no implemented files → pass through (protects
+   *      already-resolved / no-op flows). Fail-open on unreadable context.
+   *   2. If the branch has commits ahead of origin/<base> → contract satisfied.
+   *   3. Zero commits ahead + source changes still on disk → REMEDIATE: commit
+   *      the exact tree that validation approved (git add -A excluding
+   *      .nightgauge/) and push (push failure non-fatal — pr-create pushes
+   *      again). The tree that passed validation is the tree that ships.
+   *   4. Zero commits ahead + clean tree → the implementation is gone; return
+   *      an Error so the stage fails HERE with a precise message instead of
+   *      two stages later as a confusing pr-create mystery.
+   *
+   * The Go FeatureValidateGate checks gate-metrics only and shares this gap —
+   * TS-path fix first (concurrent slot pipelines run this path); Go parity is
+   * a follow-up.
+   */
+  private async enforceValidateCommitContract(issueNumber: number): Promise<Error | null> {
+    const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+    const pipelineDir = pipelineStateDir(cwd);
+
+    // 1. What did feature-dev claim to implement?
+    let claimedFiles: string[];
+    try {
+      const devPath = path.join(pipelineDir, `dev-${issueNumber}.json`);
+      if (!fs.existsSync(devPath)) return null; // fail-open — nothing to judge
+      const dev = JSON.parse(fs.readFileSync(devPath, "utf-8")) as {
+        files_created?: unknown;
+        files_modified?: unknown;
+      };
+      const toList = (v: unknown): string[] =>
+        Array.isArray(v) ? v.filter((f): f is string => typeof f === "string") : [];
+      claimedFiles = [...toList(dev.files_created), ...toList(dev.files_modified)].filter(
+        (f) => !f.startsWith(".nightgauge/")
+      );
+    } catch {
+      return null; // fail-open
+    }
+    if (claimedFiles.length === 0) return null;
+
+    // 2. Base branch from issue context (default main).
+    let baseBranch = "main";
+    try {
+      const issueCtx = JSON.parse(
+        fs.readFileSync(path.join(pipelineDir, `issue-${issueNumber}.json`), "utf-8")
+      ) as { base_branch?: string; title?: string };
+      if (typeof issueCtx.base_branch === "string" && issueCtx.base_branch.trim()) {
+        baseBranch = issueCtx.base_branch.trim();
+      }
+    } catch {
+      // default main
+    }
+
+    // 3. Contract satisfied when the branch already has commits ahead of base.
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["rev-list", "--count", `origin/${baseBranch}..HEAD`],
+        { cwd, timeout: 10_000 }
+      );
+      if (parseInt(stdout.trim(), 10) > 0) return null;
+    } catch (err) {
+      // Can't determine (no origin ref, detached state) — fail open.
+      this.logger.warn("Validate commit-contract check skipped — rev-list failed", {
+        issueNumber,
+        baseBranch,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+
+    // 4. Zero commits ahead — is the validated tree still on disk?
+    let hasSourceChanges: boolean;
+    try {
+      const { stdout } = await execFileAsync("git", ["status", "--porcelain"], {
+        cwd,
+        timeout: 10_000,
+      });
+      hasSourceChanges = stdout
+        .split("\n")
+        .some((l) => l.trim().length > 0 && !l.includes(".nightgauge"));
+    } catch {
+      return null; // fail-open
+    }
+
+    if (!hasSourceChanges) {
+      return new Error(
+        `feature-validate reported success but the commit contract (#1608) is unmet: ` +
+          `the branch has no commits ahead of origin/${baseBranch} AND the working tree ` +
+          `has no source changes, while the dev context lists ${claimedFiles.length} ` +
+          `implemented file(s) (e.g. ${claimedFiles[0]}). The implementation was lost or ` +
+          `never written — advancing to pr-create would push an empty branch. ` +
+          `Re-run this issue's pipeline from feature-dev.`
+      );
+    }
+
+    // 5. Remediate: commit the exact tree that validation approved, then push.
+    this.logger.warn(
+      "feature-validate skipped its commit-and-push phase (#1608) — committing the validated tree deterministically",
+      { issueNumber, baseBranch, claimedFiles: claimedFiles.length }
+    );
+    try {
+      await execFileAsync("git", ["add", "-A", "--", ".", ":(exclude).nightgauge"], {
+        cwd,
+        timeout: 15_000,
+      });
+      // Never publish the ephemeral Codex steering block (issue 1675).
+      await sanitizeStagedAgentsMd(cwd);
+      const commitMsg =
+        `feat(#${issueNumber}): commit validated implementation (deterministic backstop)\n\n` +
+        `feature-validate passed but skipped its commit-and-push phase (Issue #1608 ` +
+        `contract). The orchestrator committed the exact tree that validation approved ` +
+        `so the work is preserved and pr-create can proceed.\n\n` +
+        `Refs: #${issueNumber}`;
+      await execFileAsync("git", ["commit", "-m", commitMsg], { cwd, timeout: 15_000 });
+      this.logger.info("Deterministically committed validated tree", { issueNumber });
+    } catch (err) {
+      return new Error(
+        `feature-validate skipped its commit (#1608) and the deterministic backstop ` +
+          `commit failed: ${err instanceof Error ? err.message : String(err)}. Halting ` +
+          `before pr-create so the uncommitted work is preserved in the worktree.`
+      );
+    }
+    try {
+      await execFileAsync("git", ["push", "-u", "origin", "HEAD"], {
+        cwd,
+        timeout: GIT_PUSH_TIMEOUT_MS,
+      });
+      this.logger.info("Pushed deterministic validate commit", { issueNumber });
+    } catch (err) {
+      // Non-fatal — pr-create's Phase 3 pushes the branch again.
+      this.logger.warn("Push of deterministic validate commit failed (pr-create will retry)", {
+        issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return null;
+  }
+
+  private async verifyPostCreateState(issueNumber: number): Promise<Error | null> {
+    try {
+      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+
+      const resolver = BinaryResolver.fromVSCode();
+      const binary = await resolver.resolve();
+      if (!binary) {
+        this.logger.warn(
+          "Post-create verification: nightgauge binary not resolved — skipping deterministic gate",
+          { issueNumber }
+        );
+        return null;
+      }
+
+      let gateResult: {
+        passed: boolean;
+        reason: string;
+        gate_name?: string;
+        evidence?: string[];
+      } | null = null;
+      let binaryError: unknown = null;
+      try {
+        const { stdout } = await execFileAsync(
+          binary,
+          [
+            "gate",
+            "verify",
+            "pr-create",
+            String(issueNumber),
+            "--workdir",
+            cwd,
+            "--json",
+            "--timeout",
+            "60",
+            "--record",
+            // #1054: --workdir is the run's WORKTREE, because that is where the
+            // gate reads issue-N.json / dev-N.json from. But the daemon socket
+            // and the run snapshot both live at the repo root, so the record
+            // must be addressed there separately. Before --record-root existed
+            // the CLI derived both from --workdir: the dial always failed and
+            // the direct write landed in a directory with no snapshot, so every
+            // gate on every worktree run recorded nowhere — which is why the
+            // end-of-run audit reported [gate-not-invoked] for gates that had
+            // demonstrably passed. #1021 fixed the run id in the payload, not
+            // the address it was sent to, which is why it changed nothing.
+            "--record-root",
+            this.getRunRepoRoot(),
+            // #1054 round two: the daemon listens at the workspace root serve
+            // was started with, NOT at the run's repo root. In a multi-repo
+            // workspace those differ, so pointing the dial at the run root left
+            // it failing on every run. Verified live: the socket existed only
+            // under the persistent root while the run executed in a sibling
+            // repo. The file fallback cannot cover for this — the durable
+            // record is built by the daemon from its in-memory RuntimeState and
+            // never reads that file.
+            "--daemon-root",
+            this.getPersistentRoot(),
+            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
+          ],
+          { encoding: "utf-8", cwd, timeout: 90_000 }
+        );
+        gateResult = JSON.parse(stdout);
+      } catch (err) {
+        const e = err as { stdout?: string; code?: number };
+        // Exit code 2 with stdout = gate ran and reported passed=false.
+        if (e.stdout && e.code === 2) {
+          try {
+            gateResult = JSON.parse(e.stdout);
+          } catch {
+            binaryError = err;
+          }
+        } else {
+          binaryError = err;
+        }
+      }
+
+      if (!gateResult) {
+        // Binary failed entirely — can't verify. Skip rather than fabricate a
+        // failure (matches the post-merge path's stance for an unverifiable run).
+        this.logger.error(
+          "Post-create verification: gate binary produced no parseable result — skipping",
+          { issueNumber, error: binaryError }
+        );
+        return null;
+      }
+
+      if (gateResult.passed) {
+        this.logger.info("Post-create verification passed", {
+          issueNumber,
+          gateName: gateResult.gate_name,
+        });
+        return null;
+      }
+
+      // Gate failed → pr-create reported success but no OPEN PR exists.
+      const reason = gateResult.reason || "no open PR found for the feature branch";
+
+      // #3927 — deterministic create fallback. Mirror of the pr-merge fallback
+      // (#3259): rather than fail the stage and depend on an LLM retry that may
+      // no-op again for the same reason (a dismissed prompt in autonomous mode,
+      // or the destructive-git hook rejecting a heredoc PR body), push the
+      // feature branch and open the PR ourselves. The gate already confirmed
+      // no PR exists; tryDeterministicCreateFallback re-checks git/gh state.
+      const fallback = await this.tryDeterministicCreateFallback(issueNumber, cwd);
+      if (fallback.created) {
+        this.logger.info(
+          "Post-create verification: deterministic create fallback opened the PR — recovering",
+          { issueNumber }
+        );
+        // The LLM skill already ran to completion here — this branch is only
+        // reachable after its post-condition gate failed — so the stage cost
+        // full LLM price and then the fallback on top. Recording
+        // "deterministic" (defined as "skill skipped") booked that spend as a
+        // deterministic saving and inflated the very adoption metric
+        // deterministic-first is judged by: one observed stage billed $1.80
+        // over 276s and filed as a zero-cost deterministic run (#122).
+        // execution_path names what consumed resources; punt_reason carries
+        // why the deterministic hook was involved at all.
+        this.stageExecutionPaths.set("pr-create", {
+          path: "llm",
+          puntReason:
+            "deterministic-recovery: fallback opened the PR after the LLM path's gate failed",
+        });
+        return null;
+      }
+      // The deterministic create declined; the LLM path is what ran. Capture the
+      // reason as the punt reason for history/telemetry observability (#297).
+      if (fallback.reason) {
+        this.stageExecutionPaths.set("pr-create", { path: "llm", puntReason: fallback.reason });
+      }
+
+      this.logger.error(
+        "Post-create verification FAILED: pr-create reported success but no PR exists",
+        {
+          issueNumber,
+          gateReason: reason,
+          evidence: gateResult.evidence,
+          fallback: fallback.reason,
+        }
+      );
+      return new Error(
+        `pr-create reported success but no open PR exists (${reason}). ` +
+          (fallback.reason
+            ? `Deterministic fallback could not open one: ${fallback.reason}. `
+            : "") +
+          `The skill may have exited without pushing the branch or opening the PR.`
+      );
+    } catch (err) {
+      this.logger.warn("Post-create verification failed with unexpected error, continuing", {
+        issueNumber,
+        error: err,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Generic stage post-condition gate (Issue #210). Wires the three gates the
+   * extension's legacy TS pipeline loop never invoked — `issue-pickup`,
+   * `feature-planning`, `feature-dev` — through the same CLI seam the three
+   * dedicated methods above already use (`verifyPostCreateState`,
+   * `verifyPostMergeState`, `verifyPostValidateState`). Those three stages
+   * have no bespoke retry/fallback logic, so one shared generic call replaces
+   * three more near-identical dedicated methods.
+   *
+   * Always passes `--record` so the result lands in the run record's
+   * `stageGateResults` map (Go: `internal/state.AppendStageGateResultToDisk`)
+   * — previously only the in-process Go scheduler loop persisted gate
+   * results; this TS path never did, even for the three already-wired gates.
+   *
+   * Returns null when the gate passed OR could not be run (binary
+   * unresolved, unparseable output) — matches the existing stance of the
+   * three dedicated methods: an unverifiable run is not treated as a gate
+   * failure. On a genuine gate failure, returns an Error whose message is
+   * prefixed to match the scheduler's synthesized `KindNoOp` text
+   * (`internal/orchestrator/scheduler.go`) so `ClassifyTerminalKind`/
+   * `ResolveTerminalKind` classify identically regardless of which
+   * orchestration path produced the failure.
+   */
+  private async runPostConditionGate(
+    stage: PipelineStage,
+    issueNumber: number
+  ): Promise<{ error: Error; terminalKind?: string } | null> {
+    try {
+      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+
+      const resolver = BinaryResolver.fromVSCode();
+      const binary = await resolver.resolve();
+      if (!binary) {
+        this.logger.warn(
+          "Post-condition gate: nightgauge binary not resolved — skipping deterministic gate",
+          { issueNumber, stage }
+        );
+        return null;
+      }
+
+      let gateResult: {
+        passed: boolean;
+        reason: string;
+        gate_name?: string;
+        evidence?: string[];
+        kind?: string;
+        terminal_kind?: string;
+      } | null = null;
+      let binaryError: unknown = null;
+      try {
+        const { stdout } = await execFileAsync(
+          binary,
+          [
+            "gate",
+            "verify",
+            stage,
+            String(issueNumber),
+            "--workdir",
+            cwd,
+            "--json",
+            "--timeout",
+            "60",
+            "--record",
+            // #1054: --workdir is the run's WORKTREE, because that is where the
+            // gate reads issue-N.json / dev-N.json from. But the daemon socket
+            // and the run snapshot both live at the repo root, so the record
+            // must be addressed there separately. Before --record-root existed
+            // the CLI derived both from --workdir: the dial always failed and
+            // the direct write landed in a directory with no snapshot, so every
+            // gate on every worktree run recorded nowhere — which is why the
+            // end-of-run audit reported [gate-not-invoked] for gates that had
+            // demonstrably passed. #1021 fixed the run id in the payload, not
+            // the address it was sent to, which is why it changed nothing.
+            "--record-root",
+            this.getRunRepoRoot(),
+            // #1054 round two: the daemon listens at the workspace root serve
+            // was started with, NOT at the run's repo root. In a multi-repo
+            // workspace those differ, so pointing the dial at the run root left
+            // it failing on every run. Verified live: the socket existed only
+            // under the persistent root while the run executed in a sibling
+            // repo. The file fallback cannot cover for this — the durable
+            // record is built by the daemon from its in-memory RuntimeState and
+            // never reads that file.
+            "--daemon-root",
+            this.getPersistentRoot(),
+            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
+          ],
+          { encoding: "utf-8", cwd, timeout: 90_000 }
+        );
+        gateResult = JSON.parse(stdout);
+      } catch (err) {
+        const e = err as { stdout?: string; code?: number };
+        // Exit code 2 with stdout = gate ran and reported passed=false.
+        if (e.stdout && e.code === 2) {
+          try {
+            gateResult = JSON.parse(e.stdout);
+          } catch {
+            binaryError = err;
+          }
+        } else {
+          binaryError = err;
+        }
+      }
+
+      if (!gateResult) {
+        this.logger.error(
+          "Post-condition gate: gate binary produced no parseable result — skipping",
+          { issueNumber, stage, error: binaryError }
+        );
+        return null;
+      }
+
+      if (gateResult.passed) {
+        this.logger.info("Post-condition gate passed", {
+          issueNumber,
+          stage,
+          gateName: gateResult.gate_name,
+        });
+        return null;
+      }
+
+      this.logger.error("Post-condition gate FAILED", {
+        issueNumber,
+        stage,
+        gateReason: gateResult.reason,
+        evidence: gateResult.evidence,
+      });
+
+      // #223: the gate found work on disk that the stage never handed off.
+      // Commit it before returning, because returning is what halts the fleet
+      // and hands the worktree to the next sweep. The Go scheduler has done
+      // this since #3542; this path never could, which is why #221's finished
+      // implementation sat uncommitted while its halt card said "zero file
+      // changes". Best-effort by construction — a failed rescue must not
+      // replace the gate's diagnosis with a rescue error.
+      if (gateResult.terminal_kind === "dev_handoff_missing") {
+        await this.recoverStrandedWork(binary, cwd, issueNumber, stage);
+      }
+
+      // #283 defect 3: thread the gate's STRUCTURED terminal_kind through
+      // instead of discarding it. Without it the exit record carried no
+      // terminal_kind at all (Go's text fallback matched nothing for e.g.
+      // "dev context does not match the expected schema"), the pause
+      // hardcoded "unclassified", and a harness/bookkeeping fault was booked
+      // as an organic FAIL — routing the run into the lifetime-cap,
+      // fleet-pausing branch and steering the operator wrong.
+      if (gateResult.kind === "no_op") {
+        return {
+          error: new Error(
+            `premature turn end: stage exited 0 with no state change (gate no-op): ${gateResult.reason}`
+          ),
+          terminalKind: gateResult.terminal_kind || undefined,
+        };
+      }
+      return {
+        error: new Error(`stage gate failed: ${gateResult.reason}`),
+        terminalKind: gateResult.terminal_kind || undefined,
+      };
+    } catch (err) {
+      this.logger.warn("Post-condition gate failed with unexpected error, continuing", {
+        issueNumber,
+        stage,
+        error: err,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Commits work a stage produced but never handed off, so a halt does not
+   * become a deletion (#223).
+   *
+   * Delegates to `nightgauge worktree recover`, which wraps the same
+   * `RecoverUncommittedWork` the Go scheduler has used since #3542 — one
+   * implementation, so the bookkeeping exclusion and the best-effort push
+   * behave identically on both execution paths. Duplicating it in TypeScript is
+   * how the two would drift.
+   *
+   * Never throws. The caller is on the failure path already; a rescue that
+   * fails must leave the gate's own diagnosis intact rather than masking it.
+   */
+  private async recoverStrandedWork(
+    binary: string,
+    cwd: string,
+    issueNumber: number,
+    stage: PipelineStage
+  ): Promise<void> {
+    // The worktree, NOT `cwd`. The gate is invoked with
+    // `pinnedWorkspaceRoot ?? getWorkingDirectory()`, and pinnedWorkspaceRoot
+    // is the repository root — recovering there would commit against main
+    // instead of the issue branch. getWorkingDirectory() already prefers
+    // worktreeOverride, so it is the correct fallback.
+    const worktree = this.worktreeOverride ?? this.getWorkingDirectory();
+    try {
+      const { stdout } = await execFileAsync(
+        binary,
+        [
+          "worktree",
+          "recover",
+          "--worktree",
+          worktree,
+          "--issue",
+          String(issueNumber),
+          "--stage",
+          stage,
+          "--json",
+        ],
+        { encoding: "utf-8", cwd, timeout: 60_000 }
+      );
+      const result = JSON.parse(stdout) as { recovered?: boolean; message?: string };
+      if (result.recovered) {
+        this.logger.info("Stranded stage work committed to the issue branch", {
+          issueNumber,
+          stage,
+          worktree,
+          message: result.message,
+        });
+      } else {
+        this.logger.info("No stranded work to recover", { issueNumber, stage, worktree });
+      }
+    } catch (err) {
+      this.logger.error(
+        "Failed to recover stranded stage work — it is still on disk in the worktree",
+        { issueNumber, stage, worktree, error: err }
+      );
+    }
+  }
+
+  /**
+   * Invokes the Go binary's post-merge hook to explicitly close the merged
+   * sub-issue and auto-close its parent epic if all sub-issues are now
+   * closed. Mirrors `internal/orchestrator/epic.go::checkEpicCompletion` so
+   * the legacy TS path and the Go-scheduler path both close parent epics on
+   * the same trigger.
+   *
+   * Non-blocking by design: any failure logs a warning but never throws.
+   * The merge itself has already succeeded by the time we get here.
+   */
+  /**
+   * owner/repo for the post-merge hook.
+   *
+   * Prefers the slot's own repo override: on the concurrent-slot path the run
+   * targets a repository that is not necessarily the one the process cwd sits
+   * in, and asking `gh repo view` in the wrong directory names the wrong repo
+   * in the survival record. The fallback runs in getRunRepoRoot() for the same
+   * reason — the run's repo, never the launch root.
+   */
+  private async resolvePostMergeNwo(issueNumber: number): Promise<{ owner: string; repo: string }> {
+    if (this.repoOverride?.includes("/")) {
+      const [owner, repo] = this.repoOverride.split("/");
+      if (owner && repo) {
+        return { owner, repo };
+      }
+    }
+    try {
+      const { stdout: nwoRaw } = await execFileAsync(
+        "gh",
+        ["repo", "view", "--json", "owner,name", "-q", '.owner.login + "/" + .name'],
+        { cwd: this.getRunRepoRoot(), encoding: "utf-8", timeout: 10_000 }
+      );
+      const [owner, repo] = nwoRaw.trim().split("/");
+      if (!owner || !repo) {
+        this.logger.warn("Post-merge hook: could not resolve owner/repo", {
+          issueNumber,
+          nwo: nwoRaw.trim(),
+        });
+        return { owner: "", repo: "" };
+      }
+      return { owner, repo };
+    } catch (err) {
+      this.logger.warn("Post-merge hook: could not resolve owner/repo", {
+        issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { owner: "", repo: "" };
+    }
+  }
+
+  /**
+   * The merged PR's number, from the pr-{N}.json context file. Returns 0 when
+   * the file is absent or unreadable — the hook then behaves as it did before
+   * #1019 (epic check only, no survival capture) rather than not running.
+   */
+  private readMergedPrNumber(issueNumber: number): number {
+    try {
+      const prContextPath = this.getContextPath("pr", issueNumber);
+      if (!fs.existsSync(prContextPath)) {
+        return 0;
+      }
+      const prContext = JSON.parse(fs.readFileSync(prContextPath, "utf-8"));
+      const n = Number(prContext.pr_number);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private async invokePostMergeHook(issueNumber: number): Promise<void> {
+    const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+    try {
+      const resolver = BinaryResolver.fromVSCode();
+      const binary = await resolver.resolve();
+      if (!binary) {
+        this.logger.warn("Post-merge hook: binary unresolved — skipping epic auto-close", {
+          issueNumber,
+        });
+        return;
+      }
+
+      const { owner, repo } = await this.resolvePostMergeNwo(issueNumber);
+      if (!owner || !repo) {
+        return;
+      }
+
+      // The PR number, read the same way verifyPostMergeState reads it. Without
+      // it hooks.EvaluatePostMerge never fetches the merge SHA and mergedAt, so
+      // SurvivalEligible is false and the seeding block is dead — which is how
+      // the mandated dogfood path produced zero survival records (#1019). The
+      // hook is non-blocking, so an unreadable context file degrades to the old
+      // epic-only behaviour rather than skipping the hook.
+      const prNumber = this.readMergedPrNumber(issueNumber);
+
+      const args = [
+        "hook",
+        "post-merge",
+        "--issue",
+        String(issueNumber),
+        "--owner",
+        owner,
+        "--repo",
+        repo,
+        // Root the survival journal at the LAUNCH root, not the process cwd.
+        // cwd is the run's worktree on the concurrent-slot path, and that
+        // directory is removed as part of post-merge cleanup — the record would
+        // be written and then deleted, leaving no trace of the failure. This is
+        // the TypeScript twin of the Go scheduler's s.workspaceRoot.
+        "--workdir",
+        this.getPersistentRoot(),
+        "--json",
+      ];
+      if (prNumber > 0) {
+        args.splice(4, 0, "--pr", String(prNumber));
+      }
+
+      // The hook now waits out the merge commit's check runs on the base
+      // branch (#1249): up to its own 20-minute budget, so main's run is
+      // observed rather than predicted. The old 30s timeout would kill it
+      // mid-poll and record nothing — this bound is the hook's budget plus
+      // headroom for the reconciliation calls around it.
+      const { stdout } = await execFileAsync(binary, args, {
+        cwd,
+        encoding: "utf-8",
+        timeout: POST_MERGE_HOOK_TIMEOUT_MS,
+      });
+      this.logger.info("Post-merge hook completed", {
+        issueNumber,
+        result: stdout.trim(),
+      });
+    } catch (err) {
+      this.logger.warn("Post-merge hook failed (non-blocking)", {
+        issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Issue #3259 deterministic merge fallback. The gate confirmed the PR is
+   * still OPEN despite the skill claiming success; if it's independently
+   * mergeable, run the merge ourselves rather than failing the pipeline.
+   *
+   * Returns true when the fallback merged the PR (caller should treat
+   * verification as passed); false when it was either not eligible or the
+   * merge attempt itself failed (caller should fall through to the failure
+   * path so the pipeline-failed label still gets applied).
+   */
+  private async tryDeterministicMergeFallback(
+    prNumber: number,
+    issueNumber: number,
+    cwd: string
+  ): Promise<{ merged: boolean; blocker?: string; snapshot?: MergeBlockerSnapshot }> {
+    const EC_POLL_INTERVAL_MS = 2_000;
+    const EC_MAX_POLLS = 4;
+
+    let prState: string;
+    let mergeable: string;
+    let mergeStateStatus: string;
+    let reviewDecision: string;
+    let checkConclusions: Array<{ name: string; conclusion: string }>;
+
+    const fetchPrData = async () => {
+      const { stdout } = await execFileAsync(
+        "gh",
+        [
+          "pr",
+          "view",
+          String(prNumber),
+          "--json",
+          // #305 adds reviewDecision: the Action Center card's reason is
+          // produced by the Go `stages.Decide()` matrix, which distinguishes
+          // "review-not-approved" from the other blockers. Without this field
+          // a review block would be indistinguishable from a clean PR on the
+          // daemon side and would raise no card at all.
+          "state,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision",
+        ],
+        { encoding: "utf-8", cwd, timeout: 30_000 }
+      );
+      const data = JSON.parse(stdout);
+      return {
+        state: data.state as string,
+        // An in-flight check's conclusion is NULL on the wire, and empty is the
+        // meaningful value for it — `stages.PRStatusCheckRow` documents `""
+        // (in-flight)` and `stages.MergeBlockedByPendingCI` keys on
+        // ""/"PENDING". Coercing null to "UNKNOWN" (#305 review) made this
+        // projection unable to express "CI is still running", so the daemon
+        // read a queued required check as a branch-protection block and told
+        // the operator to fix a failing check that does not exist.
+        checks: (
+          (data.statusCheckRollup ?? []) as Array<{
+            name?: string;
+            conclusion?: string | null;
+          }>
+        ).map((c) => ({ name: c.name || "unknown", conclusion: c.conclusion ?? "" })),
+        mergeable: (data.mergeable as string) || "UNKNOWN",
+        mergeStateStatus: (data.mergeStateStatus as string) || "UNKNOWN",
+        // Empty is meaningful and NOT a fallback value: GitHub returns "" when
+        // the branch ruleset requires no reviewers, which Decide() reads as
+        // "review not blocking". Coercing it to "UNKNOWN" would invent a
+        // blocker that does not exist.
+        reviewDecision: (data.reviewDecision as string) ?? "",
+      };
+    };
+
+    try {
+      const data = await fetchPrData();
+      prState = data.state;
+      mergeable = data.mergeable;
+      mergeStateStatus = data.mergeStateStatus;
+      reviewDecision = data.reviewDecision;
+      checkConclusions = data.checks;
+    } catch (fetchErr) {
+      if (isGithubRateLimitError(fetchErr)) {
+        await tripBreakerIfRateLimited(fetchErr, this.logger, {
+          source: "deterministic merge fallback (eligibility check)",
+          issueNumber,
+        });
+      }
+      this.logger.warn(
+        "Post-merge verification: deterministic merge fallback eligibility check failed — falling through",
+        { issueNumber, prNumber, error: fetchErr }
+      );
+      return { merged: false };
+    }
+
+    const failedChecks = checkConclusions.filter(
+      (c) => c.conclusion === "FAILURE" || c.conclusion === "ERROR"
+    );
+    const eligible =
+      mergeable === "MERGEABLE" && mergeStateStatus === "CLEAN" && failedChecks.length === 0;
+    if (!eligible) {
+      // #3924 — the PR has a deterministically-known blocker (failing
+      // non-required check → UNSTABLE, review required, conflict). Declining
+      // to merge is correct; render the reason so the caller can surface it
+      // (and the retro classifier can emit `merge-blocked`, not `unknown`).
+      const blocker = describeMergeBlocker(mergeable, mergeStateStatus, failedChecks);
+      this.logger.info("Post-merge verification: deterministic merge fallback NOT eligible", {
+        issueNumber,
+        prNumber,
+        mergeable,
+        mergeStateStatus,
+        reviewDecision,
+        failedCheckCount: failedChecks.length,
+        blocker,
+      });
+      // #305: the STRUCTURED projection travels alongside the prose. The prose
+      // is for the operator-facing error line and the retro classifier; the
+      // Action Center card's reason comes from the daemon running the same
+      // `stages.Decide()` matrix the Go path uses, so the same block produces
+      // the same card no matter which surface observed it.
+      return {
+        merged: false,
+        blocker,
+        snapshot: {
+          prState,
+          mergeable,
+          mergeStateStatus,
+          reviewDecision,
+          checks: checkConclusions,
+        },
+      };
+    }
+
+    this.logger.info("Post-merge verification: deterministic merge fallback triggered", {
+      issueNumber,
+      prNumber,
+      mergeable,
+      mergeStateStatus,
+      checkCount: checkConclusions.length,
+      reason: "skill exited without merging; PR is independently clean",
+    });
+
+    try {
+      await execFileAsync("gh", ["pr", "merge", String(prNumber), "--squash", "--delete-branch"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: 60_000,
+      });
+    } catch (mergeErr) {
+      const stderr = (mergeErr as { stderr?: string } | undefined)?.stderr ?? String(mergeErr);
+      this.logger.warn(
+        "Post-merge verification: deterministic merge fallback failed — falling through to existing failure path",
+        { issueNumber, prNumber, stderr: stderr.slice(0, 500) }
+      );
+      return { merged: false };
+    }
+
+    for (let poll = 1; poll <= EC_MAX_POLLS; poll++) {
+      try {
+        const data = await fetchPrData();
+        if (data.state === "MERGED") {
+          this.logger.info("Post-merge verification: deterministic merge fallback succeeded", {
+            issueNumber,
+            prNumber,
+            polls: poll,
+          });
+          return { merged: true };
+        }
+      } catch {
+        // ignore — next poll will retry
+      }
+      if (poll < EC_MAX_POLLS) {
+        await new Promise((r) => setTimeout(r, EC_POLL_INTERVAL_MS));
+      }
+    }
+
+    this.logger.warn(
+      "Deterministic merge fallback: gh pr merge accepted but PR not yet MERGED — falling through",
+      { issueNumber, prNumber }
+    );
+    return { merged: false };
+  }
+
+  /**
+   * Deterministic pr-create fallback (#3927) — the mirror of
+   * tryDeterministicMergeFallback (#3259) for the create stage. When the
+   * pr-create skill exits 0 but the post-create gate finds no open PR, push
+   * the feature branch and open the PR ourselves rather than failing the stage
+   * and depending on an LLM retry that may no-op again for the same reason (a
+   * dismissed prompt in autonomous mode, or the destructive-git hook rejecting
+   * a heredoc PR body).
+   *
+   * LAST-RESORT safety net: it opens a minimal PR (title from the issue, body
+   * `Closes #N`) purely to unblock the pipeline — the rich description is the
+   * pr-create stage's job. It runs `gh`/`git` via execFile (no shell, no
+   * heredoc), so it cannot trip the destructive-git hook that may have blocked
+   * the skill in the first place.
+   *
+   * Idempotent and conservative: short-circuits to created:true if an open PR
+   * already exists, and refuses to act on a base/detached branch or a branch
+   * with no commits ahead of the base.
+   */
+  private async tryDeterministicCreateFallback(
+    issueNumber: number,
+    cwd: string
+  ): Promise<{ created: boolean; reason?: string }> {
+    const repoArgs = this.repoOverride ? ["--repo", this.repoOverride] : [];
+
+    // 1. Resolve the feature branch (current HEAD in the worktree).
+    let branch: string;
+    try {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: 15_000,
+      });
+      branch = stdout.trim();
+    } catch (err) {
+      return {
+        created: false,
+        reason: `could not resolve feature branch: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (!branch || branch === "HEAD" || branch === "main" || branch === "master") {
+      return {
+        created: false,
+        reason: `refusing to open a PR from base/detached branch "${branch || "?"}"`,
+      };
+    }
+
+    // 2. Short-circuit if an open PR for this branch already exists (the gate
+    //    may have raced, or the skill opened one after the gate ran).
+    const openPrExists = async (): Promise<boolean> => {
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["pr", "list", "--head", branch, "--state", "open", "--json", "number", ...repoArgs],
+        { encoding: "utf-8", cwd, timeout: 30_000 }
+      );
+      const prs = JSON.parse(stdout) as Array<{ number: number }>;
+      return Array.isArray(prs) && prs.length > 0;
+    };
+    try {
+      if (await openPrExists()) {
+        this.logger.info("Deterministic create fallback: open PR already exists for branch", {
+          issueNumber,
+          branch,
+        });
+        return { created: true };
+      }
+    } catch (err) {
+      if (isGithubRateLimitError(err)) {
+        await tripBreakerIfRateLimited(err, this.logger, {
+          source: "deterministic create fallback (pre-check)",
+          issueNumber,
+        });
+        return { created: false, reason: "GitHub rate-limited during pre-check" };
+      }
+      // Non-fatal: fall through and attempt to create.
+    }
+
+    // 3. Resolve the base branch and confirm the feature branch has commits
+    //    ahead of it (else there is genuinely nothing to open a PR for).
+    let base = "main";
+    try {
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name", ...repoArgs],
+        { encoding: "utf-8", cwd, timeout: 30_000 }
+      );
+      if (stdout.trim()) base = stdout.trim();
+    } catch {
+      // keep default "main"
+    }
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["rev-list", "--count", `origin/${base}..HEAD`],
+        { encoding: "utf-8", cwd, timeout: 15_000 }
+      );
+      const ahead = parseInt(stdout.trim(), 10);
+      if (Number.isFinite(ahead) && ahead <= 0) {
+        // Genuinely confirmed zero — not an inconclusive count (that's the
+        // catch block below). Stamp the stable `[no-changes-produced]`
+        // marker (#317) so ClassifyTerminalKind/classifyTerminalKind record
+        // the honest "nothing to commit" kind instead of falling through to
+        // subagent_crash — this is the exact shape of a human-only issue
+        // (e.g. labeled `owner-action`) that correctly produced no code.
+        return {
+          created: false,
+          reason: `[no-changes-produced] feature branch "${branch}" has no commits ahead of ${base}`,
+        };
+      }
+      if (!Number.isFinite(ahead)) {
+        return {
+          created: false,
+          reason: `could not parse commit count for "${branch}" vs ${base}: ${stdout.trim()}`,
+        };
+      }
+    } catch {
+      // If we cannot count (e.g. origin/base not fetched), be conservative and
+      // do not fabricate a PR — surface as a non-creation with a clear reason.
+      return {
+        created: false,
+        reason: `could not confirm "${branch}" has commits ahead of ${base}`,
+      };
+    }
+
+    // 4. Push the branch.
+    try {
+      await execFileAsync("git", ["push", "-u", "origin", branch], {
+        encoding: "utf-8",
+        cwd,
+        timeout: GIT_PUSH_TIMEOUT_MS,
+      });
+    } catch (pushErr) {
+      if (isGithubRateLimitError(pushErr)) {
+        await tripBreakerIfRateLimited(pushErr, this.logger, {
+          source: "deterministic create fallback (push)",
+          issueNumber,
+        });
+      }
+      const stderr = (pushErr as { stderr?: string } | undefined)?.stderr ?? String(pushErr);
+      return { created: false, reason: `branch push failed: ${stderr.slice(0, 200)}` };
+    }
+
+    // 5. Open the PR. Title from the issue; minimal body with the closing
+    //    keyword. Passed as execFile args (no shell, no heredoc) so the
+    //    destructive-git hook that may have blocked the skill never applies.
+    let title = `pr-create fallback for #${issueNumber}`;
+    try {
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["issue", "view", String(issueNumber), "--json", "title", "-q", ".title", ...repoArgs],
+        { encoding: "utf-8", cwd, timeout: 30_000 }
+      );
+      if (stdout.trim()) title = stdout.trim();
+    } catch {
+      // keep default title
+    }
+    const body =
+      `Closes #${issueNumber}\n\n` +
+      `_Opened by the deterministic pr-create fallback (#3927) after the pr-create stage ` +
+      `exited without creating a PR. The full description is normally authored by the ` +
+      `pr-create stage; this is a safety-net PR to unblock the pipeline._`;
+    this.logger.info("Deterministic create fallback: opening PR", { issueNumber, branch, base });
+    try {
+      await execFileAsync(
+        "gh",
+        [
+          "pr",
+          "create",
+          "--base",
+          base,
+          "--head",
+          branch,
+          "--title",
+          title,
+          "--body",
+          body,
+          ...repoArgs,
+        ],
+        { encoding: "utf-8", cwd, timeout: 60_000 }
+      );
+    } catch (createErr) {
+      if (isGithubRateLimitError(createErr)) {
+        await tripBreakerIfRateLimited(createErr, this.logger, {
+          source: "deterministic create fallback (create)",
+          issueNumber,
+        });
+      }
+      const stderr = (createErr as { stderr?: string } | undefined)?.stderr ?? String(createErr);
+      return { created: false, reason: `gh pr create failed: ${stderr.slice(0, 200)}` };
+    }
+
+    // 6. Confirm an open PR now exists.
+    try {
+      if (await openPrExists()) {
+        this.logger.info("Deterministic create fallback succeeded — PR opened", {
+          issueNumber,
+          branch,
+        });
+        return { created: true };
+      }
+    } catch {
+      // fall through
+    }
+    return { created: false, reason: "PR not visible after create" };
+  }
+
+  /**
+   * Deterministic-FIRST execution for pr-create / pr-merge on the TS
+   * (VSCode-dogfood) execution path (Issue #300).
+   *
+   * The autonomous / concurrent VSCode runs execute THIS orchestrator's
+   * `runPipeline` — one instance per `ConcurrentPipelineManager` slot, inside
+   * each issue's worktree — NOT the Go scheduler's stage loop. The scheduler's
+   * deterministic-first hooks (`tryDeterministicPRCreate` /
+   * `tryDeterministicPRMerge`) therefore never fired here, so every dogfood run
+   * paid for an LLM pr-create + pr-merge session (#297/#299 root-cause). This
+   * method invokes the SAME Go runners via `nightgauge pr-stage <create|merge>`
+   * BEFORE the LLM skill, mirroring the scheduler contract exactly rather than
+   * maintaining a second, divergent decision matrix / render / CI-wait in TS.
+   *
+   * Outcomes (mirrors the Go scheduler):
+   * - created/merged → record `execution_path="deterministic"`, complete the
+   *   stage, and return `handled` with a synthetic success `StageRunResult`. The
+   *   caller SKIPS `runStage` (the LLM) but still flows through the normal
+   *   post-success gates (verifyPostCreate/Merge, context validation, outcome
+   *   recording) — so no post-success side effect is lost. ~$0 stage cost.
+   * - punt → record `execution_path="llm"` + `punt_reason` and return `llm`; the
+   *   caller runs the LLM skill exactly as today (no behavior regression).
+   * - rate-limited → return `deferred`: DO NOT run the LLM (mirror the Go #3976
+   *   semantics — re-shelling `gh` into an exhausted bucket burns tokens for a
+   *   near-certain re-failure). Trips the rate-limit breaker and fails the stage.
+   *
+   * Fails OPEN: any binary/resolution/parse error returns `llm` so the pipeline
+   * degrades to today's behavior rather than stalling.
+   *
+   * The worktree matters (#288): the deterministic runner reads pr-{N}.json and
+   * the dev/validate context from the worktree, where those gitignored files
+   * live on concurrent runs. `getWorkingDirectory()` returns the
+   * `worktreeOverride` when one is set, and it is passed as `--workdir` and the
+   * subprocess cwd.
+   */
+  private async runDeterministicPrStage(
+    stage: PipelineStage,
+    issueNumber: number,
+    stageStartTime: number
+  ): Promise<
+    | { kind: "llm" }
+    | { kind: "handled"; result: StageRunResult }
+    | { kind: "deferred"; error: Error }
+    | { kind: "refused"; error: Error }
+  > {
+    if (stage !== "pr-create" && stage !== "pr-merge") {
+      return { kind: "llm" };
+    }
+
+    // Resolve the Go binary. Unavailable → run the LLM path (safe default).
+    // Record execution_path="llm" + a reason on EVERY fail-open return (#309):
+    // an operator must be able to distinguish a legitimate runner punt (with a
+    // DecideCreate/DecideMerge reason) from the deterministic hook never firing
+    // at all. Without this the history record was silent on both.
+    let binary: string | null;
+    try {
+      binary = await BinaryResolver.fromVSCode().resolve();
+    } catch (err) {
+      this.logger.warn("Deterministic pr-stage: binary unresolved — running LLM path", {
+        stage,
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      this.stageExecutionPaths.set(stage, { path: "llm", puntReason: "binary-unresolved" });
+      return { kind: "llm" };
+    }
+    if (!binary) {
+      this.logger.warn("Deterministic pr-stage: binary unresolved (null) — running LLM path", {
+        stage,
+        issueNumber,
+      });
+      this.stageExecutionPaths.set(stage, { path: "llm", puntReason: "binary-unresolved" });
+      return { kind: "llm" };
+    }
+
+    // Worktree-first workdir (#288). getWorkingDirectory() prefers worktreeOverride.
+    const workdir = this.getWorkingDirectory();
+    const repo = await this.resolveRunRepoSlug();
+    if (stage === "pr-create" && !repo.includes("/")) {
+      // The create runner needs owner/repo; without it, fall through to the LLM.
+      this.logger.warn("Deterministic pr-create: could not resolve owner/repo — running LLM path", {
+        issueNumber,
+      });
+      this.stageExecutionPaths.set(stage, { path: "llm", puntReason: "repo-unresolved" });
+      return { kind: "llm" };
+    }
+
+    const verb = stage === "pr-create" ? "create" : "merge";
+    const args = ["pr-stage", verb, String(issueNumber), "--workdir", workdir, "--json"];
+    if (repo.includes("/")) {
+      args.push("--repo", repo);
+    }
+    // pr-merge waits out in-flight CI (bounded ~15 min in the runner); give the
+    // subprocess headroom above that. pr-create is fast.
+    const timeoutMs = stage === "pr-merge" ? 20 * 60_000 : 3 * 60_000;
+
+    // Signal start + mark running (runStage would do this; we skip runStage).
+    // onStageStart is idempotent; this shows the spinner during the CI-wait.
+    this.eventDispatcher.onStageStart(stage);
+    this.currentStage = stage;
+    if (this.stateService) {
+      try {
+        await this.stateService.startStage(stage);
+      } catch (err) {
+        this.logger.warn("Deterministic pr-stage: failed to mark stage running", { stage, err });
+      }
+    }
+
+    let parsed: {
+      stage?: string;
+      path?: string;
+      pr_number?: number;
+      pr_url?: string;
+      pr_state?: string;
+      reason?: string;
+      rate_limited?: boolean;
+      duration_ms?: number;
+      phases?: PrStagePhaseTransition[];
+    };
+    // #1397 — the deterministic runners report phases through a reporter, and
+    // the Go scheduler attaches one. This route runs the SAME runners in a
+    // separate process, where there is no RuntimeState and no live callbacks,
+    // so the CLI streams its transitions on stderr and returns the full array
+    // in its result. Applying them live is what makes the count move: pr-merge
+    // waits out CI on a 30s x 30 budget, so a stage that only learned its
+    // phases at exit would sit at 0/14 for up to fifteen minutes and then jump.
+    let streamedPhases = 0;
+    const applyPhase = (t: PrStagePhaseTransition): void => {
+      streamedPhases++;
+      void this.recordDeterministicPhase(t);
+    };
+
+    try {
+      const { stdout } = await runWithPhaseStream(binary, args, {
+        cwd: workdir,
+        timeoutMs,
+        onPhase: applyPhase,
+        onLog: (line) => this.logger.debug(`pr-stage ${stage}: ${line}`),
+      });
+      parsed = JSON.parse(stdout.trim());
+    } catch (err) {
+      // Binary errored / timed out / emitted non-JSON → LLM fallthrough (safe).
+      this.logger.warn("Deterministic pr-stage runner errored — running LLM path", {
+        stage,
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      this.stageExecutionPaths.set(stage, { path: "llm", puntReason: "runner-error" });
+      return { kind: "llm" };
+    }
+
+    // The array is the durable authority and the fallback. When the stream
+    // delivered transitions they ARE this array — replaying it would double
+    // every record — so it is only applied when nothing arrived live (an older
+    // binary with no streaming, or a stderr channel that produced nothing).
+    if (streamedPhases === 0) {
+      for (const t of parsed.phases ?? []) {
+        await this.recordDeterministicPhase(t);
+      }
+    }
+
+    const reason = parsed.reason ?? "unknown";
+
+    // Rate-limited → DEFER. Never run the LLM into an exhausted bucket (#3976).
+    if (parsed.rate_limited) {
+      await tripBreakerIfRateLimited(
+        new Error(`GitHub rate limit during deterministic ${stage}: ${reason}`),
+        this.logger,
+        { source: `deterministic ${stage} (#300)`, issueNumber }
+      );
+      const deferErr = new Error(
+        `[github-quota-low] deterministic ${stage} deferred — GitHub API rate limit ` +
+          `(${reason}); not running the LLM into an exhausted bucket (#3976). ` +
+          `Retry after the GitHub rate-limit bucket resets.`
+      );
+      this.logger.warn("Deterministic pr-stage rate-limited — deferring (no LLM fallback)", {
+        stage,
+        issueNumber,
+        reason,
+      });
+      if (this.stateService) {
+        try {
+          await this.stateService.failStage(stage, deferErr.message);
+        } catch {
+          // Non-critical — the caller still breaks the loop.
+        }
+      }
+      return { kind: "deferred", error: deferErr };
+    }
+
+    // Refused → a deterministic gate declined the merge (generated steering on
+    // the PR head, issue 1675). Never fall through to the LLM skill, which
+    // could merge the same head; fail the stage with the classified reason.
+    if (parsed.path === "refused") {
+      const refuseErr = new Error(`deterministic ${stage} refused: ${reason}`);
+      this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
+      this.logger.warn("Deterministic pr-stage refused — failing the stage (no LLM fallback)", {
+        stage,
+        issueNumber,
+        reason,
+      });
+      if (this.stateService) {
+        try {
+          await this.stateService.failStage(stage, refuseErr.message);
+        } catch {
+          // Non-critical — the caller still breaks the loop.
+        }
+      }
+      return { kind: "refused", error: refuseErr };
+    }
+
+    const created = stage === "pr-create" && parsed.path === "created";
+    const merged = stage === "pr-merge" && parsed.path === "merged";
+    if (created || merged) {
+      this.stageExecutionPaths.set(stage, { path: "deterministic" });
+      if (this.stateService) {
+        try {
+          await this.stateService.completeStage(stage);
+        } catch (err) {
+          this.logger.warn("Deterministic pr-stage: failed to mark stage complete", { stage, err });
+        }
+      }
+      const durationMs = Date.now() - stageStartTime;
+      // Deterministic stage.completed audit — cost $0, source=deterministic
+      // (mirrors the issue-pickup deterministic short-circuit).
+      this.auditClient?.enqueue({
+        action: "stage.completed",
+        resourceType: "stage",
+        resourceId: `${issueNumber}:${stage}`,
+        metadata: {
+          pipelineRunId: this.auditCorrelationId,
+          stage,
+          issueNumber,
+          model: "none",
+          outcome: "success",
+          executionSource: "deterministic",
+          durationMs,
+          timestamp: new Date().toISOString(),
+        },
+      });
+      void this.auditClient?.flush();
+      this.eventDispatcher.onStageComplete(stage, { success: true, stage, durationMs });
+      this.logger.info(
+        `${stage}: deterministic path ${parsed.path} — skipping LLM skill (${reason})`,
+        { issueNumber, prNumber: parsed.pr_number }
+      );
+      return { kind: "handled", result: { success: true, stage, durationMs } };
+    }
+
+    // Punt → record execution_path=llm + punt_reason; caller runs the LLM skill.
+    this.stageExecutionPaths.set(stage, { path: "llm", puntReason: reason });
+    this.logger.info(`${stage}: deterministic path punted (${reason}) — running LLM skill`, {
+      issueNumber,
+    });
+    return { kind: "llm" };
+  }
+
+  /**
+   * Steering gate for the LLM pr-merge path (issue 1675) — the TypeScript twin
+   * of the Go runner's gate. Returns the refusal error when the branch's
+   * published head carries generated Nightgauge steering (after repairing it
+   * and pushing the repair where possible), or null when the merge may run.
+   * A head that cannot be inspected is logged and passed, like the Go gate.
+   */
+  private async refuseLlmMergeOnGeneratedSteering(issueNumber: number): Promise<Error | null> {
+    const workdir = this.getWorkingDirectory();
+    let verdict;
+    try {
+      // Through this file's own execFile, the seam every other subprocess
+      // here uses (and that tests substitute).
+      verdict = await guardUpstreamHead(workdir, async (cwd, args) => {
+        try {
+          const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+            timeout: 120_000,
+          });
+          return String(stdout);
+        } catch {
+          return null;
+        }
+      });
+    } catch (err) {
+      this.logger.warn("pr-merge steering gate could not inspect the head (not blocking)", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+    if (!verdict.inspected || verdict.leaked.length === 0) return null;
+    const head = (verdict.headSha ?? "").slice(0, 12);
+    const files = verdict.leaked.join(", ");
+    const detail = verdict.pushed
+      ? `PR head ${head} carries generated Nightgauge steering in ${files}; the repair was pushed, so required checks must re-run before the merge is retried`
+      : `PR head ${head} carries generated Nightgauge steering in ${files} and the repair could not be published (${verdict.pushError ?? "unknown"}); run 'nightgauge preflight managed-steering --fix' on the branch, commit and push, then retry`;
+    const refuseErr = new Error(`pr-merge refused: generated-steering-committed: ${detail}`);
+    this.stageExecutionPaths.set("pr-merge", {
+      path: "deterministic",
+      puntReason: "generated-steering-committed",
+    });
+    this.logger.warn("pr-merge refused before the LLM skill — generated steering on the PR head", {
+      issueNumber,
+      detail,
+    });
+    if (this.stateService) {
+      try {
+        await this.stateService.failStage("pr-merge", refuseErr.message);
+      } catch {
+        // Non-critical — the caller still breaks the loop.
+      }
+    }
+    return refuseErr;
+  }
+
+  /**
+   * Apply one deterministic-runner phase transition to the pipeline state
+   * (#1397).
+   *
+   * This is the extension-side equivalent of the Go scheduler's
+   * deterministicPhaseReporter: the same four transitions, routed to the same
+   * two sinks PipelineStateService already writes to — its in-memory state and
+   * view events for the tree, and the IPC notification that keeps Go's
+   * RuntimeState in step. The result is that a deterministic stage looks the
+   * same whichever of the two routes ran it, which is the whole point:
+   * previously an operator saw real progress or a frozen 0/14 depending on a
+   * choice nothing on screen explained.
+   *
+   * Best-effort by design. Progress reporting must never fail the stage it is
+   * reporting on, so a state-service error is logged and swallowed — exactly
+   * how the surrounding startStage / completeStage calls already treat theirs.
+   */
+  private async recordDeterministicPhase(t: PrStagePhaseTransition): Promise<void> {
+    if (!this.stateService) return;
+    try {
+      switch (t.status) {
+        case "running":
+          await this.stateService.startPhase(t.stage, t.name, t.total, t.index);
+          break;
+        case "complete":
+          await this.stateService.completePhase(t.stage, t.name, t.total);
+          break;
+        case "skipped":
+          await this.stateService.skipPhase(t.stage, t.name, t.total, t.index);
+          break;
+        case "failed":
+          await this.stateService.failPhase(
+            t.stage,
+            t.name,
+            `deterministic ${t.stage} did not complete ${t.name}`,
+            t.total
+          );
+          break;
+        default:
+          // An unknown status is a contract change, not a state to guess at.
+          this.logger.warn("Deterministic pr-stage reported an unknown phase status", { t });
+      }
+    } catch (err) {
+      this.logger.warn("Deterministic pr-stage: failed to record a phase transition", {
+        phase: t.name,
+        stage: t.stage,
+        err,
+      });
+    }
+  }
+
+  /**
+   * Escalate a PR whose post-merge verification could not complete after
+   * retry. The PR is already merged, so we can't roll back — but we MUST
+   * surface the unverified state so a human can audit it. Failing silently
+   * here was the path that hid the failed-CI merges in #2868.
+   *
+   * Adds the `pipeline-failed` label and posts a diagnostic comment.
+   * Both operations are best-effort — if `gh` itself is rate-limited we
+   * still log an error so the failure dashboard surfaces it.
+   *
+   * @see Issue #2869
+   */
+  private async escalateUnverifiedMerge(
+    prNumber: number,
+    issueNumber: number,
+    cwd: string,
+    cause: unknown
+  ): Promise<void> {
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    this.logger.error(
+      "Post-merge verification: gh pr view failed after retry — escalating unverified merge",
+      new Error(
+        `PR #${prNumber} (issue #${issueNumber}) was merged but verification could not complete: ${causeMessage}`
+      )
+    );
+
+    const labelArgs = ["pr", "edit", String(prNumber), "--add-label", "pipeline-failed"];
+    if (this.repoOverride) labelArgs.push("--repo", this.repoOverride);
+    try {
+      await execFileAsync("gh", labelArgs, { encoding: "utf-8", cwd, timeout: 30_000 });
+    } catch (labelErr) {
+      this.logger.warn("Failed to label PR pipeline-failed during escalation", {
+        prNumber,
+        issueNumber,
+        error: labelErr instanceof Error ? labelErr.message : String(labelErr),
+      });
+    }
+
+    const commentBody =
+      `:warning: **Pipeline post-merge verification skipped.** ` +
+      `Two attempts to fetch PR status via \`gh pr view\` failed; this PR was merged but its CI ` +
+      `outcome could not be confirmed. Manual review recommended.\n\n` +
+      `Last error: \`${causeMessage}\``;
+    const commentArgs = ["pr", "comment", String(prNumber), "--body", commentBody];
+    if (this.repoOverride) commentArgs.push("--repo", this.repoOverride);
+    try {
+      await execFileAsync("gh", commentArgs, { encoding: "utf-8", cwd, timeout: 30_000 });
+    } catch (commentErr) {
+      this.logger.warn("Failed to post escalation comment on PR", {
+        prNumber,
+        issueNumber,
+        error: commentErr instanceof Error ? commentErr.message : String(commentErr),
+      });
+    }
+  }
+
+  /**
+   * Check whether the PR associated with the given issue is in MERGED state.
+   *
+   * Used by the shipped-but-overbudget override (#3108): when pr-merge dies
+   * for budget overrun, the PR may have already been merged out-of-band by
+   * a previous push — in which case the work shipped and we should report
+   * success rather than failure. Returns null when state can't be determined
+   * so callers can fail-closed.
+   */
+  private async checkPrMergedForIssue(issueNumber: number): Promise<{ prNumber: number } | null> {
+    try {
+      const cwd = this.getWorkingDirectory();
+      const prContextPath = path.join(pipelineStateDir(cwd), `pr-${issueNumber}.json`);
+      let prNumber: number | undefined;
+      try {
+        if (fs.existsSync(prContextPath)) {
+          const raw = fs.readFileSync(prContextPath, "utf-8");
+          const parsed = JSON.parse(raw) as { pr_number?: unknown };
+          if (typeof parsed.pr_number === "number") {
+            prNumber = parsed.pr_number;
+          }
+        }
+      } catch {
+        // Fall through — try gh CLI as a backup
+      }
+
+      if (!prNumber) {
+        // Backup: ask gh for the PR number for the current branch
+        try {
+          const { stdout } = await execFileAsync(
+            "gh",
+            ["pr", "view", "--json", "number", "-q", ".number", ...this.ghRepoArgs()],
+            { encoding: "utf-8", cwd, timeout: 15_000 }
+          );
+          const parsed = Number.parseInt(stdout.trim(), 10);
+          if (Number.isFinite(parsed)) prNumber = parsed;
+        } catch {
+          return null;
+        }
+      }
+      if (!prNumber) return null;
+
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["pr", "view", String(prNumber), "--json", "state", "-q", ".state", ...this.ghRepoArgs()],
+        { encoding: "utf-8", cwd, timeout: 15_000 }
+      );
+      const state = stdout.trim().toUpperCase();
+      return state === "MERGED" ? { prNumber } : null;
+    } catch (err) {
+      this.logger.debug("checkPrMergedForIssue: state lookup failed", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Issue #3782: Pre-merge branch-behind guard.
+   *
+   * Mirrors Go's `BranchOutOfDate` recovery action but runs PRE-STAGE so no
+   * LLM tokens are wasted on a BEHIND branch.
+   *
+   * Returns:
+   *   { status: "clean" }            — branch was already up-to-date, no-op
+   *   { status: "rebased" }          — branch was behind, successfully rebased
+   *   { status: "conflict", files }  — true merge conflict; aborted; surface to operator
+   *   { status: "error", message }   — unexpected git failure; caller falls through to skill
+   */
+  private async checkAndRebaseBehindBranch(
+    prNumber: number,
+    issueNumber: number,
+    cwd: string
+  ): Promise<
+    | { status: "clean" | "rebased" }
+    | { status: "conflict"; files: string[] }
+    | { status: "error"; message: string }
+  > {
+    let mergeStateStatus: string;
+    try {
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["pr", "view", String(prNumber), "--json", "mergeStateStatus", "-q", ".mergeStateStatus"],
+        { encoding: "utf-8", cwd, timeout: 20_000 }
+      );
+      mergeStateStatus = stdout.trim().toUpperCase();
+    } catch (err) {
+      this.logger.warn("[pre-merge guard] gh pr view failed — skipping branch-behind check", {
+        issueNumber,
+        prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return { status: "error", message: err instanceof Error ? err.message : String(err) };
+    }
+
+    if (mergeStateStatus !== "BEHIND") {
+      this.logger.debug("[pre-merge guard] branch not BEHIND — no-op", {
+        issueNumber,
+        prNumber,
+        mergeStateStatus,
+      });
+      return { status: "clean" };
+    }
+
+    this.logger.info("[pre-merge guard] branch is BEHIND origin/main — rebasing", {
+      issueNumber,
+      prNumber,
+    });
+
+    try {
+      await execFileAsync("git", ["fetch", "origin", "main"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: 60_000,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn("[pre-merge guard] git fetch failed", { issueNumber, prNumber, err: msg });
+      return { status: "error", message: `git fetch origin main: ${msg}` };
+    }
+
+    try {
+      await execFileAsync("git", ["rebase", "origin/main"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: 120_000,
+      });
+    } catch {
+      let conflictFiles: string[] = [];
+      try {
+        const { stdout: statusOut } = await execFileAsync(
+          "git",
+          ["diff", "--name-only", "--diff-filter=U"],
+          { encoding: "utf-8", cwd, timeout: 10_000 }
+        );
+        conflictFiles = statusOut
+          .trim()
+          .split("\n")
+          .map((f) => f.trim())
+          .filter(Boolean);
+      } catch {
+        // Best-effort — proceed with empty list
+      }
+      try {
+        await execFileAsync("git", ["rebase", "--abort"], {
+          encoding: "utf-8",
+          cwd,
+          timeout: 30_000,
+        });
+      } catch {
+        // Ignore abort errors — same as Go implementation
+      }
+      this.logger.warn("[pre-merge guard] rebase conflict detected — aborted", {
+        issueNumber,
+        prNumber,
+        conflictFiles,
+      });
+      return { status: "conflict", files: conflictFiles };
+    }
+
+    try {
+      await execFileAsync("git", ["push", "--force-with-lease"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: GIT_PUSH_TIMEOUT_MS,
+      });
+    } catch (pushErr) {
+      const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);
+      this.logger.warn("[pre-merge guard] push --force-with-lease failed", {
+        issueNumber,
+        prNumber,
+        err: msg,
+      });
+      return { status: "error", message: `git push --force-with-lease: ${msg}` };
+    }
+
+    this.logger.info("[pre-merge guard] rebased and pushed — pr-merge may proceed", {
+      issueNumber,
+      prNumber,
+    });
+    return { status: "rebased" };
+  }
+
+  /**
+   * Verify both that the PR for the given issue is MERGED and that the issue
+   * itself is CLOSED. Used by the broadened shipped-but-overbudget override
+   * (#3274): when pr-merge reports failure for any reason — budget overrun,
+   * stale "Failure cleanup complete" exit text, etc. — and both deterministic
+   * gates pass, we treat the run as a ship rather than a failure.
+   *
+   * Fail-closed: any uncertainty (gh error, rate limit, parse failure) returns
+   * null and the original failure path remains intact.
+   */
+  private async checkPrMergedAndIssueClosed(
+    issueNumber: number
+  ): Promise<{ prNumber: number; issueClosed: boolean } | null> {
+    const merged = await this.checkPrMergedForIssue(issueNumber);
+    if (!merged) return null;
+
+    try {
+      const cwd = this.getWorkingDirectory();
+      const { stdout } = await execFileAsync(
+        "gh",
+        [
+          "issue",
+          "view",
+          String(issueNumber),
+          "--json",
+          "state",
+          "-q",
+          ".state",
+          ...this.ghRepoArgs(),
+        ],
+        { encoding: "utf-8", cwd, timeout: 15_000 }
+      );
+      const issueClosed = stdout.trim().toUpperCase() === "CLOSED";
+      return { prNumber: merged.prNumber, issueClosed };
+    } catch (err) {
+      this.logger.debug("checkPrMergedAndIssueClosed: issue state lookup failed", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Deterministic check that pr-create's work product actually shipped — a PR
+   * exists for this issue in an OPEN or MERGED state. Used to reclassify a
+   * pr-create budget kill as recoverable (#3666): when the agent successfully
+   * opened the PR before the budget enforcer fired, the work is real and
+   * pr-merge should pick up from where pr-create left off rather than the
+   * autonomous scheduler counting it as a hard failure.
+   *
+   * Reads `pr-{N}.json` for the PR number (written by pr-create Phase 4) and
+   * confirms with `gh` that the PR actually exists. Returns null on any
+   * uncertainty (missing file, gh error, parse failure) so callers fail-closed
+   * — never reclassify a real failure as success.
+   *
+   * @see Issue #3666
+   */
+  private async checkPrCreatedForIssue(
+    issueNumber: number
+  ): Promise<{ prNumber: number; state: "OPEN" | "MERGED" } | null> {
+    try {
+      const cwd = this.getWorkingDirectory();
+      const prContextPath = path.join(pipelineStateDir(cwd), `pr-${issueNumber}.json`);
+      let prNumber: number | undefined;
+      try {
+        if (fs.existsSync(prContextPath)) {
+          const raw = fs.readFileSync(prContextPath, "utf-8");
+          const parsed = JSON.parse(raw) as { pr_number?: unknown };
+          if (typeof parsed.pr_number === "number") {
+            prNumber = parsed.pr_number;
+          }
+        }
+      } catch {
+        // Fall through — pr-{N}.json missing or unreadable means pr-create
+        // probably never reached Phase 4. That is a genuine failure, not a
+        // budget false-alarm — return null.
+      }
+      if (!prNumber) return null;
+
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["pr", "view", String(prNumber), "--json", "state", "-q", ".state", ...this.ghRepoArgs()],
+        { encoding: "utf-8", cwd, timeout: 15_000 }
+      );
+      const state = stdout.trim().toUpperCase();
+      if (state === "OPEN") return { prNumber, state: "OPEN" };
+      if (state === "MERGED") return { prNumber, state: "MERGED" };
+      return null;
+    } catch (err) {
+      this.logger.debug("checkPrCreatedForIssue: PR state lookup failed", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Deterministic post-stage diagnostic for pr-merge "completed but PR didn't
+   * merge" runs (#3691).
+   *
+   * The pr-merge skill agent can end its Claude session cleanly (exit 0) after
+   * exhausting RALPH auto-fix attempts without actually merging the PR. The
+   * stage exit-record then shows `success=true` while the work was not done.
+   * Pre-#3691 the reconciliation surfaced this as a generic
+   * "Pipeline completed but issue #N is still open" — zero actionable detail,
+   * a fresh `LifetimeIssueFailures` increment on every recurrence, and the
+   * operator had no idea why it happened.
+   *
+   * This diagnostic interrogates GitHub directly and returns a structured
+   * blocker classification so the reconciliation can emit a marker-tagged
+   * error text the Go-side `ClassifyTerminalKind` routes through a
+   * recoverable terminal kind, plus a rich pause-reason naming the actual
+   * problem (failing checks, merge conflict, etc).
+   *
+   * Fail-closed: any failure to read PR state returns `null` and the original
+   * generic-failure path runs — we never reclassify a real failure as
+   * something recoverable based on incomplete data.
+   */
+  private async diagnosePrMergeBlocker(issueNumber: number): Promise<{
+    prNumber: number;
+    prUrl: string;
+    prState: "OPEN" | "CLOSED" | "MERGED";
+    mergeable: string;
+    failingChecks: string[];
+    blocker:
+      | "ci_failures"
+      | "merge_conflict"
+      | "review_required"
+      | "pr_closed_without_merge"
+      | "agent_gave_up"
+      | "unknown";
+    summary: string;
+  } | null> {
+    try {
+      const cwd = this.getWorkingDirectory();
+      const prContextPath = path.join(pipelineStateDir(cwd), `pr-${issueNumber}.json`);
+      let prNumber: number | undefined;
+      try {
+        if (fs.existsSync(prContextPath)) {
+          const raw = fs.readFileSync(prContextPath, "utf-8");
+          const parsed = JSON.parse(raw) as { pr_number?: unknown };
+          if (typeof parsed.pr_number === "number" && parsed.pr_number > 0) {
+            prNumber = parsed.pr_number;
+          }
+        }
+      } catch {
+        // Fall through — diagnose without prNumber via gh pr view --search
+      }
+      if (!prNumber) {
+        try {
+          const { stdout } = await execFileAsync(
+            "gh",
+            ["pr", "view", "--json", "number", "-q", ".number", ...this.ghRepoArgs()],
+            { encoding: "utf-8", cwd, timeout: 15_000 }
+          );
+          const parsed = Number.parseInt(stdout.trim(), 10);
+          if (Number.isFinite(parsed)) prNumber = parsed;
+        } catch {
+          return null;
+        }
+      }
+      if (!prNumber) return null;
+
+      // Single gh call pulls everything we need to classify.
+      const { stdout: prJson } = await execFileAsync(
+        "gh",
+        [
+          "pr",
+          "view",
+          String(prNumber),
+          "--json",
+          "state,mergeable,url,reviewDecision,statusCheckRollup",
+          ...this.ghRepoArgs(),
+        ],
+        { encoding: "utf-8", cwd, timeout: 15_000 }
+      );
+      const pr = JSON.parse(prJson) as {
+        state: string;
+        mergeable: string;
+        url: string;
+        reviewDecision?: string;
+        statusCheckRollup?: Array<{
+          name?: string;
+          conclusion?: string;
+          status?: string;
+        }>;
+      };
+      const prState = pr.state?.toUpperCase() as "OPEN" | "CLOSED" | "MERGED";
+      const mergeable = pr.mergeable ?? "UNKNOWN";
+      const checks = pr.statusCheckRollup ?? [];
+      const failingChecks = checks
+        .filter(
+          (c) =>
+            (c.conclusion ?? "").toUpperCase() === "FAILURE" ||
+            (c.conclusion ?? "").toUpperCase() === "TIMED_OUT" ||
+            (c.conclusion ?? "").toUpperCase() === "ACTION_REQUIRED"
+        )
+        .map((c) => c.name ?? "(unnamed)")
+        .filter(Boolean);
+
+      // Classify the actual blocker in priority order: closed-without-merge
+      // wins over merge-conflict (because the PR isn't even open), which wins
+      // over ci-failures (because no amount of CI fixing helps a conflicted
+      // branch), which wins over review-required.
+      let blocker:
+        | "ci_failures"
+        | "merge_conflict"
+        | "review_required"
+        | "pr_closed_without_merge"
+        | "agent_gave_up"
+        | "unknown" = "unknown";
+      let summary = "";
+      if (prState === "CLOSED") {
+        blocker = "pr_closed_without_merge";
+        summary = `PR #${prNumber} was CLOSED without merging.`;
+      } else if (prState === "MERGED") {
+        // This case shouldn't reach here — the upstream
+        // checkPrMergedAndIssueClosed already covers it — but classify
+        // defensively so callers can short-circuit if they see it.
+        blocker = "unknown";
+        summary = `PR #${prNumber} actually MERGED.`;
+      } else if (mergeable === "CONFLICTING") {
+        blocker = "merge_conflict";
+        summary = `PR #${prNumber} has unresolved merge conflicts against the base branch.`;
+      } else if (failingChecks.length > 0) {
+        blocker = "ci_failures";
+        summary = `PR #${prNumber} has ${failingChecks.length} failing CI check(s): ${failingChecks.slice(0, 5).join(", ")}${failingChecks.length > 5 ? `, +${failingChecks.length - 5} more` : ""}.`;
+      } else if (
+        pr.reviewDecision === "REVIEW_REQUIRED" ||
+        pr.reviewDecision === "CHANGES_REQUESTED"
+      ) {
+        blocker = "review_required";
+        summary = `PR #${prNumber} is blocked on review (${pr.reviewDecision}).`;
+      } else {
+        // PR is open, mergeable, checks green, reviews ok — but the agent
+        // didn't merge it anyway. Most likely the RALPH loop ran out of
+        // patience or the merge call itself errored without a re-attempt.
+        blocker = "agent_gave_up";
+        summary = `PR #${prNumber} appears mergeable but the pr-merge agent did not complete the merge. Manual review recommended.`;
+      }
+
+      return {
+        prNumber,
+        prUrl: pr.url,
+        prState,
+        mergeable,
+        failingChecks,
+        blocker,
+        summary,
+      };
+    } catch (err) {
+      this.logger.debug("diagnosePrMergeBlocker: PR lookup failed", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Deterministic auto-merge recovery for the `agent_gave_up` blocker.
+   *
+   * When `diagnosePrMergeBlocker` confirms a PR is genuinely mergeable
+   * (state OPEN, mergeable MERGEABLE, no failing checks, no blocking review)
+   * but the pr-merge skill agent ended its session without merging, the
+   * correct outcome is not "pause for a human" — the work is done and the PR
+   * is ready. This reproduces, on the legacy TS `runPipeline()` path, what the
+   * Go scheduler's `SkillExitedWithoutMerging` recovery action does on the
+   * scheduler path: re-run the deterministic merge. The extension's autonomous
+   * slots run through this TS path and never round-trip the Go recovery
+   * registry, so without this the mergeable PR just sat open (Issue: acmeapp
+   * #8 / PR #18 — $2.88 spent, paused, then merged by hand).
+   *
+   * This is distinct from (and a backstop to) the in-stage #3259 fallback in
+   * `verifyPostMergeState`/`tryDeterministicMergeFallback`: that path depends
+   * on the Go binary's pr-merge gate resolving, and returns null (skips
+   * entirely) when the binary is unavailable — at which point pr-merge is
+   * treated as "passed" and sails through to this reconciliation diagnostic.
+   * This net depends only on `gh` (via the already-computed diagnosis), so it
+   * still recovers when the binary gate never ran (the acmeapp #8 case).
+   *
+   * Safety: this is ONLY ever called for the `agent_gave_up` classification,
+   * which already requires MERGEABLE + CLEAN + green checks + no review block.
+   * We use a plain `gh pr merge --squash` (never `--admin`) so branch
+   * protection still has the final say — if anything has changed since the
+   * diagnostic (a check flipped red, a new commit, a protection rule), the
+   * merge errors and we return false, falling through to the pre-existing
+   * pause-with-diagnostic path. We never destroy or hide a real failure.
+   *
+   * Returns true only when the PR is confirmed MERGED afterwards.
+   */
+  private async attemptDeterministicPrMerge(
+    prNumber: number,
+    issueNumber: number
+  ): Promise<boolean> {
+    const cwd = this.getWorkingDirectory();
+    try {
+      this.logger.info("[pr-merge auto-recovery] attempting deterministic merge", {
+        prNumber,
+        issueNumber,
+      });
+      await execFileAsync(
+        "gh",
+        ["pr", "merge", String(prNumber), "--squash", "--delete-branch", ...this.ghRepoArgs()],
+        { encoding: "utf-8", cwd, timeout: 60_000 }
+      );
+    } catch (err) {
+      this.logger.warn("[pr-merge auto-recovery] deterministic merge failed — falling through", {
+        prNumber,
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+
+    // Confirm the merge actually landed before reporting success — never
+    // trust the merge command's exit code alone (the #3691 lesson).
+    try {
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["pr", "view", String(prNumber), "--json", "state", "-q", ".state", ...this.ghRepoArgs()],
+        { encoding: "utf-8", cwd, timeout: 15_000 }
+      );
+      if (stdout.trim().toUpperCase() !== "MERGED") {
+        this.logger.warn("[pr-merge auto-recovery] merge command returned but PR not MERGED", {
+          prNumber,
+          state: stdout.trim(),
+        });
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    // Best-effort: if the PR body lacked a closing keyword, the linked issue
+    // may still be open. Close it so the pipeline reports a clean completion.
+    try {
+      const { stdout: issueState } = await execFileAsync(
+        "gh",
+        [
+          "issue",
+          "view",
+          String(issueNumber),
+          "--json",
+          "state",
+          "-q",
+          ".state",
+          ...this.ghRepoArgs(),
+        ],
+        { encoding: "utf-8", cwd, timeout: 15_000 }
+      );
+      if (issueState.trim().toUpperCase() === "OPEN") {
+        await execFileAsync(
+          "gh",
+          [
+            "issue",
+            "close",
+            String(issueNumber),
+            "--reason",
+            "completed",
+            "--comment",
+            `Closed by deterministic auto-merge of PR #${prNumber} (pr-merge agent left it open; recovered automatically).`,
+            ...this.ghRepoArgs(),
+          ],
+          { encoding: "utf-8", cwd, timeout: 15_000 }
+        );
+      }
+    } catch (err) {
+      // Non-fatal — the merge is what matters. Log and continue.
+      this.logger.debug("[pr-merge auto-recovery] post-merge issue close best-effort failed", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    this.logger.info("[pr-merge auto-recovery] PR merged the agent left open", {
+      prNumber,
+      issueNumber,
+    });
+    return true;
+  }
+
+  /**
+   * When `pr-{N}.json` already names an OPEN PR, mark everything up to and
+   * including pr-create as done so this run resumes at pr-merge instead of
+   * re-planning and re-implementing work that has already shipped.
+   *
+   * `issue-pickup` … `feature-validate` are recorded **skipped** (with the
+   * reason, so the board and the dashboard say why nothing ran) and
+   * `pr-create` **complete** — the latter is not a fiction: the PR exists and
+   * the context file pr-merge consumes is on disk, which is exactly what
+   * "pr-create completed" means. Marking pr-create complete also keeps
+   * pr-merge's pre-condition check pointed at a real, schema-validated
+   * `pr-{N}.json` instead of walking back past a chain of skipped ancestors.
+   *
+   * Returns true when the run was fast-forwarded.
+   *
+   * @see Issue #1531 — a re-dispatched issue with an open PR re-ran the whole
+   *   pipeline because a fresh slot's state had no memory of pr-create.
+   */
+  private async resumeAtPrMerge(issueNumber: number): Promise<boolean> {
+    if (!this.stateService) return false;
+
+    const prContextPath = this.getContextPath("pr", issueNumber);
+    if (!fs.existsSync(prContextPath)) return false;
+
+    let prNumber = 0;
+    let prStatus = "";
+    try {
+      const parsed = JSON.parse(fs.readFileSync(prContextPath, "utf-8")) as {
+        pr_number?: unknown;
+        status?: unknown;
+      };
+      if (typeof parsed.pr_number === "number") prNumber = parsed.pr_number;
+      if (typeof parsed.status === "string") prStatus = parsed.status.toLowerCase();
+    } catch {
+      // An unreadable context file is no evidence at all — fail toward the
+      // normal pipeline rather than skipping stages on a guess.
+      return false;
+    }
+
+    // Only an OPEN PR justifies the fast-forward. "merged" is handled by the
+    // #500 restore path, and "closed" means the work was rejected — that run
+    // genuinely has to start over.
+    if (prNumber <= 0 || prStatus !== "open") return false;
+
+    const reason = `Skipped: PR #${prNumber} is already open for this issue — resuming at pr-merge (#1531)`;
+
+    const state = await this.stateService.getState();
+    for (const stage of RESUMABLE_PRE_MERGE_STAGES) {
+      if (state?.stages[stage]?.status === "complete") continue;
+      try {
+        await this.stateService.skipStage(stage, reason);
+      } catch (err) {
+        this.logger.warn("Resume-at-pr-merge: could not mark stage skipped", { stage, err });
+        return false;
+      }
+    }
+
+    try {
+      await this.stateService.completeStage("pr-create");
+    } catch (err) {
+      this.logger.warn("Resume-at-pr-merge: could not mark pr-create complete", { err });
+      return false;
+    }
+
+    this.stateService.setMeta({ pr_number: prNumber });
+
+    this.logger.info(
+      "Open PR already exists for this issue — resuming at pr-merge instead of re-planning",
+      { issueNumber, prNumber, prContextPath }
+    );
+    this.eventDispatcher.onStageSkipped("feature-planning", reason);
+
+    return true;
+  }
+
+  /**
+   * Detect an existing open PR for this issue's branch from a previous failed
+   * pipeline run. If found, generates synthetic context files so the resume
+   * logic can skip directly to pr-merge instead of re-running all stages.
+   *
+   * This is a safety net for when a pipeline fails at pr-merge and the
+   * worktree was cleaned up (losing context files). Without this, re-queuing
+   * the issue wastes ~$7+ re-running all stages when only the merge is needed.
+   *
+   * @see Issue #500 - pr-merge failure causes full pipeline re-run
+   */
+  private async detectAndRestoreExistingPr(issueNumber: number): Promise<void> {
+    // Only relevant when state shows stages completed but context files missing
+    if (!this.stateService) return;
+
+    const state = await this.stateService.getState();
+    if (!state) return;
+
+    // Check if pr-create was already completed in a previous run
+    const prCreateState = state.stages["pr-create"];
+    const prContextPath = this.getContextPath("pr", issueNumber);
+
+    // ===================================================================
+    // #1531: RESUME AT PR-MERGE WHEN AN OPEN PR ALREADY EXISTS
+    //
+    // The #500 path below only fires when state REMEMBERS pr-create
+    // completing. A re-dispatch after a killed pr-create satisfies neither
+    // half of that: the slot gets a fresh PipelineStateService with no
+    // state.json (so every stage reads pending), while the reused worktree
+    // still holds `pr-{N}.json` naming an OPEN PR. The run therefore
+    // re-planned and re-implemented an issue that already had a PR, pushed
+    // more commits onto it, and arrived back at the same stage — $2.11 and
+    // 16 minutes on platform#1431 to rediscover PR #1447.
+    //
+    // An open PR recorded on disk is proof the work shipped, whatever state
+    // remembers. Skip forward to pr-merge on that evidence alone. This is a
+    // purely local decision on purpose — a speculative forge query on every
+    // pipeline start would spend API budget on the overwhelmingly common
+    // case of a brand-new issue with no PR (#1428).
+    // ===================================================================
+    if (prCreateState?.status !== "complete" && (await this.resumeAtPrMerge(issueNumber))) {
+      return;
+    }
+
+    if (prCreateState?.status !== "complete") return;
+
+    // Check if the pr context file is missing (worktree was cleaned up)
+    if (fs.existsSync(prContextPath)) return; // Already have context, resume will work
+
+    this.logger.info(
+      "Detected pr-create complete but pr context missing — checking for existing PR",
+      { issueNumber }
+    );
+
+    // Use contextAssembler.generateDeterministicContext() which handles PR detection + context writing
+    // (searches both open and merged PRs)
+    const restored = await this.contextAssembler.generateDeterministicContext(
+      "pr-create",
+      issueNumber
+    );
+    if (restored.generated) {
+      // Check if the restored context indicates the PR is already merged.
+      // This happens when gh pr merge succeeded on GitHub but exited non-zero
+      // due to a local git worktree conflict, causing the pipeline to think
+      // pr-merge failed when it actually succeeded.
+      const restoredContext = JSON.parse(fs.readFileSync(prContextPath, "utf-8"));
+      if (restoredContext.status === "merged") {
+        this.logger.info(
+          "PR is already merged on GitHub — marking pr-merge as complete to skip re-run",
+          { issueNumber, prNumber: restoredContext.pr_number }
+        );
+        await this.stateService.completeStage("pr-merge");
+      }
+
+      this.logger.info("Restored pr context from existing PR — resume will skip to pr-merge", {
+        issueNumber,
+      });
+
+      // Also generate minimal context files for earlier stages so their
+      // resume checks don't trigger re-runs. These are stub files — the
+      // real data was in the destroyed worktree, but all we need is for
+      // fs.existsSync() to pass in the resume check.
+      const stageContextTypes: Array<{
+        stage: string;
+        type: string;
+      }> = [
+        { stage: "issue-pickup", type: "issue" },
+        { stage: "feature-planning", type: "planning" },
+        { stage: "feature-dev", type: "dev" },
+        { stage: "feature-validate", type: "validate" },
+      ];
+
+      const wsRoot = this.getWorkingDirectory();
+      for (const { stage, type } of stageContextTypes) {
+        const stageState = state.stages[stage as PipelineStage];
+        if (stageState?.status === "complete") {
+          const contextPath = path.join(pipelineStateDir(wsRoot), `${type}-${issueNumber}.json`);
+          if (!fs.existsSync(contextPath)) {
+            try {
+              fs.writeFileSync(
+                contextPath,
+                JSON.stringify(
+                  {
+                    schema_version: "1.0",
+                    issue_number: issueNumber,
+                    _restored: true,
+                    _restored_at: new Date().toISOString(),
+                    _note:
+                      "Stub context file restored from previous pipeline run. " +
+                      "Real data was in a cleaned-up worktree.",
+                  },
+                  null,
+                  2
+                )
+              );
+              this.logger.debug(`Restored stub context for ${stage}`, {
+                issueNumber,
+                contextPath,
+              });
+            } catch {
+              // Non-critical — resume will re-run this stage
+            }
+          }
+        }
+      }
+    } else {
+      this.logger.info(
+        "No existing PR found (open or merged) — pipeline will re-run from earliest missing stage",
+        { issueNumber }
+      );
+    }
+  }
+
+  /**
+   * Validate that a stage's input pre-conditions are met before launching
+   * the subagent. Checks that the prerequisite stage's context file exists
+   * on disk and passes Zod schema validation.
+   *
+   * When the prerequisite stage was skipped (via routing), walks backward
+   * through the prerequisite chain to find the nearest non-skipped ancestor
+   * that produces a context file.
+   *
+   * @returns null if preconditions are met or not applicable; Error otherwise
+   * @see Issue #1181 - Stage pre-condition validation
+   */
+  private validateStagePreconditions(
+    stage: PipelineStage,
+    issueNumber: number,
+    skippedStages: PipelineStage[]
+  ): Error | null {
+    let prereq = STAGE_INPUT_PREREQUISITES[stage];
+    if (!prereq) {
+      return null; // No prerequisites (issue-pickup, bookends)
+    }
+
+    // Walk backward through the chain if prerequisite was skipped
+    const skippedSet = new Set(skippedStages);
+    while (prereq && skippedSet.has(prereq.stage)) {
+      prereq = STAGE_INPUT_PREREQUISITES[prereq.stage];
+    }
+
+    if (!prereq) {
+      // All ancestors were skipped — no context file to check
+      return null;
+    }
+
+    const contextPath = this.getContextPath(prereq.contextType, issueNumber);
+
+    // Check file exists
+    if (!fs.existsSync(contextPath)) {
+      this.logger.error(`${stage} pre-condition failed: prerequisite context file missing`, {
+        stage,
+        prerequisiteStage: prereq.stage,
+        expectedPath: contextPath,
+        issueNumber,
+      });
+      const missingErr = new MissingInputFile(contextPath, stage, prereq.stage);
+      this.emitRecoveryRequired(missingErr, issueNumber, stage).catch(() => {
+        /* dispatch errors are logged by the dispatcher */
+      });
+      return missingErr;
+    }
+
+    // Validate content against Zod schema
+    const schema = STAGE_OUTPUT_SCHEMA[prereq.stage];
+    if (schema) {
+      let parsed: unknown;
+      try {
+        const raw = fs.readFileSync(contextPath, "utf-8");
+        parsed = JSON.parse(raw);
+      } catch (err) {
+        this.logger.error(
+          `${stage} pre-condition failed: prerequisite context file contains invalid JSON`,
+          { stage, prerequisiteStage: prereq.stage, contextPath, issueNumber }
+        );
+        const detail = err instanceof Error ? err.message : String(err);
+        const schemaErr = new ContextSchemaError(contextPath, `invalid JSON: ${detail}`);
+        this.emitRecoveryRequired(schemaErr, issueNumber, stage).catch(() => {
+          /* dispatch errors are logged by the dispatcher */
+        });
+        return schemaErr;
+      }
+
+      // #1182: the SAME policy the post-condition gate and the post-stage
+      // context validator apply. `validate-340`'s malformed gate_metrics was
+      // logged here a second time, as a prerequisite mismatch, and the run
+      // merged anyway — so a defect already tolerated once reached the
+      // gate-metrics record and the learning corpus behind two warnings. A
+      // prerequisite a consumer genuinely cannot read is now an error at this
+      // point too, and a repairable one is repaired before the consumer sees it.
+      const prereqKind = deliverableKindForStage(prereq.stage);
+      if (prereqKind) {
+        const policy = applyDeliverablePolicy(prereqKind, parsed);
+        if (!policy.ok) {
+          const detail = summarizePolicy(policy)
+            .map((line) => `  - ${line}`)
+            .join("\n");
+          this.logger.error(
+            `${stage} pre-condition failed: prerequisite deliverable does not match the contract`,
+            {
+              stage,
+              prerequisiteStage: prereq.stage,
+              contextPath,
+              issueNumber,
+              notes: `\n${detail}`,
+            }
+          );
+          const schemaErr = new ContextSchemaError(
+            contextPath,
+            `no total repair exists for the ${prereq.stage} deliverable:\n${detail}`
+          );
+          this.emitRecoveryRequired(schemaErr, issueNumber, stage).catch(() => {
+            /* dispatch errors are logged by the dispatcher */
+          });
+          return schemaErr;
+        }
+        if (policy.changed) {
+          stampPolicyMarker(policy, new Date());
+          parsed = policy.doc;
+          try {
+            fs.writeFileSync(contextPath, `${JSON.stringify(policy.doc, null, 2)}\n`, "utf-8");
+          } catch {
+            /* the repair still applies in memory for this read */
+          }
+          this.logger.warn("Prerequisite deliverable repaired by policy", {
+            stage,
+            prerequisiteStage: prereq.stage,
+            contextPath,
+            issueNumber,
+            verdict: policy.verdict,
+            untrustworthy: policy.untrustworthy,
+            notes: `\n${summarizePolicy(policy)
+              .map((line) => `  - ${line}`)
+              .join("\n")}`,
+          });
+        }
+      }
+
+      const result = schema.safeParse(parsed);
+      if (!result.success) {
+        const issues = result.error.issues
+          .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+          .join("\n");
+
+        // Anything left after the policy ran is a mismatch the closed rule table
+        // has no entry for AND that no consumer's control flow reads. It is
+        // logged, deliberately, as a candidate for a new rule — not as blanket
+        // permission to continue on any mismatch at all.
+        this.logger.warn(
+          "Prerequisite context file has residual schema mismatches outside the policy table",
+          {
+            stage,
+            prerequisiteStage: prereq.stage,
+            contextPath,
+            issueNumber,
+            issues: `\n${issues}`,
+          }
+        );
+      }
+    }
+
+    this.logger.info("Stage pre-condition validation passed", {
+      stage,
+      prerequisiteStage: prereq.stage,
+      contextPath,
+      issueNumber,
+    });
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Recovery (Issue #3239)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Lazily build the stage graph from skill manifests. Falls back to the
+   * in-process producer table when the skills directory cannot be located.
+   */
+  private getStageGraph(): StageGraph {
+    if (this.stageGraph) return this.stageGraph;
+    try {
+      const skillsDir = this.locateSkillsDir();
+      if (skillsDir) {
+        const fsView = {
+          existsSync: (p: string) => fs.existsSync(p),
+          readFileSync: (p: string) => fs.readFileSync(p, "utf-8"),
+        };
+        this.stageGraph = loadStageGraphFromManifests(skillsDir, fsView);
+        return this.stageGraph;
+      }
+    } catch (err) {
+      this.logger.warn("StageGraph: failed to load from manifests, using fallback", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    this.stageGraph = StageGraph.fromFallback();
+    return this.stageGraph;
+  }
+
+  /**
+   * Locate a `skills/` directory that contains pipeline manifests. We try
+   * the workspace root first; failing that, we walk up from the
+   * extension's source directory. Returns null when not found.
+   */
+  private locateSkillsDir(): string | null {
+    const candidates: string[] = [];
+    try {
+      const ws = this.getWorkingDirectory();
+      candidates.push(path.join(ws, "skills"));
+    } catch {
+      /* getWorkingDirectory may not be ready */
+    }
+    candidates.push(path.join(__dirname, "..", "..", "..", "..", "..", "skills"));
+    for (const candidate of candidates) {
+      try {
+        if (fs.existsSync(path.join(candidate, "nightgauge-feature-planning", "SKILL.md"))) {
+          return candidate;
+        }
+      } catch {
+        /* probe failure — try next */
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Build the on-disk run-state view used by `computeRecoveryRequired`.
+   * Reads run-state.json directly so this code can run without taking a
+   * dependency on PipelineStateService internals.
+   */
+  private readRecoveryRunStateView(issueNumber: number): {
+    lifecycle: "running" | "paused" | "aborted" | "none";
+  } {
+    const ws = this.getWorkingDirectory();
+    if (!isUsableWorkspaceRoot(ws)) {
+      return { lifecycle: "none" };
+    }
+    const runStatePath = checkoutPath(ws, "runState");
+    if (!fs.existsSync(runStatePath)) {
+      return { lifecycle: "none" };
+    }
+    let parsed: {
+      state?: string;
+      issue_number?: number;
+    } | null;
+    try {
+      const raw = fs.readFileSync(runStatePath, "utf-8");
+      parsed = JSON.parse(raw);
+    } catch {
+      return { lifecycle: "none" };
+    }
+    if (!parsed || parsed.issue_number !== issueNumber) {
+      return { lifecycle: "none" };
+    }
+
+    const lifecycle = mapLifecycle(parsed.state);
+    return { lifecycle };
+  }
+
+  /**
+   * Build a `RecoveryRequiredPayload` and dispatch it. Suppresses errors
+   * from the dispatcher; the caller still receives the original error and
+   * is expected to surface it via the existing flat-error path when no
+   * recovery callback is wired.
+   */
+  private async emitRecoveryRequired(
+    error: unknown,
+    issueNumber: number,
+    triggeringStage: string
+  ): Promise<RecoveryRequiredPayload | null> {
+    try {
+      const view = this.readRecoveryRunStateView(issueNumber);
+      const graph = this.getStageGraph();
+      const payload = computeRecoveryRequired(error, issueNumber, triggeringStage, view, graph);
+      if (!payload) return null;
+      this.eventDispatcher.onRecoveryRequired(payload);
+      return payload;
+    } catch (err) {
+      this.logger.warn("emitRecoveryRequired failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Public accessor: probe the most recent recovery shape for a stage so
+   * the retryStage command can decide whether to route to the dialog.
+   * Returns null when no recovery is needed.
+   */
+  getRecoveryShape(
+    error: unknown,
+    issueNumber: number,
+    triggeringStage: PipelineStage
+  ): RecoveryRequiredPayload | null {
+    const view = this.readRecoveryRunStateView(issueNumber);
+    const graph = this.getStageGraph();
+    return computeRecoveryRequired(error, issueNumber, triggeringStage, view, graph);
+  }
+
+  /**
+   * Execute a chosen recovery action. Single entry point so the dialog
+   * has one call irrespective of how the action is implemented.
+   *
+   * The reachable action set is intentionally observational until the
+   * deterministic layer can provide a cross-process recovery lease.
+   */
+  async runRecoveryAction(action: RecoveryAction): Promise<{ success: boolean; error?: Error }> {
+    try {
+      switch (action) {
+        case "cancel":
+          return { success: true };
+
+        case "open-run-state-directory": {
+          // run-state.json is the checkout's own singleton (ADR-024 § 7).
+          const dir = checkoutDir(this.getWorkingDirectory());
+          await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(dir));
+          return { success: true };
+        }
+
+        default:
+          return { success: false, error: new Error(`Unknown recovery action: ${action}`) };
+      }
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err : new Error(String(err)),
+      };
+    }
+  }
+
+  /**
+   * Measure the context handoff file size after a stage completes.
+   *
+   * Stores the size in PipelineStateService for JSONL telemetry records.
+   * If the file size exceeds the configured threshold, logs a warning.
+   *
+   * Non-critical: failures are logged as warnings, never break the pipeline.
+   *
+   * @see Issue #1009 - Track context handoff file sizes
+   */
+  private async measureContextFileSize(stage: PipelineStage, issueNumber: number): Promise<void> {
+    try {
+      const expectedType = STAGE_OUTPUT_CONTEXT_TYPE[stage];
+      if (!expectedType) {
+        return; // Stage doesn't produce a context file
+      }
+
+      const contextPath = this.getContextPath(expectedType, issueNumber);
+      if (!fs.existsSync(contextPath)) {
+        return; // File doesn't exist (already handled by validation)
+      }
+
+      const stat = fs.statSync(contextPath);
+      const sizeBytes = stat.size;
+
+      // Store in pipeline state
+      if (this.stateService) {
+        await this.stateService.setStageContextFileSize(stage, sizeBytes);
+      }
+
+      this.logger.info("Context file size measured", {
+        stage,
+        issueNumber,
+        sizeBytes,
+        contextPath,
+      });
+
+      // Check threshold and warn if exceeded
+      const threshold = this.getContextFileSizeAlertThreshold();
+      if (threshold > 0 && sizeBytes > threshold) {
+        this.logger.warn("Context file size exceeds alert threshold", {
+          stage,
+          issueNumber,
+          sizeBytes,
+          threshold,
+          contextPath,
+        });
+      }
+    } catch (err) {
+      this.logger.warn("Failed to measure context file size (non-critical)", {
+        stage,
+        issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Get the configured context file size alert threshold.
+   *
+   * @returns Threshold in bytes (default: 102400 = 100KB), or 0 if disabled
+   * @see Issue #1009
+   */
+  private getContextFileSizeAlertThreshold(): number {
+    try {
+      const { getContextFileSizeAlertThreshold } =
+        require("../utils/nightgaugeConfig") as typeof import("../utils/nightgaugeConfig");
+      return getContextFileSizeAlertThreshold();
+    } catch {
+      return 102400; // Default: 100KB
+    }
+  }
+
+  /**
+   * Resolve the active performance mode (Issue #3009).
+   * Used to tag history / state meta so cost trend and outcome calibration
+   * can segment runs by mode.
+   */
+  private getActivePerformanceMode(): "efficiency" | "elevated" | "maximum" | "frontier" {
+    try {
+      const { getPerformanceMode } =
+        require("../utils/nightgaugeConfig") as typeof import("../utils/nightgaugeConfig");
+      return getPerformanceMode(this.getPersistentRoot());
+    } catch {
+      return "elevated";
+    }
+  }
+
+  /**
+   * @deprecated Issue #3009 — prefer `getActivePerformanceMode()`. Returns
+   * `true` only when the resolved mode is `maximum`. Retained for one
+   * release so additive `is_supercharge` tagging keeps working.
+   */
+  private isSuperchargeActive(): boolean {
+    return this.getActivePerformanceMode() === "maximum";
+  }
+
+  /**
+   * Resolve the (model, effort) pair the runner is most likely to pick for a
+   * stage so {@link BudgetEnforcer.checkBudget} can apply the matching
+   * mode-aware multiplier. Lookup chain mirrors what skillRunner does at
+   * spawn time:
+   *   1. Mode profile (Maximum → opus/high; Efficiency → haiku/low; etc.)
+   *   2. Stage-level model/effort config overrides
+   *   3. Pipeline-default model
+   * If nothing resolves we return `undefined` and the BudgetEnforcer treats
+   * the configured base limit as the literal ceiling (scale = 1.0).
+   */
+  private resolveBudgetModelInfo(stage: PipelineStage): { model?: string; effort?: string } {
+    try {
+      const { getModeStageProfile } =
+        require("../utils/modeProfiles") as typeof import("../utils/modeProfiles");
+      const mode = this.getActivePerformanceMode();
+      const profile = getModeStageProfile(mode, stage);
+      if (profile?.model) {
+        return { model: profile.model, effort: profile.effort };
+      }
+    } catch {
+      // Fall through to config-level resolution.
+    }
+    try {
+      const { getStageModel, getStageEffort } =
+        require("../utils/resolvers/stageResolver") as typeof import("../utils/resolvers/stageResolver");
+      const { getDefaultModel } =
+        require("../utils/resolvers/modelResolver") as typeof import("../utils/resolvers/modelResolver");
+      const root = this.getPersistentRoot();
+      const stageModel = getStageModel(stage, root);
+      const model = stageModel ?? getDefaultModel(root);
+      const effort = getStageEffort(stage, root);
+      if (model) return { model, effort };
+    } catch {
+      // Best-effort — fall through to undefined.
+    }
+    return {};
+  }
+
+  /**
+   * Validate that pipeline state correctly reflects pr-create completion.
+   *
+   * Called after pr-create stage succeeds and context file validation passes.
+   * Detects the case where the PR was created but state.json was not updated,
+   * and attempts recovery from the pr-{N}.json context file.
+   *
+   * Recovery matrix:
+   * | State OK | pr-{N}.json exists | Action                           |
+   * |----------|-------------------|----------------------------------|
+   * | Yes      | Yes               | No-op (happy path)               |
+   * | No       | Yes (valid PR URL)| Reconstruct state from context   |
+   * | No       | No                | Retry with upgraded model         |
+   * | Yes      | No                | Log warning, continue            |
+   *
+   * @returns 'ok' | 'recovered' | 'retry-needed' | 'warning'
+   * @see Issue #1139 - pr-create state validation and retry
+   */
+  /**
+   * Copy the verified PR number out of `pr-{N}.json` into `pipeline_meta` so
+   * every downstream consumer (Discord embeds, the UI, and — crucially — the
+   * failure comment) can tell "no PR was ever opened" from "the PR exists and
+   * the stage died afterwards".
+   *
+   * Called on BOTH the pr-create success path and the pr-create failure path.
+   * Success-only was the bug behind #1531: when the runaway monitor killed
+   * pr-create while it waited on CI, nothing recorded the PR the stage had
+   * already opened and verified in Phase 3.6, so the failure report told the
+   * operator "PR creation failed — the agent could not push the branch or
+   * create the PR" about a PR that was open and running checks.
+   *
+   * Best-effort and never throws: a missing or malformed context file simply
+   * leaves the meta unset, which reads as "no verified PR" — the conservative
+   * direction.
+   *
+   * @see Issue #1531
+   */
+  private recordVerifiedPrNumber(issueNumber: number): void {
+    try {
+      const prCtxPath = this.getContextPath("pr", issueNumber);
+      if (!fs.existsSync(prCtxPath)) return;
+      const prCtx = JSON.parse(fs.readFileSync(prCtxPath, "utf-8")) as {
+        pr_number?: unknown;
+        pr_url?: unknown;
+        url?: unknown;
+      };
+
+      let prNumber: number | undefined;
+      if (typeof prCtx.pr_number === "number" && prCtx.pr_number > 0) {
+        prNumber = prCtx.pr_number;
+      } else {
+        const prUrlStr = typeof prCtx.pr_url === "string" ? prCtx.pr_url : "";
+        const fallbackUrl = typeof prCtx.url === "string" ? prCtx.url : "";
+        const prNumMatch = (prUrlStr || fallbackUrl).match(/\/pull\/(\d+)/);
+        if (prNumMatch) prNumber = parseInt(prNumMatch[1], 10);
+      }
+
+      if (prNumber !== undefined && prNumber > 0) {
+        this.stateService?.setMeta({ pr_number: prNumber });
+      }
+    } catch {
+      // Non-critical
+    }
+  }
+
+  private async validatePrCreateState(
+    issueNumber: number
+  ): Promise<"ok" | "recovered" | "retry-needed" | "warning"> {
+    // Skip validation when no state service (e.g., lightweight/test runs)
+    if (!this.stateService) {
+      return "ok";
+    }
+
+    // Check if state reflects pr-create completion
+    const state = await this.stateService.getState();
+
+    const stateValid =
+      state !== null &&
+      state.issue_number === issueNumber &&
+      state.stages["pr-create"]?.status === "complete";
+
+    // Check if pr-{N}.json context file exists with valid PR URL
+    const contextPath = this.getContextPath("pr", issueNumber);
+    let contextValid = false;
+    let prUrl: string | undefined;
+
+    if (fs.existsSync(contextPath)) {
+      try {
+        const content = JSON.parse(fs.readFileSync(contextPath, "utf-8")) as {
+          pr_url?: string;
+        };
+        prUrl = content.pr_url;
+        contextValid = typeof prUrl === "string" && prUrl.startsWith("https://");
+      } catch {
+        // Unparseable context — treat as missing
+      }
+    }
+
+    // Happy path: both state and context are valid
+    if (stateValid && contextValid) {
+      return "ok";
+    }
+
+    // State valid but context missing — unusual but not fatal
+    if (stateValid && !contextValid) {
+      this.logger.warn("pr-create state is valid but context file is missing or invalid", {
+        issueNumber,
+        contextPath,
+      });
+      return "warning";
+    }
+
+    // State missing/invalid but context exists with valid PR URL — recover
+    if (!stateValid && contextValid) {
+      this.logger.info("PR created but state lost — recovering from pr-{N}.json", {
+        issueNumber,
+        prUrl,
+      });
+
+      try {
+        await this.stateService.completeStage("pr-create");
+        return "recovered";
+      } catch (err) {
+        this.logger.error("Failed to recover pr-create state from context file", {
+          issueNumber,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return "retry-needed";
+      }
+    }
+
+    // Neither state nor valid context — full failure
+    this.logger.error("PR creation failed entirely — neither state nor context file found", {
+      issueNumber,
+      contextPath,
+    });
+    return "retry-needed";
+  }
+
+  /**
+   * Read expected branch name from issue context file.
+   *
+   * Returns null when the context cannot be parsed or branch is missing.
+   */
+  private getExpectedBranchFromContext(contextPath: string): string | null {
+    try {
+      const raw = fs.readFileSync(contextPath, "utf-8");
+      const parsed = JSON.parse(raw) as { branch?: unknown };
+      const branch = typeof parsed.branch === "string" ? parsed.branch.trim() : "";
+      return branch.length > 0 ? branch : null;
+    } catch (err) {
+      this.logger.warn("Failed to read expected branch from context", {
+        contextPath,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Deterministic post-validation: if this issue is a sub-issue of an epic,
+   * ensure base_branch points to the epic branch (not main). This prevents
+   * the pr-create/pr-merge stages from targeting main, which would bypass the
+   * epic merge flow (sub-issues accumulate on the epic branch, then the epic
+   * branch merges to main as one unit) and break epic completion detection.
+   *
+   * Runs after issue-pickup regardless of whether the subagent or the
+   * fallback generated the context file.
+   *
+   * Fail-closed contract: when this IS a confirmed epic sub-issue but no epic
+   * branch exists, we CREATE it (idempotent `nightgauge epic
+   * create-branch`) rather than silently leaving base_branch=main. If creation
+   * fails, we return `{ ok: false }` so the caller fails the stage instead of
+   * letting the sub-issue merge straight to main. Historically the Go scheduler
+   * created the branch and this TS method only retargeted to it — but the
+   * extension's autonomous slots never run the Go scheduler, so the branch was
+   * never created, this method fell open to main, and sub-issues landed on main
+   * individually (acmeapp-platform#6/#7 even pushed directly to main).
+   *
+   * Only a parent in this issue's own repository counts. A sub-issue of an epic
+   * in another repository has no epic branch here, so it keeps its own base
+   * branch and nothing is looked up or created (#2377).
+   *
+   * @see Issue #1452 — #1463 merged to main instead of epic branch
+   */
+  private async enforceEpicBaseBranch(
+    issueNumber: number
+  ): Promise<{ ok: boolean; error?: string }> {
+    const contextPath = this.getContextPath("issue", issueNumber);
+    const workspaceRoot = this.getWorkingDirectory();
+    const execOptions = {
+      encoding: "utf-8" as const,
+      cwd: workspaceRoot,
+      timeout: 15_000,
+    };
+
+    try {
+      const raw = fs.readFileSync(contextPath, "utf-8");
+      const ctx = JSON.parse(raw);
+      const currentBase: string = ctx.base_branch ?? "main";
+
+      // Already targeting an epic branch — nothing to do
+      if (currentBase.startsWith("epic/")) return { ok: true };
+
+      // Detect parent epic from the context or via GitHub sub-issues API.
+      // native_parent is a number in this repository: the context assembler
+      // leaves it null for a parent in another repository (#1058).
+      let parentNumber: number | null = ctx.native_parent ?? null;
+
+      // Resolve owner/repo from repoOverride or CWD's git remote (also used by
+      // the epic-branch create command below). An issue number names an issue
+      // only within one repository, so when neither answers the repository
+      // stays unknown: this used to fall back to nightgauge/nightgauge and
+      // read that repository's issue for the parent (#2388).
+      let gqlOwner = "";
+      let gqlRepo = "";
+      if (this.repoOverride?.includes("/")) {
+        [gqlOwner, gqlRepo] = this.repoOverride.split("/");
+      } else {
+        try {
+          const { stdout: nwoRaw } = await execFileAsync(
+            "gh",
+            ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+            execOptions
+          );
+          const nwo = nwoRaw.trim();
+          if (nwo.includes("/")) {
+            [gqlOwner, gqlRepo] = nwo.split("/");
+          }
+        } catch {
+          // The repository stays unknown.
+        }
+      }
+
+      if (parentNumber === null && !(gqlOwner && gqlRepo)) {
+        // Nothing can confirm epic membership without the repository, so
+        // nothing is enforced, as when the parent lookup itself fails.
+        this.logger.warn(
+          "Cannot identify this checkout's repository — skipping the parent lookup",
+          {
+            issueNumber,
+            currentBase,
+          }
+        );
+        return { ok: true };
+      }
+
+      if (parentNumber === null) {
+        // Query GitHub for this issue's parent (native sub-issues API), with
+        // the parent's repository. An epic branch, epic/<N>-*, names #N of the
+        // repository it is pushed to, so a parent in another repository has
+        // none here: epic/<N>-* in this one is the branch of its own #N, and
+        // creating one strands the sub-issue on a branch no epic PR merges
+        // (#2377). Such a sub-issue keeps its own default branch, as
+        // `git branch-create` decides on the skill path.
+        let parent: { number?: number; repository?: { nameWithOwner?: string } } | null = null;
+        try {
+          const { stdout: parentRaw } = await execFileAsync(
+            "gh",
+            [
+              "api",
+              "graphql",
+              "-f",
+              `query=query { repository(owner: "${gqlOwner}", name: "${gqlRepo}") { issue(number: ${issueNumber}) { parent { number repository { nameWithOwner } } } } }`,
+              "--jq",
+              ".data.repository.issue.parent",
+            ],
+            execOptions
+          );
+          const parentJson = parentRaw.trim();
+          if (parentJson && parentJson !== "null") {
+            parent = JSON.parse(parentJson);
+          }
+        } catch {
+          // Non-critical: parent detection failed (transient). We can't confirm
+          // this is an epic sub-issue, so don't block — fall through to ok.
+        }
+        if (parent?.number) {
+          const local = epicBranchParent(
+            `${gqlOwner}/${gqlRepo}`,
+            parent.number,
+            parent.repository?.nameWithOwner
+          );
+          if (local === undefined) {
+            this.logger.info(
+              "Epic sub-issue's parent lives in another repository — keeping its own base branch",
+              {
+                issueNumber,
+                parent: `${parent.repository?.nameWithOwner}#${parent.number}`,
+                currentBase,
+              }
+            );
+            return { ok: true };
+          }
+          parentNumber = local;
+        }
+      }
+
+      // Not an epic sub-issue (or couldn't confirm) — nothing to enforce.
+      if (parentNumber === null) return { ok: true };
+
+      // From here on this IS a confirmed epic sub-issue. Resolve the epic
+      // branch, creating it if necessary; never fall open to main.
+      let epicBranch = await this.findRemoteEpicBranch(parentNumber, execOptions);
+
+      if (!epicBranch) {
+        if (!this.isAutoCreateEpicBranchEnabled(workspaceRoot)) {
+          // Operator explicitly disabled auto-create — preserve the historical
+          // behavior of deferring to the subagent's base_branch.
+          this.logger.warn(
+            "Epic sub-issue has no epic branch and auto_create_epic_branch is disabled — leaving base_branch as-is",
+            { issueNumber, parentNumber, currentBase }
+          );
+          return { ok: true };
+        }
+        epicBranch = await this.createEpicBranch(parentNumber, gqlOwner, gqlRepo, workspaceRoot);
+      }
+
+      if (!epicBranch) {
+        // Fail-closed: confirmed epic sub-issue but we could neither find nor
+        // create the epic branch. Do NOT let it merge to main.
+        const msg =
+          `Issue #${issueNumber} is a sub-issue of epic #${parentNumber} but the epic ` +
+          `branch could not be found or created. Refusing to fall back to main (that ` +
+          `bypasses the epic merge flow). Create epic/${parentNumber}-* and re-run.`;
+        this.logger.error("Epic base_branch enforcement failed-closed", {
+          issueNumber,
+          parentNumber,
+        });
+        return { ok: false, error: msg };
+      }
+
+      // Patch the context file to target the epic branch.
+      ctx.base_branch = epicBranch;
+      if (!ctx.native_parent) ctx.native_parent = parentNumber;
+      fs.writeFileSync(contextPath, JSON.stringify(ctx, null, 2) + "\n");
+
+      this.logger.info(
+        'Enforced epic base_branch — subagent wrote "main" but issue is a sub-issue of an epic',
+        { issueNumber, parentNumber, epicBranch, previousBase: currentBase }
+      );
+      return { ok: true };
+    } catch (err) {
+      // Could not read/parse the context file — can't confirm epic membership,
+      // so don't block the pipeline on it.
+      this.logger.warn("Failed to enforce epic base_branch", {
+        issueNumber,
+        err,
+      });
+      return { ok: true };
+    }
+  }
+
+  /**
+   * Return the existing `epic/<parentNumber>-*` branch name on origin, or "".
+   */
+  private async findRemoteEpicBranch(
+    parentNumber: number,
+    execOptions: { encoding: "utf-8"; cwd: string; timeout: number }
+  ): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["ls-remote", "--heads", "origin", `epic/${parentNumber}-*`],
+        execOptions
+      );
+      return (stdout.trim().split("\n")[0]?.split(/\s+/)[1] ?? "").replace("refs/heads/", "");
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Create the epic branch via the deterministic Go binary command
+   * (`nightgauge epic create-branch`), reusing the same EnsureEpicBranch
+   * logic the Go scheduler uses. Idempotent. Returns the branch name, or "" if
+   * the binary is unavailable or creation failed.
+   *
+   * With `owner`/`repo` unknown ("") no repository is named: the binary
+   * resolves it from the checkout (config.yaml `default_repo`, else origin)
+   * and refuses a checkout whose origin is not that repository (#2388).
+   */
+  private async createEpicBranch(
+    parentNumber: number,
+    owner: string,
+    repo: string,
+    workspaceRoot: string
+  ): Promise<string> {
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        this.logger.warn("Epic branch create: nightgauge binary unresolved", { parentNumber });
+        return "";
+      }
+      const { stdout } = await execFileAsync(
+        binary,
+        [
+          "epic",
+          "create-branch",
+          String(parentNumber),
+          ...(owner && repo ? ["--owner", owner, "--repo", repo] : []),
+          "--json",
+        ],
+        { encoding: "utf-8", cwd: workspaceRoot, timeout: 60_000 }
+      );
+      const parsed = JSON.parse(stdout.trim()) as { branch?: string; created?: boolean };
+      if (parsed.branch) {
+        this.logger.info("Epic branch ensured via deterministic runner", {
+          parentNumber,
+          branch: parsed.branch,
+          created: parsed.created ?? false,
+        });
+        return parsed.branch;
+      }
+      return "";
+    } catch (err) {
+      this.logger.error("Epic branch create failed", {
+        parentNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return "";
+    }
+  }
+
+  /**
+   * Mirror of the Go scheduler's getAutoCreateEpicBranch: env var wins, else
+   * `pipeline.auto_create_epic_branch` in .nightgauge/config.yaml, default
+   * true.
+   */
+  private isAutoCreateEpicBranchEnabled(workspaceRoot: string): boolean {
+    const env = process.env.NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH;
+    if (env) return env !== "false" && env !== "0";
+    try {
+      const configPath = path.join(workspaceRoot, ".nightgauge", "config.yaml");
+      const data = fs.readFileSync(configPath, "utf-8");
+      let inPipeline = false;
+      for (const line of data.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed === "pipeline:") {
+          inPipeline = true;
+          continue;
+        }
+        if (inPipeline) {
+          // Left the pipeline block at the next top-level key.
+          if (trimmed && !line.startsWith(" ") && !line.startsWith("\t")) break;
+          const m = trimmed.match(/^auto_create_epic_branch:\s*(\S+)/);
+          if (m) return m[1] !== "false" && m[1] !== "0";
+        }
+      }
+    } catch {
+      // No config — default enabled.
+    }
+    return true;
+  }
+
+  /**
+   * Get current git branch for the working directory.
+   *
+   * Returns null if git state cannot be determined.
+   */
+  private async getCurrentGitBranch(): Promise<string | null> {
+    try {
+      const workspaceRoot = this.getWorkingDirectory();
+      const { stdout } = await execFileAsync("git", ["branch", "--show-current"], {
+        encoding: "utf-8",
+        cwd: workspaceRoot,
+        timeout: 5000,
+      });
+      const output = stdout.trim();
+      return output.length > 0 ? output : null;
+    } catch (err) {
+      this.logger.warn("Failed to determine current git branch", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Attempt deterministic branch recovery after issue-pickup mismatch.
+   *
+   * Recovery order:
+   * 1. Checkout existing local branch
+   * 2. Checkout tracking branch from origin (if it exists)
+   * 3. Create local branch from current HEAD
+   */
+  private async tryRecoverExpectedBranch(
+    issueNumber: number,
+    expectedBranch: string,
+    currentBranch: string
+  ): Promise<boolean> {
+    // One validator, not two (#498). This method used to carry a byte-for-byte
+    // copy of `branchUtils.isValidBranchName` — a dual-path-drift hazard on a
+    // security control, and the reason the old branch-sanitization test could
+    // only ever assert against a third copy of its own.
+    if (!isValidBranchName(expectedBranch)) {
+      this.logger.error("Invalid expected branch name in context", {
+        issueNumber,
+        expectedBranch,
+      });
+      return false;
+    }
+
+    const workspaceRoot = this.getWorkingDirectory();
+    const execOptions = {
+      encoding: "utf-8" as const,
+      cwd: workspaceRoot,
+      timeout: 10000,
+    };
+
+    this.logger.warn("Attempting branch recovery after issue-pickup mismatch", {
+      issueNumber,
+      expectedBranch,
+      currentBranch,
+    });
+
+    try {
+      await execFileAsync("git", ["checkout", expectedBranch], execOptions);
+      this.logger.info("Recovered branch by checking out local branch", {
+        issueNumber,
+        expectedBranch,
+      });
+      return true;
+    } catch {
+      // Continue to remote tracking fallback.
+    }
+
+    try {
+      await execFileAsync(
+        "git",
+        ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${expectedBranch}`],
+        execOptions
+      );
+      await execFileAsync(
+        "git",
+        ["checkout", "-b", expectedBranch, "--track", `origin/${expectedBranch}`],
+        execOptions
+      );
+      this.logger.info("Recovered branch by creating tracking branch", {
+        issueNumber,
+        expectedBranch,
+      });
+      return true;
+    } catch {
+      // Continue to local branch creation fallback.
+    }
+
+    try {
+      await execFileAsync("git", ["checkout", "-b", expectedBranch], execOptions);
+      this.logger.info("Recovered branch by creating local branch", {
+        issueNumber,
+        expectedBranch,
+      });
+      return true;
+    } catch (err) {
+      this.logger.error("Failed branch recovery after issue-pickup mismatch", {
+        issueNumber,
+        expectedBranch,
+        currentBranch,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Deterministic pre-check: Fetch issue labels and state in a single gh call.
+   *
+   * Returns `{ isEpic, isClosed }` to gate the pipeline before any AI stages
+   * run. Combines the epic check (Issue #525) and closed-issue check (Issue #696)
+   * into one network round-trip for efficiency.
+   *
+   * @param issueNumber - The GitHub issue number to check
+   * @returns Object with isEpic and isClosed booleans (both default false on failure)
+   *
+   * @see Issue #525 - Halt pipeline when epic detected
+   * @see Issue #696 - Orchestrator must pre-check issue state before running pipeline
+   */
+  private async preCheckIssue(issueNumber: number): Promise<{
+    isEpic: boolean;
+    isClosed: boolean;
+    /** Labels from the issue, available for pre-flight budget estimation */
+    labels: string[];
+    /** Issue title, available for pre-flight budget estimation */
+    title: string;
+  }> {
+    try {
+      const workspaceRoot = this.getWorkingDirectory();
+      const { stdout } = await execFileAsync(
+        "gh",
+        [
+          "issue",
+          "view",
+          String(issueNumber),
+          "--json",
+          "labels,state,title",
+          ...this.ghRepoArgs(),
+        ],
+        {
+          encoding: "utf-8",
+          cwd: workspaceRoot,
+          timeout: 15000,
+        }
+      );
+      const data = JSON.parse(stdout.trim());
+      const labels: string[] = (data.labels || []).map((l: { name: string }) => l.name);
+      const state: string = data.state || "";
+      const title: string = data.title || "";
+      return {
+        isEpic: labels.includes("type:epic"),
+        isClosed: state === "CLOSED",
+        labels,
+        title,
+      };
+    } catch (err) {
+      this.logger.warn("Failed to pre-check issue", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return { isEpic: false, isClosed: false, labels: [], title: "" };
+    }
+  }
+
+  /**
+   * Pre-check GitHub CLI authentication, required token scopes, and remaining
+   * API rate-limit quota. Catches expired tokens, missing scopes, and
+   * exhausted quota before AI stages consume tokens.
+   *
+   * #3020 — added rate-limit headroom check. The original incident burned
+   * 3× $21.59 spinning pr-merge runs that launched into a fully-exhausted
+   * GitHub quota and failed at the first gh call. Refusing to start the
+   * pipeline below MIN_RATE_LIMIT_HEADROOM is far cheaper than discovering
+   * exhaustion mid-stage. Threshold sized for one full pipeline run
+   * (board reads + status updates + PR ops + post-merge verify).
+   *
+   * @see Issue #1141 (auth check) · Issue #3020 (rate-limit headroom)
+   */
+  private async preCheckAuth(): Promise<{
+    isAuthenticated: boolean;
+    hasRequiredScopes: boolean;
+    // rateLimited is a SEPARATE, transient condition from auth/scope failures
+    // (#3896). Pre-fix it was conflated with hasRequiredScopes:false, which
+    // both produced a misleading "hasRequiredScopes=false" log and routed a
+    // 1-minute quota dip into the terminal pipeline-start failure path that
+    // burned the issue. When rateLimited is true, auth and scopes are fine —
+    // only the GitHub REST/GraphQL quota is momentarily below headroom.
+    rateLimited?: boolean;
+    // networkOutage is the connectivity sibling of rateLimited (#4002).
+    // `gh auth status` exits non-zero BOTH when not authenticated AND when
+    // api.github.com is unreachable (DNS down, no route). Pre-fix the two were
+    // conflated: a seconds-long network blip was reported as "not
+    // authenticated — run `gh auth login`" and burned the issue at
+    // pipeline-start. When networkOutage is true, NO auth state is known —
+    // isAuthenticated/hasRequiredScopes are presumptive (the next preflight
+    // after the cooldown re-validates for real).
+    networkOutage?: boolean;
+    retryAfterSec?: number;
+    errorMessage?: string;
+  }> {
+    const MIN_RATE_LIMIT_HEADROOM = 200;
+    try {
+      const workspaceRoot = this.getWorkingDirectory();
+      // `gh auth status` writes diagnostic output to stderr, so we need a
+      // shell for the 2>&1 redirect. execAsync (promisified exec) uses a
+      // shell; execFileAsync does not.
+      const { stdout: rawOutput } = await execAsync("gh auth status 2>&1", {
+        encoding: "utf-8",
+        cwd: workspaceRoot,
+        timeout: 15000,
+      });
+      const output = rawOutput.trim();
+
+      // Check for active authentication
+      const isAuthenticated = output.includes("Logged in to");
+
+      if (!isAuthenticated) {
+        return {
+          isAuthenticated: false,
+          hasRequiredScopes: false,
+          errorMessage: "GitHub CLI is not authenticated. Run `gh auth login` to authenticate.",
+        };
+      }
+
+      // Only classic OAuth tokens advertise scopes ("Token scopes: 'gist',
+      // 'repo'"). Fine-grained PATs (github_pat_…) and GitHub App tokens
+      // (ghs_…) carry per-repository permissions instead and `gh auth status`
+      // prints no scopes line for them — the clean-install gate's fine-grained
+      // token was refused here with "lacks required `repo` scope" while
+      // holding full Contents/Issues/Pull-requests write on the repository.
+      // So: a token that advertises scopes must list `repo`; a token that does
+      // not is checked by what it can actually do — its permission on the
+      // repository the pipeline is about to push to.
+      const scopesLine = output.match(/Token scopes:\s*(.*)/);
+      const advertisedScopes = scopesLine ? scopesLine[1].trim() : "";
+      const advertisesScopes = advertisedScopes !== "" && !/^none\b/i.test(advertisedScopes);
+
+      if (advertisesScopes) {
+        if (!/\brepo\b/.test(advertisedScopes)) {
+          return {
+            isAuthenticated: true,
+            hasRequiredScopes: false,
+            errorMessage:
+              "GitHub token lacks required `repo` scope for PR operations. " +
+              "Run `gh auth refresh -s repo` to add the scope.",
+          };
+        }
+      } else {
+        let permission = "";
+        let probeError = "";
+        try {
+          const { stdout } = await execAsync(
+            "gh repo view --json viewerPermission --jq .viewerPermission",
+            { encoding: "utf-8", cwd: workspaceRoot, timeout: 15000 }
+          );
+          permission = stdout.trim();
+        } catch (probeErr) {
+          probeError = [
+            probeErr instanceof Error ? probeErr.message : String(probeErr),
+            (probeErr as { stderr?: string })?.stderr ?? "",
+          ]
+            .join(" ")
+            .trim();
+        }
+        if (!["WRITE", "MAINTAIN", "ADMIN"].includes(permission)) {
+          return {
+            isAuthenticated: true,
+            hasRequiredScopes: false,
+            errorMessage:
+              "GitHub token cannot push to this repository " +
+              `(viewerPermission=${permission || "unknown"}${probeError ? `; ${probeError}` : ""}). ` +
+              "A fine-grained token needs Contents, Issues and Pull requests read/write on it; " +
+              "a classic token needs the `repo` scope (`gh auth refresh -s repo`).",
+          };
+        }
+      }
+
+      // Rate-limit headroom check (best-effort — IPC failure should not
+      // block the pipeline, since auth is already validated above).
+      try {
+        const ipc = IpcClient.getInstance();
+        const info = await ipc.githubRateLimit();
+        if (info.remaining < MIN_RATE_LIMIT_HEADROOM) {
+          const resetMs = info.resetAt * 1000 - Date.now();
+          const minutes = Math.max(1, Math.ceil(resetMs / 60_000));
+          const retryAfterSec = Math.max(1, Math.ceil(resetMs / 1000));
+          // Auth + scopes are fine (we passed the repo-scope check above) — this
+          // is purely a transient quota dip. Report it as rateLimited, NOT as a
+          // scope failure, so the caller defers/retries instead of burning the
+          // issue at pipeline-start (#3896).
+          return {
+            isAuthenticated: true,
+            hasRequiredScopes: true,
+            rateLimited: true,
+            retryAfterSec,
+            errorMessage:
+              `GitHub API quota too low to start pipeline (${info.remaining}/${info.limit} remaining, ` +
+              `need ≥${MIN_RATE_LIMIT_HEADROOM}). Resets in ~${minutes} min.`,
+          };
+        }
+        // Healthy quota — re-arm the rate-limit circuit breaker so a future
+        // 429 outage trips it again. (Breaker is module-level; without
+        // re-arming it would stay tripped after a successful recovery.)
+        noteRateLimitOk();
+      } catch (rlErr) {
+        // Non-fatal — log and continue. Auth is good; if quota is actually
+        // exhausted the first gh call will surface it and the rate-limit
+        // circuit breaker (#3020) will pause autonomous mode.
+        this.logger.debug("Rate-limit pre-check skipped (IPC error)", {
+          error: rlErr instanceof Error ? rlErr.message : String(rlErr),
+        });
+      }
+
+      return { isAuthenticated: true, hasRequiredScopes: true };
+    } catch (err) {
+      // `gh auth status` exits non-zero when not authenticated — but ALSO
+      // when api.github.com is unreachable (the status check validates the
+      // token over the network). Distinguish the two from gh's own
+      // diagnostic ("error connecting to api.github.com", DNS errors, …),
+      // captured on the exec error's combined output, using the same
+      // patterns the network-outage breaker matches. A blip must defer the
+      // pipeline (transient, auto-retry), not page the operator to
+      // re-authenticate. #4002.
+      const combined = [
+        err instanceof Error ? err.message : String(err),
+        (err as { stdout?: string })?.stdout ?? "",
+        (err as { stderr?: string })?.stderr ?? "",
+      ].join("\n");
+      if (isConnectivityError(combined)) {
+        return {
+          isAuthenticated: true,
+          hasRequiredScopes: true,
+          networkOutage: true,
+          retryAfterSec: 120,
+          errorMessage:
+            "GitHub API unreachable — `gh auth status` could not connect to api.github.com. " +
+            "This is a network outage, not an auth failure; the pipeline will retry automatically.",
+        };
+      }
+      return {
+        isAuthenticated: false,
+        hasRequiredScopes: false,
+        errorMessage:
+          "GitHub auth check failed: `gh auth status` returned a non-zero exit code. " +
+          "Run `gh auth login` to authenticate.",
+      };
+    }
+  }
+
+  /**
+   * Handle an epic issue — check sub-issues and auto-close if all complete.
+   *
+   * Returns a PipelineRunResult immediately without consuming any AI tokens.
+   * If all sub-issues are closed, auto-closes the epic via gh CLI and syncs
+   * the project board. If sub-issues are still open, returns a clear error
+   * listing what's remaining.
+   *
+   * @param issueNumber - The epic issue number
+   * @param startTime - Pipeline start timestamp for duration calculation
+   * @returns PipelineRunResult indicating the outcome
+   *
+   * @see Issue #525 - Halt pipeline when epic detected
+   */
+  private async handleEpicIssue(
+    issueNumber: number,
+    startTime: number
+  ): Promise<PipelineRunResult> {
+    const workspaceRoot = this.getWorkingDirectory();
+
+    // Fetch epic title and body for sub-issue reference parsing
+    // Note: gh `subIssues` field is not available in all gh CLI versions,
+    // so we parse issue references from the body text (matches #123, GH-123).
+    // This mirrors the Go binary epic check-completion fallback approach.
+    interface SubIssue {
+      number: number;
+      title: string;
+      state: string;
+    }
+    let subIssues: SubIssue[] = [];
+    let epicTitle = `Issue #${issueNumber}`;
+
+    try {
+      const { stdout: outputRaw } = await execFileAsync(
+        "gh",
+        ["issue", "view", String(issueNumber), "--json", "title,body", ...this.ghRepoArgs()],
+        {
+          encoding: "utf-8",
+          cwd: workspaceRoot,
+          timeout: 30000,
+        }
+      );
+      const data = JSON.parse(outputRaw.trim());
+      epicTitle = data.title || epicTitle;
+      const body: string = data.body || "";
+
+      // Extract issue references from body (#123, GH-123)
+      const issueRefs = new Set<number>();
+      const refPattern = /(?:#|GH-)(\d+)/g;
+      let match;
+      while ((match = refPattern.exec(body)) !== null) {
+        const refNum = parseInt(match[1], 10);
+        // Skip self-references
+        if (refNum !== issueNumber) {
+          issueRefs.add(refNum);
+        }
+      }
+
+      this.logger.debug("Parsed epic body references", {
+        issueNumber,
+        subIssueCount: issueRefs.size,
+        refs: Array.from(issueRefs),
+      });
+
+      // Check state of each referenced issue
+      for (const ref of issueRefs) {
+        try {
+          const { stdout: issueOutputRaw } = await execFileAsync(
+            "gh",
+            ["issue", "view", String(ref), "--json", "number,title,state", ...this.ghRepoArgs()],
+            {
+              encoding: "utf-8",
+              cwd: workspaceRoot,
+              timeout: 15000,
+            }
+          );
+          const issueData = JSON.parse(issueOutputRaw.trim());
+
+          // Skip sub-issues that are themselves epics (circular ref prevention)
+          try {
+            const { stdout: labelsOutputRaw } = await execFileAsync(
+              "gh",
+              [
+                "issue",
+                "view",
+                String(ref),
+                "--json",
+                "labels",
+                "-q",
+                ".labels[].name",
+                ...this.ghRepoArgs(),
+              ],
+              {
+                encoding: "utf-8",
+                cwd: workspaceRoot,
+                timeout: 15000,
+              }
+            );
+            const labelsOutput = labelsOutputRaw.trim();
+            if (labelsOutput.split("\n").includes("type:epic")) {
+              this.logger.debug("Skipping epic sub-reference", { ref });
+              continue;
+            }
+          } catch {
+            // If label check fails, don't skip
+          }
+
+          subIssues.push({
+            number: issueData.number,
+            title: issueData.title || `Issue #${ref}`,
+            state: issueData.state || "UNKNOWN",
+          });
+        } catch {
+          // If we can't fetch the issue, treat it as open to be safe
+          subIssues.push({
+            number: ref,
+            title: `Issue #${ref}`,
+            state: "UNKNOWN",
+          });
+        }
+      }
+    } catch (err) {
+      this.logger.warn("Failed to fetch epic details", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const openSubIssues = subIssues.filter((s) => s.state !== "CLOSED");
+    const closedSubIssues = subIssues.filter((s) => s.state === "CLOSED");
+
+    // If all sub-issues are closed, auto-close the epic
+    if (openSubIssues.length === 0 && closedSubIssues.length > 0) {
+      this.logger.info("All sub-issues complete — auto-closing epic", {
+        issueNumber,
+        closedCount: closedSubIssues.length,
+      });
+
+      try {
+        const comment = `All ${closedSubIssues.length} sub-issues have been completed. Auto-closing epic.`;
+        await execFileAsync(
+          "gh",
+          ["issue", "close", String(issueNumber), "--comment", comment, ...this.ghRepoArgs()],
+          {
+            encoding: "utf-8",
+            cwd: workspaceRoot,
+            timeout: 15000,
+          }
+        );
+
+        // Update project board status to Done via GraphQL
+        try {
+          await updateProjectItemStatus(issueNumber, "Done", workspaceRoot, this.logger);
+        } catch {
+          // Project board sync is best-effort
+        }
+
+        this.logger.info("Epic auto-closed successfully", { issueNumber });
+
+        // Create epic→main PR via Go binary
+        try {
+          const binary = await BinaryResolver.fromVSCode().resolve();
+          if (!binary) throw new Error("nightgauge binary not found");
+
+          const epicPrExecOpts = {
+            encoding: "utf-8" as const,
+            cwd: workspaceRoot,
+            timeout: 60000,
+          };
+
+          // Find epic branch: origin/epic/{issueNumber}-*
+          let epicBranch = "";
+          try {
+            const { stdout: branchOutRaw } = await execFileAsync(
+              "git",
+              ["branch", "-r", "--list", `origin/epic/${issueNumber}-*`],
+              { ...epicPrExecOpts, timeout: 10000 }
+            );
+            const branchOut = branchOutRaw.trim();
+            if (branchOut) {
+              epicBranch = branchOut
+                .split("\n")[0]
+                .trim()
+                .replace(/^origin\//, "");
+            }
+          } catch {
+            this.logger.warn("Could not determine epic branch", {
+              issueNumber,
+            });
+          }
+
+          if (!epicBranch) {
+            this.logger.warn("No epic branch found — skipping PR creation", {
+              issueNumber,
+            });
+          } else {
+            // Build PR title and body from existing epic data
+            const subIssueList = closedSubIssues
+              .map((s) => `- #${s.number}: ${s.title}`)
+              .join("\n");
+            const prBody = `Epic #${issueNumber} completion: all sub-issues are closed.\n\n## Sub-issues\n\n${subIssueList}`;
+            const prTitle = `feat(#${issueNumber}): ${epicTitle}`;
+
+            // Check for existing PR
+            let prAlreadyExists = false;
+            try {
+              await execFileAsync(
+                "gh",
+                ["pr", "view", epicBranch, "--json", "number", "-q", ".number"],
+                { ...epicPrExecOpts, timeout: 10000 }
+              );
+              prAlreadyExists = true;
+            } catch {
+              // PR does not exist — proceed to create
+            }
+
+            if (prAlreadyExists) {
+              this.logger.info("Epic PR already exists", {
+                issueNumber,
+                epicBranch,
+              });
+            } else {
+              const epicPrArgs = [
+                "pr",
+                "create",
+                "--title",
+                prTitle,
+                "--head",
+                epicBranch,
+                "--base",
+                "main",
+                "--body",
+                prBody,
+                "--json",
+              ];
+
+              let prResult = "";
+              let lastErr: unknown;
+
+              // Attempt with a single retry on transient failures
+              for (let attempt = 0; attempt < 2; attempt++) {
+                try {
+                  const { stdout: prResultRaw } = await execFileAsync(
+                    binary,
+                    epicPrArgs,
+                    epicPrExecOpts
+                  );
+                  prResult = prResultRaw.trim();
+                  lastErr = undefined;
+                  break;
+                } catch (err) {
+                  lastErr = err;
+                  if (attempt === 0) {
+                    this.logger.warn("Epic PR creation failed, retrying in 3s...", {
+                      issueNumber,
+                      attempt,
+                      err: err instanceof Error ? err.message : String(err),
+                    });
+                    await new Promise((r) => setTimeout(r, 3000));
+                  }
+                }
+              }
+
+              if (lastErr) {
+                this.logger.warn("Failed to create epic PR after retry", {
+                  issueNumber,
+                  err: lastErr instanceof Error ? lastErr.message : String(lastErr),
+                });
+              } else {
+                try {
+                  const prData = JSON.parse(prResult) as {
+                    action?: string;
+                    pr_url?: string;
+                    pr_number?: number;
+                  };
+                  this.logger.info("Epic PR creation result", {
+                    issueNumber,
+                    action: prData.action ?? "created",
+                    prUrl: prData.pr_url,
+                    prNumber: prData.pr_number,
+                  });
+                } catch {
+                  this.logger.warn("Epic PR binary returned non-JSON output", {
+                    issueNumber,
+                    output: prResult.slice(0, 500),
+                  });
+                }
+              }
+            }
+          }
+        } catch (prErr) {
+          // PR creation failure is non-fatal — epic is already closed
+          this.logger.warn("Failed to create/merge epic PR", {
+            issueNumber,
+            err: prErr instanceof Error ? prErr.message : String(prErr),
+          });
+        }
+      } catch (err) {
+        this.logger.error("Failed to auto-close epic", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      return {
+        success: true,
+        completedStages: [],
+        skippedStages: [],
+        deferredStages: [],
+        error: new Error(
+          `Epic #${issueNumber} auto-closed — all ${closedSubIssues.length} sub-issues are complete.`
+        ),
+        totalDurationMs: Date.now() - startTime,
+      };
+    }
+
+    // Epic has open sub-issues — halt with details
+    const openList = openSubIssues
+      .map((s) => `  - #${s.number}: ${s.title} (${s.state})`)
+      .join("\n");
+    const closedCount = closedSubIssues.length;
+    const totalCount = subIssues.length;
+
+    let message =
+      `Issue #${issueNumber} is an epic (type:epic). ` +
+      `Pipeline halted — zero AI tokens consumed.\n\n`;
+
+    if (subIssues.length > 0) {
+      message +=
+        `Progress: ${closedCount}/${totalCount} sub-issues complete.\n\n` +
+        `Open sub-issues:\n${openList}\n\n` +
+        `Pick up a sub-issue instead: /nightgauge:issue-pickup <number>`;
+    } else {
+      message += `No sub-issues found. Pick up a sub-issue instead or close this epic manually.`;
+    }
+
+    this.eventDispatcher.onStderr(
+      "pipeline-start",
+      `[pipeline-start-failure] epic-with-open-sub-issues: ${message}\n`
+    );
+
+    return {
+      success: false,
+      completedStages: [],
+      skippedStages: [],
+      deferredStages: [],
+      failedStage: "pipeline-start",
+      // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+      // ConcurrentPipelineManager must not move the board or comment.
+      startRefusal: "epic-with-open-sub-issues",
+      error: new Error(message),
+      totalDurationMs: Date.now() - startTime,
+    };
+  }
+
+  /**
+   * Migrate context schema from older versions to current (v1.3)
+   *
+   * This function performs lazy, in-memory migration of context files.
+   * It does NOT write to disk - context files are transient and deleted
+   * after PR merge, so in-memory migration is the lowest-risk approach.
+   *
+   * Migration behavior:
+   * - v1.0: No routing field → adds default routing with 'feature' task type
+   * - v1.1: Has routing but no task_type → adds 'feature' task type
+   * - v1.2: Has task_type but skip_stages may be limited → expands to 4-stage schema
+   * - v1.3: Current schema, returned as-is
+   *
+   * @param context - The parsed issue context object
+   * @returns Migrated context object (v1.3 schema) or null if invalid
+   *
+   * @see Issue #418 - Schema migration for pipeline routing
+   * @see docs/CONTEXT_ARCHITECTURE.md - Schema version history
+   */
+  private migrateContextSchema(context: Record<string, unknown>): Record<string, unknown> | null {
+    // Validate schema_version exists
+    const schemaVersion = context.schema_version;
+    if (typeof schemaVersion !== "string") {
+      this.logger.warn("Invalid schema_version in context file", {
+        schemaVersion,
+      });
+      return null;
+    }
+
+    // Handle known versions
+    switch (schemaVersion) {
+      default: {
+        // Parse major.minor version for forward-compatible handling
+        const parts = schemaVersion.split(".");
+        const major = parseInt(parts[0], 10);
+        const minor = parseInt(parts[1], 10);
+
+        if (isNaN(major) || isNaN(minor)) {
+          this.logger.warn("Unparseable schema version in context file", {
+            schemaVersion,
+          });
+          return null;
+        }
+
+        // Future versions (>= 1.3) are forward-compatible — accept as-is
+        if (major > 1 || (major === 1 && minor >= 3)) {
+          this.logger.debug("Accepting forward-compatible schema version", {
+            schemaVersion,
+          });
+          return context;
+        }
+
+        // v1.2: Has task_type, but skip_stages might not include pr-create/pr-merge
+        if (major === 1 && minor === 2) {
+          this.logger.debug("Migrating context from v1.2 to v1.3", {
+            hasRouting: !!context.routing,
+          });
+          return {
+            ...context,
+            schema_version: "1.3",
+          };
+        }
+
+        // v1.1: Has routing but no task_type
+        if (major === 1 && minor === 1) {
+          this.logger.debug("Migrating context from v1.1 to v1.3", {
+            hasRouting: !!context.routing,
+          });
+          if (context.routing && typeof context.routing === "object") {
+            return {
+              ...context,
+              schema_version: "1.3",
+              routing: {
+                ...(context.routing as Record<string, unknown>),
+                task_type: (context.routing as Record<string, unknown>).task_type ?? "feature",
+              },
+            };
+          }
+          return {
+            ...context,
+            schema_version: "1.3",
+          };
+        }
+
+        // v1.0: No routing field
+        if (major === 1 && minor === 0) {
+          this.logger.debug("Migrating context from v1.0 to v1.3", {
+            hasRouting: false,
+          });
+          return {
+            ...context,
+            schema_version: "1.3",
+          };
+        }
+
+        // Major version 0 or unknown — reject
+        this.logger.warn("Unknown schema version in context file", {
+          schemaVersion,
+        });
+        return null;
+      }
+    }
+  }
+
+  /**
+   * Load routing decision from issue context file
+   *
+   * Reads the issue-{N}.json file and extracts routing information.
+   * If routing is not present (schema v1.0), returns null.
+   *
+   * @param issueNumber - The issue number to load routing for
+   * @returns RoutingDecision or null if not available
+   */
+  private async loadRoutingDecision(issueNumber: number): Promise<RoutingDecision | null> {
+    try {
+      // Get issue context path (uses context loader if available)
+      const issueContextPath = this.getIssueContextPath(issueNumber);
+
+      // Check if file exists
+      if (!fs.existsSync(issueContextPath)) {
+        this.logger.debug("Issue context file not found", { issueContextPath });
+        return null;
+      }
+
+      // Read and parse the file
+      const content = fs.readFileSync(issueContextPath, "utf-8");
+      const rawContext = JSON.parse(content);
+
+      // Migrate schema to v1.3 if needed (Issue #418)
+      const issueContext = this.migrateContextSchema(rawContext);
+      if (!issueContext) {
+        this.logger.debug("Failed to migrate context schema", { issueNumber });
+        return null;
+      }
+
+      // Check for routing field (schema v1.1+)
+      if (!issueContext.routing) {
+        this.logger.debug("No routing field in issue context (schema v1.0)", {
+          issueNumber,
+        });
+        return null;
+      }
+
+      // Type assertion for routing object after migration
+      const routing = issueContext.routing as Record<string, unknown>;
+
+      // Convert routing from context to ChangeAnalysis format
+      // Normalize labels — subagents may write {name: string} objects
+      const rawLabels = Array.isArray(issueContext.labels) ? issueContext.labels : [];
+      const labels = this.normalizeLabels(rawLabels);
+
+      const analysis: ChangeAnalysis = {
+        changeType: routing.change_type as ChangeAnalysis["changeType"],
+        taskType: (routing.task_type ?? "feature") as ChangeAnalysis["taskType"], // Default for backward compatibility
+        sizeLabel: this.extractSizeLabel(labels),
+        typeLabel: this.extractTypeLabel(labels),
+        priorityLabel: this.extractPriorityLabel(labels),
+        complexityScore: routing.complexity_score as number,
+        suggestedRoute: routing.suggested_route as ChangeAnalysis["suggestedRoute"],
+        skipStages: routing.skip_stages as ChangeAnalysis["skipStages"],
+        rationale: routing.rationale as string,
+        estimatedTimeMinutes: routing.estimated_time_minutes as number,
+        foundationTask: (routing.foundation_task as boolean) ?? false,
+        // Risk dimension (#4093) — persisted by the Go router; default false for
+        // pre-#4093 context files.
+        riskHigh: (routing.risk_high as boolean) ?? false,
+        riskReasons: Array.isArray(routing.risk_reasons) ? (routing.risk_reasons as string[]) : [],
+      };
+
+      // Apply config overrides and make decision
+      const routingConfig: RoutingConfig = {
+        ...DEFAULT_ROUTING_CONFIG,
+        ...this.config.routing,
+        forceFullPipeline: this.config.forceFullPipeline,
+      };
+
+      const decision = makeRoutingDecision(analysis, routingConfig);
+
+      // Cache routing telemetry for JSONL execution history (Issue #1005)
+      this.cachedRoutingTelemetry = {
+        complexity_score: analysis.complexityScore,
+        path: decision.route,
+        skip_stages: decision.skipStages.map(String),
+      };
+
+      this.logger.info("Loaded routing decision", {
+        issueNumber,
+        route: decision.route,
+        skipStages: decision.skipStages,
+        wasOverridden: decision.wasOverridden,
+      });
+
+      return decision;
+    } catch (error) {
+      this.logger.warn("Failed to load routing decision", {
+        issueNumber,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Persist a stage-exit diagnostic record via the Go binary's IPC handler.
+   *
+   * Issue #3619: PR #3608 wired `WriteStageExitRecord` only to the Go
+   * scheduler's `runPipeline()` path. The user's autonomous workflow runs
+   * through this TS-side `HeadlessOrchestrator.runPipeline()` which never
+   * round-trips Go's scheduler, so `pipelineStateDir(root)/exit-records/`
+   * never got written. Every IPC-mode failure went into a black box — see
+   * the #3340 retro where four Anthropic-500 retries burned $2.41 with no
+   * persisted record. This helper closes that gap by calling the
+   * `diagnostics.recordStageExit` IPC method after every stage exit.
+   *
+   * The on-disk JSONL line is byte-equivalent to what the Go-scheduler path
+   * writes, so `nightgauge exit-records tail` sees a unified stream
+   * regardless of which dispatch path produced any given record.
+   *
+   * Fire-and-forget: a failure inside this method logs but never throws —
+   * the pipeline's success/failure semantics never depend on diagnostic
+   * persistence. Fields the TS layer doesn't have (rate-limit remaining at
+   * exit, concurrent sibling pipelines) are left empty; the record is
+   * strictly better than the prior "nothing written" status quo.
+   *
+   * Issue #109: this method used to pass literal `undefined` for the exit code
+   * and every token/cost field, so all 1,735 records this path had written
+   * carried `"tokens": {}` — and `ExitRecordTokens` is a struct, so `omitempty`
+   * could not even elide the empty object. Every figure now comes from
+   * `result.exitTelemetry`, captured off the skill subprocess at exit. The
+   * totals are per-stage-attempt, matching what the Go scheduler path books
+   * (`scheduler.go` → `result.InputTokens`); a stage that never spawned a
+   * subprocess still records zero rather than a synthesized number.
+   *
+   * Issue #125: `result.success` is the skill's SELF-REPORT (its process exit
+   * code) — not the stage's outcome. A stage that exits 0 and then fails its
+   * post-condition gate is failed in history but was recorded here as
+   * `success=true`, so gate-caught failures landed in the healthy baseline of
+   * every ratio-based health analysis. `gateFailure` carries the gate's verdict
+   * so the record reflects the POST-gate truth and names the reason. Callers
+   * pass it only when a gate overrode a clean exit; a skill-exit-code failure
+   * still records `success=false` through the untouched `result.success` path.
+   */
+  private async recordStageExitDiagnostic(
+    stage: PipelineStage,
+    issueNumber: number,
+    result: StageRunResult,
+    stageStartTime: number,
+    gateFailure?: { kind: string; reason: string; terminalKind?: string }
+  ): Promise<void> {
+    try {
+      const ipc = IpcClient.getInstance();
+      const elapsedMs = result.durationMs ?? Date.now() - stageStartTime;
+      // A gate override is authoritative: it is the verdict history records.
+      const success = result.success && !gateFailure;
+      // The gate's reason replaces the (absent) skill error so Go's
+      // ClassifyTerminalKind sees the real cause — e.g. the
+      // `[validation-failed]` marker → `validation_failed`, matching the run
+      // record's terminal_failure_kind instead of a generic fallback.
+      const errorText = gateFailure?.reason ?? result.error?.message ?? "";
+      // Pre-classify the common terminal kinds we already detect at this layer.
+      // Empty string defers to the Go-side `ClassifyTerminalKind` fallback so
+      // both write paths produce consistent `terminal_kind` values. A gate's
+      // structured verdict (#283) seeds it — the gate knows better than any
+      // text fallback (e.g. validation_error for a schema-mismatched handoff).
+      let terminalKind = gateFailure?.terminalKind ?? "";
+      if (result.budgetExceeded) {
+        // #3666: when the stage shipped its work product before being killed
+        // (e.g. pr-create successfully opened the PR), classify as the
+        // recoverable budget_ceiling_hit kind so the Go-side autonomous
+        // scheduler does NOT increment LifetimeIssueFailures or trip the
+        // cascade circuit breaker. The actual reclassification gate is in
+        // HeadlessOrchestrator's budget-kill path and only sets
+        // `shippedPartially` when a deterministic check (`checkPrCreatedForIssue`)
+        // confirms the work product exists.
+        terminalKind = result.shippedPartially ? "budget_ceiling_hit" : "budget_exceeded";
+      }
+      const repo = this.repoOverride ?? "";
+      const model = this.stageModelOverrides.get(stage) ?? "";
+      const telemetry = result.exitTelemetry;
+      // Per-stage-attempt totals, NOT a pipeline-wide running figure — the
+      // accumulator behind them is created per subprocess spawn.
+      const usage = telemetry?.tokenUsage;
+      await ipc.diagnosticsRecordStageExit(
+        repo,
+        issueNumber,
+        stage,
+        success,
+        // ADR-017: the diagnostics record belongs to the same run as every
+        // pipeline.* transition. The audit correlation UUID is deliberately a
+        // different identity and must never cross the IPC wire.
+        this.stateService?.getRunId() ?? undefined,
+        new Date(stageStartTime).toISOString(),
+        model || undefined,
+        // `null` means the subprocess died on a signal, so no exit code ever
+        // existed. Send undefined so Go's `*int` stays nil ("never observed")
+        // instead of booking a fake 0.
+        telemetry?.exitCode ?? undefined,
+        terminalKind || undefined,
+        errorText || undefined,
+        elapsedMs,
+        telemetry?.idleMsAtExit,
+        usage?.inputTokens,
+        usage?.outputTokens,
+        usage?.cacheReadTokens,
+        usage?.cacheCreationTokens,
+        usage?.costUsd,
+        telemetry?.signal,
+        telemetry?.signalSource,
+        telemetry?.sessionId,
+        telemetry?.lastBashCommand,
+        telemetry?.lastBashExit,
+        telemetry?.recentBash,
+        telemetry?.stopHookErrored,
+        telemetry?.stderrTail,
+        gateFailure?.kind,
+        // `gate_reason` is documented as the SHORT reason; cap it so a verbose
+        // orchestrator-synthesized message can't bloat the daily JSONL. The
+        // full text still reaches Go via errorText for classification.
+        gateFailure?.reason.slice(0, 500),
+        // #161: the ceiling that fired and its configured value. Without this
+        // pair, a killed stage's record names only the closure that delivered
+        // SIGTERM, and identifying the actual limit means re-tracing the whole
+        // resolver chain — which #161 showed does not converge for derived
+        // ceilings.
+        telemetry?.killCeiling,
+        telemetry?.killCeilingValue
+      );
+    } catch (err) {
+      // Never block pipeline progress on a diagnostic write failure. Logged
+      // for observability — see retros if the daily JSONL is unexpectedly empty.
+      this.logger.warn("recordStageExitDiagnostic failed (non-fatal)", {
+        stage,
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Load issue metadata for AutoModelSelector (Issue #732)
+   *
+   * Reads issue-{N}.json context file and extracts labels and title.
+   * Caches the result for the duration of the pipeline run.
+   *
+   * @param issueNumber - The issue number
+   * @returns IssueMetadata or null if context file not found
+   */
+  private loadIssueMetadata(issueNumber: number): IssueMetadata | null {
+    // Return cached metadata if available for this issue
+    if (this.cachedIssueMetadata) {
+      return this.cachedIssueMetadata;
+    }
+
+    try {
+      const issueContextPath = this.getIssueContextPath(issueNumber);
+      if (!fs.existsSync(issueContextPath)) {
+        return null;
+      }
+
+      const content = fs.readFileSync(issueContextPath, "utf-8");
+      const rawContext = JSON.parse(content);
+      const issueContext = this.migrateContextSchema(rawContext);
+      if (!issueContext) {
+        return null;
+      }
+
+      const rawLabels = Array.isArray(issueContext.labels) ? issueContext.labels : [];
+      const labels = this.normalizeLabels(rawLabels);
+      const title = (issueContext.title ?? `Issue #${issueNumber}`) as string;
+      const sizeLabel = this.extractSizeLabel(labels);
+
+      const metadata: IssueMetadata = {
+        labels,
+        title,
+        ...(sizeLabel ? { size: sizeLabel as IssueMetadata["size"] } : {}),
+      };
+
+      this.cachedIssueMetadata = metadata;
+      return metadata;
+    } catch (error) {
+      this.logger.warn("Failed to load issue metadata for model selection", {
+        issueNumber,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Normalize labels that may be strings or {name: string} objects.
+   * Subagents sometimes write raw GitHub label objects to context files.
+   */
+  private normalizeLabels(labels: unknown[]): string[] {
+    return labels
+      .map((l) =>
+        typeof l === "string"
+          ? l
+          : l && typeof l === "object" && "name" in l
+            ? String((l as { name: unknown }).name)
+            : ""
+      )
+      .filter((l) => l.length > 0);
+  }
+
+  /**
+   * Extract size label from labels array
+   */
+  private extractSizeLabel(labels: string[]): "XS" | "S" | "M" | "L" | "XL" | null {
+    for (const label of labels) {
+      const match = label.match(/^size:(XS|S|M|L|XL)$/i);
+      if (match) {
+        return match[1].toUpperCase() as "XS" | "S" | "M" | "L" | "XL";
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Extract type label from labels array
+   */
+  private extractTypeLabel(
+    labels: string[]
+  ): "feature" | "bug" | "docs" | "refactor" | "chore" | "test" | "verification" | null {
+    for (const label of labels) {
+      const match = label.match(/^type:(feature|bug|docs|refactor|chore|test|verification)$/i);
+      if (match) {
+        return match[1].toLowerCase() as
+          "feature" | "bug" | "docs" | "refactor" | "chore" | "test" | "verification";
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Extract priority label from labels array
+   */
+  private extractPriorityLabel(labels: string[]): "critical" | "high" | "medium" | "low" | null {
+    for (const label of labels) {
+      const match = label.match(/^priority:(critical|high|medium|low)$/i);
+      if (match) {
+        return match[1].toLowerCase() as "critical" | "high" | "medium" | "low";
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Check if a stage should be skipped based on routing decision
+   *
+   * @param stage - The stage to check
+   * @returns True if the stage should be skipped
+   */
+  private shouldSkipStage(stage: PipelineStage): boolean {
+    // If no routing decision, don't skip anything
+    if (!this.currentRoutingDecision) {
+      return false;
+    }
+
+    // Check if stage is in the skip list
+    return this.currentRoutingDecision.skipStages.includes(stage);
+  }
+
+  /**
+   * Reconcile deterministic completion side effects after a successful pipeline:
+   * - Ensure issue is closed when merged PR exists
+   * - Ensure status label/project status are synced to done
+   * - Run targeted epic completion check for this issue
+   * - Trigger VS Code refresh for project/ready views
+   *
+   * Returns verified=false if GitHub state cannot be queried (non-blocking).
+   */
+
+  /**
+   * Check if feature-planning signaled that the issue is already resolved.
+   *
+   * Reads `planning-{N}.json` and checks for the `verify-and-close` signal:
+   * 1. `approach === "verify-and-close"`
+   * 2. `files_to_create` is empty
+   * 3. `files_to_modify` is empty
+   *
+   * This is a pure deterministic check — no AI tokens consumed.
+   *
+   * @param issueNumber - The issue number
+   * @returns Signal object if early-exit detected, null otherwise
+   * @see Issue #708
+   */
+  private checkPlanningEarlyExit(issueNumber: number): { approach: string } | null {
+    try {
+      const planningContextPath = this.getContextPath("planning", issueNumber);
+      if (!fs.existsSync(planningContextPath)) {
+        // Missing planning context — fail-open for backwards compatibility
+        return null;
+      }
+
+      const content = fs.readFileSync(planningContextPath, "utf-8");
+      const planningContext = JSON.parse(content);
+
+      const approach = planningContext.approach;
+      if (approach !== "verify-and-close") {
+        return null;
+      }
+
+      // Safety guard: verify file lists are empty
+      const filesToCreate = Array.isArray(planningContext.files_to_create)
+        ? planningContext.files_to_create
+        : [];
+      const filesToModify = Array.isArray(planningContext.files_to_modify)
+        ? planningContext.files_to_modify
+        : [];
+
+      if (filesToCreate.length > 0 || filesToModify.length > 0) {
+        this.logger.warn(
+          "Planning approach is verify-and-close but file lists are non-empty — continuing pipeline",
+          {
+            issueNumber,
+            filesToCreate: filesToCreate.length,
+            filesToModify: filesToModify.length,
+          }
+        );
+        return null;
+      }
+
+      return { approach };
+    } catch (err) {
+      this.logger.warn("Failed to read planning context for early-exit check", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      // Fail-open: continue pipeline if we can't read the file
+      return null;
+    }
+  }
+
+  /**
+   * Read planning context to extract budget hint for post-planning stages.
+   *
+   * Returns null if the planning context doesn't exist or can't be parsed
+   * (fail-open for backwards compatibility).
+   *
+   * @param issueNumber - The issue number
+   * @returns PlanningBudgetHint or null
+   * @see Issue #1333 - Planning-aware budget enforcement
+   */
+  private readPlanningBudgetHint(issueNumber: number): PlanningBudgetHint | null {
+    try {
+      const planningContextPath = this.getContextPath("planning", issueNumber);
+      if (!fs.existsSync(planningContextPath)) {
+        return null;
+      }
+
+      const content = fs.readFileSync(planningContextPath, "utf-8");
+      const planningContext = JSON.parse(content);
+
+      const hint: PlanningBudgetHint = {};
+
+      const assessedSize = planningContext.complexity_assessment?.size_label;
+      if (assessedSize && ["XS", "S", "M", "L", "XL"].includes(assessedSize)) {
+        hint.assessedSize = assessedSize as SizeLabel;
+      }
+
+      const filesToCreate = Array.isArray(planningContext.files_to_create)
+        ? planningContext.files_to_create.length
+        : 0;
+      const filesToModify = Array.isArray(planningContext.files_to_modify)
+        ? planningContext.files_to_modify.length
+        : 0;
+      hint.totalFileCount = filesToCreate + filesToModify;
+
+      return hint;
+    } catch (err) {
+      this.logger.warn("Failed to read planning context for budget hint", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Lightweight close path for already-resolved issues detected after planning.
+   *
+   * Performs best-effort cleanup:
+   * 1. Close the GitHub issue with an explanatory comment
+   * 2. Sync project board status to Done
+   * 3. Sync project board status via hook script
+   * 4. Clean up context files and branches via hook script
+   * 5. Run epic completion check via hook script
+   *
+   * Follows the existing `reconcileCompletionSideEffects()` pattern but
+   * targeted for the early-exit case (no merged PR exists).
+   *
+   * @param issueNumber - The issue number
+   * @param callbacks - Pipeline callbacks for UI notification
+   * @see Issue #708
+   */
+  private async runAlreadyResolvedClosePath(
+    issueNumber: number,
+    callbacks?: PipelineCallbacks
+  ): Promise<void> {
+    const workspaceRoot = this.getWorkingDirectory();
+    // Resolve GITHUB_TOKEN for Go binary (VSCode doesn't inherit shell env)
+    const execEnv = { ...process.env };
+    if (!execEnv.GITHUB_TOKEN) {
+      try {
+        const { stdout: tokenRaw } = await execFileAsync("gh", ["auth", "token"], {
+          timeout: 5_000,
+        });
+        execEnv.GITHUB_TOKEN = tokenRaw.toString().trim();
+      } catch {
+        /* gh CLI not available — proceed without */
+      }
+    }
+    const ghExecOptions = {
+      encoding: "utf-8" as const,
+      cwd: workspaceRoot,
+      timeout: 30000,
+      env: execEnv,
+    };
+
+    // 1. Close the issue with an explanatory comment
+    try {
+      await execFileAsync(
+        "gh",
+        [
+          "issue",
+          "close",
+          String(issueNumber),
+          "--comment",
+          "Pipeline detected this issue is already resolved during planning. All acceptance criteria are met — no code changes needed. Closing automatically.",
+          ...this.ghRepoArgs(),
+        ],
+        ghExecOptions
+      );
+      this.logger.info("Closed already-resolved issue", { issueNumber });
+    } catch (err) {
+      this.logger.warn("Failed to close already-resolved issue", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // 2. Update project board status to Done via GraphQL
+    try {
+      await updateProjectItemStatus(issueNumber, "Done", workspaceRoot, this.logger);
+    } catch (err) {
+      this.logger.warn("Project status sync failed during early-exit close", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // 4. Clean up context files and branches via hook script
+    const cleanupScript = path.join(
+      workspaceRoot,
+      "claude-plugins/nightgauge/hooks/lib/cleanup-context-files.sh"
+    );
+    if (fs.existsSync(cleanupScript)) {
+      try {
+        await execFileAsync("bash", [cleanupScript, String(issueNumber)], {
+          ...ghExecOptions,
+          timeout: 45000,
+        });
+      } catch (err) {
+        this.logger.warn("Context cleanup failed during early-exit close", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // 5. Run epic completion check (this issue may be the last sub-issue)
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) throw new Error("nightgauge binary not found");
+      await execFileAsync(binary, ["epic", "check-completion", String(issueNumber), "--json"], {
+        ...ghExecOptions,
+        timeout: 60000,
+      });
+    } catch (err) {
+      this.logger.warn("Epic completion check failed during early-exit close", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Classify pipeline outcome for cost tracking (Issue #709, #3267).
+   *
+   * Resolution order:
+   *   1. If ANY persisted stage gate result has `kind === "no_op"`, return
+   *      `"skill-no-op"` — the gate framework detected a stage where the
+   *      skill exited 0 but did not produce its expected post-state. This
+   *      takes precedence over file-change heuristics because it is a
+   *      stronger signal: the skill claimed success but the framework
+   *      contradicted it. (Issue #3267)
+   *   2. If feature-dev never ran, fall through to `"productive"` (legacy
+   *      behaviour — no other classification information available).
+   *   3. Otherwise read `dev-{N}.json` and emit `"verify-and-close"` when
+   *      no files were created/modified, else `"productive"` (Issue #709).
+   *   4. Finally, cross-check the result against the run's own failed stages
+   *      (#1109): a success outcome over `failedStageCount >= 1` is booked as
+   *      `partial` instead. See
+   *      {@link HeadlessOrchestrator.reconcileOutcomeWithFailedStages}.
+   *
+   * @param issueNumber - The issue number
+   * @param completedStages - Stages that completed successfully
+   * @param failedStageCount - Stages in `failed` status, from the run's own
+   *   state via the shared `countFailedStages` predicate.
+   * @returns The pipeline outcome classification
+   */
+  private classifyPipelineOutcome(
+    issueNumber: number,
+    completedStages: PipelineStage[],
+    failedStageCount = 0
+  ): PipelineOutcomeType {
+    // Two cross-checks, both against the run's own ground truth: a success
+    // outcome cannot stand over a failed stage (#1109), and a "landed nothing"
+    // outcome cannot stand over a merged PR (#1120). Landed-work runs first so
+    // a refuted no-op is then still subject to the failed-stage check.
+    const landed = HeadlessOrchestrator.reconcileOutcomeWithLandedWork(
+      this.classifyPipelineOutcomeFromArtifacts(issueNumber, completedStages),
+      this.runLandedWork(issueNumber, completedStages),
+      this.logger
+    );
+    return HeadlessOrchestrator.reconcileOutcomeWithFailedStages(
+      landed,
+      failedStageCount,
+      this.logger
+    );
+  }
+
+  /**
+   * Classify the run AND persist the result — the single seam between
+   * classification and everything downstream (#1109).
+   *
+   * The failed-stage count comes from the run's own state through
+   * `countFailedStages`, the SAME predicate the Discord / Slack / Mattermost
+   * attachments use, so the durable `outcome_type` and every notifier's label
+   * are answers to one question rather than two. `runningFailedStage` is the
+   * stage the loop itself halted on: it is folded in so a run that failed
+   * before its state snapshot could record the status is still classified
+   * honestly.
+   *
+   * Persisting here (rather than at the call site) is what makes the invariant
+   * testable: a test can assert what `setOutcomeType` actually received.
+   */
+  private async classifyAndRecordOutcome(
+    issueNumber: number,
+    completedStages: PipelineStage[],
+    runningFailedStage?: PipelineStage
+  ): Promise<PipelineOutcomeType | undefined> {
+    if (!this.stateService) return undefined;
+
+    const state = await this.stateService.getState();
+    const failedStageCount = Math.max(countFailedStages(state), runningFailedStage ? 1 : 0);
+
+    const outcome = this.classifyPipelineOutcome(issueNumber, completedStages, failedStageCount);
+    await this.stateService.setOutcomeType(outcome);
+    this.logger.info("Pipeline outcome classified", {
+      issueNumber,
+      outcome_type: outcome,
+      failedStageCount,
+    });
+    return outcome;
+  }
+
+  /**
+   * Outcome type booked for a run whose own stage list contains a failure
+   * (#1109). `partial` is the existing `PipelineOutcomeType` for "some stages
+   * completed, one did not" — it is absent from the authoritative
+   * `SUCCESS_OUTCOMES` set, so analytics, the calibration corpus and the health
+   * snapshot all see a non-success, and `baseOutcomeDisplay` renders it red.
+   */
+  static readonly FAILED_STAGE_OUTCOME: PipelineOutcomeType = "partial";
+
+  /**
+   * Refuse a success outcome for a run whose own stage list contains a failure
+   * (#1109). Pure and static so the invariant can be pinned by a unit test.
+   *
+   * A `feature-dev` stage that failed its post-condition gate — no handoff, no
+   * PR, nothing merged — used to classify `productive`, because the classifier
+   * consulted only gate no-op results and the `dev-{N}.json` file counts and
+   * defaulted to `productive` for everything else. The contradiction WAS
+   * detected, but only in `outcomeDisplay`, which returns a colour and a label:
+   * `state.outcome_type` stayed `productive`, and that raw value is what the
+   * calibration table, the health snapshot and `determineAction` consume. A
+   * failed run therefore trained the learning corpus as a success.
+   *
+   * Membership is driven off `SUCCESS_OUTCOMES` (utils/telemetryEventBuilder),
+   * the same authoritative set analytics maps to `outcome: "success"`, so a new
+   * green outcome cannot slip past this check by not being listed here.
+   *
+   * Non-success outcomes are returned untouched: `skill-no-op`, `blocked`,
+   * `budget-ceiling` and friends are already honest about the run, and each
+   * carries more information than `partial` does.
+   */
+  static reconcileOutcomeWithFailedStages(
+    outcome: PipelineOutcomeType,
+    failedStageCount: number,
+    logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void }
+  ): PipelineOutcomeType {
+    if (failedStageCount <= 0) return outcome;
+    if (!SUCCESS_OUTCOMES.includes(outcome)) return outcome;
+
+    logger?.warn(
+      "Classifier: success outcome contradicted by the run's own stage list — booking the contradiction",
+      {
+        proposedOutcomeType: outcome,
+        outcome_type: HeadlessOrchestrator.FAILED_STAGE_OUTCOME,
+        failedStageCount,
+      }
+    );
+    return HeadlessOrchestrator.FAILED_STAGE_OUTCOME;
+  }
+
+  /**
+   * Outcomes that assert the run landed nothing. A merged PR refutes them
+   * (#1120).
+   */
+  private static readonly NO_WORK_OUTCOMES: readonly PipelineOutcomeType[] = [
+    "skill-no-op",
+    "verify-and-close",
+  ];
+
+  /** What a run that landed work is booked as when a no-work outcome is refuted. */
+  private static readonly LANDED_WORK_OUTCOME: PipelineOutcomeType = "productive";
+
+  /**
+   * Reject a "landed nothing" outcome on a run that demonstrably landed
+   * something (#1120) — the mirror of
+   * {@link HeadlessOrchestrator.reconcileOutcomeWithFailedStages}.
+   *
+   * `classifyPipelineOutcomeFromArtifacts` gives one stage's gate absolute
+   * precedence: any single `kind: "no_op"` result returns `skill-no-op`
+   * "regardless of what the dev context records". That rule was written for
+   * runs where the no-op IS the outcome, and it has no notion of a run that
+   * no-op'd in one conditional stage — a skipped E2E phase, a stage with
+   * nothing to do — and still shipped. A watched run merged a PR of 15 files
+   * and was booked as a no-op, which then entered the calibration corpus and
+   * the health snapshot as the pipeline having done nothing.
+   *
+   * A merged PR is dispositive, so it wins. The gate rule is not deleted, only
+   * subordinated: a run that really did land nothing still classifies as
+   * `skill-no-op`, because `landedWork` is false for it.
+   */
+  static reconcileOutcomeWithLandedWork(
+    outcome: PipelineOutcomeType,
+    landedWork: boolean,
+    logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void }
+  ): PipelineOutcomeType {
+    if (!landedWork) return outcome;
+    if (!HeadlessOrchestrator.NO_WORK_OUTCOMES.includes(outcome)) return outcome;
+
+    logger?.warn(
+      "Classifier: no-work outcome contradicted by a merged PR — booking the contradiction",
+      {
+        proposedOutcomeType: outcome,
+        outcome_type: HeadlessOrchestrator.LANDED_WORK_OUTCOME,
+      }
+    );
+    return HeadlessOrchestrator.LANDED_WORK_OUTCOME;
+  }
+
+  /**
+   * Whether this run landed work: `pr-merge` completed AND the PR context
+   * records a PR number. `pr-merge` only reaches `completed` through its
+   * post-merge verification gate, which checks the PR is really MERGED, so the
+   * pair is ground truth rather than intent.
+   *
+   * Never throws: an unreadable context yields `false`, which leaves
+   * classification exactly as it was.
+   */
+  private runLandedWork(issueNumber: number, completedStages: PipelineStage[]): boolean {
+    if (!completedStages.includes("pr-merge")) return false;
+    try {
+      const prContextPath = this.getContextPath("pr", issueNumber);
+      if (!fs.existsSync(prContextPath)) return false;
+      const prNumber = JSON.parse(fs.readFileSync(prContextPath, "utf-8")).pr_number;
+      return typeof prNumber === "number" && prNumber > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The artifact-driven half of the classification: gate no-op results, then
+   * the `dev-{N}.json` file counts. Knows nothing about failed stages — that
+   * cross-check is applied by {@link classifyPipelineOutcome}.
+   */
+  private classifyPipelineOutcomeFromArtifacts(
+    issueNumber: number,
+    completedStages: PipelineStage[]
+  ): PipelineOutcomeType {
+    // Issue #3267: gate-driven classification first. If any stage's gate
+    // detected a no-op (kind=no_op), the run is `skill-no-op` regardless
+    // of what the dev context records. Reads the runtime state snapshot
+    // persisted next to the per-stage context files.
+    if (
+      HeadlessOrchestrator.classifyOutcomeFromGateResults(
+        this.readStageGateResultsForRun(issueNumber)
+      )
+    ) {
+      return "skill-no-op";
+    }
+
+    // If feature-dev never ran, we can't classify based on file changes
+    if (!completedStages.includes("feature-dev")) {
+      return "productive";
+    }
+
+    try {
+      const devContextPath = this.getContextPath("dev", issueNumber);
+      if (!fs.existsSync(devContextPath)) {
+        // No dev context file means we can't determine — default to productive
+        return "productive";
+      }
+
+      const devContext = JSON.parse(fs.readFileSync(devContextPath, "utf-8"));
+      const filesChanged = devContext.files_changed;
+
+      if (!filesChanged) {
+        return "productive";
+      }
+
+      const created = Array.isArray(filesChanged.created) ? filesChanged.created : [];
+      const modified = Array.isArray(filesChanged.modified) ? filesChanged.modified : [];
+
+      if (created.length === 0 && modified.length === 0) {
+        return "verify-and-close";
+      }
+
+      return "productive";
+    } catch {
+      // If we can't read the dev context, default to productive
+      return "productive";
+    }
+  }
+
+  /**
+   * Resolve the on-disk runtime snapshot for an issue, or null when the issue
+   * has none (ADR-017 Decision 8, #370).
+   *
+   * The scan, the pick and the instant-based ordering live in
+   * `utils/runtimeSnapshotResolver` so they can be pinned by a red bar — the
+   * failure mode here is a silent `{}` that every caller converts into a legacy
+   * heuristic, which no orchestrator-level test can see. This method only binds
+   * the pipeline dir and the mixed-version warning to it.
+   */
+  private resolveRuntimeSnapshotPath(workspaceRoot: string, issueNumber: number): string | null {
+    const pipelineDir = pipelineStateDir(workspaceRoot);
+    return resolveRuntimeSnapshotPath(pipelineDir, issueNumber, (legacyFile) => {
+      this.logger.warn(
+        "Runtime snapshot is still on the pre-ADR-017 name — gate results for this run are unreadable until the backend restarts",
+        { issueNumber, legacyFile, pipelineDir }
+      );
+    });
+  }
+
+  /**
+   * Read the persisted stageGateResults map for a run, keyed by stage name.
+   *
+   * The Go scheduler (in-process) and `nightgauge gate verify --record` (this
+   * TS path, Issue #210) both persist through
+   * `internal/state.RuntimeState.Persist`, which since ADR-017 (#370) writes
+   * `pipelineStateDir({workspace})/runtime-{issue}-{runId}.json`. Returns an
+   * empty map when the file is missing or the field is absent — callers fall
+   * through to their own legacy heuristics in that case. Exposed as a method
+   * so subclasses / tests can override the read path.
+   *
+   * ISSUE-ADDRESSED, SO IT RESOLVES THE FILE BY SCANNING (ADR-017 Decision 8).
+   * The run identity cannot be composed from an issue number — concurrent
+   * dispatches of one issue coexist — so this mirrors the Go-side standard
+   * pick: prefer a non-terminal snapshot, then the newest `startedAt`.
+   * Composing the old bare-issue name instead would `existsSync` false on
+   * every call and return `{}` forever, and because every caller silently
+   * falls back to a legacy heuristic, the degradation would be invisible.
+   */
+  private readStageGateResultsMapForRun(
+    issueNumber: number
+  ): Record<
+    string,
+    Array<{ kind?: string; passed: boolean; gate_name?: string; reason?: string }>
+  > {
+    try {
+      // #1021: read where the DAEMON writes. getWorkingDirectory() prefers the
+      // worktree override, and the daemon files runtime-{issue}-{runId}.json
+      // under the run's REPO root — so on a concurrent-slot or cross-repo run
+      // the reader was looking in a directory that never holds a snapshot, and
+      // returned {} for every stage. That empty map is what made the shipped
+      // `gate-not-invoked` detector fire on six stages whose gates had all run
+      // and passed.
+      const cwd = this.getRunRepoRoot();
+      const statePath = this.resolveRuntimeSnapshotPath(cwd, issueNumber);
+      if (!statePath) return {};
+      const stateBlob = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+      const map = stateBlob?.stageGateResults;
+      if (!map || typeof map !== "object") return {};
+
+      // Issue #3267: only the runtime state restricted to this issue matters.
+      const blobIssue = stateBlob?.issueNumber;
+      if (typeof blobIssue === "number" && blobIssue !== issueNumber) {
+        return {};
+      }
+
+      const out: Record<
+        string,
+        Array<{ kind?: string; passed: boolean; gate_name?: string; reason?: string }>
+      > = {};
+      for (const stageKey of Object.keys(map)) {
+        const arr = map[stageKey];
+        if (!Array.isArray(arr)) continue;
+        out[stageKey] = arr
+          .filter(
+            (entry): entry is Record<string, unknown> =>
+              !!entry && typeof entry === "object" && typeof entry.passed === "boolean"
+          )
+          .map((entry) => ({
+            kind: typeof entry.kind === "string" ? entry.kind : undefined,
+            passed: entry.passed as boolean,
+            gate_name: typeof entry.gate_name === "string" ? entry.gate_name : undefined,
+            reason: typeof entry.reason === "string" ? entry.reason : undefined,
+          }));
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Read the persisted stage_gate_results for a run as a flat array (all
+   * stages combined). Thin wrapper over `readStageGateResultsMapForRun` kept
+   * for the `classifyPipelineOutcome` no-op scan, which does not care which
+   * stage produced a `kind: "no_op"` result.
+   */
+  private readStageGateResultsForRun(
+    issueNumber: number
+  ): Array<{ kind?: string; passed: boolean; gate_name?: string; reason?: string }> {
+    return Object.values(this.readStageGateResultsMapForRun(issueNumber)).flat();
+  }
+
+  /**
+   * Completion-time "gate never invoked" guard (Issue #210). For every
+   * completed, non-bookend stage in `PIPELINE_STAGE_GATE_STAGES` (the set of
+   * stages with a registered, non-NoOp gate in
+   * `internal/orchestrator/gates/registry.go`'s `Default()`), confirm the
+   * persisted run record has at least one recorded gate result for that
+   * stage. A completed gated stage with zero recorded results is exactly the
+   * silent-invocation-gap this issue reports (three of six gates never ran in
+   * the mode the extension operates in) — log a structured, greppable
+   * `[gate-not-invoked]` line via `onStderr` so it is visible in the run's
+   * diagnostic trail, matching the `[blocked-dependency]`-style marker
+   * convention. Non-fatal: this starts as a logged signal, not a hard
+   * pipeline failure (see PLAN.md Risks — a legitimate future NoOp/skipped
+   * stage must not become a false failure).
+   */
+  private logGateNotInvoked(issueNumber: number, completedStages: PipelineStage[]): void {
+    try {
+      const resultsByStage = this.readStageGateResultsMapForRun(issueNumber);
+      for (const stage of completedStages) {
+        if (!PIPELINE_STAGE_GATE_STAGES.includes(stage)) continue;
+        const results = resultsByStage[stage];
+        if (!results || results.length === 0) {
+          const message = `[gate-not-invoked] stage=${stage} issue=${issueNumber} — stage completed with a registered gate but no recorded gate result was found for this run`;
+          this.logger.error(message, { issueNumber, stage });
+          this.eventDispatcher.onStderr(stage, `${message}\n`);
+        }
+      }
+    } catch (err) {
+      this.logger.warn("Failed to evaluate gate-not-invoked guard", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Attempt to deterministically generate the context file a stage was
+   * supposed to write but didn't (Issue #3267 — extracted from the
+   * five-stage if/else cascade in runPipeline).
+   *
+   * For each of the five stages with a registered fallback generator
+   * (issue-pickup, feature-planning, feature-dev, feature-validate,
+   * pr-create), this helper:
+   *   1. Calls `ContextAssembler.generateDeterministicContext(stage, N)` to
+   *      synthesize the missing context from GitHub metadata, git diff,
+   *      build/test results, etc.
+   *   2. If the generator produced a file, re-runs `validateStageContextOutput`
+   *      to confirm the new file is schema-valid.
+   *
+   * Returns:
+   *   - { recovered: true }  on successful recovery (file generated AND
+   *     re-validation passed). Caller should continue the pipeline.
+   *   - { recovered: false, error } on failure (no fallback for this stage,
+   *     generator returned false, or re-validation failed). The returned
+   *     `error` carries the original validation failure message so the
+   *     caller can surface it to the UI / state service.
+   *
+   * Pre-#3267 the same logic was duplicated five times inline. The behaviour
+   * is preserved exactly; only the dispatch site changed.
+   */
+  private async attemptContextRecovery(
+    stage: PipelineStage,
+    issueNumber: number,
+    originalError: Error
+  ): Promise<{ recovered: true } | { recovered: false; error: Error }> {
+    const recoverableStages: PipelineStage[] = [
+      "issue-pickup",
+      "feature-planning",
+      "feature-dev",
+      "feature-validate",
+      "pr-create",
+    ];
+    if (!recoverableStages.includes(stage)) {
+      return { recovered: false, error: originalError };
+    }
+
+    this.logger.info(`${stage} context not written by subagent — generating deterministically`, {
+      issueNumber,
+    });
+    const fallbackGenerated = await this.contextAssembler.generateDeterministicContext(
+      stage,
+      issueNumber
+    );
+    if (!fallbackGenerated.generated) {
+      // Generator declined / failed (or, for issue-pickup, failed closed on
+      // open blockedBy dependencies — #189) — surface the original error.
+      return { recovered: false, error: originalError };
+    }
+
+    const retryError = await this.validateStageContextOutput(stage, issueNumber);
+    if (!retryError) {
+      this.logger.info("Fallback context file passed validation — continuing pipeline", {
+        issueNumber,
+        stage,
+      });
+      return { recovered: true };
+    }
+    return { recovered: false, error: retryError };
+  }
+
+  /**
+   * Pure helper: returns true when ANY gate result is a no-op (Issue #3267).
+   *
+   * Static so the backfill script (`scripts/backfill-skill-no-op-outcomes.ts`)
+   * can re-classify historical run records without instantiating a full
+   * HeadlessOrchestrator. The script feeds the per-stage gate_results array
+   * from the V2 record and gets back the same boolean.
+   */
+  static classifyOutcomeFromGateResults(
+    gateResults: Array<{ kind?: string; passed: boolean }>
+  ): boolean {
+    if (!Array.isArray(gateResults)) return false;
+    for (const r of gateResults) {
+      if (!r) continue;
+      // Explicit kind discriminator — preferred path (Issue #3267).
+      if (r.kind === "no_op") return true;
+      // Pre-#3267 records have no `kind`. Without it we cannot
+      // disambiguate no-op from hard-fail without regex-matching the
+      // Reason string, which the plan explicitly rejects. Pre-#3267
+      // records therefore never produce skill-no-op retroactively
+      // unless backfilled by the dedicated script.
+    }
+    return false;
+  }
+
+  private async reconcileCompletionSideEffects(
+    issueNumber: number
+  ): Promise<CompletionReconciliationResult> {
+    const workspaceRoot = this.getWorkingDirectory();
+    // Resolve GITHUB_TOKEN for Go binary (VSCode doesn't inherit shell env)
+    const execEnv = { ...process.env };
+    if (!execEnv.GITHUB_TOKEN) {
+      try {
+        const { stdout: tokenRaw } = await execFileAsync("gh", ["auth", "token"], {
+          timeout: 5_000,
+        });
+        execEnv.GITHUB_TOKEN = tokenRaw.toString().trim();
+      } catch {
+        /* gh CLI not available — proceed without */
+      }
+    }
+    const ghExecOptions = {
+      encoding: "utf-8" as const,
+      cwd: workspaceRoot,
+      timeout: 30000,
+      env: execEnv,
+    };
+
+    // Epic branch sub-issues: PRs merge to the epic branch, not main.
+    // The issue stays open until the epic→main PR merges (which GitHub
+    // auto-closes via "Closes #N"). Do NOT treat this as a failure.
+    // A `state.json` rung sat ahead of these until #471. Nothing writes that
+    // file, so it contributed "" on every run and issue-{N}.json was always the
+    // real primary source — this is the same ladder with the dead rung removed.
+    try {
+      const fs = require("fs");
+      // Primary source: issue-{N}.json (if it still exists)
+      let baseBranch = "";
+      const contextPath = path.join(pipelineStateDir(workspaceRoot), `issue-${issueNumber}.json`);
+      if (fs.existsSync(contextPath)) {
+        const ctx = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
+        baseBranch = ctx.base_branch ?? "";
+      }
+      // Fallback: pr-{N}.json has the actual PR base branch from pr-create,
+      // which is always correct even when the context file has a stale "main".
+      // @see Issue #137 — base_branch stays "main" when
+      // create-feature-branch.sh detects an epic branch after state init.
+      if (!baseBranch.startsWith("epic/")) {
+        const prContextPath = path.join(pipelineStateDir(workspaceRoot), `pr-${issueNumber}.json`);
+        if (fs.existsSync(prContextPath)) {
+          const prCtx = JSON.parse(fs.readFileSync(prContextPath, "utf-8"));
+          if (prCtx.base_branch?.startsWith("epic/")) {
+            baseBranch = prCtx.base_branch;
+          }
+        }
+      }
+      // Fallback: search for the merged PR's base branch via GitHub API.
+      if (!baseBranch.startsWith("epic/")) {
+        try {
+          const { stdout: prBaseRaw } = await execFileAsync(
+            "gh",
+            [
+              "pr",
+              "list",
+              "--state",
+              "merged",
+              "--search",
+              `#${issueNumber} in:title`,
+              "--json",
+              "baseRefName",
+              "-q",
+              ".[0].baseRefName",
+              ...this.ghRepoArgs(),
+            ],
+            ghExecOptions
+          );
+          const prBase = prBaseRaw.trim();
+          if (prBase?.startsWith("epic/")) {
+            baseBranch = prBase;
+          }
+        } catch {
+          // Non-critical: fall through
+        }
+      }
+      if (baseBranch.startsWith("epic/")) {
+        // Sub-issues are closed when their PR merges to the epic branch.
+        // Only the epic itself stays open until the epic→main PR merges.
+        this.logger.info("Epic sub-issue — closing after merge to epic branch", {
+          issueNumber,
+          baseBranch,
+        });
+        try {
+          await execFileAsync(
+            "gh",
+            [
+              "issue",
+              "close",
+              String(issueNumber),
+              "--comment",
+              `Closing: PR merged to epic branch (${baseBranch}).`,
+              ...this.ghRepoArgs(),
+            ],
+            ghExecOptions
+          );
+        } catch (closeErr) {
+          this.logger.warn("Failed to close epic sub-issue", {
+            issueNumber,
+            err: closeErr instanceof Error ? closeErr.message : String(closeErr),
+          });
+        }
+
+        // Delete the feature branch from remote. GitHub only auto-deletes
+        // branches when a PR merges to the default branch (main). Epic
+        // sub-issue PRs merge to epic/* branches, so the feature branch
+        // lingers on the remote indefinitely. This deterministic cleanup
+        // runs after every epic sub-issue merge.
+        // @see Issue #1452 — stale feat/1462-* branch left on remote
+        try {
+          const { stdout: headRefRaw } = await execFileAsync(
+            "gh",
+            [
+              "pr",
+              "list",
+              "--state",
+              "merged",
+              "--search",
+              `#${issueNumber} in:title`,
+              "--json",
+              "headRefName",
+              "-q",
+              ".[0].headRefName",
+              ...this.ghRepoArgs(),
+            ],
+            ghExecOptions
+          );
+          const headRef = headRefRaw.trim();
+          if (headRef && headRef.startsWith("feat/")) {
+            // Check if remote ref still exists (GitHub auto-deletes head branches)
+            let refExists = false;
+            try {
+              await execFileAsync(
+                "git",
+                ["ls-remote", "--exit-code", "origin", `refs/heads/${headRef}`],
+                ghExecOptions
+              );
+              refExists = true;
+            } catch {
+              refExists = false;
+            }
+            if (refExists) {
+              await execFileAsync("git", ["push", "origin", "--delete", headRef], ghExecOptions);
+              this.logger.info("Deleted feature branch after epic sub-issue merge", {
+                issueNumber,
+                branch: headRef,
+                epicBranch: baseBranch,
+              });
+            } else {
+              this.logger.debug(
+                "Feature branch already deleted by GitHub (auto-delete head branches)",
+                { issueNumber, branch: headRef }
+              );
+            }
+          }
+        } catch (branchErr) {
+          // Non-critical: branch may already be deleted or protected
+          this.logger.warn("Failed to delete feature branch after epic merge", {
+            issueNumber,
+            err: branchErr instanceof Error ? branchErr.message : String(branchErr),
+          });
+        }
+
+        // After closing the sub-issue, attempt full epic completion.
+        // Extract parent epic number from branch name (e.g., "epic/1650-..." → 1650).
+        const epicMatch = baseBranch.match(/^epic\/(\d+)/);
+        if (epicMatch) {
+          const epicNumber = parseInt(epicMatch[1], 10);
+          try {
+            const binary = await BinaryResolver.fromVSCode().resolve();
+            if (!binary) throw new Error("nightgauge binary not found");
+            const { stdout: epicOutputRaw } = await execFileAsync(
+              binary,
+              ["epic", "complete", String(epicNumber), "--json"],
+              { ...ghExecOptions, timeout: 120000 }
+            );
+            const epicOutput = epicOutputRaw.trim();
+            if (epicOutput) {
+              const epicResult = JSON.parse(epicOutput);
+              if (epicResult.action === "closed_and_merged") {
+                this.logger.info("Epic completed — PR merged and branches cleaned", {
+                  issueNumber,
+                  epicNumber,
+                  prUrl: epicResult.prUrl,
+                  prNumber: epicResult.prNumber,
+                });
+              } else if (epicResult.action === "closed_pr_created") {
+                this.logger.info("Epic complete — PR created, manual merge required", {
+                  issueNumber,
+                  epicNumber,
+                  prUrl: epicResult.prUrl,
+                });
+              } else if (epicResult.action === "not_complete") {
+                this.logger.info("Epic not yet complete", {
+                  issueNumber,
+                  epicNumber,
+                  closed: epicResult.closed,
+                  total: epicResult.total,
+                  open: epicResult.open,
+                });
+              }
+            }
+          } catch (epicErr) {
+            this.logger.warn("Epic completion check failed", {
+              issueNumber,
+              epicNumber: epicMatch[1],
+              err: epicErr instanceof Error ? epicErr.message : String(epicErr),
+            });
+          }
+        }
+
+        return { verified: true, issueClosed: true, epicDeferred: true };
+      }
+    } catch {
+      // Non-critical: fall through to standard reconciliation
+    }
+
+    let issueState: string;
+    try {
+      const { stdout: stateRaw } = await execFileAsync(
+        "gh",
+        [
+          "issue",
+          "view",
+          String(issueNumber),
+          "--json",
+          "state",
+          "-q",
+          ".state",
+          ...this.ghRepoArgs(),
+        ],
+        ghExecOptions
+      );
+      issueState = stateRaw.trim();
+    } catch (err) {
+      this.logger.warn("Could not verify issue state after pipeline", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return { verified: false, issueClosed: false };
+    }
+
+    let mergedPrNumber: number | undefined;
+    if (issueState === "OPEN") {
+      try {
+        // Primary: search for closing keywords ("closes #N", "fixes #N")
+        const { stdout: primaryRaw } = await execFileAsync(
+          "gh",
+          [
+            "pr",
+            "list",
+            "--state",
+            "merged",
+            "--search",
+            `closes #${issueNumber}`,
+            "--json",
+            "number",
+            "-q",
+            ".[0].number",
+            ...this.ghRepoArgs(),
+          ],
+          ghExecOptions
+        );
+        let mergedPr = primaryRaw.trim();
+        // Fallback: search for issue number in PR title (e.g., "feat(#110): ...")
+        // Handles epic sub-issue PRs that use "Part of #PARENT" instead of "Closes #N"
+        if (!mergedPr) {
+          const { stdout: fallbackRaw } = await execFileAsync(
+            "gh",
+            [
+              "pr",
+              "list",
+              "--state",
+              "merged",
+              "--search",
+              `#${issueNumber} in:title`,
+              "--json",
+              "number",
+              "-q",
+              ".[0].number",
+              ...this.ghRepoArgs(),
+            ],
+            ghExecOptions
+          );
+          mergedPr = fallbackRaw.trim();
+        }
+        if (mergedPr) {
+          mergedPrNumber = Number.parseInt(mergedPr, 10);
+        }
+      } catch (err) {
+        this.logger.warn("Failed to check merged PR linkage", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      if (mergedPrNumber) {
+        try {
+          await execFileAsync(
+            "gh",
+            [
+              "issue",
+              "close",
+              String(issueNumber),
+              "--comment",
+              `Closing automatically: merged PR #${mergedPrNumber} completed this issue.`,
+              ...this.ghRepoArgs(),
+            ],
+            ghExecOptions
+          );
+          issueState = "CLOSED";
+          this.logger.info("Closed issue after successful pipeline", {
+            issueNumber,
+            mergedPrNumber,
+          });
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          this.logger.error("Failed to auto-close issue after merge", {
+            issueNumber,
+            mergedPrNumber,
+            err: errorMessage,
+          });
+          return {
+            verified: true,
+            issueClosed: false,
+            mergedPrNumber,
+            error: `Issue remains open after successful pipeline: failed to close via merged PR #${mergedPrNumber}.`,
+          };
+        }
+      }
+
+      // Fallback: check if commits referencing this issue exist on main
+      // This handles cases where work was committed directly without a PR
+      // (e.g., audit tasks, docs-only changes). See Issue #779
+      if (!mergedPrNumber && issueState === "OPEN") {
+        try {
+          const { stdout: commitLogRaw } = await execFileAsync(
+            "git",
+            ["log", "main", "--oneline", `--grep=#${issueNumber}`, "--format=%h %s"],
+            ghExecOptions
+          );
+          const commitLog = commitLogRaw.trim();
+          if (commitLog) {
+            const commitLines = commitLog.split("\n");
+            const commitHashes = commitLines.map((line) => line.split(" ")[0]).join(", ");
+            const commitSummary =
+              commitLines.length === 1
+                ? `Commit: ${commitLines[0]}`
+                : `${commitLines.length} commits found (${commitHashes})`;
+            try {
+              await execFileAsync(
+                "gh",
+                [
+                  "issue",
+                  "close",
+                  String(issueNumber),
+                  "--comment",
+                  `Closing automatically: work committed directly to main (no PR). ${commitSummary}`,
+                  ...this.ghRepoArgs(),
+                ],
+                ghExecOptions
+              );
+              issueState = "CLOSED";
+              this.logger.info("Closed issue via commit-based detection (no PR)", {
+                issueNumber,
+                commitCount: commitLines.length,
+                commitHashes,
+              });
+            } catch (closeErr) {
+              const errorMessage = closeErr instanceof Error ? closeErr.message : String(closeErr);
+              this.logger.error("Failed to auto-close issue via commit detection", {
+                issueNumber,
+                err: errorMessage,
+              });
+              return {
+                verified: true,
+                issueClosed: false,
+                error: `Issue remains open: commits found on main but failed to close issue. ${commitSummary}`,
+              };
+            }
+          }
+        } catch (err) {
+          this.logger.warn("Failed to check commits on main for issue", {
+            issueNumber,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    if (issueState !== "CLOSED") {
+      return {
+        verified: true,
+        issueClosed: false,
+        mergedPrNumber,
+        error:
+          mergedPrNumber === undefined
+            ? 'Issue remains open after successful pipeline and no merged PR or commits with "#N" were found on main.'
+            : undefined,
+      };
+    }
+
+    // Best-effort: ensure project board status is synced to Done.
+    try {
+      await updateProjectItemStatus(issueNumber, "Done", workspaceRoot, this.logger);
+    } catch (err) {
+      this.logger.warn("Project status sync after completion failed", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    let epicSweepClosed = 0;
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        this.logger.debug("Epic completion sweep skipped — binary not found");
+      } else {
+        const { stdout: outputRaw } = await execFileAsync(
+          binary,
+          ["epic", "check-completion", "--sweep", "--json"],
+          { ...ghExecOptions, timeout: 60000 }
+        );
+        const output = outputRaw.trim();
+        if (output) {
+          // --sweep returns [{epicNumber, complete, ...}] array, but may return
+          // {"skipped":true,...} when rate-limited — guard before calling .filter()
+          const parsed = JSON.parse(output);
+          const results = Array.isArray(parsed) ? (parsed as Array<{ complete?: boolean }>) : [];
+          epicSweepClosed = results.filter((r) => r.complete).length;
+        }
+      }
+    } catch (err) {
+      this.logger.warn("Epic completion check after pipeline failed", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+    }
+
+    // Best-effort: sync CLOSED sub-issues' project board status to Done.
+    // When an epic->main PR merges, GitHub auto-closes sub-issues but their
+    // project board Status field is never updated (the sub-issue pipeline
+    // returns early at the epicDeferred guard above). This fills that gap.
+    // The binary reads the whole sub-issue list or fails (#1701); a fixed
+    // first page left every sub-issue past it off the Done column.
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        this.logger.debug("Sub-issue board sync skipped — binary not found");
+      } else {
+        const { stdout: nwoRaw } = await execFileAsync(
+          "gh",
+          ["repo", "view", "--json", "owner,name", "-q", '.owner.login + "/" + .name'],
+          { ...ghExecOptions, timeout: 10000 }
+        );
+        const nwo = nwoRaw.trim();
+        const [owner, repo] = nwo.split("/");
+        if (owner && repo) {
+          const subIssues = await readEpicSubIssues(binary, nwo, issueNumber, {
+            ...ghExecOptions,
+            timeout: 60000,
+          });
+          const closedSubIssues = subIssues.filter((si) => si.state === "CLOSED");
+          for (const si of closedSubIssues) {
+            try {
+              // The sub-issue's own repository: a cross-repo sub-issue's
+              // number names a different issue in this one.
+              await updateProjectItemStatus(si.number, "Done", workspaceRoot, this.logger, si.repo);
+            } catch {
+              // Best-effort per sub-issue
+            }
+          }
+          if (closedSubIssues.length > 0) {
+            this.logger.info("Synced closed sub-issues to Done on project board", {
+              issueNumber,
+              subIssueCount: closedSubIssues.length,
+              subIssues: closedSubIssues.map((si) => `${si.repo}#${si.number}`),
+            });
+          }
+        }
+      }
+    } catch (err) {
+      // Non-blocking: sub-issue board sync is best-effort, but an unreadable
+      // sub-issue list is reported rather than treated as an empty one.
+      this.logger.warn("Sub-issue board sync after completion failed", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const refreshScript = path.join(
+      workspaceRoot,
+      "claude-plugins/nightgauge/hooks/lib/trigger-refresh.sh"
+    );
+    if (fs.existsSync(refreshScript)) {
+      try {
+        await execFileAsync("bash", [refreshScript], {
+          ...ghExecOptions,
+          timeout: 10000,
+        });
+      } catch {
+        // Non-blocking: manual refresh command remains available.
+      }
+    }
+
+    return {
+      verified: true,
+      issueClosed: true,
+      mergedPrNumber,
+      epicSweepClosed,
+    };
+  }
+
+  /**
+   * Get the current routing decision
+   */
+  getRoutingDecision(): RoutingDecision | null {
+    return this.currentRoutingDecision;
+  }
+
+  // ===================================================================
+  // MODEL ESCALATION ENGINE (Issue #1343)
+  //
+  // Reads MODEL_ESCALATION_NEEDED signals from completed stage context
+  // files, evaluates escalation eligibility, and executes same-stage
+  // retries with a more capable model (haiku → sonnet → opus).
+  // Escalation fires BEFORE backtrack evaluation.
+  // ===================================================================
+
+  /**
+   * Read a MODEL_ESCALATION_NEEDED signal from a completed stage's context file.
+   *
+   * Returns the first blocking MODEL_ESCALATION_NEEDED signal found, or null.
+   * Unlike readFeedbackSignals(), this does NOT require backtrack_target_stage.
+   *
+   * @see Issue #1343 - Dynamic Model Escalation Engine
+   */
+  private readEscalationSignal(
+    stage: PipelineStage,
+    issueNumber: number
+  ): PipelineFeedbackSignal | null {
+    const contextTypeMap: Partial<Record<PipelineStage, ContextFileType>> = {
+      "feature-dev": "dev",
+      "feature-validate": "validate",
+    };
+    const contextType = contextTypeMap[stage];
+    if (!contextType) return null;
+
+    try {
+      const contextPath = this.getContextPath(contextType, issueNumber);
+      if (!fs.existsSync(contextPath)) return null;
+      const parsed = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
+      if (!Array.isArray(parsed.feedback)) return null;
+
+      return (
+        (parsed.feedback as PipelineFeedbackSignal[]).find(
+          (s) => s.signal_type === "MODEL_ESCALATION_NEEDED" && s.severity === "blocking"
+        ) ?? null
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Decide whether a failed stage should fall back Fable → Opus.
+   *
+   * True only when the error is a usage/quota-limit signal, the stage's effective
+   * model was Fable, and we haven't already fallen back for this stage this run.
+   * Fable has a separate Max-plan usage bucket from Opus/Sonnet, so a Fable-only
+   * exhaustion should retry on Opus rather than pause the whole pipeline for the
+   * global cooldown.
+   */
+  private shouldFallbackFableToOpus(stage: PipelineStage, error: Error | undefined): boolean {
+    // A pinned run never swaps its model (#1656).
+    if (this.requestedPin) return false;
+    if (this.fableQuotaFallbackApplied.has(stage)) return false;
+    if (!isUsageLimitError(error?.message)) return false;
+    const effectiveModel =
+      this.stageModelOverrides.get(stage) ?? resolveModel(stage, this.getWorkingDirectory()).model;
+    return effectiveModel === "fable";
+  }
+
+  /**
+   * The tier a model escalation moves `stage` to from `current`, or null when
+   * there is none: the next tier on the escalation ladder, provided it stays
+   * inside the stage's routed-tier ceiling under the active performance mode
+   * and `model_routing.max_model`, the band `resolveModel` routes the stage
+   * within. Every escalation path here goes through it. Go clamps its own
+   * escalation to the same ceiling in `resolveDispatchModel`; before this, an
+   * `efficiency` run escalated a `sonnet` stage to `opus` (#2386).
+   */
+  private escalationTarget(
+    stage: PipelineStage,
+    current: import("../utils/nightgaugeConfig").DefaultModel
+  ): import("../utils/nightgaugeConfig").DefaultModel | null {
+    const root = this.getWorkingDirectory();
+    const { ceiling } = getRoutedTierEnvelope(getPerformanceMode(root), stage, getMaxModel(root));
+    return getEscalatedModelWithin(current, ceiling);
+  }
+
+  /**
+   * The health-gated `escalateAllStages` policy (#1395): every stage but the
+   * bookends and issue-pickup moves one tier up, within its ceiling.
+   */
+  private escalateAllStages(): void {
+    for (const s of STAGE_ORDER) {
+      if (!isBookendStage(s) && s !== "issue-pickup") {
+        const current = (this.stageModelOverrides.get(s) ??
+          resolveModel(s, this.getWorkingDirectory())
+            .model) as import("../utils/nightgaugeConfig").DefaultModel;
+        const escalated = this.escalationTarget(s, current);
+        if (escalated) {
+          this.stageModelOverrides.set(s, escalated);
+        }
+      }
+    }
+  }
+
+  /**
+   * Evaluate whether a model escalation is allowed.
+   *
+   * Checks:
+   * 1. Ceiling guard (escalationTarget returns null at the top of the ladder
+   *    or at the stage's routed-tier ceiling)
+   * 2. max_escalations_per_stage limit
+   *
+   * Returns the next model if escalation is allowed, null if blocked.
+   *
+   * @see Issue #1343 - Dynamic Model Escalation Engine
+   */
+  private evaluateEscalation(
+    stage: PipelineStage,
+    signal: PipelineFeedbackSignal,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks
+  ): import("../utils/nightgaugeConfig").DefaultModel | null {
+    const currentModel = (this.stageModelOverrides.get(stage) ??
+      resolveModel(stage, this.getWorkingDirectory())
+        .model) as import("../utils/nightgaugeConfig").DefaultModel;
+
+    const nextModel = this.escalationTarget(stage, currentModel);
+
+    if (!nextModel) {
+      const reason = "escalation_ceiling_reached";
+      this.logger.warn("Escalation blocked: already at the most capable model the mode allows", {
+        issueNumber,
+        stage,
+        currentModel,
+      });
+      this.eventDispatcher.onEscalationBlocked(reason, signal);
+      return null;
+    }
+
+    const stageCount = this.stageEscalationCounts.get(stage) ?? 0;
+    const maxEscalations = getMaxEscalationsPerStage(this.getWorkingDirectory());
+
+    if (stageCount >= maxEscalations) {
+      const reason = "max_escalations_per_stage_exceeded";
+      this.logger.warn("Escalation blocked: max_escalations_per_stage exceeded", {
+        issueNumber,
+        stage,
+        stageCount,
+        maxEscalations,
+      });
+      this.eventDispatcher.onEscalationBlocked(reason, signal);
+      return null;
+    }
+
+    return nextModel;
+  }
+
+  /**
+   * Execute a model escalation: update instance state, record in pipeline
+   * state, log, and fire callback.
+   *
+   * @see Issue #1343 - Dynamic Model Escalation Engine
+   */
+  private async executeEscalation(
+    stage: PipelineStage,
+    signal: PipelineFeedbackSignal,
+    nextModel: import("../utils/nightgaugeConfig").DefaultModel,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks
+  ): Promise<void> {
+    const fromModel =
+      this.stageModelOverrides.get(stage) ?? resolveModel(stage, this.getWorkingDirectory()).model;
+
+    const count = (this.stageEscalationCounts.get(stage) ?? 0) + 1;
+    this.stageEscalationCounts.set(stage, count);
+    this.stageModelOverrides.set(stage, nextModel);
+
+    const record: import("../schemas/pipelineState").ModelEscalationRecord = {
+      stage,
+      from_model: fromModel,
+      to_model: nextModel,
+      rationale: signal.rationale,
+      timestamp: new Date().toISOString(),
+      attempt_number: count,
+    };
+
+    if (this.stateService) {
+      try {
+        await this.stateService.recordModelEscalation(record);
+      } catch (err) {
+        this.logger.warn("Failed to record model escalation in state", {
+          issueNumber,
+          err,
+        });
+      }
+    }
+
+    this.logger.info("Model escalation triggered", {
+      issueNumber,
+      stage,
+      from: fromModel,
+      to: nextModel,
+      attempt: count,
+    });
+
+    this.eventDispatcher.onModelEscalated(record);
+  }
+
+  // ===================================================================
+  // PRE-STAGE HEALTH CHECK — PROACTIVE MODEL ESCALATION (Issue #1394)
+  //
+  // Before each non-bookend stage, evaluates health trend slope and
+  // per-stage failure rate. When health is declining (slope < -2%) and
+  // the stage has a historically high failure rate (> 20%), proactively
+  // escalates the model one tier to avoid a wasted first attempt.
+  // Max 1 proactive escalation per pipeline run.
+  // ===================================================================
+
+  /**
+   * Compute health trend slope from health-history.jsonl.
+   *
+   * Reads the last 5 snapshots, computes percent change between the
+   * average of the most recent 3 and the average of the older 2.
+   * Returns 0 if insufficient data (< 5 snapshots).
+   *
+   * Uses synchronous file reads to match existing HeadlessOrchestrator
+   * patterns (readEscalationSignal, loadIssueMetadata).
+   *
+   * @see Issue #1394
+   */
+  private computeHealthTrendSlope(): number {
+    try {
+      const workspaceRoot = this.getWorkingDirectory();
+      const filePath = path.join(pipelineStateDir(workspaceRoot), "health-history.jsonl");
+
+      if (!fs.existsSync(filePath)) return 0;
+
+      const content = fs.readFileSync(filePath, "utf-8");
+      const lines = content.split("\n").filter((l) => l.trim());
+
+      // Parse snapshots only (skip recalibration markers)
+      const snapshots: Array<{ score: number; timestamp: string }> = [];
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line);
+          if (typeof parsed.score === "number" && parsed.type !== "recalibration") {
+            snapshots.push({
+              score: parsed.score,
+              timestamp: parsed.timestamp,
+            });
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+
+      if (snapshots.length < 5) return 0;
+
+      // Sort by timestamp descending, take last 5
+      snapshots.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      const recent5 = snapshots.slice(0, 5);
+
+      // Recent 3 avg vs older 2 avg
+      const recent3Avg = (recent5[0].score + recent5[1].score + recent5[2].score) / 3;
+      const older2Avg = (recent5[3].score + recent5[4].score) / 2;
+
+      if (older2Avg === 0) return 0;
+
+      return ((recent3Avg - older2Avg) / older2Avg) * 100;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Compute failure rate for a specific stage from execution history JSONL.
+   *
+   * Reads JSONL files from the last 30 days and counts how many runs had
+   * the given stage with 'failed' status vs total runs with that stage.
+   * Returns 0 if insufficient data (< 5 records with the stage).
+   *
+   * Uses synchronous file reads to match HeadlessOrchestrator patterns.
+   *
+   * @see Issue #1394
+   */
+  private computeStageFailureRate(stage: PipelineStage): number {
+    try {
+      const workspaceRoot = this.getWorkingDirectory();
+      const historyDir = path.join(pipelineStateDir(workspaceRoot), "history");
+
+      if (!fs.existsSync(historyDir)) return 0;
+
+      // List JSONL files from last 30 days
+      let files: string[];
+      try {
+        files = fs
+          .readdirSync(historyDir)
+          .filter((f) => f.endsWith(".jsonl"))
+          .sort();
+      } catch {
+        return 0;
+      }
+
+      // Filter to last 30 days
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      const cutoffStr = cutoff.toISOString().split("T")[0];
+      const recentFiles = files.filter((f) => f.replace(".jsonl", "") >= cutoffStr);
+
+      let totalWithStage = 0;
+      let failedCount = 0;
+
+      for (const file of recentFiles) {
+        try {
+          const content = fs.readFileSync(path.join(historyDir, file), "utf-8");
+          for (const line of content.split("\n")) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const record = JSON.parse(trimmed);
+              if (record.record_type !== "run") continue;
+              const stageDetail = record.stages?.[stage];
+              if (!stageDetail) continue;
+
+              totalWithStage++;
+              if (stageDetail.status === "failed") {
+                failedCount++;
+              }
+            } catch {
+              // Skip malformed lines
+            }
+          }
+        } catch {
+          // Skip unreadable files
+        }
+      }
+
+      if (totalWithStage < 5) return 0;
+
+      return failedCount / totalWithStage;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Evaluate whether a proactive model escalation should be applied
+   * before running the given stage.
+   *
+   * Guards:
+   * 1. Already used proactive escalation this run → null
+   * 2. Bookend or issue-pickup stage → null
+   * 3. Health slope >= -2% → null (health not declining)
+   * 4. Stage failure rate <= 20% → null (stage historically stable)
+   * 5. Already at model ceiling → null
+   *
+   * When all conditions are met, applies the escalation by setting
+   * stageModelOverrides, records it in pipeline state, and fires
+   * the onProactiveEscalation callback.
+   *
+   * @returns The escalated model if applied, null otherwise
+   * @see Issue #1394
+   */
+  private evaluatePreStageHealth(
+    stage: PipelineStage,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks
+  ): import("../utils/nightgaugeConfig").DefaultModel | null {
+    // Guard: already used proactive escalation this run
+    if (this.proactiveEscalationApplied) return null;
+
+    // Guard: skip bookend stages and issue-pickup (no meaningful history)
+    if (isBookendStage(stage) || stage === "issue-pickup") return null;
+
+    // 1. Compute health trend slope
+    const healthSlope = this.computeHealthTrendSlope();
+    // Guard: not declining (slope >= -2%)
+    if (healthSlope >= -2) return null;
+
+    // 2. Compute stage failure rate
+    const stageFailureRate = this.computeStageFailureRate(stage);
+    // Guard: stage is historically stable (failure rate <= 20%)
+    if (stageFailureRate <= 0.2) return null;
+
+    // 3. Compute escalated model
+    const currentModel = (this.stageModelOverrides.get(stage) ??
+      resolveModel(stage, this.getWorkingDirectory())
+        .model) as import("../utils/nightgaugeConfig").DefaultModel;
+    const nextModel = this.escalationTarget(stage, currentModel);
+    if (!nextModel) return null; // Already at the ceiling
+
+    // 4. Apply proactive escalation
+    this.proactiveEscalationApplied = true;
+    this.stageModelOverrides.set(stage, nextModel);
+
+    const record: import("../schemas/pipelineState").ProactiveEscalationRecord = {
+      stage,
+      from_model: currentModel,
+      to_model: nextModel,
+      health_trend_slope: healthSlope,
+      stage_failure_rate: stageFailureRate,
+      rationale: `Proactive escalation: health trend slope ${healthSlope.toFixed(1)}% (< -2%) and ${stage} failure rate ${(stageFailureRate * 100).toFixed(0)}% (> 20%)`,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Log with evidence
+    this.logger.info("Proactive model escalation applied", {
+      issueNumber,
+      stage,
+      fromModel: currentModel,
+      toModel: nextModel,
+      healthTrendSlope: healthSlope,
+      stageFailureRate,
+    });
+
+    // Record in pipeline state (fire-and-forget, non-blocking)
+    if (this.stateService) {
+      this.stateService.recordProactiveEscalation(record).catch((err) => {
+        this.logger.warn("Failed to record proactive escalation", { err });
+      });
+    }
+
+    // Fire callback
+    this.eventDispatcher.onProactiveEscalation(record);
+
+    return nextModel;
+  }
+
+  // ===================================================================
+  // FEEDBACK LEARNING ENGINE (Issue #1348)
+  //
+  // Reads COMPLEXITY_UNDERESTIMATED signals from completed stage context
+  // files and immediately updates the complexity model, without waiting
+  // for post-merge outcome recording via OutcomeRecorder.
+  // ===================================================================
+
+  /**
+   * Apply feedback learning for COMPLEXITY_UNDERESTIMATED signals.
+   *
+   * Reads all feedback signals from the completed stage's context file,
+   * finds any COMPLEXITY_UNDERESTIMATED signal (warning or blocking), and
+   * records it in the complexity model via FeedbackLearningService.
+   *
+   * Non-fatal: errors are logged as warnings and do not block the pipeline.
+   *
+   * @see Issue #1348
+   */
+  private async applyFeedbackLearning(stage: PipelineStage, issueNumber: number): Promise<void> {
+    const contextTypeMap: Partial<Record<PipelineStage, ContextFileType>> = {
+      "feature-dev": "dev",
+      "feature-validate": "validate",
+    };
+    const contextType = contextTypeMap[stage];
+    if (!contextType) return;
+
+    try {
+      const contextPath = this.getContextPath(contextType, issueNumber);
+      if (!fs.existsSync(contextPath)) return;
+
+      const parsed = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
+      if (!Array.isArray(parsed.feedback) || parsed.feedback.length === 0) return;
+
+      const underestimationSignal = (parsed.feedback as PipelineFeedbackSignal[]).find(
+        (s) => s.signal_type === "COMPLEXITY_UNDERESTIMATED"
+      );
+
+      if (!underestimationSignal) return;
+
+      // Load issue context for title, description, labels
+      const issueContextPath = this.getIssueContextPath(issueNumber);
+      if (!fs.existsSync(issueContextPath)) return;
+
+      const issueRaw = JSON.parse(fs.readFileSync(issueContextPath, "utf-8"));
+      const labels: string[] = Array.isArray(issueRaw.labels) ? issueRaw.labels : [];
+      const issueTitle: string = issueRaw.title ?? "";
+      const issueDescription: string = issueRaw.requirements?.summary ?? "";
+      const predictedSize = this.extractSizeLabel(labels) ?? "S";
+      const issueType = this.extractTypeLabel(labels) ?? "feature";
+
+      const workspaceRoot = this.getWorkingDirectory();
+      const result = await withComplexityModelService(workspaceRoot, async (modelService) => {
+        const learningService = new FeedbackLearningService(modelService);
+        return learningService.recordUnderestimation(
+          issueNumber,
+          predictedSize,
+          issueType,
+          issueTitle,
+          issueDescription,
+          underestimationSignal
+        );
+      });
+
+      if (result.skipped) {
+        this.logger.debug("FeedbackLearning: skipped duplicate underestimation", {
+          issueNumber,
+        });
+      } else {
+        this.logger.info("FeedbackLearning: recorded underestimation", {
+          issueNumber,
+          patternsAdjusted: result.patternsAdjusted,
+        });
+      }
+    } catch (error) {
+      // Non-fatal: log warning but do not block the pipeline
+      this.logger.warn("FeedbackLearning: failed to record underestimation", {
+        issueNumber,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // ===================================================================
+  // REVIEWER FEEDBACK LEARNING (Issue #1409)
+  //
+  // Captures PR reviewer comments at pipeline-finish and feeds them
+  // into the complexity model via FeedbackLearningService.
+  // ===================================================================
+
+  /**
+   * Capture reviewer feedback from merged PR and adjust complexity model.
+   *
+   * Runs during pipeline-finish, after execution history is written but
+   * before completeStage() and context cleanup. Non-fatal: all errors
+   * are caught and logged as warnings.
+   *
+   * @see Issue #1409
+   */
+  private async captureReviewerFeedback(issueNumber: number): Promise<void> {
+    const enabled = process.env.NIGHTGAUGE_FEEDBACK_REVIEWER_SIGNALS_ENABLED !== "false";
+    if (!enabled) {
+      this.logger.debug("ReviewerFeedback: disabled via env", { issueNumber });
+      return;
+    }
+
+    const confidencePenalty = process.env.NIGHTGAUGE_FEEDBACK_REVIEWER_CONFIDENCE_PENALTY
+      ? Number.parseFloat(process.env.NIGHTGAUGE_FEEDBACK_REVIEWER_CONFIDENCE_PENALTY)
+      : 0.03;
+    const minCommentLength = process.env.NIGHTGAUGE_FEEDBACK_REVIEWER_MIN_COMMENT_LENGTH
+      ? Number.parseInt(process.env.NIGHTGAUGE_FEEDBACK_REVIEWER_MIN_COMMENT_LENGTH, 10)
+      : 10;
+
+    try {
+      // Read pr-{N}.json to get PR number
+      const prContextPath = this.getContextPath("pr", issueNumber);
+      if (!fs.existsSync(prContextPath)) {
+        this.logger.debug("ReviewerFeedback: no pr context file", {
+          issueNumber,
+        });
+        return;
+      }
+
+      const prContext = JSON.parse(fs.readFileSync(prContextPath, "utf-8"));
+      const prNumber = prContext.pr_number;
+      if (!prNumber) {
+        this.logger.debug("ReviewerFeedback: no PR number in context", {
+          issueNumber,
+        });
+        return;
+      }
+
+      // Fetch PR reviews via gh CLI
+      let reviewsJson: string;
+      try {
+        const { stdout: reviewsRaw } = await execFileAsync(
+          "gh",
+          ["pr", "view", String(prNumber), "--json", "reviews", "-q", ".reviews"],
+          {
+            encoding: "utf-8",
+            cwd: this.getWorkingDirectory(),
+            timeout: 15000,
+          }
+        );
+        reviewsJson = reviewsRaw.trim();
+      } catch {
+        this.logger.debug("ReviewerFeedback: gh pr view failed", {
+          issueNumber,
+          prNumber,
+        });
+        return;
+      }
+
+      if (!reviewsJson || reviewsJson === "[]" || reviewsJson === "null") {
+        this.logger.debug("ReviewerFeedback: no reviews found", {
+          issueNumber,
+          prNumber,
+        });
+        return;
+      }
+
+      const reviews: Array<{
+        body: string;
+        state: string;
+        author: { login: string };
+      }> = JSON.parse(reviewsJson);
+
+      if (!Array.isArray(reviews) || reviews.length === 0) {
+        return;
+      }
+
+      // Map reviews to comment objects for parsing
+      const comments = reviews
+        .filter((r) => r.body && r.body.length > 0)
+        .map((r) => ({
+          body: r.body,
+          reviewer_login: r.author?.login ?? "unknown",
+          verdict: (r.state === "APPROVED"
+            ? "APPROVED"
+            : r.state === "CHANGES_REQUESTED"
+              ? "CHANGES_REQUESTED"
+              : "COMMENTED") as "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED",
+        }));
+
+      const workspaceRoot = this.getWorkingDirectory();
+      const result = await withComplexityModelService(workspaceRoot, async (modelService) => {
+        const learningService = new FeedbackLearningService(modelService);
+        const signals = learningService.parseReviewerComments(comments, minCommentLength);
+        if (signals.length === 0) {
+          this.logger.debug("ReviewerFeedback: no signals detected", {
+            issueNumber,
+            prNumber,
+            reviewCount: reviews.length,
+          });
+          return null;
+        }
+
+        const issueContextPath = this.getIssueContextPath(issueNumber);
+        if (!fs.existsSync(issueContextPath)) {
+          this.logger.debug("ReviewerFeedback: no issue context", { issueNumber });
+          return null;
+        }
+
+        const issueRaw = JSON.parse(fs.readFileSync(issueContextPath, "utf-8"));
+        const labels: string[] = Array.isArray(issueRaw.labels) ? issueRaw.labels : [];
+        const hasChangesRequested = reviews.some((r) => r.state === "CHANGES_REQUESTED");
+
+        return learningService.processReviewerFeedback(
+          issueNumber,
+          this.extractSizeLabel(labels) ?? "S",
+          this.extractTypeLabel(labels) ?? "feature",
+          issueRaw.title ?? "",
+          issueRaw.requirements?.summary ?? "",
+          signals,
+          hasChangesRequested ? "CHANGES_REQUESTED" : "APPROVED",
+          confidencePenalty
+        );
+      });
+
+      if (result === null) return;
+
+      if (result.skipped) {
+        this.logger.debug("ReviewerFeedback: skipped (already recorded)", {
+          issueNumber,
+        });
+      } else {
+        this.logger.info("ReviewerFeedback: recorded signals", {
+          issueNumber,
+          signalsProcessed: result.signalsProcessed,
+          patternsAdjusted: result.patternsAdjusted,
+        });
+      }
+    } catch (error) {
+      // Non-fatal: never block pipeline completion
+      this.logger.warn("ReviewerFeedback: failed to capture", {
+        issueNumber,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // ===================================================================
+  // BACKTRACK ENGINE (Issue #1342)
+  //
+  // Reads feedback signals from completed stage context files,
+  // evaluates backtrack eligibility, and executes backward transitions.
+  // ===================================================================
+
+  /**
+   * Read feedback signals from a completed stage's context file.
+   *
+   * Extracts the `.feedback` array from dev-{N}.json or validate-{N}.json and
+   * keeps the blocking ones that this orchestrator can act on: those naming a
+   * `backtrack_target_stage` (a rewind request), plus the two declared ways of
+   * saying "there is nowhere to rewind to" — a TERMINAL_BLOCKING_SIGNAL_TYPES
+   * type (#1241) and an EXTERNAL_BLOCKER_EVIDENCE marker (#1504).
+   * MODEL_ESCALATION_NEEDED is excluded throughout (it retries the same stage,
+   * it does not backtrack).
+   */
+  private readFeedbackSignals(stage: PipelineStage, issueNumber: number): PipelineFeedbackSignal[] {
+    // Which stages emit backtrack feedback is POLICY and stays here. Which
+    // FILE a stage writes is a naming fact, and that comes from the one shared
+    // mapping (#1143) — a hand-written second copy of it is dual-path drift.
+    if (!FEEDBACK_EMITTING_STAGES.has(stage)) return [];
+
+    const contextType = STAGE_OUTPUT_CONTEXT_TYPE[stage];
+    if (!contextType) return [];
+
+    try {
+      const contextPath = this.getContextPath(contextType, issueNumber);
+      if (!fs.existsSync(contextPath)) return [];
+
+      const content = fs.readFileSync(contextPath, "utf-8");
+      const parsed = JSON.parse(content);
+
+      if (!Array.isArray(parsed.feedback) || parsed.feedback.length === 0) {
+        return [];
+      }
+
+      return parsed.feedback.filter(
+        (signal: PipelineFeedbackSignal) =>
+          signal.severity === "blocking" &&
+          // #1241: a rewind target is required of every signal that asks for a
+          // rewind, and of nothing else. TERMINAL_BLOCKING_SIGNAL_TYPES names
+          // the types whose meaning is "there is nowhere to rewind to"; see the
+          // declaration for why requiring a target of those made the blocked
+          // fork unreachable by its one intended producer.
+          //
+          // #1504: the SAME unreachability, one class wider. #1241 widened the
+          // filter for a TYPE; the other declared way to say "no lap of this
+          // pipeline helps" is the EXTERNAL_BLOCKER_EVIDENCE marker, and the
+          // feature-planning skill mandates exactly that shape —
+          // PLAN_REVISION_NEEDED, null target, `blocked-on:` evidence, no plan
+          // file. A rewindable TYPE carrying that marker is not malformed for
+          // naming no target: the marker IS the statement that there is nowhere
+          // to rewind to, and `notRewindableReason` has honoured it since #1142.
+          // Dropping it here meant the consumer never reached the branch written
+          // for it, so the producer contract and the reader disagreed and the
+          // run was booked `premature_turn_end` instead of `blocked`.
+          //
+          // The regex is the ONE declared in EXTERNAL_BLOCKER_EVIDENCE. A second
+          // copy of the marker's shape here is the dual-path drift this file
+          // names by hand elsewhere.
+          (signal.backtrack_target_stage != null ||
+            TERMINAL_BLOCKING_SIGNAL_TYPES.has(signal.signal_type) ||
+            declaresExternalBlocker(signal)) &&
+          signal.signal_type !== "MODEL_ESCALATION_NEEDED"
+      );
+    } catch (err) {
+      this.logger.warn("Failed to read feedback signals from context file", {
+        stage,
+        issueNumber,
+        err,
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Evaluate whether a backtrack is allowed.
+   *
+   * Checks:
+   * 1. max_backtracks limit (from config)
+   * 2. Oscillation guard (same from→to edge already traversed)
+   *
+   * @returns true if backtrack is allowed
+   */
+  private evaluateBacktrack(
+    signal: PipelineFeedbackSignal,
+    currentStage: PipelineStage,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks
+  ): boolean {
+    const targetStage = signal.backtrack_target_stage!;
+    const maxBacktracks = getMaxBacktracks(this.getWorkingDirectory());
+
+    // Check hard limit
+    if (this.backtrackCount >= maxBacktracks) {
+      const reason = "max_backtracks_exceeded";
+      this.logger.warn("Backtrack blocked: max_backtracks exceeded", {
+        issueNumber,
+        currentStage,
+        targetStage,
+        backtrackCount: this.backtrackCount,
+        maxBacktracks,
+      });
+      this.eventDispatcher.onBacktrackBlocked(reason, signal);
+      return false;
+    }
+
+    // Check oscillation guard
+    const edgeKey = `${currentStage}->${targetStage}`;
+    if (this.traversedEdges.has(edgeKey)) {
+      const reason = "oscillation_detected";
+      this.logger.warn("Backtrack blocked: oscillation detected", {
+        issueNumber,
+        currentStage,
+        targetStage,
+        edgeKey,
+      });
+      this.eventDispatcher.onBacktrackBlocked(reason, signal);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Execute a backtrack: write feedback file, update state, record the edge.
+   *
+   * @returns Index of the target stage in STAGE_ORDER for loop rewinding
+   */
+  private async executeBacktrack(
+    signal: PipelineFeedbackSignal,
+    currentStage: PipelineStage,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks
+  ): Promise<number> {
+    const targetStage = signal.backtrack_target_stage as PipelineStage;
+    const edgeKey = `${currentStage}->${targetStage}`;
+    this.traversedEdges.add(edgeKey);
+    this.backtrackCount++;
+
+    const record: import("../schemas/pipelineState").BacktrackRecord = {
+      from_stage: currentStage,
+      to_stage: targetStage,
+      signal_type: signal.signal_type,
+      rationale: signal.rationale,
+      timestamp: new Date().toISOString(),
+      attempt_number: this.backtrackCount,
+    };
+
+    // Write feedback-{N}.json for the target stage to read
+    try {
+      const feedbackPath = this.getContextPath("feedback", issueNumber);
+      const feedbackContext = {
+        schema_version: "1.0",
+        issue_number: issueNumber,
+        signals: [signal],
+        created_at: new Date().toISOString(),
+      };
+      fs.writeFileSync(feedbackPath, JSON.stringify(feedbackContext, null, 2));
+      this.logger.info("Wrote feedback context file for backtrack", {
+        issueNumber,
+        path: feedbackPath,
+      });
+    } catch (err) {
+      this.logger.warn("Failed to write feedback context file", {
+        issueNumber,
+        err,
+      });
+    }
+
+    const targetIndex = STAGE_ORDER.indexOf(targetStage);
+    const currentIndex = STAGE_ORDER.indexOf(currentStage);
+    const intermediateStages = STAGE_ORDER.slice(targetIndex + 1, currentIndex);
+
+    // Clear the #698 duplicate-completion guard for every stage this rewind
+    // replays — same idiom as the opus retry and the #500 pr-merge retry. Each
+    // replayed stage completes a SECOND time, and `completedStageSet` makes the
+    // second `onComplete` a no-op, so `runStage`'s promise would never resolve
+    // and the run would hang forever at the first replayed stage. The guard
+    // exists to swallow a doubled callback for ONE attempt, not to outlaw a
+    // second attempt (#1142 — found when the failed-stage rewind first replayed
+    // feature-planning and the pipeline stopped dead).
+    for (const replayed of STAGE_ORDER.slice(targetIndex, currentIndex + 1)) {
+      this.completedStageSet.delete(replayed);
+    }
+
+    // Record backtrack in pipeline state
+    if (this.stateService) {
+      try {
+        await this.stateService.recordBacktrack(record, intermediateStages);
+      } catch (err) {
+        this.logger.warn("Failed to record backtrack in state", {
+          issueNumber,
+          err,
+        });
+      }
+    }
+
+    this.logger.info("Backtrack triggered", {
+      issueNumber,
+      from: currentStage,
+      to: targetStage,
+      signalType: signal.signal_type,
+      attemptNumber: this.backtrackCount,
+    });
+
+    this.eventDispatcher.onBacktrackTriggered(record);
+
+    return STAGE_ORDER.indexOf(targetStage);
+  }
+
+  /**
+   * Consult a FAILED stage's deliverable feedback before halting the run (#1142).
+   *
+   * The backtrack engine above sits ~640 lines below the post-validate gate, and
+   * is reached only by a stage that got that far — i.e. a stage that SUCCEEDED.
+   * `readFeedbackSignals` filters for `severity === "blocking"`, and a blocking
+   * signal is by definition emitted when the stage could NOT succeed. The
+   * unconditional `break` at the gate therefore guaranteed the engine never saw
+   * the case it was built for: `PLAN_REVISION_NEEDED → feature-planning` was
+   * written to `validate-{N}.json` and then dropped on the floor. It also left
+   * `feedback-{N}.json` — whose only writer is `executeBacktrack` — with no
+   * producer at all, so the Go retry engine's deliverable-driven rewind path was
+   * equally dead.
+   *
+   * This is the single seam that makes the halt conditional. It is deliberately
+   * a thin composition of the three existing engine methods rather than a second
+   * copy of their logic (`dual-path-drift`, docs/FAILURE_TAXONOMY.md): the budget
+   * ceiling and the oscillation guard stay in `evaluateBacktrack`, and the state
+   * record plus the `feedback-{N}.json` write stay in `executeBacktrack`.
+   *
+   * The halt remains the default. A rewind happens ONLY when the deliverable
+   * itself asked for one and the guards allow it; no feedback, non-blocking
+   * feedback, an exhausted budget or a repeated edge all return null and the
+   * caller halts with its original error, exactly as before.
+   *
+   * @returns What the caller must do: rewind to an index, book the run as
+   *          `blocked`, or halt exactly as it did before.
+   */
+  private async evaluateFailedStageFeedback(
+    stage: PipelineStage,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks
+  ): Promise<FailedStageDisposition> {
+    const signals = this.readFeedbackSignals(stage, issueNumber);
+    if (signals.length === 0) {
+      return { kind: "halt" };
+    }
+    const signal = signals[0]; // Act on first blocking signal, as the success path does
+
+    // FORK: not every blocking signal is a rewind request. A signal that says
+    // the work is blocked on something OUTSIDE this issue's scope must
+    // terminate the run as `blocked`, because no new plan can make the work
+    // possible — rewinding there burns a whole planning+dev+validate cycle to
+    // arrive at the identical verdict, repeatedly, until the budget runs out.
+    const notRewindable = this.notRewindableReason(signal);
+    if (notRewindable) {
+      return { kind: "blocked", signal, reason: notRewindable };
+    }
+
+    if (!this.evaluateBacktrack(signal, stage, issueNumber, callbacks)) {
+      // Budget exhausted or oscillation detected — evaluateBacktrack has already
+      // surfaced the reason via onBacktrackBlocked. Halt with the original error.
+      return { kind: "halt" };
+    }
+    this.logger.info("Failed stage carries a blocking backtrack signal — rewinding (#1142)", {
+      issueNumber,
+      stage,
+      signalType: signal.signal_type,
+      targetStage: signal.backtrack_target_stage,
+    });
+    return {
+      kind: "rewind",
+      targetIndex: await this.executeBacktrack(signal, stage, issueNumber, callbacks),
+    };
+  }
+
+  /**
+   * Why a blocking signal must NOT be answered with a rewind — or null when a
+   * rewind is the right answer (#1142).
+   *
+   * The decision is made from the signal's STRUCTURED fields only. Guessing at
+   * `rationale` prose would put a free-text classifier on the pipeline's control
+   * flow, which is the shape of defect this repo calls out by name.
+   *
+   * Two structured discriminators exist today:
+   *
+   *  1. **`signal_type`.** Three types mean "a different plan or a different
+   *     implementation of this same issue would fix it" and are the only ones
+   *     a rewind can serve. Everything else — an ambiguous acceptance criterion
+   *     a human must settle, an under-estimate that re-planning cannot shrink —
+   *     is outside what another lap of the pipeline can change.
+   *  2. **An `evidence` marker.** `evidence` is already the schema's slot for
+   *     machine-readable provenance (`"operator-origin: action-center"`), so a
+   *     `blocked-on:` / `blocked-by:` / `external-blocker:` / `out-of-scope:`
+   *     entry is the declared, non-prose way for a stage to say "this needs
+   *     work that is not in this issue". It overrides the type: a
+   *     PLAN_REVISION_NEEDED that declares an external blocker is blocked, not
+   *     rewindable.
+   *
+   * The feedback schema has NO first-class field for "blocked on external work"
+   * (see packages/nightgauge-sdk/src/context/schemas/feedback.ts) — the marker
+   * above is the honest interim. The feature-planning skill was since taught to
+   * write it (§ open prerequisite: PLAN_REVISION_NEEDED, null target,
+   * `blocked-on:` evidence, no plan file), and #1504 is what it cost to have the
+   * producer taught while `readFeedbackSignals` still dropped that shape before
+   * this method ever saw it — the marker branch below was dead code in
+   * production for its whole first life. The reader now keeps a marker-bearing
+   * signal regardless of type or target, so both discriminators fire; the
+   * budget/oscillation guards in
+   * `evaluateBacktrack` remain the bound on a wrong call: a misfiled
+   * PLAN_REVISION_NEEDED costs at most `max_backtracks` laps (default 1) and
+   * then halts. A wrong fork decision degrades to a halt, never to an unbounded
+   * re-plan.
+   */
+  private notRewindableReason(signal: PipelineFeedbackSignal): string | null {
+    // #1241: checked FIRST and by type, because this is the one case where the
+    // reason a rewind cannot help is not "the blocker is elsewhere" but "the
+    // deliverable is not agent-producible at all". The two read alike in a log
+    // and route differently: an out-of-scope blocker clears when the other work
+    // lands, and this one never clears, so only this one earns the
+    // `owner-action` label that ends dispatch.
+    if (TERMINAL_BLOCKING_SIGNAL_TYPES.has(signal.signal_type)) {
+      return `${signal.signal_type} — the issue's deliverable cannot be produced by any pipeline stage; it needs a human`;
+    }
+    const declared = externalBlockerEvidence(signal);
+    if (declared !== undefined) {
+      return `the signal declares an out-of-scope blocker (${declared.trim()})`;
+    }
+    if (!REWINDABLE_SIGNAL_TYPES.has(signal.signal_type)) {
+      return `${signal.signal_type} is not a plan-fixable signal — no re-plan can clear it`;
+    }
+    return null;
+  }
+
+  /**
+   * Terminate the run as a pickup DEFERRAL — the one implementation, for both
+   * conditions that defer at pickup (#189/#305, #1147).
+   *
+   * A deferral is NOT a failure: `success` is false but `failedStage` and
+   * `error` stay unset, the stage is booked `deferred` (never `failStage`, which
+   * would surface as `subagent_crash`), the outcome type is `deferred`, and the
+   * stderr line carries the `[blocked-dependency]` marker the slot manager and
+   * the Go scheduler key off to route the completion away from the failure
+   * path. Getting any one of those wrong pauses autonomous and pollutes
+   * failure-rate telemetry for a run in which nothing crashed and nothing was
+   * spent.
+   *
+   * Extracted (#1147) rather than copied for the second caller. Seven separate
+   * side effects have to be right for a deferral to book correctly, and only
+   * two lines of the block differ between the two conditions — the operator
+   * prose. A second copy would pass its own test on the day it was written and
+   * then drift the moment either the marker or the result shape moved, which is
+   * the `dual-path-drift` class this repo names.
+   */
+  private async finishAsDeferredPickup(opts: {
+    stage: PipelineStage;
+    issueNumber: number;
+    startTime: number;
+    completedStages: PipelineStage[];
+    skippedStages: PipelineStage[];
+    /** Operator-facing reason for the stage-skipped event. */
+    skipReason: string;
+    /** The `[blocked-dependency]`-marked stderr line, newline included. */
+    stderrLine: string;
+  }): Promise<PipelineRunResult> {
+    const { stage, issueNumber, startTime, completedStages, skippedStages } = opts;
+
+    if (this.stateService) {
+      try {
+        await this.stateService.deferStage(stage);
+        await this.stateService.setOutcomeType("deferred");
+      } catch {
+        // Non-critical — the return below still halts the pipeline.
+      }
+    }
+    this.eventDispatcher.onStageSkipped(stage, opts.skipReason);
+    // Info-level marker, NOT a `[pipeline-*-failure]` line: the slot manager
+    // and Go scheduler key off `[blocked-dependency]` to route this to the
+    // deferral path, never the failure path.
+    this.eventDispatcher.onStderr(stage, opts.stderrLine);
+
+    const deferredResult: PipelineRunResult = {
+      success: false,
+      deferred: true,
+      completedStages,
+      skippedStages,
+      deferredStages: [stage],
+      // No failedStage / error — a deferral is not a failure.
+      totalDurationMs: Date.now() - startTime,
+      outcomeType: "deferred",
+    };
+
+    this.firePipelineComplete(deferredResult, issueNumber);
+    if (this.queueService) {
+      this.handleQueueAutoStart(deferredResult.success, issueNumber);
+    }
+    this.isRunning = false;
+    this.abortController = null;
+    return deferredResult;
+  }
+
+  /**
+   * Write the out-of-scope finding down, tell the human, and raise the card
+   * (#1147) — the durable half of the #1142 `blocked` terminal.
+   *
+   * #1142 made the run STOP honestly. It stopped and left nothing behind, so
+   * the next dispatch spent planning, dev and validate rediscovering the same
+   * wall. Three durable effects, in this order and with this precedence:
+   *
+   *  1. **The artifact** (`blocked-findings/<issue>.json`, under the RUN'S repo
+   *     root so it survives worktree cleanup). This is the one that matters:
+   *     `issue-pickup` reads it on the next dispatch and defers before spending
+   *     a token. Its success is the method's return value.
+   *  2. **The issue comment**, so the reason is visible without a session log.
+   *  3. **The Action Center card**, so the finding sits in the operator's
+   *     inbox with a one-click way to clear it.
+   *
+   * (2) and (3) are best-effort and cannot fail (1): both cross a network or
+   * IPC boundary, and a run that recorded its finding but could not reach
+   * GitHub is still strictly better off than one that recorded nothing.
+   *
+   * WHAT THIS DELIBERATELY DOES NOT DO: create `blockedBy` edges. The blocking
+   * work is named in the signal's free-text `evidence`, and #1147's scoping
+   * question — can issue references be extracted from it confidently enough to
+   * mutate a real issue's dependency graph? — is answered NO here. See the
+   * PR body; the short version is that `#N` in prose is ambiguous in this very
+   * corpus ("AC #3"), no producer emits the marker yet so an extractor would
+   * have zero real inputs to be right about, and a wrong edge is durable,
+   * human-visible, and turns the zero-cost pickup defer into a permanent
+   * silent stall. The card is the one-step human accept instead.
+   *
+   * @returns whether the durable artifact landed.
+   */
+  private async recordOutOfScopeBlockedFinding(
+    stage: PipelineStage,
+    issueNumber: number,
+    signal: PipelineFeedbackSignal,
+    reason: string
+  ): Promise<boolean> {
+    const finding: BlockedFinding = {
+      schema_version: "1.0",
+      issue_number: issueNumber,
+      stage,
+      signal_type: signal.signal_type,
+      reason,
+      rationale: signal.rationale ?? "",
+      evidence: (signal.evidence ?? []).map(String),
+      run_id: this.readCurrentRunId(issueNumber),
+      recorded_at: new Date().toISOString(),
+    };
+
+    const persisted = writeBlockedFinding(this.getRunRepoRoot(), finding, this.logger);
+    if (persisted) {
+      this.logger.info("Recorded a durable out-of-scope blocked finding (#1147)", {
+        issueNumber,
+        stage,
+        signalType: signal.signal_type,
+        path: blockedFindingPath(this.getRunRepoRoot(), issueNumber),
+      });
+    }
+
+    try {
+      await postBlockedFindingComment({
+        issueNumber,
+        finding,
+        repoOverride: this.repoOverride,
+        cwd: this.getRunRepoRoot(),
+        logger: this.logger,
+      });
+    } catch {
+      // postBlockedFindingComment is already non-throwing; this is the belt to
+      // its braces, because nothing here may change the terminal outcome.
+    }
+
+    await this.raiseRunScopedAttention({
+      producer: "out-of-scope-blocker",
+      issueNumber,
+      stage,
+    });
+
+    // #1241: for a HUMAN-ONLY issue the finding alone does not close the loop.
+    // It is a file under one machine's repo root, consulted by one pickup path;
+    // the issue itself is unchanged, so it stays Ready on the board and any
+    // other machine — or this one after a re-clone — dispatches it again. The
+    // label is the durable half.
+    if (TERMINAL_BLOCKING_SIGNAL_TYPES.has(signal.signal_type)) {
+      await this.markIssueOwnerAction(issueNumber, signal);
+    }
+
+    return persisted;
+  }
+
+  /**
+   * Take a human-only issue out of the autonomous dispatch pool for good
+   * (#1241).
+   *
+   * The exclusion mechanism is not new — `autonomous.exclude_labels` defaults
+   * to `["owner-action"]` and the scheduler's candidate filter has honored it
+   * since #317. What was missing is a PRODUCER. The label could only be applied
+   * by a human who already knew the issue was human-only, and the dispatcher is
+   * precisely the party that does not know; so an issue nobody thought to label
+   * was dispatched, spent a planning and a dev stage discovering it was
+   * unimplementable, and — because the discovery was written nowhere the next
+   * tick reads — was eligible again immediately. the specimen run is the
+   * specimen: a legal review awaiting counsel sign-off, dispatched as ordinary
+   * `type:docs` work.
+   *
+   * Two effects, both best-effort and in this order:
+   *
+   *  1. **The label**, which is what actually ends dispatch. Created first in
+   *     case the repository has never used it (creation fails silently when it
+   *     exists), exactly as the architecture-approval path does.
+   *  2. **The board move to Backlog**, so a human reading the board sees the
+   *     issue parked rather than perpetually Ready. This is presentation: the
+   *     label is the enforcement, and a board that could not be reached must
+   *     not undo it.
+   *
+   * NEVER THROWS. This runs while the run's terminal outcome is being
+   * assembled; a GitHub hiccup here must not convert an honest `blocked`
+   * terminal into a crash. A failure is logged and the run still books
+   * `blocked` — the operator then has the finding, the comment and the card,
+   * and only loses the automatic exclusion.
+   */
+  private async markIssueOwnerAction(
+    issueNumber: number,
+    signal: PipelineFeedbackSignal
+  ): Promise<void> {
+    const cwd = this.getRunRepoRoot();
+    const repoArgs = this.ghRepoArgs();
+    try {
+      await execFileAsync(
+        "gh",
+        [
+          "label",
+          "create",
+          OWNER_ACTION_LABEL,
+          ...repoArgs,
+          "--color",
+          "d93f0b",
+          "--description",
+          "Human-only work — excluded from autonomous dispatch",
+        ],
+        { cwd, timeout: 15_000 }
+      ).catch(() => undefined);
+
+      await execFileAsync(
+        "gh",
+        ["issue", "edit", String(issueNumber), ...repoArgs, "--add-label", OWNER_ACTION_LABEL],
+        { cwd, timeout: 15_000 }
+      );
+
+      this.logger.info(
+        "Labelled the issue owner-action — it is human-only and leaves the dispatch pool (#1241)",
+        { issueNumber, signalType: signal.signal_type, rationale: signal.rationale }
+      );
+    } catch (err) {
+      this.logger.warn(
+        "Could not apply the owner-action label — the issue stays dispatch-eligible (#1241)",
+        { issueNumber, err: err instanceof Error ? err.message : String(err) }
+      );
+      return;
+    }
+
+    try {
+      await updateProjectItemStatus(issueNumber, "Backlog", cwd, this.logger, this.repoOverride);
+    } catch (err) {
+      // Presentation only — the label above already ended dispatch.
+      this.logger.warn("Could not park the human-only issue in Backlog (non-blocking, #1241)", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Run the full pipeline from pipeline-start to pipeline-finish
+   *
+   * The pipeline includes bookend stages (pipeline-start, pipeline-finish) that
+   * execute synchronously with zero AI token consumption. These provide reliable
+   * synchronization points for initialization and cleanup.
+   *
+   * @param issueNumber - The GitHub issue number to work on
+   * @param callbacks - Callbacks for pipeline events
+   * @returns Result of the pipeline run
+   */
+  async runPipeline(
+    issueNumber: number,
+    callbacks?: PipelineCallbacks,
+    modelOverride?: PipelineModelOverride,
+    requestedPin?: RequestedPin,
+    /**
+     * "private" when this direct dispatch's run is private on the hosted
+     * service (#2400): a resumed private run keeps it. Ignored when a slot
+     * already installed the identity, which carries its own.
+     */
+    visibility?: "private"
+  ): Promise<PipelineRunResult> {
+    // Per-issue in-flight registry, second line of defense behind the
+    // dispatch-boundary guard in ConcurrentPipelineManager (#188). The
+    // per-instance isRunning throw below cannot catch a duplicate dispatch
+    // through a SECOND orchestrator instance — which is exactly how
+    // the dogfood pr-merge deadlock double-ran (two pre-flights 3s apart,
+    // racing on the same context files and worktree). Static: spans all instances in
+    // this extension host. Log + refuse rather than double-run.
+    if (HeadlessOrchestrator.activePipelineIssues.has(issueNumber)) {
+      this.logger.error(
+        "Duplicate runPipeline dispatch refused — issue already has a pipeline in flight (#188)",
+        { issueNumber }
+      );
+      return {
+        success: false,
+        completedStages: [],
+        skippedStages: [],
+        deferredStages: [],
+        error: new Error(
+          `Duplicate dispatch refused: issue #${issueNumber} already has a pipeline in flight (#188)`
+        ),
+        totalDurationMs: 0,
+      };
+    }
+    HeadlessOrchestrator.activePipelineIssues.add(issueNumber);
+    try {
+      return await this.runPipelineInner(
+        issueNumber,
+        callbacks,
+        modelOverride,
+        requestedPin,
+        visibility
+      );
+    } finally {
+      HeadlessOrchestrator.activePipelineIssues.delete(issueNumber);
+    }
+  }
+
+  /** Issues with a runPipeline currently in flight, across all orchestrator instances (#188). */
+  private static activePipelineIssues = new Set<number>();
+
+  private async runPipelineInner(
+    issueNumber: number,
+    callbacks?: PipelineCallbacks,
+    modelOverride?: PipelineModelOverride,
+    requestedPin?: RequestedPin,
+    visibility?: "private"
+  ): Promise<PipelineRunResult> {
+    if (this.isRunning) {
+      throw new Error("Pipeline is already running");
+    }
+
+    // Consume pending model override if no explicit override was passed (#1610).
+    if (!modelOverride && this.pendingUserModelOverride) {
+      modelOverride = this.pendingUserModelOverride;
+    }
+    this.pendingUserModelOverride = null;
+
+    // Merge defaultPipelineCallbacks so resume and auto-resume paths receive
+    // OutputWindow integration without explicitly passing callbacks. (#1532)
+    // Explicit callbacks take precedence — same spread order as startNextQueuedIssue().
+    callbacks = { ...(this.defaultPipelineCallbacks ?? {}), ...callbacks };
+
+    // Create event dispatcher for this run (Issue #2770 — Part 3)
+    this.eventDispatcher = new OrchestratorEventDispatcher(callbacks, this.logger);
+
+    this.isRunning = true;
+    // The run an auto-start dequeued has begun (#2397): from here its queue
+    // item is completed when the run ends, never put back in the queue.
+    const autoStarted = this.autoStartedQueueItem;
+    if (autoStarted && autoStarted.issueNumber === issueNumber) {
+      autoStarted.started = true;
+    }
+    this.abortController = new AbortController();
+    this.completedStageSet.clear(); // Reset duplicate-prevention tracker (#698)
+    this.cachedIssueMetadata = null; // Clear stale metadata from previous run (#732)
+    this.stageExecutionPaths.clear(); // Reset execution-path decision tracker (#297)
+
+    // Sync contextAssembler per-run state (Issue #2770 — Part 3)
+    this.contextAssembler.clearSessionState();
+    this.contextAssembler.setContextFileWaitMs(this.config.contextFileWaitMs);
+    this.contextAssembler.setRepoOverride(this.repoOverride);
+    this.contextAssembler.setRoutingConfig(this.config.routing ?? {});
+    this.contextAssembler.setForceFullPipeline(this.config.forceFullPipeline);
+    this.backtrackCount = 0; // Reset backtrack engine state (#1342)
+    this.traversedEdges.clear(); // Reset oscillation guard (#1342)
+    this.stageEscalationCounts.clear(); // Reset escalation engine (#1343)
+    this.stageModelOverrides.clear(); // Reset escalation overrides (#1343)
+    this.fableQuotaFallbackApplied.clear(); // Reset Fable→Opus usage-limit fallback guard
+    this.fableFallbacks = []; // Reset surfaced Fable→Opus fallback list (#26)
+
+    // Pre-populate model overrides for all skill stages when user selects
+    // a model override via "Run Pipeline with Model" (#1610).
+    this.userModelOverride = modelOverride ?? null;
+    this.requestedPin = requestedPin?.adapter ? requestedPin : null;
+    if (this.requestedPin) {
+      this.logger.info("Remote run request pin applied to every stage (#1656)", {
+        issueNumber,
+        adapter: this.requestedPin.adapter,
+        model: this.requestedPin.model,
+      });
+    }
+    const executionAdapter = getExecutionAdapter(this.getWorkingDirectory());
+    if (modelOverride && executionAdapter === "claude") {
+      for (const stage of SKILL_STAGES) {
+        this.stageModelOverrides.set(
+          stage,
+          modelOverride as import("../utils/nightgaugeConfig").DefaultModel
+        );
+      }
+      this.logger.info("User model override applied to all stages", {
+        model: modelOverride,
+        issueNumber,
+        adapter: executionAdapter,
+      });
+    } else if (modelOverride) {
+      this.logger.info("User model override captured for adapter-aware stage execution", {
+        model: modelOverride,
+        issueNumber,
+        adapter: executionAdapter,
+      });
+    }
+
+    this.proactiveEscalationApplied = false; // Reset proactive escalation guard (#1394)
+    this.policyRetryBudgetIncrease = 0; // Reset health policy retry budget (#1395)
+    this.pauseAutoRouting = false; // Reset health policy auto-routing pause (#1395)
+    this.activePolicies = null; // Reset health policy overrides (#1395)
+
+    // Pin workspace root for the entire pipeline run so that a repo switch
+    // mid-pipeline doesn't cause subsequent stages to spawn with the wrong CWD.
+    // @see Issue #1592
+    this.pinnedWorkspaceRoot = this.getWorkingDirectory();
+
+    // Authenticate every `gh`/`gh api` subprocess this extension host spawns
+    // (board-status writes via projectFieldWriter, post-create/merge gates, the
+    // GITHUB_TOKEN resolution paths) as the pipeline's configured identity
+    // rather than the machine's ambient active gh account. On a multi-account
+    // machine the active account may lack target-org access, so those bare `gh`
+    // calls fail with "Could not resolve to a Repository" — false-negative
+    // gates and board-status WARNs (#3892). Resolve the token once via the Go
+    // binary (config → GITHUB_TOKEN → `gh auth token --user`) and export it to
+    // process.env so all descendant subprocesses inherit it.
+    await this.ensureGitHubTokenInProcessEnv(this.pinnedWorkspaceRoot);
+
+    // Detect whether state belongs to a resumed run before restoring persisted
+    // backtrack/escalation counters (Issues #1261, #1342, #1343).
+    if (this.stateService) {
+      const existingState = await this.stateService.getState();
+      if (existingState?.stages) {
+        const isRecovery = Object.values(existingState.stages).some(
+          (s) => s?.status === "complete" || s?.status === "skipped"
+        );
+
+        // Restore backtrack/escalation state from state.json on resume so
+        // oscillation detection and escalation limits survive across restarts.
+        // @see Issue #1342, #1343
+        if (isRecovery) {
+          this.backtrackCount = existingState.backtrack_count ?? 0;
+          // Reconstruct traversed edges from backtrack history
+          for (const bt of existingState.backtracks ?? []) {
+            this.traversedEdges.add(`${bt.from_stage}->${bt.to_stage}`);
+          }
+          // Reconstruct per-stage escalation counts from escalation history
+          for (const esc of existingState.model_escalations ?? []) {
+            const stage = esc.stage as PipelineStage;
+            this.stageEscalationCounts.set(stage, (this.stageEscalationCounts.get(stage) ?? 0) + 1);
+          }
+          this.logger.info("Restored backtrack/escalation state from state.json", {
+            backtrackCount: this.backtrackCount,
+            traversedEdges: this.traversedEdges.size,
+            escalationStages: this.stageEscalationCounts.size,
+          });
+        }
+      }
+    }
+
+    // ===================================================================
+    // AUDIT EVENT CLIENT SETUP (Issue #1582)
+    // Instantiate AuditEventClient when audit.enabled is true.
+    // Generate a stable pipelineRunId UUID for event correlation.
+    // All audit calls are fire-and-forget: never block pipeline execution.
+    // ===================================================================
+    const auditConfig = getAuditConfig(this.getWorkingDirectory());
+    if (auditConfig.enabled) {
+      this.auditClient = new AuditEventClient(auditConfig);
+    }
+    this.auditCorrelationId = crypto.randomUUID();
+    this.blockedTerminalState = null;
+    this.prMergedGroundTruth = false;
+    this.estimatorSnapshot = null;
+
+    // RECEIVE OR MINT (ADR-017 Decision 10, #370).
+    //
+    // Manager-driven slots already had `beginRun` called on their own state
+    // service before the orchestrator was handed the run, so the identity is
+    // installed and this must NOT re-begin: minting onto a live identity is
+    // F23, and `beginRun` refuses it. A DIRECT entry point (a command, a
+    // resume, a test harness driving runPipeline) is its own dispatch and has
+    // nobody to receive from, so it mints here.
+    //
+    // Installing the identity is also what pins the run's target repo, which
+    // every stage transition carries as the platform's run-creation context
+    // ("owner/name"). Without it the Go IPC layer emits stage events with an
+    // empty repo and the live Pipelines view never materialises the run.
+    //
+    // CHECK-AND-CLAIM IS AWAIT-FREE (#307/C10 discipline). The repo resolution
+    // spawns `gh repo view` with a 15s timeout; resolving it BEFORE the
+    // claiming check means no other producer can install an identity between
+    // the check and `beginRun`. The outer test only avoids paying for the
+    // subprocess when an identity is obviously already installed — the inner
+    // one is the decision. A refusal is NOT swallowed: a run must never
+    // proceed under another run's identity.
+    if (this.stateService && this.stateService.getRunId() === null) {
+      const repo = await this.resolveRunRepoSlug();
+      if (this.stateService.getRunId() === null) {
+        const mintedRunId = uuidV7();
+        this.stateService.beginRun(mintedRunId, repo, issueNumber, undefined, visibility);
+        if (visibility === "private") {
+          void confirmAndReportPrivateRun(this.stateService, issueNumber, mintedRunId, repo);
+        }
+      }
+    }
+
+    // Emit pipeline.started now that pipelineRunId is set
+    this.auditClient?.enqueue({
+      action: "pipeline.started",
+      resourceType: "pipeline",
+      resourceId: `issue-${issueNumber}`,
+      metadata: {
+        pipelineRunId: this.auditCorrelationId,
+        issueNumber,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    const startTime = Date.now();
+    const completedStages: PipelineStage[] = [];
+    const skippedStages: PipelineStage[] = [];
+    const deferredStages: PipelineStage[] = [];
+    let failedStage: PipelineStage | undefined;
+    let error: Error | undefined;
+    // The failing gate's structured terminal_kind (#283 defect 3), threaded
+    // into the stage exit record and the PipelineRunResult so a
+    // harness/bookkeeping fault classifies as such instead of "unclassified".
+    let gateTerminalKind: string | undefined;
+    let budgetExceeded = false;
+    // #253: true when the between-stage ceiling check performed a controlled
+    // stop. Suppresses the completion reconcile's pr-merge reclassification —
+    // a budget stop mid-pipeline is not a pr-merge defect.
+    let budgetCeilingStopped = false;
+
+    // Reset cost anomaly flag for this run (Issue #1335)
+    this._lastCostAnomalyExceeded = false;
+
+    // ===================================================================
+    // PIPELINE BUDGET CEILING (Issue #1047)
+    // Initialize pipeline-level cost ceiling enforcer for the pre-flight
+    // budget estimate below (a one-time snapshot, intentionally pinned like
+    // the estimator inputs). The onTokenUsage checkpoint signal is handled by
+    // a separate per-stage instance inside runStage(). The between-stage
+    // hard-stop check further down re-resolves config fresh at every check
+    // (Issue #257) rather than reusing this snapshot for the whole run.
+    // ===================================================================
+    const ceilingConfig = getPipelineCeilingConfig(this.getRunRepoRoot());
+    const pipelineCeiling = new PipelineBudgetCeiling(ceilingConfig);
+
+    // ===================================================================
+    // ISSUE PRE-CHECKS: Deterministic, zero AI tokens consumed.
+    // Single gh call fetches both labels and state to gate the pipeline.
+    // 1. Epic check: halt/auto-close epics (@see Issue #525)
+    // 2. Closed-issue check: halt already-completed issues (@see Issue #696)
+    // ===================================================================
+    const preCheck = await this.preCheckIssue(issueNumber);
+
+    if (preCheck.isEpic) {
+      this.logger.info("Epic detected via pre-check — halting before any AI stages", {
+        issueNumber,
+      });
+
+      const epicResult = await this.handleEpicIssue(issueNumber, startTime);
+
+      // Notify pipeline complete callback so UI updates
+      this.firePipelineComplete(epicResult, issueNumber);
+
+      // Notify queue service for auto-start of next issue
+      if (this.queueService) {
+        this.handleQueueAutoStart(epicResult.success, issueNumber);
+      }
+
+      this.isRunning = false;
+      this.abortController = null;
+      return epicResult;
+    }
+
+    if (!this.config.forceRerun && preCheck.isClosed) {
+      this.logger.info("Closed issue detected via pre-check — halting before any AI stages", {
+        issueNumber,
+        state: "CLOSED",
+      });
+
+      const closedResult: PipelineRunResult = {
+        success: false,
+        completedStages: [],
+        skippedStages: [],
+        deferredStages: [],
+        failedStage: "pipeline-start",
+        // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+        // ConcurrentPipelineManager must not move the board or comment.
+        startRefusal: "issue-closed",
+        error: new Error(
+          `Issue #${issueNumber} is already CLOSED. Pipeline halted — zero AI tokens consumed.\n\n` +
+            `Use forceRerun: true to override this guard for legitimate re-runs.`
+        ),
+        totalDurationMs: Date.now() - startTime,
+        outcomeType: "already-resolved",
+      };
+
+      // Classify as already-resolved for cost tracking (Issue #709)
+      if (this.stateService) {
+        try {
+          await this.stateService.setOutcomeType("already-resolved");
+        } catch {
+          // Non-critical
+        }
+      }
+
+      this.eventDispatcher.onStderr(
+        "pipeline-start",
+        `[pipeline-start-failure] issue-closed: Issue #${issueNumber} is already CLOSED. ` +
+          `Pipeline halted before any AI stages. Use forceRerun: true to override.\n`
+      );
+
+      // Notify pipeline complete callback so UI updates
+      this.firePipelineComplete(closedResult, issueNumber);
+
+      // Notify queue service for auto-start of next issue
+      if (this.queueService) {
+        this.handleQueueAutoStart(closedResult.success, issueNumber);
+      }
+
+      this.isRunning = false;
+      this.abortController = null;
+      return closedResult;
+    }
+
+    // ===================================================================
+    // AUTH PRE-CHECK: Verify GitHub CLI auth before consuming AI tokens.
+    // Catches expired tokens and missing scopes early.
+    // @see Issue #1141
+    // ===================================================================
+    const authCheck = await this.preCheckAuth();
+
+    // Transient GitHub-quota dip (#3896): auth + scopes are fine, the bucket is
+    // just momentarily below headroom and resets within the hour. Do NOT treat
+    // this like a permanent auth/scope failure that burns the issue — emit a
+    // `github-quota-low` marker so the Go scheduler classifies it transient
+    // (issue stays Ready, global cooldown until reset, no lifetime-cap
+    // increment) and retries automatically once the quota recovers.
+    if (authCheck.rateLimited) {
+      const retryAfterSec = authCheck.retryAfterSec ?? 60;
+      const quotaError = authCheck.errorMessage || "GitHub API quota too low to start pipeline";
+      this.logger.warn("GitHub quota low at pipeline-start — deferring (transient)", {
+        issueNumber,
+        retryAfterSec,
+      });
+
+      const quotaResult: PipelineRunResult = {
+        success: false,
+        completedStages: [],
+        skippedStages: [],
+        deferredStages: [],
+        failedStage: "pipeline-start",
+        // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+        // ConcurrentPipelineManager must not move the board or comment.
+        startRefusal: "github-quota-low",
+        // Embed the `[github-quota-low]` token in the error text itself (not
+        // just the stderr marker): bootstrap/services.ts forwards error.message
+        // as failureDetail, and the Go ClassifyTerminalKind fallback matches on
+        // that text — so the token must be present here for the transient
+        // classification to fire in IPC/autonomous mode. (#3896)
+        error: new Error(
+          `[github-quota-low] GitHub API quota too low — pipeline deferred before AI stages ` +
+            `(transient; resetInSec=${retryAfterSec}).\n\n${quotaError}`
+        ),
+        totalDurationMs: Date.now() - startTime,
+      };
+
+      this.eventDispatcher.onStderr(
+        "pipeline-start",
+        `[pipeline-start-failure] github-quota-low: ${quotaError} ` +
+          `(transient; resetInSec=${retryAfterSec})\n`
+      );
+
+      this.firePipelineComplete(quotaResult, issueNumber);
+
+      if (this.queueService) {
+        this.handleQueueAutoStart(quotaResult.success, issueNumber);
+      }
+
+      this.isRunning = false;
+      this.abortController = null;
+      return quotaResult;
+    }
+
+    // Network outage at pipeline-start (#4002): gh couldn't reach
+    // api.github.com at all. NOT an auth failure — emit the
+    // `github-network-outage` marker so the Go scheduler classifies it
+    // environmental (short global cooldown, issue stays Ready, no
+    // lifetime-cap increment, no pause) and retries once connectivity
+    // returns. Pre-fix this took the github-auth-failed path below, which
+    // paged the operator with "run `gh auth login`" during a DNS blip.
+    if (authCheck.networkOutage) {
+      const retryAfterSec = authCheck.retryAfterSec ?? 120;
+      const outageError = authCheck.errorMessage || "GitHub API unreachable (network outage)";
+      this.logger.warn("GitHub unreachable at pipeline-start — deferring (transient outage)", {
+        issueNumber,
+        retryAfterSec,
+      });
+
+      const outageResult: PipelineRunResult = {
+        success: false,
+        completedStages: [],
+        skippedStages: [],
+        deferredStages: [],
+        failedStage: "pipeline-start",
+        // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+        // ConcurrentPipelineManager must not move the board or comment.
+        startRefusal: "github-network-outage",
+        // Embed the `[github-network-outage]` token in the error text itself
+        // (not just the stderr marker): bootstrap/services.ts forwards
+        // error.message as failureDetail, and the Go ClassifyTerminalKind
+        // fallback matches on that text — same contract as the quota path
+        // above (#3896).
+        error: new Error(
+          `[github-network-outage] GitHub API unreachable — pipeline deferred before AI stages ` +
+            `(transient; retryInSec=${retryAfterSec}).\n\n${outageError}`
+        ),
+        totalDurationMs: Date.now() - startTime,
+      };
+
+      this.eventDispatcher.onStderr(
+        "pipeline-start",
+        `[pipeline-start-failure] github-network-outage: ${outageError} ` +
+          `(transient; retryInSec=${retryAfterSec})\n`
+      );
+
+      this.firePipelineComplete(outageResult, issueNumber);
+
+      if (this.queueService) {
+        this.handleQueueAutoStart(outageResult.success, issueNumber);
+      }
+
+      this.isRunning = false;
+      this.abortController = null;
+      return outageResult;
+    }
+
+    if (!authCheck.isAuthenticated || !authCheck.hasRequiredScopes) {
+      const authError = authCheck.errorMessage || "GitHub auth validation failed";
+      this.logger.error("GitHub auth pre-check failed", {
+        issueNumber,
+        isAuthenticated: authCheck.isAuthenticated,
+        hasRequiredScopes: authCheck.hasRequiredScopes,
+        error: authError,
+      });
+
+      const authResult: PipelineRunResult = {
+        success: false,
+        completedStages: [],
+        skippedStages: [],
+        deferredStages: [],
+        failedStage: "pipeline-start",
+        // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+        // ConcurrentPipelineManager must not move the board or comment.
+        startRefusal: "github-auth-failed",
+        error: new Error(
+          `GitHub auth pre-check failed — pipeline halted before AI stages.\n\n${authError}`
+        ),
+        totalDurationMs: Date.now() - startTime,
+      };
+
+      this.eventDispatcher.onStderr(
+        "pipeline-start",
+        `[pipeline-start-failure] github-auth-failed: ${authError} ` +
+          `(isAuthenticated=${authCheck.isAuthenticated}, hasRequiredScopes=${authCheck.hasRequiredScopes})\n`
+      );
+
+      this.firePipelineComplete(authResult, issueNumber);
+
+      if (this.queueService) {
+        this.handleQueueAutoStart(authResult.success, issueNumber);
+      }
+
+      this.isRunning = false;
+      this.abortController = null;
+      return authResult;
+    }
+
+    this.logger.info("GitHub auth pre-check passed", { issueNumber });
+
+    // ===================================================================
+    // ADAPTER AUTH PRE-FLIGHT (Issue #3222)
+    // Probe every adapter the run will use *before* any stage executes so
+    // missing credentials surface as a GitHub issue comment within seconds
+    // — not after the worktree is cut and the issue moved to In Progress.
+    //
+    // Today we probe a single global adapter resolved from
+    // `getExecutionAdapter()`. When epic #3212 (B1+B2) lands the caller
+    // swaps in the per-stage deduped list with no signature change.
+    // ===================================================================
+    // Two escape hatches: the per-project `pipeline.skip_auth_preflight` config,
+    // and the NIGHTGAUGE_SKIP_AUTH_PREFLIGHT=1 env var (a process-wide
+    // override for CI/debug — and what the unit-test suite sets so its
+    // pipeline-path tests don't depend on real CLI auth being present, #4044).
+    if (
+      getSkipAuthPreflight(this.getWorkingDirectory()) ||
+      process.env.NIGHTGAUGE_SKIP_AUTH_PREFLIGHT === "1"
+    ) {
+      this.logger.info("Adapter auth pre-flight skipped (skip_auth_preflight)", {
+        issueNumber,
+      });
+    } else {
+      const adapters = [toNightgaugeAdapter(executionAdapter, process.env)];
+      // Inject the real preflight runner so CLI adapters (claude-headless /
+      // codex / copilot) actually probe auth (`codex login status`,
+      // `claude auth status`, …) instead of short-circuiting to "passed". Without
+      // a runner the gate is a no-op for exactly the adapters it must guard, and
+      // a logged-out user only fails later at spawn time (#4044). Same runner the
+      // #4031 Adapter Doctor uses. Set `pipeline.skip_auth_preflight: true` to
+      // bypass (handled above).
+      const preflight = await runAdapterAuthPreflight(adapters, {
+        cwd: this.getWorkingDirectory(),
+        runner: createDefaultPreflightRunner(),
+      });
+      if (!preflight.ok) {
+        const bullets = preflight.failures
+          .map(
+            (f: { adapter: NightgaugeAdapter; reason: string; suggestedFix: string }) =>
+              `- **${f.adapter}**: ${f.reason}\n  Fix: ${f.suggestedFix}`
+          )
+          .join("\n");
+        // Distinguish a transient probe TIMEOUT (adapter CLI unresponsive under
+        // a concurrent dispatch burst — auth was never broken) from a definitive
+        // logged-out negative. Both carry the stable `[adapter-auth-failed]`
+        // marker so the terminal-kind classifier (TS classifyTerminalKind + Go
+        // ClassifyTerminalKind) routes this to `adapter_auth_failed` — retryable
+        // infra — never `subagent_crash`. Issue #312.
+        const allTimedOut = preflight.failures.every((f: { timedOut: boolean }) => f.timedOut);
+        const kindNote = allTimedOut
+          ? "auth probe timed out after retry (adapter CLI unresponsive — transient, not a logged-out session)"
+          : "adapter not authenticated";
+        const errorMessage =
+          `[adapter-auth-failed] Auth pre-flight failed — ${kindNote}. ` +
+          `Pipeline halted before AI stages (zero tokens spent).\n${bullets}`;
+        this.logger.error("Adapter auth pre-flight failed", {
+          issueNumber,
+          timedOut: allTimedOut,
+          failures: preflight.failures.map(
+            (f: { adapter: NightgaugeAdapter; reason: string; timedOut: boolean }) => ({
+              adapter: f.adapter,
+              reason: f.reason,
+              timedOut: f.timedOut,
+            })
+          ),
+        });
+
+        // #1168 — TELL THE OPERATOR. Until this call the log line above was the
+        // entire user-facing surface of a condition under which nothing can run
+        // at all: the observed incident was five dispatches refused in eighty
+        // seconds and an operator reporting "I restarted autonomous and
+        // everything stopped".
+        //
+        // This is the ONE layer that tells. ConcurrentPipelineManager's
+        // environmental skip for `adapter_auth_failed` (#1169) returns silently
+        // on purpose — see the module header for why the telling belongs here,
+        // including the deduplication (per adapter, across every concurrent
+        // slot) and the deliberate exclusion of `reason`, which carries adapter
+        // CLI auth-state output. Only the adapter name and the SDK's static
+        // `suggestedFix` remedy are surfaced.
+        reportAdapterAuthFailure(
+          preflight.failures.map(
+            (f: { adapter: NightgaugeAdapter; suggestedFix: string; timedOut: boolean }) => ({
+              adapter: f.adapter,
+              suggestedFix: f.suggestedFix,
+              timedOut: f.timedOut,
+            })
+          )
+        );
+
+        const preflightResult: PipelineRunResult = {
+          success: false,
+          completedStages: [],
+          skippedStages: [],
+          deferredStages: [],
+          failedStage: "pipeline-start",
+          // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+          // ConcurrentPipelineManager must not move the board or comment.
+          startRefusal: "adapter-auth-failed",
+          error: new Error(errorMessage),
+          totalDurationMs: Date.now() - startTime,
+        };
+
+        const adapterList = preflight.failures
+          .map((f: { adapter: NightgaugeAdapter; reason: string }) => `${f.adapter}=${f.reason}`)
+          .join("; ");
+        this.eventDispatcher.onStderr(
+          "pipeline-start",
+          `[pipeline-start-failure] adapter-auth-failed: ${adapterList}\n${errorMessage}\n`
+        );
+
+        this.firePipelineComplete(preflightResult, issueNumber);
+
+        if (this.queueService) {
+          this.handleQueueAutoStart(preflightResult.success, issueNumber);
+        }
+
+        this.isRunning = false;
+        this.abortController = null;
+        return preflightResult;
+      }
+      // #1168 — AUTO-RESOLVE. The adapter authenticated, so the standing
+      // condition is over: retract the surface and re-arm the dedupe so a
+      // later lapse is told again rather than swallowed by a stale entry.
+      // Unconditional, because clearing an adapter with no outstanding notice
+      // is a no-op — and because this pass path is the only place in the
+      // system that observes the condition ending.
+      clearAdapterAuthNotice(adapters);
+      this.logger.info("Adapter auth pre-flight passed", {
+        issueNumber,
+        adapters,
+      });
+    }
+
+    // ===================================================================
+    // PRE-FLIGHT BUDGET GATE (Issue #1935)
+    // Estimate pipeline cost BEFORE consuming any tokens. If the projected
+    // cost is near or above the ceiling, warn the user and let them decide
+    // whether to proceed, increase the ceiling, or split the issue.
+    // Non-blocking: never halts the pipeline without user consent.
+    // ===================================================================
+    if (pipelineCeiling.getEffectiveCeiling() > 0 && preCheck.labels.length > 0) {
+      try {
+        // Pin the estimator inputs once per run (#198): calibration table,
+        // labels/title, and performance mode are all externally mutable —
+        // re-reading them live made two estimates for the same issue differ
+        // by 83% seconds apart (the dogfood pr-merge deadlock). Every estimate, warning
+        // threshold, and post-run comparison in this run reuses this snapshot.
+        this.estimatorSnapshot = await captureEstimatorInputs(
+          { labels: preCheck.labels, title: preCheck.title },
+          this.getWorkingDirectory()
+        );
+        const preFlightResult = await runPreFlightBudgetCheck(
+          { labels: preCheck.labels, title: preCheck.title },
+          pipelineCeiling.getEffectiveCeiling(),
+          this.getWorkingDirectory(),
+          undefined,
+          undefined,
+          this.estimatorSnapshot
+        );
+
+        this.logger.info("Pre-flight budget estimate", {
+          issueNumber,
+          estimatedCost: preFlightResult.estimatedCost,
+          ceilingUsd: preFlightResult.ceilingUsd,
+          ceilingRatio: preFlightResult.ceilingRatio,
+          complexity: preFlightResult.complexity,
+          historicalCostUsd: preFlightResult.historicalCostUsd,
+          historicalSampleCount: preFlightResult.historicalSampleCount,
+          historicalSource: preFlightResult.historicalSource,
+          shouldWarn: preFlightResult.shouldWarn,
+          estimatorInputsCapturedAt: this.estimatorSnapshot.capturedAt,
+          estimatorMode: this.estimatorSnapshot.mode,
+        });
+
+        this.eventDispatcher.onStderr(
+          "pipeline-start",
+          `[PRE-FLIGHT] ${preFlightResult.summary}\n`
+        );
+
+        // Enrich pipeline state with budget metadata for Discord/UI
+        const performanceMode = this.getActivePerformanceMode();
+        const superchargeActive = performanceMode === "maximum";
+        let superchargeModel: string | undefined;
+        if (superchargeActive) {
+          try {
+            const { getSuperchargeModel } =
+              require("../utils/nightgaugeConfig") as typeof import("../utils/nightgaugeConfig");
+            superchargeModel = getSuperchargeModel(this.getPersistentRoot());
+          } catch {
+            superchargeModel = undefined;
+          }
+        }
+        this.stateService?.setMeta({
+          complexity: preFlightResult.complexity,
+          // Absent on an unpriced run rather than a confident 0 — the
+          // notification renders "unpriced" from the source field below.
+          budget_estimate_usd:
+            preFlightResult.estimateSource === "unpriced"
+              ? undefined
+              : preFlightResult.estimatedCost,
+          budget_ceiling_usd: preFlightResult.ceilingUsd,
+          // Audit trail for the estimate (#198, #1213): "estimated $X from
+          // SOURCE, priced against PROVIDER, under calibration-as-of-T" —
+          // makes post-run cost-vs-estimate deltas meaningful AND lets a
+          // reader tell a calibrated estimate from an uncalibrated one.
+          budget_estimate_captured_at: this.estimatorSnapshot?.capturedAt,
+          budget_estimate_source: preFlightResult.estimateSource,
+          budget_estimate_provider: this.estimatorSnapshot?.provider,
+          performance_mode: performanceMode,
+          // Additively kept for one release — Discord/Dashboard read fallback (Issue #3009).
+          is_supercharge: superchargeActive || undefined,
+          supercharge_model: superchargeModel,
+        });
+
+        if (preFlightResult.shouldWarn) {
+          const preFlightChoice = await vscode.window.showWarningMessage(
+            `Issue #${issueNumber} (${preFlightResult.complexity}) is projected ` +
+              `to use ${(preFlightResult.ceilingRatio * 100).toFixed(0)}% of the ` +
+              `$${preFlightResult.ceilingUsd.toFixed(0)} budget ceiling.` +
+              (preFlightResult.historicalCostUsd !== null
+                ? ` Comparable runs hit $${preFlightResult.historicalCostUsd.toFixed(2)} at p75 ` +
+                  `(${preFlightResult.historicalSampleCount} runs).`
+                : ""),
+            { modal: false },
+            "Proceed Anyway",
+            "Cancel Pipeline"
+          );
+
+          if (preFlightChoice === "Cancel Pipeline") {
+            this.logger.info("User cancelled pipeline after pre-flight budget warning", {
+              issueNumber,
+            });
+
+            const cancelResult: PipelineRunResult = {
+              success: false,
+              completedStages: [],
+              skippedStages: [],
+              deferredStages: [],
+              failedStage: "pipeline-start",
+              // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+              // ConcurrentPipelineManager must not move the board or comment.
+              startRefusal: "budget-cancelled-by-user",
+              error: new Error(
+                `Pipeline cancelled by user after pre-flight budget warning. ` +
+                  `Estimated cost: $${preFlightResult.estimatedCost.toFixed(2)}, ` +
+                  `Ceiling: $${preFlightResult.ceilingUsd.toFixed(2)}. ` +
+                  `Zero AI tokens consumed.`
+              ),
+              totalDurationMs: Date.now() - startTime,
+            };
+
+            this.eventDispatcher.onStderr(
+              "pipeline-start",
+              `[pipeline-start-failure] budget-cancelled-by-user: ` +
+                `estimated=$${preFlightResult.estimatedCost.toFixed(2)}, ` +
+                `ceiling=$${preFlightResult.ceilingUsd.toFixed(2)}, ` +
+                `ratio=${(preFlightResult.ceilingRatio * 100).toFixed(0)}%\n`
+            );
+
+            this.firePipelineComplete(cancelResult, issueNumber);
+
+            if (this.queueService) {
+              this.handleQueueAutoStart(cancelResult.success, issueNumber);
+            }
+
+            this.isRunning = false;
+            this.abortController = null;
+            return cancelResult;
+          }
+
+          // User chose "Proceed Anyway" — log and continue
+          this.logger.info("User acknowledged pre-flight budget warning, proceeding", {
+            issueNumber,
+          });
+        }
+      } catch (err) {
+        // Pre-flight is non-critical — never blocks pipeline
+        this.logger.warn("Pre-flight budget check failed (non-fatal)", {
+          issueNumber,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // ===================================================================
+    // HEALTH-GATED POLICIES (Issue #1395)
+    // Evaluate pipeline health and apply temporary per-run policy overrides.
+    // Non-critical: never blocks pipeline start.
+    // ===================================================================
+    try {
+      // #1057: same root drift as the self-check call — reading the worktree
+      // silently disabled every health-gated policy on concurrent slots.
+      const { policies } = await HealthActionService.evaluateWithPolicies(
+        this.getPersistentRoot(),
+        this.logger
+      );
+      if (policies.tier !== "none") {
+        this.activePolicies = policies;
+        this.policyRetryBudgetIncrease = policies.retryBudgetIncrease;
+
+        if (policies.escalateAllStages) {
+          this.escalateAllStages();
+        }
+
+        this.pauseAutoRouting = policies.pauseAutoRouting;
+
+        this.eventDispatcher.onHealthPoliciesApplied(policies);
+
+        this.logger.info("Health policies activated", {
+          issueNumber,
+          tier: policies.tier,
+          score: policies.score,
+          reasons: policies.reasons,
+        });
+
+        // Record in pipeline state for dashboard
+        if (this.stateService) {
+          this.stateService
+            .batchUpdate((state) => ({
+              ...state,
+              active_health_policies: {
+                tier: policies.tier,
+                retry_budget_increase: policies.retryBudgetIncrease,
+                escalate_all_stages: policies.escalateAllStages,
+                pause_auto_routing: policies.pauseAutoRouting,
+                reasons: policies.reasons,
+                score: policies.score,
+                applied_at: policies.timestamp,
+              },
+            }))
+            .catch((err: unknown) => {
+              this.logger.warn("Failed to record health policies in state", {
+                err,
+              });
+            });
+        }
+      }
+    } catch (err) {
+      this.logger.warn("Health policy evaluation failed — continuing without policies", {
+        err,
+      });
+    }
+
+    // ===================================================================
+    // PIPELINE STATE INITIALIZATION (Issue #1629)
+    // Concurrent slots create per-slot PipelineStateService instances that
+    // start with no state.json. Initialize pipeline state here so that
+    // pipeline-start's startStage() has a valid state to modify, and
+    // issue-pickup's validateStageTransition() finds an initialized pipeline.
+    // The non-concurrent queue path does this in startNextQueuedIssue().
+    // ===================================================================
+    if (this.stateService) {
+      const existingState = await this.stateService.getState();
+      if (!existingState) {
+        await this.stateService.initializePipeline(
+          issueNumber,
+          `Issue #${issueNumber}`,
+          // UNDETERMINED, not a placeholder (#448). Initialization happens
+          // before issue-pickup resolves a branch, so nothing here knows one.
+          // The `feat/{issueNumber}` that stood here was byte-identical to a
+          // branch that really resolved and rode notifyStageTransition →
+          // SeedRunContext → V2RunInput.Branch into a durable history record —
+          // the last origin of #397's fabrication class. `""` is how state
+          // says "undetermined"; SeedRunContext ignores it, so issue-pickup's
+          // real branch is still the first value the record ever sees.
+          ""
+        );
+        await this.stateService.setExecutionMode("automatic");
+      }
+    }
+
+    // ===================================================================
+    // EXISTING PR DETECTION: If a previous pipeline run created a PR for
+    // this issue but failed at pr-merge, detect the open PR and generate
+    // synthetic context files so resume skips directly to pr-merge.
+    // This prevents expensive full re-runs (~$7+) when only the merge
+    // step needs retrying.
+    // @see Issue #500 - pr-merge failure causes full pipeline re-run
+    // ===================================================================
+    await this.detectAndRestoreExistingPr(issueNumber);
+
+    // ===================================================================
+    // POST-GATE EXIT RECORD (Issue #125)
+    // A stage's skill exiting 0 is a self-report, not an outcome — the
+    // post-condition gates below (verifyPostValidateState, verifyPostCreate/
+    // MergeState, context validation, ...) are what decide the stage, and
+    // they are what history books as `V2StageDetail.status`. Writing the
+    // stage-exit diagnostic at the moment the skill returned recorded the
+    // PRE-gate view forever, so every gate-caught failure was filed in the
+    // healthy baseline of the forensic corpus — under-counting exactly the
+    // failures gates exist to catch.
+    //
+    // So the success-path record is held here and flushed once the stage's
+    // fate is settled: as a failure when a gate marked this stage failed, as
+    // a success otherwise. Exit records are append-only JSONL with no
+    // dedupe, so writing-then-correcting would double-count; deferring is
+    // the only shape that keeps one record per stage attempt.
+    //
+    // Flushed from exactly two places — the top of each iteration (draining
+    // the previous stage, including the `continue` paths) and the `finally`
+    // below (covering every `break`, early return, and throw). Failure-path
+    // records are unaffected: they are still written immediately.
+    // ===================================================================
+    let pendingStageExit: {
+      stage: PipelineStage;
+      result: StageRunResult;
+      startedAt: number;
+    } | null = null;
+    const flushPendingStageExit = (): void => {
+      const pending = pendingStageExit;
+      if (!pending) return;
+      pendingStageExit = null;
+      // `failedStage` is set by every gate that halts the loop, immediately
+      // before it breaks — so it is the post-gate verdict for this stage.
+      const gateFailed = failedStage === pending.stage;
+      void this.recordStageExitDiagnostic(
+        pending.stage,
+        issueNumber,
+        pending.result,
+        pending.startedAt,
+        gateFailed
+          ? {
+              kind: "fail",
+              reason: error?.message ?? "stage post-condition gate failed",
+              terminalKind: gateTerminalKind,
+            }
+          : undefined
+      );
+    };
+
+    try {
+      for (let stageIndex = 0; stageIndex < STAGE_ORDER.length; stageIndex++) {
+        flushPendingStageExit();
+        const stage = STAGE_ORDER[stageIndex];
+        // Check if aborted
+        if (this.abortController?.signal.aborted) {
+          this.logger.info("Pipeline aborted by user");
+          break;
+        }
+
+        // Hold BEFORE a stage starts, too (#2334). The check after a stage
+        // (below) runs once, as the stage completes. A pause that lands after
+        // it (during the between-stage budget check, or while a bookend,
+        // deferred or already-completed stage `continue`s past it) would
+        // otherwise let the next stage run in full, possibly a long
+        // feature-dev, before the run held.
+        if (!(await this.holdWhilePaused("before", stage, issueNumber))) {
+          break;
+        }
+
+        // ===================================================================
+        // DEFERRED STAGES: When deferMerge is enabled, pr-merge and
+        // pipeline-finish require human action (PR review/approval).
+        // Defer them instead of attempting to run and falsely reporting failure.
+        // When deferMerge is false (default), the full pipeline runs end-to-end.
+        // @see Issue #628 - Queue falsely pauses when pr-merge awaits review
+        // ===================================================================
+        if (this.config.deferMerge && DEFERRABLE_STAGES.includes(stage)) {
+          this.logger.info("Deferring stage (deferMerge enabled, requires human action)", {
+            stage,
+            issueNumber,
+          });
+          // Persist deferred status to state.json so the dashboard and
+          // other consumers know this stage won't run without human action.
+          if (this.stateService) {
+            await this.stateService.deferStage(stage);
+          }
+          this.eventDispatcher.onStageSkipped(
+            stage,
+            `Deferred: ${stage} requires human action (PR review/merge)`
+          );
+          deferredStages.push(stage);
+          continue;
+        }
+
+        // ===================================================================
+        // RESUME SUPPORT: Skip already-completed or skipped stages.
+        // When resuming from paused state, runPipeline() is called again
+        // and should continue from where it left off.
+        // @see Issue #535 - Fix pipeline pause/resume
+        // ===================================================================
+        if (this.stateService) {
+          const currentState = await this.stateService.getState();
+          if (currentState) {
+            const stageState = currentState.stages[stage];
+            if (
+              stageState?.status === "complete" ||
+              stageState?.status === "skipped" ||
+              stageState?.status === "deferred"
+            ) {
+              // Verify context file exists for completed stages that produce
+              // output context. If the file was deleted, re-run the stage
+              // instead of skipping — otherwise the next stage will fail its
+              // precondition check with a confusing error.
+              let contextFileMissing = false;
+              if (stageState.status === "complete") {
+                const contextType = STAGE_OUTPUT_CONTEXT_TYPE[stage];
+                const wsRoot = this.getWorkingDirectory();
+                if (contextType && wsRoot) {
+                  const contextPath = path.join(
+                    pipelineStateDir(wsRoot),
+                    `${contextType}-${issueNumber}.json`
+                  );
+                  if (!fs.existsSync(contextPath)) {
+                    this.logger.warn(
+                      `Resume: stage ${stage} marked complete but context file missing (${contextType}-${issueNumber}.json). Re-running stage.`
+                    );
+                    contextFileMissing = true;
+                  }
+                }
+              }
+
+              if (!contextFileMissing) {
+                this.logger.debug("Skipping already-completed stage", {
+                  stage,
+                  status: stageState.status,
+                });
+                // Add to appropriate tracking array
+                if (stageState.status === "complete") {
+                  completedStages.push(stage);
+                } else if (stageState.status === "deferred") {
+                  deferredStages.push(stage);
+                } else {
+                  skippedStages.push(stage);
+                }
+                continue;
+              }
+              // contextFileMissing: fall through to re-run the stage
+            }
+          }
+        }
+
+        // Handle bookend stages synchronously (zero AI tokens)
+        if (isBookendStage(stage)) {
+          const bookendResult = await this.runBookendStage(stage, issueNumber, callbacks);
+
+          if (!bookendResult.success) {
+            failedStage = stage;
+            error = bookendResult.error;
+            break;
+          }
+
+          completedStages.push(stage);
+          continue;
+        }
+
+        // Skip validation if configured (legacy config option)
+        if (stage === "feature-validate" && this.config.skipValidation) {
+          const legacySkipReason = "skipValidation config enabled";
+          this.logger.info(`Skipping feature-validate: ${legacySkipReason}`);
+          if (this.stateService) {
+            try {
+              await this.stateService.skipStage(stage, legacySkipReason);
+            } catch (err) {
+              this.logger.warn("Failed to update state for skipped stage", {
+                stage,
+                err,
+              });
+            }
+          }
+          skippedStages.push(stage);
+          continue;
+        }
+
+        // Check routing-based stage skipping (after issue-pickup completes)
+        if (this.shouldSkipStage(stage)) {
+          // Issue #1593: Include complexity context in skip reason for visibility
+          const route = this.currentRoutingDecision?.route;
+          const isTrivial = route === "trivial";
+          const skipReason = isTrivial
+            ? `Skipped ${stage}: trivial complexity (${route} route)`
+            : `Skipped via ${route} route: ${this.currentRoutingDecision?.explanation || "routing decision"}`;
+
+          this.logger.info("Skipping stage based on routing decision", {
+            stage,
+            route,
+            isTrivialComplexity: isTrivial,
+            rationale: this.currentRoutingDecision?.explanation,
+          });
+
+          // Notify via callback
+          this.eventDispatcher.onStageSkipped(stage, skipReason);
+
+          // Update state to mark stage as skipped with reason (Issue #843)
+          if (this.stateService) {
+            try {
+              await this.stateService.skipStage(stage, skipReason);
+            } catch (err) {
+              this.logger.warn("Failed to update state for skipped stage", {
+                stage,
+                err,
+              });
+            }
+          }
+          skippedStages.push(stage);
+          continue;
+        }
+
+        // ===================================================================
+        // Pre-condition validation: Verify that prerequisite context files
+        // exist and are valid before launching the subagent. Saves AI tokens
+        // by catching missing/invalid input at the orchestrator level.
+        // Generalizes the previous pr-merge-only check to all stages.
+        // @see Issue #1181 - Stage pre-condition validation
+        // @see Issue #637 - Original pr-merge defense-in-depth
+        // ===================================================================
+        const preconditionError = this.validateStagePreconditions(
+          stage,
+          issueNumber,
+          skippedStages
+        );
+        if (preconditionError) {
+          failedStage = stage;
+          error = preconditionError;
+          break;
+        }
+
+        // ===================================================================
+        // ARCHITECTURE-APPROVAL PRE-CHECK (Issue #4222)
+        // A high-impact architectural decision stays human-owned: run the
+        // deterministic approval gate BEFORE launching feature-dev so a block
+        // halts cleanly with an actionable "awaiting approval" alert and ZERO
+        // dev/validate spend — instead of the skill's inline block being
+        // swallowed by the deterministic-context fallback and bleeding into
+        // feature-validate as a confusing "missing-implementation" (#4220).
+        // The alert is surfaced by the approval-aware failure comment
+        // (failureComment.ts keys off the message marker). Fail-open.
+        // ===================================================================
+        if (stage === "feature-dev") {
+          const approvalError = await this.verifyArchitectureApproval(issueNumber);
+          if (approvalError) {
+            this.logger.warn(
+              "Architecture approval required — halting before feature-dev (no dev/validate spend)",
+              { issueNumber, reason: approvalError.message }
+            );
+            if (this.stateService) {
+              try {
+                await this.stateService.failStage(stage, approvalError.message);
+              } catch {
+                // Non-critical — the break below still halts the pipeline.
+              }
+            }
+            failedStage = stage;
+            error = approvalError;
+            break;
+          }
+        }
+
+        // ===================================================================
+        // PRE-STAGE HEALTH CHECK — PROACTIVE MODEL ESCALATION (Issue #1394)
+        // Evaluate health trends before each stage. If health is declining
+        // and this stage has a historically high failure rate, proactively
+        // escalate the model one tier to avoid a wasted first attempt.
+        // Max 1 proactive escalation per pipeline run.
+        // ===================================================================
+        this.evaluatePreStageHealth(stage, issueNumber, callbacks);
+
+        // ===================================================================
+        // DETERMINISTIC-FIRST EXECUTION FOR ISSUE-PICKUP (Issue #2614)
+        //
+        // Try to generate issue context deterministically BEFORE spawning
+        // the LLM subagent. For most runs this saves 2+ minutes of tokens
+        // and ~$0.15-0.50. Only fall through to the LLM if deterministic
+        // generation fails (e.g. gh CLI unavailable, network error).
+        //
+        // The LLM subagent (Haiku, per LIGHTWEIGHT_STAGE_DEFAULTS) runs only
+        // as a safety net for edge cases where deterministic generation is
+        // insufficient (e.g. issue body has no structured sections and the
+        // fallback produces minimal context).
+        // @see Issue #2614 - Deterministic-first execution
+        // ===================================================================
+        if (stage === "issue-pickup") {
+          const deterministicStartTime = Date.now();
+          this.logger.info(
+            "issue-pickup: attempting deterministic context generation (deterministic-first)",
+            { issueNumber }
+          );
+
+          // Notify callbacks that the stage is starting
+          this.eventDispatcher.onStageStart(stage);
+          this.currentStage = stage;
+
+          // Update state service to mark stage as running
+          if (this.stateService) {
+            try {
+              await this.stateService.startStage(stage, { forceBackward: true });
+            } catch (err) {
+              this.logger.warn("Failed to update state for deterministic issue-pickup start", {
+                stage,
+                err,
+              });
+            }
+          }
+
+          // Emit stage.started audit event
+          this.auditClient?.enqueue({
+            action: "stage.started",
+            resourceType: "stage",
+            resourceId: `${issueNumber}:${stage}`,
+            metadata: {
+              pipelineRunId: this.auditCorrelationId,
+              stage,
+              issueNumber,
+              timestamp: new Date().toISOString(),
+            },
+          });
+
+          // A recorded out-of-scope blocked finding defers BEFORE the
+          // deterministic context is generated (#1147).
+          //
+          // This is the payoff for writing the finding down. The run that
+          // discovered the wall spent planning + dev + validate to learn it; a
+          // re-dispatch now learns it from one local file read — no subagent,
+          // no forge call, no tokens. Placed ahead of
+          // `generateDeterministicContext` deliberately: the open-blockedBy
+          // deferral below is strictly cheaper than the LLM but still pays for
+          // a `hook check-deps` round trip, and there is nothing to check when
+          // a stage has already told us the answer.
+          //
+          // The finding is a HOLD, not a verdict for all time. It is cleared by
+          // resolving the Action Center card this run raised
+          // (`blocked.clearFinding`), which is the one-step human accept — see
+          // recordOutOfScopeBlockedFinding.
+          const recordedFinding = readBlockedFinding(this.getRunRepoRoot(), issueNumber);
+          if (recordedFinding) {
+            this.logger.info(
+              "issue-pickup deferred — a recorded out-of-scope blocked finding is unresolved (#1147)",
+              {
+                issueNumber,
+                signalType: recordedFinding.signal_type,
+                recordedAt: recordedFinding.recorded_at,
+              }
+            );
+            return this.finishAsDeferredPickup({
+              stage,
+              issueNumber,
+              startTime,
+              completedStages,
+              skippedStages,
+              skipReason:
+                `Deferred: issue #${issueNumber} has an unresolved out-of-scope blocked ` +
+                `finding (${describeBlockedFinding(recordedFinding)})`,
+              stderrLine:
+                `[blocked-dependency] issue #${issueNumber} deferred — ` +
+                `unresolved out-of-scope blocked finding: ${describeBlockedFinding(recordedFinding)}\n`,
+            });
+          }
+
+          // #1534: hand the deterministic path a phase reporter. Without it
+          // the stage renders 0/14 for its whole life and 14 `unreported`
+          // when it finishes — the honest reading (#1246) of a path that
+          // spawns no LLM and therefore emits no skill phase markers. This is
+          // the TS counterpart of the Go reporter PR #1398 gave pr-merge and
+          // pr-create.
+          const pickupPhases = this.stateService
+            ? createDeterministicPhaseReporter("issue-pickup", this.stateService)
+            : undefined;
+
+          const deterministicGenerated = await this.contextAssembler.generateDeterministicContext(
+            "issue-pickup",
+            issueNumber,
+            pickupPhases
+          );
+
+          // Fail closed on open blockedBy dependencies (#189): the primary
+          // deterministic path now consults GitHub's native edges. An issue
+          // whose blockers are still open must DEFER — not fall through to
+          // the LLM (which would re-derive the same answer at token cost),
+          // and never proceed to planning on prose alone.
+          if (deterministicGenerated.blockedBy?.length) {
+            const blockerList = deterministicGenerated.blockedBy
+              .map(
+                (d) => `${d.repo ? `${d.repo}#` : "#"}${d.number}${d.title ? ` (${d.title})` : ""}`
+              )
+              .join(", ");
+            // A dispatched issue whose native blockedBy edges are still open
+            // must DEFER — not fail (#189/#305). Nothing crashed and no tokens
+            // were spent; booking this as a failure (subagent_crash) both pauses
+            // autonomous and pollutes failure-rate telemetry. Terminate with a
+            // distinct non-failure outcome instead: no failedStage, no error,
+            // `deferred: true`, outcome_type="deferred". The issue stays
+            // eligible — the Go blocker-close requeue re-dispatches it once the
+            // blocker closes. The `[blocked-dependency]` marker lets the Go
+            // scheduler classify the completion as a non-failure deferral.
+            this.logger.info("issue-pickup deferred — open blockedBy dependencies (#189/#305)", {
+              issueNumber,
+              blockedBy: deterministicGenerated.blockedBy.map((d) => d.number),
+            });
+            return this.finishAsDeferredPickup({
+              stage,
+              issueNumber,
+              startTime,
+              completedStages,
+              skippedStages,
+              skipReason: `Deferred: issue #${issueNumber} is blocked by open dependencies (${blockerList})`,
+              stderrLine:
+                `[blocked-dependency] issue #${issueNumber} deferred — ` +
+                `blocked by open dependencies: ${blockerList}\n`,
+            });
+          }
+
+          if (deterministicGenerated.generated) {
+            const contextError = await this.validateStageContextOutput("issue-pickup", issueNumber);
+            if (!contextError) {
+              this.logger.info(
+                "issue-pickup: deterministic context written and validated — skipping LLM subagent",
+                { issueNumber }
+              );
+
+              // #309: record the deterministic path so the authoritative history
+              // stage record carries execution_path="deterministic" for pickup,
+              // mirroring the pr-create/pr-merge deterministic-first hooks.
+              this.stageExecutionPaths.set("issue-pickup", { path: "deterministic" });
+
+              // Emit stage.completed audit event (cost=$0, source=deterministic)
+              const deterministicDurationMs = Date.now() - deterministicStartTime;
+              this.auditClient?.enqueue({
+                action: "stage.completed",
+                resourceType: "stage",
+                resourceId: `${issueNumber}:${stage}`,
+                metadata: {
+                  pipelineRunId: this.auditCorrelationId,
+                  stage,
+                  issueNumber,
+                  model: "none",
+                  outcome: "success",
+                  executionSource: "deterministic",
+                  durationMs: deterministicDurationMs,
+                  timestamp: new Date().toISOString(),
+                },
+              });
+              void this.auditClient?.flush();
+
+              // Post-condition gate (#283 defect 1): this `continue` used to
+              // jump the generic gate block below, so issue-pickup landed in
+              // completedStages with its registered gate NEVER invoked and no
+              // recorded result — which the completion-time gate-not-invoked
+              // audit then correctly flagged (and #127's forensics
+              // mis-attributed two stages later). The Go scheduler gates
+              // every successful stage; the deterministic fast path must too.
+              {
+                const detGate = await this.runPostConditionGate(stage, issueNumber);
+                if (detGate) {
+                  this.logger.error(
+                    "Deterministic issue-pickup failed its post-condition gate — failing stage instead of recording false success",
+                    { issueNumber, stage, error: detGate.error.message }
+                  );
+                  if (this.stateService) {
+                    try {
+                      await this.stateService.failStage(stage, detGate.error.message);
+                    } catch {
+                      // Non-critical — the break below still fails the pipeline.
+                    }
+                  }
+                  failedStage = stage;
+                  gateTerminalKind = detGate.terminalKind;
+                  error = detGate.error;
+                  break;
+                }
+              }
+
+              // Mark stage as complete in state service
+              if (this.stateService) {
+                try {
+                  await this.stateService.completeStage(stage);
+                } catch (err) {
+                  this.logger.warn("Failed to update state for deterministic issue-pickup", {
+                    stage,
+                    err,
+                  });
+                }
+              }
+
+              this.eventDispatcher.onStageComplete(stage, {
+                success: true,
+                stage,
+                durationMs: deterministicDurationMs,
+              });
+              completedStages.push(stage);
+              await this.syncStageStatusTransition(stage, issueNumber);
+              continue; // Skip runStage() — deterministic path succeeded
+            }
+          }
+
+          // Deterministic generation failed — fall through to LLM subagent.
+          // #309: record the punt so history shows execution_path="llm" +
+          // punt_reason for pickup, not silence.
+          this.stageExecutionPaths.set("issue-pickup", {
+            path: "llm",
+            puntReason: "deterministic-context-failed",
+          });
+          this.logger.warn(
+            "issue-pickup: deterministic context generation failed — falling back to LLM",
+            { issueNumber }
+          );
+        }
+
+        // ===================================================================
+        // PRE-MERGE BRANCH-BEHIND GUARD (Issue #3782)
+        //
+        // Before spawning the pr-merge LLM skill, check if the PR branch is
+        // behind origin/main. If it is, auto-rebase (mirrors Go BranchOutOfDate
+        // recovery). On rebase conflict, surface the conflicting files immediately
+        // rather than wasting a full pr-merge skill invocation.
+        // ===================================================================
+        if (stage === "pr-merge") {
+          const prContextPath = this.getContextPath("pr", issueNumber);
+          let prNumber: number | undefined;
+          try {
+            if (fs.existsSync(prContextPath)) {
+              const raw = fs.readFileSync(prContextPath, "utf-8");
+              const parsed = JSON.parse(raw) as { pr_number?: unknown };
+              if (typeof parsed.pr_number === "number") prNumber = parsed.pr_number;
+            }
+          } catch {
+            // Fall through — no prNumber, guard is best-effort
+          }
+
+          if (prNumber !== undefined) {
+            const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+            const guardResult = await this.checkAndRebaseBehindBranch(prNumber, issueNumber, cwd);
+
+            if (guardResult.status === "rebased") {
+              this.eventDispatcher.onStderr(
+                "pr-merge",
+                `[pre-merge guard] Branch was behind origin/main — rebased and pushed. PR #${prNumber} is now up-to-date.\n`
+              );
+            } else if (guardResult.status === "conflict") {
+              const fileList =
+                guardResult.files.length > 0
+                  ? guardResult.files.join(", ")
+                  : "(could not determine conflicting files)";
+              failedStage = stage;
+              error = new Error(
+                `[pre-merge-conflict] PR #${prNumber} branch has a true merge conflict against origin/main. ` +
+                  `Rebase aborted. Conflicting files: ${fileList}. ` +
+                  `Resolve conflicts manually, push, and resume the pipeline.`
+              );
+              break;
+            }
+            // status === "clean" or "error" → fall through to normal skill execution
+          }
+        }
+
+        // Run the skill-based stage.
+        // Pass model override from escalation engine if one is set (#1343, #1394),
+        // or from user override (#1610). User override source is 'user-override'.
+        // Pass pinned workspace root to prevent repo-switch mid-pipeline (#1592).
+        const stageModelOverride =
+          executionAdapter === "codex"
+            ? (this.userModelOverride ?? undefined)
+            : this.stageModelOverrides.get(stage);
+
+        // Emit stage.started audit event (Issue #1582)
+        const stageStartTime = Date.now();
+        this.auditClient?.enqueue({
+          action: "stage.started",
+          resourceType: "stage",
+          resourceId: `${issueNumber}:${stage}`,
+          metadata: {
+            pipelineRunId: this.auditCorrelationId,
+            stage,
+            issueNumber,
+            timestamp: new Date().toISOString(),
+          },
+        });
+
+        // ===================================================================
+        // DETERMINISTIC-FIRST EXECUTION FOR PR-CREATE / PR-MERGE (Issue #300)
+        //
+        // The VSCode dogfood path runs THIS orchestrator, not the Go scheduler,
+        // so the scheduler's deterministic-first pr-stage hooks never fired here
+        // and every run paid $5–8 for LLM pr-create + pr-merge sessions. Invoke
+        // the SAME Go runners first (`nightgauge pr-stage`): on created/merged we
+        // synthesize a success result and skip the LLM (but still run the normal
+        // post-success gates below); on a punt we record execution_path="llm" +
+        // punt_reason and fall through to executeSkill exactly as today; a
+        // rate-limit DEFERS (no LLM fallback, #3976).
+        // ===================================================================
+        const detOutcome = await this.runDeterministicPrStage(stage, issueNumber, stageStartTime);
+        if (detOutcome.kind === "deferred" || detOutcome.kind === "refused") {
+          failedStage = stage;
+          error = detOutcome.error;
+          break;
+        }
+        // The LLM pr-merge skill can merge whatever head the PR has, and it is
+        // reached both on a runner punt and when the runner could not run at
+        // all. Gate it on the published head here, so generated steering is
+        // never merged whichever path the stage takes (issue 1675).
+        if (stage === "pr-merge" && detOutcome.kind === "llm") {
+          const steeringRefusal = await this.refuseLlmMergeOnGeneratedSteering(issueNumber);
+          if (steeringRefusal) {
+            failedStage = stage;
+            error = steeringRefusal;
+            break;
+          }
+        }
+
+        const result =
+          detOutcome.kind === "handled"
+            ? detOutcome.result
+            : await this.runStage(
+                stage,
+                issueNumber,
+                callbacks,
+                undefined,
+                stageModelOverride,
+                this.pinnedWorkspaceRoot,
+                this.userModelOverride && stageModelOverride === this.userModelOverride
+                  ? "user-override"
+                  : undefined
+              );
+
+        if (!result.success) {
+          // #3666 follow-up: shipped-partially is a recoverable budget kill,
+          // NOT a hard failure. The stage's work product (e.g. a created PR)
+          // shipped before the cost cap fired; the right move is to advance
+          // to the next stage rather than bail out of the loop. The prior
+          // #3666 work plumbed this signal through IPC and onto result, but
+          // this loop's `if (!result.success)` branch never consulted it,
+          // turning every shipped-partially run into a hard pipeline failure.
+          // That left LifetimeIssueFailures incremented and autonomous paused
+          // on runs that had actually opened working PRs (dashboard#443's
+          // PR #449 is the canonical case).
+          if (result.shippedPartially) {
+            this.logger.warn(
+              "Stage budget-killed but shipped — advancing to next stage (no pipeline failure)",
+              {
+                stage,
+                issueNumber,
+                durationMs: Date.now() - stageStartTime,
+              }
+            );
+            // Record the recoverable exit diagnostic and the success-shaped
+            // audit so the run shows up in retros + dashboards as recovered,
+            // not failed.
+            void this.recordStageExitDiagnostic(stage, issueNumber, result, stageStartTime);
+            this.auditClient?.enqueue({
+              action: "stage.completed",
+              resourceType: "stage",
+              resourceId: `${issueNumber}:${stage}`,
+              metadata: {
+                pipelineRunId: this.auditCorrelationId,
+                stage,
+                issueNumber,
+                executionSource: "llm",
+                durationMs: Date.now() - stageStartTime,
+                outcome: "shipped_partially",
+                timestamp: new Date().toISOString(),
+              },
+            });
+            void this.auditClient?.flush();
+            completedStages.push(stage);
+            await this.syncStageStatusTransition(stage, issueNumber);
+            // Skip the rest of this iteration's post-success bookkeeping —
+            // we did not really succeed, just gracefully degraded. Move on
+            // to the next stage in the loop.
+            continue;
+          }
+
+          // Graceful Fable → Opus fallback on a usage/quota limit. Fable has a
+          // separate Max-plan usage bucket; a Fable-only exhaustion should retry
+          // on Opus (still-available bucket) rather than pause the whole pipeline
+          // for the global cooldown. Downgrade this stage and retry once; if Opus
+          // ALSO limits (genuine account-wide exhaustion), fall through to the
+          // normal failure path below, which routes to the quota cooldown.
+          const pinnedUsageLimit =
+            this.requestedPin && isUsageLimitError(result.error?.message)
+              ? this.pinnedModelSwapRefusal("opus", result.error?.message ?? "usage limit")
+              : null;
+          if (pinnedUsageLimit) {
+            // A pinned run never swaps its model (#1656): the stage fails
+            // with a reason naming the pin instead of retrying on opus. The
+            // original message leads, so the usage-limit marker still routes.
+            result.error = pinnedUsageLimit;
+          } else if (this.shouldFallbackFableToOpus(stage, result.error)) {
+            this.fableQuotaFallbackApplied.add(stage);
+            this.stageModelOverrides.set(stage, "opus");
+            // Surface the downgrade to the notifiers (Discord/Mattermost) in
+            // real time. pipeline_meta is a TS-only overlay preserved across Go
+            // state syncs, so this survives to the final embed (Issue #26).
+            this.fableFallbacks.push({ stage, from: "fable", to: "opus" });
+            this.stateService?.setMeta({ quota_fallbacks: [...this.fableFallbacks] });
+            this.logger.warn(
+              "Fable usage-limit hit — downgrading stage to Opus and retrying once",
+              { stage, issueNumber }
+            );
+            if (this.stateService) {
+              try {
+                await this.stateService.batchUpdate((state) => {
+                  const stageState = state.stages[stage];
+                  if (stageState) {
+                    stageState.is_retrying = true;
+                    stageState.auto_retry_count = (stageState.auto_retry_count ?? 0) + 1;
+                  }
+                  return state;
+                });
+              } catch {
+                // Non-critical
+              }
+            }
+            // Clear duplicate-prevention guard so the retry can resolve.
+            this.completedStageSet.delete(stage);
+            const opusRetry = await this.runStage(
+              stage,
+              issueNumber,
+              callbacks,
+              undefined,
+              "opus",
+              this.pinnedWorkspaceRoot
+            );
+            void this.recordStageExitDiagnostic(stage, issueNumber, opusRetry, stageStartTime);
+            if (opusRetry.success) {
+              if (this.stateService) {
+                try {
+                  await this.stateService.clearRetrying(stage);
+                } catch {
+                  // Non-critical
+                }
+              }
+              this.eventDispatcher.onStageComplete(stage, opusRetry);
+              completedStages.push(stage);
+              await this.syncStageStatusTransition(stage, issueNumber);
+              continue;
+            }
+            // Opus retry also failed — surface the Opus attempt's error and fall
+            // through to the normal failure/cooldown path.
+            failedStage = stage;
+            error = opusRetry.error ?? result.error;
+            if (opusRetry.budgetExceeded) {
+              budgetExceeded = true;
+            }
+            break;
+          }
+
+          // Emit stage.failed audit event (Issue #1582)
+          this.auditClient?.enqueue({
+            action: "stage.failed",
+            resourceType: "stage",
+            resourceId: `${issueNumber}:${stage}`,
+            metadata: {
+              pipelineRunId: this.auditCorrelationId,
+              stage,
+              issueNumber,
+              error: result.error?.message ?? "Unknown error",
+              durationMs: Date.now() - stageStartTime,
+              timestamp: new Date().toISOString(),
+            },
+          });
+          // #3619: write a stage-exit diagnostic record so failures here are
+          // visible to `nightgauge exit-records tail`. Prior to this, the
+          // TS-side pipeline path produced zero exit records and every retro
+          // turned into log archaeology. Fire-and-forget — never blocks.
+          void this.recordStageExitDiagnostic(stage, issueNumber, result, stageStartTime);
+          // #1531: a killed pr-create may still have opened and verified a PR
+          // (Phase 3.6 writes pr-{N}.json before Phase 3.5 ever looks at CI).
+          // Record it so the failure report can name the PR instead of
+          // claiming creation failed.
+          if (stage === "pr-create") {
+            this.recordVerifiedPrNumber(issueNumber);
+          }
+          failedStage = stage;
+          error = result.error;
+          if (result.budgetExceeded) {
+            budgetExceeded = true;
+          }
+          break;
+        }
+
+        // #3619: record the healthy-exit diagnostic too. Successful runs
+        // anchor what "normal" looks like for ratio-based health analysis;
+        // omitting them would bias the corpus toward failures.
+        // #125: held until the post-condition gates below have ruled — see
+        // flushPendingStageExit(). The skill exiting 0 is not yet an outcome.
+        pendingStageExit = { stage, result, startedAt: stageStartTime };
+
+        // Emit stage.completed and skill.invoked audit events (Issue #1582)
+        const stageDurationMs = Date.now() - stageStartTime;
+        this.auditClient?.enqueue({
+          action: "stage.completed",
+          resourceType: "stage",
+          resourceId: `${issueNumber}:${stage}`,
+          metadata: {
+            pipelineRunId: this.auditCorrelationId,
+            stage,
+            issueNumber,
+            executionSource: "llm",
+            durationMs: stageDurationMs,
+            timestamp: new Date().toISOString(),
+          },
+        });
+        this.auditClient?.enqueue({
+          action: "skill.invoked",
+          resourceType: "skill",
+          resourceId: stage,
+          metadata: {
+            pipelineRunId: this.auditCorrelationId,
+            stage,
+            issueNumber,
+            model: this.stageModelOverrides.get(stage) ?? "sonnet",
+            outcome: "success",
+            durationMs: stageDurationMs,
+            timestamp: new Date().toISOString(),
+          },
+        });
+        // Flush after each stage completes (no EventBus to trigger auto-flush)
+        void this.auditClient?.flush();
+
+        // Emit commit.created audit event when feature-validate writes commit_sha (Issue #1582)
+        if (stage === "feature-validate" && this.auditClient) {
+          try {
+            const validateCtxPath = path.join(
+              pipelineStateDir(this.getWorkingDirectory()),
+              `validate-${issueNumber}.json`
+            );
+            if (fs.existsSync(validateCtxPath)) {
+              const raw = fs.readFileSync(validateCtxPath, "utf-8");
+              const parsed = JSON.parse(raw) as { commit_sha?: string };
+              if (parsed.commit_sha) {
+                this.auditClient.enqueue({
+                  action: "commit.created",
+                  resourceType: "commit",
+                  resourceId: parsed.commit_sha,
+                  metadata: {
+                    pipelineRunId: this.auditCorrelationId,
+                    issueNumber,
+                    stage: "feature-validate",
+                    timestamp: new Date().toISOString(),
+                  },
+                });
+              }
+            }
+          } catch {
+            // Non-critical — skip commit.created if context file unreadable
+          }
+        }
+
+        // ===================================================================
+        // POST-VALIDATE VERIFICATION: The feature-validate skill exits 0 even
+        // when validation FAILS — on a hard-gate failure it writes
+        // validation_status:"failed" (+ an errorCategory) and deliberately
+        // leaves the code uncommitted "on disk for retry" rather than exiting
+        // non-zero (mobile-mcp-tests.md: "does not exit 1 — control must reach
+        // the context write"). The orchestrator, not the skill, owns the halt.
+        // Without this gate the legacy TS path advanced a failed validation
+        // straight into pr-create, which then found no commit to push and
+        // aborted at the no-commits gate — after burning the full pr-create
+        // spend and (once the worktree was pruned) destroying the retry code.
+        // The Go scheduler runs FeatureValidateGate inline; this is its mirror.
+        // @see Issue #4220 - failed feature-validate advanced to pr-create
+        // ===================================================================
+        if (stage === "feature-validate") {
+          // Re-derive the verdict before reading it (#152). The skill rolls up
+          // "passed unless something actively failed", so a run that built a
+          // test suite nothing executed reports a clean pass. The correction
+          // is deterministic and lives in the Go gate; this path must invoke
+          // it or the whole check would be dead here — which is the same
+          // never-executes failure #169 was.
+          await this.deriveUnexercisedDeliverable(issueNumber);
+
+          const validateVerdictError = this.verifyPostValidateState(issueNumber);
+          if (validateVerdictError) {
+            // #1348 revived on the failed path (#1142): a run that discovers
+            // mid-flight it was under-estimated could never say so, because the
+            // halt below preempted the learning engine 640 lines further down.
+            // COMPLEXITY_UNDERESTIMATED is emitted precisely by runs that went
+            // badly, so the failed path is the one that carries the signal.
+            // FeedbackLearningService de-duplicates per issue, so running it here
+            // and again on a later successful pass records once.
+            await this.applyFeedbackLearning(stage, issueNumber);
+
+            // #1142: the deliverable may have asked to rewind rather than stop.
+            // Consult it BEFORE halting; the halt stays the default and fires
+            // whenever there is no blocking signal, the signal is not
+            // plan-fixable, or the guards refuse.
+            const disposition = await this.evaluateFailedStageFeedback(
+              stage,
+              issueNumber,
+              callbacks
+            );
+            if (disposition.kind === "rewind") {
+              // Rewind exactly as the success path does: set stageIndex so the
+              // loop increment lands on the target stage. The stage is NOT
+              // pushed to completedStages and NOT recorded as failed — the run
+              // is continuing, and executeBacktrack has recorded the transition.
+              stageIndex = disposition.targetIndex - 1;
+              continue;
+            }
+            if (disposition.kind === "blocked") {
+              // A blocking signal that no re-plan can clear. Book the existing
+              // first-class `blocked` terminal state (#190) rather than a
+              // generic failure, so outcome telemetry and the learning loop see
+              // a blocker class instead of another anonymous validation failure
+              // — and so the run can never present as complete. The halt below
+              // still runs: `blocked` is a terminal outcome, not a rewind.
+              this.blockedTerminalState = {
+                blocker: `out-of-scope: ${disposition.signal.signal_type}`,
+                remediation: disposition.signal.rationale,
+                // #1147: only true once the finding is actually on disk. The
+                // flag makes another service skip its failure comment, so
+                // setting it on a failed write would trade a generic comment
+                // for no comment at all.
+                outOfScopeFinding: await this.recordOutOfScopeBlockedFinding(
+                  stage,
+                  issueNumber,
+                  disposition.signal,
+                  disposition.reason
+                ),
+              };
+              this.logger.error(
+                "Failed stage carries a blocking signal that cannot be re-planned — ending BLOCKED (#1142)",
+                {
+                  issueNumber,
+                  stage,
+                  signalType: disposition.signal.signal_type,
+                  reason: disposition.reason,
+                  rationale: disposition.signal.rationale,
+                }
+              );
+            }
+
+            this.logger.error(
+              "Post-validate verification failed — halting instead of advancing to pr-create",
+              { issueNumber, error: validateVerdictError.message }
+            );
+            if (this.stateService) {
+              try {
+                await this.stateService.failStage(stage, validateVerdictError.message);
+              } catch {
+                // Non-critical — the break below still fails the pipeline.
+              }
+            }
+            failedStage = stage;
+            error = validateVerdictError;
+            break;
+          }
+
+          // Verdict passed — now enforce the #1608 commit contract
+          // deterministically: validated code must be committed ahead of base.
+          // Remediation commits the approved tree in-place; only an
+          // unrecoverable state (work gone, or backstop commit failed)
+          // returns an error. See enforceValidateCommitContract docs
+          // (production autonomous-run post-mortem).
+          //
+          // #1142 deliberately does NOT extend the feedback-consult to this
+          // halt. The contract error is only ever returned when the validate
+          // verdict PASSED and the approved tree is nevertheless gone from the
+          // branch — a state/environment fault the orchestrator discovered
+          // itself, not a quality judgement the deliverable emitted. Any
+          // `feedback` in validate-{N}.json describes the code, so rewinding on
+          // it would spend backtrack budget answering a question nobody asked,
+          // and would re-run planning and dev over a run whose implementation
+          // has already been destroyed. This halt stays unconditional.
+          const commitContractError = await this.enforceValidateCommitContract(issueNumber);
+          if (commitContractError) {
+            this.logger.error(
+              "Validate commit contract unmet — halting instead of advancing to pr-create",
+              { issueNumber, error: commitContractError.message }
+            );
+            if (this.stateService) {
+              try {
+                await this.stateService.failStage(stage, commitContractError.message);
+              } catch {
+                // Non-critical — the break below still fails the pipeline.
+              }
+            }
+            failedStage = stage;
+            error = commitContractError;
+            break;
+          }
+        }
+
+        // ===================================================================
+        // POST-PR-CREATE VERIFICATION: Deterministic safety net after the
+        // pr-create skill reports success. Confirms a PR actually exists on
+        // GitHub. The skill can exit 0 having written a context/assessment file
+        // but never opened a PR (push blocked, prompt dismissed) — this gate
+        // catches that false success and converts it into a real stage failure
+        // so the retry/backtrack engine re-runs pr-create (it is idempotent).
+        // The Go scheduler runs PrCreateGate inline; this is the TS-path mirror.
+        // @see Issue #3869 - TS path ran no pr-create post-condition gate
+        // @see Issue #3867 - AcmeApp #42 false pr-create success
+        // ===================================================================
+        if (stage === "pr-create") {
+          const createVerifyError = await this.verifyPostCreateState(issueNumber);
+          if (createVerifyError) {
+            this.logger.error(
+              "Post-create verification failed — failing stage instead of recording false success",
+              { issueNumber, error: createVerifyError.message }
+            );
+            if (this.stateService) {
+              try {
+                await this.stateService.failStage(stage, createVerifyError.message);
+              } catch {
+                // Non-critical — the break below still fails the pipeline.
+              }
+            }
+            failedStage = stage;
+            error = createVerifyError;
+            break;
+          }
+        }
+
+        // ===================================================================
+        // POST-PR-MERGE VERIFICATION: Deterministic safety net after the
+        // pr-merge skill reports success. Verifies the PR was actually merged
+        // and CI checks passed. The skill is AI-interpreted and can choose to
+        // merge despite failing CI — this gate catches that.
+        //
+        // AUTO-RETRY: If verification fails because the PR is still OPEN
+        // (skill exited without merging), retry the pr-merge stage once before
+        // failing the pipeline. This prevents expensive full re-runs when the
+        // AI skill simply failed to execute the merge command.
+        // @see Issue #1819 - PRs merged with failing CI checks
+        // @see Issue #500 - pr-merge verification auto-retry
+        // ===================================================================
+        if (stage === "pr-merge") {
+          const mergeVerifyError = await this.verifyPostMergeState(issueNumber, 1, 2);
+          if (!mergeVerifyError) {
+            // #266: the deterministic gate confirms the PR is MERGED. Pin the
+            // ground-truth flag so pipeline.notifyComplete can tell the Go
+            // recording boundary the merge landed even if a later stage trips.
+            this.prMergedGroundTruth = true;
+          }
+          if (mergeVerifyError) {
+            // Check if PR is still OPEN (not CLOSED) — worth retrying once
+            const isOpenPrFailure = mergeVerifyError.message.includes("state: OPEN");
+            if (isOpenPrFailure) {
+              // #185: never re-run pr-merge into a repo-config dead end. A
+              // merge blocked by branch rules / a required-check config
+              // mismatch is deterministically unwinnable — the retry would
+              // rebuild the same prompt, re-run the same checks, and hit the
+              // same rejection (the dogfood pr-merge deadlock: ~16 min and 2×
+              // tokens burned).
+              const blockerClass = await this.classifyMergeBlockerRetryability(
+                issueNumber,
+                this.pinnedWorkspaceRoot ?? this.getWorkingDirectory()
+              );
+              if (!blockerClass.retryable) {
+                const blockedError = new Error(
+                  `pr-merge BLOCKED by repository configuration (non-retryable): ` +
+                    `${blockerClass.reason}. ${mergeVerifyError.message}`
+                );
+                this.logger.error(
+                  "Post-merge verification: repo-config blocker — skipping retry, escalating",
+                  { issueNumber, reason: blockerClass.reason }
+                );
+                // First-class blocked terminal state (#190) — the structured
+                // pr-{N}.json blocker record (when the stage wrote one)
+                // carries the most precise remediation.
+                const blockerRecord = this.readPrBlockerRecord(issueNumber);
+                this.blockedTerminalState = {
+                  blocker:
+                    blockerRecord?.classification ??
+                    `repo-config: ${blockerClass.reason ?? "branch protection"}`,
+                  remediation: blockerRecord?.remediation ?? blockerClass.reason,
+                  prNumber: blockerRecord?.prNumber,
+                };
+                if (this.stateService) {
+                  try {
+                    await this.stateService.failStage(stage, blockedError.message);
+                  } catch {
+                    // Non-critical — the break below still fails the pipeline.
+                  }
+                }
+                failedStage = stage;
+                error = blockedError;
+                break;
+              }
+
+              this.logger.warn("Post-merge verification: PR still OPEN — retrying pr-merge once", {
+                issueNumber,
+              });
+
+              // Update state to reflect the retry
+              if (this.stateService) {
+                try {
+                  await this.stateService.batchUpdate((state) => {
+                    const stageState = state.stages["pr-merge"];
+                    stageState.status = "failed";
+                    stageState.error = mergeVerifyError.message;
+                    stageState.is_retrying = true;
+                    stageState.auto_retry_count = (stageState.auto_retry_count ?? 0) + 1;
+                    return state;
+                  });
+                } catch {
+                  // Non-critical
+                }
+              }
+
+              // #185: carry attempt 1's blocker context into the retry via
+              // feedback-{N}.json — the skill's feedback intake reads it, so
+              // attempt 2 starts from what already failed instead of a
+              // byte-identical blank slate.
+              this.writePrMergeRetryFeedback(
+                issueNumber,
+                `pr-merge attempt 1 exited without merging: ${mergeVerifyError.message}`,
+                [mergeVerifyError.message]
+              );
+
+              // Clear duplicate-prevention guard so the retry can resolve (#698 vs #500)
+              this.completedStageSet.delete(stage);
+
+              // Retry the stage
+              const retryResult = await this.runStage(
+                stage,
+                issueNumber,
+                callbacks,
+                undefined,
+                undefined,
+                this.pinnedWorkspaceRoot
+              );
+
+              if (retryResult.success) {
+                // Verify again after retry
+                const retryVerifyError = await this.verifyPostMergeState(issueNumber, 2, 2);
+                if (retryVerifyError) {
+                  this.logger.error("Post-merge verification failed after retry", { issueNumber });
+                  // Retry exhausted, PR still not merged — blocked, not a
+                  // generic failure (#190). Read the stage's structured
+                  // blocker record for the classification/remediation.
+                  if (retryVerifyError.message.includes("state: OPEN")) {
+                    const record = this.readPrBlockerRecord(issueNumber);
+                    this.blockedTerminalState = {
+                      blocker: record?.classification ?? "pr-unmerged: retry exhausted",
+                      remediation:
+                        record?.remediation ??
+                        "Inspect the PR's failing checks / branch rules and merge manually once clear.",
+                      prNumber: record?.prNumber,
+                    };
+                  }
+                  failedStage = stage;
+                  error = retryVerifyError;
+                  break;
+                }
+                // Retry succeeded and the gate confirms MERGED (#266).
+                this.prMergedGroundTruth = true;
+                // Retry succeeded — clear retry state and continue
+                if (this.stateService) {
+                  try {
+                    await this.stateService.clearRetrying(stage);
+                  } catch {
+                    // Non-critical
+                  }
+                }
+                this.eventDispatcher.onStageComplete(stage, retryResult);
+                completedStages.push(stage);
+                this.logger.info("Post-merge verification passed after retry", {
+                  issueNumber,
+                });
+                // Auto-close parent epic if all sub-issues now closed (non-blocking).
+                await this.invokePostMergeHook(issueNumber);
+                // Skip the normal onStageComplete below since we already fired it
+                continue;
+              } else {
+                failedStage = stage;
+                error = retryResult.error ?? new Error("pr-merge retry failed");
+                break;
+              }
+            }
+
+            // PR is CLOSED or other non-retryable state
+            failedStage = stage;
+            error = mergeVerifyError;
+            break;
+          }
+          // Initial verification passed — auto-close parent epic if all
+          // sub-issues are now closed. Non-blocking; never aborts the loop.
+          await this.invokePostMergeHook(issueNumber);
+        }
+
+        // ===================================================================
+        // EARLY SPINNER: Signal UI to show spinner for next stage immediately
+        // after stage succeeds, BEFORE any post-stage validation work.
+        // This eliminates the 15-30s perceived gap between checkmark and
+        // spinner caused by syncStageStatusTransition and context validation.
+        // onStageStart is idempotent — runStage() fires it again harmlessly.
+        // @see Issue #981 (moved from pre-delay position, Issue #634)
+        // ===================================================================
+        let earlySpinnerFired = false;
+        if (this.config.autoContinue && stage !== "pipeline-finish") {
+          const nextStageIndex = STAGE_ORDER.indexOf(stage) + 1;
+          const nextStage = STAGE_ORDER[nextStageIndex];
+          if (nextStage) {
+            // Don't show spinner for stages that will be deferred (#981)
+            const willDefer = this.config.deferMerge && DEFERRABLE_STAGES.includes(nextStage);
+            if (!willDefer) {
+              this.eventDispatcher.onStageStart(nextStage);
+              earlySpinnerFired = true;
+            }
+          }
+        }
+
+        // ===================================================================
+        // Generic context file validation for ALL successful skill stages.
+        // Validates that the stage wrote its expected output context file.
+        // Replaces the previous issue-pickup-only validation.
+        // @see Issue #637 - Context file handoff validation
+        // ===================================================================
+        const contextError = await this.validateStageContextOutput(stage, issueNumber);
+        if (contextError) {
+          // Issue #3267: the per-stage if/else cascade that used to live here
+          // (issue-pickup / pr-create / feature-dev / feature-validate /
+          // feature-planning, ~300 lines of identical fallback boilerplate)
+          // collapsed into a single dispatch through attemptContextRecovery.
+          // Behaviour preserved: every stage that has a registered fallback
+          // generator gets one chance to synthesize the missing context and
+          // re-validate; on success the pipeline continues, on failure the
+          // stage is marked failed and the loop breaks. Stages without a
+          // fallback fall through to the failure path below.
+          const recovery = await this.attemptContextRecovery(stage, issueNumber, contextError);
+          if (recovery.recovered) {
+            // Continue pipeline — context recovered deterministically.
+          } else {
+            failedStage = stage;
+            error = recovery.error;
+            // Issue #1280: Update state so the UI shows the stage as FAILED,
+            // not complete. The skill process exited 0 so completeStage() was
+            // already called; failStage() overwrites that status.
+            if (this.stateService) {
+              try {
+                await this.stateService.failStage(stage, recovery.error.message);
+              } catch (err) {
+                this.logger.warn("Failed to update state on context validation failure", {
+                  stage,
+                  err,
+                });
+              }
+            }
+            // Issue #1201: Surface validation error when early spinner is showing.
+            // Without this, the UI shows "Starting [Next Stage]..." indefinitely.
+            if (earlySpinnerFired) {
+              this.eventDispatcher.onStageError(stage, recovery.error);
+            }
+            break;
+          }
+        }
+
+        // ===================================================================
+        // GENERIC STAGE POST-CONDITION GATE (Issue #210): issue-pickup,
+        // feature-planning, and feature-dev have registered, unit-tested
+        // StageGate implementations that this legacy TS pipeline loop never
+        // invoked — pr-create, pr-merge, and feature-validate keep their own
+        // dedicated verifyPost*State calls above/below and are excluded here
+        // so neither path runs a stage's gate twice. Runs immediately after
+        // context validation/recovery and before any stage-specific side
+        // effects (branch recovery, routing decision load) so a gate failure
+        // short-circuits before those run — matching how the three
+        // already-gated stages already behave.
+        // ===================================================================
+        if (
+          !failedStage &&
+          (stage === "issue-pickup" || stage === "feature-planning" || stage === "feature-dev")
+        ) {
+          const gateFail = await this.runPostConditionGate(stage, issueNumber);
+          if (gateFail) {
+            // #1241: consult the deliverable BEFORE calling this a failure —
+            // the same fork the post-validate path has consulted since #1142,
+            // which this path never reached.
+            //
+            // A stage that correctly refuses an issue no agent can implement
+            // leaves an empty workspace, and an empty workspace is
+            // indistinguishable at the gate from a stage that promised work and
+            // produced none. The gate can only see the tree, so the tree's
+            // emptiness convicted both, and the honest refusal was booked
+            // `dev_produced_no_changes` — an AGENT-class terminal that
+            // increments the lifetime failure cap and halts the repository.
+            // That is what happened in the specimen run: feature-dev refused a
+            // legal review awaiting counsel, said so at length in its final
+            // message, and the repository stopped dispatching.
+            //
+            // The deliverable is where the difference is legible, so it is read
+            // here. A NOT_PIPELINE_ACTIONABLE signal routes into the
+            // first-class `blocked` terminal — durable finding, issue comment,
+            // Action Center card, `owner-action` label, no halt — and anything
+            // else falls through to the failure below exactly as before.
+            const gateDisposition = await this.evaluateFailedStageFeedback(
+              stage,
+              issueNumber,
+              callbacks
+            );
+            let gateError = gateFail.error;
+            let gateKind = gateFail.terminalKind;
+            if (gateDisposition.kind === "blocked") {
+              // RE-STAMP the terminal kind and the error text. The gate's own
+              // verdict is `dev_produced_no_changes` — accurate about the tree
+              // and wrong about the cause — and it is what the run record, the
+              // lifetime failure cap, the cascade breaker and the operator's
+              // halt card all read. Leaving it in place would book the
+              // first-class `blocked` outcome on one field while every routing
+              // decision still ran off an agent-class failure on another; the
+              // two would describe the same run differently, which is how a
+              // kind stops being trusted (docs/FAILURE_TAXONOMY.md).
+              //
+              // The `[not-pipeline-actionable]` marker is prefixed rather than
+              // substituted so the gate's evidence survives for whoever reads
+              // the record, and it is matched AHEAD of the gate's own kind in
+              // internal/terminalkind/table.json — see the ordering corpus row.
+              //
+              // #1504 asked whether an OUT-OF-SCOPE blocker (which clears when
+              // other work lands) deserves a different kind from a human-only
+              // declaration (which never clears). It does semantically, and
+              // docs/FAILURE_TAXONOMY.md's only other blocked kind is
+              // `blocked_dependency` — but that one is not available here and
+              // inventing a third is out of bounds. `blocked_dependency` is a
+              // SCHEDULER-ROUTING constant (internal/orchestrator/
+              // failure_handler.go) for a pickup-time, zero-token deferral; the
+              // taxonomy states it is deliberately never written into a run
+              // record's `terminal_failure_kind`, and its auto-resume reads a
+              // paused item carrying `BlockingIssues` off the issue's native
+              // `blockedBy` edges. None of that exists at a mid-run gate failure
+              // over a blocker declared in issue PROSE — the specimen's
+              // `dependencies.blockedBy` was empty, which is why it was
+              // dispatched at all. Stamping it would name a deferral the
+              // scheduler has no paused item to resume.
+              //
+              // `not_pipeline_actionable` is what this field accepts and it
+              // buys exactly the routing #1504 asks for: matched ahead of
+              // `dev_produced_no_changes` and `premature_turn_end` (the two that
+              // convicted the specimen), no `LifetimeIssueFailures` increment,
+              // no cascade feed, no repo halt. The one consequence that must
+              // NOT follow — the permanent `owner-action` park, which would be
+              // wrong for a blocker that clears — is already gated by signal
+              // TYPE in recordOutOfScopeBlockedFinding, not by this kind.
+              gateKind = "not_pipeline_actionable";
+              gateError = new Error(
+                `[not-pipeline-actionable] ${gateDisposition.reason} — ${gateFail.error.message}`
+              );
+              this.blockedTerminalState = {
+                blocker: `out-of-scope: ${gateDisposition.signal.signal_type}`,
+                remediation: gateDisposition.signal.rationale,
+                outOfScopeFinding: await this.recordOutOfScopeBlockedFinding(
+                  stage,
+                  issueNumber,
+                  gateDisposition.signal,
+                  gateDisposition.reason
+                ),
+              };
+              this.logger.error(
+                "Gate failed on a stage that declared the issue unworkable — ending BLOCKED, not failed (#1241)",
+                {
+                  issueNumber,
+                  stage,
+                  signalType: gateDisposition.signal.signal_type,
+                  reason: gateDisposition.reason,
+                }
+              );
+            }
+            // A `rewind` disposition is deliberately NOT honoured here. The
+            // post-validate site can rewind because it sits inside the stage
+            // loop with `stageIndex` in scope and a plan already on disk; this
+            // site is the generic gate check for issue-pickup / planning / dev,
+            // where a rewind target may be the stage that just failed. Only the
+            // terminal fork is served, and everything else halts as before.
+            this.logger.error(
+              "Post-condition gate failed — failing stage instead of recording false success",
+              { issueNumber, stage, error: gateError.message }
+            );
+            if (this.stateService) {
+              try {
+                await this.stateService.failStage(stage, gateError.message);
+              } catch {
+                // Non-critical — the break below still fails the pipeline.
+              }
+            }
+            failedStage = stage;
+            gateTerminalKind = gateKind;
+            error = gateError;
+            if (earlySpinnerFired) {
+              this.eventDispatcher.onStageError(stage, gateError);
+            }
+            break;
+          }
+        }
+
+        // ===================================================================
+        // DETERMINISTIC EPIC BASE_BRANCH ENFORCEMENT
+        // After issue-pickup succeeds (whether by subagent or fallback),
+        // verify that sub-issues of an epic target the epic branch, not main.
+        // The subagent may write base_branch: "main" even when the issue is
+        // a sub-issue of an epic. This deterministic override prevents PRs
+        // from incorrectly targeting main and bypassing the epic flow.
+        // @see Issue #1452 — #1463 merged to main instead of epic branch
+        // ===================================================================
+        if (stage === "issue-pickup" && !failedStage) {
+          const epicBaseResult = await this.enforceEpicBaseBranch(issueNumber);
+          if (!epicBaseResult.ok) {
+            // Confirmed epic sub-issue with no establishable epic branch —
+            // fail-closed rather than let pr-merge target main. (#1452 + the
+            // acmeapp-platform#6/#7 direct-push incident.)
+            failedStage = "issue-pickup";
+            error = new Error(epicBaseResult.error ?? "epic base_branch enforcement failed");
+            this.logger.error("Pipeline halted: epic base_branch could not be established", {
+              issueNumber,
+            });
+            break;
+          }
+        }
+
+        // ===================================================================
+        // CONTEXT FILE SIZE MEASUREMENT (Issue #1009)
+        // After context validation, measure the output context file size
+        // and store it in PipelineStateService for telemetry/JSONL records.
+        // Non-critical: failures log a warning, never break the pipeline.
+        // ===================================================================
+        await this.measureContextFileSize(stage, issueNumber);
+
+        // ===================================================================
+        // PR-CREATE STATE VALIDATION (Issue #1139)
+        // After pr-create succeeds, verify that pipeline state correctly
+        // reflects completion. If state is lost but pr-{N}.json has a valid
+        // PR URL, recover state from the context file. If both are missing,
+        // retry once with an upgraded model (sonnet instead of haiku).
+        // ===================================================================
+        if (stage === "pr-create") {
+          const stateValidation = await this.validatePrCreateState(issueNumber);
+
+          // Enrich pipeline state with PR number for Discord/UI
+          this.recordVerifiedPrNumber(issueNumber);
+
+          const pinnedPrCreate =
+            stateValidation === "retry-needed"
+              ? this.pinnedModelSwapRefusal("sonnet", "PR creation failed")
+              : null;
+          if (pinnedPrCreate) {
+            // A pinned run never swaps its model (#1656): no sonnet retry.
+            failedStage = stage;
+            error = pinnedPrCreate;
+            this.eventDispatcher.onStageError(stage, error);
+            break;
+          }
+          if (stateValidation === "retry-needed") {
+            if (!this.prCreateRetryAttempted.has(issueNumber)) {
+              this.prCreateRetryAttempted.add(issueNumber);
+
+              this.logger.info("PR creation failed — retrying with upgraded model", {
+                issueNumber,
+                previousModel: "haiku",
+                retryModel: "sonnet",
+              });
+
+              this.eventDispatcher.onStageError(
+                stage,
+                new Error("PR creation failed — retrying with upgraded model (sonnet)")
+              );
+
+              // Override model to sonnet for retry via env var
+              const envKey = "NIGHTGAUGE_PIPELINE_STAGE_MODEL_PR_CREATE";
+              const previousEnv = process.env[envKey];
+              process.env[envKey] = "sonnet";
+
+              try {
+                const retryResult = await this.runStage(
+                  stage,
+                  issueNumber,
+                  callbacks,
+                  undefined,
+                  undefined,
+                  this.pinnedWorkspaceRoot
+                );
+                if (!retryResult.success) {
+                  failedStage = stage;
+                  error =
+                    retryResult.error || new Error("pr-create retry with upgraded model failed");
+                  if (earlySpinnerFired) {
+                    this.eventDispatcher.onStageError(stage, error);
+                  }
+                  break;
+                }
+                // Re-validate after retry
+                const retryValidation = await this.validatePrCreateState(issueNumber);
+                if (retryValidation !== "ok" && retryValidation !== "recovered") {
+                  failedStage = stage;
+                  error = new Error(
+                    "pr-create state validation failed after retry with upgraded model"
+                  );
+                  if (earlySpinnerFired) {
+                    this.eventDispatcher.onStageError(stage, error);
+                  }
+                  break;
+                }
+              } finally {
+                // Restore original env var (security: prevent leakage)
+                if (previousEnv === undefined) {
+                  delete process.env[envKey];
+                } else {
+                  process.env[envKey] = previousEnv;
+                }
+              }
+            } else {
+              // Already retried once — fail permanently
+              failedStage = stage;
+              error = new Error("PR creation failed after retry with upgraded model");
+              if (earlySpinnerFired) {
+                this.eventDispatcher.onStageError(stage, error);
+              }
+              break;
+            }
+          } else if (stateValidation === "recovered") {
+            this.logger.info("PR state recovered from context file", {
+              issueNumber,
+            });
+          }
+          // 'ok' and 'warning' — continue normally
+        }
+
+        // NO OUTCOME RECORDING HERE. The "pre-merge model recording" block that
+        // used to sit at this point (#1395) called
+        // stateService.recordExecutionOutcome(), which has been a no-op
+        // returning {success:true} ever since #1899 moved pipeline state to the
+        // Go binary — it logged "Pre-merge model recording complete" on every
+        // run and wrote nothing. Removed with the stub in #304. The two things
+        // it claimed to do are both done elsewhere, on live code paths:
+        //   - complexity-model calibration → PostPipelineAnalyzer (#1395's real
+        //     replacement), which reads the completed run's history record and
+        //     drives the SDK OutcomeRecorder;
+        //   - the learning/calibration outcome corpus → the Go side of this
+        //     path's terminal funnel, `pipeline.notifyComplete` in
+        //     internal/ipc/server.go, which derives the outcome from the same
+        //     V2 run record it writes.
+        // Do not reintroduce a TypeScript outcome writer here: this class is the
+        // execution path the product is primarily operated in, and a second
+        // writer over the same corpus is what #261 had to unpick.
+
+        // After issue-pickup completes successfully, perform stage-specific
+        // checks: branch validation and routing decision loading.
+        // Note: Context file existence is validated by the generic
+        // validateStageContextOutput() call above. @see Issue #637
+        if (stage === "issue-pickup") {
+          const contextPath = this.getIssueContextPath(issueNumber);
+
+          // Defense-in-depth: verify issue-pickup actually switched to the
+          // feature branch recorded in the context file. This prevents false
+          // success where context is written but git stays on main/master.
+          const expectedBranch = this.getExpectedBranchFromContext(contextPath);
+          const currentBranch = await this.getCurrentGitBranch();
+          if (expectedBranch && currentBranch && expectedBranch !== currentBranch) {
+            this.logger.error("Branch mismatch after successful issue-pickup", {
+              issueNumber,
+              expectedBranch,
+              currentBranch,
+              contextPath,
+            });
+
+            // Attempt deterministic recovery before failing the stage.
+            const recovered = await this.tryRecoverExpectedBranch(
+              issueNumber,
+              expectedBranch,
+              currentBranch
+            );
+            const branchAfterRecovery = await this.getCurrentGitBranch();
+            if (!recovered || branchAfterRecovery !== expectedBranch) {
+              failedStage = stage;
+              error = new Error(
+                `issue-pickup reported success but git branch is "${branchAfterRecovery ?? currentBranch}" ` +
+                  `instead of expected "${expectedBranch}". Automatic checkout recovery failed.`
+              );
+              // Issue #1201: Surface error when early spinner is showing
+              if (earlySpinnerFired) {
+                this.eventDispatcher.onStageError(stage, error);
+              }
+              break;
+            }
+
+            this.logger.info("Branch mismatch recovered after issue-pickup", {
+              issueNumber,
+              expectedBranch,
+            });
+          }
+
+          // Note: Epic detection is now handled by the pre-check in runPipeline()
+          // BEFORE any stages run. The deterministic gh CLI check there prevents
+          // all AI token waste. @see isEpicIssue() and handleEpicIssue()
+
+          this.currentRoutingDecision = await this.loadRoutingDecision(issueNumber);
+
+          if (this.currentRoutingDecision) {
+            this.logger.info("Routing decision loaded", {
+              route: this.currentRoutingDecision.route,
+              executeStages: this.currentRoutingDecision.executeStages,
+              skipStages: this.currentRoutingDecision.skipStages,
+            });
+
+            // Enrich pipeline state with routing metadata for Discord/UI
+            this.stateService?.setMeta({
+              route: this.currentRoutingDecision.route,
+              skip_stages: this.currentRoutingDecision.skipStages,
+            });
+
+            // Notify via callback
+            this.eventDispatcher.onRoutingDecisionLoaded(this.currentRoutingDecision);
+          }
+
+          // Persist issue labels to pipeline state for sidebar display (Issue #1611)
+          try {
+            const ctxPathForLabels = this.getIssueContextPath(issueNumber);
+            const ctxRawForLabels = fs.existsSync(ctxPathForLabels)
+              ? JSON.parse(fs.readFileSync(ctxPathForLabels, "utf-8"))
+              : null;
+            const issueLabels: string[] = (ctxRawForLabels?.labels ?? []).map(
+              (l: { name?: string } | string) => (typeof l === "string" ? l : (l.name ?? ""))
+            );
+            if (issueLabels.length > 0) {
+              await this.stateService?.setLabels(issueLabels);
+            }
+          } catch {
+            // Non-critical — labels are cosmetic
+          }
+
+          // Validate size estimate against calibration history (Issue #1589)
+          try {
+            const ctxPath = this.getIssueContextPath(issueNumber);
+            const ctxRaw = fs.existsSync(ctxPath)
+              ? JSON.parse(fs.readFileSync(ctxPath, "utf-8"))
+              : null;
+            const ctxLabels = this.normalizeLabels(ctxRaw?.labels ?? []);
+            const sizeLabel = this.extractSizeLabel(ctxLabels);
+            if (sizeLabel) {
+              const { validateSizeEstimate } = await import("../utils/changeAnalyzer");
+              const validation = await validateSizeEstimate(this.getWorkingDirectory(), sizeLabel);
+              if (validation?.is_outlier) {
+                this.logger.warn("Size estimate outlier detected", {
+                  issueNumber,
+                  sizeBucket: validation.size_bucket,
+                  costRatio: validation.cost_ratio,
+                  reasons: validation.outlier_reasons,
+                  summary: validation.summary,
+                });
+              }
+            }
+          } catch {
+            // Non-critical — calibration validation is informational only
+          }
+        }
+
+        // ===================================================================
+        // MODEL ESCALATION ENGINE (Issue #1343)
+        // Check for MODEL_ESCALATION_NEEDED before backtrack evaluation.
+        // Escalation retries the same stage with a more capable model without
+        // consuming backtrack budget.
+        // ===================================================================
+        const escalationSignal = this.readEscalationSignal(stage, issueNumber);
+        if (escalationSignal) {
+          const nextModel = this.evaluateEscalation(
+            stage,
+            escalationSignal,
+            issueNumber,
+            callbacks
+          );
+          if (nextModel !== null) {
+            await this.executeEscalation(
+              stage,
+              escalationSignal,
+              nextModel,
+              issueNumber,
+              callbacks
+            );
+            // Re-run same stage: decrement so loop increment brings us back
+            stageIndex = stageIndex - 1;
+            continue;
+          }
+          // If escalation blocked, fall through to backtrack evaluation
+        }
+
+        // ===================================================================
+        // FEEDBACK LEARNING ENGINE (Issue #1348)
+        // When COMPLEXITY_UNDERESTIMATED is emitted, update the complexity
+        // model immediately — do not wait for post-merge outcome recording.
+        // Fires before backtrack evaluation so it records regardless of
+        // whether the signal causes a backtrack.
+        // ===================================================================
+        await this.applyFeedbackLearning(stage, issueNumber);
+
+        // ===================================================================
+        // BACKTRACK ENGINE (Issue #1342)
+        // After context validation succeeds, read feedback signals from the
+        // completed stage's context file. If a blocking signal with a
+        // backtrack_target_stage is found, evaluate eligibility and rewind.
+        // ===================================================================
+        const feedbackSignals = this.readFeedbackSignals(stage, issueNumber);
+        if (feedbackSignals.length > 0) {
+          const signal = feedbackSignals[0]; // Act on first blocking signal
+          const canBacktrack = this.evaluateBacktrack(signal, stage, issueNumber, callbacks);
+          if (canBacktrack) {
+            const targetIndex = await this.executeBacktrack(signal, stage, issueNumber, callbacks);
+            // Rewind: set stageIndex so the loop increments to targetIndex
+            stageIndex = targetIndex - 1;
+            continue;
+          }
+          // If blocked, continue forward (signal surfaced via callback)
+        }
+
+        completedStages.push(stage);
+        await this.syncStageStatusTransition(stage, issueNumber);
+
+        // ===================================================================
+        // POST-PLANNING EARLY-EXIT: After feature-planning completes, check
+        // if it signaled "verify-and-close" (issue already resolved). If so,
+        // skip remaining stages and run a lightweight close path instead.
+        // This saves ~60% of pipeline cost for already-resolved issues.
+        // @see Issue #708
+        // ===================================================================
+        if (stage === "feature-planning") {
+          const earlyExit = this.checkPlanningEarlyExit(issueNumber);
+          if (earlyExit) {
+            this.logger.info("Early exit: feature-planning signaled already-resolved issue", {
+              issueNumber,
+              approach: earlyExit.approach,
+            });
+
+            // Run lightweight close path (best-effort)
+            await this.runAlreadyResolvedClosePath(issueNumber, callbacks);
+
+            // Classify outcome for cost tracking
+            if (this.stateService) {
+              try {
+                await this.stateService.setOutcomeType("already-resolved");
+              } catch {
+                // Non-critical
+              }
+            }
+
+            // Mark remaining stages as skipped (including pipeline-finish)
+            const planningIndex = STAGE_ORDER.indexOf("feature-planning");
+            const remainingStages = STAGE_ORDER.slice(planningIndex + 1);
+            skippedStages.push(...remainingStages);
+
+            this.eventDispatcher.onEarlyExit(issueNumber, "already-resolved");
+            break; // Exit stage loop
+          }
+        }
+
+        // Check if pipeline was paused (Issue #239)
+        //
+        // HOLD at the boundary instead of breaking out of the loop (#423).
+        // Breaking here returns `{success:false, failedStage:undefined}` from
+        // runPipeline() while the run is merely paused, not done. On the
+        // singleton that is cosmetic (resume issues a fresh runPipeline()
+        // call, see resumePipeline.ts). On a ConcurrentPipelineManager slot
+        // it is not: `processSlot`'s four-arm terminal classification has no
+        // "paused" arm, so the return is booked as a slot FAILURE — the slot
+        // is deleted and its state service disposed (haltQueueOnSlotFailure /
+        // cleanupSlot), and the paused run can never be targeted by Resume
+        // again (the very capability #423 exists to add).
+        //
+        // Holding keeps THIS runPipeline() call in flight — `isRunning` stays
+        // true, the slot stays in `ConcurrentPipelineManager.slots`, and
+        // `getActiveSlots()`/`getSlotStateService()` keep resolving it — so a
+        // Resume that only clears the paused flag (`resumePipeline.ts`'s
+        // Go-driven / active-slot branch, which deliberately does not call
+        // `runPipeline()` again to avoid a duplicate execution path) lets the
+        // SAME call continue exactly where it left off. Still responsive to
+        // abort/stop: the wait loop re-checks the abort signal every poll
+        // tick, same as the per-stage check at the top of this loop.
+        if (!(await this.holdWhilePaused("after", stage, issueNumber))) {
+          break;
+        }
+
+        // =================================================================
+        // PIPELINE BUDGET CEILING — between-stage check (Issue #1047)
+        // After each stage completes, check cumulative cost against the
+        // pipeline ceiling. If exceeded, stop the pipeline gracefully.
+        // =================================================================
+        if (this.stateService) {
+          try {
+            const currentState = await this.stateService.getState();
+            if (currentState) {
+              // #257: re-resolve the base ceiling config from disk at every
+              // between-stage check instead of reusing the instance captured
+              // once at the top of runPipeline(). A live edit to
+              // `pipeline.token_budget_ceiling.ceiling_usd` mid-run reached
+              // the per-stage checks in runStage() (which already call
+              // getPipelineCeilingConfig() fresh per stage) but never this
+              // loop, which kept enforcing the stale value for the rest of
+              // the run. The read is cheap (small file read), matching the
+              // freshness the per-stage instances already have.
+              const liveCeilingConfig = getPipelineCeilingConfig(this.getRunRepoRoot());
+              const liveCeiling = new PipelineBudgetCeiling(liveCeilingConfig);
+              // #253: honor a mid-run "Increase Ceiling & Continue" — layer
+              // the confirmed escalation override on top of the freshly-read
+              // base so a live config edit can never silently drop it.
+              if (this.ceilingOverrideUsd !== null) {
+                liveCeiling.setOverrideCeiling(this.ceilingOverrideUsd);
+              }
+              const ceilingCheck = liveCeiling.check(currentState.tokens?.estimated_cost_usd ?? 0);
+
+              if (ceilingCheck.shouldStop) {
+                this.logger.error(ceilingCheck.message, {
+                  issueNumber,
+                  costUsd: ceilingCheck.currentCostUsd,
+                  ceilingUsd: ceilingCheck.effectiveCeilingUsd,
+                  lastCompletedStage: stage,
+                });
+                this.eventDispatcher.onStderr(stage, `${ceilingCheck.message}\n`);
+
+                // Classify as budget-ceiling outcome
+                try {
+                  await this.stateService.setOutcomeType("budget-ceiling");
+                } catch {
+                  // Non-critical
+                }
+
+                // #305: surface it in the Action Center. Before this, a
+                // headless run that hit the ceiling recorded an outcome type
+                // and wrote a log line — the operator got no card offering the
+                // raise-and-retry the Go path has always offered, for the
+                // condition the producer exists to surface. Fail-open inside.
+                //
+                // The condition travels; the NUMBERS do not. `currentCostUsd`
+                // and `effectiveCeilingUsd` are both in scope here and are
+                // deliberately not sent: the card's primary option persists a
+                // workspace-global ceiling override, and the daemon must read
+                // both figures from its own state (see RunScopedAttentionRaise).
+                // The ceiling this check enforced is the same one the daemon
+                // resolves FOR THIS RUN'S REPO: `getPipelineCeilingConfig`
+                // layers the persisted `budget-override.json` on with Go's
+                // max() rule, and both sides now resolve that file under the
+                // run's own repo root — `getRunRepoRoot()` here,
+                // `Server.repoRoot(repo)` on the raise and on the resolve. It
+                // is a PER-REPO agreement, not a global one: an override raised
+                // for repo A moves A's ceiling and leaves B's alone, which is
+                // the point (#305 review — the read used `workspaceFolders[0]`
+                // and the write used the focused editor's repo, so in a
+                // multi-repo workspace neither was the run's).
+                await this.raiseRunScopedAttention({
+                  producer: "budget-ceiling",
+                  issueNumber,
+                });
+
+                // Don't set failedStage — this is a controlled stop, not a
+                // failure. Flag it so the completion reconcile below doesn't
+                // reclassify the run as a pr-merge failure (#253): a run that
+                // stopped for budget mid-pipeline naturally has an unmerged
+                // PR (or none), which is not a pr-merge defect.
+                budgetCeilingStopped = true;
+                break;
+              }
+            }
+          } catch (err) {
+            this.logger.warn("Failed to check pipeline budget ceiling", {
+              issueNumber,
+              err,
+            });
+          }
+        }
+
+        // Check for approval gates (only for skill stages)
+        if (this.config.approvalGates.includes(stage)) {
+          const approved = await this.eventDispatcher.onApprovalRequired(stage);
+
+          if (!approved) {
+            this.logger.info("Pipeline stopped - approval rejected", { stage });
+            break;
+          }
+        }
+
+        // Delay between stages if auto-continuing (not after last stage)
+        // Note: onStageStart already fired at top of post-stage block (#981)
+        if (this.config.autoContinue && stage !== "pipeline-finish") {
+          await this.delay(this.config.stageContinueDelay);
+        }
+      }
+    } finally {
+      // #125: the loop exited (break / return / throw) — settle the held
+      // stage-exit record with whatever verdict the gates reached. Runs first
+      // so it reads `failedStage`/`error` before any teardown below.
+      flushPendingStageExit();
+      this.isRunning = false;
+      this.currentStage = null;
+      this.abortController = null;
+      this.currentRoutingDecision = null; // Clear routing decision at end of pipeline
+      this.cachedRoutingTelemetry = null; // Clear routing telemetry cache (#1005)
+      this.completedStageSet.clear(); // Clear duplicate-prevention tracker (#698)
+      this.backtrackCount = 0; // Clear backtrack engine state (#1342)
+      this.traversedEdges.clear(); // Clear oscillation guard (#1342)
+      this.stageEscalationCounts.clear(); // Clear escalation engine (#1343)
+      this.stageModelOverrides.clear(); // Clear escalation overrides (#1343)
+      this.fableQuotaFallbackApplied.clear(); // Clear Fable→Opus usage-limit fallback guard
+      this.fableFallbacks = []; // Clear surfaced Fable→Opus fallback list (#26)
+      this.userModelOverride = null; // Clear user model override (#1610)
+      this.requestedPin = null; // Clear the remote run request pin (#1656)
+      this.proactiveEscalationApplied = false; // Clear proactive escalation guard (#1394)
+      this.ceilingOverrideUsd = null; // Clear per-run ceiling override (#253)
+      this.policyRetryBudgetIncrease = 0; // Clear health policy retry budget (#1395)
+      this.pauseAutoRouting = false; // Clear health policy auto-routing pause (#1395)
+      this.activePolicies = null; // Clear health policy overrides (#1395)
+      this.pinnedWorkspaceRoot = undefined; // Clear pinned workspace root (#1592)
+
+      // Emit pipeline.completed or pipeline.failed and dispose audit client (Issue #1582)
+      if (this.auditClient && this.auditCorrelationId) {
+        const totalDurationMs = Date.now() - startTime;
+        if (failedStage) {
+          this.auditClient.enqueue({
+            action: "pipeline.failed",
+            resourceType: "pipeline",
+            resourceId: `issue-${issueNumber}`,
+            metadata: {
+              pipelineRunId: this.auditCorrelationId,
+              issueNumber,
+              totalDurationMs,
+              failedStage,
+              timestamp: new Date().toISOString(),
+            },
+          });
+        } else {
+          this.auditClient.enqueue({
+            action: "pipeline.completed",
+            resourceType: "pipeline",
+            resourceId: `issue-${issueNumber}`,
+            metadata: {
+              pipelineRunId: this.auditCorrelationId,
+              issueNumber,
+              totalDurationMs,
+              stagesCompleted: completedStages,
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        // dispose() calls flushAll() with a 5s timeout guard to avoid blocking
+        void Promise.race([
+          this.auditClient.dispose(),
+          new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+        ]).finally(() => {
+          this.auditClient = null;
+          this.auditCorrelationId = null;
+        });
+      }
+
+      // Clean up checkpoint signal file if it was written (Issue #1047)
+      if (this.ceilingCheckpointWritten) {
+        try {
+          const signalPath = path.join(
+            pipelineStateDir(this.getWorkingDirectory()),
+            `checkpoint-signal-${issueNumber}.json`
+          );
+          if (fs.existsSync(signalPath)) {
+            fs.unlinkSync(signalPath);
+          }
+        } catch {
+          // Non-critical: signal file cleanup failure is harmless
+        }
+        this.ceilingCheckpointWritten = false;
+      }
+
+      // Clean up wind-down signal file if it was written (Issue #2338)
+      try {
+        const winddownPath = path.join(
+          pipelineStateDir(this.getWorkingDirectory()),
+          `winddown-signal-${issueNumber}.json`
+        );
+        if (fs.existsSync(winddownPath)) {
+          fs.unlinkSync(winddownPath);
+        }
+      } catch {
+        // Non-critical
+      }
+    }
+
+    // ===================================================================
+    // GUARD: pr-create succeeded but pr-merge never ran.
+    // This catches an early-termination bug where the pipeline exits the
+    // stage loop (abort, pause, error in bookend) after pr-create completes
+    // but before pr-merge runs. A PR was created but never merged — that
+    // is NOT a successful pipeline, it's an orphaned PR.
+    // @see Issue #698
+    // ===================================================================
+    if (
+      !failedStage &&
+      deferredStages.length === 0 &&
+      completedStages.includes("pr-create") &&
+      !completedStages.includes("pr-merge") &&
+      !skippedStages.includes("pr-merge")
+    ) {
+      this.logger.error("Pipeline exited after pr-create without running pr-merge — orphaned PR", {
+        issueNumber,
+        completedStages,
+        skippedStages,
+      });
+      failedStage = "pr-merge";
+      error = new Error(
+        `pr-create succeeded but pr-merge never ran for issue #${issueNumber}. ` +
+          `The created PR is orphaned. This is a pipeline orchestration error — ` +
+          `pr-merge must always run after pr-create in a full pipeline.`
+      );
+    }
+
+    // ===================================================================
+    // SHIPPED-BUT-OVERBUDGET OVERRIDE (#3108, broadened in #3274)
+    // If pr-merge failed for any reason BUT the PR actually merged AND the
+    // issue is CLOSED, treat the run as a success. Originally this caught
+    // budget kills (#3108); #3274 broadened it to also catch stale skill
+    // exit signals (e.g. subagent emits "Failure cleanup complete" text
+    // even though the merge already landed and the issue closed).
+    //
+    // Detection requires BOTH deterministic gates: PR=MERGED *and*
+    // issue=CLOSED. The dual gate guards against the cross-slot
+    // hallucination scenario from the bug report (subagent reports the
+    // wrong PR number). Any failure to read either state leaves the
+    // original failure intact (fail-closed).
+    // ===================================================================
+    let shippedButOverbudget = false;
+    if (failedStage === "pr-merge") {
+      const verified = await this.checkPrMergedAndIssueClosed(issueNumber);
+      if (verified && verified.issueClosed) {
+        const reason = budgetExceeded
+          ? "pr-merge budget kill — PR is MERGED + issue CLOSED"
+          : "pr-merge stale failure signal — deterministic gate confirms MERGED + issue CLOSED";
+        this.logger.warn(`Reclassifying pr-merge failure as shipped-but-overbudget — ${reason}`, {
+          issueNumber,
+          prNumber: verified.prNumber,
+          budgetExceeded,
+        });
+        shippedButOverbudget = true;
+        this.prMergedGroundTruth = true; // #266: forge confirms MERGED
+        if (!completedStages.includes("pr-merge")) {
+          completedStages.push("pr-merge");
+        }
+        failedStage = undefined;
+        error = undefined;
+      }
+    }
+
+    // Only reconcile completion side-effects (issue closure, label sync)
+    // when no stages were deferred and no early-exit close path already ran.
+    // Deferred stages mean pr-merge hasn't run yet, so issue is expected open.
+    // Early-exit (feature-dev skipped) means runAlreadyResolvedClosePath()
+    // already handled close/labels/sync. @see Issue #628, #708
+    const earlyExitHandled = skippedStages.includes("feature-dev");
+    if (!failedStage && deferredStages.length === 0 && !earlyExitHandled && !budgetCeilingStopped) {
+      // #253: time-bound the network-bound completion awaits. A wedge in the
+      // `gh`-backed reconcile stranded run #236 for 8.5h with no terminal
+      // record — completing the run WITHOUT closure sync beats never
+      // completing it.
+      const reconcile = await promiseWithTimeout(
+        this.reconcileCompletionSideEffects(issueNumber),
+        COMPLETION_RECONCILE_TIMEOUT_MS,
+        "reconcileCompletionSideEffects"
+      ).catch((err) => {
+        this.logger.error(
+          "Completion reconcile failed/timed out — completing run without closure sync (#253 zombie guard)",
+          { issueNumber, err: err instanceof Error ? err.message : String(err) }
+        );
+        return null;
+      });
+      if (!reconcile) {
+        // Degraded completion: skip closure/label sync entirely.
+      } else if (reconcile.epicDeferred) {
+        this.logger.info("Epic sub-issue — closure deferred to epic merge", {
+          issueNumber,
+        });
+      } else if (reconcile.verified && !reconcile.issueClosed) {
+        // #3691: classify the actual blocker so the operator gets a
+        // useful pause-reason ("PR #N has failing checks: foo, bar"
+        // instead of generic "issue still open"). The marker text
+        // `[pr-merge-unmerged:<blocker>]` is parsed by Go's
+        // ClassifyTerminalKind into TerminalKindPrMergeUnmerged so
+        // autonomous routes through the recoverable branch (no
+        // LifetimeIssueFailures increment) and surfaces the rich
+        // summary as the pause reason.
+        const diagnosis = await promiseWithTimeout(
+          this.diagnosePrMergeBlocker(issueNumber),
+          PR_MERGE_DIAGNOSIS_TIMEOUT_MS,
+          "diagnosePrMergeBlocker"
+        ).catch((err) => {
+          this.logger.warn("pr-merge blocker diagnosis failed/timed out — proceeding without it", {
+            issueNumber,
+            err: err instanceof Error ? err.message : String(err),
+          });
+          return null;
+        });
+        failedStage = "pr-merge";
+        if (diagnosis && diagnosis.blocker === "agent_gave_up") {
+          // The PR is verifiably ready (MERGEABLE + CLEAN + green + no review
+          // block) — the agent just stopped. Don't pause for a human; finish
+          // the job deterministically, the same recovery the Go scheduler's
+          // SkillExitedWithoutMerging action performs on its path. Only on
+          // failure do we fall through to the diagnostic-pause path below.
+          const recovered = await this.attemptDeterministicPrMerge(diagnosis.prNumber, issueNumber);
+          if (recovered) {
+            this.logger.info("pr-merge auto-recovered — agent left a mergeable PR; merged it", {
+              issueNumber,
+              prNumber: diagnosis.prNumber,
+              prUrl: diagnosis.prUrl,
+            });
+            this.eventDispatcher?.onStderr(
+              "pr-merge",
+              `[pr-merge auto-recovery] PR #${diagnosis.prNumber} was mergeable but the agent ` +
+                `did not merge it — merged automatically. ${diagnosis.prUrl}\n`
+            );
+            // Treat pr-merge as actually succeeded: clear the failure so the
+            // pipeline reports completion instead of a recoverable pause.
+            failedStage = undefined;
+            error = undefined;
+          }
+        }
+        // Only emit a failure if recovery above didn't clear it. (failedStage
+        // is reset to undefined when attemptDeterministicPrMerge succeeded.)
+        if (failedStage) {
+          if (diagnosis) {
+            this.logger.warn("pr-merge completed but PR not merged — diagnostic classification", {
+              issueNumber,
+              prNumber: diagnosis.prNumber,
+              prUrl: diagnosis.prUrl,
+              prState: diagnosis.prState,
+              mergeable: diagnosis.mergeable,
+              blocker: diagnosis.blocker,
+              failingChecks: diagnosis.failingChecks,
+              summary: diagnosis.summary,
+            });
+            error = new Error(
+              `[pr-merge-unmerged:${diagnosis.blocker}] ${diagnosis.summary} ` +
+                `PR: ${diagnosis.prUrl}` +
+                (diagnosis.failingChecks.length > 0
+                  ? ` | failing-checks: ${diagnosis.failingChecks.join(", ")}`
+                  : "") +
+                ` | recoverable: no LifetimeIssueFailures increment; resume after the blocker is resolved.`
+            );
+          } else {
+            // Fail-closed: diagnostic couldn't read PR state. Keep the
+            // pre-#3691 generic path so a real failure isn't silently
+            // softened into a recoverable one based on incomplete data.
+            error = new Error(
+              reconcile.error ?? `Pipeline completed but issue #${issueNumber} is still open.`
+            );
+          }
+        }
+      } else if (reconcile.issueClosed) {
+        this.logger.info("Completion reconciliation finished", {
+          issueNumber,
+          mergedPrNumber: reconcile.mergedPrNumber,
+          epicSweepClosed: reconcile.epicSweepClosed ?? 0,
+        });
+      }
+    }
+
+    // ===================================================================
+    // POST-PIPELINE MAIN CHECKOUT: Ensure workspace is on the base branch
+    // after pipeline completion (whether stages were deferred or not).
+    // This prevents the next pipeline run from starting on a stale feature
+    // branch. Non-critical: failures are logged but don't break the result.
+    // ===================================================================
+    if (deferredStages.length > 0 && !failedStage) {
+      try {
+        const workspaceRoot = this.getWorkingDirectory();
+        const baseBranch = (await this.stateService?.getBaseBranch()) ?? "main";
+        const { stdout: currentBranchRaw } = await execFileAsync(
+          "git",
+          ["branch", "--show-current"],
+          { encoding: "utf-8", cwd: workspaceRoot }
+        );
+        const currentBranch = currentBranchRaw.trim();
+
+        if (currentBranch && currentBranch !== baseBranch) {
+          this.logger.info("Checking out base branch after deferred stages", {
+            currentBranch,
+            baseBranch,
+          });
+          await execFileAsync("git", ["checkout", baseBranch], {
+            encoding: "utf-8",
+            cwd: workspaceRoot,
+            timeout: 10000,
+          });
+          // Best-effort pull
+          try {
+            await execFileAsync("git", ["pull", "origin", baseBranch], {
+              encoding: "utf-8",
+              cwd: workspaceRoot,
+              timeout: 15000,
+            });
+          } catch {
+            this.logger.warn("Failed to pull latest after checkout, continuing with local state");
+          }
+        }
+      } catch (err) {
+        this.logger.warn("Failed to checkout base branch after deferral", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // NO FAILURE-OUTCOME RECORDING HERE (#304). What stood here called
+    // stateService.recordExecutionOutcome("failure") under a comment asserting
+    // that the Go binary "records outcomes via scheduler.recordOutcome on every
+    // pipeline completion (success + failure)" and that "the Go-side recorder
+    // DOES capture pre-PR failures with stage + cost data".
+    //
+    // Both claims were false FOR THIS PATH, which is the path the product is
+    // primarily operated in. `scheduler.recordOutcome` is reachable only from
+    // Scheduler.runPipeline; ConcurrentPipelineManager → HeadlessOrchestrator
+    // runs never enter that loop (see the PATH WARNING in
+    // ConcurrentPipelineManager.runSlotPipeline). The comment described the
+    // path this code is NOT on as if it covered the one it IS on — #254's
+    // inverted-primary-path misreading — and the call it justified was a no-op
+    // stub returning {success:true}. Net effect: the learning corpus received
+    // nothing from interactive runs and nothing went red.
+    //
+    // Outcomes for THIS path are now recorded where this path's terminal event
+    // actually lands: the Go side of `pipeline.notifyComplete`
+    // (internal/ipc/server.go), for both success and failure, derived from the
+    // same V2 run record it writes. Parity is enforced by the
+    // `learning-outcome-record` entry in
+    // internal/orchestrator/testdata/terminal_behaviors.json.
+    //
+    // Issue board recovery for terminal kills remains in the Go orchestrator's
+    // onPipelineComplete (revertFailedIssueStatus).
+
+    // Classify pipeline outcome for cost tracking (Issue #709)
+    // Skip classification if early-exit already set the outcome (Issue #708)
+    // Non-critical: failures log warnings but never break the pipeline
+    let classifiedOutcome: PipelineOutcomeType | undefined;
+    if (shippedButOverbudget) {
+      classifiedOutcome = "shipped-but-overbudget";
+      if (this.stateService) {
+        try {
+          await this.stateService.setOutcomeType(classifiedOutcome);
+        } catch (err) {
+          this.logger.warn("Failed to record shipped-but-overbudget outcome", {
+            issueNumber,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    } else if (earlyExitHandled) {
+      classifiedOutcome = "already-resolved";
+    } else if (this.blockedTerminalState) {
+      // Blocked terminal state (#190): record the outcome as blocked, not
+      // generic failure, so outcome telemetry and the learning loop see the
+      // recurrence of this blocker class.
+      classifiedOutcome = "blocked";
+      if (this.stateService) {
+        try {
+          await this.stateService.setOutcomeType(classifiedOutcome);
+        } catch (err) {
+          this.logger.warn("Failed to record blocked outcome", {
+            issueNumber,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      this.logger.error("Pipeline ended BLOCKED — PR not delivered", {
+        issueNumber,
+        blocker: this.blockedTerminalState.blocker,
+        remediation: this.blockedTerminalState.remediation,
+        prNumber: this.blockedTerminalState.prNumber,
+      });
+    } else if (this.stateService) {
+      try {
+        classifiedOutcome = await this.classifyAndRecordOutcome(
+          issueNumber,
+          completedStages,
+          failedStage
+        );
+      } catch (err) {
+        this.logger.warn("Failed to classify pipeline outcome", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Issue #210: completion-time "gate never invoked" guard. A registered,
+    // non-NoOp stage gate that never produced a recorded result for a
+    // completed, non-bookend stage is exactly the silent-invocation-gap this
+    // issue reports — log a structured, greppable signal rather than staying
+    // silent. Non-fatal on first landing (see PLAN.md Risks) so a legitimate
+    // future NoOp/skipped stage cannot turn into a false pipeline failure.
+    this.logGateNotInvoked(issueNumber, completedStages);
+
+    // Post-pipeline analysis (Issue #943) + self-check (Issue #1045)
+    // Run whenever at least one real stage executed (success or failure).
+    // Skill amendment detection needs history from failed runs too.
+    let analysisResult: PostPipelineAnalysisResult | null = null;
+    if (completedStages.length > 1 || !!failedStage) {
+      try {
+        // The RUN's repo, not the runner's (#1229). `getPersistentRoot()`
+        // returns `mainRepoRoot`, which the slot factory seeds from the RUNNER
+        // root — one fixed path for every slot. On a cross-repo dispatch that
+        // is a sibling repo, so the analyzer read that sibling's history and
+        // rewrote that sibling's `stage-model-calibration.json` and
+        // `calibration.json` while the run it was analysing lived elsewhere.
+        //
+        // The read side never had this drift: `runPreFlightBudgetCheck` resolves
+        // its history root from `getWorkingDirectory()` via
+        // `resolveMainRepoRoot()`, which only strips a `.worktrees/` suffix and
+        // never crosses repos. So writer and reader addressed DIFFERENT repos
+        // and the loop #1213 closed could never close: the estimator looked for
+        // a table that was being written one directory over.
+        //
+        // `getRunRepoRoot()` is the same path in a single-repo workspace, so
+        // this is a correction for the multi-repo case and a no-op elsewhere.
+        analysisResult = await PostPipelineAnalyzer.analyze(
+          this.getRunRepoRoot(),
+          issueNumber,
+          this.logger,
+          // #1084: gate metrics are written by a skill running IN the worktree,
+          // so the persistent root alone can never see them on a worktree run.
+          this.getWorkingDirectory()
+        );
+
+        if (analysisResult) {
+          this.logger.info("Post-pipeline analysis complete", {
+            issueNumber,
+            recommendations: analysisResult.recommendationCount,
+            savings: `$${analysisResult.totalPotentialSavingsUsd.toFixed(4)}`,
+            calibrationUpdated: analysisResult.calibrationUpdated,
+          });
+        }
+      } catch (err) {
+        // Non-critical: never break pipeline completion
+        this.logger.warn("Post-pipeline analysis failed", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      // Health evaluation and self-check summary (Issue #1045)
+      try {
+        // #1057: the persistent root, not the worktree. health-history.jsonl
+        // is written only to the main workspace, and `.nightgauge/.gitignore`
+        // ignores `pipeline/*`, so a worktree slot never has the file and the
+        // reader returned [] on every run — forever. Same root-drift class as
+        // #1017/#1045, and it matches the PostPipelineAnalyzer.analyze call
+        // immediately above.
+        const healthEval = await HealthActionService.evaluate(
+          this.getPersistentRoot(),
+          this.logger
+        );
+
+        // Log health actions
+        if (healthEval) {
+          for (const action of healthEval.actions) {
+            if (action.level === "critical") {
+              this.logger.warn(action.message);
+              if (action.suggestion) {
+                this.logger.info(action.suggestion);
+              }
+            } else if (action.level === "warning") {
+              this.logger.warn(action.message);
+            }
+          }
+        }
+
+        // Enrich pipeline state with health score for Discord/UI
+        if (healthEval) {
+          this.stateService?.setMeta({ health_score: healthEval.score });
+        }
+
+        // Emit self-check summary.
+        //
+        // #1022: these were literal zeros, with a comment saying the cost was
+        // "not available at this level". It is available — the run's own state
+        // carries it, and the panel reported $0.00 for a $12.81 run because
+        // nobody read it. A hardcoded zero is indistinguishable from a free run,
+        // which is exactly the class of misinformation this epic is about.
+        const selfCheckState = await this.stateService?.getState();
+        const runCostUsd = selfCheckState?.tokens?.estimated_cost_usd ?? 0;
+        const selfCheck = PostPipelineAnalyzer.formatSelfCheck(
+          analysisResult,
+          healthEval,
+          runCostUsd,
+          // The historical average genuinely is not computed here, and
+          // formatSelfCheck documents 0 as "unknown" and guards every use of it
+          // — so this zero is honest, unlike the cost one above.
+          0,
+          // #1057: the run's own outcome. Without it the panel reported "No
+          // anomalies detected" on the same run whose stage had just failed.
+          failedStage
+        );
+        this.logger.info(selfCheck);
+      } catch (err) {
+        // Non-critical: never break pipeline completion
+        this.logger.warn("Self-check summary failed", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // ===================================================================
+    // DEFENSIVE BOOKKEEPING RECONCILIATION (Issue #3450)
+    //
+    // Trust state.json over in-memory arrays. The in-memory `completedStages`
+    // is built by pushes inside the stage loop, but the loop has many early
+    // exits (abort signal, isPaused trip after pr-merge, post-merge verify,
+    // backtrack, approval gates, deferral). Several of those exits drop the
+    // pipeline out before pipeline-finish runs without ever setting
+    // `failedStage`. Without this reconciliation, the post-loop condition
+    // `pipelineComplete = !failedStage && len === STAGE_ORDER.length` evaluates
+    // to `false` even when state.json shows every stage terminal — producing
+    // the impossible `{ success: false, failedStage: undefined }` return that
+    // ConcurrentPipelineManager.processSlot then routes through
+    // haltQueueOnSlotFailure as "failed at unknown", incrementing
+    // lifetimeIssueFailures and pausing autonomous on an actually-successful
+    // run (see #3450 evidence: PR merged, issue closed, board moved to Done).
+    //
+    // The reconciliation only fires when:
+    //   - No stage was explicitly marked failed (`failedStage === undefined`)
+    //   - In-memory bookkeeping disagrees with disk state
+    //   - State.json shows every STAGE_ORDER entry as terminal (complete |
+    //     skipped | deferred), which is the same condition
+    //     the authoritative history writer uses to classify outcome as
+    //     "complete" (defense-in-depth, see #2994)
+    //
+    // It NEVER overrides a real failure — a non-undefined `failedStage` skips
+    // this block entirely. It also does not silently move on if state.json
+    // disagrees with disk (incomplete pipeline) — that case still flows
+    // through the existing failure / pause / abort handling.
+    // ===================================================================
+    if (!failedStage && this.stateService) {
+      const accountedFor = completedStages.length + skippedStages.length + deferredStages.length;
+      if (accountedFor < STAGE_ORDER.length) {
+        try {
+          const diskState = await this.stateService.getState();
+          if (diskState) {
+            const reconciled = reconcileBookkeepingFromDiskState(
+              { completedStages, skippedStages, deferredStages },
+              (diskState.stages ?? {}) as Record<string, { status?: string }>,
+              STAGE_ORDER
+            );
+            if (reconciled.changed) {
+              this.logger.warn(
+                "Pipeline bookkeeping reconciliation: state.json shows all stages terminal " +
+                  "but in-memory arrays missed some — promoting to success (#3450).",
+                {
+                  issueNumber,
+                  recovered: reconciled.recovered,
+                  completedStagesBefore: accountedFor,
+                  completedStagesAfter:
+                    reconciled.completedStages.length +
+                    reconciled.skippedStages.length +
+                    reconciled.deferredStages.length,
+                }
+              );
+              // Reassign by mutating in place (these arrays are still `const`
+              // bindings declared above; we splice the recovered entries in
+              // rather than replacing the reference).
+              completedStages.length = 0;
+              completedStages.push(...reconciled.completedStages);
+              skippedStages.length = 0;
+              skippedStages.push(...reconciled.skippedStages);
+              deferredStages.length = 0;
+              deferredStages.push(...reconciled.deferredStages);
+            }
+          }
+        } catch (reconcileErr) {
+          // Non-critical: if state.json is unreadable, fall through to the
+          // existing pipelineComplete computation. Worst case we keep the
+          // pre-fix behavior for this run; we never destroy correct state.
+          this.logger.warn("Pipeline bookkeeping reconciliation failed", {
+            issueNumber,
+            err: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
+          });
+        }
+      }
+    }
+
+    // ===================================================================
+    // LABEL CLEANUP: Revert status labels on failure/abort/stop so the
+    // issue returns to the ready pool. Skip for paused (will resume) and
+    // deferred (waiting for human review) pipelines. @see Issue #1115
+    // ===================================================================
+    const pipelineComplete =
+      !failedStage &&
+      completedStages.length + skippedStages.length + deferredStages.length === STAGE_ORDER.length;
+    if (
+      !pipelineComplete &&
+      deferredStages.length === 0 &&
+      completedStages.includes("issue-pickup")
+    ) {
+      let wasPaused = false;
+      if (this.stateService) {
+        try {
+          wasPaused = await this.stateService.isPaused();
+        } catch {
+          // Non-critical
+        }
+      }
+      if (!wasPaused) {
+        await this.markStatusInReviewOnFailure(issueNumber);
+      }
+    }
+
+    // Auto-retro analysis on pipeline failure (Issue #1408)
+    // Fire-and-forget: never awaited, never blocks failure reporting.
+    // Non-critical: errors are caught inside AutoRetroService.
+    if (failedStage) {
+      // Thread the orchestrator's terminal failure reason into the retro so
+      // the classifier sees the authoritative verdict instead of starving on
+      // the subagent log alone (#3926).
+      // #1056: the run's repo root, not the daemon's workspace root. The retro
+      // for an issue owned by one repo was written into whichever repo `serve`
+      // was started with, so retros for every repo piled up in one unrelated
+      // repo keyed only by issue number — and issue numbers are not unique
+      // across a multi-repo workspace, so those filenames collide.
+      // getRunRepoRoot() falls back to the persistent root when unset, so the
+      // sequential path is byte-identical.
+      void AutoRetroService.runAfterFailure(
+        this.getRunRepoRoot(),
+        issueNumber,
+        failedStage,
+        this.logger,
+        error?.message,
+        // #1056: the structured terminal kind, so the classifier reads the
+        // authoritative verdict instead of fishing for markers in prose. The
+        // run that motivated this reported category "unknown" while holding
+        // `dev_handoff_missing` in hand.
+        gateTerminalKind,
+        // #1178: where the run actually EXECUTED, which in worktree mode is
+        // not the repo root above. Stage deliverables are written next to the
+        // checkout the stage ran in, so the retro's `pipeline_context` source
+        // has to look there. getRunRepoRoot() is the wrong authority for this
+        // — it exists to keep records OUT of the worktree so they survive its
+        // removal (see utils/blockedFinding.ts). getWorkingDirectory() is the
+        // pipeline's own answer to "where did this stage put its files".
+        this.getWorkingDirectory()
+      );
+    }
+
+    const result: PipelineRunResult = {
+      success: pipelineComplete,
+      completedStages,
+      skippedStages,
+      deferredStages,
+      failedStage,
+      error,
+      terminalKind: gateTerminalKind,
+      blocked: this.blockedTerminalState ?? undefined,
+      totalDurationMs: Date.now() - startTime,
+      outcomeType: classifiedOutcome,
+      analysisResult,
+      activePolicies: this.activePolicies,
+      budgetExceeded,
+    };
+
+    this.firePipelineComplete(result, issueNumber);
+
+    // Notify queue service of pipeline completion for auto-start
+    if (this.queueService) {
+      this.handleQueueAutoStart(result.success, issueNumber);
+    }
+
+    return result;
+  }
+
+  /**
+   * Handle queue auto-start after pipeline completion
+   *
+   * If the queue has items and autoStart is enabled, dequeues the next
+   * issue and starts its pipeline after a delay.
+   *
+   * On failure with queued items, prompts user: "[Stop Queue] [Continue to Next]"
+   *
+   * @param success - Whether the pipeline completed successfully
+   * @param completedIssueNumber - The issue that just completed
+   *
+   * @see Issue #299 - Pipeline queueing with sequential processing
+   */
+  /**
+   * Start the next queued issue's pipeline
+   *
+   * Initializes pipeline state and runs the full pipeline for the given
+   * queue item. Used by both auto-start (after pipeline completion) and
+   * manual resume (play button when queue is waiting).
+   *
+   * @param item - The queue item to start
+   */
+  async startNextQueuedIssue(item: {
+    issueNumber: number;
+    title?: string;
+    requestedAdapter?: string;
+    requestedModel?: string;
+    /** "private" when the queued run is private on the hosted service (#2400). */
+    visibility?: "private";
+  }): Promise<void> {
+    // Initialize pipeline state for the queued issue
+    if (this.stateService) {
+      // Resolved BEFORE the clear+claim pair so the pair is await-free
+      // (#307/C10): a 15s `gh repo view` between releasing the predecessor's
+      // identity and installing this one is a window in which another
+      // producer can claim the singleton.
+      const repo = await this.resolveRunRepoSlug();
+      try {
+        await this.stateService.clearPipeline();
+      } catch {
+        // Ignore - state may not exist yet
+      }
+      // A queued start is its own dispatch, so it mints (ADR-017 Decision 10).
+      // `clearPipeline` above released whatever identity the previous run
+      // left installed, so this cannot land on a live one — and if it does,
+      // `beginRun` refuses rather than stamping over a running issue.
+      // The queued item's visibility rides with its run (#2400).
+      const queuedRunId = uuidV7();
+      this.stateService.beginRun(queuedRunId, repo, item.issueNumber, undefined, item.visibility);
+      if (item.visibility === "private") {
+        void confirmAndReportPrivateRun(this.stateService, item.issueNumber, queuedRunId, repo);
+      }
+      await this.stateService.initializePipeline(
+        item.issueNumber,
+        item.title || `Issue #${item.issueNumber}`,
+        // UNDETERMINED (#448) — see the identical seed in runPipeline. A queued
+        // start knows no more about the branch than a concurrent slot does, and
+        // inventing `feat/{issueNumber}` here reached the same durable record.
+        ""
+      );
+      await this.stateService.setExecutionMode("automatic");
+    }
+
+    // Merge default callbacks (OutputWindow integration) with queue-specific overrides
+    const pipelineCallbacks: PipelineCallbacks = {
+      ...this.defaultPipelineCallbacks,
+      onApprovalRequired: async () => true,
+      onBackwardTransitionConfirm: async () => false,
+      onBacktrackTriggered: () => {}, // No-op in queue mode (#1342)
+      onBacktrackBlocked: () => {}, // No-op in queue mode (#1342)
+      onModelEscalated: () => {}, // No-op in queue mode (#1343)
+      onEscalationBlocked: () => {}, // No-op in queue mode (#1343)
+    };
+
+    this.logger.info("Starting pipeline for queued issue", {
+      issueNumber: item.issueNumber,
+    });
+
+    // #1656: a queued remote run request keeps its pin on auto-start.
+    await this.runPipeline(
+      item.issueNumber,
+      pipelineCallbacks,
+      undefined,
+      item.requestedAdapter
+        ? { adapter: item.requestedAdapter, model: item.requestedModel }
+        : undefined
+    );
+  }
+
+  private async handleQueueAutoStart(
+    success: boolean,
+    completedIssueNumber: number
+  ): Promise<void> {
+    if (!this.queueService) {
+      return;
+    }
+
+    // Every terminal path of runPipeline lands here, so this is where the run
+    // an auto-start began releases its queue item (#2397) — before anything
+    // else, the stop flag included, and before the next dequeue, so the issue
+    // can be queued again and a blocked successor sees it gone.
+    const finished = this.autoStartedQueueItem;
+    if (finished && finished.issueNumber === completedIssueNumber) {
+      finished.started = true; // its terminal hook fired, so the run ran
+      await this.releaseAutoStartedQueueItem(finished, "run finished");
+    }
+
+    // Check stop-queue-after-current flag BEFORE touching the queue.
+    // This must happen before onPipelineComplete() which may dequeue the
+    // next item — if we checked after, the dequeued item would be lost.
+    // @see Issue #1785
+    if (this.shouldStopQueueAfterCurrent) {
+      this.logger.info("Queue auto-start skipped - stop-after-current flag is set", {
+        completedIssueNumber,
+      });
+      this.shouldStopQueueAfterCurrent = false;
+      vscode.commands.executeCommand("setContext", "nightgauge.stopAfterCurrentQueue", false);
+      return;
+    }
+
+    try {
+      await this.queueService.onPipelineComplete(success, completedIssueNumber);
+
+      // Dequeue next item from Go queue
+      const nextItem = await this.queueService.dequeue();
+
+      if (!nextItem) {
+        // Queue is empty, paused, or autoStart disabled
+        return;
+      }
+
+      this.logger.info("Auto-starting next queued issue", {
+        completedIssueNumber,
+        nextIssueNumber: nextItem.issueNumber,
+        nextTitle: nextItem.title,
+      });
+
+      // The dequeue marked the item processing; remember it so the run's end
+      // releases it (#2397). The finally below is the backstop for every path
+      // on which that run never reaches its terminal hook.
+      const taken: AutoStartedQueueItem = {
+        item: nextItem,
+        repo: nextItem.repoName ?? "",
+        issueNumber: nextItem.issueNumber,
+        started: false,
+        released: false,
+      };
+      this.autoStartedQueueItem = taken;
+      try {
+        // Get config delay
+        const config = this.queueService.getConfig();
+        const delay = config.autoStartDelay;
+
+        // Show notification about auto-start
+        vscode.window.showInformationMessage(
+          `Pipeline complete for #${completedIssueNumber}. ` +
+            `Starting #${nextItem.issueNumber} - ${nextItem.title} in ${delay / 1000}s...`
+        );
+
+        // Delay then start next pipeline — unless a stop lands meanwhile.
+        const stopped = await this.waitAutoStartDelay(delay);
+        if (stopped || this.shouldStopQueueAfterCurrent) {
+          this.shouldStopQueueAfterCurrent = false;
+          vscode.commands.executeCommand("setContext", "nightgauge.stopAfterCurrentQueue", false);
+          this.logger.info("Queued issue not started - stopped during the auto-start delay", {
+            issueNumber: nextItem.issueNumber,
+          });
+          return;
+        }
+
+        await this.startNextQueuedIssue(nextItem);
+      } finally {
+        await this.releaseAutoStartedQueueItem(taken, "auto-start ended");
+      }
+    } catch (error) {
+      this.logger.error("Failed to auto-start next queued issue", {
+        completedIssueNumber,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+
+  /**
+   * Wait out the auto-start delay. Resolves true when stop() cut it short
+   * (#2397), false when it ran its course.
+   */
+  private waitAutoStartDelay(ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.cancelAutoStartDelay = null;
+        resolve(false);
+      }, ms);
+      this.cancelAutoStartDelay = () => {
+        clearTimeout(timer);
+        this.cancelAutoStartDelay = null;
+        resolve(true);
+      };
+    });
+  }
+
+  /**
+   * Release an auto-started queue item's `processing` mark, once (#2397).
+   * The terminal hook and the auto-start's own backstop both call this; the
+   * second call is a no-op, so a successor run of the same issue — dequeued
+   * between the two — keeps its own processing mark.
+   *
+   * A run that began is over, so its item is completed. One that never began
+   * — a stop during the auto-start delay, or a start that was refused or
+   * threw — goes back to the queue as it was, the way the concurrent path
+   * returns a dispatch it could not start (#2337): the operator queued that
+   * issue, and nothing ran it. While Stop All is in progress the queue refuses
+   * the item, which is what Stop All asks for.
+   *
+   * Best-effort: a dead socket must not mask the run's outcome. A window
+   * reload releases any mark left behind (`queue.dropProcessing`, #2396).
+   */
+  private async releaseAutoStartedQueueItem(
+    item: AutoStartedQueueItem,
+    reason: string
+  ): Promise<void> {
+    if (item.released) return;
+    item.released = true;
+    if (this.autoStartedQueueItem === item) {
+      this.autoStartedQueueItem = null;
+    }
+    try {
+      await this.queueService?.complete(item.repo, item.issueNumber);
+      let returned = false;
+      if (!item.started && this.queueService) {
+        const queued = await this.queueService.enqueue(
+          item.item.issueNumber,
+          item.item.title,
+          item.item.labels,
+          undefined,
+          requeueOptionsFor(item.item)
+        );
+        returned = queued !== null;
+      }
+      this.logger.debug("Released the auto-started queue item", {
+        issueNumber: item.issueNumber,
+        repo: item.repo,
+        reason,
+        started: item.started,
+        returnedToQueue: returned,
+      });
+    } catch (error) {
+      this.logger.warn(
+        "Failed to release the auto-started queue item — it may linger as processing",
+        {
+          issueNumber: item.issueNumber,
+          repo: item.repo,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+    }
+  }
+
+  /**
+   * Run a bookend stage synchronously (no Claude CLI, zero AI tokens)
+   *
+   * Bookend stages provide reliable synchronization points:
+   * - pipeline-start: Initialize state, reset tokens, fire stage:start event
+   * - pipeline-finish: Aggregate metrics, fire pipeline:complete event
+   *
+   * @param stage - The bookend stage to run
+   * @param issueNumber - The GitHub issue number
+   * @param callbacks - Callbacks for stage events
+   * @returns Result of the stage run
+   */
+  private async runBookendStage(
+    stage: PipelineStage,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks
+  ): Promise<StageRunResult> {
+    const startTime = Date.now();
+
+    this.logger.info("Running bookend stage", { stage, issueNumber });
+    this.currentStage = stage;
+
+    // Notify stage start
+    this.eventDispatcher.onStageStart(stage);
+
+    try {
+      // Update state service to mark stage as running
+      if (this.stateService) {
+        await this.stateService.startStage(stage, { forceBackward: true });
+      }
+
+      // Execute stage-specific logic
+      if (stage === "pipeline-start") {
+        // pipeline-start: Initialization is handled by startStage above
+        // Additional initialization can be added here if needed
+        this.logger.info("Pipeline initialized", { issueNumber });
+      } else if (stage === "pipeline-finish") {
+        // pipeline-finish: Final aggregation and cleanup
+        // State persists until user explicitly clears (per acceptance criteria)
+        this.logger.info("Pipeline finishing", { issueNumber });
+        // Brief pause so the tree renders "running" before completing
+        await new Promise((r) => setTimeout(r, 500));
+
+        // The run-record history JSONL is written EXCLUSIVELY by the Go
+        // binary's pipeline.notifyComplete handler (#232) — the sole
+        // authoritative writer for the extension/HeadlessOrchestrator path, for
+        // both success and failure. The legacy TS bookend write that lived here
+        // was deleted (#313): it raced that writer, wrote to a different repo
+        // root, and — because the deleted TS builder derived outcome from
+        // `state.stages` that had already been cleared at pipeline-finish —
+        // stamped a bogus outcome="cancelled" record next to the authoritative
+        // "complete" one.
+        // This block now only fans out telemetry + alerting, which are distinct
+        // sinks and do not touch the run-record JSONL.
+        const state = await this.stateService?.getState();
+        if (state) {
+          // Issue metadata still feeds telemetry + alerting below (Issue #844).
+          const metadata = this.loadIssueMetadata(issueNumber);
+
+          // Telemetry submission (Issue #1480 — fire-and-forget; opt-in gated inside TelemetryService)
+          const telemetrySvc = TelemetryService.getInstance();
+          if (telemetrySvc) {
+            const issueLabels = metadata?.labels ?? state.labels ?? [];
+            const sizeLabel =
+              issueLabels.find((l: string) => l.startsWith("size:"))?.replace("size:", "") ?? null;
+            const typeLabel =
+              issueLabels.find((l: string) => l.startsWith("type:"))?.replace("type:", "") ?? null;
+            await telemetrySvc.recordPipelineExecution({
+              state,
+              issueMetadata: {
+                issueNumber: state.issue_number,
+                sizeLabel,
+                typeLabel,
+              },
+              startedAt: new Date(state.started_at),
+              completedAt: new Date(),
+            });
+          }
+
+          // Post-run alerting check (Issue #1048, Issue #1335)
+          try {
+            const alertingConfig = getAlertingConfig(this.getPersistentRoot());
+            if (alertingConfig.enabled) {
+              const costUsd = state.tokens?.estimated_cost_usd ?? 0;
+              const startedAt = state.started_at ? new Date(state.started_at).getTime() : 0;
+              const durationMinutes = startedAt > 0 ? (Date.now() - startedAt) / 60000 : 0;
+
+              // Compute model/complexity-aware estimated cost (Issue #1335)
+              let estimatedCostUsd = 0;
+              let estimatedPerStageCosts: Record<string, number> = {};
+              try {
+                const { AutoModelSelector, StageModelCalibrationService } =
+                  await import("@nightgauge/sdk");
+                const { getPerformanceMode } =
+                  await import("../utils/resolvers/monitoringResolver");
+                const { toModelEnvelope } = await import("../utils/modeProfiles");
+                const selector = new AutoModelSelector();
+                const issueMetadataForEstimate = this.loadIssueMetadata(issueNumber);
+                const persistentRoot = this.getPersistentRoot();
+                const calibrationPath = StageModelCalibrationService.getDefaultPath(persistentRoot);
+                const stageModelCalibration =
+                  await StageModelCalibrationService.load(calibrationPath);
+                // Issue #142: thread the active performance mode as a routing
+                // envelope so the estimated model tier matches the tier the
+                // run will actually serve.
+                const performanceMode = getPerformanceMode(persistentRoot);
+                const estimate = selector.estimatePipelineCost(
+                  {
+                    labels: issueMetadataForEstimate?.labels ?? [],
+                    title: issueMetadataForEstimate?.title ?? `Issue #${issueNumber}`,
+                  },
+                  {
+                    skipStages: this.cachedRoutingTelemetry?.skip_stages ?? [],
+                    stageModelCalibration,
+                    envelope: toModelEnvelope(performanceMode),
+                    // The provider pinned at pipeline start, so a mid-run
+                    // config change cannot reprice the comparison (#198).
+                    provider: this.estimatorSnapshot?.provider ?? "anthropic",
+                    stageEfforts: this.estimatorSnapshot?.stageEfforts,
+                  }
+                );
+                estimatedCostUsd = estimate.totalEstimatedCost;
+                estimatedPerStageCosts = Object.fromEntries(
+                  estimate.stages.map((s: { stage: string; estimatedCost: number }) => [
+                    s.stage,
+                    s.estimatedCost,
+                  ])
+                );
+              } catch {
+                // Non-critical: fall through with estimatedCostUsd = 0
+              }
+
+              // Build actual per-stage costs from state
+              const perStageCosts: Record<string, number> = {};
+              if (state.tokens?.per_stage) {
+                for (const [stage, usage] of Object.entries(state.tokens.per_stage)) {
+                  perStageCosts[stage] = usage.cost_usd ?? 0;
+                }
+              }
+
+              const alertResult = checkPipelineAlerts({
+                issueNumber,
+                costUsd,
+                estimatedCostUsd,
+                durationMinutes,
+                thresholds: alertingConfig,
+                perStageCosts,
+                estimatedPerStageCosts,
+              });
+
+              for (const alert of alertResult.alerts) {
+                this.logger.warn(alert.message);
+                if (alert.stageBreakdown) {
+                  for (const s of alert.stageBreakdown) {
+                    this.logger.warn(
+                      `  ${s.stage}: actual=$${s.actualCost.toFixed(3)}, estimated=$${s.estimatedCost.toFixed(3)}`
+                    );
+                  }
+                }
+              }
+
+              // Store anomaly flag for CompletedIssuesService (Issue #1335)
+              this._lastCostAnomalyExceeded = alertResult.costExceeded;
+            }
+          } catch {
+            // Alerting is non-critical — never block pipeline completion
+          }
+        }
+      }
+
+      // Capture reviewer feedback signals before outcome recording (Issue #1409)
+      // This runs after execution history write but before completeStage,
+      // so PR context files are still available for reading pr_number.
+      if (stage === "pipeline-finish") {
+        await this.captureReviewerFeedback(issueNumber);
+      }
+
+      // Outcome recording now fires automatically via completeStage('pipeline-finish')
+      // in PipelineStateService (Issue #1200). completeStage must run BEFORE cleanup
+      // so context files are still available for reading issue/PR data.
+
+      // Complete pipeline-finish HERE (before context cleanup below) so outcome
+      // recording can still read the PR/issue context files. This must NOT fire
+      // for pipeline-start — that stage is completed exactly once by the
+      // non-finish branch after cleanup (line ~10471). Firing it here as well
+      // was the source of the duplicate pipeline-start completedStages entry
+      // (two StageResults, same startedAt, different durations) (#230).
+      if (stage === "pipeline-finish" && this.stateService) {
+        await this.stateService.completeStage(stage);
+      }
+
+      // Clean up context files after completeStage (which records outcome internally)
+      if (stage === "pipeline-finish") {
+        const workspaceRoot = this.getWorkingDirectory();
+        const cleanupScript = path.join(
+          workspaceRoot,
+          "claude-plugins/nightgauge/hooks/lib/cleanup-context-files.sh"
+        );
+        if (fs.existsSync(cleanupScript)) {
+          try {
+            await execFileAsync("bash", [cleanupScript, String(issueNumber)], {
+              encoding: "utf-8",
+              cwd: workspaceRoot,
+              timeout: 45000,
+            });
+            this.logger.info("Context files cleaned up", { issueNumber });
+          } catch (err) {
+            this.logger.warn("Context file cleanup failed", {
+              issueNumber,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
+
+      // Mark stage as complete (pipeline-finish already completed above before cleanup)
+      if (stage !== "pipeline-finish" && this.stateService) {
+        await this.stateService.completeStage(stage);
+      }
+
+      const durationMs = Date.now() - startTime;
+      const result: StageRunResult = {
+        success: true,
+        stage,
+        durationMs,
+      };
+
+      this.eventDispatcher.onStageComplete(stage, result);
+      return result;
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      this.logger.error("Bookend stage failed", {
+        stage,
+        error: error.message || String(error),
+      });
+
+      // Mark stage as failed
+      if (this.stateService) {
+        try {
+          await this.stateService.failStage(stage, error.message);
+        } catch (stateErr) {
+          this.logger.warn("Failed to update state on bookend stage failure", {
+            stage,
+            stateErr,
+          });
+        }
+      }
+
+      this.eventDispatcher.onStageError(stage, error);
+
+      return {
+        success: false,
+        stage,
+        durationMs: Date.now() - startTime,
+        error,
+      };
+    }
+  }
+
+  /**
+   * Run a single skill-based stage
+   *
+   * For bookend stages (pipeline-start, pipeline-finish), use runBookendStage instead.
+   *
+   * @param stage - The stage to run
+   * @param issueNumber - The GitHub issue number
+   * @param callbacks - Callbacks for stage events
+   * @param skipToPhase - Optional phase name to skip to (Issue #1187)
+   * @returns Result of the stage run
+   */
+  async runStage(
+    stage: PipelineStage,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks,
+    skipToPhase?: string,
+    modelOverride?: PipelineModelOverride,
+    pinnedWorkspaceRoot?: string,
+    modelOverrideSource?: import("../utils/skillRunner").ModelSource
+  ): Promise<StageRunResult> {
+    // A remote run request's model (#1656) is applied here, centrally, so
+    // every entry — the stage loop and every same-model retry below it — runs
+    // the requested model. Nothing a caller passes can replace it; the
+    // model-swap retries refuse to run on a pinned run instead.
+    if (this.requestedPin?.model) {
+      modelOverride = this.requestedPin.model;
+      modelOverrideSource = "user-override";
+    }
+    // RECEIVE OR MINT, and release only what we minted (ADR-017 Decision 10).
+    //
+    // `runStage` is reached two ways: from `runPipeline`'s stage loop, where
+    // the run's identity is already installed and this is one stage OF that
+    // run; and as a DIRECT single-stage entry point (Retry Stage, retry from
+    // phase, a failed-issue retry), which is its own dispatch with no run
+    // around it. Only the second case mints, and only the second case ends
+    // the run — a stage inside a pipeline must never release the pipeline's
+    // identity when it returns.
+    //
+    // CHECK-AND-CLAIM IS AWAIT-FREE and the latch is set on the CLAIM, not on
+    // the pre-check (#307/C10). `resolveRunRepoSlug` spawns `gh repo view`
+    // with a 15s timeout; latching before that await and releasing in the
+    // `finally` would let a claim that LOST the race release the WINNER's
+    // identity. Resolving first, then re-testing, means `mintedId` is non-null
+    // only when this call actually installed the id it later releases. A
+    // refusal propagates — the run must not proceed under another's identity.
+    let mintedId: string | null = null;
+    if (this.stateService && this.stateService.getRunId() === null) {
+      const repo = await this.resolveRunRepoSlug();
+      if (this.stateService.getRunId() === null) {
+        const candidate = uuidV7();
+        this.stateService.beginRun(candidate, repo, issueNumber);
+        mintedId = candidate;
+      }
+    }
+    try {
+      return await this.runStageInner(
+        stage,
+        issueNumber,
+        callbacks,
+        skipToPhase,
+        modelOverride,
+        pinnedWorkspaceRoot,
+        modelOverrideSource
+      );
+    } finally {
+      // Keyed release: a stale id (the run already ended and a successor
+      // installed its own) is a no-op rather than a theft.
+      if (mintedId) this.stateService?.endRun(mintedId);
+    }
+  }
+
+  private async runStageInner(
+    stage: PipelineStage,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks,
+    skipToPhase?: string,
+    modelOverride?: PipelineModelOverride,
+    pinnedWorkspaceRoot?: string,
+    modelOverrideSource?: import("../utils/skillRunner").ModelSource
+  ): Promise<StageRunResult> {
+    // Create event dispatcher for this standalone stage run (Issue #2770 — Part 3)
+    this.eventDispatcher = new OrchestratorEventDispatcher(callbacks, this.logger);
+
+    // Handle bookend stages separately (synchronous, zero tokens)
+    if (isBookendStage(stage)) {
+      return this.runBookendStage(stage, issueNumber);
+    }
+
+    // Load issue metadata to determine base size label for budget enforcement.
+    // Skip for issue-pickup: context file doesn't exist until that stage completes.
+    // @see Issue #732 — AutoModelSelector metadata loading
+    const issueMetadataForSize =
+      stage === "issue-pickup" ? undefined : (this.loadIssueMetadata(issueNumber) ?? undefined);
+    const issueSizeLabel: SizeLabel = (issueMetadataForSize?.size as SizeLabel) ?? "M";
+
+    // For stages not yet extracted to dedicated runners (feature-validate, pr-create,
+    // pr-merge), pre-compute the planning-hint budget adjustment so DefaultStageRunner
+    // gets the correct effective size via the executeSkill fallback.
+    // feature-dev's planning adjustment is handled by FeatureDevStageRunner instead.
+    // @see Issue #1333 - Planning-aware budget enforcement
+    // @see Issue #2768 — POST_PLANNING_STAGES regression: preserves zero-behavior-change
+    const POST_PLANNING_NON_DEV_STAGES: ReadonlySet<string> = new Set([
+      "feature-validate",
+      "pr-create",
+      "pr-merge",
+    ]);
+    let effectiveSizeLabel: SizeLabel = issueSizeLabel;
+    if (POST_PLANNING_NON_DEV_STAGES.has(stage)) {
+      const planningHint = this.readPlanningBudgetHint(issueNumber);
+      if (planningHint) {
+        effectiveSizeLabel = resolveEffectiveSize(issueSizeLabel, planningHint);
+        if (effectiveSizeLabel !== issueSizeLabel) {
+          this.logger.info("Budget size adjusted from planning context", {
+            stage,
+            issueNumber,
+            issueSizeLabel,
+            effectiveSizeLabel,
+            assessedSize: planningHint.assessedSize,
+            totalFileCount: planningHint.totalFileCount,
+          });
+        }
+        this.stateService?.setMeta({
+          complexity: planningHint.assessedSize ?? issueSizeLabel,
+          file_count: planningHint.totalFileCount,
+        });
+      }
+    }
+
+    // Delegate to stage runner — runners handle stage-specific concerns:
+    // prerequisite validation (feature-planning, feature-dev) and budget size
+    // adjustment (feature-dev reads planning hints via FeatureDevStageRunner).
+    // Stage-agnostic orchestration (token tracking, error recovery, model
+    // escalation) runs inside executeSkill.
+    // @see Issue #2768 — HeadlessOrchestrator decomposition Part 1
+    const runner = StageRunnerRegistry.getRunner(stage);
+    const ctx: StageRunContext = {
+      stage,
+      issueNumber,
+      workspaceRoot: pinnedWorkspaceRoot ?? this.getWorkingDirectory(),
+      issueSizeLabel,
+      stateService: this.stateService ?? undefined,
+      logger: this.logger,
+      executeSkill: (options) =>
+        this._runSkillStageCore(
+          stage,
+          issueNumber,
+          callbacks,
+          skipToPhase,
+          modelOverride,
+          pinnedWorkspaceRoot,
+          modelOverrideSource,
+          options?.sizeLabel ?? effectiveSizeLabel
+        ),
+      getContextPath: (type, num) => this.getContextPath(type, num),
+    };
+    return runner.run(ctx);
+  }
+
+  /**
+   * Core skill stage execution — the machinery of a single stage run.
+   *
+   * Contains the full orchestration loop (state transition validation, budget
+   * enforcement, token tracking, skill execution, output validation, error
+   * recovery, stage completion) previously inline in runStage().
+   *
+   * The sizeLabel parameter is provided by the calling runner via
+   * StageRunContext.executeSkill(), allowing FeatureDevStageRunner (and future
+   * runners) to inject planning-context budget adjustments without coupling
+   * this core loop to stage-specific logic.
+   *
+   * @param sizeLabel - Effective budget size. Runners may have adjusted this
+   *   from the issue's default size label based on planning context.
+   * @see Issue #2768 — HeadlessOrchestrator decomposition Part 1
+   * @see Issue #1333 - Planning-aware budget enforcement
+   */
+  private async _runSkillStageCore(
+    stage: PipelineStage,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks,
+    skipToPhase?: string,
+    modelOverride?: PipelineModelOverride,
+    pinnedWorkspaceRoot?: string,
+    modelOverrideSource?: import("../utils/skillRunner").ModelSource,
+    sizeLabel: SizeLabel = "M"
+  ): Promise<StageRunResult> {
+    this.currentStage = stage;
+    const startTime = Date.now();
+
+    // The "Starting stage" line is emitted from onModelResolved below, by the
+    // dispatch that actually made the decision (#1016).
+    //
+    // It used to be emitted here from a SECOND resolveModel() call, and the
+    // comment claimed it was "the same resolveModel() call" as the dispatch's.
+    // It was not: the real one passes the issue metadata, this one passed
+    // undefined — and `source: "auto"` is only reachable inside `if
+    // (issueMetadata)`. So on every run the AutoModelSelector decided — the
+    // default for feature-planning and feature-dev — the preview reported
+    // "default" while the dispatch used "auto". One decision, described twice,
+    // by a writer that lacked the inputs to describe it.
+
+    // VALIDATE BEFORE RUNNING
+    if (this.stateService) {
+      const validation = await this.stateService.validateStageTransition(stage, issueNumber);
+
+      if (!validation.allowed) {
+        if (validation.requiresConfirmation) {
+          // Ask for confirmation via callback
+          const confirmed = await this.eventDispatcher.onBackwardTransitionConfirm(
+            stage,
+            validation.confirmationMessage || "Proceed with backward transition?"
+          );
+
+          if (!confirmed) {
+            this.logger.info("Backward transition cancelled by user", {
+              stage,
+            });
+            return {
+              success: false,
+              stage,
+              durationMs: Date.now() - startTime,
+              error: new Error("Backward transition cancelled by user"),
+            };
+          }
+          // User confirmed - proceed with forceBackward flag
+          this.logger.info("User confirmed backward transition", { stage });
+        } else {
+          // Hard block (retry limit, wrong issue, etc.)
+          this.logger.error("Stage transition blocked", {
+            stage,
+            reason: validation.error,
+          });
+          return {
+            success: false,
+            stage,
+            durationMs: Date.now() - startTime,
+            error: new Error(validation.error || "Stage transition blocked"),
+          };
+        }
+      }
+    }
+
+    this.eventDispatcher.onStageStart(stage);
+
+    /**
+     * Send this stage attempt's ONE `running` transition (ADR-017 §7.2).
+     *
+     * Deferred out of this call site and fired from the spawn instead, so the
+     * transition can carry the child's pid — the reconciler's liveness arm 3
+     * has no other way to tell a stage that is polling CI in silence from one
+     * whose host died (F26). `runStageSkillHeadless` is SYNCHRONOUS and fires
+     * `onStageChildSpawned` before it returns the handle, so by the time we
+     * call this the pid is either known or the spawn failed.
+     *
+     * Idempotent by latch: exactly one `running` transition per attempt, ever.
+     * A second would re-enter Go's BeginStage and reset the stage clock. The
+     * pre-stage ceiling refusal below is the one path that exits before the
+     * spawn, and it calls this itself so a refused stage is still recorded as
+     * having begun before it is recorded as failed.
+     */
+    let runningTransitionSent = false;
+    const markStageRunning = async (stagePid?: number): Promise<void> => {
+      if (runningTransitionSent) return;
+      runningTransitionSent = true;
+      if (!this.stateService) return;
+      try {
+        await this.stateService.startStage(stage, {
+          forceBackward: true,
+          ...(stagePid ? { stagePid } : {}),
+        });
+        // Mark stage as headless execution for token tracking (Issue #498)
+        // Headless mode uses stream-json output which enables token parsing
+        await this.stateService.setStageExecutionMode(stage, "headless");
+      } catch (err) {
+        this.logger.warn("Failed to update state on stage start", {
+          stage,
+          err,
+        });
+      }
+    };
+
+    // Note: isRunning is managed by runPipeline(), not here.
+    // Setting it here caused a race condition where isRunning was false
+    // between stages, making the stop button report "no pipeline running."
+    // @see Issue #527
+
+    // Load issue metadata for AutoModelSelector (Issue #732)
+    // Skip for issue-pickup: context file doesn't exist until that stage completes.
+    const issueMetadata =
+      stage === "issue-pickup" ? undefined : (this.loadIssueMetadata(issueNumber) ?? undefined);
+
+    // Budget enforcement (Issue #835, #1333)
+    // sizeLabel is passed in from the runner. FeatureDevStageRunner adjusts it
+    // from planning hints; other stages use issueSizeLabel directly.
+    // @see Issue #2768 — POST_PLANNING_STAGES logic moved to FeatureDevStageRunner
+    const budgetConfig = getBudgetEnforcementConfig();
+
+    const outputTokenOverrides = getOutputTokenLimitOverrides();
+
+    // Adaptive budget overrides: compute p75 from historical exit records for
+    // this (repo, stage, size_label) group and pass as stageOverrides so
+    // BudgetEnforcer uses per-repo calibrated limits instead of static defaults.
+    // Non-fatal: any failure returns empty overrides and logs a warning.
+    // @see Issue #3667 — Adaptive per-repo stage budgets
+    const adaptiveBudgetEnabled = isAdaptiveBudgetEnabled(this.getWorkingDirectory());
+    const staticBudgetsForStages = Object.fromEntries(
+      (Object.entries(DEFAULT_SIZE_AWARE_BUDGETS) as [string, SizeAwareBudget][]).map(([s, v]) => [
+        s,
+        v[sizeLabel] ?? v.M,
+      ])
+    );
+    const adaptiveResult = await loadAdaptiveBudgetOverrides({
+      workspaceRoot: this.getWorkingDirectory(),
+      repo: this.repoOverride ?? "",
+      sizeLabel,
+      staticBudgets: staticBudgetsForStages,
+      enabled: adaptiveBudgetEnabled,
+    });
+    for (const line of adaptiveResult.logLines) {
+      this.logger.info(line);
+    }
+    // Merge adaptive overrides into config overrides (config overrides win when both set).
+    const mergedStageOverrides: Record<
+      string,
+      number | Partial<import("../utils/budgetEnforcer").SizeAwareBudget>
+    > = { ...adaptiveResult.stageOverrides, ...(budgetConfig.stageOverrides ?? {}) };
+    const adaptiveEstimateSources: Record<string, EstimateSource> = adaptiveResult.estimateSources;
+
+    const budgetEnforcer = new BudgetEnforcer({
+      mode: budgetConfig.mode,
+      gracePercent: budgetConfig.gracePercent,
+      windDownPercent: budgetConfig.windDownPercent,
+      stageOverrides:
+        Object.keys(mergedStageOverrides).length > 0
+          ? mergedStageOverrides
+          : budgetConfig.stageOverrides,
+      outputTokenOverrides,
+    });
+
+    // Resolve once per stage — model/effort the runner is about to pick. Used
+    // on every checkBudget call so the BudgetEnforcer's hard-mode terminate
+    // path scales with the same multiplier table that scales the cost-cap
+    // kill. Without this, MAXIMUM (Opus high-effort) pipelines get
+    // terminated by the BudgetEnforcer at Sonnet-calibrated limits while the
+    // cost-cap path (which DOES scale) lets work through — a confusing
+    // asymmetry the 2026-05-04 incidents made very visible (#331 pr-create
+    // killed at $5.74 vs $4.50, #871 feature-dev killed at $23 vs $15).
+    const budgetModelInfo = this.resolveBudgetModelInfo(stage);
+
+    // Log the effective limit for the resolved model when it diverges from
+    // the configured base — without this it's impossible to tell from the
+    // logs whether a kill at $X was "configured limit" or "scaled limit".
+    if (budgetModelInfo.model) {
+      const effective = budgetEnforcer.getEffectiveLimit(stage, sizeLabel, budgetModelInfo);
+      const baseEffective = budgetEnforcer.getEffectiveLimit(stage, sizeLabel);
+      if (effective > 0 && Math.abs(effective - baseEffective) > 0.01) {
+        this.logger.info("Budget enforcement scaled for model/effort", {
+          stage,
+          sizeLabel,
+          model: budgetModelInfo.model,
+          effort: budgetModelInfo.effort,
+          baseEffectiveUsd: +baseEffective.toFixed(2),
+          scaledEffectiveUsd: +effective.toFixed(2),
+        });
+      }
+    }
+    // Warn threshold for in-flight cost toast (Issue #3508).
+    // Set inside the history block below; 0 = disabled (no history or warn off).
+    let stageWarnThresholdUsd = 0;
+
+    // Cost-cap tightness warning (Issue #3276)
+    // Warn once at stage-start when effectiveCap is below historical-median × multiplier.
+    // Uses execution history to compute per-stage median asynchronously; errors are non-fatal.
+    try {
+      const wsRoot = this.getWorkingDirectory();
+      const historyRecords = await ExecutionHistoryReader.readAll(wsRoot);
+      const stageCosts: number[] = [];
+      for (const record of historyRecords) {
+        const cost =
+          "tokens" in record
+            ? ((
+                record as ExecutionHistoryRecord & {
+                  tokens: { per_stage?: Record<string, { cost_usd?: number }> };
+                }
+              ).tokens?.per_stage?.[stage]?.cost_usd ?? 0)
+            : 0;
+        if (cost > 0) stageCosts.push(cost);
+      }
+      if (stageCosts.length > 0) {
+        const sorted = [...stageCosts].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        const median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+        const warningMultiplier = getCostCapWarningMultiplier(wsRoot);
+        const tightnessDecision = checkCostCapTightness(
+          stage,
+          budgetEnforcer.getEffectiveLimit(stage, sizeLabel),
+          median,
+          warningMultiplier,
+          stageCosts.length
+        );
+        if (tightnessDecision.shouldWarn) {
+          this.logger.warn(tightnessDecision.message, { stage });
+        }
+        // Issue #3508: Compute warn threshold for in-flight toast.
+        // historicalMedian × warnMultiplier — passed to skillRunner so the
+        // warn closure fires without needing to re-read history mid-execution.
+        const warnMultiplier = getStageCostWarnMultiplier(stage, wsRoot);
+        stageWarnThresholdUsd = warnMultiplier > 0 ? median * warnMultiplier : 0;
+      }
+    } catch {
+      // Non-fatal: cost-cap tightness warning is advisory only
+    }
+
+    let budgetWarningEmitted = false;
+    let budgetTerminated = false;
+    let budgetTerminatedEffectiveLimit = 0;
+    let budgetTerminatedCost = 0;
+    let windDownSignalWritten = false;
+    let outputTokenWarningEmitted = false;
+    let compactionDetected = false;
+
+    // Burn rate projector for early ceiling warnings (Issue #1935)
+    const ceilingConfigForProjector = getPipelineCeilingConfig(this.getRunRepoRoot());
+    const projectorCeiling =
+      ceilingConfigForProjector.overrideCeilingUsd ?? ceilingConfigForProjector.ceilingUsd ?? 50;
+    const burnRateProjector = new BurnRateProjector(projectorCeiling);
+    let burnRateEarlyWarningEmitted = false;
+
+    // Context budget enforcement (Issue #790 — per-stage input token budgets)
+    const contextBudgetConfig = getContextBudgetConfig();
+    const contextBudgetEnforcer = new ContextBudgetEnforcer({
+      enabled: contextBudgetConfig.enabled,
+      mode: contextBudgetConfig.mode,
+      gracePercent: contextBudgetConfig.gracePercent,
+      stageOverrides: contextBudgetConfig.stageOverrides,
+    });
+    let contextBudgetWarningEmitted = false;
+
+    // Pipeline budget ceiling — mid-stage enforcement (Issue #1047)
+    // Separate instance from the between-stages check in runPipeline() because
+    // runStage() has its own scope. Warning/checkpoint state is per-stage-run.
+    // #253: thread the per-run override through — a fresh per-stage instance
+    // silently discarding a confirmed "Increase Ceiling & Continue" is what
+    // stopped run #236 one second after the user chose to continue.
+    const stageCeilingConfig = getPipelineCeilingConfig(this.getRunRepoRoot());
+    const stagePipelineCeiling = new PipelineBudgetCeiling({
+      ...stageCeilingConfig,
+      ...(this.ceilingOverrideUsd !== null ? { overrideCeilingUsd: this.ceilingOverrideUsd } : {}),
+    });
+    let stageCeilingWarningEmitted = false;
+    let stageCeilingCheckpointEmitted = false;
+    // Issue #3542: set true once onComplete has the stage's result in hand.
+    // The mid-stage ceiling hard-stop must NOT fire after the stage already
+    // finished — the #3365 incident killed an already-complete feature-dev
+    // run because a budget-ceiling poll tick landed 40s after completion.
+    let stageResultResolved = false;
+
+    // Budget escalation cap (#3108): after this many user "Continue" choices
+    // for budget overruns in this stage, stop re-prompting and just save +
+    // stop. Each escalation typically doubles the limit, so two are enough to
+    // confirm intent — three or more is the unbounded burn pattern that took
+    // pr-merge to $63 in #287.
+    const MAX_BUDGET_ESCALATIONS_PER_STAGE = 2;
+    let stageBudgetEscalationCount = 0;
+    let stageCeilingEscalationCount = 0;
+
+    // Productive-progress gate for unattended escalation (Issue #3851).
+    // #3811's feature-dev burned $112 because the unattended auto-escalation
+    // doubled the budget/ceiling UNCONDITIONALLY (gated only on the escalation
+    // count). The proximate fix: before auto-escalating, snapshot the stage's
+    // productive-progress counter (commits / new-file writes / phase markers /
+    // CI progress, via `handle.getProductiveProgressDelta()`). If progress has
+    // NOT advanced since the last escalation, the stage is churning — do not
+    // escalate; auto-commit WIP and stop. If progress HAS advanced, the spend
+    // is buying real work — escalate as before.
+    //
+    // -1 means "never escalated yet" (the first escalation is always allowed,
+    // since there is no prior baseline to compare against — a single ceiling
+    // hit on otherwise-healthy work should not be blocked).
+    let productiveProgressAtLastBudgetEscalation = -1;
+    let productiveProgressAtLastCeilingEscalation = -1;
+
+    /**
+     * Decide whether an unattended escalation should proceed (Issue #3851).
+     * Reads the live productive-progress count off the stage handle and
+     * delegates the policy to the pure `decideProgressGatedEscalation` helper
+     * (unit-tested in isolation).
+     */
+    const shouldEscalateOnProgress = (
+      lastSnapshot: number,
+      handle: SkillProcessHandle | null
+    ): { escalate: boolean; current: number; delta: number } =>
+      decideProgressGatedEscalation(lastSnapshot, handle?.getProductiveProgressDelta?.() ?? 0);
+
+    // Track previous cumulative totals from TokenAccumulator to compute deltas.
+    // onTokenUsage receives cumulative running totals (tokenAccumulator.getTotal()),
+    // but PipelineStateService.updateTokens() adds values incrementally.
+    // Without delta conversion, each callback would re-add the full cumulative
+    // total, inflating state by ~2× per extra callback. @see Issue #843
+    let prevUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
+      costUsd: 0,
+    };
+
+    // Stage-exit telemetry for the diagnostic record (Issue #109). Unlike
+    // `prevUsage` above — which exists to delta-convert for the additive
+    // updateTokens() — the exit record wants this attempt's TOTALS, so the
+    // cumulative value is stored verbatim. Mutated in place from both the
+    // authoritative token callback and the terminal onComplete so a stage that
+    // is killed before its `result` envelope still records the burn it did.
+    const exitTelemetry: StageExitTelemetry = {};
+
+    // Phase timeout event subscriptions (Issue #1187)
+    // Subscribe to stale/timeout events to log warnings and optionally kill.
+    // ptm may be null in test environments where vscode.EventEmitter is unavailable.
+    const ptm = this.getPhaseTimeoutManager();
+    const phaseTimeoutDisposables: vscode.Disposable[] = [];
+    // Mutable ref so phase timeout handlers can kill the process.
+    // Assigned after runStageSkillHeadless() returns the handle.
+    let handleRef: { kill: () => void } | null = null;
+    // Full handle ref for the shared budget/ceiling evaluator (#254). The
+    // evaluator is defined before `const handle` is assigned, so it reaches the
+    // handle (for kill() and productive-progress reads) through this mutable
+    // binding, set the moment runStageSkillHeadless() returns — before any
+    // streamed callback fires.
+    let stageHandle: SkillProcessHandle | null = null;
+    if (ptm) {
+      phaseTimeoutDisposables.push(
+        ptm.onPhaseStale((event: PhaseStaleEvent) => {
+          this.logger.warn("Phase stale detected — no output activity", {
+            stage: event.stage,
+            phase: event.phaseName,
+            phaseType: event.phaseType,
+            inactivityMs: event.inactivityMs,
+          });
+          this.eventDispatcher.onStderr(
+            stage,
+            `[PhaseTimeoutManager] Phase "${event.phaseName}" stale — no output for ${Math.round(event.inactivityMs / 1000)}s\n`
+          );
+        })
+      );
+      phaseTimeoutDisposables.push(
+        ptm.onPhaseTimeout((event: PhaseTimeoutEvent) => {
+          this.logger.error("Phase hard timeout reached — killing process", {
+            stage: event.stage,
+            phase: event.phaseName,
+            phaseType: event.phaseType,
+            elapsedMs: event.elapsedMs,
+          });
+          this.eventDispatcher.onStderr(
+            stage,
+            `[PhaseTimeoutManager] Phase "${event.phaseName}" timed out after ${Math.round(event.elapsedMs / 1000)}s — terminating\n`
+          );
+          // Mark phase as failed in state
+          if (this.stateService) {
+            this.stateService
+              .failPhase(
+                stage,
+                event.phaseName,
+                `Hard timeout after ${Math.round(event.elapsedMs / 1000)}s`,
+                0
+              )
+              .catch(() => {});
+          }
+          // Actually kill the hung process (Issue #1620)
+          if (handleRef) {
+            handleRef.kill();
+          }
+        })
+      );
+    }
+
+    // Issue #3542: PRE-STAGE pipeline budget ceiling check. If the cumulative
+    // pipeline cost already exceeds the ceiling BEFORE this stage starts, fail
+    // fast with a clear message instead of running the stage and killing it
+    // mid-stream (which risks the #3365 lost-work scenario). Only the hard
+    // stop short-circuits here — warnings/checkpoints are handled mid-stage.
+    if (this.stateService) {
+      try {
+        const preState = await this.stateService.getState();
+        const preCost = preState?.tokens?.estimated_cost_usd ?? 0;
+        const preCheck = stagePipelineCeiling.check(preCost);
+        if (preCheck.shouldStop) {
+          this.logger.error("Pipeline budget ceiling already exceeded before stage start", {
+            stage,
+            issueNumber,
+            costUsd: preCheck.currentCostUsd,
+            ceilingUsd: preCheck.effectiveCeilingUsd,
+          });
+          this.eventDispatcher.onStderr(stage, `${preCheck.message}\n`);
+          const ceilingError = new Error(
+            `${preCheck.message} — refusing to start ${stage} (raise pipeline.token_budget_ceiling.ceiling_usd to continue)`
+          );
+          // The one exit that never reaches the spawn. Send the `running`
+          // transition here (no pid — no child was ever created) so Go books
+          // a stage that began and failed, not a `failed` for a stage it
+          // never saw begin. ADR-017 §7.2.
+          await markStageRunning();
+          if (this.stateService) {
+            try {
+              await this.stateService.failStage(stage, ceilingError.message);
+            } catch (err) {
+              this.logger.warn("Failed to update state on pre-stage ceiling block", { stage, err });
+            }
+          }
+          this.eventDispatcher.onStageError(stage, ceilingError);
+          const stageResult: StageRunResult = {
+            success: false,
+            stage,
+            durationMs: 0,
+            error: ceilingError,
+          };
+          this.eventDispatcher.onStageComplete(stage, stageResult);
+          return stageResult;
+        }
+      } catch (err) {
+        // Non-fatal: a pre-stage check failure must not block the stage.
+        this.logger.warn("Pre-stage pipeline ceiling check failed — continuing", { stage, err });
+      }
+    }
+
+    return new Promise((resolveStage) => {
+      /**
+       * Resolve with this attempt's stage-exit telemetry attached (Issue #109).
+       * Every resolution path funnels through here — clean exit, budget kill,
+       * stall kill, zombie watchdog, auto-retry — so a failed stage's exit
+       * record carries the same token/cost figures a healthy one does.
+       *
+       * When the incoming result already carries telemetry it came from the
+       * nested auto-retry `runStage()` below, which ran its own subprocess with
+       * its own accumulator. Those totals SUM (disjoint accumulators, so no
+       * double-book) while the forensic anchors come from the attempt that
+       * actually exited last.
+       */
+      const resolve = (result: StageRunResult): void => {
+        const nested = result.exitTelemetry;
+        resolveStage({
+          ...result,
+          exitTelemetry: nested
+            ? { ...nested, tokenUsage: sumTokenUsage(exitTelemetry.tokenUsage, nested.tokenUsage) }
+            : { ...exitTelemetry },
+        });
+      };
+
+      // ── First-output watchdog (#252 — zombie-run guard) ──────────────────
+      // Covers the window every other detector is blind to: the skill-runner
+      // preamble's unbounded awaits before spawn, and a session that spawns
+      // but never streams a single event. Cost-gated detectors never activate
+      // at $0, and cold-start disables the idle-kill, so without this a silent
+      // stage hangs the slot forever (three 9-hour zombies on 2026-07-18).
+      let stageProducedOutput = false;
+      let zombieWatchdogFired = false;
+      const noOutputTimer = setTimeout(() => {
+        zombieWatchdogFired = true;
+        const minutes = Math.round(STAGE_NO_OUTPUT_TIMEOUT_MS / 60000);
+        const msg =
+          `[stage-no-output-timeout] Stage ${stage} produced no output within ` +
+          `${minutes} minutes of start — presumed wedged during startup ` +
+          `(pre-spawn await or silent session). Failing the stage so the run ` +
+          `can terminate and retry. (#252)`;
+        this.logger.error(msg, { stage, issueNumber });
+        this.eventDispatcher.onStderr(stage, `${msg}\n`);
+        try {
+          handleRef?.kill();
+        } catch {
+          // Process may never have spawned — nothing to kill.
+        }
+        // Fire-and-forget: terminal resolution must never depend on the IPC
+        // round-trip that may itself be the wedged component.
+        if (this.stateService) {
+          void this.stateService.failStage(stage, msg).catch(() => {});
+        }
+        const err = new Error(msg);
+        this.eventDispatcher.onStageError(stage, err);
+        const stageResult: StageRunResult = {
+          success: false,
+          stage,
+          durationMs: Date.now() - startTime,
+          error: err,
+        };
+        this.eventDispatcher.onStageComplete(stage, stageResult);
+        resolve(stageResult);
+      }, STAGE_NO_OUTPUT_TIMEOUT_MS);
+      const markStageOutput = () => {
+        if (!stageProducedOutput) {
+          stageProducedOutput = true;
+          clearTimeout(noOutputTimer);
+        }
+      };
+
+      // Issue #254: one evaluator, two cadences. The terminal `result`
+      // envelope (opts.live === false) BOOKS authoritative cost AND enforces;
+      // the live in-stage cost snapshot (opts.live === true, #233 estimator)
+      // ENFORCES ONLY — it never books, so recorded totals stay authoritative
+      // (no double-booking). Both feed the same BudgetEnforcer /
+      // PipelineBudgetCeiling decision logic, so wind-down -> warn -> terminate
+      // fire mid-stage, in order (Issue #254).
+      const evaluateBudgetAndCeiling = async (
+        usage: ParsedTokenUsage,
+        opts: { live: boolean }
+      ): Promise<void> => {
+        markStageOutput();
+
+        // Live snapshots (#254) ENFORCE ONLY — they must never book cost.
+        // Only the authoritative terminal `result` envelope (opts.live ===
+        // false) books deltas into PipelineStateService and emits the
+        // cost.recorded audit + burn-rate samples, so recorded totals stay
+        // authoritative and there is no double-booking. `prevUsage` is
+        // likewise only advanced here, so the live ceiling delta below reads
+        // "cost booked for this stage so far".
+        if (!opts.live) {
+          // Convert cumulative totals to deltas for PipelineStateService.
+          // TokenAccumulator.getTotal() returns running totals, but
+          // updateTokens() is additive — passing cumulative values would
+          // inflate the state on every subsequent callback. @see Issue #843
+          const delta = {
+            inputTokens: usage.inputTokens - prevUsage.inputTokens,
+            outputTokens: usage.outputTokens - prevUsage.outputTokens,
+            cacheReadTokens: usage.cacheReadTokens - prevUsage.cacheReadTokens,
+            cacheCreationTokens: usage.cacheCreationTokens - prevUsage.cacheCreationTokens,
+            cacheCreation5mTokens:
+              (usage.cacheCreation5mTokens ?? 0) - prevUsage.cacheCreation5mTokens,
+            cacheCreation1hTokens:
+              (usage.cacheCreation1hTokens ?? 0) - prevUsage.cacheCreation1hTokens,
+            costUsd: usage.costUsd - prevUsage.costUsd,
+          };
+          prevUsage = {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cacheReadTokens: usage.cacheReadTokens,
+            cacheCreationTokens: usage.cacheCreationTokens,
+            cacheCreation5mTokens: usage.cacheCreation5mTokens ?? 0,
+            cacheCreation1hTokens: usage.cacheCreation1hTokens ?? 0,
+            costUsd: usage.costUsd,
+          };
+
+          // Keep the exit record's running snapshot on the authoritative
+          // cadence (Issue #109). A stage killed before its terminal envelope
+          // never reaches onComplete's booked figure, so this is what makes a
+          // kill-path record report real spend instead of zeros.
+          exitTelemetry.tokenUsage = usage;
+
+          // Update PipelineStateService with token usage delta (Issue #404)
+          // This fires the unified onTokenUsageUpdated event for UI components
+          if (this.stateService) {
+            try {
+              await this.stateService.updateTokens({
+                inputTokens: delta.inputTokens,
+                outputTokens: delta.outputTokens,
+                cacheReadTokens: delta.cacheReadTokens,
+                cacheCreationTokens: delta.cacheCreationTokens,
+                cacheCreation5mTokens: delta.cacheCreation5mTokens,
+                cacheCreation1hTokens: delta.cacheCreation1hTokens,
+                costUsd: delta.costUsd,
+                // Issue #3228: forward the resolution-step label so per-stage
+                // history records can attribute billed cost vs. computed cost.
+                // The label rides every callback unchanged; it is not a counter.
+                costSource: usage.costSource,
+                stage,
+              });
+            } catch (err) {
+              this.logger.warn("Failed to update token usage", {
+                stage,
+                err,
+              });
+            }
+          }
+
+          // Emit cost.recorded audit event for token usage (Issue #1582)
+          // Uses cumulative totals (not deltas) so the platform can compute
+          // per-stage cost from consecutive events if needed.
+          if (this.auditClient && this.auditCorrelationId) {
+            this.auditClient.enqueue({
+              action: "cost.recorded",
+              resourceType: "stage",
+              resourceId: stage,
+              metadata: {
+                pipelineRunId: this.auditCorrelationId,
+                stage,
+                inputTokens: delta.inputTokens,
+                outputTokens: delta.outputTokens,
+                cacheReadTokens: delta.cacheReadTokens,
+                cacheCreationTokens: delta.cacheCreationTokens,
+                costUsd: delta.costUsd,
+                timestamp: new Date().toISOString(),
+              },
+            });
+          }
+
+          // Burn rate sampling for early ceiling projection (Issue #1935)
+          burnRateProjector.recordSample(usage.costUsd);
+
+          // Burn rate early warning — project ceiling hit before it happens
+          if (!burnRateEarlyWarningEmitted && !budgetTerminated && this.stateService) {
+            try {
+              const pipelineState = await this.stateService.getState();
+              const totalPipelineCost = pipelineState?.tokens?.estimated_cost_usd ?? usage.costUsd;
+              const projection = burnRateProjector.getProjection(totalPipelineCost);
+              if (projection?.shouldWarnEarly) {
+                burnRateEarlyWarningEmitted = true;
+                this.logger.warn("Burn rate projection: ceiling approaching", {
+                  stage,
+                  issueNumber,
+                  burnRatePerMinute: projection.burnRatePerMinute,
+                  projectedMinutesRemaining: projection.projectedMinutesRemaining,
+                  totalPipelineCost,
+                });
+                this.eventDispatcher.onStderr(stage, `[BURN RATE WARNING] ${projection.message}\n`);
+                vscode.window.showWarningMessage(`#${issueNumber}: ${projection.message}`);
+              }
+            } catch {
+              // Non-critical — burn rate projection failure should not break pipeline
+            }
+          }
+        } // end `if (!opts.live)` booking block (#254)
+
+        // Budget enforcement (Issue #835 — hard budget limits, mode-aware
+        // scaling so MAXIMUM-mode runs aren't killed by Sonnet-calibrated
+        // limits per the 2026-05-04 incident retro). Runs on BOTH the live
+        // snapshot and the terminal envelope (#254) — `usage.costUsd` is the
+        // live estimate mid-stage and the authoritative total at stage end.
+        const decision = budgetEnforcer.checkBudget(
+          stage,
+          usage.costUsd,
+          sizeLabel,
+          budgetModelInfo
+        );
+
+        // Which phase side-effects are newly triggered (fire once each, in
+        // wind-down → warn → terminate order). Shared latch logic (#254) so
+        // the live and terminal paths can never double-fire: a threshold the
+        // live estimate already crossed is a no-op when the authoritative
+        // terminal cost re-evaluates it.
+        const budgetActions = nextBudgetActions(decision, {
+          windDownFired: windDownSignalWritten,
+          warnFired: budgetWarningEmitted,
+          terminated: budgetTerminated,
+        });
+
+        // Wind-down signal — tell agent to commit and exit cleanly (Issue #2338)
+        if (budgetActions.fireWindDown) {
+          windDownSignalWritten = true;
+          this.logger.info(decision.message, {
+            stage,
+            costUsd: usage.costUsd,
+            effectiveLimit: decision.effectiveLimit,
+          });
+          this.eventDispatcher.onStderr(stage, `${decision.message}\n`);
+          try {
+            const signalDir = pipelineStateDir(this.getWorkingDirectory());
+            const signalPath = path.join(signalDir, `winddown-signal-${issueNumber}.json`);
+            const signalContent = JSON.stringify(
+              {
+                reason: "stage_budget_winddown",
+                stage,
+                budget_usd: decision.effectiveLimit,
+                current_cost_usd: decision.currentCost,
+                remaining_budget_pct: Math.max(
+                  0,
+                  Math.round(
+                    ((decision.effectiveLimit - decision.currentCost) / decision.effectiveLimit) *
+                      100
+                  )
+                ),
+                message:
+                  "Approaching stage budget limit. Please commit current work, push, and exit cleanly.",
+                timestamp: new Date().toISOString(),
+              },
+              null,
+              2
+            );
+            fs.writeFileSync(signalPath, signalContent);
+          } catch {
+            // Non-critical — the agent can still be killed normally
+          }
+        }
+
+        if (budgetActions.fireWarn) {
+          budgetWarningEmitted = true;
+          this.logger.warn(decision.message, {
+            stage,
+            costUsd: usage.costUsd,
+            effectiveLimit: decision.effectiveLimit,
+            budgetMode: decision.budgetMode,
+          });
+          this.eventDispatcher.onStderr(stage, `${decision.message}\n`);
+        }
+
+        if (budgetActions.fireTerminate) {
+          budgetTerminated = true;
+          budgetTerminatedEffectiveLimit = decision.effectiveLimit;
+          budgetTerminatedCost = usage.costUsd;
+          this.logger.error(decision.message, {
+            stage,
+            costUsd: usage.costUsd,
+            effectiveLimit: decision.effectiveLimit,
+          });
+          this.eventDispatcher.onStderr(stage, `${decision.message}\n`);
+
+          // Budget-pause with retro: gather diagnostics before prompting (Issue #1935)
+          // The process keeps running while we wait for user input —
+          // a few more seconds of cost is negligible vs losing all work.
+          let retroRecommendation = "";
+          try {
+            const perStageCosts: Record<string, number> = {};
+            if (this.stateService) {
+              const state = await this.stateService.getState();
+              if (state?.tokens?.per_stage) {
+                for (const [s, data] of Object.entries(state.tokens.per_stage)) {
+                  if (data && typeof data === "object" && "cost_usd" in data) {
+                    perStageCosts[s] = (data as { cost_usd: number }).cost_usd;
+                  }
+                }
+              }
+            }
+            // Stage-budget terminations report STAGE cost, not pipeline total.
+            // Earlier #2777 used estimated_cost_usd as a fallback when the
+            // Claude CLI hadn't streamed total_cost_usd yet, but that field
+            // is pipeline-wide and corrupted the failure report,
+            // budget-overrun-{N}.json, and calibration signal. @see #3120
+            budgetTerminatedCost = resolveStageCostUsd(usage.costUsd, perStageCosts, stage);
+            const retro = await buildBudgetRetro({
+              budgetType: "stage-cost",
+              currentCost: usage.costUsd,
+              effectiveLimit: decision.effectiveLimit,
+              stage,
+              issueNumber,
+              stageStartTime: startTime,
+              compactionDetected,
+              sizeLabel: sizeLabel ?? "M",
+              workspaceRoot: this.getWorkingDirectory(),
+              perStageCosts,
+            });
+            const retroSummary = retro.diagnosticSummary;
+            retroRecommendation = retro.recommendation;
+            this.eventDispatcher.onStderr(
+              stage,
+              `[BUDGET RETRO]\n${retroSummary}\nRecommendation: ${retroRecommendation}\n`
+            );
+          } catch {
+            // Non-critical — show the prompt without retro if it fails
+          }
+
+          // Cap interactive re-prompts at MAX_BUDGET_ESCALATIONS_PER_STAGE
+          // (#3108). After two confirmed escalations, the next overrun
+          // skips the prompt and stops cleanly — silently re-burning the
+          // ceiling is the failure mode that caused #287's $63 spend.
+          const escalationCapHit = stageBudgetEscalationCount >= MAX_BUDGET_ESCALATIONS_PER_STAGE;
+
+          if (escalationCapHit) {
+            this.logger.warn(
+              "Stage budget escalation cap reached — stopping without re-prompting",
+              {
+                stage,
+                issueNumber,
+                escalations: stageBudgetEscalationCount,
+                cap: MAX_BUDGET_ESCALATIONS_PER_STAGE,
+              }
+            );
+            this.eventDispatcher.onStderr(
+              stage,
+              `[BUDGET ESCALATION CAP] ${stageBudgetEscalationCount} escalations already accepted ` +
+                `for ${stage} — refusing to re-prompt for a third. Saving work and stopping.\n`
+            );
+            vscode.window.showWarningMessage(
+              `Stage ${stage} for #${issueNumber} hit the ${MAX_BUDGET_ESCALATIONS_PER_STAGE}-escalation cap. ` +
+                `Saving work and stopping. Adjust pr.auto_fix_max_attempts or stage budgets, then re-run.`
+            );
+            await this.autoCommitWorktreeWIP(issueNumber, stage);
+            stageHandle?.kill();
+            return;
+          }
+
+          // Unattended (autonomous) runs have no human at the modal, so a
+          // blocking showWarningMessage would stall the whole concurrent
+          // slot waiting for a click that never comes — the source of the
+          // "it kept prompting me to increase the budget" friction. Auto-
+          // escalate (the choice the operator was clicking anyway) up to
+          // the same MAX_BUDGET_ESCALATIONS_PER_STAGE cap, surfacing each
+          // step in the log + a non-blocking toast. The cap + hard stop
+          // still bound runaway spend; only the *prompt* is removed.
+          let userChoice: string | undefined;
+          if (this.unattended) {
+            // Issue #3851: gate the unattended auto-escalation on PRODUCTIVE
+            // progress since the last escalation. Flat progress = churn →
+            // do not escalate; save work and stop. This is the proximate fix
+            // for the #3811 $112 burn (escalation was unconditional).
+            const progressGate = shouldEscalateOnProgress(
+              productiveProgressAtLastBudgetEscalation,
+              stageHandle
+            );
+            if (progressGate.escalate) {
+              userChoice = "Increase Budget & Continue";
+              productiveProgressAtLastBudgetEscalation = progressGate.current;
+              this.logger.info(
+                "Unattended budget escalation — auto-increasing (productive progress confirmed)",
+                {
+                  stage,
+                  issueNumber,
+                  costUsd: usage.costUsd,
+                  effectiveLimit: decision.effectiveLimit,
+                  escalation: stageBudgetEscalationCount + 1,
+                  cap: MAX_BUDGET_ESCALATIONS_PER_STAGE,
+                  productiveSignals: progressGate.current,
+                  productiveDelta: progressGate.delta,
+                }
+              );
+              vscode.window.showWarningMessage(
+                `Autonomous: stage ${stage} for #${issueNumber} exceeded budget ` +
+                  `($${usage.costUsd.toFixed(2)} / $${decision.effectiveLimit.toFixed(2)}) — ` +
+                  `auto-escalated (${stageBudgetEscalationCount + 1}/${MAX_BUDGET_ESCALATIONS_PER_STAGE}). ` +
+                  `It will stop and save work if the cap is reached.`
+              );
+            } else {
+              // Flat productive progress since the last escalation — churn.
+              // Stop instead of doubling the budget again (Issue #3851).
+              userChoice = "Save Work & Stop";
+              this.logger.warn(
+                "Unattended budget escalation REFUSED — no productive progress since last escalation (churn)",
+                {
+                  stage,
+                  issueNumber,
+                  costUsd: usage.costUsd,
+                  effectiveLimit: decision.effectiveLimit,
+                  productiveSignals: progressGate.current,
+                  productiveDelta: progressGate.delta,
+                }
+              );
+              this.eventDispatcher.onStderr(
+                stage,
+                `[BUDGET ESCALATION REFUSED] Stage ${stage} for #${issueNumber} exceeded budget ` +
+                  `($${usage.costUsd.toFixed(2)} / $${decision.effectiveLimit.toFixed(2)}) but made NO ` +
+                  `productive progress (commits / new files / phases) since the last escalation. ` +
+                  `Churn detected — saving work and stopping instead of escalating. (Issue #3851)\n`
+              );
+              vscode.window.showWarningMessage(
+                `Autonomous: stage ${stage} for #${issueNumber} stopped — budget exceeded with no ` +
+                  `productive progress (churn). Work saved. (Issue #3851)`
+              );
+            }
+          } else {
+            userChoice = await vscode.window.showWarningMessage(
+              `Stage ${stage} for #${issueNumber} exceeded budget ` +
+                `($${usage.costUsd.toFixed(2)} / $${decision.effectiveLimit.toFixed(2)}). ` +
+                `Escalation ${stageBudgetEscalationCount + 1}/${MAX_BUDGET_ESCALATIONS_PER_STAGE}. ` +
+                (retroRecommendation || "Work will be lost if stopped without saving."),
+              { modal: false },
+              "Increase Budget & Continue",
+              "Save Work & Stop"
+            );
+          }
+
+          if (userChoice === "Increase Budget & Continue") {
+            stageBudgetEscalationCount += 1;
+            // Double the effective limit and let the stage continue
+            budgetTerminated = false;
+            budgetTerminatedEffectiveLimit = 0;
+            budgetTerminatedCost = 0;
+            budgetWarningEmitted = false;
+            // Apply a 2x multiplier on top of current effective limit
+            const newLimit = decision.effectiveLimit * 2;
+            budgetEnforcer.applyRuntimeOverride(stage, newLimit);
+            this.logger.info("User chose to increase budget and continue", {
+              stage,
+              issueNumber,
+              previousLimit: decision.effectiveLimit,
+              newLimit,
+              escalation: stageBudgetEscalationCount,
+              cap: MAX_BUDGET_ESCALATIONS_PER_STAGE,
+            });
+            this.eventDispatcher.onStderr(
+              stage,
+              `[BUDGET INCREASED] New limit: $${newLimit.toFixed(2)}. ` +
+                `Escalation ${stageBudgetEscalationCount}/${MAX_BUDGET_ESCALATIONS_PER_STAGE}. Stage continuing.\n`
+            );
+          } else {
+            // Save work & stop (or notification was dismissed)
+            this.logger.info("User chose to save work and stop (or dismissed)", {
+              stage,
+              issueNumber,
+            });
+            // Auto-commit WIP before killing (Issue #1935)
+            await this.autoCommitWorktreeWIP(issueNumber, stage);
+            stageHandle?.kill();
+          }
+        }
+
+        // Output token enforcement (Issue #842 — cap feature-dev output tokens)
+        const outputDecision = budgetEnforcer.checkOutputTokens(
+          stage,
+          usage.outputTokens,
+          sizeLabel
+        );
+
+        if (outputDecision.shouldWarn && !outputTokenWarningEmitted) {
+          outputTokenWarningEmitted = true;
+          this.logger.warn(outputDecision.message, {
+            stage,
+            outputTokens: usage.outputTokens,
+            // #1027: the same number the message quotes. This logged
+            // effectiveLimit (base + grace) beside a message naming baseLimit.
+            limit: outputDecision.limit,
+          });
+          this.eventDispatcher.onStderr(stage, `${outputDecision.message}\n`);
+        }
+
+        // Output token limits are warn-only (Issue #1609).
+        // The post-hoc hard kill was removed because it destroyed completed
+        // work without preventing cost overruns. Cost budget enforcement
+        // (`checkBudget()`) remains as the safety net.
+
+        // Context budget enforcement (Issue #790 — per-stage input token budgets)
+        const contextDecision = contextBudgetEnforcer.checkInputTokens(
+          stage,
+          usage.inputTokens,
+          sizeLabel
+        );
+
+        if (contextDecision.shouldWarn && !contextBudgetWarningEmitted) {
+          contextBudgetWarningEmitted = true;
+          this.logger.warn(contextDecision.message, {
+            stage,
+            inputTokens: usage.inputTokens,
+            effectiveLimit: contextDecision.effectiveLimit,
+            budgetMode: contextDecision.budgetMode,
+          });
+          this.eventDispatcher.onStderr(stage, `${contextDecision.message}\n`);
+        }
+
+        if (contextDecision.shouldTerminate && !budgetTerminated) {
+          budgetTerminated = true;
+          this.logger.error(contextDecision.message, {
+            stage,
+            inputTokens: usage.inputTokens,
+            effectiveLimit: contextDecision.effectiveLimit,
+          });
+          this.eventDispatcher.onStderr(stage, `${contextDecision.message}\n`);
+
+          // Context budget-pause with retro (Issue #1935)
+          let ctxRetroMsg = "";
+          try {
+            const retro = await buildBudgetRetro({
+              budgetType: "context-tokens",
+              currentCost: usage.costUsd,
+              effectiveLimit: contextDecision.effectiveLimit,
+              stage,
+              issueNumber,
+              stageStartTime: startTime,
+              compactionDetected,
+              sizeLabel: sizeLabel ?? "M",
+              workspaceRoot: this.getWorkingDirectory(),
+            });
+            ctxRetroMsg = retro.recommendation;
+            this.eventDispatcher.onStderr(
+              stage,
+              `[CONTEXT BUDGET RETRO]\n${retro.diagnosticSummary}\nRecommendation: ${retro.recommendation}\n`
+            );
+          } catch {
+            // Non-critical
+          }
+
+          const ctxChoice = await vscode.window.showWarningMessage(
+            `Stage ${stage} for #${issueNumber} exceeded context budget ` +
+              `(${usage.inputTokens.toLocaleString()} tokens). ` +
+              (ctxRetroMsg || "Work will be lost if stopped without saving."),
+            { modal: false },
+            "Continue Anyway",
+            "Save Work & Stop"
+          );
+
+          if (ctxChoice === "Continue Anyway") {
+            budgetTerminated = false;
+            this.logger.info("User chose to continue past context budget", {
+              stage,
+              issueNumber,
+              inputTokens: usage.inputTokens,
+            });
+            this.eventDispatcher.onStderr(
+              stage,
+              `[CONTEXT BUDGET OVERRIDDEN] Stage continuing per user request.\n`
+            );
+          } else {
+            await this.autoCommitWorktreeWIP(issueNumber, stage);
+            stageHandle?.kill();
+          }
+        }
+
+        // Pipeline budget ceiling — mid-stage check (Issue #1047)
+        // Check cumulative pipeline cost for warning/checkpoint signals.
+        // Hard stop is handled between stages; mid-stage we emit warnings
+        // and write a checkpoint signal file for the agent to detect.
+        if (this.stateService && !budgetTerminated) {
+          try {
+            const pipelineState = await this.stateService.getState();
+            if (pipelineState) {
+              // Live pipeline-cumulative cost (#254): prior stages' booked cost
+              // plus THIS stage's not-yet-booked live estimate. Mid-stage
+              // `prevUsage.costUsd` is 0, so the ceiling sees the live total; at
+              // stage end the terminal envelope has already booked the stage, so
+              // the extra term collapses to 0 and there is no double-count.
+              const ceilingCheck = stagePipelineCeiling.check(
+                livePipelineCostUsd(
+                  pipelineState.tokens?.estimated_cost_usd ?? 0,
+                  usage.costUsd,
+                  prevUsage.costUsd
+                )
+              );
+
+              if (ceilingCheck.shouldWarn && !stageCeilingWarningEmitted) {
+                stageCeilingWarningEmitted = true;
+                this.logger.warn(ceilingCheck.message, {
+                  stage,
+                  costUsd: ceilingCheck.currentCostUsd,
+                  ceilingUsd: ceilingCheck.effectiveCeilingUsd,
+                });
+                this.eventDispatcher.onStderr(stage, `${ceilingCheck.message}\n`);
+              }
+
+              if (ceilingCheck.shouldCheckpoint && !stageCeilingCheckpointEmitted) {
+                stageCeilingCheckpointEmitted = true;
+                this.ceilingCheckpointWritten = true;
+                this.logger.warn(ceilingCheck.message, {
+                  stage,
+                  costUsd: ceilingCheck.currentCostUsd,
+                  ceilingUsd: ceilingCheck.effectiveCeilingUsd,
+                });
+                this.eventDispatcher.onStderr(stage, `${ceilingCheck.message}\n`);
+
+                // Write checkpoint signal file for the agent to detect
+                try {
+                  const signalPath = path.join(
+                    pipelineStateDir(this.getWorkingDirectory()),
+                    `checkpoint-signal-${issueNumber}.json`
+                  );
+                  const signalContent = JSON.stringify(
+                    {
+                      reason: "pipeline_budget_ceiling",
+                      ceiling_usd: ceilingCheck.effectiveCeilingUsd,
+                      current_cost_usd: ceilingCheck.currentCostUsd,
+                      message:
+                        "Approaching pipeline budget ceiling. Please commit current work and exit.",
+                      timestamp: new Date().toISOString(),
+                    },
+                    null,
+                    2
+                  );
+                  fs.writeFileSync(signalPath, signalContent);
+                  this.logger.info("Checkpoint signal file written", {
+                    signalPath,
+                  });
+                } catch (signalErr) {
+                  this.logger.warn("Failed to write checkpoint signal file", {
+                    err: signalErr,
+                  });
+                }
+              }
+
+              // Hard stop during stage — ask user with retro (Issue #1935)
+              // Issue #3542: skip the kill once the stage has already
+              // returned a result. A ceiling poll tick that lands after
+              // onComplete must not override a finished stage — that is
+              // exactly how #3365 lost a complete feature-dev run.
+              if (ceilingCheck.shouldStop && !budgetTerminated && !stageResultResolved) {
+                budgetTerminated = true;
+                this.logger.error(ceilingCheck.message, {
+                  stage,
+                  costUsd: ceilingCheck.currentCostUsd,
+                  ceilingUsd: ceilingCheck.effectiveCeilingUsd,
+                });
+                this.eventDispatcher.onStderr(stage, `${ceilingCheck.message}\n`);
+
+                // Gather retro diagnostics for pipeline ceiling hit
+                let ceilingRetroMsg = "";
+                try {
+                  const ceilingPerStageCosts: Record<string, number> = {};
+                  if (pipelineState?.tokens?.per_stage) {
+                    for (const [s, data] of Object.entries(pipelineState.tokens.per_stage)) {
+                      if (data && typeof data === "object" && "cost_usd" in data) {
+                        ceilingPerStageCosts[s] = (data as { cost_usd: number }).cost_usd;
+                      }
+                    }
+                  }
+                  const ceilingRetro = await buildBudgetRetro({
+                    budgetType: "pipeline-ceiling",
+                    currentCost: ceilingCheck.currentCostUsd,
+                    effectiveLimit: ceilingCheck.effectiveCeilingUsd,
+                    stage,
+                    issueNumber,
+                    stageStartTime: startTime,
+                    compactionDetected,
+                    sizeLabel: sizeLabel ?? "M",
+                    workspaceRoot: this.getWorkingDirectory(),
+                    perStageCosts: ceilingPerStageCosts,
+                  });
+                  ceilingRetroMsg = ceilingRetro.recommendation;
+                  this.eventDispatcher.onStderr(
+                    stage,
+                    `[CEILING RETRO]\n${ceilingRetro.diagnosticSummary}\nRecommendation: ${ceilingRetro.recommendation}\n`
+                  );
+                } catch {
+                  // Non-critical
+                }
+
+                // Cap pipeline-ceiling escalations per stage (#3108) for
+                // the same reason as the per-stage cap above.
+                const ceilingEscalationCapHit =
+                  stageCeilingEscalationCount >= MAX_BUDGET_ESCALATIONS_PER_STAGE;
+
+                if (ceilingEscalationCapHit) {
+                  this.logger.warn(
+                    "Pipeline ceiling escalation cap reached — stopping without re-prompting",
+                    {
+                      stage,
+                      issueNumber,
+                      escalations: stageCeilingEscalationCount,
+                      cap: MAX_BUDGET_ESCALATIONS_PER_STAGE,
+                    }
+                  );
+                  this.eventDispatcher.onStderr(
+                    stage,
+                    `[CEILING ESCALATION CAP] ${stageCeilingEscalationCount} ceiling escalations ` +
+                      `already accepted in ${stage} — refusing to re-prompt. Saving work and stopping.\n`
+                  );
+                  vscode.window.showWarningMessage(
+                    `Pipeline ceiling for #${issueNumber} hit the ${MAX_BUDGET_ESCALATIONS_PER_STAGE}-escalation cap. ` +
+                      `Saving work and stopping. Raise pipeline.budget_ceiling_usd in config and re-run if needed.`
+                  );
+                  await this.autoCommitWorktreeWIP(issueNumber, stage);
+                  stageHandle?.kill();
+                  return;
+                }
+
+                // Same unattended carve-out as the per-stage budget prompt
+                // above: an autonomous slot has no human to click the modal,
+                // so auto-escalate up to the cap and surface it non-blocking.
+                let ceilingChoice: string | undefined;
+                if (this.unattended) {
+                  // Issue #3851: gate the unattended ceiling auto-escalation
+                  // on PRODUCTIVE progress since the last ceiling escalation
+                  // — flat = churn → stop. This is the proximate fix for the
+                  // #3811 $112 burn (the ceiling doubled $75→$150→$300
+                  // unconditionally).
+                  const progressGate = shouldEscalateOnProgress(
+                    productiveProgressAtLastCeilingEscalation,
+                    stageHandle
+                  );
+                  if (progressGate.escalate) {
+                    ceilingChoice = "Increase Ceiling & Continue";
+                    productiveProgressAtLastCeilingEscalation = progressGate.current;
+                    this.logger.info(
+                      "Unattended pipeline-ceiling escalation — auto-increasing (productive progress confirmed)",
+                      {
+                        stage,
+                        issueNumber,
+                        currentCostUsd: ceilingCheck.currentCostUsd,
+                        effectiveCeilingUsd: ceilingCheck.effectiveCeilingUsd,
+                        escalation: stageCeilingEscalationCount + 1,
+                        cap: MAX_BUDGET_ESCALATIONS_PER_STAGE,
+                        productiveSignals: progressGate.current,
+                        productiveDelta: progressGate.delta,
+                      }
+                    );
+                    vscode.window.showWarningMessage(
+                      `Autonomous: pipeline ceiling exceeded for #${issueNumber} ` +
+                        `($${ceilingCheck.currentCostUsd.toFixed(2)} / $${ceilingCheck.effectiveCeilingUsd.toFixed(2)}) — ` +
+                        `auto-escalated (${stageCeilingEscalationCount + 1}/${MAX_BUDGET_ESCALATIONS_PER_STAGE}). ` +
+                        `It will stop and save work if the cap is reached.`
+                    );
+                  } else {
+                    // Flat productive progress since the last ceiling
+                    // escalation — churn. Stop instead of doubling the
+                    // ceiling again (Issue #3851 — the $112 proximate fix).
+                    ceilingChoice = "Save Work & Stop";
+                    this.logger.warn(
+                      "Unattended ceiling escalation REFUSED — no productive progress since last escalation (churn)",
+                      {
+                        stage,
+                        issueNumber,
+                        currentCostUsd: ceilingCheck.currentCostUsd,
+                        effectiveCeilingUsd: ceilingCheck.effectiveCeilingUsd,
+                        productiveSignals: progressGate.current,
+                        productiveDelta: progressGate.delta,
+                      }
+                    );
+                    this.eventDispatcher.onStderr(
+                      stage,
+                      `[CEILING ESCALATION REFUSED] Pipeline ceiling exceeded for #${issueNumber} ` +
+                        `($${ceilingCheck.currentCostUsd.toFixed(2)} / $${ceilingCheck.effectiveCeilingUsd.toFixed(2)}) but made NO ` +
+                        `productive progress (commits / new files / phases) since the last escalation. ` +
+                        `Churn detected — saving work and stopping instead of escalating. (Issue #3851)\n`
+                    );
+                    vscode.window.showWarningMessage(
+                      `Autonomous: #${issueNumber} stopped — pipeline ceiling exceeded with no ` +
+                        `productive progress (churn). Work saved. (Issue #3851)`
+                    );
+                  }
+                } else {
+                  ceilingChoice = await vscode.window.showWarningMessage(
+                    `Pipeline ceiling exceeded for #${issueNumber} ` +
+                      `($${ceilingCheck.currentCostUsd.toFixed(2)} / $${ceilingCheck.effectiveCeilingUsd.toFixed(2)}). ` +
+                      `Escalation ${stageCeilingEscalationCount + 1}/${MAX_BUDGET_ESCALATIONS_PER_STAGE}. ` +
+                      (ceilingRetroMsg || "Work will be lost if stopped without saving."),
+                    { modal: false },
+                    "Increase Ceiling & Continue",
+                    "Save Work & Stop"
+                  );
+                }
+
+                if (ceilingChoice === "Increase Ceiling & Continue") {
+                  stageCeilingEscalationCount += 1;
+                  budgetTerminated = false;
+                  this.logger.info("User chose to increase pipeline ceiling", {
+                    stage,
+                    issueNumber,
+                    previousCeiling: ceilingCheck.effectiveCeilingUsd,
+                    newCeiling: ceilingCheck.effectiveCeilingUsd * 2,
+                    escalation: stageCeilingEscalationCount,
+                    cap: MAX_BUDGET_ESCALATIONS_PER_STAGE,
+                  });
+                  // #253: actually raise the ceiling, per-run. Before this
+                  // the escalation only muted warnings for the current
+                  // stage; the fresh per-stage ceiling instance (and the
+                  // run-level between-stage check) still stopped the
+                  // pipeline at the next boundary — run #236 was stopped
+                  // one second after the user confirmed continuing.
+                  this.ceilingOverrideUsd = ceilingCheck.effectiveCeilingUsd * 2;
+                  stagePipelineCeiling.setOverrideCeiling(this.ceilingOverrideUsd);
+                  stageCeilingWarningEmitted = true;
+                  stageCeilingCheckpointEmitted = true;
+                  this.eventDispatcher.onStderr(
+                    stage,
+                    `[PIPELINE CEILING OVERRIDDEN] Escalation ` +
+                      `${stageCeilingEscalationCount}/${MAX_BUDGET_ESCALATIONS_PER_STAGE}. Stage continuing per user request.\n`
+                  );
+                } else {
+                  await this.autoCommitWorktreeWIP(issueNumber, stage);
+                  stageHandle?.kill();
+                }
+              }
+            }
+          } catch (err) {
+            // Non-critical: ceiling check failure should not break pipeline
+            this.logger.warn("Failed to check pipeline budget ceiling in onTokenUsage", {
+              stage,
+              err,
+            });
+          }
+        }
+      };
+
+      /**
+       * The stage child's pid, captured synchronously by the spawn callback
+       * so this attempt's single `running` transition can carry it
+       * (ADR-017 §7.2). Zero when the spawn never produced one.
+       */
+      let stageChildPid = 0;
+
+      const handle = runStageSkillHeadless(
+        stage,
+        issueNumber,
+        {
+          onStageChildSpawned: (pid) => {
+            stageChildPid = pid;
+          },
+          onStdout: (data) => {
+            markStageOutput();
+            // Reset stale timer on any output activity (Issue #1187)
+            ptm?.resetActivityTimer();
+            this.eventDispatcher.onStdout(stage, data);
+          },
+          onPhaseStart: (_detectedStage, name, index, total) => {
+            markStageOutput();
+            this.eventDispatcher.onPhaseStart(stage, name, index, total);
+          },
+          // The ordering-derived arm (#1924). Forwarded here for the same
+          // reason as onPhaseStart: this object is an explicit property list,
+          // and a runner callback that is never named is silently undefined —
+          // which is exactly how gap-fill reached main implemented at both
+          // layers and recorded by no run.
+          onPhasePassed: (_detectedStage, name, index, total) => {
+            markStageOutput();
+            this.eventDispatcher.onPhasePassed(stage, name, index, total);
+          },
+          onStderr: (data) => {
+            markStageOutput();
+            // Reset stale timer on any output activity (Issue #1187)
+            ptm?.resetActivityTimer();
+            this.eventDispatcher.onStderr(stage, data);
+
+            // Issue #3508: Cost warn toast. skillRunner emits [cost-warn] on
+            // stderr when the stage cost crosses warnThresholdUsd. Fire a
+            // non-blocking VSCode warning toast so the user is aware without
+            // interrupting the pipeline.
+            if (data.includes("[cost-warn]")) {
+              void vscode.window.showWarningMessage(
+                data.replace("[cost-warn] ", "").replace(/\n$/, "")
+              );
+            }
+
+            // Compaction detection (Issue #1935): Claude Code emits a message
+            // when it compresses conversation history. This is a strong signal
+            // the issue is too large for a single pipeline run.
+            if (
+              !compactionDetected &&
+              /auto-compact|compressing prior|conversation.*compress/i.test(data)
+            ) {
+              compactionDetected = true;
+              this.logger.warn(
+                "Context compaction detected — issue may be too large for single pipeline run",
+                { stage, issueNumber }
+              );
+              vscode.window.showWarningMessage(
+                `#${issueNumber} triggered context compaction during ${stage}. ` +
+                  `This issue may be too large — consider breaking it down into smaller sub-issues.`
+              );
+            }
+          },
+          onTokenUsage: (usage) => {
+            void evaluateBudgetAndCeiling(usage, { live: false });
+          },
+          onCostSnapshot: (usage) => {
+            void evaluateBudgetAndCeiling(usage, { live: true });
+          },
+          onStageProgress: (usage) => {
+            // Live in-stage token/cost estimate (#233), already throttled to
+            // >=5s in skillRunner. Mirror the Go-driven path (PipelineBridge):
+            // fire-and-forget a stage_progress event to the platform via Go so
+            // the run-detail view shows tokens/cost accruing mid-stage. The
+            // authoritative per-stage totals still flow through the "complete"
+            // transition; this is a live estimate only. Best-effort.
+            //
+            // No identity installed → no send (ADR-017 step 4, D2).
+            // `notifyStageProgress` is run-progress class, so `runId: ""` is
+            // refused `run_id_required` every 5 seconds by a callback that was
+            // never speaking for a run. Skip it and log the skip once.
+            const progressRunId = this.stateService?.getRunId() ?? null;
+            if (progressRunId === null) {
+              this.logger.warn(
+                "pipeline.notifyStageProgress — local-only state service — no run identity " +
+                  "installed; IPC notify skipped (ADR-017 step 4)",
+                { stage, issueNumber }
+              );
+              return;
+            }
+            IpcClient.getInstance()
+              .call("pipeline.notifyStageProgress", {
+                // The installed run's repo is the resolveRunRepoSlug-derived
+                // value beginRun pinned, so the no-override case stops
+                // sending "" and the platform can attribute the estimate.
+                repo: this.stateService?.getRunRepo() || this.repoOverride || "",
+                issueNumber,
+                stage,
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                cacheReadTokens: usage.cacheReadTokens,
+                costUsd: usage.costUsd,
+                runId: progressRunId,
+              } satisfies NotifyStageProgressParams)
+              .catch((err: unknown) => {
+                handleIpcRejection({
+                  method: "pipeline.notifyStageProgress",
+                  stage,
+                  runId: progressRunId,
+                  err,
+                });
+                this.logger.warn("Failed to notify stage progress", { stage, err });
+              });
+          },
+          onToolCall: (toolName, toolInput) => {
+            // Bridge tool call events to PipelineCallbacks (Issue #639)
+            // This routes tool_use blocks from stream-json → PipelineCallbacks.onToolCall
+            // → pickupIssue.ts → PipelineStateService.recordToolCall → Dashboard
+            const input = toolInput as Record<string, unknown> | undefined;
+            const target =
+              typeof input?.file_path === "string"
+                ? input.file_path
+                : typeof input?.command === "string"
+                  ? input.command.substring(0, 100)
+                  : typeof input?.pattern === "string"
+                    ? input.pattern
+                    : "";
+
+            this.eventDispatcher.onToolCall(stage, {
+              tool: toolName,
+              target,
+              args: input as Record<string, unknown> | undefined,
+            });
+          },
+          onStallWarningClear: () => {
+            this.eventDispatcher.onStallWarningClear(stage);
+          },
+          onModelResolved: (_resolvedStage, model, adapter, source) => {
+            // The ONE writer of the dispatch's model decision (#1016). It fires
+            // after the adapter branches have finished resolving, so `source`
+            // here is what the run actually used — not a prediction of it.
+            this.logger.info("Starting stage", {
+              stage,
+              issueNumber,
+              model,
+              modelSource: source,
+              adapter,
+            });
+
+            // Record the resolved model up-front (#367) so a stage killed
+            // before completeStage/failStage still attributes its true model
+            // instead of 'unknown'. Fire-and-forget: telemetry must never
+            // block or throw into the run. Use the closure-captured `stage`
+            // (matching every other callback here).
+            const stateService = this.stateService;
+            if (!stateService) return;
+            void stateService.recordStageModel(stage, { model, adapter }).catch((err) => {
+              this.logger.warn("Failed to record resolved stage model up-front", {
+                stage,
+                err,
+              });
+            });
+          },
+          onComplete: async (result: SkillRunResult) => {
+            markStageOutput();
+            // #252: the first-output watchdog already failed this stage and
+            // resolved the promise — a late completion (e.g. from the kill we
+            // issued) must not double-fire terminal events.
+            if (zombieWatchdogFired) {
+              return;
+            }
+            // Issue #3542: mark the stage resolved synchronously, before any
+            // await, so a still-in-flight onTokenUsage ceiling poll cannot
+            // hard-stop a stage that has already produced its result.
+            stageResultResolved = true;
+            const durationMs = Date.now() - startTime;
+            this.currentProcess = null;
+
+            // Context-window telemetry (#1668), forwarded where stage usage is,
+            // so the "complete" notify carries it to RecordStageContext.
+            if (
+              this.stateService &&
+              (result.peakStepInputTokens !== undefined ||
+                result.contextWindowTokens !== undefined ||
+                result.compactionCount !== undefined)
+            ) {
+              try {
+                await this.stateService.updateTokens({
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  stage,
+                  peakStepInputTokens: result.peakStepInputTokens,
+                  contextWindowTokens: result.contextWindowTokens,
+                  compactionCount: result.compactionCount,
+                });
+              } catch (err) {
+                this.logger.warn("Failed to record stage context telemetry", { stage, err });
+              }
+            }
+
+            // Capture the stage-exit telemetry the diagnostic record needs
+            // (Issue #109). `result.tokenUsage` is the BOOKED per-stage total —
+            // the reconciled accumulator on the normal path, the live estimate
+            // on a kill path (#296) — so it supersedes the running snapshot
+            // taken in evaluateBudgetAndCeiling. Left untouched when the run
+            // produced none (a stage that consumed nothing books nothing).
+            exitTelemetry.exitCode = result.exitCode;
+            exitTelemetry.idleMsAtExit = result.idleMsAtExit;
+            exitTelemetry.signal = result.signal;
+            exitTelemetry.signalSource = result.signalSource;
+            exitTelemetry.killCeiling = result.killCeiling;
+            exitTelemetry.killCeilingValue = result.killCeilingValue;
+            exitTelemetry.sessionId = result.sessionId;
+            exitTelemetry.lastBashCommand = result.lastBashCommand;
+            exitTelemetry.lastBashExit = result.lastBashExit;
+            exitTelemetry.recentBash = result.recentBash;
+            exitTelemetry.stopHookErrored = result.stopHookErrored;
+            exitTelemetry.stderrTail = result.stderrTail;
+            if (result.tokenUsage) {
+              exitTelemetry.tokenUsage = result.tokenUsage;
+            }
+
+            // Clean up phase timeout timers and subscriptions (Issue #1187)
+            // Complete all active phases for this stage to cancel their timers
+            if (ptm && this.stateService) {
+              try {
+                const pState = await this.stateService.getState();
+                const phases = pState?.stages[stage]?.phases;
+                if (phases) {
+                  for (const p of phases) {
+                    if (p.status === "running") {
+                      ptm.completePhase(stage, p.name);
+                    }
+                  }
+                }
+              } catch {
+                // Non-critical: timer cleanup failure shouldn't block completion
+              }
+            }
+            for (const d of phaseTimeoutDisposables) {
+              d?.dispose();
+            }
+            // Note: isRunning is NOT reset here. It's managed by runPipeline()'s
+            // finally block. Resetting here caused a race condition where the stop
+            // button saw isRunning=false between stages. @see Issue #527
+
+            // Issue #697: Detect when a subagent exits after an interactive
+            // prompt in headless mode. The exit code may be 0 but the agent
+            // asked a question no one could answer — treat as a failure.
+            if (result.success && result.promptDetected) {
+              this.logger.error("Stage exited after interactive prompt in headless mode", {
+                stage,
+                durationMs,
+                promptDetected: true,
+              });
+
+              const promptError = new Error(
+                `${stage} exited after an interactive prompt (AskUserQuestion) in headless mode. ` +
+                  `The subagent asked a question that cannot be answered without a human. ` +
+                  `This is treated as a stage failure.`
+              );
+
+              // Update state service
+              if (this.stateService) {
+                try {
+                  await this.stateService.failStage(stage, promptError.message);
+                } catch (err) {
+                  this.logger.warn("Failed to update state on prompt-exit failure", { stage, err });
+                }
+              }
+
+              this.eventDispatcher.onStageError(stage, promptError);
+
+              const stageResult: StageRunResult = {
+                success: false,
+                stage,
+                durationMs,
+                error: promptError,
+              };
+
+              this.eventDispatcher.onStageComplete(stage, stageResult);
+              resolve(stageResult);
+              return;
+            }
+
+            // ── Post-merge ground-truth override for pr-merge (#266) ─────────
+            // A late per-stage kill (progress-runaway, stall, or budget) must
+            // NEVER record a pr-merge whose PR already MERGED as a failure. In
+            // the #266 race the budget enforcer's escalation let the stage keep
+            // running, the merge landed on the forge, then a progress-runaway
+            // kill fired and its failed StageRunResult won — booking a MERGED
+            // run as failed/stall_kill with a misattributed $75 runaway ceiling.
+            // Before any kill branch declares failure, consult the deterministic
+            // per-issue PR state (pr-{N}.json → gh). If it is MERGED, the stage
+            // did its job: resolve success so the terminal outcome reflects
+            // ground truth, let the pipeline advance to pipeline-finish, and
+            // record the merge for the Go recording boundary. The existing
+            // post-merge verification gate at the call site (#1819) still runs.
+            if (
+              stage === "pr-merge" &&
+              !result.success &&
+              (result.costCapExceeded || result.stallKilled || budgetTerminated)
+            ) {
+              const merged = await this.checkPrMergedForIssue(issueNumber);
+              if (merged) {
+                this.prMergedGroundTruth = true;
+                this.logger.warn(
+                  "pr-merge killed after the merge landed — PR is MERGED; recording success " +
+                    "(ground truth overrides late per-stage kill) (#266)",
+                  {
+                    stage,
+                    issueNumber,
+                    prNumber: merged.prNumber,
+                    durationMs,
+                    costCapExceeded: result.costCapExceeded ?? false,
+                    stallKilled: result.stallKilled ?? false,
+                    budgetTerminated,
+                  }
+                );
+                if (this.completedStageSet.has(stage)) {
+                  return;
+                }
+                this.completedStageSet.add(stage);
+                if (this.stateService) {
+                  try {
+                    await this.stateService.completeStage(stage);
+                  } catch (err) {
+                    this.logger.warn(
+                      "Failed to mark pr-merge complete on post-merge ground-truth override",
+                      { stage, err }
+                    );
+                  }
+                }
+                const mergedResult: StageRunResult = {
+                  success: true,
+                  stage,
+                  durationMs,
+                };
+                this.eventDispatcher.onStageComplete(stage, mergedResult);
+                resolve(mergedResult);
+                return;
+              }
+            }
+
+            // Issue #3002 / #3508: Detect runaway-progress termination.
+            // When costCapExceeded is true, the stage was killed by the
+            // progress-based runaway monitor (Issue #3783). The $75 dollar
+            // runaway ceiling is warn-only, so this is NOT a ceiling crossing —
+            // it is a productive-progress stall. The skillRunner already emitted
+            // the authoritative [runaway-progress-exceeded] marker; Go maps that
+            // to TerminalKindRunawayProgress (30m backoff, no queue halt, no
+            // autonomous pause). Show a warning toast — do NOT halt queue.
+            if (result.costCapExceeded) {
+              const costAtTermUsd = result.costAtTerminationUsd ?? 0;
+
+              this.logger.warn("Stage terminated due to progress-based runaway kill", {
+                stage,
+                durationMs,
+                costCapExceeded: true,
+                cost_at_termination_usd: costAtTermUsd,
+              });
+
+              // Show non-blocking warning toast — Go handles retry via the
+              // transient stall-kill path. #266: report the cost at termination
+              // only. There is NO dollar ceiling to name (the progress monitor,
+              // not a $75 ceiling, fired the kill), so the old "$X / $75" framing
+              // is dropped rather than printed as a nonsensical over/under ratio.
+              void vscode.window.showWarningMessage(
+                `Nightgauge: Issue #${issueNumber ?? "?"} hit a progress-based runaway kill at ${stage} ` +
+                  `(cost $${costAtTermUsd.toFixed(2)}) — will retry automatically in 30 min.`
+              );
+
+              // #266: PRESERVE the authoritative marker skillRunner emitted
+              // ([runaway-progress-exceeded], which Go maps to
+              // TerminalKindRunawayProgress). The prior fallback synthesized a
+              // `[runaway-ceiling-exceeded] ... Cost $X exceeded ceiling ($75)`
+              // string that (a) misattributed a progress kill as a dollar-ceiling
+              // crossing and (b) printed a ceiling the cost never approached. Only
+              // synthesize when skillRunner left no runaway marker at all, and do
+              // so with honest progress-kill semantics (no invented ceiling).
+              const emittedMarker = result.error?.message ?? "";
+              const hasRunawayMarker =
+                emittedMarker.includes("[runaway-progress-exceeded]") ||
+                emittedMarker.includes("[runaway-ceiling-exceeded]");
+              const runawayMarker = hasRunawayMarker
+                ? emittedMarker
+                : `[runaway-progress-exceeded] Stage ${stage} terminated: progress-based runaway kill ` +
+                  `at cost $${costAtTermUsd.toFixed(4)} (no dollar ceiling crossed). ` +
+                  `Treated as transient — will retry with 30-minute backoff (Issue #3783).`;
+              const costCapError = new Error(runawayMarker);
+
+              if (this.stateService) {
+                try {
+                  await this.stateService.failStage(stage, costCapError.message, {
+                    model: result.servedModel ?? result.modelDecision?.model,
+                    adapter: result.adapterDecision?.adapter,
+                    // The raw served envelope (#888) — NOT fallen back to the requested
+                    // values the way `model` above is. Undefined means the executor
+                    // reported nothing, and Go records that as absent rather than
+                    // inventing an observation.
+                    servedModel: result.servedModel,
+                    servedEffort: result.servedEffort,
+                    servedThinking: result.servedThinking,
+                  });
+                } catch (err) {
+                  this.logger.warn("Failed to update state on runaway-progress failure", {
+                    stage,
+                    err,
+                  });
+                }
+              }
+
+              this.eventDispatcher.onStageError(stage, costCapError);
+
+              const stageResult: StageRunResult = {
+                success: false,
+                stage,
+                durationMs,
+                error: costCapError,
+              };
+
+              this.eventDispatcher.onStageComplete(stage, stageResult);
+              resolve(stageResult);
+              return;
+            }
+
+            // Issue #1620: Detect stall-killed termination.
+            // When stallKilled is true, the process exceeded
+            // stall_kill_multiplier × stall_threshold and was forcibly killed.
+            //
+            // Issue #3442: PRESERVE the underlying kill marker from
+            // `result.error.message` (which carries the last 3 lines of
+            // stderr via inferProcessError). Pre-fix this branch synthesized
+            // a generic `[stall-killed] {stage} terminated...` message and
+            // discarded `result.error`, which destroyed the
+            // `[rate-limit-quota-exhausted]` marker (#3386) that the
+            // terminal-kind rule table (internal/terminalkind/table.json)
+            // keys on. Without that classification the autonomous
+            // scheduler's global quota cooldown (#3434) is bypassed and
+            // every quota-exhausted kill increments the lifetime failure
+            // cap — exactly the regression #3440 was supposed to close but
+            // didn't because its Go-side fallback requires failureDetail
+            // (also empty in this path). Compose the original marker text
+            // into the synthetic message so downstream regex still matches.
+            if (result.stallKilled) {
+              this.logger.error("Stage terminated due to stall detection auto-kill", {
+                stage,
+                durationMs,
+                stallKilled: true,
+                stall_indicator: true, // Issue #2871 — distinct field for dashboard filtering
+              });
+
+              const stallError = composeStallKilledError(stage, durationMs, result.error);
+
+              if (this.stateService) {
+                try {
+                  await this.stateService.failStage(stage, stallError.message, {
+                    model: result.servedModel ?? result.modelDecision?.model,
+                    adapter: result.adapterDecision?.adapter,
+                    // The raw served envelope (#888) — NOT fallen back to the requested
+                    // values the way `model` above is. Undefined means the executor
+                    // reported nothing, and Go records that as absent rather than
+                    // inventing an observation.
+                    servedModel: result.servedModel,
+                    servedEffort: result.servedEffort,
+                    servedThinking: result.servedThinking,
+                  });
+                } catch (err) {
+                  this.logger.warn("Failed to update state on stall-kill failure", { stage, err });
+                }
+              }
+
+              this.eventDispatcher.onStageError(stage, stallError);
+
+              const stageResult: StageRunResult = {
+                success: false,
+                stage,
+                durationMs,
+                error: stallError,
+              };
+
+              this.eventDispatcher.onStageComplete(stage, stageResult);
+              resolve(stageResult);
+              return;
+            }
+
+            // Issue #835: Detect budget-exceeded termination.
+            // When budgetTerminated is true, the process was killed by BudgetEnforcer
+            // (cost overrun or context overrun — output token limits are warn-only
+            // per Issue #1609).
+            // Treat as non-retryable failure with clear error message.
+            if (budgetTerminated) {
+              // Use the actual enforcement limit captured at termination time,
+              // which accounts for efficiency adjustments (Issue #1392).
+              // getEffectiveLimit() ignores efficiency adjustments and would
+              // report a higher limit than what was actually enforced.
+              const costLimit =
+                budgetTerminatedEffectiveLimit > 0
+                  ? budgetTerminatedEffectiveLimit
+                  : budgetEnforcer.getEffectiveLimit(stage, sizeLabel);
+              // ----------------------------------------------------------------
+              // SHIPPED-PARTIALLY reclassification (#3666)
+              //
+              // Before declaring a hard failure, look at the work product. If
+              // pr-create was killed by the budget enforcer but actually opened
+              // the PR, the agent shipped what pr-create owes the pipeline —
+              // pr-merge can take it home. Counting this as a hard failure
+              // increments LifetimeIssueFailures and pauses autonomous on what
+              // is really a recoverable cost overrun.
+              //
+              // Symmetric to the pr-merge `shippedButOverbudget` override at
+              // line ~7286: same idea, earlier stage, different success
+              // criterion (PR exists vs PR merged).
+              // ----------------------------------------------------------------
+              let shippedPartially = false;
+              let shippedPrNumber: number | undefined;
+              if (stage === "pr-create") {
+                const created = await this.checkPrCreatedForIssue(issueNumber);
+                if (created) {
+                  shippedPartially = true;
+                  shippedPrNumber = created.prNumber;
+                  this.logger.warn(
+                    "pr-create budget kill reclassified as shipped-partially — PR exists, will resume at pr-merge",
+                    {
+                      stage,
+                      issueNumber,
+                      prNumber: created.prNumber,
+                      prState: created.state,
+                      costUsd: budgetTerminatedCost,
+                      effectiveLimit: costLimit,
+                      overrunRatio:
+                        budgetEnforcer.getBaseBudget(stage, sizeLabel) > 0
+                          ? budgetTerminatedCost / budgetEnforcer.getBaseBudget(stage, sizeLabel)
+                          : 0,
+                    }
+                  );
+                }
+              }
+
+              const budgetError = new Error(
+                shippedPartially
+                  ? `Stage ${stage} budget kill at $${budgetTerminatedCost.toFixed(2)} (limit $${costLimit.toFixed(2)}), but PR #${shippedPrNumber} was created — autonomous will resume at pr-merge (no lifetime-fail increment).`
+                  : `Stage ${stage} terminated: budget exceeded. ` +
+                      `Cost $${budgetTerminatedCost.toFixed(2)} exceeded the hard limit ($${costLimit.toFixed(2)}). ` +
+                      `Configure pipeline.budget_mode or pipeline.budget_grace_percent to adjust.`
+              );
+
+              if (shippedPartially) {
+                this.logger.warn(
+                  "Stage cost-cap hit but work product shipped — treating as recoverable",
+                  {
+                    stage,
+                    durationMs,
+                    budgetMode: budgetConfig.mode,
+                    effectiveLimit: costLimit,
+                    costUsd: budgetTerminatedCost,
+                    prNumber: shippedPrNumber,
+                  }
+                );
+              } else {
+                this.logger.error("Stage terminated due to cost budget exceeded", {
+                  stage,
+                  durationMs,
+                  budgetMode: budgetConfig.mode,
+                  effectiveLimit: costLimit,
+                  costUsd: budgetTerminatedCost,
+                });
+              }
+
+              // #3666 follow-up: when shipped-partially, transition the
+              // stage to COMPLETE rather than FAILED. Pre-fix, this branch
+              // always called failStage(), which triggered
+              // PipelineStateService.sealPhases(stage, "failed") and
+              // unconditionally sealed any still-running phase (notably
+              // the always-last `self-assessment` epilogue) as `failed`.
+              // The outer runPipeline shipped-partially short-circuit then
+              // marked the stage `complete`, but the phase state was
+              // already poisoned — the UI showed "Self Assessment failed"
+              // on a run that the pipeline classified as recovered. Mark
+              // the stage complete here so sealPhases seals running phases
+              // as `complete`, matching the actual recovered outcome.
+              if (this.stateService) {
+                try {
+                  if (shippedPartially) {
+                    await this.stateService.completeStage(stage);
+                  } else {
+                    await this.stateService.failStage(stage, budgetError.message, {
+                      model: result.servedModel ?? result.modelDecision?.model,
+                      adapter: result.adapterDecision?.adapter,
+                      // The raw served envelope (#888) — NOT fallen back to the requested
+                      // values the way `model` above is. Undefined means the executor
+                      // reported nothing, and Go records that as absent rather than
+                      // inventing an observation.
+                      servedModel: result.servedModel,
+                      servedEffort: result.servedEffort,
+                      servedThinking: result.servedThinking,
+                    });
+                  }
+                } catch (err) {
+                  this.logger.warn("Failed to update state on budget-exceeded failure", {
+                    stage,
+                    err,
+                    shippedPartially,
+                  });
+                }
+              }
+
+              this.eventDispatcher.onStageError(stage, budgetError);
+
+              // Write budget overrun context file for Go scheduler retry (Issue #2338)
+              try {
+                const overrunDir = pipelineStateDir(this.getWorkingDirectory());
+                const overrunPath = path.join(overrunDir, `budget-overrun-${issueNumber}.json`);
+                let wipBranch = "";
+                try {
+                  const { stdout: branchOut } = await execAsync("git branch --show-current", {
+                    cwd: this.getWorkingDirectory(),
+                    timeout: 5_000,
+                  });
+                  wipBranch = branchOut.trim();
+                } catch {
+                  // Non-critical
+                }
+                const baseBudget = budgetEnforcer.getBaseBudget(stage, sizeLabel);
+                const overrunData = {
+                  schema_version: "1.2",
+                  issue_number: issueNumber,
+                  stage,
+                  estimated_budget_usd: baseBudget,
+                  actual_cost_usd: budgetTerminatedCost,
+                  effective_limit_usd: costLimit,
+                  overrun_ratio: baseBudget > 0 ? budgetTerminatedCost / baseBudget : 0,
+                  wip_committed: true,
+                  wip_branch: wipBranch,
+                  // #3666: shipped_partially is set when the budget killed the
+                  // stage but its work product (e.g. a created PR) shipped. The
+                  // Go scheduler treats this like budget_ceiling_hit — no
+                  // lifetime-fail increment, no cascade-breaker contribution.
+                  shipped_partially: shippedPartially,
+                  shipped_pr_number: shippedPrNumber ?? 0,
+                  // #3667: records whether this limit came from adaptive p75 or static table.
+                  estimate_source: adaptiveEstimateSources[stage] ?? "static_table",
+                  timestamp: new Date().toISOString(),
+                };
+                fs.writeFileSync(overrunPath, JSON.stringify(overrunData, null, 2));
+              } catch {
+                // Non-critical — retry will still work, just without overrun context
+              }
+
+              const stageResult: StageRunResult = {
+                success: false,
+                stage,
+                durationMs,
+                error: budgetError,
+                budgetExceeded: true,
+                shippedPartially,
+              };
+
+              this.eventDispatcher.onStageComplete(stage, stageResult);
+              resolve(stageResult);
+              return;
+            }
+
+            if (result.success) {
+              // Issue #698: Guard against duplicate completion callbacks.
+              // If the stage already completed (e.g., retry/recovery fired
+              // onComplete a second time), log a warning and skip the duplicate.
+              if (this.completedStageSet.has(stage)) {
+                this.logger.warn("Duplicate stage completion detected — ignoring", {
+                  stage,
+                  durationMs,
+                });
+                return;
+              }
+              this.completedStageSet.add(stage);
+
+              this.logger.info("Stage completed", {
+                stage,
+                durationMs,
+                model: result.modelDecision?.model,
+                modelSource: result.modelDecision?.source,
+                adapter: result.adapterDecision?.adapter,
+                adapterSource: result.adapterDecision?.source,
+              });
+
+              // Update state service
+              if (this.stateService) {
+                try {
+                  // Attribute the stage to the model that actually served it
+                  // (result.servedModel, #91) — falling back to the requested
+                  // model — and to the executing adapter, so the Go notify
+                  // handler records them for BuildV2Record (#268: by-model cost
+                  // breakdown + Adapter Mix donut).
+                  await this.stateService.completeStage(stage, {
+                    model: result.servedModel ?? result.modelDecision?.model,
+                    adapter: result.adapterDecision?.adapter,
+                    // The raw served envelope (#888) — NOT fallen back to the requested
+                    // values the way `model` above is. Undefined means the executor
+                    // reported nothing, and Go records that as absent rather than
+                    // inventing an observation.
+                    servedModel: result.servedModel,
+                    servedEffort: result.servedEffort,
+                    servedThinking: result.servedThinking,
+                  });
+                  // A second `setStageModelSelection` call used to sit here
+                  // "for post-pipeline analysis (Issue #1259)". Its receiver was
+                  // an empty stub, so post-pipeline analysis never saw any of
+                  // it; deleted with #465. `completeStage` above already
+                  // forwards the served model and adapter to the Go recorder,
+                  // which is the authoritative writer of per-stage attribution.
+                } catch (err) {
+                  this.logger.warn("Failed to update state on stage complete", {
+                    stage,
+                    err,
+                  });
+                }
+              }
+
+              const stageResult: StageRunResult = {
+                success: true,
+                stage,
+                durationMs,
+              };
+
+              this.eventDispatcher.onStageComplete(stage, stageResult);
+              resolve(stageResult);
+            } else {
+              const error = result.error || new Error("Stage failed");
+              this.logger.error("Stage failed", {
+                stage,
+                error: error.message || String(error),
+              });
+
+              // Check if error is retryable
+              const retryConfig = getRetryConfig();
+              const errorMessage = error.message || String(error);
+
+              // Apply health policy retry budget increase (Issue #1395)
+              const effectiveMaxAttempts =
+                retryConfig.max_auto_attempts + this.policyRetryBudgetIncrease;
+
+              // Get current retry count from state
+              const state = this.stateService ? await this.stateService.getState() : null;
+              const currentAutoRetries = state?.stages[stage].auto_retry_count ?? 0;
+
+              const shouldRetry =
+                isRetryableApiError(errorMessage, retryConfig) &&
+                currentAutoRetries < effectiveMaxAttempts;
+
+              if (shouldRetry && this.stateService) {
+                // This is a retryable API error and we haven't exhausted retries
+                const nextAttempt = currentAutoRetries + 1;
+
+                // Calculate backoff delay
+                const delay = isRateLimitError(errorMessage)
+                  ? retryConfig.rate_limit_delay_ms
+                  : calculateBackoffDelay(currentAutoRetries, retryConfig);
+
+                this.logger.info("API error detected, scheduling retry", {
+                  stage,
+                  attempt: nextAttempt,
+                  maxAttempts: effectiveMaxAttempts,
+                  delayMs: delay,
+                });
+
+                // Update state atomically to show retrying (Issue #414)
+                // Uses batchUpdate to avoid 3 sequential writes racing with other state updates
+                const nextRetryAt = new Date(Date.now() + delay).toISOString();
+                try {
+                  await this.stateService.batchUpdate((state) => {
+                    const stageState = state.stages[stage];
+                    // failStage fields
+                    stageState.status = "failed";
+                    stageState.error = errorMessage;
+                    stageState.completed_at = new Date().toISOString();
+                    // markRetrying fields
+                    stageState.is_retrying = true;
+                    stageState.next_retry_at = nextRetryAt;
+                    // recordAutoRetry field
+                    stageState.auto_retry_count = (stageState.auto_retry_count ?? 0) + 1;
+                    return state;
+                  });
+                } catch (err) {
+                  this.logger.warn("Failed to update state for retry", {
+                    stage,
+                    err,
+                  });
+                }
+
+                // Sanitize error message for user display
+                const sanitizedError = sanitizeApiError(errorMessage);
+                this.eventDispatcher.onStageError(
+                  stage,
+                  new Error(
+                    `API Error - retrying in ${(delay / 1000).toFixed(1)}s (attempt ${nextAttempt}/${effectiveMaxAttempts}): ${sanitizedError}`
+                  )
+                );
+
+                // Wait for backoff delay
+                await new Promise((resolveWait) => setTimeout(resolveWait, delay));
+
+                // Clear retrying flag and retry the stage
+                try {
+                  await this.stateService.clearRetrying(stage);
+                } catch (err) {
+                  this.logger.warn("Failed to clear retrying flag", {
+                    stage,
+                    err,
+                  });
+                }
+
+                // Retry by recursively calling runStage
+                this.logger.info("Retrying stage after backoff", {
+                  stage,
+                  attempt: nextAttempt,
+                });
+
+                const retryResult = await this.runStage(
+                  stage,
+                  issueNumber,
+                  callbacks,
+                  undefined,
+                  undefined,
+                  this.pinnedWorkspaceRoot
+                );
+                resolve(retryResult);
+              } else {
+                // Not retryable or retries exhausted - fail permanently
+                if (currentAutoRetries >= effectiveMaxAttempts) {
+                  this.logger.warn("Max auto-retry attempts exhausted", {
+                    stage,
+                    attempts: currentAutoRetries,
+                  });
+                }
+
+                // Update state service
+                if (this.stateService) {
+                  try {
+                    await this.stateService.failStage(stage, errorMessage, {
+                      model: result.servedModel ?? result.modelDecision?.model,
+                      adapter: result.adapterDecision?.adapter,
+                      // The raw served envelope (#888) — NOT fallen back to the requested
+                      // values the way `model` above is. Undefined means the executor
+                      // reported nothing, and Go records that as absent rather than
+                      // inventing an observation.
+                      servedModel: result.servedModel,
+                      servedEffort: result.servedEffort,
+                      servedThinking: result.servedThinking,
+                    });
+                    await this.stateService.clearRetrying(stage);
+                  } catch (err) {
+                    this.logger.warn("Failed to update state on stage failure", {
+                      stage,
+                      err,
+                    });
+                  }
+                }
+
+                // Sanitize error for user display
+                const sanitizedError = sanitizeApiError(errorMessage);
+                const displayError =
+                  currentAutoRetries >= effectiveMaxAttempts
+                    ? new Error(
+                        `API errors persisted after ${effectiveMaxAttempts} automatic retries. Use 'Retry Stage' button to try again. Error: ${sanitizedError}`
+                      )
+                    : new Error(sanitizedError);
+
+                this.eventDispatcher.onStageError(stage, displayError);
+
+                const stageResult: StageRunResult = {
+                  success: false,
+                  stage,
+                  durationMs,
+                  error: displayError,
+                };
+
+                this.eventDispatcher.onStageComplete(stage, stageResult);
+                resolve(stageResult);
+              }
+            }
+          },
+          onError: (error) => {
+            this.logger.error("Stage execution error", {
+              stage,
+              error: error.message || String(error),
+            });
+            this.eventDispatcher.onStageError(stage, error);
+          },
+        },
+        issueMetadata,
+        undefined,
+        skipToPhase,
+        modelOverride,
+        this.pauseAutoRouting,
+        pinnedWorkspaceRoot ?? this.pinnedWorkspaceRoot,
+        modelOverrideSource,
+        undefined, // injectedSkillContent
+        undefined, // autonomousMode (managed by Go scheduler for this path)
+        stageWarnThresholdUsd > 0 ? stageWarnThresholdUsd : undefined,
+        // Issue #3867: pass the per-issue owning repo so the repo-mismatch gate
+        // compares against the issue's intended repo, NOT the workspace primary.
+        this.repoOverride,
+        // ADR-017 step 3: export the installed identity to the stage child as
+        // NIGHTGAUGE_RUN_ID, at parity with the Go scheduler's spawn. Absent
+        // (undefined, not "") when this orchestrator holds no run — the child
+        // must not inherit the OUTER run's id in the dogfood case.
+        this.stateService?.getRunId() ?? undefined,
+        undefined, // effortOverride
+        // #1656: a remote run request's adapter, pinned strictly on every stage.
+        this.requestedPin?.adapter,
+        this.requestedPin ? true : undefined
+      );
+
+      // ADR-017 §7.2: the ONE `running` transition for this stage attempt,
+      // carrying the pid the synchronous spawn callback just captured. Fired
+      // after the handle returns — see markStageRunning's contract.
+      void markStageRunning(stageChildPid || undefined);
+
+      this.currentProcess = handle;
+      // Expose handle to phase timeout handler registered before the Promise (Issue #1620)
+      handleRef = handle;
+      // Expose the full handle to the shared budget/ceiling evaluator (#254).
+      stageHandle = handle;
+
+      // Handle abort
+      if (this.abortController) {
+        const abortListener = () => {
+          if (this.currentProcess) {
+            this.currentProcess.kill();
+          }
+        };
+        this.abortController.signal.addEventListener("abort", abortListener);
+      }
+    });
+  }
+
+  /**
+   * Stop the currently running pipeline
+   */
+  stop(): void {
+    const hadOrphanedProcesses = hasActiveProcess();
+
+    // Prevent queue from auto-starting the next issue after this pipeline
+    // completes (as a result of being stopped). Without this, the killed
+    // pipeline returns with success=false, handleQueueAutoStart() fires,
+    // and the queue immediately picks up the next item — defeating the stop.
+    // @see Issue #1785
+    this.shouldStopQueueAfterCurrent = true;
+    vscode.commands.executeCommand("setContext", "nightgauge.stopAfterCurrentQueue", true);
+    // A stop during the auto-start delay keeps the queued issue from starting
+    // and releases its queue item now (#2397).
+    this.cancelAutoStartDelay?.();
+
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    if (this.currentProcess) {
+      this.currentProcess.kill();
+      this.currentProcess = null;
+    }
+
+    // Defense-in-depth: always clear tracked stage processes. Previously this
+    // was gated on hasActiveProcess() returning true at entry, but a race
+    // between child_process close events and stop() could leave the registry
+    // populated after the initial check. Unconditional cleanup is safe — the
+    // registry only holds handles this extension spawned.
+    killAllActiveProcesses();
+
+    // Defense-in-depth: mark current stage as failed in state.json.
+    // If clearPipeline() is never called (e.g., abort command errors out),
+    // this prevents the 1-hour crash recovery timeout from being the only
+    // safety net against zombie state.
+    // @see Issue #851
+    if (this.stateService && this.currentStage) {
+      this.stateService.failStage(this.currentStage, "Pipeline stopped by user").catch((err) => {
+        this.logger.warn("Failed to mark stage as failed during stop", {
+          error: err,
+        });
+      });
+    }
+
+    this.logger.info("Pipeline stopped", {
+      hadOrphanedProcesses,
+    });
+  }
+
+  /**
+   * Gracefully stop the pipeline: SIGTERM → wait timeoutMs → SIGKILL.
+   * Used by platform-initiated cancel commands (#3552). The existing stop()
+   * sends SIGKILL immediately and is reserved for user-initiated stops.
+   */
+  async gracefulStop(timeoutMs = 10_000): Promise<void> {
+    this.shouldStopQueueAfterCurrent = true;
+    this.cancelAutoStartDelay?.();
+
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+
+    const proc = this.currentProcess;
+    if (proc) {
+      // Send SIGTERM via the underlying ChildProcess — SkillProcessHandle.kill()
+      // sends SIGKILL directly, so we bypass it to honor the graceful window.
+      proc.process.kill("SIGTERM");
+
+      await new Promise<void>((resolve) => {
+        const deadline = setTimeout(() => {
+          killAllActiveProcesses();
+          resolve();
+        }, timeoutMs);
+
+        proc.process.once("exit", () => {
+          clearTimeout(deadline);
+          resolve();
+        });
+      });
+    }
+
+    this.currentProcess = null;
+    killAllActiveProcesses();
+
+    if (this.stateService && this.currentStage) {
+      this.stateService.failStage(this.currentStage, "Pipeline cancelled by platform").catch(() => {
+        // Best effort
+      });
+    }
+
+    this.logger.info("Pipeline gracefully stopped", { timeoutMs });
+  }
+
+  /**
+   * Check if the pipeline is currently running
+   */
+  getIsRunning(): boolean {
+    return this.isRunning;
+  }
+
+  /**
+   * Get the user-initiated model override for the current run, if any (Issue #1610).
+   */
+  getUserModelOverride(): PipelineModelOverride | null {
+    return this.userModelOverride;
+  }
+
+  /**
+   * Set a model override for the next pipeline run (Issue #1610).
+   * Consumed and cleared by runPipeline(). If the next runPipeline() call
+   * also passes an explicit modelOverride parameter, that takes precedence.
+   */
+  setNextRunModelOverride(model: PipelineModelOverride | null): void {
+    this.pendingUserModelOverride = model;
+  }
+
+  /**
+   * Get the currently running stage
+   */
+  getCurrentStage(): PipelineStage | null {
+    return this.currentStage;
+  }
+
+  /**
+   * Hold the stage loop while the run is paused (#239, #423): poll the
+   * paused flag until a resume clears it, staying responsive to abort.
+   * `when` says which side of `stage` the loop is holding at. Returns false
+   * when the run was aborted while held, and the loop must stop.
+   */
+  private async holdWhilePaused(
+    when: "before" | "after",
+    stage: PipelineStage,
+    issueNumber: number
+  ): Promise<boolean> {
+    if (!this.stateService) return true;
+    let isPaused = await this.stateService.isPaused();
+    if (!isPaused) return true;
+    this.logger.info(
+      when === "after"
+        ? "Pipeline paused after stage complete — holding"
+        : "Pipeline paused before stage start — holding",
+      { stage, issueNumber }
+    );
+    while (isPaused && !this.abortController?.signal.aborted) {
+      await this.delay(this.config.pausePollIntervalMs ?? PAUSE_POLL_INTERVAL_MS);
+      isPaused = await this.stateService.isPaused();
+    }
+    if (this.abortController?.signal.aborted) {
+      this.logger.info("Pipeline aborted while paused", { stage, issueNumber });
+      return false;
+    }
+    this.logger.info("Pipeline resumed — continuing stage loop", { stage, issueNumber });
+    return true;
+  }
+
+  /**
+   * Update configuration
+   */
+  setConfig(config: Partial<PipelineExecutionConfig>): void {
+    this.config = { ...this.config, ...config };
+  }
+
+  /**
+   * Set force full pipeline flag
+   *
+   * When true, routing-based stage skipping is disabled and all stages run.
+   *
+   * @param force - True to run all stages regardless of routing
+   */
+  setForceFullPipeline(force: boolean): void {
+    this.config.forceFullPipeline = force;
+  }
+
+  /**
+   * Set routing configuration
+   *
+   * @param routing - Routing configuration overrides
+   */
+  setRoutingConfig(routing: Partial<RoutingConfig>): void {
+    this.config.routing = { ...this.config.routing, ...routing };
+  }
+
+  /**
+   * Delay execution
+   */
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Set flag to stop queue processing after the current issue completes.
+   *
+   * Unlike stop(), this allows the current issue to finish all stages.
+   * handleQueueAutoStart() checks this flag before starting the next item.
+   */
+  stopQueueAfterCurrent(): void {
+    if (!this.isRunning) {
+      this.logger.warn("stopQueueAfterCurrent() called but pipeline is not running - ignoring");
+      return;
+    }
+
+    this.shouldStopQueueAfterCurrent = true;
+    this.logger.info("Stop-queue-after-current flag set - queue will not auto-start next issue");
+  }
+
+  /**
+   * Get the current issue number from pipeline state (if available)
+   */
+  async getCurrentIssueNumber(): Promise<number | null> {
+    const state = await this.stateService?.getState();
+    return state?.issue_number ?? null;
+  }
+
+  /**
+   * Dispose of resources
+   */
+  dispose(): void {
+    this.stop();
+    for (const disposable of this.disposables) {
+      disposable.dispose();
+    }
+  }
+}
+
+/**
+ * Map an on-disk run-state.json `state` string to the discriminator the
+ * Recovery Dialog understands. Unknown values fall back to "none" so the
+ * dialog defaults to safe-restart-only behavior.
+ */
+function mapLifecycle(state: string | undefined): "running" | "paused" | "aborted" | "none" {
+  switch (state) {
+    case "running":
+    case "paused":
+    case "aborted":
+      return state;
+    default:
+      return "none";
+  }
+}

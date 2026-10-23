@@ -805,7 +805,7 @@ Expected output:
 ┌──────────────────────────────────────────┐
 │  INTEGRATION AUDIT COMPLETE              │
 ├──────────────────────────────────────────┤
-│ Client Repo: nightgauge-vscode      │
+│ Client Repo: nightgauge      │
 │ Server Repo: acme-platform    │
 │                                          │
 │ HEALTH SCORE: 88/100                     │

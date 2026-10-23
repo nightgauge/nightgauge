@@ -86,7 +86,7 @@ fi
 
 # 2b. A Marketplace name collision also says "already exists" but published
 #     nothing; it must fail the step, not pass as an idempotent re-run.
-rc=$(run_sut 1 "1:ERROR  The extension 'nightgauge.nightgauge-vscode' already exists in the Marketplace. Please use a different 'name'.")
+rc=$(run_sut 1 "1:ERROR  The extension 'nightgauge.nightgauge' already exists in the Marketplace. Please use a different 'name'.")
 if [[ "$rc" != 0 ]] && grep -q 'name is unavailable' "$WORK/out" && ! grep -q 'treating as success' "$WORK/out"; then
   ok "marketplace name collision -> exit non-zero"
 else

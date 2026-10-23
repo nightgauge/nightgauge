@@ -3,7 +3,7 @@
 # so it is safe to commit to a public repository.
 #
 # `nightgauge skill render` is the same code path the VSCode extension spawns
-# (packages/nightgauge-vscode/src/utils/skillRunner.ts renderSkill()), so its
+# (packages/nightgauge/src/utils/skillRunner.ts renderSkill()), so its
 # stdout IS the artifact the model receives — including any `<!-- include: -->`
 # directive whose target did not resolve, which the composer deliberately
 # leaves in place (internal/skillrender/render.go ExpandIncludes).

@@ -15,7 +15,7 @@
 #
 # The other half is the decision itself, which must be keyed on GENERATOR
 # INPUTS rather than on file extensions.
-# `packages/nightgauge-vscode/src/services/IpcClient.generated.ts` is rendered
+# `packages/nightgauge/src/services/IpcClient.generated.ts` is rendered
 # from Go sources by `cmd/ipc-codegen`; `internal/terminalkind/table.json` is
 # embedded into a Go binary; `internal/adaptercompat/manifests/*.json` reaches Go
 # through `//go:embed`. For every one of those, "only TS/JSON changed" does NOT

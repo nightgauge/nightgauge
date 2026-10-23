@@ -279,7 +279,7 @@ deployments can skip this section.
 
 The GitLab adapter resolves credentials via four methods. The wizard exposes
 all four; the YAML schema accepts the same set
-([`schema.ts:3003-3010`](../packages/nightgauge-vscode/src/config/schema.ts)):
+([`schema.ts:3003-3010`](../packages/nightgauge/src/config/schema.ts)):
 
 ```ts
 export const ForgeAuthMethodSchema = z.enum([
@@ -319,7 +319,7 @@ The validation endpoint differs by method
 4. Expiry: 30 days during evaluation, 90 days in production.
 5. Copy the token immediately and store it in your secret manager. The wizard
    will write it into the OS keychain via VSCode's `SecretStorage` API
-   ([`configureForgeInstance.ts:307`](../packages/nightgauge-vscode/src/commands/configureForgeInstance.ts)).
+   ([`configureForgeInstance.ts:307`](../packages/nightgauge/src/commands/configureForgeInstance.ts)).
 
 ---
 
@@ -348,7 +348,7 @@ pair; the binary then sends `Authorization: Basic base64(user:token)` per
 ## 8. Author `.nightgauge/config.yaml`
 
 The schema lives in
-[`packages/nightgauge-vscode/src/config/schema.ts:2999-3043`](../packages/nightgauge-vscode/src/config/schema.ts)
+[`packages/nightgauge/src/config/schema.ts:2999-3043`](../packages/nightgauge/src/config/schema.ts)
 and its Go counterpart in
 [`internal/config/config.go:756-781`](../internal/config/config.go). Fields:
 
@@ -486,7 +486,7 @@ cloud load balancer). Requirements:
 ## 10. VSCode Forge Configuration Walkthrough
 
 Six steps in the wizard, sourced from
-[`configureForgeInstance.ts`](../packages/nightgauge-vscode/src/commands/configureForgeInstance.ts).
+[`configureForgeInstance.ts`](../packages/nightgauge/src/commands/configureForgeInstance.ts).
 Captions below match the title bar exactly so screenshots stay in sync.
 
 ### Step 1/6 — Instance ID

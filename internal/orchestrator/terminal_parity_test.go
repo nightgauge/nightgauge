@@ -17,7 +17,7 @@ package orchestrator
 //     question: which of the two paths reaches the new behavior, and is the
 //     other intentionally excluded?
 //
-// The TypeScript twin (packages/nightgauge-vscode/tests/services/
+// The TypeScript twin (packages/nightgauge/tests/services/
 // terminalParity.test.ts) runs the same checks from the same manifest, so
 // drift fails whichever suite CI reaches first.
 

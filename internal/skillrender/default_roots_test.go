@@ -92,7 +92,7 @@ func TestDefaultRootsSurvivesAnUnknownExecutable(t *testing.T) {
 // bundle second.
 func TestGoAndTypeScriptAgreeOnSkillRootOrder(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join(
-		"..", "..", "packages", "nightgauge-vscode", "src", "utils", "skillRunner.ts"))
+		"..", "..", "packages", "nightgauge", "src", "utils", "skillRunner.ts"))
 	if err != nil {
 		t.Fatalf("read skillRunner.ts: %v", err)
 	}

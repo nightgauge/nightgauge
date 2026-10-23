@@ -1,7 +1,7 @@
 // change_rules.go — routing.change_rules: the user-customizable mapping from
 // file globs (and/or coarse change_types) to fast-track behavior. This is the
 // single Go source of truth for the shape mirrored by the TypeScript
-// ChangeRuleSchema (packages/nightgauge-vscode/src/config/schema.ts) and
+// ChangeRuleSchema (packages/nightgauge/src/config/schema.ts) and
 // embedded in the config loader (internal/config RoutingConfig).
 //
 // Two layers consume the same rule with different matching modes:

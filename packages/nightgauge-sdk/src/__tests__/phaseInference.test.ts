@@ -67,7 +67,7 @@ describe("createPhaseInference — feature-dev", () => {
     inf.observeToolUse("Write", { file_path: "src/foo.ts" }); // implementation
     const m =
       inf.observeToolUse("Bash", {
-        command: "npx -w nightgauge-vscode vitest run",
+        command: "npx -w packages/nightgauge vitest run",
       })?.marker ?? null;
     expect(m?.index).toBe(9);
     expect(m?.name).toBe("testing");
@@ -296,7 +296,7 @@ describe("createPhaseInference — test/build command coverage (#1246)", () => {
     "go build ./...",
     "npm test",
     "npm run build",
-    "npm run -w packages/nightgauge-vscode test",
+    "npm run -w packages/nightgauge test",
     "pytest -q",
     "cargo test",
     "npx vitest run",

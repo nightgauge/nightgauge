@@ -9,7 +9,7 @@ like a bug in the reader.
 
 This script is that producer's schema. It is deliberately the ONLY place the
 JSON shape is spelled out, so the field names cannot drift away from
-`packages/nightgauge-vscode/src/services/DiscoveryActivityService.ts` without
+`packages/nightgauge/src/services/DiscoveryActivityService.ts` without
 a test noticing — `tests/arrival/dashboardDiscoveryTab.test.ts` runs this
 script and asserts the values reach the rendered HTML.
 

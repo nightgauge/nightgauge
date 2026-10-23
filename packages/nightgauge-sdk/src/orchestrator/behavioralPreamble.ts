@@ -10,7 +10,7 @@
  * Source of truth: evals/variants/behavioral-preamble.json (.prepend),
  * pinned by __tests__/behavioralPreamble.test.ts. Mirrors:
  * internal/execution/preamble.go and
- * packages/nightgauge-vscode/src/utils/behavioralPreamble.ts (the VSCode
+ * packages/nightgauge/src/utils/behavioralPreamble.ts (the VSCode
  * package does not import this one), each with its own sync test.
  */
 export const BEHAVIORAL_PREAMBLE =

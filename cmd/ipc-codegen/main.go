@@ -9,7 +9,7 @@
 //	go run ./cmd/ipc-codegen \
 //	  --server internal/ipc/server.go \
 //	  --protocol internal/ipc/protocol.go \
-//	  --out packages/nightgauge-vscode/src/services/IpcClient.generated.ts
+//	  --out packages/nightgauge/src/services/IpcClient.generated.ts
 package main
 
 import (
@@ -78,7 +78,7 @@ type Field struct {
 var (
 	serverPath   = flag.String("server", "internal/ipc/server.go", "Path to server.go")
 	protocolPath = flag.String("protocol", "internal/ipc/protocol.go", "Path to protocol.go")
-	outPath      = flag.String("out", "packages/nightgauge-vscode/src/services/IpcClient.generated.ts", "Output TypeScript file path")
+	outPath      = flag.String("out", "packages/nightgauge/src/services/IpcClient.generated.ts", "Output TypeScript file path")
 )
 
 func main() {

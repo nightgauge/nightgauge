@@ -117,7 +117,7 @@ func TestSkillPortability_SkipsClaudeRuntimeDir(t *testing.T) {
 func TestSkillPortability_MatchIsCaseInsensitive(t *testing.T) {
 	root := t.TempDir()
 	writeSkillFile(t, root, "nightgauge-pr-merge/SKILL.md",
-		`cand="$HOME"/.vscode/extensions/Nightgauge.nightgauge-vscode/dist/bin/nightgauge`)
+		`cand="$HOME"/.vscode/extensions/Nightgauge.nightgauge/dist/bin/nightgauge`)
 	res, err := RunSkillPortabilityCheck(context.Background(), SkillPortabilityOptions{Root: root})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

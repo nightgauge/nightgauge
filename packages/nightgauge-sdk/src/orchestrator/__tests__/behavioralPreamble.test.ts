@@ -6,7 +6,7 @@
  * source of truth), and locks the Haiku-only injection semantics.
  *
  * Counterparts: internal/execution/preamble_test.go (Go) and
- * packages/nightgauge-vscode/tests/utils/behavioral-preamble-parity.test.ts.
+ * packages/nightgauge/tests/utils/behavioral-preamble-parity.test.ts.
  * Update all copies together only behind a new measurement (docs/spikes/77-*.md).
  */
 import { describe, expect, it } from "vitest";

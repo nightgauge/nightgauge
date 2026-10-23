@@ -196,7 +196,7 @@ normalizes to `undefined`, which the classifier treats as `organic` at analysis
 time. No schema version bump was required.
 
 ```typescript
-// packages/nightgauge-vscode/src/schemas/executionHistory.ts
+// packages/nightgauge/src/schemas/executionHistory.ts
 failure_category: z.enum(['infrastructure', 'agent', 'organic']).optional(),
 
 // packages/nightgauge-sdk/src/analysis/types.ts
@@ -690,7 +690,7 @@ per-stage `last_output_lines`) is populated. Readers use a Zod union (V1 ∪ V2 
 V3) so legacy records remain valid — there is no migration step.
 
 ```typescript
-// packages/nightgauge-vscode/src/schemas/executionHistory.ts
+// packages/nightgauge/src/schemas/executionHistory.ts
 export const TerminalFailureKindSchema = z.enum([
   "stall_kill",
   "budget_exceeded",
@@ -727,7 +727,7 @@ The `TerminalKind*` constants live in
 `internal/orchestrator/failure_handler.go`; the rules that produce them live in
 `internal/terminalkind/table.json` (see below). When changing the enum, update
 **all three** in lockstep. `failureClassifier.parity.test.ts` (SDK) and
-`packages/nightgauge-vscode/tests/schemas/terminalFailureKind.parity.test.ts`
+`packages/nightgauge/tests/schemas/terminalFailureKind.parity.test.ts`
 (extension) read the Go constants and fail on a kind missing from either side,
 in both directions. The extension test found `permission_denied` missing from
 the Zod enum when it was added (#1631).
@@ -775,7 +775,7 @@ higher-precedence non-signal rule owns. That is the bug the old ladder had.)
   `internal/terminalkind/corpus_test.go`,
   `packages/nightgauge-sdk/tests/analysis/health/terminalKind.corpusParity.test.ts`
   and
-  `packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts`.
+  `packages/nightgauge/tests/services/terminalKindSignal.corpusParity.test.ts`.
   `expected` is Go's answer because Go writes the record; `expected_signal` is
   what the extension may forward. Every row carries a mandatory `rationale`, so
   changing an expectation means editing the argument for it in the same diff.
@@ -1237,9 +1237,9 @@ refusal-fallback event):
   `ModelSelection.source` is recorded as `"cli-refusal-fallback"`, and the
   learning outcome's `ActualModel` becomes the served model — never the
   originally-requested one.
-- TypeScript: `parseStreamJsonLine` (`packages/nightgauge-vscode/src/utils/tokenParser.ts`)
+- TypeScript: `parseStreamJsonLine` (`packages/nightgauge/src/utils/tokenParser.ts`)
   extracts the `system` subtype and `message.model`; `SkillRunner`
-  (`packages/nightgauge-vscode/src/utils/skillRunner.ts`) tracks the last-served
+  (`packages/nightgauge/src/utils/skillRunner.ts`) tracks the last-served
   model and forwards `servedModel` plus the `modelRefusalFallback` fields over
   `pipeline.stageResult` to Go.
 
@@ -1677,7 +1677,7 @@ the same input through each entry point, asserting the same resolved capability
    `internal/orchestrator/testdata/terminal_behaviors.json` with its call-site
    anchor on each path, or an explicit `pathSpecific` reason (and tracking
    issue when the gap is a defect). `internal/orchestrator/terminal_parity_test.go`
-   and `packages/nightgauge-vscode/tests/services/terminalParity.test.ts` both
+   and `packages/nightgauge/tests/services/terminalParity.test.ts` both
    enforce it: anchors must exist, and the two terminal funnels
    (`runPipeline`'s defer; `runSlotPipeline`'s finally) are content-pinned by
    hash — any edit inside them fails until the manifest answers the parity

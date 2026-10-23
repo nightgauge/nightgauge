@@ -186,9 +186,9 @@ Record each call as: `{method, path, authType, file, line}`.
 
 ```bash
 # Search IPC client and direct fetch calls
-grep -rn "platform\." packages/nightgauge-vscode/src/ \
+grep -rn "platform\." packages/nightgauge/src/ \
   --include="*.ts" | grep -v "node_modules"
-grep -rn "fetch\(" packages/nightgauge-vscode/src/ \
+grep -rn "fetch\(" packages/nightgauge/src/ \
   --include="*.ts" | grep -v "node_modules"
 ```
 

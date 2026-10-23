@@ -3,7 +3,7 @@ package config
 import "testing"
 
 // TestCapForRepoParity_FixtureA mirrors the TS fixture in
-// packages/nightgauge-vscode/tests/config/concurrency-parity.test.ts.
+// packages/nightgauge/tests/config/concurrency-parity.test.ts.
 //
 // Both tests use the same numeric values. When they diverge, Go and TS
 // concurrency resolution have drifted. Fix the resolver that changed.

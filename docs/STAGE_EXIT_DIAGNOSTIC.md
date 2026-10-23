@@ -375,7 +375,7 @@ to the V3 record we already write.
   (`SetRunningSiblingsFn`, `SetRateLimitRemainingFn`)
 - `internal/ipc/pipeline_messages.go` — IPC contract (TS → Go forwarding)
 - `internal/ipc/diagnostics_stage_exit.go` — IPC-mode handler + record builder
-- `packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts` —
+- `packages/nightgauge/src/services/HeadlessOrchestrator.ts` —
   IPC-mode caller (`recordStageExitDiagnostic`)
 - `cmd/nightgauge/exit_records.go` — CLI reader
 

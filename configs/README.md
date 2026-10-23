@@ -41,7 +41,7 @@ Use the VSCode extension or Claude Code CLI:
 
 ```bash
 # VSCode Extension (primary)
-cd packages/nightgauge-vscode && npm run package
+cd packages/nightgauge && npm run package
 
 # Claude Code CLI (alternative)
 claude plugin install nightgauge@nightgauge-plugins

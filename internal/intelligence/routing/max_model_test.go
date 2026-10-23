@@ -7,7 +7,7 @@ import (
 )
 
 // TestApplyMaxModel is the Go half of #1201. TypeScript mirror:
-// packages/nightgauge-vscode/tests/utils/modeProfiles.maxModel.test.ts.
+// packages/nightgauge/tests/utils/modeProfiles.maxModel.test.ts.
 // Both sides must agree, or one config file dispatches two tiers depending on
 // which path dispatched it.
 func TestApplyMaxModel(t *testing.T) {

@@ -39,7 +39,7 @@
 # Options:
 #   --root <path>        root changelog (default CHANGELOG.md)
 #   --extension <path>   extension changelog
-#                        (default packages/nightgauge-vscode/CHANGELOG.md);
+#                        (default packages/nightgauge/CHANGELOG.md);
 #                        `--extension none` for a repository with one changelog
 #                        (the platform, the dashboard, the Flutter app all run
 #                        this same script that way)
@@ -55,7 +55,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT" || exit 2
 
 ROOT="CHANGELOG.md"
-EXT="packages/nightgauge-vscode/CHANGELOG.md"
+EXT="packages/nightgauge/CHANGELOG.md"
 TAGS_CMD="git tag -l v*"
 GATE_TAG=""
 EXTRACT_TAG=""

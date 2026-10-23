@@ -2,7 +2,7 @@
 """Copy Nightgauge skills into an agent's skills directory, safely (#1694).
 
 Used by scripts/install-agent-skills.sh. The rules are the VS Code extension's
-copySkillsTree (packages/nightgauge-vscode/src/services/bundledSkills.ts), so
+copySkillsTree (packages/nightgauge/src/services/bundledSkills.ts), so
 either installer may replace what the other installed and neither touches
 anything else:
 

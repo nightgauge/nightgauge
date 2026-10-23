@@ -3,7 +3,7 @@ Cross-reference engine for the nightgauge-retro pipeline analysis skill.
 
 Cross-references classified failure events against:
   1. Budget enforcer defaults — hardcoded mirror from:
-       packages/nightgauge-vscode/src/utils/budgetEnforcer.ts
+       packages/nightgauge/src/utils/budgetEnforcer.ts
        (DEFAULT_SIZE_AWARE_BUDGETS)
   2. Model routing matrix — hardcoded mirror from:
        packages/nightgauge-sdk/src/analysis/AutoModelSelector.ts
@@ -26,7 +26,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Budget defaults
 # Mirror of DEFAULT_SIZE_AWARE_BUDGETS in budgetEnforcer.ts
-# Source: packages/nightgauge-vscode/src/utils/budgetEnforcer.ts
+# Source: packages/nightgauge/src/utils/budgetEnforcer.ts
 # ---------------------------------------------------------------------------
 
 DEFAULT_BUDGETS: dict[str, dict[str, float]] = {

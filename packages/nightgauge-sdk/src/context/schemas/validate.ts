@@ -94,7 +94,7 @@ const GateMetricEntrySchema = z.object({
   gate_name: z.string().min(1),
   /**
    * #1182: the SAME set the gate-metrics record accepts
-   * (`packages/nightgauge-vscode/src/schemas/gateMetrics.ts`). This used to be
+   * (`packages/nightgauge/src/schemas/gateMetrics.ts`). This used to be
    * `["pass", "catch"]` while the record it feeds accepted
    * `["pass", "catch", "fail"]`, so a legitimate adversarial-judge `"fail"` was
    * reported here as an invalid option. That drift was the defect in

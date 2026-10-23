@@ -2,7 +2,7 @@ package state
 
 // Go ⇄ TypeScript field-name parity for the history JSONL schema (Issue #682,
 // AC 4). Go is the sole writer of every V2* record type in this package;
-// packages/nightgauge-vscode/src/schemas/executionHistory.ts's Zod schemas are
+// packages/nightgauge/src/schemas/executionHistory.ts's Zod schemas are
 // the sole validator. #682 happened because those two declarations drifted —
 // TS declared `cost_source` and Go's V2StageTokens had no field for it at all
 // — and nothing in the repo would have failed on that drift. This file is
@@ -49,7 +49,7 @@ import (
 // test time. Path-coupled: if the file moves, move this constant with it —
 // do not delete the pin (mirrors model_selection_source_test.go's own
 // path-coupling comment).
-const executionHistoryTSSchemaPath = "../../packages/nightgauge-vscode/src/schemas/executionHistory.ts"
+const executionHistoryTSSchemaPath = "../../packages/nightgauge/src/schemas/executionHistory.ts"
 
 // stageTokensKnownGaps lists TS-only HistoryStageTokenUsageSchema fields that
 // predate #682 and are OUT OF SCOPE for it. It is a HOLDING PEN, not a

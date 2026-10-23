@@ -441,7 +441,7 @@ jobs:
       # in a test is exactly the drift a docs-only classification would let
       # through.
       - name: Typecheck test tree (VSCode)
-        run: npm run -w packages/nightgauge-vscode typecheck:tests
+        run: npm run -w packages/nightgauge typecheck:tests
       # #2296, #2297, #2298: neither the retro engine nor the model-routing
       # script is reached by the npm workspaces, so both rotted unnoticed.
       # Seconds each, so ungated like the typecheck above.
@@ -454,13 +454,13 @@ jobs:
           scripts/analyze-model-routing.ts
       - name: Test (VSCode)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: npm run -w packages/nightgauge-vscode test
+        run: npm run -w packages/nightgauge test
       - name: Generated VSCode contributions in sync
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: npx -w packages/nightgauge-vscode tsx scripts/generate-package-contributions.ts --check
+        run: npx -w packages/nightgauge tsx scripts/generate-package-contributions.ts --check
       - name: "@types/vscode <= engines.vscode (vsce packaging invariant)"
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: node packages/nightgauge-vscode/scripts/check-engine-types.mjs
+        run: node packages/nightgauge/scripts/check-engine-types.mjs
 
   # Browser-driven webview tests (tests/playwright/**, *.playwright.ts). Split
   # from `vscode` rather than folded into its `npm run test` step: vitest and
@@ -503,7 +503,7 @@ jobs:
       - name: Get Playwright version
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         id: playwright-version
-        run: echo "version=$(node -p "require('./packages/nightgauge-vscode/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(node -p "require('./packages/nightgauge/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright browser binary
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         id: playwright-cache
@@ -513,17 +513,17 @@ jobs:
           key: playwright-browsers-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
       - name: Install Playwright browser (chromium, cache miss)
         if: ${{ needs.changes.outputs.run_heavy != 'false' && steps.playwright-cache.outputs.cache-hit != 'true' }}
-        run: npx -w packages/nightgauge-vscode playwright install --with-deps chromium
+        run: npx -w packages/nightgauge playwright install --with-deps chromium
       - name: Install Playwright OS dependencies (cache hit)
         if: ${{ needs.changes.outputs.run_heavy != 'false' && steps.playwright-cache.outputs.cache-hit == 'true' }}
-        run: npx -w packages/nightgauge-vscode playwright install-deps chromium
+        run: npx -w packages/nightgauge playwright install-deps chromium
       # test:e2e generates the real dashboard HTML fixture
       # (DashboardInteractions.playwright.ts loads it from /tmp) before
       # running the suite — a bare `playwright test` skips that prerequisite
       # and 23 of the 80 tests fail on a missing file.
       - name: Test (Playwright)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: npm run -w packages/nightgauge-vscode test:e2e
+        run: npm run -w packages/nightgauge test:e2e
       # Dashboard fixture screenshots (tests/playwright/dashboard/Screenshots.playwright.ts,
       # Issue #751) — one per tab/state fixture, uploaded unconditionally so a
       # visual regression is reviewable on a GREEN run too, not only a failed
@@ -535,7 +535,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dashboard-fixture-screenshots
-          path: packages/nightgauge-vscode/test-results/dashboard-screenshots/
+          path: packages/nightgauge/test-results/dashboard-screenshots/
           retention-days: 14
           if-no-files-found: ignore
       - name: Upload Playwright failure artifacts (screenshots, traces, video)
@@ -543,7 +543,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-test-results
-          path: packages/nightgauge-vscode/test-results/
+          path: packages/nightgauge/test-results/
           retention-days: 7
 
   # VSCode extension host smoke tier (tests/vscode-host/**, #745). Launches a
@@ -553,7 +553,7 @@ jobs:
   # plays the reference demo scenario against the demo daemon, and the demo
   # drift guard (#2109) fails the job when the extension calls an IPC method
   # the daemon does not answer. It runs on every PR the change class does not
-  # fast-track as docs-only, so on every change to packages/nightgauge-vscode/
+  # fast-track as docs-only, so on every change to packages/nightgauge/
   # or internal/ipc/ source.
   #
   # Its own job for the same reason `playwright` is: a third runner with its
@@ -595,7 +595,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Test (VSCode host)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: xvfb-run --auto-servernum npm run -w packages/nightgauge-vscode test:host
+        run: xvfb-run --auto-servernum npm run -w packages/nightgauge test:host
 
   # Security & license gates. Runs on every PR, including forks — a fork cannot
   # ship a vulnerable stdlib or a copyleft/proprietary dependency into a release
@@ -693,6 +693,6 @@ jobs:
         run: |
           DENY='GPL-1.0;GPL-2.0;GPL-3.0;LGPL-2.0;LGPL-2.1;LGPL-3.0;AGPL-1.0;AGPL-3.0;SSPL-1.0;CC-BY-NC-4.0;UNLICENSED'
           npx license-checker@25.0.1 --production --excludePrivatePackages --start packages/nightgauge-sdk --failOn "$DENY"
-          npx license-checker@25.0.1 --production --excludePrivatePackages --start packages/nightgauge-vscode --failOn "$DENY"
+          npx license-checker@25.0.1 --production --excludePrivatePackages --start packages/nightgauge --failOn "$DENY"
       - name: License-header guard (source + build output)
         run: bash scripts/check-license-headers.sh

@@ -26,7 +26,7 @@ software development workflows. It provides:
 │                    USER INTERFACES                               │
 ├─────────────────────────────────────────────────────────────────┤
 │  VSCode Extension          │  Claude Code CLI                   │
-│  (packages/nightgauge-vscode) │  (claude-plugins/nightgauge)          │
+│  (packages/nightgauge) │  (claude-plugins/nightgauge)          │
 │  Primary UX (thin UI)      │  Alternative UX                    │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -58,7 +58,7 @@ software development workflows. It provides:
 ```text
 nightgauge/
 ├── packages/                       # Products
-│   ├── nightgauge-vscode/            # VSCode extension (primary UX)
+│   ├── nightgauge/            # VSCode extension (primary UX)
 │   │   ├── src/
 │   │   │   ├── services/          # Pipeline orchestration, state management
 │   │   │   ├── views/             # Tree views, dashboard, webviews
@@ -228,7 +228,7 @@ layer:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    CONFIG ACCESS LAYER                           │
 ├─────────────────────────────────────────────────────────────────┤
-│  ConfigBridge (packages/nightgauge-vscode/src/services/)           │
+│  ConfigBridge (packages/nightgauge/src/services/)           │
 │  - Singleton service for unified config access                  │
 │  - Merges 6 tiers: defaults < global < project < local < env    │
 │  - Separates behavior config from UI config                     │
@@ -339,12 +339,12 @@ changing configuration.
 
 **Key Components:**
 
-| Component               | Location                                              | Responsibility                         |
-| ----------------------- | ----------------------------------------------------- | -------------------------------------- |
-| `AutoModelSelector`     | `packages/nightgauge-sdk/src/analysis/`               | Complexity analysis and selection      |
-| `resolveModel()`        | `packages/nightgauge-vscode/src/utils/skillRunner.ts` | Full resolution chain                  |
-| `enforceMinimumModel()` | `packages/nightgauge-vscode/src/utils/skillRunner.ts` | Per-stage model floor enforcement      |
-| `ModelDecision`         | `packages/nightgauge-vscode/src/utils/skillRunner.ts` | Decision result with source annotation |
+| Component               | Location                                       | Responsibility                         |
+| ----------------------- | ---------------------------------------------- | -------------------------------------- |
+| `AutoModelSelector`     | `packages/nightgauge-sdk/src/analysis/`        | Complexity analysis and selection      |
+| `resolveModel()`        | `packages/nightgauge/src/utils/skillRunner.ts` | Full resolution chain                  |
+| `enforceMinimumModel()` | `packages/nightgauge/src/utils/skillRunner.ts` | Per-stage model floor enforcement      |
+| `ModelDecision`         | `packages/nightgauge/src/utils/skillRunner.ts` | Decision result with source annotation |
 
 **See also:**
 
@@ -1129,7 +1129,7 @@ but never prevent the pipeline from completing. This ensures the
 pipeline learning system cannot itself break the pipeline it is improving.
 
 **Orchestration**: `PostPipelineAnalyzer.analyze()` in
-`packages/nightgauge-vscode/src/services/PostPipelineAnalyzer.ts`
+`packages/nightgauge/src/services/PostPipelineAnalyzer.ts`
 
 **See also:** [docs/ADAPTIVE_PIPELINE.md](ADAPTIVE_PIPELINE.md) — complete
 reference for all subsystems, guardrail constants, health tier thresholds, data
@@ -1156,12 +1156,12 @@ trending.
 
 ### Key Components
 
-| Component              | Responsibility                                           | Location                                          |
-| ---------------------- | -------------------------------------------------------- | ------------------------------------------------- |
-| `PipelineStateService` | In-memory state owner; relays transitions to Go over IPC | `packages/nightgauge-vscode/src/services/`        |
-| `DashboardState`       | ROI calculations, historical aggregation                 | `packages/nightgauge-vscode/src/views/dashboard/` |
-| `TokenParser`          | Extracts usage from Claude CLI stream-json output        | `packages/nightgauge-vscode/src/utils/`           |
-| `TokenTracker`         | Per-stage in-memory tracking during execution            | `packages/nightgauge-sdk/src/tracking/`           |
+| Component              | Responsibility                                           | Location                                   |
+| ---------------------- | -------------------------------------------------------- | ------------------------------------------ |
+| `PipelineStateService` | In-memory state owner; relays transitions to Go over IPC | `packages/nightgauge/src/services/`        |
+| `DashboardState`       | ROI calculations, historical aggregation                 | `packages/nightgauge/src/views/dashboard/` |
+| `TokenParser`          | Extracts usage from Claude CLI stream-json output        | `packages/nightgauge/src/utils/`           |
+| `TokenTracker`         | Per-stage in-memory tracking during execution            | `packages/nightgauge-sdk/src/tracking/`    |
 
 ### Data Flow
 
@@ -1372,7 +1372,7 @@ flowchart LR
 ### Callback Wiring Detail (services.ts)
 
 The most fragile part of the system is the callback wiring in
-`packages/nightgauge-vscode/src/bootstrap/services.ts`. This is where
+`packages/nightgauge/src/bootstrap/services.ts`. This is where
 phase detection connects to the tree view, and where bugs hide:
 
 ```mermaid
@@ -1694,7 +1694,7 @@ In concurrent mode, `PipelineTreeProvider`'s phase handlers are skipped
 ### StageTreeItem and PhaseTreeItem
 
 **`StageTreeItem.setPhases(phases, currentPhase?, totalPhases?)`**
-(`packages/nightgauge-vscode/src/views/items/StageTreeItem.ts`)
+(`packages/nightgauge/src/views/items/StageTreeItem.ts`)
 
 Rebuilds the `PhaseTreeItem[]` child array from a `StagePhase[]` snapshot. The
 `totalPhases` parameter ensures the correct count is displayed from the first
@@ -1716,7 +1716,7 @@ falls back to `"running..."`. This is why the UI showed "running..." when phase
 events weren't firing — the data never reached `setPhases()`.
 
 **`PhaseTreeItem`**
-(`packages/nightgauge-vscode/src/views/items/PhaseTreeItem.ts`)
+(`packages/nightgauge/src/views/items/PhaseTreeItem.ts`)
 
 Non-expandable tree item representing one phase. `PhaseStatus` values and their
 sidebar icons:
@@ -1765,22 +1765,22 @@ phase children with correct status icons from the persisted snapshot.
 
 All files involved in the phase tracking system, for quick navigation:
 
-| File                                                                   | Role                                                           |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `packages/nightgauge-sdk/src/events/phaseRegistry.ts`                  | `PHASE_REGISTRY`, `parsePhaseMarker()`, `formatPhaseMarker()`  |
-| `packages/nightgauge-vscode/src/utils/phaseTracker.ts`                 | `createPhaseTracker()` — bridges markers to state service      |
-| `packages/nightgauge-vscode/src/utils/skillRunner.ts`                  | Detects markers in stream-JSON NDJSON (~line 1707)             |
-| `packages/nightgauge-vscode/src/utils/streamOutputHandler.ts`          | Alternative detection via stdout (Go-driven path)              |
-| `packages/nightgauge-vscode/src/services/PipelineStateService.ts`      | `startPhase()`, `completePhase()`, `skipPhase()`, events       |
-| `packages/nightgauge-vscode/src/bootstrap/services.ts`                 | Callback wiring — `onSlotPhaseStart`, per-slot trackers        |
-| `packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts` | `runSlotPipeline()` provides callbacks to HeadlessOrchestrator |
-| `packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts`      | `runStage()` passes `onPhaseStart` to skillRunner              |
-| `packages/nightgauge-vscode/src/views/items/StageTreeItem.ts`          | `setPhases()`, `formatDescription()` — renders phase progress  |
-| `packages/nightgauge-vscode/src/views/items/ConcurrentSlotTreeItem.ts` | Per-slot phase event subscriptions                             |
-| `packages/nightgauge-vscode/src/views/PipelineTreeProvider.ts`         | Non-concurrent phase event subscriptions                       |
-| `packages/nightgauge-vscode/src/views/items/PhaseTreeItem.ts`          | Individual phase tree item rendering                           |
-| `internal/ipc/server.go`                                               | `pipeline.notifyPhaseTransition` handler (Go side)             |
-| `internal/execution/phase_parser.go`                                   | Go-side phase marker regex (for Go-driven path)                |
+| File                                                            | Role                                                           |
+| --------------------------------------------------------------- | -------------------------------------------------------------- |
+| `packages/nightgauge-sdk/src/events/phaseRegistry.ts`           | `PHASE_REGISTRY`, `parsePhaseMarker()`, `formatPhaseMarker()`  |
+| `packages/nightgauge/src/utils/phaseTracker.ts`                 | `createPhaseTracker()` — bridges markers to state service      |
+| `packages/nightgauge/src/utils/skillRunner.ts`                  | Detects markers in stream-JSON NDJSON (~line 1707)             |
+| `packages/nightgauge/src/utils/streamOutputHandler.ts`          | Alternative detection via stdout (Go-driven path)              |
+| `packages/nightgauge/src/services/PipelineStateService.ts`      | `startPhase()`, `completePhase()`, `skipPhase()`, events       |
+| `packages/nightgauge/src/bootstrap/services.ts`                 | Callback wiring — `onSlotPhaseStart`, per-slot trackers        |
+| `packages/nightgauge/src/services/ConcurrentPipelineManager.ts` | `runSlotPipeline()` provides callbacks to HeadlessOrchestrator |
+| `packages/nightgauge/src/services/HeadlessOrchestrator.ts`      | `runStage()` passes `onPhaseStart` to skillRunner              |
+| `packages/nightgauge/src/views/items/StageTreeItem.ts`          | `setPhases()`, `formatDescription()` — renders phase progress  |
+| `packages/nightgauge/src/views/items/ConcurrentSlotTreeItem.ts` | Per-slot phase event subscriptions                             |
+| `packages/nightgauge/src/views/PipelineTreeProvider.ts`         | Non-concurrent phase event subscriptions                       |
+| `packages/nightgauge/src/views/items/PhaseTreeItem.ts`          | Individual phase tree item rendering                           |
+| `internal/ipc/server.go`                                        | `pipeline.notifyPhaseTransition` handler (Go side)             |
+| `internal/execution/phase_parser.go`                            | Go-side phase marker regex (for Go-driven path)                |
 
 ### Known Pitfalls
 
@@ -2002,7 +2002,7 @@ execution history (JSONL) so they can be distinguished in analytics.
 
 **Key component**: `PipelineStateService.getInterruptedPipelineInfo()` and
 `recoverFromCrash()` in
-`packages/nightgauge-vscode/src/services/PipelineStateService.ts`.
+`packages/nightgauge/src/services/PipelineStateService.ts`.
 
 ---
 
@@ -2025,7 +2025,7 @@ sidebar tree view or the `nightgauge.stopPipeline` command.
 restart the pipeline using the Resume flow.
 
 **Key components**: `HeadlessOrchestrator.stop()` /
-`packages/nightgauge-vscode/src/commands/stopPipeline.ts`
+`packages/nightgauge/src/commands/stopPipeline.ts`
 
 ---
 
@@ -2077,7 +2077,7 @@ skipped, and execution resumes from the next phase. This enables
 retry-from-failed-phase without re-running completed work.
 
 **Key component**: `PhaseTimeoutManager` in
-`packages/nightgauge-vscode/src/utils/PhaseTimeoutManager.ts`.
+`packages/nightgauge/src/utils/PhaseTimeoutManager.ts`.
 Configuration via `pipeline.phase_timeouts` — see
 [CONFIGURATION.md](./CONFIGURATION.md) for all settings.
 
@@ -2358,7 +2358,7 @@ changing consumer code.
 ### IWorkItemProvider Interface
 
 Defined in
-`packages/nightgauge-vscode/src/services/types/WorkItemProvider.ts`:
+`packages/nightgauge/src/services/types/WorkItemProvider.ts`:
 
 ```typescript
 interface IWorkItemProvider {
@@ -2412,7 +2412,7 @@ This ensures repo-only issues always have sensible defaults in the Ready view.
 <!-- graduated-from: .nightgauge/knowledge/features/2570-status-inference/decisions.md#adr-001 -->
 
 Status resolution is centralized in `inferWorkItemStatus()`
-(`packages/nightgauge-vscode/src/utils/statusInference.ts`). Every
+(`packages/nightgauge/src/utils/statusInference.ts`). Every
 provider that surfaces work items routes through this helper so status is
 deterministic across repo-only, board-only, and composite modes. The chain has
 four ordered steps — the first that matches wins:
@@ -2468,7 +2468,7 @@ multi-workspace scenarios.
 
 ### Adding VSCode Extension Features
 
-1. Add command in `packages/nightgauge-vscode/package.json`
+1. Add command in `packages/nightgauge/package.json`
 2. Implement handler in `src/extension.ts`
 3. Add UI components (tree view, webview, etc.)
 4. Update configuration schema if needed

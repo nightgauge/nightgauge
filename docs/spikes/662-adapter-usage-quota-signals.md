@@ -50,7 +50,7 @@ Every claim below is grounded in one of three kinds of evidence, cited inline:
 
 1. **Adapter source and stream parsers in this repository** — `internal/execution/adapters/*.go`,
    `internal/execution/stream.go` (the Go binary's dispatch and token accounting), and the
-   parallel TypeScript execution path (`packages/nightgauge-vscode/src/utils/tokenParser.ts`,
+   parallel TypeScript execution path (`packages/nightgauge/src/utils/tokenParser.ts`,
    `skillRunner.ts`, `packages/nightgauge-sdk/src/cli/adapters/*.ts`) that the VS Code
    extension uses for its own dispatch. **These are two separate execution paths with
    different capabilities** — see §2.1.
@@ -110,8 +110,8 @@ adapters, and they do not have the same capabilities:
   one hit — a code comment in `gemini.go:42` about _token_-usage events, unrelated to
   quota). **This confirms the research already done before this spike was dispatched.**
 - **The TypeScript execution path** the VS Code extension uses for its own dispatch
-  (`packages/nightgauge-vscode/src/utils/skillRunner.ts`,
-  `packages/nightgauge-vscode/src/utils/tokenParser.ts`,
+  (`packages/nightgauge/src/utils/skillRunner.ts`,
+  `packages/nightgauge/src/utils/tokenParser.ts`,
   `packages/nightgauge-sdk/src/cli/adapters/*.ts`) is a **separate implementation that
   parses more of the Claude CLI's stream than the Go binary does** — including a
   structured rate-limit envelope the Go side has no equivalent for (§2.2). This is not
@@ -161,7 +161,7 @@ category `LocalTelemetryUsageProvider` (#658) already covers, not a source this 
 needed to treat separately.
 
 **What "claude" resolves to.** The `ExecutionAdapterSchema` value `"claude"` is not one
-Go adapter — `packages/nightgauge-vscode/src/config/schema.ts:1742-1750` documents it
+Go adapter — `packages/nightgauge/src/config/schema.ts:1742-1750` documents it
 mapping to either `claude-sdk` (API key) or `claude-headless` (CLI/OAuth auth),
 selected by `auth_provider` (`AuthProviderSchema`: `max` | `bedrock` | `vertex`).
 `internal/execution/adapters/registry.go:33-34` shows the Go-side factories
@@ -173,7 +173,7 @@ produce the same wire format; the finding below applies to whichever one is disp
 **The signal.** The Claude CLI's `--output-format stream-json` output carries a message
 type the accumulated Go-side `TokenAccumulator` does not parse at all, but the
 TypeScript `tokenParser.ts` does
-(`packages/nightgauge-vscode/src/utils/tokenParser.ts:130-171`, Issue #2573):
+(`packages/nightgauge/src/utils/tokenParser.ts:130-171`, Issue #2573):
 
 ```
 {"type":"rate_limit_event","rate_limit_info":{...}}
@@ -213,7 +213,7 @@ unconfirmed, not merely under-specified.
 
 **Freshness — mid-run only, today.** This event arrives on the live stdout stream of an
 _already-running_ `claude -p --output-format stream-json` invocation
-(`packages/nightgauge-vscode/src/utils/skillRunner.ts:6436-6448`). There is no
+(`packages/nightgauge/src/utils/skillRunner.ts:6436-6448`). There is no
 `claude`-CLI command this spike found (nor did the doctor package's captured
 `claude-help.txt`, 2.1.233, grepped in §1 item 2, turn one up) that returns the current
 utilization when the CLI is **not** running a request. The status bar's stated need to "sample at rest"
@@ -236,7 +236,7 @@ top level to a nested `rate_limit_info` object at some point (#3386 in this repo
 history). A second data point: `#3386`'s original hypothesis about `overageStatus`
 behavior "did NOT manifest in practice" and had to be corrected by `#3448` after
 observing real session logs
-(`packages/nightgauge-vscode/src/utils/tokenParser.ts:154-163`). Two independent
+(`packages/nightgauge/src/utils/tokenParser.ts:154-163`). Two independent
 correction cycles on the same field in this repo's history is itself the finding: this
 is a live, still-settling, unofficial interface, not a stable contract. A provider built
 on it should be written defensively (unknown fields ignored, missing fields treated as
@@ -581,7 +581,7 @@ recommendations:
       claude-headless CLI/OAuth path and the claude-sdk API-key path) by
       consuming the rate_limit_event envelope tokenParser.ts and
       skillRunner.ts already parse from `claude --output-format stream-json`
-      (packages/nightgauge-vscode/src/utils/tokenParser.ts:130-171,
+      (packages/nightgauge/src/utils/tokenParser.ts:130-171,
       skillRunner.ts:6436-6448) — do not add any new CLI invocation or flag.
 
       Map RateLimitEventData onto UsageWindow (#658): used = utilization,

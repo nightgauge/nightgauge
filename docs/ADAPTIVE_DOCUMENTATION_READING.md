@@ -348,7 +348,7 @@ The VS Code extension dashboard will track:
 - **Cache hit rate** by documentation scope
 - **Time savings**: Faster documentation reading = faster planning
 
-See `packages/nightgauge-vscode/src/views/dashboard/DashboardState.ts` for
+See `packages/nightgauge/src/views/dashboard/DashboardState.ts` for
 implementation.
 
 ---

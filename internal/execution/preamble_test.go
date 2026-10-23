@@ -12,7 +12,7 @@ import (
 // measured eval variant — the single source of truth for the preamble text.
 // If this fails, evals/variants/behavioral-preamble.json changed without
 // re-measuring, or the Go copy drifted. Update both together (and the TS
-// mirrors in nightgauge-sdk / nightgauge-vscode) only behind a new
+// mirrors in nightgauge-sdk / nightgauge) only behind a new
 // measurement; see docs/spikes/77-*.md.
 func TestBehavioralPreambleMatchesEvalVariant(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "evals", "variants", "behavioral-preamble.json"))

@@ -14,7 +14,7 @@ import (
 
 // dispatch_routing_mode_test.go is the Go half of the mode × knob agreement
 // matrix (#340). Its TypeScript twin is
-// packages/nightgauge-vscode/tests/utils/resolveModel.modeKnobAgreement.test.ts,
+// packages/nightgauge/tests/utils/resolveModel.modeKnobAgreement.test.ts,
 // which asserts the SAME cells against `resolveModel`. The two resolvers own
 // one dispatch path each, so a cell where they disagree is the Dual-Path Drift
 // class this issue exists to remove — and the round-1 fixup shipped four such

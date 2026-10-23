@@ -4,7 +4,7 @@
 
 **Architecture**: Three-layer stack: portable Skills (SKILL.md), TypeScript SDK
 (`packages/nightgauge-sdk/`), and VSCode Extension
-(`packages/nightgauge-vscode/`). Six pipeline stages execute as isolated
+(`packages/nightgauge/`). Six pipeline stages execute as isolated
 subagents with JSON context handoff files.
 
 **Execution model**: Each pipeline stage runs in a fresh conversation. Context
@@ -15,7 +15,7 @@ and writes its own.
 
 **Configuration**: 6-tier config system — built-in defaults → global config →
 project config → local config → env vars → CLI flags. Schema defined in
-`packages/nightgauge-vscode/src/config/schema.ts`. Documentation in
+`packages/nightgauge/src/config/schema.ts`. Documentation in
 `docs/CONFIGURATION.md`.
 
 **Standards**: Code standards in `docs/CODE_STANDARDS.md`. Security rules in

@@ -110,7 +110,7 @@ type V2RunRecord struct {
 	// typeof check) — which is exactly why the WRITER has to keep the two
 	// shapes distinct. So do every non-zod consumer: jq, a human reading the
 	// JSONL, the index surface, and the byte-verbatim fixtures under
-	// packages/nightgauge-vscode/tests/fixtures/undetermined-branch/.
+	// packages/nightgauge/tests/fixtures/undetermined-branch/.
 	//
 	// A non-empty value is evidence of a branch that actually resolved —
 	// nothing fabricates one — for records written from #397 onward. Records
@@ -958,7 +958,7 @@ func NewHistoryWriter(workspaceRoot string) *HistoryWriter {
 // window in days (#674) — kept in sync with
 // config.DefaultHistoryRetentionDays and the TypeScript
 // DEFAULT_RETENTION_DAYS in
-// packages/nightgauge-vscode/src/utils/executionHistoryWriter.ts.
+// packages/nightgauge/src/utils/executionHistoryWriter.ts.
 const DefaultHistoryRetentionDays = 90
 
 // SetRetentionDays overrides the writer's execution-history retention window

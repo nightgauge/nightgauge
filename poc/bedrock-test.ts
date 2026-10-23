@@ -18,7 +18,7 @@ import { spawn, type ChildProcess } from "child_process";
 
 /**
  * Authentication provider options
- * Already exists in packages/nightgauge-vscode/src/config/schema.ts
+ * Already exists in packages/nightgauge/src/config/schema.ts
  */
 type AuthProvider = "max" | "bedrock" | "vertex";
 
@@ -161,11 +161,11 @@ async function exampleBedrockUsage(): Promise<void> {
 /**
  * Files that need modification for full Bedrock support:
  *
- * 1. packages/nightgauge-vscode/src/utils/skillRunner.ts
+ * 1. packages/nightgauge/src/utils/skillRunner.ts
  *    - Import config
  *    - Add auth_provider flag to CLI args (as shown above)
  *
- * 2. packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts
+ * 2. packages/nightgauge/src/services/HeadlessOrchestrator.ts
  *    - Pass config to skill runner
  *
  * 3. docs/CONFIGURATION.md

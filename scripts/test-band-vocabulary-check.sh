@@ -92,7 +92,7 @@ rm -rf "$TMP"
 # Case 4: a vertical (multi-line) band list — the shape a one-line rule would
 # miss — fails.
 seed_repo
-cat >>"$TMP/packages/nightgauge-vscode/src/utils/configMerger.ts" <<'EOF'
+cat >>"$TMP/packages/nightgauge/src/utils/configMerger.ts" <<'EOF'
 export const PLANTED_VERTICAL = [
   "haiku",
   "sonnet",

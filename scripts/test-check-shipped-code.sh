@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Self-test for packages/nightgauge-vscode/scripts/check-shipped-code.sh
+# Self-test for packages/nightgauge/scripts/check-shipped-code.sh
 # (#2320, #2321).
 #
 # The scan is only worth having if it can fail, so most arms seed a shipped
@@ -10,7 +10,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUT="$SCRIPT_DIR/../packages/nightgauge-vscode/scripts/check-shipped-code.sh"
+SUT="$SCRIPT_DIR/../packages/nightgauge/scripts/check-shipped-code.sh"
 PASS=0
 FAIL=0
 ok()  { echo "  ok   $1"; PASS=$(( PASS + 1 )); }

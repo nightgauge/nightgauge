@@ -148,7 +148,7 @@ func TestRemotePinAdapterWithoutModel(t *testing.T) {
 // ids, because the extension executes the pin, and every entry must resolve
 // in the Go registry, which supplies Agentic and ValidateModel.
 func TestRemotePinAllowListMatchesTheExtension(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "packages", "nightgauge-vscode", "src", "config", "schema.ts"))
+	src, err := os.ReadFile(filepath.Join("..", "..", "packages", "nightgauge", "src", "config", "schema.ts"))
 	if err != nil {
 		t.Fatalf("read schema.ts: %v", err)
 	}

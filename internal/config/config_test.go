@@ -126,7 +126,7 @@ func TestLoadYAML_PlatformNestedFormat(t *testing.T) {
 
 // TestLoadYAML_PlatformSection verifies that platform.api_url and
 // platform.license_key (the fields the VSCode extension actually writes,
-// see packages/nightgauge-vscode/src/config/schema.ts PlatformConfigSchema)
+// see packages/nightgauge/src/config/schema.ts PlatformConfigSchema)
 // are parsed into Config.PlatformURL / Config.LicenseKey. Before #333 only
 // platform.telemetry was wired up, so `nightgauge serve` never saw a
 // configured platform even when config.yaml declared one.

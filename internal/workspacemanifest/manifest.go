@@ -49,7 +49,7 @@ import (
 )
 
 // ValidRoles mirrors the role enum in the extension's validateWorkspaceConfig
-// (packages/nightgauge-vscode/src/utils/workspaceDetection.ts). The two
+// (packages/nightgauge/src/utils/workspaceDetection.ts). The two
 // validators must agree; a divergence is a defect, so this list is asserted
 // against the TypeScript source by TestRoleEnumMatchesExtension.
 var ValidRoles = []string{"primary", "secondary", "shared"}

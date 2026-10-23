@@ -24,7 +24,7 @@ func TestClassifyDefault(t *testing.T) {
 		{"yaml anywhere", []string{"configs/codex/model.yaml"}, ConfigOnly},
 
 		{"go source", []string{"internal/orchestrator/scheduler.go"}, Source},
-		{"ts source", []string{"packages/nightgauge-vscode/src/extension.ts"}, Source},
+		{"ts source", []string{"packages/nightgauge/src/extension.ts"}, Source},
 		{"multiple source", []string{"cmd/nightgauge/main.go", "internal/x/y.go"}, Source},
 
 		{"docs + source = mixed", []string{"docs/x.md", "internal/x.go"}, Mixed},

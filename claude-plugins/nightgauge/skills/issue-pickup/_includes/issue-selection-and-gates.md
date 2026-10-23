@@ -278,7 +278,7 @@ When the gate decides to defer:
 
 - The Go binary inserts/updates the queue item as `paused` with
   `pausedReason.kind = "baseline_ci_red"` (queue schema 2.2; see
-  `packages/nightgauge-vscode/src/types/queue.ts`).
+  `packages/nightgauge/src/types/queue.ts`).
 - `signal=deferred` is printed to stdout so the orchestrator short-circuits
   remaining stages, mirroring the AC reconciliation `signal=verify-and-close`
   pattern from feature-planning.
@@ -412,7 +412,7 @@ When the gate decides to defer:
 
 - The Go binary inserts/updates the queue item as `paused` with
   `pausedReason.kind = "blocked_dependency"` and `blockingIssues` (queue schema
-  2.3; see `packages/nightgauge-vscode/src/types/queue.ts`).
+  2.3; see `packages/nightgauge/src/types/queue.ts`).
 - `signal=deferred` is printed to stdout so the orchestrator short-circuits
   remaining stages, exactly mirroring Phase 2.8.
 - `deps-gate promote` (run on a sweep, and the autonomous cascade on blocker

@@ -734,7 +734,7 @@ func DefaultAutonomousConfig() *AutonomousConfig {
 
 // Config holds CLI configuration.
 // RoutingConfig models the routing: section of config.yaml. It mirrors
-// RoutingConfigSchema in packages/nightgauge-vscode/src/config/schema.ts:
+// RoutingConfigSchema in packages/nightgauge/src/config/schema.ts:
 // complexity thresholds plus the customizable change_rules fast-track table
 // (#4125). All fields are optional so existing configs keep working and the
 // built-in defaults apply with zero user config.
@@ -752,7 +752,7 @@ type RoutingConfig struct {
 }
 
 // ModelRoutingConfig mirrors the model_routing: section of config.yaml — the
-// TS ModelRoutingConfigSchema in packages/nightgauge-vscode/src/config/schema.ts.
+// TS ModelRoutingConfigSchema in packages/nightgauge/src/config/schema.ts.
 // The Go autonomous scheduler consumes minimum_model (the per-stage model
 // floor) and mode (which selects between explicit and router-driven per-stage
 // routing); effort_auto/confidence_threshold remain TS model-selector concerns
@@ -793,7 +793,7 @@ type ModelRoutingConfig struct {
 	// dispatch path since #340, when the scheduler became the only router on
 	// the IPC path — before that this key was inert on autonomous runs.
 	// Mirrors getModelRoutingMode in
-	// packages/nightgauge-vscode/src/utils/resolvers/modelResolver.ts.
+	// packages/nightgauge/src/utils/resolvers/modelResolver.ts.
 	// Empty/absent → DefaultModelRoutingMode. Resolve with ResolveMode.
 	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
 
@@ -917,13 +917,13 @@ type Config struct {
 	// Routing holds the routing: section of config.yaml — complexity thresholds
 	// plus the customizable change_rules fast-track table (#4125). Read by the
 	// Go scheduler/CLI to feed routing.Derive(); mirrors RoutingConfigSchema in
-	// packages/nightgauge-vscode/src/config/schema.ts.
+	// packages/nightgauge/src/config/schema.ts.
 	Routing *RoutingConfig `json:"routing,omitempty" yaml:"routing,omitempty"`
 
 	// ModelRouting holds the subset of the model_routing: section the Go
 	// scheduler reads — the per-stage minimum_model floor (#366). Mirrors
 	// ModelRoutingConfigSchema.minimum_model in
-	// packages/nightgauge-vscode/src/config/schema.ts.
+	// packages/nightgauge/src/config/schema.ts.
 	ModelRouting *ModelRoutingConfig `json:"modelRouting,omitempty" yaml:"model_routing,omitempty"`
 
 	// UI holds the subset of the ui: section the Go binary reads —
@@ -931,7 +931,7 @@ type Config struct {
 	// per-stage adapter schema (#54), and ui.core.default_model, the global
 	// model fallback the dispatch path resolves at `resolveModel` Step 3's
 	// position (#340). Mirrors UICoreConfigSchema in
-	// packages/nightgauge-vscode/src/config/schema.ts.
+	// packages/nightgauge/src/config/schema.ts.
 	UI *UIConfig `json:"ui,omitempty" yaml:"ui,omitempty"`
 
 	// Concurrency is the single source of truth for how many pipelines run at
@@ -1248,7 +1248,7 @@ type UICoreConfig struct {
 	// DefaultModel is the workspace-wide model fallback for a stage no
 	// explicit knob and no router recommendation answered for — `resolveModel`
 	// Step 3, `getDefaultModel` in
-	// packages/nightgauge-vscode/src/utils/resolvers/modelResolver.ts, with the
+	// packages/nightgauge/src/utils/resolvers/modelResolver.ts, with the
 	// NIGHTGAUGE_UI_CORE_DEFAULT_MODEL env override winning over the file.
 	//
 	// Read by the Go dispatch path since #340. Before that only the TypeScript
@@ -1282,7 +1282,7 @@ type PipelineConfig struct {
 	// the complexity router. Read by the Go dispatch path since #340 — before
 	// that only the TypeScript resolver consumed it, so the key was inert on
 	// autonomous runs. Mirrors pipeline.stage_models / getStageModel in
-	// packages/nightgauge-vscode/src/utils/resolvers/stageResolver.ts.
+	// packages/nightgauge/src/utils/resolvers/stageResolver.ts.
 	StageModels map[string]string `yaml:"stage_models,omitempty" json:"stageModels,omitempty"`
 
 	// Recovery holds the pipeline.recovery: block — the auto-triage recovery
@@ -1412,7 +1412,7 @@ type PipelineLogsConfig struct {
 	// files (and their index.json entries) to keep before pruning.
 	// 0/absent → DefaultHistoryRetentionDays. Mirrors
 	// PipelineLogsConfigSchema.history_retention_days in
-	// packages/nightgauge-vscode/src/config/schema.ts — one config key, one
+	// packages/nightgauge/src/config/schema.ts — one config key, one
 	// resolved value, both runtimes.
 	HistoryRetentionDays int `yaml:"history_retention_days,omitempty" json:"historyRetentionDays,omitempty"`
 }
@@ -1420,7 +1420,7 @@ type PipelineLogsConfig struct {
 // DefaultHistoryRetentionDays is the default execution-history retention
 // window in days (#674) — kept in sync with the TypeScript
 // DEFAULT_RETENTION_DAYS in
-// packages/nightgauge-vscode/src/utils/executionHistoryWriter.ts and the Go
+// packages/nightgauge/src/utils/executionHistoryWriter.ts and the Go
 // state.DefaultHistoryRetentionDays (internal/state cannot import this
 // package — see that constant's doc for why).
 const DefaultHistoryRetentionDays = 90
@@ -2120,7 +2120,7 @@ type yamlConfigNested struct {
 	FeedbackLoop *FeedbackLoopConfig `yaml:"feedback_loop,omitempty"`
 	Platform     struct {
 		// APIURL / LicenseKey mirror the VSCode extension's PlatformConfigSchema
-		// (packages/nightgauge-vscode/src/config/schema.ts) — the schema the
+		// (packages/nightgauge/src/config/schema.ts) — the schema the
 		// extension actually writes to config.yaml. Until #333, these two keys
 		// were silently dropped: only platform.telemetry was ever parsed, so
 		// `nightgauge serve` (spawned by the extension with no flags/env) never

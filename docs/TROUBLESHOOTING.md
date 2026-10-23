@@ -1025,7 +1025,7 @@ confirm it fails with dedupe disabled too. Give distinct calls distinct ids;
 ### `bash scripts/ci-local.sh` exits 1 with every vscode test passing (#173)
 
 **Symptom:** `npx vitest run` (or `ci-local.sh`) intermittently exits non-zero
-in `packages/nightgauge-vscode` even though the summary shows every test
+in `packages/nightgauge` even though the summary shows every test
 passing (e.g. `11136 passed | 9 skipped`, 0 assertion failures). The real
 failure is buried above the summary:
 
@@ -1344,7 +1344,7 @@ with `lsof -a -d cwd -p "$(pgrep -f '[c]i-local.sh')"`.
 
 ### `vitest` in a worktree fails until the SDK is built
 
-`packages/nightgauge-vscode/tests/setup.ts` imports `@nightgauge/sdk` from
+`packages/nightgauge/tests/setup.ts` imports `@nightgauge/sdk` from
 `dist`, not from source. A fresh worktree has no `dist`:
 
 ```bash
@@ -1430,7 +1430,7 @@ decode). Do not retype the line by hand, and do not exempt the file.
 ### A fresh worktree fails three packaging suites until `build:assets` runs
 
 `claudeAgentSdkPackaging`, `modelRegistryPackaging` and `failureTaxonomyPackaging`
-assert that files exist under `packages/nightgauge-vscode/dist/`. In a worktree
+assert that files exist under `packages/nightgauge/dist/`. In a worktree
 where you have run `npm install` and `npm run build --workspace=@nightgauge/sdk`
 — the two steps the handoff and `AGENTS.md` tell you to run — those files are
 still absent, and five tests fail:
@@ -1572,7 +1572,7 @@ prints a one-shot snapshot:
   surface (Health, Trends, Cost, Runs, Compliance, Quota/Usage)
 
 Every line printed to the channel — including the snapshot — passes through
-`redactSecrets()` (see `packages/nightgauge-vscode/src/utils/redaction.ts`)
+`redactSecrets()` (see `packages/nightgauge/src/utils/redaction.ts`)
 before it reaches the output window, so a token or license key cannot appear
 there even if it leaked into an upstream error string.
 

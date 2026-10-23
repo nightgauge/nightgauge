@@ -49,11 +49,11 @@
 #   scripts/capture-stage-recovery-fixture.sh [OUT_FILE]
 #
 # Default OUT_FILE:
-#   packages/nightgauge-vscode/tests/fixtures/stage-recovery/recovered-stage-snapshot.json
+#   packages/nightgauge/tests/fixtures/stage-recovery/recovered-stage-snapshot.json
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${1:-$REPO_ROOT/packages/nightgauge-vscode/tests/fixtures/stage-recovery/recovered-stage-snapshot.json}"
+OUT="${1:-$REPO_ROOT/packages/nightgauge/tests/fixtures/stage-recovery/recovered-stage-snapshot.json}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ng-stage-recovery-capture.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT

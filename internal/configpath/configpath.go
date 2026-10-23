@@ -26,7 +26,7 @@ func MachineConfigPath() (string, error) {
 // ForGOOS resolves the machine-tier config path as it would be on goos.
 //
 // Env-override parity with the TS globalConfigResolver
-// (packages/nightgauge-vscode/src/utils/globalConfigResolver.ts):
+// (packages/nightgauge/src/utils/globalConfigResolver.ts):
 // NIGHTGAUGE_CONFIG_HOME wins, then XDG_CONFIG_HOME/nightgauge, then the
 // platform default (~/.config/nightgauge on Linux, %APPDATA%\nightgauge on
 // Windows, ~/.nightgauge elsewhere). The overrides also let tests point the

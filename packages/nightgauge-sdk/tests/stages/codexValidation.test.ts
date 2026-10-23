@@ -292,7 +292,7 @@ describe("Codex schema contract — feature-validate and pr-merge", () => {
       build: {
         ran: true,
         passed: true,
-        command: "npm run -w nightgauge-vscode build",
+        command: "npm run -w packages/nightgauge build",
       },
       unit_tests: {
         ran: true,

@@ -5,7 +5,7 @@
 //
 // The pure function Derive(DeriveInput) Decision mirrors the canonical
 // algorithm implemented in TypeScript at
-// packages/nightgauge-vscode/src/utils/changeAnalyzer.ts so observed
+// packages/nightgauge/src/utils/changeAnalyzer.ts so observed
 // routing decisions are unchanged. Reuse-, not rebuild-, of the shared
 // constants in coercion.go (validSkipStages, routeFromComplexity,
 // inferChangeTypeFromLabels) keeps the valid-value sets in lockstep with

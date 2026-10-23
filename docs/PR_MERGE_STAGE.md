@@ -318,7 +318,7 @@ both are load-bearing**:
 
 The sentinel is a literal in two languages (`PhaseStreamPrefix` in
 `internal/orchestrator/phase_recorder.go`, `PHASE_STREAM_PREFIX` in
-`packages/nightgauge-vscode/src/services/prStagePhaseStream.ts`). Its failure
+`packages/nightgauge/src/services/prStagePhaseStream.ts`). Its failure
 mode is **silent** — a changed prefix does not error, the reader just stops
 recognising phase lines and the tree returns to 0/14 — so
 `TestPhaseStreamPrefixParityWithTypeScript` reads the TS source and fails on

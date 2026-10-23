@@ -103,7 +103,7 @@ func TestComposeBranchNameEmitsIssueNumberExactlyOnce(t *testing.T) {
 // today and proves nothing about that, so this asserts the absence of the
 // thing itself.
 func TestNoSecondBranchNameComposerInTypeScript(t *testing.T) {
-	root := filepath.Join("..", "..", "packages", "nightgauge-vscode", "src")
+	root := filepath.Join("..", "..", "packages", "nightgauge", "src")
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("extension sources not present: %v", err)
 	}

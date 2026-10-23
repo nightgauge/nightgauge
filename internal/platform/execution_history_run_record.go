@@ -22,7 +22,7 @@ const executionHistoryRunRecordSchemaVersion = 5
 // pipeline_events.adapter for the Adapter Mix donut (#268). The endpoint
 // accepts V4 and V5 via a discriminated union on `schemaVersion`; the VSCode
 // extension's TypeScript mapper
-// (packages/nightgauge-vscode/src/services/telemetry/pipelineRunV4Mapper.ts)
+// (packages/nightgauge/src/services/telemetry/pipelineRunV4Mapper.ts)
 // still emits V4 (best-effort mirror of this authoritative Go push), so the
 // two overlap idempotently on the platform side.
 //

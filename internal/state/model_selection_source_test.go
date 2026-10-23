@@ -448,7 +448,7 @@ func TestBuildV2Record_ModelSelectionWireKeys(t *testing.T) {
 	keys := slices.Sorted(maps.Keys(got))
 	if !reflect.DeepEqual(keys, want) {
 		t.Errorf("model_selection wire keys = %q, want %q.\n"+
-			"packages/nightgauge-vscode/src/schemas/executionHistory.ts "+
+			"packages/nightgauge/src/schemas/executionHistory.ts "+
 			"(HistoryStageDetailSchema) requires exactly these keys; renaming or dropping a "+
 			"json tag on V2ModelSelect (internal/state/history.go) costs every record its "+
 			"strict parse, the same as writing a value the enum does not list. %s",

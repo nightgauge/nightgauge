@@ -618,7 +618,7 @@ VSCode settings:
 
 ## Discord Pipeline Notifications (DiscordService)
 
-**File**: `packages/nightgauge-vscode/src/services/DiscordService.ts`
+**File**: `packages/nightgauge/src/services/DiscordService.ts`
 
 DiscordService posts a single Discord embed per pipeline run and edits it
 in-place as stages progress, so the channel shows live status without flooding

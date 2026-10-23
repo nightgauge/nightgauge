@@ -12,7 +12,7 @@
 //   - Wire format invariants over actual JSON-over-stdio transport
 //
 // See: docs/GO_BINARY.md — IPC protocol section
-// See: packages/nightgauge-vscode/src/services/IpcClient.ts
+// See: packages/nightgauge/src/services/IpcClient.ts
 package ipc
 
 import (

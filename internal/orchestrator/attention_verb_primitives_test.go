@@ -32,7 +32,7 @@ func TestBudgetCeilingOverrideHonoredByResolver(t *testing.T) {
 
 // TestBudgetCeilingOverrideIsTheSameContractTheExtensionReads is the Go half of
 // a two-language pair. Its twin is
-// packages/nightgauge-vscode/tests/utils/resolvers/otherResolver.budgetOverride.test.ts,
+// packages/nightgauge/tests/utils/resolvers/otherResolver.budgetOverride.test.ts,
 // which drives the SAME file with the SAME numbers through
 // getPipelineCeilingConfig → PipelineBudgetCeiling.getEffectiveCeiling.
 //

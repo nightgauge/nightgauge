@@ -10,7 +10,7 @@
 //	SDK  packages/nightgauge-sdk/src/analysis/health/terminalKindTable.generated.ts
 //	     is generated from table.json (`make generate-terminal-kind-table`) and
 //	     interpreted by classifyTerminalKind.
-//	Ext  packages/nightgauge-vscode/src/services/terminalKindSignal.ts runs the
+//	Ext  packages/nightgauge/src/services/terminalKindSignal.ts runs the
 //	     same ladder and answers only for rules marked `signal: true`.
 //
 // Before #306 those were three hand-written ladders held aligned by comments,

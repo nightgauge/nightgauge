@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://nightgauge.dev"><img src="packages/nightgauge-vscode/resources/nightgauge-icon.png" width="96" alt="Nightgauge logo"></a>
+<a href="https://nightgauge.dev"><img src="packages/nightgauge/resources/nightgauge-icon.png" width="96" alt="Nightgauge logo"></a>
 
 # Nightgauge
 
@@ -12,8 +12,8 @@ with a quality gate at every stage between the issue and the merge.
 [![CI](https://github.com/nightgauge/nightgauge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nightgauge/nightgauge/actions/workflows/ci.yml?query=branch%3Amain)
 [![CodeQL](https://github.com/nightgauge/nightgauge/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/nightgauge/nightgauge/actions/workflows/codeql.yml?query=branch%3Amain)
 [![Release](https://img.shields.io/github/v/release/nightgauge/nightgauge?sort=semver&label=release)](https://github.com/nightgauge/nightgauge/releases/latest)
-[![Open VSX](https://img.shields.io/open-vsx/v/nightgauge/nightgauge-vscode?label=Open%20VSX)](https://open-vsx.org/extension/nightgauge/nightgauge-vscode)
-[![Open VSX downloads](https://img.shields.io/open-vsx/dt/nightgauge/nightgauge-vscode?label=downloads)](https://open-vsx.org/extension/nightgauge/nightgauge-vscode)
+[![Open VSX](https://img.shields.io/open-vsx/v/nightgauge/nightgauge?label=Open%20VSX)](https://open-vsx.org/extension/nightgauge/nightgauge)
+[![Open VSX downloads](https://img.shields.io/open-vsx/dt/nightgauge/nightgauge?label=downloads)](https://open-vsx.org/extension/nightgauge/nightgauge)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
 
@@ -128,7 +128,7 @@ The full Nightgauge experience with visual dashboard, project board
 integration, batch processing, and one-click pipeline execution.
 
 Install **Nightgauge** from
-[Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode), which
+[Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge), which
 selects the build for your platform automatically and is the default registry in
 VSCodium, Cursor, Windsurf and Gitpod. In VS Code itself, install the `.vsix` for
 your platform from the
@@ -545,7 +545,7 @@ The pipeline enforces quality at every step:
 │                    USER INTERFACES                               │
 ├─────────────────────────────────────────────────────────────────┤
 │  VSCode Extension          │  CLI Adapters                      │
-│  (packages/nightgauge-vscode) │  (claude-plugins + configs/codex) │
+│  (packages/nightgauge) │  (claude-plugins + configs/codex) │
 │  Primary UX                │  Alternative UX                    │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -696,7 +696,7 @@ legacy config file. See also [docs/DEPRECATIONS.md](docs/DEPRECATIONS.md).
 ```
 nightgauge/
 ├── packages/                      # Products
-│   ├── nightgauge-vscode/           # VSCode extension (primary UX)
+│   ├── nightgauge/           # VSCode extension (primary UX)
 │   └── nightgauge-sdk/              # Programmatic SDK
 ├── skills/                        # Pipeline instruction layer
 │   ├── nightgauge-issue-pickup/     # Stage 1: Claim issue

@@ -12,7 +12,7 @@
  * rename '...stage-model-calibration.json.tmp' ->
  * '...stage-model-calibration.json'`.
  *
- * `PostPipelineAnalyzer` (nightgauge-vscode) calls
+ * `PostPipelineAnalyzer` (nightgauge) calls
  * `StageModelCalibrationService.save` from a `try/catch` that only logs at
  * debug level on failure, so this race was invisible in practice.
  *

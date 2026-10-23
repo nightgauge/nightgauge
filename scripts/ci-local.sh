@@ -170,7 +170,7 @@ go_embed_globs() {
 #   2. Path-shaped string literals in the generator sources themselves
 #      (`cmd/*gen*/`, `*/codegen/`), which is where the flag DEFAULTS live —
 #      `cmd/ipc-codegen/main.go` names
-#      `packages/nightgauge-vscode/src/services/IpcClient.generated.ts`, and
+#      `packages/nightgauge/src/services/IpcClient.generated.ts`, and
 #      `internal/terminalkind/codegen/codegen.go` names the SDK module and the
 #      behaviour golden it renders.
 #
@@ -305,7 +305,7 @@ fi
 REQUIRED_FILES=(
   go.mod
   scripts/test-ci-local-inventory.sh
-  packages/nightgauge-vscode/tests/vscode-host/launch.ts
+  packages/nightgauge/tests/vscode-host/launch.ts
   scripts/opencode-integration.sh
   scripts/adapter-cli-pin.sh
   scripts/ci-local-steps.txt
@@ -314,7 +314,7 @@ REQUIRED_FILES=(
   scripts/test-publish-vsix-set.sh
   scripts/test-sign-macos-binaries.sh
   scripts/test-check-shipped-code.sh
-  packages/nightgauge-vscode/scripts/check-shipped-code.sh
+  packages/nightgauge/scripts/check-shipped-code.sh
   scripts/test-scrub-evidence.sh
   docker/clean-install/scrub-evidence.sh
   scripts/test-capture-cli-help.sh
@@ -346,7 +346,7 @@ REQUIRED_FILES=(
   scripts/test-workflow-refs-check.sh
   scripts/test-marketplace-channel.sh
   scripts/test-vsix-host-target.sh
-  packages/nightgauge-vscode/scripts/vsix-host-target.sh
+  packages/nightgauge/scripts/vsix-host-target.sh
   scripts/test-verify-release-channels.sh
   scripts/verify-release-channels.sh
   scripts/check-workflow-refs.py
@@ -358,8 +358,8 @@ REQUIRED_FILES=(
   .github/scripts/cla-check.test.mjs
   scripts/test-measure-cache-boundary-loss.sh
   scripts/validate-phase-markers.ts
-  packages/nightgauge-vscode/scripts/generate-package-contributions.ts
-  packages/nightgauge-vscode/scripts/check-engine-types.mjs
+  packages/nightgauge/scripts/generate-package-contributions.ts
+  packages/nightgauge/scripts/check-engine-types.mjs
   scripts/check-md-links.sh
   scripts/test-check-md-links.sh
   scripts/test-credential-scan-rules.sh
@@ -1352,7 +1352,7 @@ run_group "CI change-class gate regression suite" \
 # 2. Generated files must be in sync
 run_step "make generate-ipc-client" make generate-ipc-client
 run_step "generated IPC client in sync" \
-  git diff --exit-code packages/nightgauge-vscode/src/services/IpcClient.generated.ts
+  git diff --exit-code packages/nightgauge/src/services/IpcClient.generated.ts
 
 # 2b. Canonical terminal-kind rule table (#306) — the generated SDK module and
 #     the behaviour golden must be exactly what table.json renders.
@@ -1543,7 +1543,7 @@ run_step "doctor-app-permission-walkthrough.sh regression suite" \
 # checkout where an earlier build had left dist/ behind.
 run_step "Build SDK types (for the test-tree typecheck)" \
   npm run build --workspace=@nightgauge/sdk
-run_step "VSCode test-tree typecheck" npm run typecheck:tests -w packages/nightgauge-vscode
+run_step "VSCode test-tree typecheck" npm run typecheck:tests -w packages/nightgauge
 
 # 4c. Retro engine tests and the model-routing analysis script (#2296, #2297,
 # #2298). Neither is reached by the npm workspaces, so both rotted unnoticed:
@@ -1574,14 +1574,14 @@ run_step "npm run test (all workspaces)" npm run test -- --run
 
 # 9. Generated package contributions in sync
 run_step "Generated VSCode contributions in sync" \
-  npx -w packages/nightgauge-vscode tsx scripts/generate-package-contributions.ts --check
+  npx -w packages/nightgauge tsx scripts/generate-package-contributions.ts --check
 
 # 9b. @types/vscode must not exceed engines.vscode. `vsce package` enforces this
 # at packaging time (dev-install.sh / release) but no build/test step does — a
 # Dependabot bump (#165) raised the types past the engine floor and only broke
 # at install. Guard it here so the mismatch fails locally, not at install.
 run_step "@types/vscode <= engines.vscode" \
-  node packages/nightgauge-vscode/scripts/check-engine-types.mjs
+  node packages/nightgauge/scripts/check-engine-types.mjs
 
 # 10. Markdown link check — cross-document reference integrity (root *.md +
 #     docs/**). Self-test first: `markdown-link-check` reports `Status: 0` for a
@@ -1722,9 +1722,9 @@ fi
 # macOS and Windows open their own windows.
 if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ]; then
   run_step "VSCode host smoke tests" \
-    xvfb-run --auto-servernum npm run -w packages/nightgauge-vscode test:host
+    xvfb-run --auto-servernum npm run -w packages/nightgauge test:host
 else
-  run_step "VSCode host smoke tests" npm run -w packages/nightgauge-vscode test:host
+  run_step "VSCode host smoke tests" npm run -w packages/nightgauge test:host
 fi
 
 # LAST: nothing above changed the developer's machine state (#2311). The

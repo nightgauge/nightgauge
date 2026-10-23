@@ -14,7 +14,7 @@
 //   - Event struct has no "id" field in wire JSON
 //
 // See: internal/ipc/protocol.go — type definitions under test
-// See: packages/nightgauge-vscode/src/services/IpcClientBase.ts — TS side
+// See: packages/nightgauge/src/services/IpcClientBase.ts — TS side
 // See: docs/GO_BINARY.md — IPC protocol section
 package ipc
 

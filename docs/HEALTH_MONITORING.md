@@ -903,9 +903,9 @@ Active policies are persisted to `state.json` (`active_health_policies`) and
 surfaced in the VSCode Health Dashboard widget under "Active Policies".
 
 **Source file**:
-`packages/nightgauge-vscode/src/services/HealthActionService.ts` **Policy
+`packages/nightgauge/src/services/HealthActionService.ts` **Policy
 types**:
-`packages/nightgauge-vscode/src/services/PipelinePolicyOverrides.ts`
+`packages/nightgauge/src/services/PipelinePolicyOverrides.ts`
 
 See
 [docs/ADAPTIVE_PIPELINE.md §3](ADAPTIVE_PIPELINE.md#3-health-gated-pipeline-policies)
@@ -1040,7 +1040,7 @@ budgets after a resume.
 | `packages/nightgauge-sdk/src/analysis/health/dimensions/selfImprovement.ts`    | Dimension 6: tuning effectiveness, score trajectory                       |
 | `packages/nightgauge-sdk/src/analysis/health/dimensions/pipelineVelocity.ts`   | Dimension 7: throughput, duration trend, bottleneck                       |
 | `packages/nightgauge-sdk/src/agent-teams/healthMonitor.ts`                     | `TeammateHealthMonitor` — stall detection for parallel agents             |
-| `packages/nightgauge-vscode/src/views/dashboard/HealthWidgetTypes.ts`          | VSCode dashboard health widget types and score weights                    |
+| `packages/nightgauge/src/views/dashboard/HealthWidgetTypes.ts`                 | VSCode dashboard health widget types and score weights                    |
 
 ---
 

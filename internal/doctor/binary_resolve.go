@@ -105,7 +105,7 @@ type VSCodeBundleScan struct {
 // because "highest version number on disk" is not "the bundle VS Code
 // installed". Three verified counter-examples, all reachable on this project:
 //
-//   - DOWNGRADE. packages/nightgauge-vscode/scripts/dev-install.sh stamps
+//   - DOWNGRADE. packages/nightgauge/scripts/dev-install.sh stamps
 //     `0.1.<epoch>` (package.json stays 0.1.0 on main forever, and release.yml
 //     restores it after `npm version`). The moment v0.2.0 ships, every
 //     maintainer dev-install loses numerically to a leftover

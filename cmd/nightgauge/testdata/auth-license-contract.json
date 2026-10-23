@@ -1,5 +1,5 @@
 {
-  "_comment": "The `nightgauge auth license` contract the VS Code extension depends on (licenseKeychainBridge.ts). cmd/nightgauge/auth_license_test.go pins the Go side to it and packages/nightgauge-vscode/tests/services/licenseKeychainBridge.test.ts pins the TypeScript side. Every sample lists every field.",
+  "_comment": "The `nightgauge auth license` contract the VS Code extension depends on (licenseKeychainBridge.ts). cmd/nightgauge/auth_license_test.go pins the Go side to it and packages/nightgauge/tests/services/licenseKeychainBridge.test.ts pins the TypeScript side. Every sample lists every field.",
   "keychain": { "service": "nightgauge", "account": "platform.license_key" },
   "command": ["auth", "license"],
   "subcommands": ["set", "status", "clear"],
