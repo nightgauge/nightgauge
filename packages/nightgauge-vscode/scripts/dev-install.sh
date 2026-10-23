@@ -37,7 +37,7 @@ if [[ "${1:-}" == "--from-release" ]]; then
   TMPDIR_RELEASE=$(mktemp -d)
   trap 'rm -rf "$TMPDIR_RELEASE"' EXIT
 
-  if ! gh release download --dir "$TMPDIR_RELEASE" --pattern "nightgauge-vscode-$TARGET-*.vsix" --clobber; then
+  if ! gh release download --dir "$TMPDIR_RELEASE" --pattern "nightgauge-$TARGET-*.vsix" --clobber; then
     echo "ERROR: the latest GitHub release has no $TARGET VSIX. It carries:"
     gh release view --json assets --jq '.assets[].name | select(endswith(".vsix"))' | sed 's/^/         /' || true
     echo "       Has the Release workflow run? Check: gh release list"
@@ -232,7 +232,7 @@ fi
 # Clean up old extension versions before installing the new one.
 # VSCode keeps every prior version on disk; they accumulate quickly with dev builds.
 EXT_DIR="$HOME/.vscode/extensions"
-EXT_PREFIX="nightgauge.nightgauge-vscode-"
+EXT_PREFIX="nightgauge.nightgauge-"
 # `ls` exits non-zero when its glob matches nothing, and under `set -euo
 # pipefail` that killed the script right here — before "==> Installing", and
 # silently, because the `2>/dev/null` discarded the only clue. The block exists
@@ -241,7 +241,7 @@ EXT_PREFIX="nightgauge.nightgauge-vscode-"
 # after, which is why it survived. Glob into an array instead, so "no matches"
 # is an empty list rather than an error.
 shopt -s nullglob
-INSTALLED_DIRS=("${EXT_DIR}/${EXT_PREFIX}"*)
+INSTALLED_DIRS=("${EXT_DIR}/${EXT_PREFIX}"[0-9]*)
 shopt -u nullglob
 OLD_VERSIONS=""
 if [[ ${#INSTALLED_DIRS[@]} -gt 1 ]]; then

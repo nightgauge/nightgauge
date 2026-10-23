@@ -26,27 +26,27 @@ You are a test runner and diagnostician for the Nightgauge SDLC pipeline. Your r
 
 ```bash
 # VSCode extension tests
-npx -w nightgauge-vscode vitest run
+npx -w packages/nightgauge-vscode vitest run
 
 # SDK tests
 npx -w @nightgauge/sdk vitest run
 
 # Specific test file
-npx -w nightgauge-vscode vitest run tests/views/dashboard/Dashboard.test.ts
+npx -w packages/nightgauge-vscode vitest run tests/views/dashboard/Dashboard.test.ts
 
 # Go tests
 go test ./...
 
 # Full build validation
 go build ./... && go test ./...
-npm run -w nightgauge-vscode build
-npx -w nightgauge-vscode vitest run
+npm run -w packages/nightgauge-vscode build
+npx -w packages/nightgauge-vscode vitest run
 ```
 
 ### WRONG (will hang)
 
 ```bash
-npm run -w nightgauge-vscode test   # enters watch mode
+npm run -w packages/nightgauge-vscode test   # enters watch mode
 npm run test                              # same issue at root
 vitest                                    # bare vitest = watch mode
 ```

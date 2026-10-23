@@ -7,7 +7,7 @@ tests build their temporary `$HOME` from.
 
 | File                          | What it is                                                                          |
 | ----------------------------- | ----------------------------------------------------------------------------------- |
-| `bundle-layout.json`          | what is on **disk**: every `nightgauge.nightgauge-vscode-*` bundle directory        |
+| `bundle-layout.json`          | what is on **disk**: every `nightgauge.nightgauge-*` bundle directory               |
 | `extensions-index.json`       | what VSCode **records**: a redacted copy of `~/.vscode/extensions/extensions.json`  |
 | `extensions-index-large.json` | a **synthetic** 120-entry index in the same per-entry shape, minified onto one line |
 
@@ -19,7 +19,7 @@ A fixture that only described the disk could not express that rule at all.
 ## What was captured
 
 - **`bundle-layout.json`** — every
-  `~/.vscode/extensions/nightgauge.nightgauge-vscode-*/` directory on the
+  `~/.vscode/extensions/nightgauge.nightgauge-*/` directory on the
   capturing machine, plus, for each, the `dist/bin/nightgauge` file's
   existence, executable bit, mode string, **mtime**, byte size, SHA-256, the
   first line of `nightgauge version`, and whether it is the directory
@@ -106,7 +106,7 @@ platform-specific extension directories
 `.github/workflows/release.yml` and `.github/workflows/staging.yml` both
 package with `vsce package --target <t>` (`darwin-arm64`, `darwin-x64`,
 `linux-x64`), and staging runs `npm version 0.2.0-rc.NN` first. So real
-directories look like `nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64`.
+directories look like `nightgauge.nightgauge-0.2.0-rc.23-darwin-arm64`.
 
 That gap is not hypothetical — it shipped once. An earlier #356 attempt
 compared bundle versions after trimming everything past the first `-`, which
@@ -142,7 +142,7 @@ index cannot be published (third-party ids, marketplace GUIDs, install
 timestamps). Its per-entry shape is copied from the captured file, and it is
 committed **minified onto a single line**, which is what VS Code actually writes
 and the worst case for a text scan. It records exactly one nightgauge bundle,
-`nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64` — an RC + target-platform
+`nightgauge.nightgauge-0.2.0-rc.23-darwin-arm64` — an RC + target-platform
 directory name, i.e. the release shape rather than the dev-install shape the
 capture carries.
 

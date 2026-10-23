@@ -35,9 +35,9 @@ fi
 
 # 4. Check VSCode package contributions
 echo "  🎨 Checking VSCode package contributions..."
-if ! npx -w nightgauge-vscode tsx scripts/generate-package-contributions.ts --check; then
+if ! npx -w packages/nightgauge-vscode tsx scripts/generate-package-contributions.ts --check; then
   echo "  ❌ ERROR: package.json contributions are out of sync"
-  echo "     Run: npx -w nightgauge-vscode tsx scripts/generate-package-contributions.ts"
+  echo "     Run: npx -w packages/nightgauge-vscode tsx scripts/generate-package-contributions.ts"
   echo "     Then: git add packages/nightgauge-vscode/package.json"
   exit 1
 fi

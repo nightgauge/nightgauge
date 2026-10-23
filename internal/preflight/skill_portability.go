@@ -75,7 +75,7 @@ type SkillPortabilityOptions struct {
 // vscodeExtensionPathRE matches a reference to the VSCode-extension binary
 // directory. Anchored on `.vscode/extensions` followed (anywhere later on the
 // line) by the nightgauge extension id — this catches the historical glob
-// `$HOME/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge`
+// `$HOME/.vscode/extensions/nightgauge.nightgauge-*/dist/bin/nightgauge`
 // and any restatement of it, while not tripping on the unrelated
 // `<root>/.vscode/` workspace-manifest directory used by workspace-init skills.
 // Case-insensitive (?i) for defense-in-depth against a mis-cased extension id.

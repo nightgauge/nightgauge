@@ -51,7 +51,7 @@ clone the repository.)
    default in VSCodium, Cursor, Windsurf and Gitpod. In VS Code itself, download
    the `.vsix` for your platform from the
    [latest release](https://github.com/nightgauge/nightgauge/releases/latest) and
-   install it with `code --install-extension nightgauge-vscode-<target>-<version>.vsix`,
+   install it with `code --install-extension nightgauge-<target>-<version>.vsix`,
    or **Extensions: Install from VSIX** in the Command Palette.
 2. **Sign in (optional)** — Sign-in appears once
    [cloud features](#cloud-features-optional) are on
@@ -125,7 +125,7 @@ timestamped development version and is not a release-validation path.
 ## One run, every surface
 
 Every image on this page is rendered from the same real pipeline run by
-`npm run -w nightgauge-vscode marketing:screenshots`: the dashboard HTML is the
+`npm run -w packages/nightgauge-vscode marketing:screenshots`: the dashboard HTML is the
 extension's own renderer and the notification cards are the exact payloads the
 Discord and Slack notifiers send. Only the window and chat chrome around them
 are mocked.

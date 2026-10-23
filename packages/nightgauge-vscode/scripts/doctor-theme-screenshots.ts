@@ -2,10 +2,10 @@
  * Doctor panel screenshots in the light, dark and high-contrast themes, and
  * the keyboard-only fix (#2099's manual verification).
  *
- *   npm run -w nightgauge-vscode demo:doctor-screenshots -- [--out <dir>]
+ *   npm run -w packages/nightgauge-vscode demo:doctor-screenshots -- [--out <dir>]
  *     [--themes light,dark,high-contrast] [--code <path>]
  *
- * Build first (`npm run -w nightgauge-vscode build`). For each theme it opens
+ * Build first (`npm run -w packages/nightgauge-vscode build`). For each theme it opens
  * a demo session (`scripts/demo-session.ts`) in that built-in theme: a profile
  * of its own, the demo daemon, and the reference scenario's seed state with no
  * playback, so nothing moves while you capture. The demo daemon answers the
@@ -141,7 +141,7 @@ async function main(): Promise<void> {
   const options = parseScreenshotArgs(process.argv.slice(2));
   if (!fs.existsSync(path.join(PACKAGE_ROOT, "dist", "extension.cjs"))) {
     throw new Error(
-      "dist/extension.cjs is missing: run `npm run -w nightgauge-vscode build` first."
+      "dist/extension.cjs is missing: run `npm run -w packages/nightgauge-vscode build` first."
     );
   }
   const home = path.join(options.out, "session");

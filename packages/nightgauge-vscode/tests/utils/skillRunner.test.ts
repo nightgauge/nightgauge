@@ -199,15 +199,15 @@ beforeEach(() => {
 describe("skillRunner - Packaged SDK CLI", () => {
   it("resolves the VSIX-bundled CLI when the target repo has no Nightgauge source tree", () => {
     vi.mocked(vscode.extensions.getExtension).mockReturnValue({
-      extensionPath: "/extensions/nightgauge.nightgauge-vscode-0.1.0",
+      extensionPath: "/extensions/nightgauge.nightgauge-0.1.0",
     } as vscode.Extension<unknown>);
     vi.mocked(fs.existsSync).mockImplementation(
       (candidate) =>
-        String(candidate) === "/extensions/nightgauge.nightgauge-vscode-0.1.0/dist/sdk-cli.cjs"
+        String(candidate) === "/extensions/nightgauge.nightgauge-0.1.0/dist/sdk-cli.cjs"
     );
 
     expect(resolveSdkCliPath("/external/consumer-repo")).toBe(
-      "/extensions/nightgauge.nightgauge-vscode-0.1.0/dist/sdk-cli.cjs"
+      "/extensions/nightgauge.nightgauge-0.1.0/dist/sdk-cli.cjs"
     );
   });
 });

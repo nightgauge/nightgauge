@@ -47,6 +47,12 @@ BACKOFF_SECONDS="${PUBLISH_BACKOFF_SECONDS:-20}"
 # Matched case-insensitively against combined stdout+stderr.
 ALREADY_PUBLISHED_RE='already (exists|published)|is already|conflict|409|same version|version already'
 
+# The Marketplace rejects a name another extension already holds with
+# "The extension 'X' already exists in the Marketplace. Please use a different
+# 'name'". It contains "already exists" but means nothing was published, so it
+# is checked first and is always a hard failure.
+NAME_TAKEN_RE="already exists in the marketplace|use a different 'name'"
+
 # Responses worth retrying: the registry is unavailable, not refusing us.
 TRANSIENT_RE='50[0234]|service unavailable|bad gateway|gateway time-?out|timed? ?out|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up|network|temporarily'
 
@@ -63,6 +69,10 @@ publish_one() {
 
     if [[ $rc -eq 0 ]]; then
       return 0
+    fi
+    if grep -qiE "$NAME_TAKEN_RE" <<<"$out"; then
+      echo "::error::$vsix: the extension name is unavailable on $REGISTRY; this is not an already-published version"
+      return "$rc"
     fi
     if grep -qiE "$ALREADY_PUBLISHED_RE" <<<"$out"; then
       echo "::notice::$vsix is already published at $VERSION; treating as success"

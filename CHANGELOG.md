@@ -103,7 +103,20 @@ changelog, and the release workflow refuses a tag that does not.
   and no tool names a local path or process id. See
   `docs/CONVERSATION_TURNS.md` § Tools and permissions.
 
+### Changed
+
+- **The VS Code extension is now `nightgauge.nightgauge`.** The Marketplace
+  name `nightgauge-vscode` is unavailable, so the extension is published as
+  `nightgauge.nightgauge` on both the VS Code Marketplace and Open VSX, and its
+  release files are named `nightgauge-<target>-<version>.vsix`. Install the
+  new ID; a leftover `nightgauge.nightgauge-vscode-*` directory is ignored by
+  binary resolution, `nightgauge doctor` and the hooks.
+
 ### Fixed
+
+- **A Marketplace name collision fails the VSIX publish.** The publish step
+  read "The extension '…' already exists in the Marketplace" as an
+  already-published version and reported success; it now fails the step.
 
 - **`ci-local.sh` runs the VS Code host smoke tests** (#2478). The local gate
   ran only vitest against a mocked `vscode`, so a change that broke the

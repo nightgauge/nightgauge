@@ -14,7 +14,7 @@ import { outputChannelErrorsSince, processFaults } from "../observe.js";
 import { delay, workspaceRoot } from "../fixture.js";
 import { unexpectedFaults } from "../known-issues.js";
 
-export const EXTENSION_ID = "nightgauge.nightgauge-vscode";
+export const EXTENSION_ID = "nightgauge.nightgauge";
 
 /**
  * Startup work `activate()` defers with `setTimeout` runs at 2s, 3s, 3.5s,

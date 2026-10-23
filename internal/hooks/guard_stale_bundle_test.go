@@ -28,7 +28,7 @@ const (
 	stopPayload = `{"decision":"block","reason":"stub"}`
 	// bundleDirPrefix mirrors internal/doctor's constant; the two packages do
 	// not import each other.
-	bundleDirPrefix = "nightgauge.nightgauge-vscode-"
+	bundleDirPrefix = "nightgauge.nightgauge-"
 )
 
 type capturedBundle struct {
@@ -127,7 +127,7 @@ func recordInstall(t *testing.T, home string, versions ...string) {
 	entries := []string{`{"identifier":{"id":"publisher1.extension1"},"version":"1.0.0","relativeLocation":"publisher1.extension1-1.0.0"}`}
 	for _, v := range versions {
 		dir := bundleDirPrefix + v
-		entries = append(entries, `{"identifier":{"id":"nightgauge.nightgauge-vscode"},"version":"`+v+
+		entries = append(entries, `{"identifier":{"id":"nightgauge.nightgauge"},"version":"`+v+
 			`","location":{"$mid":1,"path":"`+filepath.Join(home, ".vscode", "extensions", dir)+
 			`","scheme":"file"},"relativeLocation":"`+dir+`"}`)
 	}

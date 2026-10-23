@@ -136,7 +136,7 @@ lint-go:
 # Run platform integration tests (mock server mode, no Docker required)
 test-platform-integration:
 	go test ./internal/ipc/... -run TestIPCPlatform -v -count=1
-	npx -w nightgauge-vscode vitest run tests/integration/authFlowsIntegration.test.ts
+	npx -w packages/nightgauge-vscode vitest run tests/integration/authFlowsIntegration.test.ts
 
 # Run E2E tests against real Docker Compose platform
 test-e2e-docker:

@@ -9,7 +9,7 @@
 ## Testing
 
 - [ ] `npm run build` passes
-- [ ] `npx -w nightgauge-vscode vitest run` passes
+- [ ] `npx -w packages/nightgauge-vscode vitest run` passes
 - [ ] `go build ./... && go test ./...` passes
 - [ ] Manual verification (if applicable)
 

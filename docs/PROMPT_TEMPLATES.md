@@ -259,5 +259,5 @@ node_modules/.bin/vitest run src/templates
 ### Extension tests
 
 ```bash
-npx -w nightgauge-vscode vitest run tests/services/PromptTemplateService.test.ts
+npx -w packages/nightgauge-vscode vitest run tests/services/PromptTemplateService.test.ts
 ```

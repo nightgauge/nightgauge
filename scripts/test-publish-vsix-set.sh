@@ -84,6 +84,15 @@ else
   bad "already-published target treated as success (got $rc)"; cat "$WORK/out" >&2
 fi
 
+# 2b. A Marketplace name collision also says "already exists" but published
+#     nothing; it must fail the step, not pass as an idempotent re-run.
+rc=$(run_sut 1 "1:ERROR  The extension 'nightgauge.nightgauge-vscode' already exists in the Marketplace. Please use a different 'name'.")
+if [[ "$rc" != 0 ]] && grep -q 'name is unavailable' "$WORK/out" && ! grep -q 'treating as success' "$WORK/out"; then
+  ok "marketplace name collision -> exit non-zero"
+else
+  bad "marketplace name collision -> exit non-zero (got $rc)"; cat "$WORK/out" >&2
+fi
+
 # 3. The v0.4.2 failure itself: a transient 503 must retry, not abort.
 rc=$(run_sut 2 "0:published
 1:The server responded with status 503: Service Unavailable

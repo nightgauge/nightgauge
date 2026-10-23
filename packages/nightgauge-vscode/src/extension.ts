@@ -648,8 +648,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const machineFingerprint = services!.machineFingerprint;
         const machineId = machineFingerprint?.getMachineId() ?? "";
         const agentVersion =
-          vscode.extensions.getExtension("nightgauge.nightgauge-vscode")?.packageJSON?.version ??
-          "0.1.0";
+          vscode.extensions.getExtension("nightgauge.nightgauge")?.packageJSON?.version ?? "0.1.0";
         const vsCodeVersion = vscode.version;
 
         // Priority 1: workspace config repos (#3546)
@@ -875,8 +874,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               }
             }
             const agentVersion =
-              vscode.extensions.getExtension("nightgauge.nightgauge-vscode")?.packageJSON
-                ?.version ?? "0.1.0";
+              vscode.extensions.getExtension("nightgauge.nightgauge")?.packageJSON?.version ??
+              "0.1.0";
             const workspaceMeta = WorkspaceRegistrationPayloadBuilder.build(
               workspaceManager.getWorkspaceConfig()
             );

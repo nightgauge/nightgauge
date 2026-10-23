@@ -177,7 +177,7 @@ schema documentation.
 
 ## Gotchas
 
-- **Never run bare `vitest`.** Use `npx -w nightgauge-vscode vitest run` —
+- **Never run bare `vitest`.** Use `npx -w packages/nightgauge-vscode vitest run` —
   bare `vitest` mis-resolves the workspace and can hang in watch mode.
 - **Build before tests.** A build step MUST run before the suite — unit tests can
   pass while the build is broken, masking a defect feature-validate would catch

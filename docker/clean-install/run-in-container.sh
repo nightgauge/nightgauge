@@ -92,7 +92,7 @@ step "which bundle VS Code recorded (extensions.json is the authority, #356)"
 REL="$(python3 - "$EXT_DIR/extensions.json" <<'PY'
 import json, sys
 recs = json.load(open(sys.argv[1]))
-hits = [r["relativeLocation"] for r in recs if r.get("relativeLocation", "").startswith("nightgauge.nightgauge-vscode-")]
+hits = [r["relativeLocation"] for r in recs if r.get("relativeLocation", "").startswith("nightgauge.nightgauge-") and r["relativeLocation"][len("nightgauge.nightgauge-"):][:1].isdigit()]
 print(hits[0] if len(hits) == 1 else "")
 PY
 )"

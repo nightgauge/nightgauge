@@ -4,9 +4,9 @@ Every file in this directory is produced by one command and is safe to delete
 and regenerate:
 
 ```bash
-npm run -w nightgauge-vscode marketing:screenshots            # everything
-npm run -w nightgauge-vscode marketing:screenshots -- cards   # Discord + Slack only
-npm run -w nightgauge-vscode marketing:screenshots -- dashboard
+npm run -w packages/nightgauge-vscode marketing:screenshots            # everything
+npm run -w packages/nightgauge-vscode marketing:screenshots -- cards   # Discord + Slack only
+npm run -w packages/nightgauge-vscode marketing:screenshots -- dashboard
 ```
 
 The generator lives in `packages/nightgauge-vscode/scripts/marketing/`.
