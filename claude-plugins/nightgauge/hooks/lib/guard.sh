@@ -17,7 +17,7 @@
 #      that triggered the Stop hook hard-failed here because worktrees do not
 #      inherit `bin/` build artifacts. The agent then went silent for 100+
 #      minutes until skillRunner stall-killed the stage.
-#   4. ~/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge
+#   4. ~/.vscode/extensions/nightgauge.nightgauge-[0-9]*/dist/bin/nightgauge
 #      — the binary that ships with the VSCode extension. Every user of the
 #      extension has a current copy here, so this is the most reliable
 #      machine-local fallback. When several bundles are on disk, the one VSCode
@@ -208,7 +208,7 @@ _ng_read_recorded_bundle_dir() {
 
   # Whitespace is tolerated around the colon; the value is bounded by the
   # closing quote, so nothing past the recorded directory name can be captured.
-  _ng_scan_matches="$(LC_ALL=C grep -a -o -E '"relativeLocation"[[:space:]]*:[[:space:]]*"nightgauge\.nightgauge-vscode-[^"]*"' "$_ng_index_file" 2>/dev/null || true)"
+  _ng_scan_matches="$(LC_ALL=C grep -a -o -E '"relativeLocation"[[:space:]]*:[[:space:]]*"nightgauge\.nightgauge-[0-9][^"]*"' "$_ng_index_file" 2>/dev/null || true)"
 
   # Command substitution strips trailing newlines, so exactly one match is a
   # string with no embedded newline — the match itself cannot contain one,
@@ -285,11 +285,11 @@ if [ -z "$NIGHTGAUGE_BINARY" ]; then
   # Plain glob expansion, no `find`; the trailing /dist/bin path is the
   # canonical location set by the extension's build script. An unmatched glob
   # expands to the literal pattern, which the -f test rejects.
-  for candidate in "$HOME"/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge; do
+  for candidate in "$HOME"/.vscode/extensions/nightgauge.nightgauge-[0-9]*/dist/bin/nightgauge; do
     [ -f "$candidate" ] || continue
     _ng_bundle_dir="${candidate%/dist/bin/nightgauge}"
     _ng_bundle_base="${_ng_bundle_dir##*/}"
-    _ng_bundle_version="${_ng_bundle_base#nightgauge.nightgauge-vscode-}"
+    _ng_bundle_version="${_ng_bundle_base#nightgauge.nightgauge-}"
     [ -n "$_ng_bundle_version" ] || continue
     _ng_bundle_count=$((_ng_bundle_count + 1))
 
@@ -307,7 +307,7 @@ if [ -z "$NIGHTGAUGE_BINARY" ]; then
   if [ "$_ng_bundle_count" -gt 0 ]; then
     _ng_read_recorded_bundle_dir
     if [ -n "$_ng_recorded_dir" ]; then
-      _ng_recorded_version="${_ng_recorded_dir#nightgauge.nightgauge-vscode-}"
+      _ng_recorded_version="${_ng_recorded_dir#nightgauge.nightgauge-}"
     fi
     if [ -n "$_ng_recorded_version" ]; then
       _ng_recorded_candidate="$HOME/.vscode/extensions/$_ng_recorded_dir/dist/bin/nightgauge"

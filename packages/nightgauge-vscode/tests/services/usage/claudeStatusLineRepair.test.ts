@@ -27,10 +27,8 @@ import {
 import { repairStaleClaudeStatusLine } from "../../../src/services/usage/claudeStatusLineRepair";
 
 /** The path shape the bug report captured, verbatim. */
-const DEAD =
-  "/Users/x/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1787175119/dist/bin/nightgauge";
-const LIVE =
-  "/Users/x/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1787399523/dist/bin/nightgauge";
+const DEAD = "/Users/x/.vscode/extensions/nightgauge.nightgauge-0.1.1787175119/dist/bin/nightgauge";
+const LIVE = "/Users/x/.vscode/extensions/nightgauge.nightgauge-0.1.1787399523/dist/bin/nightgauge";
 
 function wired(command: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return { model: "opus", statusLine: { type: "command", command, ...extra } };

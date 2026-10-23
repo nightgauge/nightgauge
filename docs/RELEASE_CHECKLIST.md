@@ -58,7 +58,7 @@ metadata and the CHANGELOG. Each must describe the product that ships.
 | L2  | No relative links in the README (they 404 on the listing page)                                                                   | **Done** — #1134.                                                                                                                                                                                                |
 | L3  | `qna`, `pricing`, `galleryBanner`, `icon`, `license`, `homepage`, `bugs`, `repository` present; VSIX ships no dev files          | **Done** — #1134 (`qna`, `pricing: Free`; test tsconfigs, `scripts/**` and stray `.vsix` excluded).                                                                                                              |
 | L4  | The README states which adapter path is the supported one and does not advertise autonomous multi-repo mode as finished          | **Done** — #1136 / #1289: supported-adapter sentence, no autonomous-production claim.                                                                                                                            |
-| L5  | Gallery imagery is generated from the product, not drawn, and regenerable in one command                                         | **Done** — #1134 (`npm run -w nightgauge-vscode marketing:screenshots`). The six hand-captured README images still exist; replace or keep deliberately.                                                          |
+| L5  | Gallery imagery is generated from the product, not drawn, and regenerable in one command                                         | **Done** — #1134 (`npm run -w packages/nightgauge-vscode marketing:screenshots`). The six hand-captured README images still exist; replace or keep deliberately.                                                 |
 | L6  | `scripts/check-changelog.sh --tag vX.Y.Z` exits 0: the root `CHANGELOG.md` **and** the extension changelog both have the section | **Re-opened and closed 2026-09-05** — the 0.2.x rows above were true only of the extension file; the root changelog had never been sectioned. Both now are, and `release.yml` runs this check before publishing. |
 | L7  | Privacy policy and terms the README links to exist and name the right entity                                                     | **Done on the site side** (nightgauge.dev `/privacy/`, `/terms/`, sub-processors as a section); README links `/privacy/` — #1134.                                                                                |
 
@@ -356,7 +356,7 @@ install (`scripts/dev-install.sh` is explicitly not a release-validation path).
 
 ```bash
 # 1. Package from a clean tree at the release commit.
-npm run package -w nightgauge-vscode
+npm run package -w packages/nightgauge-vscode
 #    → packages/nightgauge-vscode/nightgauge-vscode-<version>.vsix
 
 # 2. Install into a profile that shares nothing with your dev setup.

@@ -2937,7 +2937,7 @@ export function resolveSkillRoots(): string[] {
   // (customers) find pipeline skills without the nightgauge source repo as a
   // workspace sibling. Self-heal past a garbage-collected extension dir
   // (auto-update GC): resolve to VS Code's recorded sibling bundle (#3883, #360).
-  const ext = vscode.extensions.getExtension("nightgauge.nightgauge-vscode");
+  const ext = vscode.extensions.getExtension("nightgauge.nightgauge");
   const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
   if (bundleRoot) {
     roots.push(path.join(bundleRoot, "dist", "skills"));
@@ -3235,7 +3235,7 @@ function commandExists(command: string): boolean {
  * does not require packaging first.
  */
 export function resolveSdkCliPath(workspaceRoot?: string): string | null {
-  const ext = vscode.extensions.getExtension("nightgauge.nightgauge-vscode");
+  const ext = vscode.extensions.getExtension("nightgauge.nightgauge");
   const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
   const candidates = [
     bundleRoot ? path.join(bundleRoot, "dist", "sdk-cli.cjs") : undefined,
@@ -3796,7 +3796,7 @@ export function resolvePluginRoot(): string | undefined {
 
   // 2. Fall back to the hooks bundled inside the extension's dist/ — always
   //    present, so non-nightgauge workspaces still get the safety guards.
-  const ext = vscode.extensions.getExtension("nightgauge.nightgauge-vscode");
+  const ext = vscode.extensions.getExtension("nightgauge.nightgauge");
   const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
   if (bundleRoot) {
     const bundled = path.join(bundleRoot, "dist", "claude-plugins", "nightgauge");

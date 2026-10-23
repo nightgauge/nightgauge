@@ -283,7 +283,7 @@ jobs:
 
       # Package one .vsix PER VS Code target, each bundling the matching binary
       # swapped into dist/bin/. `vsce package --target <t>` names the file
-      # nightgauge-vscode-<version>-<t>.vsix; the Marketplace serves the
+      # nightgauge-<version>-<t>.vsix; the Marketplace serves the
       # correct one per user automatically. A single universal .vsix would ship
       # one arch and fail to launch the backend on every other platform.
       - name: Package per-target VSIXs

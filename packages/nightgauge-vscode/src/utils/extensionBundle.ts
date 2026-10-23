@@ -2,7 +2,7 @@
  * extensionBundle — resilient resolution of the extension's on-disk bundle root.
  *
  * VSCode auto-updates an extension by installing a new versioned directory
- * (e.g. `nightgauge.nightgauge-vscode-0.1.1780370898`) and deleting
+ * (e.g. `nightgauge.nightgauge-0.1.1780370898`) and deleting
  * the previous one. A long-lived extension host keeps running against its
  * original `extensionPath`, but once that directory is garbage-collected every
  * bundle-relative lookup — the Go binary (`dist/bin/...`) and the bundled
@@ -22,11 +22,18 @@
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { basename, dirname, join } from "path";
 
-const EXT_DIR_PREFIX = "nightgauge.nightgauge-vscode-";
+const EXT_DIR_PREFIX = "nightgauge.nightgauge-";
+// A bundle directory is `<prefix><version>[-<target>]`; the version starts
+// with a digit, so a directory of another extension whose name merely starts
+// with this prefix (e.g. the retired `nightgauge.nightgauge-vscode-*`) is not one.
+function isBundleDirName(name: string): boolean {
+  return name.startsWith(EXT_DIR_PREFIX) && /^[0-9]/.test(name.slice(EXT_DIR_PREFIX.length));
+}
+
 const RECORDED_LOCATION_PATTERN =
   String.raw`"relativeLocation"[ \t\f\v\r]*:[ \t\f\v\r]*"(` +
   EXT_DIR_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
-  String.raw`[^"\n]*)"`;
+  String.raw`[0-9][^"\n]*)"`;
 
 /**
  * Resolve a bundle root that exists on disk, self-healing past a
@@ -45,7 +52,7 @@ export function resolveExtensionBundleRoot(extensionPath: string | undefined): s
   let surviving: string[];
   try {
     surviving = readdirSync(extensionsDir)
-      .filter((name) => name.startsWith(EXT_DIR_PREFIX))
+      .filter((name) => isBundleDirName(name))
       .map((name) => join(extensionsDir, name))
       .filter((candidate) => candidate !== extensionPath && existsSync(candidate));
   } catch {

@@ -110,21 +110,21 @@ Run each tier locally:
 
 ```bash
 # Unit / integration
-npx -w nightgauge-vscode vitest run
+npx -w packages/nightgauge-vscode vitest run
 
 # Data arrival only
-npx -w nightgauge-vscode vitest run tests/arrival
+npx -w packages/nightgauge-vscode vitest run tests/arrival
 
 # Browser-driven webview (generates the real dashboard HTML fixture first —
 # a bare `playwright test` skips that and ~30% of the suite fails on a
 # missing file)
-npm run -w nightgauge-vscode test:e2e
+npm run -w packages/nightgauge-vscode test:e2e
 
 # Extension host smoke (downloads VSCode on first run and opens a real
 # window; `npm run build` must have run, because the host loads
 # dist/extension.cjs rather than src/). On Linux, prefix with
 # `xvfb-run --auto-servernum`.
-npm run -w nightgauge-vscode test:host
+npm run -w packages/nightgauge-vscode test:host
 ```
 
 ### The vitest suite provisions its own packaging artifacts (#1400)
@@ -217,10 +217,10 @@ they happen, so a slow machine delays the checkpoints without hiding one.
 After both windows the launcher runs the demo drift guard (#2109): it fails,
 naming the method, when the extension called a method the daemon does not
 answer or that `demo/ipc-inventory.json` does not list, or when a protocol
-version differs. `npm run -w nightgauge-vscode demo:inventory` runs the tier
+version differs. `npm run -w packages/nightgauge-vscode demo:inventory` runs the tier
 and rewrites `demo/ipc-inventory.json`: each method the UI called, the cases
 it was called during, a redacted sample of its params and the result type the
-typed client declares. `npm run -w nightgauge-vscode demo` opens a demo
+typed client declares. `npm run -w packages/nightgauge-vscode demo` opens a demo
 session of its own (#2110); `scripts/demo-session.ts` documents its options.
 
 Three implementation notes that are load-bearing rather than incidental:
@@ -576,13 +576,13 @@ tested using Vitest. This section covers testing patterns for the extension.
 > enters **interactive watch mode** and hangs indefinitely — blocking CI, AI
 > agents, and any automated pipeline.
 >
-> | Command                               | Behavior                          |
-> | ------------------------------------- | --------------------------------- |
-> | `vitest run`                          | ✅ Runs once and exits            |
-> | `npx -w nightgauge-vscode vitest run` | ✅ Runs once and exits (monorepo) |
-> | `npx -w @nightgauge/sdk vitest run`   | ✅ Runs once and exits (SDK)      |
-> | `vitest`                              | ❌ Enters watch mode — **hangs**  |
-> | `npm run test` (calls bare `vitest`)  | ❌ Enters watch mode — **hangs**  |
+> | Command                                        | Behavior                          |
+> | ---------------------------------------------- | --------------------------------- |
+> | `vitest run`                                   | ✅ Runs once and exits            |
+> | `npx -w packages/nightgauge-vscode vitest run` | ✅ Runs once and exits (monorepo) |
+> | `npx -w @nightgauge/sdk vitest run`            | ✅ Runs once and exits (SDK)      |
+> | `vitest`                                       | ❌ Enters watch mode — **hangs**  |
+> | `npm run test` (calls bare `vitest`)           | ❌ Enters watch mode — **hangs**  |
 >
 > Always use `vitest run` for any non-interactive context.
 
@@ -663,7 +663,7 @@ that your file was in it.
 `packages/nightgauge-vscode/scripts/check-test-collection.sh` makes the class
 unrepeatable: it fails if any `*.test.ts` file exists under
 `packages/nightgauge-vscode/` outside `tests/**`, and runs automatically as
-`pretest` before `npm run test -w nightgauge-vscode` (and therefore as part of
+`pretest` before `npm run test -w packages/nightgauge-vscode` (and therefore as part of
 `bash scripts/ci-local.sh`). Its own coverage lives in
 `scripts/test-check-test-collection.sh`, which plants a fixture file outside
 `tests/` and asserts the guard catches it before asserting the clean-tree case
@@ -1556,7 +1556,7 @@ Or individually:
 go test ./internal/ipc/... -run TestIPCPlatform -v -count=1
 
 # TypeScript — PlatformApiClient ↔ mock HTTP server
-npx -w nightgauge-vscode vitest run tests/integration/authFlowsIntegration.test.ts
+npx -w packages/nightgauge-vscode vitest run tests/integration/authFlowsIntegration.test.ts
 ```
 
 **What's covered (mock mode):**
@@ -1586,7 +1586,7 @@ Or manually:
 ```bash
 export PLATFORM_TEST_URL=http://localhost:3000
 go test ./internal/ipc/... -run TestIPCPlatform -v -count=1
-npx -w nightgauge-vscode vitest run tests/integration/authFlowsIntegration.test.ts
+npx -w packages/nightgauge-vscode vitest run tests/integration/authFlowsIntegration.test.ts
 ```
 
 The `scripts/test-e2e-platform.sh` script automates the full lifecycle: start
@@ -1858,10 +1858,10 @@ together with only the outermost boundary (IPC / filesystem) mocked.
 
 ```bash
 # Run all E2E tests (from repo root)
-npx -w nightgauge-vscode vitest run tests/e2e/
+npx -w packages/nightgauge-vscode vitest run tests/e2e/
 
 # Run a specific file
-npx -w nightgauge-vscode vitest run tests/e2e/pipeline-execution.test.ts
+npx -w packages/nightgauge-vscode vitest run tests/e2e/pipeline-execution.test.ts
 ```
 
 ### Test Files

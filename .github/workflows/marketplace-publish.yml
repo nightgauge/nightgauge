@@ -171,7 +171,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern "nightgauge-vscode-*-${VERSION}.vsix" --pattern checksums.txt
+            --pattern "nightgauge-*-${VERSION}.vsix" --pattern checksums.txt
           shopt -s nullglob
           VSIXES=(./*.vsix)
           [[ "${#VSIXES[@]}" -eq 3 ]] || { echo "::error::expected 3 per-target VSIXs on release $TAG, found ${#VSIXES[@]}"; exit 1; }

@@ -77,7 +77,7 @@ every inlined copy. Resolution order:
 2. `$REPO_ROOT/bin/nightgauge` (same-repo build).
 3. `$(git rev-parse --git-common-dir)/../bin/nightgauge`
    (canonical-repo lookup from inside a worktree).
-4. `$HOME/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge`
+4. `$HOME/.vscode/extensions/nightgauge.nightgauge-*/dist/bin/nightgauge`
    (VSCode extension–bundled binary).
 5. `$HOME/go/bin/nightgauge` (`go install` default).
 

@@ -3,7 +3,7 @@
 # fallback depends on, redact anything private, and emit JSON on stdout.
 #
 # Why this exists (#356): step 4 used to resolve the LEXICOGRAPHICALLY FIRST
-# `~/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge`
+# `~/.vscode/extensions/nightgauge.nightgauge-[0-9]*/dist/bin/nightgauge`
 # match. The repair is not "pick the biggest version number" — that inverts on
 # downgrades, ties on RC versions, and can be won by a `.vsctmp` orphan — it is
 # "use the bundle VSCode RECORDS as installed", i.e.
@@ -35,7 +35,7 @@
 set -uo pipefail
 
 EXT_ROOT="$HOME/.vscode/extensions"
-EXT_GLOB="$EXT_ROOT/nightgauge.nightgauge-vscode-"
+EXT_GLOB="$EXT_ROOT/nightgauge.nightgauge-"
 INDEX_FILE="$EXT_ROOT/extensions.json"
 
 redact() { printf '%s' "${1/#$HOME/\~}"; }
@@ -63,7 +63,7 @@ capture_extensions_index() {
     echo "capture-vscode-bundle-layout: no readable $INDEX_FILE" >&2
     exit 1
   fi
-  awk -v home="$HOME" -v prefix="nightgauge.nightgauge-vscode-" '
+  awk -v home="$HOME" -v prefix="nightgauge.nightgauge-" '
     function jstr(s, key,   p, r, q) {
       p = index(s, "\"" key "\"")
       if (p == 0) return ""
@@ -99,7 +99,7 @@ capture_extensions_index() {
         e = entries[k]
         rl = jstr(e, "relativeLocation")
         if (k > 1) printf ","
-        if (index(rl, prefix) == 1) {
+        if (index(rl, prefix) == 1 && substr(rl, length(prefix) + 1, 1) ~ /[0-9]/) {
           gsub(home, "~", e)
           printf "%s", e
         } else {
@@ -124,7 +124,7 @@ printf '  "captured_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '  "captured_by": "scripts/capture-vscode-bundle-layout.sh",\n'
 printf '  "platform": "%s",\n' "$(json_escape "$(uname -sm)")"
 printf '  "bash_version": "%s",\n' "$(json_escape "${BASH_VERSION:-unknown}")"
-printf '  "glob": "~/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge",\n'
+printf '  "glob": "~/.vscode/extensions/nightgauge.nightgauge-[0-9]*/dist/bin/nightgauge",\n'
 printf '  "extensions_index": "~/.vscode/extensions/extensions.json",\n'
 
 # The recorded install is the SELECTION AUTHORITY (#356), so capture it here
@@ -141,7 +141,7 @@ if [ -r "$INDEX_FILE" ]; then
         r = substr(buf, p)
         sub(/^[ \t]*:[ \t]*"/, "", r)
         v = substr(r, 1, index(r, "\"") - 1)
-        if (index(v, "nightgauge.nightgauge-vscode-") == 1) print v
+        if (v ~ /^nightgauge\.nightgauge-[0-9]/) print v
       }
     }
   ' "$INDEX_FILE" | sed -n 1p)"
@@ -150,10 +150,10 @@ printf '  "recorded_relative_location": "%s",\n' "$(json_escape "$recorded")"
 printf '  "bundles": [\n'
 
 first=1
-for dir in "$EXT_GLOB"*; do
+for dir in "$EXT_GLOB"[0-9]*; do
   [ -d "$dir" ] || continue
   base="$(basename "$dir")"
-  version="${base#nightgauge.nightgauge-vscode-}"
+  version="${base#nightgauge.nightgauge-}"
   binary="$dir/dist/bin/nightgauge"
 
   exists=false

@@ -152,6 +152,10 @@ func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":304,"stage":"feature-dev","status":"complete","model":"claude-sonnet-5","adapter":"claude","inputTokens":1200,"outputTokens":340,"costUsd":0.42,"runId":"01900130-0000-7000-8000-000000000304"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(complete): %v", err)
 	}
+	// The record's duration is wall-clock now-StartedAt truncated to whole
+	// milliseconds; a fast runner finishes this sequence inside 1ms and the
+	// DurationMs > 0 assertion below then reads 0. Guarantee a measurable run.
+	time.Sleep(2 * time.Millisecond)
 	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":304,"success":true,"totalDurationMs":1000,"runId":"01900130-0000-7000-8000-000000000304"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}

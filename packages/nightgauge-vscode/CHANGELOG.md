@@ -9,6 +9,15 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **The VS Code extension is now `nightgauge.nightgauge`.** The Marketplace
+  name `nightgauge-vscode` is unavailable, so the extension is published as
+  `nightgauge.nightgauge` on both the VS Code Marketplace and Open VSX, and its
+  release files are named `nightgauge-<target>-<version>.vsix`. Install the
+  new ID; a leftover `nightgauge.nightgauge-vscode-*` directory is ignored by
+  binary resolution, `nightgauge doctor` and the hooks.
+
 ### Added
 
 - **Runs started from a conversation** (#1894). The extension tells its

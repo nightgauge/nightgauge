@@ -144,7 +144,7 @@ export function buildInventory(
       "IPC methods the VS Code extension calls at activation, while resolving each tree " +
       "view, while opening each dashboard tab and while the demo window plays the " +
       "reference scenario, recorded against demo/ipc-stub.cjs by the vscode-host tier. " +
-      "Regenerate: npm run -w nightgauge-vscode demo:inventory",
+      "Regenerate: npm run -w packages/nightgauge-vscode demo:inventory",
     protocolVersion: protocolVersionFromClient(clientSource),
     methods: [...byMethod.values()].sort((a, b) => a.method.localeCompare(b.method)),
   };
@@ -193,7 +193,7 @@ export function driftProblems(inputs: DriftInputs): string[] {
     for (const method of [...called].filter((m) => !listed.has(m)).sort()) {
       problems.push(
         `the extension called ${method}, which demo/ipc-inventory.json does not list: ` +
-          "re-record it with npm run -w nightgauge-vscode demo:inventory"
+          "re-record it with npm run -w packages/nightgauge-vscode demo:inventory"
       );
     }
     if (inputs.inventory.protocolVersion !== inputs.clientProtocolVersion) {

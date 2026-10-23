@@ -441,7 +441,7 @@ jobs:
       # in a test is exactly the drift a docs-only classification would let
       # through.
       - name: Typecheck test tree (VSCode)
-        run: npm run -w nightgauge-vscode typecheck:tests
+        run: npm run -w packages/nightgauge-vscode typecheck:tests
       # #2296, #2297, #2298: neither the retro engine nor the model-routing
       # script is reached by the npm workspaces, so both rotted unnoticed.
       # Seconds each, so ungated like the typecheck above.
@@ -454,10 +454,10 @@ jobs:
           scripts/analyze-model-routing.ts
       - name: Test (VSCode)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: npm run -w nightgauge-vscode test
+        run: npm run -w packages/nightgauge-vscode test
       - name: Generated VSCode contributions in sync
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: npx -w nightgauge-vscode tsx scripts/generate-package-contributions.ts --check
+        run: npx -w packages/nightgauge-vscode tsx scripts/generate-package-contributions.ts --check
       - name: "@types/vscode <= engines.vscode (vsce packaging invariant)"
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: node packages/nightgauge-vscode/scripts/check-engine-types.mjs
@@ -513,17 +513,17 @@ jobs:
           key: playwright-browsers-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
       - name: Install Playwright browser (chromium, cache miss)
         if: ${{ needs.changes.outputs.run_heavy != 'false' && steps.playwright-cache.outputs.cache-hit != 'true' }}
-        run: npx -w nightgauge-vscode playwright install --with-deps chromium
+        run: npx -w packages/nightgauge-vscode playwright install --with-deps chromium
       - name: Install Playwright OS dependencies (cache hit)
         if: ${{ needs.changes.outputs.run_heavy != 'false' && steps.playwright-cache.outputs.cache-hit == 'true' }}
-        run: npx -w nightgauge-vscode playwright install-deps chromium
+        run: npx -w packages/nightgauge-vscode playwright install-deps chromium
       # test:e2e generates the real dashboard HTML fixture
       # (DashboardInteractions.playwright.ts loads it from /tmp) before
       # running the suite — a bare `playwright test` skips that prerequisite
       # and 23 of the 80 tests fail on a missing file.
       - name: Test (Playwright)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: npm run -w nightgauge-vscode test:e2e
+        run: npm run -w packages/nightgauge-vscode test:e2e
       # Dashboard fixture screenshots (tests/playwright/dashboard/Screenshots.playwright.ts,
       # Issue #751) — one per tab/state fixture, uploaded unconditionally so a
       # visual regression is reviewable on a GREEN run too, not only a failed
@@ -595,7 +595,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Test (VSCode host)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: xvfb-run --auto-servernum npm run -w nightgauge-vscode test:host
+        run: xvfb-run --auto-servernum npm run -w packages/nightgauge-vscode test:host
 
   # Security & license gates. Runs on every PR, including forks — a fork cannot
   # ship a vulnerable stdlib or a copyleft/proprietary dependency into a release

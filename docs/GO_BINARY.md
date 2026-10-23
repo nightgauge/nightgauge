@@ -4708,7 +4708,7 @@ it invokes the cobra command in-process and never runs the shell.
 ##### Which bundle the hooks run — VSCode's record, not the biggest number
 
 `guard.sh`'s VSCode-extension fallback globs
-`~/.vscode/extensions/nightgauge.nightgauge-vscode-*`. VSCode keeps superseded
+`~/.vscode/extensions/nightgauge.nightgauge-*`. VSCode keeps superseded
 extension directories on disk until it restarts, so that glob routinely matches
 several. It used to take the **first** match; bash globs and `filepath.Glob`
 are both collation-sorted and the extension stamps an epoch-suffixed
@@ -4749,7 +4749,7 @@ selection **plus** a `[stale-binary]` line, rather than to silence.
 
 **Reading the record — one bounded fork, measured.** Both sides run the same
 extraction: find the ONE `"relativeLocation"` whose value is a plain
-`nightgauge.nightgauge-vscode-…` directory name (POSIX whitespace, including a
+`nightgauge.nightgauge-…` directory name (POSIX whitespace, including a
 bare carriage return, is tolerated around the colon), and treat zero or several
 matches as "no record". `guard.sh` uses one byte-oriented
 `LC_ALL=C grep -a -o -E`; `binary_resolve.go` mirrors that regular expression.

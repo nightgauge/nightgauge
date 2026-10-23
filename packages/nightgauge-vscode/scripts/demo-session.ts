@@ -1,7 +1,7 @@
 /**
  * One command starts a demo session (#2110, ADR-026).
  *
- *   npm run -w nightgauge-vscode demo -- [--scenario <file>] [--speed <n>]
+ *   npm run -w packages/nightgauge-vscode demo -- [--scenario <file>] [--speed <n>]
  *     [--wait-for-start] [--event-log <file>] [--home <dir>] [--code <path>]
  *
  * It opens a new VS Code window, with a profile of its own, on a fresh copy of
@@ -40,8 +40,8 @@
  * `<home>/events.jsonl`, emptied at launch) with timestamps relative to the
  * scenario start. Two runs of one scenario write byte-identical logs:
  *
- *   npm run -w nightgauge-vscode demo -- --event-log /tmp/run1.jsonl   # close the window
- *   npm run -w nightgauge-vscode demo -- --event-log /tmp/run2.jsonl
+ *   npm run -w packages/nightgauge-vscode demo -- --event-log /tmp/run1.jsonl   # close the window
+ *   npm run -w packages/nightgauge-vscode demo -- --event-log /tmp/run2.jsonl
  *   cmp /tmp/run1.jsonl /tmp/run2.jsonl
  *
  * Close the previous demo window before starting another: VS Code hands a
@@ -284,7 +284,7 @@ async function main(): Promise<void> {
   const bundle = path.join(PACKAGE_ROOT, "dist", "extension.cjs");
   if (!fs.existsSync(bundle)) {
     throw new Error(
-      "dist/extension.cjs is missing: run `npm run -w nightgauge-vscode build` first."
+      "dist/extension.cjs is missing: run `npm run -w packages/nightgauge-vscode build` first."
     );
   }
   const plan = planDemoSession(options);

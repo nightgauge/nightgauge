@@ -1543,7 +1543,7 @@ run_step "doctor-app-permission-walkthrough.sh regression suite" \
 # checkout where an earlier build had left dist/ behind.
 run_step "Build SDK types (for the test-tree typecheck)" \
   npm run build --workspace=@nightgauge/sdk
-run_step "VSCode test-tree typecheck" npm run typecheck:tests -w nightgauge-vscode
+run_step "VSCode test-tree typecheck" npm run typecheck:tests -w packages/nightgauge-vscode
 
 # 4c. Retro engine tests and the model-routing analysis script (#2296, #2297,
 # #2298). Neither is reached by the npm workspaces, so both rotted unnoticed:
@@ -1574,7 +1574,7 @@ run_step "npm run test (all workspaces)" npm run test -- --run
 
 # 9. Generated package contributions in sync
 run_step "Generated VSCode contributions in sync" \
-  npx -w nightgauge-vscode tsx scripts/generate-package-contributions.ts --check
+  npx -w packages/nightgauge-vscode tsx scripts/generate-package-contributions.ts --check
 
 # 9b. @types/vscode must not exceed engines.vscode. `vsce package` enforces this
 # at packaging time (dev-install.sh / release) but no build/test step does — a
@@ -1722,9 +1722,9 @@ fi
 # macOS and Windows open their own windows.
 if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ]; then
   run_step "VSCode host smoke tests" \
-    xvfb-run --auto-servernum npm run -w nightgauge-vscode test:host
+    xvfb-run --auto-servernum npm run -w packages/nightgauge-vscode test:host
 else
-  run_step "VSCode host smoke tests" npm run -w nightgauge-vscode test:host
+  run_step "VSCode host smoke tests" npm run -w packages/nightgauge-vscode test:host
 fi
 
 # LAST: nothing above changed the developer's machine state (#2311). The

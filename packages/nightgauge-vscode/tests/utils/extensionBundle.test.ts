@@ -17,7 +17,7 @@ import { fileURLToPath } from "url";
 import { resolveExtensionBundleRoot } from "../../src/utils/extensionBundle";
 
 let root: string;
-const PREFIX = "nightgauge.nightgauge-vscode-";
+const PREFIX = "nightgauge.nightgauge-";
 const FIXTURE_DIR = fileURLToPath(
   new URL("../../../../internal/doctor/testdata/vscode-bundles/", import.meta.url)
 );
@@ -126,6 +126,17 @@ describe("resolveExtensionBundleRoot", () => {
     writeExtensionsIndex(recordedIndex(`${PREFIX}9.9.9-darwin-arm64`));
 
     expect(resolveExtensionBundleRoot(stale)).toBe(first);
+  });
+
+  it("ignores a retired nightgauge.nightgauge-vscode-* directory and its record", () => {
+    const stale = join(root, `${PREFIX}0.0.0-stale`);
+    const old = join(root, "nightgauge.nightgauge-vscode-0.7.0-darwin-arm64");
+    mkdirSync(old, { recursive: true });
+    writeExtensionsIndex(recordedIndex(basename(old)));
+    expect(resolveExtensionBundleRoot(stale)).toBe(stale);
+
+    const real = makeVersion("0.1.0-darwin-arm64");
+    expect(resolveExtensionBundleRoot(stale)).toBe(real);
   });
 
   it("falls back to the stale path when no siblings survive", () => {

@@ -85,11 +85,11 @@ function requireFile(file: string, remedy: string): void {
 async function main(): Promise<void> {
   requireFile(
     EXTENSION_BUNDLE,
-    "Run `npm run -w nightgauge-vscode build` first — the host loads the real bundle, not src/."
+    "Run `npm run -w packages/nightgauge-vscode build` first — the host loads the real bundle, not src/."
   );
   requireFile(
     TESTS_BUNDLE,
-    "Run `npm run -w nightgauge-vscode build:host-tests` first (the `test:host` script does this for you)."
+    "Run `npm run -w packages/nightgauge-vscode build:host-tests` first (the `test:host` script does this for you)."
   );
   requireFile(FIXTURE_SOURCE, "The committed populated fixture is missing from the tree.");
   requireFile(DEMO_WORKSPACE, "The committed demo workspace is missing from the tree.");

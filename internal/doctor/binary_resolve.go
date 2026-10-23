@@ -24,7 +24,7 @@ const (
 // extension. A bundle directory is `<prefix><version>[-<targetPlatform>]`,
 // and extensions.json records exactly that directory name in
 // `relativeLocation`.
-const bundleDirPrefix = "nightgauge.nightgauge-vscode-"
+const bundleDirPrefix = "nightgauge.nightgauge-"
 
 // extensionsIndexRelPath is VS Code's own record of what it has installed.
 const extensionsIndexRelPath = ".vscode/extensions/extensions.json"
@@ -81,7 +81,7 @@ type VSCodeBundleScan struct {
 	SelectedVersion string
 
 	// RecordedDir is extensions.json's `relativeLocation` for
-	// nightgauge.nightgauge-vscode, and RecordedVersion its version segment.
+	// nightgauge.nightgauge, and RecordedVersion its version segment.
 	// Both are empty when there is no usable record. They are DISPLAY values:
 	// never ordered, never compared for newness.
 	RecordedDir     string
@@ -95,7 +95,7 @@ type VSCodeBundleScan struct {
 	Divergence BundleDivergence
 }
 
-// ScanVSCodeBundles enumerates ~/.vscode/extensions/nightgauge.nightgauge-vscode-*
+// ScanVSCodeBundles enumerates ~/.vscode/extensions/nightgauge.nightgauge-*
 // bundles under home and picks the one VS Code RECORDS as installed.
 //
 // # Why the record, and not the highest version number
@@ -150,7 +150,7 @@ func ScanVSCodeBundles(home string) VSCodeBundleScan {
 		scan.RecordedVersion = strings.TrimPrefix(scan.RecordedDir, bundleDirPrefix)
 	}
 
-	matches, _ := filepath.Glob(filepath.Join(home, ".vscode", "extensions", bundleDirPrefix+"*", "dist", "bin", "nightgauge"))
+	matches, _ := filepath.Glob(filepath.Join(home, ".vscode", "extensions", bundleDirPrefix+"[0-9]*", "dist", "bin", "nightgauge"))
 
 	var (
 		recordedPath      string
@@ -212,7 +212,7 @@ func ScanVSCodeBundles(home string) VSCodeBundleScan {
 // closing quote, and — because grep is line-oriented — neither the whitespace
 // runs nor the value may cross a newline. Any drift between the two spellings
 // is a parity break (#277).
-var recordedLocationPattern = regexp.MustCompile(`"relativeLocation"[ \t\f\v\r]*:[ \t\f\v\r]*"` + regexp.QuoteMeta(bundleDirPrefix) + `[^"\n]*"`)
+var recordedLocationPattern = regexp.MustCompile(`"relativeLocation"[ \t\f\v\r]*:[ \t\f\v\r]*"` + regexp.QuoteMeta(bundleDirPrefix) + `[0-9][^"\n]*"`)
 
 // scanRecordedBundleDir applies guard.sh's extraction to raw file bytes: take
 // the ONE nightgauge relativeLocation in the text, require it to be a plain
@@ -307,7 +307,7 @@ func isPlainDirName(name string) bool {
 //  1. PATH (exec.LookPath)
 //  2. <repo-root>/bin/nightgauge (git rev-parse --show-toplevel)
 //  3. <canonical-repo-root>/bin/nightgauge (git rev-parse --git-common-dir)
-//  4. ~/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge
+//  4. ~/.vscode/extensions/nightgauge.nightgauge-*/dist/bin/nightgauge
 //     — the bundle VS Code RECORDS as installed (#356), falling back to the
 //     first glob match when there is no usable record
 //  5. ~/go/bin/nightgauge

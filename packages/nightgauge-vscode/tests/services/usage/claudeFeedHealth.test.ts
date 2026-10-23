@@ -28,10 +28,8 @@ import {
   probeClaudeFeedHealth,
 } from "../../../src/services/usage/claudeFeedHealth";
 
-const DEAD =
-  "/Users/x/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1787175119/dist/bin/nightgauge";
-const LIVE =
-  "/Users/x/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1787399523/dist/bin/nightgauge";
+const DEAD = "/Users/x/.vscode/extensions/nightgauge.nightgauge-0.1.1787175119/dist/bin/nightgauge";
+const LIVE = "/Users/x/.vscode/extensions/nightgauge.nightgauge-0.1.1787399523/dist/bin/nightgauge";
 const NOW = new Date("2026-08-22T12:00:00.000Z");
 /** The maintainer's observed reading, two days stale. */
 const TWO_DAYS_AGO = new Date("2026-08-20T04:34:11.326Z");

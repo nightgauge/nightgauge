@@ -23,7 +23,7 @@ This binds the artifact's digest to the workflow, the commit and the runner that
 produced it, so a modified artifact cannot present a valid attestation.
 
 ```bash
-gh attestation verify nightgauge-vscode-darwin-arm64-<version>.vsix \
+gh attestation verify nightgauge-darwin-arm64-<version>.vsix \
   --repo nightgauge/nightgauge
 ```
 

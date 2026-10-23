@@ -113,7 +113,7 @@ export class BinaryResolver {
         return config.get<string>("binaryPath", "");
       },
       getExtensionPath: () => {
-        const ext = vscode.extensions.getExtension("nightgauge.nightgauge-vscode");
+        const ext = vscode.extensions.getExtension("nightgauge.nightgauge");
         // Self-heal past a garbage-collected extension dir (auto-update): if the
         // running extensionPath was removed, resolve to VS Code's recorded
         // sibling bundle so the binary still resolves (#3883, #360).

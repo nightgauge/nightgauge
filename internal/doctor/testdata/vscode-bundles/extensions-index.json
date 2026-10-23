@@ -216,14 +216,14 @@
     }
   },
   {
-    "identifier": { "id": "nightgauge.nightgauge-vscode" },
+    "identifier": { "id": "nightgauge.nightgauge" },
     "version": "0.1.1785982325",
     "location": {
       "$mid": 1,
-      "path": "~/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1785982325",
+      "path": "~/.vscode/extensions/nightgauge.nightgauge-0.1.1785982325",
       "scheme": "file"
     },
-    "relativeLocation": "nightgauge.nightgauge-vscode-0.1.1785982325",
+    "relativeLocation": "nightgauge.nightgauge-0.1.1785982325",
     "metadata": {
       "isApplicationScoped": false,
       "isMachineScoped": false,

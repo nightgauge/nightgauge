@@ -115,7 +115,7 @@ func writeExtensionsIndex(t *testing.T, home string, recordedDirs ...string) str
 	}}
 	for _, dir := range recordedDirs {
 		entries = append(entries, entry{
-			Identifier:       ident{ID: "nightgauge.nightgauge-vscode"},
+			Identifier:       ident{ID: "nightgauge.nightgauge"},
 			Version:          strings.TrimPrefix(dir, bundleDirPrefix),
 			Location:         loc{Mid: 1, Path: filepath.Join(extDir, dir), Scheme: "file"},
 			RelativeLocation: dir,
@@ -463,6 +463,30 @@ func TestScanVSCodeBundles_NoRecordSingleBundleIsSilent(t *testing.T) {
 	}
 }
 
+// TestScanVSCodeBundles_RetiredExtensionIDIgnored: the extension was renamed
+// from nightgauge.nightgauge-vscode, whose directories share this prefix. A
+// leftover old bundle must be neither a candidate nor a record, or its
+// "vscode-0.7.0-…" suffix would be reported as a version.
+func TestScanVSCodeBundles_RetiredExtensionIDIgnored(t *testing.T) {
+	isolateCascade(t)
+	home := os.Getenv("HOME")
+
+	old := "nightgauge.nightgauge-vscode-0.7.0-darwin-arm64"
+	installBundle(t, home, old, true)
+	writeExtensionsIndex(t, home, old)
+
+	scan := ScanVSCodeBundles(home)
+	if len(scan.Bundles) != 0 || scan.SelectedPath != "" || scan.RecordedDir != "" {
+		t.Fatalf("retired bundle must not match: %+v", scan)
+	}
+
+	cur := installBundle(t, home, bundleDirPrefix+"0.8.0-darwin-arm64", true)
+	scan = ScanVSCodeBundles(home)
+	if scan.SelectedPath != cur || scan.SelectedVersion != "0.8.0-darwin-arm64" || len(scan.Bundles) != 1 {
+		t.Fatalf("expected only %q, got %+v", cur, scan)
+	}
+}
+
 // TestScanVSCodeBundles_NoRecordMultipleBundlesDiverge: with no record and
 // several candidates the selection is a guess. It restores the pre-#356
 // first-glob-match answer — deterministic, no ordering — and says so.
@@ -496,27 +520,27 @@ func TestReadRecordedBundleDir(t *testing.T) {
 	}{
 		{
 			name:    "single nightgauge entry",
-			content: `[{"identifier":{"id":"a.b"},"relativeLocation":"a.b-1.0.0"},{"identifier":{"id":"nightgauge.nightgauge-vscode"},"relativeLocation":"nightgauge.nightgauge-vscode-0.1.5"}]`,
-			want:    "nightgauge.nightgauge-vscode-0.1.5",
+			content: `[{"identifier":{"id":"a.b"},"relativeLocation":"a.b-1.0.0"},{"identifier":{"id":"nightgauge.nightgauge"},"relativeLocation":"nightgauge.nightgauge-0.1.5"}]`,
+			want:    "nightgauge.nightgauge-0.1.5",
 		},
 		{
 			name:    "whitespace around the colon",
-			content: "[{\"relativeLocation\"\t:   \"nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64\"}]",
-			want:    "nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64",
+			content: "[{\"relativeLocation\"\t:   \"nightgauge.nightgauge-0.2.0-rc.23-darwin-arm64\"}]",
+			want:    "nightgauge.nightgauge-0.2.0-rc.23-darwin-arm64",
 		},
 		{
 			name:    "bare carriage return whitespace",
-			content: "[{\"relativeLocation\"\r:\r\"nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64\"}]",
-			want:    "nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64",
+			content: "[{\"relativeLocation\"\r:\r\"nightgauge.nightgauge-0.2.0-rc.23-darwin-arm64\"}]",
+			want:    "nightgauge.nightgauge-0.2.0-rc.23-darwin-arm64",
 		},
 		{
 			name:    "pretty printed",
-			content: "[\n  {\n    \"identifier\": { \"id\": \"nightgauge.nightgauge-vscode\" },\n    \"relativeLocation\": \"nightgauge.nightgauge-vscode-0.9.9\"\n  }\n]",
-			want:    "nightgauge.nightgauge-vscode-0.9.9",
+			content: "[\n  {\n    \"identifier\": { \"id\": \"nightgauge.nightgauge\" },\n    \"relativeLocation\": \"nightgauge.nightgauge-0.9.9\"\n  }\n]",
+			want:    "nightgauge.nightgauge-0.9.9",
 		},
 		{
 			name:    "two nightgauge entries",
-			content: `[{"relativeLocation":"nightgauge.nightgauge-vscode-0.1.1"},{"relativeLocation":"nightgauge.nightgauge-vscode-0.1.2"}]`,
+			content: `[{"relativeLocation":"nightgauge.nightgauge-0.1.1"},{"relativeLocation":"nightgauge.nightgauge-0.1.2"}]`,
 			want:    "",
 		},
 		{
@@ -540,24 +564,24 @@ func TestReadRecordedBundleDir(t *testing.T) {
 			// the hooks act on it. Answering "" here would make doctor report
 			// a divergence that does not exist (#277).
 			name:    "truncated but still carries a complete record",
-			content: `[{"identifier":{"id":"nightgauge.nightgauge-vscode"},"relativeLocation":"nightgauge.nightgauge-vscode-0.2.0"},{"identi`,
-			want:    "nightgauge.nightgauge-vscode-0.2.0",
+			content: `[{"identifier":{"id":"nightgauge.nightgauge"},"relativeLocation":"nightgauge.nightgauge-0.2.0"},{"identi`,
+			want:    "nightgauge.nightgauge-0.2.0",
 		},
 		{
 			// The value exists only after JSON unescaping, so it is not the
 			// text of any directory name in the file.
 			name:    "escaped value is not a record",
-			content: `[{"relativeLocation":"nightgauge.nightgauge-vscode-a\\b"}]`,
+			content: `[{"relativeLocation":"nightgauge.nightgauge-a\\b"}]`,
 			want:    "",
 		},
 		{
 			name:    "path traversal is rejected",
-			content: `[{"relativeLocation":"nightgauge.nightgauge-vscode-../../evil"}]`,
+			content: `[{"relativeLocation":"nightgauge.nightgauge-../../evil"}]`,
 			want:    "",
 		},
 		{
 			name:    "separator is rejected",
-			content: `[{"relativeLocation":"nightgauge.nightgauge-vscode-x/y"}]`,
+			content: `[{"relativeLocation":"nightgauge.nightgauge-x/y"}]`,
 			want:    "",
 		},
 		{
@@ -862,38 +886,39 @@ func TestGuardShParity_RecordedBundleDir(t *testing.T) {
 		name    string
 		content string
 	}{
-		{"single entry", `[{"identifier":{"id":"a.b"},"relativeLocation":"a.b-1.0.0"},{"identifier":{"id":"nightgauge.nightgauge-vscode"},"relativeLocation":"nightgauge.nightgauge-vscode-0.1.5"}]`},
-		{"whitespace around colon", "[{\"relativeLocation\"\t:   \"nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64\"}]"},
-		{"bare CR whitespace", "[{\"relativeLocation\"\r:\r\"nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64\"}]"},
-		{"NUL before record", "[{\"relativeLocation\":\"other.ext-1.0.0\"}]\x00[{\"relativeLocation\":\"nightgauge.nightgauge-vscode-0.2.0\"}]"},
-		{"invalid UTF-8 before record", "[{\"relativeLocation\":\"other.ext-1.0.0\"}]\xff[{\"relativeLocation\":\"nightgauge.nightgauge-vscode-0.2.0\"}]"},
-		{"pretty printed", "[\n  {\n    \"identifier\": { \"id\": \"nightgauge.nightgauge-vscode\" },\n    \"relativeLocation\": \"nightgauge.nightgauge-vscode-0.9.9\"\n  }\n]"},
-		{"no trailing newline", `[{"relativeLocation":"nightgauge.nightgauge-vscode-0.5.0"}]`},
-		{"two nightgauge entries", `[{"relativeLocation":"nightgauge.nightgauge-vscode-0.1.1"},{"relativeLocation":"nightgauge.nightgauge-vscode-0.1.2"}]`},
+		{"single entry", `[{"identifier":{"id":"a.b"},"relativeLocation":"a.b-1.0.0"},{"identifier":{"id":"nightgauge.nightgauge"},"relativeLocation":"nightgauge.nightgauge-0.1.5"}]`},
+		{"whitespace around colon", "[{\"relativeLocation\"\t:   \"nightgauge.nightgauge-0.2.0-rc.23-darwin-arm64\"}]"},
+		{"bare CR whitespace", "[{\"relativeLocation\"\r:\r\"nightgauge.nightgauge-0.2.0-rc.23-darwin-arm64\"}]"},
+		{"NUL before record", "[{\"relativeLocation\":\"other.ext-1.0.0\"}]\x00[{\"relativeLocation\":\"nightgauge.nightgauge-0.2.0\"}]"},
+		{"invalid UTF-8 before record", "[{\"relativeLocation\":\"other.ext-1.0.0\"}]\xff[{\"relativeLocation\":\"nightgauge.nightgauge-0.2.0\"}]"},
+		{"pretty printed", "[\n  {\n    \"identifier\": { \"id\": \"nightgauge.nightgauge\" },\n    \"relativeLocation\": \"nightgauge.nightgauge-0.9.9\"\n  }\n]"},
+		{"no trailing newline", `[{"relativeLocation":"nightgauge.nightgauge-0.5.0"}]`},
+		{"two nightgauge entries", `[{"relativeLocation":"nightgauge.nightgauge-0.1.1"},{"relativeLocation":"nightgauge.nightgauge-0.1.2"}]`},
 		{"no nightgauge entry", `[{"relativeLocation":"other.ext-1.0.0"}]`},
 		{"empty array", `[]`},
-		{"traversal rejected", `[{"relativeLocation":"nightgauge.nightgauge-vscode-../../evil"}]`},
-		{"separator rejected", `[{"relativeLocation":"nightgauge.nightgauge-vscode-x/y"}]`},
-		{"other publisher named similarly", `[{"relativeLocation":"nightgauge.nightgauge-vscode-companion-1.0.0"},{"relativeLocation":"notnightgauge.nightgauge-vscode-2.0.0"}]`},
+		{"traversal rejected", `[{"relativeLocation":"nightgauge.nightgauge-../../evil"}]`},
+		{"separator rejected", `[{"relativeLocation":"nightgauge.nightgauge-x/y"}]`},
+		{"retired nightgauge-vscode bundle", `[{"relativeLocation":"nightgauge.nightgauge-vscode-0.7.0-darwin-arm64"}]`},
+		{"other publisher named similarly", `[{"relativeLocation":"nightgauge.nightgauge-companion-1.0.0"},{"relativeLocation":"notnightgauge.nightgauge-2.0.0"}]`},
 		// Invalid JSON that still carries a scannable record: the shape VS
 		// Code transiently leaves behind while rewriting extensions.json. A
 		// decode-only Go side answered "" here while guard.sh honored the
 		// record, so doctor reported a false stale-binary warning naming a
 		// binary the hooks were not running.
-		{"truncated mid-object after a complete entry", `[{"identifier":{"id":"nightgauge.nightgauge-vscode"},"relativeLocation":"nightgauge.nightgauge-vscode-0.2.0"},{"identi`},
-		{"truncated with no closing bracket", `[{"relativeLocation":"nightgauge.nightgauge-vscode-0.3.0-darwin-arm64"}`},
+		{"truncated mid-object after a complete entry", `[{"identifier":{"id":"nightgauge.nightgauge"},"relativeLocation":"nightgauge.nightgauge-0.2.0"},{"identi`},
+		{"truncated with no closing bracket", `[{"relativeLocation":"nightgauge.nightgauge-0.3.0-darwin-arm64"}`},
 		{"truncated before any record", `[{"identifier":{"id":"a.b"},"relativeLoc`},
 		// Escapes: the value exists only after JSON unescaping, so guard.sh —
 		// which reads the file's text — never sees it. Both sides must reject.
-		{"unicode escape in the value", `[{"relativeLocation":"nightgauge.nightgauge-vscode-abc"}]`},
-		{"escaped quote in the value", `[{"relativeLocation":"nightgauge.nightgauge-vscode-a\"b"}]`},
-		{"escaped backslash in the value", `[{"relativeLocation":"nightgauge.nightgauge-vscode-a\\b"}]`},
-		{"newline between the key and its value", "[{\"relativeLocation\":\n\"nightgauge.nightgauge-vscode-0.4.0\"}]"},
+		{"unicode escape in the value", `[{"relativeLocation":"nightgauge.nightgauge-abc"}]`},
+		{"escaped quote in the value", `[{"relativeLocation":"nightgauge.nightgauge-a\"b"}]`},
+		{"escaped backslash in the value", `[{"relativeLocation":"nightgauge.nightgauge-a\\b"}]`},
+		{"newline between the key and its value", "[{\"relativeLocation\":\n\"nightgauge.nightgauge-0.4.0\"}]"},
 		// The other direction: a nested relativeLocation is not an entry to a
 		// decoder, but it is one match to a text scan. Whatever the answer,
 		// both sides must give it — this is the case that proves the two
 		// cannot be reconciled by decoding on one side.
-		{"relativeLocation nested inside another object", `[{"metadata":{"relativeLocation":"nightgauge.nightgauge-vscode-9.9"}}]`},
+		{"relativeLocation nested inside another object", `[{"metadata":{"relativeLocation":"nightgauge.nightgauge-9.9"}}]`},
 	}
 	locales := []string{"C", availableUTF8Locale(t)}
 	for _, locale := range locales {

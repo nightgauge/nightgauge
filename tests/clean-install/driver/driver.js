@@ -31,7 +31,7 @@ const path = require("node:path");
 const { execFileSync, execFile } = require("node:child_process");
 const vscode = require("vscode");
 
-const EXTENSION_ID = "nightgauge.nightgauge-vscode";
+const EXTENSION_ID = "nightgauge.nightgauge";
 const POLL_MS = 15_000;
 
 const report = {

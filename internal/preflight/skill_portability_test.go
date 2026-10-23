@@ -18,7 +18,7 @@ name: pr-create
 ---
 Resolve the binary:
 `+"```bash"+`
-for cand in "$HOME"/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge; do
+for cand in "$HOME"/.vscode/extensions/nightgauge.nightgauge-*/dist/bin/nightgauge; do
   [ -x "$cand" ] && BINARY="$cand" && break
 done
 `+"```"+`
@@ -47,7 +47,7 @@ func TestSkillPortability_FlagsIncludesAndShared(t *testing.T) {
 	root := t.TempDir()
 	// A finding in an _includes file…
 	writeSkillFile(t, root, "nightgauge-pr-merge/_includes/merge.md",
-		`cand="$HOME"/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge`)
+		`cand="$HOME"/.vscode/extensions/nightgauge.nightgauge-*/dist/bin/nightgauge`)
 	// …and in a _shared file.
 	writeSkillFile(t, root, "_shared/PREFLIGHT.md",
 		`glob "$HOME"/.vscode/extensions/nightgauge.foo/bin`)
@@ -104,7 +104,7 @@ func TestSkillPortability_SkipsClaudeRuntimeDir(t *testing.T) {
 	// excluded (keeps the Go scan in step with the shell mirror's rg). A vscode
 	// path here must NOT be flagged.
 	writeSkillFile(t, root, "nightgauge-product-audit/.claude/agent-memory/x.md",
-		`note: "$HOME"/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge`)
+		`note: "$HOME"/.vscode/extensions/nightgauge.nightgauge-*/dist/bin/nightgauge`)
 	res, err := RunSkillPortabilityCheck(context.Background(), SkillPortabilityOptions{Root: root})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

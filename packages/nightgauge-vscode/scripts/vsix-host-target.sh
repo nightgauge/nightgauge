@@ -2,7 +2,7 @@
 # vsix-host-target.sh — print the release VSIX target for a host (#2309).
 #
 # A release ships one VSIX per target, named
-# nightgauge-vscode-<target>-<version>.vsix. Each bundles a CLI built for that
+# nightgauge-<target>-<version>.vsix. Each bundles a CLI built for that
 # target, so a VSIX for another target installs cleanly and then cannot run
 # its own binary. dev-install.sh --from-release asks this script which one to
 # download instead of taking whichever file sorts first.

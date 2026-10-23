@@ -272,7 +272,7 @@ check "a 404 is still classed dead" \
 # the real listing URL (README.md) and a lookalike host that must NOT match,
 # never by handing the real hostname to markdown-link-check's network-checking
 # code path.
-MARKETPLACE_URL='https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode'
+MARKETPLACE_URL='https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge'
 MARKETPLACE_LOOKALIKE='https://marketplace.visualstudio.com.evil-nxdomain.invalid/items'
 PATTERN_CHECK="$(python3 - "$REPO_ROOT/.markdown-link-check.json" \
   "$MARKETPLACE_URL" "$MARKETPLACE_LOOKALIKE" <<'PYEOF'

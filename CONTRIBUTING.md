@@ -577,11 +577,11 @@ npm run setup-hooks
 
 The pre-commit hook validates that three generated files match their source inputs:
 
-| Generated File                                                   | Regeneration Command                                                     |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `packages/nightgauge-vscode/src/services/IpcClient.generated.ts` | `make generate-ipc-client`                                               |
-| `api/generated/ts/platform-api.ts`                               | `npm run generate:types`                                                 |
-| `packages/nightgauge-vscode/package.json` (contributions)        | `npx -w nightgauge-vscode tsx scripts/generate-package-contributions.ts` |
+| Generated File                                                   | Regeneration Command                                                              |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `packages/nightgauge-vscode/src/services/IpcClient.generated.ts` | `make generate-ipc-client`                                                        |
+| `api/generated/ts/platform-api.ts`                               | `npm run generate:types`                                                          |
+| `packages/nightgauge-vscode/package.json` (contributions)        | `npx -w packages/nightgauge-vscode tsx scripts/generate-package-contributions.ts` |
 
 If any file is out of sync, the commit is blocked with an error message showing the exact command to fix it.
 
