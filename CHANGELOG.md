@@ -14,6 +14,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-23
+
 ### Added
 
 - **A conversation can start work** (#1894). When you ask, in your own
@@ -6795,7 +6797,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nightgauge/nightgauge/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nightgauge/nightgauge/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/nightgauge/nightgauge/compare/v0.5.0...v0.5.1
