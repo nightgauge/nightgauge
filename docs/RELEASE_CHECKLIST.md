@@ -58,7 +58,7 @@ metadata and the CHANGELOG. Each must describe the product that ships.
 | L2  | No relative links in the README (they 404 on the listing page)                                                                   | **Done** — #1134.                                                                                                                                                                                                |
 | L3  | `qna`, `pricing`, `galleryBanner`, `icon`, `license`, `homepage`, `bugs`, `repository` present; VSIX ships no dev files          | **Done** — #1134 (`qna`, `pricing: Free`; test tsconfigs, `scripts/**` and stray `.vsix` excluded).                                                                                                              |
 | L4  | The README states which adapter path is the supported one and does not advertise autonomous multi-repo mode as finished          | **Done** — #1136 / #1289: supported-adapter sentence, no autonomous-production claim.                                                                                                                            |
-| L5  | Gallery imagery is generated from the product, not drawn, and regenerable in one command                                         | **Done** — #1134 (`npm run -w packages/nightgauge-vscode marketing:screenshots`). The six hand-captured README images still exist; replace or keep deliberately.                                                 |
+| L5  | Gallery imagery is generated from the product, not drawn, and regenerable in one command                                         | **Done** — #1134 (`npm run -w packages/nightgauge marketing:screenshots`). The six hand-captured README images still exist; replace or keep deliberately.                                                        |
 | L6  | `scripts/check-changelog.sh --tag vX.Y.Z` exits 0: the root `CHANGELOG.md` **and** the extension changelog both have the section | **Re-opened and closed 2026-09-05** — the 0.2.x rows above were true only of the extension file; the root changelog had never been sectioned. Both now are, and `release.yml` runs this check before publishing. |
 | L7  | Privacy policy and terms the README links to exist and name the right entity                                                     | **Done on the site side** (nightgauge.dev `/privacy/`, `/terms/`, sub-processors as a section); README links `/privacy/` — #1134.                                                                                |
 
@@ -83,7 +83,7 @@ three.
 | P1  | `release.yml` has fired at least once on a stable tag (dogfood-readiness gate D2)                                                | **Done 2026-09-02** — run 33598909653 on `v0.2.1`: GitHub Release (11 assets: 3 CLI archives + SBOMs, checksums, manifest, 3 per-target VSIXs, all attested), cask PR `homebrew-tap#8` merged. The first attempt on `v0.2.0` exposed #1296 (GoReleaser released the rc tag on the same commit); `v0.2.0` stays tagged, unpublished.                                                                                                  |
 | P2  | Marketplace publish is its own manual dispatch (`marketplace-publish.yml`, #1299) that runs `vsce verify-pat` before any publish | **Done** — `marketplace-publish.yml` is the one publish path (#1300, #1307): it verifies `VSCE_PAT` against the publisher before building, packages 0.x as pre-release, attests, publishes. `MARKETPLACE_PUBLISH` is gone. The July PAT was rejected (401) on 2026-09-02 and replaced by the owner the same day. Since the post-release audit it is dispatched **on the tag** (`--ref vX.Y.Z`), behind the `production` environment. |
 | P3  | 0.x publishes to the Marketplace **pre-release** channel                                                                         | **Done and exercised** — `marketplace-publish.yml` run 33632797220 published `v0.2.2` for darwin-arm64, darwin-x64 and linux-x64 on 2026-09-02 13:00Z with `--pre-release`; each VSIX carries `PreRelease=true` in its manifest.                                                                                                                                                                                                     |
-| P4  | Open VSX                                                                                                                         | **Done 2026-09-02 17:39Z** — `marketplace-publish.yml` run 33661929053 (`registries=open-vsx`) published 0.2.2 for all three targets as pre-release; https://open-vsx.org/extension/nightgauge/nightgauge-vscode is live. Namespace ownership verification is pending with the Open VSX maintainers (their issue 12972); until it lands the listing shows the namespace as unverified.                                               |
+| P4  | Open VSX                                                                                                                         | **Done 2026-09-02 17:39Z** — `marketplace-publish.yml` run 33661929053 (`registries=open-vsx`) published 0.2.2 for all three targets as pre-release; https://open-vsx.org/extension/nightgauge/nightgauge is live. Namespace ownership verification is pending with the Open VSX maintainers (their issue 12972); until it lands the listing shows the namespace as unverified.                                                      |
 | P5  | Recut the release candidate at the release commit; do not publish an older RC's artifacts                                        | **Done** — `v0.2.0-rc.25` (staging, green) at `35234944`, then `v0.2.0` there (unpublished, #1296), then `v0.2.1` at `57852243` = the same tree plus the release-pipeline fix and changelog.                                                                                                                                                                                                                                         |
 | P6  | After the merge: the 72-hour quiet soak, then the announcement, then the Marketplace flip                                        | **Gate 1 complete 2026-09-02 06:40Z** (`v0.2.1`: release + cask). **Gate 2 complete 2026-09-02 13:00Z** (`v0.2.2`: Marketplace pre-release channel; cask and GitHub Release also at 0.2.2). The listing appears once the Marketplace finishes its post-publish verification. Soak to 2026-09-05; announce after.                                                                                                                     |
 
@@ -143,9 +143,9 @@ correctly, with the right metadata, and is anything left open".
 | Surface                 | Observation                                                                                                                                                                                                                           |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | GitHub Release `v0.2.2` | Latest, not draft, 11 assets (3 CLI archives + SPDX SBOMs, `checksums.txt`, `manifest.json`, 3 per-target VSIXs). `v0.2.1` below it; `v0.2.0` tagged, unpublished.                                                                    |
-| VS Code Marketplace     | `nightgauge.nightgauge-vscode` 0.2.2 for darwin-arm64, darwin-x64, linux-x64, each flagged pre-release; `ExtensionKind=workspace`, `Pricing=Free`, Q&A → Discussions, gallery banner `#0A0E1C` dark; engine `^1.85.0`.                |
+| VS Code Marketplace     | `nightgauge.nightgauge` 0.2.2 for darwin-arm64, darwin-x64, linux-x64, each flagged pre-release; `ExtensionKind=workspace`, `Pricing=Free`, Q&A → Discussions, gallery banner `#0A0E1C` dark; engine `^1.85.0`.                       |
 | Marketplace artifact    | The served darwin-arm64 VSIX's SHA-256 equals the listing's `VsixSha256`; `gh attestation verify` passes and names `marketplace-publish.yml` at `1ac50c6f`, which **is** the `v0.2.2` commit.                                         |
-| Open VSX                | `nightgauge/nightgauge-vscode` 0.2.2 pre-release on the same three targets, license `Apache-2.0`, links to the site, repo and issues. Namespace still **unverified** (Open VSX issue 12972 pending).                                  |
+| Open VSX                | `nightgauge/nightgauge` 0.2.2 pre-release on the same three targets, license `Apache-2.0`, links to the site, repo and issues. Namespace still **unverified** (Open VSX issue 12972 pending).                                         |
 | `main` at the tag       | `1ac50c6f`'s own run: 18 success, 2 skipped, 0 failed. Tip `a5974a39`: 15/15.                                                                                                                                                         |
 | Repository posture      | `scripts/verify-public-hardening.sh`: all assertions pass. 0 open Dependabot, code-scanning or secret-scanning alerts. Actions restricted to an allowlist with SHA pinning enforced; default token read-only; fork PRs need approval. |
 | Workflows               | All 63 `uses:` SHA-pinned with version comments; top-level `contents: read` everywhere; no `${{ }}` inside any `run:`; `pull_request_target` only in the CLA gate, which never executes fork code.                                    |
@@ -274,7 +274,7 @@ Nothing in this file is a release blocker.
 ## Command surface
 
 Counted from `package.json` `contributes.commands` and
-`packages/nightgauge-vscode/tests/commands/` on `origin/main` plus PR #795:
+`packages/nightgauge/tests/commands/` on `origin/main` plus PR #795:
 
 - **143** contributed commands
 - **61** command-focused test files
@@ -391,7 +391,7 @@ second-machine pass before the first public release.
 
 ### Findings from the 2026-08-24 clean-profile pass
 
-Run against `main` @ `051b74d4`, packaged as `nightgauge-vscode-0.1.0.vsix`
+Run against `main` @ `051b74d4`, packaged as `nightgauge-0.1.0.vsix`
 (28.82 MB, 1341 files; binary reports `0.2.0-rc.24`). Packaging itself was
 green, and `doctor`'s per-adapter remediation lines were good — every failure
 below is about what the product _claims_, not what it does.
@@ -413,7 +413,7 @@ Two observations left unfiled, both judged cosmetic:
 
 ### Findings from the 2026-08-25 clean-profile pass (steps 3–4)
 
-Run against `main` @ `29879753`, packaged as `nightgauge-vscode-0.1.0.vsix`
+Run against `main` @ `29879753`, packaged as `nightgauge-0.1.0.vsix`
 (28.87 MB, 1341 files; binary reports `0.2.0-rc.24-…-29879753`). Packaging and
 install were green again. Steps 3 and 4 were walked for the first time: an
 isolated profile pointed at a repository with no Nightgauge state, following
@@ -533,7 +533,7 @@ from the maintainer's machine, Docker linux/arm64:
 
 | Field           | Value                                                                                                                                                                                                                             |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| VSIX            | `nightgauge-vscode-linux-arm64-0.1.0.vsix`, 20 MB, packaged from the tree; binary `v0.2.0-rc.24-235-ge6e98c76`                                                                                                                    |
+| VSIX            | `nightgauge-linux-arm64-0.1.0.vsix`, 20 MB, packaged from the tree; binary `v0.2.0-rc.24-235-ge6e98c76`                                                                                                                           |
 | Install         | fresh `--extensions-dir` / `--user-data-dir`; extension activated as `0.1.0`; the binary VS Code recorded in `extensions.json` is the one the extension resolved                                                                  |
 | Repository      | private throwaway, seeded from `tests/clean-install/fixture/`, one feature-request issue, one throwaway board                                                                                                                     |
 | Stages          | `feature-planning → feature-dev → feature-validate → pr-create → pr-merge`, unattended                                                                                                                                            |
