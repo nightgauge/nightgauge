@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -214,5 +215,19 @@ func TestAddLabels_RefusesTheApprovalLabel(t *testing.T) {
 				t.Fatalf("mutation sent = %v, want %v", mutated, tc.mutation)
 			}
 		})
+	}
+}
+
+// An issue number outside GraphQL's 32-bit Int is refused before any request.
+func TestTrustForge_IssueSignalsRejectsAnOutOfRangeNumber(t *testing.T) {
+	called := false
+	f := trustServer(t, func(http.ResponseWriter, *http.Request, string) { called = true })
+	for _, n := range []int{0, -1, math.MaxInt32 + 1} {
+		if _, err := f.IssueSignals(context.Background(), "o", "r", n); err == nil {
+			t.Errorf("number %d was accepted", n)
+		}
+	}
+	if called {
+		t.Error("an out-of-range number reached GitHub")
 	}
 }

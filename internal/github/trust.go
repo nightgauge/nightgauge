@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -140,6 +141,10 @@ type trustSignalsQuery struct {
 // recent 100 label and title events in one GraphQL query. Only an issue whose
 // author cannot vouch for it and which carries the approval label is read.
 func (t *TrustForge) IssueSignals(ctx context.Context, owner, repo string, number int) (trust.Signals, error) {
+	// GraphQL's Int is 32 bits; a number outside it names no issue.
+	if number <= 0 || number > math.MaxInt32 {
+		return trust.Signals{}, fmt.Errorf("read %s/%s#%d: not an issue number", owner, repo, number)
+	}
 	c, err := t.client(ctx, owner, repo)
 	if err != nil {
 		return trust.Signals{}, err
