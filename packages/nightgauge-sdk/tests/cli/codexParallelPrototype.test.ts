@@ -170,8 +170,14 @@ describe("Codex Parallel Execution Prototype", () => {
       ]);
 
       // Both should exit successfully
-      expect(resultA.code).toBe(0);
-      expect(resultB.code).toBe(0);
+      expect(
+        resultA.code,
+        `codex exec exited ${resultA.code}; stderr: ${resultA.stderr.slice(-2000)}`
+      ).toBe(0);
+      expect(
+        resultB.code,
+        `codex exec exited ${resultB.code}; stderr: ${resultB.stderr.slice(-2000)}`
+      ).toBe(0);
 
       // Both should produce JSONL output
       expect(resultA.stdout.trim().length).toBeGreaterThan(0);
@@ -214,7 +220,10 @@ describe("Codex Parallel Execution Prototype", () => {
     async () => {
       const result = await spawnCodexExec(tmpDir1, 'Respond with just the word "isolated"');
 
-      expect(result.code).toBe(0);
+      expect(
+        result.code,
+        `codex exec exited ${result.code}; stderr: ${result.stderr.slice(-2000)}`
+      ).toBe(0);
 
       const events = parseJsonlEvents(result.stdout);
       const threadStarted = events.find((e) => e.type === "thread.started");

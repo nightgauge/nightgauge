@@ -14,6 +14,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-23
+
+### Fixed
+
+- **An allow-listed npm advisory now also covers the packages that depend on
+  it.** `scripts/npm-audit-check.js` treated a package flagged only because it
+  depends on a vulnerable one as an unallowed finding, so a transitive advisory
+  with no upstream fix could never be allow-listed. `body-parser` is updated to
+  2.4.0, and GHSA-xcx6-jx8p-x3h5 (via `@vscode/vsce`) is allow-listed until
+  2026-11-22 (#2492).
+
+### Changed
+
+- **The extension is listed as "Nightgauge for VS Code".** The VS Code
+  Marketplace no longer accepts the display name "Nightgauge", so the listing
+  on both the Marketplace and Open VSX now uses "Nightgauge for VS Code". The
+  extension ID stays `nightgauge.nightgauge`.
+
 ## [0.7.1] - 2026-10-23
 
 ### Added
@@ -6797,7 +6815,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nightgauge/nightgauge/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nightgauge/nightgauge/compare/v0.5.1...v0.6.0

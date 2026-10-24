@@ -312,6 +312,7 @@ REQUIRED_FILES=(
   scripts/test-branch-merged-check.sh
   scripts/test-post-merge-check.sh
   scripts/test-publish-vsix-set.sh
+  scripts/test-npm-audit-check.sh
   scripts/test-sign-macos-binaries.sh
   scripts/test-check-shipped-code.sh
   packages/nightgauge/scripts/check-shipped-code.sh
@@ -1275,6 +1276,13 @@ run_group "post-merge-check.sh regression suite" \
 #       registry, so they are only ever exercised here.
 run_group "publish-vsix-set.sh regression suite" \
   bash scripts/test-publish-vsix-set.sh
+
+# 1b2a. npm-audit-check.js regression suite. A package flagged only because it
+#       depends on a vulnerable one carries no advisory of its own; allow-listing
+#       the root advisory must cover it, or no transitive advisory without an
+#       upstream fix can ever be allow-listed.
+run_group "npm-audit-check.js regression suite" \
+  bash scripts/test-npm-audit-check.sh
 
 # 1b2b. sign-macos-binaries.sh regression suite. The state it must handle
 #       correctly is the one that exists today: no Apple credentials, so it has
