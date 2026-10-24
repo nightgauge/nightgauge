@@ -31,6 +31,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Autonomous mode trusts issues filed by `github-actions[bot]`
+  (#2130).** `.nightgauge/config.yaml` sets `autonomous.trusted_bots` to the
+  pipeline's App and `github-actions[bot]`, so the issues CI workflows file
+  stay eligible for pickup under the new authorship gate.
+
 - **One health score, one persisted series, and no data never reads as a
   score.** Pipeline health had two stores and two definitions: the dashboard
   showed a 4-component score it computed itself and wrote to
