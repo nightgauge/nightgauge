@@ -4647,6 +4647,14 @@ scheduler (#4126) and CI (#4127) — that authoritative layer is the drift-revok
 safety check (a "docs" issue that edited source classifies as source and is not
 fast-tracked).
 
+**What makes a change `config`.** Never prose: a title or body that mentions
+"config", `.json` or `.yaml` is not evidence (#1892). The derived change_type
+is `config` only for an issue carrying a label that names config, or for a
+labelled issue whose predicted change targets (`nightgauge issue
+extract-targets`) are all config files. An unlabelled issue never derives
+`config`, so it never matches `config-only`. The decision's
+`change_type_evidence` field names what produced the change_type.
+
 **Precedence (first-match-wins):**
 
 ```

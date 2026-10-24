@@ -29,6 +29,47 @@ changelog, and the release workflow refuses a tag that does not.
   now the only automated thing in the repository that queries either registry.
   The docs link check no longer requests open-vsx.org (#1769).
 
+### Changed
+
+- **The OpenCode fixture capture script documents what it does not capture.**
+  `scripts/capture-opencode-fixture.sh --help` and the testdata README record
+  why the real-model and subagent legs stay manual, that cached-token coverage
+  waits for the live hosted leg, and that operator state is only inspected
+  inside the capture's isolation or with `sqlite3 -readonly` (#1746). A new
+  test books the real OpenCode captures through the production stage-record
+  pricing path (#1745).
+
+### Fixed
+
+- **A validation stage that verified nothing is re-run, not skipped.** When
+  `feature-validate` exited cleanly but recorded no quality-gate results, the
+  `abandoned-commit-recoverable` recovery resumed the run at `pr-create`, so
+  the pull request merged with no validation. That recovery is for a stage
+  that was killed after committing work; a stage that finished and produced
+  nothing now falls through to model escalation, which re-runs it. A recovery
+  that does resume past `feature-validate` now records a `validation_skipped`
+  anomaly on the run record (#1890).
+- **The deterministic merge waits for a required check that has not
+  reported.** A pull request that GitHub held `BLOCKED` with nothing pending
+  was treated as blocked by something other than CI, and handed to the model
+  merge path, which then spent dollars waiting. `pr-merge` now reads the base
+  branch's required checks: when one is missing from the PR's checks or was
+  skipped, it waits within the existing CI budget. A punt now names which
+  required checks were absent, skipped or failing (#1891).
+- **Routing no longer fast-tracks a code change as configuration because its
+  text mentions config.** `nightgauge issue route` (and the extension's issue
+  analysis) classified an issue as a config change from words like "config"
+  or ".json" in its title or body, and the `config-only` rule then skipped
+  `feature-validate`. A config change now needs a config label, or predicted
+  change targets that are all config files on a labelled issue. An unlabelled
+  issue never fast-tracks as config, and the routing decision's new
+  `change_type_evidence` field says what produced the change type (#1892).
+- **An OpenCode stage is no longer failed by a subagent's rejected
+  permission.** When only a subagent's tool call was auto-rejected, the
+  parent session carried on and exited 0, yet the stage was marked failed
+  with `[adapter-permission-rejected]`. A rejection the parent session itself
+  receives still fails the stage (#1744).
+
 ## [0.7.2] - 2026-10-23
 
 ### Fixed

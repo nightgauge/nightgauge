@@ -175,13 +175,18 @@ func TestDeriveChangeType(t *testing.T) {
 		{"type:bug → code", []string{"type:bug"}, "x", "", "code"},
 		{"docs keyword without code indicator", nil, "update readme", "improve documentation", "docs"},
 		{"docs keyword with code indicator → code via fallback", nil, "implement function for parser", "", "code"},
-		{"config-only", nil, "tweak the .yaml file", "", "config"},
+		// #1892: prose keywords no longer make a change config.
+		{"config keywords in prose alone → code", nil, "tweak the .yaml file", "", "code"},
 		{"feature keyword in body forces code", nil, "tweak yaml", "user can configure new feature", "code"},
+		{"config label → config", []string{"component:config"}, "x", "", "config"},
+		{"labelled + all targets config → config", []string{"type:chore"}, "bump ci", "Change `deploy/ci.yml` and `config/pipeline.yaml`.", "config"},
+		{"unlabelled + all targets config → code", nil, "bump ci", "Change `deploy/ci.yml` and `config/pipeline.yaml`.", "code"},
+		{"labelled + mixed targets → code", []string{"type:chore"}, "x", "Change `deploy/ci.yml` and `internal/foo/bar.go`.", "code"},
 		{"default code", nil, "implement parser", "", "code"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := deriveChangeType(tt.labels, tt.title, tt.body)
+			got, _ := deriveChangeType(tt.labels, tt.title, tt.body)
 			if got != tt.want {
 				t.Errorf("deriveChangeType(%v, %q, %q) = %q, want %q", tt.labels, tt.title, tt.body, got, tt.want)
 			}

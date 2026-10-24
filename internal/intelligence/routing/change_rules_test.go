@@ -140,7 +140,9 @@ func TestDerive_DefaultDocsRuleApplied(t *testing.T) {
 
 func TestDerive_DefaultConfigRuleApplied(t *testing.T) {
 	got := Derive(DeriveInput{
-		Title:     "tweak the .yaml file",
+		Title:     "tweak the CI workflow",
+		Body:      "Edit `deploy/ci.yml`.",
+		Labels:    []string{"type:chore"},
 		BoardSize: "S",
 	})
 	if got.ChangeType != "config" {

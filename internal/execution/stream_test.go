@@ -1404,8 +1404,9 @@ esac
 // registry holds no rate for is a stamped zero, and a registry id is priced
 // from the registry's rate card. It is not the production call: the scheduler
 // passes the adapter, "opencode", with the served model's recorded form, and
-// reads the serving provider from that form. Asserting the production stamp
-// against these captures is #1745.
+// reads the serving provider from that form. The production stamp against
+// these captures is asserted by
+// TestOpenCodeRealCaptures_ProductionStageRecordStamping (#1745).
 func openCodeStageCost(r *adapters.RunResult) (float64, bool) {
 	return tokens.CalculateCostFor(r.ModelProvider, r.ServedModel, tokens.TokenCounts{
 		Input: r.InputTokens, Output: r.OutputTokens, CacheRead: r.CacheReadTokens,
@@ -1577,7 +1578,10 @@ var openCodeSubagentSessions = []openCodeCaptureSession{
 // totals. The second subagent's bash call was auto-rejected: the parent's
 // task call failed with that rejection inside its own message, the parent
 // went on to fix the bug, and the process exited 0. The notice on stderr is
-// the subagent's, and it still decides the stage's marker (ADR-022 § 9).
+// the subagent's. ADR-022 § 9's "a rejected permission ends the run on
+// 1.18.30" holds for a rejection the parent session itself receives; this
+// capture refutes it for one only a subagent hit, so the notice decides no
+// marker and the exit-0 run is not failed on it (#1744).
 func TestParseOpenCodeRealCaptureSubagent(t *testing.T) {
 	const name = "opencode_stream_subagent_capture.jsonl"
 	acc := checkOpenCodeCapture(t, name, openCodeSubagentSteps)
@@ -1664,20 +1668,26 @@ func TestParseOpenCodeRealCaptureSubagent(t *testing.T) {
 		}
 	}
 
-	// Through a stage: the subagent's notice on stderr fails the exit-0 run,
-	// with the marker for bash, and the parent's usage is kept.
+	// Through a stage: the subagent's notice on stderr does not fail the
+	// exit-0 run (#1744) — the parent's own RejectedToolCalls is 0 and its
+	// only error is the task call's "Subagent failed" — so no marker is
+	// written, the exit stands, and the parent's usage is kept.
+	if st := acc.OpenCode(); st.SubagentFailedTasks != 1 || st.OtherToolErrors != 0 || !st.SubagentOnlyRejection() {
+		t.Errorf("subagent failures = %d, other tool errors = %d, subagent-only = %v; want 1, 0, true",
+			st.SubagentFailedTasks, st.OtherToolErrors, st.SubagentOnlyRejection())
+	}
 	stream := readTestdata(t, name)
 	stderr := readTestdata(t, "opencode_stream_subagent_stderr.txt")
 	for _, tc := range []struct {
 		allowed []string
 		marker  string
 	}{
-		{[]string{"Read", "Edit", "Task", "Bash"}, PermissionRejectedMarker + " tool=bash"},
-		{[]string{"Read", "Edit", "Task"}, PermissionDeniedMarker + " tool=bash"},
+		{[]string{"Read", "Edit", "Task", "Bash"}, PermissionRejectedMarker},
+		{[]string{"Read", "Edit", "Task"}, PermissionDeniedMarker},
 	} {
 		staged, _ := openCodeStageRun(t, stream, stderr, 0, tc.allowed, nil)
-		if staged.ExitCode != 1 || !strings.HasSuffix(staged.Stderr, tc.marker+"\n") {
-			t.Errorf("allowed %q: exit %d, stderr %q; want exit 1 ending in %q", tc.allowed, staged.ExitCode, staged.Stderr, tc.marker)
+		if staged.ExitCode != 0 || strings.Contains(staged.Stderr, tc.marker) {
+			t.Errorf("allowed %q: exit %d, stderr %q; want exit 0 with no %q marker", tc.allowed, staged.ExitCode, staged.Stderr, tc.marker)
 		}
 		if staged.InputTokens != 30632 || len(staged.DriftMarkers) != 0 {
 			t.Errorf("allowed %q: input %d, drift %q; want the parent's 30632 and no drift", tc.allowed, staged.InputTokens, staged.DriftMarkers)
@@ -1807,6 +1817,12 @@ func TestOpenCodeSharedExpectations(t *testing.T) {
 				staged, _ := openCodeStageRun(t, stdout, "", 0, nil, nil)
 				if staged.ExitCode != 0 {
 					t.Errorf("exit %d, stderr %q; the capture is a clean run", staged.ExitCode, staged.Stderr)
+				}
+			} else if len(fx.Failures) == 0 {
+				// A stderr notice that decides nothing (#1744: a subagent's).
+				staged, _ := openCodeStageRun(t, stdout, readTestdata(t, *fx.Stderr), 0, []string{"Read", "Edit", "Task", "Bash"}, nil)
+				if staged.ExitCode != 0 {
+					t.Errorf("exit %d, stderr %q; the stderr notice decides no failure", staged.ExitCode, staged.Stderr)
 				}
 			}
 			for _, f := range fx.Failures {

@@ -111,7 +111,9 @@ describe("detectChangeType", () => {
     expect(detectChangeType(labels, "Update docs for API")).toBe("docs");
   });
 
-  it("should detect config from patterns", () => {
+  // #1892: prose keywords never make a change config — the fast-track skips
+  // feature-validate, so it needs evidence (a config label).
+  it("should not detect config from prose patterns alone", () => {
     const labels: IssueLabels = {
       all: [],
       size: null,
@@ -119,8 +121,24 @@ describe("detectChangeType", () => {
       priority: null,
     };
 
-    expect(detectChangeType(labels, "Update tsconfig.json")).toBe("config");
-    expect(detectChangeType(labels, "Fix .eslintrc settings")).toBe("config");
+    expect(detectChangeType(labels, "Update tsconfig.json")).toBe("code");
+    expect(detectChangeType(labels, "Fix .eslintrc settings")).toBe("code");
+    expect(
+      detectChangeType(
+        labels,
+        "adapters: per-run HOME for OpenCode stages so ~/.opencode stops being a config directory"
+      )
+    ).toBe("code");
+  });
+
+  it("should detect config from a config label", () => {
+    const labels: IssueLabels = {
+      all: ["type:chore", "component:config"],
+      size: null,
+      type: "chore",
+      priority: null,
+    };
+
     expect(detectChangeType(labels, "Update package.json version")).toBe("config");
   });
 

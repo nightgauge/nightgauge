@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -49,8 +50,19 @@ func (a *AbandonedCommitRecoverable) Description() string {
 // that already exists means this isn't the "no PR" scenario this action
 // exists for. A live workspace is required because Execute must inspect git
 // state; without one there is nothing to detect.
+//
+// A gate no-op is excluded (#1890). The post-condition gate only runs on a
+// clean exit, so GateKind == KindNoOp means the stage was NOT killed: it ran
+// to completion and produced nothing. Resuming at pr-create would skip the
+// very stage whose emptiness was the failure — on the #1787 run a
+// feature-validate that recorded no quality-gate results was "recovered" this
+// way and the PR merged with no validation. Declining here lets the failure
+// fall through to model escalation, which re-runs the stage.
 func (a *AbandonedCommitRecoverable) Matches(failure StageFailure) bool {
 	if failure.Stage == state.StagePRCreate || failure.Stage == state.StagePRMerge {
+		return false
+	}
+	if failure.GateKind == gates.KindNoOp {
 		return false
 	}
 	if failure.PRNumber != 0 {

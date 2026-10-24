@@ -7924,6 +7924,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						})
 						log.Printf("#%d: recovery %s — resuming %s → %s",
 							item.Number, result.Action, stage, result.BacktrackTargetStage)
+						if detail, ok := recordValidationSkipped(runtime, stages, stage, targetStage,
+							result.Action, result.Reason, time.Now()); ok {
+							log.Printf("#%d: WARNING validation skipped: %s", item.Number, detail)
+						}
 						err = nil
 						exitCode = 0
 						for i, st := range stages {

@@ -1126,9 +1126,12 @@ several lines, only the last ending in `); auto-rejecting`.
 #1629's subagent capture adds a fifth: a subagent's rejection does not end
 the run. The subagent's session ends, the run's `task` call fails with
 `Subagent failed (task_id: <session>): ` followed by the rejection message,
-and the run goes on and exits 0. That notice is still the first on stderr, so
-it decides the stage's marker below, and a stage whose own session finished
-its task reports exit 1.
+and the run goes on and exits 0. So "a rejected permission ends the run"
+holds only for a rejection the run's own (parent) session receives. A run whose
+own session had no rejected or failed tool call, whose only errors were `task`
+calls failing with `Subagent failed`, and which exited 0, is therefore not
+failed on the subagent's notice: it decides no marker, and the stage's
+post-condition gate judges what the session produced (#1744).
 
 - Permission maps Nightgauge generates contain only `allow` and `deny`, never
   `ask`. That covers the permissions OpenCode defaults to `ask`, such as

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -176,6 +177,77 @@ type PRViewSnapshot struct {
 	ReviewDecision    string             // APPROVED | REVIEW_REQUIRED | CHANGES_REQUESTED | "" (no review required)
 	StatusCheckRollup []PRStatusCheckRow // CI / status checks
 	HeadRefName       string             // the PR's head branch — carried through to PRMergeResult on merge
+	// RequiredChecks is the set of required status-check contexts on the PR's
+	// base branch (rulesets and, when readable, classic protection), resolved
+	// only for an OPEN BLOCKED/UNSTABLE PR (#1891). nil means none are
+	// configured or the set could not be read; the predicates then behave
+	// exactly as they did before the set was consulted.
+	RequiredChecks []string
+}
+
+// RequiredCheckGaps reports, for each required context in snap.RequiredChecks,
+// whether the rollup lacks it entirely (absent), reports it SKIPPED, or
+// reports it FAILURE/ERROR (failing). Names compare case-insensitively, the
+// same rule github.MissingRequiredChecks uses. All three are nil when no
+// required set is known (#1891).
+func RequiredCheckGaps(snap PRViewSnapshot) (absent, skipped, failing []string) {
+	if len(snap.RequiredChecks) == 0 {
+		return nil, nil, nil
+	}
+	byName := make(map[string]string, len(snap.StatusCheckRollup))
+	for _, c := range snap.StatusCheckRollup {
+		key := strings.ToLower(strings.TrimSpace(c.Name))
+		// A context can appear more than once (re-runs, matrix legs sharing a
+		// name). Keep the worst reading: failing > skipped > anything else.
+		prev, seen := byName[key]
+		if !seen || checkGapRank(c.Conclusion) > checkGapRank(prev) {
+			byName[key] = c.Conclusion
+		}
+	}
+	for _, name := range snap.RequiredChecks {
+		conclusion, ok := byName[strings.ToLower(strings.TrimSpace(name))]
+		switch {
+		case !ok:
+			absent = append(absent, name)
+		case conclusion == "FAILURE" || conclusion == "ERROR":
+			failing = append(failing, name)
+		case conclusion == "SKIPPED":
+			skipped = append(skipped, name)
+		}
+	}
+	return absent, skipped, failing
+}
+
+func checkGapRank(conclusion string) int {
+	switch conclusion {
+	case "FAILURE", "ERROR":
+		return 2
+	case "SKIPPED":
+		return 1
+	}
+	return 0
+}
+
+// requiredCheckEvidence renders RequiredCheckGaps for a punt reason, so the
+// cost of a punt is attributable to what the required set looked like at the
+// verdict (#1891). Empty when no required set is known.
+func requiredCheckEvidence(snap PRViewSnapshot) string {
+	if len(snap.RequiredChecks) == 0 {
+		return ""
+	}
+	absent, skipped, failing := RequiredCheckGaps(snap)
+	return fmt.Sprintf("required checks: absent=[%s] skipped=[%s] failing=[%s]",
+		strings.Join(absent, ","), strings.Join(skipped, ","), strings.Join(failing, ","))
+}
+
+// withRequiredCheckEvidence appends requiredCheckEvidence to a punt reason
+// in parentheses, keeping the reason's prefix (which IsBranchProtectionPunt
+// and the telemetry buckets match on) intact.
+func withRequiredCheckEvidence(reason string, snap PRViewSnapshot) string {
+	if ev := requiredCheckEvidence(snap); ev != "" {
+		return reason + " (" + ev + ")"
+	}
+	return reason
 }
 
 // PRStatusCheckRow is the projection of one GitHub statusCheckRollup entry.
@@ -275,9 +347,9 @@ func logPuntSnapshot(prNumber int, reason string, snap PRViewSnapshot) {
 		}
 		checks = append(checks, fmt.Sprintf("%s=%s", c.Name, conclusion))
 	}
-	log.Printf("pr-merge: punt snapshot pr=%d reason=%q state=%s mergeable=%s mergeStateStatus=%s reviewDecision=%s checks=%d [%s]",
+	log.Printf("pr-merge: punt snapshot pr=%d reason=%q state=%s mergeable=%s mergeStateStatus=%s reviewDecision=%s checks=%d [%s] required=[%s]",
 		prNumber, reason, snap.State, snap.Mergeable, snap.MergeStateStatus, snap.ReviewDecision,
-		len(snap.StatusCheckRollup), strings.Join(checks, ", "))
+		len(snap.StatusCheckRollup), strings.Join(checks, ", "), strings.Join(snap.RequiredChecks, ", "))
 }
 
 // mergeableUnknown is GitHub's "I have not computed this yet" answer for a
@@ -527,7 +599,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 				Path:     PathPunt,
 				PRNumber: prNumber,
 				PRState:  snap.State,
-				Reason:   ReasonCIWaitTimeout,
+				Reason:   withRequiredCheckEvidence(ReasonCIWaitTimeout, snap),
 			}, nil)
 		case ciWaitNoChecksCreated:
 			ph.supersedeInFlight()
@@ -564,11 +636,15 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 			ph.supersedeInFlight()
 			logPuntSnapshot(prNumber, decision.Reason, snap)
 		}
+		reason := decision.Reason
+		if decision.Punt {
+			reason = withRequiredCheckEvidence(reason, snap)
+		}
 		return finish(PRMergeResult{
 			Path:        path,
 			PRNumber:    prNumber,
 			PRState:     snap.State,
-			Reason:      decision.Reason,
+			Reason:      reason,
 			HeadRefName: headRef,
 		}, nil)
 	}
@@ -887,10 +963,12 @@ func (r *DeterministicRunner) waitForMergeability(ctx context.Context, gh ghClie
 // #1027): the PR is OPEN and MERGEABLE (no conflict), no check has reported
 // FAILURE/ERROR, review is not blocking, the merge state is BLOCKED or UNSTABLE
 // (required/optional checks not yet green), and either at least one check is
-// still pending or NO check run has been created at all. Such a PR is expected
+// still pending, NO check run has been created at all, or a known required
+// context is absent from the rollup or reported SKIPPED (#1891). Such a PR is expected
 // to become CLEAN once CI finishes, so the runner waits rather than punting.
 // Hard blockers (conflict → DIRTY/CONFLICTING, review required, a failed check,
-// BEHIND/DRAFT, or BLOCKED with every listed check concluded) return false:
+// BEHIND/DRAFT, or BLOCKED with every listed check concluded and every known
+// required context reported) return false:
 // those will not self-resolve by waiting, so the LLM path should get its turn
 // immediately.
 //
@@ -947,10 +1025,21 @@ func MergeBlockedByPendingCI(snap PRViewSnapshot) bool {
 			sawPending = true
 		}
 	}
-	// With checks listed, require at least one in-flight so we don't spin on
-	// a PR that is BLOCKED for a non-CI reason (every listed check concluded
-	// green and the ruleset still says BLOCKED).
-	return sawPending
+	if sawPending {
+		return true
+	}
+	// Nothing listed is in flight. Before #1891 that alone read as a non-CI
+	// block ("every listed check concluded green and the ruleset still says
+	// BLOCKED") and punted at once — but a required context that has not
+	// reported yet (absent from the rollup) or reported SKIPPED keeps the PR
+	// BLOCKED with nothing pending, and that does clear on its own: on the
+	// #1889 run the LLM arm merged it 33 minutes later with no intervention,
+	// at $6.74 of waiting. When the required set is known and has such a gap,
+	// keep waiting; the runner's budget bounds it and punts ci-wait-timeout
+	// if it never clears. With no gap (or no known required set) the block is
+	// not CI's, so punt immediately as before.
+	absent, skipped, _ := RequiredCheckGaps(snap)
+	return len(absent) > 0 || len(skipped) > 0
 }
 
 // ciWaitOutcome is how waitForCleanMergeState ended.
@@ -1126,7 +1215,7 @@ func (c *execGhClient) withWorkdir(dir string) ghClient {
 func (c *execGhClient) View(ctx context.Context, prNumber int) (PRViewSnapshot, error) {
 	stdout, err := github.RunGhSubprocess(ctx, c.workdir,
 		"pr", "view", fmt.Sprintf("%d", prNumber),
-		"--json", "state,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,headRefName")
+		"--json", "state,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,headRefName,baseRefName")
 	if err != nil {
 		return PRViewSnapshot{}, normalizeGhError(err)
 	}
@@ -1136,6 +1225,7 @@ func (c *execGhClient) View(ctx context.Context, prNumber int) (PRViewSnapshot, 
 		MergeStateStatus  string `json:"mergeStateStatus"`
 		ReviewDecision    string `json:"reviewDecision"`
 		HeadRefName       string `json:"headRefName"`
+		BaseRefName       string `json:"baseRefName"`
 		StatusCheckRollup []struct {
 			Name       string `json:"name"`
 			Conclusion string `json:"conclusion"`
@@ -1157,7 +1247,59 @@ func (c *execGhClient) View(ctx context.Context, prNumber int) (PRViewSnapshot, 
 			Conclusion: row.Conclusion,
 		})
 	}
+	// The required set is read only when it can change the verdict: an OPEN
+	// PR that GitHub still holds BLOCKED/UNSTABLE (#1891). A read failure
+	// leaves it nil, which is the pre-#1891 behaviour (punt immediately on
+	// "nothing pending"), so an unreadable ruleset can only cost LLM spend,
+	// never a merge.
+	if snap.State == "OPEN" && raw.BaseRefName != "" &&
+		(snap.MergeStateStatus == "BLOCKED" || snap.MergeStateStatus == "UNSTABLE") {
+		required, rerr := c.requiredChecks(ctx, raw.BaseRefName)
+		if rerr != nil {
+			log.Printf("pr-merge: could not read required checks for base %q: %v", raw.BaseRefName, rerr)
+		}
+		snap.RequiredChecks = required
+	}
 	return snap, nil
+}
+
+// requiredChecks returns the required status-check contexts on base: the
+// rulesets' required_status_checks rules, plus classic branch protection when
+// the token can read it (that endpoint needs admin, so its failure contributes
+// nothing — the same union github.CIService.GetRequiredCheckNames computes).
+// `{owner}/{repo}` is resolved by gh from the working directory's remote.
+func (c *execGhClient) requiredChecks(ctx context.Context, base string) ([]string, error) {
+	escaped := url.PathEscape(base)
+	out, err := github.RunGhSubprocess(ctx, c.workdir, "api", "--paginate",
+		"repos/{owner}/{repo}/rules/branches/"+escaped,
+		"--jq", `.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context`)
+	if err != nil {
+		return nil, normalizeGhError(err)
+	}
+	names := splitContexts(out, nil)
+	if classic, cerr := github.RunGhSubprocess(ctx, c.workdir, "api",
+		"repos/{owner}/{repo}/branches/"+escaped+"/protection/required_status_checks",
+		"--jq", `.contexts[]`); cerr == nil {
+		names = splitContexts(classic, names)
+	}
+	return names, nil
+}
+
+// splitContexts appends the non-empty, not-yet-seen lines of out to into.
+func splitContexts(out []byte, into []string) []string {
+	seen := make(map[string]bool, len(into))
+	for _, n := range into {
+		seen[n] = true
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		into = append(into, name)
+	}
+	return into
 }
 
 // Merge issues a server-side squash merge via `gh pr merge --squash`.

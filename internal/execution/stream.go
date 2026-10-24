@@ -879,6 +879,21 @@ const openCodeRejectedToolError = "The user rejected permission to use this spec
 // success for a stage a permission-map "deny" actually stopped.
 const openCodeRuleDeniedToolErrorPrefix = "The user has specified a rule which prevents you from using this specific tool call."
 
+// openCodeSubagentFailedPrefix starts the error 1.18.30 gives the parent's
+// `task` tool call when the subagent it started ended in error (#1744). The
+// subagent's own failure follows the task id; the parent session receives
+// all of it as an ordinary tool result and may carry on.
+const openCodeSubagentFailedPrefix = "Subagent failed"
+
+// SubagentOnlyRejection reports whether every error the run's own session
+// saw was a failed subagent (#1744): no tool call of its own was rejected or
+// otherwise failed, at least one `task` call failed with "Subagent failed",
+// and the stream did not end on an error event. An auto-reject notice on
+// stderr in such a run is the subagent's, not the session's.
+func (s *OpenCodeStream) SubagentOnlyRejection() bool {
+	return s.RejectedToolCalls == 0 && s.OtherToolErrors == 0 && s.SubagentFailedTasks > 0 && !s.LastEventError
+}
+
 // openCodeIsRejectedToolError reports whether errText is a tool_use event's
 // error for a call OpenCode's own permission config refused — either
 // rejection text above, "ask" auto-rejected or "deny" matched directly. Both
@@ -933,6 +948,15 @@ type OpenCodeStream struct {
 	// LastEventError is true when the stream's last event was an "error"
 	// event: the session ended on an error, not a finished step.
 	LastEventError bool
+	// SubagentFailedTasks counts the run's own `task` tool calls that failed
+	// with OpenCode's "Subagent failed" error (#1744): a subagent the parent
+	// delegated to ended in error — on 1.18.30, when its own tool call was
+	// auto-rejected — and the parent session received that as a tool result
+	// it can continue past.
+	SubagentFailedTasks int
+	// OtherToolErrors counts the run's own tool calls that failed with any
+	// error other than a permission rejection or a subagent failure.
+	OtherToolErrors int
 
 	// openRejections counts rejections not yet followed by recovery;
 	// completedSinceRejection is set by a completed tool call after one and
@@ -1032,6 +1056,12 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 			}
 			s.openRejections++
 			s.completedSinceRejection = false
+		} else if ev.Part != nil && ev.Part.State != nil && ev.Part.State.Status == "error" {
+			if ev.Part.Tool == "task" && strings.HasPrefix(ev.Part.State.Error, openCodeSubagentFailedPrefix) {
+				s.SubagentFailedTasks++
+			} else {
+				s.OtherToolErrors++
+			}
 		} else if s.openRejections > 0 && ev.Part != nil && ev.Part.State != nil && ev.Part.State.Status == "completed" {
 			s.completedSinceRejection = true
 		}

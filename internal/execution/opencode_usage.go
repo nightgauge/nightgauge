@@ -555,6 +555,17 @@ func (r *openCodeRun) finish(ctx context.Context, exit openCodeExit, acc *TokenA
 		// stderr notice for it decides nothing either.
 		fmt.Fprintf(os.Stderr, "[opencode-recovered] %d rejected tool call(s) recovered from; not classified as a permission rejection\n", r.stream.RecoveredRejections)
 		marker = ""
+	} else if marker != "" && exit.exitCode == 0 && r.stream.SubagentOnlyRejection() {
+		// The auto-reject notice on stderr was a subagent's (#1744): the
+		// run's own session had no rejected or failed tool call, its only
+		// errors were `task` calls failing with "Subagent failed", and the
+		// process exited 0 after the parent went on with its work. That
+		// rejection did not end the run, so it decides no failure kind; the
+		// stage's post-condition gate judges what the session produced. A
+		// rejection the parent session itself receives counts in
+		// RejectedToolCalls and still fails the stage below and in apply.
+		fmt.Fprintf(os.Stderr, "[opencode-subagent-rejection] %d subagent task(s) failed on an auto-rejected permission; the parent session continued and exited 0, so it is not classified as a permission rejection\n", r.stream.SubagentFailedTasks)
+		marker = ""
 	} else if r.stream.RejectedToolCalls > 0 && marker == "" {
 		// OpenCode rejected the stage's own tool call, and stderr did not say
 		// which permission: a "deny" match (this map's only rejection shape,
@@ -614,10 +625,13 @@ func openCodeHelperEnv(env []string) []string {
 	return kept
 }
 
-// apply writes the outcome onto the RunResult. A rejected permission ends
-// the run on 1.18.30 even though the process exits 0, so an exit-0 run with
-// one is reported as exit 1 (ADR-022 § 9), and its marker is the last line of
-// Stderr, where failure classification reads the reason.
+// apply writes the outcome onto the RunResult. A permission rejection the
+// run's own (parent) session receives ends the run on 1.18.30 even though the
+// process exits 0, so an exit-0 run with one is reported as exit 1 (ADR-022
+// § 9), and its marker is the last line of Stderr, where failure
+// classification reads the reason. A rejection only a subagent hit does not
+// end the run — the parent receives "Subagent failed" as a tool result and
+// carries on — so finish clears the marker for it and the exit stands (#1744).
 func (o openCodeOutcome) apply(result *adapters.RunResult) {
 	result.ServedModel = o.served.Model
 	result.ModelProvider = o.served.Provider
