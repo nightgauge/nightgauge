@@ -123,14 +123,16 @@ pipeline telemetry. Callers map their `AggregatedDataset` →
 `HealthAnalysisInput` to avoid circular dependencies between the SDK and VSCode
 packages.
 
-| Field                   | Type                           | Source                                                |
-| ----------------------- | ------------------------------ | ----------------------------------------------------- |
-| `executionHistory`      | `ExecutionHistoryRecord[]`     | Per-stage execution records (stage, success, cost…)   |
-| `healthScores`          | `HealthScoreEntry[]`           | Persisted composite scores from prior runs            |
-| `selfTuningLog`         | `SelfTuningEntry[]`            | Legacy field (always `[]` — self-tuning removed)      |
-| `experimentResults`     | `ExperimentEntry[]`            | A/B experiment control/treatment records              |
-| `healthReports`         | `HealthReportEntry[]`          | Prior report summaries (finding/recommendation count) |
-| `recommendationHistory` | `RecommendationHistoryEntry[]` | Optional — prior recommendation-to-issue mappings     |
+| Field                | Type                        | Source                                              |
+| -------------------- | --------------------------- | --------------------------------------------------- |
+| `executionHistory`   | `ExecutionHistoryRecord[]`  | Per-stage execution records (stage, success, cost…) |
+| `healthScores`       | `HealthScoreEntry[]`        | Persisted composite scores from prior runs          |
+| `learningSignals`    | `LearningSignals`           | Optional — `outcomes.jsonl` pairs + calibration age |
+| `skillEffectiveness` | `SkillEffectivenessEntry[]` | Optional — latest record per skill change in period |
+
+An optional input that is absent means its file does not exist; the dimension
+that reads it reports `hasEnoughData: false` and names the missing file. It is
+never replaced by an empty corpus or a weaker proxy (#1900).
 
 ### `HealthAnalysisEngine.analyze()` Flow
 
@@ -143,7 +145,10 @@ packages.
    (`computeOverallHealthScore`)
 6. Derive `overallStatus` via `getOverallHealthStatus(score)` — `"no-data"`
    when the score is `null`
-7. Generate human-readable `summary` string
+7. Generate human-readable `summary` string: the overall score, how many of
+   the 8 dimensions contributed, and every excluded dimension with its
+   `insufficientDataReason` (`excludedDimensionReason`), so a six-dimension
+   score is never read as an eight-dimension one
 8. Return `HealthAnalysisResult`
 
 ### Weighted Scoring Formula
@@ -223,6 +228,7 @@ interface DimensionResult {
   metrics: Record<string, number>;
   hasEnoughData: boolean;
   sampleSize: number;
+  insufficientDataReason?: string; // why hasEnoughData is false (#1900)
   periodComparison?: PeriodComparison; // present when baseline provided
 }
 ```
@@ -430,21 +436,47 @@ high-failure stages.
 
 **Weight**: 0.10 | **File**: `dimensions/learningEffectiveness.ts`
 
-Evaluates whether the pipeline's learning systems (calibration, tuning,
-experiments) are producing measurable improvements.
+Asks whether the pipeline's predictions about a change are right. Routing and
+sizing are the two predictions made before a run and measured after it, so
+their accuracy is the learning signal (#1900).
 
-**Key metrics**:
+**Inputs** (read by `packages/nightgauge/src/utils/healthLearningInputs.ts`):
 
-| Metric                            | Description                                              |
-| --------------------------------- | -------------------------------------------------------- |
-| `avgHealthScore`                  | Mean health score across recorded data points            |
-| `scoreSlope`                      | Linear slope of health score time series                 |
-| `tuningActionCount`               | Total self-tuning log entries                            |
-| `tuningEffectiveCount`            | Tuning actions followed by score improvement             |
-| `experimentsCount`                | Distinct A/B experiment names observed                   |
-| `positiveExperimentCount`         | Experiments where treatment > control success            |
+| File                                      | Fields                                                                        |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| `<clone>/pipeline/history/outcomes.jsonl` | `completedAt`, `predictedModel`, `actualModel`, `predictedSize`, `actualSize` |
+| `<clone>/pipeline/calibration.json`       | `updated_at`                                                                  |
+
+**Sample**: outcome rows in the period with at least one complete
+predicted/actual pair. A pair with an empty half is an unknown, excluded from
+the denominator (#340), never booked as a miss. Each accuracy contributes only
+with at least `minimumSampleSizes.basic` (5) pairs; with neither, the dimension
+is excluded and says why.
+
+**Key metrics**: `outcomeRows`, `routingPairs`, `sizePairs`, `routingAccuracy`,
+`sizeAccuracy`, `predictionCoverage` (rows with any prediction / rows), and
+`calibrationLagDays` (newest outcome minus `calibration.json` `updated_at`).
+
+**Scoring**: mean of the accuracies that met the minimum, × 100; −10 when
+calibration is absent or lags the newest outcome by more than 14 days.
+
+**Findings emitted**:
+
+- Routing or size prediction accuracy below 60%
+- Low prediction coverage (< 50% of rows carry a prediction, the #304 gap)
+- Calibration absent or lagging the outcome corpus
+- Prediction accuracy worsening against the baseline period (feeds
+  cross-reference rule 3)
+
+--------------------------------- | -------------------------------------------------------- |
+| `avgHealthScore` | Mean health score across recorded data points |
+| `scoreSlope` | Linear slope of health score time series |
+| `tuningActionCount` | Total self-tuning log entries |
+| `tuningEffectiveCount` | Tuning actions followed by score improvement |
+| `experimentsCount` | Distinct A/B experiment names observed |
+| `positiveExperimentCount` | Experiments where treatment > control success |
 | `recommendationFollowThroughRate` | Closed issues / total issues with linked recommendations |
-| `recommendationEffectivenessRate` | Improved outcomes / closed recommendations with metrics  |
+| `recommendationEffectivenessRate` | Improved outcomes / closed recommendations with metrics |
 
 **Scoring**: Starts at 50 (neutral). Gains from improving score trend, effective
 tuning, positive experiments, decreasing recommendation counts, and high
@@ -496,23 +528,29 @@ trend, duration trend, and P95 outlier counts.
 
 **Weight**: 0.08 | **File**: `dimensions/skillDrift.ts`
 
-Evaluates skill-instruction health from the self-assessment synthesis data
-produced by `SkillSelfAssessmentSynthesizer` — recurring friction patterns
-across skill executions indicate that SKILL.md instructions are drifting from
-what the pipeline actually needs.
+Asks whether changing a skill's instructions makes its stage worse (#1900).
 
-**Scoring**: Starts at 100 (no friction) and subtracts a severity-weighted
-penalty per recurring amendment proposal (high −20, medium −10, low −5),
-clamped to [0, 100]. With no assessment data, the dimension reports a perfect
-score flagged as insufficient data.
+**Input**: `<git-dir>/nightgauge-worktree/health/skill-effectiveness.jsonl`,
+the latest record per (`skill_file`, `commit_hash`) whose `changed_at` falls
+in the period; fields `classification`, `confidence`, `delta`, `before_*`,
+`after_*`. `PostPipelineAnalyzer` writes it through
+`SkillEffectivenessWriter.upsertRecords`.
 
-**Findings emitted**:
+**Retention**: the file is a snapshot, not a log. Each write keeps one record
+per skill change (latest `analyzed_at`) and drops changes older than 90 days.
+The former append-per-analysis grew it to tens of megabytes of superseded
+duplicates; the first write after upgrading collapses such a file. Reads
+stream it, so memory is bounded by distinct changes, not file size.
 
-- Recurring friction in a specific skill (per amendment proposal, with the
-  affected SKILL.md named)
+**Sample**: classified changes (`effective`, `neutral`, `regression`).
+`insufficient_data` changes are counted as `unclassifiedChanges`, not samples.
+At least `minimumSampleSizes.basic` (5) are required.
 
-See [docs/SKILL_SELF_ASSESSMENT.md](SKILL_SELF_ASSESSMENT.md) for the
-underlying assessment/synthesis pipeline and scoring table.
+**Scoring**: share of classified changes that did not regress their stage's
+success rate, × 100.
+
+**Findings emitted**: one per regressing skill change, naming the SKILL.md and
+commit.
 
 ---
 

@@ -42,9 +42,6 @@ function dataset(records: ExecutionHistoryRecord[]): HealthAnalysisInput {
   return {
     executionHistory: records,
     healthScores: [],
-    selfTuningLog: [],
-    experimentResults: [],
-    healthReports: [],
   };
 }
 

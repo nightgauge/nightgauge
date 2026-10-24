@@ -9,7 +9,7 @@
  */
 
 import type { ExecutionHistoryRecord } from "../types.js";
-import type { WorkflowCalibrationSignal } from "../WorkflowOutcomeAnalyzer.js";
+import type { SkillEffectivenessEntry } from "../skill-effectiveness-types.js";
 
 // ── Dimension Identifiers ─────────────────────────────────────────
 
@@ -85,6 +85,8 @@ export interface DimensionResult {
   metrics: Record<string, number>;
   hasEnoughData: boolean;
   sampleSize: number;
+  /** Why hasEnoughData is false (named in the series' excluded_dimensions, #1900). */
+  insufficientDataReason?: string;
   periodComparison?: PeriodComparison;
 }
 
@@ -194,31 +196,44 @@ export interface HealthAnalysisResult {
 export interface HealthAnalysisInput {
   executionHistory: ExecutionHistoryRecord[];
   healthScores: HealthScoreEntry[];
-  selfTuningLog: SelfTuningEntry[];
-  experimentResults: ExperimentEntry[];
-  healthReports: HealthReportEntry[];
-  recommendationHistory?: RecommendationHistoryEntry[];
-  /** Skill self-assessment synthesis result (Issue #1986, #2320) */
-  skillAssessmentSynthesis?: {
-    recordsAnalyzed: number;
-    totalFrictionItems: number;
-    proposals: Array<{
-      skillFile: string;
-      findingPattern: string;
-      occurrenceCount: number;
-      severity: "high" | "medium" | "low";
-      proposedChange: string;
-    }>;
-    isolatedCount: number;
-  };
   /**
-   * Aggregate V4 workflow-orchestration calibration signal folded from the
-   * canonical schemaVersion-4 WorkflowEvent node tree (Issue #3915, epic #3899).
-   * Optional — present only once a run exercises multi-agent fan-out. Feeds the
-   * learning-effectiveness dimension (judge-rejection rate, fan-out efficiency,
-   * native-vs-fanout cost delta).
+   * Learning-effectiveness inputs (#1900). Absent → the dimension reports
+   * `hasEnoughData: false` naming the missing file.
    */
-  workflowCalibration?: WorkflowCalibrationSignal;
+  learningSignals?: LearningSignals;
+  /**
+   * Skill-drift input (#1900): the latest record per (skill_file, commit_hash)
+   * from `<git-dir>/nightgauge-worktree/health/skill-effectiveness.jsonl`
+   * (`SkillEffectivenessAnalyzer` entries, persisted by the extension),
+   * restricted to changes inside the analysis period. Absent → excluded.
+   */
+  skillEffectiveness?: SkillEffectivenessEntry[];
+}
+
+/**
+ * The predicted/actual pair fields of one row of
+ * `<clone>/pipeline/history/outcomes.jsonl` (Go `learning.Outcome`). An empty
+ * string is an unknown: it is excluded from every accuracy denominator (#340)
+ * and counted as a coverage gap (#304), never as a miss.
+ */
+export interface LearningOutcomeEntry {
+  /** `completedAt` */
+  completedAt: string;
+  /** `predictedModel` — registry band, or "" */
+  predictedModel: string;
+  /** `actualModel` — band the implementation stage served, or "" */
+  actualModel: string;
+  /** `predictedSize` — small|medium|large, or "" */
+  predictedSize: string;
+  /** `actualSize` — small|medium|large measured from lines changed, or "" */
+  actualSize: string;
+}
+
+export interface LearningSignals {
+  /** Outcome rows inside the analysis period. */
+  outcomes: LearningOutcomeEntry[];
+  /** `updated_at` of `<clone>/pipeline/calibration.json`; null when absent. */
+  calibrationUpdatedAt: string | null;
 }
 
 export interface HealthScoreEntry {
@@ -228,42 +243,6 @@ export interface HealthScoreEntry {
   components: Record<string, number>;
   costUsd: number;
   issueNumber: number;
-}
-
-export interface SelfTuningEntry {
-  timestamp: string;
-  field: string;
-  previousValue: number | string;
-  newValue: number | string;
-  rationale: string;
-  trigger: string;
-}
-
-export interface ExperimentEntry {
-  experimentName: string;
-  group: "control" | "treatment";
-  issueNumber: number;
-  stage: string;
-  success: boolean;
-  costUsd: number;
-  durationMs: number;
-  recordedAt: string;
-}
-
-export interface HealthReportEntry {
-  createdAt: string;
-  periodDays: number;
-  summary: {
-    totalCostUsd: number;
-    avgCostPerRun: number;
-    totalRuns: number;
-    successRate: number;
-    avgDurationMinutes: number;
-    totalTokens: number;
-    cacheHitRate: number;
-  };
-  findingCount: number;
-  recommendationCount: number;
 }
 
 // ── Finding-to-Issue Engine Types ─────────────────────────────────

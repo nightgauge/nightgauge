@@ -18,8 +18,7 @@ import type { AggregatedDataset } from "../types/aggregation";
 import type {
   HealthAnalysisInput,
   HealthScoreEntry,
-  ExperimentEntry,
-  HealthReportEntry,
+  SkillEffectivenessEntry,
 } from "@nightgauge/sdk";
 import type { ExecutionHistoryRecord as SdkExecutionHistoryRecord } from "@nightgauge/sdk";
 import { flattenRunRecords } from "@nightgauge/sdk";
@@ -51,40 +50,26 @@ export function buildHealthInput(dataset: AggregatedDataset): HealthAnalysisInpu
     issueNumber: s.issueNumber,
   }));
 
-  // Map ExperimentOutcome → ExperimentEntry (snake_case → camelCase)
-  const experimentResults: ExperimentEntry[] = dataset.experimentResults.map((e) => ({
-    experimentName: e.experiment_name,
-    group: e.group,
-    issueNumber: e.issue_number,
-    stage: e.stage,
-    success: e.success,
-    costUsd: e.cost_usd,
-    durationMs: e.duration_ms,
-    recordedAt: e.recorded_at,
-  }));
-
-  // Map HealthReport → HealthReportEntry (snake_case summary → camelCase)
-  const healthReports: HealthReportEntry[] = dataset.healthReports.map((r) => ({
-    createdAt: r.created_at,
-    periodDays: r.analysis_period.period_days,
-    summary: {
-      totalCostUsd: r.summary.total_cost_usd,
-      avgCostPerRun: r.summary.avg_cost_per_run,
-      totalRuns: r.summary.total_runs,
-      successRate: r.summary.success_rate,
-      avgDurationMinutes: r.summary.avg_duration_minutes,
-      totalTokens: r.summary.total_tokens,
-      cacheHitRate: r.summary.cache_hit_rate,
-    },
-    findingCount: r.findings.length,
-    recommendationCount: r.recommendations.length,
-  }));
+  // Learning-effectiveness and skill-drift inputs (#1900). `null` (file
+  // absent) stays absent so the dimension names the missing input.
+  const skillEffectiveness: SkillEffectivenessEntry[] | undefined =
+    dataset.skillEffectiveness?.map((r) => ({
+      skillFile: r.skill_file,
+      stage: r.stage,
+      commitHash: r.commit_hash,
+      changedAt: r.changed_at,
+      beforeWindow: { sampleCount: r.before_sample_count, successRate: r.before_success_rate },
+      afterWindow: { sampleCount: r.after_sample_count, successRate: r.after_success_rate },
+      delta: r.delta,
+      classification: r.classification,
+      confidence: r.confidence,
+      analyzedAt: r.analyzed_at,
+    })) ?? undefined;
 
   return {
     executionHistory,
     healthScores,
-    selfTuningLog: [],
-    experimentResults,
-    healthReports,
+    learningSignals: dataset.learningSignals ?? undefined,
+    skillEffectiveness,
   };
 }

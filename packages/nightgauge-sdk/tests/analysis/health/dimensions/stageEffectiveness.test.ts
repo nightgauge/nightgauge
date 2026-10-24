@@ -26,9 +26,6 @@ function makeInput(records: ReturnType<typeof makeExecutionRecord>[]): HealthAna
   return {
     executionHistory: records,
     healthScores: [],
-    selfTuningLog: [],
-    experimentResults: [],
-    healthReports: [],
   };
 }
 

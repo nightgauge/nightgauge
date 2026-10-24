@@ -28,9 +28,6 @@ function datasetWith(records: HealthAnalysisInput["executionHistory"]): HealthAn
   return {
     executionHistory: records,
     healthScores: [],
-    selfTuningLog: [],
-    experimentResults: [],
-    healthReports: [],
   };
 }
 

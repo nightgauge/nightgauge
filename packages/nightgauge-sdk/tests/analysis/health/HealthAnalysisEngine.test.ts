@@ -272,8 +272,13 @@ describe("HealthAnalysisEngine.analyze() — minimal dataset", () => {
     const engine = new HealthAnalysisEngine();
     const result = engine.analyze(makeMinimalDataset(2));
 
-    expect(result.overallScore).toBeGreaterThanOrEqual(0);
-    expect(result.overallScore).toBeLessThanOrEqual(100);
+    // Too little data for any dimension is N/A, never a number (#1197, #1900).
+    if (result.overallScore === null) {
+      expect(result.overallStatus).toBe("no-data");
+    } else {
+      expect(result.overallScore).toBeGreaterThanOrEqual(0);
+      expect(result.overallScore).toBeLessThanOrEqual(100);
+    }
   });
 
   it("dimensions report sampleSize matching input record count", () => {
@@ -598,13 +603,14 @@ describe("HealthAnalysisEngine — summary generation", () => {
     expect(result.summary).toMatch(/^Pipeline health:/);
   });
 
-  it('summary contains "X dimension(s) analyzed" when at least one has data', () => {
+  it('summary contains "X of 8 dimension(s) contributing" and names each exclusion', () => {
     const engine = new HealthAnalysisEngine();
     const result = engine.analyze(makeDataset());
 
     const analyzed = Object.values(result.dimensions).filter((d) => d?.hasEnoughData).length;
-    if (analyzed > 0) {
-      expect(result.summary).toContain(`${analyzed} dimension(s) analyzed`);
+    expect(result.summary).toContain(`${analyzed} of 8 dimension(s) contributing`);
+    for (const d of Object.values(result.dimensions)) {
+      if (d && !d.hasEnoughData) expect(result.summary).toContain(d.dimension);
     }
   });
 
@@ -766,20 +772,13 @@ describe("HealthAnalysisEngine — integration: full health check flow", () => {
     expect(lowCacheFinding).toBeDefined();
   });
 
-  it("learning-effectiveness detects worsening health scores for degrading dataset", () => {
+  it("learning-effectiveness detects poor prediction accuracy for degrading dataset", () => {
     const engine = new HealthAnalysisEngine();
     const result = engine.analyze(makeDegradingDataset());
 
     const selfResult = result.dimensions["learning-effectiveness"];
-    // The degrading dataset has health scores: 80 → 72 → 60 → 50 → 40 (declining)
     expect(selfResult?.hasEnoughData).toBe(true);
-    const decliningFinding = selfResult?.findings.find(
-      (f) =>
-        f.title.toLowerCase().includes("declining") ||
-        f.title.toLowerCase().includes("worsening") ||
-        f.title.toLowerCase().includes("trajectory")
-    );
-    expect(decliningFinding).toBeDefined();
+    expect(selfResult?.findings.some((f) => /accuracy is low/.test(f.title))).toBe(true);
   });
 
   it("model-routing detects over-routing for degrading dataset", () => {

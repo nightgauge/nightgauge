@@ -354,20 +354,11 @@ export class PostPipelineAnalyzer {
                 };
               }),
             };
-            // Persist to JSONL
-            for (const entry of result.entries) {
-              // Normalize SDK enum values to schema expectations
-              const classification =
-                entry.classification === "insufficient_data"
-                  ? "insufficient_data"
-                  : (entry.classification as string);
-              const confidence =
-                entry.confidence === "insufficient_data"
-                  ? "insufficient_data"
-                  : (entry.confidence as string);
-
-              await SkillEffectivenessWriter.appendRecord(workspaceRoot, {
-                schema_version: "1",
+            // Persist to the snapshot (latest record per skill change, #1900)
+            await SkillEffectivenessWriter.upsertRecords(
+              workspaceRoot,
+              result.entries.map((entry) => ({
+                schema_version: "1" as const,
                 skill_file: entry.skillFile,
                 stage: entry.stage,
                 commit_hash: entry.commitHash,
@@ -377,12 +368,11 @@ export class PostPipelineAnalyzer {
                 after_sample_count: entry.afterWindow.sampleCount,
                 after_success_rate: entry.afterWindow.successRate,
                 delta: entry.delta,
-                classification: classification as
-                  "effective" | "regression" | "neutral" | "insufficient_data",
-                confidence: confidence as "insufficient_data" | "low" | "moderate",
+                classification: entry.classification,
+                confidence: entry.confidence,
                 analyzed_at: entry.analyzedAt,
-              });
-            }
+              }))
+            );
           }
         }
       } catch (err) {

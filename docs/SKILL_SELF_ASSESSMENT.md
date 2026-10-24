@@ -399,6 +399,12 @@ included.
 - [x] Per-skill friction trend via dimension sparklines (improving/degrading/stable)
 - [x] `skillAssessmentSynthesis` field on `HealthAnalysisInput` for data flow
 
+The health dimension no longer reads synthesis proposals: nothing populated
+`skillAssessmentSynthesis`, so `skill-drift` never had data. Since #1900 it is
+scored from `skill-effectiveness.jsonl` (per-change success-rate deltas); see
+[HEALTH_MONITORING.md § Skill Drift](HEALTH_MONITORING.md#8-skill-drift-skill-drift).
+Synthesis proposals still drive the `skill-drift` issues described above.
+
 ### Phase 4: Automated Issue Creation
 
 **Status: COMPLETE** — `create_issues` action mode reads config, filters by

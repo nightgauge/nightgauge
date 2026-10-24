@@ -19,6 +19,7 @@ import * as path from "node:path";
 import { ExperimentManager, type ExperimentOutcome } from "@nightgauge/sdk";
 
 import { ExecutionHistoryReader } from "../utils/executionHistoryReader";
+import { readLearningSignals, readSkillEffectiveness } from "../utils/healthLearningInputs";
 import { HealthScoreHistoryReader } from "../utils/healthScoreHistory";
 import type { ExecutionHistoryRecord } from "../schemas/executionHistory";
 import type { HealthScoreSnapshot } from "../schemas/healthScoreHistory";
@@ -127,6 +128,13 @@ export class DataAggregator {
     );
     const healthReports = this.extractResult(healthReportsResult, "healthReports", sourceWarnings);
 
+    // Learning-effectiveness and skill-drift inputs (#1900). Read separately:
+    // `null` means the file is absent, which the dimension reports by name.
+    const [learningSignals, skillEffectiveness] = await Promise.all([
+      readLearningSignals(workspaceRoot, filter).catch(() => null),
+      readSkillEffectiveness(workspaceRoot, filter).catch(() => null),
+    ]);
+
     const summary = this.computeSummary(executionHistory);
     const quality = this.computeQualityMetrics(
       filter,
@@ -147,6 +155,8 @@ export class DataAggregator {
       analysisReports,
       experimentResults,
       healthReports,
+      learningSignals,
+      skillEffectiveness,
       summary,
       quality,
     };

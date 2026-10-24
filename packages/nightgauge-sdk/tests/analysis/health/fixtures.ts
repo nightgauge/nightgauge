@@ -13,9 +13,6 @@ import type { ExecutionHistoryRecord } from "../../../src/analysis/types.js";
 import type {
   HealthAnalysisInput,
   HealthScoreEntry,
-  SelfTuningEntry,
-  ExperimentEntry,
-  HealthReportEntry,
   RecommendationHistoryEntry,
   HealthDimension,
   Severity,
@@ -86,59 +83,6 @@ export function makeHealthScoreEntry(overrides: Partial<HealthScoreEntry> = {}):
     },
     costUsd: 1.5,
     issueNumber: 100,
-    ...overrides,
-  };
-}
-
-// ── SelfTuningEntry ─────────────────────────────────────────────────
-
-export function makeSelfTuningEntry(overrides: Partial<SelfTuningEntry> = {}): SelfTuningEntry {
-  return {
-    timestamp: daysAgo(7),
-    field: "model_routing.complexity_threshold",
-    previousValue: 0.6,
-    newValue: 0.7,
-    rationale: "Increasing threshold to reduce under-routing failures",
-    trigger: "under-routing-detected",
-    ...overrides,
-  };
-}
-
-// ── ExperimentEntry ─────────────────────────────────────────────────
-
-export function makeExperimentEntry(overrides: Partial<ExperimentEntry> = {}): ExperimentEntry {
-  return {
-    experimentName: "prompt-v2-test",
-    group: "treatment",
-    issueNumber: 100,
-    stage: "feature-dev",
-    success: true,
-    costUsd: 0.3,
-    durationMs: 90000,
-    recordedAt: daysAgo(4),
-    ...overrides,
-  };
-}
-
-// ── HealthReportEntry ───────────────────────────────────────────────
-
-export function makeHealthReportEntry(
-  overrides: Partial<HealthReportEntry> = {}
-): HealthReportEntry {
-  return {
-    createdAt: daysAgo(1),
-    periodDays: 7,
-    summary: {
-      totalCostUsd: 15.0,
-      avgCostPerRun: 1.5,
-      totalRuns: 10,
-      successRate: 0.8,
-      avgDurationMinutes: 25,
-      totalTokens: 500000,
-      cacheHitRate: 0.35,
-    },
-    findingCount: 3,
-    recommendationCount: 2,
     ...overrides,
   };
 }
@@ -223,42 +167,28 @@ export function makeDataset(overrides: Partial<HealthAnalysisInput> = {}): Healt
         issueNumber: 103,
       }),
     ],
-    selfTuningLog: [
-      makeSelfTuningEntry({ timestamp: daysAgo(15) }),
-      makeSelfTuningEntry({
-        timestamp: daysAgo(8),
-        field: "retry.max_retries",
-        previousValue: 2,
-        newValue: 3,
-      }),
-    ],
-    experimentResults: [
-      makeExperimentEntry({
-        group: "control",
-        success: true,
-        recordedAt: daysAgo(10),
-      }),
-      makeExperimentEntry({
-        group: "treatment",
-        success: true,
-        recordedAt: daysAgo(10),
-      }),
-      makeExperimentEntry({
-        group: "control",
-        success: false,
-        recordedAt: daysAgo(9),
-      }),
-      makeExperimentEntry({
-        group: "treatment",
-        success: true,
-        recordedAt: daysAgo(9),
-      }),
-    ],
-    healthReports: [
-      makeHealthReportEntry({ createdAt: daysAgo(14), recommendationCount: 5 }),
-      makeHealthReportEntry({ createdAt: daysAgo(7), recommendationCount: 3 }),
-      makeHealthReportEntry({ createdAt: daysAgo(1), recommendationCount: 2 }),
-    ],
+    learningSignals: {
+      outcomes: Array.from({ length: 8 }, (_, i) => ({
+        completedAt: daysAgo(20 - i * 2),
+        predictedModel: "sonnet",
+        actualModel: "sonnet",
+        predictedSize: "medium",
+        actualSize: i === 0 ? "large" : "medium",
+      })),
+      calibrationUpdatedAt: daysAgo(5),
+    },
+    skillEffectiveness: Array.from({ length: 6 }, (_, i) => ({
+      skillFile: `skills/example-${i}/SKILL.md`,
+      stage: "feature-dev",
+      commitHash: `abc${i}`,
+      changedAt: daysAgo(20 - i),
+      beforeWindow: { sampleCount: 10, successRate: 0.8 },
+      afterWindow: { sampleCount: 10, successRate: 0.85 },
+      delta: 0.05,
+      classification: i === 0 ? ("effective" as const) : ("neutral" as const),
+      confidence: "low" as const,
+      analyzedAt: daysAgo(1),
+    })),
     ...overrides,
   };
 }
@@ -270,9 +200,6 @@ export function makeEmptyDataset(): HealthAnalysisInput {
   return {
     executionHistory: [],
     healthScores: [],
-    selfTuningLog: [],
-    experimentResults: [],
-    healthReports: [],
   };
 }
 
@@ -297,9 +224,6 @@ export function makeMinimalDataset(count: number = 1): HealthAnalysisInput {
             makeHealthScoreEntry({ timestamp: daysAgo(1), score: 72 }),
           ]
         : [],
-    selfTuningLog: [],
-    experimentResults: [],
-    healthReports: [],
   };
 }
 
@@ -378,44 +302,27 @@ export function makeDegradingDataset(): HealthAnalysisInput {
         issueNumber: 304,
       }),
     ],
-    selfTuningLog: [makeSelfTuningEntry({ timestamp: daysAgo(20) })],
-    experimentResults: [],
-    healthReports: [
-      makeHealthReportEntry({
-        createdAt: daysAgo(21),
-        recommendationCount: 2,
-        findingCount: 2,
-      }),
-      makeHealthReportEntry({
-        createdAt: daysAgo(14),
-        recommendationCount: 4,
-        findingCount: 5,
-      }),
-      makeHealthReportEntry({
-        createdAt: daysAgo(7),
-        recommendationCount: 6,
-        findingCount: 7,
-      }),
-      makeHealthReportEntry({
-        createdAt: daysAgo(1),
-        recommendationCount: 8,
-        findingCount: 9,
-      }),
-    ],
-    recommendationHistory: [
-      makeRecommendationEntry({
-        created_at: daysAgo(20),
-        issue_state: "open",
-        severity: "high",
-      }),
-      makeRecommendationEntry({
-        created_at: daysAgo(15),
-        finding_id: "ch-1",
-        dimension: "cost-health",
-        title: "Cost anomaly",
-        issue_state: "open",
-        severity: "high",
-      }),
-    ],
+    learningSignals: {
+      outcomes: Array.from({ length: 10 }, (_, i) => ({
+        completedAt: daysAgo(28 - i * 2),
+        predictedModel: "sonnet",
+        actualModel: i < 3 ? "sonnet" : "opus",
+        predictedSize: "small",
+        actualSize: i < 3 ? "small" : "large",
+      })),
+      calibrationUpdatedAt: daysAgo(60),
+    },
+    skillEffectiveness: Array.from({ length: 6 }, (_, i) => ({
+      skillFile: `skills/example-${i}/SKILL.md`,
+      stage: "feature-dev",
+      commitHash: `def${i}`,
+      changedAt: daysAgo(25 - i),
+      beforeWindow: { sampleCount: 20, successRate: 0.9 },
+      afterWindow: { sampleCount: 10, successRate: i < 4 ? 0.5 : 0.9 },
+      delta: i < 4 ? -0.4 : 0,
+      classification: i < 4 ? ("regression" as const) : ("neutral" as const),
+      confidence: "moderate" as const,
+      analyzedAt: daysAgo(1),
+    })),
   };
 }
