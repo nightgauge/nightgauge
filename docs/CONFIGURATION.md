@@ -7735,10 +7735,8 @@ autonomous:
     - blocked
   pickup_backlog: false # Dispatch Backlog items after all Ready items done (default: false)
   auto_actionable: false # Move auto-refined issues directly to Ready (default: false)
-  trusted_author_associations: # GitHub associations trusted for autonomous processing
-    - OWNER # (default: OWNER, MEMBER, COLLABORATOR)
-    - MEMBER
-    - COLLABORATOR
+  trusted_bots: # Bots trusted by authorship (default: nightgauge-pipeline[bot])
+    - nightgauge-pipeline[bot]
   refinement_enabled: true # Enable autonomous refinement scheduler (default: true)
   refinement_interval: 60s # Time between refinement scans, min 30s (default: 60s)
   refinement_max_concurrent: 1 # Max concurrent refinement operations, 1-3 (default: 1)
@@ -7977,36 +7975,35 @@ review (`false`).
   autonomous scheduler on the next scan cycle. Use for high-trust workflows
   where refinement quality is well-established.
 
-### trusted_author_associations
+### trusted_bots
 
-| Key                           | Type     | Default                               | Env Variable |
-| ----------------------------- | -------- | ------------------------------------- | ------------ |
-| `trusted_author_associations` | string[] | `["OWNER", "MEMBER", "COLLABORATOR"]` | (none)       |
+| Key            | Type     | Default                        | Env Variable |
+| -------------- | -------- | ------------------------------ | ------------ |
+| `trusted_bots` | string[] | `["nightgauge-pipeline[bot]"]` | (none)       |
 
-Overrides the set of GitHub `author_association` values trusted to reach
-autonomous refinement and dispatch (#270). A stranger's issue on a public repo
-has no privilege to reach these entry points purely because it landed on the
-board — the author-trust gate fails closed: an issue whose author is not in
-this set (or the default) is skipped at every gate (refinement candidate
-selection, Backlog→Ready promotion, and dispatch), and a `review_required`
-card is raised in the Action Center so a maintainer can review and manually
-promote it if the author should be trusted.
+The bot accounts whose issues the pipeline works by authorship alone (#2130),
+named after `claude-code-action`'s `allowed_bots`. Every other issue must be
+vouched for by a user with write access or higher to the repository: they
+authored it, or they applied `pipeline:approved` after its last edit. See
+[AUTONOMOUS_ORCHESTRATOR.md § Eligibility Gate](AUTONOMOUS_ORCHESTRATOR.md#eligibility-gate-270-2130).
 
-When set, this list **fully replaces** the default set — it does not merge
-with it. Values are matched case-insensitively against GitHub's
-`author_association` enum: `OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`,
-`FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`, `MANNEQUIN`.
+Entries may be written `name`, `name[bot]` or `app/name`. A listed bot is not
+asked for its repository permission and can never approve an issue. Approval
+by `pipeline:approved` exists only for owners with a `github_auth.app`
+installation, and any edit after approval voids it. A user
+account that shares a bot's name is not the bot. When set, the list replaces
+the default, so list your own pipeline App if it has another name:
 
 ```yaml
 autonomous:
-  # Also trust first-time contributors — only for repos with a strong
-  # review process downstream of the autonomous pipeline.
-  trusted_author_associations: ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]
+  # github-actions[bot] is opt-in: any workflow can act as it.
+  trusted_bots: ["my-pipeline-app[bot]", "github-actions[bot]"]
 ```
 
-**Why fail closed**: an empty, unknown, or future GitHub association value is
-always treated as untrusted — never soften this to fail-open. See
-[standards/security.md](../standards/security.md) for the full threat model.
+`trusted_author_associations` was removed by #2130: a config that still sets
+it fails to load with an error naming the removal. `author_association` is
+not a permission: it calls a read-only outside collaborator `COLLABORATOR`
+and every org member `MEMBER`.
 
 ### refinement_enabled
 

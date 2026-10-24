@@ -60,8 +60,9 @@ func TestMergedWorktreeSweep_DefaultBranchReclaimIsNotLoggedAsMerged(t *testing.
 	root, wt := defaultBranchWorktreeRepo(t, 410)
 
 	as := &AutonomousScheduler{
-		scheduler: &Scheduler{workspaceRoot: root},
-		state:     &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		scheduler:         &Scheduler{workspaceRoot: root},
+		state:             &AutonomousState{},
 	}
 
 	out := captureLog(t, func() { as.sweepMergedWorktrees() })

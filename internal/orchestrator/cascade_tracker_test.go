@@ -258,7 +258,8 @@ func TestOnPipelineComplete_CascadeTripsAndPauses(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			Running:               []RunningItem{},
@@ -315,7 +316,8 @@ func TestOnPipelineComplete_TwoFailuresPlusOneOutsideWindow_NoTrip(t *testing.T)
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
 	tracker := NewCascadeTracker(CascadeTrackerConfig{Threshold: 3, Window: 5 * time.Millisecond})
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{},
@@ -353,7 +355,8 @@ func TestOnPipelineComplete_StallKillDoesNotFeedCascade(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{},
@@ -386,7 +389,8 @@ func TestResume_ClearsCascadeBreaker(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{},

@@ -77,6 +77,7 @@ func TestScheduler_PRMerge_PhantomSuccess_FailsPipeline(t *testing.T) {
 	issueSvc.addIssue("nightgauge", "test", 9100, &types.Issue{Number: 9100, State: "OPEN"})
 
 	s := &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 1, MaxEscalationsPerStage: 0}),
@@ -160,6 +161,7 @@ func (f *fakeStageRunnerCounter) RunStage(_ context.Context, params StageRunPara
 // dependencies.
 func newSchedulerForDeterministicTest() *Scheduler {
 	return &Scheduler{
+		trustGate:    allWritersGate(),
 		retryEngine:  NewRetryEngine(DefaultRetryConfig()),
 		budgetEngine: NewBudgetEnforcer(DefaultBudgetConfig()),
 	}

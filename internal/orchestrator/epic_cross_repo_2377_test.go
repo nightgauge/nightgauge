@@ -349,7 +349,7 @@ func readyBoardNode(id string, number int, repo, title, labels, subIssues, block
 			"__typename": "Issue", "number": %d, "title": %q, "state": "OPEN",
 			"url": "https://github.com/%s/issues/%d",
 			"createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z",
-			"authorAssociation": "OWNER",
+			"author": {"login": "maintainer", "__typename": "User"},
 			"labels": {"nodes": [%s]},
 			"repository": {"nameWithOwner": %q},
 			"subIssues": {"nodes": [%s]},
@@ -381,7 +381,7 @@ func TestPickNext_EpicBlockingHoldsOnlyTheEpicsOwnSubIssue(t *testing.T) {
 	}))
 	defer srv.Close()
 	client := gh.NewClientWithURL("test-token", srv.URL)
-	s := &Scheduler{client: client, boardSvc: gh.NewBoardService(client, "example-org", 1), repoRunning: map[string]int{}}
+	s := &Scheduler{client: client, boardSvc: gh.NewBoardService(client, "example-org", 1), repoRunning: map[string]int{}, trustGate: allWritersGate()}
 
 	item, err := s.PickNext(context.Background())
 	if err != nil {
@@ -648,7 +648,7 @@ func TestQueueBlockers_AreReadAndMatchedInTheirOwnRepository(t *testing.T) {
 	})
 
 	dequeue := func(queue []QueueItem, running []RunningItem) []string {
-		s := &Scheduler{repoRunning: map[string]int{}, mergeLocks: map[string]*sync.Mutex{}, maxPerRepo: 4}
+		s := &Scheduler{repoRunning: map[string]int{}, mergeLocks: map[string]*sync.Mutex{}, maxPerRepo: 4, trustGate: allWritersGate()}
 		s.queue = append([]QueueItem(nil), queue...)
 		var got []string
 		for _, it := range s.DequeueIndependent(context.Background(), 4, running) {
@@ -738,6 +738,7 @@ func TestRunPipeline_PromptCarriesTheParentsEpicContextFromItsOwnRepository(t *t
 
 	runner := &promptCapturingRunner{}
 	s := &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

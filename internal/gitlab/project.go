@@ -811,12 +811,12 @@ func (p *ProjectService) SnapshotFields(ctx context.Context) (*forgetypes.Fields
 // AddBlockedByNumber is intentionally not implemented in this adapter — the
 // blocking-link surface lands in #3358 alongside sub-issue support. Returns
 // ErrUnsupported with the tracking issue so callers can branch.
-func (p *ProjectService) AddBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error {
+func (p *ProjectService) AddBlockedByNumber(ctx context.Context, blocked, blocker forge.IssueRef) error {
 	return unsupported("ProjectService.AddBlockedByNumber", "#3358")
 }
 
 // RemoveBlockedByNumber is the inverse stub; lands with #3358.
-func (p *ProjectService) RemoveBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error {
+func (p *ProjectService) RemoveBlockedByNumber(ctx context.Context, blocked, blocker forge.IssueRef) error {
 	return unsupported("ProjectService.RemoveBlockedByNumber", "#3358")
 }
 

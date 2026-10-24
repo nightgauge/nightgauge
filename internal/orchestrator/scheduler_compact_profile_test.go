@@ -76,6 +76,7 @@ func (r *profileCapturingRunner) dispatched(stage state.PipelineStage) bool {
 
 func newProfileTestScheduler(root string, runner StageRunner, adapter adapters.SkillRunner) *Scheduler {
 	return &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

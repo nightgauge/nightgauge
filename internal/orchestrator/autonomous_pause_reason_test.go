@@ -16,6 +16,7 @@ import (
 
 func TestPauseRecordsReasonAndTriggeredBy(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status: "running",
 		},
@@ -43,6 +44,7 @@ func TestPauseRecordsReasonAndTriggeredBy(t *testing.T) {
 
 func TestResumeClearsPauseProvenance(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status:           "paused",
 			PauseReason:      "haltQueueOnSlotFailure: #3239 failed at pr-merge",
@@ -75,6 +77,7 @@ func TestResumeClearsPauseProvenance(t *testing.T) {
 
 func TestOnStatusChangeFiresOnPause(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status: "running",
 		},
@@ -113,6 +116,7 @@ func TestOnStatusChangeFiresOnPause(t *testing.T) {
 
 func TestOnStatusChangeFiresOnResume(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status: "paused",
 		},
@@ -154,6 +158,7 @@ func TestOnStatusChangeFiresOnResume(t *testing.T) {
 func TestOnStatusChangeNotFiredWhenStatusUnchanged(t *testing.T) {
 	// Pause() is a no-op when status isn't "running"; no event should fire.
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status: "complete",
 		},
@@ -185,6 +190,7 @@ func TestPauseReasonDefaultsAreFriendly(t *testing.T) {
 	// does NOT inject defaults — that's the IPC handler's job per #3251 so
 	// that direct Go callers can record their own provenance).
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status: "running",
 		},
@@ -296,8 +302,9 @@ func TestPauseLatchesOnlyMachineRaisedHalts(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			as := &AutonomousScheduler{
-				state:    &AutonomousState{Status: "running"},
-				rescanCh: make(chan struct{}, 1),
+				trustGateOverride: allWritersGate(),
+				state:             &AutonomousState{Status: "running"},
+				rescanCh:          make(chan struct{}, 1),
 			}
 			as.Pause("reason", tc.trigger)
 			if as.state.Status != "paused" {
@@ -322,6 +329,7 @@ func TestPauseLatchesOnlyMachineRaisedHalts(t *testing.T) {
 // together, by Resume, from any status a shutdown might have left behind.
 func TestResumeIsTheOnlyLatchClearer(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			// Stop() ran after the halt: the exit status is "stopped", the
 			// halt is still in force. Resume must still act.

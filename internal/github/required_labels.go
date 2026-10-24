@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/trust"
 )
 
 // RequiredLabel is a label the Go layer READS at runtime. The distinction
@@ -103,6 +104,15 @@ var RequiredLabels = []RequiredLabel{
 		// cannot drift.
 		Name:        LabelArchitectureApproved,
 		Description: "Human-approved architectural decision — architecture gate passes",
+		Color:       "0e8a16",
+	},
+	{
+		// The eligibility gate (#2130) reads who applied it and when: an issue
+		// opened by someone without write access is worked only once a user
+		// with write access applies it. Absent from a repo, an outsider's issue
+		// cannot be approved at all.
+		Name:        trust.ApprovedLabel,
+		Description: "Maintainer approval for the pipeline to work an issue opened by a non-writer",
 		Color:       "0e8a16",
 	},
 }

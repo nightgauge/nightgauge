@@ -30,6 +30,7 @@ nightgauge forge repo view --repo "$REPO" --json | jq -r .owner   # --repo is re
 # Issues
 nightgauge forge issue view <number> --repo "$REPO" --json
 nightgauge forge issue view <number> --repo "$REPO" --json | jq -r .nodeId
+nightgauge forge issue view <number> --repo "$REPO" --json --comments  # only writers' (and trusted bots') comments
 nightgauge forge issue create --repo-id <REPO_NODE_ID> --title "…" --body "$(cat body.md)" \
   --labels type:bug,priority:high
 nightgauge forge issue edit --node-id <NODE_ID> --body "Updated body"

@@ -77,7 +77,9 @@ if [ -f "$FEEDBACK_FILE" ]; then
   HAS_AMBIGUOUS=$(printf '%s\n' "$SIGNALS" | jq '[.[] | select(.signal_type == "ACCEPTANCE_CRITERIA_AMBIGUOUS")] | length')
   if [ "$HAS_AMBIGUOUS" -gt 0 ]; then
     echo "**ACCEPTANCE_CRITERIA_AMBIGUOUS**: You cannot change the acceptance"
-    echo "criteria. Read the original issue body and any comments. Make an"
+    echo "criteria. Read the original issue body and its comments, fetched with"
+    echo "\`nightgauge forge issue view <N> --repo <owner/repo> --json --comments\`"
+    echo "(only comments by users with write access are returned). Make an"
     echo "explicit interpretation decision and document it in the plan with"
     echo "rationale, so feature-validate knows exactly what to check."
     echo ""

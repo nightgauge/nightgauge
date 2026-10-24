@@ -32,6 +32,7 @@ func newStartupGraphScheduler(t *testing.T) (*AutonomousScheduler, *countingBoar
 		{Owner: "O", Name: "c", Project: 7},
 	}
 	as := NewAutonomousScheduler(nil, nil, repos, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	board := &countingBoard{}
 	// The default provider is what production uses; only the board behind
 	// it is substituted, so the build path under test is the real one.

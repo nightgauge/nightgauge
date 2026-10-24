@@ -103,6 +103,56 @@ changelog, and the release workflow refuses a tag that does not.
   parent session carried on and exited 0, yet the stage was marked failed
   with `[adapter-permission-rejected]`. A rejection the parent session itself
   receives still fails the stage (#1744).
+- **`nightgauge issue add-blocked-by` accepts a blocker in another
+  repository.** The blocker argument was read as a bare number in `--repo`, so
+  `add-blocked-by 692 acme/api#1253` failed with "invalid
+  blocker issue number" even though the planning skill tells operators to use
+  the verb for cross-repository blockers. The blocker may now be a number in
+  `--repo`, `owner/repo#N`, `repo#N` (a workspace repository's short name, else
+  that repository under `--owner`) or an issue URL; `remove-blocked-by` takes
+  the same forms. The blocker is resolved in its own repository, and the
+  parent-epic guard compares against that repository, so an epic elsewhere is
+  refused as its own sub-issue's blocker while a same-numbered issue is not.
+  (#1508)
+
+### Security
+
+- **The pipeline works an issue only when someone with write access vouches
+  for it.** Trust used to come from the author's `author_association`, which
+  calls a read-only outside collaborator `COLLABORATOR` and every org member
+  `MEMBER`. It also ignored who approved an issue, let anyone's comments reach
+  the model, and was not checked on a manual dispatch at all. Now an issue is
+  eligible only when its author has `admin`, `maintain` or `write` access to
+  the repository. Where the pipeline runs as a GitHub App, an issue is also
+  eligible when such a user applied the new `pipeline:approved` label and
+  nothing edited the issue afterwards. No bot's label counts, so a label the
+  pipeline's own stages apply never approves anything. On a personal token
+  label approval is unavailable, because a label the stages applied could not
+  be told apart from the maintainer's. The same gate runs at refinement,
+  Backlog→Ready promotion, autonomous dispatch, the dispatch scan, the queue
+  (where every queued item claims a slot, whichever route queued it), wave
+  sub-issues, IPC `pipeline.runItem`, `nightgauge run <issue>`, before every
+  stage of a run, and when a stage reads its own issue. A refused manual
+  dispatch names the author, their permission and how to approve the issue. A
+  held queue item is released once someone vouches for it. Comments now reach
+  a stage only through `nightgauge forge issue view --json --comments`, which
+  drops those from users without write access and logs how many it dropped. A
+  failed permission lookup counts as no access. Lookups are cached per author
+  for one scheduler cycle.
+  - **New setting:** `autonomous.trusted_bots` (default: only the pipeline's
+    App) names the only bots trusted by authorship. `github-actions[bot]` is
+    opt-in, because any workflow can act as it. A label applied by any login a
+    stage on the machine can authenticate as (the `gh` keyring, an env token,
+    `github_user`) never approves, so a maintainer approves outsiders' issues
+    only from elsewhere; their own issues vouch by authorship.
+  - **Removed setting:** `autonomous.trusted_author_associations`. A config
+    that still sets it fails to load, with an error naming the replacement.
+  - **New report:** `nightgauge autonomous eligibility --all-open` runs the
+    gate over a repository's open issues without dispatching anything.
+  - **Label provisioning:** `nightgauge label ensure` and repo-init now create
+    `pipeline:approved`.
+  - **Fix:** the issue-refine skill's issue read, which always failed on a
+    `--json` value, now works (#2130).
 
 ## [0.7.2] - 2026-10-23
 

@@ -39,10 +39,9 @@ type Node struct {
 	// own; read the parent through EpicID, never as {Repo, EpicNumber}.
 	EpicRepo string `json:"epicRepo,omitempty"`
 	Weight   int    `json:"weight"` // size weight for critical path
-	// AuthorAssociation is the issue author's relationship to the repo
-	// (OWNER, MEMBER, COLLABORATOR, ...). Used by the autonomous pipeline's
-	// author-trust gate (#270) — empty/unknown values are untrusted.
-	AuthorAssociation string `json:"authorAssociation,omitempty"`
+	// AuthorLogin is the issue author's login (types.BoardItem.AuthorLogin),
+	// read by the eligibility gate (internal/trust, #2130).
+	AuthorLogin string `json:"authorLogin,omitempty"`
 }
 
 // ID returns the NodeID for this node.

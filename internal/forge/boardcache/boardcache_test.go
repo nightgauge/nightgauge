@@ -429,4 +429,52 @@ func (p *fakeProject) SyncStatus(context.Context, string, string, int, string) e
 	return p.err
 }
 
+func (p *fakeProject) AddBlockedByNumber(context.Context, forge.IssueRef, forge.IssueRef) error {
+	return p.err
+}
+
+func (p *fakeProject) RemoveBlockedByNumber(context.Context, forge.IssueRef, forge.IssueRef) error {
+	return p.err
+}
+
+// #1508: a blocked-by edge changes BlockedBy on the blocked issue's board item
+// and Blocking on the blocker's. When the two ends are in different
+// repositories the blocker's item can sit on a board this wrapper is not bound
+// to, so a cross-repository edge drops every board; a same-repository edge
+// drops only the bound one.
+func TestBlockedByEdgeInvalidatesTheBoardsOfBothEnds(t *testing.T) {
+	same := forge.IssueRef{Owner: "acme", Repo: "web", Number: 1}
+	for _, tc := range []struct {
+		name         string
+		blocker      forge.IssueRef
+		otherDropped bool
+		call         func(forge.ProjectService, context.Context, forge.IssueRef, forge.IssueRef) error
+	}{
+		{"add, same repo", forge.IssueRef{Owner: "acme", Repo: "web", Number: 2}, false, forge.ProjectService.AddBlockedByNumber},
+		{"add, other repo", forge.IssueRef{Owner: "acme", Repo: "api", Number: 2}, true, forge.ProjectService.AddBlockedByNumber},
+		{"add, other owner", forge.IssueRef{Owner: "other", Repo: "web", Number: 2}, true, forge.ProjectService.AddBlockedByNumber},
+		{"remove, same repo", forge.IssueRef{Owner: "ACME", Repo: "Web", Number: 2}, false, forge.ProjectService.RemoveBlockedByNumber},
+		{"remove, other repo", forge.IssueRef{Owner: "acme", Repo: "api", Number: 2}, true, forge.ProjectService.RemoveBlockedByNumber},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := New(time.Hour)
+			bound := WrapClient(c, &fakeClient{board: &countingBoard{items: sampleItems()}, project: &fakeProject{}}, "acme", 3)
+			ctx := context.Background()
+			if _, _, err := bound.Board().ListOpenItems(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := c.Wrap(&countingBoard{items: sampleItems()}, "other", 5).ListOpenItems(ctx); err != nil {
+				t.Fatal(err)
+			}
+			_ = tc.call(bound.Project(), ctx, same, tc.blocker)
+			if _, ok := c.Peek("acme", 3, "open"); ok {
+				t.Error("the bound board survived a blocked-by edge")
+			}
+			if _, ok := c.Peek("other", 5, "open"); ok != !tc.otherDropped {
+				t.Errorf("another board cached = %v, want %v", ok, !tc.otherDropped)
+			}
+		})
+	}
+}
+
 var _ = fmt.Sprintf

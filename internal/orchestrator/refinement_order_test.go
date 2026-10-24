@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -20,14 +21,14 @@ func boardNode(repo string, number int, status, priority string, labels ...strin
 	return &depgraph.Node{
 		Repo: repo, Number: number, Title: "issue", State: "OPEN",
 		BoardStatus: status, Priority: priority, Labels: labels,
-		AuthorAssociation: "OWNER",
+		AuthorLogin: "maintainer",
 	}
 }
 
 func unrefined(number int, labels ...string) gh.UnrefinedIssue {
 	return gh.UnrefinedIssue{
 		Number: number, Title: "issue", Labels: labels,
-		AuthorAssociation: "OWNER",
+		AuthorLogin: "maintainer",
 	}
 }
 
@@ -300,9 +301,9 @@ func tieredIssuesServer(t *testing.T) *httptest.Server {
 			"data": {"repository": {"issues": {
 				"pageInfo": {"hasNextPage": false, "endCursor": ""},
 				"nodes": [
-					{"number": 1, "title": "oldest, off board", "createdAt": "2026-01-01T00:00:00Z", "authorAssociation": "OWNER", "labels": {"nodes": []}},
-					{"number": 2, "title": "backlog with priority", "createdAt": "2026-01-02T00:00:00Z", "authorAssociation": "OWNER", "labels": {"nodes": []}},
-					{"number": 3, "title": "ready", "createdAt": "2026-01-03T00:00:00Z", "authorAssociation": "OWNER", "labels": {"nodes": []}}
+					{"number": 1, "title": "oldest, off board", "createdAt": "2026-01-01T00:00:00Z", "author": {"login": "maintainer", "__typename": "User"}, "labels": {"nodes": []}},
+					{"number": 2, "title": "backlog with priority", "createdAt": "2026-01-02T00:00:00Z", "author": {"login": "maintainer", "__typename": "User"}, "labels": {"nodes": []}},
+					{"number": 3, "title": "ready", "createdAt": "2026-01-03T00:00:00Z", "author": {"login": "maintainer", "__typename": "User"}, "labels": {"nodes": []}}
 				]
 			}}}
 		}`))
@@ -325,6 +326,7 @@ func TestRunRefinementCycle_RefinesInDispatchOrder(t *testing.T) {
 
 	client := gh.NewClientWithURL("test-token", srv.URL)
 	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir()})
+	sched.SetTrustGate(allWritersGate())
 	cfg := DefaultAutonomousConfig()
 	cfg.RefinementMaxConcurrent = 3
 	as := NewAutonomousScheduler(sched, client, []depgraph.RepoConfig{
@@ -371,6 +373,7 @@ func hookScheduler(t *testing.T, slots int) *AutonomousScheduler {
 	cfg.RefinementMaxConcurrent = slots
 	as := NewAutonomousScheduler(nil, nil, []depgraph.RepoConfig{{Owner: "o", Name: "r"}},
 		nil, cfg, t.TempDir())
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 	as.markRefinedFn = func(context.Context, string, string, int) error { return nil }
 	return as
@@ -493,23 +496,25 @@ func TestRefineBeforeDispatch_TruncatedLabelsFailClosed(t *testing.T) {
 	}
 }
 
-// TestRefineBeforeDispatch_UntrustedAuthorDispatchesUnrefined: the #270 gate is
-// not a slot question — a stranger's issue text never reaches the model, and
-// the dispatch decision is unaffected.
+// TestRefineBeforeDispatch_UntrustedAuthorDispatchesUnrefined: the
+// eligibility gate (#270, #2130) is not a slot question — text no writer
+// vouched for never reaches the model, and the dispatch decision is
+// unaffected.
 func TestRefineBeforeDispatch_UntrustedAuthorDispatchesUnrefined(t *testing.T) {
 	logs := withCapturedLog(t)
 	as := hookScheduler(t, 1)
+	as.trustGateOverride, _ = levelsGate(map[string]trust.Level{"maintainer": trust.LevelWrite, "stranger": trust.LevelRead})
 	as.WithRefinementRunner(func(_ context.Context, _, _ string, _ int) error {
 		t.Error("must not refine an untrusted author's issue")
 		return nil
 	})
 	g := hookGraph()
-	g.Nodes["o/r#7"].AuthorAssociation = "NONE"
+	g.Nodes["o/r#7"].AuthorLogin = "stranger"
 
 	if as.refineBeforeDispatch(context.Background(), g, hookItem) {
 		t.Fatal("hook must refuse an untrusted author")
 	}
-	if out := logs.String(); !strings.Contains(out, "untrusted author") {
+	if out := logs.String(); !strings.Contains(out, "@stranger has read access") {
 		t.Fatalf("expected the untrusted-author reason, got:\n%s", out)
 	}
 }

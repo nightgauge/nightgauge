@@ -60,11 +60,13 @@ func TestRunRefinementCycle_ReposShrinkMidScanDoesNotPanic(t *testing.T) {
 	cfg.RefinementBacklog = true
 	client := gh.NewClientWithURL("test-token", srv.URL)
 	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir()})
+	sched.SetTrustGate(allWritersGate())
 	as := NewAutonomousScheduler(sched, client, []depgraph.RepoConfig{
 		{Owner: "o", Name: "r1", Project: 1},
 		{Owner: "o", Name: "r2", Project: 2},
 		{Owner: "o", Name: "r3", Project: 3},
 	}, nil, cfg, t.TempDir())
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 	as.WithRefinementRunner(func(_ context.Context, _, _ string, _ int) error { return nil })
 
@@ -138,10 +140,12 @@ func TestRunRefinementCycle_OffsetDoesNotAdvanceOnSaturatedCycle(t *testing.T) {
 
 	client := gh.NewClientWithURL("test-token", srv.URL)
 	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir()})
+	sched.SetTrustGate(allWritersGate())
 	as := NewAutonomousScheduler(sched, client, []depgraph.RepoConfig{
 		{Owner: "o1", Name: "r1", Project: 1},
 		{Owner: "o2", Name: "r2", Project: 2},
 	}, nil, cfg, t.TempDir())
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 
 	var mu sync.Mutex

@@ -228,6 +228,7 @@ func TestAutonomousScheduler_SetDispatcher_RoutesThrough(t *testing.T) {
 
 	// Build a minimal scheduler — we only need enqueueItem to exercise the path.
 	as := &AutonomousScheduler{
+		trustGateOverride:    allWritersGate(),
 		dispatcher:           mock,
 		perIssueFailureCount: make(map[string]int),
 		retryBackoff:         make(map[string]retryPlan),
@@ -256,6 +257,7 @@ func TestAutonomousScheduler_SetDispatcher_NoDispatcherUsesLegacy(t *testing.T) 
 	var legacyCalled bool
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		// dispatcher is nil — should fall to onDispatch
 		onDispatch: func(owner, repo string, issueNumber int, title string) {
 			legacyCalled = true

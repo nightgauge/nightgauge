@@ -149,6 +149,7 @@ create_label "auto-process"          "8957e5" "Issue is queued for automatic pip
 create_label "owner-action"          "FBCA04" "Requires owner action (real account / external state)"
 create_label "blocked"               "B60205" "Waits on another issue or a decision; the scheduler skips it"
 create_label "approved:architecture" "0e8a16" "Human-approved architectural decision — architecture gate passes"
+create_label "pipeline:approved"     "0e8a16" "Maintainer approval for the pipeline to work an issue opened by a non-writer"
 
 # NOTE: Priority and Size are NOT created as labels.
 # They are set directly as project board fields (single-select) via GraphQL

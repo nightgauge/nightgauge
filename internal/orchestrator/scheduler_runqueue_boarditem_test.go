@@ -44,6 +44,7 @@ func runQueueOnce(t *testing.T, serverURL string) QueueRunSummary {
 	t.Helper()
 	client := gh.NewClientWithURL("test-token", serverURL)
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		client:      client,
 		boardSvc:    gh.NewBoardService(client, "o", 1),
 		owner:       "o",

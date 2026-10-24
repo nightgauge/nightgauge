@@ -2,6 +2,7 @@ package boardcache
 
 import (
 	"context"
+	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
@@ -178,14 +179,27 @@ func (p *invalidatingProject) SetEstimateFromLabels(ctx context.Context, owner, 
 	return p.ProjectService.SetEstimateFromLabels(ctx, owner, repo, issueNumber, labels, mapping)
 }
 
-func (p *invalidatingProject) AddBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error {
-	defer p.invalidate()
-	return p.ProjectService.AddBlockedByNumber(ctx, owner, repo, blockedNumber, blockerNumber)
+func (p *invalidatingProject) AddBlockedByNumber(ctx context.Context, blocked, blocker forge.IssueRef) error {
+	defer p.invalidateEdge(blocked, blocker)
+	return p.ProjectService.AddBlockedByNumber(ctx, blocked, blocker)
 }
 
-func (p *invalidatingProject) RemoveBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error {
-	defer p.invalidate()
-	return p.ProjectService.RemoveBlockedByNumber(ctx, owner, repo, blockedNumber, blockerNumber)
+func (p *invalidatingProject) RemoveBlockedByNumber(ctx context.Context, blocked, blocker forge.IssueRef) error {
+	defer p.invalidateEdge(blocked, blocker)
+	return p.ProjectService.RemoveBlockedByNumber(ctx, blocked, blocker)
+}
+
+// invalidateEdge is invalidate for a blocked-by edge. The edge changes
+// BlockedBy on the blocked issue's board item and Blocking on the blocker's.
+// When the two ends are in different repositories (#1508) the blocker's item
+// can sit on a board this service is not bound to, and which one is not
+// knowable here, so every board is dropped.
+func (p *invalidatingProject) invalidateEdge(blocked, blocker forge.IssueRef) {
+	if !strings.EqualFold(blocked.Owner, blocker.Owner) || !strings.EqualFold(blocked.Repo, blocker.Repo) {
+		p.cache.InvalidateAll()
+		return
+	}
+	p.invalidate()
 }
 
 func (p *invalidatingProject) UpdateEpicEstimates(ctx context.Context, owner, repo string, epicNumber int) (float64, error) {

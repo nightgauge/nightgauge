@@ -55,9 +55,9 @@ type spawnFileSpec struct {
 var spawnPinTable = map[string]spawnFileSpec{
 	"autonomous.go": {trackedFunc: "goTracked"},
 	"wave_orchestrator.go": {allowedLines: map[int]string{
-		505: "runWaveParallel — joined via wg.Wait() before the function returns",
-		570: "runWaveScaled — joined via wg.Wait() before the batch loop continues",
-		632: "runSubagent — joined via the done-channel select below (ctx.Done()/<-done)",
+		506: "runWaveParallel — joined via wg.Wait() before the function returns",
+		571: "runWaveScaled — joined via wg.Wait() before the batch loop continues",
+		643: "runSubagent — joined via the done-channel select below (ctx.Done()/<-done)",
 	}},
 	"epic.go": {allowedLines: map[int]string{
 		81: "checkEpicCompletion — process-lifetime, 35s-bounded, WithoutCancel; documented at the call site",
@@ -358,6 +358,7 @@ func TestRun_RefinementLoopReleasesDrain(t *testing.T) {
 	// A real (if empty) inner Scheduler: Run() wires its pipeline-complete
 	// callback unconditionally, so a nil one panics before the first cycle.
 	as := NewAutonomousScheduler(&Scheduler{}, nil, nil, nil, cfg, layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	t.Cleanup(as.drainBackground) // backstop for the successor generation
 	stubGraphFn(as)               // keeps the cycle off the network
 

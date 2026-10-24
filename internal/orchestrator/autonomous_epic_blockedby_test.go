@@ -45,6 +45,7 @@ func TestEpicBlockedByCascade_SubIssueBlocked(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			MaxConcurrent: 5,
 			// DisableEpicBlockedByCascade: false (default — cascade active)
@@ -78,9 +79,10 @@ func TestEpicBlockedByCascade_SubIssueUnblocked_EpicBlockerClosed(t *testing.T) 
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		repos:  []depgraph.RepoConfig{{Owner: "owner", Name: "repo", Project: 1}},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		repos:             []depgraph.RepoConfig{{Owner: "owner", Name: "repo", Project: 1}},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -112,6 +114,7 @@ func TestEpicBlockedByCascade_Disabled(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			MaxConcurrent:               5,
 			DisableEpicBlockedByCascade: true,
@@ -146,9 +149,10 @@ func TestReposCandidateRestriction(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		repos:  []depgraph.RepoConfig{{Owner: "owner", Name: "repo-a", Project: 1}},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		repos:             []depgraph.RepoConfig{{Owner: "owner", Name: "repo-a", Project: 1}},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -186,6 +190,7 @@ func TestDanglingEpicGateWarning(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			MaxConcurrent:               5,
 			DisableEpicBlockedByCascade: true,

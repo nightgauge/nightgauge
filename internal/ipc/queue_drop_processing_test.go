@@ -15,6 +15,7 @@ import (
 // and the answer is {"dropped": n}.
 func TestQueueDropProcessing_Handler(t *testing.T) {
 	sched := orchestrator.NewScheduler(nil, orchestrator.SchedulerConfig{})
+	sched.SetTrustGate(permissiveGate())
 	s := NewServer(nil, WithScheduler(sched))
 	s.writer = &bytes.Buffer{}
 
@@ -52,6 +53,7 @@ func TestQueueDropProcessing_HandlerWithoutAScheduler(t *testing.T) {
 // queue.dequeueIndependent: their items go back to waiting (#2396).
 func TestQueueDropProcessing_HandlerHandsBack(t *testing.T) {
 	sched := orchestrator.NewScheduler(nil, orchestrator.SchedulerConfig{})
+	sched.SetTrustGate(permissiveGate())
 	s := NewServer(nil, WithScheduler(sched))
 	s.writer = &bytes.Buffer{}
 

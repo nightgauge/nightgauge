@@ -330,7 +330,9 @@ func (g *githubMaterializer) CreateIssue(ctx context.Context, spikeNumber int, r
 }
 
 func (g *githubMaterializer) AddBlockedByByNumber(ctx context.Context, blockedNumber, blockerNumber int) error {
-	return g.projSvc.AddBlockedByNumber(ctx, g.owner, g.repo, blockedNumber, blockerNumber)
+	return g.projSvc.AddBlockedByNumber(ctx,
+		forge.IssueRef{Owner: g.owner, Repo: g.repo, Number: blockedNumber},
+		forge.IssueRef{Owner: g.owner, Repo: g.repo, Number: blockerNumber})
 }
 
 // priorityToBoardOption maps the contract's lowercase priority to the project

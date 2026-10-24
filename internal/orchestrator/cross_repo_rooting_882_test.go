@@ -113,6 +113,7 @@ func crossRepoScheduler(t *testing.T, launchRoot string, runner StageRunner) *Sc
 	t.Helper()
 	writeSkillFile(t, launchRoot, "nightgauge-issue-pickup")
 	return &Scheduler{
+		trustGate:     allWritersGate(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
 		retryEngine:   NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

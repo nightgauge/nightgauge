@@ -231,6 +231,7 @@ func TestDetectStuckEpics_RetryBackoffExcludes(t *testing.T) {
 		}, nil)
 
 	as := &AutonomousScheduler{
+		trustGateOverride:        allWritersGate(),
 		state:                    &AutonomousState{},
 		config:                   AutonomousConfig{StuckEpicDetectionEnabled: true},
 		retryBackoff:             map[string]retryPlan{"o/r#143": {Until: time.Now().Add(2 * time.Minute)}},
@@ -258,6 +259,7 @@ func TestDetectStuckEpics_HistoryRecoveryExcludes(t *testing.T) {
 
 	recent := time.Now().UTC().Add(-3 * time.Minute).Format(time.RFC3339)
 	as := &AutonomousScheduler{
+		trustGateOverride:        allWritersGate(),
 		state:                    &AutonomousState{},
 		config:                   AutonomousConfig{StuckEpicDetectionEnabled: true},
 		retryBackoff:             map[string]retryPlan{},
@@ -286,6 +288,7 @@ func TestAlertStuckEpics_DeDup(t *testing.T) {
 	defer srv.Close()
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			StuckEpicWebhookURL:   srv.URL,
 			StuckEpicReAlertAfter: time.Hour,
@@ -456,6 +459,7 @@ func TestAlertStuckEpics_NoCooldownOnFailure(t *testing.T) {
 	defer func() { notify.RetryDelay = old }()
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{StuckEpicWebhookURL: srv.URL, StuckEpicReAlertAfter: time.Hour},
 		alertedStuckEpics: map[string]time.Time{},
 	}
@@ -520,6 +524,7 @@ func TestAlertStuckEpics_PartialBatchArmsDelivered(t *testing.T) {
 	defer func() { notify.RetryDelay = old }()
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config:            AutonomousConfig{StuckEpicWebhookURL: srv.URL, StuckEpicReAlertAfter: time.Hour},
 		alertedStuckEpics: map[string]time.Time{},
 	}
@@ -741,9 +746,10 @@ func TestStuckEpics_CascadeNamesOnlyTheEpicsRealBlocker(t *testing.T) {
 
 func TestPrioritize_EpicEdgesToItsOwnSubsDoNotCascade(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		repos:  []depgraph.RepoConfig{{Owner: "o", Name: "r", Project: 1}},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		repos:             []depgraph.RepoConfig{{Owner: "o", Name: "r", Project: 1}},
+		state:             &AutonomousState{},
 	}
 	var got []int
 	for _, c := range as.prioritize(context.Background(), issue477Graph(false)) {

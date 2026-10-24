@@ -30,7 +30,7 @@ func makeNode(number int, status string, priority string, labels []string, state
 		// the #270 author-trust gate) keep asserting the triage logic alone.
 		// Author-trust behavior is covered separately in author_trust_test.go
 		// and autonomous_author_trust_test.go.
-		AuthorAssociation: "OWNER",
+		AuthorLogin: "maintainer",
 	}
 }
 
@@ -45,7 +45,7 @@ func graphWith(nodes ...*depgraph.Node) *depgraph.Graph {
 func TestIsTriagedAndUnblocked_HappyPath(t *testing.T) {
 	node := makeNode(3216, "Backlog", "P1", []string{"type:bug", "priority:high"}, "OPEN")
 	g := graphWith(node)
-	if !isTriagedAndUnblocked(node, g, g.Adjacency(), nil) {
+	if !isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
 		t.Error("triaged P1 + type:bug item with no blockers should be promotable")
 	}
 }
@@ -53,7 +53,7 @@ func TestIsTriagedAndUnblocked_HappyPath(t *testing.T) {
 func TestIsTriagedAndUnblocked_RejectsClosedItems(t *testing.T) {
 	node := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "CLOSED")
 	g := graphWith(node)
-	if isTriagedAndUnblocked(node, g, g.Adjacency(), nil) {
+	if isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
 		t.Error("closed items must never be promoted")
 	}
 }
@@ -62,7 +62,7 @@ func TestIsTriagedAndUnblocked_RejectsNonBacklogStatus(t *testing.T) {
 	for _, status := range []string{"Ready", "In progress", "In review", "Done", ""} {
 		node := makeNode(3216, status, "P1", []string{"type:bug"}, "OPEN")
 		g := graphWith(node)
-		if isTriagedAndUnblocked(node, g, g.Adjacency(), nil) {
+		if isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
 			t.Errorf("status %q should not be promoted (only Backlog → Ready)", status)
 		}
 	}
@@ -71,7 +71,7 @@ func TestIsTriagedAndUnblocked_RejectsNonBacklogStatus(t *testing.T) {
 func TestIsTriagedAndUnblocked_RejectsMissingPriority(t *testing.T) {
 	node := makeNode(3216, "Backlog", "", []string{"type:bug"}, "OPEN")
 	g := graphWith(node)
-	if isTriagedAndUnblocked(node, g, g.Adjacency(), nil) {
+	if isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
 		t.Error("Backlog item with no Priority must NOT be promoted (untriaged)")
 	}
 }
@@ -79,7 +79,7 @@ func TestIsTriagedAndUnblocked_RejectsMissingPriority(t *testing.T) {
 func TestIsTriagedAndUnblocked_RejectsMissingTypeLabel(t *testing.T) {
 	node := makeNode(3216, "Backlog", "P1", []string{"priority:high", "component:pipeline"}, "OPEN")
 	g := graphWith(node)
-	if isTriagedAndUnblocked(node, g, g.Adjacency(), nil) {
+	if isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
 		t.Error("Backlog item with no type:* label must NOT be promoted")
 	}
 }
@@ -87,7 +87,7 @@ func TestIsTriagedAndUnblocked_RejectsMissingTypeLabel(t *testing.T) {
 func TestIsTriagedAndUnblocked_RejectsEpics(t *testing.T) {
 	node := makeNode(3216, "Backlog", "P1", []string{"type:epic"}, "OPEN")
 	g := graphWith(node)
-	if isTriagedAndUnblocked(node, g, g.Adjacency(), nil) {
+	if isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
 		t.Error("epics are tracked not dispatched — must not be promoted")
 	}
 }
@@ -100,7 +100,7 @@ func TestIsTriagedAndUnblocked_RejectsItemsWithOpenBlockers(t *testing.T) {
 		{From: blocked.ID(), To: blocker.ID()},
 	}
 	adj := g.Adjacency()
-	if isTriagedAndUnblocked(blocked, g, adj, nil) {
+	if isTriagedAndUnblocked(blocked, g, adj, vouchedByMaintainer) {
 		t.Error("item with an OPEN blocker must NOT be promoted")
 	}
 }
@@ -113,7 +113,7 @@ func TestIsTriagedAndUnblocked_AcceptsItemsWithAllClosedBlockers(t *testing.T) {
 		{From: blocked.ID(), To: blocker.ID()},
 	}
 	adj := g.Adjacency()
-	if !isTriagedAndUnblocked(blocked, g, adj, nil) {
+	if !isTriagedAndUnblocked(blocked, g, adj, vouchedByMaintainer) {
 		t.Error("item with all-closed blockers should be promoted")
 	}
 }
@@ -122,7 +122,7 @@ func TestIsTriagedAndUnblocked_AcceptsAllPriorityLevels(t *testing.T) {
 	for _, p := range []string{"P0", "P1", "P2", "P3"} {
 		node := makeNode(3216, "Backlog", p, []string{"type:bug"}, "OPEN")
 		g := graphWith(node)
-		if !isTriagedAndUnblocked(node, g, g.Adjacency(), nil) {
+		if !isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
 			t.Errorf("priority %q should be promoted", p)
 		}
 	}
@@ -132,7 +132,7 @@ func TestIsTriagedAndUnblocked_AcceptsVariousTypeLabels(t *testing.T) {
 	for _, lbl := range []string{"type:bug", "type:feature", "type:chore", "type:docs"} {
 		node := makeNode(3216, "Backlog", "P1", []string{lbl}, "OPEN")
 		g := graphWith(node)
-		if !isTriagedAndUnblocked(node, g, g.Adjacency(), nil) {
+		if !isTriagedAndUnblocked(node, g, g.Adjacency(), vouchedByMaintainer) {
 			t.Errorf("type label %q should pass the triage gate", lbl)
 		}
 	}
@@ -140,7 +140,7 @@ func TestIsTriagedAndUnblocked_AcceptsVariousTypeLabels(t *testing.T) {
 
 func TestIsTriagedAndUnblocked_HandlesNilNode(t *testing.T) {
 	g := graphWith()
-	if isTriagedAndUnblocked(nil, g, g.Adjacency(), nil) {
+	if isTriagedAndUnblocked(nil, g, g.Adjacency(), vouchedByMaintainer) {
 		t.Error("nil node must never be promoted")
 	}
 }
@@ -152,7 +152,7 @@ func TestIsTriagedAndUnblocked_HandlesNilNode(t *testing.T) {
 func TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked(t *testing.T) {
 	t.Run("nil node", func(t *testing.T) {
 		g := graphWith()
-		if got := triageRejectionReason(nil, g, g.Adjacency(), nil); got != "not-open" {
+		if got := triageRejectionReason(nil, g, g.Adjacency(), vouchedByMaintainer); got != "not-open" {
 			t.Errorf("nil node: got %q, want %q", got, "not-open")
 		}
 	})
@@ -160,7 +160,7 @@ func TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked(t *testing.T) {
 	t.Run("closed item", func(t *testing.T) {
 		node := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "CLOSED")
 		g := graphWith(node)
-		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "not-open" {
+		if got := triageRejectionReason(node, g, g.Adjacency(), vouchedByMaintainer); got != "not-open" {
 			t.Errorf("closed item: got %q, want %q", got, "not-open")
 		}
 	})
@@ -168,7 +168,7 @@ func TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked(t *testing.T) {
 	t.Run("non-backlog status", func(t *testing.T) {
 		node := makeNode(3216, "Ready", "P1", []string{"type:bug"}, "OPEN")
 		g := graphWith(node)
-		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "not-backlog" {
+		if got := triageRejectionReason(node, g, g.Adjacency(), vouchedByMaintainer); got != "not-backlog" {
 			t.Errorf("non-backlog status: got %q, want %q", got, "not-backlog")
 		}
 	})
@@ -176,24 +176,24 @@ func TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked(t *testing.T) {
 	t.Run("missing priority", func(t *testing.T) {
 		node := makeNode(3216, "Backlog", "", []string{"type:bug"}, "OPEN")
 		g := graphWith(node)
-		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "no-priority" {
+		if got := triageRejectionReason(node, g, g.Adjacency(), vouchedByMaintainer); got != "no-priority" {
 			t.Errorf("missing priority: got %q, want %q", got, "no-priority")
 		}
 	})
 
 	t.Run("untrusted author", func(t *testing.T) {
 		node := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "OPEN")
-		node.AuthorAssociation = "NONE"
+		node.AuthorLogin = "stranger"
 		g := graphWith(node)
-		if got := triageRejectionReason(node, g, g.Adjacency(), []string{"OWNER", "MEMBER"}); got != "untrusted-author" {
-			t.Errorf("untrusted author: got %q, want %q", got, "untrusted-author")
+		if got := triageRejectionReason(node, g, g.Adjacency(), vouchedByMaintainer); got != "not-vouched-for" {
+			t.Errorf("untrusted author: got %q, want %q", got, "not-vouched-for")
 		}
 	})
 
 	t.Run("epic", func(t *testing.T) {
 		node := makeNode(3216, "Backlog", "P1", []string{"type:epic"}, "OPEN")
 		g := graphWith(node)
-		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "epic" {
+		if got := triageRejectionReason(node, g, g.Adjacency(), vouchedByMaintainer); got != "epic" {
 			t.Errorf("epic: got %q, want %q", got, "epic")
 		}
 	})
@@ -201,7 +201,7 @@ func TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked(t *testing.T) {
 	t.Run("missing type label", func(t *testing.T) {
 		node := makeNode(3216, "Backlog", "P1", []string{"priority:high"}, "OPEN")
 		g := graphWith(node)
-		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "no-type-label" {
+		if got := triageRejectionReason(node, g, g.Adjacency(), vouchedByMaintainer); got != "no-type-label" {
 			t.Errorf("missing type label: got %q, want %q", got, "no-type-label")
 		}
 	})
@@ -212,7 +212,7 @@ func TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked(t *testing.T) {
 		g := graphWith(blocker, blocked)
 		g.Edges = []depgraph.Edge{{From: blocked.ID(), To: blocker.ID()}}
 		adj := g.Adjacency()
-		if got := triageRejectionReason(blocked, g, adj, nil); got != "open-blocker" {
+		if got := triageRejectionReason(blocked, g, adj, vouchedByMaintainer); got != "open-blocker" {
 			t.Errorf("open blocker: got %q, want %q", got, "open-blocker")
 		}
 	})
@@ -220,8 +220,12 @@ func TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked(t *testing.T) {
 	t.Run("eligible returns empty string", func(t *testing.T) {
 		node := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "OPEN")
 		g := graphWith(node)
-		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "" {
+		if got := triageRejectionReason(node, g, g.Adjacency(), vouchedByMaintainer); got != "" {
 			t.Errorf("eligible node: got %q, want empty string", got)
 		}
 	})
 }
+
+// vouchedByMaintainer stands in for the eligibility gate (#2130): only the
+// maintainer's issues are vouched for.
+func vouchedByMaintainer(n *depgraph.Node) bool { return n != nil && n.AuthorLogin == "maintainer" }

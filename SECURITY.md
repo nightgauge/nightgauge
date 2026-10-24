@@ -73,6 +73,23 @@ report because you want the software to be safe, not for a reward.
 - See [standards/security.md](standards/security.md) for coding standards
 - See [docs/SECURITY.md](docs/SECURITY.md) for prompt injection safeguards
 
+### Who can direct the pipeline
+
+The pipeline works an issue only when someone with **write access or
+higher** to the repository vouches for it: they opened it, or, where the
+pipeline runs as a GitHub App, they applied the `pipeline:approved` label
+after its last edit. (On a personal token a label the pipeline applied could
+not be told apart from yours, so only authorship counts there.) Only comments by such
+users reach a model. Anyone else can still open issues and comment; their
+text simply never reaches the pipeline until a maintainer approves the
+issue. Any edit after approval voids it.
+
+For an organisation, set the base permission to **Read**, give people who
+triage **Triage**, and give **Write** only to people whose issues the
+pipeline may work. Triage can apply labels but cannot approve: approving
+hands an issue's text to a model that holds write credentials. Details:
+[docs/AUTONOMOUS_ORCHESTRATOR.md § Eligibility Gate](docs/AUTONOMOUS_ORCHESTRATOR.md#eligibility-gate-270-2130).
+
 ## Scope
 
 This policy covers the `nightgauge/nightgauge` repository, including:

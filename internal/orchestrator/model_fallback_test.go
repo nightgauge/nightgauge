@@ -169,7 +169,8 @@ func TestRetryEngine_Reset_ClearsDowngrades(t *testing.T) {
 // increment, no queue pause. Mirrors the api-overloaded transient contract.
 func TestOnPipelineComplete_ModelUnavailable_EnvironmentalNoPause(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{

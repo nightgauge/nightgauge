@@ -185,6 +185,7 @@ func newWorktreeRunFixture(t *testing.T, issueNumber int, branch string) *worktr
 
 func newWorktreeRunScheduler(root string, runner StageRunner) *Scheduler {
 	return &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

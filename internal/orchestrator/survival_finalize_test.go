@@ -48,6 +48,7 @@ func TestRunCycle_SweepsSurvivalWithZeroFreeSlots(t *testing.T) {
 	stubSurvivalSweepNoForge(t)
 	root := layouttest.Repo(t)
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), root)
+	as.trustGateOverride = allWritersGate()
 
 	// Saturate the fleet: every slot consumed, so runCycle returns at the slot
 	// gate before it ever builds a graph.
@@ -79,6 +80,7 @@ func TestSweepSurvivalRecords_IsPacedIndependently(t *testing.T) {
 	stubSurvivalSweepNoForge(t)
 	root := layouttest.Repo(t)
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), root)
+	as.trustGateOverride = allWritersGate()
 	seedPending(t, root, "o/r", 7, time.Now().AddDate(0, 0, -30))
 
 	as.sweepSurvivalRecords(context.Background())
@@ -118,6 +120,7 @@ func TestSweepSurvivalRecords_IsPacedIndependently(t *testing.T) {
 func TestSweepSurvivalRecords_NoPendingCostsNothing(t *testing.T) {
 	root := layouttest.Repo(t)
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), root)
+	as.trustGateOverride = allWritersGate()
 
 	// No records at all. Must not panic and must not need a client.
 	as.sweepSurvivalRecords(context.Background())

@@ -33,7 +33,7 @@ nightgauge epic plan-waves <epic>
 # Issues (native sub-issues, blocking, routing)
 nightgauge issue create-sub <parent> --title "…" --labels …   # create + link + board
 nightgauge issue link-sub <parent> <child>
-nightgauge issue add-blocked-by <blocked> <blocker>
+nightgauge issue add-blocked-by <blocked> <blocker>     # blocker: N, owner/repo#N, repo#N, URL
 nightgauge issue route <issue>                          # change_type/complexity/route
 
 # Gates / CI

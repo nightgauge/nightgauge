@@ -3,10 +3,13 @@ package github
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/forge"
 )
 
 // blockedByRESTServer serves the REST issue objects AddBlockedByNumber
@@ -71,7 +74,7 @@ func TestAddBlockedByNumber_RejectsBlockingByParentEpic(t *testing.T) {
 	defer srv.Close()
 
 	p := &ProjectService{client: newClientForRESTTest(srv)}
-	err := p.AddBlockedByNumber(context.Background(), "o", "r", 849, 842)
+	err := p.AddBlockedByNumber(context.Background(), issueAt("o/r", 849), issueAt("o/r", 842))
 	if err == nil {
 		t.Fatal("AddBlockedByNumber succeeded, want a circular-dependency error")
 	}
@@ -102,7 +105,7 @@ func TestAddBlockedByNumber_RejectsPullRequestNumber(t *testing.T) {
 	defer srv.Close()
 
 	p := &ProjectService{client: newClientForRESTTest(srv)}
-	err := p.AddBlockedByNumber(context.Background(), "o", "r", 925, 1)
+	err := p.AddBlockedByNumber(context.Background(), issueAt("o/r", 925), issueAt("o/r", 1))
 	if err == nil || !strings.Contains(err.Error(), "pull request") {
 		t.Fatalf("err = %v, want a pull-request rejection", err)
 	}
@@ -116,10 +119,10 @@ func TestBlockedByNumber_ResolvesBlockerOverREST(t *testing.T) {
 		call func(*ProjectService, context.Context) error
 	}{
 		{"add", func(p *ProjectService, ctx context.Context) error {
-			return p.AddBlockedByNumber(ctx, "o", "r", 1, 2)
+			return p.AddBlockedByNumber(ctx, issueAt("o/r", 1), issueAt("o/r", 2))
 		}},
 		{"remove", func(p *ProjectService, ctx context.Context) error {
-			return p.RemoveBlockedByNumber(ctx, "o", "r", 1, 2)
+			return p.RemoveBlockedByNumber(ctx, issueAt("o/r", 1), issueAt("o/r", 2))
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,7 +140,7 @@ func TestBlockedByNumber_ResolvesBlockerOverREST(t *testing.T) {
 			if err == nil {
 				t.Fatal("call succeeded despite an unresolvable blocker")
 			}
-			if !strings.Contains(err.Error(), "blocker issue #2") {
+			if !strings.Contains(err.Error(), "blocker issue o/r#2") {
 				t.Errorf("error = %q, want it to name the blocker", err)
 			}
 			// The ADD path resolves both: it needs the blocked issue's
@@ -174,8 +177,8 @@ func TestBlockedByNumber_UnresolvableBlockedIssueIsAnError(t *testing.T) {
 	defer srv.Close()
 
 	p := &ProjectService{client: newClientForRESTTest(srv)}
-	err := p.AddBlockedByNumber(context.Background(), "o", "r", 7, 8)
-	if err == nil || !strings.Contains(err.Error(), "blocked issue #7") {
+	err := p.AddBlockedByNumber(context.Background(), issueAt("o/r", 7), issueAt("o/r", 8))
+	if err == nil || !strings.Contains(err.Error(), "blocked issue o/r#7") {
 		t.Fatalf("err = %v, want an error naming the blocked issue", err)
 	}
 }
@@ -226,7 +229,7 @@ func TestAddBlockedByNumber_SameNumberAsAParentInAnotherRepoIsNotCircular(t *tes
 	defer srv.Close()
 
 	p := &ProjectService{client: newClientForRESTTest(srv)}
-	err := p.AddBlockedByNumber(context.Background(), "o", "r", 849, 842)
+	err := p.AddBlockedByNumber(context.Background(), issueAt("o/r", 849), issueAt("o/r", 842))
 	if err != nil && strings.Contains(err.Error(), "circular dependency") {
 		t.Fatalf("refused a legitimate edge: %v", err)
 	}
@@ -254,5 +257,129 @@ func TestParentIssueRepo(t *testing.T) {
 		if got := parentIssueRepo(raw); got != want {
 			t.Errorf("parentIssueRepo(%q) = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+// issueAt builds a forge.IssueRef from an "owner/repo" slug.
+func issueAt(slug string, number int) forge.IssueRef {
+	owner, repo, _ := strings.Cut(slug, "/")
+	return forge.IssueRef{Owner: owner, Repo: repo, Number: number}
+}
+
+// blockedByPathServer serves REST issue objects keyed by their full path, so a
+// fixture can hold two issues that share a number in different repositories.
+// Every request is recorded with its body; any write succeeds with 201.
+func blockedByPathServer(t *testing.T, byPath map[string]string, seen *[]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		entry := r.Method + " " + r.URL.Path
+		if len(body) > 0 {
+			entry += " " + strings.TrimSpace(string(body))
+		}
+		*seen = append(*seen, entry)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		if b, ok := byPath[r.URL.Path]; ok {
+			_, _ = w.Write([]byte(b))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+}
+
+// #1508: a blocker in another repository is resolved from ITS repository, and
+// the edge is written on the blocked issue's repository with the blocker's
+// database id. Both repositories hold an issue numbered 1253, with different
+// ids, so resolving the blocker in the blocked issue's repository would send
+// the wrong id.
+func TestBlockedByNumber_CrossRepoBlocker(t *testing.T) {
+	const otherID = 7_777_777
+	issues := map[string]string{
+		"/repos/o/dash/issues/692":      issueJSON(692, "I_dash", ""),
+		"/repos/o/platform/issues/1253": issueJSON(1253, "I_platform", ""),
+		"/repos/o/dash/issues/1253": fmt.Sprintf(
+			`{"number":1253,"id":%d,"node_id":"I_wrong","parent_issue_url":null}`, otherID),
+	}
+	blocked, blocker := issueAt("o/dash", 692), issueAt("o/platform", 1253)
+	id := databaseIDFor(1253)
+
+	t.Run("add", func(t *testing.T) {
+		var seen []string
+		srv := blockedByPathServer(t, issues, &seen)
+		defer srv.Close()
+		p := &ProjectService{client: newClientForRESTTest(srv)}
+		if err := p.AddBlockedByNumber(context.Background(), blocked, blocker); err != nil {
+			t.Fatalf("AddBlockedByNumber: %v", err)
+		}
+		want := []string{
+			"GET /repos/o/dash/issues/692",
+			"GET /repos/o/platform/issues/1253",
+			fmt.Sprintf(`POST /repos/o/dash/issues/692/dependencies/blocked_by {"issue_id":%d}`, id),
+		}
+		if strings.Join(seen, "\n") != strings.Join(want, "\n") {
+			t.Errorf("requests =\n%s\nwant\n%s", strings.Join(seen, "\n"), strings.Join(want, "\n"))
+		}
+	})
+	t.Run("remove", func(t *testing.T) {
+		var seen []string
+		srv := blockedByPathServer(t, issues, &seen)
+		defer srv.Close()
+		p := &ProjectService{client: newClientForRESTTest(srv)}
+		if err := p.RemoveBlockedByNumber(context.Background(), blocked, blocker); err != nil {
+			t.Fatalf("RemoveBlockedByNumber: %v", err)
+		}
+		want := []string{
+			"GET /repos/o/platform/issues/1253",
+			fmt.Sprintf("DELETE /repos/o/dash/issues/692/dependencies/blocked_by/%d", id),
+		}
+		if strings.Join(seen, "\n") != strings.Join(want, "\n") {
+			t.Errorf("requests =\n%s\nwant\n%s", strings.Join(seen, "\n"), strings.Join(want, "\n"))
+		}
+	})
+}
+
+// #1508: the parent-epic guard compares against the BLOCKER's own repository.
+// The blocked issue o/dash#849 has its parent epic in o/platform#842. Naming
+// that epic as a cross-repo blocker is the cycle and is refused; o/other#842,
+// which only shares the number, is a legitimate edge and reaches the write.
+func TestAddBlockedByNumber_CrossRepoParentEpicGuard(t *testing.T) {
+	issues := map[string]string{
+		"/repos/o/dash/issues/849":     issueJSON(849, "I_child", "https://api.github.com/repos/o/platform/issues/842"),
+		"/repos/o/platform/issues/842": issueJSON(842, "I_epic", ""),
+		"/repos/O/Platform/issues/842": issueJSON(842, "I_epic", ""),
+		"/repos/o/other/issues/842":    issueJSON(842, "I_unrelated", ""),
+	}
+	for _, tc := range []struct {
+		blocker  string
+		circular bool
+	}{
+		{"o/platform", true},
+		{"O/Platform", true},
+		{"o/other", false},
+	} {
+		t.Run(tc.blocker, func(t *testing.T) {
+			var seen []string
+			srv := blockedByPathServer(t, issues, &seen)
+			defer srv.Close()
+			p := &ProjectService{client: newClientForRESTTest(srv)}
+			err := p.AddBlockedByNumber(context.Background(), issueAt("o/dash", 849), issueAt(tc.blocker, 842))
+			gotCircular := err != nil && strings.Contains(err.Error(), "circular dependency")
+			if gotCircular != tc.circular {
+				t.Fatalf("circular = %v (err %v), want %v", gotCircular, err, tc.circular)
+			}
+			wrote := false
+			for _, req := range seen {
+				wrote = wrote || strings.HasPrefix(req, "POST ")
+			}
+			if wrote == tc.circular {
+				t.Errorf("write issued = %v, want %v; requests = %v", wrote, !tc.circular, seen)
+			}
+		})
 	}
 }

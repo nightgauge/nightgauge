@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"log"
 	"os"
 	"path/filepath"
@@ -612,6 +613,16 @@ func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, 
 		IssueNumber: si.Number,
 		Repo:        subItem.Repo,
 		WaveIndex:   waveIdx,
+	}
+
+	// A sub-issue is vouched for on its own (#2130): an approved epic does not
+	// carry an outsider's sub-issue into a run.
+	subOwner, subRepo := splitOwnerRepo(subItem.Repo)
+	if d := wo.scheduler.decide(ctx, trust.Subject{Owner: subOwner, Repo: subRepo, Number: si.Number}); !d.Eligible {
+		log.Printf("epic #%d: wave %d — not running %s#%d: %s", wo.epicNumber, waveIdx, subItem.Repo, si.Number, d.Reason)
+		result.Error = d.Reason
+		result.Duration = time.Since(start)
+		return result
 	}
 
 	log.Printf("epic #%d: wave %d — starting subagent for %s#%d %q",

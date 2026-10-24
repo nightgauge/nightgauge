@@ -77,6 +77,7 @@ func newPinScheduler(t *testing.T, root string, runner StageRunner, adapter, mod
 		writeSkillFile(t, root, dir)
 	}
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
 		retryEngine:   NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

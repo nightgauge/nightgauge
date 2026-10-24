@@ -300,7 +300,7 @@ func (f *fakeGitHub) itemsPage(req *http.Request, q url.Values) (int, []byte, st
 				"repository":         map[string]string{"full_name": it.repo},
 				"created_at":         "2026-09-01T00:00:00Z",
 				"updated_at":         "2026-09-02T00:00:00Z",
-				"author_association": "MEMBER",
+				"user":               map[string]string{"login": "maintainer"},
 				"labels":             labels,
 				"sub_issues_summary": map[string]int{"total": it.subs, "completed": 0},
 				"issue_dependencies_summary": map[string]int{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"log"
 	"net/http"
 	"net/url"
@@ -28,11 +29,11 @@ const (
 
 // UnrefinedIssue is a lightweight issue result for list-unrefined output.
 type UnrefinedIssue struct {
-	Number            int      `json:"number"`
-	Title             string   `json:"title"`
-	Labels            []string `json:"labels"`
-	CreatedAt         string   `json:"created_at"`
-	AuthorAssociation string   `json:"author_association"`
+	Number      int      `json:"number"`
+	Title       string   `json:"title"`
+	Labels      []string `json:"labels"`
+	CreatedAt   string   `json:"created_at"`
+	AuthorLogin string   `json:"author_login"`
 }
 
 // dependabotLabels is the set of labels applied by Dependabot to its issues and PRs.
@@ -753,7 +754,30 @@ func (s *IssueService) removeBlockedByResolved(ctx context.Context, blocked, blo
 }
 
 // AddLabels adds labels to an issue by node IDs.
+//
+// It refuses the approval label (#2130). This is defense in depth, not the
+// boundary: a stage can write a label by other paths (`gh`, raw GraphQL or
+// REST). The boundary is the eligibility gate, which never counts a label
+// applied by the identity the stages act as (internal/trust). The ids are
+// resolved to names first; a resolution that fails refuses the write.
 func (s *IssueService) AddLabels(ctx context.Context, issueID string, labelIDs []string) error {
+	if err := s.refuseApprovalLabel(ctx, labelIDs); err != nil {
+		return err
+	}
+	return s.addLabelIDs(ctx, issueID, labelIDs)
+}
+
+// addKnownLabel adds one label this package resolved by name itself, so the
+// name is checked directly instead of resolved again.
+func (s *IssueService) addKnownLabel(ctx context.Context, issueID, name, labelID string) error {
+	if strings.EqualFold(strings.TrimSpace(name), trust.ApprovedLabel) {
+		return fmt.Errorf("add labels: refusing to apply %s: a user with write access applies it on GitHub, never the pipeline", trust.ApprovedLabel)
+	}
+	return s.addLabelIDs(ctx, issueID, []string{labelID})
+}
+
+// addLabelIDs is the mutation itself. Callers check the approval label first.
+func (s *IssueService) addLabelIDs(ctx context.Context, issueID string, labelIDs []string) error {
 	var m addLabelsMutation
 	gqlLabelIDs := make([]graphql.ID, len(labelIDs))
 	for i, id := range labelIDs {
@@ -769,6 +793,34 @@ func (s *IssueService) AddLabels(ctx context.Context, issueID string, labelIDs [
 
 	if err := s.client.mutate(ctx, &m, input); err != nil {
 		return fmt.Errorf("add labels: %w", err)
+	}
+	return nil
+}
+
+// refuseApprovalLabel resolves label node ids to names and refuses the
+// approval label among them.
+func (s *IssueService) refuseApprovalLabel(ctx context.Context, labelIDs []string) error {
+	if len(labelIDs) == 0 {
+		return nil
+	}
+	ids := make([]graphql.ID, len(labelIDs))
+	for i, id := range labelIDs {
+		ids[i] = graphql.ID(id)
+	}
+	var q struct {
+		Nodes []struct {
+			Label struct {
+				Name graphql.String
+			} `graphql:"... on Label"`
+		} `graphql:"nodes(ids: $ids)"`
+	}
+	if err := s.client.query(ctx, &q, map[string]interface{}{"ids": ids}); err != nil {
+		return fmt.Errorf("add labels: cannot confirm none of them is %s: %w", trust.ApprovedLabel, err)
+	}
+	for _, n := range q.Nodes {
+		if strings.EqualFold(strings.TrimSpace(string(n.Label.Name)), trust.ApprovedLabel) {
+			return fmt.Errorf("add labels: refusing to apply %s: a user with write access applies it on GitHub, never the pipeline", trust.ApprovedLabel)
+		}
 	}
 	return nil
 }
@@ -828,7 +880,7 @@ func (s *IssueService) SyncStatusLabel(ctx context.Context, owner, repo string, 
 	// Add new status label
 	newLabel := "status:" + newStatus
 	if id, ok := repoLabels[newLabel]; ok {
-		if err := s.AddLabels(ctx, issue.NodeID, []string{id}); err != nil {
+		if err := s.addKnownLabel(ctx, issue.NodeID, newLabel, id); err != nil {
 			return fmt.Errorf("add new status label: %w", err)
 		}
 	} else {
@@ -917,11 +969,11 @@ func (s *IssueService) ListIssuesExcludingLabels(ctx context.Context, owner, rep
 	// because a false "already refined" costs one skipped refinement that a
 	// human can see, while a false "unrefined" costs an unbounded rewrite loop.
 	type issueNode struct {
-		Number            graphql.Int
-		Title             graphql.String
-		CreatedAt         graphql.String
-		AuthorAssociation graphql.String `graphql:"authorAssociation"`
-		Labels            labelPage      `graphql:"labels(first: 20)"`
+		Number    graphql.Int
+		Title     graphql.String
+		CreatedAt graphql.String
+		Author    *trustActor
+		Labels    labelPage `graphql:"labels(first: 20)"`
 	}
 
 	var q struct {
@@ -973,11 +1025,11 @@ func (s *IssueService) ListIssuesExcludingLabels(ctx context.Context, owner, rep
 		}
 
 		results = append(results, UnrefinedIssue{
-			Number:            int(n.Number),
-			Title:             string(n.Title),
-			Labels:            labels,
-			CreatedAt:         string(n.CreatedAt),
-			AuthorAssociation: string(n.AuthorAssociation),
+			Number:      int(n.Number),
+			Title:       string(n.Title),
+			Labels:      labels,
+			CreatedAt:   string(n.CreatedAt),
+			AuthorLogin: actorLogin(n.Author),
 		})
 
 		if limit > 0 && len(results) >= limit {
@@ -1021,7 +1073,7 @@ func (s *IssueService) MarkRefined(ctx context.Context, owner, repo string, numb
 		return fmt.Errorf("label %q not found in repo %s/%s — run repo-init to create labels", LabelRefined, owner, repo)
 	}
 
-	return s.AddLabels(ctx, issue.NodeID, []string{labelID})
+	return s.addKnownLabel(ctx, issue.NodeID, LabelRefined, labelID)
 }
 
 // GetRepoLabels fetches all labels for a repo, returning name → nodeID map.

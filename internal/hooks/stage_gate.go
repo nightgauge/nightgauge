@@ -3,6 +3,7 @@ package hooks
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"os"
 	"strings"
 )
@@ -89,6 +90,16 @@ func evaluateStageGate(inputJSON []byte, stage string) GateDecision {
 		return Block(fmt.Sprintf(
 			"admin/auto merge bypass is prohibited in pipeline sessions — blocked: %s. A merge blocked by branch protection or required checks is terminal: report the blocker and escalate (#186).",
 			reason))
+	}
+
+	// No stage applies the approval label (#2130). Defense in depth, not the
+	// boundary: a text match can be evaded (a variable set in an earlier
+	// call, an encoded body). The boundary is the eligibility gate, which
+	// never counts a label applied by the identity the stages act as.
+	if reason := approvalLabelReason(ti.Command, segments); reason != "" {
+		return Block(fmt.Sprintf(
+			"pipeline sessions must not touch the %s label — blocked: %s. A user with write access applies it on GitHub to approve an issue; the pipeline never does (#2130).",
+			approvalLabel, reason))
 	}
 
 	if !forgeFencedStages[stage] && !commitFencedStages[stage] {
@@ -239,6 +250,32 @@ func mutatingGitReason(segments []Segment) string {
 			return "git cherry-pick"
 		case "revert":
 			return "git revert"
+		}
+	}
+	return ""
+}
+
+// approvalLabel is the label the eligibility gate reads as approval.
+const approvalLabel = trust.ApprovedLabel
+
+// forgeClients run commands that can write a label.
+var forgeClients = map[string]bool{
+	"gh": true, "glab": true, "nightgauge": true, "ib": true,
+	"curl": true, "wget": true, "http": true, "https": true, "xh": true,
+}
+
+// approvalLabelReason returns a reason when the command names the approval
+// label and runs a forge client, else "". It reads the whole command, not one
+// segment, so a label set in a variable earlier on the same line is caught.
+// Prose (echo, grep) runs no forge client and is not fenced.
+func approvalLabelReason(command string, segments []Segment) string {
+	if !strings.Contains(strings.ToLower(command), approvalLabel) {
+		return ""
+	}
+	for _, seg := range segments {
+		argv := seg.CommandArgv()
+		if len(argv) > 0 && forgeClients[baseName(argv[0])] {
+			return baseName(argv[0]) + " command naming " + approvalLabel
 		}
 	}
 	return ""

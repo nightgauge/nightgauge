@@ -378,10 +378,10 @@ func (as *AutonomousScheduler) refineBeforeDispatch(ctx context.Context, g *depg
 		// exception it was always meant to be rather than every dispatch.
 		return unrefined("no refinement runner and no CLI adapter to run the refine skill")
 	}
-	// The author-trust gate (#270) is not a slot question — a stranger's issue
-	// text must never reach the model, whatever the rail says.
-	if !isTrustedAuthor(node.AuthorAssociation, as.config.TrustedAuthorAssociations) {
-		return unrefined(fmt.Sprintf("untrusted author (author_association=%q)", node.AuthorAssociation))
+	// The eligibility gate (#2130) is not a slot question — text no writer
+	// vouched for must never reach the model, whatever the rail says.
+	if d := as.eligibility().decideNode(ctx, node); !d.Eligible {
+		return unrefined(d.Reason)
 	}
 	if as.refinementExhausted(key) {
 		return unrefined(fmt.Sprintf("refinement already failed %d times", maxRefinementFailures))
@@ -407,10 +407,10 @@ func (as *AutonomousScheduler) refineBeforeDispatch(ctx context.Context, g *depg
 	log.Printf("[refinement] pre-dispatch: refining %s before dispatch", key)
 	// refineIssue releases the semaphore itself.
 	as.refineIssue(ctx, owner, repo, gh.UnrefinedIssue{
-		Number:            node.Number,
-		Title:             node.Title,
-		Labels:            node.Labels,
-		AuthorAssociation: node.AuthorAssociation,
+		Number:      node.Number,
+		Title:       node.Title,
+		Labels:      node.Labels,
+		AuthorLogin: node.AuthorLogin,
 	}, refinementOrigin{
 		// The tier is read off the same board fields the cycle's view reads,
 		// so the two sources report the same vocabulary.

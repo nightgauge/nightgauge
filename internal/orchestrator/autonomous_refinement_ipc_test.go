@@ -58,6 +58,7 @@ func ipcRefinementScheduler(t *testing.T, runner StageRunner) (*AutonomousSchedu
 	sched.WithStageRunner(runner)
 
 	as := NewAutonomousScheduler(sched, nil, []depgraph.RepoConfig{}, nil, DefaultAutonomousConfig(), ws)
+	as.trustGateOverride = allWritersGate()
 	as.markRefinedFn = func(context.Context, string, string, int) error { return nil }
 	as.WithIPCRefinement()
 	return as, ws
@@ -72,6 +73,7 @@ func TestRefinementIsViableOnceIPCRefinementIsRegistered(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: ws, Adapter: nil})
 	sched.WithStageRunner(&refinementStageRunner{})
 	as := NewAutonomousScheduler(sched, nil, []depgraph.RepoConfig{}, nil, DefaultAutonomousConfig(), ws)
+	as.trustGateOverride = allWritersGate()
 
 	if as.refinementIsViable() {
 		t.Fatal("a scheduler with no adapter and no registered runner must not claim refinement is viable")

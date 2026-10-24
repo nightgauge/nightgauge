@@ -45,6 +45,7 @@ func terminalSkipScheduler(t *testing.T, root, errText string) *Scheduler {
 		writeSkillFile(t, root, dir)
 	}
 	return &Scheduler{
+		trustGate:    allWritersGate(),
 		repoRunning:  make(map[string]int),
 		mergeLocks:   make(map[string]*sync.Mutex),
 		retryEngine:  NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

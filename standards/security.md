@@ -217,42 +217,34 @@ sanitization:
 
 ---
 
-## Author Trust Boundary for the Autonomous Pipeline (#270)
+## Eligibility Boundary for the Autonomous Pipeline (#270, #2130)
 
 **GitHub issue authorship on a public repo is itself an untrusted-input
 vector.** Anyone can open an issue on a public repository — its title, body,
-and labels are attacker-controlled the same way file contents or a webhook
-payload are. Before #270, nothing in the autonomous pipeline's entry points
-(refinement candidate selection, Backlog→Ready promotion, dispatch) checked
-`author_association`, so a stranger's issue could reach:
+labels and comments are attacker-controlled the same way file contents or a
+webhook payload are. An issue's text reaches a model that holds write
+credentials, so who may put text there is a security boundary.
 
-1. **Refinement** — attacker-controlled issue text handed directly to a model
-   via `runRefinementCycle`, with no author check.
-2. **Dispatch** — the same issue promoted to `Ready` and picked up for
-   autonomous pipeline execution, purely through configuration defaults
-   (`auto_actionable`, or GitHub's default board template status "Todo"/"To
-   Do" being incorrectly treated as dispatchable).
+**Rule**: the pipeline works an issue only when a user with **write access or
+higher** to the repository vouches for it, by authoring it or by applying
+`pipeline:approved` after its last edit (only where the pipeline runs as a
+GitHub App, so no label its own stages applied can count); a bot vouches only
+by authorship and
+only when `autonomous.trusted_bots` lists it. Only comments by such users reach
+a model. Repository permission decides, never `author_association`, which
+calls a read-only outside collaborator `COLLABORATOR` and every org member
+`MEMBER`. The one decision is `internal/trust.Gate.Decide`; it fails closed
+when a read errors, and every entry point calls it. See
+[docs/AUTONOMOUS_ORCHESTRATOR.md § Eligibility Gate](../docs/AUTONOMOUS_ORCHESTRATOR.md#eligibility-gate-270-2130).
 
-**Mitigation**: a fail-closed author-trust gate (`isTrustedAuthor` in
-`internal/orchestrator/author_trust.go`) applied at every entry point:
-refinement candidate selection, the Backlog→Ready triage gate
-(`isTriagedAndUnblocked`), and dispatch (`PickNext`, defense-in-depth). Only
-`OWNER`, `MEMBER`, and `COLLABORATOR` associations are trusted by default —
-empty, unknown, or future GitHub association values (`CONTRIBUTOR`,
-`FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`, `MANNEQUIN`) are always
-untrusted. Skipped issues raise a `review_required` Action Center card rather
-than silently disappearing from consideration. See
-[docs/AUTONOMOUS_ORCHESTRATOR.md § Author Trust Gate](../docs/AUTONOMOUS_ORCHESTRATOR.md#author-trust-gate-270)
-and
-[docs/CONFIGURATION.md § trusted_author_associations](../docs/CONFIGURATION.md#trusted_author_associations)
-for configuration.
-
-**Rule for any future autonomous entry point**: if a code path can promote,
-refine, or dispatch a GitHub issue without a human having explicitly reviewed
-it first, it must consult `isTrustedAuthor` (or the board-status/triage gates
-that already wrap it) before acting. Never assume board status or label
-presence alone implies a trusted author — those signals can be set by GitHub
-automation (board auto-add) as easily as by a human triager.
+**Rule for any future entry point**: if a code path can promote, refine or
+dispatch an issue, or put an issue's comments in a prompt, it must ask
+`trust.Gate` first. Never take board status or a label's presence as proof
+someone vouched for an issue: board automation sets status, and a triager can
+apply labels. Only the approval label's own timeline event, by a writer, after
+the last edit, counts. The gate's threshold and the `trusted_bots` default are
+security controls: a change to either needs a reviewed pull request, never a
+pipeline-authored one merged unreviewed (#1970).
 
 ---
 

@@ -1447,11 +1447,14 @@ nightgauge issue create-sub <parent-number> "<title>" "<body>"
 # Link an existing issue as a sub-issue of a parent epic
 nightgauge issue link-sub <parent-number> <child-number>
 
-# Add blocking relationship (blocker blocks blocked)
-nightgauge issue add-blocked-by <blocked-number> <blocker-number>
+# Add blocking relationship (blocker blocks blocked). The blocked issue is a
+# number in --repo; the blocker is a number in --repo, owner/repo#N, repo#N
+# (a workspace repository's short name, else repo under --owner) or an issue URL
+nightgauge issue add-blocked-by <blocked-number> <blocker>
+nightgauge issue add-blocked-by 692 acme/api#1253 --repo web
 
-# Remove blocking relationship
-nightgauge issue remove-blocked-by <blocked-number> <blocker-number>
+# Remove blocking relationship (the blocker takes the same forms)
+nightgauge issue remove-blocked-by <blocked-number> <blocker>
 
 # Sync labels from issue metadata
 nightgauge issue sync-labels <number> [--owner ORG] [--repo REPO]

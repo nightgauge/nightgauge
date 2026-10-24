@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"log"
 	"os"
 	"path/filepath"
@@ -91,11 +92,6 @@ type AutonomousConfig struct {
 
 	// AutoActionable controls whether auto-refined issues go to Ready (true) or Backlog (false).
 	AutoActionable bool
-
-	// TrustedAuthorAssociations overrides the default trusted set
-	// (OWNER/MEMBER/COLLABORATOR) used by the author-trust gate (#270).
-	// Empty → use the built-in default.
-	TrustedAuthorAssociations []string
 
 	// PerRepoMax is the default per-repository concurrency cap
 	// (concurrency.per_repo_max). 0 → 1 (serialize per repo). Applies to any
@@ -874,7 +870,11 @@ const graphIncompleteThreshold = 0.10
 // what to run and the existing pipeline infrastructure to run it.
 type AutonomousScheduler struct {
 	scheduler *Scheduler
-	ghClient  *gh.Client
+	// trustGateOverride replaces the scheduler's eligibility gate for the
+	// autonomous loop's own decisions. Tests only; nil in production, where
+	// the loop asks the scheduler's gate (#2130).
+	trustGateOverride *trust.Gate
+	ghClient          *gh.Client
 	// allRepos is the full, pristine repo list from construction. Used as the
 	// source for FilterRepos so repeated filter calls can widen/narrow the
 	// active set idempotently (rather than monotonically shrinking).
@@ -4114,6 +4114,10 @@ type CandidateItem struct {
 	BoardStatus  string   // project board status: Ready, Backlog, In progress, etc.
 	OnCritPath   bool
 	UnblockCount int // how many downstream items this unblocks
+	// AuthorLogin and LabelsTruncated feed the eligibility gate (#2130) at
+	// enqueueItem, so the decision usually costs no issue read.
+	AuthorLogin     string
+	LabelsTruncated bool
 }
 
 // isWorkCompleteStatus returns true when the dep's board status is the one
@@ -4761,6 +4765,9 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			BoardStatus:  node.BoardStatus,
 			OnCritPath:   critPathSet[key],
 			UnblockCount: unblockCount,
+			AuthorLogin:  node.AuthorLogin,
+			// A truncated label page cannot prove the approval label absent.
+			LabelsTruncated: node.LabelsTruncated,
 		})
 	}
 
@@ -4925,6 +4932,18 @@ func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateIt
 		log.Printf("autonomous: enqueueItem REFUSED %s#%d — self-repo guard (#292); work it interactively or set autonomous.allow_self_repo",
 			item.Repo, item.Number)
 		as.raiseSelfRepoRefusal(item.Repo, item.Number, item.Title)
+		return
+	}
+	// The eligibility gate (#2130) runs here, before the running set, the
+	// dispatcher (local or cloud) or the extension's onDispatch callback sees
+	// the item: every autonomous dispatch funnels through this function, and
+	// the queue's own check (DequeueIndependentFor) is the backstop for the
+	// routes that do not.
+	owner, repoName := splitOwnerRepo(item.Repo)
+	if d := as.eligibility().decide(ctx, trust.Subject{Owner: owner, Repo: repoName, Number: item.Number,
+		Author: item.AuthorLogin, Labels: item.Labels, LabelsComplete: !item.LabelsTruncated}); !d.Eligible {
+		log.Printf("autonomous: enqueueItem REFUSED %s#%d — %s", item.Repo, item.Number, d.Reason)
+		as.raiseUntrustedAuthorSkip(owner, repoName, item.Number, item.Title, d, "dispatch")
 		return
 	}
 	log.Printf("autonomous: dispatching %s#%d (%s)", item.Repo, item.Number, item.Title)
@@ -6542,7 +6561,7 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 // new rule promotes any Backlog item that meets the triage gate, which
 // matches what users expect when they land 12 P1 issues with `type:bug`
 // labels and no blockers and start autonomous.
-func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[string][]string, trustedAssociations []string) bool {
+func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[string][]string, eligible func(*depgraph.Node) bool) bool {
 	if node == nil || !strings.EqualFold(node.State, "OPEN") {
 		return false
 	}
@@ -6552,10 +6571,11 @@ func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[s
 	if node.Priority == "" {
 		return false
 	}
-	// Author-trust gate (#270): the sound existing Backlog->Ready gate must
-	// also fail closed on author identity — a triage label alone does not
-	// imply the author is trusted.
-	if !isTrustedAuthor(node.AuthorAssociation, trustedAssociations) {
+	// Eligibility gate (#2130): a triage label alone does not vouch for an
+	// issue; a user with write access must have authored or approved it. Asked
+	// after the cheap board checks so a non-candidate costs no lookup. A nil
+	// predicate refuses: fail closed.
+	if eligible == nil || !eligible(node) {
 		return false
 	}
 	hasType := false
@@ -6585,7 +6605,7 @@ func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[s
 // to populate the LastPromotionRejectionReasons tally (#288) — it is a
 // read-only diagnostic helper and must never be used for gating, so
 // isTriagedAndUnblocked stays the single source of truth for the rule itself.
-func triageRejectionReason(node *depgraph.Node, graph *depgraph.Graph, adj map[string][]string, trustedAssociations []string) string {
+func triageRejectionReason(node *depgraph.Node, graph *depgraph.Graph, adj map[string][]string, eligible func(*depgraph.Node) bool) string {
 	if node == nil || !strings.EqualFold(node.State, "OPEN") {
 		return "not-open"
 	}
@@ -6595,8 +6615,8 @@ func triageRejectionReason(node *depgraph.Node, graph *depgraph.Graph, adj map[s
 	if node.Priority == "" {
 		return "no-priority"
 	}
-	if !isTrustedAuthor(node.AuthorAssociation, trustedAssociations) {
-		return "untrusted-author"
+	if eligible == nil || !eligible(node) {
+		return "not-vouched-for"
 	}
 	hasType := false
 	for _, label := range node.Labels {
@@ -6628,6 +6648,7 @@ func triageRejectionReason(node *depgraph.Node, graph *depgraph.Graph, adj map[s
 // before the callback fired and lifting fully-triaged greenfield items
 // that never had `blockedBy` set in the first place (#3253).
 func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
+	as.eligibility().resetTrustCycle() // a fresh eligibility cycle (#2130)
 	// Same rationale as recoverOrphanedRunning: the startup promotion scan builds
 	// the cross-repo graph and issues board moves, all of which hit GitHub. Run
 	// them on a boardRecoveryTimeout context detached from the caller's deadline
@@ -6650,13 +6671,14 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 	rejections := make(map[string]int)
 
 	for _, node := range graph.Nodes {
-		if strings.EqualFold(node.BoardStatus, "Backlog") && node.Priority != "" &&
-			!isTrustedAuthor(node.AuthorAssociation, as.config.TrustedAuthorAssociations) {
-			owner, repoName := splitOwnerRepo(node.Repo)
-			as.raiseUntrustedAuthorSkip(owner, repoName, node.Number, node.Title, node.AuthorAssociation, "triage-promotion")
+		if strings.EqualFold(node.BoardStatus, "Backlog") && node.Priority != "" {
+			if d := as.eligibility().decideNode(opCtx, node); !d.Eligible {
+				owner, repoName := splitOwnerRepo(node.Repo)
+				as.raiseUntrustedAuthorSkip(owner, repoName, node.Number, node.Title, d, "triage-promotion")
+			}
 		}
-		if !isTriagedAndUnblocked(node, graph, adj, as.config.TrustedAuthorAssociations) {
-			if reason := triageRejectionReason(node, graph, adj, as.config.TrustedAuthorAssociations); reason != "" {
+		if !isTriagedAndUnblocked(node, graph, adj, as.eligibility().nodeEligible(opCtx)) {
+			if reason := triageRejectionReason(node, graph, adj, as.eligibility().nodeEligible(opCtx)); reason != "" {
 				rejections[reason]++
 			}
 			continue
@@ -6706,6 +6728,7 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 // from Backlog → Ready on the project board. This ensures the autonomous
 // scheduler can pick them up on the next scan cycle.
 func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, completedRepo string, completedIssue int) {
+	as.eligibility().resetTrustCycle() // a fresh eligibility cycle (#2130)
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
 
@@ -6775,13 +6798,14 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 		}
 		// Triage gate is shared with promoteUnblockedOnStartup so the cascade
 		// path doesn't promote items that startup would refuse (#3253).
-		if strings.EqualFold(node.BoardStatus, "Backlog") && node.Priority != "" &&
-			!isTrustedAuthor(node.AuthorAssociation, as.config.TrustedAuthorAssociations) {
-			owner, repoName := splitOwnerRepo(node.Repo)
-			as.raiseUntrustedAuthorSkip(owner, repoName, node.Number, node.Title, node.AuthorAssociation, "triage-promotion")
+		if strings.EqualFold(node.BoardStatus, "Backlog") && node.Priority != "" {
+			if d := as.eligibility().decideNode(ctx, node); !d.Eligible {
+				owner, repoName := splitOwnerRepo(node.Repo)
+				as.raiseUntrustedAuthorSkip(owner, repoName, node.Number, node.Title, d, "triage-promotion")
+			}
 		}
-		if !isTriagedAndUnblocked(node, graph, adj, as.config.TrustedAuthorAssociations) {
-			if reason := triageRejectionReason(node, graph, adj, as.config.TrustedAuthorAssociations); reason != "" {
+		if !isTriagedAndUnblocked(node, graph, adj, as.eligibility().nodeEligible(ctx)) {
+			if reason := triageRejectionReason(node, graph, adj, as.eligibility().nodeEligible(ctx)); reason != "" {
 				rejections[reason]++
 			}
 			continue
@@ -7795,6 +7819,10 @@ func (as *AutonomousScheduler) refinementIsViable() bool {
 // skill for each candidate. Runs on its own ticker, separate from the dispatch
 // loop. Refinement failures do NOT trip the dispatch circuit breaker.
 func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
+	// A new refinement cycle asks the forge again (#2130): an approval or a
+	// permission change since the last cycle must count, and an edit made
+	// after an approval must void it.
+	as.eligibility().resetTrustCycle()
 	as.mu.Lock()
 	if as.state.Status != "running" {
 		as.mu.Unlock()
@@ -7994,13 +8022,15 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 		for i, candidate := range candidates {
 			key := fmt.Sprintf("%s#%d", fullRepo, candidate.Number)
 
-			// Author-trust gate (#270): a stranger's issue on a public repo
-			// must not reach refinement — attacker-controlled title/body text
-			// would otherwise be handed straight to the model. Fail closed.
-			if !isTrustedAuthor(candidate.AuthorAssociation, as.config.TrustedAuthorAssociations) {
-				log.Printf("[refinement] %s#%d: skipping — untrusted author (author_association=%q)",
-					fullRepo, candidate.Number, candidate.AuthorAssociation)
-				as.raiseUntrustedAuthorSkip(owner, repo, candidate.Number, candidate.Title, candidate.AuthorAssociation, "refinement")
+			// Eligibility gate (#2130): an issue no writer vouched for must not
+			// reach refinement — its title and body would be handed straight to
+			// the model. Fail closed.
+			if d := as.eligibility().decide(ctx, trust.Subject{
+				Owner: owner, Repo: repo, Number: candidate.Number,
+				Author: candidate.AuthorLogin, Labels: candidate.Labels, LabelsComplete: true,
+			}); !d.Eligible {
+				log.Printf("[refinement] %s#%d: skipping — %s", fullRepo, candidate.Number, d.Reason)
+				as.raiseUntrustedAuthorSkip(owner, repo, candidate.Number, candidate.Title, d, "refinement")
 				continue
 			}
 

@@ -69,11 +69,10 @@ type BoardItem struct {
 	BlockedBy []BlockingRef `json:"blockedBy,omitempty"`
 	Blocking  []BlockingRef `json:"blocking,omitempty"`
 
-	// AuthorAssociation is the issue author's relationship to the repo
-	// (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR,
-	// FIRST_TIMER, NONE, MANNEQUIN). Used by the autonomous pipeline's
-	// author-trust gate (#270) — empty/unknown values are untrusted.
-	AuthorAssociation string `json:"authorAssociation,omitempty"`
+	// AuthorLogin is the issue author's login; a bot's ends in "[bot]". The
+	// eligibility gate (internal/trust, #2130) asks the repository for this
+	// login's permission. Empty means unknown, and the gate reads the issue.
+	AuthorLogin string `json:"authorLogin,omitempty"`
 
 	// RelationSummary carries the COUNTS of the item's relationships. It is
 	// set by the summary read (ListOpenItemsSummary), which reads counts

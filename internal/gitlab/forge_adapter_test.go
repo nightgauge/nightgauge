@@ -48,7 +48,8 @@ func TestStubServices_ReturnUnsupported(t *testing.T) {
 	// for individual methods lives in their service tests. Project + Board
 	// services are no longer stubs (landed in #3357); CI + Rulesets are no
 	// longer stubs (landed in #3359) — exercise the still-stubbed methods.
-	if err := a.Project().AddBlockedByNumber(ctx, "o", "r", 1, 2); !errors.Is(err, forge.ErrUnsupported) {
+	if err := a.Project().AddBlockedByNumber(ctx,
+		forge.IssueRef{Owner: "o", Repo: "r", Number: 1}, forge.IssueRef{Owner: "o", Repo: "other", Number: 2}); !errors.Is(err, forge.ErrUnsupported) {
 		t.Errorf("Project.AddBlockedByNumber: %v", err)
 	}
 	if _, err := a.Project().UpdateEpicEstimates(ctx, "o", "r", 1); !errors.Is(err, forge.ErrUnsupported) {

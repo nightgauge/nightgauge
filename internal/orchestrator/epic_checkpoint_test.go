@@ -26,6 +26,7 @@ import (
 func TestNewAutonomousScheduler_WiresEpicCheckpointIntoScheduler(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 
 	if sched.epicCheckpoint == nil {
 		t.Fatal("NewAutonomousScheduler did not register an epic-checkpoint callback on " +
@@ -68,6 +69,7 @@ func TestEpicCheckpoint_DisabledDoesNotLatch(t *testing.T) {
 	cfg := DefaultAutonomousConfig()
 	cfg.SafetyRails = &SafetyConfig{RateLimitPerHour: 100, EpicCheckpoint: false}
 	as := NewAutonomousScheduler(sched, nil, nil, nil, cfg, layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 
 	sched.epicCheckpoint("example-org/platform", 42)
 
@@ -90,6 +92,7 @@ func TestEpicCheckpoint_DisabledDoesNotLatch(t *testing.T) {
 func TestEpicCheckpoint_SurvivesOnEpicCompleteReassignment(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 
 	// Exactly what the IPC server does on every pipeline.run request.
 	otherCalled := false
@@ -157,6 +160,7 @@ func TestSafetyRailKind_FingerprintsAreStable(t *testing.T) {
 func TestRaiseSafetyRailTrip_RaisesABlockingFleetCard(t *testing.T) {
 	store := attention.New(layouttest.Repo(t))
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	as.attention = store
 
 	as.raiseSafetyRailTrip("paused for epic checkpoint (epic example-org/platform#42 complete — awaiting human review)",
@@ -224,6 +228,7 @@ func TestEpicCheckpointDefaults_AgreeAcrossPackages(t *testing.T) {
 func TestCheckEpicCompletion_LatchesTheCheckpoint(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 
 	sched.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
 		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer,
@@ -254,6 +259,7 @@ func TestCheckEpicCompletion_LatchesTheCheckpoint(t *testing.T) {
 func TestCheckEpicCompletion_NamesACrossRepoEpicInItsOwnRepository(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 
 	sched.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
 		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer,
@@ -345,6 +351,7 @@ func TestCheckEpicCompletion_ReadyToShipNamesTheEpicInItsOwnRepository(t *testin
 func TestCheckEpicCompletion_DoesNotLatchWithoutAutoClose(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 
 	sched.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
 		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer,

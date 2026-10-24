@@ -68,6 +68,7 @@ func TestScheduler_PRMerge_RefusalFailsRunWithoutLLM_1675(t *testing.T) {
 		Reason: pmstages.ReasonGeneratedSteering + ": no local worktree",
 	}}
 	s := &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

@@ -100,6 +100,7 @@ func newRunIdentityTestScheduler(t *testing.T, root string, runner StageRunner) 
 	commitPipelineSkillFixtures(t, root)
 
 	return &Scheduler{
+		trustGate:     allWritersGate(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
 		retryEngine:   NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

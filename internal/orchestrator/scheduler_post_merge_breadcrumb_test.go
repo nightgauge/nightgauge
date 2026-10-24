@@ -113,6 +113,7 @@ func newBreadcrumbScheduler(t *testing.T, launchRoot, targetRoot string) *Schedu
 	t.Helper()
 	srv := mergedPRServer(t)
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		client:        gh.NewClientWithURL("test-token", srv.URL),
 		issueSvc:      &breadcrumbIssueSvc{issue: &types.Issue{Number: breadcrumbIssue, NodeID: "I_441", State: "CLOSED"}},
 		execMgr:       execution.NewManager(launchRoot, nil),

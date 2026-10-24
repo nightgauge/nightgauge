@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"github.com/nightgauge/nightgauge/internal/trust"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 )
@@ -74,6 +75,12 @@ func NewForgeAdapter(client *Client, owner string, projectNumber int, ownerType 
 		projectNumber: projectNumber,
 		ownerType:     ownerType,
 	}
+}
+
+// TrustSource returns the reads the eligibility gate and the comment filter
+// make (#2130), through this adapter's client.
+func (a *ForgeAdapter) TrustSource() trust.CommentSource {
+	return NewTrustForge(a.client)
 }
 
 // Issues returns the IssueService as a forge.IssueService.

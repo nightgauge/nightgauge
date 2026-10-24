@@ -291,7 +291,7 @@ func (b *BoardService) nodeToItem(node projectItemNode, rels IssueRelations) *ty
 		item.CreatedAt, _ = time.Parse(time.RFC3339, string(f.CreatedAt))
 		item.UpdatedAt, _ = time.Parse(time.RFC3339, string(f.UpdatedAt))
 		item.IsPR = false
-		item.AuthorAssociation = string(f.AuthorAssociation)
+		item.AuthorLogin = actorLogin(f.Author)
 		item.Labels = f.Labels.names()
 		// Recorded rather than silently producing a short slice: the owner-action
 		// dispatch exclusion, IsEpic, Priority and Size all read item.Labels,

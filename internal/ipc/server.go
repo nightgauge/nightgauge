@@ -3111,6 +3111,12 @@ func (s *Server) registerMethods() {
 		if s.scheduler == nil {
 			return nil, errors.New(errSchedulerNotConfigured)
 		}
+		// The eligibility gate (#2130) runs before anything is queued, so a
+		// refusal reaches the caller as an error naming the author, their
+		// permission level and how to approve the issue, and no run starts.
+		if d := s.scheduler.Eligibility(ctx, p.Owner, p.Repo, p.IssueNumber); !d.Eligible {
+			return nil, errors.New(d.Reason)
+		}
 
 		item := types.BoardItem{
 			ID:     p.ID,

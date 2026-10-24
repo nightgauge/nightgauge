@@ -104,7 +104,8 @@ func TestScanCadence_RateAwareDisabledReturnsFixedBase(t *testing.T) {
 	c, cleanup := withFreshTracker(t, "alice", 2000, 30*time.Minute)
 	defer cleanup()
 	as := &AutonomousScheduler{
-		ghClient: c,
+		trustGateOverride: allWritersGate(),
+		ghClient:          c,
 		config: AutonomousConfig{
 			ScanInterval:     30 * time.Second,
 			RateAwareCadence: false,
@@ -120,6 +121,7 @@ func TestScanCadence_RateAwareDisabledReturnsFixedBase(t *testing.T) {
 // no ghClient/tracker (e.g. tests, early startup) must fail open to base.
 func TestScanCadence_RateAwareNoTrackerFailsOpen(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			ScanInterval:     30 * time.Second,
 			RateAwareCadence: true,
@@ -138,7 +140,8 @@ func TestScanCadence_RateAwareStretchesUnderPressure(t *testing.T) {
 	c, cleanup := withFreshTracker(t, "alice", 2200, 40*time.Minute)
 	defer cleanup()
 	as := &AutonomousScheduler{
-		ghClient: c,
+		trustGateOverride: allWritersGate(),
+		ghClient:          c,
 		config: AutonomousConfig{
 			ScanInterval:     30 * time.Second,
 			RateAwareCadence: true,
@@ -216,7 +219,8 @@ func TestSustainedHourBudgetSimulation(t *testing.T) {
 	cleanup()
 
 	as := &AutonomousScheduler{
-		ghClient: c,
+		trustGateOverride: allWritersGate(),
+		ghClient:          c,
 		config: AutonomousConfig{
 			ScanInterval:     30 * time.Second,
 			RateAwareCadence: true,

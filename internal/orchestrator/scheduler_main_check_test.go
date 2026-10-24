@@ -109,6 +109,7 @@ func TestCheckEpicCompletion_WiresTheMainCheckReaderThroughTheSeam(t *testing.T)
 	reader := &redMainReader{}
 
 	s := &Scheduler{
+		trustGate:           allWritersGate(),
 		client:              gh.NewClientWithURL("t", "http://127.0.0.1:0/graphql"),
 		evaluatePostMergeFn: capture,
 		mainCheckReaderFn:   func(*gh.Client) hooks.MainCheckReader { return reader },

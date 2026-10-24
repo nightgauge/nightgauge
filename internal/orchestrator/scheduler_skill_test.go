@@ -35,6 +35,7 @@ func TestPreflightLicense_NilChecker_ReturnsCommunity(t *testing.T) {
 
 func TestPreflightLicense_ProTier_ReturnsTier(t *testing.T) {
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
 			result: &LicenseCheckResult{Allowed: true, Tier: "pro"},
 		},
@@ -53,6 +54,7 @@ func TestPreflightLicense_ProTier_ReturnsTier(t *testing.T) {
 
 func TestPreflightLicense_Blocked_ReturnsEmptyTier(t *testing.T) {
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
 			result: &LicenseCheckResult{Allowed: false, Reason: "expired"},
 		},
@@ -71,6 +73,7 @@ func TestPreflightLicense_Blocked_ReturnsEmptyTier(t *testing.T) {
 
 func TestPreflightLicense_Error_DegradesToCommunity(t *testing.T) {
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
 			err: fmt.Errorf("network timeout"),
 		},
@@ -108,6 +111,7 @@ func TestRevalidateLicense_NilChecker_StillAllowed(t *testing.T) {
 // progression (allowed=false), not just flag-and-continue.
 func TestRevalidateLicense_ConfirmedRevoked_Halts(t *testing.T) {
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
 			result: &LicenseCheckResult{Allowed: false, Status: "revoked", Reason: "license revoked"},
 		},
@@ -127,6 +131,7 @@ func TestRevalidateLicense_ConfirmedRevoked_Halts(t *testing.T) {
 // TestRevalidateLicense_ConfirmedSuspended_Halts mirrors the revoked case.
 func TestRevalidateLicense_ConfirmedSuspended_Halts(t *testing.T) {
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
 			result: &LicenseCheckResult{Allowed: false, Status: "suspended"},
 		},
@@ -149,6 +154,7 @@ func TestRevalidateLicense_ConfirmedSuspended_Halts(t *testing.T) {
 // status) must NOT halt the run.
 func TestRevalidateLicense_UnreachableFailOpen_StillAllowed(t *testing.T) {
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
 			result: &LicenseCheckResult{Allowed: true, Tier: "community"},
 		},
@@ -170,6 +176,7 @@ func TestRevalidateLicense_UnreachableFailOpen_StillAllowed(t *testing.T) {
 // mid-run halt, which the epic didn't ask for.
 func TestRevalidateLicense_Blocked_NonRevokedStatus_StillAllowed(t *testing.T) {
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
 			result: &LicenseCheckResult{Allowed: false, Status: "expired", Reason: "expired"},
 		},
@@ -188,6 +195,7 @@ func TestRevalidateLicense_Blocked_NonRevokedStatus_StillAllowed(t *testing.T) {
 // an error) is treated as transient and does not block.
 func TestRevalidateLicense_Error_TreatedAsTransient(t *testing.T) {
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
 			err: fmt.Errorf("checker internal error"),
 		},
@@ -206,6 +214,7 @@ func TestRevalidateLicense_Error_TreatedAsTransient(t *testing.T) {
 // the new cacheUntil window rather than re-validating on every stage.
 func TestRevalidateLicense_Allowed_RefreshesSnapshot(t *testing.T) {
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		licenseChecker: &mockLicenseChecker{
 			result: &LicenseCheckResult{
 				Allowed:    true,

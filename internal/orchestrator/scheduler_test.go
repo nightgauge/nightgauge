@@ -688,6 +688,7 @@ func TestQueuePersistence(t *testing.T) {
 
 	// Create scheduler with workspace root — queue persists to disk
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: tmpDir,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -729,6 +730,7 @@ func TestQueuePersistence(t *testing.T) {
 
 	// Create a new scheduler and verify it loads from disk
 	s2 := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: tmpDir,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -746,6 +748,7 @@ func TestQueuePersistence(t *testing.T) {
 	// Clear and verify persistence
 	s2.QueueClear()
 	s3 := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: tmpDir,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -881,6 +884,7 @@ func TestDequeueIndependent(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Scheduler{
+				trustGate:   allWritersGate(),
 				repoRunning: make(map[string]int),
 				mergeLocks:  make(map[string]*sync.Mutex),
 			}
@@ -973,6 +977,7 @@ func (f *fakeTelemetry) SyncQueue(ctx context.Context, items []platform.QueueSyn
 func TestDequeueIndependent_ProducesProcessingStatus(t *testing.T) {
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: tmpDir,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -1147,6 +1152,7 @@ func TestCompleteQueueItem_SparesRequeueAndOtherRepo(t *testing.T) {
 func TestSyncQueueToCloudLocked_IncludesProcessingItem(t *testing.T) {
 	fake := &fakeTelemetry{}
 	s := &Scheduler{
+		trustGate:        allWritersGate(),
 		repoRunning:      make(map[string]int),
 		mergeLocks:       make(map[string]*sync.Mutex),
 		telemetrySvc:     fake,
@@ -1182,6 +1188,7 @@ func TestSyncQueueToCloudLocked_IncludesProcessingItem(t *testing.T) {
 // nothing (every repo at its per-repo cap), and overflow stays queued.
 func TestDequeueIndependent_PerRepoCap(t *testing.T) {
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
 		maxPerRepo:  1, // concurrency.per_repo_max default
@@ -1230,6 +1237,7 @@ func TestDequeueIndependent_PerRepoCap(t *testing.T) {
 // lacked before #3781/#3786.
 func TestDequeueIndependent_3874_SameRepoBatchAndCrossPass(t *testing.T) {
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
 		maxPerRepo:  1, // concurrency.per_repo_max = 1 (sequential per repo)
@@ -1282,6 +1290,7 @@ func TestDequeueIndependent_3874_SameRepoBatchAndCrossPass(t *testing.T) {
 func TestDequeueIndependent_PerRepoOverride(t *testing.T) {
 	// Override raises repo A to 2; B stays at default 1.
 	s := &Scheduler{
+		trustGate:                allWritersGate(),
 		repoRunning:              make(map[string]int),
 		mergeLocks:               make(map[string]*sync.Mutex),
 		maxPerRepo:               1,
@@ -1308,6 +1317,7 @@ func TestDequeueIndependent_PerRepoOverride(t *testing.T) {
 
 func TestQueueItemPositions(t *testing.T) {
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
 	}
@@ -1341,6 +1351,7 @@ func TestQueueItemPositions(t *testing.T) {
 
 func TestQueueAddItem_DeduplicatesByRepositoryAndIssueNumber(t *testing.T) {
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
 	}
@@ -1388,6 +1399,7 @@ func TestQueueChangedCallback(t *testing.T) {
 	ch := make(chan QueueState, 1)
 
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
 	}
@@ -1447,6 +1459,7 @@ func TestEnqueueEpic_PopulatesSubIssueBlockedBy(t *testing.T) {
 	})
 
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		issueSvc:    mock,
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
@@ -1535,6 +1548,7 @@ func TestEnqueueEpic_CombinesEpicAndSubIssueBlockers(t *testing.T) {
 	})
 
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		issueSvc:    mock,
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
@@ -1868,6 +1882,7 @@ func TestOnFailureStatusDefault(t *testing.T) {
 	// When OnFailureStatus is empty, NewScheduler should default to "ready"
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
+		trustGate:       allWritersGate(),
 		workspaceRoot:   tmpDir,
 		repoRunning:     make(map[string]int),
 		mergeLocks:      make(map[string]*sync.Mutex),
@@ -1909,6 +1924,7 @@ func TestOnFailureStatusConfigValues(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tmpDir := layouttest.Repo(t)
 			s := &Scheduler{
+				trustGate:       allWritersGate(),
 				workspaceRoot:   tmpDir,
 				repoRunning:     make(map[string]int),
 				mergeLocks:      make(map[string]*sync.Mutex),
@@ -2063,7 +2079,8 @@ func TestEnsureEpicBranchForItem_Disabled(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "false")
 
 	s := &Scheduler{
-		issueSvc: newMockIssueSvc(),
+		trustGate: allWritersGate(),
+		issueSvc:  newMockIssueSvc(),
 	}
 
 	item := types.BoardItem{
@@ -2306,8 +2323,9 @@ func TestVerifyPRMerged_MergedButIssueStillOpen_TrustsMerged(t *testing.T) {
 	issueSvc.addIssue("nightgauge", "acme-platform", 4070,
 		&types.Issue{Number: 4070, State: "OPEN"})
 	s := &Scheduler{
-		client:   gh.NewClientWithURL("test-token", srv.URL),
-		issueSvc: issueSvc,
+		trustGate: allWritersGate(),
+		client:    gh.NewClientWithURL("test-token", srv.URL),
+		issueSvc:  issueSvc,
 	}
 
 	merged, reason := s.verifyPRMerged(context.Background(), testPRURL, 4070)
@@ -2324,8 +2342,9 @@ func TestVerifyPRMerged_MergedAndIssueClosed_Succeeds(t *testing.T) {
 	issueSvc.addIssue("nightgauge", "acme-platform", 4070,
 		&types.Issue{Number: 4070, State: "CLOSED"})
 	s := &Scheduler{
-		client:   gh.NewClientWithURL("test-token", srv.URL),
-		issueSvc: issueSvc,
+		trustGate: allWritersGate(),
+		client:    gh.NewClientWithURL("test-token", srv.URL),
+		issueSvc:  issueSvc,
 	}
 
 	merged, reason := s.verifyPRMerged(context.Background(), testPRURL, 4070)
@@ -2341,8 +2360,9 @@ func TestVerifyPRMerged_MergedIssueFetchError_Inconclusive(t *testing.T) {
 	srv := prBlockerServer(t, "MERGED", "MERGEABLE", "CLEAN", "APPROVED")
 	defer srv.Close()
 	s := &Scheduler{
-		client:   gh.NewClientWithURL("test-token", srv.URL),
-		issueSvc: newMockIssueSvc(), // issue 4070 not registered → GetIssue errors
+		trustGate: allWritersGate(),
+		client:    gh.NewClientWithURL("test-token", srv.URL),
+		issueSvc:  newMockIssueSvc(), // issue 4070 not registered → GetIssue errors
 	}
 
 	merged, reason := s.verifyPRMerged(context.Background(), testPRURL, 4070)
@@ -2878,6 +2898,7 @@ func TestCircularBlockedByAutoFixActuallyFires(t *testing.T) {
 // a local item of the same issue, and not the item once a dispatch took it.
 func TestQueueRemoveRemoteRun_RemovesOnlyTheRunsUntakenItem(t *testing.T) {
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
 	}
@@ -2924,6 +2945,7 @@ func TestQueueRemoveRemoteRun_RemovesOnlyTheRunsUntakenItem(t *testing.T) {
 // keeps what it has, and nothing is queued twice.
 func TestQueueAddItem_AttachesATriggersRunIdToAWaitingItem(t *testing.T) {
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
 	}
@@ -2968,6 +2990,7 @@ func TestQueueAddItem_AttachesATriggersRunIdToAWaitingItem(t *testing.T) {
 // while no dispatch has taken it.
 func TestQueueRemoveRemoteRun_DetachesARunFromTheOperatorsItem(t *testing.T) {
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
 	}

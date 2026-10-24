@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 func newAttentionProducerScheduler(t *testing.T) *AutonomousScheduler {
 	t.Helper()
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	if as.Attention() == nil {
 		t.Fatal("attention store not wired by NewAutonomousScheduler")
 	}
@@ -231,13 +233,18 @@ func TestProducerArchitectureApprovalEmitsApprove(t *testing.T) {
 	assertSteerSet(t, r)
 }
 
-// TestProducerUntrustedAuthorSkipEmitsApprove covers the review_required-
-// equivalent card for #270's author-trust gate: without it, an untrusted
-// author's issue silently disappears from autonomous consideration instead of
-// surfacing to a maintainer who can review and manually promote it.
+// untrustedDecision is the gate's refusal the card tests raise.
+var untrustedDecision = trust.Decision{Author: "stranger", AuthorLevel: trust.LevelRead,
+	Reason: "octocat/acme#900 is not eligible: @stranger has read access to octocat/acme, and the issue does not " +
+		"carry `pipeline:approved`; a user with write access or higher must apply `pipeline:approved` to approve it"}
+
+// TestProducerUntrustedAuthorSkipEmitsApprove covers the card the eligibility
+// gate (#2130) raises: without it, an issue no writer vouched for silently
+// disappears from autonomous consideration. The card says how to approve the
+// issue and offers no "promote" action, which would not make it eligible.
 func TestProducerUntrustedAuthorSkipEmitsApprove(t *testing.T) {
 	as := newAttentionProducerScheduler(t)
-	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", "NONE", "refinement")
+	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", untrustedDecision, "refinement")
 
 	reqs := openRequests(t, as)
 	if len(reqs) != 1 {
@@ -247,12 +254,19 @@ func TestProducerUntrustedAuthorSkipEmitsApprove(t *testing.T) {
 	if r.Kind != attention.KindApprove {
 		t.Errorf("kind = %q, want approve", r.Kind)
 	}
-	promote := r.FindOption("promote")
-	if promote == nil || r.FindOption("leave") == nil {
-		t.Fatal("expected promote + leave options")
+	if r.FindOption("leave") == nil {
+		t.Fatal("expected a leave option")
 	}
-	if promote.Verb != attention.VerbProjectSyncStatus {
-		t.Errorf("promote verb = %q, want %q", promote.Verb, attention.VerbProjectSyncStatus)
+	if r.FindOption("promote") != nil {
+		t.Error("the card offers promote, which would not make the issue eligible")
+	}
+	for _, want := range []string{"apply `pipeline:approved`", "@stranger has read access"} {
+		if !strings.Contains(r.Body, want) {
+			t.Errorf("card body lacks %q: %s", want, r.Body)
+		}
+	}
+	if !strings.Contains(r.Context.Blocker, "permission=read") {
+		t.Errorf("blocker = %q, want the permission level", r.Context.Blocker)
 	}
 	assertSteerSet(t, r)
 }
@@ -262,8 +276,8 @@ func TestProducerUntrustedAuthorSkipEmitsApprove(t *testing.T) {
 // same issue update a single card rather than spawning duplicates.
 func TestUntrustedAuthorSkipDedupesAcrossGates(t *testing.T) {
 	as := newAttentionProducerScheduler(t)
-	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", "NONE", "refinement")
-	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", "NONE", "triage-promotion")
+	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", untrustedDecision, "refinement")
+	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", untrustedDecision, "triage-promotion")
 
 	if got := len(openRequests(t, as)); got != 1 {
 		t.Fatalf("got %d requests after both gates observed the same issue, want 1", got)

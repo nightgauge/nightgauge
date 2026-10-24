@@ -53,8 +53,9 @@ func TestPrioritize_CriticalPathTiebreakerWithinSamePriority(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -89,8 +90,9 @@ func TestPrioritize_PriorityDominatesCriticalPath(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -122,8 +124,9 @@ func TestPrioritize_PriorityOrdering(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -152,8 +155,9 @@ func TestPrioritize_SmallerSizeFirst(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -193,8 +197,9 @@ func TestPrioritize_HigherUnblockCountFirst(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -222,8 +227,9 @@ func TestPrioritize_SkipsBlockedItems(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -243,8 +249,9 @@ func TestPrioritize_SkipsClosedItems(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -264,8 +271,9 @@ func TestPrioritize_SkipsEpics(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -291,8 +299,9 @@ func TestPrioritize_SkipsOwnerActionLabel(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -314,8 +323,9 @@ func TestPrioritize_OwnerActionLabelCaseInsensitive(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -338,8 +348,9 @@ func TestPrioritize_ExcludeLabelsConfigOverride(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5, ExcludeLabels: []string{"needs-human"}},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5, ExcludeLabels: []string{"needs-human"}},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -359,7 +370,8 @@ func TestPrioritize_SkipsAlreadyRunning(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
 		state: &AutonomousState{
 			Running: []RunningItem{
 				{Repo: "R", Number: 1, Title: "Running"},
@@ -384,7 +396,8 @@ func TestPrioritize_SkipsAlreadyCompleted(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
 		state: &AutonomousState{
 			Completed: []CompletedItem{
 				{Repo: "R", Number: 1, Title: "Done"},
@@ -417,8 +430,9 @@ func TestPrioritize_BoardStatusGating(t *testing.T) {
 
 	t.Run("default: only Ready dispatched, Todo is not (#270)", func(t *testing.T) {
 		as := &AutonomousScheduler{
-			config: AutonomousConfig{MaxConcurrent: 10, PickupBacklog: false},
-			state:  &AutonomousState{},
+			trustGateOverride: allWritersGate(),
+			config:            AutonomousConfig{MaxConcurrent: 10, PickupBacklog: false},
+			state:             &AutonomousState{},
 		}
 		candidates := as.prioritize(context.Background(), g)
 		if len(candidates) != 1 {
@@ -431,8 +445,9 @@ func TestPrioritize_BoardStatusGating(t *testing.T) {
 
 	t.Run("pickup_backlog: Ready + Backlog dispatched, Todo still excluded", func(t *testing.T) {
 		as := &AutonomousScheduler{
-			config: AutonomousConfig{MaxConcurrent: 10, PickupBacklog: true},
-			state:  &AutonomousState{},
+			trustGateOverride: allWritersGate(),
+			config:            AutonomousConfig{MaxConcurrent: 10, PickupBacklog: true},
+			state:             &AutonomousState{},
 		}
 		candidates := as.prioritize(context.Background(), g)
 		if len(candidates) != 2 {
@@ -461,8 +476,9 @@ func TestUnblockCascade(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -477,7 +493,8 @@ func TestUnblockCascade(t *testing.T) {
 
 func TestOnPipelineComplete_Success(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -513,7 +530,8 @@ func TestOnPipelineComplete_Success(t *testing.T) {
 
 func TestOnPipelineComplete_Failure(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -544,7 +562,8 @@ func TestOnPipelineComplete_Failure(t *testing.T) {
 // no conflict-restart re-queue) — the branch is NOT blindly deleted/restarted.
 func TestOnPipelineComplete_ConflictRecoveryPath_PreservesBranch(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:  "running",
 			Running: []RunningItem{{Repo: "R", Number: 70, Title: "Conflict Issue"}},
@@ -574,7 +593,8 @@ func TestOnPipelineComplete_ConflictRecoveryPath_PreservesBranch(t *testing.T) {
 // through to a true failure.
 func TestOnPipelineComplete_LegacyConflictRestart_BoundedThenTrueFailure(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			Running:               []RunningItem{{Repo: "R", Number: 80, Title: "Legacy Conflict"}},
@@ -629,7 +649,8 @@ func TestOnPipelineComplete_LegacyConflictRestart_BoundedThenTrueFailure(t *test
 // cap (#3327 incident, $14.95 lost).
 func TestOnPipelineComplete_StreamIdleTimeout_LongBackoff(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -698,7 +719,8 @@ func TestOnPipelineComplete_StreamIdleTimeout_LongBackoff(t *testing.T) {
 // $20+ each time.
 func TestOnPipelineComplete_RateLimitQuotaExhausted_LongBackoff(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -757,7 +779,8 @@ func TestOnPipelineComplete_RateLimitQuotaExhausted_LongBackoff(t *testing.T) {
 // (=2) and required manual triage, halting the entire autonomous queue.
 func TestOnPipelineComplete_StallKill_NoLifetimeCap(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -834,7 +857,8 @@ func TestOnPipelineComplete_ApiOverloaded_TransientNoPause(t *testing.T) {
 	// circuit breaker came to halt the fleet on transient 529s while this test
 	// stayed green.
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -925,7 +949,8 @@ func TestApiOverloadedBackoffFor_EscalatesAndCaps(t *testing.T) {
 // attempts have occurred (#194 AC3).
 func TestOnPipelineComplete_ApiOverloaded_EscalatesAcrossConsecutiveFailures(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{},
@@ -973,7 +998,8 @@ func TestOnPipelineComplete_ApiOverloaded_EscalatesAcrossConsecutiveFailures(t *
 // fault, per ADR-001.
 func TestOnPipelineComplete_ApiOverloaded_CeilingStopsRedispatchWithoutLifetimeCap(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{},
@@ -1023,7 +1049,8 @@ func TestOnPipelineComplete_ApiOverloaded_CeilingStopsRedispatchWithoutLifetimeC
 // new production code, per the PRD's assumption that AC4 is already satisfied.
 func TestOnPipelineComplete_ApiOverloaded_SuccessResetsBackoff(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{},
@@ -1085,6 +1112,7 @@ func TestTransientFailuresNeverTripTheCircuitBreaker(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			rails := NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3})
 			as := &AutonomousScheduler{
+				trustGateOverride:    allWritersGate(),
 				config:               AutonomousConfig{MaxConcurrent: 3},
 				state:                &AutonomousState{Status: "running", LifetimeIssueFailures: map[string]int{}},
 				rescanCh:             make(chan struct{}, 16),
@@ -1158,7 +1186,8 @@ func TestNonFaultOutcomeDoesNotLaunderAFailureCascade(t *testing.T) {
 // condition resolves.
 func TestOnPipelineComplete_StallKill_RepeatedDoesNotBlockIssue(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{},
@@ -1197,7 +1226,8 @@ func TestOnPipelineComplete_StallKill_RepeatedDoesNotBlockIssue(t *testing.T) {
 // bridge silently disables the entire cooldown protection.
 func TestNotifyComplete_EmptyKindButQuotaMarkerInDetail_AppliesCooldown(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -1236,7 +1266,8 @@ func TestNotifyComplete_EmptyKindButQuotaMarkerInDetail_AppliesCooldown(t *testi
 // GENERIC branch (incrementing lifetime cap as expected).
 func TestNotifyComplete_EmptyKindAndNoMarker_FallsThroughToGeneric(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -1277,7 +1308,8 @@ func TestOnPipelineComplete_OtherFailures_StillIncrementLifetime(t *testing.T) {
 	for _, kind := range cases {
 		t.Run(kind, func(t *testing.T) {
 			as := &AutonomousScheduler{
-				config: AutonomousConfig{MaxConcurrent: 3},
+				trustGateOverride: allWritersGate(),
+				config:            AutonomousConfig{MaxConcurrent: 3},
 				state: &AutonomousState{
 					Status: "running",
 					Running: []RunningItem{
@@ -1307,7 +1339,8 @@ func TestOnPipelineComplete_OtherFailures_StillIncrementLifetime(t *testing.T) {
 // failure, survives Resume(), and that Resume() does NOT reset it.
 func TestLifetimeIssueFailures_PersistAcrossResume(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -1347,7 +1380,8 @@ func TestLifetimeIssueFailures_PersistAcrossResume(t *testing.T) {
 // previously-flaky issue isn't permanently locked out after one bad run.
 func TestLifetimeIssueFailures_ClearedOnSuccess(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{"R#42": 1},
@@ -1365,6 +1399,7 @@ func TestLifetimeIssueFailures_ClearedOnSuccess(t *testing.T) {
 // #3020 — ClearIssueFailures wipes a single issue or all when key is empty.
 func TestClearIssueFailures(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			LifetimeIssueFailures: map[string]int{"R#1": 2, "R#2": 5, "R#3": 1},
 		},
@@ -1390,7 +1425,8 @@ func TestClearIssueFailures(t *testing.T) {
 
 func TestBudgetExhaustion(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3, BudgetCeiling: 1000},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3, BudgetCeiling: 1000},
 		state: &AutonomousState{
 			Status:        "running",
 			TokensSpent:   500,
@@ -1409,7 +1445,8 @@ func TestBudgetExhaustion(t *testing.T) {
 
 func TestAllComplete_Detection(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:    "running",
 			Remaining: 0,
@@ -1432,8 +1469,9 @@ func TestStatePersistence(t *testing.T) {
 	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{MaxConcurrent: 3},
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Status:    "running",
 			StartedAt: "2026-01-01T00:00:00Z",
@@ -1514,6 +1552,7 @@ func TestStateLoadOnConstruction(t *testing.T) {
 
 	// Create scheduler — it should load the state
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), tmpDir)
+	as.trustGateOverride = allWritersGate()
 
 	if as.state.Status != "stopped" {
 		t.Errorf("expected 'stopped' (running is resumed as stopped), got %q", as.state.Status)
@@ -1541,6 +1580,7 @@ func TestStateLoadPreservesTerminalStatus(t *testing.T) {
 	}
 
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), tmpDir)
+	as.trustGateOverride = allWritersGate()
 	if as.state.Status != "complete" {
 		t.Errorf("expected terminal status 'complete' to be preserved, got %q", as.state.Status)
 	}
@@ -1548,7 +1588,8 @@ func TestStateLoadPreservesTerminalStatus(t *testing.T) {
 
 func TestDryRunMode(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5, DryRun: true},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5, DryRun: true},
 		state: &AutonomousState{
 			Status: "running",
 		},
@@ -1577,6 +1618,7 @@ func TestDryRunMode(t *testing.T) {
 
 func TestIsRunning(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Running: []RunningItem{
 				{Repo: "R", Number: 42},
@@ -1597,6 +1639,7 @@ func TestIsRunning(t *testing.T) {
 
 func TestPauseResume(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status: "running",
 		},
@@ -1624,6 +1667,7 @@ func TestPauseResume(t *testing.T) {
 
 func TestPauseIgnoredWhenNotRunning(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status: "complete",
 		},
@@ -1638,6 +1682,7 @@ func TestPauseIgnoredWhenNotRunning(t *testing.T) {
 
 func TestResumeIgnoredWhenNotPaused(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status: "running",
 		},
@@ -1653,6 +1698,7 @@ func TestResumeIgnoredWhenNotPaused(t *testing.T) {
 
 func TestStatusSnapshot(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status:    "running",
 			CyclesRun: 3,
@@ -1690,6 +1736,7 @@ func TestStatusSnapshot(t *testing.T) {
 
 func TestAddTokensSpent(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			TokensSpent: 100,
 		},
@@ -1730,7 +1777,8 @@ func TestCandidatePriorityRank(t *testing.T) {
 
 func TestStopSignal(t *testing.T) {
 	as := &AutonomousScheduler{
-		running: true,
+		trustGateOverride: allWritersGate(),
+		running:           true,
 		state: &AutonomousState{
 			Status: "running",
 		},
@@ -1752,7 +1800,8 @@ func TestStopSignal(t *testing.T) {
 
 func TestStopIgnoredWhenNotRunning(t *testing.T) {
 	as := &AutonomousScheduler{
-		running: false,
+		trustGateOverride: allWritersGate(),
+		running:           false,
 		state: &AutonomousState{
 			Status: "stopped",
 		},
@@ -1781,6 +1830,7 @@ func TestStopIgnoredWhenNotRunning(t *testing.T) {
 func TestNewAutonomousScheduler_StopChBuffered(t *testing.T) {
 	tmpDir := t.TempDir()
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), tmpDir)
+	as.trustGateOverride = allWritersGate()
 
 	if cap(as.stopCh) < 1 {
 		t.Fatalf("stopCh must be buffered (cap >= 1) to survive the Stop-during-runCycle race, got cap=%d", cap(as.stopCh))
@@ -1808,7 +1858,8 @@ func TestNewAutonomousScheduler_StopChBuffered(t *testing.T) {
 // TypeScript side after the user clicked "Stop Autonomous".
 func TestStopSetsStopRequested(t *testing.T) {
 	as := &AutonomousScheduler{
-		running: true,
+		trustGateOverride: allWritersGate(),
+		running:           true,
 		state: &AutonomousState{
 			Status: "running",
 		},
@@ -1849,7 +1900,8 @@ func TestRunCycleBailsOutOnStopRequested(t *testing.T) {
 	}
 	dispatched := 0
 	as := &AutonomousScheduler{
-		running: true,
+		trustGateOverride: allWritersGate(),
+		running:           true,
 		state: &AutonomousState{
 			Status:  "running",
 			Running: nil,
@@ -1904,12 +1956,13 @@ func TestRunCycleBailsOutOnStatusChangeMidCycle(t *testing.T) {
 	}
 	dispatched := 0
 	as := &AutonomousScheduler{
-		running:          true,
-		state:            &AutonomousState{Status: "running"},
-		stopCh:           make(chan struct{}, 1),
-		stopRefinementCh: make(chan struct{}, 1),
-		rescanCh:         make(chan struct{}, 1),
-		config:           AutonomousConfig{MaxConcurrent: 5},
+		trustGateOverride: allWritersGate(),
+		running:           true,
+		state:             &AutonomousState{Status: "running"},
+		stopCh:            make(chan struct{}, 1),
+		stopRefinementCh:  make(chan struct{}, 1),
+		rescanCh:          make(chan struct{}, 1),
+		config:            AutonomousConfig{MaxConcurrent: 5},
 		onDispatch: func(_, _ string, _ int, _ string) {
 			dispatched++
 		},
@@ -1944,8 +1997,9 @@ func TestRunCycleBailsOutOnStatusChangeMidCycle(t *testing.T) {
 // pending rescan signal in the buffered channel.
 func TestTriggerRescan_NonBlockingAndIdempotent(t *testing.T) {
 	as := &AutonomousScheduler{
-		state:    &AutonomousState{Status: "running"},
-		rescanCh: make(chan struct{}, 1),
+		trustGateOverride: allWritersGate(),
+		state:             &AutonomousState{Status: "running"},
+		rescanCh:          make(chan struct{}, 1),
 	}
 
 	// First call lands in the buffered channel.
@@ -1977,8 +2031,9 @@ func TestTriggerRescan_NonBlockingAndIdempotent(t *testing.T) {
 // running pipeline resets it to zero so cadence snaps back to base.
 func TestUpdateIdleCounterAfterCycle(t *testing.T) {
 	as := &AutonomousScheduler{
-		state:  &AutonomousState{},
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		state:             &AutonomousState{},
+		config:            AutonomousConfig{MaxConcurrent: 3},
 	}
 
 	// Idle cycle (no candidates, no running) → increment.
@@ -2039,7 +2094,8 @@ func TestScanCadence_FloorsMisconfigured(t *testing.T) {
 
 func TestRunAlreadyRunning(t *testing.T) {
 	as := &AutonomousScheduler{
-		running: true,
+		trustGateOverride: allWritersGate(),
+		running:           true,
 		state: &AutonomousState{
 			Status: "running",
 		},
@@ -2068,8 +2124,9 @@ func TestCrossRepoPrioritization(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -2220,9 +2277,10 @@ func TestPrioritize_PriorityDominatesFocusBoost(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{MaxConcurrent: 5},
-		state:         &AutonomousState{},
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
+		workspaceRoot:     tmpDir,
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -2262,9 +2320,10 @@ func TestPrioritize_FocusTiebreaksWithinSamePriority(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{MaxConcurrent: 5},
-		state:         &AutonomousState{},
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
+		workspaceRoot:     tmpDir,
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -2308,9 +2367,10 @@ func TestPrioritize_FocusGeneralNoEffect(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{MaxConcurrent: 5},
-		state:         &AutonomousState{},
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
+		workspaceRoot:     tmpDir,
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -2358,9 +2418,10 @@ func TestPrioritize_CriticalPathStillBeatsFocus(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{MaxConcurrent: 5},
-		state:         &AutonomousState{},
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
+		workspaceRoot:     tmpDir,
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -2389,9 +2450,10 @@ func TestPrioritize_FocusMissingYaml(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{MaxConcurrent: 5},
-		state:         &AutonomousState{},
-		workspaceRoot: tmpDir, // no focus.yaml here
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
+		workspaceRoot:     tmpDir, // no focus.yaml here
 	}
 
 	// Should not panic, should return candidates sorted by priority
@@ -2425,8 +2487,9 @@ func TestEpicAutoCloseScenario(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -2446,6 +2509,7 @@ func TestFilterRepos_PrunesPersistedState(t *testing.T) {
 	}
 
 	as := NewAutonomousScheduler(nil, nil, repos, nil, DefaultAutonomousConfig(), tmpDir)
+	as.trustGateOverride = allWritersGate()
 
 	// Simulate state from a prior session that included all three repos.
 	as.state.Completed = []CompletedItem{
@@ -2510,6 +2574,7 @@ func TestFilterRepos_NoMatchKeepsAllState(t *testing.T) {
 	}
 
 	as := NewAutonomousScheduler(nil, nil, repos, nil, DefaultAutonomousConfig(), tmpDir)
+	as.trustGateOverride = allWritersGate()
 	as.state.Failed = []FailedItem{
 		{Repo: "Org/alpha", Number: 1, Title: "Should be kept"},
 	}
@@ -2534,6 +2599,7 @@ func TestFilterRepos_CaseInsensitive(t *testing.T) {
 	}
 
 	as := NewAutonomousScheduler(nil, nil, repos, nil, DefaultAutonomousConfig(), tmpDir)
+	as.trustGateOverride = allWritersGate()
 	as.state.Completed = []CompletedItem{
 		{Repo: "nightgauge/acmeweb", Number: 10, Title: "Acmeweb done"},
 		{Repo: "nightgauge/nightgauge", Number: 2486, Title: "IB done"},
@@ -2571,6 +2637,7 @@ func TestFilterRepos_Widening(t *testing.T) {
 	}
 
 	as := NewAutonomousScheduler(nil, nil, repos, nil, DefaultAutonomousConfig(), tmpDir)
+	as.trustGateOverride = allWritersGate()
 
 	// Narrow to platform only.
 	as.FilterRepos([]string{"nightgauge/acme-platform"})
@@ -2619,6 +2686,7 @@ func TestRefinementConfig_SemaphoreClamp(t *testing.T) {
 	cfg.RefinementMaxConcurrent = 10
 
 	as := NewAutonomousScheduler(nil, nil, nil, nil, cfg, "")
+	as.trustGateOverride = allWritersGate()
 	if cap(as.refinementSem) != 3 {
 		t.Errorf("expected refinement sem capacity=3 (clamped), got %d", cap(as.refinementSem))
 	}
@@ -2630,6 +2698,7 @@ func TestRefinementConfig_SemaphoreMinimum(t *testing.T) {
 	cfg.RefinementMaxConcurrent = 0
 
 	as := NewAutonomousScheduler(nil, nil, nil, nil, cfg, "")
+	as.trustGateOverride = allWritersGate()
 	if cap(as.refinementSem) != 1 {
 		t.Errorf("expected refinement sem capacity=1 (min), got %d", cap(as.refinementSem))
 	}
@@ -2637,6 +2706,7 @@ func TestRefinementConfig_SemaphoreMinimum(t *testing.T) {
 
 func TestRefinementCycleSkipsAlreadyRunning(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			RefinementEnabled:       true,
 			RefinementMaxConcurrent: 1,
@@ -2667,6 +2737,7 @@ func TestRefinementCycleSkipsAlreadyRunning(t *testing.T) {
 
 func TestRefinementCycleCooldown(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			RefinementEnabled:  true,
 			RefinementCooldown: 5 * time.Minute,
@@ -2693,6 +2764,7 @@ func TestRefinementCycleCooldown(t *testing.T) {
 
 func TestRefinementCycleDisabled(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			RefinementEnabled: false,
 		},
@@ -2717,6 +2789,7 @@ func TestRefinementIsViable_NoDispatcherNoAdapter_False(t *testing.T) {
 		Adapter:       nil, // mirrors cmd/nightgauge/main.go in IPC mode
 	})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 
 	if as.refinementIsViable() {
 		t.Error("expected viability=false when adapter is nil and no dispatcher is registered")
@@ -2729,6 +2802,7 @@ func TestRefinementIsViable_DispatcherRegistered_True(t *testing.T) {
 		Adapter:       nil,
 	})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	as.WithRefinementRunner(func(_ context.Context, owner, repo string, issueNumber int) error { return nil })
 
 	if !as.refinementIsViable() {
@@ -2748,6 +2822,7 @@ func TestRefinementCycle_SkipsWhenNotViable(t *testing.T) {
 	as := NewAutonomousScheduler(sched, nil, []depgraph.RepoConfig{
 		{Owner: "O", Name: "R", Project: 1},
 	}, nil, DefaultAutonomousConfig(), t.TempDir())
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 
 	// Must return without panic or GitHub call.
@@ -2786,6 +2861,7 @@ func TestRefinementCycleRateLimit(t *testing.T) {
 func TestRefineIssueSuccess_StateTransitions(t *testing.T) {
 	// Verify state transitions: Running → Completed
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			RefinementEnabled:       true,
 			RefinementMaxConcurrent: 1,
@@ -2835,6 +2911,7 @@ func TestRefineIssueFailure_StateTransitions(t *testing.T) {
 	})
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			RefinementEnabled:       true,
 			RefinementMaxConcurrent: 1,
@@ -2890,8 +2967,9 @@ func TestRefinementState_Persistence(t *testing.T) {
 	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{},
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{},
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Status: "running",
 			RefinementCompleted: []RefinementItem{
@@ -2935,6 +3013,7 @@ func TestRefinementState_Persistence(t *testing.T) {
 
 func TestRefinementState_PrunedByFilterRepos(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		repos: []depgraph.RepoConfig{
 			{Owner: "O", Name: "keep", Project: 1},
 			{Owner: "O", Name: "remove", Project: 2},
@@ -3016,8 +3095,9 @@ func TestRecoverOrphanedRunning_ClearsState(t *testing.T) {
 	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{MaxConcurrent: 3},
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Status:    "running",
 			StartedAt: "2026-01-01T00:00:00Z",
@@ -3064,8 +3144,9 @@ func TestRecoverOrphanedRunning_CompletesDespiteCancelledCaller(t *testing.T) {
 	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{MaxConcurrent: 3},
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Status:    "running",
 			StartedAt: "2026-01-01T00:00:00Z",
@@ -3107,8 +3188,9 @@ func TestRecoverOrphanedRunning_NoOpWhenEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{MaxConcurrent: 3},
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Status:  "running",
 			Running: nil,
@@ -3133,7 +3215,8 @@ func TestRecordFailureLocked_DedupsByIssue(t *testing.T) {
 	// with AttemptCount=6, FirstFailedAt from attempt 1, FailedAt/Reason from
 	// the last attempt. Before this change each failure produced a new row.
 	as := &AutonomousScheduler{
-		state: &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		state:             &AutonomousState{},
 	}
 
 	for i := 1; i <= 6; i++ {
@@ -3242,7 +3325,8 @@ func TestLifetimeIssueFailures_SurvivesPersistLoadRoundTrip(t *testing.T) {
 	// Session 1: two issues have accrued failures; persist as the real
 	// scheduler does rather than hand-writing the file.
 	first := &AutonomousScheduler{
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{capped: MaxLifetimeFailuresPerIssue, other: 1},
@@ -3285,6 +3369,7 @@ func TestLifetimeIssueFailures_SurvivesPersistLoadRoundTrip(t *testing.T) {
 // must be reported as still-tripped rather than silently cleared. #150.
 func TestClearIssueFailures_ReportsCircuitBreakerTrippedIndependently(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			LifetimeIssueFailures: map[string]int{"R#1": 2},
 		},
@@ -3319,7 +3404,8 @@ func TestLifetimeIssueFailures_ClearedOnlyByExplicitTriage(t *testing.T) {
 	const key = "acme/web#315"
 
 	as := &AutonomousScheduler{
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{key: MaxLifetimeFailuresPerIssue},
@@ -3369,8 +3455,9 @@ func TestLoadState_PreservesRunningForRecovery(t *testing.T) {
 	}
 
 	as := &AutonomousScheduler{
-		workspaceRoot: tmpDir,
-		state:         &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     tmpDir,
+		state:             &AutonomousState{},
 	}
 	as.loadState()
 
@@ -3491,12 +3578,13 @@ func TestLoadState_CleanStopDoesNotSetRestartedFromRunning(t *testing.T) {
 func TestRun_SetsPIDAndClearsRestartedFromRunning(t *testing.T) {
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
-		workspaceRoot:    tmpDir,
-		state:            &AutonomousState{Status: "stopped", RestartedFromRunning: true},
-		config:           AutonomousConfig{MaxConcurrent: 0},
-		stopCh:           make(chan struct{}, 1),
-		stopRefinementCh: make(chan struct{}, 1),
-		rescanCh:         make(chan struct{}, 1),
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     tmpDir,
+		state:             &AutonomousState{Status: "stopped", RestartedFromRunning: true},
+		config:            AutonomousConfig{MaxConcurrent: 0},
+		stopCh:            make(chan struct{}, 1),
+		stopRefinementCh:  make(chan struct{}, 1),
+		rescanCh:          make(chan struct{}, 1),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3528,8 +3616,9 @@ func TestRecoverOrphanedRunning_ExportedWrapper(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	as := &AutonomousScheduler{
-		config:        AutonomousConfig{MaxConcurrent: 3},
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -3563,7 +3652,8 @@ func (as *AutonomousScheduler) isInRefinementCooldown(key string) bool {
 func TestReconcileStateAgainstGraph_PrunesClosedFailures(t *testing.T) {
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Failed: []FailedItem{
 				{Repo: "R1", Number: 100, Title: "Open issue", FailedAt: "2026-04-10T00:00:00Z"},
@@ -3586,7 +3676,8 @@ func TestReconcileStateAgainstGraph_PrunesClosedFailures(t *testing.T) {
 func TestReconcileStateAgainstGraph_PrunesMissingNodeFailures(t *testing.T) {
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Failed: []FailedItem{
 				{Repo: "R1", Number: 999, Title: "Deleted issue", FailedAt: "2026-04-10T00:00:00Z"},
@@ -3605,7 +3696,8 @@ func TestReconcileStateAgainstGraph_PrunesMissingNodeFailures(t *testing.T) {
 func TestReconcileStateAgainstGraph_ReadmitsOpenFailures(t *testing.T) {
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			Failed: []FailedItem{
 				{Repo: "R1", Number: 200, Title: "Still open", FailedAt: "2026-04-10T00:00:00Z"},
@@ -3634,7 +3726,8 @@ func TestReconcileStateAgainstGraph_ReadmitsOpenFailures(t *testing.T) {
 func TestReconcileStateAgainstGraph_PrunesStaleLifetimeAndQuarantineKeys(t *testing.T) {
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			LifetimeIssueFailures: map[string]int{
 				"R1#100": 2, // still on the board — must survive
@@ -3674,7 +3767,8 @@ func TestReconcileStateAgainstGraph_PrunesStaleLifetimeAndQuarantineKeys(t *test
 func TestClearIssueFailures_AlsoClearsQuarantine(t *testing.T) {
 	tmpDir := t.TempDir()
 	as := &AutonomousScheduler{
-		workspaceRoot: tmpDir,
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     tmpDir,
 		state: &AutonomousState{
 			LifetimeIssueFailures: map[string]int{"R1#100": 2, "R1#101": 2},
 			QuarantinedIssues:     map[string]bool{"R1#100": true, "R1#101": true},
@@ -3705,7 +3799,8 @@ func TestSequentialModeSkipsSecondDispatch(t *testing.T) {
 	// Per-repo cap defaults to 1 (sequential), so a second issue from the same
 	// repo is blocked while one is running — no explicit config needed.
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{},
 		state: &AutonomousState{
 			Running: []RunningItem{
 				{Repo: "R", Number: 1},
@@ -3728,6 +3823,7 @@ func TestPerRepoOverrideMakesRepoNonSequential(t *testing.T) {
 	// An explicit override > 1 makes a repo non-sequential while other repos
 	// keep the sequential default.
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			RepositoryMaxConcurrent: map[string]int{"B": 2},
 		},
@@ -3751,6 +3847,7 @@ func TestPerRepoOverrideResolvesBothForms(t *testing.T) {
 	// A repository_overrides entry should resolve via short and fully-qualified
 	// names.
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			RepositoryMaxConcurrent: map[string]int{"my-repo": 4},
 		},
@@ -3770,7 +3867,8 @@ func TestPerRepoOverrideResolvesBothForms(t *testing.T) {
 func TestDefaultIsSequential(t *testing.T) {
 	// With no concurrency config, every repo defaults to per-repo cap 1.
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{},
 		state: &AutonomousState{
 			Running: []RunningItem{{Repo: "R", Number: 1}},
 		},
@@ -3787,6 +3885,7 @@ func TestDefaultIsSequential(t *testing.T) {
 
 func TestMaxConcurrentForRepo_OverrideWins(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			RepositoryMaxConcurrent: map[string]int{"R": 3},
 		},
@@ -3803,8 +3902,9 @@ func TestMaxConcurrentForRepo_OverrideWins(t *testing.T) {
 func TestMaxConcurrentForRepo_PerRepoMaxDefault(t *testing.T) {
 	// No override → PerRepoMax (explicit), else 1.
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{PerRepoMax: 2},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{PerRepoMax: 2},
+		state:             &AutonomousState{},
 	}
 	if got := as.maxConcurrentForRepo("R"); got != 2 {
 		t.Errorf("maxConcurrentForRepo('R') = %d, want 2 (PerRepoMax)", got)
@@ -3820,6 +3920,7 @@ func TestMaxConcurrentForRepo_NoConfigDefaultsToOne(t *testing.T) {
 
 func TestMaxConcurrentForRepo_ShortNameFallback(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			RepositoryMaxConcurrent: map[string]int{"my-repo": 2},
 		},
@@ -3832,7 +3933,8 @@ func TestMaxConcurrentForRepo_ShortNameFallback(t *testing.T) {
 
 func TestRunningCountFrom(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{},
 		state: &AutonomousState{
 			Running: []RunningItem{
 				{Repo: "A", Number: 1},
@@ -3864,6 +3966,7 @@ func TestPerRepoCapBlocksSecondDispatch(t *testing.T) {
 	// Repo B has default cap=1 (per_repo_max) — first OK, second blocked.
 	// Repo C unconfigured — also default cap=1.
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			RepositoryMaxConcurrent: map[string]int{"A": 2},
 		},
@@ -3896,8 +3999,9 @@ func TestPerRepoCapBlocksSecondDispatch(t *testing.T) {
 // buffer and the other loop never exited.
 func TestStopSignalsRefinementGoroutine(t *testing.T) {
 	as := &AutonomousScheduler{
-		running: true,
-		state:   &AutonomousState{Status: "running"},
+		trustGateOverride: allWritersGate(),
+		running:           true,
+		state:             &AutonomousState{Status: "running"},
 		config: AutonomousConfig{
 			RefinementEnabled:  true,
 			RefinementInterval: 100 * time.Millisecond,
@@ -3935,8 +4039,9 @@ func TestStopSignalsRefinementGoroutine(t *testing.T) {
 // both the dispatch loop and the refinement loop exit when Stop() is called.
 func TestStopSignalsMainLoopAndRefinement(t *testing.T) {
 	as := &AutonomousScheduler{
-		running: true,
-		state:   &AutonomousState{Status: "running"},
+		trustGateOverride: allWritersGate(),
+		running:           true,
+		state:             &AutonomousState{Status: "running"},
 		config: AutonomousConfig{
 			RefinementEnabled:  true,
 			ScanInterval:       50 * time.Millisecond,
@@ -4017,7 +4122,8 @@ func TestStopSignalsMainLoopAndRefinement(t *testing.T) {
 func TestWriteCrashExitEvent(t *testing.T) {
 	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{
-		workspaceRoot: dir,
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     dir,
 	}
 
 	as.writeCrashExitEvent("something went wrong", "goroutine 1 [running]:\nsome/package.go:42")
@@ -4116,8 +4222,9 @@ func TestRevertFailedIssueStatus_NoProjectConfigIsNoOp(t *testing.T) {
 	// without panicking. Defensive — workspaces with mid-incident config
 	// changes can have running items whose repo is no longer configured.
 	as := &AutonomousScheduler{
-		repos: nil,
-		state: &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		repos:             nil,
+		state:             &AutonomousState{},
 	}
 	// Should not panic and should not block. The call is synchronous on this
 	// goroutine, so there is nothing tracked to join — a drain here would join
@@ -4142,7 +4249,8 @@ func TestOnPipelineComplete_Failure_TriggersStatusRevertGoroutine(t *testing.T) 
 	// asserting the call site is wired — not the network behavior. This
 	// pairs with the no-op test above.
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -4172,7 +4280,8 @@ func TestOnPipelineComplete_Success_DoesNotTriggerRevert(t *testing.T) {
 	// promotion goroutine has a different signature, and no panics or extra
 	// state transitions occur).
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -4344,7 +4453,8 @@ func TestQuotaCooldownActiveLocked(t *testing.T) {
 
 func TestOnPipelineComplete_QuotaExhausted_SetsGlobalCooldown(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -4385,7 +4495,8 @@ func TestOnPipelineComplete_QuotaExhausted_SetsGlobalCooldown(t *testing.T) {
 
 func TestOnPipelineComplete_QuotaExhausted_NoHintUsesFloor(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -4414,7 +4525,8 @@ func TestOnPipelineComplete_QuotaExhausted_NoHintUsesFloor(t *testing.T) {
 func TestRunCycle_SuspendsDispatchDuringQuotaCooldown(t *testing.T) {
 	dispatched := 0
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:             "running",
 			QuotaCooldownUntil: time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
@@ -4444,7 +4556,8 @@ func TestRunCycle_SuspendsDispatchDuringQuotaCooldown(t *testing.T) {
 
 func TestRunCycle_ResumesAfterQuotaCooldownExpires(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:              "running",
 			QuotaCooldownUntil:  time.Now().Add(-1 * time.Minute).UTC().Format(time.RFC3339),
@@ -4477,7 +4590,8 @@ func TestClearQuotaCooldown_ClearsAndPersists(t *testing.T) {
 		tmp := layouttest.Repo(t)
 		until := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
 		as := &AutonomousScheduler{
-			workspaceRoot: tmp,
+			trustGateOverride: allWritersGate(),
+			workspaceRoot:     tmp,
 			state: &AutonomousState{
 				Status:              "running",
 				QuotaCooldownUntil:  until,
@@ -4522,8 +4636,9 @@ func TestClearQuotaCooldown_ClearsAndPersists(t *testing.T) {
 
 	t.Run("no-op when no cooldown active", func(t *testing.T) {
 		as := &AutonomousScheduler{
-			workspaceRoot: t.TempDir(),
-			state:         &AutonomousState{Status: "running"},
+			trustGateOverride: allWritersGate(),
+			workspaceRoot:     t.TempDir(),
+			state:             &AutonomousState{Status: "running"},
 		}
 		cleared, previous := as.ClearQuotaCooldown()
 		if cleared {
@@ -4544,7 +4659,8 @@ func TestClearQuotaCooldown_ClearsAndPersists(t *testing.T) {
 // is about.
 func TestRunCycle_CooldownEmitsRejectionReason(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:               "running",
 			QuotaCooldownUntil:   time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
@@ -4578,6 +4694,7 @@ func TestRunCycle_GraphCacheHit(t *testing.T) {
 	buildCalls := 0
 	fakeGraph := buildTestGraph(nil, nil)
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			MaxConcurrent: 3,
 			GraphCacheTTL: 5 * time.Minute,
@@ -4607,6 +4724,7 @@ func TestRunCycle_GraphCacheMissAfterTTL(t *testing.T) {
 	buildCalls := 0
 	fakeGraph := buildTestGraph(nil, nil)
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			MaxConcurrent: 3,
 			GraphCacheTTL: 10 * time.Millisecond,
@@ -4642,6 +4760,7 @@ func TestRunCycle_GraphBuildFailure_FiresOnCycleComplete(t *testing.T) {
 	root := layouttest.Repo(t)
 	cycleCompletes := 0
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		config: AutonomousConfig{
 			MaxConcurrent: 3,
 			GraphCacheTTL: 5 * time.Minute,
@@ -4673,7 +4792,8 @@ func TestRunCycle_GraphBuildFailure_FiresOnCycleComplete(t *testing.T) {
 // retry backoff. Issue #3661.
 func TestOnPipelineComplete_IssueClosed_NoLifetimeIncrement(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -4720,7 +4840,8 @@ func TestOnPipelineComplete_IssueClosed_NoLifetimeIncrement(t *testing.T) {
 // issue-closed events do not trip the cascade circuit breaker. Issue #3661.
 func TestOnPipelineComplete_IssueClosed_NoCircuitBreaker(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{},
@@ -4761,7 +4882,8 @@ func TestOnPipelineComplete_IssueClosed_NoCircuitBreaker(t *testing.T) {
 // a modest retry backoff (board → Ready, not Done). Issue #305.
 func TestOnPipelineComplete_BlockedDependency_NonFailure(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -4828,7 +4950,8 @@ func TestOnPipelineComplete_BlockedDependency_NonFailure(t *testing.T) {
 // proves the deferral short-circuits before that path. Issue #305.
 func TestOnPipelineComplete_BlockedDependency_NoCircuitBreaker(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			LifetimeIssueFailures: map[string]int{},
@@ -4862,7 +4985,8 @@ func TestOnPipelineComplete_BlockedDependency_NoCircuitBreaker(t *testing.T) {
 // state (simulating the read-after-write race). Issue #3661.
 func TestReconcileStateAgainstGraph_RecentClosureGuard(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Completed: []CompletedItem{
@@ -4897,7 +5021,8 @@ func TestReconcileStateAgainstGraph_RecentClosureGuard(t *testing.T) {
 // race window has passed and the OPEN read is now credible). Issue #3661.
 func TestReconcileStateAgainstGraph_RecentClosureGuard_ExpiredAllowsReadmit(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Completed: []CompletedItem{
@@ -5023,9 +5148,10 @@ func TestPrioritize_OffBoardDependencyResolution(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := tt.buildGraph()
 			as := &AutonomousScheduler{
-				config: AutonomousConfig{MaxConcurrent: 5},
-				repos:  []depgraph.RepoConfig{{Owner: "owner", Name: "repo", Project: 1}},
-				state:  &AutonomousState{},
+				trustGateOverride: allWritersGate(),
+				config:            AutonomousConfig{MaxConcurrent: 5},
+				repos:             []depgraph.RepoConfig{{Owner: "owner", Name: "repo", Project: 1}},
+				state:             &AutonomousState{},
 			}
 			var callCount int
 			as.resolveDepStatesFn = func(_ context.Context, keys []string) map[string]string {
@@ -5077,9 +5203,10 @@ func TestPrioritize_OffBoardDependency_NoResolverWired(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		repos:  []depgraph.RepoConfig{{Owner: "owner", Name: "repo", Project: 1}},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		repos:             []depgraph.RepoConfig{{Owner: "owner", Name: "repo", Project: 1}},
+		state:             &AutonomousState{},
 		// resolveDepStatesFn intentionally left nil — simulates a scheduler
 		// wired without a resolver (or a resolver that was never set up).
 	}
@@ -5111,9 +5238,10 @@ func TestPrioritize_NoLookupWhenAllDepsPresent(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		repos:  []depgraph.RepoConfig{{Owner: "owner", Name: "repo", Project: 1}},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		repos:             []depgraph.RepoConfig{{Owner: "owner", Name: "repo", Project: 1}},
+		state:             &AutonomousState{},
 	}
 	as.resolveDepStatesFn = func(context.Context, []string) map[string]string {
 		t.Fatal("resolveDepStatesFn must not be called when all deps are present in the graph")
@@ -5186,7 +5314,8 @@ func TestResolveIssueStatesByKey_NilIssueService(t *testing.T) {
 func TestPendingRetriesAreVisibleInExportedState(t *testing.T) {
 	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:                "running",
 			Running:               []RunningItem{{Repo: "nightgauge/nightgauge", Number: 135, Title: "worktree reuse"}},
@@ -5257,6 +5386,7 @@ func TestPendingRetriesAreVisibleInExportedState(t *testing.T) {
 func TestPendingRetriesExcludeExpiredAndSortByDeadline(t *testing.T) {
 	now := time.Now()
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Failed: []FailedItem{{Repo: "o/r", Number: 2, Title: "second"}},
 		},
@@ -5292,6 +5422,7 @@ func TestPendingRetriesExcludeExpiredAndSortByDeadline(t *testing.T) {
 func TestPendingRetryClearsOnSuccess(t *testing.T) {
 	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{
+		trustGateOverride:    allWritersGate(),
 		config:               AutonomousConfig{MaxConcurrent: 3},
 		state:                &AutonomousState{Status: "running", LifetimeIssueFailures: map[string]int{}},
 		rescanCh:             make(chan struct{}, 8),
@@ -5364,8 +5495,9 @@ func TestPrioritize_SkipsBlockedLabel(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)
@@ -5398,8 +5530,9 @@ func TestPrioritize_HoldsOnBodyDeclaredSameRepoDependency(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	candidates := as.prioritize(context.Background(), g)

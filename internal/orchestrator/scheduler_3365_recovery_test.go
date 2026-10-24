@@ -510,7 +510,8 @@ func TestOnPipelineComplete_RecoverableKinds_NoLifetimeCap(t *testing.T) {
 	for _, kind := range []string{TerminalKindWorktreeUncommitted, TerminalKindBudgetCeiling} {
 		t.Run(kind, func(t *testing.T) {
 			as := &AutonomousScheduler{
-				config: AutonomousConfig{MaxConcurrent: 3},
+				trustGateOverride: allWritersGate(),
+				config:            AutonomousConfig{MaxConcurrent: 3},
 				state: &AutonomousState{
 					Status: "running",
 					Running: []RunningItem{
