@@ -905,6 +905,12 @@ type Config struct {
 	// Default: XS=1, S=2, M=3, L=5, XL=8.
 	SizeToEstimate map[string]float64 `json:"sizeToEstimate,omitempty" yaml:"size_to_estimate,omitempty"`
 
+	// BuiltinWorkflows is project.builtin_workflows as written in config.yaml: the
+	// operator's record of which board workflows are enabled. Nothing applies it
+	// (GitHub has no API to enable one); `nightgauge doctor` compares it to the
+	// live board (#2499).
+	BuiltinWorkflows map[string]any `json:"builtinWorkflows,omitempty" yaml:"-"`
+
 	// Knowledge holds knowledge base settings from the knowledge: section.
 	Knowledge *KnowledgeConfig `json:"knowledge,omitempty" yaml:"knowledge,omitempty"`
 
@@ -2112,11 +2118,12 @@ type yamlConfigNested struct {
 	GitHubAuth *GitHubAuthConfig `yaml:"github_auth,omitempty"`
 
 	Project struct {
-		Owner          string             `yaml:"owner"`
-		OwnerType      string             `yaml:"owner_type"`
-		Number         int                `yaml:"number"`
-		Repo           string             `yaml:"repo"`
-		SizeToEstimate map[string]float64 `yaml:"size_to_estimate,omitempty"`
+		Owner            string             `yaml:"owner"`
+		OwnerType        string             `yaml:"owner_type"`
+		Number           int                `yaml:"number"`
+		Repo             string             `yaml:"repo"`
+		SizeToEstimate   map[string]float64 `yaml:"size_to_estimate,omitempty"`
+		BuiltinWorkflows map[string]any     `yaml:"builtin_workflows,omitempty"`
 	} `yaml:"project"`
 	Projects     []ProjectEntry      `yaml:"projects,omitempty"`
 	LogLevel     string              `yaml:"logLevel"`
@@ -2403,6 +2410,9 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.Attention = nested.Attention
 	if len(nested.Project.SizeToEstimate) > 0 {
 		cfg.SizeToEstimate = nested.Project.SizeToEstimate
+	}
+	if len(nested.Project.BuiltinWorkflows) > 0 {
+		cfg.BuiltinWorkflows = nested.Project.BuiltinWorkflows
 	}
 	migrateV1ToV2(cfg)
 	return cfg, nil

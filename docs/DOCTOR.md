@@ -549,6 +549,20 @@ production default. A non-default URL is marked `non-default`. The finding fires
 when that URL is not absolute, or is plain HTTP to a host other than `localhost`
 or `127.0.0.1`. Manual `fix`: correct the source the evidence names, or unset it.
 
+#### NGD048
+
+**`project.builtin_workflows` disagrees with the live board.** `project_workflows` ·
+`blocker`.
+
+GitHub cannot enable a board's built-in workflows by API, so the file can only
+drift from the board. The check reads the board's workflows and compares each
+declared key (`item_closed_to_done` is "Item closed", and so on). A workflow
+declared one way and enabled the other is a `blocker` that names the key and the
+workflow. A key with no workflow of that name on the board, an unknown key, a
+wrong-typed value and a board workflow the file does not declare are warnings.
+`auto_archive_days` counts as enabled when above zero. Manual `reconcile`: change
+the workflow in the board's settings, or the file.
+
 ### Learning and scheduled automations
 
 #### NGD014

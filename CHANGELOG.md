@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge doctor` now checks `project.builtin_workflows` against the live
+  board.** The setting was never read, so it drifted silently from the board's
+  workflows. GitHub has no API to enable a workflow, so the new
+  `project_workflows` check ([NGD048](docs/DOCTOR.md#ngd048)) reports a
+  workflow declared one way and enabled the other as a blocker, and warns about
+  keys the board does not have and board workflows the file does not declare.
 - **A release now checks that the VS Code Marketplace and Open VSX list it.**
   A successful publish call does not mean the listing shows the version: a
   registry can index late, reject a submission after upload, or drop one target
