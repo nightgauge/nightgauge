@@ -68,6 +68,10 @@ autonomous:
   pickup_backlog: false
   auto_actionable: false
   refinement_enabled: false
+  # Bots trusted by authorship (#2130). github-actions[bot] files the CI,
+  # release-watchdog and adapter-canary issues; the list replaces the default,
+  # so the pipeline's own App is listed too.
+  trusted_bots: ["nightgauge-pipeline[bot]", "github-actions[bot]"]
 
 automations:
   enabled: false
