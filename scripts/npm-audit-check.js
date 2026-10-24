@@ -14,7 +14,10 @@ const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const ALLOWLIST_FILE = path.resolve(__dirname, "../.npmauditrc.json");
+// NPM_AUDIT_CHECK_ALLOWLIST / NPM_AUDIT_CHECK_INPUT substitute fixtures for the
+// allow-list and the `npm audit --json` output (scripts/test-npm-audit-check.sh).
+const ALLOWLIST_FILE =
+  process.env.NPM_AUDIT_CHECK_ALLOWLIST || path.resolve(__dirname, "../.npmauditrc.json");
 const TODAY = new Date().toISOString().slice(0, 10);
 
 // Load allow-list
@@ -44,14 +47,18 @@ const allowedIds = new Set(allowlist.map((e) => e.id));
 
 // Run npm audit
 let auditOutput;
-try {
-  auditOutput = execSync("npm audit --audit-level=high --json", {
-    encoding: "utf8",
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-} catch (err) {
-  // npm audit exits non-zero when vulnerabilities are found — capture output
-  auditOutput = err.stdout || "{}";
+if (process.env.NPM_AUDIT_CHECK_INPUT) {
+  auditOutput = fs.readFileSync(process.env.NPM_AUDIT_CHECK_INPUT, "utf8");
+} else {
+  try {
+    auditOutput = execSync("npm audit --audit-level=high --json", {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (err) {
+    // npm audit exits non-zero when vulnerabilities are found — capture output
+    auditOutput = err.stdout || "{}";
+  }
 }
 
 let auditData;
@@ -67,11 +74,21 @@ try {
 const vulnerabilities = auditData.vulnerabilities || {};
 const violations = [];
 
+// A `via` entry is either an advisory object or the name of another vulnerable
+// package (a dependent of a vulnerable package is flagged too). Resolve names to
+// the advisories they carry, so allow-listing an advisory also covers every
+// package that is flagged only because it depends on the vulnerable one.
+function advisoryIds(pkg, seen = new Set()) {
+  if (seen.has(pkg)) return [];
+  seen.add(pkg);
+  return (vulnerabilities[pkg]?.via || []).flatMap((v) =>
+    typeof v === "object" ? [v.source || v.url || "unknown"] : advisoryIds(v, seen)
+  );
+}
+
 for (const [pkg, vuln] of Object.entries(vulnerabilities)) {
   if (!["high", "critical"].includes(vuln.severity)) continue;
-  const viaIds = (vuln.via || [])
-    .filter((v) => typeof v === "object")
-    .map((v) => v.source || v.url || "unknown");
+  const viaIds = [...new Set(advisoryIds(pkg))];
 
   const unallowed = viaIds.filter((id) => !allowedIds.has(String(id)));
   if (unallowed.length > 0 || viaIds.length === 0) {

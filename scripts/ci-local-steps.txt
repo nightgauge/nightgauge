@@ -9,6 +9,7 @@ gofmt -l ./internal ./cmd
 branch-merged-check.sh regression suite
 post-merge-check.sh regression suite
 publish-vsix-set.sh regression suite
+npm-audit-check.js regression suite
 sign-macos-binaries.sh regression suite
 malware-scan.sh regression suite
 check-shipped-code.sh regression suite

@@ -657,10 +657,13 @@ jobs:
         # which cover this repository already.
         #
         # Gated at `high` so a release is not blocked by a low-severity
-        # advisory in a devDependency; moderate and below are reported.
+        # advisory in a devDependency; moderate and below are reported. The
+        # gate is scripts/npm-audit-check.js, the allow-list-aware check
+        # ci-local runs, so a reviewed .npmauditrc.json exception (expiry and
+        # tracking issue required) is honoured here too, not just locally.
         run: |
           set -uo pipefail
-          npm audit --audit-level=high || AUDIT_RC=$?
+          node scripts/npm-audit-check.js || AUDIT_RC=$?
           npm audit --audit-level=moderate --json > npm-audit.json 2>/dev/null || true
           if [ "${AUDIT_RC:-0}" -ne 0 ]; then
             echo "::error::npm audit found a high or critical advisory"

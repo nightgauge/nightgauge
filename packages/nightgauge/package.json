@@ -1,6 +1,6 @@
 {
   "name": "nightgauge",
-  "displayName": "Nightgauge",
+  "displayName": "Nightgauge for VS Code",
   "description": "Run an autonomous issue-to-merge pipeline from VS Code: queue GitHub issues, watch each stage, gate on evidence, review the PR.",
   "version": "0.1.0",
   "publisher": "nightgauge",

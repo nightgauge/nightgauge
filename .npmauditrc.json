@@ -1,5 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema",
   "description": "npm audit allow-list. Entries expire on the given date — expired entries fail CI.",
-  "allowlist": []
+  "allowlist": [
+    {
+      "id": "1243111",
+      "reason": "GHSA-xcx6-jx8p-x3h5 (MSAL Node auth-code flow) reaches us only via @vscode/vsce -> @azure/identity, whose latest (4.14.0) still requires @azure/msal-node ^6; fix is 7.1.0. vsce publishes with a PAT and never runs the auth-code flow. Tracked in #2492.",
+      "expires": "2026-11-22",
+      "addedBy": "release-maintainer"
+    }
+  ]
 }
