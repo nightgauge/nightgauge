@@ -11,6 +11,11 @@ export {
   type ScoredDimension,
 } from "./HealthAnalysisEngine.js";
 export { HealthTrendsWriter } from "./HealthTrendsWriter.js";
+export {
+  buildHealthTrendEntry,
+  recordHealthTrend,
+  type HealthTrendRunMeta,
+} from "./healthSeries.js";
 export { FindingToIssueEngine } from "./FindingToIssueEngine.js";
 export { RecommendationTracker } from "./RecommendationTracker.js";
 export {

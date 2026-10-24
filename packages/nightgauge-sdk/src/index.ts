@@ -708,6 +708,12 @@ export {
   type TerminalFailureKind,
   // Health Analysis Engine (Issue #1101)
   HealthAnalysisEngine,
+  // The one health series (#1898)
+  HealthTrendsWriter,
+  buildHealthTrendEntry,
+  recordHealthTrend,
+  type HealthTrendRunMeta,
+  type HealthTrendEntry,
   computeOverallHealthScore,
   getOverallHealthStatus,
   crossReference,

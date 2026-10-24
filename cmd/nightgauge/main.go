@@ -5974,12 +5974,14 @@ func healthTrendsCmd() *cobra.Command {
 				return printJSON(entries)
 			}
 			if len(entries) == 0 {
-				fmt.Println("No health trend data found.")
+				// Say where we looked: the series is one file, appended once
+				// per pipeline run (#1898), and "nothing" must name it.
+				where, _ := healthpkg.TrendsPath(workdir)
+				fmt.Printf("No health trend data found in %s (one entry is appended per pipeline run).\n", where)
 				return nil
 			}
 			for _, e := range entries {
-				fmt.Printf("%s | Issue #%d | Score: %.0f | Findings: %d\n",
-					e.Timestamp, e.IssueNumber, e.OverallScore, len(e.Findings))
+				fmt.Println(formatHealthTrendLine(e))
 			}
 			fmt.Printf("\nTotal: %d entries\n", len(entries))
 			return nil
@@ -5988,6 +5990,20 @@ func healthTrendsCmd() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 50, "Last N entries (0 = all)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
+}
+
+// formatHealthTrendLine renders one series entry. A null score is "N/A", never
+// 0 (#1197), and a score always says how many dimensions it is made of, so a
+// six-dimension score never reads as an eight-dimension one (#1900).
+func formatHealthTrendLine(e healthpkg.HealthTrendEntry) string {
+	contributing := len(e.Dimensions)
+	of := contributing + len(e.ExcludedDimensions)
+	score := "N/A (no dimension had data)"
+	if e.OverallScore != nil {
+		score = fmt.Sprintf("%.0f %s (%d/%d dimensions)", *e.OverallScore, e.Status, contributing, of)
+	}
+	return fmt.Sprintf("%s | Issue #%d | Score: %s | Findings: %d",
+		e.Timestamp, e.IssueNumber, score, len(e.Findings))
 }
 
 func healthGateMetricsCmd() *cobra.Command {

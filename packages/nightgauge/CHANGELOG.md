@@ -9,6 +9,18 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **The Pipeline Health headline is the engine's 8-dimension score, and N/A when
+  there is no data.** The widget no longer computes its own 4-component score.
+  It shows the latest entry of the health series, which each completed run
+  appends, lists all eight dimensions with the reason for any that had no data,
+  and shows how many dimensions contributed. "Nightgauge: Recalibrate Health
+  Score Baseline" is removed (#1898, #1900).
+- **Partly observed stages read as coverage**:
+  `14 phases · 4 observed, 10 unobserved` replaces `4/14 phases · 10 unreported`
+  (#1887).
+
 ### Fixed
 
 - **Issue analysis no longer classifies an issue as a configuration change

@@ -18,9 +18,7 @@ import type {
   Finding,
   RecommendationReport,
   Severity,
-  HealthTrendEntry,
 } from "./types.js";
-import { HealthTrendsWriter } from "./HealthTrendsWriter.js";
 import { HealthReportSchema, type HealthReport } from "./reportSchema.js";
 import { buildPeriodComparison } from "./statistics.js";
 import { SEVERITY_ORDER } from "./severityMapping.js";
@@ -38,15 +36,6 @@ export interface HealthReportOptions {
     issueUrl: string;
   }[];
   recommendationReport?: RecommendationReport;
-  /**
-   * If provided, append a HealthTrendEntry to the checkout's health/trends.jsonl
-   * (`.git/nightgauge-worktree/health/`, ADR-024 § 7; Issue #1411)
-   */
-  workspaceRoot?: string;
-  /** Issue number for the trend entry (default: 0) */
-  issueNumber?: number;
-  /** Retention days for trends.jsonl pruning (default: 90) */
-  trendsRetentionDays?: number;
 }
 
 export interface WriteReportsResult {
@@ -409,20 +398,8 @@ export class HealthReportGenerator {
 
     await this.enforceRetention(outputDir);
 
-    // Append dimension trend entry (Issue #1411) — non-critical, never blocks
-    if (options.workspaceRoot) {
-      try {
-        const entry = buildTrendEntry(result, options.issueNumber ?? 0);
-        await HealthTrendsWriter.append(options.workspaceRoot, entry);
-        // Lazy prune (non-blocking, ignore errors)
-        HealthTrendsWriter.pruneOldEntries(
-          options.workspaceRoot,
-          options.trendsRetentionDays ?? 90
-        ).catch(() => {});
-      } catch (err) {
-        console.warn("[HealthReportGenerator] Failed to write trend entry:", err);
-      }
-    }
+    // A report is not a run: it never appends to the health series, which
+    // holds exactly one entry per pipeline run (#1898, recordHealthTrend).
 
     return { jsonPath, markdownPath: mdPath };
   }
@@ -600,38 +577,4 @@ export class HealthReportGenerator {
 
     return lines;
   }
-}
-
-// ── Module-level helpers ──────────────────────────────────────────
-
-/**
- * Build a HealthTrendEntry from a HealthAnalysisResult.
- * @internal used by writeReports() — Issue #1411
- */
-function buildTrendEntry(result: HealthAnalysisResult, issueNumber: number): HealthTrendEntry {
-  // Extract per-dimension scores
-  const dimensions: Partial<Record<string, number>> = {};
-  for (const [key, dim] of Object.entries(result.dimensions)) {
-    if (dim) {
-      dimensions[key] = dim.score;
-    }
-  }
-
-  // Top 3 finding titles by severity
-  const allFindings = Object.values(result.dimensions)
-    .filter((d): d is DimensionResult => d !== undefined)
-    .flatMap((d) => d.findings)
-    .sort((a, b) => (SEVERITY_ORDER[b.severity] ?? 0) - (SEVERITY_ORDER[a.severity] ?? 0))
-    .slice(0, 3)
-    .map((f) => f.title);
-
-  return {
-    schema_version: "1",
-    timestamp: result.analyzedAt,
-    run_id: result.analyzedAt,
-    issue_number: issueNumber,
-    overall_score: result.overallScore,
-    dimensions,
-    significant_findings: allFindings,
-  };
 }

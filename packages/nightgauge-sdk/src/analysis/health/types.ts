@@ -85,6 +85,8 @@ export interface DimensionResult {
   metrics: Record<string, number>;
   hasEnoughData: boolean;
   sampleSize: number;
+  /** Why hasEnoughData is false (named in the series' excluded_dimensions, #1900). */
+  insufficientDataReason?: string;
   periodComparison?: PeriodComparison;
 }
 
@@ -221,12 +223,13 @@ export interface HealthAnalysisInput {
   workflowCalibration?: WorkflowCalibrationSignal;
 }
 
+/**
+ * One scored point of the health series (#1898). Entries whose
+ * `overall_score` is null are not points and never appear here.
+ */
 export interface HealthScoreEntry {
   timestamp: string;
   score: number;
-  status: string;
-  components: Record<string, number>;
-  costUsd: number;
   issueNumber: number;
 }
 
@@ -376,15 +379,24 @@ export interface RecommendationReport {
 }
 
 // ── Health Trend Time-Series ──────────────────────────────────────
-// @see Issue #1411 - Health trend persistence and dashboard sparklines
+// The ONE persisted health series (#1898): one entry per pipeline run, at the
+// checkout's `health/trends.jsonl`, written by `recordHealthTrend` and read by
+// the dashboard, `nightgauge health trends` and `loopverdicts`. See
+// docs/HEALTH_MONITORING.md § The health series.
 
 export interface HealthTrendEntry {
-  schema_version: "1";
+  schema_version: "2";
   timestamp: string; // ISO 8601 (analyzedAt from HealthAnalysisResult)
-  run_id: string; // Derived: analyzedAt timestamp string (unique per analysis)
+  run_id: string; // The pipeline run this entry scores
   issue_number: number; // 0 if unknown
-  overall_score: number | null; // 0-100, null when no dimension had data (#1197)
-  dimensions: Partial<Record<HealthDimension, number>>; // 7 dimension scores
+  /** 0-100, or null when no dimension had data (#1197). Never coerced. */
+  overall_score: number | null;
+  /** `getOverallHealthStatus(overall_score)`; `"no-data"` exactly when null. */
+  status: OverallHealthStatus;
+  /** Scores of the dimensions that CONTRIBUTED. A starved one is absent. */
+  dimensions: Partial<Record<HealthDimension, number>>;
+  /** Every dimension that did not contribute, with the reason it did not. */
+  excluded_dimensions: Partial<Record<HealthDimension, string>>;
   significant_findings: string[]; // Top 3 finding titles (for hover tooltip)
 }
 

@@ -1,5 +1,5 @@
 /**
- * Tests for `HealthScoreHistoryReader.analyzeTrend()` message wording.
+ * Tests for `analyzeHealthTrend()` message wording.
  *
  * The chart on the Overview tab can show a wider range (7d, 30d, 90d) than
  * the comparison window the message describes (3d, 7d, 14d respectively).
@@ -9,15 +9,15 @@
  * disagreed.
  */
 import { describe, it, expect } from "vitest";
-import { HealthScoreHistoryReader } from "../../src/utils/healthScoreHistory";
-// TrendChartDay is imported BY healthScoreHistory, not re-exported from it.
+import { analyzeHealthTrend } from "../../src/utils/healthSeries";
+
 import type { TrendChartDay } from "../../src/views/dashboard/HealthWidgetTypes";
 
 function bucket(date: string, avgScore: number, count = 1): TrendChartDay {
   return { date, avgScore, count };
 }
 
-describe("HealthScoreHistoryReader.analyzeTrend — message clarity", () => {
+describe("analyzeHealthTrend — message clarity", () => {
   it("reports an improvement using comparison wording (not single-window wording)", () => {
     // Recent 3 days avg 90, prior 3 days avg 60 → +50%.
     const data: TrendChartDay[] = [
@@ -28,7 +28,7 @@ describe("HealthScoreHistoryReader.analyzeTrend — message clarity", () => {
       bucket("2026-05-13", 60),
       bucket("2026-05-12", 60),
     ];
-    const result = HealthScoreHistoryReader.analyzeTrend(data, 3);
+    const result = analyzeHealthTrend(data, 3);
 
     expect(result.direction).toBe("improving");
     expect(result.percentChange).toBe(50);
@@ -46,7 +46,7 @@ describe("HealthScoreHistoryReader.analyzeTrend — message clarity", () => {
       bucket("2026-05-13", 100),
       bucket("2026-05-12", 100),
     ];
-    const result = HealthScoreHistoryReader.analyzeTrend(data, 3);
+    const result = analyzeHealthTrend(data, 3);
 
     expect(result.direction).toBe("declining");
     expect(result.percentChange).toBe(-50);
@@ -62,7 +62,7 @@ describe("HealthScoreHistoryReader.analyzeTrend — message clarity", () => {
       bucket("2026-05-13", 80),
       bucket("2026-05-12", 80),
     ];
-    const result = HealthScoreHistoryReader.analyzeTrend(data, 3);
+    const result = analyzeHealthTrend(data, 3);
 
     expect(result.direction).toBe("stable");
     expect(result.message).toBe("Health stable vs prior 3 days");
@@ -72,14 +72,14 @@ describe("HealthScoreHistoryReader.analyzeTrend — message clarity", () => {
     const data: TrendChartDay[] = Array.from({ length: 24 }, (_, i) =>
       bucket(`2026-05-17T${String(23 - i).padStart(2, "0")}`, i < 12 ? 90 : 60)
     );
-    const result = HealthScoreHistoryReader.analyzeTrend(data, 12);
+    const result = analyzeHealthTrend(data, 12);
 
     expect(result.message).toMatch(/^Health improved \d+% vs prior 12 hours$/);
   });
 
   it("handles a 1-day window with singular grammar", () => {
     const data: TrendChartDay[] = [bucket("2026-05-17", 90), bucket("2026-05-16", 60)];
-    const result = HealthScoreHistoryReader.analyzeTrend(data, 1);
+    const result = analyzeHealthTrend(data, 1);
 
     expect(result.message).toBe("Health improved 50% vs prior 1 day");
   });

@@ -20,15 +20,13 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Mock HealthScoreHistoryReader
+// Mock the health series reader (#1898): HealthActionService reads
+// HealthTrendsWriter.read, the one persisted health series.
 const mockReadAll = vi.fn();
-vi.mock("../../src/utils/healthScoreHistory", () => ({
-  HealthScoreHistoryReader: {
-    readAll: (...args: unknown[]) => mockReadAll(...args),
-  },
-  HealthScoreHistoryWriter: {
-    getFilePath: vi.fn(),
-    appendSnapshot: vi.fn(),
+vi.mock("@nightgauge/sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@nightgauge/sdk")>()),
+  HealthTrendsWriter: {
+    read: (...args: unknown[]) => mockReadAll(...args),
   },
 }));
 
@@ -53,16 +51,17 @@ function createMockLogger() {
   };
 }
 
-function createSnapshot(score: number, timestamp: string, status: string = "good") {
+function createSnapshot(score: number | null, timestamp: string, status: string = "good") {
   return {
-    schema_version: "1" as const,
+    schema_version: "2" as const,
     timestamp,
-    score,
-    status,
-    components: { successRate: score },
-    cacheHitRate: 0.5,
-    costUsd: 0.5,
-    issueNumber: 100,
+    run_id: timestamp,
+    issue_number: 100,
+    overall_score: score,
+    status: score === null ? "no-data" : status,
+    dimensions: score === null ? {} : { reliability: score },
+    excluded_dimensions: {},
+    significant_findings: [],
   };
 }
 
@@ -290,6 +289,26 @@ describe("HealthActionService", () => {
       expect(trendAction).toBeDefined();
     });
 
+    it("excludes null entries from the trend instead of averaging them as 0 (#1898)", async () => {
+      // Stable 70s with null (all-starved) runs interleaved among the prior
+      // batch. Read as zeros they would make the prior average collapse and
+      // the trend read "improving"; excluded, the series is flat.
+      const base = new Date("2026-02-10T00:00:00Z");
+      const entries = [];
+      // Newest-first positions 3..6 (the prior window) are null.
+      for (let i = 0; i < 14; i++) {
+        const ts = new Date(base.getTime() + i * 60_000).toISOString();
+        entries.push(createSnapshot(i >= 7 && i <= 10 ? null : 70, ts));
+      }
+      mockReadAll.mockResolvedValue(entries);
+
+      const result = await HealthActionService.evaluate(workspaceRoot, logger as any);
+
+      expect(result).not.toBeNull();
+      expect(result!.score).toBe(70);
+      expect(result!.trend).toBe("stable");
+    });
+
     it("detects stable trend when change is less than 10%", async () => {
       mockReadAll.mockResolvedValue(buildStableSnapshots());
 
@@ -461,6 +480,17 @@ describe("HealthActionService", () => {
 
       expect(result).toBeNull();
     });
+
+    it("returns null when the latest entry is null — a starved run is N/A, not a score (#1898)", async () => {
+      mockReadAll.mockResolvedValue([
+        createSnapshot(85, "2026-02-20T10:00:00Z", "good"),
+        createSnapshot(null, "2026-02-20T11:00:00Z"),
+      ]);
+
+      const result = await HealthActionService.evaluate(workspaceRoot, logger as any);
+
+      expect(result).toBeNull();
+    });
   });
 
   // ===========================================================================
@@ -468,7 +498,7 @@ describe("HealthActionService", () => {
   // ===========================================================================
 
   describe("error handling", () => {
-    it("returns null when evaluate throws (e.g. HealthScoreHistoryReader rejects)", async () => {
+    it("returns null when evaluate throws (e.g. HealthTrendsWriter rejects)", async () => {
       mockReadAll.mockRejectedValue(new Error("disk read failure"));
 
       const result = await HealthActionService.evaluate(workspaceRoot, logger as any);

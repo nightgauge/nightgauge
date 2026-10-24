@@ -61,7 +61,6 @@ export {
 } from "./loadSavedQuery";
 export { registerExportTelemetryCommand } from "./exportTelemetry";
 export { registerRunPipelineHealthCommand } from "./runPipelineHealth";
-export { registerRecalibrateHealthCommand } from "./recalibrateHealth";
 export { registerRunPipelineWithModelCommand } from "./runPipelineWithModel";
 export { registerKnowledgeNewEntryCommand } from "./knowledge/newEntry.js";
 export { registerKnowledgeScaffoldForIssueCommand } from "./knowledge/scaffoldForIssue.js";

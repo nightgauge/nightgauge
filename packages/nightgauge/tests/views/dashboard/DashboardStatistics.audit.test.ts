@@ -30,7 +30,6 @@ vi.mock("vscode", () => ({
 
 import { DashboardState } from "../../../src/views/dashboard/DashboardState";
 import { HealthWidgetService } from "../../../src/views/dashboard/HealthWidget";
-import { DEFAULT_HEALTH_WEIGHTS } from "../../../src/views/dashboard/HealthWidgetTypes";
 
 // ---------------------------------------------------------------------------
 // Test Data Helpers
@@ -363,7 +362,7 @@ describe("Dashboard Statistics Audit (Issue #1041)", () => {
   // -------------------------------------------------------------------------
   // 4. Cache Hit Rate Calculation
   // -------------------------------------------------------------------------
-  describe("Cache hit rate (#989 zero-token filtering)", () => {
+  describe("Cache hit rate", () => {
     it("should compute cacheHitRate as cacheRead / (input + output + cacheRead + cacheCreation)", () => {
       const run = makeSerializedRun({
         issueNumber: 200,
@@ -387,179 +386,6 @@ describe("Dashboard Statistics Audit (Issue #1041)", () => {
 
       expect(eff).toBeDefined();
       expect(eff!.cacheHitRate).toBeCloseTo(expectedCacheHitRate, 10);
-    });
-
-    it("should exclude zero-token runs from health cache hit rate average", () => {
-      // Build runs: 4 with data, 1 zero-token
-      const runs = [
-        makeSerializedRun({
-          issueNumber: 201,
-          costUsd: 2.0,
-          inputTokens: 400,
-          outputTokens: 20000,
-          cacheReadTokens: 3000000,
-          cacheCreationTokens: 100000,
-          durationMs: 600000,
-        }),
-        makeSerializedRun({
-          issueNumber: 202,
-          costUsd: 3.0,
-          inputTokens: 500,
-          outputTokens: 25000,
-          cacheReadTokens: 4000000,
-          cacheCreationTokens: 150000,
-          durationMs: 800000,
-        }),
-        // Zero-token run
-        makeSerializedRun({
-          issueNumber: 203,
-          costUsd: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadTokens: 0,
-          cacheCreationTokens: 0,
-          durationMs: 1000,
-        }),
-        makeSerializedRun({
-          issueNumber: 204,
-          costUsd: 1.5,
-          inputTokens: 300,
-          outputTokens: 15000,
-          cacheReadTokens: 2000000,
-          cacheCreationTokens: 80000,
-          durationMs: 500000,
-        }),
-        makeSerializedRun({
-          issueNumber: 205,
-          costUsd: 2.5,
-          inputTokens: 450,
-          outputTokens: 22000,
-          cacheReadTokens: 3500000,
-          cacheCreationTokens: 120000,
-          durationMs: 700000,
-        }),
-      ];
-
-      const state = createDashboardState(runs);
-      const widget = new HealthWidgetService(state, undefined);
-      const components = widget.computeHealthComponents();
-      const cacheComp = components.find((c) => c.name === "cacheHitRate");
-
-      expect(cacheComp).toBeDefined();
-
-      // Independent: compute average cache hit rate from last 5, excluding zero-token
-      const history = state.getHistory();
-      const recentRuns = history.slice(0, 5);
-      const validRuns = recentRuns.filter((r) => {
-        const u = r.usage;
-        return (
-          u.inputTokens + u.outputTokens + (u.cacheReadTokens ?? 0) + (u.cacheCreationTokens ?? 0) >
-          0
-        );
-      });
-
-      const avgCacheHitRate =
-        validRuns.length > 0
-          ? validRuns.reduce((sum, r) => sum + (r.efficiency?.cacheHitRate ?? 0), 0) /
-            validRuns.length
-          : 0;
-      const expectedScore = Math.round(avgCacheHitRate * 100);
-
-      expect(cacheComp!.score).toBe(expectedScore);
-      // Zero-token run should NOT be included — 4 valid runs, not 5
-      expect(validRuns.length).toBe(4);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // 5. Health Score Formula
-  // -------------------------------------------------------------------------
-  describe("Health score formula", () => {
-    it("should compute weighted score = sum(score * weight) / sum(weights)", () => {
-      const runs = buildRepresentativeRuns();
-      const state = createDashboardState(runs);
-      const widget = new HealthWidgetService(state, undefined);
-      const components = widget.computeHealthComponents();
-      const score = widget.computeWeightedScore(components);
-
-      // Independent weighted average calculation
-      let weightedSum = 0;
-      let totalWeight = 0;
-      for (const c of components) {
-        weightedSum += c.score * c.weight;
-        totalWeight += c.weight;
-      }
-      const expectedScore = totalWeight > 0 ? Math.round(weightedSum / totalWeight) : 0;
-
-      expect(score).toBe(expectedScore);
-    });
-
-    it("should return 0 for empty components", () => {
-      const runs = buildRepresentativeRuns();
-      const state = createDashboardState(runs);
-      const widget = new HealthWidgetService(state, undefined);
-      expect(widget.computeWeightedScore([])).toBe(0);
-    });
-
-    it("should produce individual component scores within 0-100", () => {
-      const runs = buildRepresentativeRuns();
-      const state = createDashboardState(runs);
-      const widget = new HealthWidgetService(state, undefined);
-      const components = widget.computeHealthComponents();
-
-      for (const c of components) {
-        expect(c.score).toBeGreaterThanOrEqual(0);
-        expect(c.score).toBeLessThanOrEqual(100);
-      }
-    });
-
-    it("should include all 4 health components", () => {
-      const runs = buildRepresentativeRuns();
-      const state = createDashboardState(runs);
-      const widget = new HealthWidgetService(state, undefined);
-      const components = widget.computeHealthComponents();
-
-      const expectedNames = ["successRate", "costTrend", "failureRate", "cacheHitRate"];
-      const componentNames = components.map((c) => c.name);
-      expect(componentNames).toEqual(expectedNames);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // 6. Success Rate Component
-  // -------------------------------------------------------------------------
-  describe("Health component: success rate", () => {
-    it("should match independently computed success rate", () => {
-      const runs = buildRepresentativeRuns();
-      const state = createDashboardState(runs);
-      const widget = new HealthWidgetService(state, undefined);
-      const components = widget.computeHealthComponents();
-      const successComp = components.find((c) => c.name === "successRate");
-
-      const completed = runs.filter((r) => r.status === "complete").length;
-      const expectedScore = Math.round((completed / runs.length) * 100);
-
-      expect(successComp!.score).toBe(expectedScore);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // 7. Reliability Component (failure rate inverse)
-  // -------------------------------------------------------------------------
-  describe("Health component: reliability", () => {
-    it("should equal (1 - failureRate) * 100", () => {
-      const runs = buildRepresentativeRuns();
-      const state = createDashboardState(runs);
-      const widget = new HealthWidgetService(state, undefined);
-      const components = widget.computeHealthComponents();
-      const reliabilityComp = components.find((c) => c.name === "failureRate");
-
-      const history = state.getHistory();
-      const failed = history.filter((r) => r.status === "failed").length;
-      const failureRate = history.length > 0 ? failed / history.length : 0;
-      const expectedScore = Math.round((1 - failureRate) * 100);
-
-      expect(reliabilityComp!.score).toBe(expectedScore);
     });
   });
 
@@ -706,12 +532,9 @@ describe("Dashboard Statistics Audit (Issue #1041)", () => {
       expect(tokenSparkline!.data).toEqual(tokenData);
     });
 
-    // The Recent Activity row on the Overview tab no longer emits cache-hit
-    // or success-rate sparklines — both values are already shown as composite
-    // scores in the Pipeline Health component cards directly above. The old
-    // "#989 zero-token mapping" rule continues to apply to the score path
-    // (verified by HealthWidget.cacheFilter.test.ts), just not to a sparkline
-    // that doesn't exist anymore.
+    // The Recent Activity row on the Overview tab does not emit cache-hit or
+    // success-rate sparklines. Health is the SDK engine's per-run series entry
+    // (#1898), not a widget-side composite of those rates.
     it("does not emit cache-hit or success-rate sparklines on the Overview tab", () => {
       const runs = buildRepresentativeRuns();
       const state = createDashboardState(runs);

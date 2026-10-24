@@ -5,8 +5,8 @@
  * the duration of that write the file is zero bytes on disk, and any concurrent
  * reader sees an empty file rather than the old contents or the new ones.
  *
- * That window is not theoretical. `health-history.jsonl` is rewritten by a
- * retention prune after every append while the telemetry uploader reads it on
+ * That window is not theoretical. The retired `health-history.jsonl` was
+ * rewritten by a retention prune after every append while the telemetry uploader reads it on
  * its own timer — a 10-second timer while any run is active. A read that landed
  * mid-prune saw zero lines, could not match its anchor record against an empty
  * file, and fell through to re-uploading the whole stream from line 0 (#1210).

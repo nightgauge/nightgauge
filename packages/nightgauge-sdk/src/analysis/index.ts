@@ -285,6 +285,14 @@ export {
   type WriteReportsResult,
 } from "./health/index.js";
 export { HealthReportSchema } from "./health/index.js";
+// The one health series (#1898)
+export {
+  HealthTrendsWriter,
+  buildHealthTrendEntry,
+  recordHealthTrend,
+  type HealthTrendRunMeta,
+  type HealthTrendEntry,
+} from "./health/index.js";
 export type { HealthReport } from "./health/index.js";
 export type {
   RecommendationHistoryEntry,

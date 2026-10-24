@@ -47,7 +47,8 @@ function makeFullWidgetData(overrides: Partial<HealthWidgetData> = {}): HealthWi
     summary: {
       score: 75,
       status: "good",
-      components: [],
+      dimensions: [],
+      contributing: 0,
     },
     sparklines: [],
     alerts: [],

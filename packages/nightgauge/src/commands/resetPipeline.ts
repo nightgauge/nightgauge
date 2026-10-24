@@ -300,7 +300,7 @@ export function registerResetPipelineCommand(
 
         // Keep only pipeline context files: issue-N, planning-N, dev-N,
         // validate-N, pr-N, merge-N, dev-batch-N, planning-batch-N.
-        // Preserves health-history.jsonl, calibration.json, etc. (The
+        // Preserves calibration.json, history/, etc. (The
         // run-control singletons are in the checkout's own directory.)
         const PIPELINE_CONTEXT_PATTERN =
           /^(?:issue|planning|dev|validate|pr|merge|dev-batch|planning-batch)-\d+\.json$/;

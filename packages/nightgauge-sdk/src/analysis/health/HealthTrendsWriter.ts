@@ -1,8 +1,8 @@
 /**
  * HealthTrendsWriter - JSONL append/read/prune for HealthTrendEntry records
  *
- * Persists all 7 SDK health dimension scores + overall score to a single JSONL
- * time-series file in the checkout's own per-checkout directory (ADR-024 § 7):
+ * The one health series (#1898): one entry per pipeline run, written through
+ * `recordHealthTrend` (healthSeries.ts), to a single JSONL time-series file in the checkout's own per-checkout directory (ADR-024 § 7):
  * `<git-dir>/nightgauge-worktree/health/trends.jsonl`
  * (`.git/nightgauge-worktree/health/trends.jsonl` for a main checkout).
  *
@@ -25,15 +25,23 @@ const DEFAULT_RETENTION_DAYS = 90;
 
 // ── Validation schema ─────────────────────────────────────────────
 
-const HealthTrendEntrySchema = z.object({
-  schema_version: z.literal("1"),
-  timestamp: z.string(),
-  run_id: z.string(),
-  issue_number: z.number(),
-  overall_score: z.number().min(0).max(100).nullable(),
-  dimensions: z.record(z.string(), z.number()),
-  significant_findings: z.array(z.string()),
-});
+const HealthTrendEntrySchema = z
+  .object({
+    schema_version: z.literal("2"),
+    timestamp: z.string(),
+    run_id: z.string(),
+    issue_number: z.number(),
+    overall_score: z.number().min(0).max(100).nullable(),
+    status: z.enum(["excellent", "good", "fair", "poor", "critical", "no-data"]),
+    dimensions: z.record(z.string(), z.number()),
+    excluded_dimensions: z.record(z.string(), z.string()),
+    significant_findings: z.array(z.string()),
+  })
+  // null and "no-data" travel together: a score is never stored without a
+  // status that describes it, and absence never wears a status (#1197).
+  .refine((e) => (e.overall_score === null) === (e.status === "no-data"), {
+    message: "overall_score is null exactly when status is no-data",
+  });
 
 // ── HealthTrendsWriter ────────────────────────────────────────────
 
@@ -191,8 +199,13 @@ export class HealthTrendsWriter {
       }
     }
 
+    // Temp file + rename: the telemetry uploader reads this file on its own
+    // timer, and a truncate-then-write exposes an empty file mid-prune, which
+    // made the uploader re-send the whole stream (#1210).
+    const tmpPath = `${filePath}.${process.pid}.tmp`;
     try {
-      await fs.writeFile(filePath, kept.join("\n") + (kept.length > 0 ? "\n" : ""), "utf-8");
+      await fs.writeFile(tmpPath, kept.join("\n") + (kept.length > 0 ? "\n" : ""), "utf-8");
+      await fs.rename(tmpPath, filePath);
     } catch (error) {
       console.warn(`[HealthTrendsWriter] Failed to prune trend entries: ${error}`);
     }

@@ -3791,18 +3791,12 @@ export class DashboardState {
    * @see Issue #655 - Pipeline Health Dashboard Widget
    */
   async getHealthData(
-    cacheAlertThreshold?: number,
     trendRange?: import("./HealthWidgetTypes").TrendRange,
     dependabotData?: import("../../services/DependabotPRService").DependabotPRData | null
   ): Promise<import("./HealthWidgetTypes").HealthWidgetData | null> {
     try {
       const { HealthWidgetService } = await import("./HealthWidget");
-      const service = new HealthWidgetService(
-        this,
-        this.workspaceRoot,
-        undefined,
-        cacheAlertThreshold
-      );
+      const service = new HealthWidgetService(this, this.workspaceRoot);
       return await service.getData(trendRange, dependabotData);
     } catch {
       return null;

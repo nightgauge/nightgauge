@@ -8,7 +8,7 @@
  */
 
 import type { ExecutionHistoryRecord } from "../schemas/executionHistory";
-import type { HealthScoreSnapshot } from "../schemas/healthScoreHistory";
+import type { HealthScoreEntry } from "@nightgauge/sdk";
 import type { ExperimentOutcome } from "@nightgauge/sdk";
 
 /** Date range filter for aggregation queries */
@@ -91,7 +91,8 @@ export interface StoredAnalysisReport {
 export interface AggregatedDataset {
   filter: DateRangeFilter;
   executionHistory: ExecutionHistoryRecord[];
-  healthScores: HealthScoreSnapshot[];
+  /** Scored points of the health series, `health/trends.jsonl` (#1898). */
+  healthScores: HealthScoreEntry[];
   analysisReports: StoredAnalysisReport[];
   experimentResults: ExperimentOutcome[];
   healthReports: HealthReport[];

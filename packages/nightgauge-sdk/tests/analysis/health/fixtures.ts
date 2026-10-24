@@ -78,13 +78,6 @@ export function makeHealthScoreEntry(overrides: Partial<HealthScoreEntry> = {}):
   return {
     timestamp: daysAgo(3),
     score: 75,
-    status: "good",
-    components: {
-      "token-economics": 80,
-      "cost-health": 70,
-      reliability: 75,
-    },
-    costUsd: 1.5,
     issueNumber: 100,
     ...overrides,
   };

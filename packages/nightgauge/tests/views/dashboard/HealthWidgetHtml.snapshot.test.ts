@@ -18,7 +18,7 @@ import type { HealthWidgetData } from "../../../src/views/dashboard/HealthWidget
 
 function createMockHealthData(overrides?: Partial<HealthWidgetData>): HealthWidgetData {
   return {
-    summary: { score: 75, status: "good", components: [] },
+    summary: { score: 75, status: "good", dimensions: [], contributing: 0 },
     sparklines: [],
     alerts: [],
     recommendations: [],
@@ -40,27 +40,22 @@ describe("getHealthWidgetHtml snapshots (Issue #1242)", () => {
     expect(html).toMatchSnapshot();
   });
 
-  it("healthy state — score 82, good status, with components", () => {
+  it("healthy state — score 82, good status, with dimensions", () => {
     const data = createMockHealthData({
       summary: {
         score: 82,
         status: "good",
-        components: [
+        dimensions: [
+          { dimension: "reliability", label: "Reliability", score: 90 },
+          { dimension: "token-economics", label: "Token Economics", score: 78 },
           {
-            name: "successRate",
-            score: 90,
-            weight: 0.25,
-            trend: "improving",
-            label: "Success Rate",
-          },
-          {
-            name: "tokenEfficiency",
-            score: 78,
-            weight: 0.18,
-            trend: "stable",
-            label: "Token Efficiency",
+            dimension: "skill-drift",
+            label: "Skill Drift",
+            score: null,
+            excludedReason: "no skill-effectiveness records",
           },
         ],
+        contributing: 2,
       },
       sparklines: [
         {
@@ -78,9 +73,31 @@ describe("getHealthWidgetHtml snapshots (Issue #1242)", () => {
     expect(html).toMatchSnapshot();
   });
 
+  it("no-data state — N/A, every dimension excluded with its reason (#1898)", () => {
+    const data = createMockHealthData({
+      summary: {
+        score: null,
+        status: "no-data",
+        dimensions: [
+          {
+            dimension: "reliability",
+            label: "Reliability",
+            score: null,
+            excludedReason: "fewer than 5 runs",
+          },
+        ],
+        contributing: 0,
+        recordedAt: "2026-01-01T12:00:00Z",
+      },
+      lastUpdated: "2026-01-01T12:00:00Z",
+    });
+    const html = getHealthWidgetHtml(data);
+    expect(html).toMatchSnapshot();
+  });
+
   it("with alerts — warning and critical", () => {
     const data = createMockHealthData({
-      summary: { score: 45, status: "poor", components: [] },
+      summary: { score: 45, status: "poor", dimensions: [], contributing: 0 },
       alerts: [
         {
           level: "critical",
@@ -133,7 +150,7 @@ describe("getHealthWidgetHtml snapshots (Issue #1242)", () => {
 
   it("collapsed state", () => {
     const data = createMockHealthData({
-      summary: { score: 60, status: "fair", components: [] },
+      summary: { score: 60, status: "fair", dimensions: [], contributing: 0 },
     });
     const html = getHealthWidgetHtml(data, true);
     expect(html).toMatchSnapshot();

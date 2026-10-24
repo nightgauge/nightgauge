@@ -28,6 +28,17 @@ import type { TelemetryStream } from "../../src/services/telemetry/types";
 import * as vscode from "vscode";
 import { fakeCloneLayout } from "../helpers/cloneLayout";
 
+// ─── SDK mock ─────────────────────────────────────────────────────────────────
+// The health stream reads the one health series (#1898) at
+// HealthTrendsWriter.getFilePath(root): the checkout's health/trends.jsonl.
+// Resolved here without git, under the root, so the fs mocks below route it.
+vi.mock("@nightgauge/sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@nightgauge/sdk")>()),
+  HealthTrendsWriter: {
+    getFilePath: (root: string) => `${root}/.git/nightgauge-worktree/health/trends.jsonl`,
+  },
+}));
+
 // ─── vscode mock ──────────────────────────────────────────────────────────────
 
 vi.mock("vscode", () => ({
@@ -735,7 +746,7 @@ describe("TelemetryUploaderService", () => {
     setupFs(
       [], // no daily files
       {},
-      [{ filename: "health-history.jsonl", content: healthContent, sizeBytes: 60000 }]
+      [{ filename: "trends.jsonl", content: healthContent, sizeBytes: 60000 }]
     );
 
     fetchMock.mockResolvedValue(okResponse());
@@ -762,15 +773,21 @@ describe("TelemetryUploaderService", () => {
       return body.length;
     });
     expect(batchSizes).toEqual([500, 100]);
+
+    // The stream reads the one health series (#1898) — the checkout's
+    // health/trends.jsonl — and never the retired health-history.jsonl.
+    const readPaths = vi
+      .mocked(vscode.workspace.fs.readFile)
+      .mock.calls.map(([uri]) => (uri as { fsPath: string }).fsPath);
+    expect(readPaths).toContain("/workspace/.git/nightgauge-worktree/health/trends.jsonl");
+    expect(readPaths.some((p) => p.endsWith("health-history.jsonl"))).toBe(false);
   });
 
   // ── Test 8: Health watermark advances correctly after 600-record upload ───
 
   it("advances health watermark to 600 after uploading 600 records", async () => {
     const healthContent = makeJsonlContent(600);
-    setupFs([], {}, [
-      { filename: "health-history.jsonl", content: healthContent, sizeBytes: 60000 },
-    ]);
+    setupFs([], {}, [{ filename: "trends.jsonl", content: healthContent, sizeBytes: 60000 }]);
 
     fetchMock.mockResolvedValue(okResponse());
 
@@ -792,7 +809,7 @@ describe("TelemetryUploaderService", () => {
     const saved = JSON.parse(
       Buffer.from(writeCall![1] as Uint8Array).toString("utf8")
     ) as SavedWatermarks;
-    expect(wmLines(saved, "health-history.jsonl")).toBe(600);
+    expect(wmLines(saved, "health/trends.jsonl")).toBe(600);
   });
 
   // ── Test 9: Recommendation filter — only metric_after records uploaded ────
@@ -869,7 +886,7 @@ describe("TelemetryUploaderService", () => {
     const healthContent = makeJsonlContent(5);
 
     setupFs([{ name: "2026-05-10.jsonl", content: dailyContent, sizeBytes: 300 }], {}, [
-      { filename: "health-history.jsonl", content: healthContent, sizeBytes: 500 },
+      { filename: "trends.jsonl", content: healthContent, sizeBytes: 500 },
     ]);
 
     fetchMock.mockResolvedValue(okResponse());
@@ -899,7 +916,7 @@ describe("TelemetryUploaderService", () => {
     const recContent = makeRecommendationContent(6, 4); // 4 with metric_after
 
     setupFs([{ name: "2026-05-10.jsonl", content: dailyContent, sizeBytes: 500 }], {}, [
-      { filename: "health-history.jsonl", content: healthContent, sizeBytes: 1000 },
+      { filename: "trends.jsonl", content: healthContent, sizeBytes: 1000 },
       { filename: "recommendation-history.jsonl", content: recContent, sizeBytes: 600 },
     ]);
 
@@ -939,7 +956,7 @@ describe("TelemetryUploaderService", () => {
     const recContent = makeRecommendationContent(3, 3);
 
     setupFs([{ name: "2026-05-10.jsonl", content: dailyContent, sizeBytes: 300 }], {}, [
-      { filename: "health-history.jsonl", content: healthContent, sizeBytes: 400 },
+      { filename: "trends.jsonl", content: healthContent, sizeBytes: 400 },
       { filename: "recommendation-history.jsonl", content: recContent, sizeBytes: 300 },
     ]);
 
@@ -969,12 +986,12 @@ describe("TelemetryUploaderService", () => {
 
     // Each stream uses its own basename key
     expect(saved).toHaveProperty("2026-05-10.jsonl");
-    expect(saved).toHaveProperty("health-history.jsonl");
+    expect(saved).toHaveProperty("health/trends.jsonl");
     expect(saved).toHaveProperty("recommendation-history.jsonl");
 
     // Watermark values are independent
     expect(wmLines(saved, "2026-05-10.jsonl")).toBe(3);
-    expect(wmLines(saved, "health-history.jsonl")).toBe(4);
+    expect(wmLines(saved, "health/trends.jsonl")).toBe(4);
     expect(wmLines(saved, "recommendation-history.jsonl")).toBe(3);
   });
 
@@ -1721,12 +1738,12 @@ describe("TelemetryUploaderService", () => {
   // ── #1173: cursor rotation — a watermark past EOF must never read as "quiet" ─
   //
   // A bare line count is only a valid cursor while the file is append-only.
-  // `HealthScoreHistoryWriter.pruneOldEntries` rewrites health-history.jsonl
+  // `HealthTrendsWriter.pruneOldEntries` rewrites the health series
   // after EVERY append, and run-history retention prunes daily files — so a
   // file routinely gets SHORTER than its watermark, `slice(count)` yields `[]`,
   // and the stream is dead forever while logging "health:+0", which is exactly
   // what a healthy idle stream logs. Live evidence: a real workspace carrying
-  // watermark 949 against a 232-line health-history.jsonl.
+  // watermark 949 against a 232-line health file (then health-history.jsonl).
   describe("#1173 — rotated / pruned / truncated files", () => {
     /** The individual JSONL lines behind {@link makeJsonlContent}. */
     function dailyLines(count: number): string[] {
@@ -1865,11 +1882,11 @@ describe("TelemetryUploaderService", () => {
     it("health: the live 949-vs-232 watermark is detected, logged at error, and the stream resumes", async () => {
       const lines = dailyLines(232);
       const health = {
-        filename: "health-history.jsonl",
+        filename: "trends.jsonl",
         content: lines.join("\n"),
         sizeBytes: 56513,
       };
-      setupFs([], { "health-history.jsonl": 949 }, [health]);
+      setupFs([], { "health/trends.jsonl": 949 }, [health]);
       fetchMock.mockResolvedValue(okResponse());
 
       const logger = makeLogger();
@@ -1884,7 +1901,7 @@ describe("TelemetryUploaderService", () => {
         (JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as unknown[])
           .length
       ).toBe(232);
-      expect(wmLines(lastSavedWatermarks(), "health-history.jsonl")).toBe(232);
+      expect(wmLines(lastSavedWatermarks(), "health/trends.jsonl")).toBe(232);
     });
 
     // #1210 — `pruneOldEntries` used fs.writeFile (truncate-then-write), so a
@@ -1894,11 +1911,11 @@ describe("TelemetryUploaderService", () => {
     // this guards the reader against any producer that is not.
     it("health: an empty read under a non-zero cursor is skipped, not re-derived from zero", async () => {
       const health = {
-        filename: "health-history.jsonl",
+        filename: "trends.jsonl",
         content: "",
         sizeBytes: 0,
       };
-      setupFs([], { "health-history.jsonl": { lines: 36, anchor: "deadbeefdeadbeef" } }, [health]);
+      setupFs([], { "health/trends.jsonl": { lines: 36, anchor: "deadbeefdeadbeef" } }, [health]);
       fetchMock.mockResolvedValue(okResponse());
 
       const logger = makeLogger();
@@ -1909,8 +1926,8 @@ describe("TelemetryUploaderService", () => {
       // the file's real contents reappeared.
       expect(fetchMock).not.toHaveBeenCalled();
       const saved = lastSavedWatermarks();
-      if (saved && "health-history.jsonl" in saved) {
-        expect(wmLines(saved, "health-history.jsonl")).toBe(36);
+      if (saved && "health/trends.jsonl" in saved) {
+        expect(wmLines(saved, "health/trends.jsonl")).toBe(36);
       }
       expect(logger.error).not.toHaveBeenCalledWith(
         expect.stringContaining("STALE"),
@@ -1921,7 +1938,7 @@ describe("TelemetryUploaderService", () => {
     it("health: after a prune, snapshots written afterwards upload rather than being skipped", async () => {
       const lines = dailyLines(10);
       const health = {
-        filename: "health-history.jsonl",
+        filename: "trends.jsonl",
         content: lines.slice(0, 6).join("\n"),
         sizeBytes: 6000,
       };
@@ -1947,11 +1964,11 @@ describe("TelemetryUploaderService", () => {
 
     it("a recovering stream is distinguishable from a quiet one in the cycle summary", async () => {
       const health = {
-        filename: "health-history.jsonl",
+        filename: "trends.jsonl",
         content: dailyLines(3).join("\n"),
         sizeBytes: 300,
       };
-      setupFs([], { "health-history.jsonl": 949 }, [health]);
+      setupFs([], { "health/trends.jsonl": 949 }, [health]);
       fetchMock.mockResolvedValue(okResponse());
 
       const logger = makeLogger();
@@ -1992,19 +2009,19 @@ describe("TelemetryUploaderService", () => {
 
     it("upgrades a LEGACY count-only entry that is already fully caught up, uploading nothing", async () => {
       const health = {
-        filename: "health-history.jsonl",
+        filename: "trends.jsonl",
         content: dailyLines(4).join("\n"),
         sizeBytes: 400,
       };
-      setupFs([], { "health-history.jsonl": 4 }, [health]);
+      setupFs([], { "health/trends.jsonl": 4 }, [health]);
 
       const logger = makeLogger();
       await makeService(logger).runUploadCycle();
 
       expect(fetchMock).not.toHaveBeenCalled();
       const saved = lastSavedWatermarks();
-      expect(wmLines(saved, "health-history.jsonl")).toBe(4);
-      expect(wmAnchor(saved, "health-history.jsonl")).toEqual(expect.any(String));
+      expect(wmLines(saved, "health/trends.jsonl")).toBe(4);
+      expect(wmAnchor(saved, "health/trends.jsonl")).toEqual(expect.any(String));
     });
 
     // ── The hot path must be untouched ─────────────────────────────────────

@@ -437,27 +437,50 @@ func readOutcomes(path string, since time.Time) ([]outcomeRecord, error) {
 // --- Health Monitoring Loop ---
 
 type healthTrendEntry struct {
-	Timestamp    string             `json:"timestamp"`
-	OverallScore float64            `json:"overall_score"`
+	SchemaVersion string `json:"schema_version"`
+	Timestamp     string `json:"timestamp"`
+	// nil when no dimension had data (#1197); never averaged as 0.
+	OverallScore *float64           `json:"overall_score"`
 	Dimensions   map[string]float64 `json:"dimensions"`
 	Findings     []string           `json:"significant_findings"`
 }
 
+// analyzeHealthMonitoring reads the one health series, the checkout's
+// health/trends.jsonl (#1898) — the file the dashboard's displayed score is
+// appended to, once per pipeline run. Absence is stated, with the path; an
+// entry recorded as null (every dimension starved) is counted, not averaged.
 func analyzeHealthMonitoring(root string, since time.Time) LoopResult {
 	path, err := layout.CheckoutPath(root, layout.CheckoutHealth+"/trends.jsonl")
 	if err != nil {
-		return noDataResult("health-monitoring", "no health trend history available: "+err.Error())
+		return noDataResult("health-monitoring", "health series unresolvable: "+err.Error())
 	}
-	entries, err := readHealthTrends(path, since)
-	if err != nil || len(entries) == 0 {
-		return noDataResult("health-monitoring", "no health trend history available")
+	all, err := readHealthTrends(path, since)
+	if os.IsNotExist(err) {
+		return noDataResult("health-monitoring", "health series absent: "+path+
+			" does not exist; no pipeline run has recorded a health entry")
+	}
+	if err != nil {
+		return noDataResult("health-monitoring", "health series unreadable: "+err.Error())
+	}
+	if len(all) == 0 {
+		return noDataResult("health-monitoring", "health series "+path+" has no entries in the period")
+	}
+	var entries []healthTrendEntry
+	for _, e := range all {
+		if e.OverallScore != nil {
+			entries = append(entries, e)
+		}
+	}
+	unscored := len(all) - len(entries)
+	if len(entries) == 0 {
+		return noDataResult("health-monitoring", itoa(len(all))+" health entries in the period, none scored: "+
+			"every dimension lacked data on every run")
 	}
 
-	// Simple heuristic: check if score is trending up
 	total := len(entries)
 	var scoreSum float64
 	for _, e := range entries {
-		scoreSum += e.OverallScore
+		scoreSum += *e.OverallScore
 	}
 	avgScore := scoreSum / float64(total)
 
@@ -477,6 +500,7 @@ func analyzeHealthMonitoring(root string, since time.Time) LoopResult {
 
 	evidence := map[string]string{
 		"entriesAnalyzed":   itoa(total),
+		"unscoredEntries":   itoa(unscored),
 		"avgScore":          pct(avgScore / 100.0),
 		"recurringFindings": itoa(recurringCount),
 	}
@@ -521,7 +545,7 @@ func readHealthTrends(path string, since time.Time) ([]healthTrendEntry, error) 
 			continue
 		}
 		var e healthTrendEntry
-		if err := json.Unmarshal(line, &e); err != nil {
+		if err := json.Unmarshal(line, &e); err != nil || e.SchemaVersion != "2" {
 			continue
 		}
 		if ts, err := time.Parse(time.RFC3339, e.Timestamp); err == nil && ts.Before(since) {

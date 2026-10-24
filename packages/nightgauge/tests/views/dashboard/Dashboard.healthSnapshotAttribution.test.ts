@@ -1,21 +1,18 @@
 /**
  * Dashboard.healthSnapshotAttribution.test.ts
  *
- * Issue #1231 — one `health-history.jsonl` held two repositories' populations.
+ * Issue #1231 — one health file held two repositories' populations.
  *
- * `recordHealthSnapshotForRun` built `HealthWidgetService(this.state,
- * this.workspaceRoot)` — the DASHBOARD's history and the DASHBOARD's path — for
- * a run that may have executed in a sibling repository. The Go scheduler sent
- * `repo` on every `pipeline.complete`; the handler logged it and dropped it.
- *
- * The observed result was a file whose `costTrend` was bimodal — 100 from the
- * runner repo's cost history, 0 from a dispatched repo's, alternating at the
- * same timestamp for the same issue. A score read off that file describes no
+ * `recordHealthSnapshotForRun` once scored a run against the DASHBOARD's
+ * history and filed it under the DASHBOARD's path, for a run that may have
+ * executed in a sibling repository. A score read off that file describes no
  * repository at all.
  *
- * These tests write real files under temp roots and assert WHERE the snapshot
- * landed, because the defect was never in the scoring maths — it was the root
- * the writer was handed.
+ * Since #1898 the store is the one health series, `health/trends.jsonl`,
+ * appended by the SDK engine over the run's own repo. These tests write real
+ * files under temp roots and assert WHERE the entry landed and WHAT corpus it
+ * was computed from, because the defect was never in the scoring maths — it
+ * was the root the writer was handed.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -264,10 +261,14 @@ vi.mock("vscode", () => ({
   RelativePattern: vi.fn(),
 }));
 
+import { HealthTrendsWriter, type HealthTrendEntry } from "@nightgauge/sdk";
 import { Dashboard } from "../../../src/views/dashboard/Dashboard";
-import { fakeCloneLayout, mkFakeCloneLayout } from "../../helpers/cloneLayout";
+import { initGitRepo, mkFakeCloneLayout } from "../../helpers/cloneLayout";
 
-const HEALTH_FILE = "health-history.jsonl";
+/** `hoursAgo` hours before now, ISO — inside the series' 30-day window. */
+function hoursAgo(hours: number, minutes = 0): string {
+  return new Date(Date.now() - hours * 3_600_000 + minutes * 60_000).toISOString();
+}
 
 /**
  * Seed a repo root with completed runs.
@@ -278,11 +279,16 @@ const HEALTH_FILE = "health-history.jsonl";
  * passes for the wrong reason.
  */
 function seedRepo(root: string, costs: number[]): void {
-  // Each repo is its own clone, with its own per-clone pipeline directory.
+  // Each repo is its own clone, with its own per-clone pipeline directory. A
+  // real git repository, because the SDK resolves the series' path from git
+  // (a fake layout seeded through the extension's helper is not visible to
+  // the SDK entry point under vitest's module graph).
+  initGitRepo(root);
   const histDir = path.join(mkFakeCloneLayout(root).pipeline, "history");
   fs.mkdirSync(histDir, { recursive: true });
   const lines = costs.map((c, i) => {
-    const hh = String(i + 1).padStart(2, "0");
+    // Oldest first, one run an hour, ending an hour ago.
+    const startH = costs.length - i + 1;
     return JSON.stringify({
       schema_version: "2",
       record_type: "run",
@@ -296,9 +302,9 @@ function seedRepo(root: string, costs: number[]): void {
       size: "M",
       type: "feature",
       execution_mode: "headless",
-      started_at: `2026-08-30T${hh}:00:00Z`,
-      completed_at: `2026-08-30T${hh}:30:00Z`,
-      recorded_at: `2026-08-30T${hh}:30:05Z`,
+      started_at: hoursAgo(startH),
+      completed_at: hoursAgo(startH, 30),
+      recorded_at: hoursAgo(startH, 31),
       total_duration_ms: 1_800_000,
       files: [],
       stages: {
@@ -322,17 +328,12 @@ function seedRepo(root: string, costs: number[]): void {
       },
     });
   });
-  fs.writeFileSync(path.join(histDir, "2026-08-30.jsonl"), lines.join("\n") + "\n");
+  const day = new Date().toISOString().slice(0, 10);
+  fs.writeFileSync(path.join(histDir, `${day}.jsonl`), lines.join("\n") + "\n");
 }
 
-function readSnapshots(root: string): any[] {
-  const f = path.join(fakeCloneLayout(root).pipeline, HEALTH_FILE);
-  if (!fs.existsSync(f)) return [];
-  return fs
-    .readFileSync(f, "utf-8")
-    .split("\n")
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l));
+function readSnapshots(root: string): Promise<HealthTrendEntry[]> {
+  return HealthTrendsWriter.read(root);
 }
 
 describe("health snapshots are attributed to the repo that ran (#1231)", () => {
@@ -361,7 +362,7 @@ describe("health snapshots are attributed to the repo that ran (#1231)", () => {
     };
     mockDisposables = [];
 
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ng-health-attr-"));
+    tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ng-health-attr-")));
     runnerRoot = path.join(tmp, "runner");
     siblingRoot = path.join(tmp, "sibling");
     // Cheap, flat corpus in the runner; an expensive recent spike in the
@@ -384,50 +385,47 @@ describe("health snapshots are attributed to the repo that ran (#1231)", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("writes a cross-repo run's snapshot under THAT repo, not the runner's", async () => {
+  it("writes a cross-repo run's entry under THAT repo, not the runner's", async () => {
     await dashboard.recordHealthSnapshotForRun(349, 10.85, "acme/sibling", "run-x");
 
-    const sibling = readSnapshots(siblingRoot);
-    const runner = readSnapshots(runnerRoot);
+    const sibling = await readSnapshots(siblingRoot);
+    const runner = await readSnapshots(runnerRoot);
 
     expect(
       sibling.length,
-      "the run executed in acme/sibling, so its snapshot belongs in that repo"
+      "the run executed in acme/sibling, so its entry belongs in that repo"
     ).toBe(1);
     expect(
       runner.length,
       "writing it under the runner root is the #1231 defect: the file then holds " +
         "two repos' populations and the score describes neither"
     ).toBe(0);
-    expect(sibling[0].issueNumber).toBe(349);
+    expect(sibling[0].issue_number).toBe(349);
+    expect(sibling[0].run_id).toBe("run-x");
+    expect(sibling[0].schema_version).toBe("2");
   });
 
   it("scores the cross-repo run against THAT repo's history", async () => {
     await dashboard.recordHealthSnapshotForRun(349, 10.85, "acme/sibling", "run-x");
-
-    const [snap] = readSnapshots(siblingRoot);
-    // The sibling's recent runs are ~10x its older ones, so costTrend must
-    // collapse. Scoring it against the runner's flat corpus would return 100 —
-    // the exact 87-vs-57 split seen in the real file.
-    expect(snap.components.costTrend).toBeLessThan(50);
-  });
-
-  it("keeps using the dashboard's own state when the run is the dashboard's repo", async () => {
     await dashboard.recordHealthSnapshotForRun(11, 1.5, undefined, "run-local");
 
-    const runner = readSnapshots(runnerRoot);
-    expect(runner.length).toBe(1);
-    // Flat corpus -> healthy trend. This is the single-repo path, which was the
-    // only case that was ever correct, and it must stay correct.
-    expect(runner[0].components.costTrend).toBe(100);
+    const [sib] = await readSnapshots(siblingRoot);
+    const [run] = await readSnapshots(runnerRoot);
+    // Both corpora are ten runs, so both are scored — and the sibling's ~10x
+    // recent cost spike must make its cost-health differ from the runner's
+    // flat corpus. Scoring both against one corpus would make them equal.
+    expect(sib.overall_score).not.toBeNull();
+    expect(run.overall_score).not.toBeNull();
+    expect(sib.dimensions["cost-health"]).toBeDefined();
+    expect(sib.dimensions["cost-health"]).not.toBe(run.dimensions["cost-health"]);
   });
 
-  it("records exactly one snapshot per run, across repeated completions", async () => {
+  it("records exactly one entry per run, across repeated completions", async () => {
     // One completed run produced six byte-identical records in the real file.
     for (let i = 0; i < 6; i++) {
       await dashboard.recordHealthSnapshotForRun(349, 10.85, "acme/sibling", "run-x");
     }
-    expect(readSnapshots(siblingRoot).length).toBe(1);
+    expect((await readSnapshots(siblingRoot)).length).toBe(1);
   });
 
   it("still records a genuine re-run of the same issue", async () => {
@@ -436,19 +434,23 @@ describe("health snapshots are attributed to the repo that ran (#1231)", () => {
     await dashboard.recordHealthSnapshotForRun(349, 10.85, "acme/sibling", "run-1");
     await dashboard.recordHealthSnapshotForRun(349, 12.0, "acme/sibling", "run-2");
 
-    expect(readSnapshots(siblingRoot).length).toBe(2);
+    expect((await readSnapshots(siblingRoot)).length).toBe(2);
   });
 
-  it("does not write a snapshot for a repo with no history of its own", async () => {
+  it("records a repo with no history of its own as null — under that repo only", async () => {
     const emptyRoot = path.join(tmp, "empty");
+    initGitRepo(emptyRoot);
     mkFakeCloneLayout(emptyRoot);
     repoRoots.set("acme/empty", emptyRoot);
 
     await dashboard.recordHealthSnapshotForRun(1, 1, "acme/empty", "run-e");
 
-    // Scoring every component against an empty corpus produces a meaningless
-    // point; putting it on the trend is worse than leaving the trend short.
-    expect(readSnapshots(emptyRoot).length).toBe(0);
-    expect(readSnapshots(runnerRoot).length).toBe(0);
+    // #1898: a run with no data is recorded as null, not omitted and not
+    // coerced to a number — and still never filed under the runner's root.
+    const [entry, ...rest] = await readSnapshots(emptyRoot);
+    expect(rest).toHaveLength(0);
+    expect(entry.overall_score).toBeNull();
+    expect(entry.status).toBe("no-data");
+    expect((await readSnapshots(runnerRoot)).length).toBe(0);
   });
 });

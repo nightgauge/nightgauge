@@ -9,12 +9,12 @@
 
 import type {
   HealthWidgetData,
-  HealthComponent,
+  HealthSummary,
+  HealthSummaryStatus,
   TrendSparkline,
   ActiveAlert,
   Recommendation,
   PredictionAccuracy,
-  HealthStatus,
   TrendChartDay,
   TrendAnalysis,
   TrendRange,
@@ -53,8 +53,10 @@ function formatSavings(usd: number): string {
 /**
  * Status badge emoji/icon for health status
  */
-function getStatusIcon(status: HealthStatus): string {
+function getStatusIcon(status: HealthSummaryStatus): string {
   switch (status) {
+    case "no-data":
+      return "○";
     case "excellent":
       return "●";
     case "good":
@@ -119,9 +121,9 @@ export function getHealthWidgetHtml(
         <span class="toggle-icon">${toggleIcon}</span>
         <h2>Pipeline Health</h2>
         <span class="health-badge ${getHealthStatusColor(data.summary.status)}">
-          ${getStatusIcon(data.summary.status)} ${data.summary.status.toUpperCase()}
+          ${getStatusIcon(data.summary.status)} ${data.summary.status === "no-data" ? "NO DATA" : data.summary.status.toUpperCase()}
         </span>
-        <span class="health-score-inline">${Math.round(data.summary.score)}</span>
+        <span class="health-score-inline">${formatHealthScore(data.summary.score)}</span>
       </div>
       <div class="health-widget-body">
         ${getHealthSummaryHtml(data.summary)}
@@ -155,43 +157,56 @@ function getEmptyStateHtml(): string {
   `;
 }
 
+/** A score, or "N/A" when nothing was measured — never 0 (#1898). */
+export function formatHealthScore(score: number | null): string {
+  return score === null ? "N/A" : String(Math.round(score));
+}
+
 /**
- * Health summary card with score and component breakdown
+ * Health summary card: the latest series entry's score, how many dimensions
+ * it is made of, and every dimension — an excluded one says why (#1900).
  */
-function getHealthSummaryHtml(summary: {
-  score: number;
-  status: HealthStatus;
-  components: HealthComponent[];
-}): string {
-  const componentBars = summary.components
-    .map((c) => {
-      const insufficientClass = c.insufficientData ? " health-component-insufficient" : "";
-      const titleAttr = c.insufficientDataMessage
-        ? ` title="${escapeAttr(c.insufficientDataMessage)}"`
-        : "";
-      const trendContent = c.insufficientData ? "—" : getTrendArrow(c.trend);
+function getHealthSummaryHtml(summary: HealthSummary): string {
+  const dimensionRows = summary.dimensions
+    .map((d) => {
+      if (d.score === null) {
+        const reason = d.excludedReason ?? "insufficient data";
+        return `
+      <div class="health-component-row health-component-insufficient" title="${escapeAttr(reason)}">
+        <span class="component-label">${escapeHtml(d.label)}</span>
+        <span class="component-excluded">no data — ${escapeHtml(reason)}</span>
+      </div>
+    `;
+      }
       return `
-      <div class="health-component-row${insufficientClass}"${titleAttr}>
-        <span class="component-label">${escapeHtml(c.label)}</span>
+      <div class="health-component-row">
+        <span class="component-label">${escapeHtml(d.label)}</span>
         <div class="component-bar-container">
-          <div class="component-bar ${getHealthStatusColor(c.score >= 70 ? "good" : c.score >= 40 ? "fair" : "poor")}"
-               style="width: ${Math.round(c.score)}%">
+          <div class="component-bar ${getHealthStatusColor(d.score >= 70 ? "good" : d.score >= 40 ? "fair" : "poor")}"
+               style="width: ${Math.round(d.score)}%">
           </div>
         </div>
-        <span class="component-score">${Math.round(c.score)}</span>
-        <span class="component-trend">${trendContent}</span>
+        <span class="component-score">${Math.round(d.score)}</span>
       </div>
     `;
     })
     .join("");
 
+  const basis =
+    summary.score === null
+      ? summary.recordedAt
+        ? "No dimension had enough data on the latest run"
+        : "No health entry recorded yet — one is written when a pipeline run completes"
+      : `${summary.contributing} of ${summary.dimensions.length} dimensions contributing`;
+
   return `
     <div class="health-summary-card">
       <div class="health-score-large ${getHealthStatusColor(summary.status)}">
-        ${Math.round(summary.score)}
+        ${formatHealthScore(summary.score)}
       </div>
+      <div class="health-score-basis">${escapeHtml(basis)}</div>
       <div class="health-component-breakdown">
-        ${componentBars}
+        ${dimensionRows}
       </div>
     </div>
   `;
@@ -626,6 +641,11 @@ export function getHealthWidgetStyles(): string {
     .health-fair { background: rgba(255, 206, 86, 0.2); color: #ffce56; }
     .health-poor { background: rgba(255, 159, 64, 0.2); color: #ff9f40; }
     .health-critical { background: rgba(255, 99, 132, 0.2); color: #ff6384; }
+    .health-no-data {
+      background: transparent;
+      color: var(--vscode-descriptionForeground, #888);
+      border: 1px dashed var(--vscode-panel-border, #333);
+    }
     .health-score-inline {
       font-size: 16px;
       font-weight: 700;
@@ -1000,16 +1020,15 @@ export function getHealthWidgetStyles(): string {
     .health-component-insufficient {
       opacity: 0.6;
     }
-    .health-component-insufficient .component-bar-container {
-      border-style: dashed;
-      border-width: 1px;
-      border-color: var(--vscode-panel-border, #333);
-    }
-    .health-component-insufficient .component-label::after {
-      content: ' (insufficient data)';
+    .component-excluded {
+      flex: 1;
       font-style: italic;
       font-size: 0.85em;
-      opacity: 0.7;
+    }
+    .health-score-basis {
+      font-size: 0.85em;
+      opacity: 0.75;
+      margin: 2px 0 6px;
     }
   `;
 }

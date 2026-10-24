@@ -27,7 +27,7 @@ function localToday(): string {
 }
 
 const createMockHealthData = (overrides?: Partial<HealthWidgetData>): HealthWidgetData => ({
-  summary: { score: 75, status: "good", components: [] },
+  summary: { score: 75, status: "good", dimensions: [], contributing: 0 },
   sparklines: [],
   alerts: [],
   recommendations: [],

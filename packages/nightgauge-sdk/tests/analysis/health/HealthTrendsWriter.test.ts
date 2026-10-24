@@ -13,6 +13,7 @@ vi.mock("node:fs/promises", () => ({
   appendFile: vi.fn().mockResolvedValue(undefined),
   readFile: vi.fn(),
   writeFile: vi.fn().mockResolvedValue(undefined),
+  rename: vi.fn().mockResolvedValue(undefined),
 }));
 
 import * as fs from "node:fs/promises";
@@ -31,11 +32,12 @@ setCloneLayout(
 // ── Test fixtures ────────────────────────────────────────────────────────────
 
 const BASE_ENTRY: HealthTrendEntry = {
-  schema_version: "1",
+  schema_version: "2",
   timestamp: "2026-01-15T10:00:00Z",
   run_id: "2026-01-15T10:00:00Z",
   issue_number: 100,
   overall_score: 75,
+  status: "good",
   dimensions: {
     "token-economics": 80,
     "cost-health": 70,
@@ -45,6 +47,7 @@ const BASE_ENTRY: HealthTrendEntry = {
     "learning-effectiveness": 60,
     "pipeline-velocity": 72,
   },
+  excluded_dimensions: { "skill-drift": "no skill-effectiveness records" },
   significant_findings: ["Low cache hit rate", "Cost spike detected"],
 };
 
@@ -228,6 +231,10 @@ describe("HealthTrendsWriter.pruneOldEntries", () => {
       expect.stringContaining(recentEntry.timestamp),
       "utf-8"
     );
+    // Atomic: written beside the target, then renamed over it (#1210).
+    const tmp = vi.mocked(fs.writeFile).mock.calls[0][0] as string;
+    expect(tmp).toMatch(/trends\.jsonl\.\d+\.tmp$/);
+    expect(fs.rename).toHaveBeenCalledWith(tmp, expect.stringMatching(/trends\.jsonl$/));
   });
 
   it("keeps all entries when none are older than retentionDays", async () => {

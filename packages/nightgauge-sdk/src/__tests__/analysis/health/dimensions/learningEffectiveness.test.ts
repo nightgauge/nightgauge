@@ -30,9 +30,6 @@ function makeHealthScore(score: number, timestamp: string): HealthScoreEntry {
   return {
     timestamp,
     score,
-    status: score >= 70 ? "good" : "poor",
-    components: {},
-    costUsd: 0.1,
     issueNumber: 100,
   };
 }

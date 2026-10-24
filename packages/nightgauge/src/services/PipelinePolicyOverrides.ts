@@ -21,8 +21,8 @@ export interface PipelinePolicyOverrides {
   pauseAutoRouting: boolean;
   /** Human-readable reasons for each active policy */
   reasons: string[];
-  /** Health score that triggered the policies */
-  score: number;
+  /** Health score that triggered the policies; null when there was no health data. */
+  score: number | null;
   /** ISO 8601 timestamp of policy evaluation */
   timestamp: string;
 }

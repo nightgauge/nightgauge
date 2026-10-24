@@ -17,15 +17,13 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Mock HealthScoreHistoryReader
+// Mock the health series reader (#1898): HealthActionService reads
+// HealthTrendsWriter.read, the one persisted health series.
 const mockReadAll = vi.fn();
-vi.mock("../../src/utils/healthScoreHistory", () => ({
-  HealthScoreHistoryReader: {
-    readAll: (...args: unknown[]) => mockReadAll(...args),
-  },
-  HealthScoreHistoryWriter: {
-    getFilePath: vi.fn(),
-    appendSnapshot: vi.fn(),
+vi.mock("@nightgauge/sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@nightgauge/sdk")>()),
+  HealthTrendsWriter: {
+    read: (...args: unknown[]) => mockReadAll(...args),
   },
 }));
 
@@ -50,16 +48,17 @@ function createMockLogger() {
   };
 }
 
-function createSnapshot(score: number, timestamp: string, status: string = "good") {
+function createSnapshot(score: number | null, timestamp: string, status: string = "good") {
   return {
-    schema_version: "1" as const,
+    schema_version: "2" as const,
     timestamp,
-    score,
-    status,
-    components: { successRate: score },
-    cacheHitRate: 0.5,
-    costUsd: 0.5,
-    issueNumber: 100,
+    run_id: timestamp,
+    issue_number: 100,
+    overall_score: score,
+    status: score === null ? "no-data" : status,
+    dimensions: score === null ? {} : { reliability: score },
+    excluded_dimensions: {},
+    significant_findings: [],
   };
 }
 
@@ -141,7 +140,7 @@ describe("HealthActionService.evaluateWithPolicies", () => {
       expect(policies.score).toBe(60);
 
       // Should include autoApplied policy actions
-      const autoAppliedActions = evaluation.actions.filter((a) => a.autoApplied);
+      const autoAppliedActions = evaluation!.actions.filter((a) => a.autoApplied);
       expect(autoAppliedActions.length).toBeGreaterThanOrEqual(1);
     });
 
@@ -183,7 +182,7 @@ describe("HealthActionService.evaluateWithPolicies", () => {
       expect(policies.score).toBe(42);
 
       // Should include autoApplied policy actions for retry + escalation
-      const autoAppliedActions = evaluation.actions.filter((a) => a.autoApplied);
+      const autoAppliedActions = evaluation!.actions.filter((a) => a.autoApplied);
       expect(autoAppliedActions.length).toBe(2);
     });
 
@@ -226,7 +225,7 @@ describe("HealthActionService.evaluateWithPolicies", () => {
       expect(policies.score).toBe(20);
 
       // Should include autoApplied policy actions for retry + escalation + pause
-      const autoAppliedActions = evaluation.actions.filter((a) => a.autoApplied);
+      const autoAppliedActions = evaluation!.actions.filter((a) => a.autoApplied);
       expect(autoAppliedActions.length).toBe(3);
     });
 
@@ -310,7 +309,7 @@ describe("HealthActionService.evaluateWithPolicies", () => {
   // ===========================================================================
 
   describe("no health data", () => {
-    it('returns tier "none" when no snapshots exist (score defaults to 100)', async () => {
+    it('returns tier "none" and no score when no entries exist — not a fabricated 100', async () => {
       mockReadAll.mockResolvedValue([]);
 
       const { evaluation, policies } = await HealthActionService.evaluateWithPolicies(
@@ -319,11 +318,11 @@ describe("HealthActionService.evaluateWithPolicies", () => {
       );
 
       expect(policies.tier).toBe("none");
-      expect(policies.score).toBe(100);
-      expect(evaluation.score).toBe(100);
+      expect(policies.score).toBeNull();
+      expect(evaluation).toBeNull();
     });
 
-    it('returns tier "none" when evaluate returns null (read error)', async () => {
+    it('returns tier "none" and no score when evaluate returns null (read error)', async () => {
       mockReadAll.mockRejectedValue(new Error("disk read failure"));
 
       const { evaluation, policies } = await HealthActionService.evaluateWithPolicies(
@@ -332,8 +331,26 @@ describe("HealthActionService.evaluateWithPolicies", () => {
       );
 
       expect(policies.tier).toBe("none");
-      expect(policies.score).toBe(100);
-      expect(evaluation.score).toBe(100);
+      expect(policies.score).toBeNull();
+      expect(evaluation).toBeNull();
+    });
+
+    it("gates no policy when the latest entry is null, even after critical history (#1898)", async () => {
+      mockReadAll.mockResolvedValue([
+        createSnapshot(15, "2026-02-20T10:00:00Z", "critical"),
+        createSnapshot(null, "2026-02-20T11:00:00Z"),
+      ]);
+
+      const { evaluation, policies } = await HealthActionService.evaluateWithPolicies(
+        workspaceRoot,
+        logger as any
+      );
+
+      expect(evaluation).toBeNull();
+      expect(policies.tier).toBe("none");
+      expect(policies.score).toBeNull();
+      expect(policies.escalateAllStages).toBe(false);
+      expect(policies.retryBudgetIncrease).toBe(0);
     });
   });
 
@@ -350,7 +367,7 @@ describe("HealthActionService.evaluateWithPolicies", () => {
 
       expect(result).toHaveProperty("evaluation");
       expect(result).toHaveProperty("policies");
-      expect(result.evaluation.score).toBe(60);
+      expect(result.evaluation!.score).toBe(60);
       expect(result.policies.timestamp).toBeDefined();
     });
 
@@ -364,8 +381,8 @@ describe("HealthActionService.evaluateWithPolicies", () => {
       );
 
       // Should have both advisory (autoApplied: false) and policy (autoApplied: true) actions
-      const advisoryActions = evaluation.actions.filter((a) => !a.autoApplied);
-      const policyActions = evaluation.actions.filter((a) => a.autoApplied);
+      const advisoryActions = evaluation!.actions.filter((a) => !a.autoApplied);
+      const policyActions = evaluation!.actions.filter((a) => a.autoApplied);
 
       expect(advisoryActions.length).toBeGreaterThanOrEqual(1);
       expect(policyActions.length).toBeGreaterThanOrEqual(1);

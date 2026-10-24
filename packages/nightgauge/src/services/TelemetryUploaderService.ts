@@ -5,7 +5,8 @@
  * Streams:
  *   - `pipeline-run`: daily JSONL files in `pipelineStateDir(root)/history/`
  *                     → POST /v1/telemetry/pipeline-run
- *   - `health`:       single file `pipelineStateDir(root)/health-history.jsonl`
+ *   - `health`:       the health series, the checkout's `health/trends.jsonl`
+ *                     (schema 2, one entry per run, #1898)
  *                     → POST /v1/telemetry/health-snapshot
  *   - `recommendation`: single file `pipelineStateDir(root)/recommendation-history.jsonl`
  *                       → POST /v1/telemetry/recommendation-outcome
@@ -35,6 +36,7 @@
 import { pipelineStateDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as path from "node:path";
+import { HealthTrendsWriter } from "@nightgauge/sdk";
 import { createHash, randomBytes } from "node:crypto";
 import type { TelemetryConsentService } from "./TelemetryConsentService";
 import type { TelemetryStream } from "./telemetry/types";
@@ -103,7 +105,7 @@ const TRACE_SUBDIR = "trace";
  * Per-file upload cursor.
  *
  * A bare line count is only a valid cursor while the file is append-only.
- * Health history is rewritten by `HealthScoreHistoryWriter.pruneOldEntries`
+ * The health series is rewritten by `HealthTrendsWriter.pruneOldEntries`
  * after EVERY append, and daily run-history files are pruned by retention —
  * so files routinely get SHORTER while the count stays high, and
  * `slice(count)` then yields `[]` forever (#1173).
@@ -136,6 +138,12 @@ interface StreamConfig {
   stream: TelemetryStream;
   /** Path of the JSONL file relative to the root's pipeline state dir (`pipelineStateDir`). */
   filePath: string;
+  /**
+   * Absolute path of the file, for a stream that does not live in the
+   * pipeline state dir. Overrides `filePath` for reading; the watermark key
+   * still derives from `filePath`.
+   */
+  resolvePath?: (root: string) => string;
   /** Absolute path segment appended to platformUrl (e.g. "/v1/telemetry/health-snapshot"). */
   endpoint: string;
   maxBatchSize: number;
@@ -185,7 +193,12 @@ type TelemetryBatch = unknown[];
 
 const HEALTH_STREAM_CONFIG: StreamConfig = {
   stream: "health",
-  filePath: "health-history.jsonl",
+  // The one health series (#1898) lives in the checkout's dir, not the
+  // pipeline state dir. The watermark key is the series' own name, so no
+  // cursor left over from the retired health-history.jsonl applies to it.
+  filePath: "health/trends.jsonl",
+  watermarkKey: "health/trends.jsonl",
+  resolvePath: (root) => HealthTrendsWriter.getFilePath(root),
   endpoint: "/v1/telemetry/health-snapshot",
   maxBatchSize: MAX_BATCH_SIZE_HEALTH,
 };
@@ -1124,7 +1137,17 @@ export class TelemetryUploaderService implements vscode.Disposable {
     root: string = this.nightgaugeRoot
   ): Promise<StreamSummary> {
     const watermarkUri = vscode.Uri.file(path.join(pipelineStateDir(root), WATERMARK_FILENAME));
-    const fileUri = vscode.Uri.file(path.join(pipelineStateDir(root), cfg.filePath));
+    // An unresolvable stream path skips THIS stream; it must not abort the
+    // cycle for the streams after it.
+    let filePath: string;
+    try {
+      filePath = cfg.resolvePath
+        ? cfg.resolvePath(root)
+        : path.join(pipelineStateDir(root), cfg.filePath);
+    } catch {
+      return { stream: cfg.stream, uploaded: 0, skipped: true };
+    }
+    const fileUri = vscode.Uri.file(filePath);
     const watermarkKey = cfg.watermarkKey ?? path.basename(cfg.filePath);
 
     // Size guard

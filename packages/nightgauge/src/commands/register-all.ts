@@ -54,7 +54,6 @@ import {
   registerManageSavedQueriesCommand,
   registerExportTelemetryCommand,
   registerRunPipelineHealthCommand,
-  registerRecalibrateHealthCommand,
   registerRunPipelineWithModelCommand,
   registerKnowledgeNewEntryCommand,
   registerKnowledgeScaffoldForIssueCommand,
@@ -652,7 +651,6 @@ export function registerAllCommands(deps: AllCommandDeps): void {
       ? [
           registerExportTelemetryCommand(nightgaugeRoot, logger),
           registerRunPipelineHealthCommand(nightgaugeRoot, logger, dashboard),
-          registerRecalibrateHealthCommand(nightgaugeRoot, logger),
         ]
       : []),
 

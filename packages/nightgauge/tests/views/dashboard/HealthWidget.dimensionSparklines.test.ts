@@ -1,8 +1,9 @@
 /**
  * HealthWidget.dimensionSparklines.test.ts
  *
- * Tests that getData() loads and includes per-dimension sparklines from
- * HealthTrendsWriter when trends.jsonl data is available.
+ * Tests that getData() builds per-dimension sparklines from the one health
+ * series (`health/trends.jsonl`, #1898) when it has entries. A dimension
+ * excluded for lack of data is absent from an entry, never a placeholder.
  *
  * @see Issue #1411 - Health trend persistence and dashboard sparklines
  */
@@ -64,29 +65,19 @@ vi.mock("../../../src/services/SelfTuningLogger", () => ({
   SelfTuningLogger: { readAll: vi.fn().mockResolvedValue([]) },
 }));
 
-// Mock healthScoreHistory to avoid filesystem access
-vi.mock("../../../src/utils/healthScoreHistory", () => ({
-  HealthScoreHistoryWriter: { appendSnapshot: vi.fn() },
-  HealthScoreHistoryReader: {
-    readDateRange: vi.fn().mockResolvedValue([]),
-    aggregateByDay: vi.fn().mockReturnValue([]),
-    analyzeTrend: vi.fn().mockReturnValue(null),
-    getMostRecentRecalibration: vi.fn().mockResolvedValue(null),
-  },
-}));
-
 // Mock batchMetricsAttribution
 vi.mock("../../../src/utils/batchMetricsAttribution", () => ({
   deduplicateBatchTokens: vi.fn((runs: unknown[]) => runs),
 }));
 
-// ── HealthTrendsWriter mock ──────────────────────────────────────────────────
-const mockTrendsRead = vi.fn();
+// ── Health series mock ───────────────────────────────────────────────────────
+const mockSeriesRead = vi.fn();
 
-vi.mock("@nightgauge/sdk/dist/analysis/health/HealthTrendsWriter", () => ({
-  HealthTrendsWriter: {
-    read: (...args: unknown[]) => mockTrendsRead(...args),
-  },
+vi.mock("../../../src/utils/healthSeries", () => ({
+  readHealthSeries: (...args: unknown[]) => mockSeriesRead(...args),
+  aggregateHealthByDay: vi.fn().mockReturnValue([]),
+  aggregateHealthByHour: vi.fn().mockReturnValue([]),
+  analyzeHealthTrend: vi.fn().mockReturnValue(null),
 }));
 
 import { HealthWidgetService } from "../../../src/views/dashboard/HealthWidget";
@@ -95,11 +86,13 @@ import { HealthWidgetService } from "../../../src/views/dashboard/HealthWidget";
 
 function makeTrendEntry(overrides: Record<string, unknown> = {}) {
   return {
-    schema_version: "1",
+    schema_version: "2",
     timestamp: "2026-01-15T10:00:00Z",
     run_id: "2026-01-15T10:00:00Z",
     issue_number: 100,
     overall_score: 75,
+    status: "good",
+    excluded_dimensions: { "skill-drift": "no skill-effectiveness records" },
     dimensions: {
       "token-economics": 80,
       "cost-health": 70,
@@ -171,7 +164,7 @@ describe("HealthWidgetService.getData() — dimension sparklines", () => {
     vi.clearAllMocks();
   });
 
-  it("includes dimensionSparklines when HealthTrendsWriter returns ≥2 entries with dimension data", async () => {
+  it("includes dimensionSparklines when the series has ≥2 entries with dimension data", async () => {
     // Provide 5 entries so buildDimensionSparklines can compute trend
     const entries = Array.from({ length: 5 }, (_, i) =>
       makeTrendEntry({
@@ -179,7 +172,7 @@ describe("HealthWidgetService.getData() — dimension sparklines", () => {
         overall_score: 70 + i,
       })
     );
-    mockTrendsRead.mockResolvedValueOnce(entries);
+    mockSeriesRead.mockResolvedValueOnce(entries);
 
     const service = new HealthWidgetService(createMockState() as never, "/workspace");
     const data = await service.getData();
@@ -196,8 +189,8 @@ describe("HealthWidgetService.getData() — dimension sparklines", () => {
     });
   });
 
-  it("returns no dimensionSparklines when HealthTrendsWriter returns empty array", async () => {
-    mockTrendsRead.mockResolvedValueOnce([]);
+  it("returns no dimensionSparklines when the series is empty", async () => {
+    mockSeriesRead.mockResolvedValueOnce([]);
 
     const service = new HealthWidgetService(createMockState() as never, "/workspace");
     const data = await service.getData();
@@ -205,30 +198,45 @@ describe("HealthWidgetService.getData() — dimension sparklines", () => {
     expect(data.dimensionSparklines).toBeUndefined();
   });
 
-  it("does not throw when HealthTrendsWriter.read rejects", async () => {
-    mockTrendsRead.mockRejectedValueOnce(new Error("File not found"));
+  it("emits no sparkline for a dimension that was excluded on every entry", async () => {
+    mockSeriesRead.mockResolvedValueOnce([
+      makeTrendEntry({ timestamp: "2026-01-01T10:00:00Z" }),
+      makeTrendEntry({ timestamp: "2026-01-02T10:00:00Z" }),
+    ]);
 
     const service = new HealthWidgetService(createMockState() as never, "/workspace");
-    await expect(service.getData()).resolves.toBeDefined();
     const data = await service.getData();
-    expect(data.dimensionSparklines).toBeUndefined();
+
+    const dims = data.dimensionSparklines!.map((d) => d.dimension);
+    expect(dims).toContain("reliability");
+    expect(dims).not.toContain("skill-drift");
   });
 
   it("returns no dimensionSparklines when workspacePath is undefined", async () => {
     const service = new HealthWidgetService(createMockState() as never, undefined);
     const data = await service.getData();
 
-    // HealthTrendsWriter should not be called — no workspace
-    expect(mockTrendsRead).not.toHaveBeenCalled();
+    // The series should not be read — no workspace
+    expect(mockSeriesRead).not.toHaveBeenCalled();
     expect(data.dimensionSparklines).toBeUndefined();
   });
 
-  it("passes limit: 20 to HealthTrendsWriter.read", async () => {
-    mockTrendsRead.mockResolvedValueOnce([]);
+  it("builds sparklines from the most recent 20 entries only", async () => {
+    const entries = Array.from({ length: 25 }, (_, i) =>
+      makeTrendEntry({
+        timestamp: `2026-01-${String(i + 1).padStart(2, "0")}T10:00:00Z`,
+        dimensions: { reliability: i },
+      })
+    );
+    mockSeriesRead.mockResolvedValueOnce(entries);
 
     const service = new HealthWidgetService(createMockState() as never, "/workspace");
-    await service.getData();
+    const data = await service.getData();
 
-    expect(mockTrendsRead).toHaveBeenCalledWith("/workspace", { limit: 20 });
+    expect(mockSeriesRead).toHaveBeenCalledWith("/workspace");
+    const reliability = data.dimensionSparklines!.find((d) => d.dimension === "reliability")!;
+    expect(reliability.data).toHaveLength(20);
+    expect(reliability.data[0]).toBe(5);
+    expect(reliability.data[19]).toBe(24);
   });
 });

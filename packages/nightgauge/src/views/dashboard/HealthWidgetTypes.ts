@@ -5,25 +5,6 @@
  */
 
 /**
- * Configurable weights for health score computation.
- * Weights are auto-normalized (divided by their sum) so users
- * can adjust individual values without recalculating the total.
- */
-export interface HealthScoreWeights {
-  successRate: number; // default 0.30
-  costTrend: number; // default 0.30
-  failureRate: number; // default 0.25
-  cacheHitRate: number; // default 0.15
-}
-
-export const DEFAULT_HEALTH_WEIGHTS: HealthScoreWeights = {
-  successRate: 0.3,
-  costTrend: 0.3,
-  failureRate: 0.25,
-  cacheHitRate: 0.15,
-};
-
-/**
  * Status thresholds for mapping health scores to labels
  */
 interface HealthStatusThresholds {
@@ -43,26 +24,34 @@ const DEFAULT_HEALTH_THRESHOLDS: HealthStatusThresholds = {
 
 export type HealthStatus = "excellent" | "good" | "fair" | "poor" | "critical";
 
-/**
- * Overall health summary with composite score
- */
-interface HealthSummary {
-  score: number; // 0-100
-  status: HealthStatus;
-  components: HealthComponent[];
-}
+/** A headline status, or `"no-data"` when no dimension had data (#1197). */
+export type HealthSummaryStatus = HealthStatus | "no-data";
 
 /**
- * Individual health component (one per metric)
+ * The dashboard headline: the latest entry of the one health series (#1898),
+ * computed by the SDK's `HealthAnalysisEngine` when its run completed. The
+ * number shown is the number persisted, by construction.
  */
-export interface HealthComponent {
-  name: string;
-  score: number; // 0-100
-  weight: number; // 0-1 (normalized)
-  trend: "improving" | "stable" | "degrading";
+export interface HealthSummary {
+  /** 0-100, or null when no entry exists or the latest run had no data. */
+  score: number | null;
+  status: HealthSummaryStatus;
+  /** All eight dimensions; an excluded one has `score: null` and a reason. */
+  dimensions: HealthDimensionScore[];
+  /** How many dimensions the score is made of (#1900). */
+  contributing: number;
+  /** The run the headline scores; absent before the first entry exists. */
+  recordedAt?: string;
+  issueNumber?: number;
+}
+
+/** One dimension of the headline entry. */
+export interface HealthDimensionScore {
+  dimension: string;
   label: string;
-  insufficientData?: boolean;
-  insufficientDataMessage?: string;
+  /** null when the dimension was excluded for lack of data. */
+  score: number | null;
+  excludedReason?: string;
 }
 
 /**
@@ -225,8 +214,10 @@ export interface HealthWidgetData {
 /**
  * Map health status to display color CSS class
  */
-export function getHealthStatusColor(status: HealthStatus): string {
+export function getHealthStatusColor(status: HealthSummaryStatus): string {
   switch (status) {
+    case "no-data":
+      return "health-no-data";
     case "excellent":
       return "health-excellent";
     case "good":

@@ -12,7 +12,7 @@
  * @see Issue #1045 - Health-gated tier actions and learning system monitoring
  */
 
-import { HealthScoreHistoryReader } from "../utils/healthScoreHistory";
+import { HealthTrendsWriter } from "@nightgauge/sdk";
 import { IpcClient } from "./IpcClient";
 import type { Logger } from "../utils/logger";
 import type { PipelinePolicyOverrides, HealthPolicyTier } from "./PipelinePolicyOverrides";
@@ -46,7 +46,7 @@ export class HealthActionService {
   /**
    * Evaluate current health state and compute actions.
    *
-   * Reads the latest health score snapshots, computes trend,
+   * Reads the latest entry of the health series, computes trend,
    * and generates appropriate health actions.
    *
    * @param workspaceRoot - Absolute path to repo root
@@ -55,25 +55,29 @@ export class HealthActionService {
    */
   static async evaluate(workspaceRoot: string, logger: Logger): Promise<HealthEvaluation | null> {
     try {
-      const snapshots = await HealthScoreHistoryReader.readAll(workspaceRoot);
+      // The one health series (#1898): what the dashboard displays is what
+      // gates policy here.
+      const entries = await HealthTrendsWriter.read(workspaceRoot);
+      const sortedEntries = [...entries].sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      const latestEntry = sortedEntries[0];
 
-      if (snapshots.length === 0) {
-        // No data is not excellent health (#1057). Fabricating a perfect score
-        // for an empty history made a failed run print "Health: 100 (=) —
-        // Excellent", and published that 100 onward to the meta/notifier
-        // surfaces. `formatSelfCheck` already renders `Health: N/A` for a null
-        // evaluation and every caller null-guards, so absence now reads as
-        // absence.
+      // No data is not excellent health (#1057), and neither is a run whose
+      // every dimension was starved (#1898): both are N/A. `formatSelfCheck`
+      // renders `Health: N/A` for a null evaluation and every caller
+      // null-guards, so absence reads as absence and gates no policy.
+      if (!latestEntry || latestEntry.overall_score === null) {
         return null;
       }
 
-      // Get latest score
-      const sorted = [...snapshots].sort(
-        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
-      const latest = sorted[0];
-      const score = latest.score;
-      const status = latest.status;
+      const sorted: Array<{ score: number; timestamp: string }> = [];
+      for (const e of sortedEntries) {
+        if (e.overall_score !== null)
+          sorted.push({ score: e.overall_score, timestamp: e.timestamp });
+      }
+      const score = latestEntry.overall_score;
+      const status: string = latestEntry.status;
 
       // Compute trend: compare recent 3-run average to prior 7-run average
       const trend = this.computeTrend(sorted);
@@ -162,7 +166,7 @@ export class HealthActionService {
     workspaceRoot: string,
     logger: Logger
   ): Promise<{
-    evaluation: HealthEvaluation;
+    evaluation: HealthEvaluation | null;
     policies: PipelinePolicyOverrides;
   }> {
     const evaluation = await this.evaluate(workspaceRoot, logger);
@@ -174,20 +178,14 @@ export class HealthActionService {
       escalateAllStages: false,
       pauseAutoRouting: false,
       reasons: [],
-      score: evaluation?.score ?? 100,
+      score: evaluation?.score ?? null,
       timestamp: new Date().toISOString(),
     };
 
+    // No health data gates no policy — and is not reported as a score of 100
+    // "excellent" either (#1898).
     if (!evaluation) {
-      return {
-        evaluation: {
-          score: 100,
-          status: "excellent",
-          trend: "stable",
-          actions: [],
-        },
-        policies: noPolicies,
-      };
+      return { evaluation: null, policies: noPolicies };
     }
 
     // Read all thresholds and flags via IPC

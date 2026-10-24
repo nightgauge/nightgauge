@@ -41,15 +41,8 @@ export function buildHealthInput(dataset: AggregatedDataset): HealthAnalysisInpu
   // the per-run mapper this replaced left `selectionSource` unset (#461).
   const executionHistory: SdkExecutionHistoryRecord[] = flattenRunRecords(dataset.executionHistory);
 
-  // Map HealthScoreSnapshot → HealthScoreEntry (fields align directly)
-  const healthScores: HealthScoreEntry[] = dataset.healthScores.map((s) => ({
-    timestamp: s.timestamp,
-    score: s.score,
-    status: s.status,
-    components: s.components,
-    costUsd: s.costUsd,
-    issueNumber: s.issueNumber,
-  }));
+  // Already the series' scored points (DataAggregator dropped null entries).
+  const healthScores: HealthScoreEntry[] = dataset.healthScores;
 
   // Map ExperimentOutcome → ExperimentEntry (snake_case → camelCase)
   const experimentResults: ExperimentEntry[] = dataset.experimentResults.map((e) => ({

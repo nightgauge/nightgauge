@@ -31,6 +31,40 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **One health score, one persisted series, and no data never reads as a
+  score.** Pipeline health had two stores and two definitions: the dashboard
+  showed a 4-component score it computed itself and wrote to
+  `health-history.jsonl`, while `nightgauge health trends` and the
+  self-improvement loop's verdicts read `health/trends.jsonl`, which nothing
+  wrote. Now every completed run appends exactly one entry to
+  `health/trends.jsonl` (schema 2), computed by the SDK's 8-dimension engine,
+  and the dashboard's headline is that entry, so the number shown is the number
+  persisted. A run where no dimension had data is recorded as `null` and shown
+  as N/A; it is no longer shown as 0 "critical", gated as 100 "excellent",
+  decoded as 0 by the Go readers, or plotted as 0 on the trend chart. Each
+  entry stores only the dimensions that contributed and names every excluded
+  one with its reason, and the dashboard and `health trends` say how many of
+  the eight dimensions a score is made of. The loop verdict names an absent
+  series by path. The legacy 4-component score and the "Recalibrate Health
+  Score Baseline" command are retired; existing `health-history.jsonl` entries
+  measured a different metric and are not migrated (#1898).
+- **Learning effectiveness and skill drift score on data the pipeline writes
+  today.** Both dimensions were specified against self-tuning logs, experiment
+  records and skill-assessment syntheses the pipeline no longer produces, so
+  18% of the health weight never had data. Learning effectiveness now reads
+  routing- and size-prediction accuracy from `outcomes.jsonl` and calibration
+  freshness from `calibration.json`; skill drift reads per-skill regression
+  classifications from `skill-effectiveness.jsonl`. Each names its input files
+  and reports insufficient data, with the reason, rather than substituting a
+  proxy. `skill-effectiveness.jsonl` is now kept as one record per skill change
+  with 90-day retention, written atomically, instead of growing without bound
+  (#1900).
+- **A stage whose phases were only partly observed states coverage, not
+  completion.** The pipeline tree read `4/14 phases · 10 unreported`, a fraction
+  every reader takes as "did 4 of its 14 steps". It now reads
+  `14 phases · 4 observed, 10 unobserved`; fully observed and fully unreported
+  stages render as before (#1887).
+
 - **The OpenCode fixture capture script documents what it does not capture.**
   `scripts/capture-opencode-fixture.sh --help` and the testdata README record
   why the real-model and subagent legs stay manual, that cached-token coverage

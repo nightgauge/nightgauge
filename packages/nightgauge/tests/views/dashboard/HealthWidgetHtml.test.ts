@@ -20,7 +20,7 @@ import type { HealthWidgetData } from "../../../src/views/dashboard/HealthWidget
 // ---------------------------------------------------------------------------
 
 const createMockHealthData = (overrides?: Partial<HealthWidgetData>): HealthWidgetData => ({
-  summary: { score: 75, status: "good", components: [] },
+  summary: { score: 75, status: "good", dimensions: [], contributing: 0 },
   sparklines: [],
   alerts: [],
   recommendations: [],
@@ -53,15 +53,8 @@ describe("getHealthWidgetHtml", () => {
       summary: {
         score: 82,
         status: "good",
-        components: [
-          {
-            name: "successRate",
-            score: 90,
-            weight: 0.25,
-            trend: "improving",
-            label: "Success Rate",
-          },
-        ],
+        dimensions: [{ dimension: "reliability", label: "Reliability", score: 90 }],
+        contributing: 1,
       },
     });
 
@@ -72,7 +65,8 @@ describe("getHealthWidgetHtml", () => {
     expect(html).toContain("82");
     expect(html).toContain("GOOD");
     expect(html).toContain("health-good");
-    expect(html).toContain("Success Rate");
+    expect(html).toContain("Reliability");
+    expect(html).toContain("1 of 1 dimensions contributing");
   });
 
   it("renders alerts with correct count in heading", () => {
@@ -164,15 +158,16 @@ describe("getHealthWidgetHtml", () => {
       summary: {
         score: 75,
         status: "good",
-        components: [
+        dimensions: [
+          { dimension: "test", label: '<script>alert("xss")</script>', score: 50 },
           {
-            name: "test",
-            score: 50,
-            weight: 0.5,
-            trend: "stable",
-            label: '<script>alert("xss")</script>',
+            dimension: "skill-drift",
+            label: "Skill Drift",
+            score: null,
+            excludedReason: '<img src=x onerror=alert("reason")>',
           },
         ],
+        contributing: 1,
       },
       alerts: [
         {
@@ -537,53 +532,76 @@ describe("getHealthWidgetHtml", () => {
     expect(html).not.toContain("no data");
   });
 
-  it("applies health-component-insufficient class when insufficientData is true (#991)", () => {
+  it("renders N/A and NO DATA — never 0 or CRITICAL — for a null score (#1898)", () => {
+    const data = createMockHealthData({
+      summary: { score: null, status: "no-data", dimensions: [], contributing: 0 },
+    });
+
+    const html = getHealthWidgetHtml(data);
+
+    expect(html).toContain("N/A");
+    expect(html).toContain("NO DATA");
+    expect(html).toContain("health-no-data");
+    expect(html).not.toContain("CRITICAL");
+    expect(html).not.toMatch(/health-score-inline">0</);
+    expect(html).toContain("No health entry recorded yet");
+  });
+
+  it("says no dimension had data when the latest entry was recorded as null", () => {
     const data = createMockHealthData({
       summary: {
-        score: 50,
-        status: "fair",
-        components: [
+        score: null,
+        status: "no-data",
+        dimensions: [],
+        contributing: 0,
+        recordedAt: "2026-01-01T00:00:00Z",
+      },
+    });
+
+    expect(getHealthWidgetHtml(data)).toContain("No dimension had enough data on the latest run");
+  });
+
+  it("renders an excluded dimension with its reason instead of a bar (#1900)", () => {
+    const data = createMockHealthData({
+      summary: {
+        score: 83,
+        status: "good",
+        dimensions: [
+          { dimension: "reliability", label: "Reliability", score: 92 },
           {
-            name: "tokenEfficiencyTrend",
-            score: 50,
-            weight: 0.18,
-            trend: "stable",
-            label: "Token Efficiency",
-            insufficientData: true,
-            insufficientDataMessage: "Need 3 more runs for trend data",
+            dimension: "skill-drift",
+            label: "Skill Drift",
+            score: null,
+            excludedReason: "no skill-effectiveness records",
           },
         ],
+        contributing: 1,
       },
     });
 
     const html = getHealthWidgetHtml(data);
 
     expect(html).toContain("health-component-insufficient");
-    expect(html).toContain("Need 3 more runs for trend data");
-    // Trend arrow replaced with dash
-    expect(html).toContain("—");
+    expect(html).toContain("no data — no skill-effectiveness records");
+    expect(html).toContain("1 of 2 dimensions contributing");
+    // The excluded dimension has no bar, so no placeholder score is drawn.
+    const driftRow = html.slice(html.indexOf("Skill Drift"), html.indexOf("Skill Drift") + 200);
+    expect(driftRow).not.toContain("component-bar");
   });
 
-  it("does not apply insufficient class when insufficientData is falsy (#991)", () => {
+  it("renders a contributing dimension without the insufficient class", () => {
     const data = createMockHealthData({
       summary: {
         score: 75,
         status: "good",
-        components: [
-          {
-            name: "tokenEfficiencyTrend",
-            score: 55,
-            weight: 0.18,
-            trend: "improving",
-            label: "Token Efficiency",
-          },
-        ],
+        dimensions: [{ dimension: "reliability", label: "Reliability", score: 55 }],
+        contributing: 1,
       },
     });
 
     const html = getHealthWidgetHtml(data);
 
     expect(html).not.toContain("health-component-insufficient");
-    expect(html).toContain("↑"); // normal trend arrow
+    expect(html).toContain('style="width: 55%"');
   });
 });

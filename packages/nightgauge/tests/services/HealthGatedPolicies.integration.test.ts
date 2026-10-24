@@ -6,7 +6,7 @@
  * 2. Health recovery → policies deactivate (tier returns to 'none')
  *
  * Tests verify the full evaluate → policy → orchestrator integration
- * by mocking HealthScoreHistoryReader with declining/recovering scores.
+ * by mocking HealthTrendsWriter with declining/recovering scores.
  *
  * @see Issue #1395 - Health-gated pipeline policies
  */
@@ -16,15 +16,13 @@ import * as fs from "node:fs/promises";
 
 vi.mock("node:fs/promises");
 
-// Mock HealthScoreHistoryReader
+// Mock the health series reader (#1898): HealthActionService reads
+// HealthTrendsWriter.read, the one persisted health series.
 const mockReadAll = vi.fn();
-vi.mock("../../src/utils/healthScoreHistory", () => ({
-  HealthScoreHistoryReader: {
-    readAll: (...args: unknown[]) => mockReadAll(...args),
-  },
-  HealthScoreHistoryWriter: {
-    getFilePath: vi.fn(),
-    appendSnapshot: vi.fn(),
+vi.mock("@nightgauge/sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@nightgauge/sdk")>()),
+  HealthTrendsWriter: {
+    read: (...args: unknown[]) => mockReadAll(...args),
   },
 }));
 
@@ -53,16 +51,17 @@ function createMockLogger() {
   };
 }
 
-function createSnapshot(score: number, timestamp: string, status: string = "good") {
+function createSnapshot(score: number | null, timestamp: string, status: string = "good") {
   return {
-    schema_version: "1" as const,
+    schema_version: "2" as const,
     timestamp,
-    score,
-    status,
-    components: { successRate: score },
-    cacheHitRate: 0.5,
-    costUsd: 0.5,
-    issueNumber: 100,
+    run_id: timestamp,
+    issue_number: 100,
+    overall_score: score,
+    status: score === null ? "no-data" : status,
+    dimensions: score === null ? {} : { reliability: score },
+    excluded_dimensions: {},
+    significant_findings: [],
   };
 }
 
