@@ -272,10 +272,10 @@ check "a 404 is still classed dead" \
 # the real listing URL (README.md) and a lookalike host that must NOT match,
 # never by handing the real hostname to markdown-link-check's network-checking
 # code path.
-MARKETPLACE_URL='https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge'
-MARKETPLACE_LOOKALIKE='https://marketplace.visualstudio.com.evil-nxdomain.invalid/items'
-PATTERN_CHECK="$(python3 - "$REPO_ROOT/.markdown-link-check.json" \
-  "$MARKETPLACE_URL" "$MARKETPLACE_LOOKALIKE" <<'PYEOF'
+# Open VSX gets the same host-scoped ignore (#1769), checked the same way.
+check_registry_ignore() { # <label> <real-url> <lookalike-url>
+  local label="$1" pattern_check
+  pattern_check="$(python3 - "$REPO_ROOT/.markdown-link-check.json" "$2" "$3" <<'PYEOF'
 import json, re, sys
 config_path, real_url, lookalike_url = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(config_path) as f:
@@ -287,12 +287,19 @@ has_comment = any(bool(e.get("comment")) for e in matching)
 print("real=%s lookalike=%s comment=%s" % (matches_real, matches_lookalike, has_comment))
 PYEOF
 )"
-check "the config ignores the real Marketplace listing URL" \
-  "$(grep -q 'real=True' <<<"$PATTERN_CHECK" && echo 0 || echo 1)"
-check "the ignore is host-scoped: a lookalike host does NOT match" \
-  "$(grep -q 'lookalike=False' <<<"$PATTERN_CHECK" && echo 0 || echo 1)"
-check "the matching ignore entry documents why, with a comment" \
-  "$(grep -q 'comment=True' <<<"$PATTERN_CHECK" && echo 0 || echo 1)"
+  check "the config ignores the real $label listing URL" \
+    "$(grep -q 'real=True' <<<"$pattern_check" && echo 0 || echo 1)"
+  check "the $label ignore is host-scoped: a lookalike host does NOT match" \
+    "$(grep -q 'lookalike=False' <<<"$pattern_check" && echo 0 || echo 1)"
+  check "the matching $label ignore entry documents why, with a comment" \
+    "$(grep -q 'comment=True' <<<"$pattern_check" && echo 0 || echo 1)"
+}
+check_registry_ignore Marketplace \
+  'https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge' \
+  'https://marketplace.visualstudio.com.evil-nxdomain.invalid/items'
+check_registry_ignore "Open VSX" \
+  'https://open-vsx.org/extension/nightgauge/nightgauge' \
+  'https://open-vsx.org.evil-nxdomain.invalid/extension'
 
 # --- Case 9: the ignore mechanism itself is never-requested, end-to-end -----
 #

@@ -5,7 +5,8 @@
 # to a registry. This workflow promotes those exact files (#2151): it downloads
 # the tag's release VSIXs, verifies each against the release's checksums.txt
 # and its release.yml provenance attestation, checks version and channel,
-# verifies the PAT, and publishes. It builds nothing, so the registries serve
+# verifies the PAT, publishes, and confirms each registry lists the version on
+# every target (#1769). It builds nothing, so the registries serve
 # the same SHA-256 the release records. It is re-runnable on its own and never
 # touches the GitHub Release or the Homebrew tap. Run release.yml first.
 #
@@ -57,7 +58,9 @@ jobs:
     # Linux: nothing is built or signed here any more, so macOS (needed for
     # `codesign` in release.yml) buys nothing.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Publishing takes minutes; each listing check may wait up to 10 more for
+    # its registry to index the version (#1769).
+    timeout-minutes: 40
     # The `production` environment admits `v*` tag refs only, so a dispatch
     # from a branch is refused by GitHub before a runner is assigned -- the
     # same gate release.yml runs behind.
@@ -273,3 +276,25 @@ jobs:
           # step and leave a partial release that a re-run could not repair.
           bash "$GITHUB_WORKSPACE/scripts/publish-vsix-set.sh" \
             open-vsx "$VERSION" ${CHANNEL[@]+"${CHANNEL[@]}"}
+
+      # A successful publish call is not a listing (#1769): the Marketplace and
+      # Open VSX index asynchronously, and a submission can be rejected after
+      # upload. Query each registry this run published to, per target, until
+      # the version is listed or 10 minutes pass, and fail the job if it never
+      # is. These and the release watchdog's daily check are the only
+      # automated queries the repository makes to either registry.
+      - name: Confirm the VS Code Marketplace lists the version on every target
+        if: ${{ inputs.registries == 'marketplace' || inputs.registries == 'both' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bash scripts/verify-release-channels.sh --channel marketplace \
+            --release --version "$VERSION" --wait 600
+
+      - name: Confirm Open VSX lists the version on every target
+        if: ${{ inputs.registries == 'open-vsx' || inputs.registries == 'both' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bash scripts/verify-release-channels.sh --channel open-vsx \
+            --release --version "$VERSION" --wait 600

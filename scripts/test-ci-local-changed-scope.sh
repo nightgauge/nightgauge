@@ -307,6 +307,20 @@ check "the verdict is NOT the unqualified 'All CI-parity checks passed.'" $?
 grep -qF 'that RAN passed' "$summary_out"
 check "the verdict is qualified to the steps that actually ran" $?
 
+# ── (10b) a failed check exits non-zero, and the summary agrees (#1494) ──────
+# The gate once printed "✗ 3 check(s) failed" and exited 0, so every caller
+# trusting its exit code got a false green. `--summary-probe fail` runs one
+# step that really fails through the same verdict path as a full run.
+fail_out="$TMP/summary-fail.txt"
+CI_LOCAL_LOG_DIR="$TMP/summary-fail-logs" bash "$CI_LOCAL" --summary-probe fail > "$fail_out" 2>&1
+fail_rc=$?
+[ "$fail_rc" -ne 0 ]
+check "a run with a failed check exits non-zero — got $fail_rc" $?
+grep -qF '✗ 1 check(s) failed' "$fail_out"
+check "the summary counts the failed check" $?
+grep -q 'summary probe failing step' "$fail_out"
+check "the summary names the failed check" $?
+
 # ── (11) a SKIPPED step stays in the step inventory (#983) ─────────────────
 # The #983 guard compares `--list-steps` against scripts/ci-local-steps.txt. A
 # skipped step must still appear there — otherwise `--changed` would make steps

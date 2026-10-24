@@ -954,7 +954,9 @@ main ──●──●──●──●──●──
 9. `gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both`
    → promotes the release's own per-target VSIXs to the VS Code Marketplace
    and Open VSX after verifying each against `checksums.txt` and its
-   `release.yml` attestation (every version publishes on the release channel)
+   `release.yml` attestation (every version publishes on the release channel),
+   then fails unless each registry lists the version on every target within
+   10 minutes. `release-watchdog.yml` re-checks both listings daily
 
 ### Per-Repository Workflows
 
@@ -1089,11 +1091,14 @@ gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both
 gh run watch
 
 # 11. Confirm the listings serve the version, then run the post-merge hook for
-#     any issue the release closes (§ After Merge).
-#     Open VSX can take minutes to serve a new version after the publish
-#     workflow reports success, so wait and re-check; never re-publish.
-npx --yes @vscode/vsce@3.9.2 show nightgauge.nightgauge --json | jq '.versions[]|{version,targetPlatform}'
-curl -s https://open-vsx.org/api/nightgauge/nightgauge | jq '{version,preRelease}'
+#     any issue the release closes (§ After Merge). marketplace-publish.yml
+#     already waited up to 10 minutes per registry for the version to list on
+#     every target and failed if it did not (#1769); the release watchdog
+#     re-checks both listings daily and keeps one issue per channel while one
+#     is behind. If the publish run's check failed, re-run the workflow on the
+#     tag (it is idempotent); never bump the version to work around it.
+bash scripts/verify-release-channels.sh --channel marketplace
+bash scripts/verify-release-channels.sh --channel open-vsx
 
 # 12. Bring every other channel to the same version the same day. release.yml
 #     opened the Homebrew cask pull request: check its sha256s against the
@@ -1368,6 +1373,8 @@ Or run all CI-parity checks in order with one command:
 bash scripts/ci-local.sh
 ```
 
+It exits non-zero whenever any step failed, so the exit code and the printed
+summary always agree (#1494; `--summary-probe fail` is its regression test).
 If any step fails, fix the issue and re-run before pushing. The order matters:
 generated files must be regenerated before the TypeScript build, and the build
 must succeed before tests can run. `format:check` is the #1 cause of avoidable

@@ -23,6 +23,10 @@
     {
       "pattern": "^https://marketplace\\.visualstudio\\.com/",
       "comment": "Host-scoped exemption (#1767). The VS Code Marketplace listing linked from README.md is a publishing artifact -- it is checked where it is published, not a property of this repository's documentation. CI and local gates must never request marketplace.visualstudio.com: a third-party listing whose availability we do not control must not be able to block every merge (the listing answered HTTP 404 for hours on 2026-09-14 for reasons entirely unrelated to any change here, and every PR's required link-check job failed with it). Scoped to this one host only -- every other external link is still checked. Listing availability is checked after publishing and once a day by the release watchdog, not by this gate."
+    },
+    {
+      "pattern": "^https://open-vsx\\.org/",
+      "comment": "Host-scoped exemption (#1769), the same reasoning as the Marketplace entry above: the Open VSX listing is a publishing artifact, so CI and local gates must never request open-vsx.org. scripts/verify-release-channels.sh --channel open-vsx checks the listing after publishing (marketplace-publish.yml) and once a day (release-watchdog.yml). Scoped to this one host only."
     }
   ],
   "aliveStatusCodes": [200, 206, 301, 302, 307, 308, 401, 403, 429]

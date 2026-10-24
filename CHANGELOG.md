@@ -14,6 +14,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **A release now checks that the VS Code Marketplace and Open VSX list it.**
+  A successful publish call does not mean the listing shows the version: a
+  registry can index late, reject a submission after upload, or drop one target
+  on a 503. `marketplace-publish.yml` now queries each registry it published to
+  until the version is listed for every target (darwin-arm64, darwin-x64,
+  linux-x64), and fails the job if that takes longer than 10 minutes.
+  `release-watchdog.yml` checks both listings once a day, alongside the
+  Homebrew tap. While a listing is behind, it keeps one open issue per channel
+  and closes it once the listing catches up. Both checks run
+  `scripts/verify-release-channels.sh --channel marketplace|open-vsx`, which is
+  now the only automated thing in the repository that queries either registry.
+  The docs link check no longer requests open-vsx.org (#1769).
+
 ## [0.7.2] - 2026-10-23
 
 ### Fixed
