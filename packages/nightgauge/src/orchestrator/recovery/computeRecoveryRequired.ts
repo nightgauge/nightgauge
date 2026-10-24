@@ -21,6 +21,7 @@ import {
   WorktreeMissing,
   type RecoveryAction,
   type RecoveryErrorKind,
+  type RecoveryIdentity,
   type RecoveryRequiredPayload,
   type RecoveryRunState,
   type StageGraph,
@@ -32,6 +33,12 @@ import {
  */
 export interface RecoveryRunStateView {
   lifecycle: RecoveryRunState;
+}
+
+/** Whether the Go layer supports recovery transactions, and for which run. */
+export interface RecoveryTransactionOptions {
+  supported: boolean;
+  identity?: RecoveryIdentity;
 }
 
 /**
@@ -46,7 +53,8 @@ export function computeRecoveryRequired(
   issueNumber: number,
   triggeringStage: string,
   runStateView: RecoveryRunStateView,
-  stageGraph: StageGraph
+  stageGraph: StageGraph,
+  transaction?: RecoveryTransactionOptions
 ): RecoveryRequiredPayload | null {
   const classified = classifyError(error);
   if (!classified) return null;
@@ -55,7 +63,8 @@ export function computeRecoveryRequired(
     ? (stageGraph.getProducingStage(classified.missingFile)?.stage ?? null)
     : null;
 
-  const availableActions = computeAvailableActions();
+  const identity = transaction?.supported ? transaction.identity : undefined;
+  const availableActions = computeAvailableActions(identity);
 
   return {
     issueNumber,
@@ -65,6 +74,7 @@ export function computeRecoveryRequired(
     errorDetail: classified.detail,
     runState: runStateView.lifecycle,
     availableActions,
+    ...(identity ? { recoveryIdentity: identity } : {}),
   };
 }
 
@@ -122,12 +132,15 @@ export function isRecoveryRequiredError(error: unknown): boolean {
 }
 
 /**
- * Compute the available actions per the AC matrix in PLAN.md.
+ * Compute the available actions.
  *
- * State-changing recovery requires an identity-bound cross-process lease that
- * the extension host does not yet have. Until that transaction exists, the
- * dialog is intentionally observational for every run-state shape.
+ * State-changing actions need BOTH an identity-bound claim the Go layer can
+ * authorise (`identity` present only when the binary advertised
+ * `recovery_transactions`) and a known run identity. Without them the dialog
+ * is observational, exactly as before #794.
  */
-export function computeAvailableActions(): RecoveryAction[] {
-  return ["open-run-state-directory", "cancel"];
+export function computeAvailableActions(identity?: RecoveryIdentity): RecoveryAction[] {
+  const observational: RecoveryAction[] = ["open-run-state-directory", "cancel"];
+  if (!identity) return observational;
+  return ["resume", "restart", "discard", ...observational];
 }

@@ -29,6 +29,9 @@ interface WebViewMessage {
 const RECOVERY_ACTIONS: ReadonlySet<RecoveryAction> = new Set([
   "open-run-state-directory",
   "cancel",
+  "resume",
+  "restart",
+  "discard",
 ]);
 
 export class RecoveryDialog implements vscode.Disposable {

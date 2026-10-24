@@ -108,6 +108,9 @@ var contractTestedMethods = map[string]bool{
 	// Pipeline
 	"pipeline.cancelActiveForNetworkOutage": true,
 	"pipeline.getState":                     true,
+	"pipeline.recoveryClaim":                true,
+	"pipeline.recoveryExecute":              true,
+	"pipeline.recoveryRelease":              true,
 	"pipeline.notifyComplete":               true,
 	"pipeline.notifyPhaseTransition":        true,
 	"pipeline.notifyStageProgress":          true,
@@ -773,6 +776,24 @@ func TestContract_Pipeline(t *testing.T) {
 		h.bind(t)
 		id := h.sendRequest("pipeline.cancelActiveForNetworkOutage", nil)
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.cancelActiveForNetworkOutage")
+	})
+
+	t.Run("pipeline.recoveryClaim/registered", func(t *testing.T) {
+		h.bind(t)
+		id := h.sendRequest("pipeline.recoveryClaim", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.recoveryClaim")
+	})
+
+	t.Run("pipeline.recoveryExecute/registered", func(t *testing.T) {
+		h.bind(t)
+		id := h.sendRequest("pipeline.recoveryExecute", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.recoveryExecute")
+	})
+
+	t.Run("pipeline.recoveryRelease/registered", func(t *testing.T) {
+		h.bind(t)
+		id := h.sendRequest("pipeline.recoveryRelease", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.recoveryRelease")
 	})
 
 	t.Run("pipeline.stop/registered", func(t *testing.T) {

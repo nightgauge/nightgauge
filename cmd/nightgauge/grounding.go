@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/git"
 	"github.com/nightgauge/nightgauge/internal/intelligence/groundingGate"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
@@ -66,10 +67,7 @@ Disabled with pipeline.grounding_gate.enabled: false.`,
 			}
 
 			ctx := readIssueContextForGrounding(work, issueNum)
-			protected := []string{"main", "master"}
-			if ctx.BaseBranch != "" {
-				protected = append(protected, ctx.BaseBranch)
-			}
+			protected := git.ProtectedBranches(ctx.BaseBranch)
 
 			res := groundingGate.Evaluate(groundingGate.GroundingInput{
 				IssueNumber:       issueNum,

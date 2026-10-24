@@ -92,6 +92,8 @@ import type {
   QueueValidatePinResult,
   RateLimitInfo,
   RecordStageExitResult,
+  RecoveryClaimResult,
+  RecoveryExecuteResult,
   RetentionConfig,
   RunVisibilityResult,
   RunningPipelinesResult,
@@ -232,6 +234,18 @@ export class IpcClientGenerated extends IpcClientBase {
   // -------------------------------------------------------------------------
   // Pipeline
   // -------------------------------------------------------------------------
+
+  async pipelineRecoveryClaim(request: unknown): Promise<RecoveryClaimResult> {
+    return this.call<RecoveryClaimResult>('pipeline.recoveryClaim', { request });
+  }
+
+  async pipelineRecoveryRelease(runId: string, token: string): Promise<void> {
+    await this.call<void>('pipeline.recoveryRelease', { runId, token });
+  }
+
+  async pipelineRecoveryExecute(runId: string, token: string, action: string): Promise<RecoveryExecuteResult> {
+    return this.call<RecoveryExecuteResult>('pipeline.recoveryExecute', { runId, token, action });
+  }
 
   async pipelineCancelActiveForNetworkOutage(): Promise<CancelActiveForNetworkOutageResult> {
     return this.call<CancelActiveForNetworkOutageResult>('pipeline.cancelActiveForNetworkOutage');

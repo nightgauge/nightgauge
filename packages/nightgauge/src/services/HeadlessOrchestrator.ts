@@ -19,6 +19,7 @@ import * as vscode from "vscode";
 import { confirmAndReportPrivateRun } from "./RunVisibility";
 import * as fs from "fs";
 import * as path from "path";
+import { createHash } from "crypto";
 import {
   checkoutDir,
   checkoutPath,
@@ -102,6 +103,8 @@ import {
   HealthTrendsWriter,
   type NightgaugeAdapter,
   type RecoveryAction,
+  type RecoveryIdentity,
+  STATE_CHANGING_RECOVERY_ACTIONS,
   type RecoveryRequiredPayload,
 } from "@nightgauge/sdk";
 import type { ExecutionAdapter } from "../utils/resolvers/modelResolver";
@@ -5569,7 +5572,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     try {
       const view = this.readRecoveryRunStateView(issueNumber);
       const graph = this.getStageGraph();
-      const payload = computeRecoveryRequired(error, issueNumber, triggeringStage, view, graph);
+      const payload = computeRecoveryRequired(
+        error,
+        issueNumber,
+        triggeringStage,
+        view,
+        graph,
+        this.recoveryTransactionOptions(issueNumber, triggeringStage)
+      );
       if (!payload) return null;
       this.eventDispatcher.onRecoveryRequired(payload);
       return payload;
@@ -5593,18 +5603,91 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   ): RecoveryRequiredPayload | null {
     const view = this.readRecoveryRunStateView(issueNumber);
     const graph = this.getStageGraph();
-    return computeRecoveryRequired(error, issueNumber, triggeringStage, view, graph);
+    return computeRecoveryRequired(
+      error,
+      issueNumber,
+      triggeringStage,
+      view,
+      graph,
+      this.recoveryTransactionOptions(issueNumber, triggeringStage)
+    );
+  }
+
+  /**
+   * Whether state-changing recovery is offered for this failure: the Go binary
+   * must advertise `recovery_transactions` AND a run identity must be readable.
+   * Either missing leaves the dialog observational (#794).
+   */
+  private recoveryTransactionOptions(
+    issueNumber: number,
+    stage: string
+  ): { supported: boolean; identity?: RecoveryIdentity } {
+    let supported: boolean;
+    try {
+      supported = IpcClient.getInstance().supportsFeature("recovery_transactions");
+    } catch {
+      supported = false;
+    }
+    if (!supported) return { supported: false };
+    const identity = this.readRecoveryIdentity(issueNumber, stage);
+    return identity ? { supported: true, identity } : { supported: false };
+  }
+
+  /**
+   * Read the identity of the newest `runtime-{issue}-{runId}.json` snapshot and
+   * the SHA-256 of its exact bytes. The hash is what the Go claim compares, so a
+   * snapshot that changes between this read and the claim is refused there.
+   * Untrusted snapshot content only names what to ASK the Go layer about; Go
+   * re-validates every field before using it.
+   */
+  private readRecoveryIdentity(issueNumber: number, stage: string): RecoveryIdentity | null {
+    try {
+      const dir = path.dirname(this.getContextPath("issue", issueNumber));
+      const prefix = `runtime-${issueNumber}-`;
+      const candidates = fs
+        .readdirSync(dir)
+        .filter((f) => f.startsWith(prefix) && f.endsWith(".json"))
+        .map((f) => ({ f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime);
+      if (candidates.length === 0) return null;
+      const bytes = fs.readFileSync(path.join(dir, candidates[0].f));
+      const parsed = JSON.parse(bytes.toString("utf-8")) as {
+        runId?: string;
+        repo?: string;
+        branch?: string;
+        worktreeDir?: string;
+      };
+      if (!parsed.runId || !parsed.repo || !parsed.branch) return null;
+      return {
+        repo: parsed.repo,
+        issue: issueNumber,
+        runId: parsed.runId,
+        branch: parsed.branch,
+        ...(parsed.worktreeDir ? { worktree: parsed.worktreeDir } : {}),
+        stage,
+        snapshotSha256: createHash("sha256").update(bytes).digest("hex"),
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**
    * Execute a chosen recovery action. Single entry point so the dialog
    * has one call irrespective of how the action is implemented.
    *
-   * The reachable action set is intentionally observational until the
-   * deterministic layer can provide a cross-process recovery lease.
+   * State-changing actions (resume/restart/discard) are host-confirmed with a
+   * modal, claimed in the Go layer, and only then executed. The claim is
+   * released on any failure so the run is never left wedged.
    */
-  async runRecoveryAction(action: RecoveryAction): Promise<{ success: boolean; error?: Error }> {
+  async runRecoveryAction(
+    action: RecoveryAction,
+    payload?: RecoveryRequiredPayload
+  ): Promise<{ success: boolean; error?: Error }> {
     try {
+      if (STATE_CHANGING_RECOVERY_ACTIONS.includes(action)) {
+        return await this.runStateChangingRecovery(action, payload);
+      }
       switch (action) {
         case "cancel":
           return { success: true };
@@ -5624,6 +5707,47 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         success: false,
         error: err instanceof Error ? err : new Error(String(err)),
       };
+    }
+  }
+
+  private async runStateChangingRecovery(
+    action: RecoveryAction,
+    payload?: RecoveryRequiredPayload
+  ): Promise<{ success: boolean; error?: Error }> {
+    const identity = payload?.recoveryIdentity;
+    const ipc = IpcClient.getInstance();
+    // Re-checked at the moment of action: the capability may have gone away
+    // (reconnect to an older binary) since the dialog was computed.
+    if (!identity || !ipc.supportsFeature("recovery_transactions")) {
+      return { success: false, error: new Error("State-changing recovery is not available") };
+    }
+    // The host owns the final confirmation. The webview's `confirmed` flag is
+    // a UI affordance, never authority.
+    const verb = action === "resume" ? "Resume" : action === "restart" ? "Restart" : "Discard";
+    const choice = await vscode.window.showWarningMessage(
+      `${verb} run ${identity.runId} for issue #${identity.issue}?`,
+      {
+        modal: true,
+        detail:
+          action === "discard"
+            ? "The run's snapshot is archived and its branch is deleted only if it is proven merged."
+            : "The run is claimed so no other process can act on it while this runs.",
+      },
+      verb
+    );
+    if (choice !== verb) return { success: true };
+
+    const claim = await ipc.pipelineRecoveryClaim(identity);
+    try {
+      await ipc.pipelineRecoveryExecute(identity.runId, claim.token, action);
+      return { success: true };
+    } catch (err) {
+      try {
+        await ipc.pipelineRecoveryRelease(identity.runId, claim.token);
+      } catch {
+        // The claim also expires on its own; release is best-effort.
+      }
+      return { success: false, error: err instanceof Error ? err : new Error(String(err)) };
     }
   }
 

@@ -65,7 +65,10 @@ describe("RecoveryCoordinator", () => {
     coordinator.present(payload);
 
     await vi.waitFor(() => expect(dialog.waitForNextAction).toHaveBeenCalledOnce());
-    expect(orchestrator.runRecoveryAction).toHaveBeenCalledWith("open-run-state-directory");
+    expect(orchestrator.runRecoveryAction).toHaveBeenCalledWith(
+      "open-run-state-directory",
+      expect.anything()
+    );
     expect(dialog.dispose).toHaveBeenCalledOnce();
   });
 

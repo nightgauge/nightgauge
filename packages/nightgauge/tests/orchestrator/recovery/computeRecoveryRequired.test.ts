@@ -86,3 +86,51 @@ describe("computeRecoveryRequired", () => {
     expect(isRecoveryRequiredError(new Error("boom"))).toBe(false);
   });
 });
+
+describe("recovery transactions (#794)", () => {
+  const identity = {
+    repo: "o/r",
+    issue: 793,
+    runId: "0192f8a0-0000-7000-8000-000000000001",
+    branch: "feat/793-x",
+    stage: "feature-dev",
+    snapshotSha256: "b".repeat(64),
+  };
+  const err = new RunStateMissing(793);
+
+  it("offers state-changing actions only when supported AND identity-bound", () => {
+    const payload = computeRecoveryRequired(
+      err,
+      793,
+      "feature-dev",
+      { lifecycle: "paused" },
+      graph,
+      { supported: true, identity }
+    );
+    expect(payload?.availableActions).toEqual([
+      "resume",
+      "restart",
+      "discard",
+      "open-run-state-directory",
+      "cancel",
+    ]);
+    expect(payload?.recoveryIdentity).toEqual(identity);
+  });
+
+  it.each([
+    ["flag false", { supported: false, identity }],
+    ["flag true but no identity", { supported: true }],
+    ["absent", undefined],
+  ])("stays observational when %s", (_name, tx) => {
+    const payload = computeRecoveryRequired(
+      err,
+      793,
+      "feature-dev",
+      { lifecycle: "paused" },
+      graph,
+      tx
+    );
+    expect(payload?.availableActions).toEqual(["open-run-state-directory", "cancel"]);
+    expect(payload?.recoveryIdentity).toBeUndefined();
+  });
+});
