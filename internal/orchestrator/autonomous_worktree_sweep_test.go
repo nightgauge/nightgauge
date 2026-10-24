@@ -72,7 +72,9 @@ func TestSweepMergedWorktrees_ReclaimsAcrossEveryRegisteredRepo(t *testing.T) {
 	rootB, wtB := mergedWorktreeRepo(t, 202)
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		scheduler: &Scheduler{
+			trustGate:         allWritersGate(),
 			workspaceRoot:     rootA,
 			repoRootsResolver: func() []string { return []string{rootB} },
 		},
@@ -91,7 +93,8 @@ func TestSweepMergedWorktrees_ProtectsRunningIssues(t *testing.T) {
 	root, wt := mergedWorktreeRepo(t, 203)
 
 	as := &AutonomousScheduler{
-		scheduler: &Scheduler{workspaceRoot: root},
+		trustGateOverride: allWritersGate(),
+		scheduler:         &Scheduler{workspaceRoot: root},
 		// The PR landed but the run still has stages to execute in there.
 		state: &AutonomousState{Running: []RunningItem{{Repo: "acme/app", Number: 203}}},
 	}
@@ -140,8 +143,9 @@ func TestSweepMergedWorktrees_NilStateSkipsLoudly(t *testing.T) {
 func TestSweepMergedWorktrees_ZeroRootsIsLoud(t *testing.T) {
 	// No workspace root and no roots resolver → repoScanRoots() is empty.
 	as := &AutonomousScheduler{
-		scheduler: &Scheduler{},
-		state:     &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		scheduler:         &Scheduler{},
+		state:             &AutonomousState{},
 	}
 
 	out := captureLog(t, func() { as.sweepMergedWorktrees() })
@@ -184,7 +188,9 @@ func TestSweepMergedWorktrees_UndeterminedSkipsAutonomousSweep(t *testing.T) {
 	notARepo := unreadableRoot(t)
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		scheduler: &Scheduler{
+			trustGate:         allWritersGate(),
 			workspaceRoot:     root,
 			repoRootsResolver: func() []string { return []string{notARepo} },
 		},
@@ -215,7 +221,9 @@ func TestSweepMergedWorktrees_PerRootFailureIsLoggedAndDoesNotStopTheSweep(t *te
 	missing := filepath.Join(t.TempDir(), "deleted-sibling")
 
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		scheduler: &Scheduler{
+			trustGate:         allWritersGate(),
 			workspaceRoot:     root,
 			repoRootsResolver: func() []string { return []string{missing} },
 		},

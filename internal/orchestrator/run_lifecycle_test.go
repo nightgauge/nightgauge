@@ -192,6 +192,7 @@ func (r *cancellingRunner) RunStage(ctx context.Context, params StageRunParams) 
 
 func newLifecycleTestScheduler(root string, runner StageRunner) *Scheduler {
 	return &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

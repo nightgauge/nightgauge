@@ -115,6 +115,7 @@ func (h *hookTelemetry) SyncQueue(_ context.Context, _ []platform.QueueSyncItem)
 // newRefusalScheduler builds the minimal scheduler these two tests need.
 func newRefusalScheduler(root string, runner StageRunner) *Scheduler {
 	return &Scheduler{
+		trustGate:     allWritersGate(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
 		retryEngine:   NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

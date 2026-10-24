@@ -295,9 +295,9 @@ export interface BoardItem {
     state: string;
     repo?: string;
   }>;
-  /** GitHub author_association (OWNER, MEMBER, COLLABORATOR, NONE, ...). Used
-   * by the autonomous pipeline's author-trust gate (#270). */
-  authorAssociation?: string;
+  /** The issue author's login; a bot's ends in "[bot]". The eligibility gate
+   * (#2130) asks the repository for this login's permission. */
+  authorLogin?: string;
   /**
    * Relationship COUNTS, set by the summary read (`board.listOpen`). On such an
    * item `blockedBy`, `blocking` and `subIssues` were not read: absent means

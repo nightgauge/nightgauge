@@ -42,21 +42,21 @@ func threeTrustedUnrefinedIssuesServer(t *testing.T) *httptest.Server {
 								"number": 11,
 								"title": "First trusted issue",
 								"createdAt": "2026-01-01T00:00:00Z",
-								"authorAssociation": "OWNER",
+								"author": {"login": "maintainer", "__typename": "User"},
 								"labels": {"nodes": []}
 							},
 							{
 								"number": 12,
 								"title": "Second trusted issue",
 								"createdAt": "2026-01-01T00:00:00Z",
-								"authorAssociation": "OWNER",
+								"author": {"login": "maintainer", "__typename": "User"},
 								"labels": {"nodes": []}
 							},
 							{
 								"number": 13,
 								"title": "Third trusted issue",
 								"createdAt": "2026-01-01T00:00:00Z",
-								"authorAssociation": "OWNER",
+								"author": {"login": "maintainer", "__typename": "User"},
 								"labels": {"nodes": []}
 							}
 						]
@@ -103,9 +103,11 @@ func TestRunRefinementCycle_RefusedSemaphoreGatesDispatch(t *testing.T) {
 
 	client := gh.NewClientWithURL("test-token", srv.URL)
 	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir()})
+	sched.SetTrustGate(allWritersGate())
 	as := NewAutonomousScheduler(sched, client, []depgraph.RepoConfig{
 		{Owner: "o", Name: "r", Project: 1},
 	}, nil, cfg, t.TempDir())
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 
 	var mu sync.Mutex
@@ -204,10 +206,12 @@ func TestRunRefinementCycle_SaturatedCycleSpendsNoAPIQuota(t *testing.T) {
 
 	client := gh.NewClientWithURL("test-token", srv.URL)
 	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir()})
+	sched.SetTrustGate(allWritersGate())
 	as := NewAutonomousScheduler(sched, client, []depgraph.RepoConfig{
 		{Owner: "o", Name: "r1", Project: 1},
 		{Owner: "o", Name: "r2", Project: 2},
 	}, nil, cfg, t.TempDir())
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 	// Registering the IPC callback is what makes refinement viable without a
 	// CLI adapter; the cycle must short-circuit before it is ever called.

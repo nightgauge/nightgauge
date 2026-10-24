@@ -500,10 +500,18 @@ func TestIssueService_AddComment_Error(t *testing.T) {
 // --- AddLabels / RemoveLabels Tests ---
 
 func TestIssueService_AddLabels_HappyPath(t *testing.T) {
-	response := `{"data":{"addLabelsToLabelable":{"labelable":{"__typename":"Issue"}}}}`
-
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
+	// The label ids are resolved to names first (#2130), then the mutation.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(string(body), "nodes(ids:") {
+			_, _ = w.Write([]byte(`{"data":{"nodes":[{"name":"type:bug"},{"name":"size:M"}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"addLabelsToLabelable":{"labelable":{"__typename":"Issue"}}}}`))
+	}))
+	defer srv.Close()
+	client := NewClientWithURL("ghp_test", srv.URL+"/graphql")
 
 	svc := NewIssueService(client)
 	if err := svc.AddLabels(context.Background(), "ISSUE_NODE_ID", []string{"LABEL_ID_1", "LABEL_ID_2"}); err != nil {

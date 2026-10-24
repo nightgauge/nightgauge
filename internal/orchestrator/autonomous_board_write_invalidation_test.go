@@ -64,6 +64,7 @@ func TestSchedulerStatusMovesInvalidateSharedBoardCache(t *testing.T) {
 
 			repos := []depgraph.RepoConfig{{Owner: "O", Name: "a", Project: 7}}
 			as := NewAutonomousScheduler(nil, gh.NewClientWithURL("test-token", srv.URL), repos, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+			as.trustGateOverride = allWritersGate()
 			cache := boardcache.New(0)
 			as.SetBoardCache(cache)
 
@@ -105,6 +106,7 @@ func TestSchedulerWithoutBoardCacheStillWrites(t *testing.T) {
 
 	repos := []depgraph.RepoConfig{{Owner: "O", Name: "a", Project: 7}}
 	as := NewAutonomousScheduler(nil, gh.NewClientWithURL("test-token", srv.URL), repos, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	as.revertFailedIssueStatus(context.Background(), "O/a", 1)
 	if requests.Load() == 0 {
 		t.Fatal("no forge request without a board cache")
@@ -159,6 +161,7 @@ func TestEpicPostMergeBoardSyncInvalidatesSharedBoardCache(t *testing.T) {
 	client := gh.NewClientWithURL("test-token", srv.URL)
 	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir(), ProjectNumber: 7})
 	as := NewAutonomousScheduler(sched, client, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	cache := boardcache.New(0)
 	as.SetBoardCache(cache)
 

@@ -23,6 +23,9 @@ func newAutonomousForCascadeTest(t *testing.T, threshold int, window time.Durati
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
 	as := &AutonomousScheduler{
 		config: AutonomousConfig{MaxConcurrent: 3},
+		// A permissive eligibility gate (#2130): these tests are about
+		// cascades, not eligibility.
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status:  "running",
 			Running: nil,
@@ -279,7 +282,7 @@ func TestRecoverOrphanedRunning_PromotesOnCleanStart(t *testing.T) {
 	node := &depgraph.Node{
 		Repo: "nightgauge/nightgauge", Number: 3216, State: "OPEN",
 		BoardStatus: "Backlog", Priority: "P1", Labels: []string{"type:bug"},
-		AuthorAssociation: "OWNER",
+		AuthorLogin: "maintainer",
 	}
 	as.buildGraphFn = func(_ context.Context) (*depgraph.Graph, error) {
 		return buildTestGraph([]*depgraph.Node{node}, nil), nil
@@ -310,7 +313,7 @@ func TestPromoteUnblockedToReady_PromotesIndependentBacklogNode(t *testing.T) {
 	independent := &depgraph.Node{
 		Repo: "nightgauge/nightgauge", Number: 3216, State: "OPEN",
 		BoardStatus: "Backlog", Priority: "P1", Labels: []string{"type:bug"},
-		AuthorAssociation: "OWNER",
+		AuthorLogin: "maintainer",
 	}
 	// No edge between completed and independent — independent has no
 	// blockedBy entry, so revAdj[completedKey] is empty.

@@ -46,6 +46,7 @@ func TestScheduler_FeaturePlanning_PrematureTurnEnd_FailsPipeline(t *testing.T) 
 	runner := newSuccessStageRunner()
 
 	s := &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

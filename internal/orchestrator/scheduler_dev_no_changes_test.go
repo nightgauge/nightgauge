@@ -103,6 +103,7 @@ func TestScheduler_FeatureDev_NoChangesProduced_FailsBeforeValidate(t *testing.T
 	runner := &honestReportEmptyDiskRunner{}
 
 	s := &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

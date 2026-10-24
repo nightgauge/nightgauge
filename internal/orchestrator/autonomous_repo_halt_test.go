@@ -38,6 +38,7 @@ func newRepoHaltScheduler(t *testing.T) (*AutonomousScheduler, *[]string) {
 			{Owner: "acme", Name: "api", Project: 8},
 		},
 		nil, DefaultAutonomousConfig(), t.TempDir())
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 	as.config.MaxConcurrent = 5
 	as.buildGraphFn = func(context.Context) (*depgraph.Graph, error) { return graph, nil }

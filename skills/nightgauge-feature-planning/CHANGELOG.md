@@ -10,6 +10,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The acceptance-criteria precheck reads the issue body through
+  `nightgauge forge issue view --json --vouched` instead of `gh issue view`, so
+  a body edited after a maintainer approved the issue is refused (#2130).
+- An ambiguous-acceptance-criteria signal now tells the plan to read the issue's
+  comments through `nightgauge forge issue view --json --comments`, which
+  returns only comments by users with write access (#2130).
+
 - The clone's pipeline state and plans are read at `$(nightgauge layout path <class> <name>)`
   and written through `nightgauge layout write|append`, never by a
   `.nightgauge/...` path: they now live in the git directory (#2037, ADR-024

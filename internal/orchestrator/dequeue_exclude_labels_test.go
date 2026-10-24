@@ -12,6 +12,7 @@ import (
 func newDequeueExcludeFixture(t *testing.T, excludeLabels []string) *Scheduler {
 	t.Helper()
 	return &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),

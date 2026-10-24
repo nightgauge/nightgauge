@@ -39,6 +39,7 @@ func newTestHarness(t *testing.T, cfg AutonomousConfig, graphProvider testGraphP
 	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
+		trustGateOverride:    allWritersGate(),
 		config:               cfg,
 		workspaceRoot:        tmpDir,
 		state:                &AutonomousState{Status: "running", TokensCeiling: cfg.BudgetCeiling},
@@ -753,6 +754,7 @@ func TestIntegration_StateRecovery(t *testing.T) {
 
 	// Create initial scheduler with some state
 	original := &AutonomousScheduler{
+		trustGateOverride:    allWritersGate(),
 		config:               AutonomousConfig{MaxConcurrent: 3},
 		workspaceRoot:        tmpDir,
 		perIssueFailureCount: make(map[string]int),
@@ -785,6 +787,7 @@ func TestIntegration_StateRecovery(t *testing.T) {
 
 	// Create new scheduler (simulating restart)
 	recovered := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), tmpDir)
+	recovered.trustGateOverride = allWritersGate()
 
 	// Running state should become "stopped" on load
 	if recovered.state.Status != "stopped" {

@@ -15,6 +15,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,14 +83,50 @@ func newIpcTestHarnessWithSkills(t *testing.T) (*ipcTestHarness, string) {
 	gittest.Run(t, workDir, "add", "-A")
 	gittest.Run(t, workDir, "commit", "-qm", "fixture")
 
-	// Start binary with this workspace
-	h := startHarness(t, &cmdSpec{workDir: workDir})
+	// Start binary with this workspace, its GitHub reads served by a stand-in
+	// that vouches for every fixture issue (#2130).
+	h := startHarness(t, &cmdSpec{workDir: workDir, githubURL: vouchingGitHub(t)})
 	return h, workDir
+}
+
+// vouchingGitHub stands in for GitHub in the E2E harness: pipeline.runItem
+// asks the eligibility gate (#2130), which reads the issue's author and that
+// author's permission. Both answer "a maintainer with admin access". Every
+// other request has its connection dropped, exactly what TestMain's network
+// seal does to a request for api.github.com, so the rest of the pipeline sees
+// the same unreachable forge it always has.
+func vouchingGitHub(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/permission"):
+			_, _ = w.Write([]byte(`{"permission":"admin","role_name":"admin","user":{"login":"e2e-maintainer"}}`))
+			return
+		case r.URL.Path == "/graphql" && strings.Contains(string(body), "timelineItems"):
+			_, _ = w.Write([]byte(`{"data":{"repository":{"issue":{"author":{"login":"e2e-maintainer","__typename":"User"},` +
+				`"lastEditedAt":null,"labels":{"nodes":[]},"timelineItems":{"nodes":[]}}}}}`))
+			return
+		}
+		if hj, ok := w.(http.Hijacker); ok {
+			if conn, _, err := hj.Hijack(); err == nil {
+				_ = conn.Close()
+				return
+			}
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/graphql"
 }
 
 // cmdSpec holds the parameters for starting a binary.
 type cmdSpec struct {
 	workDir string
+	// githubURL, when set, points the binary's GitHub GraphQL (and REST,
+	// derived from it) at a stand-in.
+	githubURL string
 }
 
 // startHarness starts the binary from a cmdSpec and returns a harness.
@@ -96,6 +135,9 @@ func startHarness(t *testing.T, spec *cmdSpec) *ipcTestHarness {
 	t.Helper()
 
 	cmd := newCmd(spec.workDir)
+	if spec.githubURL != "" {
+		cmd.Args = append(cmd.Args, "--github-graphql-url", spec.githubURL)
+	}
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {

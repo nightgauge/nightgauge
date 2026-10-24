@@ -181,9 +181,10 @@ func (fakeLiftTimer) Stop() bool { return true }
 func TestAutonomousScheduler_DispatchCeilingFollowsTheThrottle(t *testing.T) {
 	newScheduler := func() *AutonomousScheduler {
 		return &AutonomousScheduler{
-			config:   AutonomousConfig{MaxConcurrent: 3},
-			state:    &AutonomousState{},
-			rescanCh: make(chan struct{}, 1),
+			trustGateOverride: allWritersGate(),
+			config:            AutonomousConfig{MaxConcurrent: 3},
+			state:             &AutonomousState{},
+			rescanCh:          make(chan struct{}, 1),
 		}
 	}
 	d := NewDispatchThrottle()

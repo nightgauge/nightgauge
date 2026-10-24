@@ -261,6 +261,7 @@ func TestStatus_BoardTailIsZeroWhileTheRefinementLoopRuns(t *testing.T) {
 	// A real (if empty) inner Scheduler: Run() wires its pipeline-complete
 	// callback unconditionally, so a nil one panics before the first cycle.
 	as := NewAutonomousScheduler(&Scheduler{}, nil, nil, nil, cfg, layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	t.Cleanup(as.drainBackground)
 	stubGraphFn(as) // keeps the cycle off the network
 

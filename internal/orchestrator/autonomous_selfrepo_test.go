@@ -20,10 +20,11 @@ import (
 func newSelfRepoTestScheduler(t *testing.T, selfSlug string, allow bool) *AutonomousScheduler {
 	t.Helper()
 	as := &AutonomousScheduler{
-		config:       AutonomousConfig{MaxConcurrent: 5, AllowSelfRepo: allow},
-		state:        &AutonomousState{},
-		selfRepoSlug: selfSlug,
-		attention:    attention.New(layouttest.Repo(t)),
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5, AllowSelfRepo: allow},
+		state:             &AutonomousState{},
+		selfRepoSlug:      selfSlug,
+		attention:         attention.New(layouttest.Repo(t)),
 	}
 	t.Cleanup(as.drainBackground) // backstop; see newAutonomousForCascadeTest
 	return as

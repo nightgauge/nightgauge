@@ -1,7 +1,15 @@
 package forgecmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/forge"
+	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/trust"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge/output"
@@ -82,10 +90,129 @@ func issueViewCmd() *cobra.Command {
 			if err != nil {
 				return emitError(cmd, fmt.Errorf("get issue: %w", err))
 			}
-			return renderForCmd(cmd, IssueFromForge(issue))
+			out := IssueFromForge(issue)
+			withComments, _ := cmd.Flags().GetBool("comments")
+			vouched, _ := cmd.Flags().GetBool("vouched")
+			if withComments || vouched || isStageOwnIssue(number) {
+				// Checked AFTER the issue was read, with nothing cached, so an
+				// edit made at any point up to now is seen: an outsider's edit
+				// after a writer approved the issue never reaches the stage that
+				// reads it (#2130). The dispatch-time check cannot close that
+				// window on its own.
+				if err := requireVouched(cmd, client, owner, repo, number); err != nil {
+					return emitError(cmd, err)
+				}
+			}
+			if withComments {
+				comments, removed, err := vouchedComments(cmd, client, owner, repo, number)
+				if err != nil {
+					return emitError(cmd, err)
+				}
+				out.Comments = comments
+				if removed > 0 {
+					// The count, never the text (#2130).
+					fmt.Fprintf(cmd.ErrOrStderr(), "comments: %d removed: their authors lack write access to %s/%s\n",
+						removed, owner, repo)
+				}
+			}
+			return renderForCmd(cmd, out)
 		},
 	}
+	cmd.Flags().Bool("vouched", false,
+		"Refuse unless a user with write access vouches for the issue now (always on for a stage reading its own issue)")
+	cmd.Flags().Bool("comments", false,
+		"Include the issue's comments by users with write access (or a trusted bot); the rest are removed and counted on stderr")
 	return cmd
+}
+
+// commentSourcer is a forge client that can list comments and answer
+// permission lookups (the GitHub adapter).
+type commentSourcer interface {
+	TrustSource() trust.CommentSource
+}
+
+// trustedBotsFromConfig reads autonomous.trusted_bots from the working
+// directory's config; without one, the gate's defaults apply.
+var trustedBotsFromConfig = func() []string {
+	cfg := workingConfig()
+	if cfg == nil || cfg.Autonomous == nil {
+		return nil
+	}
+	return cfg.Autonomous.TrustedBots
+}
+
+// appOwnersFromConfig reads the owners where the pipeline acts as a GitHub
+// App, the only owners where label approval exists.
+var appOwnersFromConfig = func() []string { return workingConfig().AppOwners() }
+
+// stageIdentitiesFromConfig lists every login a stage on this machine can
+// act as; a label any of them applied never approves.
+var stageIdentitiesFromConfig = func(ctx context.Context) ([]string, error) {
+	return gh.StageIdentities(ctx, workingConfig().ConfiguredGitHubLogins())
+}
+
+func workingConfig() *config.Config {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	cfg, err := config.Load(cwd)
+	if err != nil {
+		return nil
+	}
+	return cfg
+}
+
+// newCommandGate is the gate a forge command asks.
+func newCommandGate(src trust.Forge) *trust.Gate {
+	return trust.NewGate(src, trustedBotsFromConfig()).WithAppOwners(appOwnersFromConfig()...).
+		WithStageIdentities(stageIdentitiesFromConfig)
+}
+
+// isStageOwnIssue reports whether this read is a pipeline stage reading the
+// issue it was dispatched for: stage adapters set NIGHTGAUGE_ISSUE_NUMBER.
+func isStageOwnIssue(number int) bool {
+	v := strings.TrimSpace(os.Getenv("NIGHTGAUGE_ISSUE_NUMBER"))
+	return v != "" && v == strconv.Itoa(number)
+}
+
+// requireVouched re-runs the eligibility gate on a fresh cache. A forge that
+// cannot answer it refuses: fail closed.
+func requireVouched(cmd *cobra.Command, client forge.ForgeClient, owner, repo string, number int) error {
+	src, ok := client.(commentSourcer)
+	if !ok {
+		return fmt.Errorf("%w: this forge cannot check who vouches for %s/%s#%d", forge.ErrUnsupported, owner, repo, number)
+	}
+	d := newCommandGate(src.TrustSource()).Decide(cmd.Context(),
+		trust.Subject{Owner: owner, Repo: repo, Number: number})
+	if !d.Eligible {
+		return errors.New(d.Reason)
+	}
+	return nil
+}
+
+// vouchedComments lists an issue's comments and keeps only those whose author
+// may vouch for an issue: a user with write access or higher, or a trusted bot
+// (#2130). This is the one place comments are assembled for a model, so a
+// comment by anyone else never reaches one. A failed permission lookup removes
+// the comment.
+func vouchedComments(cmd *cobra.Command, client forge.ForgeClient, owner, repo string, number int) ([]CommentJSON, int, error) {
+	src, ok := client.(commentSourcer)
+	if !ok {
+		return nil, 0, fmt.Errorf("--comments: %w: this forge cannot list comments with their authors' permissions", forge.ErrUnsupported)
+	}
+	ts := src.TrustSource()
+	all, err := ts.IssueComments(cmd.Context(), owner, repo, number)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list comments: %w", err)
+	}
+	kept, removed := newCommandGate(ts).FilterComments(cmd.Context(), owner, repo, all)
+	out := make([]CommentJSON, 0, len(kept))
+	for _, c := range kept {
+		at := c.CreatedAt
+		out = append(out, CommentJSON{Author: ActorJSON{Login: c.Author}, Body: c.Body, CreatedAt: &at})
+	}
+	return out, removed, nil
 }
 
 // --- create ---

@@ -28,7 +28,6 @@ func TestBuildAutonomousConfigServePathHonorsConfigKeys(t *testing.T) {
 	cfg := &config.Config{
 		Autonomous: &config.AutonomousConfig{
 			AutoActionable:              boolPtr(true),
-			TrustedAuthorAssociations:   []string{"OWNER"},
 			DisableEpicBlockedByCascade: true,
 			RefinementEnabled:           boolPtr(false),
 			RefinementInterval:          config.YAMLDuration(90 * time.Second),
@@ -59,9 +58,6 @@ func TestBuildAutonomousConfigServePathHonorsConfigKeys(t *testing.T) {
 
 	if !got.AutoActionable {
 		t.Errorf("AutoActionable = false, want true (autonomous.auto_actionable: true was set)")
-	}
-	if !reflect.DeepEqual(got.TrustedAuthorAssociations, []string{"OWNER"}) {
-		t.Errorf("TrustedAuthorAssociations = %#v, want [\"OWNER\"]", got.TrustedAuthorAssociations)
 	}
 	if !got.DisableEpicBlockedByCascade {
 		t.Errorf("DisableEpicBlockedByCascade = false, want true (autonomous.disable_epic_blockedby_cascade: true was set)")

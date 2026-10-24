@@ -33,6 +33,7 @@ func truncatedRead(number int) error {
 // IssueService to forge, which fails every relationship page after the first.
 func forgeScheduler(forge *githubtest.Forge) *Scheduler {
 	return &Scheduler{
+		trustGate:   allWritersGate(),
 		issueSvc:    gh.NewIssueService(forge.Client()),
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),

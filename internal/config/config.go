@@ -403,12 +403,17 @@ type AutonomousConfig struct {
 	// call each: 165 unrefined issues at the default rate rail is roughly 17
 	// hours of Sonnet calls on issues that may never dispatch (#1514).
 	RefinementBacklog *bool `yaml:"refinement_backlog" json:"refinementBacklog,omitempty"`
-	// TrustedAuthorAssociations overrides the default set of GitHub
-	// author_association values ("OWNER", "MEMBER", "COLLABORATOR") that are
-	// trusted to reach autonomous refinement and dispatch (#270). When set,
-	// this list fully replaces the default set — it does not merge with it.
-	// Unset/empty → use the built-in default (OWNER/MEMBER/COLLABORATOR).
-	TrustedAuthorAssociations []string `yaml:"trusted_author_associations,omitempty" json:"trustedAuthorAssociations,omitempty"`
+	// TrustedBots are the bot accounts trusted by authorship (#2130), named
+	// after claude-code-action's allowed_bots. An issue is otherwise eligible
+	// only when a user with write access authored it or applied
+	// `pipeline:approved`. A bot is never asked for its permission and can
+	// never approve. Entries may be written "name", "name[bot]" or
+	// "app/name". Unset/empty → the pipeline's own App and github-actions.
+	// When set, the list replaces the default.
+	TrustedBots []string `yaml:"trusted_bots,omitempty" json:"trustedBots,omitempty"`
+	// RemovedTrustedAuthorAssociations only detects the key #2130 removed, so
+	// Load can refuse a config that still sets it. Nothing reads its value.
+	RemovedTrustedAuthorAssociations []string `yaml:"trusted_author_associations,omitempty" json:"-"`
 	// StallEscalationEnabled enables progressive stall escalation in autonomous
 	// mode (Issue #2656). When true, autonomous pipelines escalate through 5
 	// levels instead of silently killing. Default: true.
@@ -2214,6 +2219,9 @@ func Load(workspaceRoot string) (*Config, error) {
 	cfg, err := load(workspaceRoot)
 	if err == nil {
 		if rerr := ValidateNoRetiredAdapters(cfg); rerr != nil {
+			return nil, rerr
+		}
+		if rerr := ValidateNoRemovedTrustKeys(cfg); rerr != nil {
 			return nil, rerr
 		}
 	}

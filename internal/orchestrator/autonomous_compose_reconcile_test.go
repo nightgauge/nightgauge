@@ -32,6 +32,7 @@ func TestSweepOrphanedCompose_RunsOnTheAutonomousCycle(t *testing.T) {
 	var torn []string
 	as := NewAutonomousScheduler(
 		&Scheduler{
+			trustGate:     allWritersGate(),
 			workspaceRoot: root,
 			composeLister: listing(
 				composeIn(root, 921), // live worktree
@@ -41,6 +42,7 @@ func TestSweepOrphanedCompose_RunsOnTheAutonomousCycle(t *testing.T) {
 		},
 		nil, nil, nil, DefaultAutonomousConfig(), t.TempDir(),
 	)
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 	as.buildGraphFn = func(context.Context) (*depgraph.Graph, error) {
 		return buildTestGraph(nil, nil), nil
@@ -65,7 +67,9 @@ func TestSweepOrphanedCompose_UnionProtectsBothPopulations(t *testing.T) {
 
 	var torn []string
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		scheduler: &Scheduler{
+			trustGate:     allWritersGate(),
 			workspaceRoot: root,
 			composeLister: listing(
 				composeIn(root, 931),
@@ -108,7 +112,9 @@ func TestSweepOrphanedCompose_NilStateSkipsLoudly(t *testing.T) {
 
 	var torn []string
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		scheduler: &Scheduler{
+			trustGate:       allWritersGate(),
 			workspaceRoot:   root,
 			composeLister:   listing(composeIn(root, 942)),
 			composeTeardown: recordingTeardown(&torn),
@@ -135,7 +141,9 @@ func TestSweepOrphanedCompose_NilStateSkipsLoudly(t *testing.T) {
 func TestSweepOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 	var torn []string
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		scheduler: &Scheduler{
+			trustGate:       allWritersGate(),
 			workspaceRoot:   unreadableRoot(t),
 			composeLister:   listing(dockercompose.Project{Name: "issue-951", IssueNumber: 951}),
 			composeTeardown: recordingTeardown(&torn),
@@ -169,8 +177,9 @@ func TestSweepOrphanedCompose_ProductionDefaultsReachDocker(t *testing.T) {
 		`{"Name":"issue-962","Status":"running(1)","ConfigFiles":"`+cf("issue-962")+`"}]`)
 
 	as := &AutonomousScheduler{
-		scheduler: &Scheduler{workspaceRoot: root},
-		state:     &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		scheduler:         &Scheduler{workspaceRoot: root},
+		state:             &AutonomousState{},
 	}
 
 	as.sweepOrphanedComposeProjects(context.Background())
@@ -220,12 +229,14 @@ func TestAutonomousCycle_ComposeReconcileRunsBeforeTheWorktreeSweep(t *testing.T
 	var torn []string
 	as := NewAutonomousScheduler(
 		&Scheduler{
+			trustGate:       allWritersGate(),
 			workspaceRoot:   root,
 			composeLister:   listing(composeIn(root, 802)),
 			composeTeardown: recordingTeardown(&torn),
 		},
 		nil, nil, nil, DefaultAutonomousConfig(), t.TempDir(),
 	)
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 	as.buildGraphFn = func(context.Context) (*depgraph.Graph, error) {
 		return buildTestGraph(nil, nil), nil
@@ -266,7 +277,9 @@ func TestSweepOrphanedCompose_SnapshotArmProtectsARunWithNoWorktree(t *testing.T
 
 	var torn []string
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		scheduler: &Scheduler{
+			trustGate:     allWritersGate(),
 			workspaceRoot: root,
 			composeLister: listing(
 				composeIn(root, 972),
@@ -307,7 +320,9 @@ func TestSweepOrphanedCompose_UnreadableSnapshotSourceVetoesTheTeardown(t *testi
 
 	var torn []string
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		scheduler: &Scheduler{
+			trustGate:       allWritersGate(),
 			workspaceRoot:   root,
 			composeLister:   listing(composeIn(root, 992)),
 			composeTeardown: recordingTeardown(&torn),

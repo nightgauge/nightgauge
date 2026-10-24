@@ -47,6 +47,7 @@ func TestNetworkUnavailableDoesNotFeedCascadeBreaker(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tracker := NewCascadeTracker(CascadeTrackerConfig{Threshold: 100, Window: time.Hour})
 			as := &AutonomousScheduler{
+				trustGateOverride:    allWritersGate(),
 				config:               AutonomousConfig{MaxConcurrent: 3},
 				state:                &AutonomousState{Status: "running", LifetimeIssueFailures: map[string]int{}},
 				rescanCh:             make(chan struct{}, 16),

@@ -174,7 +174,6 @@ Consumes zero LLM tokens. Skip cleanly when the binary is missing.
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 ISSUE_BODY_FILE=$(mktemp)
-gh issue view "$ISSUE_NUMBER" --json body -q .body > "$ISSUE_BODY_FILE" 2>/dev/null || true
 
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
@@ -192,6 +191,14 @@ if [ -z "$BINARY" ]; then
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
+
+# The issue's own read re-checks who vouches for it, so a body edited after a
+# maintainer approved the issue is refused, not read (#2130).
+if [ -n "$BINARY" ]; then
+  REPO="${NIGHTGAUGE_REPO:-$("$BINARY" git repo-slug 2>/dev/null)}"
+  [ -n "$REPO" ] && "$BINARY" forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json --vouched 2>/dev/null \
+    | jq -r '.body // ""' > "$ISSUE_BODY_FILE" || true
+fi
 
 AC_RECONCILE_FILE="$(nightgauge layout path pipeline ac-reconcile-${ISSUE_NUMBER}.json)"
 if [ -n "$BINARY" ] && [ -s "$ISSUE_BODY_FILE" ]; then
@@ -685,8 +692,8 @@ not in flight.
 **This is a hold, not a verdict, and it does not create a `blockedBy` edge.**
 An edge is durable and human-visible, and a wrong one converts a zero-cost
 defer into a permanent silent stall, so the operator adds it by hand
-(`nightgauge issue add-blocked-by <blocked> <blocker>`) after reading your
-comment. See
+(`nightgauge issue add-blocked-by <blocked> <blocker>`; a blocker in another
+repository is spelled `owner/repo#N` or `repo#N`) after reading your comment. See
 [docs/FEEDBACK_LOOPS.md § Not every blocking signal is a rewind request](../../../../docs/FEEDBACK_LOOPS.md#not-every-blocking-signal-is-a-rewind-request)
 for what the run leaves behind (a blocked-finding file, an issue comment, an
 Action Center card).

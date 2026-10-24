@@ -38,7 +38,8 @@ func crossRepoEdge(fromRepo string, from int, toRepo string, to int) depgraph.Ed
 
 func crossRepoCascadeScheduler() *AutonomousScheduler {
 	return &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
 		repos: []depgraph.RepoConfig{
 			{Owner: "o", Name: "app", Project: 1},
 			{Owner: "o", Name: "platform", Project: 1},

@@ -390,6 +390,7 @@ func newDescentTestScheduler(t *testing.T, root string, runner StageRunner, engi
 		return []byte(`[]`), nil
 	})
 	return &Scheduler{
+		trustGate:     allWritersGate(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
 		retryEngine:   engine,

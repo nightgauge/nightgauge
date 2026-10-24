@@ -65,6 +65,7 @@ func TestRefineViaCLIResolvesTheSkillOutsideTheWorkspace(t *testing.T) {
 
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: ws})
 	as := NewAutonomousScheduler(sched, nil, []depgraph.RepoConfig{}, nil, DefaultAutonomousConfig(), ws)
+	as.trustGateOverride = allWritersGate()
 
 	err := as.refineViaCLI(context.Background(), "acme", "widgets", 42)
 	if err == nil {
@@ -94,6 +95,7 @@ func TestRefineStageOptionsCarryAPromptAndToolAllowlist(t *testing.T) {
 
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: ws})
 	as := NewAutonomousScheduler(sched, nil, []depgraph.RepoConfig{}, nil, DefaultAutonomousConfig(), ws)
+	as.trustGateOverride = allWritersGate()
 
 	opts, err := as.refineStageOptions("acme", "widgets", 42, "claude")
 	if err != nil {
@@ -142,6 +144,7 @@ func TestRefineStageOptionsSetsCostBudget(t *testing.T) {
 
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: ws})
 	as := NewAutonomousScheduler(sched, nil, []depgraph.RepoConfig{}, nil, DefaultAutonomousConfig(), ws)
+	as.trustGateOverride = allWritersGate()
 
 	opts, err := as.refineStageOptions("acme", "widgets", 42, "claude")
 	if err != nil {
@@ -200,6 +203,7 @@ func TestRefineStageOptionsModelFollowsThePerformanceMode(t *testing.T) {
 
 			sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: ws})
 			as := NewAutonomousScheduler(sched, nil, []depgraph.RepoConfig{}, nil, DefaultAutonomousConfig(), ws)
+			as.trustGateOverride = allWritersGate()
 			opts, err := as.refineStageOptions("acme", "widgets", 42, "claude")
 			if err != nil {
 				t.Fatalf("refineStageOptions: %v", err)

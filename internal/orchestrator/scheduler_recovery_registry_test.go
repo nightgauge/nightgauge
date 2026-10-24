@@ -169,6 +169,7 @@ func TestRecoveryRegistry_PRMergeSelfHeal(t *testing.T) {
 	prMergeRunner := &flipFlopRunner{}
 
 	s := &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 1, MaxEscalationsPerStage: 0}),
@@ -371,6 +372,7 @@ func TestRecoveryRegistry_ConflictRecoveryRewindsTwice(t *testing.T) {
 
 	runner := newSuccessStageRunner()
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
 		retryEngine:   NewRetryEngine(RetryConfig{MaxBacktracks: 1, MaxEscalationsPerStage: 0}), // 1 → generic guard would block the 2nd rewind
@@ -435,6 +437,7 @@ func TestRecoveryRegistry_ConflictExhaustionNamesFiles(t *testing.T) {
 
 	runner := newSuccessStageRunner()
 	s := &Scheduler{
+		trustGate:    allWritersGate(),
 		repoRunning:  make(map[string]int),
 		mergeLocks:   make(map[string]*sync.Mutex),
 		retryEngine:  NewRetryEngine(RetryConfig{MaxBacktracks: 1, MaxEscalationsPerStage: 1, ModelLadder: []string{"haiku", "sonnet", "opus"}, MaxConflictRedispatch: 2}),

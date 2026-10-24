@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
@@ -218,7 +219,9 @@ func TestUnboundProjectServiceStillInvalidates(t *testing.T) {
 	// The call itself fails against this stub — it is the invalidation, which
 	// runs on failure too, that is under test.
 	unbound := s.boardServicesFor(c, "testorg", 0, gh.OwnerTypeUser).Project
-	_ = unbound.RemoveBlockedByNumber(ctx, "testorg", "test", 42, 43)
+	_ = unbound.RemoveBlockedByNumber(ctx,
+		forge.IssueRef{Owner: "testorg", Repo: "test", Number: 42},
+		forge.IssueRef{Owner: "testorg", Repo: "test", Number: 43})
 
 	if _, err := s.boardServicesFor(c, "testorg", 1, gh.OwnerTypeOrg).Board.ListItems(ctx, ""); err != nil {
 		t.Fatalf("read after unbound write: %v", err)

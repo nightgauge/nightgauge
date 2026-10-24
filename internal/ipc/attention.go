@@ -20,6 +20,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
@@ -288,7 +289,9 @@ func (s *Server) handleIssueRemoveBlockedBy(ctx context.Context, raw json.RawMes
 		return nil, err
 	}
 	projSvc := s.boardServicesFor(c, p.Owner, 0, gh.OwnerTypeUser).Project
-	if err := projSvc.RemoveBlockedByNumber(ctx, p.Owner, p.Repo, p.BlockedNumber, p.BlockerNumber); err != nil {
+	if err := projSvc.RemoveBlockedByNumber(ctx,
+		forge.IssueRef{Owner: p.Owner, Repo: p.Repo, Number: p.BlockedNumber},
+		forge.IssueRef{Owner: p.Owner, Repo: p.Repo, Number: p.BlockerNumber}); err != nil {
 		return nil, err
 	}
 	return map[string]string{"status": "ok"}, nil
@@ -397,7 +400,9 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		if err != nil {
 			return err
 		}
-		return s.boardServicesFor(c, owner, 0, gh.OwnerTypeUser).Project.RemoveBlockedByNumber(ctx, owner, name, issue, blocker)
+		return s.boardServicesFor(c, owner, 0, gh.OwnerTypeUser).Project.RemoveBlockedByNumber(ctx,
+			forge.IssueRef{Owner: owner, Repo: name, Number: issue},
+			forge.IssueRef{Owner: owner, Repo: name, Number: blocker})
 
 	case attention.VerbWorkspaceAddRepo:
 		// The workspace root, not s.repoRoot(repo): the manifest lives once at

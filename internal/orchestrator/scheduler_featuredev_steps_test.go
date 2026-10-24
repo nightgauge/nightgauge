@@ -109,6 +109,7 @@ func TestScheduler_FeatureDevSubSessions_RecordedAsPhases(t *testing.T) {
 
 	runner := &steppedPipelineRunner{root: root}
 	s := &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),
@@ -256,6 +257,7 @@ func TestScheduler_FeatureDevSubSessions_EngageForLocalOpenCodeModel(t *testing.
 
 	runner := &steppedPipelineRunner{root: root}
 	s := &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

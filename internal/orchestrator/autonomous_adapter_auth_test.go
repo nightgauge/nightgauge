@@ -83,7 +83,8 @@ func TestOnPipelineComplete_AdapterAuthFailed_TransientNoPauseNoCascade(t *testi
 // branch (no lifetime increment, no pause, backoff set).
 func TestNotifyComplete_EmptyKindAdapterAuthDetail_RoutesTransient(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{

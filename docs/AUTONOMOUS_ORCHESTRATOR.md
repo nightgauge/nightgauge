@@ -726,8 +726,8 @@ workspace scheduler lease) and `nightgauge autonomous run`. Both get their
 `cmd/nightgauge/autonomous_config.go`.
 
 That is a correctness requirement, not tidiness. The two used to assemble the
-struct by hand, independently, and drifted: `auto_actionable`,
-`trusted_author_associations`, `disable_epic_blockedby_cascade` and the three
+struct by hand, independently, and drifted: `auto_actionable`, a since-removed
+trust key, `disable_epic_blockedby_cascade` and the three
 `refinement_*` keys were read only on the `run` path and silently ignored under
 `serve` — the primary long-running daemon — while `serve` alone got the
 documented adaptive-cadence and graph-cache defaults. Neither half warned; the
@@ -1658,29 +1658,104 @@ surface reads it.
   could not reach them, and nothing short of hand-editing `state.json` could
   release them.
 
-### Author Trust Gate (#270)
+### Eligibility Gate (#270, #2130)
 
-- **Config**: `autonomous.trusted_author_associations` — default
-  `["OWNER", "MEMBER", "COLLABORATOR"]`; a non-empty list fully replaces the
-  default set
-- **Trigger**: An issue's GitHub `author_association` is not in the trusted
-  set, at any of three entry points: refinement candidate selection
-  (`runRefinementCycle`), Backlog→Ready promotion (`isTriagedAndUnblocked`),
-  and final dispatch (`PickNext`, deliberately redundant defense-in-depth)
-- **Effect**: The issue is skipped at that gate and a `review_required`
-  Action Center card is raised so a maintainer can review and manually
-  promote it if the author should be trusted
-- **Fail-closed**: empty, unknown, or future `author_association` values
-  (e.g. `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`,
-  `MANNEQUIN`) are always untrusted — never soften this to fail-open
-- **Why**: nothing in the autonomous path previously checked author identity.
-  A stranger's issue on a public repo could reach refinement (exposing
-  attacker-controlled text to a model) and dispatch purely through
-  configuration defaults — see
-  [standards/security.md](../standards/security.md) for the full threat
-  model. `isReadyStatus` was also fixed to stop treating GitHub's default
-  board template status (`Todo` / `To Do`) as dispatchable, since it
-  collapsed the Backlog gate entirely; only `Ready` is dispatchable now.
+The pipeline works an issue only when a user with **write access or higher**
+to its repository vouches for it. This is the model GitHub's Copilot coding
+agent and `anthropics/claude-code-action` use.
+
+- **Vouching**: the issue is eligible when either
+  - its author has `admin`, `maintain` or `write` access, or
+  - in a repository whose owner the pipeline serves as a GitHub App
+    installation (`github_auth.app` with an installation for the owner), the
+    most recent `labeled` event for `pipeline:approved` was made by a human
+    with such access, the label is still on the issue, and nothing edited the
+    body or the title at or after that event.
+    `triage`, `read`, `none` and not-a-collaborator cannot vouch. Triage can
+    apply labels but not push, so a triager's `pipeline:approved` does not count.
+- **Why label approval needs an App**: the boundary is who applied the
+  label. In App mode the stages act as the App, a bot, and no bot's label
+  ever counts, so a label a stage applied, by any path (`nightgauge`, `gh`,
+  raw GraphQL or REST), can never approve anything. On a personal token the
+  stages act as the maintainer's own login, a label they applied cannot be
+  told apart from the maintainer's, and label approval is unavailable: only
+  writer authorship vouches. The scheduler logs which owners have label
+  approval, and `nightgauge autonomous eligibility` says so for its repo.
+- **Edits void approval**: any edit to the body or the title at or after the
+  approval voids it, whoever made it, the pipeline's own App included: its
+  stages are model sessions, and a model's rewrite is not what the
+  maintainer approved. Re-applying the label approves the new text. (The
+  pipeline has no deterministic, non-model body writer whose output could
+  be recorded as approved.)
+- **Bots**: a bot is trusted by authorship only when
+  `autonomous.trusted_bots` names it (default: only the pipeline's own App,
+  `nightgauge-pipeline[bot]`). `github-actions[bot]` is opt-in: any workflow
+  can act as it, including one that files issues from a model's reading of
+  untrusted text. Its comments are dropped unless it is listed. A bot is
+  never asked for its permission and can never approve. A user account that
+  shares a bot's name is not the bot.
+- **A stage's identity never approves**: a label applied by any login a
+  stage on this machine can authenticate as is refused: every account in the
+  `gh` keyring (not only the active one), the account behind a personal
+  token in `GH_TOKEN` / `GITHUB_TOKEN`, and `github_user` /
+  `github_auth.users`. If that list cannot be read, no label approves. So a
+  maintainer whose own login is on the machine that runs the stages cannot
+  approve by label there; their own issues vouch by authorship, and another
+  writer, working elsewhere, can approve an outsider's issue.
+- **Source of truth**: the repository role from
+  `GET /repos/{owner}/{repo}/collaborators/{login}/permission` (`role_name`;
+  a custom role falls back to the base `permission`). `author_association` is
+  not read: it calls a read-only outside collaborator `COLLABORATOR` and every
+  org member `MEMBER`, whatever their repository role.
+- **One decision, every entry point**: `internal/trust.Gate.Decide` runs at
+  refinement candidate selection, the pre-dispatch refinement hook,
+  Backlog→Ready promotion (`isTriagedAndUnblocked`), autonomous dispatch
+  (`enqueueItem`, before the local or cloud dispatcher or the extension's
+  `autonomous.dispatch` callback), the dispatch scan (`PickNext`), the queue
+  (`RunQueue`, and `DequeueIndependentFor`, where every queued item claims a
+  slot whichever route queued it: IPC or cloud `queue.add`, Action Center
+  retries, epic sub-issues, `nightgauge queue add`), each wave sub-issue, IPC
+  `pipeline.runItem`, `nightgauge run <issue>`, and before every stage of a
+  run, on a fresh cache. A queued item the gate refuses is held with the
+  pause reason `not_vouched_for` and released by the next dequeue once
+  someone vouches for it.
+- **Effect**: autonomous mode skips the issue and raises an Action Center
+  card telling a maintainer to apply `pipeline:approved` to approve it. A
+  manual dispatch fails with a message naming the author, their permission
+  level and how to approve the issue.
+- **Read-time re-check**: approval is checked again, after the issue is read
+  and with nothing cached, when a stage reads its own issue
+  (`nightgauge forge issue view` with `NIGHTGAUGE_ISSUE_NUMBER` set, or with
+  `--vouched` or `--comments`). Together with the per-stage check, an edit
+  that voids an approval while a run is in flight stops the run and is never
+  read by a stage.
+- **Defense in depth, not the boundary**: the shared GitHub label write
+  (`IssueService.AddLabels`), `nightgauge forge label add` and the stage
+  hook (which blocks `gh`, `glab`, `nightgauge`, `curl` or `wget` commands
+  naming the label in every pipeline stage) all refuse to apply
+  `pipeline:approved`. They can be evaded; the gate's rule above cannot.
+- **Not covered**: an approval covers the issue's own text, not content it
+  links to; a stage that follows a link reads whatever is there now. Stage
+  models also hold `gh`, so the comment filter binds the pipeline's own
+  reads, not every command a model could run. In App mode a stage that
+  discards its App token and reaches a maintainer's own credential stored on
+  the same machine could apply the label as that maintainer; keep
+  maintainer credentials off machines that run stages unattended.
+- **Comments**: `nightgauge forge issue view --json --comments`, the one
+  place a stage reads comments, returns only comments by users who could
+  vouch (or a trusted bot) and logs how many it removed, never their text.
+- **Fail closed**: a permission or issue read that errors (network, 403, 404) leaves the actor untrusted. The gate never retries on its own; reads
+  follow the forge client's retry and backoff.
+- **API budget (#842)**: permission lookups are cached per (repository,
+  login) for one scheduler cycle, so a board scan makes at most one call per
+  distinct author. An issue's label history is read only for an issue by a
+  non-writer that carries `pipeline:approved` in an App-mode repository.
+- **Report**: `nightgauge autonomous eligibility --all-open --json` runs the
+  gate over a repository's open issues without dispatching anything.
+- **Recommended organisation setup**: base permission **Read**; helpers who
+  triage on **Triage**; engineers whose issues the pipeline may work on
+  **Write**. Only Write and above can approve, because approving hands an
+  issue's text to a model that holds write credentials.
 
 ### Backlog → Ready Promotion (#288)
 

@@ -42,6 +42,7 @@ func TestEveryDependencyReaderGetsTheWorkspaceAliasMap(t *testing.T) {
 		"depgraph.BuildGraphFromItems":        3,
 		"depgraph.ParseDependencyRefs":        2,
 		"depgraph.ParseCrossRepoRefs":         1,
+		"depgraph.ParseIssueArg":              2,
 	}
 	// …and every function of this package that forwards it, as a parameter
 	// named repoAliases.

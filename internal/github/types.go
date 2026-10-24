@@ -175,14 +175,14 @@ type projectItemContent struct {
 	IssueFields struct {
 		// ID is the issue's node id, the handle the relationship follow-up
 		// query pages from.
-		ID                graphql.ID
-		Number            graphql.Int
-		Title             graphql.String
-		State             graphql.String
-		URL               graphql.String
-		CreatedAt         graphql.String
-		UpdatedAt         graphql.String
-		AuthorAssociation graphql.String `graphql:"authorAssociation"`
+		ID        graphql.ID
+		Number    graphql.Int
+		Title     graphql.String
+		State     graphql.String
+		URL       graphql.String
+		CreatedAt graphql.String
+		UpdatedAt graphql.String
+		Author    *trustActor
 		// labelPage (not a bare Nodes slice) so a clipped page is detectable:
 		// every label-derived board decision, including the owner-action
 		// dispatch exclusion, must fail CLOSED on an incomplete set (#998).

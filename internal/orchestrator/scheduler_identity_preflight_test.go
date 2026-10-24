@@ -32,6 +32,7 @@ func (f *fakeIdentityChecker) CheckIdentity(_ context.Context, owner, repo strin
 
 func newPreflightScheduler(checker IdentityChecker) *Scheduler {
 	return &Scheduler{
+		trustGate:       allWritersGate(),
 		repoRunning:     make(map[string]int),
 		mergeLocks:      make(map[string]*sync.Mutex),
 		identityChecker: checker,

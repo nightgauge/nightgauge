@@ -220,7 +220,7 @@ func restIssueItem(nodeID string, number int, status string, labels []string, bl
 	}
 	return fmt.Sprintf(`{"node_id":%q,"content_type":"Issue","content":{"number":%d,"title":"t%d","state":"open",
 		"html_url":"https://github.com/acme/web/issues/%d","repository":{"full_name":"acme/web"},
-		"created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-02T00:00:00Z","author_association":"MEMBER",
+		"created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-02T00:00:00Z","user":{"login":"nightgauge-pipeline[bot]"},
 		"labels":[%s],"sub_issues_summary":{"total":%d,"completed":0},
 		"issue_dependencies_summary":{"blocked_by":%d,"total_blocked_by":%d,"blocking":0,"total_blocking":0}},
 		"fields":[{"name":"Status","value":{"name":{"raw":%q,"html":%q}}},{"name":"Priority","value":null},{"name":"Parent issue","value":%s}]}`,
@@ -396,7 +396,7 @@ func TestRESTAndGraphQLStatusReadsAgree(t *testing.T) {
 		"id":"PVTI_1",
 		"content":{"__typename":"Issue","id":"I_1","number":1,"title":"t1","state":"OPEN",
 			"url":"https://github.com/acme/web/issues/1","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-02T00:00:00Z",
-			"authorAssociation":"MEMBER","labels":{"totalCount":1,"nodes":[{"name":"priority:high"}]},
+			"author":{"login":"nightgauge-pipeline","__typename":"Bot"},"labels":{"totalCount":1,"nodes":[{"name":"priority:high"}]},
 			"repository":{"nameWithOwner":"acme/web"},
 			"subIssues":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]},
 			"blockedBy":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[

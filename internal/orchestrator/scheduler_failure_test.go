@@ -545,6 +545,7 @@ func TestResolveTerminalKind(t *testing.T) {
 // owns its own pointer (mutating one doesn't poison others).
 func TestPauseQueuedItemsUnlocked(t *testing.T) {
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -626,6 +627,7 @@ func TestQueueStatusDerivedFromPausedItems(t *testing.T) {
 // accidentally release items paused by an unrelated run B).
 func TestResumePausedItems(t *testing.T) {
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -657,6 +659,7 @@ func TestResumePausedItems(t *testing.T) {
 // dispatcher: paused items are never picked even when first in the queue.
 func TestDequeueIndependentSkipsPaused(t *testing.T) {
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -764,6 +767,7 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 	// Construct a scheduler the way NewScheduler does (queue load + recovery)
 	// without going through the constructor (which requires a real GitHub client).
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: tmpDir,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -871,6 +875,7 @@ func TestSidecarRecoverySkipsFutureStartedAt(t *testing.T) {
 		t.Fatalf("write sidecar: %v", err)
 	}
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: tmpDir,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),

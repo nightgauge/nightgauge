@@ -9,6 +9,7 @@ import (
 // item when none exists for the issue number. (Issue #3004)
 func TestPauseDeferred_AddsNewItem(t *testing.T) {
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -44,6 +45,7 @@ func TestPauseDeferred_AddsNewItem(t *testing.T) {
 // the entry.
 func TestPauseDeferred_UpdatesExistingItem(t *testing.T) {
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -86,6 +88,7 @@ func TestListPausedByKind_FiltersByKind(t *testing.T) {
 
 func TestResumePaused_ResumesPaused(t *testing.T) {
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -123,6 +126,7 @@ func TestResumePaused_MissingReturnsFalse(t *testing.T) {
 // platform#21 both queued, pausing and resuming one never touches the other.
 func TestPauseAndResume_SameNumberInTwoRepos(t *testing.T) {
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),

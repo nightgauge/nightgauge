@@ -23,8 +23,9 @@ func TestPrioritize_RefusesItemWithTruncatedLabels(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 	}
 
 	var candidates []CandidateItem

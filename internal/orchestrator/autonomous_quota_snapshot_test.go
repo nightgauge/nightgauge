@@ -14,6 +14,7 @@ func TestQuotaCooldownSnapshot(t *testing.T) {
 	t.Run("active cooldown reports active with until+reason", func(t *testing.T) {
 		until := time.Now().Add(90 * time.Minute).UTC().Format(time.RFC3339)
 		as := &AutonomousScheduler{
+			trustGateOverride: allWritersGate(),
 			state: &AutonomousState{
 				Status:              "running",
 				QuotaCooldownUntil:  until,
@@ -35,6 +36,7 @@ func TestQuotaCooldownSnapshot(t *testing.T) {
 	t.Run("expired cooldown reads inactive without clearing state", func(t *testing.T) {
 		until := time.Now().Add(-1 * time.Minute).UTC().Format(time.RFC3339)
 		as := &AutonomousScheduler{
+			trustGateOverride: allWritersGate(),
 			state: &AutonomousState{
 				Status:              "running",
 				QuotaCooldownUntil:  until,
@@ -66,6 +68,7 @@ func TestQuotaCooldownSnapshot(t *testing.T) {
 
 	t.Run("malformed deadline reads inactive", func(t *testing.T) {
 		as := &AutonomousScheduler{
+			trustGateOverride: allWritersGate(),
 			state: &AutonomousState{
 				Status:             "running",
 				QuotaCooldownUntil: "not-a-timestamp",

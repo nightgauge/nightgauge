@@ -53,21 +53,21 @@ func twoRepoUnrefinedIssuesServer(t *testing.T) *httptest.Server {
 									"number": 21,
 									"title": "r1 candidate A",
 									"createdAt": "2026-01-01T00:00:00Z",
-									"authorAssociation": "OWNER",
+									"author": {"login": "maintainer", "__typename": "User"},
 									"labels": {"nodes": []}
 								},
 								{
 									"number": 22,
 									"title": "r1 candidate B",
 									"createdAt": "2026-01-01T00:00:00Z",
-									"authorAssociation": "OWNER",
+									"author": {"login": "maintainer", "__typename": "User"},
 									"labels": {"nodes": []}
 								},
 								{
 									"number": 23,
 									"title": "r1 candidate C",
 									"createdAt": "2026-01-01T00:00:00Z",
-									"authorAssociation": "OWNER",
+									"author": {"login": "maintainer", "__typename": "User"},
 									"labels": {"nodes": []}
 								}
 							]
@@ -86,7 +86,7 @@ func twoRepoUnrefinedIssuesServer(t *testing.T) *httptest.Server {
 									"number": 31,
 									"title": "r2 candidate",
 									"createdAt": "2026-01-01T00:00:00Z",
-									"authorAssociation": "OWNER",
+									"author": {"login": "maintainer", "__typename": "User"},
 									"labels": {"nodes": []}
 								}
 							]
@@ -125,10 +125,12 @@ func TestRunRefinementCycle_RotatesScanStartAcrossCycles(t *testing.T) {
 
 	client := gh.NewClientWithURL("test-token", srv.URL)
 	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir()})
+	sched.SetTrustGate(allWritersGate())
 	as := NewAutonomousScheduler(sched, client, []depgraph.RepoConfig{
 		{Owner: "o1", Name: "r1", Project: 1},
 		{Owner: "o2", Name: "r2", Project: 2},
 	}, nil, cfg, t.TempDir())
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 
 	var mu sync.Mutex

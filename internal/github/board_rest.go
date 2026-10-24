@@ -185,24 +185,24 @@ func (b *BoardService) restItemsURL(q string, fieldIDs []int64) string {
 // restItem is the reduced, stored form of one REST project item: exactly the
 // fields BoardItem is built from, so a 2.5 MB page is stored as a few KB.
 type restItem struct {
-	ID                string   `json:"id"`
-	Type              string   `json:"type"`
-	Number            int      `json:"number,omitempty"`
-	Title             string   `json:"title,omitempty"`
-	State             string   `json:"state,omitempty"`
-	URL               string   `json:"url,omitempty"`
-	Repo              string   `json:"repo,omitempty"`
-	CreatedAt         string   `json:"createdAt,omitempty"`
-	UpdatedAt         string   `json:"updatedAt,omitempty"`
-	AuthorAssociation string   `json:"authorAssociation,omitempty"`
-	Labels            []string `json:"labels,omitempty"`
-	Status            string   `json:"status,omitempty"`
-	Priority          string   `json:"priority,omitempty"`
-	Size              string   `json:"size,omitempty"`
-	PipelineStage     string   `json:"pipelineStage,omitempty"`
-	ParentNumber      int      `json:"parentNumber,omitempty"`
-	ParentTitle       string   `json:"parentTitle,omitempty"`
-	ParentRepo        string   `json:"parentRepo,omitempty"`
+	ID            string   `json:"id"`
+	Type          string   `json:"type"`
+	Number        int      `json:"number,omitempty"`
+	Title         string   `json:"title,omitempty"`
+	State         string   `json:"state,omitempty"`
+	URL           string   `json:"url,omitempty"`
+	Repo          string   `json:"repo,omitempty"`
+	CreatedAt     string   `json:"createdAt,omitempty"`
+	UpdatedAt     string   `json:"updatedAt,omitempty"`
+	AuthorLogin   string   `json:"authorLogin,omitempty"`
+	Labels        []string `json:"labels,omitempty"`
+	Status        string   `json:"status,omitempty"`
+	Priority      string   `json:"priority,omitempty"`
+	Size          string   `json:"size,omitempty"`
+	PipelineStage string   `json:"pipelineStage,omitempty"`
+	ParentNumber  int      `json:"parentNumber,omitempty"`
+	ParentTitle   string   `json:"parentTitle,omitempty"`
+	ParentRepo    string   `json:"parentRepo,omitempty"`
 	// Relations is nil when the item did not carry BOTH summaries: an absent
 	// summary is "unknown", never "zero blockers" — the reader then fetches
 	// the lists (restCompleteRelations).
@@ -243,14 +243,16 @@ type restProjectItemRaw struct {
 	ArchivedAt  *string `json:"archived_at"`
 	Content     *struct {
 		restIssueRepo
-		Number            int     `json:"number"`
-		Title             string  `json:"title"`
-		State             string  `json:"state"`
-		MergedAt          *string `json:"merged_at"`
-		CreatedAt         string  `json:"created_at"`
-		UpdatedAt         string  `json:"updated_at"`
-		AuthorAssociation string  `json:"author_association"`
-		Labels            []struct {
+		Number    int     `json:"number"`
+		Title     string  `json:"title"`
+		State     string  `json:"state"`
+		MergedAt  *string `json:"merged_at"`
+		CreatedAt string  `json:"created_at"`
+		UpdatedAt string  `json:"updated_at"`
+		User      *struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Labels []struct {
 			Name string `json:"name"`
 		} `json:"labels"`
 		SubIssuesSummary *struct {
@@ -330,8 +332,8 @@ func reduceItemsPage(body []byte) (any, error) {
 			it.Repo = c.repoName()
 			it.CreatedAt = c.CreatedAt
 			it.UpdatedAt = c.UpdatedAt
-			if r.ContentType == "Issue" {
-				it.AuthorAssociation = c.AuthorAssociation
+			if r.ContentType == "Issue" && c.User != nil {
+				it.AuthorLogin = c.User.Login
 			}
 			for _, l := range c.Labels {
 				it.Labels = append(it.Labels, l.Name)
@@ -397,19 +399,19 @@ func (it restItem) toBoardItem() (types.BoardItem, bool) {
 		return types.BoardItem{}, false
 	}
 	item := types.BoardItem{
-		ID:                it.ID,
-		Number:            it.Number,
-		Title:             it.Title,
-		State:             it.State,
-		URL:               it.URL,
-		Repo:              it.Repo,
-		IsPR:              it.Type == "PullRequest",
-		AuthorAssociation: it.AuthorAssociation,
-		Labels:            append([]string(nil), it.Labels...),
-		Status:            it.Status,
-		Priority:          types.Priority(it.Priority),
-		Size:              types.Size(it.Size),
-		PipelineStage:     it.PipelineStage,
+		ID:            it.ID,
+		Number:        it.Number,
+		Title:         it.Title,
+		State:         it.State,
+		URL:           it.URL,
+		Repo:          it.Repo,
+		IsPR:          it.Type == "PullRequest",
+		AuthorLogin:   it.AuthorLogin,
+		Labels:        append([]string(nil), it.Labels...),
+		Status:        it.Status,
+		Priority:      types.Priority(it.Priority),
+		Size:          types.Size(it.Size),
+		PipelineStage: it.PipelineStage,
 	}
 	item.CreatedAt, _ = time.Parse(time.RFC3339, it.CreatedAt)
 	item.UpdatedAt, _ = time.Parse(time.RFC3339, it.UpdatedAt)
@@ -448,7 +450,9 @@ func (b *BoardService) restListItems(ctx context.Context, q string, withLists bo
 	}
 	// v3: restItem gained ParentRepo (#2350); a v2 page would decode with it
 	// empty and send the epic cascade back to the sub-issue's own repository.
-	pages, _, err := b.client.condGetAll(ctx, b.restItemsURL(q, fieldIDs), "board-items/v3", reduceItemsPage)
+	// v4: restItem gained AuthorLogin (#2130); a v3 page would decode with it
+	// empty and make the eligibility gate read every issue once more.
+	pages, _, err := b.client.condGetAll(ctx, b.restItemsURL(q, fieldIDs), "board-items/v4", reduceItemsPage)
 	if err != nil {
 		return nil, 0, b.restFallback(err)
 	}
