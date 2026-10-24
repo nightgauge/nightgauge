@@ -133,6 +133,9 @@ func TestDeriveRoutingDecision_ConfigOnlySkips(t *testing.T) {
 	d := deriveRoutingDecision(dir, types.BoardItem{
 		Number: 2,
 		Title:  "tweak the .yaml file",
+		// #1892: config needs evidence; the scheduler passes no body, so a
+		// label is the only evidence it can carry. Prose alone is code.
+		Labels: []string{"component:config"},
 		Size:   "S",
 	})
 	if d.ChangeType != "config" {
