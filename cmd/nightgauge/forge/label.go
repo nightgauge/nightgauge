@@ -2,6 +2,7 @@ package forgecmd
 
 import (
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -117,6 +118,14 @@ func labelDeleteCmd() *cobra.Command {
 func resolveLabelNames(cmd *cobra.Command, client forge.ForgeClient, names []string) ([]string, error) {
 	if len(names) == 0 {
 		return nil, nil
+	}
+	for _, n := range names {
+		// Approving an issue is a maintainer's own act on the forge (#2130).
+		// Defense in depth, not the boundary: the eligibility gate never
+		// counts a label the stages' own identity applied, by any path.
+		if strings.EqualFold(strings.TrimSpace(n), trust.ApprovedLabel) {
+			return nil, fmt.Errorf("refusing to apply %s: a user with write access applies it on the forge, never the pipeline", trust.ApprovedLabel)
+		}
 	}
 	existing, err := client.Labels().List(cmd.Context())
 	if err != nil {

@@ -84,6 +84,7 @@ func TestActiveWorktreeIssues_SeesCrossRepoWorktree(t *testing.T) {
 	siblingRoot := worktreeRepo(t, 402)
 
 	s := &Scheduler{
+		trustGate:         allWritersGate(),
 		workspaceRoot:     launchRoot,
 		repoRootsResolver: func() []string { return []string{siblingRoot} },
 	}
@@ -147,6 +148,7 @@ func TestActiveWorktreeIssues_UndeterminedPaths(t *testing.T) {
 func TestActiveWorktreeIssues_MissingRootIsSkipped(t *testing.T) {
 	root := worktreeRepo(t, 404)
 	s := &Scheduler{
+		trustGate:         allWritersGate(),
 		workspaceRoot:     root,
 		repoRootsResolver: func() []string { return []string{filepath.Join(t.TempDir(), "deleted-sibling")} },
 	}
@@ -170,6 +172,7 @@ func TestReconcileOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 
 	var torn []string
 	s := &Scheduler{
+		trustGate:       allWritersGate(),
 		workspaceRoot:   notARepo, // `git worktree list` here fails → undetermined
 		composeLister:   listing(composeIn(notARepo, 501)),
 		composeTeardown: recordingTeardown(&torn),
@@ -203,7 +206,9 @@ func TestReconcileOrphanedCompose_CrossRepoRunSurvives(t *testing.T) {
 
 	var torn []string
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		scheduler: &Scheduler{
+			trustGate:         allWritersGate(),
 			workspaceRoot:     launchRoot,
 			repoRootsResolver: func() []string { return []string{siblingRoot} },
 			composeLister: listing(
@@ -390,6 +395,7 @@ func TestComposeReconcile_SkipsProjectOutsideRoots(t *testing.T) {
 			logs := captureReconcileLog(t)
 			var torn []string
 			s := &Scheduler{
+				trustGate:       allWritersGate(),
 				workspaceRoot:   rootA,
 				composeLister:   listing(tc.project),
 				composeTeardown: recordingTeardown(&torn),
@@ -428,6 +434,7 @@ func TestComposeReconcile_PrefixIsNotContainment(t *testing.T) {
 	logs := captureReconcileLog(t)
 	var torn []string
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		composeLister: listing(dockercompose.Project{Name: "issue-8", IssueNumber: 8,
 			ConfigFiles: []string{filepath.Join(other, "docker-compose.yml")}}),
 		composeTeardown: recordingTeardown(&torn),
@@ -451,7 +458,9 @@ func TestComposeReconcile_BoundIsTheReceiversRoots(t *testing.T) {
 	logs := captureReconcileLog(t)
 	var torn []string
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		scheduler: &Scheduler{
+			trustGate:         allWritersGate(),
 			workspaceRoot:     launchRoot,
 			repoRootsResolver: func() []string { return []string{siblingRoot} },
 			composeLister: listing(

@@ -1872,22 +1872,28 @@ func issueAddBlockedByCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "add-blocked-by [blocked-number] [blocker-number]",
+		Use:   "add-blocked-by [blocked-number] [blocker]",
 		Short: "Add a blocking relationship (blocker blocks blocked)",
 		Long: `Set a native GitHub blocking relationship between two issues.
-The first argument is the issue that becomes blocked; the second is the blocker.
-Uses issue numbers — node ID resolution is handled internally.`,
+The first argument is the issue that becomes blocked, by number in --repo.
+The second is the blocker: a number in --repo, owner/repo#N, repo#N (a
+workspace repository's short name, else repo under --owner), or an issue URL.
+Node ID resolution is handled internally.`,
 		Args: cobra.ExactArgs(2),
 		Example: `  nightgauge issue add-blocked-by 171 170   # 171 is blocked by 170
-  nightgauge issue add-blocked-by 42 41 --repo nightgauge/acmeweb`,
+  nightgauge issue add-blocked-by 42 41 --repo nightgauge/acmeweb
+  nightgauge issue add-blocked-by 692 acme/api#1253 --repo web`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			blockedNumber, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid blocked issue number: %s", args[0])
 			}
-			blockerNumber, err := strconv.Atoi(args[1])
+			ownerPart, repoPart := splitRepo(owner, repo)
+			blocked := forge.IssueRef{Owner: ownerPart, Repo: repoPart, Number: blockedNumber}
+			blocker, err := parseBlockerRef(args[1], ownerPart, repoPart,
+				launchRepoAliases(ownerPart+"/"+repoPart))
 			if err != nil {
-				return fmt.Errorf("invalid blocker issue number: %s", args[1])
+				return err
 			}
 
 			client, err := clientFromConfig()
@@ -1895,21 +1901,21 @@ Uses issue numbers — node ID resolution is handled internally.`,
 				return err
 			}
 
-			ownerPart, repoPart := splitRepo(owner, repo)
 			svc := gh.NewProjectService(client, ownerPart, projectNumber)
-			if err := svc.AddBlockedByNumber(cmd.Context(), ownerPart, repoPart, blockedNumber, blockerNumber); err != nil {
+			if err := svc.AddBlockedByNumber(cmd.Context(), blocked, blocker); err != nil {
 				return err
 			}
 
 			if outputJSON {
 				return printJSON(map[string]interface{}{
-					"blocked": blockedNumber,
-					"blocker": blockerNumber,
-					"result":  "blocked",
+					"blocked":      blockedNumber,
+					"blocker":      blocker.Number,
+					"blocker_repo": blocker.Owner + "/" + blocker.Repo,
+					"result":       "blocked",
 				})
 			}
 
-			fmt.Printf("Set #%d blocked by #%d\n", blockedNumber, blockerNumber)
+			fmt.Printf("Set %s blocked by %s\n", blocked, blocker)
 			return nil
 		},
 	}
@@ -1930,9 +1936,12 @@ func issueRemoveBlockedByCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "remove-blocked-by [blocked-number] [blocker-number]",
+		Use:   "remove-blocked-by [blocked-number] [blocker]",
 		Short: "Remove a blocking relationship",
-		Args:  cobra.ExactArgs(2),
+		Long: `Remove a native GitHub blocking relationship. The blocker accepts the
+same forms as add-blocked-by: a number in --repo, owner/repo#N, repo#N or an
+issue URL.`,
+		Args: cobra.ExactArgs(2),
 		Example: `  nightgauge issue remove-blocked-by 171 170
   nightgauge issue remove-blocked-by 42 41 --repo nightgauge/acmeweb`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -1940,9 +1949,12 @@ func issueRemoveBlockedByCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("invalid blocked issue number: %s", args[0])
 			}
-			blockerNumber, err := strconv.Atoi(args[1])
+			ownerPart, repoPart := splitRepo(owner, repo)
+			blocked := forge.IssueRef{Owner: ownerPart, Repo: repoPart, Number: blockedNumber}
+			blocker, err := parseBlockerRef(args[1], ownerPart, repoPart,
+				launchRepoAliases(ownerPart+"/"+repoPart))
 			if err != nil {
-				return fmt.Errorf("invalid blocker issue number: %s", args[1])
+				return err
 			}
 
 			client, err := clientFromConfig()
@@ -1950,21 +1962,21 @@ func issueRemoveBlockedByCmd() *cobra.Command {
 				return err
 			}
 
-			ownerPart, repoPart := splitRepo(owner, repo)
 			svc := gh.NewProjectService(client, ownerPart, projectNumber)
-			if err := svc.RemoveBlockedByNumber(cmd.Context(), ownerPart, repoPart, blockedNumber, blockerNumber); err != nil {
+			if err := svc.RemoveBlockedByNumber(cmd.Context(), blocked, blocker); err != nil {
 				return err
 			}
 
 			if outputJSON {
 				return printJSON(map[string]interface{}{
-					"blocked": blockedNumber,
-					"blocker": blockerNumber,
-					"result":  "unblocked",
+					"blocked":      blockedNumber,
+					"blocker":      blocker.Number,
+					"blocker_repo": blocker.Owner + "/" + blocker.Repo,
+					"result":       "unblocked",
 				})
 			}
 
-			fmt.Printf("Removed #%d blocked by #%d\n", blockedNumber, blockerNumber)
+			fmt.Printf("Removed %s blocked by %s\n", blocked, blocker)
 			return nil
 		},
 	}
@@ -4780,6 +4792,9 @@ func runCmd() *cobra.Command {
 				repo, repoErr := resolveRunTargetRepo(cmd, runCfg, owner, repoName)
 				if repoErr != nil {
 					return repoErr
+				}
+				if err := manualDispatchGate(cmd.Context(), sched, repo, issueNumber); err != nil {
+					return err
 				}
 				fmt.Printf("Running #%d in %s\n", issueNumber, repo)
 				progress.Track(repo, issueNumber)
@@ -11113,6 +11128,7 @@ func autonomousCmd() *cobra.Command {
 	cmd.AddCommand(autonomousClearFailuresCmd())
 	cmd.AddCommand(autonomousStopCmd())
 	cmd.AddCommand(autonomousStuckEpicsCmd())
+	cmd.AddCommand(autonomousEligibilityCmd())
 	return cmd
 }
 
@@ -11265,11 +11281,9 @@ func autonomousRunCmd() *cobra.Command {
 			// Create the underlying scheduler
 			autoOnFailure := "ready"
 			autoExcludeLabels := config.DefaultExcludeLabels
-			var autoTrustedAuthorAssociations []string
 			if cfg != nil && cfg.Autonomous != nil {
 				autoOnFailure = cfg.Autonomous.ResolvedOnFailureStatus()
 				autoExcludeLabels = cfg.Autonomous.ResolvedExcludeLabels()
-				autoTrustedAuthorAssociations = cfg.Autonomous.TrustedAuthorAssociations
 			}
 			// The CLI-only dispatch branch (no IPC callback, no cloud
 			// dispatcher) runs stages through ExecutionManagerRunner, which
@@ -11286,17 +11300,16 @@ func autonomousRunCmd() *cobra.Command {
 				return err
 			}
 			sched := orchestrator.NewScheduler(client, autonomousSchedulerConfig(autonomousSchedulerInputs{
-				Owner:                     owner,
-				OwnerType:                 getOwnerType(cmd),
-				ProjectNumber:             project,
-				MaxPerRepo:                maxSlots,
-				WorkspaceRoot:             workdir,
-				OnFailureStatus:           autoOnFailure,
-				ExcludeLabels:             autoExcludeLabels,
-				TrustedAuthorAssociations: autoTrustedAuthorAssociations,
-				RuntimeConfig:             cfg,
-				Adapter:                   adapter,
-				AdapterExplicit:           adapterExplicit,
+				Owner:           owner,
+				OwnerType:       getOwnerType(cmd),
+				ProjectNumber:   project,
+				MaxPerRepo:      maxSlots,
+				WorkspaceRoot:   workdir,
+				OnFailureStatus: autoOnFailure,
+				ExcludeLabels:   autoExcludeLabels,
+				RuntimeConfig:   cfg,
+				Adapter:         adapter,
+				AdapterExplicit: adapterExplicit,
 			}))
 
 			// Root a cross-repo run at its TARGET repo, and refuse the run when
@@ -11425,17 +11438,16 @@ func autonomousRunCmd() *cobra.Command {
 // scheduler. It exists so a test can assert the command's scheduler carries a
 // stage adapter (#1336) without standing up a forge client.
 type autonomousSchedulerInputs struct {
-	Owner                     string
-	OwnerType                 gh.OwnerType
-	ProjectNumber             int
-	MaxPerRepo                int
-	WorkspaceRoot             string
-	OnFailureStatus           string
-	ExcludeLabels             []string
-	TrustedAuthorAssociations []string
-	RuntimeConfig             *config.Config
-	Adapter                   adapters.SkillRunner
-	AdapterExplicit           string
+	Owner           string
+	OwnerType       gh.OwnerType
+	ProjectNumber   int
+	MaxPerRepo      int
+	WorkspaceRoot   string
+	OnFailureStatus string
+	ExcludeLabels   []string
+	RuntimeConfig   *config.Config
+	Adapter         adapters.SkillRunner
+	AdapterExplicit string
 }
 
 // autonomousSchedulerConfig maps the command's inputs onto SchedulerConfig.
@@ -11443,17 +11455,16 @@ type autonomousSchedulerInputs struct {
 // stage without it.
 func autonomousSchedulerConfig(in autonomousSchedulerInputs) orchestrator.SchedulerConfig {
 	return orchestrator.SchedulerConfig{
-		Owner:                     in.Owner,
-		OwnerType:                 in.OwnerType,
-		ProjectNumber:             in.ProjectNumber,
-		MaxPerRepo:                in.MaxPerRepo,
-		WorkspaceRoot:             in.WorkspaceRoot,
-		OnFailureStatus:           in.OnFailureStatus,
-		ExcludeLabels:             in.ExcludeLabels,
-		TrustedAuthorAssociations: in.TrustedAuthorAssociations,
-		RuntimeConfig:             in.RuntimeConfig,
-		Adapter:                   in.Adapter,
-		AdapterExplicit:           in.AdapterExplicit,
+		Owner:           in.Owner,
+		OwnerType:       in.OwnerType,
+		ProjectNumber:   in.ProjectNumber,
+		MaxPerRepo:      in.MaxPerRepo,
+		WorkspaceRoot:   in.WorkspaceRoot,
+		OnFailureStatus: in.OnFailureStatus,
+		ExcludeLabels:   in.ExcludeLabels,
+		RuntimeConfig:   in.RuntimeConfig,
+		Adapter:         in.Adapter,
+		AdapterExplicit: in.AdapterExplicit,
 	}
 }
 

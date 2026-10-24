@@ -13,6 +13,7 @@ func cloudQueueScheduler(t *testing.T) (*Scheduler, *fakeTelemetry) {
 	t.Helper()
 	ft := &fakeTelemetry{}
 	return &Scheduler{
+		trustGate:        allWritersGate(),
 		workspaceRoot:    layouttest.Repo(t),
 		repoRunning:      make(map[string]int),
 		mergeLocks:       make(map[string]*sync.Mutex),

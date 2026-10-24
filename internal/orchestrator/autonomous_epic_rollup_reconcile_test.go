@@ -65,6 +65,7 @@ func recordingBoardReconciler(t *testing.T, as *AutonomousScheduler, err error) 
 func newRollupScheduler(t *testing.T, repos ...depgraph.RepoConfig) *AutonomousScheduler {
 	t.Helper()
 	as := NewAutonomousScheduler(nil, nil, repos, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 	as.buildGraphFn = func(context.Context) (*depgraph.Graph, error) {
 		return buildTestGraph(nil, nil), nil

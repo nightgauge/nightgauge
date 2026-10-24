@@ -35,9 +35,12 @@ type ProjectService interface {
 	SetDateFieldByNumber(ctx context.Context, owner, repo string, issueNumber int, fieldName, dateValue string) error
 	SetEstimateFromLabels(ctx context.Context, owner, repo string, issueNumber int, labels []string, mapping map[string]float64) error
 
-	// Blocking / dependency edges.
-	AddBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error
-	RemoveBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error
+	// Blocking / dependency edges. Each end carries its own repository, so
+	// the blocker may live in another repository than the blocked issue
+	// (#1508). AddBlockedByNumber also refuses a blocker that is the blocked
+	// issue's own parent epic.
+	AddBlockedByNumber(ctx context.Context, blocked, blocker IssueRef) error
+	RemoveBlockedByNumber(ctx context.Context, blocked, blocker IssueRef) error
 
 	// Epic aggregation.
 	UpdateEpicEstimates(ctx context.Context, owner, repo string, epicNumber int) (float64, error)

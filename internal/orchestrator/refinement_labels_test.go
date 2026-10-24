@@ -23,6 +23,7 @@ import (
 func newRefinementTestScheduler(t *testing.T) *AutonomousScheduler {
 	t.Helper()
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	// A registered runner short-circuits refineViaCLI, which would otherwise
 	// need an execution manager and a skill on disk. Refinement "succeeds";
 	// what is under test is everything after it.

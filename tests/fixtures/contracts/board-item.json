@@ -47,7 +47,7 @@
       "repo": "nightgauge/nightgauge"
     }
   ],
-  "authorAssociation": "OWNER",
+  "authorLogin": "octocat",
   "relationSummary": {
     "blockedByOpen": 0,
     "blockedByTotal": 1,

@@ -529,62 +529,58 @@ func blocksOwnParent(blockedParentRepo string, blockedParentNumber int, blockerR
 		blockedParentRepo != "" && strings.EqualFold(blockedParentRepo, blockerRepo)
 }
 
-// AddBlockedByNumber adds a blocking relationship between two issues identified by number.
-// blockedNumber is blocked by blockerNumber.
+// AddBlockedByNumber makes blocked blocked by blocker. Each end carries its
+// own repository, so the blocker may live in another one (#1508); the edge is
+// written on the blocked issue's repository and names the blocker by its
+// database id, which only the blocker's own repository can resolve.
 // Returns an error if the blocker is the parent epic of the blocked issue — this
 // creates an unresolvable circular dependency and is always a bug.
 //
 // The two ID-resolution reads are REST (#849), and since #956 so is the write.
 // Both reads happen here regardless -- the guard below needs the blocked
-// issue's parent number, and the write needs the blocker's database id -- so
-// the resolved form of the write is used to avoid paying a third read for an
-// id this method already holds. One write path, reached with the id already in
+// issue's parent, and the write needs the blocker's database id -- so the
+// resolved form of the write is used to avoid paying a third read for an id
+// this method already holds. One write path, reached with the id already in
 // hand; not a second write path.
-func (p *ProjectService) AddBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error {
-	blocked, err := resolveIssueRef(ctx, p.client, owner, repo, blockedNumber)
+func (p *ProjectService) AddBlockedByNumber(ctx context.Context, blocked, blocker forge.IssueRef) error {
+	blockedIssue, err := resolveIssueRef(ctx, p.client, blocked.Owner, blocked.Repo, blocked.Number)
 	if err != nil {
-		return fmt.Errorf("fetch blocked issue #%d: %w", blockedNumber, err)
+		return fmt.Errorf("fetch blocked issue %s: %w", blocked, err)
 	}
-	blocker, err := resolveIssueRef(ctx, p.client, owner, repo, blockerNumber)
+	blockerIssue, err := resolveIssueRef(ctx, p.client, blocker.Owner, blocker.Repo, blocker.Number)
 	if err != nil {
-		return fmt.Errorf("fetch blocker issue #%d: %w", blockerNumber, err)
+		return fmt.Errorf("fetch blocker issue %s: %w", blocker, err)
 	}
 
 	// Guard: reject if the blocker is the parent epic of the blocked issue.
-	// A sub-issue blocked by its own epic creates an unresolvable circular dependency.
-	if blocksOwnParent(blocked.ParentRepo, blocked.ParentNumber, owner+"/"+repo, blockerNumber) {
+	// A sub-issue blocked by its own epic creates an unresolvable circular
+	// dependency. The blocker's own repository is compared, so an epic in
+	// another repository is caught and a same-numbered issue elsewhere is not.
+	if blocksOwnParent(blockedIssue.ParentRepo, blockedIssue.ParentNumber, blocker.Owner+"/"+blocker.Repo, blocker.Number) {
 		return fmt.Errorf(
-			"circular dependency: cannot block #%d by its parent epic #%d",
-			blockedNumber, blockerNumber,
+			"circular dependency: cannot block %s by its parent epic %s",
+			blocked, blocker,
 		)
 	}
 
-	return NewIssueService(p.client).addBlockedByResolved(ctx,
-		forge.IssueRef{Owner: owner, Repo: repo, Number: blockedNumber},
-		forge.IssueRef{Owner: owner, Repo: repo, Number: blockerNumber},
-		blocker.DatabaseID,
-	)
+	return NewIssueService(p.client).addBlockedByResolved(ctx, blocked, blocker, blockerIssue.DatabaseID)
 }
 
-// RemoveBlockedByNumber removes a blocking relationship between two issues
-// identified by number. ID resolution and the write are both REST, for the
-// reasons on AddBlockedByNumber above.
+// RemoveBlockedByNumber removes the edge AddBlockedByNumber writes. ID
+// resolution and the write are both REST, for the reasons on
+// AddBlockedByNumber above; the blocker is resolved in its own repository.
 // Unlike the add path, the BLOCKED issue is not read here. Add resolves it for
-// the circular-dependency guard, which needs its parent number; remove has no
-// guard, and the endpoint addresses the blocked issue by number. Reading it
-// anyway would be a call made solely to produce an error the write itself
-// reports -- the 404 discriminator names both sides.
-func (p *ProjectService) RemoveBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error {
-	blocker, err := resolveIssueRef(ctx, p.client, owner, repo, blockerNumber)
+// the circular-dependency guard, which needs its parent; remove has no guard,
+// and the endpoint addresses the blocked issue by number. Reading it anyway
+// would be a call made solely to produce an error the write itself reports --
+// the 404 discriminator names both sides.
+func (p *ProjectService) RemoveBlockedByNumber(ctx context.Context, blocked, blocker forge.IssueRef) error {
+	blockerIssue, err := resolveIssueRef(ctx, p.client, blocker.Owner, blocker.Repo, blocker.Number)
 	if err != nil {
-		return fmt.Errorf("fetch blocker issue #%d: %w", blockerNumber, err)
+		return fmt.Errorf("fetch blocker issue %s: %w", blocker, err)
 	}
 
-	return NewIssueService(p.client).removeBlockedByResolved(ctx,
-		forge.IssueRef{Owner: owner, Repo: repo, Number: blockedNumber},
-		forge.IssueRef{Owner: owner, Repo: repo, Number: blockerNumber},
-		blocker.DatabaseID,
-	)
+	return NewIssueService(p.client).removeBlockedByResolved(ctx, blocked, blocker, blockerIssue.DatabaseID)
 }
 
 // MoveStatus transitions an issue's status with optional validation.

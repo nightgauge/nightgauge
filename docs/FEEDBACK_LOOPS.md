@@ -126,8 +126,8 @@ written flat would be archived away by the run that produced it.
 blocking work is named only in free text, `#N` in prose is ambiguous ("AC #3"),
 and a wrong edge is durable, human-visible, and converts the zero-cost defer
 into a permanent silent stall. Add the edges by hand
-(`nightgauge issue add-blocked-by <blocked> <blocker>`) after reading the
-comment. Resolving the card with **Blocker resolved** deletes the finding and
+(`nightgauge issue add-blocked-by <blocked> <blocker>`, where a blocker in
+another repository is `owner/repo#N`) after reading the comment. Resolving the card with **Blocker resolved** deletes the finding and
 lets the issue run again — the defer is a hold, not a verdict.
 
 ## Recursion Guards

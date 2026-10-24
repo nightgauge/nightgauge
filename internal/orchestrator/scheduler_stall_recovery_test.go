@@ -83,6 +83,7 @@ func buildStallTestScheduler(t *testing.T, root string, runner StageRunner) *Sch
 		writeSkillFile(t, root, dir)
 	}
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
 		retryEngine:   NewRetryEngine(DefaultRetryConfig()),

@@ -16,6 +16,7 @@ import (
 func TestQueueDropProcessing_KeepsEveryWaitingItem(t *testing.T) {
 	root := layouttest.Repo(t)
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: root,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -42,6 +43,7 @@ func TestQueueDropProcessing_KeepsEveryWaitingItem(t *testing.T) {
 
 	// The next window's daemon reads what this one persisted.
 	next := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: root,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -105,6 +107,7 @@ func TestQueueDropProcessing_RefusesADequeueUnderWay(t *testing.T) {
 	}
 	svc.addIssue("o", "a", 99, &types.Issue{Number: 99, State: "CLOSED"})
 	s := &Scheduler{
+		trustGate:   allWritersGate(),
 		issueSvc:    svc,
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
@@ -147,6 +150,7 @@ func TestQueueDropProcessing_RefusesADequeueUnderWay(t *testing.T) {
 func newDropTestScheduler(t *testing.T, root string) *Scheduler {
 	t.Helper()
 	return &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: root,
 		issueSvc:      newMockEpicIssueSvc(),
 		repoRunning:   make(map[string]int),

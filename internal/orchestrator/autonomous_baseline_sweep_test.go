@@ -56,6 +56,7 @@ func newBaselineSweepScheduler(t *testing.T, eval *fakeBaselineEvaluator, items 
 		return []byte("[]"), nil
 	})
 	inner := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -65,6 +66,7 @@ func newBaselineSweepScheduler(t *testing.T, eval *fakeBaselineEvaluator, items 
 	as := NewAutonomousScheduler(inner, nil,
 		[]depgraph.RepoConfig{{Owner: "acme", Name: "web", Project: 7}},
 		nil, DefaultAutonomousConfig(), t.TempDir())
+	as.trustGateOverride = allWritersGate()
 	as.state.Status = "running"
 	as.buildGraphFn = func(context.Context) (*depgraph.Graph, error) {
 		return buildTestGraph(nil, nil), nil

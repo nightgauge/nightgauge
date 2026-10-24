@@ -28,7 +28,7 @@ type autonomousConfigOverrides struct {
 // Both entry points that attach an autonomous scheduler call it: the `serve`
 // daemon (behind the scheduler lease) and `nightgauge autonomous run`. They
 // used to assemble the struct by hand, independently, and the two literals
-// drifted — `auto_actionable`, `trusted_author_associations`,
+// drifted — `auto_actionable`, a since-removed trust key,
 // `disable_epic_blockedby_cascade` and the three `refinement_*` keys were read
 // only on the `run` path and silently ignored under `serve`, which is the
 // primary long-running daemon (#1445). One builder means a new config.yaml key
@@ -70,9 +70,6 @@ func buildAutonomousConfig(cfg *config.Config, over autonomousConfigOverrides) o
 		if cfg.Autonomous.AutoActionable != nil {
 			autoCfg.AutoActionable = *cfg.Autonomous.AutoActionable
 		}
-		// Unset/empty means "use the built-in trusted set", which the
-		// orchestrator resolves from a nil slice.
-		autoCfg.TrustedAuthorAssociations = cfg.Autonomous.TrustedAuthorAssociations
 		if cfg.Autonomous.DisableEpicBlockedByCascade {
 			autoCfg.DisableEpicBlockedByCascade = true
 		}

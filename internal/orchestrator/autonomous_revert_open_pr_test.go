@@ -80,6 +80,7 @@ func revertFixture(t *testing.T, pages ...map[int]string) (as *AutonomousSchedul
 	t.Cleanup(srv.Close)
 	repos := []depgraph.RepoConfig{{Owner: "O", Name: "a", Project: 7}}
 	as = NewAutonomousScheduler(nil, gh.NewClientWithURL("test-token", srv.URL), repos, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+	as.trustGateOverride = allWritersGate()
 	return as, writes, prReads
 }
 

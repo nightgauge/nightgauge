@@ -78,6 +78,7 @@ func TestRecoverOrchestratorCrash_LiveRunIsLeftAlone(t *testing.T) {
 	}
 
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: root,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -126,6 +127,7 @@ func TestRecoverOrchestratorCrash_DeadPidStillSynthesizes(t *testing.T) {
 	}
 
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: root,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),

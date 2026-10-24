@@ -145,6 +145,7 @@ func buildWaveTestScheduler(t *testing.T, tmpDir string, issueSvc *mockEpicIssue
 	}
 
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
 		retryEngine:   NewRetryEngine(DefaultRetryConfig()),
@@ -341,7 +342,8 @@ func TestWaveOrchestrator_BuildSummary(t *testing.T) {
 func TestWaveOrchestrator_PersistWavePlan(t *testing.T) {
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
-		execMgr: execution.NewManager(tmpDir, nil),
+		trustGate: allWritersGate(),
+		execMgr:   execution.NewManager(tmpDir, nil),
 	}
 	wo := newWaveOrchestrator(s, 100, "Org/repo", 4, 2_000_000)
 	wo.waves = []teams.WaveAssignment{
@@ -392,7 +394,8 @@ func TestWaveOrchestrator_PersistWavePlan(t *testing.T) {
 func TestWaveOrchestrator_PersistWaveStatus(t *testing.T) {
 	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
-		execMgr: execution.NewManager(tmpDir, nil),
+		trustGate: allWritersGate(),
+		execMgr:   execution.NewManager(tmpDir, nil),
 	}
 	wo := newWaveOrchestrator(s, 100, "Org/repo", 4, 0)
 	wo.waves = []teams.WaveAssignment{
@@ -891,6 +894,7 @@ func TestWaveOrchestrator_ScalingConfigDefaults(t *testing.T) {
 func TestWaveOrchestrator_ScalingDecisionCallback(t *testing.T) {
 	var captured *ScalingDecision
 	s := &Scheduler{
+		trustGate: allWritersGate(),
 		onScalingDecision: func(epicNumber int, decision ScalingDecision) {
 			d := decision
 			captured = &d

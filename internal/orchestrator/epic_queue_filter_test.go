@@ -33,6 +33,7 @@ func newEpicFilterFixture(t *testing.T) *Scheduler {
 	mock.addIssue("Org", "repo", 203, &types.Issue{NodeID: "I_203", Number: 203, Title: "Sub C", State: "OPEN", Repo: "Org/repo"})
 
 	return &Scheduler{
+		trustGate:   allWritersGate(),
 		issueSvc:    mock,
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
@@ -155,6 +156,7 @@ func TestEnqueueEpic_SkipsOwnerActionSubIssue(t *testing.T) {
 	mock.addIssue("Org", "repo", 203, &types.Issue{NodeID: "I_203", Number: 203, Title: "Sub C", State: "OPEN", Repo: "Org/repo"})
 
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		issueSvc:      mock,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -196,6 +198,7 @@ func TestEnqueueEpic_ExcludeLabelsConfigOverride(t *testing.T) {
 	mock.addIssue("Org", "repo", 202, &types.Issue{NodeID: "I_202", Number: 202, Title: "Needs a human", State: "OPEN", Repo: "Org/repo", Labels: []string{"needs-human"}})
 
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		issueSvc:      mock,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),

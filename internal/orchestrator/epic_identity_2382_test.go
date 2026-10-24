@@ -28,6 +28,7 @@ func newCrossRepoEpicFixture(t *testing.T) *Scheduler {
 	mock.addIssue("example-org", "platform", 21, &types.Issue{NodeID: "I_p21", Number: 21, Title: "Platform 21", State: "OPEN", Repo: "example-org/platform"})
 	mock.addIssue("example-org", "app", 21, &types.Issue{NodeID: "I_a21", Number: 21, Title: "App 21", State: "OPEN", Repo: "example-org/app"})
 	return &Scheduler{
+		trustGate:   allWritersGate(),
 		issueSvc:    mock,
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),

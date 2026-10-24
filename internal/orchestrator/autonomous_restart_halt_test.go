@@ -54,6 +54,7 @@ func newRestartHaltScheduler(t *testing.T, root string) *AutonomousScheduler {
 	// A real (if empty) inner Scheduler: Run() wires its pipeline-complete
 	// callback unconditionally, so a nil one panics before the first cycle.
 	as := NewAutonomousScheduler(&Scheduler{}, nil, nil, nil, cfg, root)
+	as.trustGateOverride = allWritersGate()
 	if as.Attention() == nil {
 		t.Fatal("attention store not wired by NewAutonomousScheduler")
 	}
@@ -713,11 +714,12 @@ func TestGracefulShutdownPreservesSafetyTrip(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
 
 	as := &AutonomousScheduler{
-		workspaceRoot:  root,
-		config:         AutonomousConfig{MaxConcurrent: 3},
-		state:          &AutonomousState{Status: "running"},
-		rescanCh:       make(chan struct{}, 4),
-		cascadeTracker: NewCascadeTracker(CascadeTrackerConfig{Threshold: 3, Window: 30 * time.Minute}),
+		trustGateOverride: allWritersGate(),
+		workspaceRoot:     root,
+		config:            AutonomousConfig{MaxConcurrent: 3},
+		state:             &AutonomousState{Status: "running"},
+		rescanCh:          make(chan struct{}, 4),
+		cascadeTracker:    NewCascadeTracker(CascadeTrackerConfig{Threshold: 3, Window: 30 * time.Minute}),
 	}
 	for _, num := range []int{100, 101, 102} {
 		addRunning(as, "octocat/acme", num, "issue")

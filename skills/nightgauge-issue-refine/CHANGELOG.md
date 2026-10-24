@@ -6,6 +6,12 @@ All notable changes to this skill are documented here.
 
 ### Fixed
 
+- **Step 1.3 reads the issue again, with only trusted comments (#2130).** It
+  passed `--json number,title,…` to `nightgauge forge issue view`, whose
+  `--json` takes no value, so the command failed and the step reported the
+  issue as not found. It now passes `--json --comments`, which returns only
+  comments by users with write access to the repository (or a trusted bot).
+
 - **Every shell block derives the pipeline identifiers it reads (#1932).** Each
   `Bash` call is a fresh process, so a block that read `$ISSUE_NUMBER`,
   `$BRANCH` or `$REPO` from an earlier phase read an empty string, and

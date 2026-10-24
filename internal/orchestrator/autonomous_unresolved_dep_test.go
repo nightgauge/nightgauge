@@ -35,9 +35,10 @@ func TestPrioritize_UnresolvedRepositoryNameFailsClosed(t *testing.T) {
 	g := buildTestGraph(nodes, edges)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		repos:  []depgraph.RepoConfig{{Owner: "owner", Name: "repo", Project: 1}},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		repos:             []depgraph.RepoConfig{{Owner: "owner", Name: "repo", Project: 1}},
+		state:             &AutonomousState{},
 	}
 	mock := newMockIssueSvc()
 	as.resolveDepStatesFn = func(ctx context.Context, keys []string) map[string]string {

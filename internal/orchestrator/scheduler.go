@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"log"
 	"maps"
 	"os"
@@ -965,9 +966,10 @@ type Scheduler struct {
 	// Issue #317.
 	excludeLabels []string
 
-	// trustedAuthorAssociations mirrors SchedulerConfig.TrustedAuthorAssociations
-	// (#270) — used by PickNext's defense-in-depth author-trust filter.
-	trustedAuthorAssociations []string
+	// trustGate decides whether an issue may be worked (internal/trust,
+	// #2130). Built from the startup client and the per-repo resolver, with
+	// autonomous.trusted_bots from RuntimeConfig.
+	trustGate *trust.Gate
 
 	// adapterExplicit mirrors SchedulerConfig.AdapterExplicit (#54).
 	adapterExplicit string
@@ -1292,10 +1294,6 @@ type SchedulerConfig struct {
 	// EnqueueEpic must never enqueue as sub-issues. Empty falls back to
 	// defaultExcludeLabels (["owner-action", "blocked"]). Issue #317, #1492.
 	ExcludeLabels []string
-	// TrustedAuthorAssociations overrides the default trusted set
-	// (OWNER/MEMBER/COLLABORATOR) used by PickNext's author-trust
-	// defense-in-depth filter (#270). Empty → use the built-in default.
-	TrustedAuthorAssociations []string
 	// RuntimeConfig is the loaded config.Config for this repo, used at
 	// startup to cross-check a multi-repo workspace manifest's
 	// project_number against the runtime-resolved board (#271). Nil skips
@@ -1322,42 +1320,43 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 	s := &Scheduler{
 		// Default to the real evaluator; tests override to drive the
 		// AutoClosed branch without a live GitHub client (#991).
-		evaluatePostMergeFn:       hooks.EvaluatePostMerge,
-		mainCheckReaderFn:         func(c *gh.Client) hooks.MainCheckReader { return gh.NewCIService(c) },
-		client:                    client,
-		boardSvc:                  gh.NewBoardService(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
-		issueSvc:                  gh.NewIssueService(client),
-		epicSvc:                   gh.NewEpicService(client),
-		execMgr:                   execMgr,
-		stateSvc:                  state.NewBoardStateServiceForClient(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
-		owner:                     cfg.Owner,
-		projectNumber:             cfg.ProjectNumber,
-		workspaceRoot:             cfg.WorkspaceRoot,
-		stageRunner:               &ExecutionManagerRunner{execMgr: execMgr},
-		retryEngine:               NewRetryEngine(retryConfigForWorkspace(cfg.WorkspaceRoot)),
-		budgetEngine:              NewBudgetEnforcer(DefaultBudgetConfig()),
-		ralphEngine:               NewRalphLoopController(DefaultRalphConfig()),
-		stageGates:                defaultStageGatesFromEnv(),
-		maxPerRepo:                maxPerRepo,
-		repoConcurrencyOverrides:  cfg.RepoConcurrencyOverrides,
-		repoRunning:               make(map[string]int),
-		budgetRetries:             make(map[string]int),
-		mergeLocks:                make(map[string]*sync.Mutex),
-		recordOutcomes:            true,
-		onFailureStatus:           onFailureStatus,
-		excludeLabels:             excludeLabels,
-		trustedAuthorAssociations: cfg.TrustedAuthorAssociations,
-		adapterExplicit:           cfg.AdapterExplicit,
-		runDefaultAdapter:         cfg.Adapter,
-		prMergeRunner:             newPRMergeRunner(cfg.RuntimeConfig),
-		prCreateRunner:            NewDefaultPRCreateRunner(client),
-		issuePickupRunner:         NewDeterministicIssuePickupRunner(),
-		launchRepo:                launchRepoSlug(cfg.RuntimeConfig),
+		evaluatePostMergeFn:      hooks.EvaluatePostMerge,
+		mainCheckReaderFn:        func(c *gh.Client) hooks.MainCheckReader { return gh.NewCIService(c) },
+		client:                   client,
+		boardSvc:                 gh.NewBoardService(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
+		issueSvc:                 gh.NewIssueService(client),
+		epicSvc:                  gh.NewEpicService(client),
+		execMgr:                  execMgr,
+		stateSvc:                 state.NewBoardStateServiceForClient(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
+		owner:                    cfg.Owner,
+		projectNumber:            cfg.ProjectNumber,
+		workspaceRoot:            cfg.WorkspaceRoot,
+		stageRunner:              &ExecutionManagerRunner{execMgr: execMgr},
+		retryEngine:              NewRetryEngine(retryConfigForWorkspace(cfg.WorkspaceRoot)),
+		budgetEngine:             NewBudgetEnforcer(DefaultBudgetConfig()),
+		ralphEngine:              NewRalphLoopController(DefaultRalphConfig()),
+		stageGates:               defaultStageGatesFromEnv(),
+		maxPerRepo:               maxPerRepo,
+		repoConcurrencyOverrides: cfg.RepoConcurrencyOverrides,
+		repoRunning:              make(map[string]int),
+		budgetRetries:            make(map[string]int),
+		mergeLocks:               make(map[string]*sync.Mutex),
+		recordOutcomes:           true,
+		onFailureStatus:          onFailureStatus,
+		excludeLabels:            excludeLabels,
+		adapterExplicit:          cfg.AdapterExplicit,
+		runDefaultAdapter:        cfg.Adapter,
+		prMergeRunner:            newPRMergeRunner(cfg.RuntimeConfig),
+		prCreateRunner:           NewDefaultPRCreateRunner(client),
+		issuePickupRunner:        NewDeterministicIssuePickupRunner(),
+		launchRepo:               launchRepoSlug(cfg.RuntimeConfig),
 	}
 	// Wire FailureRecovery registry (Issue #3268). Reuses the same runners
 	// as the deterministic-first hooks so a recovery and a deterministic
 	// merge use a single source of truth.
 	s.recoveryRegistry = recovery.Default(cfg.WorkspaceRoot, s.prMergeRunner, s.prCreateRunner)
+	s.trustGate = newSchedulerTrustGate(s, trustedBotsFrom(cfg.RuntimeConfig), cfg.RuntimeConfig.AppOwners(),
+		cfg.RuntimeConfig.ConfiguredGitHubLogins())
 	s.loadQueue()
 	warnProjectMappingMismatch(cfg.RuntimeConfig, cfg.WorkspaceRoot)
 	return s
@@ -2223,6 +2222,8 @@ func (s *Scheduler) preflightIdentity(ctx context.Context, item types.BoardItem,
 
 // PickNext selects the highest-priority unblocked ready issue to execute.
 func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
+	// One scan, one permission-cache cycle (#2130, #842).
+	s.resetTrustCycle()
 	items, err := s.boardSvc.ListItems(ctx, "Ready")
 	if err != nil {
 		return nil, fmt.Errorf("fetch ready items: %w", err)
@@ -2294,13 +2295,12 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 			continue
 		}
 
-		// Author-trust gate, defense-in-depth (#270): even if an item reached
-		// Ready by some other route (board auto-add, a mis-set status, a
-		// future code path), the final dispatch gate must still refuse an
-		// untrusted author. Deliberately redundant with the refinement and
-		// isTriagedAndUnblocked gates upstream.
-		if !isTrustedAuthor(item.AuthorAssociation, s.trustedAuthorAssociations) {
-			log.Printf("#%d: skipping — untrusted author (author_association=%q)", item.Number, item.AuthorAssociation)
+		// Eligibility gate (#2130), deliberately redundant with the refinement
+		// and promotion gates upstream: an item that reached Ready by any route
+		// (board auto-add, a hand-set status, a future code path) is still
+		// dispatched only when a user with write access vouched for it.
+		if d := s.decideItem(ctx, item); !d.Eligible {
+			log.Printf("#%d: skipping — %s", item.Number, d.Reason)
 			continue
 		}
 
@@ -2563,6 +2563,7 @@ func (s *Scheduler) RunQueue(ctx context.Context) (QueueRunSummary, error) {
 	s.mu.Unlock()
 
 	summary := QueueRunSummary{}
+	s.resetTrustCycle()
 	record := func(entry QueueItem, kind QueueOutcomeKind, terminalKind, detail string) {
 		summary.Outcomes = append(summary.Outcomes, QueueOutcome{
 			Repo:         entry.Repo,
@@ -2628,6 +2629,14 @@ func (s *Scheduler) RunQueue(ctx context.Context) (QueueRunSummary, error) {
 		if item == nil {
 			log.Printf("queue: issue #%d not found on board", entry.IssueNumber)
 			record(entry, QueueOutcomeNotDispatched, "", "not found on project board")
+			continue
+		}
+
+		// The eligibility gate (#2130) runs for queued work too: `nightgauge
+		// run <issue>` and `queue add` reach the pipeline through here.
+		if d := s.decideItem(ctx, *item); !d.Eligible {
+			log.Printf("queue: skipping #%d — %s", entry.IssueNumber, d.Reason)
+			record(entry, QueueOutcomeNotDispatched, "", d.Reason)
 			continue
 		}
 
@@ -3204,6 +3213,13 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 	// since the queue was last persisted.
 	s.refreshBlockerStates(ctx)
 
+	// The eligibility gate (#2130), decided before the lock because it may
+	// read the forge. This is the one place a queued item claims a slot, so
+	// every route into the queue is covered: IPC queue.add, the extension's
+	// autonomous.dispatch handler, cloud queue_add, Action Center retries,
+	// EnqueueEpic sub-issues and `nightgauge queue add`.
+	verdicts := s.queueEligibility(ctx)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// A window that closed while this dequeue read blockers has dropped or
@@ -3255,6 +3271,17 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 		// are skipped over until the operator explicitly resumes them via the
 		// dashboard Retry / Skip / Discard actions or ResumePausedItems().
 		if item.Status == "paused" {
+			// An item held only because no writer had vouched for it is
+			// released once one has (#2130): applying pipeline:approved is the
+			// whole approval, with no second step in the queue.
+			if item.PausedReason != nil && item.PausedReason.Kind == pausedNotVouchedFor {
+				if d, ok := verdicts[repoIssueKey(item.Repo, item.IssueNumber)]; ok && d.Eligible {
+					log.Printf("DequeueIndependent: releasing #%d — now vouched for (%s)", item.IssueNumber, d.Via)
+					s.queue[i].Status = "pending"
+					s.queue[i].PausedReason = nil
+					pausedByLabel = true
+				}
+			}
 			continue
 		}
 
@@ -3293,6 +3320,18 @@ func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, 
 				Kind:    "labels_truncated",
 				Summary: fmt.Sprintf("label list truncated at %d labels; human-only label guard (autonomous.exclude_labels) cannot be evaluated", len(item.Labels)),
 			}
+			pausedByLabel = true
+			continue
+		}
+		d, decided := verdicts[repoIssueKey(item.Repo, item.IssueNumber)]
+		if !decided {
+			// Queued after the gate ran: the next pass decides it.
+			continue
+		}
+		if !d.Eligible {
+			log.Printf("DequeueIndependent: holding #%d — %s", item.IssueNumber, d.Reason)
+			s.queue[i].Status = "paused"
+			s.queue[i].PausedReason = &QueuePausedReason{Kind: pausedNotVouchedFor, Summary: d.Reason}
 			pausedByLabel = true
 			continue
 		}
@@ -5937,6 +5976,20 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 		if budgetDecision.ShouldWarn {
 			log.Printf("#%d: pipeline budget warning: %s (mode=%s)", item.Number, budgetDecision.Reason, budgetDecision.PerformanceMode)
+		}
+
+		// Eligibility re-check (#2130), before every stage and on a fresh
+		// cache: the dispatch-time decision cannot see an edit made while the
+		// run is in flight, and every stage reads the issue again. Booked like
+		// the budget refusal above: the stage is entered, then failed, before
+		// anything is dispatched.
+		if d := s.stageEligibility(ctx, item); !d.Eligible {
+			reason := "eligibility: " + d.Reason
+			log.Printf("#%d: stopping before %s — %s", item.Number, stage, reason)
+			runtime.BeginStage(stage)
+			runtime.SetStageError(stage, reason)
+			s.emitStateChanged(item.Repo, item.Number, runtime)
+			return
 		}
 
 		// Validate context prerequisite (previous stage output exists). Resolve
@@ -8604,7 +8657,16 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 // Unlike RunQueue, this bypasses the project board lookup — the caller
 // supplies the item directly. Used by pipeline.runItem IPC method (testing
 // and direct-dispatch use cases).
+//
+// It refuses an issue the eligibility gate (#2130) does not pass. The IPC
+// handler asks first, so a refusal reaches the caller as an error; this check
+// keeps any other caller from bypassing the gate.
 func (s *Scheduler) RunPipelineForItem(ctx context.Context, item types.BoardItem) {
+	owner, repo := splitOwnerRepo(item.Repo)
+	if d := s.Eligibility(ctx, owner, repo, item.Number); !d.Eligible {
+		log.Printf("#%d: refusing dispatch — %s", item.Number, d.Reason)
+		return
+	}
 	s.dispatchItem(ctx, item)
 }
 

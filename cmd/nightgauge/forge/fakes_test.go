@@ -278,10 +278,10 @@ func (f *fakeProjectService) SetDateFieldByNumber(_ context.Context, _, _ string
 func (f *fakeProjectService) SetEstimateFromLabels(_ context.Context, _, _ string, _ int, _ []string, _ map[string]float64) error {
 	return nil
 }
-func (f *fakeProjectService) AddBlockedByNumber(_ context.Context, _, _ string, _, _ int) error {
+func (f *fakeProjectService) AddBlockedByNumber(_ context.Context, _, _ forge.IssueRef) error {
 	return nil
 }
-func (f *fakeProjectService) RemoveBlockedByNumber(_ context.Context, _, _ string, _, _ int) error {
+func (f *fakeProjectService) RemoveBlockedByNumber(_ context.Context, _, _ forge.IssueRef) error {
 	return nil
 }
 func (f *fakeProjectService) UpdateEpicEstimates(_ context.Context, _, _ string, _ int) (float64, error) {

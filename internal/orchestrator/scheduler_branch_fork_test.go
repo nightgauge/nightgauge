@@ -110,6 +110,7 @@ func TestScheduler_BranchForkPreflight_BlocksBeforeSpendingTokens(t *testing.T) 
 
 	runner := newBranchAwareStageRunner(branch)
 	s := &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),
@@ -210,6 +211,7 @@ func TestScheduler_BranchForkPreflight_DoesNotBlockAHealthyRun(t *testing.T) {
 
 	runner := newBranchAwareStageRunner(branch)
 	s := &Scheduler{
+		trustGate:      allWritersGate(),
 		repoRunning:    make(map[string]int),
 		mergeLocks:     make(map[string]*sync.Mutex),
 		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),

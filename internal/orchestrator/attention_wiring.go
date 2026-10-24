@@ -22,6 +22,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"log"
 	"path/filepath"
 	"strings"
@@ -504,45 +505,47 @@ func (as *AutonomousScheduler) raiseSelfRepoRefusal(repo string, issue int, titl
 	})
 }
 
-// raiseUntrustedAuthorSkip surfaces a review_required-equivalent card when the
-// author-trust gate (#270) skips an issue at refinement candidate selection or
-// Backlog→Ready promotion. Without this, an untrusted-author issue silently
-// disappears from autonomous consideration instead of being visible to a
-// maintainer who can review it and manually promote if the author should be
-// trusted. gateSite distinguishes which gate skipped it (e.g. "refinement",
-// "triage-promotion") for the card body.
-func (as *AutonomousScheduler) raiseUntrustedAuthorSkip(owner, repo string, issue int, title, authorAssociation, gateSite string) {
+// raiseUntrustedAuthorSkip surfaces a card when the eligibility gate (#2130)
+// skips an issue at refinement candidate selection or Backlog→Ready
+// promotion. Without it, an issue no writer vouched for silently disappears
+// from autonomous consideration instead of being visible to a maintainer who
+// can approve it. gateSite names the gate that skipped it ("refinement",
+// "triage-promotion").
+//
+// The card offers no "promote" action: promoting the board status would not
+// make the issue eligible, and the daemon applying the approval label would
+// make the pipeline vouch for itself. Approval is a maintainer's own act.
+func (as *AutonomousScheduler) raiseUntrustedAuthorSkip(owner, repo string, issue int, title string, d trust.Decision, gateSite string) {
 	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
-	assoc := authorAssociation
-	if assoc == "" {
-		assoc = "(none)"
+	author := d.Author
+	if author == "" {
+		author = "(unknown)"
+	}
+	level := string(d.AuthorLevel)
+	if level == "" {
+		level = "unknown"
 	}
 	as.raiseAttention(attention.DecisionRequest{
 		IdempotencyKey: keyUntrustedAuthorSkip(fullRepo, issue),
 		Kind:           attention.KindApprove,
 		Severity:       attention.SeverityFYI,
-		Title:          fmt.Sprintf("Untrusted author skipped at %s — #%d", gateSite, issue),
-		Body: fmt.Sprintf("#%d (%q) was skipped by the author-trust gate at %s: author_association=%s is not in the "+
-			"trusted set (default OWNER/MEMBER/COLLABORATOR, or autonomous.trusted_author_associations). "+
-			"Review the issue; if the author should be trusted, either add their association to "+
-			"autonomous.trusted_author_associations or manually promote the issue's board status to Ready.",
-			issue, title, gateSite, assoc),
+		Title:          fmt.Sprintf("Not vouched for, skipped at %s — #%d", gateSite, issue),
+		Body: fmt.Sprintf("#%d (%q) was skipped by the eligibility gate at %s. %s. "+
+			"Review the issue. Where the pipeline runs as a GitHub App, a user with write access can "+
+			"apply `%s` to approve it; any later edit to its title or body voids the approval.",
+			issue, title, gateSite, d.Reason, trust.ApprovedLabel),
 		Producer: producerUntrustedAuthor,
 		Standing: true,
-		// Constant fingerprint: the gate's verdict for a given issue does not
-		// change cycle to cycle unless the author or config changes, so this
-		// alerts once and stays muted until a human resolves it.
+		// Constant fingerprint: the verdict for a given issue does not change
+		// cycle to cycle until someone approves it, so this alerts once and
+		// stays muted until a human resolves it.
 		Fingerprint: "skipped:untrusted-author",
-		Context:     attention.Context{Repo: fullRepo, Issue: issue, Blocker: fmt.Sprintf("author_association=%s", assoc)},
-		Options: []attention.Option{
-			{ID: "promote", Label: "Promote to Ready", Verb: attention.VerbProjectSyncStatus,
-				Args:  map[string]any{"owner": owner, "repo": repo, "issueNumber": issue, "status": "ready"},
-				Style: attention.StyleDefault},
-			noopOption("leave", "Leave skipped"),
-		},
+		Context: attention.Context{Repo: fullRepo, Issue: issue,
+			Blocker: fmt.Sprintf("author=%s permission=%s", author, level)},
+		Options:       []attention.Option{noopOption("leave", "Leave skipped")},
 		DefaultAction: "leave",
 		ExpiresAt:     standingExpiry(),
-		Steer:         &attention.Steer{Enabled: true, Hint: "Note why this author should (or should not) be trusted"},
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note why this issue should (or should not) be approved"},
 	})
 }
 

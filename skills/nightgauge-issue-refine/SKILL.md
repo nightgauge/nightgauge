@@ -118,8 +118,10 @@ REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo $REPO \
-  --json number,title,body,labels,comments,state 2>/dev/null)
+# --comments returns only comments by users with write access (or a trusted
+# bot); the rest never reach this skill (#2130).
+ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" \
+  --json --comments 2>/dev/null)
 
 if [ -z "$ISSUE_JSON" ] || [ "$(printf '%s\n' "$ISSUE_JSON" | jq -r '.number // empty')" = "" ]; then
   echo "ERROR: Issue #${ISSUE_NUMBER} not found or not accessible."

@@ -129,7 +129,8 @@ func TestForgeAdapter_AccessorsReturnNonNil(t *testing.T) {
 func TestProjectService_AddBlockedByNumber_ReturnsErrUnsupported(t *testing.T) {
 	c := NewClient("", "tok")
 	p := NewProjectServiceFor(c, "o", "r", StrategyLabelStatus, 0)
-	err := p.AddBlockedByNumber(context.Background(), "o", "r", 1, 2)
+	err := p.AddBlockedByNumber(context.Background(),
+		forge.IssueRef{Owner: "o", Repo: "r", Number: 1}, forge.IssueRef{Owner: "o", Repo: "other", Number: 2})
 	if !errors.Is(err, forge.ErrUnsupported) {
 		t.Errorf("ProjectService.AddBlockedByNumber: err = %v, want ErrUnsupported", err)
 	}
@@ -138,7 +139,8 @@ func TestProjectService_AddBlockedByNumber_ReturnsErrUnsupported(t *testing.T) {
 func TestProjectService_RemoveBlockedByNumber_ReturnsErrUnsupported(t *testing.T) {
 	c := NewClient("", "tok")
 	p := NewProjectServiceFor(c, "o", "r", StrategyLabelStatus, 0)
-	err := p.RemoveBlockedByNumber(context.Background(), "o", "r", 1, 2)
+	err := p.RemoveBlockedByNumber(context.Background(),
+		forge.IssueRef{Owner: "o", Repo: "r", Number: 1}, forge.IssueRef{Owner: "o", Repo: "other", Number: 2})
 	if !errors.Is(err, forge.ErrUnsupported) {
 		t.Errorf("ProjectService.RemoveBlockedByNumber: err = %v, want ErrUnsupported", err)
 	}

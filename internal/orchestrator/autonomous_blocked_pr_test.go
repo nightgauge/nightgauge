@@ -23,6 +23,7 @@ func TestPrioritize_SkipsOpenPRBlocked(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
+		trustGateOverride:    allWritersGate(),
 		config:               AutonomousConfig{MaxConcurrent: 5},
 		state:                &AutonomousState{},
 		blockedReadyPRIssues: map[string]bool{"R#1": true},
@@ -47,8 +48,9 @@ func TestPrioritize_NilBlockedSetDispatchesNormally(t *testing.T) {
 	g := buildTestGraph(nodes, nil)
 
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 5},
-		state:  &AutonomousState{},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 5},
+		state:             &AutonomousState{},
 		// blockedReadyPRIssues intentionally nil
 	}
 

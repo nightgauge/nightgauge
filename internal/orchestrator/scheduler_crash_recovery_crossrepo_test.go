@@ -61,6 +61,7 @@ func TestRecoverOrchestratorCrash_ReconcilesCrossRepoSidecar(t *testing.T) {
 	}
 
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: launchRoot,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -134,6 +135,7 @@ func TestRecoverOrchestratorCrash_NoDuplicateWhenPrimaryIsRegistered(t *testing.
 	}
 
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: launchRoot,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -174,6 +176,7 @@ func TestRecoverOrchestratorCrash_LaunchRootOnlyWhenResolverNil(t *testing.T) {
 	}
 
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: launchRoot,
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -200,6 +203,7 @@ func TestRecoverOrchestratorCrash_LaunchRootOnlyWhenResolverNil(t *testing.T) {
 // strings, the launch root re-registered) are collapsed.
 func TestCrashScanRoots_DedupsAndOrders(t *testing.T) {
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: "/launch",
 		repoRootsResolver: func() []string {
 			return []string{"/launch", "", "/repo-a", "/repo-b", "/repo-a"}

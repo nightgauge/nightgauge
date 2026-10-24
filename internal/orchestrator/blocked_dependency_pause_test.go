@@ -11,6 +11,7 @@ import (
 // baseline-CI pause round-trip (baseline_pause_test.go).
 func TestPauseDeferred_BlockedDependency_RoundTrip(t *testing.T) {
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
@@ -65,6 +66,7 @@ func TestPauseDeferred_BlockedDependency_RoundTrip(t *testing.T) {
 // issue updates the reason without duplicating the queue entry.
 func TestPauseDeferred_BlockedDependency_Idempotent(t *testing.T) {
 	s := &Scheduler{
+		trustGate:     allWritersGate(),
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),

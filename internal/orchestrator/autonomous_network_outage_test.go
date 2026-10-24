@@ -18,7 +18,8 @@ import (
 // NO global cooldown.
 func TestOnPipelineComplete_ApiConnectionLost_TransientNoPause(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -79,7 +80,8 @@ func TestOnPipelineComplete_ApiConnectionLost_TransientNoPause(t *testing.T) {
 // haltQueueOnSlotFailure.
 func TestOnPipelineComplete_GitHubNetworkOutage_ShortGlobalCooldownNoPause(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{
@@ -138,7 +140,8 @@ func TestOnPipelineComplete_GitHubNetworkOutage_ShortGlobalCooldownNoPause(t *te
 // route to the transient branch (no lifetime increment, no pause).
 func TestNotifyComplete_EmptyKindSocketCloseDetail_RoutesTransient(t *testing.T) {
 	as := &AutonomousScheduler{
-		config: AutonomousConfig{MaxConcurrent: 3},
+		trustGateOverride: allWritersGate(),
+		config:            AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status: "running",
 			Running: []RunningItem{

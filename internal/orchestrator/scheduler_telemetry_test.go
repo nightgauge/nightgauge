@@ -124,6 +124,7 @@ func buildTelemetryTestScheduler(t *testing.T, tmpDir string, svc telemetryServi
 	// mockIssueSvc returns error for unknown issues — checkEpicCompletion logs and returns.
 
 	s := &Scheduler{
+		trustGate:        allWritersGate(),
 		repoRunning:      make(map[string]int),
 		mergeLocks:       make(map[string]*sync.Mutex),
 		retryEngine:      NewRetryEngine(DefaultRetryConfig()),

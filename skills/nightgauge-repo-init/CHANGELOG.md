@@ -6,6 +6,10 @@ All notable changes to this skill are documented here.
 
 ### Changed
 
+- The labels phase creates `pipeline:approved`, the label a user with write
+  access applies to let the pipeline work an issue opened by someone without
+  it (#2130).
+
 - Phase 6.8 bootstraps this checkout's `complexity-model.yaml` inside the git
   directory (`nightgauge layout path checkout complexity-model.yaml`); a
   `--seed-from` model is staged in a temp file and written through

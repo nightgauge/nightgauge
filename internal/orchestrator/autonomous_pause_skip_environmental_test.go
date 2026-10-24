@@ -21,6 +21,7 @@ import (
 // automatically when the cooldown expires.
 func TestPause_DeclinedWhenQuotaCooldownActive(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status:              "running",
 			QuotaCooldownUntil:  time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339),
@@ -51,6 +52,7 @@ func TestPause_DeclinedWhenQuotaCooldownActive(t *testing.T) {
 // not absolute.
 func TestPause_AllowedAfterQuotaCooldownExpired(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status:             "running",
 			QuotaCooldownUntil: time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339),
@@ -73,6 +75,7 @@ func TestPause_AllowedAfterQuotaCooldownExpired(t *testing.T) {
 // (auto-triggered post-failure) — not deliberate operator actions.
 func TestPause_UserActionAlwaysAllowed(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status:             "running",
 			QuotaCooldownUntil: time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339),
@@ -96,6 +99,7 @@ func TestPause_UserActionAlwaysAllowed(t *testing.T) {
 // separate from environmental backoff.
 func TestPause_SafetyTripAlwaysAllowed(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status:             "running",
 			QuotaCooldownUntil: time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339),
@@ -115,6 +119,7 @@ func TestPause_SafetyTripAlwaysAllowed(t *testing.T) {
 // failures like validation_error or subagent_crash).
 func TestPause_NoCooldownStillHalts(t *testing.T) {
 	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
 		state: &AutonomousState{
 			Status: "running",
 			// QuotaCooldownUntil intentionally empty
