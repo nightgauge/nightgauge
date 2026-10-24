@@ -52,8 +52,11 @@ describe("StageTreeItem phase counting (#1246)", () => {
     item.setPhases(issue336Phases(), undefined, 18);
 
     const label = String(item.description ?? "");
-    expect(label).toContain("4/18 phases");
-    expect(label).toContain("14 unreported");
+    // A coverage statement, not a completion fraction (#1887): the stage was
+    // not seen doing fourteen of its phases, which is not the same as not
+    // doing them. `unreported` is still never folded into the count (#1246).
+    expect(label).toContain("18 phases · 4 observed, 14 unobserved");
+    expect(label).not.toContain("4/18");
     expect(label).not.toContain("18/18");
   });
 
@@ -78,8 +81,7 @@ describe("StageTreeItem phase counting (#1246)", () => {
     );
 
     const label = String(item.description ?? "");
-    expect(label).toContain("1/2 phases");
-    expect(label).toContain("1 unreported");
+    expect(label).toContain("2 phases · 1 observed, 1 unobserved");
     expect(label).toContain("1 skipped");
     expect(label).not.toContain("2/3");
   });
@@ -107,9 +109,10 @@ describe("StageTreeItem phase counting (#1246)", () => {
     expect(label).not.toContain("11/14");
   });
 
-  // The partial case still scores, because there it IS a score: something was
-  // observed and something was not.
-  it("still shows a count when only some phases went unreported", () => {
+  // The partial case is a measurement too (#1887): something was observed and
+  // something was not, and the line says so instead of printing a fraction
+  // every reader parses as completion. The denominator stays visible (#1850).
+  it("states coverage, not completion, when only some phases went unreported", () => {
     const item = new StageTreeItem(STAGE, "pending");
     item.setStatus("complete");
     item.setPhases(
@@ -119,8 +122,8 @@ describe("StageTreeItem phase counting (#1246)", () => {
     );
 
     const label = String(item.description ?? "");
-    expect(label).toContain("1/3 phases");
-    expect(label).toContain("2 unreported");
+    expect(label).toContain("3 phases · 1 observed, 2 unobserved");
+    expect(label).not.toContain("1/3");
     expect(label).not.toContain("not reported (");
   });
 
@@ -184,9 +187,8 @@ describe("StageTreeItem phase counting (#1246)", () => {
     );
 
     const label = String(item.description ?? "");
-    expect(label).toContain("1/3 phases");
+    expect(label).toContain("3 phases · 1 observed, 1 unobserved");
     expect(label).toContain("1 abandoned");
-    expect(label).toContain("1 unreported");
   });
 });
 

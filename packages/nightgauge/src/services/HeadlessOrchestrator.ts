@@ -99,6 +99,7 @@ import {
   summarizePolicy,
   sanitizeStagedAgentsMd,
   guardUpstreamHead,
+  HealthTrendsWriter,
   type NightgaugeAdapter,
   type RecoveryAction,
   type RecoveryRequiredPayload,
@@ -8830,11 +8831,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   // ===================================================================
 
   /**
-   * Compute health trend slope from health-history.jsonl.
+   * Compute health trend slope from the health series (#1898).
    *
-   * Reads the last 5 snapshots, computes percent change between the
-   * average of the most recent 3 and the average of the older 2.
-   * Returns 0 if insufficient data (< 5 snapshots).
+   * Reads the last 5 scored entries of the checkout's `health/trends.jsonl`,
+   * computes percent change between the average of the most recent 3 and the
+   * average of the older 2. An entry recorded as null (no dimension had data)
+   * is not a point. Returns 0 if insufficient data (< 5 scored entries).
    *
    * Uses synchronous file reads to match existing HeadlessOrchestrator
    * patterns (readEscalationSignal, loadIssueMetadata).
@@ -8843,22 +8845,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private computeHealthTrendSlope(): number {
     try {
-      const workspaceRoot = this.getWorkingDirectory();
-      const filePath = path.join(pipelineStateDir(workspaceRoot), "health-history.jsonl");
+      const filePath = HealthTrendsWriter.getFilePath(this.getPersistentRoot());
 
       if (!fs.existsSync(filePath)) return 0;
 
       const content = fs.readFileSync(filePath, "utf-8");
       const lines = content.split("\n").filter((l) => l.trim());
 
-      // Parse snapshots only (skip recalibration markers)
       const snapshots: Array<{ score: number; timestamp: string }> = [];
       for (const line of lines) {
         try {
           const parsed = JSON.parse(line);
-          if (typeof parsed.score === "number" && parsed.type !== "recalibration") {
+          if (parsed.schema_version === "2" && typeof parsed.overall_score === "number") {
             snapshots.push({
-              score: parsed.score,
+              score: parsed.overall_score,
               timestamp: parsed.timestamp,
             });
           }
@@ -13097,12 +13097,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
       // Health evaluation and self-check summary (Issue #1045)
       try {
-        // #1057: the persistent root, not the worktree. health-history.jsonl
-        // is written only to the main workspace, and `.nightgauge/.gitignore`
-        // ignores `pipeline/*`, so a worktree slot never has the file and the
-        // reader returned [] on every run — forever. Same root-drift class as
-        // #1017/#1045, and it matches the PostPipelineAnalyzer.analyze call
-        // immediately above.
+        // #1057: the persistent root, not the worktree. The health series is
+        // per checkout and is appended under the main workspace, so a worktree
+        // slot never has it and the reader returned [] on every run — forever.
+        // Same root-drift class as #1017/#1045, and it matches the
+        // PostPipelineAnalyzer.analyze call immediately above.
         const healthEval = await HealthActionService.evaluate(
           this.getPersistentRoot(),
           this.logger

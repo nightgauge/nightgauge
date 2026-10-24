@@ -52,9 +52,9 @@ func TestReadTrends_Empty(t *testing.T) {
 func TestReadTrends_ValidLines(t *testing.T) {
 	dir := layouttest.Repo(t)
 	lines := []string{
-		`{"schema_version":"1","timestamp":"2026-01-01T00:00:00Z","run_id":"r1","issue_number":1,"overall_score":80,"dimensions":{},"significant_findings":[]}`,
-		`{"schema_version":"1","timestamp":"2026-01-02T00:00:00Z","run_id":"r2","issue_number":2,"overall_score":85,"dimensions":{},"significant_findings":[]}`,
-		`{"schema_version":"1","timestamp":"2026-01-03T00:00:00Z","run_id":"r3","issue_number":3,"overall_score":90,"dimensions":{},"significant_findings":[]}`,
+		`{"schema_version":"2","timestamp":"2026-01-01T00:00:00Z","run_id":"r1","issue_number":1,"overall_score":80,"status":"good","dimensions":{},"significant_findings":[]}`,
+		`{"schema_version":"2","timestamp":"2026-01-02T00:00:00Z","run_id":"r2","issue_number":2,"overall_score":85,"status":"good","dimensions":{},"significant_findings":[]}`,
+		`{"schema_version":"2","timestamp":"2026-01-03T00:00:00Z","run_id":"r3","issue_number":3,"overall_score":90,"status":"good","dimensions":{},"significant_findings":[]}`,
 	}
 	writeTrendsFile(t, dir, lines)
 
@@ -74,9 +74,9 @@ func TestReadTrends_ValidLines(t *testing.T) {
 func TestReadTrends_SkipsMalformed(t *testing.T) {
 	dir := layouttest.Repo(t)
 	lines := []string{
-		`{"schema_version":"1","timestamp":"2026-01-01T00:00:00Z","run_id":"r1","issue_number":1,"overall_score":80,"dimensions":{},"significant_findings":[]}`,
+		`{"schema_version":"2","timestamp":"2026-01-01T00:00:00Z","run_id":"r1","issue_number":1,"overall_score":80,"status":"good","dimensions":{},"significant_findings":[]}`,
 		`{not valid json}`,
-		`{"schema_version":"1","timestamp":"2026-01-03T00:00:00Z","run_id":"r3","issue_number":3,"overall_score":90,"dimensions":{},"significant_findings":[]}`,
+		`{"schema_version":"2","timestamp":"2026-01-03T00:00:00Z","run_id":"r3","issue_number":3,"overall_score":90,"status":"good","dimensions":{},"significant_findings":[]}`,
 	}
 	writeTrendsFile(t, dir, lines)
 
@@ -137,5 +137,32 @@ func TestAggregateGateMetrics(t *testing.T) {
 	}
 	if g2.Catches != 1 || g2.HitRate != 1.0 {
 		t.Fatalf("expected gate-2 catches=1 hit_rate=1.0, got catches=%d hit_rate=%f", g2.Catches, g2.HitRate)
+	}
+}
+
+// One series, one schema (#1898): a null score stays null, and a line of any
+// other schema is not read as a health entry.
+func TestReadTrends_NullScoreStaysNullAndOtherSchemasAreSkipped(t *testing.T) {
+	dir := layouttest.Repo(t)
+	writeTrendsFile(t, dir, []string{
+		`{"schema_version":"2","timestamp":"2026-01-01T00:00:00Z","run_id":"r1","issue_number":1,"overall_score":null,"status":"no-data","dimensions":{},"excluded_dimensions":{"reliability":"no runs"},"significant_findings":[]}`,
+		`{"schema_version":"2","timestamp":"2026-01-02T00:00:00Z","run_id":"r2","issue_number":2,"overall_score":81,"status":"good","dimensions":{"reliability":81},"excluded_dimensions":{},"significant_findings":[]}`,
+		`{"schema_version":"1","timestamp":"2026-01-03T00:00:00Z","score":75,"status":"good"}`,
+	})
+	entries, err := ReadTrends(dir, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 schema-2 entries, got %d", len(entries))
+	}
+	if entries[0].OverallScore != nil {
+		t.Fatalf("null overall_score decoded as %v, want nil", *entries[0].OverallScore)
+	}
+	if entries[0].ExcludedDimensions["reliability"] != "no runs" {
+		t.Fatalf("excluded_dimensions not read: %v", entries[0].ExcludedDimensions)
+	}
+	if entries[1].OverallScore == nil || *entries[1].OverallScore != 81 {
+		t.Fatalf("scored entry lost its score: %v", entries[1].OverallScore)
 	}
 }

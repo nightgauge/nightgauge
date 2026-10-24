@@ -215,6 +215,7 @@ export {
   HealthAnalysisEngine,
   computeOverallHealthScore,
   getOverallHealthStatus,
+  excludedDimensionReason,
   type ScoredDimension,
 } from "./health/index.js";
 export { crossReference } from "./health/index.js";
@@ -252,9 +253,8 @@ export type {
   HealthAnalysisResult,
   HealthAnalysisInput,
   HealthScoreEntry,
-  SelfTuningEntry,
-  ExperimentEntry,
-  HealthReportEntry,
+  LearningOutcomeEntry,
+  LearningSignals,
 } from "./health/index.js";
 
 // Finding-to-Issue Engine (Issue #1102)
@@ -285,6 +285,14 @@ export {
   type WriteReportsResult,
 } from "./health/index.js";
 export { HealthReportSchema } from "./health/index.js";
+// The one health series (#1898)
+export {
+  HealthTrendsWriter,
+  buildHealthTrendEntry,
+  recordHealthTrend,
+  type HealthTrendRunMeta,
+  type HealthTrendEntry,
+} from "./health/index.js";
 export type { HealthReport } from "./health/index.js";
 export type {
   RecommendationHistoryEntry,

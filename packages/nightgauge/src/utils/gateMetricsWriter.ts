@@ -1,7 +1,7 @@
 /**
  * GateMetricsWriter - JSONL writer/reader for quality gate telemetry
  *
- * Static utility class following the HealthScoreHistoryWriter pattern:
+ * Static utility class:
  * no state, no VSCode dependency, testable in isolation.
  *
  * Persists gate metric records to a single JSONL file in the checkout's own

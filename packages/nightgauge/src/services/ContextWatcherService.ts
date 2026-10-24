@@ -430,7 +430,7 @@ export class ContextWatcherService implements vscode.Disposable {
    *
    * Removes: issue-*.json, planning-*.json, dev-*.json, validate-*.json,
    * pr-*.json, merge-*.json (plus the checkpoint/winddown/budget signal files).
-   * Preserves: health-history.jsonl, calibration.json, history/, and other
+   * Preserves: calibration.json, history/, and other
    * non-context files. The run-control singletons (run-state.json,
    * queue-state.json, batch-state.json) are not in this directory at all: they
    * live in the checkout's CHECKOUT (ADR-024 § 7).

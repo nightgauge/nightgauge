@@ -8,8 +8,9 @@
  */
 
 import type { ExecutionHistoryRecord } from "../schemas/executionHistory";
-import type { HealthScoreSnapshot } from "../schemas/healthScoreHistory";
-import type { ExperimentOutcome } from "@nightgauge/sdk";
+import type { HealthScoreEntry } from "@nightgauge/sdk";
+import type { ExperimentOutcome, LearningSignals } from "@nightgauge/sdk";
+import type { SkillEffectivenessRecord } from "../schemas/skillEffectiveness";
 
 /** Date range filter for aggregation queries */
 export interface DateRangeFilter {
@@ -91,10 +92,21 @@ export interface StoredAnalysisReport {
 export interface AggregatedDataset {
   filter: DateRangeFilter;
   executionHistory: ExecutionHistoryRecord[];
-  healthScores: HealthScoreSnapshot[];
+  /** Scored points of the health series, `health/trends.jsonl` (#1898). */
+  healthScores: HealthScoreEntry[];
   analysisReports: StoredAnalysisReport[];
   experimentResults: ExperimentOutcome[];
   healthReports: HealthReport[];
+  /**
+   * Learning-effectiveness input (#1900): `outcomes.jsonl` pairs and
+   * `calibration.json` freshness. `null` when outcomes.jsonl is absent.
+   */
+  learningSignals?: LearningSignals | null;
+  /**
+   * Skill-drift input (#1900): latest `skill-effectiveness.jsonl` record per
+   * skill change in the period. `null` when the file is absent.
+   */
+  skillEffectiveness?: SkillEffectivenessRecord[] | null;
   summary: AggregatedSummary;
   quality: DataQualityMetrics;
 }

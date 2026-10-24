@@ -831,7 +831,7 @@ export class Dashboard implements vscode.Disposable {
       // Accumulate token usage into the live dashboard run so that
       // currentRun.usage.costUsd reflects real costs at completion time.
       // Without this, the run's costUsd stays 0 and health snapshots
-      // record zero cost. (Fix: health-history.jsonl always had costUsd=0)
+      // record zero cost.
       if (tokenUpdate?.stage) {
         this.state.recordTokenUsage({
           stage: tokenUpdate.stage as PipelineStage,
@@ -1311,19 +1311,11 @@ export class Dashboard implements vscode.Disposable {
         }
       }
 
-      // Record health snapshot on pipeline completion (Issue #789)
-      // Non-critical: wrapped in try/catch so snapshot failure never breaks pipeline
-      // Cost comes from two sources: (1) live token events accumulated into
-      // currentRun.usage.costUsd via recordTokenUsage(), and (2) the authoritative
-      // pipeline state.json tokens.estimated_cost_usd. We prefer the pipeline state
-      // value for snapshots because it's the single source of truth written by the
-      // orchestrator; live token events may lag if the dashboard panel wasn't open.
-      // Dedupe lives in writeHealthSnapshot(), keyed by (repo, issue, run), so
-      // it covers this path AND the IPC path rather than only guarding against
-      // an immediate repeat on this one (#1231).
-      this.recordHealthSnapshot(currentRun, pipelineState.tokens?.estimated_cost_usd ?? 0).catch(
-        () => {}
-      );
+      // Append this run's health-series entry (#1898). Non-critical: a
+      // failure never breaks the pipeline. Dedupe lives in
+      // writeHealthSnapshot(), keyed by (repo, issue, run), so it covers this
+      // path AND the IPC path (#1231).
+      this.recordHealthSnapshot(currentRun).catch(() => {});
 
       // Auto-refresh all metrics after pipeline completion (Issue #998)
       // refreshAllMetrics() is async and non-blocking; the subsequent
@@ -1383,24 +1375,19 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
-   * Record a health score snapshot after pipeline completion (Issue #789)
-   *
-   * Creates a HealthWidgetService to compute and persist the snapshot.
+   * Record this run's entry in the health series after pipeline completion.
    * Non-critical: errors are caught silently.
    */
   private async recordHealthSnapshot(
-    run: import("./DashboardState").PipelineRunSummary,
-    costUsd?: number
+    run: import("./DashboardState").PipelineRunSummary
   ): Promise<void> {
     // No repo attribution available on this path: `PipelineRunSummary` carries
     // no repo, and this fires from `syncFromPipelineState` reading the
     // singleton state service — which is the runner's. So it can only speak for
     // the dashboard's own repo, and it says so rather than guessing (#1231).
-    const cost = costUsd ?? run.usage.costUsd;
     await this.writeHealthSnapshot({
       repoRoot: this.workspaceRoot,
       issueNumber: run.issueNumber,
-      costUsd: cost,
       // `runId` is optional on a PipelineRunSummary. Falling back to the start
       // time keeps two runs of one issue distinguishable — without it both
       // collapse to the same dedupe key and the second never records.
@@ -1409,39 +1396,30 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
-   * Write one health snapshot, attributed to the repo whose run produced it.
+   * Append one entry to the health series, attributed to the repo whose run
+   * produced it.
    *
-   * THE SNAPSHOT IS DERIVED FROM, AND WRITTEN UNDER, ONE REPO (#1231). Before
-   * this, both entry points built `HealthWidgetService(this.state,
-   * this.workspaceRoot)` — the dashboard's history and the dashboard's path —
-   * for a run that may have executed in a sibling repository. The result was a
-   * single `health-history.jsonl` holding two populations: the runner repo's
-   * runs scoring `costTrend` 100, and a dispatched repo's scoring 0, alternating
-   * at the same timestamp for the same issue. A score read off that file does
-   * not describe any repository, and a trend over it compares different systems
-   * point to point.
+   * THE ENTRY IS DERIVED FROM, AND WRITTEN UNDER, ONE REPO (#1231): the SDK
+   * engine runs over that repo's own run records (`recordHealthForRun` →
+   * `DataAggregator.aggregate(repoRoot)`) and appends to that repo's
+   * `health/trends.jsonl`. The series is the only health store (#1898), and
+   * the dashboard headline is its latest entry, so the number displayed is the
+   * number persisted.
    *
-   * When the run's repo is not the dashboard's, a DashboardState is built over
-   * THAT repo's `TelemetryStore` and loaded before the components are computed,
-   * so `getAggregates`/`getCostTrend`/`getHistory` all see the right corpus.
-   *
-   * Non-critical throughout: a snapshot must never break pipeline completion.
+   * Non-critical throughout: a health entry must never break pipeline completion.
    */
   private async writeHealthSnapshot(args: {
     repoRoot: string | undefined;
     issueNumber: number;
-    costUsd: number;
     runId?: string;
   }): Promise<void> {
-    const { repoRoot, issueNumber, costUsd, runId } = args;
+    const { repoRoot, issueNumber, runId } = args;
     if (!repoRoot) return;
 
-    // One completed run appends exactly one snapshot (#1231). Both entry points
-    // funnel here, so the guard covers the IPC path AND the polling path — the
-    // old `lastSnapshotIssueNumber` scalar guarded only the latter, and only
-    // against an immediate repeat: two runs alternating issue numbers slipped
-    // straight through it. Keyed by run, not by issue, so a legitimate re-run of
-    // the same issue still records.
+    // One completed run appends exactly one entry (#1231). Both entry points
+    // funnel here, so the guard covers the IPC path AND the polling path.
+    // Keyed by run, not by issue, so a legitimate re-run of the same issue
+    // still records.
     const key = `${repoRoot}|${issueNumber}|${runId ?? ""}`;
     if (this.recordedSnapshotKeys.has(key)) return;
     this.recordedSnapshotKeys.add(key);
@@ -1453,39 +1431,13 @@ export class Dashboard implements vscode.Disposable {
     }
 
     try {
-      const state = await this.stateForRepo(repoRoot);
-      if (!state) return;
-      await new HealthWidgetService(state, repoRoot).recordSnapshot(issueNumber, costUsd);
+      const { recordHealthForRun } = await import("../../utils/healthSeries");
+      await recordHealthForRun(repoRoot, {
+        issueNumber,
+        runId: runId ?? `issue-${issueNumber}@${new Date().toISOString()}`,
+      });
     } catch {
-      // Non-critical — snapshot failure must not break pipeline
-    }
-  }
-
-  /**
-   * The DashboardState whose history belongs to `repoRoot`.
-   *
-   * Returns the dashboard's own state when the roots match — the common
-   * single-repo case, and the only case that was ever correct before #1231.
-   * Otherwise builds one over that repo's `TelemetryStore` and loads it.
-   * `computeHealthComponents()` reads only `getHistory()`, `getAggregates()`
-   * and `getCostTrend()`, all of which derive from the loaded history, so a
-   * state constructed without a Memento is sufficient — and is what keeps this
-   * from disturbing the dashboard's own cached view.
-   */
-  private async stateForRepo(repoRoot: string): Promise<DashboardState | null> {
-    if (this.workspaceRoot && path.resolve(repoRoot) === path.resolve(this.workspaceRoot)) {
-      return this.state;
-    }
-    try {
-      const { TelemetryStore } = await import("../../services/TelemetryStore");
-      const state = new DashboardState(undefined, repoRoot, new TelemetryStore(repoRoot));
-      const result = await state.loadFromTelemetryStore();
-      // An empty corpus scores every component against nothing; writing that
-      // would put a meaningless point on the sibling's trend.
-      if (!result.ok || state.getHistory().length === 0) return null;
-      return state;
-    } catch {
-      return null;
+      // Non-critical — a health entry failure must not break pipeline
     }
   }
 
@@ -1510,8 +1462,8 @@ export class Dashboard implements vscode.Disposable {
    * Public entry point for the pipeline.complete IPC handler and
    * concurrent slot completion callback. The private recordHealthSnapshot()
    * requires a PipelineRunSummary, but callers outside Dashboard only have
-   * issueNumber + costUsd. This method writes directly to health-history.jsonl
-   * via HealthWidgetService.
+   * issueNumber + costUsd. `costUsd` is not an input to health: the engine
+   * reads the run records themselves (#1898).
    *
    * Must be called AFTER reloadHistory() so DashboardState has the latest
    * run data for health score computation.
@@ -1520,7 +1472,7 @@ export class Dashboard implements vscode.Disposable {
    */
   async recordHealthSnapshotForRun(
     issueNumber: number,
-    costUsd: number,
+    _costUsd: number,
     repo?: string,
     runId?: string
   ): Promise<void> {
@@ -1532,7 +1484,6 @@ export class Dashboard implements vscode.Disposable {
       await this.writeHealthSnapshot({
         repoRoot: this.resolveRepoRoot(repo),
         issueNumber,
-        costUsd,
         runId,
       });
 
@@ -2904,7 +2855,6 @@ export class Dashboard implements vscode.Disposable {
   async refreshHealthWidgetData(): Promise<void> {
     try {
       this.healthWidgetData = await this.state.getHealthData(
-        undefined,
         this.healthTrendRange,
         this.dependabotData?.data ?? null
       );

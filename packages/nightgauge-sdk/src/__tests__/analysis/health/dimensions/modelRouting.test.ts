@@ -57,9 +57,6 @@ function datasetFromRecords(
   return {
     executionHistory: records,
     healthScores: [],
-    selfTuningLog: [],
-    experimentResults: [],
-    healthReports: [],
   };
 }
 

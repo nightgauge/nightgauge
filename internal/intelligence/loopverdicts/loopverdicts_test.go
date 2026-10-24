@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -351,5 +352,66 @@ func TestAnalyze_Reliability_Closing(t *testing.T) {
 	}
 	if rel.Verdict != VerdictClosing {
 		t.Errorf("verdict = %s, want closing (failure rate improved)", rel.Verdict)
+	}
+}
+
+// The health-monitoring loop reads the one health series (#1898). An absent
+// series is named — path and all — rather than read as a quiet no-data.
+func TestHealthMonitoring_AbsentSeriesNamesThePath(t *testing.T) {
+	dir := layouttest.Repo(t)
+	got := analyzeHealthMonitoring(dir, time.Now().AddDate(0, 0, -30))
+	if got.Verdict != VerdictNoData {
+		t.Fatalf("verdict = %q, want no-data", got.Verdict)
+	}
+	if !strings.Contains(got.Reason, "health/trends.jsonl") || !strings.Contains(got.Reason, "absent") {
+		t.Fatalf("reason %q does not name the absent series", got.Reason)
+	}
+}
+
+// A run whose every dimension was starved is recorded as null. Averaging it as
+// 0 would turn "nothing was measured" into "health collapsed".
+func TestHealthMonitoring_NullScoresAreNotZeros(t *testing.T) {
+	dir := layouttest.Repo(t)
+	healthDir := layouttest.MkCheckoutSubdir(t, dir, "health")
+	now := time.Now().UTC()
+	var recs []interface{}
+	for i := 0; i < 3; i++ {
+		recs = append(recs, map[string]interface{}{
+			"schema_version": "2", "timestamp": now.Add(-time.Duration(i) * time.Hour).Format(time.RFC3339),
+			"overall_score": 90, "status": "excellent", "dimensions": map[string]float64{"reliability": 90},
+			"excluded_dimensions": map[string]string{}, "significant_findings": []string{},
+		})
+	}
+	for i := 0; i < 3; i++ {
+		recs = append(recs, map[string]interface{}{
+			"schema_version": "2", "timestamp": now.Add(-time.Duration(i+3) * time.Hour).Format(time.RFC3339),
+			"overall_score": nil, "status": "no-data", "dimensions": map[string]float64{},
+			"excluded_dimensions": map[string]string{"reliability": "no runs"}, "significant_findings": []string{},
+		})
+	}
+	writeJSONL(t, filepath.Join(healthDir, "trends.jsonl"), recs)
+
+	got := analyzeHealthMonitoring(dir, now.AddDate(0, 0, -30))
+	if got.Verdict != VerdictClosing {
+		t.Fatalf("verdict = %q (%s), want closing over the three scored entries", got.Verdict, got.Reason)
+	}
+	if got.Evidence["avgScore"] != "90.0%" || got.Evidence["unscoredEntries"] != "3" {
+		t.Fatalf("evidence = %v, want avgScore 90.0%% and unscoredEntries 3", got.Evidence)
+	}
+}
+
+func TestHealthMonitoring_AllUnscoredIsNoData(t *testing.T) {
+	dir := layouttest.Repo(t)
+	healthDir := layouttest.MkCheckoutSubdir(t, dir, "health")
+	writeJSONL(t, filepath.Join(healthDir, "trends.jsonl"), []interface{}{
+		map[string]interface{}{
+			"schema_version": "2", "timestamp": time.Now().UTC().Format(time.RFC3339),
+			"overall_score": nil, "status": "no-data", "dimensions": map[string]float64{},
+			"excluded_dimensions": map[string]string{}, "significant_findings": []string{},
+		},
+	})
+	got := analyzeHealthMonitoring(dir, time.Now().AddDate(0, 0, -30))
+	if got.Verdict != VerdictNoData || !strings.Contains(got.Reason, "none scored") {
+		t.Fatalf("got %q / %q, want no-data naming that none scored", got.Verdict, got.Reason)
 	}
 }

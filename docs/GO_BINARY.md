@@ -5153,7 +5153,11 @@ error):
   See
   [SELF_IMPROVEMENT_LOOP.md § Outcome Recording](SELF_IMPROVEMENT_LOOP.md#outcome-recording).
 - `health/trends.jsonl` in the checkout's directory
-  (`nightgauge layout path checkout health/trends.jsonl`) — health-monitoring loop
+  (`nightgauge layout path checkout health/trends.jsonl`) — health-monitoring loop.
+  This is the one health series (one schema-2 entry per pipeline run). An absent
+  series is reported as `no-data` with the path named; an entry whose
+  `overall_score` is `null` is counted in `unscoredEntries` and never averaged
+  as 0.
 
 **Exit codes**: 0 success, 1 error (non-zero workspace root)
 
@@ -5563,8 +5567,7 @@ nightgauge health gate-metrics [--json]
 
 ### Health Subcommands
 
-Read health data written by the SDK's `HealthTrendsWriter` and gate evaluation
-hooks.
+Read the health series and gate evaluation hooks.
 
 #### `health trends`
 
@@ -5572,9 +5575,19 @@ hooks.
 nightgauge health trends [--limit N] [--json]
 ```
 
-Reads the last N entries from `health/trends.jsonl` in the checkout's directory
-(`nightgauge layout path checkout health/trends.jsonl`). Malformed
-lines are skipped with a warning to stderr (non-fatal).
+Reads the last N entries of the one health series, `health/trends.jsonl` in the
+checkout's directory (`nightgauge layout path checkout health/trends.jsonl`).
+The extension appends exactly one entry per completed pipeline run, computed by
+the SDK's `HealthAnalysisEngine`; the dashboard's headline score is the latest
+entry. See
+[HEALTH_MONITORING.md § The health series](HEALTH_MONITORING.md#the-health-series).
+Malformed lines, and lines of any schema other than `2`, are skipped with a
+warning to stderr (non-fatal).
+
+The text output prints `N/A` for an entry whose `overall_score` is `null` (no
+dimension had data) and names how many dimensions a score is made of, for
+example `Score: 83 good (6/8 dimensions)`. With no entries it names the file it
+read.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -5586,19 +5599,27 @@ lines are skipped with a warning to stderr (non-fatal).
 ```json
 [
   {
-    "schema_version": "1",
+    "schema_version": "2",
     "timestamp": "2026-04-29T10:30:00Z",
     "run_id": "run-abc123",
     "issue_number": 3070,
-    "overall_score": 85.5,
+    "overall_score": 83,
+    "status": "good",
     "dimensions": {
-      "token_economics": 0.9,
-      "cost_health": 0.85
+      "reliability": 92,
+      "cost-health": 75
     },
-    "significant_findings": ["improving success rate trend"]
+    "excluded_dimensions": {
+      "skill-drift": "no skill-effectiveness records in the period"
+    },
+    "significant_findings": ["Cost spike detected"]
   }
 ]
 ```
+
+`overall_score` is `null` and `status` is `"no-data"` together, exactly when no
+dimension had enough data. `dimensions` holds only the dimensions that
+contributed; every other dimension is in `excluded_dimensions` with its reason.
 
 #### `health gate-metrics`
 

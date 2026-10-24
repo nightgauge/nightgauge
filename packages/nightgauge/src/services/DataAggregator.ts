@@ -16,12 +16,16 @@ import { checkoutPath, isUsableWorkspaceRoot, pipelineStateDir } from "../utils/
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { ExperimentManager, type ExperimentOutcome } from "@nightgauge/sdk";
+import {
+  ExperimentManager,
+  HealthTrendsWriter,
+  type ExperimentOutcome,
+  type HealthScoreEntry,
+} from "@nightgauge/sdk";
 
 import { ExecutionHistoryReader } from "../utils/executionHistoryReader";
-import { HealthScoreHistoryReader } from "../utils/healthScoreHistory";
+import { readLearningSignals, readSkillEffectiveness } from "../utils/healthLearningInputs";
 import type { ExecutionHistoryRecord } from "../schemas/executionHistory";
-import type { HealthScoreSnapshot } from "../schemas/healthScoreHistory";
 import type {
   DateRangeFilter,
   AggregatedDataset,
@@ -127,6 +131,13 @@ export class DataAggregator {
     );
     const healthReports = this.extractResult(healthReportsResult, "healthReports", sourceWarnings);
 
+    // Learning-effectiveness and skill-drift inputs (#1900). Read separately:
+    // `null` means the file is absent, which the dimension reports by name.
+    const [learningSignals, skillEffectiveness] = await Promise.all([
+      readLearningSignals(workspaceRoot, filter).catch(() => null),
+      readSkillEffectiveness(workspaceRoot, filter).catch(() => null),
+    ]);
+
     const summary = this.computeSummary(executionHistory);
     const quality = this.computeQualityMetrics(
       filter,
@@ -147,6 +158,8 @@ export class DataAggregator {
       analysisReports,
       experimentResults,
       healthReports,
+      learningSignals,
+      skillEffectiveness,
       summary,
       quality,
     };
@@ -163,11 +176,26 @@ export class DataAggregator {
     return ExecutionHistoryReader.readDateRange(workspaceRoot, filter.startDate, filter.endDate);
   }
 
+  /**
+   * The scored points of the one health series (#1898) in the window. An
+   * entry recorded as null (every dimension starved) is not a point: it is
+   * dropped here rather than fed to an analyzer as a score.
+   */
   private static async readHealthScores(
     workspaceRoot: string,
     filter: DateRangeFilter
-  ): Promise<HealthScoreSnapshot[]> {
-    return HealthScoreHistoryReader.readDateRange(workspaceRoot, filter.startDate, filter.endDate);
+  ): Promise<HealthScoreEntry[]> {
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return [];
+    const entries = await HealthTrendsWriter.read(workspaceRoot, {
+      startDate: filter.startDate,
+      endDate: filter.endDate,
+    });
+    const scores: HealthScoreEntry[] = [];
+    for (const e of entries) {
+      if (e.overall_score === null) continue;
+      scores.push({ timestamp: e.timestamp, score: e.overall_score, issueNumber: e.issue_number });
+    }
+    return scores;
   }
 
   private static async readAnalysisReports(
@@ -363,7 +391,7 @@ export class DataAggregator {
     filter: DateRangeFilter,
     data: {
       executionHistory: ExecutionHistoryRecord[];
-      healthScores: HealthScoreSnapshot[];
+      healthScores: HealthScoreEntry[];
       analysisReports: StoredAnalysisReport[];
       experimentResults: ExperimentOutcome[];
       healthReports: HealthReport[];
@@ -487,7 +515,7 @@ export class DataAggregator {
     filter: DateRangeFilter,
     data: {
       executionHistory: ExecutionHistoryRecord[];
-      healthScores: HealthScoreSnapshot[];
+      healthScores: HealthScoreEntry[];
       analysisReports: StoredAnalysisReport[];
       experimentResults: ExperimentOutcome[];
       healthReports: HealthReport[];

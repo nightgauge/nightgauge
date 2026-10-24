@@ -3476,6 +3476,11 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
     .health-fair { background: rgba(255, 206, 86, 0.2); color: #ffce56; }
     .health-poor { background: rgba(255, 159, 64, 0.2); color: #ff9f40; }
     .health-critical { background: rgba(255, 99, 132, 0.2); color: #ff6384; }
+    .health-no-data {
+      background: transparent;
+      color: var(--vscode-descriptionForeground, #888);
+      border: 1px dashed var(--vscode-panel-border, #333);
+    }
     .health-score-inline {
       font-size: 16px;
       font-weight: 700;
@@ -3850,16 +3855,15 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
     .health-component-insufficient {
       opacity: 0.6;
     }
-    .health-component-insufficient .component-bar-container {
-      border-style: dashed;
-      border-width: 1px;
-      border-color: var(--vscode-panel-border, #333);
-    }
-    .health-component-insufficient .component-label::after {
-      content: ' (insufficient data)';
+    .component-excluded {
+      flex: 1;
       font-style: italic;
       font-size: 0.85em;
-      opacity: 0.7;
+    }
+    .health-score-basis {
+      font-size: 0.85em;
+      opacity: 0.75;
+      margin: 2px 0 6px;
     }
 /* Audit Trail Tab Styles (Issue #1583) */
     .audit-tab {
@@ -10195,6 +10199,11 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
     .health-fair { background: rgba(255, 206, 86, 0.2); color: #ffce56; }
     .health-poor { background: rgba(255, 159, 64, 0.2); color: #ff9f40; }
     .health-critical { background: rgba(255, 99, 132, 0.2); color: #ff6384; }
+    .health-no-data {
+      background: transparent;
+      color: var(--vscode-descriptionForeground, #888);
+      border: 1px dashed var(--vscode-panel-border, #333);
+    }
     .health-score-inline {
       font-size: 16px;
       font-weight: 700;
@@ -10569,16 +10578,15 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
     .health-component-insufficient {
       opacity: 0.6;
     }
-    .health-component-insufficient .component-bar-container {
-      border-style: dashed;
-      border-width: 1px;
-      border-color: var(--vscode-panel-border, #333);
-    }
-    .health-component-insufficient .component-label::after {
-      content: ' (insufficient data)';
+    .component-excluded {
+      flex: 1;
       font-style: italic;
       font-size: 0.85em;
-      opacity: 0.7;
+    }
+    .health-score-basis {
+      font-size: 0.85em;
+      opacity: 0.75;
+      margin: 2px 0 6px;
     }
 /* Audit Trail Tab Styles (Issue #1583) */
     .audit-tab {
@@ -16962,6 +16970,11 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
     .health-fair { background: rgba(255, 206, 86, 0.2); color: #ffce56; }
     .health-poor { background: rgba(255, 159, 64, 0.2); color: #ff9f40; }
     .health-critical { background: rgba(255, 99, 132, 0.2); color: #ff6384; }
+    .health-no-data {
+      background: transparent;
+      color: var(--vscode-descriptionForeground, #888);
+      border: 1px dashed var(--vscode-panel-border, #333);
+    }
     .health-score-inline {
       font-size: 16px;
       font-weight: 700;
@@ -17336,16 +17349,15 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
     .health-component-insufficient {
       opacity: 0.6;
     }
-    .health-component-insufficient .component-bar-container {
-      border-style: dashed;
-      border-width: 1px;
-      border-color: var(--vscode-panel-border, #333);
-    }
-    .health-component-insufficient .component-label::after {
-      content: ' (insufficient data)';
+    .component-excluded {
+      flex: 1;
       font-style: italic;
       font-size: 0.85em;
-      opacity: 0.7;
+    }
+    .health-score-basis {
+      font-size: 0.85em;
+      opacity: 0.75;
+      margin: 2px 0 6px;
     }
 /* Audit Trail Tab Styles (Issue #1583) */
     .audit-tab {
@@ -23574,6 +23586,11 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
     .health-fair { background: rgba(255, 206, 86, 0.2); color: #ffce56; }
     .health-poor { background: rgba(255, 159, 64, 0.2); color: #ff9f40; }
     .health-critical { background: rgba(255, 99, 132, 0.2); color: #ff6384; }
+    .health-no-data {
+      background: transparent;
+      color: var(--vscode-descriptionForeground, #888);
+      border: 1px dashed var(--vscode-panel-border, #333);
+    }
     .health-score-inline {
       font-size: 16px;
       font-weight: 700;
@@ -23948,16 +23965,15 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
     .health-component-insufficient {
       opacity: 0.6;
     }
-    .health-component-insufficient .component-bar-container {
-      border-style: dashed;
-      border-width: 1px;
-      border-color: var(--vscode-panel-border, #333);
-    }
-    .health-component-insufficient .component-label::after {
-      content: ' (insufficient data)';
+    .component-excluded {
+      flex: 1;
       font-style: italic;
       font-size: 0.85em;
-      opacity: 0.7;
+    }
+    .health-score-basis {
+      font-size: 0.85em;
+      opacity: 0.75;
+      margin: 2px 0 6px;
     }
 /* Audit Trail Tab Styles (Issue #1583) */
     .audit-tab {

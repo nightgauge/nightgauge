@@ -29,9 +29,6 @@ function makeInput(
   return {
     executionHistory: records,
     healthScores: [],
-    selfTuningLog: [],
-    experimentResults: [],
-    healthReports: [],
     ...extras,
   };
 }

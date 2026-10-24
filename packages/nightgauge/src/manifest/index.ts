@@ -611,11 +611,6 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(heart-filled)",
     },
     {
-      command: "nightgauge.recalibrateHealth",
-      title: "Nightgauge: Recalibrate Health Score Baseline",
-      icon: "$(refresh)",
-    },
-    {
       command: "nightgauge.showBrownfieldDashboard",
       title: "Nightgauge: Show Brownfield Dashboard",
       icon: "$(dashboard)",

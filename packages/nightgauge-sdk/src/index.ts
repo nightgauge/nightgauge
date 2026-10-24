@@ -708,8 +708,15 @@ export {
   type TerminalFailureKind,
   // Health Analysis Engine (Issue #1101)
   HealthAnalysisEngine,
+  // The one health series (#1898)
+  HealthTrendsWriter,
+  buildHealthTrendEntry,
+  recordHealthTrend,
+  type HealthTrendRunMeta,
+  type HealthTrendEntry,
   computeOverallHealthScore,
   getOverallHealthStatus,
+  excludedDimensionReason,
   crossReference,
   analyzeTokenEconomics,
   analyzeCostHealth,
@@ -742,9 +749,8 @@ export {
   type HealthAnalysisResult,
   type HealthAnalysisInput,
   type HealthScoreEntry,
-  type SelfTuningEntry,
-  type ExperimentEntry,
-  type HealthReportEntry,
+  type LearningOutcomeEntry,
+  type LearningSignals,
   // Recommendation Tracking (Issue #1103)
   RecommendationTracker,
   type RecommendationHistoryEntry,

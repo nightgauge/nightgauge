@@ -15,11 +15,17 @@ const (
 	gateMetricsName = layout.CheckoutHealth + "/gate-metrics.jsonl"
 )
 
+// TrendsPath is the absolute path of the checkout's health series.
+func TrendsPath(workspaceRoot string) (string, error) {
+	return layout.CheckoutPath(workspaceRoot, trendsName)
+}
+
 // ReadTrends reads the last N entries from the checkout's health/trends.jsonl.
 // When limit is 0 all entries are returned. If the file does not exist an empty
-// slice is returned without error.
+// slice is returned without error. A line of any schema other than
+// TrendSchemaVersion is skipped with a warning: the series has one schema.
 func ReadTrends(workspaceRoot string, limit int) ([]HealthTrendEntry, error) {
-	filePath, err := layout.CheckoutPath(workspaceRoot, trendsName)
+	filePath, err := TrendsPath(workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +51,11 @@ func ReadTrends(workspaceRoot string, limit int) ([]HealthTrendEntry, error) {
 		var entry HealthTrendEntry
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: skipped malformed line %d in trends.jsonl: %v\n", lineNum, err)
+			continue
+		}
+		if entry.SchemaVersion != TrendSchemaVersion {
+			fmt.Fprintf(os.Stderr, "warning: skipped line %d in trends.jsonl: schema_version %q, want %q\n",
+				lineNum, entry.SchemaVersion, TrendSchemaVersion)
 			continue
 		}
 		entries = append(entries, entry)

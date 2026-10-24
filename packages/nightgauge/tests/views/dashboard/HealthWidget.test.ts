@@ -2,14 +2,11 @@
  * HealthWidget.test.ts
  *
  * Unit tests for HealthWidgetService class covering:
- * - Empty history returns isEmpty=true
- * - Health score with default weights returns 0-100
- * - Health score with all-perfect metrics yields a high score
- * - computeWeightedScore normalizes weights correctly
- * - Custom weights are applied correctly
+ * - Empty history returns isEmpty=true with no score (N/A, not 0)
+ * - The headline is the latest health-series entry, verbatim (#1898)
+ * - A null latest entry reads as no-data even when older entries scored
  * - Sparkline data has correct structure
  * - Graceful degradation when SDK analysis throws
- * - Components have correct names
  *
  * @see Issue #655 - Pipeline Health Dashboard Widget
  */
@@ -33,7 +30,29 @@ vi.mock("vscode", () => ({
   },
 }));
 
+const readHealthSeries = vi.fn();
+vi.mock("../../../src/utils/healthSeries", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/utils/healthSeries")>()),
+  readHealthSeries: (...args: unknown[]) => readHealthSeries(...args),
+}));
+
+import type { HealthTrendEntry } from "@nightgauge/sdk";
 import { HealthWidgetService } from "../../../src/views/dashboard/HealthWidget";
+
+function seriesEntry(overrides: Partial<HealthTrendEntry> = {}): HealthTrendEntry {
+  return {
+    schema_version: "2",
+    timestamp: new Date().toISOString(),
+    run_id: "r",
+    issue_number: 1,
+    overall_score: 83,
+    status: "good",
+    dimensions: { reliability: 92, "cost-health": 75 },
+    excluded_dimensions: { "skill-drift": "no skill-effectiveness records" },
+    significant_findings: [],
+    ...overrides,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Mock factories
@@ -95,244 +114,96 @@ const createMockRun = (overrides?: Record<string, unknown>) => ({
 // ---------------------------------------------------------------------------
 
 describe("HealthWidgetService", () => {
+  beforeEach(() => {
+    readHealthSeries.mockReset();
+    readHealthSeries.mockResolvedValue([]);
+  });
+
   describe("getData()", () => {
-    it("returns isEmpty=true when history is empty", async () => {
-      // Arrange
+    it("returns isEmpty=true with no score — not 0, not critical — when history is empty", async () => {
       const state = createMockDashboardState();
       const service = new HealthWidgetService(state as any, "/workspace");
 
-      // Act
       const data = await service.getData();
 
-      // Assert
       expect(data.isEmpty).toBe(true);
-      expect(data.summary.score).toBe(0);
-      expect(data.summary.components).toHaveLength(0);
+      expect(data.summary.score).toBeNull();
+      expect(data.summary.status).toBe("no-data");
       expect(data.sparklines).toHaveLength(0);
       expect(data.alerts).toHaveLength(0);
       expect(data.recommendations).toHaveLength(0);
     });
 
-    it("returns isEmpty=false with valid data when history has runs", async () => {
-      // Arrange
+    it("reads no-data when runs exist but no health entry has been recorded", async () => {
       const runs = [createMockRun(), createMockRun({ issueNumber: 2 })];
-      const state = createMockDashboardState({
-        getHistory: vi.fn().mockReturnValue(runs),
-      });
+      const state = createMockDashboardState({ getHistory: vi.fn().mockReturnValue(runs) });
       const service = new HealthWidgetService(state as any, "/workspace");
 
-      // Act
       const data = await service.getData();
 
-      // Assert
       expect(data.isEmpty).toBe(false);
-      expect(data.summary.components.length).toBeGreaterThan(0);
+      expect(data.summary.score).toBeNull();
+      expect(data.summary.status).toBe("no-data");
+      expect(data.summary.dimensions).toHaveLength(8);
+      expect(data.summary.contributing).toBe(0);
       expect(data.lastUpdated).toBeDefined();
     });
 
-    it("returns health score in valid 0-100 range with default weights", async () => {
-      // Arrange
-      const runs = [createMockRun(), createMockRun()];
-      const state = createMockDashboardState({
-        getHistory: vi.fn().mockReturnValue(runs),
-      });
-      const service = new HealthWidgetService(state as any, "/workspace");
-
-      // Act
-      const data = await service.getData();
-
-      // Assert
-      expect(data.summary.score).toBeGreaterThanOrEqual(0);
-      expect(data.summary.score).toBeLessThanOrEqual(100);
-    });
-
-    it("produces a high score when all metrics are perfect", async () => {
-      // Arrange — all-perfect: 100% success, improving efficiency, low cost, high cache
-      const runs = Array.from({ length: 5 }, (_, i) =>
-        createMockRun({
-          issueNumber: i + 1,
-          status: "complete",
-          efficiency: {
-            tokensPerMinute: 100,
-            costPerMinute: 0.001,
-            cacheHitRate: 1.0,
-            avgStageDurationMs: 5000,
-          },
-        })
-      );
-      const state = createMockDashboardState({
-        getHistory: vi.fn().mockReturnValue(runs),
-        getAggregates: vi.fn().mockReturnValue({ successRate: 1.0, totalRuns: 5 }),
-        getEfficiencyTrend: vi.fn().mockReturnValue({
-          improving: true,
-          percentChange: 20,
-          hasEnoughData: true,
-        }),
-        getCostTrend: vi.fn().mockReturnValue({
-          improving: true,
-          percentChange: -10,
-          hasEnoughData: true,
-        }),
-      });
-      const service = new HealthWidgetService(state as any, "/workspace");
-
-      // Act
-      const data = await service.getData();
-
-      // Assert — with perfect inputs, composite score should be high
-      expect(data.summary.score).toBeGreaterThanOrEqual(70);
-    });
-
-    it("does not include prediction accuracy as a health component", async () => {
-      // Prediction accuracy was removed as a health component in the simplification
-      const runs = [createMockRun(), createMockRun({ issueNumber: 2 })];
-      const state = createMockDashboardState({
-        getHistory: vi.fn().mockReturnValue(runs),
-      });
-      const service = new HealthWidgetService(state as any, "/workspace");
-
-      // Act
-      const data = await service.getData();
-
-      // Assert — predictionAccuracy is no longer a health component
-      const predComp = data.summary.components.find((c) => c.name === "predictionAccuracy");
-      expect(predComp).toBeUndefined();
-    });
-  });
-
-  describe("computeWeightedScore()", () => {
-    it("normalizes weights and returns a value between 0 and 100", () => {
-      // Arrange — weights that do NOT sum to 1.0
-      const state = createMockDashboardState();
-      const service = new HealthWidgetService(state as any, "/workspace");
-      const components = [
-        {
-          name: "a",
-          score: 80,
-          weight: 5,
-          trend: "improving" as const,
-          label: "A",
-        },
-        {
-          name: "b",
-          score: 60,
-          weight: 5,
-          trend: "stable" as const,
-          label: "B",
-        },
-      ];
-
-      // Act
-      const score = service.computeWeightedScore(components);
-
-      // Assert
-      expect(score).toBeGreaterThanOrEqual(0);
-      expect(score).toBeLessThanOrEqual(100);
-      // Weighted average of 80 and 60 with equal weights = 70
-      expect(score).toBe(70);
-    });
-
-    it("returns 0 for empty components array", () => {
-      // Arrange
-      const state = createMockDashboardState();
-      const service = new HealthWidgetService(state as any, "/workspace");
-
-      // Act
-      const score = service.computeWeightedScore([]);
-
-      // Assert
-      expect(score).toBe(0);
-    });
-
-    it("applies different weights to produce different scores", () => {
-      // Arrange
-      const state = createMockDashboardState();
-      const service = new HealthWidgetService(state as any, "/workspace");
-
-      const componentsHighWeightOnGood = [
-        {
-          name: "a",
-          score: 100,
-          weight: 9,
-          trend: "improving" as const,
-          label: "A",
-        },
-        {
-          name: "b",
-          score: 0,
-          weight: 1,
-          trend: "degrading" as const,
-          label: "B",
-        },
-      ];
-
-      const componentsHighWeightOnBad = [
-        {
-          name: "a",
-          score: 100,
-          weight: 1,
-          trend: "improving" as const,
-          label: "A",
-        },
-        {
-          name: "b",
-          score: 0,
-          weight: 9,
-          trend: "degrading" as const,
-          label: "B",
-        },
-      ];
-
-      // Act
-      const scoreHigh = service.computeWeightedScore(componentsHighWeightOnGood);
-      const scoreLow = service.computeWeightedScore(componentsHighWeightOnBad);
-
-      // Assert — weighting towards good metric gives higher score
-      expect(scoreHigh).toBe(90);
-      expect(scoreLow).toBe(10);
-      expect(scoreHigh).toBeGreaterThan(scoreLow);
-    });
-  });
-
-  describe("computeHealthComponents()", () => {
-    it("returns all 4 expected components with correct names", () => {
-      // Arrange
+    it("shows the latest series entry's score verbatim — the number persisted (#1898)", async () => {
+      readHealthSeries.mockResolvedValue([
+        seriesEntry({ overall_score: 40, status: "poor", run_id: "older" }),
+        seriesEntry({ overall_score: 83, status: "good", run_id: "latest", issue_number: 7 }),
+      ]);
       const runs = [createMockRun()];
-      const state = createMockDashboardState({
-        getHistory: vi.fn().mockReturnValue(runs),
-      });
+      const state = createMockDashboardState({ getHistory: vi.fn().mockReturnValue(runs) });
       const service = new HealthWidgetService(state as any, "/workspace");
 
-      // Act
-      const components = service.computeHealthComponents();
+      const data = await service.getData();
 
-      // Assert
-      expect(components).toHaveLength(4);
-      const names = components.map((c) => c.name);
-      expect(names).toContain("successRate");
-      expect(names).toContain("costTrend");
-      expect(names).toContain("failureRate");
-      expect(names).toContain("cacheHitRate");
+      expect(readHealthSeries).toHaveBeenCalledWith("/workspace");
+      expect(data.summary.score).toBe(83);
+      expect(data.summary.status).toBe("good");
+      expect(data.summary.issueNumber).toBe(7);
+      expect(data.summary.contributing).toBe(2);
+      const drift = data.summary.dimensions.find((d) => d.dimension === "skill-drift");
+      expect(drift).toMatchObject({
+        score: null,
+        excludedReason: "no skill-effectiveness records",
+      });
     });
 
-    it("each component has a score between 0 and 100", () => {
-      // Arrange
-      const runs = [createMockRun()];
+    it("a latest entry recorded as null reads N/A, not the last scored entry", async () => {
+      readHealthSeries.mockResolvedValue([
+        seriesEntry({ overall_score: 90, status: "excellent" }),
+        seriesEntry({
+          overall_score: null,
+          status: "no-data",
+          dimensions: {},
+          excluded_dimensions: { reliability: "no runs" },
+        }),
+      ]);
       const state = createMockDashboardState({
-        getHistory: vi.fn().mockReturnValue(runs),
+        getHistory: vi.fn().mockReturnValue([createMockRun()]),
       });
       const service = new HealthWidgetService(state as any, "/workspace");
 
-      // Act
-      const components = service.computeHealthComponents();
+      const data = await service.getData();
 
-      // Assert
-      for (const component of components) {
-        expect(component.score).toBeGreaterThanOrEqual(0);
-        expect(component.score).toBeLessThanOrEqual(100);
-        expect(component.weight).toBeGreaterThanOrEqual(0);
-        expect(component.weight).toBeLessThanOrEqual(1);
-      }
+      expect(data.summary.score).toBeNull();
+      expect(data.summary.status).toBe("no-data");
+      expect(data.summary.recordedAt).toBeDefined();
+    });
+
+    it("does not read a series when there is no workspace path", async () => {
+      const state = createMockDashboardState({
+        getHistory: vi.fn().mockReturnValue([createMockRun()]),
+      });
+      const service = new HealthWidgetService(state as any, undefined);
+
+      const data = await service.getData();
+
+      expect(readHealthSeries).not.toHaveBeenCalled();
+      expect(data.summary.score).toBeNull();
     });
   });
 
@@ -510,82 +381,6 @@ describe("HealthWidgetService", () => {
 
       // Assert — SDK is mocked to throw, so we get empty array
       expect(recommendations).toEqual([]);
-    });
-  });
-
-  describe("insufficientData (#991)", () => {
-    it("sets insufficientData=true on cost component with < 6 runs", () => {
-      const runs = Array.from({ length: 4 }, (_, i) => createMockRun({ issueNumber: i + 1 }));
-      const state = createMockDashboardState({
-        getHistory: vi.fn().mockReturnValue(runs),
-        getCostTrend: vi.fn().mockReturnValue({
-          improving: true,
-          percentChange: 0,
-          hasEnoughData: false,
-        }),
-      });
-      const service = new HealthWidgetService(state as any, "/workspace");
-
-      const components = service.computeHealthComponents();
-
-      const cost = components.find((c) => c.name === "costTrend");
-      expect(cost?.insufficientData).toBe(true);
-      expect(cost?.insufficientDataMessage).toBe("Need 2 more runs for trend data");
-    });
-
-    it("sets insufficientData=false on cost component with >= 6 runs", () => {
-      const runs = Array.from({ length: 10 }, (_, i) => createMockRun({ issueNumber: i + 1 }));
-      const state = createMockDashboardState({
-        getHistory: vi.fn().mockReturnValue(runs),
-        getCostTrend: vi.fn().mockReturnValue({
-          improving: true,
-          percentChange: -3,
-          hasEnoughData: true,
-        }),
-      });
-      const service = new HealthWidgetService(state as any, "/workspace");
-
-      const components = service.computeHealthComponents();
-
-      const cost = components.find((c) => c.name === "costTrend");
-      expect(cost?.insufficientData).toBe(false);
-      expect(cost?.insufficientDataMessage).toBeUndefined();
-    });
-
-    it("defaults cost score to 100 when insufficient data (assume healthy)", () => {
-      const runs = Array.from({ length: 2 }, (_, i) => createMockRun({ issueNumber: i + 1 }));
-      const state = createMockDashboardState({
-        getHistory: vi.fn().mockReturnValue(runs),
-        getCostTrend: vi.fn().mockReturnValue({
-          improving: true,
-          percentChange: 0,
-          hasEnoughData: false,
-        }),
-      });
-      const service = new HealthWidgetService(state as any, "/workspace");
-
-      const components = service.computeHealthComponents();
-
-      const cost = components.find((c) => c.name === "costTrend");
-      expect(cost?.score).toBe(100);
-    });
-
-    it("clamps runsNeeded to at least 1", () => {
-      // 5 runs: 6-5=1, should say "Need 1 more run" (singular)
-      const runs = Array.from({ length: 5 }, (_, i) => createMockRun({ issueNumber: i + 1 }));
-      const state = createMockDashboardState({
-        getHistory: vi.fn().mockReturnValue(runs),
-        getCostTrend: vi.fn().mockReturnValue({
-          improving: true,
-          percentChange: 0,
-          hasEnoughData: false,
-        }),
-      });
-      const service = new HealthWidgetService(state as any, "/workspace");
-
-      const components = service.computeHealthComponents();
-      const cost = components.find((c) => c.name === "costTrend");
-      expect(cost?.insufficientDataMessage).toBe("Need 1 more run for trend data");
     });
   });
 });

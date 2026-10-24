@@ -291,6 +291,13 @@ export class StageTreeItem extends BaseTreeItem {
       // and narrated none of it. A stage that cannot report its phases has to
       // SAY that.
       //
+      // The partial case is the same measurement with a smaller gap (#1887):
+      // `4/14 phases · 10 unreported` puts a fraction where every reader
+      // parses completion — "it did 4 of its 14 steps" — when the claim is
+      // about what the pipeline SAW. It reads as coverage instead:
+      // `14 phases · 4 observed, 10 unobserved`. A fully observed stage keeps
+      // its `N/N phases`, which there really is a completion count.
+      //
       // The denominator stays visible on purpose. Dropping it would hide how
       // much went unmeasured, which is the opposite failure and just as
       // dishonest.
@@ -300,9 +307,10 @@ export class StageTreeItem extends BaseTreeItem {
           ? "no phases applicable"
           : unmeasured
             ? `phases not reported (${applicable})`
-            : `${completedCount}/${applicable} phases`,
+            : unreportedCount > 0
+              ? `${applicable} phases · ${completedCount} observed, ${unreportedCount} unobserved`
+              : `${completedCount}/${applicable} phases`,
       ];
-      if (unreportedCount > 0 && !unmeasured) parts.push(`${unreportedCount} unreported`);
       if (abandonedCount > 0) parts.push(`${abandonedCount} abandoned`);
       if (degradedCount > 0) parts.push(`${degradedCount} degraded`);
       if (supersededCount > 0) parts.push(`${supersededCount} superseded`);

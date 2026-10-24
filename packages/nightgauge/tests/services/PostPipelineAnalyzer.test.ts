@@ -139,9 +139,8 @@ vi.mock("node:child_process", () => ({
 const mockSkillEffectivenessAppend = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/utils/SkillEffectivenessWriter", () => ({
   SkillEffectivenessWriter: {
-    appendRecord: (...args: unknown[]) => mockSkillEffectivenessAppend(...args),
-    readAll: vi.fn().mockResolvedValue([]),
-    enforceRetention: vi.fn().mockResolvedValue(undefined),
+    upsertRecords: (...args: unknown[]) => mockSkillEffectivenessAppend(...args),
+    readLatest: vi.fn().mockResolvedValue(null),
     getFilePath: vi
       .fn()
       .mockReturnValue("/workspace/.git/nightgauge-worktree/health/skill-effectiveness.jsonl"),
@@ -1047,14 +1046,13 @@ describe("PostPipelineAnalyzer", () => {
       await PostPipelineAnalyzer.analyze(workspaceRoot, 100, logger as any);
 
       expect(mockSkillEffectivenessAppend).toHaveBeenCalledOnce();
-      expect(mockSkillEffectivenessAppend).toHaveBeenCalledWith(
-        workspaceRoot,
+      expect(mockSkillEffectivenessAppend).toHaveBeenCalledWith(workspaceRoot, [
         expect.objectContaining({
           schema_version: "1",
           skill_file: "skills/nightgauge-feature-planning/SKILL.md",
           classification: "effective",
-        })
-      );
+        }),
+      ]);
     });
 
     it("analyze() does not throw when SkillEffectivenessWriter throws (non-critical)", async () => {

@@ -8,9 +8,15 @@ export {
   HealthAnalysisEngine,
   computeOverallHealthScore,
   getOverallHealthStatus,
+  excludedDimensionReason,
   type ScoredDimension,
 } from "./HealthAnalysisEngine.js";
 export { HealthTrendsWriter } from "./HealthTrendsWriter.js";
+export {
+  buildHealthTrendEntry,
+  recordHealthTrend,
+  type HealthTrendRunMeta,
+} from "./healthSeries.js";
 export { FindingToIssueEngine } from "./FindingToIssueEngine.js";
 export { RecommendationTracker } from "./RecommendationTracker.js";
 export {
@@ -100,9 +106,8 @@ export type {
   HealthAnalysisResult,
   HealthAnalysisInput,
   HealthScoreEntry,
-  SelfTuningEntry,
-  ExperimentEntry,
-  HealthReportEntry,
+  LearningOutcomeEntry,
+  LearningSignals,
   FindingToIssueConfig,
   GeneratedIssue,
   EpicGroup,

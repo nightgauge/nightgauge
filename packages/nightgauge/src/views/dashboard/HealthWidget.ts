@@ -1,12 +1,15 @@
 /**
  * HealthWidget - Health widget data aggregation service
  *
- * Computes pipeline health scores from weighted metrics, generates sparkline
- * trend data, collects active alerts from SDK drift detection, and surfaces
- * top recommendations from token efficiency analysis.
+ * The headline score is the latest entry of the one health series (#1898):
+ * the checkout's `health/trends.jsonl`, appended once per completed run by
+ * `recordHealthForRun` with the SDK's `HealthAnalysisEngine`. The widget never
+ * computes a score of its own, so the number shown is the number persisted.
+ * No entry, or an entry whose every dimension was starved, reads as N/A —
+ * never 0, never "critical".
  *
- * All SDK analysis calls are wrapped in try/catch — if SDK dist is unavailable
- * or data is insufficient, the widget degrades gracefully with empty arrays.
+ * Sparklines, alerts and recommendations come from DashboardState and SDK
+ * analysis; all SDK calls degrade gracefully to empty arrays.
  *
  * @see Issue #655 - Pipeline Health Dashboard Widget
  */
@@ -15,8 +18,7 @@ import type { DashboardState, PipelineRunSummary } from "./DashboardState";
 import type { DependabotPRData } from "../../services/DependabotPRService";
 import type {
   HealthWidgetData,
-  HealthScoreWeights,
-  HealthComponent,
+  HealthSummary,
   TrendSparkline,
   ActiveAlert,
   Recommendation,
@@ -26,10 +28,15 @@ import type {
   TrendRange,
   DimensionSparkline,
 } from "./HealthWidgetTypes";
-import { DEFAULT_HEALTH_WEIGHTS, DEFAULT_TREND_RANGE, getHealthStatus } from "./HealthWidgetTypes";
-import { HealthScoreHistoryWriter, HealthScoreHistoryReader } from "../../utils/healthScoreHistory";
+import { DEFAULT_TREND_RANGE } from "./HealthWidgetTypes";
+import {
+  aggregateHealthByDay,
+  aggregateHealthByHour,
+  analyzeHealthTrend,
+  readHealthSeries,
+} from "../../utils/healthSeries";
 import { isUsableWorkspaceRoot } from "../../utils/cloneLayout";
-import type { HealthScoreSnapshot } from "../../schemas/healthScoreHistory";
+import type { HealthTrendEntry } from "@nightgauge/sdk";
 
 /**
  * HealthWidgetService aggregates data from DashboardState, SDK analysis
@@ -39,9 +46,7 @@ import type { HealthScoreSnapshot } from "../../schemas/healthScoreHistory";
 export class HealthWidgetService {
   constructor(
     private readonly dashboardState: DashboardState,
-    private readonly workspacePath: string | undefined,
-    private readonly weights: HealthScoreWeights = DEFAULT_HEALTH_WEIGHTS,
-    private readonly cacheAlertThreshold: number = 40
+    private readonly workspacePath: string | undefined
   ) {}
 
   /**
@@ -59,7 +64,8 @@ export class HealthWidgetService {
 
     if (history.length === 0) {
       return {
-        summary: { score: 0, status: "critical", components: [] },
+        // No runs is no data — not a score of 0 and not "critical" (#1898).
+        summary: summarizeHealthEntry(null),
         sparklines: [],
         alerts: [],
         recommendations: [],
@@ -69,9 +75,11 @@ export class HealthWidgetService {
       };
     }
 
-    const components = this.computeHealthComponents();
-    const score = this.computeWeightedScore(components);
-    const status = getHealthStatus(score);
+    // A series that cannot be read is no data, not a blank widget.
+    const series = this.workspacePath
+      ? await readHealthSeries(this.workspacePath).catch(() => [])
+      : [];
+    const summary = summarizeHealthEntry(series.at(-1) ?? null);
 
     const [sparklines, baseAlerts, recommendations, predictionAccuracy] = await Promise.all([
       Promise.resolve(this.getSparklines()),
@@ -96,9 +104,6 @@ export class HealthWidgetService {
       });
     }
 
-    const finalScore = score;
-    const finalStatus = status;
-
     // Load persisted health history for configurable trend range (Issue #789)
     let trendChart: TrendChartDay[] = [];
     let trendAnalysis: TrendAnalysis | null = null;
@@ -116,40 +121,23 @@ export class HealthWidgetService {
           comparisonBuckets = trendRange === "7d" ? 3 : trendRange === "30d" ? 7 : 14;
         }
 
-        const snapshots = await HealthScoreHistoryReader.readDateRange(
-          this.workspacePath,
-          rangeStart,
-          new Date()
-        );
-
+        const inRange = series.filter((e) => new Date(e.timestamp) >= rangeStart);
         trendChart =
-          trendRange === "24h"
-            ? HealthScoreHistoryReader.aggregateByHour(snapshots)
-            : HealthScoreHistoryReader.aggregateByDay(snapshots);
+          trendRange === "24h" ? aggregateHealthByHour(inRange) : aggregateHealthByDay(inRange);
 
-        trendAnalysis = HealthScoreHistoryReader.analyzeTrend(trendChart, comparisonBuckets);
+        trendAnalysis = analyzeHealthTrend(trendChart, comparisonBuckets);
       } catch {
         // Non-critical — degrade gracefully
       }
     }
 
-    // Load per-dimension sparklines from trends.jsonl (Issue #1411)
-    let dimensionSparklines: DimensionSparkline[] | undefined;
-    if (this.workspacePath) {
-      try {
-        const { HealthTrendsWriter } =
-          await import("@nightgauge/sdk/dist/analysis/health/HealthTrendsWriter");
-        const recentEntries = await HealthTrendsWriter.read(this.workspacePath, { limit: 20 });
-        if (recentEntries.length > 0) {
-          dimensionSparklines = buildDimensionSparklines(recentEntries);
-        }
-      } catch {
-        // Non-critical — sparklines simply won't render
-      }
-    }
+    // Per-dimension sparklines from the same series (Issue #1411)
+    const recentEntries = series.slice(-20);
+    const dimensionSparklines: DimensionSparkline[] | undefined =
+      recentEntries.length > 0 ? buildDimensionSparklines(recentEntries) : undefined;
 
     return {
-      summary: { score: finalScore, status: finalStatus, components },
+      summary,
       sparklines,
       alerts,
       recommendations,
@@ -161,112 +149,6 @@ export class HealthWidgetService {
       trendRange,
       dimensionSparklines,
     };
-  }
-
-  /**
-   * Compute individual health components from DashboardState trend data
-   *
-   * Each component produces a 0-100 score based on the underlying metric.
-   */
-  computeHealthComponents(): HealthComponent[] {
-    const components: HealthComponent[] = [];
-    const normalizedWeights = this.normalizeWeights(this.weights);
-    const history = this.dashboardState.getHistory();
-    const runsNeeded = Math.max(1, 6 - history.length);
-
-    // 1. Success Rate (weight 0.30)
-    const aggregates = this.dashboardState.getAggregates("all");
-    const successScore = Math.round(aggregates.successRate * 100);
-    components.push({
-      name: "successRate",
-      score: successScore,
-      weight: normalizedWeights.successRate,
-      trend: successScore >= 80 ? "improving" : successScore >= 50 ? "stable" : "degrading",
-      label: "Success Rate",
-    });
-
-    // 2. Cost Trend (weight 0.30 — stable or decreasing = healthy)
-    const costTrend = this.dashboardState.getCostTrend();
-    const costScore = costTrend.hasEnoughData
-      ? computeCostTrendScore(costTrend.percentChange)
-      : 100; // No trend data yet — assume healthy until proven otherwise
-    components.push({
-      name: "costTrend",
-      score: costScore,
-      weight: normalizedWeights.costTrend,
-      trend: !costTrend.hasEnoughData
-        ? "stable"
-        : costTrend.percentChange < -5
-          ? "improving"
-          : costTrend.percentChange > 15
-            ? "degrading"
-            : "stable",
-      label: "Cost Trend",
-      insufficientData: !costTrend.hasEnoughData,
-      insufficientDataMessage: !costTrend.hasEnoughData
-        ? `Need ${runsNeeded} more run${runsNeeded !== 1 ? "s" : ""} for trend data`
-        : undefined,
-    });
-
-    // 3. Reliability (weight 0.25 — inverse of failure rate)
-    const failedRuns = history.filter((r) => r.status === "failed").length;
-    const failureRate = history.length > 0 ? failedRuns / history.length : 0;
-    const reliabilityScore = Math.round((1 - failureRate) * 100);
-    components.push({
-      name: "failureRate",
-      score: reliabilityScore,
-      weight: normalizedWeights.failureRate,
-      trend: reliabilityScore >= 80 ? "improving" : reliabilityScore >= 50 ? "stable" : "degrading",
-      label: "Reliability",
-    });
-
-    // 4. Cache Hit Rate (weight 0.15)
-    // Filter to runs that actually used tokens FIRST, then take the recent
-    // window. Slicing first and filtering after reported 0% whenever the five
-    // most recent runs were zero-token records (early-failed / no-op / partial
-    // runs), even though real runs cache at ~99%. Filter-then-slice makes the
-    // metric reflect the most recent runs that genuinely exercised the cache.
-    const runsWithCacheData = history.filter(hasValidCacheData).slice(0, 5);
-    const avgCacheHitRate =
-      runsWithCacheData.length > 0
-        ? runsWithCacheData.reduce((sum, r) => sum + (r.efficiency?.cacheHitRate ?? 0), 0) /
-          runsWithCacheData.length
-        : 0;
-    const cacheScore = Math.round(avgCacheHitRate * 100);
-    const cacheThreshold = this.cacheAlertThreshold;
-    components.push({
-      name: "cacheHitRate",
-      score: cacheScore,
-      weight: normalizedWeights.cacheHitRate,
-      trend:
-        cacheScore >= cacheThreshold + 10
-          ? "improving"
-          : cacheScore >= cacheThreshold
-            ? "stable"
-            : "degrading",
-      label: "Cache Hit Rate",
-    });
-
-    return components;
-  }
-
-  /**
-   * Compute weighted composite score from health components
-   *
-   * Uses auto-normalized weights so the sum doesn't need to equal 1.0.
-   */
-  computeWeightedScore(components: HealthComponent[]): number {
-    if (components.length === 0) return 0;
-
-    let weightedSum = 0;
-    let totalWeight = 0;
-
-    for (const c of components) {
-      weightedSum += c.score * c.weight;
-      totalWeight += c.weight;
-    }
-
-    return totalWeight > 0 ? Math.round(weightedSum / totalWeight) : 0;
   }
 
   /**
@@ -604,106 +486,11 @@ export class HealthWidgetService {
   }
 
   /**
-   * Record a health score snapshot to disk after pipeline completion.
-   *
-   * Computes current health components, builds a snapshot, and persists it
-   * to health-history.jsonl. Non-critical: logs warnings on failure, never throws.
-   *
-   * @param issueNumber - Issue number from the completed pipeline run
-   * @param costUsd - Total cost of the completed run
-   * @see Issue #789 - Persist Health Scores to Disk with 30-Day Trend
-   */
-  async recordSnapshot(issueNumber: number, costUsd: number): Promise<void> {
-    if (!this.workspacePath) return;
-
-    try {
-      const components = this.computeHealthComponents();
-      const score = this.computeWeightedScore(components);
-      const status = getHealthStatus(score);
-
-      // Extract cache hit rate from the most recent runs that actually used
-      // tokens (exclude zero-token runs #989). Filter BEFORE slicing — slicing
-      // first reported 0% when the recent window was all zero-token records.
-      const history = this.dashboardState.getHistory();
-      const runsWithCacheData = history.filter(hasValidCacheData).slice(0, 5);
-      const avgCacheHitRate =
-        runsWithCacheData.length > 0
-          ? runsWithCacheData.reduce((sum, r) => sum + (r.efficiency?.cacheHitRate ?? 0), 0) /
-            runsWithCacheData.length
-          : 0;
-
-      // Build component scores map
-      const componentScores: Record<string, number> = {};
-      for (const c of components) {
-        componentScores[c.name] = c.score;
-      }
-
-      const snapshot: HealthScoreSnapshot = {
-        schema_version: "1",
-        timestamp: new Date().toISOString(),
-        score,
-        status,
-        components: componentScores,
-        cacheHitRate: avgCacheHitRate,
-        costUsd,
-        issueNumber,
-      };
-
-      await HealthScoreHistoryWriter.appendSnapshot(this.workspacePath, snapshot);
-    } catch (error) {
-      console.warn(`[Nightgauge] Failed to record health snapshot: ${error}`);
-    }
-  }
-
-  /**
    * Get total cost from pipeline run history
    */
   getTotalCost(runs: PipelineRunSummary[]): number {
     return runs.reduce((sum, r) => sum + r.usage.costUsd, 0);
   }
-
-  /**
-   * Normalize weights so they sum to 1.0
-   */
-  private normalizeWeights(weights: HealthScoreWeights): HealthScoreWeights {
-    const sum =
-      weights.successRate + weights.costTrend + weights.failureRate + weights.cacheHitRate;
-
-    if (sum === 0) return DEFAULT_HEALTH_WEIGHTS;
-
-    return {
-      successRate: weights.successRate / sum,
-      costTrend: weights.costTrend / sum,
-      failureRate: weights.failureRate / sum,
-      cacheHitRate: weights.cacheHitRate / sum,
-    };
-  }
-}
-
-/**
- * Score cost trend using a one-sided Gaussian decay with a dead band.
- *
- * Stable or decreasing costs score 100 (healthy). Only sustained increases
- * beyond a 15% dead band reduce the score. The 15% band accounts for natural
- * cost variance from issue-size differences (S=$2-3, M=$5-7, L=$10-15).
- *
- * Curve: +25%→96, +35%→85, +50%→61, +65%→37, +85%→14
- */
-export function computeCostTrendScore(percentChange: number): number {
-  if (percentChange <= 15) return 100;
-  const excess = percentChange - 15;
-  return Math.max(0, Math.round(100 * Math.exp(-Math.pow(excess / 50, 2))));
-}
-
-/**
- * A run has valid cache data when its total token count is non-zero (#989).
- * Zero-token runs produce cacheHitRate 0 which would drag down averages.
- */
-function hasValidCacheData(r: PipelineRunSummary): boolean {
-  const u = r.usage;
-  return (
-    u.inputTokens + u.outputTokens + (u.cacheReadTokens ?? 0) + (u.cacheCreationTokens ?? 0) > 0
-  );
 }
 
 /** Human-readable labels for each health dimension */
@@ -719,6 +506,44 @@ const DIMENSION_LABELS: Record<string, string> = {
 };
 
 /**
+ * The headline for one series entry. `null` (no entry yet) and an entry
+ * recorded as null both read as no-data; every dimension is listed, an
+ * excluded one with the reason it did not contribute (#1900).
+ */
+export function summarizeHealthEntry(entry: HealthTrendEntry | null): HealthSummary {
+  const dimensions = ALL_DIMS.map((dimension) => {
+    const score = entry?.dimensions[dimension as keyof HealthTrendEntry["dimensions"]];
+    const reason =
+      entry?.excluded_dimensions[dimension as keyof HealthTrendEntry["excluded_dimensions"]];
+    return {
+      dimension,
+      label: DIMENSION_LABELS[dimension] ?? dimension,
+      score: typeof score === "number" ? score : null,
+      excludedReason: typeof score === "number" ? undefined : (reason ?? "no health entry yet"),
+    };
+  });
+  return {
+    score: entry?.overall_score ?? null,
+    status: entry?.status ?? "no-data",
+    dimensions,
+    contributing: dimensions.filter((d) => d.score !== null).length,
+    recordedAt: entry?.timestamp,
+    issueNumber: entry?.issue_number,
+  };
+}
+
+const ALL_DIMS = [
+  "token-economics",
+  "cost-health",
+  "stage-effectiveness",
+  "model-routing",
+  "reliability",
+  "learning-effectiveness",
+  "pipeline-velocity",
+  "skill-drift",
+];
+
+/**
  * Build DimensionSparkline[] from recent HealthTrendEntry records.
  * Only returns sparklines for dimensions with ≥2 data points.
  * Trend: compares avg of last 3 vs avg of prior 3 entries.
@@ -728,17 +553,6 @@ const DIMENSION_LABELS: Record<string, string> = {
 function buildDimensionSparklines(
   entries: Array<{ dimensions: Partial<Record<string, number>> }>
 ): DimensionSparkline[] {
-  const ALL_DIMS = [
-    "token-economics",
-    "cost-health",
-    "stage-effectiveness",
-    "model-routing",
-    "reliability",
-    "learning-effectiveness",
-    "pipeline-velocity",
-    "skill-drift",
-  ];
-
   const result: DimensionSparkline[] = [];
 
   for (const dim of ALL_DIMS) {

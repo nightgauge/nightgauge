@@ -4,7 +4,6 @@
  * Comprehensive cost trend tests covering:
  * - Median-based outlier resistance (replaces mean)
  * - Supercharge-mode exclusion (Issue #2433)
- * - computeCostTrendScore scoring function
  * - Edge cases (insufficient data, zero baselines)
  */
 
@@ -26,7 +25,6 @@ vi.mock("vscode", () => ({
 }));
 
 import { DashboardState } from "../../../src/views/dashboard/DashboardState";
-import { computeCostTrendScore } from "../../../src/views/dashboard/HealthWidget";
 
 /** Build a serialized PipelineRunSummary for storage */
 function makeRun(overrides: {
@@ -193,11 +191,9 @@ describe("getCostTrend — median-based outlier resistance", () => {
     const trend = state.getCostTrend();
 
     expect(trend.hasEnoughData).toBe(true);
-    // With mean: recentAvg=$8.27, olderAvg=$3.38 → +144% → score 0 (BUG)
-    // With median: recentMedian=$7.15, olderMedian=$3.97 → +80% → score ≈ 26
+    // With mean: recentAvg=$8.27, olderAvg=$3.38 → +144%
+    // With median: recentMedian=$7.15, olderMedian=$3.97 → +80%
     // The outlier $14.82 no longer dominates the calculation
-    const score = computeCostTrendScore(trend.percentChange);
-    expect(score).toBeGreaterThan(0);
     // Verify the percent change is reasonable (not 144%)
     expect(trend.percentChange).toBeLessThan(100);
   });
@@ -299,55 +295,6 @@ describe("getCostTrend — supercharge-mode exclusion (Issue #2433)", () => {
 
     expect(trend.hasEnoughData).toBe(true);
     expect(trend.percentChange).toBe(25);
-  });
-});
-
-// ============================================================================
-// computeCostTrendScore
-// ============================================================================
-
-describe("computeCostTrendScore", () => {
-  it("should return 100 for stable or decreasing costs (≤15% change)", () => {
-    expect(computeCostTrendScore(-50)).toBe(100);
-    expect(computeCostTrendScore(-10)).toBe(100);
-    expect(computeCostTrendScore(0)).toBe(100);
-    expect(computeCostTrendScore(10)).toBe(100);
-    expect(computeCostTrendScore(15)).toBe(100);
-  });
-
-  it("should decay gracefully for moderate increases", () => {
-    const score25 = computeCostTrendScore(25);
-    const score35 = computeCostTrendScore(35);
-    const score50 = computeCostTrendScore(50);
-
-    // Scores should decrease monotonically
-    expect(score25).toBeGreaterThan(score35);
-    expect(score35).toBeGreaterThan(score50);
-
-    // Approximate expected values from Gaussian curve
-    expect(score25).toBeGreaterThanOrEqual(90);
-    expect(score35).toBeGreaterThanOrEqual(80);
-    expect(score50).toBeGreaterThanOrEqual(50);
-  });
-
-  it("should approach 0 for extreme increases", () => {
-    expect(computeCostTrendScore(100)).toBeLessThan(20);
-    expect(computeCostTrendScore(150)).toBeLessThanOrEqual(2);
-  });
-
-  it("should never return negative scores", () => {
-    expect(computeCostTrendScore(500)).toBe(0);
-    expect(computeCostTrendScore(1000)).toBe(0);
-  });
-
-  it("should not score 0 for the production scenario after median fix", () => {
-    // With median: recent=$7.15, older=$3.97 → +80%
-    const percentChange = ((7.15 - 3.97) / 3.97) * 100; // ≈ 80.1%
-    const score = computeCostTrendScore(percentChange);
-    // Score should be non-zero (the old mean-based 144% would give 0)
-    // With median: ~80% → excess=65 → score ≈ 18
-    expect(score).toBeGreaterThan(0);
-    expect(score).toBeGreaterThanOrEqual(15);
   });
 });
 

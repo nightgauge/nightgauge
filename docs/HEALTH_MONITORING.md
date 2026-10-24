@@ -53,37 +53,67 @@ A health finding that a human must act on can itself become a
 [ADR 015](decisions/015-decision-requests.md), designed-for but not automated.
 See [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md) for the authoring contract.
 
+### The health series
+
+There is **one** persisted health time-series, with one schema and one writer
+(#1898):
+
+| Property  | Value                                                                                                                                                                                     |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File      | `health/trends.jsonl` in the checkout's directory (`nightgauge layout path checkout health/trends.jsonl`)                                                                                 |
+| Schema    | `HealthTrendEntry`, `schema_version: "2"` (SDK `analysis/health/types.ts`)                                                                                                                |
+| Engine    | `HealthAnalysisEngine`, over the run records of the last 30 days                                                                                                                          |
+| Writer    | `recordHealthForRun` (extension `utils/healthSeries.ts`) via the SDK's `recordHealthTrend`                                                                                                |
+| Cadence   | Exactly one entry per completed pipeline run                                                                                                                                              |
+| Retention | 90 days, pruned atomically after each append                                                                                                                                              |
+| Readers   | Dashboard widget, `HealthActionService` (policies), `HeadlessOrchestrator` (trend slope), `DataAggregator` (learning input), `nightgauge health trends`, `loopverdicts`, telemetry upload |
+
+The dashboard's headline score is the latest entry, so the number a user reads
+and the number persisted are the same number from the same engine.
+
+An entry records what the engine measured and nothing else:
+
+- `overall_score` is `null`, and `status` is `"no-data"`, exactly when no
+  dimension had enough data. Such a run is recorded, not omitted, and is never
+  coerced to a number: the dashboard shows N/A, policies gate nothing, the trend
+  chart skips it, the Go readers decode it as absent (`*float64`), and
+  `loopverdicts` counts it in `unscoredEntries` rather than averaging it as 0.
+- `dimensions` holds only the dimensions that contributed. A starved analyzer's
+  placeholder score is not a measurement and is not stored.
+- `excluded_dimensions` names every dimension that did not contribute and why,
+  so a score made of six dimensions is never presented as one made of eight.
+
+A health report written by the `nightgauge-pipeline-health` skill is not a run
+and does not append to the series.
+
+**The legacy store is retired.** `pipeline/health-history.jsonl` held a
+different metric: a 4-component score (success rate, cost trend, failure rate,
+cache hit rate) the dashboard computed itself. Its entries are not migrated —
+they cannot be placed on the 8-dimension series without inventing the
+dimensions they never measured — and nothing reads or writes the file any more.
+It can be deleted. The "Recalibrate Health Score Baseline" command, which wrote
+markers into that file, is removed with it.
+
 ### One repo per score (#1231)
 
-A health snapshot is derived from, and written under, **the repo whose run
+A health entry is derived from, and written under, **the repo whose run
 produced it** — never the runner's. Both entry points
 (`Dashboard.recordHealthSnapshotForRun`, fed by `pipeline.complete` and by
 concurrent-slot completion, and the polling path in `syncFromPipelineState`)
 funnel through `writeHealthSnapshot`, which resolves the run's repo from the
-`repo` slug the Go scheduler already sends and builds a `DashboardState` over
-that repo's `TelemetryStore`.
+`repo` slug the Go scheduler already sends and runs the engine over that repo's
+own run records.
 
 This is not cosmetic bookkeeping. Before it, both paths scored a run against the
 dashboard's history and appended to the dashboard's path however cross-repo the
-run was, so a single `health-history.jsonl` accumulated **two populations**: the
-runner repo's runs scoring `costTrend` 100 and a dispatched repo's scoring 0,
-alternating at the same timestamp for the same issue number. The visible score
-depended on which path last evaluated, no reading described any one repository,
+run was, so one file accumulated **two populations** that alternated at the same
+timestamp for the same issue number. No reading described any one repository,
 and a trend drawn over the file compared different systems point to point.
 
-Two consequences worth knowing when reading a health file:
-
-- **A snapshot is written per run, keyed by `(repoRoot, issue, runId)`.** One
-  completed run appends exactly one record. The former guard was a single
-  `lastSnapshotIssueNumber` scalar on one of the two paths, which caught only an
-  immediate repeat — the real file held six byte-identical records at one
-  timestamp.
-- **A repo with no history of its own gets no snapshot.** Scoring every
-  component against an empty corpus produces a meaningless point; leaving the
-  trend short is better than seeding it with one.
-
-Records written before this landed cannot be attributed after the fact and
-should not be read as a single series.
+**An entry is written per run, keyed by `(repoRoot, issue, runId)`.** One
+completed run appends exactly one record. A repo with no run records of its own
+still gets its entry, recorded as `null`: the run happened, and nothing could be
+measured about it.
 
 ## System Architecture
 
@@ -123,14 +153,16 @@ pipeline telemetry. Callers map their `AggregatedDataset` →
 `HealthAnalysisInput` to avoid circular dependencies between the SDK and VSCode
 packages.
 
-| Field                   | Type                           | Source                                                |
-| ----------------------- | ------------------------------ | ----------------------------------------------------- |
-| `executionHistory`      | `ExecutionHistoryRecord[]`     | Per-stage execution records (stage, success, cost…)   |
-| `healthScores`          | `HealthScoreEntry[]`           | Persisted composite scores from prior runs            |
-| `selfTuningLog`         | `SelfTuningEntry[]`            | Legacy field (always `[]` — self-tuning removed)      |
-| `experimentResults`     | `ExperimentEntry[]`            | A/B experiment control/treatment records              |
-| `healthReports`         | `HealthReportEntry[]`          | Prior report summaries (finding/recommendation count) |
-| `recommendationHistory` | `RecommendationHistoryEntry[]` | Optional — prior recommendation-to-issue mappings     |
+| Field                | Type                        | Source                                              |
+| -------------------- | --------------------------- | --------------------------------------------------- |
+| `executionHistory`   | `ExecutionHistoryRecord[]`  | Per-stage execution records (stage, success, cost…) |
+| `healthScores`       | `HealthScoreEntry[]`        | Scored points of the health series (nulls dropped)  |
+| `learningSignals`    | `LearningSignals`           | Optional — `outcomes.jsonl` pairs + calibration age |
+| `skillEffectiveness` | `SkillEffectivenessEntry[]` | Optional — latest record per skill change in period |
+
+An optional input that is absent means its file does not exist; the dimension
+that reads it reports `hasEnoughData: false` and names the missing file. It is
+never replaced by an empty corpus or a weaker proxy (#1900).
 
 ### `HealthAnalysisEngine.analyze()` Flow
 
@@ -143,7 +175,10 @@ packages.
    (`computeOverallHealthScore`)
 6. Derive `overallStatus` via `getOverallHealthStatus(score)` — `"no-data"`
    when the score is `null`
-7. Generate human-readable `summary` string
+7. Generate human-readable `summary` string: the overall score, how many of
+   the 8 dimensions contributed, and every excluded dimension with its
+   `insufficientDataReason` (`excludedDimensionReason`), so a six-dimension
+   score is never read as an eight-dimension one
 8. Return `HealthAnalysisResult`
 
 ### Weighted Scoring Formula
@@ -223,6 +258,7 @@ interface DimensionResult {
   metrics: Record<string, number>;
   hasEnoughData: boolean;
   sampleSize: number;
+  insufficientDataReason?: string; // why hasEnoughData is false (#1900)
   periodComparison?: PeriodComparison; // present when baseline provided
 }
 ```
@@ -430,21 +466,47 @@ high-failure stages.
 
 **Weight**: 0.10 | **File**: `dimensions/learningEffectiveness.ts`
 
-Evaluates whether the pipeline's learning systems (calibration, tuning,
-experiments) are producing measurable improvements.
+Asks whether the pipeline's predictions about a change are right. Routing and
+sizing are the two predictions made before a run and measured after it, so
+their accuracy is the learning signal (#1900).
 
-**Key metrics**:
+**Inputs** (read by `packages/nightgauge/src/utils/healthLearningInputs.ts`):
 
-| Metric                            | Description                                              |
-| --------------------------------- | -------------------------------------------------------- |
-| `avgHealthScore`                  | Mean health score across recorded data points            |
-| `scoreSlope`                      | Linear slope of health score time series                 |
-| `tuningActionCount`               | Total self-tuning log entries                            |
-| `tuningEffectiveCount`            | Tuning actions followed by score improvement             |
-| `experimentsCount`                | Distinct A/B experiment names observed                   |
-| `positiveExperimentCount`         | Experiments where treatment > control success            |
+| File                                      | Fields                                                                        |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| `<clone>/pipeline/history/outcomes.jsonl` | `completedAt`, `predictedModel`, `actualModel`, `predictedSize`, `actualSize` |
+| `<clone>/pipeline/calibration.json`       | `updated_at`                                                                  |
+
+**Sample**: outcome rows in the period with at least one complete
+predicted/actual pair. A pair with an empty half is an unknown, excluded from
+the denominator (#340), never booked as a miss. Each accuracy contributes only
+with at least `minimumSampleSizes.basic` (5) pairs; with neither, the dimension
+is excluded and says why.
+
+**Key metrics**: `outcomeRows`, `routingPairs`, `sizePairs`, `routingAccuracy`,
+`sizeAccuracy`, `predictionCoverage` (rows with any prediction / rows), and
+`calibrationLagDays` (newest outcome minus `calibration.json` `updated_at`).
+
+**Scoring**: mean of the accuracies that met the minimum, × 100; −10 when
+calibration is absent or lags the newest outcome by more than 14 days.
+
+**Findings emitted**:
+
+- Routing or size prediction accuracy below 60%
+- Low prediction coverage (< 50% of rows carry a prediction, the #304 gap)
+- Calibration absent or lagging the outcome corpus
+- Prediction accuracy worsening against the baseline period (feeds
+  cross-reference rule 3)
+
+--------------------------------- | -------------------------------------------------------- |
+| `avgHealthScore` | Mean health score across recorded data points |
+| `scoreSlope` | Linear slope of health score time series |
+| `tuningActionCount` | Total self-tuning log entries |
+| `tuningEffectiveCount` | Tuning actions followed by score improvement |
+| `experimentsCount` | Distinct A/B experiment names observed |
+| `positiveExperimentCount` | Experiments where treatment > control success |
 | `recommendationFollowThroughRate` | Closed issues / total issues with linked recommendations |
-| `recommendationEffectivenessRate` | Improved outcomes / closed recommendations with metrics  |
+| `recommendationEffectivenessRate` | Improved outcomes / closed recommendations with metrics |
 
 **Scoring**: Starts at 50 (neutral). Gains from improving score trend, effective
 tuning, positive experiments, decreasing recommendation counts, and high
@@ -496,23 +558,29 @@ trend, duration trend, and P95 outlier counts.
 
 **Weight**: 0.08 | **File**: `dimensions/skillDrift.ts`
 
-Evaluates skill-instruction health from the self-assessment synthesis data
-produced by `SkillSelfAssessmentSynthesizer` — recurring friction patterns
-across skill executions indicate that SKILL.md instructions are drifting from
-what the pipeline actually needs.
+Asks whether changing a skill's instructions makes its stage worse (#1900).
 
-**Scoring**: Starts at 100 (no friction) and subtracts a severity-weighted
-penalty per recurring amendment proposal (high −20, medium −10, low −5),
-clamped to [0, 100]. With no assessment data, the dimension reports a perfect
-score flagged as insufficient data.
+**Input**: `<git-dir>/nightgauge-worktree/health/skill-effectiveness.jsonl`,
+the latest record per (`skill_file`, `commit_hash`) whose `changed_at` falls
+in the period; fields `classification`, `confidence`, `delta`, `before_*`,
+`after_*`. `PostPipelineAnalyzer` writes it through
+`SkillEffectivenessWriter.upsertRecords`.
 
-**Findings emitted**:
+**Retention**: the file is a snapshot, not a log. Each write keeps one record
+per skill change (latest `analyzed_at`) and drops changes older than 90 days.
+The former append-per-analysis grew it to tens of megabytes of superseded
+duplicates; the first write after upgrading collapses such a file. Reads
+stream it, so memory is bounded by distinct changes, not file size.
 
-- Recurring friction in a specific skill (per amendment proposal, with the
-  affected SKILL.md named)
+**Sample**: classified changes (`effective`, `neutral`, `regression`).
+`insufficient_data` changes are counted as `unclassifiedChanges`, not samples.
+At least `minimumSampleSizes.basic` (5) are required.
 
-See [docs/SKILL_SELF_ASSESSMENT.md](SKILL_SELF_ASSESSMENT.md) for the
-underlying assessment/synthesis pipeline and scoring table.
+**Scoring**: share of classified changes that did not regress their stage's
+success rate, × 100.
+
+**Findings emitted**: one per regressing skill change, naming the SKILL.md and
+commit.
 
 ---
 
@@ -782,28 +850,18 @@ and `markFailed()` as teammate lifecycle events occur.
 
 ## Dashboard Health Widget
 
-The VSCode dashboard includes a health widget that displays a composite score
-and per-component breakdown for the **current run** (not the 7-dimension engine
-above).
+The VSCode dashboard's Pipeline Health widget shows the **latest entry of the
+health series** (see [The health series](#the-health-series)). It computes no
+score of its own.
 
-The widget uses `HealthWidgetTypes.ts` (`HealthWidgetData`, `HealthComponent`,
-`HealthScoreWeights`) to compute a composite score from exactly **4 scored
-components**:
-
-| Component      | Description                                | Scored/Weighted |
-| -------------- | ------------------------------------------ | --------------- |
-| `successRate`  | Pipeline stage success rate                | **Yes**         |
-| `costTrend`    | Cost trend direction (improving/worsening) | **Yes**         |
-| `failureRate`  | Weighted failure rate across stages        | **Yes**         |
-| `cacheHitRate` | Token cache hit ratio                      | **Yes**         |
-
-`predictionAccuracy` is **display-only** — it is shown in the dashboard UI for
-informational purposes but does NOT contribute to the composite health score.
-
-These two health systems are **independent**:
-
-- The dashboard widget shows real-time per-run health for the active issue.
-- The `HealthAnalysisEngine` analyzes historical trends across many runs.
+- The headline is the entry's `overall_score`, or **N/A** with a "no data"
+  badge when no entry exists yet or the latest run had no dimension with data.
+  It is never shown as 0 or "critical" for absence.
+- Under it, the widget states how many of the eight dimensions contributed and
+  lists all eight: a contributing dimension with its score bar, an excluded one
+  as "no data — <reason>".
+- Sparklines, alerts, recommendations and prediction accuracy are informational
+  and do not feed the score.
 
 ### Configurable Trend Range
 
@@ -821,31 +879,31 @@ range. Users can choose from four ranges via a dropdown selector:
 quickly in AI-driven pipelines without noise from hourly fluctuations.
 
 **Hourly granularity** (24h range): Uses
-`HealthScoreHistoryReader.aggregateByHour()` to bucket snapshots by hour
+`aggregateHealthByHour()` to bucket the series' scored entries by hour
 (`timestamp.slice(0, 13)`), producing up to 24 bars. Useful for spotting
 same-day regressions during active development.
 
-**Daily granularity** (7d/30d/90d): Uses
-`HealthScoreHistoryReader.aggregateByDay()` to bucket snapshots by date,
-producing bars matching the range window.
+**Daily granularity** (7d/30d/90d): Uses `aggregateHealthByDay()` to bucket
+the series' scored entries by date, producing bars matching the range window.
+An entry recorded as `null` is not a point and is skipped, never plotted as 0.
 
-**Trend analysis**: `analyzeTrend()` splits the bucketed data into two halves
+**Trend analysis**: `analyzeHealthTrend()` splits the bucketed data into two halves
 (recent N vs prior N buckets, where N = comparison buckets) and computes the
 direction (improving, stable, declining) from the score delta.
 
 **Data retention**: `DEFAULT_RETENTION_DAYS` is set to 90 to support the full
-90-day range. The JSONL history file is pruned on each write.
+90-day range. The series is pruned on each write.
 
 **Implementation files**:
 
-| File                    | Role                                                                        |
-| ----------------------- | --------------------------------------------------------------------------- |
-| `HealthWidgetTypes.ts`  | `TrendRange` type, `TREND_RANGE_LABELS`, `DEFAULT_TREND_RANGE`              |
-| `HealthWidget.ts`       | `getData(trendRange)` — maps range to window/granularity/comparison buckets |
-| `HealthWidgetHtml.ts`   | Renders range selector dropdown and dynamic bar chart                       |
-| `Dashboard.ts`          | Handles `healthTrendRange` webview message, stores selection                |
-| `DashboardState.ts`     | Passes `trendRange` through to `HealthWidget.getData()`                     |
-| `healthScoreHistory.ts` | `aggregateByHour()`, `aggregateByDay()`, `analyzeTrend(comparisonBuckets)`  |
+| File                   | Role                                                                          |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| `HealthWidgetTypes.ts` | `TrendRange` type, `TREND_RANGE_LABELS`, `DEFAULT_TREND_RANGE`                |
+| `HealthWidget.ts`      | `getData(trendRange)` — maps range to window/granularity/comparison buckets   |
+| `HealthWidgetHtml.ts`  | Renders range selector dropdown and dynamic bar chart                         |
+| `Dashboard.ts`         | Handles `healthTrendRange` webview message, stores selection                  |
+| `DashboardState.ts`    | Passes `trendRange` through to `HealthWidget.getData()`                       |
+| `healthSeries.ts`      | `recordHealthForRun()`, `aggregateHealthByHour/Day()`, `analyzeHealthTrend()` |
 
 See [docs/ARCHITECTURE.md — Dashboard](ARCHITECTURE.md) for the dashboard widget
 implementation details.
@@ -881,8 +939,10 @@ Health scores drive automatic per-run pipeline adjustments when the pipeline is
 in poor health. These adjustments are ephemeral — they apply to the next run
 only and never persist to `config.yaml`.
 
-`HealthActionService.computePolicies()` evaluates the most recent health score
-and assigns a policy tier:
+`HealthActionService.evaluateWithPolicies()` evaluates the latest entry of the
+health series and assigns a policy tier. When there is no entry, or the latest
+is `null`, there is no score: the tier is `none` and the reported score is
+`null`, not a fabricated 100.
 
 | Tier        | Score | Retry Budget | Model Escalation                       | Auto-Routing |
 | ----------- | ----- | ------------ | -------------------------------------- | ------------ |

@@ -17,6 +17,7 @@ exports[`getHealthWidgetHtml snapshots (Issue #1242) > collapsed state 1`] = `
       <div class="health-score-large health-fair">
         60
       </div>
+      <div class="health-score-basis">0 of 0 dimensions contributing</div>
       <div class="health-component-breakdown">
         
       </div>
@@ -49,7 +50,7 @@ exports[`getHealthWidgetHtml snapshots (Issue #1242) > empty state — isEmpty t
   "
 `;
 
-exports[`getHealthWidgetHtml snapshots (Issue #1242) > healthy state — score 82, good status, with components 1`] = `
+exports[`getHealthWidgetHtml snapshots (Issue #1242) > healthy state — score 82, good status, with dimensions 1`] = `
 "
     <div class="health-widget " id="healthWidget">
       <div class="health-widget-header" id="healthWidgetHeader">
@@ -66,28 +67,32 @@ exports[`getHealthWidgetHtml snapshots (Issue #1242) > healthy state — score 8
       <div class="health-score-large health-good">
         82
       </div>
+      <div class="health-score-basis">2 of 3 dimensions contributing</div>
       <div class="health-component-breakdown">
         
       <div class="health-component-row">
-        <span class="component-label">Success Rate</span>
+        <span class="component-label">Reliability</span>
         <div class="component-bar-container">
           <div class="component-bar health-good"
                style="width: 90%">
           </div>
         </div>
         <span class="component-score">90</span>
-        <span class="component-trend">↑</span>
       </div>
     
       <div class="health-component-row">
-        <span class="component-label">Token Efficiency</span>
+        <span class="component-label">Token Economics</span>
         <div class="component-bar-container">
           <div class="component-bar health-good"
                style="width: 78%">
           </div>
         </div>
         <span class="component-score">78</span>
-        <span class="component-trend">→</span>
+      </div>
+    
+      <div class="health-component-row health-component-insufficient" title="no skill-effectiveness records">
+        <span class="component-label">Skill Drift</span>
+        <span class="component-excluded">no data — no skill-effectiveness records</span>
       </div>
     
       </div>
@@ -123,6 +128,46 @@ exports[`getHealthWidgetHtml snapshots (Issue #1242) > healthy state — score 8
   "
 `;
 
+exports[`getHealthWidgetHtml snapshots (Issue #1242) > no-data state — N/A, every dimension excluded with its reason (#1898) 1`] = `
+"
+    <div class="health-widget " id="healthWidget">
+      <div class="health-widget-header" id="healthWidgetHeader">
+        <span class="toggle-icon">▼</span>
+        <h2>Pipeline Health</h2>
+        <span class="health-badge health-no-data">
+          ○ NO DATA
+        </span>
+        <span class="health-score-inline">N/A</span>
+      </div>
+      <div class="health-widget-body">
+        
+    <div class="health-summary-card">
+      <div class="health-score-large health-no-data">
+        N/A
+      </div>
+      <div class="health-score-basis">No dimension had enough data on the latest run</div>
+      <div class="health-component-breakdown">
+        
+      <div class="health-component-row health-component-insufficient" title="fewer than 5 runs">
+        <span class="component-label">Reliability</span>
+        <span class="component-excluded">no data — fewer than 5 runs</span>
+      </div>
+    
+      </div>
+    </div>
+  
+        
+        
+        
+        
+        
+        
+        <div class="health-updated">Last updated: 2026-01-01T12:00:00Z</div>
+      </div>
+    </div>
+  "
+`;
+
 exports[`getHealthWidgetHtml snapshots (Issue #1242) > with alerts — warning and critical 1`] = `
 "
     <div class="health-widget " id="healthWidget">
@@ -140,6 +185,7 @@ exports[`getHealthWidgetHtml snapshots (Issue #1242) > with alerts — warning a
       <div class="health-score-large health-poor">
         45
       </div>
+      <div class="health-score-basis">0 of 0 dimensions contributing</div>
       <div class="health-component-breakdown">
         
       </div>
@@ -196,6 +242,7 @@ exports[`getHealthWidgetHtml snapshots (Issue #1242) > with recommendations incl
       <div class="health-score-large health-good">
         75
       </div>
+      <div class="health-score-basis">0 of 0 dimensions contributing</div>
       <div class="health-component-breakdown">
         
       </div>

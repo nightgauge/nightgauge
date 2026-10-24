@@ -1,7 +1,7 @@
 /**
  * Smoke tests for config and display commands
  *
- * Tests: showPipelineSummary, showSettings, migrateConfig, recalibrateHealth
+ * Tests: showPipelineSummary, showSettings, migrateConfig
  *
  * @see Issue #2269 - Add smoke tests for untested pipeline-critical commands
  */
@@ -11,7 +11,6 @@ import * as vscode from "vscode";
 import { registerShowPipelineSummaryCommand } from "../../src/commands/showPipelineSummary";
 import { registerShowSettingsCommand } from "../../src/commands/showSettings";
 import { registerMigrateConfigCommand } from "../../src/commands/migrateConfig";
-import { registerRecalibrateHealthCommand } from "../../src/commands/recalibrateHealth";
 import type { Logger } from "../../src/utils/logger";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 
@@ -55,12 +54,6 @@ vi.mock("../../src/utils/configPathResolver", () => ({
   needsMigration: vi.fn(() => Promise.resolve(false)),
   CONFIG_FILE_NAME: "config.yaml",
   LEGACY_CONFIG_FILE_NAME: "nightgauge.yaml",
-}));
-
-vi.mock("../../src/utils/healthScoreHistory", () => ({
-  HealthScoreHistoryWriter: {
-    appendRecalibrationMarker: vi.fn(() => Promise.resolve()),
-  },
 }));
 
 // ---------------------------------------------------------------------------
@@ -229,60 +222,5 @@ describe("migrateConfig Command", () => {
     expect(vscode.window.showInformationMessage).not.toHaveBeenCalledWith(
       expect.stringContaining("Config migrated successfully")
     );
-  });
-});
-
-describe("recalibrateHealth Command", () => {
-  let mockLogger: Logger;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockLogger = createMockLogger();
-  });
-
-  it("should do nothing when user cancels confirmation", async () => {
-    vi.mocked(vscode.window.showWarningMessage).mockResolvedValue(undefined as any);
-
-    registerRecalibrateHealthCommand("/mock/workspace", mockLogger);
-    const handler = getLastHandler();
-
-    await handler();
-
-    expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
-  });
-
-  it("should recalibrate when user confirms and provides reason", async () => {
-    vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Recalibrate" as any);
-    // Mock showInputBox - need to add it to the vscode mock
-    (vscode.window as any).showInputBox = vi.fn().mockResolvedValue("Fixed schema issues");
-
-    const { HealthScoreHistoryWriter } = await import("../../src/utils/healthScoreHistory");
-
-    registerRecalibrateHealthCommand("/mock/workspace", mockLogger);
-    const handler = getLastHandler();
-
-    await handler();
-
-    expect(HealthScoreHistoryWriter.appendRecalibrationMarker).toHaveBeenCalledWith(
-      "/mock/workspace",
-      "Fixed schema issues"
-    );
-    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      expect.stringContaining("Health score baseline recalibrated")
-    );
-  });
-
-  it("should cancel when user presses Escape on input box", async () => {
-    vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Recalibrate" as any);
-    (vscode.window as any).showInputBox = vi.fn().mockResolvedValue(undefined);
-
-    const { HealthScoreHistoryWriter } = await import("../../src/utils/healthScoreHistory");
-
-    registerRecalibrateHealthCommand("/mock/workspace", mockLogger);
-    const handler = getLastHandler();
-
-    await handler();
-
-    expect(HealthScoreHistoryWriter.appendRecalibrationMarker).not.toHaveBeenCalled();
   });
 });

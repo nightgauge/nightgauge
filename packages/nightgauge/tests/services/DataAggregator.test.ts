@@ -12,11 +12,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "node:fs/promises";
 import { DataAggregator } from "../../src/services/DataAggregator";
 import { ExecutionHistoryReader } from "../../src/utils/executionHistoryReader";
-import { HealthScoreHistoryReader } from "../../src/utils/healthScoreHistory";
-import { ExperimentManager } from "@nightgauge/sdk";
+import { ExperimentManager, HealthTrendsWriter } from "@nightgauge/sdk";
 import type { ExecutionHistoryRunRecordV2 } from "../../src/schemas/executionHistory";
-import type { HealthScoreSnapshot } from "../../src/schemas/healthScoreHistory";
-import type { ExperimentOutcome } from "@nightgauge/sdk";
+import type { ExperimentOutcome, HealthTrendEntry } from "@nightgauge/sdk";
 import type { DateRangeFilter } from "../../src/types/aggregation";
 import { fakeCloneLayout } from "../helpers/cloneLayout";
 
@@ -59,17 +57,18 @@ function buildRunRecord(
   };
 }
 
-/** Build a mock health score snapshot */
-function buildHealthSnapshot(overrides: Partial<HealthScoreSnapshot> = {}): HealthScoreSnapshot {
+/** Build a mock entry of the health series (#1898, schema 2) */
+function buildHealthSnapshot(overrides: Partial<HealthTrendEntry> = {}): HealthTrendEntry {
   return {
-    schema_version: "1",
+    schema_version: "2",
     timestamp: "2026-02-15T11:00:00.000Z",
-    score: 85,
+    run_id: "run-100",
+    issue_number: 100,
+    overall_score: 85,
     status: "good",
-    components: { cost: 80, success: 90 },
-    cacheHitRate: 0.75,
-    costUsd: 0.5,
-    issueNumber: 100,
+    dimensions: { reliability: 85 },
+    excluded_dimensions: {},
+    significant_findings: [],
     ...overrides,
   };
 }
@@ -111,7 +110,7 @@ describe("DataAggregator", () => {
     );
 
     vi.spyOn(ExecutionHistoryReader, "readDateRange").mockResolvedValue([]);
-    vi.spyOn(HealthScoreHistoryReader, "readDateRange").mockResolvedValue([]);
+    vi.spyOn(HealthTrendsWriter, "read").mockResolvedValue([]);
     vi.spyOn(ExperimentManager, "readOutcomes").mockReturnValue([]);
   });
 
@@ -295,17 +294,37 @@ describe("DataAggregator", () => {
   describe("aggregate — with health scores", () => {
     it("should include health scores from reader", async () => {
       const snapshots = [buildHealthSnapshot({ timestamp: "2026-02-12T11:00:00.000Z" })];
-      vi.spyOn(HealthScoreHistoryReader, "readDateRange").mockResolvedValue(snapshots);
+      vi.spyOn(HealthTrendsWriter, "read").mockResolvedValue(snapshots);
 
       const filter = buildFilter("2026-02-10", "2026-02-15");
       const result = await DataAggregator.aggregate(WORKSPACE, filter);
 
-      expect(result.healthScores).toHaveLength(1);
-      expect(HealthScoreHistoryReader.readDateRange).toHaveBeenCalledWith(
+      expect(result.healthScores).toEqual([
+        { timestamp: "2026-02-12T11:00:00.000Z", score: 85, issueNumber: 100 },
+      ]);
+      expect(HealthTrendsWriter.read).toHaveBeenCalledWith(WORKSPACE, {
+        startDate: filter.startDate,
+        endDate: filter.endDate,
+      });
+    });
+
+    it("drops entries recorded as null — a starved run is not a score of 0 (#1898)", async () => {
+      vi.spyOn(HealthTrendsWriter, "read").mockResolvedValue([
+        buildHealthSnapshot({ timestamp: "2026-02-12T11:00:00.000Z", overall_score: 70 }),
+        buildHealthSnapshot({
+          timestamp: "2026-02-13T11:00:00.000Z",
+          overall_score: null,
+          status: "no-data",
+          dimensions: {},
+        }),
+      ]);
+
+      const result = await DataAggregator.aggregate(
         WORKSPACE,
-        filter.startDate,
-        filter.endDate
+        buildFilter("2026-02-10", "2026-02-15")
       );
+
+      expect(result.healthScores.map((h) => h.score)).toEqual([70]);
     });
   });
 
@@ -480,7 +499,7 @@ describe("DataAggregator", () => {
       vi.spyOn(ExecutionHistoryReader, "readDateRange").mockResolvedValue([
         buildRunRecord({ recorded_at: "2026-02-12T10:00:00.000Z" }),
       ]);
-      vi.spyOn(HealthScoreHistoryReader, "readDateRange").mockResolvedValue([
+      vi.spyOn(HealthTrendsWriter, "read").mockResolvedValue([
         buildHealthSnapshot({ timestamp: "2026-02-12T11:00:00.000Z" }),
       ]);
 
@@ -549,7 +568,7 @@ describe("DataAggregator", () => {
         new Error("Disk read error")
       );
       // Other sources still work
-      vi.spyOn(HealthScoreHistoryReader, "readDateRange").mockResolvedValue([
+      vi.spyOn(HealthTrendsWriter, "read").mockResolvedValue([
         buildHealthSnapshot({ timestamp: "2026-02-12T11:00:00.000Z" }),
       ]);
 
@@ -588,7 +607,7 @@ describe("DataAggregator", () => {
 
     it("should continue when some sources fail", async () => {
       vi.spyOn(ExecutionHistoryReader, "readDateRange").mockRejectedValue(new Error("fail"));
-      vi.spyOn(HealthScoreHistoryReader, "readDateRange").mockRejectedValue(new Error("fail"));
+      vi.spyOn(HealthTrendsWriter, "read").mockRejectedValue(new Error("fail"));
 
       const filter = buildFilter("2026-02-10", "2026-02-15");
       // Should not throw
@@ -610,7 +629,7 @@ describe("DataAggregator", () => {
       vi.spyOn(ExecutionHistoryReader, "readDateRange").mockResolvedValue([
         buildRunRecord({ recorded_at: "2026-02-12T10:00:00.000Z" }),
       ]);
-      vi.spyOn(HealthScoreHistoryReader, "readDateRange").mockResolvedValue([
+      vi.spyOn(HealthTrendsWriter, "read").mockResolvedValue([
         buildHealthSnapshot({ timestamp: "2026-02-12T11:00:00.000Z" }),
       ]);
       // Analysis reports

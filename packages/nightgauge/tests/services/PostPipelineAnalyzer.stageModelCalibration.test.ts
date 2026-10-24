@@ -87,9 +87,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
 const mockSkillEffectivenessAppend = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/utils/SkillEffectivenessWriter", () => ({
   SkillEffectivenessWriter: {
-    appendRecord: (...args: unknown[]) => mockSkillEffectivenessAppend(...args),
-    readAll: vi.fn().mockResolvedValue([]),
-    enforceRetention: vi.fn().mockResolvedValue(undefined),
+    upsertRecords: (...args: unknown[]) => mockSkillEffectivenessAppend(...args),
+    readLatest: vi.fn().mockResolvedValue(null),
     getFilePath: vi
       .fn()
       .mockReturnValue("/workspace/.git/nightgauge-worktree/health/skill-effectiveness.jsonl"),

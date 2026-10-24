@@ -137,15 +137,14 @@ autonomous decisions or fail with clear error.
 The skill reads data from 8 sources in priority order, with graceful fallback
 when sources are unavailable:
 
-| Source                  | Location                                | What It Provides                                                                                                                                                                                                          |
-| ----------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Execution History       | `pipeline/history/*.jsonl`              | Per-run tokens, costs, durations, stage breakdowns                                                                                                                                                                        |
-| History Index           | `pipeline/history/index.json`           | Lightweight run summaries for fast filtering                                                                                                                                                                              |
-| Health Score History    | `pipeline/health-history.jsonl`         | Component health scores and trends over time                                                                                                                                                                              |
-| Post-Pipeline Analysis  | `checkout/analysis/*.json`              | Model performance metrics, failure analysis                                                                                                                                                                               |
-| A/B Experiments         | `checkout/analysis/experiments/*.jsonl` | Experiment results and variant comparisons                                                                                                                                                                                |
-| Past Health Reports     | `pipeline/health-report-*.json`         | Historical findings for recommendation tracking                                                                                                                                                                           |
-| Dimension Trend History | `checkout/health/trends.jsonl`          | Per-dimension time-series (HealthTrendEntry records, 90-day retention). Query with `last N runs` using `limit`, or `last N days` using `startDate`/`endDate`. Each entry contains all 7 dimension scores + overall score. |
+| Source                 | Location                                | What It Provides                                                                                                                                                                                                                         |
+| ---------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execution History      | `pipeline/history/*.jsonl`              | Per-run tokens, costs, durations, stage breakdowns                                                                                                                                                                                       |
+| History Index          | `pipeline/history/index.json`           | Lightweight run summaries for fast filtering                                                                                                                                                                                             |
+| Post-Pipeline Analysis | `checkout/analysis/*.json`              | Model performance metrics, failure analysis                                                                                                                                                                                              |
+| A/B Experiments        | `checkout/analysis/experiments/*.jsonl` | Experiment results and variant comparisons                                                                                                                                                                                               |
+| Past Health Reports    | `pipeline/health-report-*.json`         | Historical findings for recommendation tracking                                                                                                                                                                                          |
+| Health Series          | `checkout/health/trends.jsonl`          | The one health time-series: one schema-2 entry per pipeline run, 90-day retention. `overall_score` is `null` (status `no-data`) when no dimension had data; `excluded_dimensions` names every dimension that did not contribute and why. |
 
 `pipeline/...` locations are in the clone's pipeline state directory
 (`nightgauge layout path pipeline`); `checkout/...` locations are in this
@@ -385,10 +384,10 @@ else
   SOURCES_MISSING+=("history-index")
 fi
 
-if [ -f "${PIPELINE_DIR}/health-history.jsonl" ]; then
-  SOURCES_FOUND+=("health-history")
+if [ -f "$(nightgauge layout path checkout health/trends.jsonl)" ]; then
+  SOURCES_FOUND+=("health-series")
 else
-  SOURCES_MISSING+=("health-history")
+  SOURCES_MISSING+=("health-series")
 fi
 
 ANALYSIS_DIR="$(nightgauge layout path checkout analysis)"
@@ -543,7 +542,7 @@ print(f"Extracted {len(records)} runs to /tmp/health_execution.json")
 python3 /tmp/health_extract_history.py ${PERIOD_DAYS} "${SINCE_DATE}" "${UNTIL_DATE}"
 ```
 
-#### Step 2.2: Extract Health Score History
+#### Step 2.2: Extract the Health Series
 
 ```bash
 # Extract health trend scores using Go binary (replaces Python script)
@@ -794,7 +793,7 @@ stdin, or `--from FILE` after writing a temp file outside the git directory):
     "from": "YYYY-MM-DD",
     "to": "YYYY-MM-DD",
     "period_days": 7,
-    "data_sources_found": ["execution-history", "health-history"],
+    "data_sources_found": ["execution-history", "health-series"],
     "data_sources_missing": ["ab-experiments"]
   },
   "summary": {
@@ -884,7 +883,7 @@ PIPELINE HEALTH REPORT
 ═══════════════════════════════════════════════════════════
 
 Analysis Period: 2026-02-07 to 2026-02-14 (7 days, 15 runs)
-Data Sources: execution-history, health-history (5/7 available)
+Data Sources: execution-history, health-series (5/7 available)
 
 SUMMARY
 ───────────────────────────────────────────────────────────
@@ -991,7 +990,7 @@ UTILITIES (not part of main pipeline)
   Use on regular cadence (weekly recommended)
   (pipeline/ = the clone's pipeline state dir: nightgauge layout path pipeline)
   Reads: pipeline/history/*.jsonl
-  Reads: pipeline/health-history.jsonl
+  Reads: checkout/health/trends.jsonl (the health series)
   Reads: checkout/analysis/*.json
   Reads: checkout/analysis/experiments/*.jsonl
   Reads: pipeline/health-report-*.json
