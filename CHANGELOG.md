@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Recovery actions are now transaction-safe at the IPC layer (#794).** Three
+  new verbs, `pipeline.recoveryClaim`, `pipeline.recoveryExecute` and
+  `pipeline.recoveryRelease`, let a host resume, restart or discard a stalled
+  run. A claim is refused when another claim is held, the run has a live owner,
+  or the run snapshot's SHA-256 changed since it was read; while held, ordinary
+  run writers fail closed. Execution is journaled in an append-only,
+  hash-chained, HMAC-signed log kept under the user's config directory (not the
+  workspace), so a partial failure retries from the failed step and a tampered
+  journal is refused. Run ids, branches and worktree paths are validated and
+  path-contained before use. `ipc.ready` now advertises
+  `features.recovery_transactions`. Branch protection is one shared policy
+  (`git.ProtectedBranches` / `RefuseBranchMutation`) used by the grounding gate
+  and recovery alike.
 - **`nightgauge doctor` now checks `project.builtin_workflows` against the live
   board.** The setting was never read, so it drifted silently from the board's
   workflows. GitHub has no API to enable a workflow, so the new

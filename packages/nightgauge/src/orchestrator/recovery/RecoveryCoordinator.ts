@@ -54,7 +54,7 @@ export class RecoveryCoordinator implements vscode.Disposable {
         return;
       }
 
-      const actionResult = await this.orchestrator.runRecoveryAction(result.action);
+      const actionResult = await this.orchestrator.runRecoveryAction(result.action, payload);
 
       if (actionResult.success) {
         result = await this.dialog.waitForNextAction();

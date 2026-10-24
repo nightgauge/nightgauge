@@ -355,8 +355,9 @@ func collectImportTypes(methods []MethodDef) []string {
 		"AuthTokenResponse": true, "AuthDeviceCodeResult": true, "AuthDeviceFlowPollResult": true,
 		"BoardItem": true, "IssueDetail": true, "IssueSummary": true, "EpicProgress": true,
 		"PipelineStatus": true, "ExecutionInfo": true, "ComplexityResult": true,
-		"RunningPipelinesResult": true, // #1511 — reload-safety summary
-		"ModelRouteResult":       true, "FailureClassification": true, "CostEstimate": true,
+		"RunningPipelinesResult": true,                                // #1511 — reload-safety summary
+		"RecoveryClaimResult":    true, "RecoveryExecuteResult": true, // #794 — recovery transactions
+		"ModelRouteResult": true, "FailureClassification": true, "CostEstimate": true,
 		"BatchAssessment": true, "PlatformStatus": true, "LicenseInfo": true,
 		"TrialResult":   true, // Issue #1138 — Start Free Trial
 		"IpcQueueState": true, "IpcQueueItem": true, "RunPipelineResult": true,

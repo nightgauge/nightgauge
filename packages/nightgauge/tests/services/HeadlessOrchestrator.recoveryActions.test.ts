@@ -6,12 +6,13 @@ import * as path from "path";
 const mocks = vi.hoisted(() => ({
   executeCommand: vi.fn(),
   uriFile: vi.fn((fsPath: string) => ({ fsPath })),
+  showWarningMessage: vi.fn(),
 }));
 
 vi.mock("vscode", () => ({
   commands: { executeCommand: mocks.executeCommand },
   Uri: { file: mocks.uriFile },
-  window: { showErrorMessage: vi.fn() },
+  window: { showErrorMessage: vi.fn(), showWarningMessage: mocks.showWarningMessage },
   workspace: {
     workspaceFolders: [{ uri: { fsPath: "/mock/repo" } }],
     getConfiguration: vi.fn(() => ({ get: vi.fn() })),
@@ -19,6 +20,8 @@ vi.mock("vscode", () => ({
 }));
 
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
+import { IpcClient } from "../../src/services/IpcClient";
+import type { RecoveryRequiredPayload } from "@nightgauge/sdk";
 import type { Logger } from "../../src/utils/logger";
 import { fakeCloneLayout, mkFakeCloneLayout } from "../helpers/cloneLayout";
 
@@ -138,5 +141,111 @@ describe("HeadlessOrchestrator recovery actions", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("HeadlessOrchestrator state-changing recovery (#794)", () => {
+  const identity = {
+    repo: "o/r",
+    issue: 42,
+    runId: "0192f8a0-0000-7000-8000-000000000001",
+    branch: "feat/42-x",
+    stage: "feature-dev",
+    snapshotSha256: "a".repeat(64),
+  };
+  const payload: RecoveryRequiredPayload = {
+    issueNumber: 42,
+    triggeringStage: "feature-dev",
+    errorKind: "RUN_STATE_MISSING",
+    errorDetail: "x",
+    runState: "paused",
+    availableActions: ["restart", "cancel"],
+    recoveryIdentity: identity,
+  };
+
+  function fakeIpc(supported: boolean, calls: string[]) {
+    const ipc = {
+      supportsFeature: vi.fn(() => supported),
+      pipelineRecoveryClaim: vi.fn(async () => {
+        calls.push("claim");
+        return { token: "tok", expiresAt: "" };
+      }),
+      pipelineRecoveryExecute: vi.fn(async () => {
+        calls.push("execute");
+        return { action: "restart", completedSteps: [], skippedSteps: [] };
+      }),
+      pipelineRecoveryRelease: vi.fn(async () => {
+        calls.push("release");
+      }),
+    };
+    vi.spyOn(IpcClient, "getInstance").mockReturnValue(ipc as never);
+    return ipc;
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    mocks.showWarningMessage.mockReset();
+  });
+
+  it("confirms in a host modal, then claims, then executes", async () => {
+    const calls: string[] = [];
+    fakeIpc(true, calls);
+    mocks.showWarningMessage.mockImplementation(async () => {
+      calls.push("confirm");
+      return "Restart";
+    });
+
+    const result = await makeOrchestrator().runRecoveryAction("restart", payload);
+
+    expect(result).toEqual({ success: true });
+    expect(calls).toEqual(["confirm", "claim", "execute"]);
+    expect(mocks.showWarningMessage.mock.calls[0][1]).toMatchObject({ modal: true });
+  });
+
+  it("does not claim or execute when the operator declines", async () => {
+    const calls: string[] = [];
+    fakeIpc(true, calls);
+    mocks.showWarningMessage.mockResolvedValue(undefined);
+
+    await makeOrchestrator().runRecoveryAction("restart", payload);
+
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses when the binary does not advertise recovery_transactions", async () => {
+    const calls: string[] = [];
+    fakeIpc(false, calls);
+
+    const result = await makeOrchestrator().runRecoveryAction("restart", payload);
+
+    expect(result.success).toBe(false);
+    expect(mocks.showWarningMessage).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses without a run identity", async () => {
+    const calls: string[] = [];
+    fakeIpc(true, calls);
+
+    const result = await makeOrchestrator().runRecoveryAction("restart", {
+      ...payload,
+      recoveryIdentity: undefined,
+    });
+
+    expect(result.success).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it("releases the claim when execution fails", async () => {
+    const calls: string[] = [];
+    const ipc = fakeIpc(true, calls);
+    ipc.pipelineRecoveryExecute.mockRejectedValueOnce(new Error("step failed"));
+    mocks.showWarningMessage.mockResolvedValue("Restart");
+
+    const result = await makeOrchestrator().runRecoveryAction("restart", payload);
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toBe("step failed");
+    expect(calls).toEqual(["claim", "release"]);
   });
 });

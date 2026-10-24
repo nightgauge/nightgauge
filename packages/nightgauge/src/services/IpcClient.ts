@@ -102,6 +102,17 @@ export class IpcClient extends IpcClientGenerated {
     return this._readyPayload;
   }
 
+  /**
+   * Whether the connected Go binary advertised a capability in `ipc.ready`'s
+   * `features` map. Absent map or key reads as false, so an older binary leaves
+   * every feature-gated UI in its previous (observational) state (#794).
+   */
+  supportsFeature(name: string): boolean {
+    const features = (this._readyPayload as { features?: Record<string, unknown> } | null)
+      ?.features;
+    return features?.[name] === true;
+  }
+
   static getInstance(): IpcClient {
     if (!IpcClient.instance) {
       IpcClient.instance = new IpcClient();

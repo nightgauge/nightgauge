@@ -87,4 +87,12 @@ describe("getRecoveryDialogHtml — basic structure", () => {
     expect(html).not.toContain('data-action="resume-from-paused-stage"');
     expect(html).not.toContain('data-action="run-producing-stage"');
   });
+
+  it("renders the state-changing action set when recovery transactions are offered", () => {
+    const payload: RecoveryRequiredPayload = {
+      ...baseMissingInput,
+      availableActions: ["resume", "restart", "discard", "open-run-state-directory", "cancel"],
+    };
+    expect(normalize(getRecoveryDialogHtml(mockWebview, payload))).toMatchSnapshot();
+  });
 });

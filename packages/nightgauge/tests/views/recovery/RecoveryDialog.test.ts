@@ -72,6 +72,32 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe("RecoveryDialog state-changing whitelist (#794)", () => {
+  it("drops a restart message when the payload does not offer it", async () => {
+    const { RecoveryDialog } = await import("../../../src/views/recovery/RecoveryDialog");
+    const dialog = new RecoveryDialog({ fsPath: "/ext" } as any);
+    const promise = dialog.show(basePayload);
+
+    capturedMessageHandler!({ type: "action", action: "restart", confirmed: true });
+    capturedMessageHandler!({ type: "action", action: "cancel", confirmed: true });
+
+    await expect(promise).resolves.toEqual({ action: "cancel" });
+  });
+
+  it("resolves a restart message when the payload offers it", async () => {
+    const { RecoveryDialog } = await import("../../../src/views/recovery/RecoveryDialog");
+    const dialog = new RecoveryDialog({ fsPath: "/ext" } as any);
+    const promise = dialog.show({
+      ...basePayload,
+      availableActions: ["restart", "cancel"],
+    });
+
+    capturedMessageHandler!({ type: "action", action: "restart", confirmed: true });
+
+    await expect(promise).resolves.toEqual({ action: "restart" });
+  });
+});
+
 describe("RecoveryDialog", () => {
   it("creates a webview panel and resolves on action message", async () => {
     const { RecoveryDialog } = await import("../../../src/views/recovery/RecoveryDialog");

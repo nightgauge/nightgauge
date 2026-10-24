@@ -13,16 +13,23 @@
 
 import { getNonce } from "../../utils/webviewNonce";
 import * as vscode from "vscode";
+import { STATE_CHANGING_RECOVERY_ACTIONS } from "@nightgauge/sdk";
 import type { RecoveryAction, RecoveryRequiredPayload } from "@nightgauge/sdk";
 
 const ACTION_LABELS: Record<RecoveryAction, string> = {
   "open-run-state-directory": "Open run-state directory",
   cancel: "Cancel",
+  resume: "Resume run",
+  restart: "Restart run",
+  discard: "Discard run",
 };
 
 const ACTION_ICONS: Record<RecoveryAction, string> = {
   "open-run-state-directory": "codicon-folder-opened",
   cancel: "codicon-close",
+  resume: "codicon-debug-continue",
+  restart: "codicon-debug-restart",
+  discard: "codicon-trash",
 };
 
 /**
@@ -105,7 +112,12 @@ function renderSubtitle(payload: RecoveryRequiredPayload): string {
   const producer = payload.producingStage
     ? `Producer: <strong>${escapeHtml(formatStageName(payload.producingStage))}</strong>. `
     : "";
-  return `${producer}Inspect the run state or close this dialog.`;
+  const mutating = payload.availableActions.some((a) =>
+    STATE_CHANGING_RECOVERY_ACTIONS.includes(a)
+  );
+  return mutating
+    ? `${producer}Resume, restart or discard the run, inspect its state, or close this dialog. State-changing actions ask for confirmation first.`
+    : `${producer}Inspect the run state or close this dialog.`;
 }
 
 function getStyles(): string {
@@ -270,6 +282,9 @@ function getStyles(): string {
     .codicon-warning::before { content: "\\ea6c"; }
     .codicon-folder-opened::before { content: "\\eaf7"; }
     .codicon-close::before { content: "\\ea76"; }
+    .codicon-debug-continue::before { content: "\\eacf"; }
+    .codicon-debug-restart::before { content: "\\eb37"; }
+    .codicon-trash::before { content: "\\ea81"; }
     .codicon-circle-outline::before { content: "\\eabc"; }
 
     @media (max-width: 600px) {

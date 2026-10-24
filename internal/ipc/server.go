@@ -215,6 +215,10 @@ type Server struct {
 	rejectLogSeen map[string]time.Time
 	rejectLogMu   sync.Mutex
 
+	// recovery holds the transaction-safe recovery claims and journal
+	// collaborators (#794).
+	recovery recoveryDeps
+
 	// schedulerRuns is the narrow read surface ADR-017 Decision 11 needs from
 	// the Go scheduler's own registry. It is set from the same scheduler
 	// WithScheduler attaches; it exists as an interface so the resolution
@@ -1314,6 +1318,9 @@ func (s *Server) Run(ctx context.Context) error {
 	// can validate binary compatibility on startup.
 	s.Emit("ipc.ready", map[string]interface{}{
 		"protocolVersion": ProtocolVersion,
+		// features lets an extension host gate UI on server capability
+		// without a protocol-version bump (#794).
+		"features": map[string]bool{"recovery_transactions": true},
 	})
 
 	// The stdio loop runs on its own goroutine so this one can select on the
@@ -1445,6 +1452,32 @@ func reconcilePrMergeGroundTruth(reportedSuccess, prMerged bool, terminalStage s
 }
 
 func (s *Server) registerMethods() {
+	// --- Recovery transaction methods (#794) ---
+	//ipc:method pipelineRecoveryClaim params:RecoveryClaimParams result:RecoveryClaimResult
+	s.methods["pipeline.recoveryClaim"] = func(_ context.Context, raw json.RawMessage) (interface{}, error) {
+		var p RecoveryClaimParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		return s.recoveryClaimRun(p.Request)
+	}
+	//ipc:method pipelineRecoveryRelease params:RecoveryReleaseParams result:void
+	s.methods["pipeline.recoveryRelease"] = func(_ context.Context, raw json.RawMessage) (interface{}, error) {
+		var p RecoveryReleaseParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		return nil, s.recoveryRelease(p.RunID, p.Token)
+	}
+	//ipc:method pipelineRecoveryExecute params:RecoveryExecuteParams result:RecoveryExecuteResult
+	s.methods["pipeline.recoveryExecute"] = func(_ context.Context, raw json.RawMessage) (interface{}, error) {
+		var p RecoveryExecuteParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		return s.recoveryExecuteRun(p)
+	}
+
 	// --- Workspace methods ---
 
 	//ipc:method workspaceSetRoot params:WorkspaceSetRootParams result:WorkspaceSetRootResult

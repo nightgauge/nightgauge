@@ -178,8 +178,35 @@ export type RecoveryErrorKind =
  *
  * - `open-run-state-directory` — reveal the on-disk pipeline directory.
  * - `cancel` — close the dialog without acting.
+ * - `resume`, `restart`, `discard` — state-changing. Offered only when the
+ *   Go binary advertises `recovery_transactions` and the run identity is
+ *   known; each runs as a claimed, journaled transaction (#794).
  */
-export type RecoveryAction = "open-run-state-directory" | "cancel";
+export type RecoveryAction =
+  "open-run-state-directory" | "cancel" | "resume" | "restart" | "discard";
+
+/** Actions that mutate run state and so require a host-confirmed claim. */
+export const STATE_CHANGING_RECOVERY_ACTIONS: readonly RecoveryAction[] = [
+  "resume",
+  "restart",
+  "discard",
+];
+
+/**
+ * The identity a state-changing recovery request carries to the Go layer:
+ * exact repository, issue, run, branch, worktree, stage and phase, plus the
+ * SHA-256 of the run snapshot the operator was shown.
+ */
+export interface RecoveryIdentity {
+  repo: string;
+  issue: number;
+  runId: string;
+  branch: string;
+  worktree?: string;
+  stage: string;
+  phase?: string;
+  snapshotSha256: string;
+}
 
 /**
  * Payload emitted by `OrchestratorEventDispatcher.onRecoveryRequired`.
@@ -195,6 +222,8 @@ export interface RecoveryRequiredPayload {
   errorDetail: string;
   runState: RecoveryRunState;
   availableActions: RecoveryAction[];
+  /** Present only when state-changing actions are offered (#794). */
+  recoveryIdentity?: RecoveryIdentity;
 }
 
 /**

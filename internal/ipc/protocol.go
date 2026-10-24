@@ -474,6 +474,54 @@ type PipelineGetStateParams struct {
 	IssueNumber int    `json:"issueNumber"`
 }
 
+// --- Recovery transaction methods (#794) ---
+
+// RecoveryRequest is the identity a state-changing recovery action must carry.
+// It names the exact repository, issue, run, branch, worktree, stage and phase
+// plus the SHA-256 of the snapshot the operator was looking at. Nothing in it
+// is ever used to select a target until validateRecoveryRequest has passed.
+type RecoveryRequest struct {
+	Repo           string `json:"repo"`
+	Issue          int    `json:"issue"`
+	RunID          string `json:"runId"`
+	Branch         string `json:"branch"`
+	Worktree       string `json:"worktree,omitempty"`
+	Stage          string `json:"stage"`
+	Phase          string `json:"phase,omitempty"`
+	SnapshotSHA256 string `json:"snapshotSha256"`
+}
+
+// RecoveryClaimParams are parameters for pipeline.recoveryClaim.
+type RecoveryClaimParams struct {
+	Request RecoveryRequest `json:"request"`
+}
+
+// RecoveryClaimResult is the lease a successful claim returns.
+type RecoveryClaimResult struct {
+	Token     string `json:"token"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// RecoveryReleaseParams are parameters for pipeline.recoveryRelease.
+type RecoveryReleaseParams struct {
+	RunID string `json:"runId"`
+	Token string `json:"token"`
+}
+
+// RecoveryExecuteParams are parameters for pipeline.recoveryExecute.
+type RecoveryExecuteParams struct {
+	RunID  string `json:"runId"`
+	Token  string `json:"token"`
+	Action string `json:"action"`
+}
+
+// RecoveryExecuteResult reports which journal steps completed.
+type RecoveryExecuteResult struct {
+	Action         string   `json:"action"`
+	CompletedSteps []string `json:"completedSteps"`
+	SkippedSteps   []string `json:"skippedSteps"`
+}
+
 // --- Queue methods ---
 
 // QueueAddParams are parameters for queue.add.

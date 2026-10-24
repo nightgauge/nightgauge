@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **The Recovery Dialog can resume, restart or discard a run when the engine
+  supports it.** The three actions appear only when the engine advertises
+  recovery transactions and the run's identity is readable; otherwise the
+  dialog stays observational as before. Each action asks for confirmation in a
+  modal, claims the run, then executes, and releases the claim if it fails.
+
 ### Changed
 
 - **The Pipeline Health headline is the engine's 8-dimension score, and N/A when

@@ -1101,6 +1101,19 @@ export interface RunningPipelinesResult {
   autonomousStatus?: string;
 }
 
+/** Result from pipeline.recoveryClaim — the lease a recovery transaction runs under (#794). */
+export interface RecoveryClaimResult {
+  token: string;
+  expiresAt: string;
+}
+
+/** Result from pipeline.recoveryExecute — which journal steps ran or were skipped (#794). */
+export interface RecoveryExecuteResult {
+  action: string;
+  completedSteps: string[];
+  skippedSteps: string[];
+}
+
 /** Result from autonomous.* methods — autonomous scheduler state snapshot. */
 export interface AutonomousStatusResult {
   status: string;

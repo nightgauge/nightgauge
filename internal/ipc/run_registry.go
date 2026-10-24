@@ -601,6 +601,13 @@ func (s *Server) resolveRun(method string, class verbClass, runID, repo string, 
 			"not a canonical run identity")
 	}
 
+	// A run under a recovery claim fails closed for every ordinary writer
+	// (#794). Checked before runtimesMu: recovery.mu is always the outer lock.
+	if class != verbLookup && s.recoveryClaimHeld(runID) {
+		return runResolution{}, s.rejectRun(method, codeRecoveryClaimHeld, runID, issue,
+			"the run is under an active recovery claim")
+	}
+
 	s.runtimesMu.Lock()
 	if s.closedRuns.hasLocked(runID) {
 		s.runtimesMu.Unlock()
