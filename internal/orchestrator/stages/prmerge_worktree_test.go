@@ -156,7 +156,7 @@ func TestExecGhClient_OldDeleteBranchFlag_CollidesInLinkedWorktree(t *testing.T)
 		t.Fatalf("fixture did not reproduce the collision: `gh pr merge --delete-branch` succeeded from " +
 			"a linked worktree while the primary checkout held main — this test would pass even without the fix")
 	}
-	if !strings.Contains(string(out), "already used by worktree") {
+	if !isWorktreeOccupancyError(string(out)) {
 		t.Fatalf("expected git's worktree-occupancy error, got: %s", out)
 	}
 
@@ -209,4 +209,32 @@ func TestExecGhClient_Merge_SucceedsFromLinkedWorktree(t *testing.T) {
 	// completed without ever touching either.
 	assertBranch(t, mainDir, "main")
 	assertBranch(t, worktreeDir, headBranch)
+}
+
+// TestIsWorktreeOccupancyError pins both wordings git has used for refusing to
+// check out a branch another worktree holds (#1794): "is already checked out
+// at" before git 2.42, "is already used by worktree at" since. The collision
+// test above runs real git, so it must accept whichever one the machine has,
+// and still nothing else.
+func TestIsWorktreeOccupancyError(t *testing.T) {
+	for _, tc := range []struct {
+		out  string
+		want bool
+	}{
+		{"fatal: 'main' is already used by worktree at '/tmp/001/main'\n", true},
+		{"fatal: 'main' is already checked out at '/tmp/001/main'\n", true},
+		{"error: pathspec 'main' did not match any file(s) known to git\n", false},
+		{"", false},
+	} {
+		if got := isWorktreeOccupancyError(tc.out); got != tc.want {
+			t.Errorf("isWorktreeOccupancyError(%q) = %v, want %v", tc.out, got, tc.want)
+		}
+	}
+}
+
+// isWorktreeOccupancyError reports whether git refused a checkout because
+// another worktree holds the branch, in either wording git has used (#1794).
+func isWorktreeOccupancyError(out string) bool {
+	return strings.Contains(out, "is already used by worktree at") ||
+		strings.Contains(out, "is already checked out at")
 }

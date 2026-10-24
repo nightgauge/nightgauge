@@ -79,13 +79,20 @@ SCOPE_PROBE=0
 # and one skipped step, and exits. It is the regression test for the property
 # that a skipped step is a THIRD state: revert the verdict to the unconditional
 # "✓ All CI-parity checks passed." and this probe's output says so.
+# `--summary-probe fail` adds one step that really fails: the gate's exit code
+# must then be non-zero, never a printed "N check(s) failed" over exit 0 (#1494).
 SUMMARY_PROBE=0
+SUMMARY_PROBE_FAIL=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --list-steps) LIST_STEPS=1; shift ;;
     --changed) CHANGED_SCOPE=1; shift ;;
     --scope-probe) SCOPE_PROBE=1; shift ;;
-    --summary-probe) SUMMARY_PROBE=1; shift ;;
+    --summary-probe)
+      SUMMARY_PROBE=1
+      shift
+      case "${1:-}" in fail) SUMMARY_PROBE_FAIL=1; shift ;; esac
+      ;;
     --slot-probe)
       SLOT_PROBE=1
       shift
@@ -1112,6 +1119,9 @@ if [ "$SUMMARY_PROBE" -eq 1 ]; then
   # reporting green over a step it never looked at.
   run_step "summary probe passing step" true
   skip_step "summary probe skipped step" "the probe asked for one, to exercise this path"
+  if [ "$SUMMARY_PROBE_FAIL" -eq 1 ]; then
+    run_step "summary probe failing step" false
+  fi
   print_skip_summary
   print_final_verdict
   exit $?

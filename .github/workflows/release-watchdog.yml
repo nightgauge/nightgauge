@@ -40,8 +40,10 @@ name: Release Watchdog
 # verifies every distribution channel serves the latest stable release
 # (scripts/verify-release-channels.sh, #1874). The Homebrew cask arrives as a
 # pull request on the tap that someone must merge, and seven releases went by
-# with nobody noticing it had not been. #1769 adds the VS Code Marketplace and
-# Open VSX as further channels of the same script and job.
+# with nobody noticing it had not been. The VS Code Marketplace and Open VSX
+# listings are further channels of the same script and job (#1769): each must
+# list the latest release on every target, once a day. Every channel step runs
+# even when an earlier one is red, and each keeps its own single issue.
 #
 # The state files are published to the `discovery-state` branch, not to `main`:
 # `main`'s ruleset requires a pull request, so no workflow token can push to
@@ -92,7 +94,7 @@ jobs:
     # Not gated on autonomous_discovery: a stale distribution channel is a
     # release defect whatever the discovery switches say.
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       # Read the releases here; the tap is public, so its cask and pull
       # requests need no token scope beyond this.
@@ -114,6 +116,26 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(--channel homebrew)
+          if [ "$DRY_RUN" != "true" ]; then
+            ARGS+=(--issue-repo "$GITHUB_REPOSITORY")
+          fi
+          bash scripts/verify-release-channels.sh "${ARGS[@]}"
+
+      - name: VS Code Marketplace lists the latest release
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          ARGS=(--channel marketplace)
+          if [ "$DRY_RUN" != "true" ]; then
+            ARGS+=(--issue-repo "$GITHUB_REPOSITORY")
+          fi
+          bash scripts/verify-release-channels.sh "${ARGS[@]}"
+
+      - name: Open VSX lists the latest release
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          ARGS=(--channel open-vsx)
           if [ "$DRY_RUN" != "true" ]; then
             ARGS+=(--issue-repo "$GITHUB_REPOSITORY")
           fi
