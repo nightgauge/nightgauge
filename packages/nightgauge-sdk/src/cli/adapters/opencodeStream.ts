@@ -70,6 +70,29 @@ const OPENCODE_RULE_DENIED_TOOL_ERROR_PREFIX =
  * own permission config refused — either text above, "ask" auto-rejected or
  * "deny" matched directly.
  */
+/**
+ * Starts the error 1.18.30 gives the parent's `task` tool call when the
+ * subagent it started ended in error (#1744). Go parity:
+ * openCodeSubagentFailedPrefix in stream.go.
+ */
+const OPENCODE_SUBAGENT_FAILED_PREFIX = "Subagent failed";
+
+/**
+ * Whether every error the run's own session saw was a failed subagent
+ * (#1744): no tool call of its own was rejected or otherwise failed, at least
+ * one `task` call failed with "Subagent failed", and no error event. An
+ * auto-reject notice on stderr in such a run is the subagent's. Go parity:
+ * OpenCodeStream.SubagentOnlyRejection.
+ */
+function subagentOnlyRejection(s: OpenCodeStreamState): boolean {
+  return (
+    s.rejectedToolCalls === 0 &&
+    s.otherToolErrors === 0 &&
+    s.subagentFailedTasks > 0 &&
+    s.errorEvents.length === 0
+  );
+}
+
 function isOpenCodeRejectedToolError(errText: string): boolean {
   return (
     errText.startsWith(OPENCODE_REJECTED_TOOL_ERROR) ||
@@ -191,6 +214,15 @@ export interface OpenCodeStreamState {
    * OpenCodeStream.RejectedTool in opencode_usage.go/stream.go.
    */
   rejectedTool?: string;
+  /**
+   * The run's own `task` tool calls that failed with "Subagent failed": a
+   * subagent ended in error (on 1.18.30, when its own tool call was
+   * auto-rejected) and the parent received that as a tool result (#1744).
+   * Go parity: OpenCodeStream.SubagentFailedTasks.
+   */
+  subagentFailedTasks: number;
+  /** The run's own tool calls that failed with any other error. */
+  otherToolErrors: number;
   /** The `error.name` of every error event, in order ("unknown" when it has none). */
   errorEvents: string[];
   /** The text parts' text, joined: the stage's display output, never classified. */
@@ -224,6 +256,8 @@ export function parseOpenCodeStream(
     peakStepInputTokens: 0,
     reportedCostUsd: 0,
     rejectedToolCalls: 0,
+    subagentFailedTasks: 0,
+    otherToolErrors: 0,
     errorEvents: [],
     displayText: "",
   };
@@ -261,6 +295,16 @@ export function parseOpenCodeStream(
           s.rejectedToolCalls++;
           if (s.rejectedTool === undefined && typeof part?.tool === "string" && part.tool !== "") {
             s.rejectedTool = part.tool;
+          }
+        } else if (state?.status === "error") {
+          if (
+            part?.tool === "task" &&
+            typeof state.error === "string" &&
+            state.error.startsWith(OPENCODE_SUBAGENT_FAILED_PREFIX)
+          ) {
+            s.subagentFailedTasks++;
+          } else {
+            s.otherToolErrors++;
           }
         }
         break;
@@ -1016,10 +1060,11 @@ function stderrTail(kept: readonly string[], redact: (s: string) => string): str
  * whether it failed. A run fails, whatever its exit code, when:
  *
  *   - it exited non-zero;
- *   - OpenCode rejected a permission on its own (the notice on stderr, or a
- *     tool call the stream shows rejected): OpenCode ends the run and exits
- *     0, so the stage reads as a success unless this says otherwise (ADR-022
- *     § 9). The failure leads with `[adapter-permission-rejected] tool=<p>`, or
+ *   - OpenCode rejected a permission of the run's own session on its own (the
+ *     notice on stderr, or a tool call the stream shows rejected): OpenCode
+ *     ends the run and exits 0, so the stage reads as a success unless this
+ *     says otherwise (ADR-022 § 9). A notice only a subagent's rejection
+ *     printed, which the parent carried on past, decides nothing (#1744). The failure leads with `[adapter-permission-rejected] tool=<p>`, or
  *     `[permission-denied] tool=<p>` for a tool the stage was not allowed;
  *   - the stream carried an error event;
  *   - it exited 0 without a single step_finish, which recorded no usage.
@@ -1057,7 +1102,13 @@ export async function classifyOpenCodeRun(input: OpenCodeRunInput): Promise<Open
     );
   }
   let marker = stderr.marker;
-  if (stream.rejectedToolCalls > 0 && marker === undefined) {
+  if (marker !== undefined && input.exitCode === 0 && subagentOnlyRejection(stream)) {
+    // The notice was a subagent's (#1744): the parent session had no rejected
+    // or failed tool call of its own, carried on past the failed task, and
+    // exited 0. That rejection did not end the run, so it decides no failure;
+    // a rejection the parent itself receives still does.
+    marker = undefined;
+  } else if (stream.rejectedToolCalls > 0 && marker === undefined) {
     // A "deny" match (this map's own rejection shape, ADR-022 § 9's
     // "pattern matching" amendment) never prints the "auto-rejecting"
     // notice a stderr-only read depends on. AC3 (#1638 fix round): the

@@ -564,6 +564,30 @@ opencode run --format json --print-logs --log-level ERROR \
 another model or version will not reproduce these numbers; update the tables
 and the tests' ground truth in the same change.
 
+### Recapture scope and operator state (#1746)
+
+- **Not scripted, by decision.** `scripts/capture-opencode-fixture.sh`
+  captures the stub-provider legs only (`--help` says so). The four legs above
+  are recaptured by hand with the procedure in this section, not by a script:
+  the local and remote legs need a model server on the maintainer's machine
+  whose address is never recorded, the subagent leg needs a model that chooses
+  to call `task` (the stub's scripts cannot drive a subagent session tree), and
+  no leg's numbers reproduce on another model, quant or version, so a script
+  would not make a recapture repeatable; the procedure is what is repeatable.
+- **Cached tokens stay deferred to #1680.** The stub provider does not report
+  `prompt_tokens_details.cached_tokens`, and it will not gain it first: a
+  cached count the stub invents would hold the parser to the stub's shape,
+  not a hosted provider's, which is what these captures exist to avoid. The
+  parser's cache-pool arithmetic is covered by synthetic `step_finish` tests;
+  hosted cache pools are #1680's live hosted leg to capture.
+- **Operator state.** During any capture, inspect OpenCode state only under
+  the capture's isolation (`env -i`, the sandbox `HOME` and XDG directories)
+  or with `sqlite3 -readonly` against a copy of the database. Never run an
+  uncontained `opencode` command: one such probe during #1629 added a stray
+  `project_directory` row to the operator's own database. The capture script
+  enforces this for every `opencode` process it starts; a manual probe is the
+  operator's to keep inside the sandbox.
+
 ### Ground truth encoded in the files
 
 `opencode_stream_local_capture.jsonl` (read, edit, stop):
@@ -661,10 +685,11 @@ stream would book 30632 and 689. The peak step prompt stays the parent's
   notice on the run's stderr, the subagent's session ends, the run's `task`
   call fails with `Subagent failed (task_id: <session>): ` and the rejection
   message, which is not the rejection of the run's own call, and the run goes
-  on: here it read `calc.py`, fixed it and stopped, and exited 0. The notice
-  is the first on stderr, so it decides the stage's marker (ADR-022 § 9): the
-  stage reports exit 1 with `tool=bash` although its own session finished the
-  task.
+  on: here it read `calc.py`, fixed it and stopped, and exited 0. Since #1744
+  the parsers tell that apart from a rejection of the run's own call (the
+  run's own session has no rejected or failed tool call, and its only errors
+  are `Subagent failed` task calls), so the notice decides no marker and the
+  stage keeps its exit 0 (ADR-022 § 9). Its entry below has no `failures`.
 
 ## OpenCode: `opencode_stream_expected.json`
 

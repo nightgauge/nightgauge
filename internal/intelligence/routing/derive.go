@@ -19,6 +19,9 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/changeClassifier"
+	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 )
 
 // DeriveInput captures the issue metadata required to derive a routing
@@ -53,7 +56,14 @@ type DeriveInput struct {
 
 // Decision is the pipeline-routing verdict emitted by Derive.
 type Decision struct {
-	ChangeType         string   `json:"change_type"`
+	ChangeType string `json:"change_type"`
+	// ChangeTypeEvidence names what produced ChangeType (#1892): a label
+	// ("label:type:bug"), the predicted change targets
+	// ("targets:config-only [.github/workflows/ci.yml]"), prose keywords
+	// ("prose:docs"), or the default ("default:code"). A fast-track keyed on
+	// change_type is only as good as this evidence, so the decision says
+	// which one it was.
+	ChangeTypeEvidence string   `json:"change_type_evidence"`
 	TaskType           string   `json:"task_type"`
 	ComplexityScore    int      `json:"complexity_score"`
 	SuggestedRoute     string   `json:"suggested_route"`
@@ -88,7 +98,7 @@ func Derive(in DeriveInput) Decision {
 	effectiveSize, sizeSource := resolveSizeWithSource(in.BoardSize, in.Labels, in.PlannerSize, foundation)
 	effectivePriority := resolvePriority(in.BoardPriority, in.Labels)
 
-	changeType := deriveChangeType(in.Labels, in.Title, in.Body)
+	changeType, changeEvidence := deriveChangeType(in.Labels, in.Title, in.Body)
 	complexity := complexityFromSize(effectiveSize, effectivePriority, changeType)
 
 	// RISK_FLOOR invariant (#4093): a label-based high-risk classification forces
@@ -140,6 +150,7 @@ func Derive(in DeriveInput) Decision {
 
 	return Decision{
 		ChangeType:         changeType,
+		ChangeTypeEvidence: changeEvidence,
 		TaskType:           taskType,
 		ComplexityScore:    complexity,
 		SuggestedRoute:     route,
@@ -391,31 +402,54 @@ func abs(f float64) float64 {
 
 // --- change type ---
 
-// deriveChangeType combines the canonical TS detection logic with the
-// existing label-only helper from coercion.go so callers get the same
-// fallback ladder used elsewhere in the binary.
-func deriveChangeType(labels []string, title, body string) string {
-	switch labelTypeOf(labels) {
+// deriveChangeType returns the coarse change kind ("code" | "docs" |
+// "config") and the evidence that produced it.
+//
+// "config" is never derived from prose (#1892). It skips feature-validate
+// through the config-only rule, and before #1892 the keyword "config" (or
+// ".json", ".yaml") anywhere in the title or body was enough: #1787, an
+// unlabelled issue about `~/.opencode` as a config DIRECTORY, routed
+// `config-only (fast-tracked)` and went on to change 17 Go files with the
+// validation stage skipped. "config" now needs evidence that the change IS
+// config:
+//
+//   - a label naming config (inferChangeTypeFromLabels), or
+//   - predicted change targets (teams.ExtractTargetFiles, the shared
+//     `nightgauge issue extract-targets` implementation) that are all config
+//     files by changeClassifier's patterns — on an issue that carries at least
+//     one label. An unlabelled issue never fast-tracks as config: the inferred
+//     targets are themselves read from prose, and with no label to corroborate
+//     them the safe answer is the standard path.
+//
+// Absent that evidence the change is "code", which no rule fast-tracks.
+func deriveChangeType(labels []string, title, body string) (string, string) {
+	switch t := labelTypeOf(labels); t {
 	case "docs":
-		return "docs"
+		return "docs", "label:type:docs"
 	case "feature", "bug", "refactor", "spike":
-		return "code"
+		return "code", "label:type:" + t
 	}
 
 	content := strings.ToLower(title + " " + body)
 	docsLike := matchesAny(content, docsPatterns)
 	if docsLike && !hasCodeIndicator(content) {
-		return "docs"
+		return "docs", "prose:docs"
 	}
 
-	configLike := matchesAny(content, []string{".yaml", ".yml", ".json", ".toml", "config", ".env"})
-	featureLike := matchesAny(content, []string{"feature", "functionality", "behavior", "user can", "should be able"})
-	if configLike && !featureLike && !docsLike {
-		return "config"
+	if len(labels) > 0 {
+		if targets := teams.ExtractTargetFiles(body); len(targets) > 0 &&
+			changeClassifier.Classify(targets, changeClassifier.DefaultClassPatterns()) == changeClassifier.ConfigOnly {
+			return "config", "targets:config-only [" + strings.Join(targets, ", ") + "]"
+		}
 	}
 
 	// Final fallback shares logic with coercion.go so the two stay in sync.
-	return inferChangeTypeFromLabels(labels)
+	for _, l := range labels {
+		if ct := inferChangeTypeFromLabels([]string{l}); ct != "code" {
+			return ct, "label:" + l
+		}
+	}
+	return "code", "default:code"
 }
 
 // --- route selection ---

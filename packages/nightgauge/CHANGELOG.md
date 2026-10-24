@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Issue analysis no longer classifies an issue as a configuration change
+  from its title.** A title mentioning config, settings or a `.json` file
+  made the change type `config`, which skips validation. Only a config label
+  counts now (#1892).
+
 ## [0.7.2] - 2026-10-23
 
 ### Changed

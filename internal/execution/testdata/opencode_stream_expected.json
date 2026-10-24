@@ -247,13 +247,7 @@
         "rejected_tool_calls": 0
       },
       "stderr": "opencode_stream_subagent_stderr.txt",
-      "failures": [
-        {
-          "allowed_tools": ["Read", "Edit", "Task", "Bash"],
-          "marker": "[adapter-permission-rejected] tool=bash"
-        },
-        { "allowed_tools": ["Read", "Edit", "Task"], "marker": "[permission-denied] tool=bash" }
-      ],
+      "failures": [],
       "fold": {
         "sessions": [
           {

@@ -6,6 +6,7 @@
 #   bash scripts/capture-opencode-fixture.sh [--out DIR]
 #   bash scripts/capture-opencode-fixture.sh --check FILE...
 #   bash scripts/capture-opencode-fixture.sh --self-test
+#   bash scripts/capture-opencode-fixture.sh --help
 #
 # Capture writes, into internal/execution/testdata/ unless --out names another
 # directory:
@@ -49,6 +50,24 @@
 # --self-test plants a credential in a staged transcript and runs the write
 # path, which must refuse it: the script then exits 1, having written nothing.
 # Exit 0 from --self-test would mean a credential reached a fixture.
+#
+# Scope (#1746): this script captures the stub-provider legs only. The #1629
+# real-model captures (opencode_stream_{local,remote,subagent,cloud}_capture)
+# are deliberately not scripted: the local and remote legs need a model server
+# on the maintainer's machine whose address is never recorded, the subagent
+# leg needs a model that chooses to call `task` (the stub's scripts cannot
+# drive a subagent session tree), and none of their numbers reproduce on
+# another model, quant or version. Their recapture procedure is
+# internal/execution/testdata/README.md § OpenCode: real-model captures. The
+# stub reports no cached tokens, and it will not gain them before #1680's live
+# hosted leg: cache-pool coverage from a real provider is #1680's.
+#
+# Operator state: inspect OpenCode state during any capture only under this
+# script's isolation (env -i, the sandbox HOME and XDG directories) or with
+# `sqlite3 -readonly` on a copy of the database. Never run an uncontained
+# `opencode` command: one such probe during #1629 added a row to the
+# operator's own database. Every opencode process this script starts runs
+# under that isolation.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -346,6 +365,9 @@ run_capture() {
 }
 
 case "${1:-}" in
+--help | -h)
+  sed -n '2,/^set -euo pipefail$/{/^set -euo pipefail$/d;s/^# \{0,1\}//;s/^#$//;p;}' "${BASH_SOURCE[0]}"
+  ;;
 --self-test)
   run_self_test
   ;;
@@ -361,6 +383,6 @@ case "${1:-}" in
   run_capture "$TESTDATA"
   ;;
 *)
-  die "unknown argument: $1 (use --out DIR, --check FILE..., or --self-test)"
+  die "unknown argument: $1 (use --out DIR, --check FILE..., --self-test or --help)"
   ;;
 esac

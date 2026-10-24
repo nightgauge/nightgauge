@@ -185,6 +185,17 @@ describe("opencode stream parser: shared Go/TS expectations (#1637)", () => {
         return;
       }
       const stderr = testdata(fx.stderr);
+      if (fx.failures.length === 0) {
+        // A stderr notice that decides nothing (#1744: a subagent's).
+        const summary = await classifyOpenCodeRun({
+          stdout,
+          stderr,
+          exitCode: 0,
+          allowedTools: ["Read", "Edit", "Task", "Bash"],
+          dispatched: fx.dispatched,
+        });
+        expect(summary.failure).toBeUndefined();
+      }
       for (const f of fx.failures) {
         const summary = await classifyOpenCodeRun({
           stdout,
@@ -309,17 +320,22 @@ describe("opencode stream parser: failures are never success (#1637)", () => {
     expect(summary.failure).not.toContain("python3 calc.py");
   });
 
-  it("a subagent's auto-reject fails the stage although its own session finished", async () => {
-    const summary = await classifyOpenCodeRun({
-      stdout: testdata("opencode_stream_subagent_capture.jsonl"),
-      stderr: testdata("opencode_stream_subagent_stderr.txt"),
-      exitCode: 0,
-      allowedTools: ["Read", "Edit", "Task", "Bash"],
-      dispatched: "lmstudio/qwen/qwen3.8-27b",
-    });
-    expect(summary.failure?.startsWith(`${OPENCODE_PERMISSION_REJECTED_MARKER} tool=bash:`)).toBe(
-      true
-    );
+  it("a subagent-only auto-reject does not fail an exit-0 run whose parent finished (#1744)", async () => {
+    for (const allowedTools of [
+      ["Read", "Edit", "Task", "Bash"],
+      ["Read", "Edit", "Task"],
+    ]) {
+      const summary = await classifyOpenCodeRun({
+        stdout: testdata("opencode_stream_subagent_capture.jsonl"),
+        stderr: testdata("opencode_stream_subagent_stderr.txt"),
+        exitCode: 0,
+        allowedTools,
+        dispatched: "lmstudio/qwen/qwen3.8-27b",
+      });
+      expect(summary.stream.rejectedToolCalls).toBe(0);
+      expect(summary.stream.subagentFailedTasks).toBe(1);
+      expect(summary.failure).toBeUndefined();
+    }
   });
 
   it("a rejected call with no stderr notice names the tool_use event's own tool (AC3, #1638 fix round)", async () => {

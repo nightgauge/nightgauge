@@ -1470,6 +1470,7 @@ When `--json` is set the verb emits:
 ```json
 {
   "change_type": "code",
+  "change_type_evidence": "label:type:feature",
   "task_type": "feature",
   "complexity_score": 3,
   "suggested_route": "standard",

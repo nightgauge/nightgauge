@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 
@@ -61,6 +62,19 @@ func TestAbandonedCommitRecoverable_Matches(t *testing.T) {
 		{"pr already exists", StageFailure{Stage: state.StageFeatureDev, PRNumber: 5, Workspace: "/tmp/x"}, false},
 		{"no workspace", StageFailure{Stage: state.StageFeatureDev, Workspace: ""}, false},
 		{"matches feature-dev with live workspace", StageFailure{Stage: state.StageFeatureDev, Workspace: "/tmp/x"}, true},
+		{"matches killed feature-validate (gate never ran)", StageFailure{Stage: state.StageFeatureValidate, GateKind: gates.KindOK, Workspace: "/tmp/x"}, true},
+		// #1890: a gate no-op is a stage that ran to completion and produced
+		// nothing — not a killed stage with surviving work. Resuming at
+		// pr-create would skip the stage whose emptiness was the failure.
+		{"feature-validate gate no-op excluded", StageFailure{
+			Stage:      state.StageFeatureValidate,
+			GateName:   "feature-validate",
+			GateKind:   gates.KindNoOp,
+			Reason:     "no quality-gate results recorded",
+			StageError: "premature turn end: stage exited 0 with no state change (gate no-op): no quality-gate results recorded",
+			Workspace:  "/tmp/x",
+		}, false},
+		{"feature-dev gate no-op excluded", StageFailure{Stage: state.StageFeatureDev, GateKind: gates.KindNoOp, Workspace: "/tmp/x"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -162,5 +176,48 @@ func TestAbandonedCommitRecoverable_Execute_DirtyTree_NoMatch(t *testing.T) {
 	res := a.Execute(context.Background(), failure)
 	if res.Recovered || res.FollowUp == FollowUpStageCanResume {
 		t.Errorf("expected zero-value non-match result for dirty tree, got %+v", res)
+	}
+}
+
+// TestDefaultRegistry_FeatureValidateGateNoOp_NotResumedAtPRCreate is the
+// #1890 regression: on the #1787 run a feature-validate that exited 0 with no
+// quality-gate results was claimed by abandoned-commit-recoverable and resumed
+// at pr-create, so the PR merged unvalidated. The workspace here satisfies
+// every precondition that action's Execute checks (committed, unmerged work on
+// a clean tree, no PR), so the only thing keeping the registry from rewinding
+// past validation is the gate-no-op exclusion. No action may claim it: the
+// failure must fall through to model escalation, which re-runs the stage.
+func TestDefaultRegistry_FeatureValidateGateNoOp_NotResumedAtPRCreate(t *testing.T) {
+	root := newAbandonedCommitFixture(t)
+	runGit(t, root, "checkout", "-b", "feat/1787-work")
+	writeAbandonedFile(t, root, "feature.txt", "new work\n")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "work: feature")
+
+	reg := Default("", nil, &fakePRCreateRunner{res: pmstages.PRCreateResult{Path: pmstages.CreatePathPunt, Reason: pmstages.ReasonMissingDevContext}})
+	failure := StageFailure{
+		Stage:       state.StageFeatureValidate,
+		GateName:    "feature-validate",
+		GateKind:    gates.KindNoOp,
+		Reason:      "no quality-gate results recorded",
+		StageError:  "premature turn end: stage exited 0 with no state change (gate no-op): no quality-gate results recorded",
+		Workspace:   root,
+		IssueNumber: 1787,
+	}
+	res, matched := reg.TryRecover(context.Background(), failure, 0)
+	if matched {
+		t.Fatalf("gate no-op was claimed by %q (backtrack=%q, reason=%q); it must fall through to escalation",
+			res.Action, res.BacktrackTargetStage, res.Reason)
+	}
+
+	// The killed-stage case (#191) on the same workspace still resumes at
+	// pr-create: the gate never ran, so GateKind is KindOK.
+	killed := failure
+	killed.GateName, killed.GateKind, killed.Reason = "", gates.KindOK, ""
+	killed.StageError = "signal: killed"
+	res, matched = reg.TryRecover(context.Background(), killed, 0)
+	if !matched || res.Action != "abandoned-commit-recoverable" || res.BacktrackTargetStage != string(state.StagePRCreate) {
+		t.Fatalf("killed feature-validate: matched=%v action=%q backtrack=%q, want abandoned-commit-recoverable → pr-create",
+			matched, res.Action, res.BacktrackTargetStage)
 	}
 }

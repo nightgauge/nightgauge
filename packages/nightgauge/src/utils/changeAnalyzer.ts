@@ -172,21 +172,6 @@ const DOCS_PATTERNS = [
 ];
 
 /**
- * Config-only patterns in issue content
- */
-const CONFIG_PATTERNS = [
-  /config(uration)?[:\-\s]/i,
-  /settings?[:\-\s]/i,
-  /\.ya?ml\b/i,
-  /\.json\b/i,
-  /\.env\b/i,
-  /\.eslint/i,
-  /\.prettier/i,
-  /tsconfig/i,
-  /package\.json/i,
-];
-
-/**
  * Verification task patterns in issue title/body
  *
  * These patterns indicate the task is about verifying, confirming, or certifying
@@ -308,15 +293,12 @@ export function detectChangeType(labels: IssueLabels, title: string, body?: stri
     return "docs";
   }
 
-  // Check for config-only patterns
-  const isConfigOnly = CONFIG_PATTERNS.some((pattern) => pattern.test(content));
-  const noFeatureIndicators = !content.match(
-    /\b(feature|functionality|behavior|user can|should be able)/i
-  );
-
-  // At this point, labels.type is 'chore', 'test', or null
-  // (feature, bug, refactor, docs already returned above)
-  if (isConfigOnly && noFeatureIndicators && !isDocsOnly) {
+  // "config" is never derived from prose (#1892): it skips feature-validate,
+  // and the keyword "config" in an issue ABOUT a config directory routed a
+  // 17-file Go change past validation. Only a label naming config counts as
+  // evidence here; the Go router (`nightgauge issue route`) additionally
+  // accepts predicted change targets that are all config files.
+  if (labels.all.some((label) => /config/.test(label))) {
     return "config";
   }
 
