@@ -21,15 +21,13 @@
 import type { HealthAnalysisResult, HealthDimension, HealthTrendEntry } from "./types.js";
 import { SEVERITY_ORDER } from "./severityMapping.js";
 import { HealthTrendsWriter } from "./HealthTrendsWriter.js";
+import { excludedDimensionReason } from "./HealthAnalysisEngine.js";
 
 /** Identity of the run an entry scores. */
 export interface HealthTrendRunMeta {
   issueNumber: number;
   runId: string;
 }
-
-/** Reason recorded for an excluded dimension whose analyzer named none. */
-const UNNAMED_EXCLUSION = "insufficient data";
 
 /** Build the series entry for one analysis. Pure. */
 export function buildHealthTrendEntry(
@@ -44,7 +42,7 @@ export function buildHealthTrendEntry(
     if (dim.hasEnoughData) {
       dimensions[name] = dim.score;
     } else {
-      excluded[name] = dim.insufficientDataReason ?? UNNAMED_EXCLUSION;
+      excluded[name] = excludedDimensionReason(dim);
     }
   }
 

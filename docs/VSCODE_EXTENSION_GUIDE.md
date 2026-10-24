@@ -632,14 +632,13 @@ Commands are organized by function. Access via Command Palette (Cmd+Shift+P / Ct
 
 ### Health & Diagnostics
 
-| Command                                         | What It Does                        |
-| ----------------------------------------------- | ----------------------------------- |
-| `Nightgauge: Run Pipeline Health Check`         | Analyze pipeline efficiency metrics |
-| `Nightgauge: Recalibrate Health Score Baseline` | Re-establish health baseline        |
-| `Nightgauge: Show Brownfield Dashboard`         | Analyze code quality metrics        |
-| `Nightgauge: Rescrub Dashboard History`         | Clean up metrics/outliers           |
-| `Nightgauge: Export Telemetry Analytics`        | Export metrics for analysis         |
-| `Nightgauge: Telemetry Settings`                | Configure what data is collected    |
+| Command                                  | What It Does                        |
+| ---------------------------------------- | ----------------------------------- |
+| `Nightgauge: Run Pipeline Health Check`  | Analyze pipeline efficiency metrics |
+| `Nightgauge: Show Brownfield Dashboard`  | Analyze code quality metrics        |
+| `Nightgauge: Rescrub Dashboard History`  | Clean up metrics/outliers           |
+| `Nightgauge: Export Telemetry Analytics` | Export metrics for analysis         |
+| `Nightgauge: Telemetry Settings`         | Configure what data is collected    |
 
 ### Knowledge Base
 
@@ -1127,7 +1126,9 @@ Run comprehensive pipeline health diagnostics:
    - Dimension breakdowns
    - Recommended optimizations
 
-4. Click **Recalibrate Health Score Baseline** to reset baseline if config changed
+The dashboard's Pipeline Health headline is the latest entry of the health
+series, appended once per completed run; it reads N/A when no dimension had
+data. See [HEALTH_MONITORING.md](HEALTH_MONITORING.md#the-health-series).
 
 ### Knowledge Base Management
 

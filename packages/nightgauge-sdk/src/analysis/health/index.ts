@@ -8,6 +8,7 @@ export {
   HealthAnalysisEngine,
   computeOverallHealthScore,
   getOverallHealthStatus,
+  excludedDimensionReason,
   type ScoredDimension,
 } from "./HealthAnalysisEngine.js";
 export { HealthTrendsWriter } from "./HealthTrendsWriter.js";
@@ -105,9 +106,8 @@ export type {
   HealthAnalysisResult,
   HealthAnalysisInput,
   HealthScoreEntry,
-  SelfTuningEntry,
-  ExperimentEntry,
-  HealthReportEntry,
+  LearningOutcomeEntry,
+  LearningSignals,
   FindingToIssueConfig,
   GeneratedIssue,
   EpicGroup,

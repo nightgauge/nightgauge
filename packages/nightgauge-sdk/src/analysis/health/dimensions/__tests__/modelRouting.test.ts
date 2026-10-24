@@ -67,9 +67,6 @@ function inputFrom(records: Array<Record<string, unknown>>): HealthAnalysisInput
   return {
     executionHistory: flattenRunRecords(records),
     healthScores: [],
-    selfTuningLog: [],
-    experimentResults: [],
-    healthReports: [],
   };
 }
 

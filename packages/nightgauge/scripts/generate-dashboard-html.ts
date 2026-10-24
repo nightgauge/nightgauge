@@ -238,34 +238,16 @@ const mockHealthWidgetData = {
   summary: {
     score: 72,
     status: "good" as const,
-    components: [
+    contributing: 3,
+    dimensions: [
+      { dimension: "reliability", label: "Reliability", score: 85 },
+      { dimension: "cost-health", label: "Cost Health", score: 68 },
+      { dimension: "pipeline-velocity", label: "Pipeline Velocity", score: 60 },
       {
-        name: "successRate",
-        score: 85,
-        weight: 0.3,
-        trend: "stable" as const,
-        label: "Success Rate",
-      },
-      {
-        name: "costTrend",
-        score: 68,
-        weight: 0.3,
-        trend: "improving" as const,
-        label: "Cost Trend",
-      },
-      {
-        name: "failureRate",
-        score: 70,
-        weight: 0.25,
-        trend: "stable" as const,
-        label: "Failure Rate",
-      },
-      {
-        name: "cacheHitRate",
-        score: 60,
-        weight: 0.15,
-        trend: "degrading" as const,
-        label: "Cache Hit Rate",
+        dimension: "skill-drift",
+        label: "Skill Drift",
+        score: null,
+        excludedReason: "no skill-effectiveness records in the period",
       },
     ],
   },

@@ -85,7 +85,7 @@ describe("buildHealthTrendEntry", () => {
     expect(entry.dimensions).toEqual({});
     expect(Object.keys(entry.excluded_dimensions).sort()).toEqual(["cost-health", "reliability"]);
     // A reason is always named, even when the analyzer gave none.
-    expect(entry.excluded_dimensions.reliability).toMatch(/insufficient data/);
+    expect(entry.excluded_dimensions.reliability).toMatch(/below its minimum/);
   });
 
   it("persists the same number the engine computed", () => {

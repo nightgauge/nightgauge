@@ -1,37 +1,26 @@
 /**
  * SkillEffectivenessWriter unit tests
  *
+ * The file is a SNAPSHOT keyed by (skill_file, commit_hash): each analysis
+ * re-classifies every recent skill change, so appending every pass grew it
+ * without bound (96 MB of mostly duplicate rows, #1900). `upsertRecords`
+ * keeps the latest record per key inside the retention window; `readLatest`
+ * streams the file, so its memory is bounded by distinct keys, not file size.
+ *
  * @see Issue #1414 - Skill effectiveness tracking
+ * @see Issue #1900 - skill-drift reads this file; retention policy
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import * as fs from "node:fs/promises";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { SkillEffectivenessRecord } from "../../src/schemas/skillEffectiveness";
-
-vi.mock("node:fs/promises");
-
 import { SkillEffectivenessWriter } from "../../src/utils/SkillEffectivenessWriter";
-import { fakeCloneLayout } from "../helpers/cloneLayout";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
-/**
- * `fs.readFile` is overloaded: with an encoding it resolves a string, without
- * one a Buffer. `vi.mocked` picks the Buffer overload, so every call site here
- * used to write `content as unknown as Buffer` — a cast that says the code
- * under test receives a Buffer when it receives a string.
- *
- * The code calls `fs.readFile(path, "utf-8")`. Narrowing the mock to that
- * overload once states the truth and drops eight casts (#499).
- */
-const readFileUtf8 = vi.mocked(fs.readFile as (path: string, encoding: string) => Promise<string>);
-
-const WORKSPACE = "/workspace";
-// Per checkout, in CHECKOUT (ADR-024 § 7).
-const EXPECTED_FILE = path.join(
-  fakeCloneLayout(WORKSPACE).checkout,
-  "health",
-  "skill-effectiveness.jsonl"
-);
+let root: string;
+let file: string;
 
 function makeRecord(overrides: Partial<SkillEffectivenessRecord> = {}): SkillEffectivenessRecord {
   return {
@@ -39,7 +28,7 @@ function makeRecord(overrides: Partial<SkillEffectivenessRecord> = {}): SkillEff
     skill_file: "skills/nightgauge-feature-planning/SKILL.md",
     stage: "feature-planning",
     commit_hash: "abc123",
-    changed_at: "2026-01-15T12:00:00Z",
+    changed_at: new Date(Date.now() - 5 * 86_400_000).toISOString(),
     before_sample_count: 10,
     before_success_rate: 0.7,
     after_sample_count: 10,
@@ -47,160 +36,94 @@ function makeRecord(overrides: Partial<SkillEffectivenessRecord> = {}): SkillEff
     delta: 0.2,
     classification: "effective",
     confidence: "low",
-    analyzed_at: "2026-01-30T00:00:00Z",
+    analyzed_at: new Date(Date.now() - 86_400_000).toISOString(),
     ...overrides,
   };
 }
 
+const lines = () => fs.readFileSync(file, "utf-8").trim().split("\n");
+
 beforeEach(() => {
-  vi.resetAllMocks();
-  vi.mocked(fs.mkdir).mockResolvedValue(undefined);
-  vi.mocked(fs.appendFile).mockResolvedValue(undefined);
-  readFileUtf8.mockRejectedValue(new Error("ENOENT"));
-  vi.mocked(fs.writeFile).mockResolvedValue(undefined);
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "ng-skill-eff-"));
+  const layout = mkFakeCloneLayout(root);
+  file = path.join(layout.checkout, "health", "skill-effectiveness.jsonl");
+});
+
+afterEach(() => {
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("SkillEffectivenessWriter", () => {
-  describe("getFilePath()", () => {
-    it("returns the path under the checkout's CHECKOUT", () => {
-      const filePath = SkillEffectivenessWriter.getFilePath(WORKSPACE);
-      expect(filePath).toBe(EXPECTED_FILE);
-    });
+  it("getFilePath resolves under the checkout's health directory", () => {
+    expect(SkillEffectivenessWriter.getFilePath(root)).toBe(file);
   });
 
-  describe("appendRecord()", () => {
-    it("creates the health directory and appends valid JSON line", async () => {
-      const record = makeRecord();
-      await SkillEffectivenessWriter.appendRecord(WORKSPACE, record);
-
-      expect(fs.mkdir).toHaveBeenCalledWith(path.dirname(EXPECTED_FILE), {
-        recursive: true,
-      });
-      expect(fs.appendFile).toHaveBeenCalledWith(
-        EXPECTED_FILE,
-        JSON.stringify(record) + "\n",
-        "utf-8"
-      );
-    });
-
-    it("skips invalid records without throwing (Zod validation)", async () => {
-      const invalid = {
-        schema_version: "bad",
-      } as unknown as SkillEffectivenessRecord;
-      await expect(
-        SkillEffectivenessWriter.appendRecord(WORKSPACE, invalid)
-      ).resolves.toBeUndefined();
-      expect(fs.appendFile).not.toHaveBeenCalled();
-    });
-
-    it("does not throw on filesystem errors", async () => {
-      vi.mocked(fs.mkdir).mockRejectedValue(new Error("Permission denied"));
-      await expect(
-        SkillEffectivenessWriter.appendRecord(WORKSPACE, makeRecord())
-      ).resolves.toBeUndefined();
-    });
+  it("readLatest returns null when the file is absent (absence is not an empty corpus)", async () => {
+    expect(await SkillEffectivenessWriter.readLatest(root)).toBeNull();
   });
 
-  describe("readAll()", () => {
-    it("returns empty array when file does not exist", async () => {
-      readFileUtf8.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
-      const records = await SkillEffectivenessWriter.readAll(WORKSPACE);
-      expect(records).toEqual([]);
-    });
+  it("upsertRecords keeps one record per (skill_file, commit_hash), the latest analysis", async () => {
+    await SkillEffectivenessWriter.upsertRecords(root, [
+      makeRecord({ analyzed_at: "2026-01-01T00:00:00Z", classification: "neutral" }),
+      makeRecord({ commit_hash: "def456" }),
+    ]);
+    await SkillEffectivenessWriter.upsertRecords(root, [
+      makeRecord({ analyzed_at: new Date().toISOString(), classification: "regression" }),
+    ]);
 
-    it("returns parsed records from valid JSONL content", async () => {
-      const record = makeRecord();
-      readFileUtf8.mockResolvedValue(JSON.stringify(record) + "\n");
-
-      const records = await SkillEffectivenessWriter.readAll(WORKSPACE);
-      expect(records).toHaveLength(1);
-      expect(records[0]).toEqual(record);
-    });
-
-    it("skips malformed JSON lines silently", async () => {
-      const record = makeRecord();
-      const content = "not-valid-json\n" + JSON.stringify(record) + "\n{bad\n";
-      readFileUtf8.mockResolvedValue(content);
-
-      const records = await SkillEffectivenessWriter.readAll(WORKSPACE);
-      expect(records).toHaveLength(1);
-    });
-
-    it("skips lines that fail Zod validation silently", async () => {
-      const valid = makeRecord();
-      const invalid = { schema_version: "99", stage: "unknown" };
-      const content = JSON.stringify(invalid) + "\n" + JSON.stringify(valid) + "\n";
-      readFileUtf8.mockResolvedValue(content);
-
-      const records = await SkillEffectivenessWriter.readAll(WORKSPACE);
-      expect(records).toHaveLength(1);
-      expect(records[0].schema_version).toBe("1");
-    });
-
-    it("skips empty lines", async () => {
-      const record = makeRecord();
-      const content = "\n" + JSON.stringify(record) + "\n\n";
-      readFileUtf8.mockResolvedValue(content);
-
-      const records = await SkillEffectivenessWriter.readAll(WORKSPACE);
-      expect(records).toHaveLength(1);
-    });
+    expect(lines()).toHaveLength(2);
+    const latest = await SkillEffectivenessWriter.readLatest(root);
+    expect(latest).toHaveLength(2);
+    expect(latest!.find((r) => r.commit_hash === "abc123")!.classification).toBe("regression");
   });
 
-  describe("enforceRetention()", () => {
-    it("returns early when file does not exist", async () => {
-      readFileUtf8.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
-      await expect(SkillEffectivenessWriter.enforceRetention(WORKSPACE)).resolves.toBeUndefined();
-      expect(fs.writeFile).not.toHaveBeenCalled();
+  it("upsertRecords drops changes older than the retention window", async () => {
+    await SkillEffectivenessWriter.upsertRecords(
+      root,
+      [
+        makeRecord(),
+        makeRecord({
+          commit_hash: "old",
+          changed_at: new Date(Date.now() - 200 * 86_400_000).toISOString(),
+        }),
+      ],
+      90
+    );
+    expect(lines()).toHaveLength(1);
+  });
+
+  it("upsertRecords collapses a legacy append-only file of duplicate rows", async () => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const dup = Array.from({ length: 50 }, (_, i) =>
+      JSON.stringify(makeRecord({ analyzed_at: new Date(Date.now() - i * 1000).toISOString() }))
+    );
+    fs.writeFileSync(file, dup.join("\n") + "\nnot json\n");
+    await SkillEffectivenessWriter.upsertRecords(root, []);
+    expect(lines()).toHaveLength(1);
+  });
+
+  it("upsertRecords skips invalid records without throwing", async () => {
+    const invalid = {
+      ...makeRecord(),
+      classification: "bogus",
+    } as unknown as SkillEffectivenessRecord;
+    await expect(SkillEffectivenessWriter.upsertRecords(root, [invalid])).resolves.toBeUndefined();
+    expect(await SkillEffectivenessWriter.readLatest(root)).toEqual([]);
+  });
+
+  it("readLatest filters by changed_at when a range is given", async () => {
+    await SkillEffectivenessWriter.upsertRecords(
+      root,
+      [
+        makeRecord({ commit_hash: "a", changed_at: "2026-03-01T00:00:00Z" }),
+        makeRecord({ commit_hash: "b", changed_at: "2026-05-01T00:00:00Z" }),
+      ],
+      100_000
+    );
+    const inRange = await SkillEffectivenessWriter.readLatest(root, {
+      since: new Date("2026-04-01T00:00:00Z"),
+      until: new Date("2026-06-01T00:00:00Z"),
     });
-
-    it("keeps entries within retention window", async () => {
-      const recent = makeRecord({
-        analyzed_at: new Date().toISOString(),
-      });
-      readFileUtf8.mockResolvedValue(JSON.stringify(recent) + "\n");
-
-      await SkillEffectivenessWriter.enforceRetention(WORKSPACE, 90);
-
-      expect(fs.writeFile).toHaveBeenCalledWith(
-        EXPECTED_FILE,
-        JSON.stringify(recent) + "\n",
-        "utf-8"
-      );
-    });
-
-    it("prunes entries older than retention window", async () => {
-      const old = makeRecord({
-        analyzed_at: "2020-01-01T00:00:00Z", // very old
-      });
-      const recent = makeRecord({
-        analyzed_at: new Date().toISOString(),
-      });
-      const content = JSON.stringify(old) + "\n" + JSON.stringify(recent) + "\n";
-      readFileUtf8.mockResolvedValue(content);
-
-      await SkillEffectivenessWriter.enforceRetention(WORKSPACE, 90);
-
-      const written = vi.mocked(fs.writeFile).mock.calls[0][1] as string;
-      expect(written).not.toContain("2020-01-01");
-      expect(written).toContain(recent.analyzed_at);
-    });
-
-    it("writes empty string when all entries are pruned", async () => {
-      const old = makeRecord({ analyzed_at: "2020-01-01T00:00:00Z" });
-      readFileUtf8.mockResolvedValue(JSON.stringify(old) + "\n");
-
-      await SkillEffectivenessWriter.enforceRetention(WORKSPACE, 90);
-
-      const written = vi.mocked(fs.writeFile).mock.calls[0][1];
-      expect(written).toBe("");
-    });
-
-    it("does not throw on filesystem errors", async () => {
-      readFileUtf8.mockResolvedValue(JSON.stringify(makeRecord()) + "\n");
-      vi.mocked(fs.writeFile).mockRejectedValue(new Error("Disk full"));
-
-      await expect(SkillEffectivenessWriter.enforceRetention(WORKSPACE)).resolves.toBeUndefined();
-    });
+    expect(inRange!.map((r) => r.commit_hash)).toEqual(["b"]);
   });
 });

@@ -10,6 +10,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The health series (`checkout/health/trends.jsonl`, schema 2) is the only
+  health store; the retired `pipeline/health-history.jsonl` is no longer a data
+  source. An entry with `overall_score: null` means no dimension had data and is
+  never read as a score (#1898).
+
 - Health trends and skill-usage telemetry are read from this checkout's
   directory (`nightgauge layout path checkout health/trends.jsonl`,
   `skills/usage.jsonl`), not from `.nightgauge/` (#2037, ADR-024 § 7).

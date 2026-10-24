@@ -61,8 +61,8 @@ describe("buildHealthInput", () => {
     const input = buildHealthInput(makeDataset());
     expect(input.executionHistory).toEqual([]);
     expect(input.healthScores).toEqual([]);
-    expect(input.experimentResults).toEqual([]);
-    expect(input.healthReports).toEqual([]);
+    expect(input.learningSignals).toBeUndefined();
+    expect(input.skillEffectiveness).toBeUndefined();
   });
 
   // =========================================================================
@@ -230,31 +230,10 @@ describe("buildHealthInput", () => {
   // =========================================================================
 
   describe("healthScores mapping", () => {
-    it("maps HealthScoreSnapshot fields correctly", () => {
-      const dataset = makeDataset({
-        healthScores: [
-          {
-            schema_version: "1",
-            timestamp: "2026-03-01T12:00:00Z",
-            score: 72,
-            status: "good",
-            components: { reliability: 80, cost: 65 },
-            cacheHitRate: 0.45,
-            costUsd: 0.32,
-            issueNumber: 55,
-          },
-        ],
-      });
-
-      const input = buildHealthInput(dataset);
-      expect(input.healthScores).toHaveLength(1);
-      const entry = input.healthScores[0];
-      expect(entry.timestamp).toBe("2026-03-01T12:00:00Z");
-      expect(entry.score).toBe(72);
-      expect(entry.status).toBe("good");
-      expect(entry.components).toEqual({ reliability: 80, cost: 65 });
-      expect(entry.costUsd).toBe(0.32);
-      expect(entry.issueNumber).toBe(55);
+    it("passes the health series' scored points through unchanged (#1898)", () => {
+      const point = { timestamp: "2026-03-01T12:00:00Z", score: 72, issueNumber: 55 };
+      const input = buildHealthInput(makeDataset({ healthScores: [point] }));
+      expect(input.healthScores).toEqual([point]);
     });
   });
 
@@ -262,107 +241,68 @@ describe("buildHealthInput", () => {
   // experimentResults mapping
   // =========================================================================
 
-  describe("experimentResults mapping", () => {
-    it("maps ExperimentOutcome snake_case fields to ExperimentEntry camelCase", () => {
-      const dataset = makeDataset({
-        experimentResults: [
+  describe("learning-effectiveness and skill-drift inputs (#1900)", () => {
+    it("passes the outcome corpus and calibration timestamp through", () => {
+      const learningSignals = {
+        outcomes: [
           {
-            experiment_name: "haiku-expansion-v1",
-            group: "treatment",
-            issue_number: 1400,
-            stage: "feature-dev",
-            model: "haiku",
-            success: true,
-            cost_usd: 0.08,
-            duration_ms: 90000,
-            retry_count: 0,
-            recorded_at: "2026-03-02T14:00:00Z",
+            completedAt: "2026-03-01T00:00:00Z",
+            predictedModel: "sonnet",
+            actualModel: "sonnet",
+            predictedSize: "medium",
+            actualSize: "",
           },
         ],
-      });
-
-      const input = buildHealthInput(dataset);
-      expect(input.experimentResults).toHaveLength(1);
-      const entry = input.experimentResults[0];
-      expect(entry.experimentName).toBe("haiku-expansion-v1");
-      expect(entry.group).toBe("treatment");
-      expect(entry.issueNumber).toBe(1400);
-      expect(entry.stage).toBe("feature-dev");
-      expect(entry.success).toBe(true);
-      expect(entry.costUsd).toBe(0.08);
-      expect(entry.durationMs).toBe(90000);
-      expect(entry.recordedAt).toBe("2026-03-02T14:00:00Z");
+        calibrationUpdatedAt: "2026-03-02T00:00:00Z",
+      };
+      const input = buildHealthInput(makeDataset({ learningSignals }));
+      expect(input.learningSignals).toEqual(learningSignals);
     });
-  });
 
-  // =========================================================================
-  // healthReports mapping
-  // =========================================================================
-
-  describe("healthReports mapping", () => {
-    it("maps HealthReport snake_case summary fields to HealthReportEntry camelCase", () => {
-      const dataset = makeDataset({
-        healthReports: [
-          {
-            schema_version: "1",
-            analysis_period: {
-              from: "2026-02-24T00:00:00Z",
-              to: "2026-03-03T23:59:59Z",
-              period_days: 7,
-              data_sources_found: 4,
-              data_sources_missing: 2,
+    it("maps skill-effectiveness records to the SDK entry shape", () => {
+      const input = buildHealthInput(
+        makeDataset({
+          skillEffectiveness: [
+            {
+              schema_version: "1",
+              skill_file: "skills/x/SKILL.md",
+              stage: "x",
+              commit_hash: "abc",
+              changed_at: "2026-03-01T00:00:00Z",
+              before_sample_count: 10,
+              before_success_rate: 0.9,
+              after_sample_count: 5,
+              after_success_rate: 0.6,
+              delta: -0.3,
+              classification: "regression",
+              confidence: "low",
+              analyzed_at: "2026-03-02T00:00:00Z",
             },
-            summary: {
-              total_cost_usd: 12.5,
-              avg_cost_per_run: 0.42,
-              total_runs: 30,
-              success_rate: 0.9,
-              avg_duration_minutes: 15.2,
-              total_tokens: 3000000,
-              cache_hit_rate: 0.55,
-            },
-            findings: [
-              {
-                id: "f1",
-                dimension: "cost-health",
-                severity: "high",
-                title: "Cost spike",
-                description: "Cost above threshold",
-              },
-            ],
-            recommendations: [
-              {
-                id: "r1",
-                priority: "high",
-                title: "Reduce model tier",
-                description: "Switch haiku_max to 3",
-              },
-              {
-                id: "r2",
-                priority: "medium",
-                title: "Improve caching",
-                description: "Enable cache warming",
-              },
-            ],
-            created_at: "2026-03-03T10:00:00Z",
-          },
-        ],
-      });
+          ],
+        })
+      );
+      expect(input.skillEffectiveness).toEqual([
+        {
+          skillFile: "skills/x/SKILL.md",
+          stage: "x",
+          commitHash: "abc",
+          changedAt: "2026-03-01T00:00:00Z",
+          beforeWindow: { sampleCount: 10, successRate: 0.9 },
+          afterWindow: { sampleCount: 5, successRate: 0.6 },
+          delta: -0.3,
+          classification: "regression",
+          confidence: "low",
+          analyzedAt: "2026-03-02T00:00:00Z",
+        },
+      ]);
+    });
 
-      const input = buildHealthInput(dataset);
-      expect(input.healthReports).toHaveLength(1);
-      const entry = input.healthReports[0];
-      expect(entry.createdAt).toBe("2026-03-03T10:00:00Z");
-      expect(entry.periodDays).toBe(7);
-      expect(entry.summary.totalCostUsd).toBe(12.5);
-      expect(entry.summary.avgCostPerRun).toBe(0.42);
-      expect(entry.summary.totalRuns).toBe(30);
-      expect(entry.summary.successRate).toBe(0.9);
-      expect(entry.summary.avgDurationMinutes).toBe(15.2);
-      expect(entry.summary.totalTokens).toBe(3000000);
-      expect(entry.summary.cacheHitRate).toBe(0.55);
-      expect(entry.findingCount).toBe(1);
-      expect(entry.recommendationCount).toBe(2);
+    it("an absent source stays absent (null → undefined), never an empty corpus", () => {
+      const input = buildHealthInput(
+        makeDataset({ learningSignals: null, skillEffectiveness: null })
+      );
+      expect(input.learningSignals).toBeUndefined();
+      expect(input.skillEffectiveness).toBeUndefined();
     });
   });
 });

@@ -60,6 +60,14 @@ export function computeOverallHealthScore(
   return clamp(Math.round(weightedSum / totalWeight), 0, 100);
 }
 
+/**
+ * Why a dimension was excluded from the overall score. Analyzers that know
+ * their inputs set `insufficientDataReason`; the fallback names the sample.
+ */
+export function excludedDimensionReason(result: DimensionResult): string {
+  return result.insufficientDataReason ?? `sample size ${result.sampleSize} below its minimum`;
+}
+
 /** Status for an overall score; `null` maps to `"no-data"`. */
 export function getOverallHealthStatus(score: number | null): OverallHealthStatus {
   return score === null ? "no-data" : getHealthStatus(score);
@@ -187,11 +195,14 @@ export class HealthAnalysisEngine {
     const withData = [...dimensionResults.values()].filter((r) => r.hasEnoughData);
     const withoutData = [...dimensionResults.values()].filter((r) => !r.hasEnoughData);
 
-    if (withData.length > 0) {
-      parts.push(`${withData.length} dimension(s) analyzed.`);
-    }
+    // Name the denominator and every excluded dimension with its reason, so a
+    // six-dimension score is never read as an eight-dimension one (#1900).
+    parts.push(`${withData.length} of ${dimensionResults.size} dimension(s) contributing.`);
     if (withoutData.length > 0) {
-      parts.push(`${withoutData.length} dimension(s) have insufficient data.`);
+      const excluded = withoutData
+        .map((r) => `${r.dimension} (${excludedDimensionReason(r)})`)
+        .join("; ");
+      parts.push(`Excluded for insufficient data: ${excluded}.`);
     }
 
     // Worst dimension

@@ -40,9 +40,6 @@ function makeDataset(count: number = 10): HealthAnalysisInput {
   return {
     executionHistory: records,
     healthScores: [],
-    selfTuningLog: [],
-    experimentResults: [],
-    healthReports: [],
   };
 }
 
@@ -50,9 +47,6 @@ function makeEmptyDataset(): HealthAnalysisInput {
   return {
     executionHistory: [],
     healthScores: [],
-    selfTuningLog: [],
-    experimentResults: [],
-    healthReports: [],
   };
 }
 
@@ -235,17 +229,11 @@ describe("HealthAnalysisEngine", () => {
       const currentDataset: HealthAnalysisInput = {
         executionHistory: currentRecords,
         healthScores: [],
-        selfTuningLog: [],
-        experimentResults: [],
-        healthReports: [],
       };
 
       const baselineDataset: HealthAnalysisInput = {
         executionHistory: baselineRecords,
         healthScores: [],
-        selfTuningLog: [],
-        experimentResults: [],
-        healthReports: [],
       };
 
       const result = engine.analyze(currentDataset, baselineDataset);
