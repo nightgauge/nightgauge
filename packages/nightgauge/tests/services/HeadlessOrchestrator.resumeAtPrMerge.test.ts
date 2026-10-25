@@ -261,6 +261,16 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
       expect(mockState.skipStage).not.toHaveBeenCalled();
     });
 
+    it("refuses to resume on a restored PR other than the dispatched one", async () => {
+      withPrContext(null);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
+      orchestrator.setDispatchedOpenPr(2526);
+      stubRestore(orchestrator, { issue_number: 1431, pr_number: 9999, status: "open" });
+      await detect(orchestrator, 1431);
+      expect(mockState.skipStage).not.toHaveBeenCalled();
+      expect(mockState.completeStage).not.toHaveBeenCalled();
+    });
+
     it("runs the normal pipeline when the restore finds no open PR", async () => {
       withPrContext(null);
       const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
