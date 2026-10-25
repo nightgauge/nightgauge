@@ -1209,11 +1209,11 @@ record and learning outcome **under its own identity** — the #307 behaviour,
 preserved. The platform sees `pipeline_done(success=false)` at abandon time and
 then the run's real terminal event; the row converges on the truth **if**
 `pipeline_runs` is keyed by `run_id` and last-writer-wins on outcome. That is
-**Assumption A-1**, it is unverified from this tree, and the
-[Assumptions](#assumptions) section carries both the verification task and the
-design that applies if it is false. Emitting early and correcting later is the
-right trade under A-1: the ordinary case is that the wedge is terminal and #44's
-whole point is not stranding a `running` row.
+**Assumption A-1**. It was verified on 2026-08-29 and is pinned by platform
+contract tests (#380); the [Assumptions](#assumptions) section names them and
+keeps the design that applies if they ever fail. Emitting early and correcting
+later is the right trade under A-1: the ordinary case is that the wedge is
+terminal and #44's whole point is not stranding a `running` row.
 
 **Resolution when the registry has no entry** (the modal case — the force-clear
 fires because something is wedged, and a restarted or replaced IPC binary leaves
@@ -2208,6 +2208,23 @@ during implementation.
 
 ### A-1 — the platform's `pipeline_runs` row is idempotent by `run_id` and last-writer-wins on outcome
 
+> **VERIFIED — #380 (2026-08-29). A-1 holds.** The companion service's
+> ingestion code keeps one `pipeline_runs` row per `run_id` under a unique
+> constraint; the live `pipeline_done` path updates that row unconditionally,
+> and the terminal-telemetry path upserts it with on-conflict-do-update. Two
+> platform contract tests pin the property:
+>
+> - `telemetry-ingest.test.ts` — "upserts pipeline_runs on run_id so a second
+>   terminal record for the run updates the one row; arrival order wins"
+> - `run-row-status-attribution.integration.test.ts` — "a second terminal
+>   record for one run_id updates the single row: later outcome and timestamp
+>   win, in either arrival order"
+>
+> The A-1-false variant below is **not** applied. It stays as the contingency
+> if either test goes red. Step 6 (`pipeline.abandonRun`) is unblocked, and its
+> pull request links both tests by name. The paragraphs below record the
+> pre-verification reasoning.
+
 **Where it is load-bearing.** 7.1's `abandonRun` emits a terminal
 `pipeline_done(success=false)` for a dispatch that may still be alive, on the
 theory that the run's own later `notifyComplete` supersedes it and the row
@@ -2215,12 +2232,13 @@ converges on the truth. R-3's false-positive lease expiry leans on the same
 property, as does the reconciler's emit-then-remove idempotency across
 activations.
 
-**Why it is unverified.** The platform is the closed-source companion service
-and is not in this repository. `#1047` materialises a `running` row from the
-first `stage_started` event keyed by `run_id`, which is consistent with — but
-not proof of — last-writer-wins on a later terminal event.
+**Why it was unverified (historical).** The platform is the closed-source
+companion service and is not in this repository. `#1047` materialises a
+`running` row from the first `stage_started` event keyed by `run_id`, which is
+consistent with — but not proof of — last-writer-wins on a later terminal
+event.
 
-**Verification task (blocks the step that ships `abandonRun`).** Confirm against
+**Verification task (done — see the verification note above).** Confirm against
 the platform's ingestion contract that (a) two `pipeline_done` events for one
 `run_id` update one row rather than creating two, and (b) the **later** event's
 outcome wins. Filed as a follow-up issue (see below) and named as a precondition
@@ -2976,14 +2994,14 @@ listed here with the scope each one carries, so the issues can be filed from
 this section rather than reconstructed from prose. None of them gates #370; the
 A-1 verification gates one **step** of it, as noted.
 
-| Ref         | Title                                                                          | Scope                                                                                                                                                                                                                                                                                                                                  |
-| ----------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **R-1**     | Give the runtime snapshot a single authoritative writer                        | Five writers in three processes share `Persist`'s whole-file last-write-wins contract. After #370 the residual is same-run field loss between the IPC server and `nightgauge gate verify --record`, narrowed to a rename race. Fix: the gate CLI posts its result through IPC when a server is reachable, mirroring #316's discipline. |
-| **R-2**     | Authenticate the IPC socket                                                    | #370 closes the **addressing** half of ADR 015 §N's residual and explicitly not the **forgery** half: a writer that can reach the socket can still mint an id and drive a run of its own. §N is amended in #370's PR to say which half; this issue closes the other.                                                                   |
-| **R-5**     | Re-key `Scheduler.activeRuntimes` on `RunID`                                   | Decision 11 guards its one externally-reachable write site on identity instead of re-keying — a compensating check, which this ADR elsewhere calls the signature of a wrong key. Re-keying it also gives scheduler runs a real IPC abandon/pause route, which Decision 3 currently refuses with `run_wrong_owner`.                     |
-| **A-1**     | Verify the platform's `pipeline_runs` idempotency contract                     | Confirm two `pipeline_done` events for one `run_id` update one row and the later outcome wins. **Precondition on the plan step that ships `pipeline.abandonRun`** (step 6 in the current order); if it fails, apply the A-1-false variant in [Assumptions](#assumptions).                                                              |
-| ~~**L-1**~~ | ~~Remove the one-shot Go legacy `runtime-{N}.json` sweep~~ **RESOLVED (#381)** | **The sweep was never built**, so there was nothing to remove: #370 closed without step 8. #381 re-decided the arc and abandoned legacy files unswept — the premise (an upgrade to strand rows across) never held, since there are zero published releases. See the amendment on [Migration](#migration).                              |
-| **O-1**     | Give the five bare `PipelineStateService` catches a shared rejection handler   | #370 adds a `logger.warn` to each of `:717, 741, 787, 828, 966`. They should share one handler that classifies the JSON-RPC code, because five copies of a warn will drift. Observability follow-up, not a mechanism.                                                                                                                  |
+| Ref         | Title                                                                              | Scope                                                                                                                                                                                                                                                                                                                                  |
+| ----------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R-1**     | Give the runtime snapshot a single authoritative writer                            | Five writers in three processes share `Persist`'s whole-file last-write-wins contract. After #370 the residual is same-run field loss between the IPC server and `nightgauge gate verify --record`, narrowed to a rename race. Fix: the gate CLI posts its result through IPC when a server is reachable, mirroring #316's discipline. |
+| **R-2**     | Authenticate the IPC socket                                                        | #370 closes the **addressing** half of ADR 015 §N's residual and explicitly not the **forgery** half: a writer that can reach the socket can still mint an id and drive a run of its own. §N is amended in #370's PR to say which half; this issue closes the other.                                                                   |
+| **R-5**     | Re-key `Scheduler.activeRuntimes` on `RunID`                                       | Decision 11 guards its one externally-reachable write site on identity instead of re-keying — a compensating check, which this ADR elsewhere calls the signature of a wrong key. Re-keying it also gives scheduler runs a real IPC abandon/pause route, which Decision 3 currently refuses with `run_wrong_owner`.                     |
+| ~~**A-1**~~ | ~~Verify the platform's `pipeline_runs` idempotency contract~~ **RESOLVED (#380)** | **Holds** — pinned by `telemetry-ingest.test.ts` and `run-row-status-attribution.integration.test.ts` on the platform. Step 6 (`pipeline.abandonRun`) is unblocked; its pull request links both tests by name. The A-1-false variant in [Assumptions](#assumptions) applies only if either test fails.                                 |
+| ~~**L-1**~~ | ~~Remove the one-shot Go legacy `runtime-{N}.json` sweep~~ **RESOLVED (#381)**     | **The sweep was never built**, so there was nothing to remove: #370 closed without step 8. #381 re-decided the arc and abandoned legacy files unswept — the premise (an upgrade to strand rows across) never held, since there are zero published releases. See the amendment on [Migration](#migration).                              |
+| **O-1**     | Give the five bare `PipelineStateService` catches a shared rejection handler       | #370 adds a `logger.warn` to each of `:717, 741, 787, 828, 966`. They should share one handler that classifies the JSON-RPC code, because five copies of a warn will drift. Observability follow-up, not a mechanism.                                                                                                                  |
 
 ---
 
@@ -3107,9 +3125,10 @@ surfaces, and this is not one.
 6. **`pipeline.abandonRun`.** The verb and its handler (administrative class,
    corroboration, `MarkAbandoned`, the dispatch-terminal `pipeline_done`), plus
    `abandonRun` in the force-clear funnel, the rule that the funnel never calls
-   `notifyComplete`, and the fence re-pin. **Gated on A-1's verification** — if
-   the platform is first-writer-wins on outcome, ship the A-1-false variant from
-   [Assumptions](#assumptions).
+   `notifyComplete`, and the fence re-pin. **Gated on A-1's verification**, which
+   holds (#380); link the two platform tests named in
+   [Assumptions](#assumptions) by name. If either goes red, ship the A-1-false
+   variant instead.
 7. `learning.Recorder` idempotency key; #305's multi-run corroboration rule with
    the raise's identity **threaded** and `readCurrentRunId` **deleted**; the
    `AttentionRaiseParams.RunID` doc-comment amendment; #375's run-id payload
