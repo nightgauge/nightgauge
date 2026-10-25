@@ -7523,6 +7523,49 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
 
   /**
+   * Is the issue branch's work already reachable from the base branch?
+   *
+   * verify-and-close may only close an issue whose fix is on the default (or
+   * epic base) branch. Evidence that exists only on the issue's own unmerged
+   * branch is not "resolved" — closing would orphan it (#2509). Fails closed:
+   * any git error reports the work as NOT on base, so nothing is closed.
+   */
+  private async assessEarlyExitReachability(
+    issueNumber: number
+  ): Promise<{ onBase: boolean; uniqueCommits: number; base: string }> {
+    let base = "main";
+    try {
+      base = (await this.stateService?.getBaseBranch()) ?? "main";
+    } catch {
+      // keep default
+    }
+    const cwd = this.getWorkingDirectory();
+    const git = async (args: string[]) =>
+      (await execFileAsync("git", args, { cwd, encoding: "utf-8", timeout: 30_000 })).stdout;
+    try {
+      await git(["fetch", "origin", base]).catch(() => undefined);
+      let countOut: string;
+      try {
+        countOut = await git(["rev-list", "--count", `origin/${base}..HEAD`]);
+      } catch {
+        countOut = await git(["rev-list", "--count", `${base}..HEAD`]);
+      }
+      const uniqueCommits = Number.parseInt(String(countOut).trim(), 10);
+      if (!Number.isFinite(uniqueCommits)) {
+        throw new Error(`unparseable rev-list count: ${String(countOut).trim()}`);
+      }
+      return { onBase: uniqueCommits === 0, uniqueCommits, base };
+    } catch (err) {
+      this.logger.warn("Early-exit reachability check failed — treating work as not on base", {
+        issueNumber,
+        base,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return { onBase: false, uniqueCommits: -1, base };
+    }
+  }
+
+  /**
    * Check if feature-planning signaled that the issue is already resolved.
    *
    * Reads `planning-{N}.json` and checks for the `verify-and-close` signal:
@@ -10241,6 +10284,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     const startTime = Date.now();
     const completedStages: PipelineStage[] = [];
     const skippedStages: PipelineStage[] = [];
+    let branchOnlyResume = false; // #2509
     const deferredStages: PipelineStage[] = [];
     let failedStage: PipelineStage | undefined;
     let error: Error | undefined;
@@ -11061,6 +11105,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 stage,
                 err,
               });
+            }
+          }
+          skippedStages.push(stage);
+          continue;
+        }
+
+        // #2509: planning found the work already committed on the issue branch
+        // (not on base). Don't re-implement it: go straight to validate.
+        if (
+          stage === "feature-dev" &&
+          branchOnlyResume &&
+          fs.existsSync(this.getContextPath("dev", issueNumber))
+        ) {
+          const reason = "work already committed on issue branch";
+          this.eventDispatcher.onStageSkipped(stage, reason);
+          if (this.stateService) {
+            try {
+              await this.stateService.skipStage(stage, reason);
+            } catch (err) {
+              this.logger.warn("Failed to update state for skipped stage", { stage, err });
             }
           }
           skippedStages.push(stage);
@@ -12613,25 +12677,35 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               approach: earlyExit.approach,
             });
 
-            // Run lightweight close path (best-effort)
-            await this.runAlreadyResolvedClosePath(issueNumber, callbacks);
+            const reach = await this.assessEarlyExitReachability(issueNumber);
+            if (!reach.onBase) {
+              this.logger.warn(
+                "Early exit refused: verify-and-close evidence is only on the issue branch",
+                { issueNumber, base: reach.base, uniqueCommits: reach.uniqueCommits }
+              );
+              branchOnlyResume = true;
+              // Resume the pipeline (validate -> pr-create) instead of closing.
+            } else {
+              // Run lightweight close path (best-effort)
+              await this.runAlreadyResolvedClosePath(issueNumber, callbacks);
 
-            // Classify outcome for cost tracking
-            if (this.stateService) {
-              try {
-                await this.stateService.setOutcomeType("already-resolved");
-              } catch {
-                // Non-critical
+              // Classify outcome for cost tracking
+              if (this.stateService) {
+                try {
+                  await this.stateService.setOutcomeType("already-resolved");
+                } catch {
+                  // Non-critical
+                }
               }
+
+              // Mark remaining stages as skipped (including pipeline-finish)
+              const planningIndex = STAGE_ORDER.indexOf("feature-planning");
+              const remainingStages = STAGE_ORDER.slice(planningIndex + 1);
+              skippedStages.push(...remainingStages);
+
+              this.eventDispatcher.onEarlyExit(issueNumber, "already-resolved");
+              break; // Exit stage loop
             }
-
-            // Mark remaining stages as skipped (including pipeline-finish)
-            const planningIndex = STAGE_ORDER.indexOf("feature-planning");
-            const remainingStages = STAGE_ORDER.slice(planningIndex + 1);
-            skippedStages.push(...remainingStages);
-
-            this.eventDispatcher.onEarlyExit(issueNumber, "already-resolved");
-            break; // Exit stage loop
           }
         }
 

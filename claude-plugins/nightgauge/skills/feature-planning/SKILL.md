@@ -563,6 +563,9 @@ signal instead of a normal plan:
 - Set `files_to_create` to an empty array `[]`
 - Set `files_to_modify` to an empty array `[]`
 - Write a minimal plan file explaining why the issue is already resolved
+- Use it ONLY when the fix is reachable from the default (or epic base) branch.
+  Work committed only on the issue's own unmerged branch is NOT resolved: the
+  orchestrator refuses to close and resumes validate -> pr-create instead.
 
 The orchestrator detects this signal after feature-planning completes and
 short-circuits the remaining stages (feature-dev, feature-validate, pr-create,

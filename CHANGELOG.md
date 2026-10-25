@@ -99,6 +99,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **verify-and-close no longer closes an issue whose fix exists only on its own
+  unmerged branch (#2509).** The already-resolved early exit now closes only
+  when the issue branch has no commits beyond the base (default or epic base)
+  branch; otherwise it refuses, skips feature-dev when its work is committed,
+  and resumes feature-validate then pr-create. Git errors fail closed.
+
 - **pr-merge no longer has the LLM poll CI after it pushes a fix (#2504).**
   The skill now pushes the fix, writes `pr-merge-fix-{N}.json` and exits. The
   deterministic runner then waits for CI and merges or enqueues the PR. If CI
