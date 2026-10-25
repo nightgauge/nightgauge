@@ -42,7 +42,7 @@ func newRepoHaltScheduler(t *testing.T) (*AutonomousScheduler, *[]string) {
 	as.state.Status = "running"
 	as.config.MaxConcurrent = 5
 	as.buildGraphFn = func(context.Context) (*depgraph.Graph, error) { return graph, nil }
-	as.onDispatch = func(owner, name string, number int, _ string) {
+	as.onDispatch = func(owner, name string, number int, _ string, _ int) {
 		*dispatched = append(*dispatched, repoHaltKey(owner, name, number))
 	}
 	t.Cleanup(as.drainBackground)

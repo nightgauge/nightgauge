@@ -1910,7 +1910,7 @@ func TestRunCycleBailsOutOnStopRequested(t *testing.T) {
 		stopRefinementCh: make(chan struct{}, 1),
 		rescanCh:         make(chan struct{}, 1),
 		config:           AutonomousConfig{MaxConcurrent: 5},
-		onDispatch: func(_, _ string, _ int, _ string) {
+		onDispatch: func(_, _ string, _ int, _ string, _ int) {
 			dispatched++
 		},
 	}
@@ -1928,7 +1928,7 @@ func TestRunCycleBailsOutOnStopRequested(t *testing.T) {
 		}
 		// Emulate enqueueItem's onDispatch fire path
 		if as.onDispatch != nil {
-			as.onDispatch("R", "r", candidates[i].Number, candidates[i].Title)
+			as.onDispatch("R", "r", candidates[i].Number, candidates[i].Title, 0)
 		}
 		// User presses Stop after the first dispatch completes
 		if i == 0 {
@@ -1963,7 +1963,7 @@ func TestRunCycleBailsOutOnStatusChangeMidCycle(t *testing.T) {
 		stopRefinementCh:  make(chan struct{}, 1),
 		rescanCh:          make(chan struct{}, 1),
 		config:            AutonomousConfig{MaxConcurrent: 5},
-		onDispatch: func(_, _ string, _ int, _ string) {
+		onDispatch: func(_, _ string, _ int, _ string, _ int) {
 			dispatched++
 		},
 	}
@@ -1978,7 +1978,7 @@ func TestRunCycleBailsOutOnStatusChangeMidCycle(t *testing.T) {
 			break
 		}
 		if as.onDispatch != nil {
-			as.onDispatch("R", "r", candidates[i].Number, candidates[i].Title)
+			as.onDispatch("R", "r", candidates[i].Number, candidates[i].Title, 0)
 		}
 		// Simulate haltQueueOnSlotFailure → Pause() landing after the first
 		// dispatch completes.
@@ -4578,7 +4578,7 @@ func TestRunCycle_SuspendsDispatchDuringQuotaCooldown(t *testing.T) {
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
 		retryBackoff:         map[string]retryPlan{},
-		onDispatch: func(_ string, _ string, _ int, _ string) {
+		onDispatch: func(_ string, _ string, _ int, _ string, _ int) {
 			dispatched++
 		},
 	}

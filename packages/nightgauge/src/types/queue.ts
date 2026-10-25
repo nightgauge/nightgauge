@@ -137,6 +137,12 @@ export interface QueueItem {
    * remote run too. A cancel of the run before its slot opens detaches the
    * run id and leaves the item to run as it was queued.
    */
+  /**
+   * The issue's open PR the autonomous scan saw (#2541). The run resumes at
+   * pr-merge on it when the worktree holding pr-{N}.json is gone. Absent when
+   * the dispatch carried none.
+   */
+  openPrNumber?: number;
   remoteRunAttached?: boolean;
   /**
    * A remote run request's pin (#1656, ADR-022 § 2): the adapter and model a
@@ -370,6 +376,7 @@ export interface QueueRequeueOptions {
   requestedAdapter?: string;
   requestedModel?: string;
   visibility?: "private";
+  openPrNumber?: number;
 }
 
 /**
@@ -388,5 +395,6 @@ export function requeueOptionsFor(item: QueueItem): QueueRequeueOptions {
       : {}),
     // A private run goes back private (#2400).
     ...(item.visibility === "private" ? { visibility: "private" as const } : {}),
+    ...(item.openPrNumber ? { openPrNumber: item.openPrNumber } : {}),
   };
 }

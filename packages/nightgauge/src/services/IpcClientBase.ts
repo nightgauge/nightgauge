@@ -823,6 +823,8 @@ export interface IpcQueueItem {
   requestedModel?: string;
   /** "private" when the item's run is private on the hosted service (#2400). */
   visibility?: string;
+  /** The issue's open PR an autonomous dispatch carried (#2541). */
+  openPrNumber?: number;
 }
 
 /** IPC-layer queue state (matches Go orchestrator.QueueState). */

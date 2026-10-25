@@ -1428,6 +1428,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * Gates interactive prompts into auto-resolving behavior. @see setUnattended
    */
   private unattended = false;
+  /** The issue's open PR the dispatch carried (#2541); 0 when none. */
+  private dispatchedOpenPrNumber = 0;
   /**
    * Blocked terminal state for the current run (#190). Set by the pr-merge
    * dead-end paths (non-retryable repo-config blocker, or retry exhausted
@@ -1610,6 +1612,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   setUnattended(unattended: boolean): void {
     this.unattended = unattended;
+  }
+
+  /**
+   * The issue's open PR, from the autonomous scan that dispatched this run
+   * (#2541). When `pr-{N}.json` is gone with the worktree, resumeAtPrMerge
+   * restores it from this PR instead of re-running pickup→validate.
+   */
+  setDispatchedOpenPr(prNumber: number | undefined): void {
+    this.dispatchedOpenPrNumber = prNumber && prNumber > 0 ? prNumber : 0;
   }
 
   /**
@@ -5145,7 +5156,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     if (!this.stateService) return false;
 
     const prContextPath = this.getContextPath("pr", issueNumber);
-    if (!fs.existsSync(prContextPath)) return false;
+    let restoredFromDispatch = false;
+    if (!fs.existsSync(prContextPath)) {
+      // #2541: the dispatch carried the issue's open PR but the worktree that
+      // held pr-{N}.json is gone. Restore it through the deterministic
+      // pr-create path, which re-reads the PR from the forge, then apply the
+      // same open-PR check below. No dispatched PR means no forge call.
+      if (this.dispatchedOpenPrNumber <= 0) return false;
+      try {
+        const restored = await this.contextAssembler.generateDeterministicContext(
+          "pr-create",
+          issueNumber
+        );
+        if (!restored.generated || !fs.existsSync(prContextPath)) return false;
+        restoredFromDispatch = true;
+      } catch (err) {
+        this.logger.warn("Resume-at-pr-merge: could not restore pr context", { issueNumber, err });
+        return false;
+      }
+    }
 
     let prNumber = 0;
     let prStatus = "";
@@ -5166,6 +5195,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // #500 restore path, and "closed" means the work was rejected — that run
     // genuinely has to start over.
     if (prNumber <= 0 || prStatus !== "open") return false;
+    // A restored context must name the very PR the scan dispatched: the forge
+    // lookup re-derives a PR by branch, and skipping four stages on any other
+    // PR (a fork's, a stale one) would be trusting a number nobody confirmed.
+    if (restoredFromDispatch && prNumber !== this.dispatchedOpenPrNumber) {
+      this.logger.warn("Resume-at-pr-merge: restored PR differs from the dispatched one", {
+        issueNumber,
+        restored: prNumber,
+        dispatched: this.dispatchedOpenPrNumber,
+      });
+      fs.rmSync(prContextPath, { force: true });
+      return false;
+    }
 
     const reason = `Skipped: PR #${prNumber} is already open for this issue — resuming at pr-merge (#1531)`;
 

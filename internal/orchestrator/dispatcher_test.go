@@ -39,7 +39,7 @@ func TestLocalDispatcher_Dispatch_IPC(t *testing.T) {
 		title  string
 	}
 	disp := NewLocalDispatcher(
-		func(owner, repo string, issueNumber int, title string) {
+		func(owner, repo string, issueNumber int, title string, openPRNumber int) {
 			got.owner = owner
 			got.repo = repo
 			got.number = issueNumber
@@ -259,7 +259,7 @@ func TestAutonomousScheduler_SetDispatcher_NoDispatcherUsesLegacy(t *testing.T) 
 	as := &AutonomousScheduler{
 		trustGateOverride: allWritersGate(),
 		// dispatcher is nil — should fall to onDispatch
-		onDispatch: func(owner, repo string, issueNumber int, title string) {
+		onDispatch: func(owner, repo string, issueNumber int, title string, openPRNumber int) {
 			legacyCalled = true
 		},
 		perIssueFailureCount: make(map[string]int),

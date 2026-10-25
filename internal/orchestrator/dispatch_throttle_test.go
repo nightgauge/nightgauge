@@ -218,7 +218,7 @@ func TestAutonomousScheduler_DispatchCeilingFollowsTheThrottle(t *testing.T) {
 
 	// Handing work to the extension: the extension caps it, so not here.
 	ext := newScheduler()
-	ext.OnDispatch(func(owner, repo string, issueNumber int, title string) {})
+	ext.OnDispatch(func(owner, repo string, issueNumber int, title string, openPRNumber int) {})
 	ext.SetDispatchThrottle(d)
 	d.Set(throttleAt(1, nil), true)
 	if got := ext.effectiveAvailableSlots(); got != 3 {

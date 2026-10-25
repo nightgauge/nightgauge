@@ -57,7 +57,7 @@ func TestEnqueueItem_RefusesAnIssueNoWriterVouchedFor(t *testing.T) {
 	gate, _ := levelsGate(map[string]trust.Level{"stranger": trust.LevelRead})
 	as := &AutonomousScheduler{trustGateOverride: gate, state: &AutonomousState{Status: "running"}}
 	dispatched := false
-	as.onDispatch = func(string, string, int, string) { dispatched = true }
+	as.onDispatch = func(string, string, int, string, int) { dispatched = true }
 	as.enqueueItem(t.Context(), CandidateItem{Repo: "o/r", Number: 9, Title: "x", AuthorLogin: "stranger"})
 	if dispatched {
 		t.Fatal("an issue no writer vouched for reached onDispatch")

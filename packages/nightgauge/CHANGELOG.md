@@ -11,6 +11,14 @@ and this project adheres to
 
 ### Fixed
 
+- **A re-dispatched issue with an open PR resumes at pr-merge even after its
+  worktree is gone (#2541).** The autonomous scan already lists each repo's
+  open PRs; it now carries a dispatchable issue's open, unblocked PR number
+  (conflicting PRs included) with the dispatch. When `pr-{N}.json` was swept
+  with the worktree, the run restores it from that PR, confirms it is still
+  open, and skips pickup through validate instead of re-running them on
+  shipped work. Dispatches without an open PR are unchanged.
+
 - **Credentials orphaned by the extension ID change are now reported (#2513).**
   The extension identifier changed from `nightgauge.nightgauge-vscode` to
   `nightgauge.nightgauge`, and VS Code secrets are scoped per identifier, so

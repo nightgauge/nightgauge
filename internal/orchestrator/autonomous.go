@@ -964,6 +964,12 @@ type AutonomousScheduler struct {
 	// unsatisfied rather than silently satisfied. Guarded by mu.
 	inReviewPRBacked map[string]bool
 
+	// readyOpenPRs maps "repo#number" of dispatchable issues whose OPEN PR is
+	// not blocked to that PR's number, refreshed on FRESH graph builds by
+	// refreshBlockedReadyPRs and copied onto CandidateItem.OpenPRNumber by
+	// prioritize() (#2541). Replaced wholesale, never mutated. Guarded by mu.
+	readyOpenPRs map[string]int
+
 	// prQueryOKRepos is the set of repos whose open-PR listing SUCCEEDED on
 	// the last fresh graph build. Absence from inReviewPRBacked is otherwise
 	// ambiguous — it means either "queried, no PR exists" or "the query
@@ -1076,7 +1082,7 @@ type AutonomousScheduler struct {
 	// onDispatch is called when the autonomous scheduler wants to dispatch an
 	// issue to the pipeline. When set, the scheduler delegates to this callback
 	// (e.g. IPC emit to TypeScript extension) instead of using the Go queue.
-	onDispatch func(owner, repo string, issueNumber int, title string)
+	onDispatch func(owner, repo string, issueNumber int, title string, openPRNumber int)
 
 	// dispatchThrottle is the platform's workspace throttle (#2352). It caps
 	// the global ceiling only when the scheduler dispatches without the
@@ -1910,7 +1916,7 @@ func (as *AutonomousScheduler) dispatchCeilingLocked() int {
 // using the Go scheduler queue directly — allowing the TypeScript extension
 // to run the pipeline through HeadlessOrchestrator.
 // Deprecated: prefer SetDispatcher for new code.
-func (as *AutonomousScheduler) OnDispatch(fn func(owner, repo string, issueNumber int, title string)) {
+func (as *AutonomousScheduler) OnDispatch(fn func(owner, repo string, issueNumber int, title string, openPRNumber int)) {
 	as.onDispatch = fn
 }
 
@@ -4136,6 +4142,12 @@ type CandidateItem struct {
 	// enqueueItem, so the decision usually costs no issue read.
 	AuthorLogin     string
 	LabelsTruncated bool
+	// OpenPRNumber is the number of the issue's OPEN, not-blocked PR (CLEAN,
+	// DIRTY, …) seen on the last fresh graph build, or 0 when there is none.
+	// The dispatch carries it so the run resumes at pr-merge instead of
+	// re-running pickup→validate on shipped work once the worktree holding
+	// pr-{N}.json is gone (#2541).
+	OpenPRNumber int
 }
 
 // isWorkCompleteStatus returns true when the dep's board status is the one
@@ -4471,6 +4483,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// all-false. No GitHub call happens here — the guard is pure map lookup.
 	blockedPRSet := as.blockedReadyPRIssues
 	prBackedSet := as.inReviewPRBacked
+	readyOpenPRSet := as.readyOpenPRs
 	prQueryOKSet := as.prQueryOKRepos
 	as.mu.Unlock()
 	var inReviewWithoutPR []InReviewWithoutPRItem
@@ -4801,6 +4814,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			AuthorLogin:  node.AuthorLogin,
 			// A truncated label page cannot prove the approval label absent.
 			LabelsTruncated: node.LabelsTruncated,
+			OpenPRNumber:    readyOpenPRSet[key],
 		})
 	}
 
@@ -5006,12 +5020,13 @@ func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateIt
 	// when available, otherwise enqueue in Go scheduler queue for CLI-only mode.
 	ownerPart, repoPart := splitOwnerRepo(item.Repo)
 	if as.onDispatch != nil {
-		as.onDispatch(ownerPart, repoPart, item.Number, item.Title)
+		as.onDispatch(ownerPart, repoPart, item.Number, item.Title, item.OpenPRNumber)
 	} else {
 		as.scheduler.QueueAdd(QueueEntry{
-			Repo:        repoPart,
-			IssueNumber: item.Number,
-			Priority:    candidatePriorityRank(item.Priority),
+			Repo:         repoPart,
+			IssueNumber:  item.Number,
+			Priority:     candidatePriorityRank(item.Priority),
+			OpenPRNumber: item.OpenPRNumber,
 		})
 		// The queue run is long-lived (a full pipeline per entry) and carries
 		// the cycle context, which cancelBackground cannot reach — so merge the

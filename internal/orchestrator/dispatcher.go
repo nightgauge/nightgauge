@@ -26,7 +26,7 @@ type Dispatcher interface {
 // directly on the existing AutonomousScheduler infrastructure.
 type LocalDispatcher struct {
 	// onDispatch is called when the IPC bridge is available (extension mode).
-	onDispatch func(owner, repo string, issueNumber int, title string)
+	onDispatch func(owner, repo string, issueNumber int, title string, openPRNumber int)
 
 	// onFallback is called when onDispatch is nil (CLI-only mode).
 	// It should enqueue the item in the Go scheduler queue.
@@ -37,7 +37,7 @@ type LocalDispatcher struct {
 // onDispatch may be nil when running in CLI-only mode; onFallback handles
 // that case by enqueuing via the Go scheduler.
 func NewLocalDispatcher(
-	onDispatch func(owner, repo string, issueNumber int, title string),
+	onDispatch func(owner, repo string, issueNumber int, title string, openPRNumber int),
 	onFallback func(ctx context.Context, item CandidateItem),
 ) *LocalDispatcher {
 	return &LocalDispatcher{
@@ -54,7 +54,7 @@ func (d *LocalDispatcher) Dispatch(ctx context.Context, item CandidateItem) (str
 	owner, repo := splitOwnerRepo(item.Repo)
 
 	if d.onDispatch != nil {
-		d.onDispatch(owner, repo, item.Number, item.Title)
+		d.onDispatch(owner, repo, item.Number, item.Title, item.OpenPRNumber)
 	} else if d.onFallback != nil {
 		d.onFallback(ctx, item)
 	}
@@ -99,6 +99,9 @@ type dispatchRequest struct {
 	Title       string `json:"title"`
 	AccountID   string `json:"accountId"`
 	Executor    string `json:"executor"`
+	// OpenPRNumber is the issue's open, mergeable-or-conflicting PR, so the
+	// run can resume at pr-merge (#2541). Omitted when there is none.
+	OpenPRNumber int `json:"openPrNumber,omitempty"`
 }
 
 // dispatchResponse is the JSON body returned by the platform dispatch endpoint.
@@ -110,11 +113,12 @@ type dispatchResponse struct {
 // from the response. Retries once on 5xx errors before returning an error.
 func (d *CloudDispatcher) Dispatch(ctx context.Context, item CandidateItem) (string, error) {
 	body, err := json.Marshal(dispatchRequest{
-		IssueNumber: item.Number,
-		Repo:        item.Repo,
-		Title:       item.Title,
-		AccountID:   d.accountID,
-		Executor:    "cloud",
+		IssueNumber:  item.Number,
+		Repo:         item.Repo,
+		Title:        item.Title,
+		AccountID:    d.accountID,
+		Executor:     "cloud",
+		OpenPRNumber: item.OpenPRNumber,
 	})
 	if err != nil {
 		return "", fmt.Errorf("dispatcher: marshal request: %w", err)

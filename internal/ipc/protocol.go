@@ -556,6 +556,9 @@ type QueueAddParams struct {
 	// queues it or carried by a remote trigger. Anything else is refused. A
 	// private request for an issue already waiting raises that item.
 	Visibility string `json:"visibility,omitempty"`
+	// OpenPRNumber is the issue's open PR from an autonomous dispatch (#2541),
+	// so the run resumes at pr-merge. Zero or negative is ignored.
+	OpenPRNumber int `json:"openPrNumber,omitempty"`
 }
 
 // QueueValidatePinParams are parameters for queue.validatePin: a remote run

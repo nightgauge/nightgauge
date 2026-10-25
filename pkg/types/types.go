@@ -74,6 +74,11 @@ type BoardItem struct {
 	// login's permission. Empty means unknown, and the gate reads the issue.
 	AuthorLogin string `json:"authorLogin,omitempty"`
 
+	// OpenPRNumber is the issue's open PR an autonomous dispatch carried
+	// (#2541), so the run resumes at pr-merge. Set by the queue runner, never
+	// by a board read, and never serialized; 0 when there is none.
+	OpenPRNumber int `json:"-"`
+
 	// RelationSummary carries the COUNTS of the item's relationships. It is
 	// set by the summary read (ListOpenItemsSummary), which reads counts
 	// instead of lists: on such an item SubIssues, BlockedBy and Blocking are

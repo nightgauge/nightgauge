@@ -187,6 +187,10 @@ func (as *AutonomousScheduler) refreshBlockedReadyPRs(ctx context.Context, graph
 	}
 
 	blocked := map[string]bool{}
+	// readyOpen maps each dispatchable candidate whose OPEN PR is not blocked
+	// (CLEAN, DIRTY, …) to that PR's number, so its dispatch can resume at
+	// pr-merge instead of re-running pickup→validate on shipped work (#2541).
+	readyOpen := map[string]int{}
 	prBacked := map[string]bool{}
 	// queryOK records the repos whose PR listing actually succeeded, so a
 	// reporting caller can tell "queried, no PR" from "never looked" (#265).
@@ -213,10 +217,13 @@ func (as *AutonomousScheduler) refreshBlockedReadyPRs(ctx context.Context, graph
 				policy = policies.get(ctx, pr.BaseRef)
 			}
 			reason := prCannotMergeReason(pr, policy)
-			if reason == "" {
-				continue // mergeable, or only retry-clearable problems — dispatch it
-			}
 			key := fmt.Sprintf("%s#%d", node.Repo, node.Number)
+			if reason == "" {
+				// Mergeable, or only retry-clearable problems — dispatch it,
+				// carrying the PR number so the run resumes at pr-merge (#2541).
+				readyOpen[key] = pr.Number
+				continue
+			}
 			blocked[key] = true
 			log.Printf("autonomous: %s has an OPEN PR #%d that cannot merge (%s) — will not re-dispatch; needs human, no retry can clear", key, pr.Number, reason)
 		}
@@ -231,6 +238,7 @@ func (as *AutonomousScheduler) refreshBlockedReadyPRs(ctx context.Context, graph
 
 	as.mu.Lock()
 	as.blockedReadyPRIssues = blocked
+	as.readyOpenPRs = readyOpen
 	as.inReviewPRBacked = prBacked
 	as.prQueryOKRepos = queryOK
 	as.mu.Unlock()
