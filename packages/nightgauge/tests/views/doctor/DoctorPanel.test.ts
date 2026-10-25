@@ -325,6 +325,145 @@ describe("DoctorHtml", () => {
     expect(html.isAllowedLink("https://user:pw@github.com/x")).toBe(false);
     expect(html.isAllowedLink("javascript:alert(1)")).toBe(false);
   });
+
+  it("renders adapter health and adapter findings in the adapters group only", () => {
+    const adapterFp = "5555555555555555";
+    const result = fixture();
+    result.findings!.push(
+      finding("housekeeping", {
+        code: "NGD030",
+        check: "adapters",
+        title: "codex below its version floor",
+        fingerprint: adapterFp,
+        remedies: [
+          {
+            id: "upgrade",
+            kind: "auto",
+            summary: "Upgrade codex",
+            preview: "npm i -g codex",
+            verb: "upgrade_adapter",
+            reversible: false,
+            verify: "adapters",
+          },
+        ],
+      })
+    );
+    result.adapters = [
+      {
+        adapter: "codex",
+        kind: "cli",
+        installed: true,
+        version: "0.1.0",
+        version_ok: false,
+        min_version: "0.2.0",
+        ok: false,
+        code: "NGD030",
+      },
+    ];
+    const page = render(result);
+
+    const start = page.indexOf('aria-labelledby="group-adapters"');
+    expect(start).toBeGreaterThan(0);
+    const adapters = page.slice(start, page.indexOf("</section>", start));
+    expect(adapters).toContain('<h2 id="group-adapters">Adapters (1 finding)</h2>');
+    expect(adapters).toContain(
+      '<tr><th scope="row">codex</th><td>cli</td><td>0.1.0 (minimum 0.2.0)</td><td>Not usable (NGD030)</td></tr>'
+    );
+    expect(adapters).toContain(`id="card-${adapterFp}"`);
+    // Only the adapters group holds the card, not the housekeeping group.
+    expect(page.split(`id="card-${adapterFp}"`)).toHaveLength(2);
+    const housekeeping = page.slice(
+      page.indexOf('id="housekeeping-body"'),
+      page.indexOf("</details>\n  </section>", page.indexOf('id="housekeeping-body"'))
+    );
+    expect(housekeeping).not.toContain(adapterFp);
+    // Fix all safe counts the one safe housekeeping fix, never the adapter's.
+    expect(html.safeFixes(result.findings!).map((s) => s.finding.fingerprint)).toEqual([
+      FP.housekeeping,
+    ]);
+    expect(page).toContain('aria-label="Fix all safe housekeeping items (1 item)"');
+  });
+
+  it("says no adapters were probed when the scan carries no adapter health", () => {
+    const page = render(fixture());
+    const start = page.indexOf('aria-labelledby="group-adapters"');
+    const adapters = page.slice(start, page.indexOf("</section>", start));
+    expect(adapters).toContain("Adapters (0 findings)");
+    expect(adapters).toContain("No adapters were probed in this scan.");
+    expect(adapters).not.toContain("<table");
+  });
+
+  it("styles only with theme variables, never a literal colour", () => {
+    const page = render(fixture());
+    const css = /<style nonce="abc123">([\s\S]*?)<\/style>/.exec(page)![1];
+    expect(css).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(css).not.toMatch(/\b(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i);
+    const KEYWORDS = new Set(["transparent", "inherit", "currentcolor"]);
+    // Every property that takes a colour: color, background, border(-side)(-color), outline.
+    const COLOUR_PROP =
+      /(?:^|[;{\s])(color|background(?:-color)?|border(?:-(?:top|right|bottom|left))?(?:-color)?|outline(?:-color)?)\s*:\s*([^;}]+)/g;
+    const decls = [...css.matchAll(COLOUR_PROP)];
+    expect(decls.length).toBeGreaterThan(10);
+    for (const [, prop, value] of decls) {
+      // Strip theme variables (fallbacks nest) and non-colour tokens; nothing may remain.
+      let rest = value;
+      while (/var\(--vscode-[\w-]+(?:,\s*[^()]*)?\)/.test(rest)) {
+        rest = rest.replace(/var\(--vscode-[\w-]+(?:,\s*[^()]*)?\)/g, "");
+      }
+      const leftover = rest
+        .split(/[\s,]+/)
+        .filter(Boolean)
+        .filter((t) => !/^-?[\d.]+(px|em|rem|%)?$/.test(t))
+        .filter((t) => !/^(solid|none|max-content|1fr)$/.test(t))
+        .filter((t) => !KEYWORDS.has(t.toLowerCase()));
+      expect({ prop, leftover }).toEqual({ prop, leftover: [] });
+    }
+  });
+
+  it("gives every control an accessible name and keeps tab order in reading order", () => {
+    const result = fixture();
+    const page = render(result);
+    const buttons = page.match(/<button\b[^>]*>/g)!;
+    expect(buttons.length).toBeGreaterThan(5);
+    for (const b of buttons) {
+      expect(b).toContain('type="button"');
+      expect(b).toMatch(/aria-label="[^"]+"/);
+    }
+    expect(page).toContain('aria-label="Fix NGD014: Create the complexity model"');
+    expect(page).toContain('aria-label="Check NGD026 again"');
+    // Only tabindex="-1" (programmatic focus target); a positive tabindex reorders tabbing.
+    for (const t of page.match(/tabindex="[^"]*"/g) ?? []) {
+      expect(t).toBe('tabindex="-1"');
+    }
+    for (const fp of Object.values(FP)) {
+      expect(cardOf(page, fp)).toContain('<p class="verify" role="status" aria-live="polite"');
+    }
+    expect(page).toMatch(/<p class="verdict" role="status" aria-live="polite">/);
+  });
+
+  it("announces scan progress in a polite live region", () => {
+    const progress: DoctorProgressEvent[] = [
+      { index: 0, total: 2, check: "git", title: "Git", phase: "started", findings: 0 },
+      {
+        index: 0,
+        total: 2,
+        check: "git",
+        title: "Git",
+        phase: "finished",
+        status: "passed",
+        findings: 0,
+      },
+    ];
+    const page = html.renderDoctorHtml(
+      { phase: "running", progress },
+      { cspSource: "vscode-resource:", nonce: "abc123" }
+    );
+    expect(page).toContain(
+      '<p id="progress-status" role="status" aria-live="polite">Checked 1 of 2</p>'
+    );
+    expect(page).toContain("<li>Git: passed</li>");
+    expect(page).toMatch(/<button disabled type="button"[^>]*aria-label="Run the doctor again"/);
+  });
 });
 
 describe("DoctorPanel", () => {

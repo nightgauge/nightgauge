@@ -25,8 +25,8 @@ import (
 // the MCP managed-block state in `config.toml`.
 //
 // Auth status (e.g. `codex login status`) is intentionally NOT probed here: the
-// VSCode Adapter Doctor layers the SDK's `validateAdapterAuth` on top of this
-// structured data, keeping auth logic in one place (the SDK adapters) and this
+// pipeline-start auth gate probes it through the SDK's `validateAdapterAuth`,
+// keeping auth logic in one place (the SDK adapters) and this
 // section fast + side-effect-light for skill preflight that parses
 // `nightgauge doctor --adapters … --json`.
 type AdapterHealth struct {

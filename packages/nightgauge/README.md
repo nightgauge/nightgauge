@@ -38,10 +38,11 @@ before the pipeline can run a single stage. See
   and direct API keys — are **beta**: they work, but are far less exercised
   and rougher; see [Settings](#settings).
 
-Run **Nightgauge: Adapter Doctor** from the Command Palette at any point to
-check all three. (The `nightgauge` binary ships inside the extension and is
-not added to your `PATH`, so there is no shell command to run until you
-clone the repository.)
+Run **Nightgauge: Run Doctor** from the Command Palette at any point to
+check all three; adapter health is the panel's **Adapters** group. The
+Nightgauge health item in the status bar opens the same panel. (The
+`nightgauge` binary ships inside the extension and is not added to your
+`PATH`, so there is no shell command to run until you clone the repository.)
 
 ### Steps
 
@@ -467,8 +468,7 @@ bundled with the extension is not on your `PATH`.
 macOS (Apple Silicon and Intel) and Linux x64 only — see
 [Installing](#installing).
 
-Verify all of it from the Command Palette with **Nightgauge: Adapter
-Doctor**.
+Verify all of it from the Command Palette with **Nightgauge: Run Doctor**.
 
 ## Uninstalling
 
