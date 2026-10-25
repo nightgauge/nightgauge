@@ -19,6 +19,11 @@ and this project adheres to
 
 ### Fixed
 
+- A stale `.branch-context` in the plans directory no longer gives an issue an
+  unrelated parent and epic base; the parent comes from the issue's native
+  GitHub parent. The pr-create safety-net fallback opens its PR through the
+  `nightgauge` binary, so it is authored by the configured identity and
+  carries the pipeline marker (#2506).
 - **A failed run is moved to In review only when an open PR backs it
   (#1496).** The failure safety nets and the pr-create stage exit now write
   In review through `nightgauge project sync-status`, which refuses without an

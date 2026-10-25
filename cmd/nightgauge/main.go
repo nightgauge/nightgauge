@@ -7344,6 +7344,8 @@ func prCreateCmd() *cobra.Command {
 		body       string
 		head       string
 		base       string
+		issue      int
+		runID      string
 		outputJSON bool
 	)
 
@@ -7372,7 +7374,7 @@ func prCreateCmd() *cobra.Command {
 			}
 
 			svc := gh.NewPRService(client)
-			pr, err := svc.CreatePR(cmd.Context(), repoID, title, body, head, base)
+			pr, err := svc.CreatePR(cmd.Context(), repoID, title, prCreateBody(body, issue, runID), head, base)
 			if err != nil {
 				return err
 			}
@@ -7393,8 +7395,26 @@ func prCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&body, "body", "", "PR body")
 	cmd.Flags().StringVar(&head, "head", "", "Head branch (required)")
 	cmd.Flags().StringVar(&base, "base", "main", "Base branch")
+	cmd.Flags().IntVar(&issue, "issue", 0,
+		"Issue the PR resolves; when set, the body is stamped with the pipeline marker")
+	cmd.Flags().StringVar(&runID, "run-id", os.Getenv("NIGHTGAUGE_RUN_ID"),
+		"Pipeline run id for the marker (default $NIGHTGAUGE_RUN_ID)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
+}
+
+// prCreateBody appends forge.PipelineMarker to body when issue is set, so a
+// PR opened through `pr create` by the pipeline is stamped like the Go
+// pr-create stage's (#2506). Without an issue the body is returned unchanged.
+func prCreateBody(body string, issue int, runID string) string {
+	if issue <= 0 || forge.HasPipelineMarker(body) {
+		return body
+	}
+	marker := forge.PipelineMarker("pr-create", issue, runID)
+	if strings.TrimSpace(body) == "" {
+		return marker
+	}
+	return strings.TrimRight(body, "\n") + "\n\n" + marker
 }
 
 func prViewCmd() *cobra.Command {
