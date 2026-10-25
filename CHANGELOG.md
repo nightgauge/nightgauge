@@ -27,6 +27,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A re-dispatched issue with an open PR now starts at pr-merge (#2550).** The
+  fast-forward marked pr-create complete without beginning it, and the
+  pipeline's state service drops a completion for a stage that never began
+  (#2536). pr-create then ran, and failed because `validate-{N}.json` was
+  missing. The fast-forward now begins pr-create before completing it.
+
 - The autonomous scheduler now dispatches a Ready issue whose open PR is only
   behind its base branch (green, strict up-to-date policy); the run resumes at
   pr-merge, which rebases it. Previously the issue stalled in Ready. A behind PR
