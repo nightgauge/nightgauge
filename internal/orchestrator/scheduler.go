@@ -908,6 +908,9 @@ type Scheduler struct {
 	// as it does today. nil disables the hook (every pr-merge runs LLM).
 	// Tests inject deterministic fakes via WithPRMergeRunner.
 	prMergeRunner pmstages.PRMergeRunner
+	// prAutoFixMaxAttempts bounds the pr-merge fix hand-back loop
+	// (pr.auto_fix_max_attempts, #2504). 0 → config.DefaultAutoFixMaxAttempts.
+	prAutoFixMaxAttempts int
 
 	// prCreateRunner is the deterministic-first hook for the pr-create stage
 	// (Issue #3265). Mirrors prMergeRunner: on `created` the skill is skipped,
@@ -1347,6 +1350,7 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 		adapterExplicit:          cfg.AdapterExplicit,
 		runDefaultAdapter:        cfg.Adapter,
 		prMergeRunner:            newPRMergeRunner(cfg.RuntimeConfig),
+		prAutoFixMaxAttempts:     prAutoFixMaxAttempts(cfg.RuntimeConfig),
 		prCreateRunner:           NewDefaultPRCreateRunner(client),
 		issuePickupRunner:        NewDeterministicIssuePickupRunner(),
 		launchRepo:               launchRepoSlug(cfg.RuntimeConfig),
@@ -1584,14 +1588,17 @@ func (s *Scheduler) WithRepoRootsResolver(fn func() []string) {
 // or "" when no config was loaded or it does not name both halves.
 // newPRMergeRunner builds the deterministic pr-merge runner with the
 // configured merge-queue wait budget (pipeline.merge_queue.wait_timeout,
-// #2214).
+// #2214) and CI-wait budget (pr.ci_check_timeout, #2504).
 func newPRMergeRunner(cfg *config.Config) *pmstages.DeterministicRunner {
 	r := pmstages.NewDeterministicRunner()
 	var p *config.PipelineConfig
+	var pr *config.PRConfig
 	if cfg != nil {
 		p = cfg.Pipeline
+		pr = cfg.PR
 	}
 	r.SetMergeQueueWaitTimeout(p.ResolveMergeQueueWaitTimeout())
+	r.SetCIWaitTimeout(pr.ResolveCICheckTimeout())
 	return r
 }
 
@@ -6862,6 +6869,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if stage == state.StageFeatureDev {
 				// Bounded sub-sessions when ADR-023 Q7 enables them (#1651).
 				result, stageRunErr = s.runFeatureDevStage(stageCtx, stageParams, skillData.ContextWindow, ws)
+			} else if stage == state.StagePRMerge {
+				// The skill only fixes; CI wait and merge go back to the
+				// deterministic runner (#2504).
+				result, stageRunErr = s.runPRMergeSkillWithFixHandback(stageCtx, stageParams, runtime, item, workspaceRoot)
 			} else {
 				result, stageRunErr = s.stageRunner.RunStage(stageCtx, stageParams)
 			}
@@ -11148,6 +11159,124 @@ func (s *Scheduler) tryDeterministicPRMerge(
 		s.raiseBranchProtectionBlock(item.Repo, item.Number, detResult.PRNumber, runtime.RunID, detResult.Reason)
 	}
 	return false, "", false, nil
+}
+
+// prMergeFixMarker is pr-merge-fix-{N}.json: the pr-merge skill writes it
+// after pushing a CI fix and ends its session instead of waiting on CI
+// (#2504). See skills/_shared/AUTO_FIX_LOOP.md.
+type prMergeFixMarker struct {
+	Result   string `json:"result"`
+	PRNumber int    `json:"pr_number"`
+	HeadSHA  string `json:"head_sha"`
+	Attempt  int    `json:"attempt"`
+}
+
+// prMergeFixMarkerResult is the only marker result the scheduler acts on.
+const prMergeFixMarkerResult = "fix-pushed"
+
+// prAutoFixMaxAttempts resolves pr.auto_fix_max_attempts from cfg (nil-safe).
+func prAutoFixMaxAttempts(cfg *config.Config) int {
+	var pr *config.PRConfig
+	if cfg != nil {
+		pr = cfg.PR
+	}
+	return pr.ResolveAutoFixMaxAttempts()
+}
+
+// consumePRMergeFixMarker reads and removes the fix-pushed marker. It reports
+// false when the marker is absent, unparseable or carries another result.
+func consumePRMergeFixMarker(path string) (prMergeFixMarker, bool) {
+	var m prMergeFixMarker
+	if path == "" {
+		return m, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return m, false
+	}
+	_ = os.Remove(path)
+	if json.Unmarshal(data, &m) != nil || m.Result != prMergeFixMarkerResult {
+		log.Printf("WARN pr-merge: ignoring malformed fix marker %s", path)
+		return prMergeFixMarker{}, false
+	}
+	return m, true
+}
+
+// addStageRunUsage folds a later session's usage into the stage's total so a
+// multi-session stage is billed for every session it ran.
+func addStageRunUsage(total, next *StageRunResult) *StageRunResult {
+	if total == nil {
+		return next
+	}
+	if next == nil {
+		return total
+	}
+	merged := *next
+	merged.InputTokens += total.InputTokens
+	merged.OutputTokens += total.OutputTokens
+	merged.CacheReadTokens += total.CacheReadTokens
+	merged.CacheCreationTokens += total.CacheCreationTokens
+	merged.CostUsd += total.CostUsd
+	return &merged
+}
+
+// runPRMergeSkillWithFixHandback runs the pr-merge skill and, each time it
+// reports a pushed CI fix (pr-merge-fix-{N}.json), hands the PR back to the
+// deterministic runner, which waits for CI and merges or enqueues (#2504).
+// A fresh failed-ci-checks punt re-runs the skill while fewer than
+// pr.auto_fix_max_attempts sessions have run; every other outcome ends the
+// stage. Without a marker the skill's own result stands.
+func (s *Scheduler) runPRMergeSkillWithFixHandback(
+	ctx context.Context,
+	params StageRunParams,
+	runtime *state.RuntimeState,
+	item types.BoardItem,
+	workspaceRoot string,
+) (*StageRunResult, error) {
+	markerPath := pipelineStatePath(stageWorkspace(runtime, workspaceRoot),
+		fmt.Sprintf("pr-merge-fix-%d.json", item.Number))
+	if markerPath != "" {
+		_ = os.Remove(markerPath) // a marker from an earlier run is not this session's
+	}
+	maxAttempts := s.prAutoFixMaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = config.DefaultAutoFixMaxAttempts
+	}
+	fail := func(total *StageRunResult, err error) (*StageRunResult, error) {
+		failed := *total
+		failed.ExitCode = 1
+		failed.ErrorText = err.Error()
+		return &failed, err
+	}
+	var total *StageRunResult
+	for attempt := 1; ; attempt++ {
+		res, err := s.stageRunner.RunStage(ctx, params)
+		total = addStageRunUsage(total, res)
+		if err != nil || total == nil || total.ExitCode != 0 {
+			return total, err
+		}
+		marker, ok := consumePRMergeFixMarker(markerPath)
+		if !ok {
+			return total, nil
+		}
+		log.Printf("#%d: pr-merge skill pushed fix %d/%d (PR #%d, %s) — handing back to the deterministic path",
+			item.Number, attempt, maxAttempts, marker.PRNumber, marker.HeadSHA)
+		merged, _, rateLimited, refusal := s.tryDeterministicPRMerge(ctx, state.StagePRMerge, runtime, item, workspaceRoot)
+		// The stage needed the LLM; the runner only finished it.
+		runtime.RecordExecutionPath(state.StagePRMerge, "llm")
+		switch {
+		case merged:
+			return total, nil
+		case rateLimited:
+			return fail(total, fmt.Errorf("github-quota-low: pr-merge deterministic path rate-limited after auto-fix; deferring until GitHub bucket reset [#3976]"))
+		case refusal != nil:
+			return fail(total, refusal)
+		}
+		reason := runtime.StagePuntReason(state.StagePRMerge)
+		if !strings.HasPrefix(reason, pmstages.ReasonFailedChecks) || attempt >= maxAttempts {
+			return fail(total, fmt.Errorf("auto-fix-exhausted: %s (after %d of %d fix attempts)", reason, attempt, maxAttempts))
+		}
+	}
 }
 
 // parsePRURL extracts owner, repo, and number from a GitHub PR URL.
