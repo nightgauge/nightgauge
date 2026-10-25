@@ -183,11 +183,12 @@ auto-managed by the extension on activation).
 
 ## Phase 6.5: Verify field IDs in config.yaml
 
-The pipeline's `projectFieldWriter.ts` reads field IDs from the `project.fields`
-section of `config.yaml` to sync issue statuses on the project board during
-stage transitions (e.g., "In progress" → "In review" → "Done"). **Without
-`project.id` and `project.fields` in config.yaml, every pipeline stage will warn
-"No project configuration found" and skip board status sync.**
+The extension's board writer (`projectFieldWriter.ts`) no longer reads these
+IDs: it resolves the board with `nightgauge project resolve --repo` and reads
+Status, Priority and Size from the board itself (#1501). `nightgauge doctor`
+reports a board whose fields cannot be resolved (`project_fields`). The
+`project.fields` section is still written for the other consumers of the
+generated config.
 
 Verify that the `config.yaml` written in Phase 6 includes these fields under the
 `project:` key (they should already be there from Phase 6 generation):

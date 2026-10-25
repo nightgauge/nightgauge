@@ -413,6 +413,12 @@ func TestNoRaiseableProducerIsStandingWithoutRetraction(t *testing.T) {
 		// cannot read SecretStorage, so no scan could retract a standing card.
 		ProducerMissingCredentials: {Producer: ProducerMissingCredentials, Repo: "octocat/acme",
 			Credentials: []string{"slack-bot-token"}},
+		// #1501. EVENT, not standing: one failed board write, observed once by
+		// the extension. The standing condition behind repeated failures — a
+		// board whose fields cannot be resolved — is doctor's project_fields
+		// check, not this card.
+		ProducerBoardStatusWriteFailed: {Producer: ProducerBoardStatusWriteFailed,
+			Repo: "octocat/acme", Issue: 1, RunID: "run-1", Stage: "feature-dev"},
 	}
 	for _, producer := range RaiseableProducers() {
 		p, ok := samples[producer]
@@ -1530,5 +1536,24 @@ func TestMissingCredentialsRejectsBadInput(t *testing.T) {
 	}
 	if reqs, _ := s.attentionStore().List(attention.ListFilter{IncludeTerminal: true}); len(reqs) != 0 {
 		t.Errorf("rejected raises wrote %d record(s)", len(reqs))
+	}
+}
+
+// TestBoardStatusWriteFailedRaisesOverIPC — #1501. A failed extension board
+// write reaches the Action Center through the closed allowlist, carrying the
+// stage it was observed in and nothing else.
+func TestBoardStatusWriteFailedRaisesOverIPC(t *testing.T) {
+	s := newAttentionTestServer(t)
+	raw := raiseParams(t, AttentionRaiseParams{Producer: ProducerBoardStatusWriteFailed,
+		Repo: "octocat/acme", Issue: 7, RunID: "run-1", Stage: "feature-validate"})
+	if _, err := s.handleAttentionRaise(context.Background(), raw); err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	reqs, err := s.attentionStore().List(attention.ListFilter{})
+	if err != nil || len(reqs) != 1 {
+		t.Fatalf("list = %d records, err %v; want 1", len(reqs), err)
+	}
+	if reqs[0].Producer != ProducerBoardStatusWriteFailed || reqs[0].Context.Stage != "feature-validate" {
+		t.Errorf("card = producer %q stage %q", reqs[0].Producer, reqs[0].Context.Stage)
 	}
 }

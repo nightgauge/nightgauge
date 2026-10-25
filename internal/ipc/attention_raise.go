@@ -60,6 +60,10 @@ const (
 	// extension can read VS Code SecretStorage (#2513). See
 	// orchestrator.BuildMissingCredentials.
 	ProducerMissingCredentials = orchestrator.ProducerMissingCredentials
+	// ProducerBoardStatusWriteFailed is extension-only by design — the failing
+	// board writer is the extension's projectFieldWriter (#1501). See
+	// orchestrator.BuildBoardStatusWriteFailed.
+	ProducerBoardStatusWriteFailed = orchestrator.ProducerBoardStatusWriteFailed
 )
 
 // raiseableProducers is the closed allowlist. Adding an entry here is the
@@ -105,6 +109,10 @@ var raiseableProducers = map[string]struct{}{
 	// configured and the credential set is a closed enum, so the key space is
 	// at most 15 non-empty subsets per configured repo.
 	ProducerMissingCredentials: {},
+	// #1501. Extension-only: the board write that failed is the extension's.
+	// Like out-of-scope-blocker it has no producer-specific field — `stage` is
+	// the only thing it reads, and every word on the card is the builder's.
+	ProducerBoardStatusWriteFailed: {},
 }
 
 // RaiseableProducers returns the allowlist sorted, for diagnostics, error
@@ -521,6 +529,11 @@ func (s *Server) buildRaise(p AttentionRaiseParams) (attention.DecisionRequest, 
 				fmt.Errorf("attention.raise: %s: %w", ProducerMissingCredentials, err)
 		}
 		return orchestrator.BuildMissingCredentials(p.Repo, creds, p.LegacyIDDetected), true, nil
+	case ProducerBoardStatusWriteFailed:
+		// No producer-specific field and no daemon-side precondition: the
+		// caller observed the failed write, and the card it builds offers no
+		// verb, so nothing a caller sends can act on anything.
+		return orchestrator.BuildBoardStatusWriteFailed(p.Repo, p.Issue, p.RunID, p.Stage), true, nil
 	}
 	// Unreachable: the allowlist check ran first. Kept so a producer added to
 	// the allowlist and not to the switch is a loud failure, not a silent

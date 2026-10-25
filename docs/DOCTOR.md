@@ -563,6 +563,17 @@ wrong-typed value and a board workflow the file does not declare are warnings.
 `auto_archive_days` counts as enabled when above zero. Manual `reconcile`: change
 the workflow in the board's settings, or the file.
 
+#### NGD049
+
+**A board field cannot be resolved.** `project_fields` · `warning`.
+
+Board status writes, from the scheduler and the VS Code extension alike,
+resolve the Status, Priority and Size single-select fields from the configured
+project by name; no field IDs are read from config. The check reads the board
+and reports each of those fields that is absent or not a single-select field,
+naming the board. A board that cannot be read is unverifiable. Manual `add`:
+add the field to the board.
+
 ### Learning and scheduled automations
 
 #### NGD014

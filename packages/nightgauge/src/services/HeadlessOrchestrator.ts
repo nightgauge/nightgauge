@@ -965,7 +965,12 @@ export interface MergeBlockerSnapshot {
  * @internal Exported for testing.
  */
 export interface RunScopedAttentionRaise {
-  producer: "budget-ceiling" | "branch-protection" | "abandoned-dispatch" | "out-of-scope-blocker";
+  producer:
+    | "budget-ceiling"
+    | "branch-protection"
+    | "abandoned-dispatch"
+    | "out-of-scope-blocker"
+    | "board-status-write-failed";
   issueNumber: number;
   /**
    * budget-ceiling carries NO fields at all, and that is the security boundary
@@ -2236,6 +2241,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           statusValue,
           error: result.error,
         });
+        await this.raiseBoardStatusWriteFailed(issueNumber, stage);
       }
     } catch (err) {
       this.logger.warn("Failed to sync stage status transition", {
@@ -2244,7 +2250,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         statusValue,
         err: err instanceof Error ? err.message : String(err),
       });
+      await this.raiseBoardStatusWriteFailed(issueNumber, stage);
     }
+  }
+
+  /**
+   * Surface a board Status write that failed in the Action Center (#1501).
+   * The WARN alone went to a session log nobody reads, so the board drifted
+   * from the pipeline silently. Fail-open, like every run-scoped raise.
+   */
+  private async raiseBoardStatusWriteFailed(issueNumber: number, stage: string): Promise<void> {
+    await this.raiseRunScopedAttention({
+      producer: "board-status-write-failed",
+      issueNumber,
+      stage,
+    });
   }
 
   /**
@@ -10171,7 +10191,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     }
 
     try {
-      await updateProjectItemStatus(issueNumber, "Backlog", cwd, this.logger, this.repoOverride);
+      const parked = await updateProjectItemStatus(
+        issueNumber,
+        "Backlog",
+        cwd,
+        this.logger,
+        this.repoOverride
+      );
+      if (!parked.success) {
+        this.logger.warn("Could not park the human-only issue in Backlog (non-blocking, #1241)", {
+          issueNumber,
+          err: parked.error,
+        });
+        await this.raiseBoardStatusWriteFailed(issueNumber, signal.emitted_by_stage ?? "");
+      }
     } catch (err) {
       // Presentation only — the label above already ended dispatch.
       this.logger.warn("Could not park the human-only issue in Backlog (non-blocking, #1241)", {
