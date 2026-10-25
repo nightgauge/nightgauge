@@ -411,8 +411,10 @@ acceptance criteria met, fixes already merged on main), it MUST output a
 `verify-and-close` signal instead of a normal plan: set `approach` to
 `"verify-and-close"`, `files_to_create` and `files_to_modify` to `[]`, and
 write a minimal plan file explaining why the issue is already resolved. The
-orchestrator detects this signal and short-circuits the remaining stages. @see
-Issue #708.
+orchestrator detects this signal and short-circuits the remaining stages, but
+only when the fix is reachable from the default (or epic base) branch; work
+only on the issue's own unmerged branch is refused and resumes validate ->
+pr-create. @see Issue #708.
 
 ### Not-Pipeline-Actionable Signal
 
