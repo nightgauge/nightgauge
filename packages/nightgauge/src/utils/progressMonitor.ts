@@ -300,6 +300,8 @@ export class ProgressMonitor {
   private readonly declaredLogs = new Map<string, number>();
   /** Tool calls issued with no matching tool_result yet (Issue #1488). */
   private inFlightToolCalls = 0;
+  /** Claude Code background tasks still running (Issue #2517). */
+  private backgroundTasks = 0;
 
   constructor(
     private readonly config: ProgressMonitorConfig,
@@ -446,6 +448,22 @@ export class ProgressMonitor {
   }
 
   /**
+   * Number of Claude Code background tasks still running (#2517).
+   *
+   * A Bash call that outlives its timeout is moved to the background, and its
+   * tool_result returns at once, so {@link setInFlightToolCalls} drops it while
+   * the command is still running. A stage that then waits for the task's
+   * `task_notification` is idle on the stream but not stalled: #2505's
+   * feature-validate was killed 127s into waiting on a full `ci-local.sh`.
+   * Fed by skillRunner from {@link applyBackgroundTaskEvent}. Bounded by
+   * `externalProgressCeilingMs` like every other external source, so a wedged
+   * background job cannot make a stage immortal.
+   */
+  setBackgroundTasks(count: number): void {
+    this.backgroundTasks = Math.max(0, count);
+  }
+
+  /**
    * Consult the external-progress sources and record activity if any is live.
    *
    * Called only from {@link check} (the 30-second ticker), so the syscalls
@@ -476,6 +494,10 @@ export class ProgressMonitor {
 
     if (this.inFlightToolCalls > 0) {
       reasons.push(`${this.inFlightToolCalls} tool call(s) in flight`);
+    }
+
+    if (this.backgroundTasks > 0) {
+      reasons.push(`${this.backgroundTasks} background task(s) running`);
     }
 
     if (reasons.length === 0) {
@@ -845,4 +867,50 @@ export function recordToolCallProgress(
  */
 export function isBlindMonitorKill(signalsSeen: number, parsedToolEventCount: number): boolean {
   return signalsSeen === 0 && parsedToolEventCount > 0;
+}
+
+/**
+ * Apply one stream-json line to the set of running background task ids (#2517).
+ *
+ * Returns true when the line was a background-task event, so the caller knows
+ * to re-sync the count. `background_tasks_changed` carries the CLI's whole
+ * current list and replaces the set; `task_started` adds a task that started
+ * in the background (a foreground one is already an in-flight tool call);
+ * `task_notification` removes a task that finished, failed or was stopped.
+ */
+export function applyBackgroundTaskEvent(line: string, taskIds: Set<string>): boolean {
+  if (!line.includes('"subtype":"') || !line.includes("task")) return false;
+  let event: {
+    type?: unknown;
+    subtype?: unknown;
+    task_id?: unknown;
+    is_backgrounded?: unknown;
+    tasks?: unknown;
+  };
+  try {
+    event = JSON.parse(line) as typeof event;
+  } catch {
+    return false;
+  }
+  if (event.type !== "system") return false;
+  switch (event.subtype) {
+    case "background_tasks_changed": {
+      taskIds.clear();
+      for (const task of Array.isArray(event.tasks) ? event.tasks : []) {
+        const id = (task as { task_id?: unknown } | null)?.task_id;
+        if (typeof id === "string") taskIds.add(id);
+      }
+      return true;
+    }
+    case "task_started":
+      if (event.is_backgrounded === true && typeof event.task_id === "string") {
+        taskIds.add(event.task_id);
+      }
+      return true;
+    case "task_notification":
+      if (typeof event.task_id === "string") taskIds.delete(event.task_id);
+      return true;
+    default:
+      return false;
+  }
 }

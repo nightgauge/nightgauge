@@ -205,7 +205,12 @@ import { isCostAwareRoutingEnabled, getCostPerSuccessContext } from "./costAware
 import { withBehavioralPreamble } from "./behavioralPreamble";
 import type { KillCeiling } from "./killCeiling";
 import { formatKillCeilingValue, msLimit } from "./killCeiling";
-import { ProgressMonitor, recordToolCallProgress, isBlindMonitorKill } from "./progressMonitor";
+import {
+  ProgressMonitor,
+  applyBackgroundTaskEvent,
+  recordToolCallProgress,
+  isBlindMonitorKill,
+} from "./progressMonitor";
 import {
   declaredTimeoutMs,
   longToolCallReportBucket,
@@ -6966,6 +6971,12 @@ function runStageSkillHeadlessImpl(
     progressMonitor.setInFlightToolCalls(inFlightToolCallIds.size);
   };
 
+  // Claude Code background tasks still running (#2517). A Bash call moved to
+  // the background returns its tool_result at once, which drops it from
+  // `inFlightToolCallIds` while the command keeps running; a stage waiting on
+  // it went cold on every clock and was killed mid-`ci-local.sh`.
+  const backgroundTaskIds = new Set<string>();
+
   // A stage declaring a long external process it is waiting on (#1488).
   //
   // Deliberately NOT a productive signal: it says "something real is running",
@@ -7193,6 +7204,10 @@ function runStageSkillHeadlessImpl(
       // A stage declaring a long external process it is waiting on (#1488).
       if (observeExternalProgressDeclarations(line)) {
         continue;
+      }
+
+      if (applyBackgroundTaskEvent(line, backgroundTaskIds)) {
+        progressMonitor.setBackgroundTasks(backgroundTaskIds.size);
       }
 
       // Detect CI progress from wait-for-ci-checks.sh (Issue #902)

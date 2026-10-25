@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The runaway gate no longer kills a stage waiting on a background task
+  (#2517).** A Bash call that outlives its timeout is moved to the background
+  and returns its tool_result at once, so it stopped counting as in flight
+  while the command kept running. #2505's feature-validate was killed 127s into
+  waiting on its own `scripts/ci-local.sh`. The extension now reads Claude
+  Code's `background_tasks_changed`, `task_started` and `task_notification`
+  events, and a running background task defers the kill like an in-flight tool
+  call, still bounded by the 20-minute external-progress ceiling.
 - **CI parity now runs this repository's format and lint checks (#2503).**
   `nightgauge ci discover-commands` scans every `pull_request`/`merge_group`
   workflow, not just `ci.yml`, drops runner setup (`sudo`, `$GITHUB_ENV`,
