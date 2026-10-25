@@ -28,6 +28,7 @@ import { z } from "zod";
 import { evaluateAssertions } from "./assertions.js";
 import { DEFAULT_FIXTURES_DIR, DEFAULT_SCENARIOS_DIR, loadScenarios } from "./loader.js";
 import type { MockFixture } from "./modelRunner.js";
+import { TIER_BANDS, type TierBand } from "./tierBands.js";
 import {
   EVAL_SKILLS,
   EvalScenarioSchema,
@@ -92,7 +93,7 @@ export type ScenarioDiagnosis = z.infer<typeof ScenarioDiagnosisSchema>;
 
 export interface GeneratedScenario {
   scenario: EvalScenario;
-  fixture: Record<"haiku" | "sonnet" | "opus", MockFixture>;
+  fixture: Record<TierBand, MockFixture>;
   /** Repo-relative paths the writer uses. */
   scenarioPath: string;
   fixturePath: string;
@@ -169,7 +170,10 @@ export function generateScenarioFromDiagnosis(regression: SkillRegression): Gene
   };
   return {
     scenario,
-    fixture: { haiku: cell, sonnet: { ...cell }, opus: { ...cell } },
+    fixture: Object.fromEntries(TIER_BANDS.map((band) => [band, { ...cell }])) as Record<
+      TierBand,
+      MockFixture
+    >,
     scenarioPath: path.join(DEFAULT_SCENARIOS_DIR, regression.skill, `${regression.slug}.json`),
     fixturePath: path.join(DEFAULT_FIXTURES_DIR, regression.skill, `${id}.json`),
   };
