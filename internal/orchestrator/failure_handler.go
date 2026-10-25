@@ -90,6 +90,12 @@ const (
 	// `[rate-limit-quota-exhausted]`. Routes through the same retry policy
 	// as stream_idle_timeout: 1-hour backoff, no lifetime-cap increment,
 	// preserved worktree.
+	//
+	// The kind is believed only when it describes the stage's OWN adapter
+	// error. A stage that reached a verdict (BLOCKED, not-pipeline-actionable)
+	// and quotes another tool's usage-limit text as evidence did not hit the
+	// Anthropic quota, so DemoteEnvironmentalKindForOutcome strips the kind
+	// before it can reach the global cooldown (#2551).
 	TerminalKindRateLimitQuotaExhausted = "rate_limit_quota_exhausted"
 	// TerminalKindWorktreeUncommitted is set when a stage fails or is killed
 	// but the worktree contained uncommitted work that was successfully
@@ -726,7 +732,7 @@ func HoldForTerminalKind(kind string) string {
 	switch kind {
 	case TerminalKindArchitectureApprovalRequired:
 		return HoldArchitectureApproval
-	case TerminalKindNotPipelineActionable:
+	case TerminalKindNotPipelineActionable, TerminalKindBlockedOutcomeHold:
 		return HoldOperatorResume
 	}
 	// The parked kinds (#1631) are faults of the configuration, not decisions
@@ -1003,4 +1009,51 @@ func GetPipelineFailureMode(workspaceRoot string) string {
 		}
 	}
 	return FailureModeHalt
+}
+
+// StageBlockedOutcomePrefix is the prefix the extension synthesizes at the
+// START of the slot error for a run a stage ended BLOCKED
+// (packages/nightgauge/src/services/ConcurrentPipelineManager.ts, the
+// `BLOCKED — PR unmerged: …` template). Quoted stage evidence can only follow
+// it, after `Remediation:`, so a prefix test is structural, not a free-text
+// match. Keep the two in step (#2551).
+const StageBlockedOutcomePrefix = "BLOCKED — "
+
+// TerminalKindBlockedOutcomeHold is a scheduler-local routing value, not a
+// table kind: a stage-declared BLOCKED outcome whose text was misread as an
+// environmental quota or stream-idle failure. It is held for that one issue
+// as a non-fault outcome — no retry, no global cooldown, no lifetime-cap
+// increment (#2551).
+const TerminalKindBlockedOutcomeHold = "blocked_outcome_hold"
+
+// IsStageDeclaredBlockedOutcome reports whether detail is an outcome a stage
+// declared itself — the repo-synthesized BLOCKED slot error, or a detail the
+// record ladder classifies not_pipeline_actionable. Such an outcome means the
+// stage's own adapter worked well enough to reach a verdict (#2551).
+func IsStageDeclaredBlockedOutcome(detail string) bool {
+	if strings.HasPrefix(strings.TrimSpace(detail), StageBlockedOutcomePrefix) {
+		return true
+	}
+	return ClassifyTerminalKind(detail) == TerminalKindNotPipelineActionable
+}
+
+// DemoteEnvironmentalKindForOutcome strips an environmental Anthropic-API kind
+// (rate_limit_quota_exhausted, stream_idle_timeout) from a stage-declared
+// outcome. The quota text such an outcome carries is quoted evidence about
+// some other tool, and treating it as the scheduler's own quota applied a
+// GLOBAL dispatch cooldown over one issue's verdict (#2551). Returns the
+// record ladder's not_pipeline_actionable when that is its answer, otherwise
+// TerminalKindBlockedOutcomeHold, and true; (kind, false) when nothing is
+// demoted.
+func DemoteEnvironmentalKindForOutcome(kind, detail string) (string, bool) {
+	if kind != TerminalKindRateLimitQuotaExhausted && kind != TerminalKindStreamIdleTimeout {
+		return kind, false
+	}
+	if !IsStageDeclaredBlockedOutcome(detail) {
+		return kind, false
+	}
+	if ClassifyTerminalKind(detail) == TerminalKindNotPipelineActionable {
+		return TerminalKindNotPipelineActionable, true
+	}
+	return TerminalKindBlockedOutcomeHold, true
 }

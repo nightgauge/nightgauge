@@ -2448,6 +2448,14 @@ advisory lock in the tree. A second copy would be fixed in one place and not the
 other, and a locking bug stays invisible until the day two processes do the
 thing the lock existed to prevent.
 
+**Clearing the global quota cooldown (#2551).** After a quota failure the
+scheduler suspends every dispatch until `QuotaCooldownUntil`. Run
+`nightgauge autonomous clear-cooldown` to lift it. Like `clear-failures`, it
+clears the cooldown on the running daemon's scheduler (`autonomous.clearQuotaCooldown`)
+and falls back to the state file when no daemon is up. It reports the
+deadline it removed. `--json` prints `{daemon, cleared, previousUntil}`, plus
+`found` on the offline path.
+
 **What each entry point does with a held lease:**
 
 |                                |                                                                                                                                                                                    |

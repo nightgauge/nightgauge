@@ -11154,6 +11154,7 @@ func autonomousCmd() *cobra.Command {
 	cmd.AddCommand(autonomousStatusCmd())
 	cmd.AddCommand(autonomousResumeCmd())
 	cmd.AddCommand(autonomousClearFailuresCmd())
+	cmd.AddCommand(autonomousClearCooldownCmd())
 	cmd.AddCommand(autonomousStopCmd())
 	cmd.AddCommand(autonomousStuckEpicsCmd())
 	cmd.AddCommand(autonomousEligibilityCmd())
@@ -12075,6 +12076,74 @@ func autonomousClearFailuresCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "Clear the lifetime failure counter for every issue")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output the result as JSON")
+	return cmd
+}
+
+// autonomousClearCooldownCmd lifts the global quota dispatch cooldown (#2551).
+// It mirrors clear-failures: the running daemon's scheduler first, then the
+// state file, so a headless operator can recover without the extension.
+func autonomousClearCooldownCmd() *cobra.Command {
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "clear-cooldown",
+		Short: "Clear the global quota cooldown that suspends every dispatch",
+		Long: "Removes the global dispatch cooldown the scheduler applies after a quota failure, " +
+			"so the next cycle dispatches without waiting for the recorded deadline.",
+		Example:      "  nightgauge autonomous clear-cooldown\n  nightgauge autonomous clear-cooldown --json",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workdir, _ := os.Getwd()
+			out := cmd.OutOrStdout()
+			ctx := context.Background()
+
+			if client, dialErr := ipc.DialDaemon(ctx, workdir, daemonDialTimeout); dialErr == nil {
+				defer client.Close()
+				var res ipc.AutonomousClearQuotaCooldownResult
+				if err := client.Call(ctx, "autonomous.clearQuotaCooldown", ipc.AutonomousClearQuotaCooldownParams{}, &res); err != nil {
+					return err
+				}
+				if outputJSON {
+					return printJSON(map[string]any{
+						"daemon":        true,
+						"cleared":       res.Cleared,
+						"previousUntil": res.PreviousUntil,
+					})
+				}
+				if !res.Cleared {
+					fmt.Fprintln(out, "No quota cooldown is active — nothing to clear.")
+					return nil
+				}
+				fmt.Fprintf(out, "Cleared the quota cooldown (was until %s) on the running scheduler.\n", res.PreviousUntil)
+				return nil
+			}
+
+			cleared, previousUntil, found, err := orchestrator.ClearQuotaCooldownOffline(workdir)
+			if err != nil {
+				return err
+			}
+			if outputJSON {
+				return printJSON(map[string]any{
+					"daemon":        false,
+					"cleared":       cleared,
+					"previousUntil": previousUntil,
+					"found":         found,
+				})
+			}
+			if !found {
+				fmt.Fprintln(out, "No autonomous scheduler state found. Run 'nightgauge autonomous run' first.")
+				return nil
+			}
+			if !cleared {
+				fmt.Fprintln(out, "No quota cooldown is active — nothing to clear.")
+				return nil
+			}
+			fmt.Fprintf(out, "Cleared the quota cooldown (was until %s) in the state file.\n", previousUntil)
+			return nil
+		},
+	}
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output the result as JSON")
 	return cmd
 }
