@@ -11219,7 +11219,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // and ~$0.15-0.50. Only fall through to the LLM if deterministic
         // generation fails (e.g. gh CLI unavailable, network error).
         //
-        // The LLM subagent (Haiku, per LIGHTWEIGHT_STAGE_DEFAULTS) runs only
+        // The LLM subagent (Haiku, per DEFAULT_STAGE_MODELS) runs only
         // as a safety net for edge cases where deterministic generation is
         // insufficient (e.g. issue body has no structured sections and the
         // fallback produces minimal context).

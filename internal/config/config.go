@@ -828,6 +828,12 @@ type ModelRoutingConfig struct {
 	// per-stage override names one. Mirrors getModelDefaultEffort
 	// (stageResolver.ts). Same #581 wire history as StageEfforts.
 	DefaultEffort string `json:"defaultEffort,omitempty" yaml:"default_effort,omitempty"`
+
+	// EffortAuto raises feature-dev's built-in effort by the issue's
+	// complexity (#2512). Mirrors effort_auto in the TS
+	// ModelRoutingConfigSchema. A pointer so an omitted key stays distinct
+	// from `false`; resolve with ResolveEffortAuto.
+	EffortAuto *bool `json:"effortAuto,omitempty" yaml:"effort_auto,omitempty"`
 }
 
 // AttentionConfig is the attention: section of config.yaml — operator-tunable

@@ -48,7 +48,9 @@ import {
   DEFAULT_COMPLEXITY_THRESHOLDS,
   DEFAULT_CONFIDENCE_THRESHOLD,
   DEFAULT_STAGE_EFFORTS,
+  DEFAULT_STAGE_MODELS,
 } from "../../src/utils/nightgaugeConfig";
+import { resolveModel } from "../../src/utils/skillRunner";
 import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
 
 // ============================================================================
@@ -427,17 +429,19 @@ describe("getStageModel — mode-aware behavior (Issue #731)", () => {
   });
 
   describe("manual mode (explicit config)", () => {
-    it("returns default stage models from DEFAULT_STAGE_MODELS in manual mode", () => {
+    it("returns no model without an explicit override (defaults live in resolveModel, #2512)", () => {
       process.env.NIGHTGAUGE_MODEL_ROUTING_MODE = "manual";
       mockNoConfig();
-      expect(getStageModel("issue-pickup", "/test/workspace")).toBe("haiku");
-      expect(getStageModel("feature-planning", "/test/workspace")).toBe("sonnet");
-      expect(getStageModel("feature-dev", "/test/workspace")).toBe("sonnet");
-      expect(getStageModel("feature-validate", "/test/workspace")).toBe("sonnet");
-      expect(getStageModel("pr-create", "/test/workspace")).toBe("haiku");
-      // #197: pr-merge defaults to sonnet — its LLM path only runs on
-      // deterministic punts (the judgment-heavy cases).
-      expect(getStageModel("pr-merge", "/test/workspace")).toBe("sonnet");
+      for (const stage of [
+        "issue-pickup",
+        "feature-planning",
+        "feature-dev",
+        "feature-validate",
+        "pr-create",
+        "pr-merge",
+      ] as const) {
+        expect(getStageModel(stage, "/test/workspace")).toBeUndefined();
+      }
     });
 
     it("reads per-stage override from config file in manual mode", () => {
@@ -605,17 +609,17 @@ describe("DEFAULT_STAGE_MODELS (Issue #944)", () => {
     process.env = originalEnv;
   });
 
-  it("maps Sonnet 4.6 era defaults correctly in manual mode", () => {
-    process.env.NIGHTGAUGE_MODEL_ROUTING_MODE = "manual";
-    mockNoConfig();
-    expect(getStageModel("issue-pickup", "/test/workspace")).toBe("haiku");
-    expect(getStageModel("feature-planning", "/test/workspace")).toBe("sonnet");
-    expect(getStageModel("feature-dev", "/test/workspace")).toBe("sonnet");
-    expect(getStageModel("feature-validate", "/test/workspace")).toBe("sonnet");
-    expect(getStageModel("pr-create", "/test/workspace")).toBe("haiku");
-    // #197: pr-merge defaults to sonnet — its LLM path only runs on
-    // deterministic punts (the judgment-heavy cases).
-    expect(getStageModel("pr-merge", "/test/workspace")).toBe("sonnet");
+  it("maps the Opus 5.5 / Haiku 5.5 defaults (#2512)", () => {
+    expect(DEFAULT_STAGE_MODELS).toEqual({
+      "issue-pickup": "haiku",
+      "feature-planning": "opus",
+      "feature-dev": "opus",
+      "feature-validate": "opus",
+      "pr-create": "haiku",
+      // #197: pr-merge's LLM path only runs on deterministic punts (the
+      // judgment-heavy cases), so it is a reasoning stage.
+      "pr-merge": "opus",
+    });
   });
 });
 
@@ -645,8 +649,9 @@ describe("DEFAULT_STAGE_EFFORTS (Issue #944)", () => {
   it("exports DEFAULT_STAGE_EFFORTS constant", () => {
     expect(DEFAULT_STAGE_EFFORTS).toEqual({
       "feature-planning": "medium",
-      "feature-dev": "medium",
+      "feature-dev": "low",
       "feature-validate": "low",
+      "pr-merge": "medium",
     });
   });
 
@@ -656,10 +661,10 @@ describe("DEFAULT_STAGE_EFFORTS (Issue #944)", () => {
     expect(getStageEffort("feature-planning", "/test/workspace")).toBe("medium");
   });
 
-  it("returns medium for feature-dev in manual mode", () => {
+  it("returns low for feature-dev in manual mode (#2512)", () => {
     process.env.NIGHTGAUGE_MODEL_ROUTING_MODE = "manual";
     mockNoConfig();
-    expect(getStageEffort("feature-dev", "/test/workspace")).toBe("medium");
+    expect(getStageEffort("feature-dev", "/test/workspace")).toBe("low");
   });
 
   it("returns low for feature-validate in manual mode", () => {
@@ -668,12 +673,17 @@ describe("DEFAULT_STAGE_EFFORTS (Issue #944)", () => {
     expect(getStageEffort("feature-validate", "/test/workspace")).toBe("low");
   });
 
-  it("returns undefined for lightweight stages in manual mode", () => {
+  it("returns undefined for haiku stages in manual mode", () => {
     process.env.NIGHTGAUGE_MODEL_ROUTING_MODE = "manual";
     mockNoConfig();
     expect(getStageEffort("issue-pickup", "/test/workspace")).toBeUndefined();
     expect(getStageEffort("pr-create", "/test/workspace")).toBeUndefined();
-    expect(getStageEffort("pr-merge", "/test/workspace")).toBeUndefined();
+  });
+
+  it("returns medium for pr-merge in manual mode (#2512)", () => {
+    process.env.NIGHTGAUGE_MODEL_ROUTING_MODE = "manual";
+    mockNoConfig();
+    expect(getStageEffort("pr-merge", "/test/workspace")).toBe("medium");
   });
 
   it("config stage_efforts overrides defaults", () => {
@@ -689,5 +699,100 @@ model_routing:
     process.env.NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV = "high";
     mockNoConfig();
     expect(getStageEffort("feature-dev", "/test/workspace")).toBe("high");
+  });
+});
+
+// ============================================================================
+// Per-stage defaults through resolveModel (#2512)
+//
+// Go twin: TestResolveWireEffortStageDefaults in
+// internal/orchestrator/dispatch_envelope_test.go.
+// ============================================================================
+
+describe("per-stage defaults (#2512)", () => {
+  const originalEnv = process.env;
+  const ROOT = "/test/workspace";
+  const MODEL_ENV = "NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV";
+  const EFFORT_ENV = "NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env = { ...originalEnv };
+    for (const key of Object.keys(process.env)) {
+      if (
+        key.startsWith("NIGHTGAUGE_PIPELINE_STAGE_") ||
+        key.startsWith("NIGHTGAUGE_MODEL_ROUTING_")
+      ) {
+        delete process.env[key];
+      }
+    }
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "elevated";
+    mockNoConfig();
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  const MODELS = {
+    "issue-pickup": "haiku",
+    "feature-planning": "opus",
+    "feature-dev": "opus",
+    "feature-validate": "opus",
+    "pr-create": "haiku",
+    "pr-merge": "opus",
+  } as const;
+  const EFFORTS = {
+    "issue-pickup": undefined,
+    "feature-planning": "medium",
+    "feature-dev": "low",
+    "feature-validate": "low",
+    "pr-create": undefined,
+    "pr-merge": "medium",
+  } as const;
+
+  const cases = (["manual", "automatic", "hybrid"] as const).flatMap((mode) =>
+    (Object.keys(MODELS) as (keyof typeof MODELS)[]).map((stage) => ({ mode, stage }))
+  );
+
+  it.each(cases)(
+    "$stage resolves its built-in model and effort in $mode mode",
+    ({ mode, stage }) => {
+      process.env.NIGHTGAUGE_MODEL_ROUTING_MODE = mode;
+      const decision = resolveModel(stage, ROOT);
+      expect(decision.model).toBe(MODELS[stage]);
+      expect(decision.source).toBe("stage-default");
+      expect(decision.effort).toBe(EFFORTS[stage]);
+    }
+  );
+
+  it.each(["manual", "automatic", "hybrid"] as const)(
+    "explicit env model and effort override the defaults in %s mode",
+    (mode) => {
+      process.env.NIGHTGAUGE_MODEL_ROUTING_MODE = mode;
+      process.env[MODEL_ENV] = "sonnet";
+      process.env[EFFORT_ENV] = "high";
+      const decision = resolveModel("feature-dev", ROOT);
+      expect(decision.model).toBe("sonnet");
+      expect(decision.source).toBe("env");
+      expect(decision.effort).toBe("high");
+    }
+  );
+
+  describe("feature-dev effort derivation", () => {
+    const meta = (size: string) => ({ labels: [`size:${size}`], title: "A change" });
+
+    it.each([
+      ["M", "medium"],
+      ["L", "high"],
+    ] as const)("size:%s derives %s when effort_auto is on", (size, expected) => {
+      mockConfigFile("model_routing:\n  mode: automatic\n  effort_auto: true\n");
+      expect(resolveModel("feature-dev", ROOT, meta(size)).effort).toBe(expected);
+    });
+
+    it("stays at the low base when effort_auto is false", () => {
+      mockConfigFile("model_routing:\n  mode: automatic\n  effort_auto: false\n");
+      expect(resolveModel("feature-dev", ROOT, meta("L")).effort).toBe("low");
+    });
   });
 });

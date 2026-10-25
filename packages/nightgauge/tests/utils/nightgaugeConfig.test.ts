@@ -410,7 +410,7 @@ describe("getStageEffort", () => {
     expect(effort).toBe("medium");
   });
 
-  it("auto-derives low effort for lightweight stage", () => {
+  it("does not auto-derive effort for haiku stages (#2512)", () => {
     vi.mocked(resolveConfigPathSync).mockReturnValue({
       path: "/test/workspace/.nightgauge/config.yaml",
       isLegacy: false,
@@ -423,15 +423,15 @@ describe("getStageEffort", () => {
 `
     );
 
-    // pr-create is a lightweight stage (always low effort)
+    // pr-create is a haiku stage: no default and no auto-derivation
     const effort = getStageEffort("pr-create", "/test/workspace", {
       labels: ["size:XL"],
       title: "Large issue",
     });
-    expect(effort).toBe("low");
+    expect(effort).toBeUndefined();
   });
 
-  it("auto-derives complexity-based effort for issue-pickup (Issue #1593)", () => {
+  it("does not auto-derive effort for issue-pickup or other non-dev stages (#2512)", () => {
     vi.mocked(resolveConfigPathSync).mockReturnValue({
       path: "/test/workspace/.nightgauge/config.yaml",
       isLegacy: false,
@@ -444,15 +444,16 @@ describe("getStageEffort", () => {
 `
     );
 
-    // issue-pickup is now a classification stage, not lightweight
-    const effort = getStageEffort("issue-pickup", "/test/workspace", {
-      labels: ["size:XL"],
-      title: "Large issue",
-    });
-    expect(effort).toBe("high");
+    const meta = { labels: ["size:XL"], title: "Large issue" };
+    expect(getStageEffort("issue-pickup", "/test/workspace", meta)).toBeUndefined();
+    // Reasoning stages keep their table value regardless of size.
+    expect(getStageEffort("feature-planning", "/test/workspace", meta)).toBe("medium");
+    expect(getStageEffort("feature-validate", "/test/workspace", meta)).toBe("low");
+    // Only feature-dev derives from complexity.
+    expect(getStageEffort("feature-dev", "/test/workspace", meta)).toBe("high");
   });
 
-  it("returns undefined when auto mode is enabled without metadata", () => {
+  it("falls back to the low feature-dev base when auto mode is enabled without metadata", () => {
     vi.mocked(resolveConfigPathSync).mockReturnValue({
       path: "/test/workspace/.nightgauge/config.yaml",
       isLegacy: false,
@@ -466,12 +467,12 @@ describe("getStageEffort", () => {
     );
 
     const effort = getStageEffort("feature-dev", "/test/workspace");
-    expect(effort).toBeUndefined();
+    expect(effort).toBe("low");
   });
 });
 
 // ============================================================================
-// DEFAULT_STAGE_EFFORTS — Sonnet 4.6 Era Defaults (Issue #944)
+// DEFAULT_STAGE_EFFORTS — Defaults (Issue #944, #2512)
 // ============================================================================
 
 describe("DEFAULT_STAGE_EFFORTS (Issue #944)", () => {
@@ -504,9 +505,9 @@ describe("DEFAULT_STAGE_EFFORTS (Issue #944)", () => {
     expect(getStageEffort("feature-planning", "/test/workspace")).toBe("medium");
   });
 
-  it("returns medium for feature-dev in manual mode", () => {
+  it("returns low for feature-dev in manual mode (#2512)", () => {
     process.env.NIGHTGAUGE_MODEL_ROUTING_MODE = "manual";
-    expect(getStageEffort("feature-dev", "/test/workspace")).toBe("medium");
+    expect(getStageEffort("feature-dev", "/test/workspace")).toBe("low");
   });
 
   it("returns low for feature-validate in manual mode", () => {
@@ -514,11 +515,11 @@ describe("DEFAULT_STAGE_EFFORTS (Issue #944)", () => {
     expect(getStageEffort("feature-validate", "/test/workspace")).toBe("low");
   });
 
-  it("returns undefined for lightweight stages in manual mode", () => {
+  it("returns undefined for haiku stages and medium for pr-merge in manual mode (#2512)", () => {
     process.env.NIGHTGAUGE_MODEL_ROUTING_MODE = "manual";
     expect(getStageEffort("issue-pickup", "/test/workspace")).toBeUndefined();
     expect(getStageEffort("pr-create", "/test/workspace")).toBeUndefined();
-    expect(getStageEffort("pr-merge", "/test/workspace")).toBeUndefined();
+    expect(getStageEffort("pr-merge", "/test/workspace")).toBe("medium");
   });
 
   it("config stage_efforts overrides defaults", () => {

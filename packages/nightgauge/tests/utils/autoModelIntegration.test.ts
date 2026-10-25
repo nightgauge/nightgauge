@@ -179,7 +179,7 @@ model_routing:
 
     it("XS issue selects haiku for lightweight stages via stage-default", async () => {
       // Since Issue #972, lightweight stages (issue-pickup, pr-create, pr-merge)
-      // are intercepted by LIGHTWEIGHT_STAGE_DEFAULTS in Step 1.5, before
+      // are intercepted by DEFAULT_STAGE_MODELS in Step 1.5, before
       // AutoModelSelector is consulted. The model is still haiku but the source
       // is now 'stage-default' instead of 'auto'.
       mockConfigFile(`
@@ -336,17 +336,18 @@ model_routing:
   });
 
   describe("manual mode", () => {
-    it("uses DEFAULT_STAGE_MODELS without consulting selector", async () => {
+    it("applies the opus stage default in manual mode without consulting selector", async () => {
       process.env.NIGHTGAUGE_MODEL_ROUTING_MODE = "manual";
       mockNoConfig();
 
-      const { resolveModel } = await getResolveModel();
+      const { resolveModel } = await import("../../src/utils/skillRunner");
 
-      const result = resolveModel("feature-dev" as any, "/test/workspace", defaultMetadata);
+      const result = resolveModel("feature-dev" as any, "/test/workspace");
 
-      // Manual mode: getStageModel returns DEFAULT_STAGE_MODELS['feature-dev'] = 'sonnet'
-      expect(result.model).toBe("sonnet");
-      expect(result.source).toBe("config");
+      // #2512: real resolveModel; DEFAULT_STAGE_MODELS['feature-dev'] = 'opus'
+      // via Step 1.5 (no selector metadata), reported as a stage-default.
+      expect(result.model).toBe("opus");
+      expect(result.source).toBe("stage-default");
       expect(result.selectionResult).toBeUndefined();
     });
   });
@@ -429,20 +430,19 @@ describe("Lightweight Stage Defaults (Issue #972)", () => {
 
   it("pr-merge is NOT affected by diff-size escalation", async () => {
     mockNoConfig();
-    const { resolveModel, setDiffLineCount } = await getResolveModel();
+    const { resolveModel } = await import("../../src/utils/skillRunner");
 
-    setDiffLineCount(1000);
     const result = resolveModel("pr-merge" as any, "/test/workspace");
-    expect(result.model).toBe("sonnet");
+    expect(result.model).toBe("opus");
     expect(result.source).toBe("stage-default");
   });
 
-  it("pr-merge defaults to sonnet — its LLM path only runs on deterministic punts (#197)", async () => {
+  it("pr-merge defaults to opus — its LLM path only runs on deterministic punts (#197)", async () => {
     mockNoConfig();
-    const { resolveModel } = await getResolveModel();
+    const { resolveModel } = await import("../../src/utils/skillRunner");
 
     const result = resolveModel("pr-merge" as any, "/test/workspace");
-    expect(result.model).toBe("sonnet");
+    expect(result.model).toBe("opus");
     expect(result.source).toBe("stage-default");
   });
 
@@ -528,12 +528,13 @@ async function getResolveModel() {
   let _diffLineCount = 0;
 
   // Lightweight stage defaults (Issue #972)
-  const LIGHTWEIGHT_STAGE_DEFAULTS: Record<string, string> = {
-    "issue-pickup": "haiku",
-    "pr-create": "haiku",
-    // #197: pr-merge's LLM path only runs on deterministic punts — sonnet.
-    "pr-merge": "sonnet",
-  };
+  // Haiku-only subset of DEFAULT_STAGE_MODELS (#2512). Opus stages are a floor
+  // under the selector's pick and are covered against the real resolveModel
+  // (see the opus tests below and modelRoutingConfig.test.ts); this harness
+  // models only the selector chain for stages with no built-in default.
+  const LIGHTWEIGHT_STAGE_DEFAULTS: Record<string, string> = Object.fromEntries(
+    Object.entries(config.DEFAULT_STAGE_MODELS).filter(([, m]) => m === "haiku")
+  ) as Record<string, string>;
 
   // Build a manual resolveModel for testing
   function resolveModel(stage: any, workspaceRoot: string, issueMetadata?: IssueMetadata) {

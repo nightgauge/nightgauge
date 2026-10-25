@@ -356,7 +356,8 @@ func TestDispatchModelFrontierCeilingIsPerStageForFloorsToo(t *testing.T) {
 }
 
 // TestDispatchModelResolvesTheWorkspaceDefault pins `resolveModel` Step 3 on the
-// Go side. On the pre-#340 IPC path this was the EFFECTIVE model for every
+// Go side. It dispatches spike-materialize, the one stage with no built-in
+// stage default (#2512) — every other stage answers before Step 3. On the pre-#340 IPC path this was the EFFECTIVE model for every
 // reasoning stage — services/SkillRunner.ts passed no issue metadata, so Step 2
 // never fired and Step 3 always won — so a Go router that stopped at its own
 // hardcoded sonnet would have dropped the knob silently for exactly the runs it
@@ -365,8 +366,8 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 	t.Run("ui.core.default_model answers an unrouted stage", func(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: opus\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil, ""); got != "opus" {
-			t.Errorf("feature-dev = %q, want opus — ui.core.default_model is Step 3", got)
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", nil, ""); got != "opus" {
+			t.Errorf("spike-materialize = %q, want opus — ui.core.default_model is Step 3", got)
 		}
 	})
 
@@ -374,16 +375,16 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: haiku\n")
 		t.Setenv("NIGHTGAUGE_UI_CORE_DEFAULT_MODEL", "opus")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil, ""); got != "opus" {
-			t.Errorf("feature-dev = %q, want opus", got)
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", nil, ""); got != "opus" {
+			t.Errorf("spike-materialize = %q, want opus", got)
 		}
 	})
 
 	t.Run("the routed tier still wins over it", func(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: opus\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", nil, ""); got != "haiku" {
-			t.Errorf("feature-dev = %q, want the routed haiku — Step 2 precedes Step 3", got)
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "haiku", nil, ""); got != "haiku" {
+			t.Errorf("spike-materialize = %q, want the routed haiku — Step 2 precedes Step 3", got)
 		}
 	})
 
@@ -391,16 +392,16 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: opus\n")
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil, ""); got != "sonnet" {
-			t.Errorf("feature-dev = %q, want sonnet", got)
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", nil, ""); got != "sonnet" {
+			t.Errorf("spike-materialize = %q, want sonnet", got)
 		}
 	})
 
 	t.Run("a non-band value is ignored, as in getDefaultModel's validModels guard", func(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: gpt-5.6-sol\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil, ""); got != "sonnet" {
-			t.Errorf("feature-dev = %q, want the hardcoded sonnet fallback", got)
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", nil, ""); got != "sonnet" {
+			t.Errorf("spike-materialize = %q, want the hardcoded sonnet fallback", got)
 		}
 	})
 
@@ -416,16 +417,18 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: fable\n")
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil, ""); got != "fable" {
-			t.Errorf("feature-dev = %q, want fable — DefaultModelSchema permits it and validStageModel accepts it", got)
+		// spike-materialize's routed envelope tops out at opus even under
+		// frontier; a rejected value would have fallen to the sonnet fallback.
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", nil, ""); got != "opus" {
+			t.Errorf("spike-materialize = %q, want opus (fable accepted, then clamped) — DefaultModelSchema permits it and validStageModel accepts it", got)
 		}
 	})
 
 	t.Run("a fable default is still clamped into the mode envelope", func(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: fable\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil, ""); got != "opus" {
-			t.Errorf("feature-dev = %q, want opus — elevated tops out there; accepting the band does not exempt it from the ceiling", got)
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", nil, ""); got != "opus" {
+			t.Errorf("spike-materialize = %q, want opus — elevated tops out there; accepting the band does not exempt it from the ceiling", got)
 		}
 	})
 }
@@ -490,15 +493,17 @@ func TestDispatchModelPRCreateLargeDiffSparesAnExplicitBase(t *testing.T) {
 		dir := gitWorkspaceWithLargeDiff(t, "model_routing:\n  mode: automatic\n", bigDiff)
 		s := testScheduler(t)
 		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", nil, ""); got != "sonnet" {
-			t.Errorf("pr-create = %q, want sonnet — lightweightStageDefaults is the pipeline's own choice, and haiku stalls on a big changeset", got)
+			t.Errorf("pr-create = %q, want sonnet — the haiku stage default is the pipeline's own choice, and haiku stalls on a big changeset", got)
 		}
 	})
 
-	t.Run("the manual-mode table is explicit, so it is left alone", func(t *testing.T) {
+	t.Run("the built-in table is the pipeline's choice in manual mode too", func(t *testing.T) {
 		dir := gitWorkspaceWithLargeDiff(t, "model_routing:\n  mode: manual\n", bigDiff)
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", nil, ""); got != "haiku" {
-			t.Errorf("pr-create = %q, want haiku — resolveModel Step 1 answers from DEFAULT_STAGE_MODELS and never reaches the escalation", got)
+		// #2512: the built-in stage defaults are no longer an explicit manual
+		// answer, so the escalation applies in every mode.
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", nil, ""); got != "sonnet" {
+			t.Errorf("pr-create = %q, want sonnet — the built-in haiku default is not an operator choice", got)
 		}
 	})
 
@@ -555,4 +560,75 @@ func TestModeTableIsSharedWithTheRouter(t *testing.T) {
 				mode, pinned)
 		}
 	}
+}
+
+// TestStageDefaultModelsEveryMode pins the built-in per-stage base model
+// (#2512) on the Go dispatch path in every routing mode, with no routed tier
+// and no config. TS twin: modelRoutingConfig.test.ts "per-stage defaults
+// (#2512)" — both dispatch paths assert the same table.
+func TestStageDefaultModelsEveryMode(t *testing.T) {
+	want := map[state.PipelineStage]string{
+		state.StageIssuePickup:     "haiku",
+		state.StageFeaturePlanning: "opus",
+		state.StageFeatureDev:      "opus",
+		state.StageFeatureValidate: "opus",
+		state.StagePRCreate:        "haiku",
+		state.StagePRMerge:         "opus",
+	}
+	for _, mode := range []string{"automatic", "hybrid", "manual"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := routedWorkspace(t, "model_routing:\n  mode: "+mode+"\n")
+			s := testScheduler(t)
+			for stage, w := range want {
+				if got := s.resolveDispatchModel(stage, 1, dir, "", nil, ""); got != w {
+					t.Errorf("%s = %q, want %q", stage, got, w)
+				}
+				// A lower routed tier never lowers an opus stage; a haiku
+				// stage ignores the routed tier entirely.
+				if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", nil, ""); got != w {
+					t.Errorf("%s with routed sonnet = %q, want %q", stage, got, w)
+				}
+			}
+			if got := refinementModel(dir); got != "haiku" {
+				t.Errorf("issue-refine = %q, want haiku", got)
+			}
+		})
+	}
+
+	t.Run("efficiency caps opus at sonnet", func(t *testing.T) {
+		dir := isolatedWorkspace(t)
+		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
+		if got := testScheduler(t).resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil, ""); got != "sonnet" {
+			t.Errorf("efficiency feature-dev = %q, want sonnet", got)
+		}
+	})
+	t.Run("maximum pins opus", func(t *testing.T) {
+		dir := isolatedWorkspace(t)
+		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "maximum")
+		if got := testScheduler(t).resolveDispatchModel(state.StagePRCreate, 1, dir, "", nil, ""); got != "opus" {
+			t.Errorf("maximum pr-create = %q, want opus", got)
+		}
+	})
+	t.Run("operator overrides win", func(t *testing.T) {
+		dir := routedWorkspace(t, "model_routing:\n  mode: hybrid\npipeline:\n  stage_models:\n    feature-planning: sonnet\n")
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StageFeaturePlanning, 1, dir, "", nil, ""); got != "sonnet" {
+			t.Errorf("stage_models feature-planning = %q, want sonnet", got)
+		}
+		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "sonnet")
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil, ""); got != "sonnet" {
+			t.Errorf("env feature-dev = %q, want sonnet", got)
+		}
+		floors := map[string]string{string(state.StageIssuePickup): "sonnet"}
+		if got := s.resolveDispatchModel(state.StageIssuePickup, 1, dir, "", floors, ""); got != "sonnet" {
+			t.Errorf("minimum_model issue-pickup = %q, want sonnet", got)
+		}
+	})
+	t.Run("the router still raises an opus stage under frontier", func(t *testing.T) {
+		dir := isolatedWorkspace(t)
+		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
+		if got := testScheduler(t).resolveDispatchModel(state.StageFeatureDev, 1, dir, "fable", nil, ""); got != "fable" {
+			t.Errorf("frontier feature-dev routed fable = %q, want fable", got)
+		}
+	})
 }

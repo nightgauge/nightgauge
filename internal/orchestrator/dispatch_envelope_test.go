@@ -127,6 +127,7 @@ func isolateEffortEnv(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV", "")
 	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_DEFAULT_EFFORT", "")
 	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "")
+	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_EFFORT_AUTO", "")
 }
 
 // TestResolveWireEffort pins the Go mirror of the TS resolveStageEffort chain
@@ -138,11 +139,11 @@ func isolateEffortEnv(t *testing.T) {
 func TestResolveWireEffort(t *testing.T) {
 	stage := state.StageFeatureDev
 
-	t.Run("elevated, no config: no explicit effort — omit the flag", func(t *testing.T) {
+	t.Run("elevated, no config: the built-in low feature-dev base", func(t *testing.T) {
 		dir := isolatedWorkspace(t)
 		isolateEffortEnv(t)
-		if got := resolveWireEffort(dir, stage); got != "" {
-			t.Errorf("resolveWireEffort = %q, want \"\"", got)
+		if got := resolveWireEffort(dir, stage, 0); got != "low" {
+			t.Errorf("resolveWireEffort = %q, want \"low\"", got)
 		}
 	})
 
@@ -150,7 +151,7 @@ func TestResolveWireEffort(t *testing.T) {
 		dir := isolatedWorkspace(t)
 		isolateEffortEnv(t)
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "maximum")
-		if got := resolveWireEffort(dir, stage); got != "high" {
+		if got := resolveWireEffort(dir, stage, 0); got != "high" {
 			t.Errorf("resolveWireEffort(maximum) = %q, want \"high\"", got)
 		}
 	})
@@ -163,7 +164,7 @@ func TestResolveWireEffort(t *testing.T) {
 		isolateEffortEnv(t)
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "maximum")
 		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "sonnet")
-		if got := resolveWireEffort(dir, stage); got != "high" {
+		if got := resolveWireEffort(dir, stage, 0); got != "high" {
 			t.Errorf("resolveWireEffort(maximum, model env override) = %q, want \"high\"", got)
 		}
 	})
@@ -172,7 +173,7 @@ func TestResolveWireEffort(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  stage_efforts:\n    feature-dev: xhigh\n")
 		isolateEffortEnv(t)
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
-		if got := resolveWireEffort(dir, stage); got != "medium" {
+		if got := resolveWireEffort(dir, stage, 0); got != "medium" {
 			t.Errorf("resolveWireEffort(efficiency, xhigh config) = %q, want \"medium\"", got)
 		}
 	})
@@ -181,7 +182,7 @@ func TestResolveWireEffort(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  default_effort: high\n")
 		isolateEffortEnv(t)
 		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV", "low")
-		if got := resolveWireEffort(dir, stage); got != "low" {
+		if got := resolveWireEffort(dir, stage, 0); got != "low" {
 			t.Errorf("resolveWireEffort(env low over config high) = %q, want \"low\"", got)
 		}
 	})
@@ -189,22 +190,22 @@ func TestResolveWireEffort(t *testing.T) {
 	t.Run("config stage_efforts, then default_effort", func(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  default_effort: high\n  stage_efforts:\n    feature-dev: medium\n")
 		isolateEffortEnv(t)
-		if got := resolveWireEffort(dir, stage); got != "medium" {
+		if got := resolveWireEffort(dir, stage, 0); got != "medium" {
 			t.Errorf("resolveWireEffort(stage_efforts over default_effort) = %q, want \"medium\"", got)
 		}
 		dir2 := routedWorkspace(t, "model_routing:\n  default_effort: high\n")
-		if got := resolveWireEffort(dir2, stage); got != "high" {
+		if got := resolveWireEffort(dir2, stage, 0); got != "high" {
 			t.Errorf("resolveWireEffort(default_effort) = %q, want \"high\"", got)
 		}
 	})
 
-	t.Run("manual mode falls back to the DEFAULT_STAGE_EFFORTS table", func(t *testing.T) {
+	t.Run("manual mode uses the same DEFAULT_STAGE_EFFORTS table", func(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  mode: manual\n")
 		isolateEffortEnv(t)
-		if got := resolveWireEffort(dir, stage); got != "medium" {
-			t.Errorf("resolveWireEffort(manual, feature-dev) = %q, want \"medium\"", got)
+		if got := resolveWireEffort(dir, stage, 0); got != "low" {
+			t.Errorf("resolveWireEffort(manual, feature-dev) = %q, want \"low\"", got)
 		}
-		if got := resolveWireEffort(dir, state.StagePRCreate); got != "" {
+		if got := resolveWireEffort(dir, state.StagePRCreate, 0); got != "" {
 			t.Errorf("resolveWireEffort(manual, pr-create) = %q, want \"\" — table has no entry", got)
 		}
 	})
@@ -212,8 +213,8 @@ func TestResolveWireEffort(t *testing.T) {
 	t.Run("off-ladder values are ignored, not dispatched", func(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  stage_efforts:\n    feature-dev: turbo\n")
 		isolateEffortEnv(t)
-		if got := resolveWireEffort(dir, stage); got != "" {
-			t.Errorf("resolveWireEffort(invalid config value) = %q, want \"\"", got)
+		if got := resolveWireEffort(dir, stage, 0); got != "low" {
+			t.Errorf("resolveWireEffort(invalid config value) = %q, want the built-in \"low\"", got)
 		}
 	})
 }
@@ -244,7 +245,7 @@ func TestOpus55EffortDefault(t *testing.T) {
 	t.Run("no override: the declared default, low", func(t *testing.T) {
 		dir := isolatedWorkspace(t)
 		isolateEffortEnv(t)
-		if got := effective(resolveWireEffort(dir, stage)); got != "low" {
+		if got := effective(resolveWireEffort(dir, stage, 0)); got != "low" {
 			t.Errorf("effective effort = %q, want \"low\"", got)
 		}
 	})
@@ -253,7 +254,7 @@ func TestOpus55EffortDefault(t *testing.T) {
 		dir := isolatedWorkspace(t)
 		isolateEffortEnv(t)
 		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV", "high")
-		if got := effective(resolveWireEffort(dir, stage)); got != "high" {
+		if got := effective(resolveWireEffort(dir, stage, 0)); got != "high" {
 			t.Errorf("effective effort = %q, want \"high\"", got)
 		}
 	})
@@ -261,7 +262,7 @@ func TestOpus55EffortDefault(t *testing.T) {
 	t.Run("model_routing.default_effort: high", func(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  default_effort: high\n")
 		isolateEffortEnv(t)
-		if got := effective(resolveWireEffort(dir, stage)); got != "high" {
+		if got := effective(resolveWireEffort(dir, stage, 0)); got != "high" {
 			t.Errorf("effective effort = %q, want \"high\"", got)
 		}
 	})
@@ -332,5 +333,72 @@ func TestWireThinkingUnderPolicy(t *testing.T) {
 				t.Errorf("wireThinkingUnderPolicy(%q, %q) = %q, want %q", tc.model, tc.policy, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestResolveWireEffortStageDefaults pins the built-in per-stage effort (#2512)
+// in every routing mode: opus stages always send an explicit effort, the haiku
+// stages send none. TS twin: modelRoutingConfig.test.ts "per-stage defaults".
+func TestResolveWireEffortStageDefaults(t *testing.T) {
+	want := map[state.PipelineStage]string{
+		state.StageIssueRefine:     "",
+		state.StageIssuePickup:     "",
+		state.StageFeaturePlanning: "medium",
+		state.StageFeatureDev:      "low",
+		state.StageFeatureValidate: "low",
+		state.StagePRCreate:        "",
+		state.StagePRMerge:         "medium",
+	}
+	for _, mode := range []string{"automatic", "hybrid", "manual"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := routedWorkspace(t, "model_routing:\n  mode: "+mode+"\n")
+			isolateEffortEnv(t)
+			for stage, w := range want {
+				if got := resolveWireEffort(dir, stage, 0); got != w {
+					t.Errorf("%s effort = %q, want %q", stage, got, w)
+				}
+				if stageDefaultModels[stage] == "opus" && resolveWireEffort(dir, stage, 0) == "" {
+					t.Errorf("%s is an opus stage and left effort to the API default", stage)
+				}
+			}
+		})
+	}
+}
+
+// TestResolveWireEffortFeatureDevComplexityRaise: effort_auto raises
+// feature-dev's low base by the routing complexity score, on the same buckets
+// as AutoModelSelector.deriveEffort; it touches no other stage, and
+// effort_auto: false keeps the base.
+func TestResolveWireEffortFeatureDevComplexityRaise(t *testing.T) {
+	dir := isolatedWorkspace(t)
+	isolateEffortEnv(t)
+	for score, w := range map[int]string{0: "low", 1: "low", 2: "low", 3: "medium", 5: "high", 8: "high"} {
+		if got := resolveWireEffort(dir, state.StageFeatureDev, score); got != w {
+			t.Errorf("feature-dev, complexity %d = %q, want %q", score, got, w)
+		}
+	}
+	if got := resolveWireEffort(dir, state.StageFeatureValidate, 8); got != "low" {
+		t.Errorf("feature-validate, complexity 8 = %q, want low (the raise is feature-dev's only)", got)
+	}
+
+	off := routedWorkspace(t, "model_routing:\n  effort_auto: false\n")
+	if got := resolveWireEffort(off, state.StageFeatureDev, 8); got != "low" {
+		t.Errorf("effort_auto false, complexity 8 = %q, want low", got)
+	}
+	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_EFFORT_AUTO", "false")
+	if got := resolveWireEffort(dir, state.StageFeatureDev, 8); got != "low" {
+		t.Errorf("effort_auto env false, complexity 8 = %q, want low", got)
+	}
+	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_EFFORT_AUTO", "")
+
+	// An explicit stage effort still wins over the raise.
+	explicit := routedWorkspace(t, "model_routing:\n  stage_efforts:\n    feature-dev: low\n")
+	if got := resolveWireEffort(explicit, state.StageFeatureDev, 8); got != "low" {
+		t.Errorf("stage_efforts low, complexity 8 = %q, want the operator's low", got)
+	}
+	// Efficiency caps the raise at medium.
+	t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
+	if got := resolveWireEffort(dir, state.StageFeatureDev, 8); got != "medium" {
+		t.Errorf("efficiency, complexity 8 = %q, want medium", got)
 	}
 }

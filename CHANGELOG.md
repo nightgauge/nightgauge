@@ -14,6 +14,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- Every routing mode, the default `automatic` included, now starts each stage
+  from one built-in table: `feature-planning`, `feature-dev`,
+  `feature-validate` and `pr-merge` run on Opus 5.5; `issue-refine`,
+  `issue-pickup` and `pr-create` run on Haiku 5.5. The router can raise a
+  reasoning stage but no longer lowers it below Opus. Opus stages always send
+  an explicit effort: `medium` for planning and pr-merge, `low` for validation,
+  and `low` for feature-dev, raised to `medium` or `high` by the issue's
+  complexity unless `model_routing.effort_auto` is `false`. Explicit
+  `pipeline.stage_models`, `model_routing.stage_efforts`, `minimum_model`, the
+  environment overrides and the `efficiency`/`maximum` performance modes still
+  win. Expect higher per-stage cost on reasoning stages than the old Sonnet
+  defaults. The docs now list current prices (#2512).
+
 ### Fixed
 
 - **`scripts/ci-local.sh` no longer fails on a clean `main` when a pipeline

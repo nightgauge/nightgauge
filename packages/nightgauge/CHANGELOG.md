@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Extension-driven runs use the new built-in stage defaults (#2512).**
+  Planning, development, validation and pr-merge start on Opus 5.5 with an
+  explicit effort; issue pickup and PR creation start on Haiku 5.5. This holds
+  in every routing mode. Your `pipeline.stage_models`,
+  `model_routing.stage_efforts` and performance mode still take precedence.
+
 ### Fixed
 
 - **A failed run is moved to In review only when an open PR backs it

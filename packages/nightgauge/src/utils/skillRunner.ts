@@ -123,6 +123,7 @@ import {
   getMaxTurns,
   getCostBudget,
   getStageModel,
+  DEFAULT_STAGE_MODELS,
   getStageEnvModel,
   getStallThresholds,
   getStallKillMultiplier,
@@ -1005,34 +1006,6 @@ function clampModelToCeiling(model: DefaultModel, envelope: ModeEnvelope): Defau
 }
 
 /**
- * Built-in per-stage model defaults for lightweight stages.
- *
- * These stages either perform simple, well-defined tasks OR use
- * deterministic context generation first — in either case, Haiku
- * is sufficient for the LLM's reduced (or fallback-only) role.
- *
- * issue-pickup: re-added in Issue #2614. The LLM now only runs as a fallback
- * when generateDeterministicIssueContext() fails, so Haiku is appropriate.
- * pr-create/pr-merge: create a PR, wait for merge — no complex reasoning needed.
- *
- * @see Issue #972 - Add per-stage model defaults for lightweight stages
- * @see Issue #1593 - Issue-pickup uses Sonnet for classification
- * @see Issue #2614 - Deterministic-first execution (issue-pickup back to haiku)
- */
-const LIGHTWEIGHT_STAGE_DEFAULTS: Partial<Record<PipelineStage, DefaultModel>> = {
-  "issue-pickup": "haiku",
-  "pr-create": "haiku",
-  // pr-merge removed (#197): since the two-path design landed, the LLM never
-  // sees an easy merge — the deterministic runner merges every clean case
-  // and punts to the LLM only when something is WRONG (blocked merge state,
-  // failing checks, dirty state). Issue size is irrelevant to that
-  // difficulty; routing the punt path to the cheapest tier assigned the
-  // weakest model to the hardest instances (the dogfood pr-merge deadlock:
-  // haiku improvised an admin bypass). pr-merge resolves to sonnet via
-  // DEFAULT_STAGE_MODELS.
-};
-
-/**
  * Count total lines changed (insertions + deletions) in the current branch vs main.
  * Returns 0 on any error so callers fall through to the default model.
  */
@@ -1078,8 +1051,10 @@ function getDiffLineCount(workspaceRoot: string): number {
  *    ceiling]` ENVELOPES with empty `stages` maps — they clamp the steps below
  *    instead of preempting them — and `elevated` is the open band. A per-stage
  *    env override suppresses the pin (#340), so it wins in every mode.
- * 1. getStageModel() — env var > config override > defaults (mode-aware)
- * 1.5. LIGHTWEIGHT_STAGE_DEFAULTS — built-in per-stage defaults (mode-agnostic)
+ * 1. getStageModel() — env var > config override (mode-aware)
+ * 1.5. DEFAULT_STAGE_MODELS — built-in per-stage defaults, every mode (#2512):
+ *      haiku stages return here; opus stages are a floor under Step 2
+ *      (the selector may raise them, never lower them)
  * 2. AutoModelSelector — when getStageModel returns undefined (automatic/hybrid)
  * 3. getDefaultModel() — global default
  * 4. 'sonnet' — hardcoded final fallback
@@ -1523,13 +1498,16 @@ export function resolveModel(
     return { model, source, mode: routingMode, effort };
   }
 
-  // Step 1.5: Per-stage defaults for lightweight stages (mode-agnostic)
-  // Fires when no explicit config/env override is set. Ensures lightweight
-  // stages always route to Haiku without needing AutoModelSelector metadata.
-  // Exception: pr-create escalates to sonnet when the diff is large, to avoid
-  // stalls where haiku cannot produce a complete PR for big changesets.
-  const lightweightDefault = LIGHTWEIGHT_STAGE_DEFAULTS[stage];
-  if (lightweightDefault !== undefined) {
+  // Step 1.5: Built-in per-stage defaults (every mode, #2512). Mirrors
+  // stageDefaultModels in internal/orchestrator/dispatch_routing.go.
+  // Haiku stages return here and ignore the selector. Exception: pr-create
+  // escalates to sonnet when the diff is large, to avoid stalls where haiku
+  // cannot produce a complete PR for big changesets.
+  // Opus stages fall through: the selector (Step 2) may raise them, never
+  // lower them, and with no selector pick they resolve to the default before
+  // Step 3.
+  const stageDefault = DEFAULT_STAGE_MODELS[stage];
+  if (stageDefault === "haiku") {
     if (stage === "pr-create") {
       const threshold = getLargeDiffThreshold(workspaceRoot);
       if (threshold > 0) {
@@ -1547,12 +1525,16 @@ export function resolveModel(
       }
     }
     return {
-      model: withFloor(clampModelToEnvelope(lightweightDefault, modelEnvelope)),
+      model: withFloor(clampModelToEnvelope(stageDefault, modelEnvelope)),
       source: "stage-default",
       mode: routingMode,
       effort,
     };
   }
+  // The stage default is a floor under the router's pick, clamped into the
+  // envelope like every pipeline-chosen tier.
+  const withStageDefault = (chosen: DefaultModel): DefaultModel =>
+    withFloor(clampModelToEnvelope(enforceMinimumModel(chosen, stageDefault), modelEnvelope));
 
   // Step 1.6: Adaptive policy routing override (Issue #1571)
   // Long-horizon override from health-gated policies — applied after env var
@@ -1642,7 +1624,7 @@ export function resolveModel(
         // lands inside the stage's routed-tier ceiling — so a `fable` floor
         // cannot put feature-validate or the plumbing on Fable under `frontier`
         // (#340).
-        const model = withFloor(result.model as DefaultModel);
+        const model = withStageDefault(result.model as DefaultModel);
 
         // Eval-advice re-pick (#581, on by default since ADR-021): the advisor
         // slots between the selector's pick and the return, inside the same
@@ -1654,7 +1636,7 @@ export function resolveModel(
             workspaceRoot,
             performanceMode,
             issueMetadata,
-            withFloor
+            withStageDefault
           );
           if (advisory) {
             return {
@@ -1681,6 +1663,16 @@ export function resolveModel(
       // AutoModelSelector failure → fall through to default (graceful degradation)
       errorStageDiagnostic(`[skillRunner] AutoModelSelector failed for stage ${stage}:`, error);
     }
+  }
+
+  // Step 1.5 (continued): an opus stage the selector did not answer for.
+  if (stageDefault !== undefined) {
+    return {
+      model: withStageDefault(stageDefault),
+      source: "stage-default",
+      mode: routingMode,
+      effort,
+    };
   }
 
   // Step 3: Global default (clamped to the mode envelope)
