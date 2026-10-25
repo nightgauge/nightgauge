@@ -185,6 +185,8 @@ func ValidateLegacyJSONCredentials(cfg *Config, path string) error {
 	cfg.LicenseKey = ""
 	cfg.PlatformURL = ""
 	cfg.PlatformEnabled = nil
+	// users is hard-stripped too (#2510): a repository cannot grant an identity.
+	cfg.Users = nil
 	return nil
 }
 

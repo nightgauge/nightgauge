@@ -169,3 +169,14 @@ func TestLoadMergedStripsRepoTierUsers(t *testing.T) {
 		t.Fatal("users is not hard-stripped from repository tiers")
 	}
 }
+
+// TestLegacyJSONStripsUsers: the legacy config.json path clears users too.
+func TestLegacyJSONStripsUsers(t *testing.T) {
+	cfg := &Config{Users: []UserMappingEntry{{MattermostUserID: "u1", GitHubLogin: "a"}}}
+	if err := ValidateLegacyJSONCredentials(cfg, "/repo/.nightgauge/config.json"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Users != nil {
+		t.Fatalf("users survived the legacy JSON tier: %+v", cfg.Users)
+	}
+}
