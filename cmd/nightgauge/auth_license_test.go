@@ -27,6 +27,7 @@ func licenseFixture(t *testing.T) string {
 	// The suite runs on CI hosts too, where a store refuses to write
 	// (ADR-024 § 5); tests that exercise storing opt back in explicitly.
 	t.Setenv("CI", "")
+	t.Setenv("NIGHTGAUGE_HOST_CI", "") // A stage's leaked NIGHTGAUGE_HOST_CI outranks CI (#2514), so pin it empty (#2524).
 	return path
 }
 
@@ -35,6 +36,7 @@ func licenseFixture(t *testing.T) string {
 func TestLicenseSetInCIStoresNothing(t *testing.T) {
 	path := licenseFixture(t)
 	t.Setenv("CI", "true")
+	t.Setenv("NIGHTGAUGE_HOST_CI", "")
 	_, _, err := runLicenseCmd(t, "ib_live_ci_job\n", "set")
 	if !errors.Is(err, config.ErrCredentialWriteInCI) {
 		t.Fatalf("auth license set in CI: err = %v, want ErrCredentialWriteInCI", err)

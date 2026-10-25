@@ -31,6 +31,9 @@ func TestMain(m *testing.M) {
 	// No test here reads or writes the operator's OS keychain: go-keyring's
 	// in-memory provider stands in for it (internal/keychain).
 	keyring.MockInit()
+	// Nor does a stage's exported NIGHTGAUGE_HOST_CI, which outranks CI (#2514),
+	// decide whether a test runs as CI (#2524).
+	_ = os.Unsetenv("NIGHTGAUGE_HOST_CI")
 	// No test here reaches GitHub for an OpenCode stage's MCP servers; one
 	// that reads them swaps in a forge of its own.
 	restoreForge := adapters.SwapOpenCodeMcpForgeForTest(openCodeVerbForge{err: errors.New("the cmd test binary reads no forge")})

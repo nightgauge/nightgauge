@@ -675,7 +675,8 @@ func TestNewClientFromConfig_SuppressWarning(t *testing.T) {
 // ── ResolveTokenChain tests (#2733) ────────────────────────────────────────────
 
 func TestResolveTokenChain_ConfigTokenWins(t *testing.T) {
-	t.Setenv("CI", "") // off CI; the CI order is pinned below
+	t.Setenv("CI", "")                 // off CI; the CI order is pinned below
+	t.Setenv("NIGHTGAUGE_HOST_CI", "") // A stage's leaked NIGHTGAUGE_HOST_CI outranks CI (#2514), so pin it empty (#2524).
 	t.Setenv("GITHUB_TOKEN", "ghp_envtoken")
 	resolver := &stubTokenResolver{token: "ghp_configtoken"}
 	tok, err := ResolveTokenChain(resolver, "nightgauge")
@@ -691,6 +692,7 @@ func TestResolveTokenChain_ConfigTokenWins(t *testing.T) {
 // a machine-file token an earlier job left behind never shadows this job's.
 func TestResolveTokenChain_CIPrefersEnvironment(t *testing.T) {
 	t.Setenv("CI", "true")
+	t.Setenv("NIGHTGAUGE_HOST_CI", "")
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_TOKEN", "ghp_jobtoken")
 	resolver := &stubTokenResolver{token: "ghp_staleconfigtoken"}
@@ -708,6 +710,7 @@ func TestResolveTokenChain_CIPrefersEnvironment(t *testing.T) {
 // gh identity: a pull request must not pick a credential off a shared runner.
 func TestResolveTokenChain_CIIgnoresGitHubUser(t *testing.T) {
 	t.Setenv("CI", "true")
+	t.Setenv("NIGHTGAUGE_HOST_CI", "")
 	t.Setenv("GITHUB_TOKEN", "ghp_jobtoken")
 	resolver := &stubOwnerUserResolver{usersByOwner: map[string]string{"nightgauge": "someone-else"}}
 	calledFor := ""

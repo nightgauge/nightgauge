@@ -23,6 +23,7 @@
 # Both halves are asserted here, through the real code paths, in seconds rather
 # than by running two 7-minute gates: `--group-probe` drives the actual
 # `run_group`/`run_group_wait` pair, and `--slot-probe` takes a real slot.
+# Arm (17) asserts the gate scrubs stage-only variables (`--env-probe`, #2524).
 #
 # Run: bash scripts/test-ci-local-concurrency.sh
 # Also run by scripts/ci-local.sh and .github/workflows/lint.yml.
@@ -407,6 +408,25 @@ plan_total="$(
 declared_total="$(sed -n 's/^EXPECTED_ASSERTIONS=\([0-9]*\)$/\1/p' scripts/test-mirror-drift-gate.sh | sed -n 1p)"
 [ -n "$plan_total" ] && [ -n "$declared_total" ] && [ "$plan_total" = "$declared_total" ]
 check "ARM_PLAN sums to EXPECTED_ASSERTIONS ($plan_total vs $declared_total)" $?
+
+# ── (17) the gate scrubs the variables CI never has (#2524) ─────────────────
+# A stage leaks NIGHTGAUGE_HOST_CI, NIGHTGAUGE_SKILL_DIR and ELECTRON_RUN_AS_NODE;
+# each turned a step red on clean main. `--env-probe` reports from a child
+# process, so dropping the `unset` makes these lines say `set`. A missing line
+# fails too: an arm that only greps for `=set` would pass on empty output.
+env NIGHTGAUGE_HOST_CI=false NIGHTGAUGE_SKILL_DIR=/x ELECTRON_RUN_AS_NODE=1 CI=true \
+  bash scripts/ci-local.sh --env-probe > "$TMP/env-probe.log" 2>&1
+env_probe_rc=$?
+if [ "$env_probe_rc" -ne 0 ]; then
+  echo "HARNESS ERROR: ci-local.sh --env-probe exited $env_probe_rc"
+  sed 's/^/    /' "$TMP/env-probe.log"
+  FAIL=$((FAIL + 1))
+else
+  for name in NIGHTGAUGE_HOST_CI NIGHTGAUGE_SKILL_DIR ELECTRON_RUN_AS_NODE; do
+    grep -qx "${name}=unset" "$TMP/env-probe.log"
+    check "the gate scrubs $name before any step runs" $?
+  done
+fi
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then

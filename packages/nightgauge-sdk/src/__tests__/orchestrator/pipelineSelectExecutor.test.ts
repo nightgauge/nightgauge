@@ -165,6 +165,19 @@ function withBackend(): Partial<PipelineConfig> {
   };
 }
 
+// A pipeline stage exports NIGHTGAUGE_SKILL_DIR, and StageExecutor searches it
+// first, so a run from inside a stage read the real skill instead of the
+// fixture (#2524). Every test here runs without it.
+let prevSkillDir: string | undefined;
+beforeEach(() => {
+  prevSkillDir = process.env.NIGHTGAUGE_SKILL_DIR;
+  delete process.env.NIGHTGAUGE_SKILL_DIR;
+});
+afterEach(() => {
+  if (prevSkillDir === undefined) delete process.env.NIGHTGAUGE_SKILL_DIR;
+  else process.env.NIGHTGAUGE_SKILL_DIR = prevSkillDir;
+});
+
 describe("PipelineOrchestrator.selectExecutor", () => {
   let ws: { dir: string; cleanup: () => Promise<void> };
 

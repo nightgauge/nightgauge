@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`scripts/ci-local.sh` no longer fails on a clean `main` when a pipeline
+  stage runs it (#2524).** The gate passed its caller's environment to every
+  step, and an extension-hosted stage exports three variables CI never has:
+  `NIGHTGAUGE_HOST_CI` flipped the Go CI-auth tests, `NIGHTGAUGE_SKILL_DIR` made
+  a skill-selection test read the real skill, and `ELECTRON_RUN_AS_NODE` broke
+  the VS Code host smoke tests. The gate now unsets them before any step runs
+  (`--env-probe` reports the result), and the affected Go and TypeScript tests
+  clear them themselves, so a direct `go test` or `vitest` run is correct too.
 - **A failed issue with no open PR now ends in the status the revert names
   (#1496).** The scheduler's revert wrote `Ready` while the VS Code extension
   wrote `In review` in the same second, and when the extension landed last the
