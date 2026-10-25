@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +83,7 @@ func TestDiscoverCommands_WorkflowParsing(t *testing.T) {
 	}
 
 	workflowYAML := `
+on: pull_request
 jobs:
   build:
     steps:
@@ -190,6 +192,7 @@ func TestDiscoverCommands_BackslashContinuation(t *testing.T) {
 	}
 
 	workflowYAML := `
+on: [pull_request]
 jobs:
   integration:
     steps:
@@ -209,9 +212,10 @@ jobs:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// A multi-line block is returned whole (run through a shell), not as
+	// per-line fragments; the continuation is still joined.
 	want := []string{
-		"flutter test integration_test/sync_e2e --tags=e2e --dart-define=API_URL=http://localhost:8080",
-		"flutter analyze",
+		"flutter test integration_test/sync_e2e --tags=e2e --dart-define=API_URL=http://localhost:8080\nflutter analyze",
 	}
 	if len(result.Commands) != len(want) {
 		t.Fatalf("commands = %v, want %v", result.Commands, want)
@@ -440,6 +444,173 @@ func TestTokenizeCommand_UnterminatedQuote(t *testing.T) {
 	for _, in := range []string{`echo "unterminated`, `echo 'unterminated`, `prettier --write "a b`} {
 		if _, err := tokenizeCommand(in); err == nil {
 			t.Errorf("tokenizeCommand(%q) expected an unterminated-quote error, got nil", in)
+		}
+	}
+}
+
+func writeTestWorkflow(t *testing.T, dir, name, body string) {
+	t.Helper()
+	wfDir := filepath.Join(dir, ".github", "workflows")
+	if err := os.MkdirAll(wfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wfDir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDiscoverCommands_MultipleWorkflowsAndTriggers(t *testing.T) {
+	dir := t.TempDir()
+	writeTestWorkflow(t, dir, "ci.yml", "on: pull_request\njobs:\n  a:\n    steps:\n      - name: Build\n        run: go build ./...\n")
+	writeTestWorkflow(t, dir, "lint.yaml", "on:\n  merge_group:\n    types: [checks_requested]\njobs:\n  l:\n    steps:\n      - name: Prettier\n        run: npm run format:check\n")
+	writeTestWorkflow(t, dir, "release.yml", "on:\n  push:\n    tags: ['v*']\njobs:\n  r:\n    steps:\n      - name: Publish\n        run: npm publish\n")
+
+	result, err := DiscoverCommands(context.Background(), dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Check{
+		{Command: "go build ./...", Workflow: "ci.yml", Step: "Build"},
+		{Command: "npm run format:check", Workflow: "lint.yaml", Step: "Prettier"},
+	}
+	if len(result.Checks) != len(want) {
+		t.Fatalf("checks = %+v, want %+v", result.Checks, want)
+	}
+	for i := range want {
+		if result.Checks[i] != want[i] {
+			t.Errorf("checks[%d] = %+v, want %+v", i, result.Checks[i], want[i])
+		}
+	}
+	if len(result.WorkflowPaths) != 2 {
+		t.Errorf("workflow_paths = %v, want 2 entries", result.WorkflowPaths)
+	}
+}
+
+func TestDiscoverCommands_DropsRunnerSetup(t *testing.T) {
+	dir := t.TempDir()
+	writeTestWorkflow(t, dir, "ci.yml", `on: pull_request
+jobs:
+  a:
+    steps:
+      - run: git config --global user.name bot
+      - run: echo "X=1" >> "$GITHUB_ENV"
+      - run: echo "## s" >> "$GITHUB_STEP_SUMMARY"
+      - run: sudo apt-get install -y jq
+      - run: npx playwright install --with-deps
+      - run: go install example.com/tool@latest
+      - run: pip install -r requirements.txt
+      - run: echo "v=${{ github.sha }}"
+      - name: Mixed
+        run: |
+          echo ok
+          echo "y=1" >> "$GITHUB_OUTPUT"
+      - name: Real
+        run: npm run lint
+`)
+	result, err := DiscoverCommands(context.Background(), dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Commands) != 1 || result.Commands[0] != "npm run lint" {
+		t.Errorf("commands = %q, want only npm run lint", result.Commands)
+	}
+}
+
+func TestDiscoverCommands_CompoundBlockReturnedWhole(t *testing.T) {
+	dir := t.TempDir()
+	writeTestWorkflow(t, dir, "ci.yml", `on: pull_request
+jobs:
+  a:
+    steps:
+      - name: Gofmt
+        run: |
+          U="$(gofmt -l .)"
+          if [ -n "$U" ]; then
+            echo "$U"
+            exit 1
+          fi
+`)
+	result, err := DiscoverCommands(context.Background(), dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Checks) != 1 || !strings.HasPrefix(result.Checks[0].Command, "U=") ||
+		!strings.HasSuffix(result.Checks[0].Command, "\nfi") {
+		t.Fatalf("expected one whole block, got %q", result.Commands)
+	}
+}
+
+func TestRunShellCmd_MultiLineBlockUsesShell(t *testing.T) {
+	_, code, _ := runShellCmd(t.TempDir(), "X=1\nif [ \"$X\" = 1 ]; then exit 3; fi")
+	if code != 3 {
+		t.Errorf("exit code = %d, want 3", code)
+	}
+}
+
+func TestDiscoverCommands_DropsRunnerBoundEnvAndRunnerOnlyTools(t *testing.T) {
+	dir := t.TempDir()
+	writeTestWorkflow(t, dir, "ci.yml", `on: pull_request
+env:
+  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+jobs:
+  a:
+    env:
+      CHANGE_CLASS: ${{ needs.classify.outputs.class }}
+      LITERAL: bar
+    steps:
+      - name: Workflow-bound
+        run: bash scripts/boundary.sh "$BASE_SHA" HEAD
+      - name: Job-bound
+        run: bash scripts/ci-change-class.sh ${CHANGE_CLASS}
+      - name: Step-bound
+        env:
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+        run: test "$ANALYZE_RESULT" = success
+      - name: Step-bound, read by the script
+        env:
+          NG_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-change-class.sh
+      - name: Step literal env
+        env:
+          MODE: strict
+        run: npm run lint
+      - name: Literal env
+        run: echo "$LITERAL"
+      - name: Prefix name only
+        run: echo "$BASE_SHAX"
+      - name: Headless
+        run: xvfb-run --auto-servernum npm test
+      - name: Tags
+        run: git fetch --tags --force --quiet origin
+`)
+	result, err := DiscoverCommands(context.Background(), dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"npm run lint", `echo "$LITERAL"`, `echo "$BASE_SHAX"`}
+	if len(result.Commands) != len(want) {
+		t.Fatalf("commands = %q, want %q", result.Commands, want)
+	}
+	for i := range want {
+		if result.Commands[i] != want[i] {
+			t.Errorf("commands[%d] = %q, want %q", i, result.Commands[i], want[i])
+		}
+	}
+}
+
+func TestIsUnsafe_GitFetchPushWholeCommand(t *testing.T) {
+	cases := map[string]bool{
+		"git fetch origin main": true,
+		"git push":              true,
+		"git  fetch --depth=1":  true,
+		"git fetch-pack origin": false,
+		"git pushurl-check":     false,
+		"npm run lint":          false,
+		"xvfb-run -a npm test":  true,
+	}
+	for line, want := range cases {
+		if got := isUnsafe(line); got != want {
+			t.Errorf("isUnsafe(%q) = %v, want %v", line, got, want)
 		}
 	}
 }

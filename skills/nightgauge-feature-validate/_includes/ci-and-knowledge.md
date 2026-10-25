@@ -28,13 +28,18 @@ failing on first CI run and requiring pr-merge auto-fix cycles.
 
 ### Step 2.5.1: Discover CI Commands from Workflow
 
-Parse `.github/workflows/ci.yml` (or `ci.yaml`) to extract the commands CI
-actually runs. Fall back to standard commands if no workflow is found.
+Scan every workflow under `.github/workflows/` that runs on `pull_request` or
+`merge_group` (format and lint checks live in `lint.yml`, not `ci.yml`). The
+binary drops runner setup (`sudo`, `apt-get`, `$GITHUB_ENV`, installs, global git
+config) and returns a multi-line `run:` block whole. Fall back to standard
+commands if no workflow is found.
 
 ```bash
 CI_DISCOVER_RESULT=$(nightgauge ci discover-commands --json 2>/dev/null || \
-  echo '{"commands":[],"workflow_path":"","framework":"unknown","timestamp":""}')
-mapfile -t CI_PARITY_COMMANDS < <(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -r '.commands[]' 2>/dev/null)
+  echo '{"commands":[],"checks":[],"workflow_path":"","framework":"unknown","timestamp":""}')
+CI_PARITY_COMMANDS=()
+while IFS= read -r -d '' C; do CI_PARITY_COMMANDS+=("$C"); done \
+  < <(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -j '.commands[] | ., "\u0000"' 2>/dev/null)
 echo "CI parity commands discovered (${#CI_PARITY_COMMANDS[@]}): ${CI_PARITY_COMMANDS[*]}"
 ```
 
@@ -49,25 +54,54 @@ CI_PARITY_FAILED_OUTPUT=""
 CI_PARITY_MAX_ATTEMPTS=3
 CI_PARITY_ATTEMPT=0
 
+CI_PARITY_RAN=false
+CI_PARITY_RESULTS_JSON="[]"
+
+# Runs every discovered check and records one result per check, joined to
+# `.checks[]` for its workflow and step. Exit 127 means the tool is not
+# installed here (e.g. gitleaks): recorded as skipped with its reason, not as a
+# failure. The first real failure stops the run for the auto-fix loop.
 function run_ci_parity() {
+  CI_PARITY_RAN=true
+  CI_PARITY_RESULTS_JSON="[]"
   for CMD in "${CI_PARITY_COMMANDS[@]}"; do
     echo "Running: $CMD"
-    OUTPUT=$($CMD 2>&1)
+    # A command may be a multi-line block; run it through a shell, as CI does.
+    OUTPUT=$(bash -c "$CMD" 2>&1)
     EXIT_CODE=$?
-    if [ $EXIT_CODE -ne 0 ]; then
+    if [ $EXIT_CODE -eq 0 ]; then STATUS=passed; REASON=""
+    elif [ $EXIT_CODE -eq 127 ]; then STATUS=skipped; REASON="command not found"
+    else STATUS=failed; REASON=""
+    fi
+    CI_PARITY_RESULTS_JSON=$(printf '%s\n' "$CI_PARITY_RESULTS_JSON" | jq -c \
+      --arg cmd "$CMD" --arg status "$STATUS" --argjson exit_code "$EXIT_CODE" \
+      --arg reason "$REASON" --argjson checks "$(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -c '.checks // []')" \
+      '. + [($checks | map(select(.command == $cmd)) | first // {command: $cmd})
+            + {status: $status, exit_code: $exit_code}
+            + (if $reason != "" then {reason: $reason} else {} end)]')
+    if [ "$STATUS" = "failed" ]; then
       CI_PARITY_PASSED=false
       CI_PARITY_FAILED_CMD="$CMD"
       CI_PARITY_FAILED_OUTPUT="$OUTPUT"
       echo "✗ CI parity check failed: $CMD (exit $EXIT_CODE)"
       return 1
     fi
-    echo "✓ $CMD passed"
+    echo "${STATUS}: $CMD"
   done
   return 0
 }
 
-run_ci_parity
+if [ "${#CI_PARITY_COMMANDS[@]}" -eq 0 ]; then
+  # A skipped phase is never silent: record why.
+  SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "ci_parity_check", "reason": "no runnable CI commands discovered"}]')
+else
+  run_ci_parity
+fi
 ```
+
+`CI_PARITY_RAN`, `CI_PARITY_PASSED` and `CI_PARITY_RESULTS_JSON` (the last run's
+per-check results) are written to the validate context's `ci_parity` field by
+the writer in `context-and-board.md`.
 
 ### Step 2.5.3: Auto-Fix Loop (If Failures Detected)
 

@@ -250,7 +250,7 @@
       "evidence": "#1182 table row 2 — `reason` is genuinely absent and cannot be invented",
       "stage": "validate",
       "input": {
-        "schema_version": "2.6",
+        "schema_version": "2.7",
         "issue_number": 170,
         "skipped_phases": ["lint", "e2e", { "phase": "unit", "reason": "no tests" }]
       },
@@ -270,7 +270,7 @@
           }
         ],
         "doc": {
-          "schema_version": "2.6",
+          "schema_version": "2.7",
           "issue_number": 170,
           "skipped_phases": [{ "phase": "unit", "reason": "no tests" }]
         }
@@ -281,7 +281,7 @@
       "evidence": "#1182 table row 4 — reached the gate-metrics record behind a warning",
       "stage": "validate",
       "input": {
-        "schema_version": "2.6",
+        "schema_version": "2.7",
         "issue_number": 340,
         "gate_metrics": [
           { "name": "lint", "result": "passed" },
@@ -304,7 +304,7 @@
           }
         ],
         "doc": {
-          "schema_version": "2.6",
+          "schema_version": "2.7",
           "issue_number": 340,
           "gate_metrics": [{ "gate_name": "adversarial-review", "result": "fail" }]
         }
@@ -315,7 +315,7 @@
       "evidence": "#1182 table row 5",
       "stage": "validate",
       "input": {
-        "schema_version": "2.6",
+        "schema_version": "2.7",
         "issue_number": 232,
         "gate_metrics": [{ "result": "pass", "duration_ms": 12 }]
       },
@@ -330,7 +330,7 @@
           }
         ],
         "doc": {
-          "schema_version": "2.6",
+          "schema_version": "2.7",
           "issue_number": 232,
           "gate_metrics": []
         }
@@ -341,7 +341,7 @@
       "evidence": "#1182 — the deliverable enum was NARROWER than the record enum it feeds; that drift is the defect, not the emission",
       "stage": "validate",
       "input": {
-        "schema_version": "2.6",
+        "schema_version": "2.7",
         "issue_number": 233,
         "gate_metrics": [{ "gate_name": "judges", "result": "fail" }]
       },
@@ -361,7 +361,7 @@
             "rule": "any.schema_version.stamped"
           }
         ],
-        "doc": { "schema_version": "2.6", "issue_number": 234 }
+        "doc": { "schema_version": "2.7", "issue_number": 234 }
       }
     },
     {

@@ -115,7 +115,7 @@ describe("one policy, one consequence (#1182)", () => {
     {
       row: "validate-170 skipped_phases[i] expected object, got string",
       kind: "validate",
-      doc: { schema_version: "2.6", skipped_phases: ["lint"] },
+      doc: { schema_version: "2.7", skipped_phases: ["lint"] },
       verdict: "quarantined",
     },
     {
@@ -127,19 +127,19 @@ describe("one policy, one consequence (#1182)", () => {
     {
       row: "validate-340 gate_metrics[].gate_name undefined",
       kind: "validate",
-      doc: { schema_version: "2.6", gate_metrics: [{ name: "lint", result: "pass" }] },
+      doc: { schema_version: "2.7", gate_metrics: [{ name: "lint", result: "pass" }] },
       verdict: "quarantined",
     },
     {
       row: "validate-340 gate_metrics[].result invalid option",
       kind: "validate",
-      doc: { schema_version: "2.6", gate_metrics: [{ gate_name: "judges", result: "failed" }] },
+      doc: { schema_version: "2.7", gate_metrics: [{ gate_name: "judges", result: "failed" }] },
       verdict: "repaired",
     },
     {
       row: "validate-232 gate_metrics[0].gate_name undefined",
       kind: "validate",
-      doc: { schema_version: "2.6", gate_metrics: [{ result: "pass" }] },
+      doc: { schema_version: "2.7", gate_metrics: [{ result: "pass" }] },
       verdict: "quarantined",
     },
     {
@@ -206,7 +206,7 @@ describe("the policy output satisfies the schema it is repairing", () => {
 
   it("quarantines the nameless gate metric into something ValidateContextSchema accepts", () => {
     const out = applyDeliverablePolicy("validate", {
-      schema_version: "2.6",
+      schema_version: "2.7",
       issue_number: 232,
       validation_status: "passed",
       gate_metrics: [{ result: "pass" }, { gate_name: "lint", result: "pass" }],
@@ -217,7 +217,7 @@ describe("the policy output satisfies the schema it is repairing", () => {
 
   it("accepts a judge 'fail' — the deliverable enum and the record enum are one list", () => {
     const parsed = ValidateContextSchema.safeParse({
-      schema_version: "2.6",
+      schema_version: "2.7",
       issue_number: 233,
       validation_status: "passed",
       gate_metrics: [{ gate_name: "judges", result: "fail" }],

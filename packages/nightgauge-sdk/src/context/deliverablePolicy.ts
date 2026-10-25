@@ -80,7 +80,7 @@ export interface PolicyOutcome {
  */
 const CANONICAL_SCHEMA_VERSION: Record<string, string> = {
   dev: "1.9",
-  validate: "2.6",
+  validate: "2.7",
 };
 
 export function canonicalSchemaVersion(stage: string): string | undefined {

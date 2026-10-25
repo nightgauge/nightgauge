@@ -26,6 +26,7 @@ import { flexEnum, optionalString } from "./helpers.js";
  * - 2.4: Added verify_ui object for the browser-driven web UI verification gate (issue #4193)
  * - 2.5: Added passed_unverified status + unverified_deliverable block (issue #152)
  * - 2.6: Added inconclusive validation_status for zero-test unit-test runs (issue #221)
+ * - 2.7: Added ci_parity object with per-check CI parity results (issue #2503)
  *
  * @see docs/CONTEXT_ARCHITECTURE.md for field documentation
  */
@@ -84,6 +85,19 @@ const PreexistingFailureSchema = z.object({
 const SkippedPhaseSchema = z.object({
   phase: z.string().min(1),
   reason: z.string().min(1),
+});
+
+/**
+ * One CI parity check result (v2.7, Issue #2503). `workflow`/`step` name where
+ * the command came from; exit 127 (tool not installed) is `skipped`.
+ */
+const CiParityCheckSchema = z.object({
+  command: z.string().min(1),
+  workflow: z.string().nullish(),
+  step: z.string().nullish(),
+  status: flexEnum(["passed", "failed", "skipped"] as const),
+  exit_code: z.number().int().nullish(),
+  reason: optionalString(),
 });
 
 /**
@@ -347,6 +361,14 @@ export const ValidateContextSchema = z
     dead_code_warnings: z.array(DeadCodeWarningSchema).nullish(),
     preexisting_failures: z.array(PreexistingFailureSchema).nullish(),
     skipped_phases: z.array(SkippedPhaseSchema).nullish(),
+    /** CI parity phase results (v2.7, #2503); null when the phase never ran. */
+    ci_parity: z
+      .object({
+        ran: z.boolean(),
+        passed: coerceBool,
+        checks: z.array(CiParityCheckSchema),
+      })
+      .nullish(),
     /**
      * Evidence for a `passed_unverified` verdict (v2.5, #152).
      *

@@ -192,7 +192,7 @@ func topLevelField(path string) string {
 // that authors the deliverable, so bumping one without the other fails CI.
 var canonicalSchemaVersion = map[string]string{
 	"dev":      "1.9",
-	"validate": "2.6",
+	"validate": "2.7",
 }
 
 // CanonicalSchemaVersion returns the contract version for a stage deliverable
