@@ -22,7 +22,11 @@ type RulesetCheckResult struct {
 	// Omitting this distinction is what made a bypassable rule read as a hard
 	// block, and callers promote a hard block to a NON-RETRYABLE terminal
 	// failure — killing runs over a merge that would in fact have succeeded.
-	BypassedRules  []string `json:"bypassed_rules,omitempty"`
+	BypassedRules []string `json:"bypassed_rules,omitempty"`
+	// AdvisoryRules names rules that are configured on the base branch but
+	// never gate a merge (copilot_code_review requests a review; GitHub merges
+	// a CLEAN PR without it). They are never Blockers (#2539).
+	AdvisoryRules  []string `json:"advisory_rules,omitempty"`
 	BaseRef        string   `json:"base_ref"`
 	AllowedToMerge bool     `json:"allowed_to_merge"`
 	Message        string   `json:"message"`

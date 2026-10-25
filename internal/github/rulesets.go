@@ -5,23 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
-	"github.com/shurcooL/graphql"
 )
 
-// RulesetService detects and auto-satisfies GitHub branch rulesets.
+// RulesetService detects GitHub branch rulesets that gate a merge.
 type RulesetService struct {
-	client       *Client
-	pollInterval time.Duration
+	client *Client
 }
 
-// NewRulesetService creates a RulesetService with a 10-second poll interval.
+// NewRulesetService creates a RulesetService.
 func NewRulesetService(client *Client) *RulesetService {
-	return &RulesetService{client: client, pollInterval: 10 * time.Second}
+	return &RulesetService{client: client}
 }
 
 // RulesetCheckResult is an alias for the forge-agnostic ruleset precheck
@@ -172,10 +168,15 @@ func (s *RulesetService) CheckRulesets(ctx context.Context, owner, repo string, 
 
 	var candidates []candidateBlocker
 	detected := []string{}
+	var advisory []string
 	for _, rule := range rules {
 		switch rule.Type {
 		case "copilot_code_review":
-			candidates = append(candidates, candidateBlocker{"copilot_code_review", rule.RulesetID})
+			// A Copilot review rule REQUESTS a review; it never gates the
+			// merge — GitHub merges a CLEAN PR with the review still pending.
+			// Reporting it as a blocker made callers fail an all-green PR as a
+			// non-retryable configuration dead end (#2539).
+			advisory = append(advisory, "copilot_code_review")
 			detected = append(detected, "copilot_code_review")
 		case "pull_request":
 			if rule.Parameters != nil && rule.Parameters.RequiredApprovingReviewCount > 0 {
@@ -236,6 +237,9 @@ func (s *RulesetService) CheckRulesets(ctx context.Context, owner, repo string, 
 	if len(bypassed) > 0 {
 		msg += fmt.Sprintf(" Bypassed by the merging identity: %s.", strings.Join(bypassed, ", "))
 	}
+	if len(advisory) > 0 {
+		msg += fmt.Sprintf(" Advisory (does not gate merge): %s.", strings.Join(advisory, ", "))
+	}
 	if len(bypassErrs) > 0 {
 		msg += fmt.Sprintf(" NOTE: bypass undetermined for %s — treated as blocking.", strings.Join(bypassErrs, "; "))
 	}
@@ -244,6 +248,7 @@ func (s *RulesetService) CheckRulesets(ctx context.Context, owner, repo string, 
 		Blockers:       append([]string{}, blockers...),
 		DetectedRules:  detected,
 		BypassedRules:  bypassed,
+		AdvisoryRules:  advisory,
 		RequiredChecks: requiredChecks,
 		BaseRef:        baseRef,
 		AllowedToMerge: allowed,
@@ -255,141 +260,15 @@ func (s *RulesetService) CheckRulesets(ctx context.Context, owner, repo string, 
 // it successfully resolved. Caller is responsible for subtracting the resolved
 // list from any "remaining blockers" view it presents.
 //
-// For copilot_code_review: requests Copilot review and polls up to ctx
-// deadline; resolution = Copilot has reviewed.
-// For required_pull_request_reviews: emits an informational note and does NOT
-// add to the resolved list — human reviewer action is required.
+// No blocker is auto-resolvable today: required_pull_request_reviews needs a
+// human reviewer, so it emits an informational note and is NOT added to the
+// resolved list. copilot_code_review is advisory, never a blocker (#2539), so
+// it never reaches this function.
 func (s *RulesetService) SatisfyRulesets(ctx context.Context, owner, repo string, prNumber int, blockers []string) ([]string, error) {
-	if len(blockers) == 0 {
-		return nil, nil
-	}
-	prSvc := NewPRService(s.client)
-	pr, err := prSvc.GetPR(ctx, owner, repo, prNumber)
-	if err != nil {
-		return nil, fmt.Errorf("fetch PR for auto-satisfy: %w", err)
-	}
-
-	var resolved []string
 	for _, blocker := range blockers {
-		switch blocker {
-		case "copilot_code_review":
-			if err := s.requestCopilotReview(ctx, pr.NodeID); err != nil {
-				return resolved, fmt.Errorf("request Copilot review: %w", err)
-			}
-			if err := s.pollForCopilotReview(ctx, owner, repo, prNumber); err != nil {
-				return resolved, err
-			}
-			resolved = append(resolved, "copilot_code_review")
-		case "required_pull_request_reviews":
+		if blocker == "required_pull_request_reviews" {
 			fmt.Printf("Required reviewers enforced by branch ruleset. Ensure required reviewers have approved before merge proceeds.\n")
 		}
 	}
-	return resolved, nil
-}
-
-// requestCopilotReview adds "Copilot" as a review requester on the PR (idempotent).
-func (s *RulesetService) requestCopilotReview(ctx context.Context, prNodeID string) error {
-	var m requestReviewsMutation
-	input := map[string]interface{}{
-		"input": requestReviewsInput{
-			PullRequestID: graphql.ID(prNodeID),
-			UserLogins:    []graphql.String{"Copilot"},
-		},
-	}
-	if err := s.client.mutate(ctx, &m, input); err != nil {
-		return err
-	}
-	return nil
-}
-
-// pollForCopilotReview polls until Copilot leaves a review or ctx expires.
-func (s *RulesetService) pollForCopilotReview(ctx context.Context, owner, repo string, prNumber int) error {
-	for {
-		reviewed, err := s.hasCopilotReviewed(ctx, owner, repo, prNumber)
-		if err != nil {
-			return fmt.Errorf("poll for Copilot review: %w", err)
-		}
-		if reviewed {
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timed out waiting for Copilot review on PR #%d", prNumber)
-		case <-time.After(s.pollInterval):
-		}
-	}
-}
-
-// copilotReviewPageSize is how many reviews one readiness probe reads.
-//
-// 100 is GitHub's per_page maximum, and asking for all of it is the point.
-// The GraphQL predecessor selected `reviews(first: 10)`, which is a
-// correctness bound rather than a cost one: on a PR that already carries ten
-// human reviews, Copilot's is the eleventh and the probe can never see it — so
-// pollForCopilotReview spins until its context expires and reports a timeout
-// for a review that exists. REST costs the same one request whether it returns
-// one review or a hundred.
-const copilotReviewPageSize = 100
-
-// prReview is the slice of `GET /repos/{owner}/{repo}/pulls/{n}/reviews` this
-// probe reads. Only the author's login is consulted.
-type prReview struct {
-	User struct {
-		Login string `json:"login"`
-	} `json:"user"`
-}
-
-// hasCopilotReviewed reports whether Copilot has submitted a review on the PR.
-//
-// REST, deliberately (#849). This is a POLLED read — pollForCopilotReview
-// calls it every pollInterval until Copilot answers or the context expires —
-// and it is the shape where the transport choice matters most. A GraphQL POST
-// is unconditional: every poll of an unchanged PR costs another point on the
-// bucket this repo actually exhausts. The REST collection answers with a
-// strong ETag, so the client's conditional-GET layer (#486) turns every poll
-// after the first into a 304, which GitHub does not bill at all. A wait that
-// costs one request instead of one per tick is the shape #849 AC 2 exists to
-// find, and the saving grows with how long Copilot takes.
-//
-// A non-2xx is an error rather than "not reviewed". The caller polls on false,
-// so swallowing a 403 or a 404 here would spin silently until the deadline and
-// then report a timeout — attributing a permission problem to Copilot.
-func (s *RulesetService) hasCopilotReviewed(ctx context.Context, owner, repo string, prNumber int) (bool, error) {
-	if prNumber <= 0 {
-		return false, fmt.Errorf("copilot review check: pull request number must be positive, got %d", prNumber)
-	}
-	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=%d",
-		url.PathEscape(owner), url.PathEscape(repo), prNumber, copilotReviewPageSize)
-	body, status, err := s.client.restDoStatus(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return false, fmt.Errorf("copilot review check for %s/%s#%d: %w", owner, repo, prNumber, err)
-	}
-	if status < 200 || status >= 300 {
-		return false, fmt.Errorf("copilot review check for %s/%s#%d: REST %d: %s",
-			owner, repo, prNumber, status, restErrorSummary(body))
-	}
-	var reviews []prReview
-	if err := json.Unmarshal(body, &reviews); err != nil {
-		return false, fmt.Errorf("copilot review check for %s/%s#%d: decode reviews: %w", owner, repo, prNumber, err)
-	}
-	for _, review := range reviews {
-		if strings.EqualFold(review.User.Login, "copilot") {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// --- GraphQL types for RulesetService ---
-
-type requestReviewsInput struct {
-	PullRequestID graphql.ID       `json:"pullRequestId"`
-	UserLogins    []graphql.String `json:"userLogins"`
-}
-
-type requestReviewsMutation struct {
-	RequestReviews struct {
-		ClientMutationID *graphql.String
-	} `graphql:"requestReviews(input: $input)"`
+	return nil, nil
 }

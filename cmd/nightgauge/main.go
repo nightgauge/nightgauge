@@ -7704,7 +7704,7 @@ func prRulesetPrecheckCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ruleset-precheck <pr-number>",
 		Short: "Detect and auto-satisfy branch rulesets blocking merge",
-		Long:  "Detects GitHub branch rulesets that would block a PR merge. Optionally auto-satisfies known blockers (e.g., requesting Copilot review).",
+		Long:  "Detects GitHub branch rulesets that would block a PR merge. Advisory rules such as copilot_code_review are reported under advisory_rules and never block.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prNumber, err := strconv.Atoi(args[0])

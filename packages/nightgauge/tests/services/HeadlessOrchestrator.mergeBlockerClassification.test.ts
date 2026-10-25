@@ -4,7 +4,8 @@
  * Tests for the #185 repo-config retry gate:
  * - classifyMergeBlockerRetryability(): non-retryable on a failing
  *   required-check config mismatch or unresolved ruleset blockers
- *   (via `pr ruleset-precheck --json`), retryable on clean output,
+ *   (via `pr ruleset-precheck --json`) confirmed by the live PR state
+ *   (#2539: a CLEAN or still-running PR stays retryable), retryable on clean output,
  *   and fail-open (retryable) when the binary is unavailable.
  * - writePrMergeRetryFeedback(): merges a PR_MERGE_RETRY signal into
  *   feedback-{N}.json (severity "warning" so the Go RetryEngine's
@@ -23,8 +24,9 @@ import type { Logger } from "../../src/utils/logger";
 import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mutable stub state shared with the hoisted child_process factory.
-const { precheckResponse, binaryPath } = vi.hoisted(() => ({
+const { precheckResponse, prViewResponse, binaryPath } = vi.hoisted(() => ({
   precheckResponse: { value: "" as string },
+  prViewResponse: { value: "" as string },
   binaryPath: { value: "/fake/nightgauge" as string | null },
 }));
 
@@ -45,6 +47,13 @@ vi.mock("child_process", async () => {
         return Promise.reject(new Error("precheck exploded"));
       }
       return Promise.resolve({ stdout: precheckResponse.value, stderr: "" });
+    }
+    // fetchLiveMergeSnapshot's `gh pr view` read (#2539).
+    if (cmd === "gh" && args?.[0] === "pr" && args?.[1] === "view") {
+      if (prViewResponse.value === "ERROR") {
+        return Promise.reject(new Error("gh pr view exploded"));
+      }
+      return Promise.resolve({ stdout: prViewResponse.value, stderr: "" });
     }
     // resolveRunRepoSlug's `gh repo view` probe.
     return Promise.resolve({ stdout: "test-owner/test-repo", stderr: "" });
@@ -78,6 +87,7 @@ describe("HeadlessOrchestrator #185 merge-blocker retry gate", () => {
     orchestrator.setWorktreeOverride(tmpDir);
     binaryPath.value = "/fake/nightgauge";
     precheckResponse.value = "";
+    prViewResponse.value = "";
   });
 
   afterEach(() => {
@@ -90,6 +100,19 @@ describe("HeadlessOrchestrator #185 merge-blocker retry gate", () => {
       path.join(pipelineDir, `pr-${issueNumber}.json`),
       JSON.stringify(prNumber ? { pr_number: prNumber } : {})
     );
+  }
+
+  function livePr(
+    mergeStateStatus: string,
+    checks: Array<{ name: string; conclusion: string | null }>
+  ): string {
+    return JSON.stringify({
+      state: "OPEN",
+      mergeable: "MERGEABLE",
+      mergeStateStatus,
+      reviewDecision: "",
+      statusCheckRollup: checks,
+    });
   }
 
   async function classify(issueNumber: number) {
@@ -125,10 +148,75 @@ describe("HeadlessOrchestrator #185 merge-blocker retry gate", () => {
         blockers: ["required-check-config-mismatch:Sentry Smoke (integration)"],
         allowed_to_merge: false,
       });
+      prViewResponse.value = livePr("BLOCKED", [{ name: "build", conclusion: "SUCCESS" }]);
 
       const result = await classify(233);
       expect(result.retryable).toBe(false);
       expect(result.reason).toContain("required-check-config-mismatch");
+      expect(result.reason).toContain("mergeStateStatus=BLOCKED");
+    });
+
+    // #2539: the precheck's static ruleset read is not ground truth. A CLEAN,
+    // all-green PR must not be failed as a non-retryable config dead end on a
+    // copilot_code_review "blocker" that never gates the merge.
+    it("is retryable when the precheck blocks but the live PR is CLEAN (#2539)", async () => {
+      writePrContext(2539, 1666);
+      precheckResponse.value = JSON.stringify({
+        blockers: ["copilot_code_review"],
+        allowed_to_merge: false,
+      });
+      prViewResponse.value = livePr("CLEAN", [
+        { name: "build", conclusion: "SUCCESS" },
+        { name: "test", conclusion: "SUCCESS" },
+      ]);
+
+      const result = await classify(2539);
+      expect(result.retryable).toBe(true);
+      expect(result.reason).toContain("CLEAN");
+    });
+
+    it("is retryable when a check is still running", async () => {
+      writePrContext(233, 276);
+      precheckResponse.value = JSON.stringify({
+        blockers: ["copilot_code_review"],
+        allowed_to_merge: false,
+      });
+      prViewResponse.value = livePr("BLOCKED", [
+        { name: "build", conclusion: "SUCCESS" },
+        { name: "e2e", conclusion: null },
+      ]);
+
+      const result = await classify(233);
+      expect(result.retryable).toBe(true);
+    });
+
+    it("is non-retryable naming the failing check", async () => {
+      writePrContext(233, 276);
+      precheckResponse.value = JSON.stringify({
+        blockers: ["copilot_code_review"],
+        allowed_to_merge: false,
+      });
+      prViewResponse.value = livePr("BLOCKED", [
+        { name: "build", conclusion: "SUCCESS" },
+        { name: "lint", conclusion: "FAILURE" },
+      ]);
+
+      const result = await classify(233);
+      expect(result.retryable).toBe(false);
+      expect(result.reason).toContain('"lint"');
+    });
+
+    it("keeps the precheck verdict (non-retryable) when the live read fails", async () => {
+      writePrContext(233, 276);
+      precheckResponse.value = JSON.stringify({
+        blockers: ["required_pull_request_reviews"],
+        allowed_to_merge: false,
+      });
+      prViewResponse.value = "ERROR";
+
+      const result = await classify(233);
+      expect(result.retryable).toBe(false);
+      expect(result.reason).toContain("required_pull_request_reviews");
     });
 
     it("is retryable when the precheck reports no blockers", async () => {
