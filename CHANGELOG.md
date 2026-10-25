@@ -123,9 +123,9 @@ changelog, and the release workflow refuses a tag that does not.
   (#2528).
 
 - **The VS Code extension's board status writes work without hand-copied field
-  IDs (#1501).** The extension resolves the board with `nightgauge project
-  resolve --repo` and reads the Status field and its options from the board,
-  the same way the scheduler does, caching the result per workspace and
+  IDs (#1501).** The extension resolves the board with
+  `nightgauge project resolve --repo` and reads the Status field and its
+  options from the board, the same way the scheduler does, caching the result per workspace and
   repository. `project.fields` in `config.yaml` is no longer read by the
   extension, and the "No project configuration found" failure is gone. A
   status write that still fails raises a `board-status-write-failed` Action
