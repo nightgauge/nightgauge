@@ -5217,6 +5217,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    *
    * @see Issue #1531 — a re-dispatched issue with an open PR re-ran the whole
    *   pipeline because a fresh slot's state had no memory of pr-create.
+   * @see Issue #2550 — pr-create must be begun before it is completed, or Go
+   *   drops the completion and pr-create runs anyway.
    */
   private async resumeAtPrMerge(issueNumber: number): Promise<boolean> {
     if (!this.stateService) return false;
@@ -5287,7 +5289,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
     }
 
+    // Begin pr-create before completing it: the Go notify handler books a
+    // completion only for the stage that has begun (#2536), so an unbegun
+    // completion is dropped and the stage loop then runs pr-create (#2550).
     try {
+      await this.stateService.startStage("pr-create");
       await this.stateService.completeStage("pr-create");
     } catch (err) {
       this.logger.warn("Resume-at-pr-merge: could not mark pr-create complete", { err });

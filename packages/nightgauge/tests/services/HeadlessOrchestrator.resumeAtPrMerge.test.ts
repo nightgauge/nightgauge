@@ -78,6 +78,7 @@ function freshState(issueNumber: number) {
 function createMockStateService(state: unknown): PipelineStateService {
   return {
     getState: vi.fn().mockResolvedValue(state),
+    startStage: vi.fn().mockResolvedValue(undefined),
     completeStage: vi.fn().mockResolvedValue(undefined),
     skipStage: vi.fn().mockResolvedValue(undefined),
     setMeta: vi.fn(),
@@ -86,6 +87,46 @@ function createMockStateService(state: unknown): PipelineStateService {
     onStateChanged: vi.fn().mockReturnValue({ dispose: vi.fn() }),
   } as unknown as PipelineStateService;
 }
+
+/**
+ * A state service that books stage transitions the way the Go notify handler
+ * does (`internal/ipc/server.go`): `complete` is recorded only for the stage
+ * that has begun (#2536); a completion for any other stage is dropped.
+ * `skipped` has no such guard.
+ */
+function createGoFaithfulStateService(issueNumber: number) {
+  const stages: Record<string, { status: string }> = {};
+  let current = "";
+  const service = {
+    getState: vi.fn(async () => ({ ...freshState(issueNumber), stages: { ...stages } })),
+    startStage: vi.fn(async (stage: string) => {
+      current = stage;
+      stages[stage] = { status: "running" };
+    }),
+    completeStage: vi.fn(async (stage: string) => {
+      if (current !== stage) return;
+      stages[stage] = { status: "complete" };
+    }),
+    skipStage: vi.fn(async (stage: string) => {
+      stages[stage] = { status: "skipped" };
+    }),
+    setMeta: vi.fn(),
+    getRunId: vi.fn().mockReturnValue(null),
+    getRunRepo: vi.fn().mockReturnValue(""),
+    onStateChanged: vi.fn().mockReturnValue({ dispose: vi.fn() }),
+  };
+  return { service: service as unknown as PipelineStateService, stages };
+}
+
+const STAGE_ORDER = [
+  "issue-pickup",
+  "feature-planning",
+  "feature-dev",
+  "feature-validate",
+  "pr-create",
+  "pr-merge",
+  "pipeline-finish",
+];
 
 const PR_CONTEXT_SUFFIX = "pr-1431.json";
 
@@ -147,6 +188,7 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
     }
     // pr-create is complete, not skipped — its deliverable really exists, and
     // pr-merge's pre-condition check needs it to point at pr-{N}.json.
+    expect(mockState.startStage).toHaveBeenCalledWith("pr-create");
     expect(mockState.completeStage).toHaveBeenCalledWith("pr-create");
     expect(mockState.skipStage).not.toHaveBeenCalledWith("pr-create", expect.anything());
     // pr-merge itself is never pre-empted.
@@ -283,6 +325,85 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
       stubRestore(orchestrator, null);
       await detect(orchestrator, 1431);
       expect(mockState.skipStage).not.toHaveBeenCalled();
+    });
+
+    describe("against Go's stage-booking guard (Issue #2550)", () => {
+      const restoredPr = {
+        schema_version: "1.0",
+        issue_number: 1501,
+        pr_number: 2526,
+        pr_url: "https://github.com/acme/acme-core/pull/2526",
+        branch: "feat/1501-example",
+        base_branch: "main",
+        title: "feat(#1501): example",
+        status: "open",
+        created_at: "2026-10-25T22:38:56Z",
+      };
+
+      function makeGoFaithful() {
+        const { service, stages } = createGoFaithfulStateService(1501);
+        const orchestrator = new HeadlessOrchestrator(service, logger, { contextFileWaitMs: 0 });
+        return { orchestrator, service, stages };
+      }
+
+      function firstPending(stages: Record<string, { status: string }>) {
+        return STAGE_ORDER.find(
+          (s) => stages[s]?.status !== "complete" && stages[s]?.status !== "skipped"
+        );
+      }
+
+      it("starts at pr-merge with neither pr-{N}.json nor validate-{N}.json on disk", async () => {
+        withPrContext(null);
+        const { orchestrator, stages } = makeGoFaithful();
+        orchestrator.setDispatchedOpenPr(2526);
+        stubRestore(orchestrator, restoredPr);
+        await detect(orchestrator, 1431);
+
+        for (const s of ["issue-pickup", "feature-planning", "feature-dev", "feature-validate"]) {
+          expect(stages[s]?.status).toBe("skipped");
+        }
+        expect(stages["pr-create"]?.status).toBe("complete");
+        expect(firstPending(stages)).toBe("pr-merge");
+
+        // pr-merge's prerequisite resolves to the restored pr-{N}.json, not to
+        // the validate-{N}.json that is not on disk.
+        const precondition = (
+          orchestrator as unknown as {
+            validateStagePreconditions(s: string, n: number, skipped: string[]): Error | null;
+          }
+        ).validateStagePreconditions("pr-merge", 1431, [
+          "issue-pickup",
+          "feature-planning",
+          "feature-dev",
+          "feature-validate",
+        ]);
+        expect(precondition).toBeNull();
+      });
+
+      it("begins pr-create before completing it", async () => {
+        withPrContext(null);
+        const { orchestrator, service } = makeGoFaithful();
+        orchestrator.setDispatchedOpenPr(2526);
+        stubRestore(orchestrator, restoredPr);
+        await detect(orchestrator, 1431);
+
+        const start = vi.mocked(service.startStage).mock.invocationCallOrder[0];
+        const complete = vi.mocked(service.completeStage).mock.invocationCallOrder[0];
+        expect(start).toBeDefined();
+        expect(complete).toBeDefined();
+        expect(start).toBeLessThan(complete);
+      });
+
+      it("starts at issue-pickup when there is no open PR", async () => {
+        withPrContext(null);
+        const { orchestrator, service, stages } = makeGoFaithful();
+        await detect(orchestrator, 1431);
+
+        expect(service.startStage).not.toHaveBeenCalled();
+        expect(service.skipStage).not.toHaveBeenCalled();
+        expect(service.completeStage).not.toHaveBeenCalled();
+        expect(firstPending(stages)).toBe("issue-pickup");
+      });
     });
   });
 });
