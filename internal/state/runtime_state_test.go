@@ -1119,3 +1119,45 @@ func TestHasCompletedStage_SurvivesARedispatch(t *testing.T) {
 		t.Error("HasCompletedStage answers yes for a stage the run never ran")
 	}
 }
+
+// #2536: a completion with no stage begun must book nothing. Before the guard
+// it booked Stage "" with Duration time.Since(time.Time{}) — MaxInt64.
+func TestCompleteStageWithNoStageBegunBooksNothing(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 2536, "item-1", testRunID())
+
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "claude-haiku-4-5-20251001", "")
+	rs.CompleteStageWithCost(0, 1000, 500, 0, 2.5)
+
+	if n := len(rs.CompletedStages); n != 0 {
+		t.Fatalf("CompletedStages = %d entries (%+v), want 0", n, rs.CompletedStages)
+	}
+	if rs.TotalCostUSD != 0 {
+		t.Errorf("TotalCostUSD = %v, want 0", rs.TotalCostUSD)
+	}
+}
+
+func TestCompleteStageWithZeroStageStartBooksNothing(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 2536, "item-1", testRunID())
+	rs.Stage = StageFeatureDev // named, but never stamped by BeginStage
+	rs.StageStart = time.Time{}
+
+	rs.CompleteStageWithCost(0, 1000, 500, 0, 2.5)
+
+	if n := len(rs.CompletedStages); n != 0 {
+		t.Fatalf("CompletedStages = %d entries (%+v), want 0", n, rs.CompletedStages)
+	}
+	if rs.TotalCostUSD != 0 {
+		t.Errorf("TotalCostUSD = %v, want 0", rs.TotalCostUSD)
+	}
+}
+
+func TestCurrentStageReportsBegunStage(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 2536, "item-1", testRunID())
+	if got := rs.CurrentStage(); got != "" {
+		t.Errorf("CurrentStage() before BeginStage = %q, want empty", got)
+	}
+	rs.BeginStage(StageFeatureDev)
+	if got := rs.CurrentStage(); got != StageFeatureDev {
+		t.Errorf("CurrentStage() = %q, want %q", got, StageFeatureDev)
+	}
+}

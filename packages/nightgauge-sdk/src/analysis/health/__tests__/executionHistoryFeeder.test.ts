@@ -10,7 +10,11 @@
 
 import { describe, expect, it } from "vitest";
 import { TokenEfficiencyAnalyzer } from "../../TokenEfficiencyAnalyzer.js";
-import { flattenRunRecords, type HistoryRunRecordInput } from "../executionHistoryFeeder.js";
+import {
+  flattenRunRecords,
+  MAX_PLAUSIBLE_STAGE_DURATION_MS,
+  type HistoryRunRecordInput,
+} from "../executionHistoryFeeder.js";
 
 function runRecord(issueNumber: number, utilization?: number): HistoryRunRecordInput {
   return {
@@ -110,5 +114,51 @@ describe("flattenRunRecords — near-window pattern (#2017)", () => {
     expect(analysis.summary.categorySummary["context-window-utilization"].totalWastedTokens).toBe(
       0
     );
+  });
+});
+
+describe("flattenRunRecords — corrupt stage rows (#2536)", () => {
+  function withStage(name: string, durationMs: number): HistoryRunRecordInput {
+    return {
+      record_type: "run",
+      issue_number: 2536,
+      started_at: "2026-10-25T00:00:00Z",
+      stages: {
+        "feature-dev": { status: "complete", duration_ms: 60_000 },
+        [name]: { status: "complete", duration_ms: durationMs },
+      },
+    };
+  }
+
+  it("drops an empty stage key", () => {
+    const records = flattenRunRecords([withStage("", 1_000)]);
+    expect(records.map((r) => r.stage)).toEqual(["feature-dev"]);
+  });
+
+  it("drops a negative duration", () => {
+    const records = flattenRunRecords([withStage("feature-planning", -1)]);
+    expect(records.map((r) => r.stage)).toEqual(["feature-dev"]);
+  });
+
+  it("drops a saturated MaxInt64 duration (ns booked as ms)", () => {
+    const records = flattenRunRecords([withStage("feature-planning", 9_223_372_036_854)]);
+    expect(records.map((r) => r.stage)).toEqual(["feature-dev"]);
+  });
+
+  it("keeps a duration at the plausibility ceiling", () => {
+    const records = flattenRunRecords([
+      withStage("feature-planning", MAX_PLAUSIBLE_STAGE_DURATION_MS),
+    ]);
+    expect(records.map((r) => r.stage)).toEqual(["feature-dev", "feature-planning"]);
+  });
+
+  it("never yields an empty-named stage from a polluted history", () => {
+    const records = flattenRunRecords([
+      withStage("", 9_223_372_036_854),
+      runRecord(1),
+      withStage("pr-create", 30_000),
+    ]);
+    expect(records.some((r) => r.stage.trim() === "")).toBe(false);
+    expect(records.length).toBe(4);
   });
 });

@@ -1174,15 +1174,18 @@ func TestOneCallMintedRunCannotCorroborateARaise(t *testing.T) {
 		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "complete",
 		CostUsd: 1_000_000, RunID: forgedRun,
 	})
-	// The runtime EXISTS and carries the forged total — the bookkeeping verb is
-	// as writable as it ever was (ADR-015 §N: pre-existing, #370's to close).
-	// What changed is that it no longer corroborates anything.
+	// The runtime EXISTS, but since #2536 a "complete" for a stage that never
+	// began books nothing, so the forged total never lands. The chain below
+	// must still hold: the card goes up, carries no remedy, writes no override.
 	s.runtimesMu.Lock()
 	minted, ok := s.activeRuntimes[forgedRun]
 	s.runtimesMu.Unlock()
-	if !ok || minted.rs.Snapshot().TotalCostUSD != 1_000_000 {
-		t.Fatal("precondition: one notify call should still mint a runtime with the forged total — " +
+	if !ok {
+		t.Fatal("precondition: one notify call should still mint a runtime — " +
 			"if it no longer does, this test is no longer exercising the round-3 chain")
+	}
+	if got := minted.rs.Snapshot().TotalCostUSD; got != 0 {
+		t.Errorf("a complete with no stage begun booked $%v; want nothing booked (#2536)", got)
 	}
 	if spend, corroborated := s.recordedRunSpendUSD(repo, issue); corroborated {
 		t.Errorf("a runtime minted by ONE terminal transition corroborated $%v — no stage ever began", spend)
