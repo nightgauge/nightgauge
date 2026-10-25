@@ -27,6 +27,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The VS Code extension README now tells you to run **Nightgauge: Run Doctor**
+  to check your prerequisites; it named the removed Adapter Doctor command
+  (#2099).
+
 - The autonomous scheduler now dispatches a Ready issue whose open PR is only
   behind its base branch (green, strict up-to-date policy); the run resumes at
   pr-merge, which rebases it. Previously the issue stalled in Ready. A behind PR

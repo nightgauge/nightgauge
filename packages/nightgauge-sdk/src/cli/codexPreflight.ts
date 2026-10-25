@@ -137,8 +137,8 @@ async function runCommand(
  * `validateAuth() resolves to passed without a runner` contract). Each spawn is
  * bounded by a SIGTERM timeout so a hung CLI cannot leak a child process.
  *
- * @see Issue #4031 — the Adapter Doctor and the pipeline auth gate inject this
- *   so CLI-adapter auth status is actually probed rather than silently passed.
+ * The pipeline-start auth gate injects this so CLI-adapter auth status is
+ * actually probed rather than silently passed.
  */
 export function createDefaultPreflightRunner(timeoutMs = 10_000): PreflightCommandRunner {
   return (command, args, cwd) => runCommand(command, args, cwd, timeoutMs);

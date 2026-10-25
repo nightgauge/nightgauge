@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- The README now tells you to run **Nightgauge: Run Doctor** to check your
+  prerequisites; it named the removed **Nightgauge: Adapter Doctor** command
+  (#2099).
+
 - **A re-dispatched issue with an open PR resumes at pr-merge even after its
   worktree is gone (#2541).** The autonomous scan already lists each repo's
   open PRs; it now carries a dispatchable issue's open, unblocked PR number
