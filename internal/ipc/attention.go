@@ -336,6 +336,8 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		if s.autonomousScheduler == nil {
 			return fmt.Errorf("autonomous scheduler not configured")
 		}
+		// Runs under the store lock; NotifyComplete takes as.mu (lock order
+		// store → as.mu, #2528) and dispatches its attention I/O off-lock.
 		s.autonomousScheduler.NotifyComplete(repo, issue, true, false, "", "")
 		if argString(opt.Args, "then") == "issue.close" {
 			if err := s.closeIssueBestEffort(ctx, owner, name, issue); err != nil {

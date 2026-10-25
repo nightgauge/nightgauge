@@ -359,6 +359,26 @@ func (as *AutonomousScheduler) raiseOwnerActionHandoff(repo string, issue int, t
 	})
 }
 
+// dispatchAttention runs fn — attention-store I/O started from scheduler
+// state — on a tracked background goroutine, never on the caller's.
+//
+// LOCK ORDER (#2528): attention store lock → as.mu. Store.Resolve holds the
+// store lock while it runs an option's verb, and verbs such as
+// autonomous.complete call into the scheduler and take as.mu. Code holding
+// as.mu therefore must not raise, retract or list attention cards inline:
+// on the mark-done path that re-entered the store lock on the goroutine that
+// already held it and wedged the daemon. This helper is the single
+// enforcement point for every attention call made while as.mu is held.
+//
+// Dispatched ops run unordered relative to each other; callers must not
+// dispatch a raise and a retract for the same idempotency key in one pass.
+func (as *AutonomousScheduler) dispatchAttention(fn func()) {
+	if as == nil || as.attention == nil {
+		return
+	}
+	as.goTracked(func(context.Context) { fn() })
+}
+
 // --- Producer 3: cascade pause (fleet-scoped) --------------------------------
 
 // raiseCascadePause surfaces the cascading-failure circuit-breaker trip. The

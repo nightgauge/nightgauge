@@ -31,6 +31,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Resolving an attention card with **Mark done** no longer hangs the daemon. The scheduler
+  used to re-enter the attention store while it held its own lock, so the card never resolved
+  and autonomous dispatch stopped. Scheduler-held attention updates now run in the background
+  (#2528).
+
 - **`scripts/ci-local.sh` no longer fails on a clean `main` when a pipeline
   stage runs it (#2524).** The gate passed its caller's environment to every
   step, and an extension-hosted stage exports three variables CI never has:
