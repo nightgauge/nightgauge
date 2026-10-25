@@ -53,7 +53,7 @@ a new mechanism, add it to this table before implementing.
 | Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `<checkout>/analysis/`                  | Active                   |
 | Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `<checkout>/health/`                    | Active                   |
 | Learning Effectiveness Dimension    | EXTERNAL    | No (measures learning system health)      | `<checkout>/health/`                    | Active                   |
-| Gate Metrics                        | EXTERNAL    | No (observability)                        | `<checkout>/health/gate-metrics.jsonl`  | Active                   |
+| Gate Metrics                        | EXTERNAL    | No (observability)                        | `<clone>/logs/gate-metrics.jsonl`       | Active                   |
 | Skill Effectiveness Tracking        | EXTERNAL    | No (before/after comparison)              | `.nightgauge/skill-effectiveness.jsonl` | Active                   |
 | Skill Drift Dashboard Dimension     | EXTERNAL    | No (read-only display)                    | `<checkout>/health/`                    | Active                   |
 | Skill Drift Auto-Issue Creation     | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                           | Active (config-gated)    |

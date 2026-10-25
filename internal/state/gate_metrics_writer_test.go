@@ -3,8 +3,11 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
@@ -66,6 +69,9 @@ func TestAppendGateMetric_WritesCheckoutNotWorkingTree(t *testing.T) {
 	if _, err := os.Stat(layouttest.CheckoutPath(t, ws, GateMetricsName)); err != nil {
 		t.Fatalf("gate-metrics.jsonl not in CHECKOUT: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(layouttest.LogsDir(t, ws), GateMetricsHistoryName)); err != nil {
+		t.Fatalf("gate-metrics.jsonl not in CLONE logs: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(ws, ".nightgauge")); !os.IsNotExist(err) {
 		t.Fatalf("AppendGateMetric wrote into the working tree (stat err %v)", err)
 	}
@@ -76,5 +82,40 @@ func TestAppendGateMetric_WritesCheckoutNotWorkingTree(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(plain, ".nightgauge")); !os.IsNotExist(err) {
 		t.Fatalf("AppendGateMetric outside a git checkout wrote into it (stat err %v)", err)
+	}
+}
+
+// A record written from a linked pipeline worktree must survive the
+// worktree's removal in the clone's cross-run history, while the in-run gate
+// input stays per-checkout so the main checkout never sees it (#2535).
+func TestAppendGateMetric_LinkedWorktreeRecordSurvivesRemoval(t *testing.T) {
+	repo := layouttest.Repo(t)
+	gittest.Run(t, repo, "commit", "-q", "--allow-empty", "-m", "init")
+	linked := filepath.Join(t.TempDir(), "wt")
+	gittest.Run(t, repo, "worktree", "add", "-q", "--detach", linked)
+
+	if err := AppendGateMetric(linked, 42, "adversarial-review", "catch", "x", "2026-10-25T00:00:00Z"); err != nil {
+		t.Fatalf("append from worktree: %v", err)
+	}
+	gittest.Run(t, repo, "worktree", "remove", "--force", linked)
+
+	history, err := layout.ClassFilePath(repo, layout.ClassLogs, GateMetricsHistoryName)
+	if err != nil {
+		t.Fatalf("history path: %v", err)
+	}
+	data, err := os.ReadFile(history)
+	if err != nil {
+		t.Fatalf("history not readable from main after worktree removal: %v", err)
+	}
+	if !strings.Contains(string(data), `"gate_name":"adversarial-review"`) || !strings.Contains(string(data), `"issue_number":42`) {
+		t.Fatalf("history missing the worktree's record: %s", data)
+	}
+
+	got, err := ReadGateMetricsForIssue(repo, 42)
+	if err != nil {
+		t.Fatalf("read main gate input: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("main checkout gate input has %d records from the worktree, want 0", len(got))
 	}
 }

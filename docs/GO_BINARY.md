@@ -5648,8 +5648,10 @@ contributed; every other dimension is in `excluded_dimensions` with its reason.
 nightgauge health gate-metrics [--json]
 ```
 
-Reads `health/gate-metrics.jsonl` in the checkout's directory
-(`nightgauge layout path checkout health/gate-metrics.jsonl`), groups by `gate_name`, and
+Reads the clone's cross-run gate history `logs/gate-metrics.jsonl`
+(`nightgauge layout path logs gate-metrics.jsonl`), which `gate record-metric`
+appends to from every checkout and linked worktree, so records survive worktree
+cleanup. Malformed lines are skipped with one summary warning. It groups by `gate_name`, and
 computes hit rates. Output is deterministically sorted by gate name.
 
 | Flag | Default | Description |

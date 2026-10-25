@@ -27,6 +27,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`nightgauge health gate-metrics` sees gate results from pipeline runs again**
+  (#2535). `gate record-metric` wrote only to the per-checkout directory, which
+  for a pipeline worktree is deleted on cleanup, so the health report had no new
+  data. Each record now also goes to the clone's `logs/gate-metrics.jsonl`,
+  which the report reads; the in-run validation gate still reads only its own
+  checkout. Malformed lines are reported in one summary warning, not one per line.
+
 - **Credentials orphaned by the extension ID change are now reported (#2513).**
   The extension identifier changed from `nightgauge.nightgauge-vscode` to
   `nightgauge.nightgauge`, and VS Code secrets are scoped per identifier, so
