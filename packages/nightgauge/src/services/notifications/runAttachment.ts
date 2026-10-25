@@ -25,6 +25,7 @@ import {
   outcomeDisplay,
   determineAction,
   modeDisplay,
+  formatLimitsValue,
 } from "../DiscordService";
 import { getBranchDisplayText } from "../../views/dashboard/DashboardComponents";
 import {
@@ -120,6 +121,10 @@ export interface PipelineStateSnapshot {
     supercharge_model?: string;
     /** Active performance mode — Issue 3009. */
     performance_mode?: "efficiency" | "elevated" | "maximum" | "frontier";
+    /** Effective mode; `"custom"` when per-stage pins are honored (#2527). */
+    effective_mode?: "custom" | "efficiency" | "elevated" | "maximum" | "frontier";
+    /** Honored per-stage model pins (#2527). */
+    stage_model_pins?: Record<string, string>;
     /** Fable → Opus graceful downgrades applied this run after a usage/quota
      *  limit (Issue #26). Surfaced so operators see the downgrade in real time. */
     quota_fallbacks?: Array<{ stage: string; from: string; to: string }>;
@@ -335,23 +340,9 @@ export function buildRunFields(
   // (#333 decision I). Discord parity: the value leads with the mode label
   // because the title badge is an icon, and Elevated has none.
   const liveMeta = state.pipeline_meta;
-  const {
-    label: liveModeLabel,
-    modelSuffix: liveSuffix,
-    ceiling: liveCeiling,
-  } = modeDisplay(liveMeta);
-  const limitParts: string[] = [
-    liveModeLabel,
-    liveModeLabel === "Maximum"
-      ? `pinned${liveSuffix || ` ${liveCeiling}`}`
-      : `up to ${liveCeiling}`,
-  ];
-  if (liveMeta?.route && liveMeta.route !== "standard") {
-    limitParts.push(`route: ${liveMeta.route}`);
-  }
   fields.push({
     title: "Limits",
-    value: limitParts.join("  ·  "),
+    value: formatLimitsValue(liveMeta),
     short: true,
   });
 

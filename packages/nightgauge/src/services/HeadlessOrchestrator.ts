@@ -124,7 +124,11 @@ import {
   type SkillRunResult,
   type SkillProcessHandle,
 } from "../utils/skillRunner";
-import type { PipelineStateService, PipelineOutcomeType } from "./PipelineStateService";
+import type {
+  PipelineStateService,
+  PipelineOutcomeType,
+  PipelineMeta,
+} from "./PipelineStateService";
 import { countFailedStages } from "../utils/failedStages";
 import { createDeterministicPhaseReporter } from "../utils/deterministicPhases";
 import { SUCCESS_OUTCOMES } from "../utils/telemetryEventBuilder";
@@ -5844,6 +5848,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * Used to tag history / state meta so cost trend and outcome calibration
    * can segment runs by mode.
    */
+  /**
+   * `effective_mode` / `stage_model_pins` for pipeline_meta, from the same
+   * `readStageModelSelections` rule the status bar uses (#2527).
+   */
+  private getEffectiveModeMeta(
+    performanceMode: "efficiency" | "elevated" | "maximum" | "frontier"
+  ): Pick<PipelineMeta, "effective_mode" | "stage_model_pins"> {
+    try {
+      const { readStagePins } =
+        require("../utils/customStageModels") as typeof import("../utils/customStageModels");
+      const pins = readStagePins(this.getPersistentRoot());
+      if (Object.keys(pins).length > 0) {
+        return { effective_mode: "custom", stage_model_pins: pins };
+      }
+    } catch {
+      // Non-critical — fall back to the preset.
+    }
+    return { effective_mode: performanceMode };
+  }
+
   private getActivePerformanceMode(): "efficiency" | "elevated" | "maximum" | "frontier" {
     try {
       const { getPerformanceMode } =
@@ -10776,6 +10800,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           budget_estimate_source: preFlightResult.estimateSource,
           budget_estimate_provider: this.estimatorSnapshot?.provider,
           performance_mode: performanceMode,
+          // Effective mode follows the status-bar rule (#2527): honored
+          // per-stage pins make the run Custom, whatever the stale preset says.
+          ...this.getEffectiveModeMeta(performanceMode),
           // Additively kept for one release — Discord/Dashboard read fallback (Issue #3009).
           is_supercharge: superchargeActive || undefined,
           supercharge_model: superchargeModel,

@@ -184,6 +184,7 @@ import {
   type DefaultModel,
   type PipelineModelOverride,
 } from "./nightgaugeConfig";
+import { costCapModeForStage } from "./customStageModels";
 // #1545: the adapter-name enum, used to validate a cap-recovery adapter pin
 // arriving over the IPC wire. A pin the schema does not recognise falls back to
 // local resolution rather than failing the stage on a typo.
@@ -5753,7 +5754,13 @@ function runStageSkillHeadlessImpl(
   //   See `DEFAULT_COST_CAP_MODE_MULTIPLIER`.
   // At elevated mode (default), the multiplier is 1.0× — math is identical
   // to pre-#3217.
-  const performanceModeForCostCap = getPerformanceMode(workspaceRoot);
+  // A pinned stage drops the preset multiplier: its model is already priced in
+  // by the model scale, and the preset may be stale under Custom (#2527).
+  const performanceModeForCostCap = costCapModeForStage(
+    workspaceRoot,
+    stage,
+    getPerformanceMode(workspaceRoot)
+  );
   const {
     baseCap: costCapBaseUsd,
     scale: costCapScale,
@@ -5777,14 +5784,14 @@ function runStageSkillHeadlessImpl(
         `[skillRunner] Stage cost cap for ${stage}: $${costCapUsd.toFixed(2)} ` +
           `(base $${costCapBaseUsd.toFixed(2)} × ${costCapScale.toFixed(2)} for ` +
           `${modelDecision.model}/${modelDecision.effort ?? "default"} × ` +
-          `${costCapModeMultiplier.toFixed(2)} for mode=${performanceModeForCostCap} × ` +
+          `${costCapModeMultiplier.toFixed(2)} for mode=${performanceModeForCostCap ?? "pinned"} × ` +
           `${costCapProviderScale.toFixed(2)} for provider=${adapter}) ` +
           `(Issue #3002, scaled #3180/#3217/#3229)`
       );
     } else {
       logStageDiagnostic(
         `[skillRunner] Stage cost cap for ${stage}: $${costCapUsd.toFixed(2)} ` +
-          `(mode=${performanceModeForCostCap}, provider=${adapter}) (Issue #3002)`
+          `(mode=${performanceModeForCostCap ?? "pinned"}, provider=${adapter}) (Issue #3002)`
       );
     }
   }

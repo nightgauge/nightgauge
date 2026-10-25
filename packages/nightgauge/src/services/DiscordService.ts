@@ -172,6 +172,10 @@ interface PipelineStateSnapshot {
     supercharge_model?: string;
     /** Active performance mode — Issue #3009. */
     performance_mode?: "efficiency" | "elevated" | "maximum" | "frontier";
+    /** Effective mode; `"custom"` when per-stage pins are honored (#2527). */
+    effective_mode?: "custom" | "efficiency" | "elevated" | "maximum" | "frontier";
+    /** Honored per-stage model pins (#2527). */
+    stage_model_pins?: Record<string, string>;
     /** Fable → Opus graceful downgrades applied this run after a usage/quota
      *  limit (Issue #26). Fable has a separate Max-plan usage bucket; a
      *  Fable-only exhaustion retries the stage on Opus rather than pausing the
@@ -818,6 +822,11 @@ export function modeDisplay(meta: PipelineStateSnapshot["pipeline_meta"]): {
   modelSuffix: string;
   ceiling: string;
 } {
+  // Honored per-stage pins override the (possibly stale) preset — the status
+  // bar reads "Custom" under the same rule (#2527).
+  if (meta?.effective_mode === "custom") {
+    return { label: "Custom", icon: "🎛️", modelSuffix: "", ceiling: "" };
+  }
   const mode = meta?.performance_mode;
   if (mode === "maximum" || (!mode && meta?.is_supercharge)) {
     const modelSuffix = meta?.supercharge_model ? ` (${shortModel(meta.supercharge_model)})` : "";
@@ -831,6 +840,45 @@ export function modeDisplay(meta: PipelineStateSnapshot["pipeline_meta"]): {
     return { label: "Efficiency", icon: "💡", modelSuffix: "", ceiling: "Sonnet" };
   // elevated is the default; also covers pre-#3009 runs without performance_mode
   return { label: "Elevated", icon: "", modelSuffix: "", ceiling: "Opus" };
+}
+
+/** Short stage names for the Custom Limits value, in execution order (#2527). */
+const PIN_STAGE_SHORT: ReadonlyArray<[string, string]> = [
+  ["issue-pickup", "pickup"],
+  ["feature-planning", "planning"],
+  ["feature-dev", "dev"],
+  ["feature-validate", "validate"],
+  ["pr-create", "pr-create"],
+  ["pr-merge", "merge"],
+];
+
+/**
+ * The Limits field value shared by the Discord embed and the Slack/Mattermost
+ * attachment: the mode's name plus its consequences, stated exactly once
+ * (#333 decision I). A Custom run lists its pinned models grouped by band
+ * instead of a preset ceiling it never reaches (#2527).
+ */
+export function formatLimitsValue(meta: PipelineStateSnapshot["pipeline_meta"]): string {
+  const { label, modelSuffix, ceiling } = modeDisplay(meta);
+  const parts: string[] = [label];
+  if (label === "Custom") {
+    const byBand = new Map<string, string[]>();
+    for (const [stage, short] of PIN_STAGE_SHORT) {
+      const band = meta?.stage_model_pins?.[stage];
+      if (!band) continue;
+      const name = band.charAt(0).toUpperCase() + band.slice(1);
+      byBand.set(name, [...(byBand.get(name) ?? []), short]);
+    }
+    for (const [band, stages] of byBand) parts.push(`${band} (${stages.join(", ")})`);
+  } else {
+    // Maximum pins a model rather than declaring an envelope, so it names the
+    // pinned model instead of a "up to …" ceiling.
+    parts.push(label === "Maximum" ? `pinned${modelSuffix || ` ${ceiling}`}` : `up to ${ceiling}`);
+  }
+  if (meta?.route && meta.route !== "standard") {
+    parts.push(`route: ${meta.route}`);
+  }
+  return parts.join("  ·  ");
 }
 
 // ─── DiscordService ───────────────────────────────────────────────────────────
@@ -1525,25 +1573,9 @@ export class DiscordService implements Notifier, vscode.Disposable {
     // default — has no icon at all, so a badge-only rule left the commonest
     // mode named nowhere in the message.
     const liveMeta = state.pipeline_meta;
-    const {
-      label: liveModeLabel,
-      modelSuffix: liveSuffix,
-      ceiling: liveCeiling,
-    } = modeDisplay(liveMeta);
-    // Maximum pins a model rather than declaring an envelope, so it names the
-    // pinned model instead of a "up to …" ceiling.
-    const limitParts: string[] = [
-      liveModeLabel,
-      liveModeLabel === "Maximum"
-        ? `pinned${liveSuffix || ` ${liveCeiling}`}`
-        : `up to ${liveCeiling}`,
-    ];
-    if (liveMeta?.route && liveMeta.route !== "standard") {
-      limitParts.push(`route: ${liveMeta.route}`);
-    }
     fields.push({
       name: "⚙️ Limits",
-      value: limitParts.join("  ·  "),
+      value: formatLimitsValue(liveMeta),
       inline: true,
     });
 

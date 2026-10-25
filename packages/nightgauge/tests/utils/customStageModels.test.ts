@@ -22,6 +22,9 @@ import {
   writeStageModelSelections,
   clearStageModelSelections,
   hasCustomStageOverrides,
+  readStagePins,
+  isStagePinned,
+  costCapModeForStage,
   CUSTOM_SELECTABLE_STAGES,
   type StageModelChoice,
 } from "../../src/utils/customStageModels";
@@ -221,5 +224,33 @@ describe("customStageModels (Issue #20)", () => {
     const sel = readStageModelSelections(root);
     expect(sel["feature-dev"]).toBe("auto"); // invalid → auto
     expect(sel["pr-create"]).toBe("haiku");
+  });
+
+  describe("effective pins (#2527)", () => {
+    it("hybrid routing + pins → pinned; cost cap drops the preset for pinned stages only", () => {
+      const sel = allAuto();
+      sel["feature-dev"] = "opus";
+      writeStageModelSelections(root, sel);
+
+      expect(readStagePins(root)).toEqual({ "feature-dev": "opus" });
+      expect(isStagePinned(root, "feature-dev")).toBe(true);
+      expect(isStagePinned(root, "feature-planning")).toBe(false);
+      expect(costCapModeForStage(root, "feature-dev", "frontier")).toBeUndefined();
+      expect(costCapModeForStage(root, "feature-planning", "frontier")).toBe("frontier");
+    });
+
+    it("pins under automatic routing are not honored → nothing pinned, preset kept", () => {
+      writeConfig(
+        root,
+        "model_routing:\n  mode: automatic\npipeline:\n  stage_models:\n    feature-dev: opus\n"
+      );
+      expect(readStagePins(root)).toEqual({});
+      expect(isStagePinned(root, "feature-dev")).toBe(false);
+      expect(costCapModeForStage(root, "feature-dev", "frontier")).toBe("frontier");
+    });
+
+    it("no pins → empty map", () => {
+      expect(readStagePins(root)).toEqual({});
+    });
   });
 });

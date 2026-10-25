@@ -434,6 +434,11 @@ export interface PipelineMeta {
   supercharge_model?: string;
   /** Active performance mode (`efficiency` / `elevated` / `maximum`) — Issue #3009. */
   performance_mode?: "efficiency" | "elevated" | "maximum" | "frontier";
+  /** Effective mode — `"custom"` when per-stage pins are honored, otherwise the
+   * preset. Matches the status-bar badge (#2527). */
+  effective_mode?: "custom" | "efficiency" | "elevated" | "maximum" | "frontier";
+  /** Honored per-stage model pins, present only when `effective_mode` is custom (#2527). */
+  stage_model_pins?: Record<string, string>;
   /** Fable → Opus graceful downgrades applied this run after a usage/quota limit
    * (Issue #26). Set via setMeta() from the orchestrator; preserved across Go
    * state syncs (TS-only enrichment overlay) and surfaced by the notifiers. */
