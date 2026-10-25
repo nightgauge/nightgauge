@@ -298,7 +298,7 @@ var labelColors = map[string]string{
 	"OK": "\x1b[32m", "FIXED": "\x1b[32m", "FINDING": "\x1b[31m", "SKIPPED": "\x1b[2m",
 	"TIMED OUT": "\x1b[33m", "STILL PRESENT": "\x1b[33m", "BLOCKED": "\x1b[31m", "CONFLICT": "\x1b[31m",
 	"NOT ATTEMPTED": "\x1b[2m", "NEEDS YOU": "\x1b[35m", "CONFIRM": "\x1b[35m", "MANUAL": "\x1b[35m",
-	"STALE": "\x1b[2m", "INCOMPLETE": "\x1b[33m",
+	"STALE": "\x1b[2m", "INCOMPLETE": "\x1b[33m", "RUNNING": "\x1b[34m",
 }
 
 // padLabel is label padded to n columns; the padding stays outside the color.
@@ -545,6 +545,11 @@ func (g *guidedSession) observe(ev doctor.CheckEvent) {
 		p.running, p.started = true, time.Now()
 		if g.t.live {
 			g.drawStatus(spinnerFrames[0])
+		} else {
+			// Without the spinner a slow check would be silent, so its start
+			// is a state change of its own (ADR-025 § 6).
+			const prefix = "  RUNNING "
+			fmt.Fprintf(g.t.out, "  %s %s\n", g.st.label("RUNNING"), truncate(ev.ID, g.st.width-1-len(prefix)))
 		}
 		return
 	}
