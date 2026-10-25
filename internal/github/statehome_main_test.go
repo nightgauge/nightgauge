@@ -18,6 +18,9 @@ import (
 // resolution (ADR-024 § 5); tests of the CI rules set it themselves.
 func TestMain(m *testing.M) {
 	_ = os.Unsetenv("CI")
+	// An extension-hosted stage exports NIGHTGAUGE_HOST_CI, which ciHost reads
+	// ahead of CI (#2514); a leaked value flips every token-chain test (#2524).
+	_ = os.Unsetenv("NIGHTGAUGE_HOST_CI")
 	cleanup := hometest.Isolate()
 	code := m.Run()
 	cleanup()

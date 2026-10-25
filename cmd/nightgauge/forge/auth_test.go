@@ -447,6 +447,7 @@ func TestAuthRefresh_ReadsGhAndWrites(t *testing.T) {
 // reaches gh's keychain entry or hosts file (ADR-024 § 5).
 func TestStoreTokenInKeyring_RefusesInCI(t *testing.T) {
 	t.Setenv("CI", "true")
+	t.Setenv("NIGHTGAUGE_HOST_CI", "") // A stage's leaked NIGHTGAUGE_HOST_CI outranks CI (#2514), so pin it empty (#2524).
 	// A PATH with no gh proves the refusal precedes the exec.
 	t.Setenv("PATH", t.TempDir())
 	err := storeTokenInKeyring("ghp_xxxxxxxxyyyyyyyy")

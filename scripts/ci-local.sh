@@ -45,7 +45,29 @@ set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# ── Variables CI never has (#2524) ───────────────────────────────────────────
+#
+# The gate is CI parity, so it must not hand its steps variables GitHub Actions
+# never sets. An extension-hosted pipeline stage exports three of them, and on a
+# clean origin/main each one turned a step red:
+#
+#   NIGHTGAUGE_HOST_CI    extension (#2514). CIHost reads it ahead of CI, so a
+#                         leaked value flips the Go CI-auth tests.
+#   NIGHTGAUGE_SKILL_DIR  stage runner. StageExecutor searches it first, so
+#                         pipelineSelectExecutor.test.ts reads the real skill.
+#   ELECTRON_RUN_AS_NODE  VS Code extension host. Electron starts as plain node
+#                         and the VSCode host smoke tests fail.
+#
+# CI itself is kept: GitHub sets it, so passing it through is parity. The scrub
+# runs before argument parsing so every probe sees the scrubbed environment too.
+CI_ABSENT_ENV=(NIGHTGAUGE_HOST_CI NIGHTGAUGE_SKILL_DIR ELECTRON_RUN_AS_NODE)
+unset "${CI_ABSENT_ENV[@]}"
+
 LIST_STEPS=0
+# `--env-probe` reports, from a CHILD process, whether each CI_ABSENT_ENV name
+# is set, and runs no steps. It is the regression test for the scrub: drop the
+# `unset` above and the probe prints `NAME=set` for whatever the caller leaked.
+ENV_PROBE=0
 # `--slot-probe [seconds]` takes one heavy-step slot from the machine-wide
 # budget, reports how many were in use when it got one, holds it for `seconds`
 # (default 0) and hands it back. It exists so the concurrency contract is
@@ -86,6 +108,7 @@ SUMMARY_PROBE_FAIL=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --list-steps) LIST_STEPS=1; shift ;;
+    --env-probe) ENV_PROBE=1; shift ;;
     --changed) CHANGED_SCOPE=1; shift ;;
     --scope-probe) SCOPE_PROBE=1; shift ;;
     --summary-probe)
@@ -107,6 +130,14 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
+
+if [ "$ENV_PROBE" -eq 1 ]; then
+  probe_env="$(env)"
+  for name in "${CI_ABSENT_ENV[@]}"; do
+    if grep -q "^${name}=" <<<"$probe_env"; then echo "${name}=set"; else echo "${name}=unset"; fi
+  done
+  exit 0
+fi
 
 # ── The change scope, and the Go decision (#1985) ────────────────────────────
 #
