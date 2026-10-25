@@ -115,6 +115,9 @@ jq -n \
   --argjson dead_code_warnings "$(printf '%s\n' "${DEAD_CODE_JSON:-[]}" | jq -c .)" \
   --argjson preexisting_failures "$(printf '%s\n' "${PREEXISTING_FAILURES:-[]}" | jq -c .)" \
   --argjson skipped_phases "$(printf '%s\n' "${SKIPPED_PHASES:-[]}" | jq -c .)" \
+  --argjson ci_parity_ran "${CI_PARITY_RAN:-false}" \
+  --argjson ci_parity_passed "${CI_PARITY_PASSED:-false}" \
+  --argjson ci_parity_checks "$(printf '%s\n' "${CI_PARITY_RESULTS_JSON:-[]}" | jq -c .)" \
   --arg ac_status "${AC_COMPLETION_STATUS:-skipped}" \
   --argjson ac_checked "${CHECKED:-0}" \
   --argjson ac_unchecked "${UNCHECKED:-0}" \
@@ -129,7 +132,7 @@ jq -n \
   --arg min_dur_warning "${MINIMUM_DURATION_WARNING:-}" \
   --arg created_at "$TIMESTAMP" \
   '{
-    schema_version: "2.6",
+    schema_version: "2.7",
     issue_number: $issue_number,
     commit_sha: $commit_sha,
     validation_status: $validation_status,
@@ -174,6 +177,7 @@ jq -n \
     preexisting_failures: $preexisting_failures,
     pre_push_status: $pre_push_status,
     skipped_phases: $skipped_phases,
+    ci_parity: (if $ci_parity_ran then { ran: true, passed: $ci_parity_passed, checks: $ci_parity_checks } else null end),
     manual_checklist: $manual_checklist,
     feedback: $feedback,
     notes: $notes,

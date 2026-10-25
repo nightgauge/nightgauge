@@ -659,51 +659,55 @@ issue #1608)
 }
 ```
 
-| Field                                      | Type   | Required | Description                                                                      |
-| ------------------------------------------ | ------ | -------- | -------------------------------------------------------------------------------- |
-| `schema_version`                           | string | Yes      | Schema version for compatibility (1.0–1.5 or 1.9)                                |
-| `issue_number`                             | number | Yes      | GitHub issue number                                                              |
-| `commit_sha`                               | string | Yes      | Git commit SHA after validated code is committed and pushed (v1.9+, issue #1608) |
-| `validation_status`                        | string | Yes      | Overall: passed, passed_unverified, failed, partial, skipped                     |
-| `unverified_deliverable`                   | object | No       | Evidence for passed_unverified (v2.5, #152)                                      |
-| `build`                                    | object | No       | Build verification results (v1.1+)                                               |
-| `build.ran`                                | bool   | Yes      | Whether build was run                                                            |
-| `build.passed`                             | bool   | Yes      | Whether build passed                                                             |
-| `build.command`                            | string | No       | Build command used (null if not detected)                                        |
-| `integration_tests`                        | object | No       | Integration test results                                                         |
-| `integration_tests.ran`                    | bool   | Yes      | Whether integration tests were run                                               |
-| `integration_tests.passed`                 | bool   | Yes      | Whether tests passed                                                             |
-| `integration_tests.framework`              | string | No       | Test framework used                                                              |
-| `integration_tests.tests_run`              | number | No       | Number of tests run                                                              |
-| `unit_tests`                               | object | No       | Unit test results (v1.2+, same shape as integration_tests)                       |
-| `e2e_tests`                                | object | No       | E2E test results                                                                 |
-| `e2e_tests.ran`                            | bool   | Yes      | Whether E2E tests were run                                                       |
-| `e2e_tests.passed`                         | bool   | Yes      | Whether tests passed                                                             |
-| `e2e_tests.framework`                      | string | No       | E2E framework (playwright, cypress)                                              |
-| `e2e_tests.reason`                         | string | No       | Reason if not run (e.g., "not configured")                                       |
-| `dead_code_warnings`                       | array  | No       | Dead code findings from Phase 1.6 (v1.2+)                                        |
-| `dead_code_warnings[].type`                | string | Yes      | Detection category (unused-export, unregistered-command, missing-arg-validation) |
-| `dead_code_warnings[].name`                | string | Yes      | Identifier name                                                                  |
-| `dead_code_warnings[].location`            | string | Yes      | File path and line (e.g., "src/utils.ts:42")                                     |
-| `dead_code_warnings[].severity`            | string | Yes      | `"error"` (current-issue, blocking) or `"warning"` (pre-existing, non-blocking)  |
-| `preexisting_failures`                     | array  | No       | Pre-existing test failures detected via baseline comparison (v1.3+)              |
-| `preexisting_failures[].test_file`         | string | Yes      | Path to the failing test file                                                    |
-| `preexisting_failures[].failure_count`     | number | Yes      | Number of failures in this test file                                             |
-| `preexisting_failures[].baseline_verified` | bool   | Yes      | Whether the failure was verified against main via baseline comparison            |
-| `skipped_phases`                           | array  | No       | Phases skipped due to redundancy with feature-dev (v1.4+)                        |
-| `skipped_phases[].phase`                   | string | Yes      | Phase name (e.g., "build_verification", "unit_tests", "baseline_comparison")     |
-| `skipped_phases[].reason`                  | string | Yes      | Human-readable reason for skipping                                               |
-| `ac_completion_check`                      | object | No       | AC checkbox verification for type:docs issues (v1.5+)                            |
-| `ac_completion_check.applicable`           | bool   | Yes      | Whether this check applies — true only for type:docs issues (#1145)              |
-| `ac_completion_check.status`               | string | Yes      | `"passed"`, `"failed"`, `"not_applicable"`, `"error"` (did not run), `"skipped"` |
-| `ac_completion_check.checked_count`        | number | No       | Number of checked `- [x]` boxes in the issue body                                |
-| `ac_completion_check.unchecked_count`      | number | No       | Number of unchecked `- [ ]` boxes in the issue body                              |
-| `manual_checklist`                         | array  | Yes      | Manual verification items                                                        |
-| `manual_checklist[].item`                  | string | Yes      | Checklist item description                                                       |
-| `manual_checklist[].verified`              | bool   | Yes      | Whether item was verified                                                        |
-| `project_type`                             | string | Yes      | Detected project type                                                            |
-| `notes`                                    | string | No       | Additional notes                                                                 |
-| `created_at`                               | string | Yes      | ISO 8601 timestamp                                                               |
+| Field                                      | Type   | Required | Description                                                                                         |
+| ------------------------------------------ | ------ | -------- | --------------------------------------------------------------------------------------------------- |
+| `schema_version`                           | string | Yes      | Schema version for compatibility (1.0–1.5 or 1.9)                                                   |
+| `issue_number`                             | number | Yes      | GitHub issue number                                                                                 |
+| `commit_sha`                               | string | Yes      | Git commit SHA after validated code is committed and pushed (v1.9+, issue #1608)                    |
+| `validation_status`                        | string | Yes      | Overall: passed, passed_unverified, failed, partial, skipped                                        |
+| `unverified_deliverable`                   | object | No       | Evidence for passed_unverified (v2.5, #152)                                                         |
+| `build`                                    | object | No       | Build verification results (v1.1+)                                                                  |
+| `build.ran`                                | bool   | Yes      | Whether build was run                                                                               |
+| `build.passed`                             | bool   | Yes      | Whether build passed                                                                                |
+| `build.command`                            | string | No       | Build command used (null if not detected)                                                           |
+| `integration_tests`                        | object | No       | Integration test results                                                                            |
+| `integration_tests.ran`                    | bool   | Yes      | Whether integration tests were run                                                                  |
+| `integration_tests.passed`                 | bool   | Yes      | Whether tests passed                                                                                |
+| `integration_tests.framework`              | string | No       | Test framework used                                                                                 |
+| `integration_tests.tests_run`              | number | No       | Number of tests run                                                                                 |
+| `unit_tests`                               | object | No       | Unit test results (v1.2+, same shape as integration_tests)                                          |
+| `e2e_tests`                                | object | No       | E2E test results                                                                                    |
+| `e2e_tests.ran`                            | bool   | Yes      | Whether E2E tests were run                                                                          |
+| `e2e_tests.passed`                         | bool   | Yes      | Whether tests passed                                                                                |
+| `e2e_tests.framework`                      | string | No       | E2E framework (playwright, cypress)                                                                 |
+| `e2e_tests.reason`                         | string | No       | Reason if not run (e.g., "not configured")                                                          |
+| `dead_code_warnings`                       | array  | No       | Dead code findings from Phase 1.6 (v1.2+)                                                           |
+| `dead_code_warnings[].type`                | string | Yes      | Detection category (unused-export, unregistered-command, missing-arg-validation)                    |
+| `dead_code_warnings[].name`                | string | Yes      | Identifier name                                                                                     |
+| `dead_code_warnings[].location`            | string | Yes      | File path and line (e.g., "src/utils.ts:42")                                                        |
+| `dead_code_warnings[].severity`            | string | Yes      | `"error"` (current-issue, blocking) or `"warning"` (pre-existing, non-blocking)                     |
+| `preexisting_failures`                     | array  | No       | Pre-existing test failures detected via baseline comparison (v1.3+)                                 |
+| `preexisting_failures[].test_file`         | string | Yes      | Path to the failing test file                                                                       |
+| `preexisting_failures[].failure_count`     | number | Yes      | Number of failures in this test file                                                                |
+| `preexisting_failures[].baseline_verified` | bool   | Yes      | Whether the failure was verified against main via baseline comparison                               |
+| `skipped_phases`                           | array  | No       | Phases skipped due to redundancy with feature-dev (v1.4+)                                           |
+| `skipped_phases[].phase`                   | string | Yes      | Phase name (e.g., "build_verification", "unit_tests", "baseline_comparison")                        |
+| `skipped_phases[].reason`                  | string | Yes      | Human-readable reason for skipping                                                                  |
+| `ci_parity`                                | object | No       | CI parity results (v2.7+); `null` when Phase 2.5 never ran (see `skipped_phases`)                   |
+| `ci_parity.ran`                            | bool   | Yes      | Whether Phase 2.5 executed at least one discovered check                                            |
+| `ci_parity.passed`                         | bool   | Yes      | Whether the last parity run had no failed check                                                     |
+| `ci_parity.checks[]`                       | array  | Yes      | `{command, workflow, step, status, exit_code, reason?}`; exit 127 is `skipped` (tool not installed) |
+| `ac_completion_check`                      | object | No       | AC checkbox verification for type:docs issues (v1.5+)                                               |
+| `ac_completion_check.applicable`           | bool   | Yes      | Whether this check applies — true only for type:docs issues (#1145)                                 |
+| `ac_completion_check.status`               | string | Yes      | `"passed"`, `"failed"`, `"not_applicable"`, `"error"` (did not run), `"skipped"`                    |
+| `ac_completion_check.checked_count`        | number | No       | Number of checked `- [x]` boxes in the issue body                                                   |
+| `ac_completion_check.unchecked_count`      | number | No       | Number of unchecked `- [ ]` boxes in the issue body                                                 |
+| `manual_checklist`                         | array  | Yes      | Manual verification items                                                                           |
+| `manual_checklist[].item`                  | string | Yes      | Checklist item description                                                                          |
+| `manual_checklist[].verified`              | bool   | Yes      | Whether item was verified                                                                           |
+| `project_type`                             | string | Yes      | Detected project type                                                                               |
+| `notes`                                    | string | No       | Additional notes                                                                                    |
+| `created_at`                               | string | Yes      | ISO 8601 timestamp                                                                                  |
 
 ### pr-{N}.json
 
@@ -1636,6 +1640,8 @@ All context files include `schema_version` to enable future evolution:
   documenting phases skipped due to redundancy with feature-dev (issue #861)
 - **1.5** (validate): Added `ac_completion_check` object to `validate-{N}.json`
   for tracking AC checkbox completion on type:docs issues (issue #1274)
+- **2.7** (validate): Added `ci_parity` object with per-check CI parity results
+  and skip reasons (issue #2503)
 - **1.1** (planning): Added optional `files_to_read` array to
   `planning-{N}.json` for pre-loading implementation context (issue #773)
 - **1.7** (dev): Added `e2e_framework` and `e2e_tests_generated` to

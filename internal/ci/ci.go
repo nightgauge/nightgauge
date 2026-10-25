@@ -57,16 +57,19 @@ type ParityFail struct {
 // workflowYAML is used for YAML unmarshalling of GitHub Actions workflow files.
 type workflowYAML struct {
 	On   yaml.Node          `yaml:"on"`
+	Env  map[string]string  `yaml:"env"`
 	Jobs map[string]jobYAML `yaml:"jobs"`
 }
 
 type jobYAML struct {
-	Steps []stepYAML `yaml:"steps"`
+	Env   map[string]string `yaml:"env"`
+	Steps []stepYAML        `yaml:"steps"`
 }
 
 type stepYAML struct {
-	Name string `yaml:"name"`
-	Run  string `yaml:"run"`
+	Name string            `yaml:"name"`
+	Run  string            `yaml:"run"`
+	Env  map[string]string `yaml:"env"`
 }
 
 // unsafePatterns identify runner setup that cannot or must not run on a
@@ -76,7 +79,12 @@ var unsafePatterns = []string{
 	"::error", "::warning", "::notice", "::group", "::endgroup",
 	"sudo ", "apt-get", "playwright install", "go install", "pip install",
 	"pip3 install", "git config --global", "git config --system",
+	"xvfb-run",
 }
+
+// unsafeCommands match runner-only git commands as whole words, so that
+// `git fetch-pack` or `git pushd`-like names are not mistaken for them.
+var unsafeCommands = regexp.MustCompile(`\bgit\s+(fetch|push)(\s|$)`)
 
 // skipPatterns are substrings that identify install/setup steps to exclude.
 var skipPatterns = []string{
@@ -249,8 +257,12 @@ func parseWorkflowChecks(wfPath string, requirePR bool) []Check {
 	sort.Strings(jobNames)
 
 	for _, jobName := range jobNames {
-		for i, step := range wf.Jobs[jobName].Steps {
+		job := wf.Jobs[jobName]
+		for i, step := range job.Steps {
 			if strings.TrimSpace(step.Run) == "" {
+				continue
+			}
+			if bindsRunnerEnv(step.Env) || referencesRunnerBoundEnv(step.Run, wf.Env, job.Env) {
 				continue
 			}
 			stepName := step.Name
@@ -290,6 +302,48 @@ func blockCommands(run string) []string {
 	return []string{strings.Join(lines, "\n")}
 }
 
+// bindsRunnerEnv reports whether a step's own env: carries a ${{ }}
+// expression. That env exists only to feed the step — often to a script that
+// reads it rather than to the run: text — so locally the step cannot mean what
+// it means on the runner (#2503).
+func bindsRunnerEnv(env map[string]string) bool {
+	for _, v := range env {
+		if strings.Contains(v, "${{") {
+			return true
+		}
+	}
+	return false
+}
+
+// envReference matches a shell read of name: $NAME or ${NAME...}.
+func envReference(name string) *regexp.Regexp {
+	return regexp.MustCompile(`\$(` + name + `\b|\{` + name + `[}:#%/^,-])`)
+}
+
+// referencesRunnerBoundEnv reports whether run reads a variable whose env:
+// value (workflow or job level; the innermost wins) is a ${{ }}
+// expression. Locally that variable is empty, so the command cannot mean what
+// it means on the runner (#2503).
+func referencesRunnerBoundEnv(run string, levels ...map[string]string) bool {
+	merged := make(map[string]string)
+	for _, env := range levels {
+		for k, v := range env {
+			merged[k] = v
+		}
+	}
+	for name, value := range merged {
+		if !strings.Contains(value, "${{") || !environmentName.MatchString(name) {
+			continue
+		}
+		// name is a validated identifier (environmentName), so it is
+		// regexp-safe; one compile per runner-bound variable per step.
+		if envReference(name).MatchString(run) {
+			return true
+		}
+	}
+	return false
+}
+
 func isUnsafe(line string) bool {
 	lower := strings.ToLower(line)
 	for _, p := range unsafePatterns {
@@ -297,7 +351,7 @@ func isUnsafe(line string) bool {
 			return true
 		}
 	}
-	return false
+	return unsafeCommands.MatchString(lower)
 }
 
 // splitLogicalCommands splits a run: block into logical commands, joining

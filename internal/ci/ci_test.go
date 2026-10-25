@@ -546,3 +546,71 @@ func TestRunShellCmd_MultiLineBlockUsesShell(t *testing.T) {
 		t.Errorf("exit code = %d, want 3", code)
 	}
 }
+
+func TestDiscoverCommands_DropsRunnerBoundEnvAndRunnerOnlyTools(t *testing.T) {
+	dir := t.TempDir()
+	writeTestWorkflow(t, dir, "ci.yml", `on: pull_request
+env:
+  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+jobs:
+  a:
+    env:
+      CHANGE_CLASS: ${{ needs.classify.outputs.class }}
+      LITERAL: bar
+    steps:
+      - name: Workflow-bound
+        run: bash scripts/boundary.sh "$BASE_SHA" HEAD
+      - name: Job-bound
+        run: bash scripts/ci-change-class.sh ${CHANGE_CLASS}
+      - name: Step-bound
+        env:
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+        run: test "$ANALYZE_RESULT" = success
+      - name: Step-bound, read by the script
+        env:
+          NG_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-change-class.sh
+      - name: Step literal env
+        env:
+          MODE: strict
+        run: npm run lint
+      - name: Literal env
+        run: echo "$LITERAL"
+      - name: Prefix name only
+        run: echo "$BASE_SHAX"
+      - name: Headless
+        run: xvfb-run --auto-servernum npm test
+      - name: Tags
+        run: git fetch --tags --force --quiet origin
+`)
+	result, err := DiscoverCommands(context.Background(), dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"npm run lint", `echo "$LITERAL"`, `echo "$BASE_SHAX"`}
+	if len(result.Commands) != len(want) {
+		t.Fatalf("commands = %q, want %q", result.Commands, want)
+	}
+	for i := range want {
+		if result.Commands[i] != want[i] {
+			t.Errorf("commands[%d] = %q, want %q", i, result.Commands[i], want[i])
+		}
+	}
+}
+
+func TestIsUnsafe_GitFetchPushWholeCommand(t *testing.T) {
+	cases := map[string]bool{
+		"git fetch origin main": true,
+		"git push":              true,
+		"git  fetch --depth=1":  true,
+		"git fetch-pack origin": false,
+		"git pushurl-check":     false,
+		"npm run lint":          false,
+		"xvfb-run -a npm test":  true,
+	}
+	for line, want := range cases {
+		if got := isUnsafe(line); got != want {
+			t.Errorf("isUnsafe(%q) = %v, want %v", line, got, want)
+		}
+	}
+}

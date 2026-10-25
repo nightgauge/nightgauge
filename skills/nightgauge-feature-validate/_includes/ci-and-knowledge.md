@@ -54,36 +54,54 @@ CI_PARITY_FAILED_OUTPUT=""
 CI_PARITY_MAX_ATTEMPTS=3
 CI_PARITY_ATTEMPT=0
 
+CI_PARITY_RAN=false
+CI_PARITY_RESULTS_JSON="[]"
+
+# Runs every discovered check and records one result per check, joined to
+# `.checks[]` for its workflow and step. Exit 127 means the tool is not
+# installed here (e.g. gitleaks): recorded as skipped with its reason, not as a
+# failure. The first real failure stops the run for the auto-fix loop.
 function run_ci_parity() {
+  CI_PARITY_RAN=true
+  CI_PARITY_RESULTS_JSON="[]"
   for CMD in "${CI_PARITY_COMMANDS[@]}"; do
     echo "Running: $CMD"
     # A command may be a multi-line block; run it through a shell, as CI does.
     OUTPUT=$(bash -c "$CMD" 2>&1)
     EXIT_CODE=$?
-    if [ $EXIT_CODE -ne 0 ]; then
+    if [ $EXIT_CODE -eq 0 ]; then STATUS=passed; REASON=""
+    elif [ $EXIT_CODE -eq 127 ]; then STATUS=skipped; REASON="command not found"
+    else STATUS=failed; REASON=""
+    fi
+    CI_PARITY_RESULTS_JSON=$(printf '%s\n' "$CI_PARITY_RESULTS_JSON" | jq -c \
+      --arg cmd "$CMD" --arg status "$STATUS" --argjson exit_code "$EXIT_CODE" \
+      --arg reason "$REASON" --argjson checks "$(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -c '.checks // []')" \
+      '. + [($checks | map(select(.command == $cmd)) | first // {command: $cmd})
+            + {status: $status, exit_code: $exit_code}
+            + (if $reason != "" then {reason: $reason} else {} end)]')
+    if [ "$STATUS" = "failed" ]; then
       CI_PARITY_PASSED=false
       CI_PARITY_FAILED_CMD="$CMD"
       CI_PARITY_FAILED_OUTPUT="$OUTPUT"
       echo "✗ CI parity check failed: $CMD (exit $EXIT_CODE)"
       return 1
     fi
-    echo "✓ $CMD passed"
+    echo "${STATUS}: $CMD"
   done
   return 0
 }
 
-run_ci_parity
-
-# Record what ran (command, workflow, step) in the validate context, or why it
-# did not — a skipped phase is never silent.
-CI_PARITY_CHECKS_JSON=$(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -c '.checks // []')
 if [ "${#CI_PARITY_COMMANDS[@]}" -eq 0 ]; then
+  # A skipped phase is never silent: record why.
   SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "ci_parity_check", "reason": "no runnable CI commands discovered"}]')
+else
+  run_ci_parity
 fi
 ```
 
-Write `CI_PARITY_CHECKS_JSON` into the validate context as the commands the
-phase ran.
+`CI_PARITY_RAN`, `CI_PARITY_PASSED` and `CI_PARITY_RESULTS_JSON` (the last run's
+per-check results) are written to the validate context's `ci_parity` field by
+the writer in `context-and-board.md`.
 
 ### Step 2.5.3: Auto-Fix Loop (If Failures Detected)
 

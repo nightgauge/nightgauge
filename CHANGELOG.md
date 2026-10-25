@@ -20,7 +20,11 @@ changelog, and the release workflow refuses a tag that does not.
   `nightgauge ci discover-commands` scans every `pull_request`/`merge_group`
   workflow, not just `ci.yml`, drops runner setup (`sudo`, `$GITHUB_ENV`,
   installs, global git config), returns multi-line `run:` blocks whole, and
-  reports the workflow and step of each check in a new `checks` field.
+  reports the workflow and step of each check in a new `checks` field. Steps
+  whose inputs are runner-only `${{ }}` env bindings, `xvfb-run` and
+  `git fetch`/`git push` are dropped too. feature-validate records each check's
+  result (passed, failed, or skipped when the tool is not installed) in the
+  validate context's new `ci_parity` field (schema 2.7).
 
 ### Added
 

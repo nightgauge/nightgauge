@@ -4179,7 +4179,10 @@ for the fast-track surface and the `ci_jobs` → workflow-gate mapping.
 With no `--workflow`, every workflow under `.github/workflows/` that runs on
 `pull_request` or `merge_group` is scanned. A `run:` block with runner setup
 (`sudo`, `apt-get`, `$GITHUB_ENV`/`OUTPUT`/`STEP_SUMMARY`, `playwright install`,
-`go install`, `pip install`, `git config --global`, `${{ }}`) is dropped whole;
+`go install`, `pip install`, `git config --global`, `${{ }}`, `xvfb-run`,
+`git fetch`/`git push`) is dropped whole, as is a step whose own `env:` binds a
+`${{ }}` expression or whose `run:` reads a workflow- or job-level variable bound
+to one (locally that input is empty);
 a multi-line block is one command, run through `sh -c` by `ci parity-check`.
 
 Falls back to standard commands (`format:check`, `lint`, `typecheck`, `build`,

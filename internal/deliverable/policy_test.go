@@ -136,7 +136,7 @@ func TestFatalOutcomeDoesNotProceed(t *testing.T) {
 	}
 
 	quarantined := ApplyPolicy("validate", map[string]any{
-		"schema_version": "2.6",
+		"schema_version": "2.7",
 		"gate_metrics":   []any{map[string]any{"result": "pass"}},
 	})
 	if !quarantined.OK() {

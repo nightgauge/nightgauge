@@ -364,3 +364,45 @@ describe("ValidateContextSchema — mobile_mcp (Issue #24)", () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe("ValidateContextSchema — ci_parity (#2503)", () => {
+  it("accepts a context without ci_parity", () => {
+    expect(ValidateContextSchema.safeParse(minimalValidate).success).toBe(true);
+  });
+
+  it("accepts per-check results with workflow, step and skip reason", () => {
+    const result = ValidateContextSchema.safeParse({
+      ...minimalValidate,
+      ci_parity: {
+        ran: true,
+        passed: true,
+        checks: [
+          {
+            command: "npm run format:check",
+            workflow: "lint.yml",
+            step: "Prettier (format check)",
+            status: "passed",
+            exit_code: 0,
+          },
+          {
+            command: "gitleaks git --no-banner",
+            workflow: "credential-scan.yml",
+            step: "Scan",
+            status: "skipped",
+            exit_code: 127,
+            reason: "command not found",
+          },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a check without a command", () => {
+    const result = ValidateContextSchema.safeParse({
+      ...minimalValidate,
+      ci_parity: { ran: true, passed: false, checks: [{ status: "failed" }] },
+    });
+    expect(result.success).toBe(false);
+  });
+});
