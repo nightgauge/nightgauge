@@ -3532,6 +3532,13 @@ func (s *Server) registerMethods() {
 			// intentional no-op. Do NOT call BeginStage here — that would reset
 			// StageStart (the stage clock) before "running" arrives.
 		case "complete":
+			// Reject a completion for a stage other than the one running
+			// (#2536): booking it would record the notified stage's usage under
+			// rs.Stage's name — or under "" when nothing was begun.
+			if current := rt.CurrentStage(); current != stage {
+				log.Printf("ipc: WARNING: complete for stage %q but current stage is %q — not booked", stage, current)
+				break
+			}
 			// Thread the per-stage usage the extension accumulated (#227) instead
 			// of the old hardcoded rt.CompleteStage(0, 0, 0, ""). Mirror the
 			// scheduler path (scheduler.go): prefer the CLI-authoritative

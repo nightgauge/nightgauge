@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -830,6 +831,14 @@ func (rs *RuntimeState) IsTerminal() bool {
 	return rs.Terminal
 }
 
+// CurrentStage returns the stage most recently begun by BeginStage, or "" when
+// none has been begun.
+func (rs *RuntimeState) CurrentStage() PipelineStage {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.Stage
+}
+
 // IsSealed reports whether SealAndRemove has run on this object. In-memory
 // only — a fresh process that loads the same snapshot sees Terminal, not this.
 func (rs *RuntimeState) IsSealed() bool {
@@ -1122,6 +1131,16 @@ func (rs *RuntimeState) consumeCurrentStageTokenCountsLocked(direct tokens.Token
 // holds rs.mu so pending-token consumption and the idempotency decision are one
 // atomic transaction.
 func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int, cost float64, costUnstamped bool, costSource string) {
+	// No-stage-begun guard (#2536): a completion that arrives before any
+	// BeginStage has no stage name and no start time, so booking it would
+	// record Stage "" with Duration time.Since(time.Time{}) — MaxInt64 — and
+	// skew every duration-based health finding. Book nothing, retire nothing.
+	if rs.Stage == "" || rs.StageStart.IsZero() {
+		log.Printf("state: WARNING: stage completion with no stage begun (stage=%q, start=%v) — not booked",
+			rs.Stage, rs.StageStart)
+		return
+	}
+
 	// Idempotency guard (#230): if this exact stage occurrence was already
 	// completed — same Stage AND the same BeginStage-stamped StageStart — skip
 	// it so a residual double-complete yields exactly one completedStages entry

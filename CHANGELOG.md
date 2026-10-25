@@ -34,6 +34,14 @@ changelog, and the release workflow refuses a tag that does not.
   which the report reads; the in-run validation gate still reads only its own
   checkout. Malformed lines are reported in one summary warning, not one per line.
 
+- **Health findings no longer name an empty stage as the bottleneck (#2536).**
+  A stage completion that arrived before any stage began booked a stage named
+  `""` with a duration of about 292 years. Such a completion now books nothing
+  and logs a warning, and an editor `complete` for a stage other than the
+  one running is rejected rather than booked under the wrong name. The health
+  feeder also drops rows that already sit in history with an empty stage name
+  or a negative or longer-than-24-hour duration.
+
 - **Credentials orphaned by the extension ID change are now reported (#2513).**
   The extension identifier changed from `nightgauge.nightgauge-vscode` to
   `nightgauge.nightgauge`, and VS Code secrets are scoped per identifier, so

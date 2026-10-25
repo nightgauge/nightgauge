@@ -80,6 +80,9 @@ function asSelectionSource(value: string | undefined): ModelSelectionSource | un
     : undefined;
 }
 
+/** Ceiling above which a recorded stage duration is treated as corrupt (24h). */
+export const MAX_PLAUSIBLE_STAGE_DURATION_MS = 24 * 60 * 60 * 1000;
+
 /**
  * Flatten JSONL history records into per-stage analyzer records.
  *
@@ -93,6 +96,11 @@ function asSelectionSource(value: string | undefined): ModelSelectionSource | un
  * only when the stage carries it: Go omits it when the adapter exposed no
  * per-step prompt size or no window was known, and the analyzer tells
  * "unmeasured" from "measured" by the key's presence.
+ *
+ * Corrupt rows are dropped (#2536): an empty stage key, or a `duration_ms`
+ * that is non-finite, negative, or above {@link MAX_PLAUSIBLE_STAGE_DURATION_MS}.
+ * A completion booked before any stage began recorded `""` with a saturated
+ * MaxInt64 duration, which every health dimension then named the bottleneck.
  */
 export function flattenRunRecords(
   rawRecords: ReadonlyArray<HistoryRunRecordInput | Record<string, unknown>>
@@ -107,6 +115,16 @@ export function flattenRunRecords(
 
     for (const [stageName, stage] of Object.entries(run.stages)) {
       if (!stage || !EXECUTED_STAGE_STATUSES.has(stage.status ?? "")) continue;
+      if (stageName.trim() === "") continue;
+      const durationMs = stage.duration_ms;
+      if (
+        durationMs !== undefined &&
+        (!Number.isFinite(durationMs) ||
+          durationMs < 0 ||
+          durationMs > MAX_PLAUSIBLE_STAGE_DURATION_MS)
+      ) {
+        continue;
+      }
 
       const tokens = run.tokens?.per_stage?.[stageName];
       const selection = stage.model_selection;
