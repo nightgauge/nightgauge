@@ -466,6 +466,8 @@ func (s *LifecycleAuditService) detectClosedWithOpenPR(
 			}
 
 			if fix {
+				// The "In review" written below is backed by the OPEN PR this
+				// finding names, the evidence every In review writer needs (#1496).
 				// Resolve against the item's OWN repo (N:1 boards aggregate
 				// cross-repo issues) so a cross-repo item is not left unfixed. #3792.
 				itemOwner, itemRepo := resolveItemRepo(item.Repo, owner, repo)

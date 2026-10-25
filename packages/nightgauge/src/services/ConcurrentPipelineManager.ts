@@ -143,6 +143,7 @@ import type { PipelineState, PipelineStateService } from "./PipelineStateService
 import type { Logger } from "../utils/logger";
 import { requeueOptionsFor, type ActiveSlot, type QueueItem } from "../types/queue";
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
+import { moveToInReviewIfPRBacked } from "../utils/inReviewGuard";
 import { postFailureComment } from "../utils/failureComment";
 import { epicBranchParent } from "../utils/epicBranchParent";
 import { formatEpicRef, isEpic, sameRepo, slotKey, type EpicRef } from "../utils/epicRef";
@@ -2469,8 +2470,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           "run reached terminal state"
         );
 
-        // Safety net: move board status to "In review" on pipeline failure.
-        // HeadlessOrchestrator.markStatusInReviewOnFailure() handles most cases,
+        // Safety net: move board status to "In review" on pipeline failure,
+        // only when an open PR backs the issue (#1496): the write goes through
+        // the guarded CLI, which refuses without one, so a PR-less failure is
+        // left to the scheduler's revert instead of racing it.
+        // HeadlessOrchestrator.parkFailedIssueIfPRBacked() handles most cases,
         // but it can be skipped by early returns (epic detection, closed issue,
         // auth failure) or fail silently for cross-repo items that resolve the
         // wrong workspace root. This catch-all ensures no failed issue gets
@@ -2489,7 +2493,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // kinds (`revertFailedIssueStatus` on the adapter_auth_failed /
         // github_quota_low / transient-infra branches in autonomous.go), and on
         // the TS-only path nothing ever moved the issue off Ready in the first
-        // place — `markStatusInReviewOnFailure` is gated on
+        // place — `parkFailedIssueIfPRBacked` is gated on
         // `completedStages.includes("issue-pickup")`, which a refusal never
         // satisfies. So this write is not a net; it is the ONLY thing that puts
         // the issue in "In review", overwriting a correct Ready with a status
@@ -2514,19 +2518,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
               vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
               "";
             if (cwd) {
-              const revertResult = await updateProjectItemStatus(
-                slot.issueNumber,
-                "In review",
-                cwd,
-                this.logger
-              );
-              if (revertResult.success) {
-                this.logger.info(
-                  "Safety net: moved board status to In review after pipeline failure",
-                  { issueNumber: slot.issueNumber, repo: slot.repo }
-                );
-              }
-              // Silent on failure — HeadlessOrchestrator may have already moved it
+              await moveToInReviewIfPRBacked(slot.issueNumber, cwd, this.logger, slot.repo);
             }
           } catch {
             // Best effort — never block cleanup

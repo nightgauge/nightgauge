@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A failed issue with no open PR now ends in the status the revert names
+  (#1496).** The scheduler's revert wrote `Ready` while the VS Code extension
+  wrote `In review` in the same second, and when the extension landed last the
+  issue sat in `In review` with only merged PRs, rejected on every scan. Every
+  `In review` writer now requires an open PR whose head branch names the issue:
+  the scheduler, `project move-status`/`sync-status in-review` (which refuse
+  without one) and the extension, which writes through that CLI.
+- The scan's rejection summary now reports `status="In review" (no-open-pr)`
+  apart from PR-backed `In review` items, and `nightgauge autonomous status`
+  (text and `--json`) lists the In review items with no open PR (#1496).
 - A run whose issue context cannot be found now says so at `info`, naming the issue
   and the path it looked in, because that miss silently disables every routed
   `skip_stages` entry. Regression tests pin that a linked worktree and its main

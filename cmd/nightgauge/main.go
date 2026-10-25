@@ -3934,7 +3934,8 @@ func projectSyncStatusCmd() *cobra.Command {
 Status is a POSITIONAL argument, not a --status flag.
 
 Valid statuses: backlog, ready, in-progress, in-review, done, blocked, needs-info
-The board's own casing ("In progress", "In review") is accepted and normalized.`,
+The board's own casing ("In progress", "In review") is accepted and normalized.
+in-review is refused unless an open PR whose head branch names the issue exists.`,
 		Args: exactStatusArgs("sync-status"),
 		Example: `  nightgauge project sync-status 103 in-progress
   nightgauge project sync-status 103 "In progress"
@@ -3970,6 +3971,9 @@ The board's own casing ("In progress", "In review") is accepted and normalized.`
 
 			client, err := clientFromConfig()
 			if err != nil {
+				return err
+			}
+			if err := requireOpenPRForInReview(cmd.Context(), client, ownerPart, repoPart, number, status); err != nil {
 				return err
 			}
 			svc := gh.NewProjectService(client, ownerPart, projectNumber)
@@ -4445,7 +4449,8 @@ func projectMoveStatusCmd() *cobra.Command {
 Status is a POSITIONAL argument, not a --status flag.
 
 Valid statuses: backlog, ready, in-progress, in-review, done, blocked, needs-info
-The board's own casing ("In progress", "In review") is accepted and normalized.`,
+The board's own casing ("In progress", "In review") is accepted and normalized.
+in-review is refused unless an open PR whose head branch names the issue exists.`,
 		Args: exactStatusArgs("move-status"),
 		Example: `  nightgauge project move-status 295 in-review
   nightgauge project move-status 295 done`,
@@ -4470,6 +4475,9 @@ The board's own casing ("In progress", "In review") is accepted and normalized.`
 			}
 
 			ownerPart, repoPart := splitRepo(owner, repo)
+			if err := requireOpenPRForInReview(cmd.Context(), client, ownerPart, repoPart, number, status); err != nil {
+				return err
+			}
 			svc := gh.NewProjectService(client, ownerPart, projectNumber)
 			if err := svc.MoveStatus(cmd.Context(), ownerPart, repoPart, number, status); err != nil {
 				return err
@@ -11565,10 +11573,11 @@ func autonomousStatusCmd() *cobra.Command {
 				if callErr := client.Call(cmd.Context(), "autonomous.status", nil, &res); callErr == nil {
 					if outputJSON {
 						return printJSON(map[string]any{
-							"daemon":  true,
-							"status":  res.Status,
-							"cycles":  res.CyclesRun,
-							"running": res.Running,
+							"daemon":            true,
+							"status":            res.Status,
+							"cycles":            res.CyclesRun,
+							"running":           res.Running,
+							"inReviewWithoutPR": inReviewWithoutPRJSON(res.InReviewWithoutPR),
 						})
 					}
 					fmt.Printf("Source: live daemon\nStatus: %s\nCycles: %d\n", res.Status, res.CyclesRun)
@@ -11582,6 +11591,7 @@ func autonomousStatusCmd() *cobra.Command {
 							fmt.Printf("  #%-4d %-12s %s elapsed\n", r.Number, repoShort, formatElapsedSince(r.StartedAt))
 						}
 					}
+					printInReviewWithoutPR(os.Stdout, res.InReviewWithoutPR)
 					return nil
 				}
 				// A daemon that is up but cannot answer is not licence to print
@@ -11727,6 +11737,8 @@ func autonomousStatusCmd() *cobra.Command {
 					fmt.Printf("  #%-4d %-12s %s elapsed\n", r.Number, repoShort, elapsed)
 				}
 			}
+
+			printInReviewWithoutPR(os.Stdout, state.InReviewWithoutPR)
 
 			// Completed items
 			if len(state.Completed) > 0 {

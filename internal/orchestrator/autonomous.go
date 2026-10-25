@@ -287,6 +287,14 @@ func (f FailedItem) hold() string {
 	return HoldNone
 }
 
+// InReviewWithoutPRItem is a board item in "In review" with no open PR of its
+// own behind it (#1496). See AutonomousState.InReviewWithoutPR.
+type InReviewWithoutPRItem struct {
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Title  string `json:"title,omitempty"`
+}
+
 // RefinementItem tracks an in-flight or completed refinement operation.
 type RefinementItem struct {
 	Repo        string `json:"repo"`
@@ -370,6 +378,12 @@ type AutonomousState struct {
 	LastNodeCount        int            `json:"lastNodeCount,omitempty"`
 	LastCandidateCount   int            `json:"lastCandidateCount,omitempty"`
 	LastRejectionReasons map[string]int `json:"lastRejectionReasons,omitempty"`
+	// InReviewWithoutPR lists the board items the last prioritize() pass found
+	// in "In review" with no open PR behind them (#1496). Nothing dispatches
+	// such an item, so without this list it is rejected on every scan with no
+	// record anywhere. Only repos whose open-PR query succeeded contribute: a
+	// failed query is "unverified", never "no PR".
+	InReviewWithoutPR []InReviewWithoutPRItem `json:"inReviewWithoutPR,omitempty"`
 
 	// Diagnostics from the most recent Backlog->Ready promotion scan (either
 	// promoteUnblockedOnStartup or promoteUnblockedToReady — #288). Mirrors
@@ -4453,7 +4467,9 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// all-false. No GitHub call happens here — the guard is pure map lookup.
 	blockedPRSet := as.blockedReadyPRIssues
 	prBackedSet := as.inReviewPRBacked
+	prQueryOKSet := as.prQueryOKRepos
 	as.mu.Unlock()
+	var inReviewWithoutPR []InReviewWithoutPRItem
 
 	now := time.Now()
 
@@ -4645,6 +4661,19 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		// This eliminates the race condition where issues are dispatched before
 		// blockedBy relationships are configured.
 		if !isDispatchableStatus(node.BoardStatus, as.config.PickupBacklog) {
+			// #1496: an "In review" item with no open PR is not the legitimate
+			// awaiting-review case, so it gets its own bucket and is listed for
+			// `autonomous status`. Decided from the scan's existing PR evidence
+			// (no extra API call); a repo whose PR query failed stays in the
+			// plain bucket, since nobody looked.
+			if isWorkCompleteStatus(node.BoardStatus) && prQueryOKSet[node.Repo] &&
+				!prBackedSet[fmt.Sprintf("%s#%d", node.Repo, node.Number)] {
+				bump(fmt.Sprintf("status=%q (no-open-pr)", node.BoardStatus))
+				inReviewWithoutPR = append(inReviewWithoutPR, InReviewWithoutPRItem{
+					Repo: node.Repo, Number: node.Number, Title: node.Title,
+				})
+				continue
+			}
 			bump(fmt.Sprintf("status=%q", node.BoardStatus))
 			continue
 		}
@@ -4833,6 +4862,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// instrumenting the binary every time.
 	as.mu.Lock()
 	as.state.LastRejectionReasons = rejected
+	as.state.InReviewWithoutPR = inReviewWithoutPR
 	as.state.LastCandidateCount = len(candidates)
 	as.state.LastNodeCount = len(g.Nodes)
 	as.mu.Unlock()
@@ -6156,9 +6186,12 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 // the PR it already has. Open-PR evidence decides, as for sidelineHalt (see
 // ownOpenPR): an issue an OPEN PR backs moves to "In review", the truthful
 // status, where the in-review reconcile re-runs pr-merge once the branch goes
-// stale or conflicts. The board status alone cannot answer this: the
-// extension parks every failed run in "In review", PR or not, and this revert
-// is what returns a PR-less one to Ready. An unanswered PR query reverts
+// stale or conflicts. The board status alone cannot answer this: it may be
+// "In review" from an earlier run. No other writer puts a PR-less failed run
+// in "In review" (#1496): the extension's failure safety nets write it only
+// through the guarded CLI, which refuses without an open PR, so on a PR-less
+// failure this revert is the only write and the board ends where its log line
+// says. An unanswered PR query reverts
 // nothing: the issue is left where it is, which a human can see and recover,
 // rather than in Ready.
 func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, repo string, issue int) {
@@ -6191,7 +6224,7 @@ func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, r
 	if found {
 		log.Printf("autonomous: revert-status: NOT moving %s#%d to Ready after pipeline failure — its PR #%d is open; moving it to In review instead",
 			repo, issue, pr)
-		as.moveIssueToInReview(parent, repo, issue)
+		as.moveIssueToInReview(parent, repo, issue, pr)
 		return
 	}
 	projSvc := as.projectService(owner, projectNum, ownerType)
@@ -6244,9 +6277,16 @@ func (as *AutonomousScheduler) moveIssueToDone(parent context.Context, repo stri
 // Ready stops the scheduler from re-dispatching into the same external
 // blocker, and "In review" already satisfies downstream dependency checks
 // (isWorkCompleteStatus). Modeled after moveIssueToDone. Best-effort: a
-// network failure logs a warning; the TS-side safety net performs the same
-// move on its path.
-func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo string, issue int) {
+// network failure logs a warning.
+//
+// pr is the open PR that backs the issue, the evidence every "In review"
+// writer requires (#1496): a caller that has not confirmed one passes 0 and
+// nothing is written, so "In review" never stands for a PR that does not exist.
+func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo string, issue, pr int) {
+	if pr <= 0 {
+		log.Printf("autonomous: move-to-in-review: NOT moving %s#%d to In review — no open PR backs it (#1496)", repo, issue)
+		return
+	}
 	owner, repoName := splitOwnerRepo(repo)
 	var projectNum int
 	var ownerType gh.OwnerType
@@ -6272,8 +6312,8 @@ func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo 
 			repo, issue, err)
 		return
 	}
-	log.Printf("autonomous: move-to-in-review: moved %s#%d → In review (PR exists, externally blocked — no re-dispatch)",
-		repo, issue)
+	log.Printf("autonomous: move-to-in-review: moved %s#%d → In review (open PR #%d, externally blocked — no re-dispatch)",
+		repo, issue, pr)
 }
 
 // moveIssueToInProgress moves a sidelined issue's board status to "In
@@ -6353,8 +6393,8 @@ func (as *AutonomousScheduler) sidelineHalt(parent context.Context, repo string,
 	defer cancel()
 	openPRs, ok := as.openPRMergeStatesForRepo(ctx, repo)
 	if ok {
-		if _, hasPR := openPRs[issue]; hasPR {
-			as.moveIssueToInReview(parent, repo, issue) // unchanged: truthful here
+		if pr, hasPR := openPRs[issue]; hasPR {
+			as.moveIssueToInReview(parent, repo, issue, pr.Number)
 			return
 		}
 	}
@@ -6522,7 +6562,7 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 		if found {
 			log.Printf("autonomous: recovery: NOT moving %s#%d to Ready — its PR #%d is open; moving it to In review instead",
 				item.Repo, item.Number, pr)
-			as.moveIssueToInReview(context.WithoutCancel(ctx), item.Repo, item.Number)
+			as.moveIssueToInReview(context.WithoutCancel(ctx), item.Repo, item.Number, pr)
 			recovered++
 			continue
 		}

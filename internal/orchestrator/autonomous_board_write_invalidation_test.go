@@ -39,7 +39,7 @@ func TestSchedulerStatusMovesInvalidateSharedBoardCache(t *testing.T) {
 			as.moveIssueToDone(ctx, "O/a", 1)
 		},
 		"moveIssueToInReview": func(as *AutonomousScheduler, ctx context.Context) {
-			as.moveIssueToInReview(ctx, "O/a", 1)
+			as.moveIssueToInReview(ctx, "O/a", 1, 7)
 		},
 		"moveIssueToInProgress": func(as *AutonomousScheduler, ctx context.Context) {
 			as.moveIssueToInProgress(ctx, "O/a", 1, "test")

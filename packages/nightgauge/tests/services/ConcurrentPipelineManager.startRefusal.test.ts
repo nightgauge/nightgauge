@@ -73,6 +73,11 @@ const updateProjectItemStatus = vi.fn().mockResolvedValue({ success: true });
 vi.mock("../../src/utils/projectFieldWriter", () => ({
   updateProjectItemStatus: (...args: unknown[]) => updateProjectItemStatus(...args),
 }));
+/** The safety net's In review write, through the open-PR guard (#1496). */
+const moveToInReviewIfPRBacked = vi.fn().mockResolvedValue("moved");
+vi.mock("../../src/utils/inReviewGuard", () => ({
+  moveToInReviewIfPRBacked: (...args: unknown[]) => moveToInReviewIfPRBacked(...args),
+}));
 
 const postFailureComment = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/utils/failureComment", () => ({
@@ -195,6 +200,7 @@ describe("ConcurrentPipelineManager — zero-token pipeline-start refusal (#1170
   beforeEach(() => {
     vi.clearAllMocks();
     updateProjectItemStatus.mockResolvedValue({ success: true });
+    moveToInReviewIfPRBacked.mockResolvedValue("moved");
     postFailureComment.mockResolvedValue(undefined);
     mockAutonomousStatus.mockResolvedValue({ status: "paused" });
   });
@@ -223,6 +229,7 @@ describe("ConcurrentPipelineManager — zero-token pipeline-start refusal (#1170
 
     // The two reactions the incident produced — neither may fire.
     expect(updateProjectItemStatus).not.toHaveBeenCalled();
+    expect(moveToInReviewIfPRBacked).not.toHaveBeenCalled();
     expect(postFailureComment).not.toHaveBeenCalled();
 
     // It is still a failure for accounting purposes — the run did not succeed.
@@ -257,11 +264,12 @@ describe("ConcurrentPipelineManager — zero-token pipeline-start refusal (#1170
       await manager.settleForTest(1170);
 
       expect(updateProjectItemStatus).not.toHaveBeenCalled();
+      expect(moveToInReviewIfPRBacked).not.toHaveBeenCalled();
       expect(postFailureComment).not.toHaveBeenCalled();
     }
   );
 
-  it("STILL moves the board to In review and STILL comments when a run that genuinely started fails", async () => {
+  it("STILL attempts the guarded In review move and STILL comments when a run that genuinely started fails", async () => {
     const { manager, controllable, onSlotFailed } = buildManager([1171]);
 
     await manager.fillSlots();
@@ -281,14 +289,44 @@ describe("ConcurrentPipelineManager — zero-token pipeline-start refusal (#1170
 
     expect(onSlotFailed).toHaveBeenCalledTimes(1);
 
-    // The safety net fires, with the same status it always used.
-    expect(updateProjectItemStatus).toHaveBeenCalledTimes(1);
-    const [issueNumber, status] = updateProjectItemStatus.mock.calls[0];
-    expect(issueNumber).toBe(1171);
-    expect(status).toBe("In review");
+    // The safety net fires, through the open-PR guard (#1496) — never as an
+    // unconditional board write that could race the scheduler's revert.
+    expect(moveToInReviewIfPRBacked).toHaveBeenCalledTimes(1);
+    expect(moveToInReviewIfPRBacked.mock.calls[0][0]).toBe(1171);
+    expect(updateProjectItemStatus).not.toHaveBeenCalled();
 
     // And the diagnostic comment is posted.
     expect(postFailureComment).toHaveBeenCalledTimes(1);
     expect(postFailureComment.mock.calls[0][0]).toMatchObject({ issueNumber: 1171 });
+  });
+});
+
+describe("ConcurrentPipelineManager — failure safety net needs an open PR (#1496)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    postFailureComment.mockResolvedValue(undefined);
+    mockAutonomousStatus.mockResolvedValue({ status: "paused" });
+  });
+
+  it("writes nothing and does not retry when the guard refuses (no open PR)", async () => {
+    moveToInReviewIfPRBacked.mockResolvedValue("refused");
+    const { manager, controllable } = buildManager([1496]);
+
+    await manager.fillSlots();
+    controllable.finishWith(1496, {
+      success: false,
+      completedStages: ["issue-pickup", "feature-planning"],
+      skippedStages: [],
+      deferredStages: [],
+      failedStage: "feature-dev",
+      error: new Error("exit 1: feature-dev subagent crashed"),
+      totalDurationMs: 420_000,
+    });
+
+    await manager.settleForTest(1496);
+
+    expect(moveToInReviewIfPRBacked).toHaveBeenCalledTimes(1);
+    // No fallback status write of any kind: the scheduler's revert is the only writer.
+    expect(updateProjectItemStatus).not.toHaveBeenCalled();
   });
 });

@@ -108,3 +108,21 @@ func TestListOpenPRHeads(t *testing.T) {
 		}
 	})
 }
+
+// TestOwnOpenPRForIssue: only an open PR whose head branch names the issue
+// counts, and an unreadable list is an error, never "no PR" (#1496).
+func TestOwnOpenPRForIssue(t *testing.T) {
+	ctx := context.Background()
+	c, _ := openPRForge(t, 3, 0)
+	svc := NewPRService(c)
+	if pr, found, err := svc.OwnOpenPRForIssue(ctx, "acme", "widgets", 2); err != nil || !found || pr != 102 {
+		t.Fatalf("issue 2 = (%d, %v, %v), want (102, true, nil)", pr, found, err)
+	}
+	if pr, found, err := svc.OwnOpenPRForIssue(ctx, "acme", "widgets", 9); err != nil || found || pr != 0 {
+		t.Fatalf("issue 9 = (%d, %v, %v), want (0, false, nil)", pr, found, err)
+	}
+	failing, _ := openPRForge(t, 3, 2)
+	if _, found, err := NewPRService(failing).OwnOpenPRForIssue(ctx, "acme", "widgets", 1); err == nil || found {
+		t.Fatalf("failed walk = (found %v, err %v), want an error", found, err)
+	}
+}

@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failed run is moved to In review only when an open PR backs it
+  (#1496).** The failure safety nets and the pr-create stage exit now write
+  In review through `nightgauge project sync-status`, which refuses without an
+  open PR. A failed run with no PR is left to the scheduler, which returns it to
+  Ready, instead of being stranded in In review.
+
 ### Added
 
 - **The Recovery Dialog can resume, restart or discard a run when the engine
