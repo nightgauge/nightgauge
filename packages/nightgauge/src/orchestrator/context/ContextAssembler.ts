@@ -14,6 +14,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { pipelineStateDir, plansDir as clonePlansDir } from "../../utils/cloneLayout";
+import { epicBranchParent } from "../../utils/epicBranchParent";
 import { execFile } from "child_process";
 import { promisify } from "util";
 
@@ -1201,27 +1202,57 @@ export class ContextAssembler {
       const sections = this.parseIssueBodySections(body, repository);
       const analysis = analyzeChange(labels, title);
 
+      // #2506: the parent comes from the issue's native GitHub parent, resolved
+      // in the issue's own repository and filtered through epicBranchParent —
+      // the same source Go issue-pickup uses (git.EpicBranchParent). A
+      // cross-repository parent has no epic branch here.
       let baseBranch = "main";
       let nativeParent: number | null = null;
-      const branchContextPath = path.join(clonePlansDir(workspaceRoot), ".branch-context");
-      try {
-        if (fs.existsSync(branchContextPath)) {
-          const content = fs.readFileSync(branchContextPath, "utf-8");
-          const baseMatch = content.match(/BASE_BRANCH=(\S+)/);
-          if (baseMatch?.[1]) baseBranch = baseMatch[1];
-
-          const parentMatch = content.match(/PARENT_ISSUE=(\d+)/);
-          if (parentMatch?.[1]) nativeParent = parseInt(parentMatch[1], 10);
+      if (repository.includes("/")) {
+        const [ownerName, repoName] = repository.split("/");
+        try {
+          const { stdout: parentRaw } = await execFileAsync(
+            "gh",
+            [
+              "api",
+              "graphql",
+              "-f",
+              "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){parent{number repository{nameWithOwner}}}}}",
+              "-f",
+              `owner=${ownerName}`,
+              "-f",
+              `name=${repoName}`,
+              "-F",
+              `number=${issueNumber}`,
+            ],
+            execOptions
+          );
+          const parent = (
+            JSON.parse(parentRaw) as {
+              data?: {
+                repository?: {
+                  issue?: {
+                    parent?: { number?: number; repository?: { nameWithOwner?: string } } | null;
+                  };
+                };
+              };
+            }
+          ).data?.repository?.issue?.parent;
+          nativeParent =
+            epicBranchParent(repository, parent?.number, parent?.repository?.nameWithOwner) ?? null;
+        } catch (err) {
+          this.logger.warn("Deterministic context: native parent lookup failed", {
+            issueNumber,
+            err: err instanceof Error ? err.message : String(err),
+          });
         }
-      } catch {
-        // Use default
       }
 
       if (nativeParent === null && sections.parentIssue !== null) {
         nativeParent = sections.parentIssue;
       }
 
-      if (nativeParent !== null && !baseBranch.startsWith("epic/")) {
+      if (nativeParent !== null) {
         try {
           const { stdout: lsRemoteRaw } = await execFileAsync(
             "git",

@@ -2977,8 +2977,13 @@ nightgauge pr create \
   --body "..." \
   --head <branch> \
   --base main \
+  [--issue <N>] \
+  [--run-id <id>] \
   [--draft] \
   [--json]
+# --issue appends the pipeline marker
+# <!-- nightgauge:pipeline stage=pr-create issue=<N> run=<id> --> to the body;
+# --run-id defaults to $NIGHTGAUGE_RUN_ID (unknown run renders as "-").
 
 # Merge a pull request with configurable strategy
 nightgauge pr merge [pr-number] \

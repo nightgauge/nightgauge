@@ -23,19 +23,28 @@ vi.mock("../../src/utils/skillRunner", () => ({
 }));
 
 vi.mock("../../src/services/BinaryResolver", () => ({
-  BinaryResolver: { fromVSCode: () => ({ resolve: async () => "/fake/nightgauge" }) },
+  BinaryResolver: { fromVSCode: () => ({ resolve: async () => binaryPath.value }) },
 }));
 
-const { branchName, preExistingPrs, commitsAhead, pushFails, createFails, prCreated, calls } =
-  vi.hoisted(() => ({
-    branchName: { value: "feat/42-add-thing" },
-    preExistingPrs: { value: [] as Array<{ number: number }> },
-    commitsAhead: { value: "2" },
-    pushFails: { value: false },
-    createFails: { value: false },
-    prCreated: { value: false },
-    calls: { value: [] as string[][] },
-  }));
+const {
+  binaryPath,
+  branchName,
+  preExistingPrs,
+  commitsAhead,
+  pushFails,
+  createFails,
+  prCreated,
+  calls,
+} = vi.hoisted(() => ({
+  binaryPath: { value: "/fake/nightgauge" as string | null },
+  branchName: { value: "feat/42-add-thing" },
+  preExistingPrs: { value: [] as Array<{ number: number }> },
+  commitsAhead: { value: "2" },
+  pushFails: { value: false },
+  createFails: { value: false },
+  prCreated: { value: false },
+  calls: { value: [] as string[][] },
+}));
 
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
@@ -60,6 +69,9 @@ vi.mock("child_process", async () => {
     }
     // gh repo view --json defaultBranchRef -q .defaultBranchRef.name
     if (cmd === "gh" && a[0] === "repo" && a[1] === "view") {
+      if (a.includes("nameWithOwner")) {
+        return Promise.resolve({ stdout: "o/r\n", stderr: "" });
+      }
       return Promise.resolve({ stdout: "main\n", stderr: "" });
     }
     // git rev-list --count origin/main..HEAD
@@ -79,8 +91,8 @@ vi.mock("child_process", async () => {
     if (cmd === "gh" && a[0] === "issue" && a[1] === "view") {
       return Promise.resolve({ stdout: "Add thing\n", stderr: "" });
     }
-    // gh pr create ...
-    if (cmd === "gh" && a[0] === "pr" && a[1] === "create") {
+    // nightgauge pr create ... (#2506: never ambient gh pr create)
+    if (cmd === "/fake/nightgauge" && a[0] === "pr" && a[1] === "create") {
       if (createFails.value) {
         return Promise.reject(
           Object.assign(new Error("create failed"), {
@@ -142,6 +154,7 @@ function makeOrchestratorForRecovery() {
 
 describe("execution_path attribution when the fallback recovers (#122)", () => {
   beforeEach(() => {
+    binaryPath.value = "/fake/nightgauge";
     branchName.value = "feat/42-add-thing";
     preExistingPrs.value = [];
     commitsAhead.value = "2";
@@ -177,6 +190,7 @@ describe("execution_path attribution when the fallback recovers (#122)", () => {
 
 describe("tryDeterministicCreateFallback (#3927)", () => {
   beforeEach(() => {
+    binaryPath.value = "/fake/nightgauge";
     branchName.value = "feat/42-add-thing";
     preExistingPrs.value = [];
     commitsAhead.value = "2";
@@ -190,12 +204,16 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     const result = await callFallback();
     expect(result.created).toBe(true);
     expect(countCalls((c) => c[0] === "git" && c[1] === "push")).toBe(1);
-    expect(countCalls((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create")).toBe(1);
+    expect(
+      countCalls((c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create")
+    ).toBe(1);
   });
 
   it("uses --body (not a heredoc) and includes the closing keyword + issue title", async () => {
     await callFallback();
-    const create = calls.value.find((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create");
+    const create = calls.value.find(
+      (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
+    );
     expect(create).toBeDefined();
     expect(create).toContain("--body");
     expect(create).toContain("--title");
@@ -210,7 +228,9 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     const result = await callFallback();
     expect(result.created).toBe(true);
     expect(countCalls((c) => c[0] === "git" && c[1] === "push")).toBe(0);
-    expect(countCalls((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create")).toBe(0);
+    expect(
+      countCalls((c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create")
+    ).toBe(0);
   });
 
   it("refuses to open a PR from a base branch", async () => {
@@ -226,7 +246,9 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     const result = await callFallback();
     expect(result.created).toBe(false);
     expect(result.reason).toMatch(/no commits ahead/i);
-    expect(countCalls((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create")).toBe(0);
+    expect(
+      countCalls((c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create")
+    ).toBe(0);
   });
 
   // Issue #317: the confirmed-zero-commits case must carry the stable
@@ -253,13 +275,37 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     const result = await callFallback();
     expect(result.created).toBe(false);
     expect(result.reason).toMatch(/push failed/i);
-    expect(countCalls((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create")).toBe(0);
+    expect(
+      countCalls((c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create")
+    ).toBe(0);
   });
 
   it("returns created:false with a reason when gh pr create fails", async () => {
     createFails.value = true;
     const result = await callFallback();
     expect(result.created).toBe(false);
-    expect(result.reason).toMatch(/gh pr create failed/i);
+    expect(result.reason).toMatch(/nightgauge pr create failed/i);
+  });
+
+  // #2506: the binary authors with the config identity and stamps the
+  // pipeline marker from --issue/--run-id; ambient gh must never open it.
+  it("opens the PR through the binary with --issue and --run-id, never gh pr create", async () => {
+    const result = await callFallback();
+    expect(result.created).toBe(true);
+    expect(countCalls((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create")).toBe(0);
+    const create = calls.value.find(
+      (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
+    )!;
+    expect(create[create.indexOf("--issue") + 1]).toBe("42");
+    expect(create).toContain("--run-id");
+    expect(create[create.indexOf("--repo") + 1]).toBe("o/r");
+  });
+
+  it("fails closed when the binary is unresolved", async () => {
+    binaryPath.value = null;
+    const result = await callFallback();
+    expect(result.created).toBe(false);
+    expect(result.reason).toMatch(/binary unresolved/i);
+    expect(countCalls((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create")).toBe(0);
   });
 });

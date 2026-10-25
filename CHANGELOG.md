@@ -24,6 +24,13 @@ changelog, and the release workflow refuses a tag that does not.
   the VS Code host smoke tests. The gate now unsets them before any step runs
   (`--env-probe` reports the result), and the affected Go and TypeScript tests
   clear them themselves, so a direct `go test` or `vitest` run is correct too.
+- **A stale `.branch-context` no longer sets an unrelated issue's base and parent,
+  and the pr-create fallback no longer opens PRs as the operator (#2506).** The
+  deterministic issue-context fallback takes the parent from the issue's native
+  GitHub parent in its own repository, and the create fallback opens the PR
+  through `nightgauge pr create --issue --run-id`, which authors with the
+  configured identity and stamps the pipeline marker. `pr create` gains
+  `--issue` and `--run-id`.
 - **A failed issue with no open PR now ends in the status the revert names
   (#1496).** The scheduler's revert wrote `Ready` while the VS Code extension
   wrote `In review` in the same second, and when the extension landed last the

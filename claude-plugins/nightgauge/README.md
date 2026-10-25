@@ -356,7 +356,7 @@ Gathering context...
 ✓ Issue #13 details loaded
 
 Detecting base branch...
-✓ Base: feat/nightgauge-pipeline (from .nightgauge/plans/.branch-context)
+✓ Base: epic/12-nightgauge-pipeline (from the issue's native parent)
 
 ┌─────────────────────────────────────────────────────────────────┐
 │  PULL REQUEST CREATED                                           │

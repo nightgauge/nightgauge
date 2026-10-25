@@ -4054,13 +4054,42 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       `_Opened by the deterministic pr-create fallback (#3927) after the pr-create stage ` +
       `exited without creating a PR. The full description is normally authored by the ` +
       `pr-create stage; this is a safety-net PR to unblock the pipeline._`;
+    // #2506: open through the binary, never ambient `gh pr create` — the
+    // binary authors with the config-resolved identity (the pipeline App when
+    // github_auth.app is configured) and stamps forge.PipelineMarker.
+    const binary = await BinaryResolver.fromVSCode().resolve();
+    if (!binary) {
+      return {
+        created: false,
+        reason: "nightgauge binary unresolved; refusing ambient gh pr create",
+      };
+    }
+    let repoSlug = this.repoOverride ?? "";
+    if (!repoSlug) {
+      try {
+        const { stdout } = await execFileAsync(
+          "gh",
+          ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+          { encoding: "utf-8", cwd, timeout: 30_000 }
+        );
+        repoSlug = stdout.trim();
+      } catch {
+        // handled below
+      }
+    }
+    if (!repoSlug) {
+      return { created: false, reason: "could not resolve repository for pr create" };
+    }
+    const runId = this.stateService?.getRunId() ?? "";
     this.logger.info("Deterministic create fallback: opening PR", { issueNumber, branch, base });
     try {
       await execFileAsync(
-        "gh",
+        binary,
         [
           "pr",
           "create",
+          "--repo",
+          repoSlug,
           "--base",
           base,
           "--head",
@@ -4069,7 +4098,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           title,
           "--body",
           body,
-          ...repoArgs,
+          "--issue",
+          String(issueNumber),
+          "--run-id",
+          runId,
+          "--json",
         ],
         { encoding: "utf-8", cwd, timeout: 60_000 }
       );
@@ -4081,7 +4114,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         });
       }
       const stderr = (createErr as { stderr?: string } | undefined)?.stderr ?? String(createErr);
-      return { created: false, reason: `gh pr create failed: ${stderr.slice(0, 200)}` };
+      return { created: false, reason: `nightgauge pr create failed: ${stderr.slice(0, 200)}` };
     }
 
     // 6. Confirm an open PR now exists.
