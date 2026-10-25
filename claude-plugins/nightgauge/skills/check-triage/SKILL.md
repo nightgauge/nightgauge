@@ -4,7 +4,7 @@ description: Triage a failing CI check that no issue exists for — reproduce it
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.0.0"
+  version: "1.1.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 disable-model-invocation: true
@@ -75,7 +75,9 @@ The run ends with exactly one of:
 DIAGNOSED — <one-line cause>
   reproduced: local | ci
   ruled out:  <hypothesis> — <the observation that killed it>
+  cause:      product_code | skill_instruction | agent_config
   fix:        <branch> / <PR>   test: <name> (red without the fix: yes|no — <why not>)
+  scenario:   evals/scenarios/<skill>/<file> (red pre-fix: yes)   [skill causes only]
   record:     <checkout>/triage/checks/<id>.json
   tracked:    <issue URL>
 ```
@@ -219,6 +221,27 @@ emulator and a live stack are needed; nothing reproduces this in unit scope" is
 a legitimate answer. Implying coverage you do not have is not.
 
 Land it on a branch and open a PR. Never push to a default branch.
+
+**When the cause is a skill instruction or agent configuration**, not product
+code, set `cause.kind` to `skill_instruction` or `agent_config` and the guard is
+an eval scenario rather than a unit test (#1287). Add a `skill_regression` block
+to the record — the decision the skill faced, the enumerated options, the
+corrected decision, and the pre-fix decision with a verbatim transcript excerpt
+as `pre_fix_evidence` (schema: `docs/SKILL_EVALUATION.md` § Generated
+scenarios) — and run the generator, which writes the scenario only if it passes
+on the corrected decision and fails on both the non-answer sentinel and the
+pre-fix decision:
+
+```bash
+npx tsx scripts/generate-eval-scenario.ts --from "$RECORD_JSON"
+```
+
+Exit 0 with `"status": "written"` → put the reported `scenario_path` in
+`fix.test` and set `test_fails_without_fix: true`. Exit 1 (rejected) → the
+reason names the failed gate; fix the diagnosis, or record
+`fix.no_test_reason` with that reason. Never set `test_fails_without_fix` on a
+scenario the generator did not write. Product-code causes set
+`cause.kind: product_code` and the generator skips them.
 
 ### Phase 5: Record and Track
 

@@ -1030,6 +1030,21 @@ export {
   pickAdvice,
   type RoutingAdviceEntry,
   type RoutingAdviceFile,
+  // Regression scenarios generated from skill-caused diagnoses (#1287)
+  NON_ANSWER_SENTINEL,
+  CAUSE_KINDS,
+  SkillRegressionSchema,
+  ScenarioDiagnosisSchema,
+  skillIdPrefix,
+  generateScenarioFromDiagnosis,
+  verifyGeneratedScenario,
+  generateScenarioFromInput,
+  type SkillRegression,
+  type ScenarioDiagnosis,
+  type GeneratedScenario,
+  type GenerationCheck,
+  type GenerationStatus,
+  type GenerationReport,
 } from "./eval/index.js";
 
 // Query Language (GQL)

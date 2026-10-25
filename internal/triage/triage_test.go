@@ -347,3 +347,32 @@ func TestRecordsLiveInCheckoutOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_CauseAttribution(t *testing.T) {
+	cases := []struct {
+		name  string
+		cause *Cause
+		block string
+		want  string
+	}{
+		{"absent cause is allowed", nil, "", ""},
+		{"product code needs no block", &Cause{Kind: CauseProductCode}, "", ""},
+		{"skill cause without block", &Cause{Kind: CauseSkillInstruction}, "", "skill_regression"},
+		{"agent config with empty block", &Cause{Kind: CauseAgentConfig}, "{}", "skill_regression"},
+		{"skill cause with block", &Cause{Kind: CauseSkillInstruction}, `{"skill":"check-triage"}`, ""},
+		{"unknown kind", &Cause{Kind: "vibes"}, "", "cause.kind"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := grounded()
+			r.Cause = tc.cause
+			if tc.block != "" {
+				r.SkillRegression = []byte(tc.block)
+			}
+			got := fieldsOf(r.Validate())
+			if got != tc.want {
+				t.Fatalf("violations = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

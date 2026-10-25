@@ -27,6 +27,7 @@
 package triage
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -58,6 +59,27 @@ const (
 	// it satisfies nothing.
 	VerdictUntested = "untested"
 )
+
+// Root-cause kinds. A diagnosis names what was actually wrong, because the
+// regression guard it leaves behind depends on it: a product-code cause leaves
+// a test (Fix.Test), a skill-instruction or agent-config cause leaves an eval
+// scenario generated from SkillRegression (#1287).
+const (
+	CauseProductCode      = "product_code"
+	CauseSkillInstruction = "skill_instruction"
+	CauseAgentConfig      = "agent_config"
+)
+
+// Cause is the root-cause attribution of a diagnosis.
+type Cause struct {
+	Kind string `json:"kind"` // product_code | skill_instruction | agent_config
+}
+
+// IsSkillCause reports whether the kind attributes the failure to a skill
+// instruction or agent configuration rather than product code.
+func IsSkillCause(kind string) bool {
+	return kind == CauseSkillInstruction || kind == CauseAgentConfig
+}
 
 // Target is what the operator handed over: a check name, a workflow run URL, or
 // a workflow file path.
@@ -135,6 +157,14 @@ type Record struct {
 	Reproduction Reproduction `json:"reproduction"`
 	Hypotheses   []Hypothesis `json:"hypotheses"`
 	Fix          *Fix         `json:"fix,omitempty"`
+	// Cause attributes the root cause. Optional; when it names a skill cause,
+	// SkillRegression is required.
+	Cause *Cause `json:"cause,omitempty"`
+	// SkillRegression is the structured block the eval-scenario generator
+	// (scripts/generate-eval-scenario.ts) derives a regression scenario from.
+	// Its shape is owned by the SDK schema (SkillRegressionSchema); this
+	// package checks only that it is present for a skill cause.
+	SkillRegression json.RawMessage `json:"skill_regression,omitempty"`
 	// SpikeIssue is the type:spike filed when nothing reproduced.
 	SpikeIssue string `json:"spike_issue,omitempty"`
 	// TrackingIssue is the issue the landed fix is tracked by, so the work
@@ -245,7 +275,24 @@ func (r Record) Validate() []Violation {
 			add("tracking_issue", "required for a landed fix — otherwise the work exists only in a session transcript")
 		}
 	}
+
+	if r.Cause != nil {
+		switch r.Cause.Kind {
+		case CauseProductCode, CauseSkillInstruction, CauseAgentConfig:
+		default:
+			add("cause.kind", fmt.Sprintf("must be %q, %q or %q", CauseProductCode, CauseSkillInstruction, CauseAgentConfig))
+		}
+		if IsSkillCause(r.Cause.Kind) && !isJSONObject(r.SkillRegression) {
+			add("skill_regression",
+				"required for a skill or agent-config cause — without it no eval scenario can be generated, and the regression is left unguarded")
+		}
+	}
 	return out
+}
+
+func isJSONObject(raw json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	return json.Unmarshal(raw, &m) == nil && len(m) > 0
 }
 
 // NewID builds a stable, filesystem-safe record id from a target and a time.

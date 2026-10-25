@@ -303,6 +303,66 @@ cp .nightgauge/skill-evals/multi-*.jsonl .nightgauge/skill-evals/baseline.jsonl
 5. Optionally validate with the runner: `npx tsx scripts/evaluate-skills.ts
 --skills <skill>`.
 
+## Generated scenarios (#1287)
+
+A diagnosis whose root cause is a skill instruction or agent configuration
+leaves a scenario behind, the way a product-code diagnosis leaves a test.
+`scripts/generate-eval-scenario.ts` (SDK: `src/eval/scenarioFromDiagnosis.ts`)
+reads a check-triage record or retro finding and writes
+`evals/scenarios/<skill>/<slug>.json` plus `evals/fixtures/<skill>/<id>.json`.
+
+```bash
+npx tsx scripts/generate-eval-scenario.ts --from <diagnosis.json> [--root .] [--dry-run]
+```
+
+Input — the two keys both producers carry:
+
+```json
+{
+  "cause": { "kind": "skill_instruction" },
+  "skill_regression": {
+    "skill": "check-triage",
+    "slug": "unreproduced-files-spike",
+    "description": "one line",
+    "failure_mode": "what the pre-fix skill did wrong",
+    "condition": "the situation the skill faced, written as the prompt body",
+    "decision": {
+      "action": ["file_spike", "increase_timeout"],
+      "proposes_code_change": [true, false]
+    },
+    "corrected": { "action": "file_spike", "proposes_code_change": false },
+    "corrected_rationale": "prose the fixed skill gives (fixture text)",
+    "pre_fix": { "action": "increase_timeout", "proposes_code_change": true },
+    "pre_fix_evidence": "verbatim transcript excerpt showing the pre-fix decision"
+  }
+}
+```
+
+The scenario id is `<skill-prefix>-<slug>` (`check-triage` → `ct`). The prompt
+is `condition` plus the enumerated-options JSON request, and each `corrected`
+field becomes a `json_path_equals` assertion on the last ` ```json ` block.
+`cause.kind: product_code` is skipped (exit 0, nothing written).
+
+Nothing is written unless every gate passes; otherwise the report names the
+failed gate and the CLI exits 1:
+
+| Gate                             | Rejects                                                        |
+| -------------------------------- | -------------------------------------------------------------- |
+| `skill_is_evaluated`             | a skill outside `EVAL_SKILLS` — its scenarios would never load |
+| `decisions_within_options`       | a `corrected`/`pre_fix` value not listed in `decision`         |
+| `pre_fix_differs_from_corrected` | a pre-fix decision identical to the fix                        |
+| `scenario_schema_valid`          | a scenario the loader would reject                             |
+| `id_is_new`                      | an id or file that already exists — never overwrites           |
+| `fixture_passes`                 | a fixture that would turn the mock matrix red                  |
+| `non_answer_fails`               | a scenario that passes on `"I don't know."`                    |
+| `red_on_pre_fix`                 | a scenario that passes on the recorded pre-fix decision        |
+
+"Red before the fix" replays the recorded pre-fix decision rather than running a
+model against the old `SKILL.md`: the live runner sends only the scenario prompt
+and loads no skill. Only decision-form scenarios are generated; prose-shaped
+failure modes stay hand-authored. Exit 2 means the input or arguments are
+invalid.
+
 ## The non-answer sentinel (#1267)
 
 The mock matrix is green by construction, so on its own it cannot tell a working

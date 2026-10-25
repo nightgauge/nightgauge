@@ -8,7 +8,7 @@ description: Analyze pipeline failures to identify root causes, recurring patter
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.5.1"
+  version: "1.6.0"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task
@@ -450,9 +450,16 @@ For each failure category present in the event list, generate a finding:
   "root_cause": "Detailed explanation of what is causing this failure category",
   "pattern": "Recurring pattern description (e.g., TypeScript strict mode errors on async handlers)",
   "recommendation": "Specific actionable step to remediate",
-  "estimated_recurrence_risk": "high | medium | low"
+  "estimated_recurrence_risk": "high | medium | low",
+  "cause": { "kind": "product_code | skill_instruction | agent_config" }
 }
 ```
+
+When the root cause is a skill instruction or agent configuration, also add a
+`skill_regression` block (schema: `docs/SKILL_EVALUATION.md` § Generated
+scenarios) built from the transcript evidence you read. Omit it when the
+evidence does not show the decision the skill made — a guessed pre-fix
+decision would produce a scenario that proves nothing.
 
 **Severity Classification Rules:**
 
@@ -662,6 +669,29 @@ for f in findings:
 
 deduped_findings = list(seen.values())
 ```
+
+#### Step 7.1b: Generate Regression Scenarios for Skill Causes (#1287)
+
+For each deduplicated finding whose `cause.kind` is `skill_instruction` or
+`agent_config` and that carries `skill_regression`, write the finding to a temp
+file and run the generator. It writes `evals/scenarios/<skill>/` and
+`evals/fixtures/<skill>/` only when the scenario passes on the corrected
+decision and fails on the non-answer sentinel and on the pre-fix decision:
+
+```bash
+FINDING_JSON=$(mktemp)
+printf '%s\n' "$FINDING" > "$FINDING_JSON"
+GEN_FLAGS=""
+[ "$DRY_RUN" = "true" ] && GEN_FLAGS="--dry-run"
+npx tsx scripts/generate-eval-scenario.ts --from "$FINDING_JSON" $GEN_FLAGS
+GEN_EXIT=$?
+rm -f "$FINDING_JSON"
+```
+
+Exit 0 → report the `scenario_path` in the finding's recommendation
+(`verified` under dry-run). Exit 1 → report the rejection reason; the
+scenario must be hand-authored or the diagnosis improved. Exit 2 → the
+`skill_regression` block is malformed; report it, do not guess a fix.
 
 #### Step 7.2: Generate Recommendation Templates
 

@@ -14,6 +14,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **Skill-caused diagnoses now leave a regression scenario behind (#1287).**
+  When check-triage or retro attributes a failure to a skill instruction or
+  agent configuration, `scripts/generate-eval-scenario.ts` turns the diagnosis
+  into an eval scenario and mock fixture. It writes them only if the scenario
+  passes on the corrected decision, fails on a non-answer and fails on the
+  decision the skill made before the fix, and it never overwrites an existing
+  scenario. Triage records gain `cause.kind` and a `skill_regression` block;
+  see `docs/SKILL_EVALUATION.md`.
+
 ### Fixed
 
 - **Credentials orphaned by the extension ID change are now reported (#2513).**
