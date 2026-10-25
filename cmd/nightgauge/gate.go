@@ -53,10 +53,12 @@ func gateRecordMetricCmd() *cobra.Command {
 		workdir      string
 	)
 	cmd := &cobra.Command{
-		Use:   "record-metric",
-		Short: "Append a quality-gate result (pass|catch) to " + layout.CheckoutDisplay(state.GateMetricsName),
+		Use: "record-metric",
+		Short: "Append a quality-gate result (pass|catch) to " + layout.CheckoutDisplay(state.GateMetricsName) +
+			" and " + layout.CloneLogsDisplay() + "/" + state.GateMetricsHistoryName,
 		Long: `Append one quality-gate record consumed by the deterministic
-FeatureValidateGate. Used by the feature-validate adversarial-review phase to
+FeatureValidateGate (per-checkout) and by ` + "`nightgauge health gate-metrics`" + `
+(cross-run history in the clone's logs, which survives worktree cleanup). Used by the feature-validate adversarial-review phase to
 record an LLM-critic verdict — a "catch" fails validation through the existing
 gate without putting an LLM call inside the gate itself (see docs/STAGE_GATES.md).`,
 		Example:      `  nightgauge gate record-metric --issue 4097 --gate adversarial-review --result catch --error-summary "correctness: nil-deref"`,

@@ -226,7 +226,7 @@ CHECKOUT_DIR="$(nightgauge layout path checkout)"
 [ -d "${PIPELINE_DIR}/assessments" ] && DATA_SOURCES="$DATA_SOURCES assessments"
 [ -f ".nightgauge/calibration.json" ] && DATA_SOURCES="$DATA_SOURCES calibration"
 [ -d "${CHECKOUT_DIR}/analysis" ] && DATA_SOURCES="$DATA_SOURCES analysis"
-[ -f "${CHECKOUT_DIR}/health/gate-metrics.jsonl" ] && DATA_SOURCES="$DATA_SOURCES gate-metrics"
+[ -f "$(nightgauge layout path logs gate-metrics.jsonl)" ] && DATA_SOURCES="$DATA_SOURCES gate-metrics"
 [ -f ".nightgauge/skill-effectiveness.jsonl" ] && DATA_SOURCES="$DATA_SOURCES skill-effectiveness"
 [ -d "${CHECKOUT_DIR}/health" ] && DATA_SOURCES="$DATA_SOURCES health-trends"
 [ -f "${CHECKOUT_DIR}/complexity-model.yaml" ] && DATA_SOURCES="$DATA_SOURCES complexity-model"
@@ -371,7 +371,7 @@ activations:
 - Model escalation count
 - Ralph Loop activation count
 - Ralph Loop success rate (fixed vs escalated to human)
-- Gate effectiveness (hit rates from `checkout/health/gate-metrics.jsonl`)
+- Gate effectiveness (hit rates from `logs/gate-metrics.jsonl`, the clone's cross-run history)
 - Skill effectiveness deltas (from `.nightgauge/skill-effectiveness.jsonl`)
 
 <!-- phase:end name="signal-gathering" -->
@@ -1004,7 +1004,7 @@ This skill reads configuration from `.nightgauge/config.yaml`:
 | `checkout/complexity-model.yaml`        | Calibration          | No        |
 | `pipeline/recommendation-history.jsonl` | Recommendations      | No        |
 | `.nightgauge/execution-history.jsonl`   | Execution Efficiency | No        |
-| `checkout/health/gate-metrics.jsonl`    | Feedback & Recovery  | No        |
+| `logs/gate-metrics.jsonl`               | Feedback & Recovery  | No        |
 | `.nightgauge/skill-effectiveness.jsonl` | Feedback & Recovery  | No        |
 | `checkout/analysis/latest.json`         | Health Dimensions    | No        |
 | `.nightgauge/calibration.json`          | Calibration          | No        |

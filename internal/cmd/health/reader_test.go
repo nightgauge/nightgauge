@@ -1,11 +1,15 @@
 package health
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 func writeTrendsFile(t *testing.T, dir string, lines []string) {
@@ -25,8 +29,7 @@ func writeTrendsFile(t *testing.T, dir string, lines []string) {
 
 func writeGateFile(t *testing.T, dir string, lines []string) {
 	t.Helper()
-	healthDir := layouttest.MkCheckoutSubdir(t, dir, "health")
-	f, err := os.Create(filepath.Join(healthDir, "gate-metrics.jsonl"))
+	f, err := os.Create(filepath.Join(layouttest.MkLogsDir(t, dir), state.GateMetricsHistoryName))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -164,5 +167,51 @@ func TestReadTrends_NullScoreStaysNullAndOtherSchemasAreSkipped(t *testing.T) {
 	}
 	if entries[1].OverallScore == nil || *entries[1].OverallScore != 81 {
 		t.Fatalf("scored entry lost its score: %v", entries[1].OverallScore)
+	}
+}
+
+// Legacy pretty-printed records span several lines; each line fails to parse,
+// and the reader must report them once, not once per line (#2535).
+func TestReadGateMetrics_MalformedLinesGiveOneSummaryWarning(t *testing.T) {
+	dir := layouttest.Repo(t)
+	writeGateFile(t, dir, []string{
+		`{"schema_version":"1.0","issue_number":1,"gate_name":"build","result":"pass"}`,
+		`{`,
+		`  "gate_name": "legacy",`,
+		`}`,
+		`{"schema_version":"1.0","issue_number":2,"gate_name":"build","result":"catch"}`,
+	})
+	var warn bytes.Buffer
+	entries, err := readGateMetrics(dir, &warn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 valid entries, got %d", len(entries))
+	}
+	out := strings.TrimSpace(warn.String())
+	if strings.Count(out, "\n") != 0 || !strings.Contains(out, "skipped 3 malformed line(s)") {
+		t.Fatalf("want one summary warning for 3 lines, got %q", out)
+	}
+}
+
+// End to end: a record written from a linked worktree is read by
+// `health gate-metrics` from the main checkout after the worktree is removed.
+func TestReadGateMetrics_RecordFromRemovedWorktree(t *testing.T) {
+	repo := layouttest.Repo(t)
+	gittest.Run(t, repo, "commit", "-q", "--allow-empty", "-m", "init")
+	linked := filepath.Join(t.TempDir(), "wt")
+	gittest.Run(t, repo, "worktree", "add", "-q", "--detach", linked)
+	if err := state.AppendGateMetric(linked, 7, "verify-ui", "pass", "", "2026-10-25T00:00:00Z"); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	gittest.Run(t, repo, "worktree", "remove", "--force", linked)
+
+	entries, err := ReadGateMetrics(repo)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(entries) != 1 || entries[0].GateName != "verify-ui" {
+		t.Fatalf("want the worktree's verify-ui record, got %+v", entries)
 	}
 }

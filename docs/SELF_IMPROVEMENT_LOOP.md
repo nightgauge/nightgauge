@@ -553,7 +553,7 @@ Generate prioritized improvement proposals
 | `<pipeline>/history/outcomes.jsonl`           | Learning outcome corpus (per target repo, both exec paths)   |
 | `<checkout>/analysis/latest.json`             | Most recent analysis result                                  |
 | `<checkout>/analysis/analysis-*.json`         | Timestamped analysis history                                 |
-| `<checkout>/health/gate-metrics.jsonl`        | Gate invocation records                                      |
+| `<clone>/logs/gate-metrics.jsonl`             | Gate invocation records                                      |
 | `.nightgauge/skill-effectiveness.jsonl`       | Skill change effectiveness                                   |
 | `.nightgauge/calibration.json`                | Size estimate calibration                                    |
 | `<pipeline>/stage-model-calibration.json`     | Per-(stage, model) cost calibration (#142)                   |
