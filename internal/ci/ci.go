@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,10 +20,22 @@ import (
 
 // DiscoverResult is the output of DiscoverCommands.
 type DiscoverResult struct {
-	Commands     []string `json:"commands"`
-	WorkflowPath string   `json:"workflow_path"`
-	Framework    string   `json:"framework"` // "node" | "go" | "flutter" | "unknown"
-	Timestamp    string   `json:"timestamp"`
+	Commands []string `json:"commands"`
+	// Checks carries the same commands as Commands, in order, with the
+	// workflow and step each came from so a caller can report what it ran.
+	Checks       []Check `json:"checks"`
+	WorkflowPath string  `json:"workflow_path"`
+	// WorkflowPaths lists every workflow that contributed commands.
+	WorkflowPaths []string `json:"workflow_paths"`
+	Framework     string   `json:"framework"` // "node" | "go" | "flutter" | "unknown"
+	Timestamp     string   `json:"timestamp"`
+}
+
+// Check is one locally runnable command and where it came from.
+type Check struct {
+	Command  string `json:"command"`
+	Workflow string `json:"workflow"`
+	Step     string `json:"step"`
 }
 
 // ParityResult is the output of CheckParity.
@@ -43,6 +56,7 @@ type ParityFail struct {
 
 // workflowYAML is used for YAML unmarshalling of GitHub Actions workflow files.
 type workflowYAML struct {
+	On   yaml.Node          `yaml:"on"`
 	Jobs map[string]jobYAML `yaml:"jobs"`
 }
 
@@ -51,7 +65,17 @@ type jobYAML struct {
 }
 
 type stepYAML struct {
-	Run string `yaml:"run"`
+	Name string `yaml:"name"`
+	Run  string `yaml:"run"`
+}
+
+// unsafePatterns identify runner setup that cannot or must not run on a
+// developer machine. A run: block containing any of them is dropped whole.
+var unsafePatterns = []string{
+	"$github_", "${github_", "${{", "$runner_temp", "${runner_temp}",
+	"::error", "::warning", "::notice", "::group", "::endgroup",
+	"sudo ", "apt-get", "playwright install", "go install", "pip install",
+	"pip3 install", "git config --global", "git config --system",
 }
 
 // skipPatterns are substrings that identify install/setup steps to exclude.
@@ -60,41 +84,73 @@ var skipPatterns = []string{
 	"upload-artifact", "download-artifact", "actions/",
 }
 
-// DiscoverCommands parses the CI workflow to extract run-step commands.
-// When workflowPath is empty, it auto-discovers .github/workflows/ci.yml or ci.yaml.
-// Falls back to standard commands derived from project type when no workflow is found.
+// DiscoverCommands parses CI workflows to extract locally runnable check
+// commands. When workflowPath is empty, it scans every workflow under
+// .github/workflows/ that runs on pull_request or merge_group; an explicit
+// path is parsed regardless of its triggers. Falls back to standard commands
+// derived from project type when no workflow yields a command.
 func DiscoverCommands(_ context.Context, workdir, workflowPath string) (DiscoverResult, error) {
 	ts := time.Now().UTC().Format(time.RFC3339)
 
-	wfPath := workflowPath
-	if wfPath == "" {
-		for _, candidate := range []string{
-			filepath.Join(workdir, ".github", "workflows", "ci.yml"),
-			filepath.Join(workdir, ".github", "workflows", "ci.yaml"),
-		} {
-			if fileExists(candidate) {
-				wfPath = candidate
-				break
-			}
+	var paths []string
+	if workflowPath != "" {
+		paths = []string{workflowPath}
+	} else {
+		for _, pattern := range []string{"*.yml", "*.yaml"} {
+			matches, _ := filepath.Glob(filepath.Join(workdir, ".github", "workflows", pattern))
+			paths = append(paths, matches...)
 		}
+		sort.Strings(paths)
 	}
 
-	var commands []string
-	if wfPath != "" {
-		commands = parseWorkflowCommands(wfPath)
+	var checks []Check
+	var used []string
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		added := false
+		for _, c := range parseWorkflowChecks(p, workflowPath == "") {
+			if seen[c.Command] {
+				continue
+			}
+			seen[c.Command] = true
+			checks = append(checks, c)
+			added = true
+		}
+		if added {
+			used = append(used, p)
+		}
 	}
 
 	framework := detectFramework(workdir)
 
+	var commands []string
+	for _, c := range checks {
+		commands = append(commands, c.Command)
+	}
 	if len(commands) == 0 {
 		commands = fallbackCommands(workdir, framework)
 	}
 
+	first := ""
+	if len(used) > 0 {
+		first = used[0]
+	} else if workflowPath != "" {
+		first = workflowPath
+	}
+	if checks == nil {
+		checks = []Check{}
+	}
+	if used == nil {
+		used = []string{}
+	}
+
 	return DiscoverResult{
-		Commands:     commands,
-		WorkflowPath: wfPath,
-		Framework:    framework,
-		Timestamp:    ts,
+		Commands:      commands,
+		Checks:        checks,
+		WorkflowPath:  first,
+		WorkflowPaths: used,
+		Framework:     framework,
+		Timestamp:     ts,
 	}, nil
 }
 
@@ -142,7 +198,33 @@ func CheckParityJSON(ctx context.Context, workdir string, commands []string) ([]
 	return json.Marshal(result)
 }
 
-func parseWorkflowCommands(wfPath string) []string {
+// triggersOnPR reports whether the workflow's `on:` runs on pull_request or
+// merge_group, in string, list or map form.
+func triggersOnPR(on *yaml.Node) bool {
+	wanted := func(v string) bool { return v == "pull_request" || v == "merge_group" }
+	switch on.Kind {
+	case yaml.ScalarNode:
+		return wanted(on.Value)
+	case yaml.SequenceNode:
+		for _, n := range on.Content {
+			if n.Kind == yaml.ScalarNode && wanted(n.Value) {
+				return true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(on.Content); i += 2 {
+			if wanted(on.Content[i].Value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// parseWorkflowChecks returns the safe-to-run checks of one workflow. When
+// requirePR is set a workflow that does not run on pull_request/merge_group
+// yields nothing. The unit of filtering is the whole run: block.
+func parseWorkflowChecks(wfPath string, requirePR bool) []Check {
 	data, err := os.ReadFile(wfPath)
 	if err != nil {
 		return nil
@@ -152,35 +234,70 @@ func parseWorkflowCommands(wfPath string) []string {
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		return nil
 	}
+	if requirePR && !triggersOnPR(&wf.On) {
+		return nil
+	}
 
-	var commands []string
+	workflow := filepath.Base(wfPath)
+	var checks []Check
 	seen := make(map[string]bool)
 
-	for _, job := range wf.Jobs {
-		for _, step := range job.Steps {
-			if step.Run == "" {
+	jobNames := make([]string, 0, len(wf.Jobs))
+	for name := range wf.Jobs {
+		jobNames = append(jobNames, name)
+	}
+	sort.Strings(jobNames)
+
+	for _, jobName := range jobNames {
+		for i, step := range wf.Jobs[jobName].Steps {
+			if strings.TrimSpace(step.Run) == "" {
 				continue
 			}
-			// Each "run:" block may contain multiple logical commands; split
-			// on newlines AFTER joining backslash continuations — splitting a
-			// continued command per physical line executed each fragment
-			// separately and produced phantom hard-gate failures (#194).
-			for _, line := range splitLogicalCommands(step.Run) {
-				if line == "" || line[0] == '#' {
-					continue
-				}
-				if shouldSkip(line) {
-					continue
-				}
-				if !seen[line] {
-					seen[line] = true
-					commands = append(commands, line)
+			stepName := step.Name
+			if stepName == "" {
+				stepName = fmt.Sprintf("%s step %d", jobName, i+1)
+			}
+			for _, cmd := range blockCommands(step.Run) {
+				if !seen[cmd] {
+					seen[cmd] = true
+					checks = append(checks, Check{Command: cmd, Workflow: workflow, Step: stepName})
 				}
 			}
 		}
 	}
+	return checks
+}
 
-	return commands
+// blockCommands turns one run: block into commands. A block with any unsafe
+// or setup line is dropped whole. A block of several logical lines is returned
+// whole as one newline-joined command, which CheckParity runs through a shell:
+// its lines (if/fi, loops, `rc=$?`, `wait`) are fragments on their own. A
+// single-line block is one command. Backslash continuations are joined (#194).
+func blockCommands(run string) []string {
+	var lines []string
+	for _, line := range splitLogicalCommands(run) {
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		if isUnsafe(line) || shouldSkip(line) {
+			return nil
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return []string{strings.Join(lines, "\n")}
+}
+
+func isUnsafe(line string) bool {
+	lower := strings.ToLower(line)
+	for _, p := range unsafePatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // splitLogicalCommands splits a run: block into logical commands, joining
@@ -381,6 +498,22 @@ func tokenizeCommand(cmdStr string) ([]string, error) {
 }
 
 func runShellCmd(workdir, cmdStr string) (string, int, error) {
+	// A compound block (if/fi, loops, heredocs) is only valid whole and needs
+	// a real shell; single-line commands keep the shell-free exec path below.
+	if strings.Contains(cmdStr, "\n") {
+		cmd := exec.Command("sh", "-c", cmdStr)
+		cmd.Dir = workdir
+		var buf bytes.Buffer
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+		if err := cmd.Run(); err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				return buf.String(), exitErr.ExitCode(), err
+			}
+			return buf.String(), 1, err
+		}
+		return buf.String(), 0, nil
+	}
 	parts, err := tokenizeCommand(cmdStr)
 	if err != nil {
 		return "", 1, err

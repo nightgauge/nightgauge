@@ -14,6 +14,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **CI parity now runs this repository's format and lint checks (#2503).**
+  `nightgauge ci discover-commands` scans every `pull_request`/`merge_group`
+  workflow, not just `ci.yml`, drops runner setup (`sudo`, `$GITHUB_ENV`,
+  installs, global git config), returns multi-line `run:` blocks whole, and
+  reports the workflow and step of each check in a new `checks` field.
+
 ### Added
 
 - **Recovery actions are now transaction-safe at the IPC layer (#794).** Three

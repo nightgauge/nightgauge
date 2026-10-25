@@ -28,13 +28,18 @@ failing on first CI run and requiring pr-merge auto-fix cycles.
 
 ### Step 2.5.1: Discover CI Commands from Workflow
 
-Parse `.github/workflows/ci.yml` (or `ci.yaml`) to extract the commands CI
-actually runs. Fall back to standard commands if no workflow is found.
+Scan every workflow under `.github/workflows/` that runs on `pull_request` or
+`merge_group` (format and lint checks live in `lint.yml`, not `ci.yml`). The
+binary drops runner setup (`sudo`, `apt-get`, `$GITHUB_ENV`, installs, global git
+config) and returns a multi-line `run:` block whole. Fall back to standard
+commands if no workflow is found.
 
 ```bash
 CI_DISCOVER_RESULT=$(nightgauge ci discover-commands --json 2>/dev/null || \
-  echo '{"commands":[],"workflow_path":"","framework":"unknown","timestamp":""}')
-mapfile -t CI_PARITY_COMMANDS < <(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -r '.commands[]' 2>/dev/null)
+  echo '{"commands":[],"checks":[],"workflow_path":"","framework":"unknown","timestamp":""}')
+CI_PARITY_COMMANDS=()
+while IFS= read -r -d '' C; do CI_PARITY_COMMANDS+=("$C"); done \
+  < <(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -j '.commands[] | ., "\u0000"' 2>/dev/null)
 echo "CI parity commands discovered (${#CI_PARITY_COMMANDS[@]}): ${CI_PARITY_COMMANDS[*]}"
 ```
 
@@ -52,7 +57,8 @@ CI_PARITY_ATTEMPT=0
 function run_ci_parity() {
   for CMD in "${CI_PARITY_COMMANDS[@]}"; do
     echo "Running: $CMD"
-    OUTPUT=$($CMD 2>&1)
+    # A command may be a multi-line block; run it through a shell, as CI does.
+    OUTPUT=$(bash -c "$CMD" 2>&1)
     EXIT_CODE=$?
     if [ $EXIT_CODE -ne 0 ]; then
       CI_PARITY_PASSED=false
@@ -67,7 +73,17 @@ function run_ci_parity() {
 }
 
 run_ci_parity
+
+# Record what ran (command, workflow, step) in the validate context, or why it
+# did not — a skipped phase is never silent.
+CI_PARITY_CHECKS_JSON=$(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -c '.checks // []')
+if [ "${#CI_PARITY_COMMANDS[@]}" -eq 0 ]; then
+  SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "ci_parity_check", "reason": "no runnable CI commands discovered"}]')
+fi
 ```
+
+Write `CI_PARITY_CHECKS_JSON` into the validate context as the commands the
+phase ran.
 
 ### Step 2.5.3: Auto-Fix Loop (If Failures Detected)
 

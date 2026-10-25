@@ -4164,13 +4164,23 @@ for the fast-track surface and the `ci_jobs` → workflow-gate mapping.
 ```json
 {
   "commands": ["npm run format:check", "npm run lint", "npm run build"],
-  "workflow_path": ".github/workflows/ci.yml",
+  "checks": [
+    { "command": "npm run format:check", "workflow": "lint.yml", "step": "Prettier (format check)" }
+  ],
+  "workflow_path": ".github/workflows/lint.yml",
+  "workflow_paths": [".github/workflows/lint.yml", ".github/workflows/ci.yml"],
   "framework": "node",
   "timestamp": "2026-04-29T12:00:00Z"
 }
 ```
 
 `framework` values: `"node"` | `"go"` | `"flutter"` | `"unknown"`
+
+With no `--workflow`, every workflow under `.github/workflows/` that runs on
+`pull_request` or `merge_group` is scanned. A `run:` block with runner setup
+(`sudo`, `apt-get`, `$GITHUB_ENV`/`OUTPUT`/`STEP_SUMMARY`, `playwright install`,
+`go install`, `pip install`, `git config --global`, `${{ }}`) is dropped whole;
+a multi-line block is one command, run through `sh -c` by `ci parity-check`.
 
 Falls back to standard commands (`format:check`, `lint`, `typecheck`, `build`,
 `test` from `package.json` scripts) when no workflow is found.
