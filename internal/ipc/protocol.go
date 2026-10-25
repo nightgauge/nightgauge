@@ -2132,7 +2132,8 @@ type AttentionRaiseParams struct {
 	// Repo is "owner/name", and must resolve to a repo this daemon has
 	// configured. Required by every producer.
 	Repo string `json:"repo"`
-	// Issue is the issue number. Required by every producer.
+	// Issue is the issue number. Required by every producer except
+	// missing-credentials, which is repo-scoped and must send none.
 	Issue int `json:"issue"`
 
 	// RunID is supplied by the CALLER, deliberately: resolving it daemon-side
@@ -2186,6 +2187,16 @@ type AttentionRaiseParams struct {
 	// cannot infer either after the fact. An unrecognised value is an ERROR
 	// rather than a default, because a default prints a confident wrong body.
 	Situation string `json:"situation,omitempty"`
+
+	// --- missing-credentials ---
+	// Credentials are ids from the CLOSED enum orchestrator.MissingCredentialIDs
+	// (#2513). Ids only, never prose: the daemon maps each to a fixed label and
+	// re-entry command. An unknown id is an ERROR.
+	Credentials []string `json:"credentials,omitempty"`
+	// LegacyIDDetected selects between two fixed wordings: whether the retired
+	// `nightgauge.nightgauge-vscode` extension left data on this machine. It
+	// selects prose only, never an option.
+	LegacyIDDetected bool `json:"legacyIdDetected,omitempty"`
 }
 
 // AttentionRaiseCheck is one statusCheckRollup row, mirroring

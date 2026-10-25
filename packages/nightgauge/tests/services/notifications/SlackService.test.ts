@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { resetMissingCredentialWarnings } from "../../../src/services/notifications/credentials";
 import { makeLogger, makeState } from "./_helpers";
 
 vi.mock("vscode", () => ({
@@ -150,6 +151,7 @@ describe("SlackService — delivery", () => {
   let logger: ReturnType<typeof makeLogger>;
 
   beforeEach(() => {
+    resetMissingCredentialWarnings();
     storedSecret = BOT_TOKEN;
     logger = makeLogger();
   });
@@ -406,6 +408,7 @@ describe("SlackService — same issue number in two repositories (#2408)", () =>
   let logger: ReturnType<typeof makeLogger>;
 
   beforeEach(() => {
+    resetMissingCredentialWarnings();
     storedSecret = BOT_TOKEN;
     logger = makeLogger();
   });

@@ -683,3 +683,13 @@ card from the same producer untouched.
 - [docs/GO_BINARY.md](GO_BINARY.md#attention-operations) — the `attention` CLI
 - [docs/HEALTH_MONITORING.md](HEALTH_MONITORING.md) — how attention relates to
   health analysis
+
+## `missing-credentials` (#2513)
+
+Raised by the extension on activation through `attention.raise`. It is the only
+issue-less raiseable producer. The extension sends credential ids from a closed
+enum (`slack-bot-token`, `discord-webhook`, `mattermost-webhook`,
+`platform-license`) plus a boolean that selects the legacy-identifier wording.
+The daemon writes every word on the card (`BuildMissingCredentials`). The card
+is event-shaped, not standing: the daemon cannot read VS Code SecretStorage, so
+no sweep could retract it, and a human resolving it is its retraction.

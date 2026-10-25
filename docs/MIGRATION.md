@@ -4,6 +4,30 @@ This document tracks migration paths for deprecated components in Nightgauge.
 
 ---
 
+## Upgrading from the `nightgauge-vscode` extension
+
+The VS Code extension identifier changed from `nightgauge.nightgauge-vscode` to
+`nightgauge.nightgauge`. VS Code stores secrets per extension identifier, so
+credentials saved by the old extension cannot be read by the new one, and no
+extension can migrate them. A feature still enabled in config then does nothing.
+
+After upgrading, re-enter each credential you use:
+
+| Credential                  | Command                                                 |
+| --------------------------- | ------------------------------------------------------- |
+| Slack bot token             | `Nightgauge: Configure Slack Notifications`             |
+| Discord webhook URL         | `Nightgauge: Configure Discord Notifications`           |
+| Mattermost webhook URL      | `Nightgauge: Configure Mattermost Notifications`        |
+| Platform license or sign-in | `Nightgauge: Activate License` or `Nightgauge: Sign In` |
+
+On activation the extension checks each enabled feature. If a credential is
+missing from both SecretStorage and its environment-variable fallback, it
+raises one Action Center card (`missing-credentials`) that lists each missing
+credential and its command. Resolve the card after re-entering them. The card
+returns on the next activation if a credential is still missing.
+
+---
+
 ## Config File Migration (nightgauge.yaml → config.yaml)
 
 **Status**: Deprecated as of v0.8.0 (Issue #433) **Removal Target**: v1.0.0

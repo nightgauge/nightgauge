@@ -56,6 +56,10 @@ const (
 	// fork lives in the TypeScript post-validate gate (#1142/#1147). See
 	// orchestrator.BuildOutOfScopeBlocker.
 	ProducerOutOfScopeBlocker = orchestrator.ProducerOutOfScopeBlocker
+	// ProducerMissingCredentials is extension-only by design — only the
+	// extension can read VS Code SecretStorage (#2513). See
+	// orchestrator.BuildMissingCredentials.
+	ProducerMissingCredentials = orchestrator.ProducerMissingCredentials
 )
 
 // raiseableProducers is the closed allowlist. Adding an entry here is the
@@ -96,6 +100,11 @@ var raiseableProducers = map[string]struct{}{
 	// evidence a human needs go on the GitHub issue and into the recorded
 	// finding, neither of which crosses this socket.
 	ProducerOutOfScopeBlocker: {},
+	// #2513. The ONE issue-less producer: the condition is the workspace's,
+	// not a run's. The card-injection bound still holds — the repo must be
+	// configured and the credential set is a closed enum, so the key space is
+	// at most 15 non-empty subsets per configured repo.
+	ProducerMissingCredentials: {},
 }
 
 // RaiseableProducers returns the allowlist sorted, for diagnostics, error
@@ -160,7 +169,11 @@ func (s *Server) handleAttentionRaise(_ context.Context, raw json.RawMessage) (i
 	if !strings.Contains(p.Repo, "/") {
 		return nil, fmt.Errorf("attention.raise: repo must be \"owner/name\"")
 	}
-	if p.Issue <= 0 {
+	if p.Producer == ProducerMissingCredentials {
+		if p.Issue != 0 {
+			return nil, fmt.Errorf("attention.raise: %s is repo-scoped and takes no issue", ProducerMissingCredentials)
+		}
+	} else if p.Issue <= 0 {
 		return nil, fmt.Errorf("attention.raise: issue is required")
 	}
 	// A (repo, issue) the daemon knows nothing about is not a condition it can
@@ -496,6 +509,18 @@ func (s *Server) buildRaise(p AttentionRaiseParams) (attention.DecisionRequest, 
 		// the deliverable it holds, and the daemon has no vantage point from
 		// which to second-guess it. There is therefore no not_applicable answer.
 		return orchestrator.BuildOutOfScopeBlocker(p.Repo, p.Issue, p.RunID, p.Stage), true, nil
+
+	case ProducerMissingCredentials:
+		// Ids from a closed enum, sorted and deduped so the idempotency key is
+		// independent of the caller's order. The extension decided the
+		// condition (only it can read SecretStorage); every word is the
+		// builder's.
+		creds, err := orchestrator.NormalizeMissingCredentials(p.Credentials)
+		if err != nil {
+			return attention.DecisionRequest{}, false,
+				fmt.Errorf("attention.raise: %s: %w", ProducerMissingCredentials, err)
+		}
+		return orchestrator.BuildMissingCredentials(p.Repo, creds, p.LegacyIDDetected), true, nil
 	}
 	// Unreachable: the allowlist check ran first. Kept so a producer added to
 	// the allowlist and not to the switch is a loud failure, not a silent

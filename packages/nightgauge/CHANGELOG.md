@@ -9,6 +9,18 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Credentials orphaned by the extension ID change are now reported (#2513).**
+  The extension identifier changed from `nightgauge.nightgauge-vscode` to
+  `nightgauge.nightgauge`, and VS Code secrets are scoped per identifier, so
+  Slack, Discord, Mattermost and platform credentials saved by the old build are
+  unreadable. On activation, the extension now raises one Action Center card
+  listing each enabled feature whose credential is missing and the command that
+  re-enters it. The "no credential" warning is logged once per session instead
+  of on every stage. Re-enter your credentials after upgrading; see
+  `docs/MIGRATION.md`.
+
 ### Changed
 
 - **Extension-driven runs use the new built-in stage defaults (#2512).**

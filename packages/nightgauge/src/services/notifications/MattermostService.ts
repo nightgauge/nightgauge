@@ -29,7 +29,7 @@ import { Logger } from "../../utils/logger";
 import { SecretStorageService, SECRET_KEYS } from "../SecretStorageService";
 import type { Notifier, PipelineEventContext } from "./types";
 import { NotifierStatusTracker } from "./NotifierStatusTracker";
-import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey } from "./credentials";
+import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey, warnMissingCredentialOnce } from "./credentials";
 import {
   DEBOUNCE_MS,
   DebouncedPatcher,
@@ -687,7 +687,9 @@ export class MattermostService implements Notifier, vscode.Disposable {
       "Nightgauge: Configure Mattermost Notifications"
     );
     if (!hadLegacy) {
-      this.logger.warn(
+      warnMissingCredentialOnce(
+        this.logger,
+        "mattermost",
         `MattermostService: no webhook URL in SecretStorage or ${envName} — ` +
           'run "Nightgauge: Configure Mattermost Notifications" to set it up.'
       );

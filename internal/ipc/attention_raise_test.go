@@ -409,6 +409,10 @@ func TestNoRaiseableProducerIsStandingWithoutRetraction(t *testing.T) {
 		// retracts stayed on disk.
 		ProducerOutOfScopeBlocker: {Producer: ProducerOutOfScopeBlocker, Repo: "octocat/acme",
 			Issue: 1, RunID: "run-1", Stage: "feature-validate"},
+		// #2513. EVENT, not standing: raised once per activation; the daemon
+		// cannot read SecretStorage, so no scan could retract a standing card.
+		ProducerMissingCredentials: {Producer: ProducerMissingCredentials, Repo: "octocat/acme",
+			Credentials: []string{"slack-bot-token"}},
 	}
 	for _, producer := range RaiseableProducers() {
 		p, ok := samples[producer]
@@ -1461,5 +1465,67 @@ func TestStandingSweepProducersAreNotRaiseable(t *testing.T) {
 				"auto-resolves — the card would stand until StandingExpiry. Reach sweep producers "+
 				"through attention.sweep instead (#649).", p.Name())
 		}
+	}
+}
+
+// TestMissingCredentialsRaise covers the #2513 issue-less producer: one card
+// naming each credential and its re-entry command, a key independent of input
+// order, and a closed credential enum.
+func TestMissingCredentialsRaise(t *testing.T) {
+	const repo = "octocat/acme"
+	s := newAttentionTestServer(t)
+	got := mustRaise(t, s, AttentionRaiseParams{Producer: ProducerMissingCredentials, Repo: repo,
+		Credentials: []string{"slack-bot-token", "discord-webhook"}})
+	if got.Outcome != string(attention.OutcomeCreated) {
+		t.Fatalf("outcome = %q, want created", got.Outcome)
+	}
+	card := onlyOpenRequest(t, s)
+	for _, want := range []string{"Slack bot token", "Nightgauge: Configure Slack Notifications",
+		"Discord webhook URL", "Nightgauge: Configure Discord Notifications",
+		"If you upgraded from the `nightgauge-vscode` extension"} {
+		if !strings.Contains(card.Body, want) {
+			t.Errorf("card body missing %q:\n%s", want, card.Body)
+		}
+	}
+	if card.Context.Issue != 0 || card.Context.Repo != repo {
+		t.Errorf("context = %+v, want repo-scoped with no issue", card.Context)
+	}
+	// Same set, other order: one card, not two.
+	again := mustRaise(t, s, AttentionRaiseParams{Producer: ProducerMissingCredentials, Repo: repo,
+		Credentials: []string{"discord-webhook", "slack-bot-token", "slack-bot-token"}})
+	if again.Outcome == string(attention.OutcomeCreated) {
+		t.Errorf("reordered raise created a second card")
+	}
+	onlyOpenRequest(t, s)
+}
+
+func TestMissingCredentialsLegacyWording(t *testing.T) {
+	creds := []string{"platform-license"}
+	legacy := orchestrator.BuildMissingCredentials("o/r", creds, true).Body
+	plain := orchestrator.BuildMissingCredentials("o/r", creds, false).Body
+	if !strings.Contains(legacy, "identifier changed") || strings.Contains(legacy, "If you upgraded") {
+		t.Errorf("legacy wording wrong:\n%s", legacy)
+	}
+	if strings.Contains(plain, "identifier changed") || !strings.Contains(plain, "If you upgraded") {
+		t.Errorf("fallback wording wrong:\n%s", plain)
+	}
+}
+
+func TestMissingCredentialsRejectsBadInput(t *testing.T) {
+	s := newAttentionTestServer(t)
+	cases := map[string]AttentionRaiseParams{
+		"unknown id":     {Producer: ProducerMissingCredentials, Repo: "octocat/acme", Credentials: []string{"github-token"}},
+		"empty":          {Producer: ProducerMissingCredentials, Repo: "octocat/acme"},
+		"with issue":     {Producer: ProducerMissingCredentials, Repo: "octocat/acme", Issue: 3, Credentials: []string{"slack-bot-token"}},
+		"other no issue": {Producer: ProducerOutOfScopeBlocker, Repo: "octocat/acme"},
+		"unconfigured":   {Producer: ProducerMissingCredentials, Repo: "victim/repo", Credentials: []string{"slack-bot-token"}},
+	}
+	for name, p := range cases {
+		if _, err := s.handleAttentionRaise(context.Background(), raiseParams(t, p)); err == nil {
+			t.Errorf("%s: accepted, want rejection", name)
+		}
+	}
+	if reqs, _ := s.attentionStore().List(attention.ListFilter{IncludeTerminal: true}); len(reqs) != 0 {
+		t.Errorf("rejected raises wrote %d record(s)", len(reqs))
 	}
 }

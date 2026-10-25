@@ -102,3 +102,27 @@ export function warnOnLegacyEnvKey(
   }
   return true;
 }
+
+/** Notifiers that have already logged "no credential" this session (#2513). */
+const warnedMissingCredential = new Set<NotifierId>();
+
+/**
+ * Log the "no credential" WARN at most once per session per notifier. The
+ * resolution runs on every stage; repeating the same line each time buried
+ * it. The Action Center card (utils/missingCredentialsAudit.ts) is the
+ * operator surface; this line is the log trail.
+ */
+export function warnMissingCredentialOnce(
+  logger: { warn(msg: string): void },
+  notifier: NotifierId,
+  message: string
+): void {
+  if (warnedMissingCredential.has(notifier)) return;
+  warnedMissingCredential.add(notifier);
+  logger.warn(message);
+}
+
+/** Test-only: forget which notifiers have warned. */
+export function resetMissingCredentialWarnings(): void {
+  warnedMissingCredential.clear();
+}
