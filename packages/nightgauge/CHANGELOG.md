@@ -19,6 +19,10 @@ and this project adheres to
   open, and skips pickup through validate instead of re-running them on
   shipped work. Dispatches without an open PR are unchanged.
 
+- A pipeline run no longer fails at pr-merge with a "repository configuration"
+  error when the PR is CLEAN and the only reported blocker is a Copilot review
+  rule; the run retries the merge instead (#2539).
+
 - **Credentials orphaned by the extension ID change are now reported (#2513).**
   The extension identifier changed from `nightgauge.nightgauge-vscode` to
   `nightgauge.nightgauge`, and VS Code secrets are scoped per identifier, so

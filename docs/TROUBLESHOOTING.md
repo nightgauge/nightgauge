@@ -541,12 +541,15 @@ no private database access is required to repair the local workspace.
 `gh pr checks` / `statusCheckRollup` before recording a CI-monitoring result;
 populate from the rollup when `total==0` or `TIMEOUT`.
 
-### `pr ruleset-precheck --auto-satisfy` false `copilot_code_review` blocker
+### `copilot_code_review` in `pr ruleset-precheck` output
 
-The precheck exits 1 (`requestReviewsInput isn't a defined input type`) on every
-PR into `main` and then reports a `copilot_code_review` blocker that does not
-exist. Trust `gh pr view --json mergeStateStatus` — `CLEAN` means merge works.
-Do not improvise review-request workarounds.
+A Copilot review rule requests a review; it never gates a merge. The precheck
+reports it under `advisory_rules`, never under `blockers`, and `--auto-satisfy`
+no longer requests a Copilot review (#2539). When the precheck does say
+`allowed_to_merge: false`, the orchestrator confirms against the live
+`gh pr view --json mergeStateStatus,statusCheckRollup` before failing the run:
+`CLEAN` or a still-running check stays retryable. Do not improvise
+review-request workarounds.
 
 ### Worktree has no `node_modules` → build fails
 

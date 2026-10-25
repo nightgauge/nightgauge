@@ -35,6 +35,15 @@ changelog, and the release workflow refuses a tag that does not.
   open, and skips pickup through validate instead of re-running them on
   shipped work. Dispatches without an open PR are unchanged.
 
+- **pr-merge no longer fails a CLEAN PR over a Copilot review rule (#2539).**
+  `nightgauge pr ruleset-precheck` reports `copilot_code_review` under the new
+  `advisory_rules` field instead of as a blocker, since a Copilot review request
+  never gates a merge. When the precheck still says a PR cannot merge, the
+  orchestrator checks the PR's live state first: a CLEAN PR or one with checks
+  still running is retried instead of failed as a repository-configuration dead
+  end, and failing checks are named as the cause. The Copilot review request in
+  `--auto-satisfy`, which no longer had anything to satisfy, is removed.
+
 - **`nightgauge health gate-metrics` sees gate results from pipeline runs again**
   (#2535). `gate record-metric` wrote only to the per-checkout directory, which
   for a pipeline worktree is deleted on cleanup, so the health report had no new

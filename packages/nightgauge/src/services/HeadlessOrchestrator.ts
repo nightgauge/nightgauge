@@ -2616,7 +2616,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * failing (#184's config-mismatch probe) — are deterministically
    * unwinnable: re-running the stage re-derives the same dead end at full
    * token cost and ends in the same rejection. Delegates to the Go binary's
-   * `pr ruleset-precheck --json` (single source of truth for ruleset state).
+   * `pr ruleset-precheck --json` (single source of truth for ruleset state);
+   * a "not allowed" precheck verdict is then checked against the PR's live
+   * merge state before it is trusted (#2539, `classifyFromLiveMergeState`).
    *
    * Fails open: if the binary is unavailable or the probe errors, returns
    * retryable=true so genuinely transient conditions keep the legacy retry.
@@ -2669,10 +2671,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         };
       }
       if (precheck.allowed_to_merge === false) {
-        return {
-          retryable: false,
-          reason: `unresolved branch ruleset blockers: ${(precheck.blockers ?? []).join(", ")}`,
-        };
+        return await this.classifyFromLiveMergeState(prNumber, cwd, precheck.blockers ?? []);
       }
       return { retryable: true };
     } catch (err) {
@@ -2682,6 +2681,62 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       );
       return { retryable: true };
     }
+  }
+
+  /**
+   * Judge a precheck "not allowed to merge" verdict against the PR's live
+   * state (#2539). The precheck reads static ruleset configuration, which is
+   * not ground truth: a rule that only requests a review (or a stale binary,
+   * or a mis-read bypass) can read as a blocker on a PR GitHub reports CLEAN.
+   * Failing a CLEAN PR as a non-retryable config dead end strands a finished
+   * run, so the live `mergeStateStatus` and check rollup decide:
+   *
+   * - CLEAN → retryable (the precheck blockers did not gate the merge)
+   * - a check still running → retryable (CI will settle)
+   * - failing checks → non-retryable, naming them (the real cause)
+   * - anything else → non-retryable with the ruleset blockers
+   * - live read fails → non-retryable with the ruleset blockers (the
+   *   precheck verdict stands when GitHub cannot be read)
+   */
+  private async classifyFromLiveMergeState(
+    prNumber: number,
+    cwd: string,
+    blockers: string[]
+  ): Promise<{ retryable: boolean; reason?: string }> {
+    const blockerList = `unresolved branch ruleset blockers: ${blockers.join(", ")}`;
+    let snapshot: MergeBlockerSnapshot;
+    try {
+      snapshot = await this.fetchLiveMergeSnapshot(prNumber, cwd);
+    } catch (err) {
+      this.logger.warn("Live merge-state read failed — keeping the ruleset precheck verdict", {
+        prNumber,
+        error: err,
+      });
+      return { retryable: false, reason: blockerList };
+    }
+
+    if (snapshot.mergeStateStatus === "CLEAN") {
+      return {
+        retryable: true,
+        reason: `PR is CLEAN on GitHub; precheck blockers (${blockers.join(", ")}) did not gate the merge`,
+      };
+    }
+    if (snapshot.checks.some((c) => c.conclusion === "" || c.conclusion === "PENDING")) {
+      return { retryable: true, reason: "required checks are still running" };
+    }
+    const failing = snapshot.checks.filter(
+      (c) => c.conclusion === "FAILURE" || c.conclusion === "ERROR"
+    );
+    if (failing.length > 0) {
+      return {
+        retryable: false,
+        reason: describeMergeBlocker(snapshot.mergeable, snapshot.mergeStateStatus, failing),
+      };
+    }
+    return {
+      retryable: false,
+      reason: `${blockerList} (mergeStateStatus=${snapshot.mergeStateStatus})`,
+    };
   }
 
   /**
@@ -3733,6 +3788,58 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Read the live merge state of a PR via `gh pr view` (#305, #2539). Shared by
+   * the deterministic merge fallback and the merge-blocker classifier so both
+   * judge a PR from the same projection. Throws on any read failure; callers
+   * decide their own fallback.
+   */
+  private async fetchLiveMergeSnapshot(
+    prNumber: number,
+    cwd: string
+  ): Promise<MergeBlockerSnapshot> {
+    const { stdout } = await execFileAsync(
+      "gh",
+      [
+        "pr",
+        "view",
+        String(prNumber),
+        "--json",
+        // #305 adds reviewDecision: the Action Center card's reason is
+        // produced by the Go `stages.Decide()` matrix, which distinguishes
+        // "review-not-approved" from the other blockers. Without this field
+        // a review block would be indistinguishable from a clean PR on the
+        // daemon side and would raise no card at all.
+        "state,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision",
+      ],
+      { encoding: "utf-8", cwd, timeout: 30_000 }
+    );
+    const data = JSON.parse(stdout);
+    return {
+      prState: data.state as string,
+      // An in-flight check's conclusion is NULL on the wire, and empty is the
+      // meaningful value for it — `stages.PRStatusCheckRow` documents `""
+      // (in-flight)` and `stages.MergeBlockedByPendingCI` keys on
+      // ""/"PENDING". Coercing null to "UNKNOWN" (#305 review) made this
+      // projection unable to express "CI is still running", so the daemon
+      // read a queued required check as a branch-protection block and told
+      // the operator to fix a failing check that does not exist.
+      checks: (
+        (data.statusCheckRollup ?? []) as Array<{
+          name?: string;
+          conclusion?: string | null;
+        }>
+      ).map((c) => ({ name: c.name || "unknown", conclusion: c.conclusion ?? "" })),
+      mergeable: (data.mergeable as string) || "UNKNOWN",
+      mergeStateStatus: (data.mergeStateStatus as string) || "UNKNOWN",
+      // Empty is meaningful and NOT a fallback value: GitHub returns "" when
+      // the branch ruleset requires no reviewers, which Decide() reads as
+      // "review not blocking". Coercing it to "UNKNOWN" would invent a
+      // blocker that does not exist.
+      reviewDecision: (data.reviewDecision as string) ?? "",
+    };
+  }
+
+  /**
    * Issue #3259 deterministic merge fallback. The gate confirmed the PR is
    * still OPEN despite the skill claiming success; if it's independently
    * mergeable, run the merge ourselves rather than failing the pipeline.
@@ -3756,52 +3863,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     let reviewDecision: string;
     let checkConclusions: Array<{ name: string; conclusion: string }>;
 
-    const fetchPrData = async () => {
-      const { stdout } = await execFileAsync(
-        "gh",
-        [
-          "pr",
-          "view",
-          String(prNumber),
-          "--json",
-          // #305 adds reviewDecision: the Action Center card's reason is
-          // produced by the Go `stages.Decide()` matrix, which distinguishes
-          // "review-not-approved" from the other blockers. Without this field
-          // a review block would be indistinguishable from a clean PR on the
-          // daemon side and would raise no card at all.
-          "state,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision",
-        ],
-        { encoding: "utf-8", cwd, timeout: 30_000 }
-      );
-      const data = JSON.parse(stdout);
-      return {
-        state: data.state as string,
-        // An in-flight check's conclusion is NULL on the wire, and empty is the
-        // meaningful value for it — `stages.PRStatusCheckRow` documents `""
-        // (in-flight)` and `stages.MergeBlockedByPendingCI` keys on
-        // ""/"PENDING". Coercing null to "UNKNOWN" (#305 review) made this
-        // projection unable to express "CI is still running", so the daemon
-        // read a queued required check as a branch-protection block and told
-        // the operator to fix a failing check that does not exist.
-        checks: (
-          (data.statusCheckRollup ?? []) as Array<{
-            name?: string;
-            conclusion?: string | null;
-          }>
-        ).map((c) => ({ name: c.name || "unknown", conclusion: c.conclusion ?? "" })),
-        mergeable: (data.mergeable as string) || "UNKNOWN",
-        mergeStateStatus: (data.mergeStateStatus as string) || "UNKNOWN",
-        // Empty is meaningful and NOT a fallback value: GitHub returns "" when
-        // the branch ruleset requires no reviewers, which Decide() reads as
-        // "review not blocking". Coercing it to "UNKNOWN" would invent a
-        // blocker that does not exist.
-        reviewDecision: (data.reviewDecision as string) ?? "",
-      };
-    };
+    const fetchPrData = () => this.fetchLiveMergeSnapshot(prNumber, cwd);
 
     try {
       const data = await fetchPrData();
-      prState = data.state;
+      prState = data.prState;
       mergeable = data.mergeable;
       mergeStateStatus = data.mergeStateStatus;
       reviewDecision = data.reviewDecision;
@@ -3885,7 +3951,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     for (let poll = 1; poll <= EC_MAX_POLLS; poll++) {
       try {
         const data = await fetchPrData();
-        if (data.state === "MERGED") {
+        if (data.prState === "MERGED") {
           this.logger.info("Post-merge verification: deterministic merge fallback succeeded", {
             issueNumber,
             prNumber,
