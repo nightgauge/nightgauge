@@ -8117,6 +8117,7 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 			// candidate's ordering record — the selection tier the per-issue
 			// log line names.
 			tier := plan[i].tier
+			boardStatus := plan[i].boardStatus
 
 			// Same merge as enqueueItem's RunQueue spawn: refineIssue is a real
 			// adapter invocation carrying the cycle context, so the generation
@@ -8127,8 +8128,9 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 				defer stop()
 				defer rcancel()
 				as.refineIssue(rctx, owner, repo, candidate, refinementOrigin{
-					tier:   tier,
-					source: refinementSourceCycle,
+					tier:        tier,
+					source:      refinementSourceCycle,
+					boardStatus: boardStatus,
 				})
 			})
 			dispatched++
@@ -8272,13 +8274,17 @@ func (as *AutonomousScheduler) refinementExhausted(key string) bool {
 	return as.refinementFailures[key] >= maxRefinementFailures
 }
 
-// refinementOrigin is the provenance of one refinement, carried only so the
-// per-refinement log line can name it: which selection tier the issue came
-// from, and whether the refinement cycle or the pre-dispatch hook (#1522) ran
-// it. Never a control input.
+// refinementOrigin is the provenance of one refinement: which selection tier
+// the issue came from, whether the refinement cycle or the pre-dispatch hook
+// (#1522) ran it, and the board status it had when refinement started. tier is
+// log-only; source and boardStatus decide the board move on completion
+// (refinementBoardTarget, #2505).
 type refinementOrigin struct {
 	tier   int
 	source string
+	// boardStatus is the issue's board status at refinement start, read off
+	// the cached board graph. Empty when the issue is on no polled board.
+	boardStatus string
 }
 
 const (
@@ -8405,20 +8411,23 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 		}
 	}
 
-	targetStatus := string(state.StatusReady)
-	if !hasAutoProcess && !as.config.AutoActionable {
-		targetStatus = "Backlog"
-	}
-
-	// Move status on project board (best-effort — may not be on board yet)
-	for _, rc := range as.repos {
-		if rc.Owner == owner && rc.Name == repo && rc.Project > 0 {
-			projSvc := as.projectService(owner, rc.Project, rc.OwnerType)
-			if err := projSvc.MoveStatus(ctx, owner, repo, issue.Number, targetStatus); err != nil {
-				log.Printf("[refinement] #%d: failed to move to %s: %v", issue.Number, targetStatus, err)
+	// A pre-dispatch refinement, or one of an issue a human already moved to
+	// Ready or past it, leaves the board status alone (#2505).
+	targetStatus, move := refinementBoardTarget(origin, hasAutoProcess, as.config.AutoActionable)
+	if move {
+		// Move status on project board (best-effort — may not be on board yet)
+		for _, rc := range as.repos {
+			if rc.Owner == owner && rc.Name == repo && rc.Project > 0 {
+				projSvc := as.projectService(owner, rc.Project, rc.OwnerType)
+				if err := projSvc.MoveStatus(ctx, owner, repo, issue.Number, targetStatus); err != nil {
+					log.Printf("[refinement] #%d: failed to move to %s: %v", issue.Number, targetStatus, err)
+				}
+				break
 			}
-			break
 		}
+	} else {
+		log.Printf("[refinement] #%d: board status left unchanged (source=%s, status=%q)",
+			issue.Number, origin.sourceLabel(), origin.boardStatus)
 	}
 
 	// Remove auto-process label if present (consumed, not permanent)
@@ -8451,7 +8460,11 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 	// Success makes the give-up condition untrue — retract the card rather than
 	// leaving an "abandoned" notice on an issue that just refined cleanly.
 	as.resolveRefinementExhausted(fullRepo, issue.Number)
-	log.Printf("[refinement] Completed #%d → %s", issue.Number, targetStatus)
+	if move {
+		log.Printf("[refinement] Completed #%d → %s", issue.Number, targetStatus)
+	} else {
+		log.Printf("[refinement] Completed #%d (board status unchanged)", issue.Number)
+	}
 }
 
 // refineSkillRoots is the seam through which refinement resolves its skill

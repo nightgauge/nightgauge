@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // Refinement candidate tiers, in dispatch order (#1514).
@@ -88,6 +89,8 @@ type refinementCandidate struct {
 	issue        gh.UnrefinedIssue
 	tier         int
 	priorityRank int
+	// boardStatus is the board status at plan time; empty when off-board.
+	boardStatus string
 }
 
 // refinementDispatchView is the query-less view of the workspace that decides
@@ -283,10 +286,12 @@ func (v refinementDispatchView) planRefinement(fullRepo string, issues []gh.Unre
 			continue
 		}
 		rank := candidatePriorityRank("")
+		boardStatus := ""
 		if onBoard {
 			rank = candidatePriorityRank(node.priority)
+			boardStatus = node.boardStatus
 		}
-		kept = append(kept, refinementCandidate{issue: issue, tier: tier, priorityRank: rank})
+		kept = append(kept, refinementCandidate{issue: issue, tier: tier, priorityRank: rank, boardStatus: boardStatus})
 	}
 
 	sort.SliceStable(kept, func(i, j int) bool {
@@ -418,9 +423,38 @@ func (as *AutonomousScheduler) refineBeforeDispatch(ctx context.Context, g *depg
 			boardStatus: node.BoardStatus,
 			priority:    node.Priority,
 		}, true),
-		source: refinementSourcePreDispatch,
+		source:      refinementSourcePreDispatch,
+		boardStatus: node.BoardStatus,
 	})
 	return true
+}
+
+// refinementBoardTarget returns the board status refinement completion moves
+// the issue to, and false when it must not move the status at all (#2505).
+//
+// A pre-dispatch refinement never moves it: the scan already chose to dispatch
+// the issue, and demoting it to Backlog seconds before its pipeline starts
+// leaves a failed run outside the dispatch scan. Neither does a refinement of
+// an issue already at Ready or past it — a human authorized that work.
+// Otherwise the pre-#2505 rule holds: Ready with auto-process or
+// auto_actionable, else Backlog.
+func refinementBoardTarget(origin refinementOrigin, hasAutoProcess, autoActionable bool) (string, bool) {
+	if origin.source == refinementSourcePreDispatch || boardStatusAtOrPastReady(origin.boardStatus) {
+		return "", false
+	}
+	if hasAutoProcess || autoActionable {
+		return string(state.StatusReady), true
+	}
+	return "Backlog", true
+}
+
+// boardStatusAtOrPastReady reports Ready, In progress, In review or Done.
+func boardStatusAtOrPastReady(status string) bool {
+	switch strings.Join(strings.Fields(strings.ToLower(status)), " ") {
+	case "ready", "in progress", "in review", "done":
+		return true
+	}
+	return false
 }
 
 // splitRepoSlug splits "owner/name" into its two halves.

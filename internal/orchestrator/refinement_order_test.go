@@ -518,3 +518,59 @@ func TestRefineBeforeDispatch_UntrustedAuthorDispatchesUnrefined(t *testing.T) {
 		t.Fatalf("expected the untrusted-author reason, got:\n%s", out)
 	}
 }
+
+// TestRefinementBoardTarget pins the #2505 board-move matrix: a pre-dispatch
+// refinement, or one that started at Ready or past it, never moves the status;
+// Backlog and off-board keep the pre-#2505 Ready/Backlog rule.
+func TestRefinementBoardTarget(t *testing.T) {
+	type flags struct{ autoProcess, autoActionable bool }
+	flagSets := []flags{{true, false}, {false, true}, {false, false}}
+	for _, source := range []string{refinementSourceCycle, refinementSourcePreDispatch} {
+		for _, status := range []string{"Backlog", "", "Ready", " in  Progress ", "In review", "Done"} {
+			for _, f := range flagSets {
+				origin := refinementOrigin{source: source, boardStatus: status}
+				got, move := refinementBoardTarget(origin, f.autoProcess, f.autoActionable)
+				wantMove := source == refinementSourceCycle && (status == "Backlog" || status == "")
+				want := ""
+				if wantMove {
+					want = "Backlog"
+					if f.autoProcess || f.autoActionable {
+						want = "Ready"
+					}
+				}
+				if move != wantMove || got != want {
+					t.Errorf("source=%s status=%q flags=%+v: got (%q,%v), want (%q,%v)",
+						source, status, f, got, move, want, wantMove)
+				}
+			}
+		}
+	}
+}
+
+// TestPlanRefinement_CarriesBoardStatus proves the cycle hands refineIssue the
+// board status at plan time, and empty for an off-board issue.
+func TestPlanRefinement_CarriesBoardStatus(t *testing.T) {
+	const repo = "o/r"
+	nodes := map[string]*depgraph.Node{
+		repo + "#20": boardNode(repo, 20, "Ready", "P1"),
+		repo + "#10": boardNode(repo, 10, "Backlog", "P1"),
+	}
+	plan, _ := viewOver(true, nodes).planRefinement(repo,
+		[]gh.UnrefinedIssue{unrefined(10), unrefined(20)})
+	got := map[int]string{}
+	for _, c := range plan {
+		got[c.issue.Number] = c.boardStatus
+	}
+	want := map[int]string{20: "Ready", 10: "Backlog"}
+	for n, s := range want {
+		if g, ok := got[n]; !ok || g != s {
+			t.Errorf("#%d boardStatus = %q (present=%v), want %q", n, g, ok, s)
+		}
+	}
+
+	// Off-board (no higher tier pending, backlog on): empty status.
+	offBoard, _ := viewOver(true, nil).planRefinement(repo, []gh.UnrefinedIssue{unrefined(99)})
+	if len(offBoard) != 1 || offBoard[0].boardStatus != "" {
+		t.Fatalf("off-board plan = %+v, want one candidate with empty boardStatus", offBoard)
+	}
+}

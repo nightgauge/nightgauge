@@ -24,6 +24,12 @@ changelog, and the release workflow refuses a tag that does not.
   Code's `background_tasks_changed`, `task_started` and `task_notification`
   events, and a running background task defers the kill like an in-flight tool
   call, still bounded by the 20-minute external-progress ceiling.
+- **Refinement no longer demotes a Ready issue to Backlog (#2505).** The
+  autonomous scheduler's pre-dispatch refinement used to move the issue it was
+  about to dispatch to Backlog, so a failed run left it outside the dispatch
+  scan. A pre-dispatch refinement, or a refinement of an issue already at Ready
+  or past it, now leaves the board status unchanged. Backlog and off-board
+  issues keep the previous behaviour.
 - **CI parity now runs this repository's format and lint checks (#2503).**
   `nightgauge ci discover-commands` scans every `pull_request`/`merge_group`
   workflow, not just `ci.yml`, drops runner setup (`sudo`, `$GITHUB_ENV`,
