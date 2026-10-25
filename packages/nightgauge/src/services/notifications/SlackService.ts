@@ -47,7 +47,7 @@ import { ConfigBridge } from "../ConfigBridge";
 import { Logger } from "../../utils/logger";
 import { slotKey } from "../../utils/epicRef";
 import { SecretStorageService, SECRET_KEYS } from "../SecretStorageService";
-import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey } from "./credentials";
+import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey, warnMissingCredentialOnce } from "./credentials";
 import type { Notifier, PipelineEventContext } from "./types";
 import { NotifierStatusTracker } from "./NotifierStatusTracker";
 import {
@@ -681,7 +681,9 @@ export class SlackService implements Notifier, vscode.Disposable {
       "Nightgauge: Configure Slack Notifications"
     );
     if (!hadLegacy) {
-      this.logger.warn(
+      warnMissingCredentialOnce(
+        this.logger,
+        "slack",
         `SlackService: no bot token in SecretStorage or ${envName} — ` +
           'run "Nightgauge: Configure Slack Notifications" to set it up. Slack will not post.'
       );

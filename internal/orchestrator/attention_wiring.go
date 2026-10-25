@@ -25,6 +25,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/trust"
 	"log"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -1765,4 +1766,122 @@ func (as *AutonomousScheduler) steerRootFor(repo string) string {
 		}
 	}
 	return root
+}
+
+// --- Producer (unnumbered): missing credentials (repo-scoped, extension-only) ---
+
+// ProducerMissingCredentials names the activation-time missing-credentials
+// producer (#2513).
+const ProducerMissingCredentials = "missing-credentials"
+
+// missingCredential is the fixed operator-facing text for one credential id.
+type missingCredential struct {
+	label   string
+	command string
+}
+
+// missingCredentials is the CLOSED credential enum. A caller sends ids only;
+// every word on the card comes from this table. The command titles are the
+// palette titles declared in packages/nightgauge/package.json.
+var missingCredentials = map[string]missingCredential{
+	"slack-bot-token": {
+		label:   "Slack bot token (notifications.slack is enabled)",
+		command: "Nightgauge: Configure Slack Notifications",
+	},
+	"discord-webhook": {
+		label:   "Discord webhook URL (notifications.discord is enabled)",
+		command: "Nightgauge: Configure Discord Notifications",
+	},
+	"mattermost-webhook": {
+		label:   "Mattermost webhook URL (notifications.mattermost is enabled)",
+		command: "Nightgauge: Configure Mattermost Notifications",
+	},
+	"platform-license": {
+		label:   "Platform license key or sign-in (platform upload is enabled)",
+		command: "Nightgauge: Activate License** or **Nightgauge: Sign In",
+	},
+}
+
+// MissingCredentialIDs returns the closed credential enum, sorted.
+func MissingCredentialIDs() []string {
+	out := make([]string, 0, len(missingCredentials))
+	for id := range missingCredentials {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// NormalizeMissingCredentials validates ids against the closed enum and returns
+// them sorted and deduplicated. An empty list or an unknown id is an error.
+func NormalizeMissingCredentials(ids []string) ([]string, error) {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := missingCredentials[id]; !ok {
+			return nil, fmt.Errorf("credentials must be drawn from %s",
+				strings.Join(MissingCredentialIDs(), ", "))
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("credentials must name at least one of %s",
+			strings.Join(MissingCredentialIDs(), ", "))
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// BuildMissingCredentials constructs the card the extension raises on
+// activation when a feature config marks enabled has no readable credential
+// (#2513). The extension ID changed from `nightgauge.nightgauge-vscode` to
+// `nightgauge.nightgauge`, and VS Code scopes SecretStorage per extension ID,
+// so secrets stored by the old build are unreadable and cannot be migrated.
+//
+// REPO-SCOPED AND ISSUE-LESS: the condition belongs to the workspace, not a
+// run. EVENT-SHAPED, not standing: it is raised once per activation, deduped
+// on the sorted credential set while open, and a human resolving it is its
+// retraction. The daemon cannot read VS Code SecretStorage, so no scan could
+// auto-resolve a standing version (see utils/adapterAuthNotice.ts).
+//
+// creds must already be normalized. legacy selects between two fixed
+// wordings and nothing else.
+func BuildMissingCredentials(repo string, creds []string, legacy bool) attention.DecisionRequest {
+	var lines strings.Builder
+	for _, id := range creds {
+		c := missingCredentials[id]
+		fmt.Fprintf(&lines, "- %s — run **%s**\n", c.label, c.command)
+	}
+	why := "If you upgraded from the `nightgauge-vscode` extension, re-enter these: VS Code " +
+		"stores secrets per extension identifier, and credentials saved by the old " +
+		"identifier cannot be read or migrated."
+	if legacy {
+		why = "The extension identifier changed from `nightgauge.nightgauge-vscode` to " +
+			"`nightgauge.nightgauge`, and data from the old identifier is still on this " +
+			"machine. VS Code stores secrets per extension identifier, so credentials saved " +
+			"by `nightgauge-vscode` are no longer readable and cannot be migrated. Re-enter them."
+	}
+	return attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("%s:%s#%s", ProducerMissingCredentials, repo, strings.Join(creds, ",")),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("%d enabled feature(s) have no credential", len(creds)),
+		Body: "These features are enabled in config, but their credential is missing, so they " +
+			"are silently doing nothing:\n\n" + lines.String() + "\n" + why +
+			"\n\nResolve this card once you have re-entered them. If a credential is still " +
+			"missing on the next activation, the card comes back.",
+		Producer: ProducerMissingCredentials,
+		Context: attention.Context{
+			Repo:    repo,
+			Blocker: "enabled features have no stored credential",
+		},
+		Options: []attention.Option{
+			noopOption("reentered", "I re-entered them"),
+		},
+		DefaultAction: "reentered",
+		ExpiresAt:     expiryFromNow(72 * time.Hour),
+	}
 }

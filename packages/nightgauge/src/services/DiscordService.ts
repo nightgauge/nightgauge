@@ -31,7 +31,11 @@ import { ConfigBridge } from "./ConfigBridge";
 import { Logger } from "../utils/logger";
 import { countFailedStages } from "../utils/failedStages";
 import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
-import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey } from "./notifications/credentials";
+import {
+  CREDENTIAL_ENV_VAR,
+  warnOnLegacyEnvKey,
+  warnMissingCredentialOnce,
+} from "./notifications/credentials";
 import type { Notifier, PipelineEventContext } from "./notifications/types";
 import { NotifierStatusTracker } from "./notifications/NotifierStatusTracker";
 import { getBranchDisplayText } from "../views/dashboard/DashboardComponents";
@@ -1787,7 +1791,9 @@ export class DiscordService implements Notifier, vscode.Disposable {
       "Nightgauge: Configure Discord Notifications"
     );
     if (!hadLegacy) {
-      this.logger.warn(
+      warnMissingCredentialOnce(
+        this.logger,
+        "discord",
         `DiscordService: no webhook URL in SecretStorage or ${envName} — ` +
           'run "Nightgauge: Configure Discord Notifications" to set it up.'
       );

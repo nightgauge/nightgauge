@@ -149,6 +149,10 @@ import { IpcClient } from "../services/IpcClient";
 import { IpcClientBase } from "../services/IpcClientBase";
 import { setStageBudgetResolver } from "../utils/stageBudget";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
+import {
+  auditMissingCredentials,
+  type CredentialAuditConfig,
+} from "../utils/missingCredentialsAudit";
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
 import {
   extractLicenseKeyLine,
@@ -4152,6 +4156,50 @@ export async function initializeServices(
 
   // IPC client for platform services — replaces direct HTTP calls (#2090)
   const ipcClient = IpcClient.getInstance();
+
+  // #2513 — enabled features whose credential is missing (the extension ID
+  // change orphaned every secret the old build stored) get ONE Action Center
+  // card per activation. Not awaited: fail-open, off the activation path.
+  void (async () => {
+    let repo: string | undefined;
+    try {
+      const projCfg = await ipcClient.configGetProjectConfig();
+      if (projCfg.owner && projCfg.defaultRepo) repo = `${projCfg.owner}/${projCfg.defaultRepo}`;
+    } catch {
+      // No project config — the audit logs and skips.
+    }
+    const secrets = SecretStorageService.getInstance();
+    await auditMissingCredentials({
+      config: ConfigBridge.getInstance().getEffectiveConfig()?.config as
+        CredentialAuditConfig | undefined,
+      probe: {
+        getSecret: (key) => secrets?.getSecret(key) ?? Promise.resolve(undefined),
+        getAccessToken: () =>
+          TokenStorage.getInstance()?.retrieve("accessToken") ?? Promise.resolve(null),
+        env: process.env,
+      },
+      repo,
+      globalStoragePath: context.globalStorageUri?.fsPath,
+      raise: (r, creds, legacy) =>
+        ipcClient.attentionRaise(
+          "missing-credentials",
+          r,
+          0,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          creds,
+          legacy
+        ),
+      logger,
+    });
+  })();
 
   // Account commands are contributed in every window, including empty windows.
   // Their backing services must therefore exist independently of the
