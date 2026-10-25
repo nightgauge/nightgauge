@@ -978,7 +978,7 @@ printf '<!-- phase:start name="auto-fix-retry" index=4 total=14 stage="pr-merge"
 - [Step 2.5: Baseline-Failure Detection](#step-25-baseline-failure-detection-deterministic)
 - [Step 3: Generate Fix](#step-3-generate-fix-probabilistic---ai)
 - [Step 4: Commit and Push Fix](#step-4-commit-and-push-fix)
-- [Step 5: Wait for Re-Check](#step-5-wait-for-re-check)
+- [Step 5: Hand Back](#step-5-hand-back)
 - [Handle Loop Exit](#handle-loop-exit)
 
 **PURPOSE**: Automatically attempt to fix CI failures before merge, following
@@ -988,7 +988,7 @@ the Ralph Loop pattern. Skipped if CI checks pass or auto-fix is disabled.
 
 **EXIT CONDITIONS**:
 
-- CI checks pass after fix -> Proceed to merge
+- Fix pushed -> Hand back (Step 5): write the marker and end the session
 - Max attempts reached -> Report failure and exit
 - Non-fixable failure (security) -> Report and exit
 
@@ -996,17 +996,23 @@ the Ralph Loop pattern. Skipped if CI checks pass or auto-fix is disabled.
 
 ```bash
 AUTO_FIX_MAX_ATTEMPTS=${NIGHTGAUGE_PR_AUTO_FIX_MAX_ATTEMPTS:-2}
-CI_CHECK_TIMEOUT=${NIGHTGAUGE_PR_CI_CHECK_TIMEOUT:-10}  # minutes (not seconds)
-AUTO_FIX_ATTEMPT=0
+AUTO_FIX_ATTEMPT=1
 AUTO_FIX_SUCCESS=false
 
-while [ $AUTO_FIX_ATTEMPT -lt $AUTO_FIX_MAX_ATTEMPTS ]; do
-  AUTO_FIX_ATTEMPT=$((AUTO_FIX_ATTEMPT + 1))
-  # Steps 0-5 execute within this loop
+# Steps 0-5 run ONCE per session. `break` below means "leave the auto-fix
+# steps and go to Handle Loop Exit".
+while :; do
+  # Steps 0-5
+  break
 done
 ```
 
-The default cap was lowered to 2 in #3108. After two LLM-driven fix attempts the next dollar of spend rarely produces new progress; surface to the user instead of silently looping. Override with `pr.auto_fix_max_attempts` in `.nightgauge/config.yaml` or `NIGHTGAUGE_PR_AUTO_FIX_MAX_ATTEMPTS`.
+One session makes one fix. After it pushes, Step 5 hands the PR back to the
+orchestrator: the deterministic pr-merge runner waits for CI and merges or
+enqueues. If CI fails again, the orchestrator runs this skill again. It stops
+after `pr.auto_fix_max_attempts` sessions (default 2, lowered in #3108;
+`NIGHTGAUGE_PR_AUTO_FIX_MAX_ATTEMPTS` overrides it) and fails the stage with
+`auto-fix-exhausted`. Do not count attempts or poll CI here (#2504).
 
 #### Step 0: Fast-Path Merge State Check
 
@@ -1096,33 +1102,22 @@ if [ "$ALL_TRANSIENT" = "true" ]; then
 
   if [ -n "$FAILED_RUN" ]; then
     gh run rerun "$FAILED_RUN" --failed 2>&1 | head -3 || true
-    echo "[transient-rerun-gate] Re-run triggered for run $FAILED_RUN. Waiting for CI…"
-
-    # Wait for the rerun in ONE bounded 90s chunk — a full
-    # --timeout ${CI_CHECK_TIMEOUT} wait is SIGTERMed by the ~2-minute Bash
-    # tool budget (#187). Exit 2 = chunk expired, checks still pending: if the
-    # rerun deserves more waiting, re-run THIS wait command in a NEW Bash tool
-    # call (up to CI_CHECK_TIMEOUT minutes cumulative — you track the budget);
-    # otherwise fall through to normal RALPH so we never get stuck here.
-    if "$BINARY" ci wait "$PR_NUMBER" --timeout-secs 90 --json > /tmp/rerun-result.json 2>/dev/null; then
-      RERUN_STATE=$(jq -r '.state // "UNKNOWN"' /tmp/rerun-result.json)
-      if [ "$RERUN_STATE" = "SUCCESS" ]; then
-        echo "[transient-rerun-gate] Re-run passed — proceeding to merge without RALPH."
-        AUTO_FIX_SUCCESS=true
-        break
-      fi
-      echo "[transient-rerun-gate] Re-run did NOT pass cleanly (state=$RERUN_STATE). Falling through to RALPH."
-    fi
+    echo "[transient-rerun-gate] Re-run triggered for run $FAILED_RUN. Handing back."
+    # The re-run is the fix: hand back exactly as Step 5 does, so the
+    # deterministic runner waits for CI (#2504). Do not wait here.
   else
     echo "[transient-rerun-gate] Could not locate a failed run to rerun. Falling through to RALPH."
   fi
 fi
 ```
 
-**Cost**: one `gh run rerun` call + one CI wait — both $0 from a token
-perspective. If the transient hypothesis was right, the whole loop exits here
-without a single model turn. If wrong (rerun also fails), fall through to the
-normal RALPH path with no time lost beyond the CI wait.
+If the re-run was triggered, go straight to Step 5. Otherwise continue with
+Step 1.
+
+**Cost**: one `gh run rerun` call — $0 from a token perspective. If the
+transient hypothesis was right, the runner merges after the re-run without a
+single model turn. If it was wrong, the runner punts `failed-ci-checks` and
+the orchestrator runs this skill again.
 
 **Trust boundary**: the gate only fires when the prior stage's classifier
 marked **every** failure transient. A mixed batch (one transient + one code
@@ -1328,25 +1323,38 @@ git push origin HEAD
 ```
 
 If push fails (e.g., remote rejected, network error), report the error and break
-out of the retry loop — do NOT proceed to Step 5. CI cannot re-check commits
+out of the retry loop — do NOT proceed to Step 5. CI cannot check commits
 that are not on the remote.
 
 **Never use `git commit --allow-empty` in the auto-fix loop.** An empty commit
 is a strong signal that the loop has run out of useful work; the correct
 response is to break and surface, not to pretend a fix happened.
 
-#### Step 5: Wait for Re-Check
+#### Step 5: Hand Back
 
-Re-invoke the Go binary `nightgauge ci wait` directly — it blocks internally
-until CI reports a result, so no separate wait step is needed. **NEVER** add a
-foreground `sleep` before it and **NEVER** substitute your own polling loop
-using `gh pr checks`; the harness denies foreground `sleep` outright and the
-Go binary already handles polling correctly (#289, see CI_GATE.md).
+Do not wait for CI and do not merge. Record the pushed head and end the
+session:
 
-- Exit code 0: `AUTO_FIX_SUCCESS=true`, break loop
-- Exit code 1: Compare failures to previous. If same failure repeats 2+ times,
-  log as potentially unfixable. If different failure, log as progress made.
-- Other: Log error/timeout
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+jq -n --argjson pr "$PR_NUMBER" --arg sha "$(git rev-parse HEAD)" \
+  --argjson attempt "$AUTO_FIX_ATTEMPT" \
+  '{result: "fix-pushed", pr_number: $pr, head_sha: $sha, attempt: $attempt}' \
+  | nightgauge layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
+echo "Fix pushed to PR #$PR_NUMBER — handing back to the deterministic merge path."
+exit 0
+```
+
+The orchestrator reads `pr-merge-fix-{N}.json`, deletes it, and runs the
+deterministic runner, which waits up to `pr.ci_check_timeout` for CI. Green CI
+merges or enqueues the PR. A new `failed-ci-checks` result runs this skill
+again while attempts remain. Any other result fails the stage. Outside the
+orchestrator nothing reads the marker: finish with
+`nightgauge pr merge "$PR_NUMBER"`.
+
+**NEVER** poll CI after a push with repeated `nightgauge ci wait` calls,
+`gh pr checks`, or `sleep`. The deterministic path waits for you (#2504).
 
 #### Handle Loop Exit
 
@@ -1584,48 +1592,23 @@ build/test validation.
 
 If `FRESHNESS_CHECK_FAILED=true`, proceed to Phase 6 anyway — the reactive
 conflict resolution (Step 6.1.5) may still succeed with a different strategy.
-If the rebase succeeded and pushed, CI will re-run. Wait for CI before merge:
+If the rebase succeeded and pushed, CI re-runs on the new head. Do not wait
+for it here: hand back to the deterministic merge path, which waits for CI and
+merges (#2504):
 
 ```bash
-if [ "$BEHIND_COUNT" -gt 0 ] && [ "$FRESHNESS_CHECK_FAILED" != "true" ]; then
-  echo "Branch was rebased. Waiting for CI to pass on rebased commits..."
-
-  BINARY="${NIGHTGAUGE_BIN:-}"
-  [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
-  [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-  if [ -z "$BINARY" ]; then
-    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-  fi
-  if [ -z "$BINARY" ]; then
-    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-    if [ -n "$GIT_COMMON_DIR" ]; then
-      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-      [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-    fi
-  fi
-  [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
-  [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
-
-  if [ -n "$BINARY" ] && [ "$CI_EPIC_SKIP" != "true" ]; then
-    # ONE bounded 90s chunk per Bash call (#187) — a 10-minute wait is
-    # SIGTERMed by the tool budget. Exit 2 = still pending: re-run this
-    # block in a NEW Bash call while the freshness budget
-    # (NIGHTGAUGE_PR_CI_CHECK_TIMEOUT minutes, default 10) remains.
-    CI_RESULT=$("$BINARY" ci wait "$PR_NUMBER" --timeout-secs 90 --json 2>/dev/null) || true
-    # Re-check state: PR may have been merged out-of-band during CI wait.
-    REBASE_POST_STATE=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.state // "UNKNOWN"')
-    if [ "$REBASE_POST_STATE" = "MERGED" ]; then
-      echo "PR #$PR_NUMBER was merged (detected after rebase CI wait). Exiting cleanly."
-      exit 0
-    fi
-    CI_ALL_PASSED=$(printf '%s\n' "$CI_RESULT" | jq -r 'if .state == "SUCCESS" then "true" else "false" end')
-    if [ "$CI_ALL_PASSED" != "true" ]; then
-      echo "WARNING: CI checks failed after rebase. Proceeding to merge phase for auto-fix."
-    fi
-  fi
+if [ "$BEHIND_COUNT" -gt 0 ] && [ "$FRESHNESS_CHECK_FAILED" != "true" ] && [ "$CI_EPIC_SKIP" != "true" ]; then
+  ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+  jq -n --argjson pr "$PR_NUMBER" --arg sha "$(git rev-parse HEAD)" \
+    '{result: "fix-pushed", pr_number: $pr, head_sha: $sha, attempt: 0}' \
+    | nightgauge layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
+  echo "Branch rebased and pushed — handing back to the deterministic merge path."
+  exit 0
 fi
 ```
+
+The marker contract is in `<REPO_ROOT>/skills/_shared/AUTO_FIX_LOOP.md` Step 5. **NEVER**
+poll CI here with repeated `nightgauge ci wait` calls.
 
 ---
 
