@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A run whose issue context cannot be found now says so at `info`, naming the issue
+  and the path it looked in, because that miss silently disables every routed
+  `skip_stages` entry. Regression tests pin that a linked worktree and its main
+  checkout resolve the same `issue-N.json`. Each stage's state also records
+  `auto_retry_reasons` (`rate_limit`, `api_error_<status>`), so a stage that ran
+  twice shows why (#1489).
 - A `concurrency` block in the machine config now takes effect. The config parser
   dropped it, so `per_repo_max` and `repository_overrides` were ignored and every
   repository ran one pipeline at a time. `config show --key concurrency` prints it,

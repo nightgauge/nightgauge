@@ -31,6 +31,13 @@ and this project adheres to
 
 ### Fixed
 
+- A run whose issue context cannot be found now says so at `info`, naming the issue
+  and the path it looked in, because that miss silently disables every routed
+  `skip_stages` entry. Regression tests pin that a linked worktree and its main
+  checkout resolve the same `issue-N.json`. Each stage's state also records
+  `auto_retry_reasons` (`rate_limit`, `api_error_<status>`), so a stage that ran
+  twice shows why (#1489).
+
 - **Issue analysis no longer classifies an issue as a configuration change
   from its title.** A title mentioning config, settings or a `.json` file
   made the change type `config`, which skips validation. Only a config label

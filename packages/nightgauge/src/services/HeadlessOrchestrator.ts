@@ -146,6 +146,7 @@ import {
   isRateLimitError,
   calculateBackoffDelay,
   sanitizeApiError,
+  describeAutoRetryReason,
 } from "../utils/retryHelpers";
 import {
   getRetryConfig,
@@ -7170,7 +7171,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
       // Check if file exists
       if (!fs.existsSync(issueContextPath)) {
-        this.logger.debug("Issue context file not found", { issueContextPath });
+        // info, not debug (#1489): a missing context silently disables every
+        // routed skip_stages entry, so the miss must be visible by default.
+        this.logger.info("Issue context file not found — routing skip_stages not applied", {
+          issueNumber,
+          issueContextPath,
+        });
         return null;
       }
 
@@ -16254,8 +16260,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   ? retryConfig.rate_limit_delay_ms
                   : calculateBackoffDelay(currentAutoRetries, retryConfig);
 
+                // Name why this stage is being re-dispatched, so a duplicate
+                // stage run in the record is attributable (#1489).
+                const retryReason = describeAutoRetryReason(errorMessage);
+
                 this.logger.info("API error detected, scheduling retry", {
                   stage,
+                  reason: retryReason,
                   attempt: nextAttempt,
                   maxAttempts: effectiveMaxAttempts,
                   delayMs: delay,
@@ -16276,6 +16287,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     stageState.next_retry_at = nextRetryAt;
                     // recordAutoRetry field
                     stageState.auto_retry_count = (stageState.auto_retry_count ?? 0) + 1;
+                    stageState.auto_retry_reasons = [
+                      ...(stageState.auto_retry_reasons ?? []),
+                      retryReason,
+                    ];
                     return state;
                   });
                 } catch (err) {

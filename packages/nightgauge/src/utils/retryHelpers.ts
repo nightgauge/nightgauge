@@ -239,3 +239,15 @@ export function isRateLimitError(error: string | Error): boolean {
   const statusCode = extractApiErrorCode(errorMessage);
   return statusCode === 429;
 }
+
+/**
+ * Classifies why an auto-retry re-dispatches a stage, for the run record
+ * (#1489): `rate_limit` or `api_error_<status>`, else `unclassified`.
+ */
+export function describeAutoRetryReason(errorMessage: string): string {
+  if (isRateLimitError(errorMessage)) {
+    return "rate_limit";
+  }
+  const statusCode = extractApiErrorCode(errorMessage);
+  return statusCode === null ? "unclassified" : `api_error_${statusCode}`;
+}

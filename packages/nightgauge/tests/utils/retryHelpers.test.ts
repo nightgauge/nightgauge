@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  describeAutoRetryReason,
   isRetryableApiError,
   extractApiErrorCode,
   calculateBackoffDelay,
@@ -228,5 +229,13 @@ describe("retryHelpers", () => {
       const error500 = new Error("API Error: 500");
       expect(isRateLimitError(error500)).toBe(false);
     });
+  });
+});
+
+describe("describeAutoRetryReason (#1489)", () => {
+  it("names the reason a stage is re-dispatched", () => {
+    expect(describeAutoRetryReason("API Error: 429 Too Many Requests")).toBe("rate_limit");
+    expect(describeAutoRetryReason("API Error: 529 overloaded")).toBe("api_error_529");
+    expect(describeAutoRetryReason("premature turn end: no state change")).toBe("unclassified");
   });
 });

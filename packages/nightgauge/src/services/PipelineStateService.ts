@@ -231,6 +231,7 @@ export type ExtendedStageState = {
   /** Performance mode active at this stage's start (Issue #3215). */
   performance_mode?: "efficiency" | "elevated" | "maximum" | "frontier";
   auto_retry_count?: number;
+  auto_retry_reasons?: string[];
   is_retrying?: boolean;
   next_retry_at?: string;
   completed_at?: string;
