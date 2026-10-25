@@ -6509,7 +6509,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		wireEffort, wireThinking := "", ""
 		grokEnvEffortSet := false
 		if adapterName == "" {
-			wireEffort = resolveWireEffort(workspaceRoot, stage)
+			wireEffort = resolveWireEffort(workspaceRoot, stage, routingDecision.ComplexityScore)
 			wireThinking = resolveWireThinking(model, stagePerfMode)
 		} else if models.ProviderForAdapter(adapterName) == "xai" {
 			// The operator's NIGHTGAUGE_GROK_EFFORT override owns the
@@ -6519,7 +6519,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// override nor mis-attributes a value that never dispatched.
 			grokEnvEffortSet = strings.TrimSpace(os.Getenv("NIGHTGAUGE_GROK_EFFORT")) != ""
 			if !grokEnvEffortSet {
-				wireEffort = resolveWireEffort(workspaceRoot, stage)
+				wireEffort = resolveWireEffort(workspaceRoot, stage, routingDecision.ComplexityScore)
 			}
 		}
 		// Sticky effort substitution (#606): a same-model effort descent
@@ -10431,7 +10431,7 @@ func (s *Scheduler) resolveDispatchModel(
 	// skipped on the provenance of the base they raised. Gating it on
 	// `explicitBase` was the round-2 defect: under `model_routing.mode: manual`
 	// — which every recommended docs/CONFIGURATION.md profile sets, and where
-	// stageConfiguredModel answers for EVERY stage from defaultStageModels —
+	// the built-in table then counted as explicit for EVERY stage —
 	// the flag was true on every stage, so the ceiling never bound escalation,
 	// the floor or the forced tier for the operators most likely to have chosen
 	// a cost-capping mode.
@@ -10476,14 +10476,14 @@ func (s *Scheduler) resolveDispatchModel(
 	//
 	// Only over a base the PIPELINE chose. In `resolveModel` this rule is
 	// structural rather than stated: the escalation lives inside Step 1.5, the
-	// lightweight-stage branch, which Step 1 returns before ever reaching
+	// stage-default branch, which Step 1 returns before ever reaching
 	// whenever `getStageModel` answers. Evaluating it here on the resolved
 	// model regardless of provenance made it fire over an explicit
 	// `pipeline.stage_models` entry, a `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`
-	// override, and the whole `model_routing.mode: manual` table — where
-	// defaultStageModels[pr-create] is haiku and all three recommended
-	// docs/CONFIGURATION.md profiles live. One workspace and one 900-line diff
-	// then ran pr-create on sonnet autonomously and haiku from the extension.
+	// override, and (before #2512 made the built-in table a pipeline choice in
+	// every mode) the `model_routing.mode: manual` table. One workspace and one
+	// 900-line diff then ran pr-create on sonnet autonomously and haiku from
+	// the extension.
 	//
 	// So: explicit operator configuration wins, on both resolvers. An operator
 	// who names haiku for pr-create gets haiku; the escalation exists to keep

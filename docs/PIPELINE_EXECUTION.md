@@ -240,11 +240,11 @@ resolvers producing the same decision is the Dual-Path Drift class in
 defect: the escalated tier was computed, logged, and recorded in run history,
 while the CLI kept spawning on the tier that had just failed.
 
-| Dispatch path                                   | Resolver                                 | What it applies                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ----------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Go scheduler → IPC → extension** (autonomous) | `scheduler.resolveDispatchModel` (Go)    | performance-mode pin **and envelope**, `pipeline.stage_models` + `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, `model_routing.mode`, lightweight stage defaults, the run's routed tier, `ui.core.default_model` + `NIGHTGAUGE_UI_CORE_DEFAULT_MODEL` (Step 3), post-failure escalation, sticky model-unavailable downgrades (#42), `model_routing.minimum_model` (#366), the feature-dev implementation band and the high-risk Opus floor ([CONFIGURATION.md § Routing by cost per closed issue](CONFIGURATION.md#routing-by-cost-per-closed-issue)), pr-create large-diff, feature-validate haiku gate, pr-merge haiku floor (#197) |
-| **Go scheduler → ExecutionManager** (auto/CLI)  | `scheduler.resolveDispatchModel` (Go)    | same — this is why both paths agree                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **HeadlessOrchestrator** (extension-driven)     | `resolveModel` in `utils/skillRunner.ts` | performance-mode pins **and envelope**, `pipeline.stage_models` + env, `model_routing.mode`, lightweight stage defaults, `model_routing.minimum_model`, `ui.core.default_model` (Step 3), pr-create large-diff — plus three the Go resolver has no counterpart for: the adaptive policy override (Step 1.6), A/B experiment assignment (Step 1.7) and `AutoModelSelector` (Step 2). Escalation and sticky downgrades belong to whichever orchestrator drives this path.                                                                                                                                                     |
+| Dispatch path                                   | Resolver                                 | What it applies                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Go scheduler → IPC → extension** (autonomous) | `scheduler.resolveDispatchModel` (Go)    | performance-mode pin **and envelope**, `pipeline.stage_models` + `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, `model_routing.mode`, built-in stage defaults, the run's routed tier, `ui.core.default_model` + `NIGHTGAUGE_UI_CORE_DEFAULT_MODEL` (Step 3), post-failure escalation, sticky model-unavailable downgrades (#42), `model_routing.minimum_model` (#366), the feature-dev implementation band and the high-risk Opus floor ([CONFIGURATION.md § Routing by cost per closed issue](CONFIGURATION.md#routing-by-cost-per-closed-issue)), pr-create large-diff, feature-validate haiku gate, pr-merge haiku floor (#197) |
+| **Go scheduler → ExecutionManager** (auto/CLI)  | `scheduler.resolveDispatchModel` (Go)    | same — this is why both paths agree                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **HeadlessOrchestrator** (extension-driven)     | `resolveModel` in `utils/skillRunner.ts` | performance-mode pins **and envelope**, `pipeline.stage_models` + env, `model_routing.mode`, built-in stage defaults, `model_routing.minimum_model`, `ui.core.default_model` (Step 3), pr-create large-diff — plus three the Go resolver has no counterpart for: the adaptive policy override (Step 1.6), A/B experiment assignment (Step 1.7) and `AutoModelSelector` (Step 2). Escalation and sticky downgrades belong to whichever orchestrator drives this path.                                                                                                                                                     |
 
 On the IPC path the extension **executes** the wire model verbatim: it passes
 `RunStageParams.model` to `runStageSkillHeadless` as the authoritative
@@ -257,7 +257,7 @@ complete router lives in
 [`internal/orchestrator/dispatch_routing.go`](../internal/orchestrator/dispatch_routing.go),
 applied by `stageBaseModel` before escalation and the floors. Its tables are
 deliberate duplicates of named TypeScript counterparts
-(`getStageModel`/`DEFAULT_STAGE_MODELS`, `LIGHTWEIGHT_STAGE_DEFAULTS`,
+(`getStageModel`, `DEFAULT_STAGE_MODELS`, `DEFAULT_STAGE_EFFORTS`,
 `getDefaultModel`), each annotated with its pair — threading TS config over the
 wire would put the extension back in the routing business, which is the drift
 #340 removed.
@@ -276,16 +276,16 @@ ceiling]` envelopes instead.
 decisions rather than translations:
 
 - The **ceiling binds everything the pipeline chose** — the routed tier, the
-  lightweight defaults, `ui.core.default_model`, post-failure escalation, the
+  built-in stage defaults, `ui.core.default_model`, post-failure escalation, the
   `minimum_model` floor and the `run.retryWithEscalation` forced tier. A
   cost-capping mode that any later mechanism can raise out of caps nothing.
   `resolveModel` applies the same rule to its own `enforceMinimumModel` result.
   The clamp is applied to **what the raising mechanisms produced**, never
-  skipped on the provenance of the base they raised — gating it on "the base was
-  explicit" makes it a no-op under `model_routing.mode: manual`, where the
-  explicit chain answers for _every_ stage.
+  skipped on the provenance of the base they raised. Gating it on "the base was
+  explicit" made it a no-op under `model_routing.mode: manual` when the
+  built-in table still counted as explicit there.
 - An **explicit per-stage model is not clamped** (`pipeline.stage_models`,
-  `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, and the manual-mode table): that is the
+  `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`): that is the
   operator overriding the mode for one stage, and `resolveModel` Step 1 returns
   it unclamped too. The env override is read ahead of the Maximum pin, on both
   resolvers, so it wins in every mode. The exemption covers the operator's own
@@ -330,14 +330,13 @@ whichever orchestrator drives the run.
 The `pr-create` large-diff escalation is **not** a third one — it is shared, and
 it fires under the same condition on both resolvers: **only over a base the
 pipeline chose.** In `resolveModel` that is structural (it lives inside the Step
-1.5 lightweight branch, which Step 1 returns before ever reaching); in
+1.5 stage-default branch, which Step 1 returns before ever reaching); in
 `resolveDispatchModel` it is an explicit guard on `stageBaseModel`'s `explicit`
 flag. Without the guard it also fired over an explicit `pipeline.stage_models`
-entry, a `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` override and the whole
-`model_routing.mode: manual` table — where `defaultStageModels[pr-create]` is
-haiku and all three recommended `CONFIGURATION.md` profiles live — so one
-workspace and one 900-line diff ran `pr-create` on sonnet autonomously and haiku
-from the extension. Explicit operator configuration wins; the escalation exists
+entry and a `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` override, so one workspace and
+one 900-line diff ran `pr-create` on sonnet autonomously and haiku from the
+extension. Since #2512 the built-in haiku default is a pipeline choice in every
+routing mode, `manual` included, so the escalation applies over it everywhere. Explicit operator configuration wins; the escalation exists
 to stop the pipeline's own cheap default from stalling, not to overrule a
 choice.
 
@@ -346,19 +345,41 @@ resolver: `TestDispatchModelModeKnobMatrix`
 (`internal/orchestrator/dispatch_routing_mode_test.go`) and
 `resolveModel.modeKnobAgreement.test.ts`.
 
-The visible routing delta on the IPC path, in the default `automatic` +
-`elevated` configuration:
+**Built-in stage defaults (#2512).** Every routing mode a new install gets, the default `automatic` included,
+starts each stage from one table, held in Go (`stageDefaultModels`,
+`defaultStageEfforts`) and TypeScript (`DEFAULT_STAGE_MODELS`,
+`DEFAULT_STAGE_EFFORTS`). The config that `nightgauge init` writes needs no
+routing block to get it.
 
-- **`feature-planning` / `feature-dev` / `feature-validate`** now dispatch on
-  the run's complexity-routed tier from `issue-{N}.json`. Previously they got
-  the global default, because the IPC path never passes `issueMetadata` and
-  `AutoModelSelector` therefore never ran.
-- **`issue-pickup` / `pr-create`** keep the built-in lightweight `haiku` base
-  (still raised by the pr-create large-diff escalation, the `minimum_model`
-  floor and post-failure escalation). `pr-merge` has no lightweight base — #197
-  removed it, because the pr-merge LLM path runs only when the deterministic
-  runner punted, i.e. exclusively on the hardest merges — so it dispatches the
-  run tier, floored at sonnet.
+| Stage              | Model   | Effort                                            |
+| ------------------ | ------- | ------------------------------------------------- |
+| `issue-refine`     | `haiku` | model default (omitted)                           |
+| `issue-pickup`     | `haiku` | model default (omitted)                           |
+| `feature-planning` | `opus`  | `medium`                                          |
+| `feature-dev`      | `opus`  | `low`, raised by complexity (M→medium, L/XL→high) |
+| `feature-validate` | `opus`  | `low`                                             |
+| `pr-create`        | `haiku` | model default (omitted)                           |
+| `pr-merge`         | `opus`  | `medium`                                          |
+
+Prices per MTok (input/output): Opus 5.5 $4/$20, Sonnet 5.5 $2/$10, Haiku 5.5
+$0.10/$0.50.
+
+- **Opus stages** take the higher of the default and the run's routed tier
+  from `issue-{N}.json`, so the router and `frontier`'s Fable can raise a
+  reasoning stage but never lower it. Effort is always sent explicitly. Go
+  raises feature-dev's effort from the run's routing complexity score; TS
+  raises it from the issue metadata through `deriveEffort`. Both use the same
+  buckets, and `model_routing.effort_auto: false` keeps `low`.
+- **Haiku stages** ignore the routed tier. The pr-create large-diff
+  escalation, the `minimum_model` floor and post-failure escalation still
+  raise them. `pr-merge` is Opus (#197): its LLM path runs only when the
+  deterministic runner punted, which means only the hardest merges.
+- **Overrides still win**, in this order: `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`,
+  the `maximum` pin, `pipeline.stage_models` (manual/hybrid), then the table.
+  For effort: `NIGHTGAUGE_PIPELINE_STAGE_EFFORT_*`,
+  `model_routing.stage_efforts`, `default_effort`, then the table. The mode
+  envelope is applied last, so `efficiency` caps Opus at Sonnet and effort at
+  `medium`, and `maximum` pins Opus at `high`.
 
 Two things the extension still owns on the IPC path, because Go resolves
 neither:
@@ -411,7 +432,7 @@ neither:
   a step-for-step mirror of the TS `resolveStageEffort` chain (the mode's
   effort pin and `[effortFloor, effortCeiling]` envelope,
   `model_routing.stage_efforts` + env overrides, `default_effort`, the
-  manual-mode table), puts it on `RunStageParams.effort`, and the extension
+  built-in per-stage table), puts it on `RunStageParams.effort`, and the extension
   executes it verbatim — precedence moved to the wire without changing any
   outcome, and the twin matrix (Go `TestResolveWireEffort` ⇄ TS
   `resolveModel.modeKnobAgreement.test.ts`) pins the mirror. An absent wire

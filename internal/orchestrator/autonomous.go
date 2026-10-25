@@ -8514,22 +8514,17 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 // bundle root must be searched.
 var refineSkillRoots = skillrender.DefaultRoots
 
-// refinementBaseTier is the tier refinement starts from. Refinement is a
-// lighter workload than the pipeline stages and runs before pickup, so it has
-// no routed tier of its own; Sonnet stands in for one.
-const refinementBaseTier = tierSonnet
-
 // refinementModel resolves the model refinement dispatches on, through the
 // same per-stage chain as a pipeline stage (#2384): the issue-refine
-// environment override, then pipeline.stage_models, and otherwise the Sonnet
-// base clamped into the performance mode's routed-tier envelope with
-// model_routing.max_model applied. No mode pins issue-refine, so under maximum
-// the envelope [opus, opus] raises it to opus. It used to be the literal
-// "sonnet" in every mode, below maximum's floor and above a haiku max_model.
+// environment override, then pipeline.stage_models, and otherwise the built-in
+// haiku default (stageDefaultModels, #2512) clamped into the performance mode's
+// routed-tier envelope with model_routing.max_model applied. Refinement runs
+// before pickup, so it has no routed tier. No mode pins issue-refine, so under
+// maximum the envelope [opus, opus] raises it to opus.
 // The issue has no job class before pickup, so eval advice never re-picks it.
 func refinementModel(workspaceRoot string) string {
 	mode := routing.ResolvePerformanceMode(workspaceRoot)
-	model, _ := stageBaseModel(workspaceRoot, mode, state.StageIssueRefine, refinementBaseTier, "")
+	model, _ := stageBaseModel(workspaceRoot, mode, state.StageIssueRefine, "", "")
 	return normalizeDispatchTier(model)
 }
 
@@ -8665,7 +8660,7 @@ func (as *AutonomousScheduler) refineViaStageRunner(ctx context.Context, owner, 
 		IssueNumber:  issueNumber,
 		Repo:         fullRepo,
 		Model:        opts.Model,
-		Effort:       resolveWireEffort(as.workspaceRoot, state.StageIssueRefine),
+		Effort:       resolveWireEffort(as.workspaceRoot, state.StageIssueRefine, 0),
 		Thinking:     resolveWireThinking(opts.Model, routing.ResolvePerformanceMode(as.workspaceRoot)),
 		Timeout:      opts.Timeout,
 		SkillPath:    opts.SkillPath,

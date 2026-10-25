@@ -1583,6 +1583,9 @@ func TestCLIStallKill_RewindsAndPersistsTheRealReason(t *testing.T) {
 // `complete` feature-dev carrying a crash transcript.
 func TestSupersededStageTailIsCleared(t *testing.T) {
 	stubReconcileGhUnreachable(t)
+	// Start feature-dev on sonnet so an escalation rung exists above it: the
+	// built-in default is opus (#2512), the top of the elevated envelope.
+	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "sonnet")
 	root := gitWorkspace(t)
 
 	const crashTail = "…transcript…\nError: Cannot read properties of undefined (reading 'text')"

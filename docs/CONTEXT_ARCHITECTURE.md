@@ -1853,8 +1853,9 @@ The `source` field indicates where the model came from in the resolution chain:
 
 ```
 1.   Environment variable       NIGHTGAUGE_PIPELINE_STAGE_MODEL_*  → highest priority
-1.5. LIGHTWEIGHT_STAGE_DEFAULTS built-in per-stage defaults for lightweight stages
-                                (issue-pickup, pr-create, pr-merge → haiku)
+1.5. DEFAULT_STAGE_MODELS       built-in per-stage defaults, every mode (#2512)
+                                (issue-pickup, pr-create → haiku; planning, dev,
+                                validate, pr-merge → opus, raise-only)
 2.   Config stage override      pipeline.stage_models.<stage>           → mode-aware
 3.   AutoModelSelector          complexity × stage matrix               → automatic/hybrid only
 4.   Global default             pipeline.default_model                  → fallback

@@ -184,6 +184,19 @@ func (f *FeedbackLoopConfig) ResolveAutoRetroactive() bool {
 // no per-run cost to opt out of — only a rollout that has now soaked.
 const DefaultUseEvalRecommendations = true
 
+// DefaultEffortAuto is the shipped model_routing.effort_auto: feature-dev's
+// built-in effort is raised by the issue's complexity. Mirrors the TS
+// DEFAULT_CONFIG.
+const DefaultEffortAuto = true
+
+// ResolveEffortAuto returns effort_auto, or DefaultEffortAuto when unset.
+func (m *ModelRoutingConfig) ResolveEffortAuto() bool {
+	if m == nil || m.EffortAuto == nil {
+		return DefaultEffortAuto
+	}
+	return *m.EffortAuto
+}
+
 // ResolveUseEvalRecommendations returns the effective setting. Safe on a nil
 // receiver, which is how a config with no model_routing block arrives.
 func (m *ModelRoutingConfig) ResolveUseEvalRecommendations() bool {

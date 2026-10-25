@@ -182,9 +182,9 @@ func TestRefineStageOptionsModelFollowsThePerformanceMode(t *testing.T) {
 		env    string // NIGHTGAUGE_PIPELINE_STAGE_MODEL_ISSUE_REFINE
 		want   string
 	}{
-		{"elevated keeps the sonnet base", "elevated", "", "", "sonnet"},
-		{"efficiency keeps the sonnet base", "efficiency", "", "", "sonnet"},
-		{"frontier keeps the sonnet base", "frontier", "", "", "sonnet"},
+		{"elevated keeps the haiku stage default", "elevated", "", "", "haiku"},
+		{"efficiency keeps the haiku stage default", "efficiency", "", "", "haiku"},
+		{"frontier keeps the haiku stage default", "frontier", "", "", "haiku"},
 		{"maximum raises it to its opus floor", "maximum", "", "", "opus"},
 		{"max_model caps it", "elevated", "model_routing:\n  max_model: haiku\n", "", "haiku"},
 		{"the stage's environment override wins over the mode", "maximum", "", "haiku", "haiku"},

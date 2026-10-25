@@ -156,14 +156,53 @@ func latestOpenCodeSessionID(outputFile, runID string) string {
 	return sessionID
 }
 
-// defaultStageEfforts is the manual-mode effort fallback table. Mirrors
-// DEFAULT_STAGE_EFFORTS (stageResolver.ts) — consulted only when
-// model_routing.mode is "manual" and nothing more explicit named an effort,
-// exactly where getStageEffort consults its copy.
+// defaultStageEfforts is the built-in per-stage effort (#2512), consulted in
+// EVERY routing mode when nothing more explicit named an effort, so an opus
+// stage never leaves effort to the API default. Mirrors DEFAULT_STAGE_EFFORTS
+// (stageResolver.ts). The haiku stages carry no entry: their effort is the
+// model's own default. feature-dev's entry is a base that complexity raises
+// (stageDefaultEffort).
 var defaultStageEfforts = map[state.PipelineStage]string{
 	state.StageFeaturePlanning: "medium",
-	state.StageFeatureDev:      "medium",
+	state.StageFeatureDev:      "low",
 	state.StageFeatureValidate: "low",
+	state.StagePRMerge:         "medium",
+}
+
+// stageDefaultEffort returns defaultStageEfforts[stage], raising feature-dev
+// by the run's complexity score when model_routing.effort_auto is on — the
+// same buckets as AutoModelSelector.deriveEffort (XS/S → low, M → medium,
+// L/XL → high) over the routing scale (XS 1, S 2, M 3, L 5, XL 8). A zero
+// score means no complexity is known and leaves the base.
+func stageDefaultEffort(cfg *config.Config, stage state.PipelineStage, complexityScore int) string {
+	effort := defaultStageEfforts[stage]
+	if stage != state.StageFeatureDev || !resolveEffortAuto(cfg) {
+		return effort
+	}
+	switch {
+	case complexityScore >= 5:
+		return "high"
+	case complexityScore >= 3:
+		return "medium"
+	}
+	return effort
+}
+
+// resolveEffortAuto resolves model_routing.effort_auto: the
+// NIGHTGAUGE_MODEL_ROUTING_EFFORT_AUTO env var wins over config, and absence
+// means config.DefaultEffortAuto. Same parse vocabulary as
+// useEvalRecommendations.
+func resolveEffortAuto(cfg *config.Config) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("NIGHTGAUGE_MODEL_ROUTING_EFFORT_AUTO"))) {
+	case "true", "1", "yes":
+		return true
+	case "false", "0", "no":
+		return false
+	}
+	if cfg == nil {
+		return config.DefaultEffortAuto
+	}
+	return cfg.ModelRouting.ResolveEffortAuto()
 }
 
 // validEffortLevel keeps operator effort input to the EFFORT_LEVELS
@@ -178,18 +217,17 @@ func validEffortLevel(effort string) string {
 }
 
 // stageEffortConfig resolves the explicit effort chain below the mode pin,
-// mirroring getStageEffort (stageResolver.ts) for the dispatch path — where
-// no issue metadata exists (services/SkillRunner passes none on the IPC path,
-// so the effort_auto derivation structurally never fires there and is NOT
-// mirrored):
+// mirroring getStageEffort (stageResolver.ts) for the dispatch path. The IPC
+// path carries no issue metadata, so feature-dev's effort_auto raise reads the
+// run's routing complexity score instead:
 //
 //  1. NIGHTGAUGE_PIPELINE_STAGE_EFFORT_{STAGE}   env override
 //  2. model_routing.stage_efforts.{stage}         config
 //  3. NIGHTGAUGE_MODEL_ROUTING_DEFAULT_EFFORT     env override
 //  4. model_routing.default_effort                config
-//  5. manual mode only: defaultStageEfforts       built-in table
-//  6. "" (no explicit effort — the model's declared default applies)
-func stageEffortConfig(workspaceRoot string, stage state.PipelineStage) string {
+//  5. defaultStageEfforts (every mode)            built-in table
+//  6. "" (haiku stages — the model's declared default applies)
+func stageEffortConfig(workspaceRoot string, stage state.PipelineStage, complexityScore int) string {
 	envKey := "NIGHTGAUGE_PIPELINE_STAGE_EFFORT_" +
 		strings.ToUpper(strings.ReplaceAll(string(stage), "-", "_"))
 	if v := validEffortLevel(strings.TrimSpace(os.Getenv(envKey))); v != "" {
@@ -207,10 +245,7 @@ func stageEffortConfig(workspaceRoot string, stage state.PipelineStage) string {
 	if v, _ := config.ResolveDefaultEffort(cfg, os.Getenv); v != "" {
 		return v
 	}
-	if modelRoutingMode(cfg) == "manual" {
-		return defaultStageEfforts[stage]
-	}
-	return ""
+	return stageDefaultEffort(cfg, stage, complexityScore)
 }
 
 // resolveWireEffort resolves the effort half of the wire envelope (#581 —
@@ -226,18 +261,18 @@ func stageEffortConfig(workspaceRoot string, stage state.PipelineStage) string {
 //	        [EffortFloor, EffortCeiling] — Efficiency caps at medium, Maximum
 //	        floors at high even when its model pin was overridden away.
 //
-// "" means no explicit effort resolved anywhere: the extension omits
-// `--effort` and the model's declared default rules — the selection query's
-// rung effort, implied rather than spelled, which keeps the spawned argv
-// byte-identical to the pre-wire behavior.
-func resolveWireEffort(workspaceRoot string, stage state.PipelineStage) string {
+// "" means no effort resolved anywhere (a stage with no built-in default): the
+// extension omits `--effort` and the model's declared default rules.
+// complexityScore is the run's routing complexity (0 when unknown); it only
+// raises feature-dev's built-in default.
+func resolveWireEffort(workspaceRoot string, stage state.PipelineStage, complexityScore int) string {
 	mode := routing.ResolvePerformanceMode(workspaceRoot)
 	if mode != routing.ModeElevated && stageEnvModel(stage) == "" {
 		if pin := routing.ModeStageEffort(mode, string(stage)); pin != "" {
 			return pin
 		}
 	}
-	return routing.ClampEffortToEnvelope(stageEffortConfig(workspaceRoot, stage), routing.Envelope(mode))
+	return routing.ClampEffortToEnvelope(stageEffortConfig(workspaceRoot, stage, complexityScore), routing.Envelope(mode))
 }
 
 // resolveWireThinking resolves the thinking half of the wire envelope (#581)

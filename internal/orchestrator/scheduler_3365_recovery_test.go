@@ -662,6 +662,9 @@ func (r *budgetEscalationRunner) RunStage(_ context.Context, params StageRunPara
 // same-model stall-retry / re-plan rewind.
 func TestScheduler_BudgetAwareEscalationOnStallKill(t *testing.T) {
 	stubReconcileGhUnreachable(t)
+	// Start feature-dev on sonnet so an escalation rung exists above it: the
+	// built-in default is opus (#2512), the top of the elevated envelope.
+	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "sonnet")
 	root := gitWorkspace(t)
 	// Enable adaptive stall recovery AND set a low $10 budget ceiling. Without
 	// the budget-aware branch, the stall-kill would rewind to feature-planning;

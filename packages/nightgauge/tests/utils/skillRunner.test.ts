@@ -2399,7 +2399,9 @@ allowed-tools: Read Write Edit Bash
     expect(args[modelIndex + 1]).toBe("opus");
   });
 
-  it("should pass --model sonnet explicitly when default_model is sonnet", () => {
+  it("should pass --model opus for feature-dev even when default_model is sonnet (#2512)", () => {
+    // The built-in Opus stage default answers before ui.core.default_model
+    // (Step 3); that step is covered in resolveModel.modeKnobAgreement.test.ts.
     vi.mocked(getDefaultModel).mockReturnValue("sonnet");
 
     runStageSkillHeadless("feature-dev", 42, {});
@@ -2409,10 +2411,10 @@ allowed-tools: Read Write Edit Bash
     const modelIndex = args.indexOf("--model");
 
     expect(modelIndex).toBeGreaterThan(-1);
-    expect(args[modelIndex + 1]).toBe("sonnet");
+    expect(args[modelIndex + 1]).toBe("opus");
   });
 
-  it("should pass --model sonnet when default_model is undefined (fallback)", () => {
+  it("should pass --model opus for feature-dev when default_model is undefined (#2512)", () => {
     vi.mocked(getDefaultModel).mockReturnValue(undefined);
 
     runStageSkillHeadless("feature-dev", 42, {});
@@ -2422,7 +2424,7 @@ allowed-tools: Read Write Edit Bash
     const modelIndex = args.indexOf("--model");
 
     expect(modelIndex).toBeGreaterThan(-1);
-    expect(args[modelIndex + 1]).toBe("sonnet");
+    expect(args[modelIndex + 1]).toBe("opus");
   });
 
   it("should pass --model opus when stage model overrides to opus (Issue #707)", () => {

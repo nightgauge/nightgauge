@@ -13,6 +13,10 @@ import (
 // dispatch path (#581): on unless model_routing.use_eval_recommendations is
 // false (the shipped default is true, ADR-021), applied only on the
 // router-chosen branch, only within the stage's routed-tier envelope.
+//
+// The cases dispatch spike-materialize: it has no built-in stage default, so
+// the routed tier is the whole answer. A reasoning stage's opus default
+// (#2512) would hide a sonnet routed tier.
 
 const adviceFixture = `{
   "schema_version": 1,
@@ -56,7 +60,7 @@ func TestStageBaseModelAppliesAdviceByDefault(t *testing.T) {
 	root := t.TempDir()
 	writeAdvice(t, root)
 
-	model, explicit := stageBaseModel(root, routing.ModeElevated, state.StageFeatureDev, "sonnet", "bugfix")
+	model, explicit := stageBaseModel(root, routing.ModeElevated, state.StageSpikeMaterialize, "sonnet", "bugfix")
 	if model != "opus" || explicit {
 		t.Fatalf("stageBaseModel with the key unset = (%q, %v), want (opus, false)", model, explicit)
 	}
@@ -71,7 +75,7 @@ func TestStageBaseModelIgnoresAdviceWhenTheKeyIsOff(t *testing.T) {
 	clearRoutingEnv(t)
 	writeAdvice(t, root)
 
-	model, explicit := stageBaseModel(root, routing.ModeElevated, state.StageFeatureDev, "sonnet", "bugfix")
+	model, explicit := stageBaseModel(root, routing.ModeElevated, state.StageSpikeMaterialize, "sonnet", "bugfix")
 	if model != "sonnet" || explicit {
 		t.Fatalf("stageBaseModel with advice OFF = (%q, %v), want (sonnet, false)", model, explicit)
 	}
@@ -86,7 +90,7 @@ func TestStageBaseModelAppliesAdviceWhenEnabled(t *testing.T) {
 	// Enabled AND job-class-attributed (#606): advisable bugfix evidence names
 	// opus, which sits inside the elevated envelope → the routed sonnet is
 	// re-picked to opus.
-	model, explicit := stageBaseModel(root, routing.ModeElevated, state.StageFeatureDev, "sonnet", "bugfix")
+	model, explicit := stageBaseModel(root, routing.ModeElevated, state.StageSpikeMaterialize, "sonnet", "bugfix")
 	if model != "opus" || explicit {
 		t.Fatalf("stageBaseModel with advice ON = (%q, %v), want (opus, false)", model, explicit)
 	}
@@ -100,7 +104,7 @@ func TestStageBaseModelAdviceStaysInsideTheEnvelope(t *testing.T) {
 
 	// Efficiency caps at sonnet: the opus advice is outside the envelope, so
 	// the axis query's own clamp answers — advice never escapes the clamps.
-	model, _ := stageBaseModel(root, routing.ModeEfficiency, state.StageFeatureDev, "sonnet", "bugfix")
+	model, _ := stageBaseModel(root, routing.ModeEfficiency, state.StageSpikeMaterialize, "sonnet", "bugfix")
 	if model != "sonnet" {
 		t.Fatalf("stageBaseModel(efficiency) with opus advice = %q, want sonnet", model)
 	}
@@ -111,7 +115,7 @@ func TestStageBaseModelAdviceEnabledWithoutFileIsToday(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS", "true")
 	root := t.TempDir() // no advice file
 
-	model, _ := stageBaseModel(root, routing.ModeElevated, state.StageFeatureDev, "sonnet", "bugfix")
+	model, _ := stageBaseModel(root, routing.ModeElevated, state.StageSpikeMaterialize, "sonnet", "bugfix")
 	if model != "sonnet" {
 		t.Fatalf("stageBaseModel enabled, no file = %q, want sonnet (fail-open to declared routing)", model)
 	}
@@ -127,12 +131,12 @@ func TestStageBaseModelAdviceRequiresAJobClass(t *testing.T) {
 	// labels name none gets no advice even with the key ON and advisable
 	// evidence on disk, mirroring the TS resolver exactly (the retired
 	// (model, *, *) pooling would have re-picked opus here).
-	model, _ := stageBaseModel(root, routing.ModeElevated, state.StageFeatureDev, "sonnet", "")
+	model, _ := stageBaseModel(root, routing.ModeElevated, state.StageSpikeMaterialize, "sonnet", "")
 	if model != "sonnet" {
 		t.Fatalf("stageBaseModel without a job class = %q, want sonnet (no advice)", model)
 	}
 	// And a job class the file has no advisable evidence for is equally inert.
-	model, _ = stageBaseModel(root, routing.ModeElevated, state.StageFeatureDev, "sonnet", "docs")
+	model, _ = stageBaseModel(root, routing.ModeElevated, state.StageSpikeMaterialize, "sonnet", "docs")
 	if model != "sonnet" {
 		t.Fatalf("stageBaseModel with foreign job class = %q, want sonnet (no cross-class pooling)", model)
 	}

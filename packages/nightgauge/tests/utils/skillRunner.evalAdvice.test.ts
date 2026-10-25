@@ -113,7 +113,8 @@ describe("resolveModel — eval-advice consumption (#581)", () => {
     configText.mockReturnValue("model_routing:\n  use_eval_recommendations: false\n");
     try {
       const decision = resolveModel(STAGE, root, METADATA);
-      expect(decision.model).toBe("sonnet"); // the selector's own M-complexity pick
+      expect(decision.selectionResult?.model).toBe("sonnet"); // the selector's own M-complexity pick
+      expect(decision.model).toBe("opus"); // raised to the stage-default floor (#2512)
       expect(decision.evalAdvisory).toBeUndefined();
     } finally {
       configPath.mockReturnValue({
@@ -128,7 +129,8 @@ describe("resolveModel — eval-advice consumption (#581)", () => {
   it("ignores the advice file when the env override is false", () => {
     process.env.NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS = "false";
     const decision = resolveModel(STAGE, root, METADATA);
-    expect(decision.model).toBe("sonnet");
+    expect(decision.selectionResult?.model).toBe("sonnet"); // the selector's own M-complexity pick
+    expect(decision.model).toBe("opus"); // raised to the stage-default floor (#2512)
     expect(decision.evalAdvisory).toBeUndefined();
   });
 
@@ -190,7 +192,8 @@ describe("resolveModel — eval-advice consumption (#581)", () => {
       labels: ["size:M", "type:feature"],
       title: "add the widget",
     });
-    expect(decision.model).toBe("sonnet");
+    expect(decision.selectionResult?.model).toBe("sonnet"); // the selector's own M-complexity pick
+    expect(decision.model).toBe("opus"); // raised to the stage-default floor (#2512)
     expect(decision.evalAdvisory).toBeUndefined();
   });
 
@@ -198,7 +201,8 @@ describe("resolveModel — eval-advice consumption (#581)", () => {
     process.env.NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS = "true";
     rmSync(join(root, ROUTING_ADVICE_RELATIVE_PATH));
     const decision = resolveModel(STAGE, root, METADATA);
-    expect(decision.model).toBe("sonnet");
+    expect(decision.selectionResult?.model).toBe("sonnet"); // the selector's own M-complexity pick
+    expect(decision.model).toBe("opus"); // raised to the stage-default floor (#2512)
     expect(decision.evalAdvisory).toBeUndefined();
   });
 
@@ -222,7 +226,8 @@ describe("resolveModel — eval-advice consumption (#581)", () => {
     };
     writeFileSync(join(root, ROUTING_ADVICE_RELATIVE_PATH), JSON.stringify(sparse));
     const decision = resolveModel(STAGE, root, METADATA);
-    expect(decision.model).toBe("sonnet"); // the selector's own M-complexity pick
+    expect(decision.selectionResult?.model).toBe("sonnet"); // the selector's own M-complexity pick
+    expect(decision.model).toBe("opus"); // raised to the stage-default floor (#2512)
     expect(decision.evalAdvisory).toBeUndefined();
   });
 });

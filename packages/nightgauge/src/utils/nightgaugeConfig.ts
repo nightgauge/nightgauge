@@ -40,6 +40,7 @@ export {
   getStageBudget,
   type ClaudeEffort,
   DEFAULT_STAGE_EFFORTS,
+  DEFAULT_STAGE_MODELS,
   supportedEffortsFor,
   modelSupportsEffort,
   assertEffortSupported,

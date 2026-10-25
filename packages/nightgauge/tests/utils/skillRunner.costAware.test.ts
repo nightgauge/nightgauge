@@ -4,7 +4,8 @@
  * Verifies resolveModel wires cost-per-success context into the selector and
  * that the resulting pick stays within the mode envelope:
  *   - with history where Sonnet has a comparable-or-better cost-per-success,
- *     an Elevated L feature-dev (normally Opus) is routed to Sonnet.
+ *     the selector picks Sonnet for an Elevated L feature-dev, but the Opus
+ *     stage default (#2512) is a floor, so the dispatched tier stays Opus.
  *   - the envelope still clamps: the same context under Efficiency never
  *     exceeds Sonnet, and cost-aware routing can't push below the floor.
  *   - when cost-aware routing is disabled, no downgrade occurs.
@@ -67,9 +68,12 @@ describe("resolveModel — cost-aware routing within the envelope (Issue #21)", 
     vi.mocked(getPerformanceMode).mockReturnValue("elevated");
   });
 
-  it("downgrades an Elevated L feature-dev from Opus to Sonnet on favorable CPS", () => {
+  it("the selector downgrades L feature-dev to Sonnet on favorable CPS, but the Opus floor holds (#2512)", () => {
     const result = resolveModel("feature-dev", "/test/workspace", L);
-    expect(result.model).toBe("sonnet");
+    // Cost-aware routing still reaches the selector and picks Sonnet...
+    expect(result.selectionResult?.model).toBe("sonnet");
+    // ...but the stage default is raise-only: the dispatched tier stays Opus.
+    expect(result.model).toBe("opus");
     expect(result.source).toBe("auto");
   });
 

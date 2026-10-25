@@ -222,7 +222,7 @@ allowed-tools: Read Write Edit Bash
       expect.objectContaining({
         NIGHTGAUGE_ADAPTER: "gemini",
         NIGHTGAUGE_OUTPUT_FORMAT: "json",
-        NIGHTGAUGE_GEMINI_MODEL: "gemini-2.5-flash",
+        NIGHTGAUGE_GEMINI_MODEL: "gemini-2.5-pro",
       })
     );
   });

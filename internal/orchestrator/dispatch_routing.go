@@ -18,7 +18,7 @@ import (
 // stop existing. What moved: the performance-mode pin AND its envelope,
 // `pipeline.stage_models` + its `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` env
 // overrides, `model_routing.mode` (manual/automatic/hybrid), the
-// lightweight-stage defaults, and `ui.core.default_model` /
+// built-in stage defaults, and `ui.core.default_model` /
 // `NIGHTGAUGE_UI_CORE_DEFAULT_MODEL` (Step 3 — pre-#340 that was the EFFECTIVE
 // model for every reasoning stage on the IPC path, because services/
 // SkillRunner.ts passed no issue metadata so Step 2 never fired). Without them
@@ -43,37 +43,27 @@ import (
 // performance_mode.go), the Go mirror of MODE_PROFILES — one table for the
 // router's recommendation at pickup and for this file's per-stage resolution.
 
-// defaultStageModels is the `manual` routing mode's built-in table — the
-// answer when the operator asked for explicit routing but named no model for
-// this stage. Mirrors DEFAULT_STAGE_MODELS in
+// stageDefaultModels is the built-in per-stage base model (#2512), applied in
+// EVERY routing mode at stageBaseModel's Step 1.5 — after the env override, the
+// `maximum` pin and an explicit pipeline.stage_models entry, and clamped into
+// the stage's routed-tier envelope. Mirrors DEFAULT_STAGE_MODELS in
 // packages/nightgauge/src/utils/resolvers/stageResolver.ts.
 //
-// Consulted ONLY in manual mode. In automatic/hybrid a stage with no explicit
-// entry defers to the router, exactly as `getStageModel` returns undefined.
-var defaultStageModels = map[state.PipelineStage]string{
+// Structured stages default to haiku and ignore the routed tier; floors,
+// post-failure escalation and the pr-create large-diff escalation still raise
+// them. Reasoning stages default to opus and take the HIGHER of the default
+// and the routed tier, so the router (and Frontier's Fable) may raise them but
+// never lower one. pr-merge is opus, not haiku (#197): its LLM path runs only
+// when the deterministic runner punted, which is exclusively the hardest
+// merges.
+var stageDefaultModels = map[state.PipelineStage]string{
+	state.StageIssueRefine:     "haiku",
 	state.StageIssuePickup:     "haiku",
-	state.StageFeaturePlanning: "sonnet",
-	state.StageFeatureDev:      "sonnet",
-	state.StageFeatureValidate: "sonnet",
+	state.StageFeaturePlanning: "opus",
+	state.StageFeatureDev:      "opus",
+	state.StageFeatureValidate: "opus",
 	state.StagePRCreate:        "haiku",
-	// sonnet, not haiku (#197): the pr-merge LLM path only runs when the
-	// deterministic runner punted — i.e. exclusively on the judgment-heavy
-	// instances. Issue size does not predict punt difficulty.
-	state.StagePRMerge: "sonnet",
-}
-
-// lightweightStageDefaults is the automatic/hybrid base for stages whose LLM
-// role is structured and shallow. Mirrors LIGHTWEIGHT_STAGE_DEFAULTS in
-// packages/nightgauge/src/utils/skillRunner.ts.
-//
-// These are BASES, not caps: the pr-create large-diff escalation, the
-// minimum_model floor and post-failure escalation all still raise them. pr-merge
-// is deliberately absent (#197) — its LLM path runs only on deterministic
-// punts, which are the hardest merges, so the cheapest tier is the wrong
-// default there.
-var lightweightStageDefaults = map[state.PipelineStage]string{
-	state.StageIssuePickup: "haiku",
-	state.StagePRCreate:    "haiku",
+	state.StagePRMerge:         "opus",
 }
 
 // modelRoutingMode resolves `model_routing.mode` with the same precedence as
@@ -128,8 +118,7 @@ func stageEnvModel(stage state.PipelineStage) string {
 // `getStageModel` (stageResolver.ts) exactly:
 //
 //  1. pipeline.stage_models.{stage} — manual/hybrid only
-//  2. defaultStageModels[stage]     — manual only
-//  3. "" (defer to the router)      — automatic/hybrid
+//  2. "" (fall through to the built-in defaults and the router)
 //
 // The env override is resolved by stageEnvModel, ahead of the mode pin.
 func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) string {
@@ -146,10 +135,6 @@ func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) strin
 		if v := validStageModel(strings.TrimSpace(cfg.Pipeline.StageModels[string(stage)])); v != "" {
 			return v
 		}
-	}
-
-	if mode == "manual" {
-		return defaultStageModels[stage]
 	}
 	return ""
 }
@@ -203,16 +188,18 @@ func workspaceDefaultModel(workspaceRoot string) string {
 //	                                       The NIGHTGAUGE_PIPELINE_STAGE_MODEL_*
 //	                                       override is read FIRST, so it wins in
 //	                                       every mode.
-//	Step 1   explicit per-stage config   — pipeline.stage_models, then the
-//	                                       manual-mode table
-//	Step 1.5 lightweight stage defaults  — issue-pickup, pr-create → haiku
+//	Step 1   explicit per-stage config   — pipeline.stage_models
+//	Step 1.5 built-in stage defaults     — stageDefaultModels, every mode:
+//	                                       haiku stages ignore the routed
+//	                                       tier; opus stages take the higher
+//	                                       of the default and Step 2
 //	Step 2   the run's routed tier       — pickup_recommendation.dev_model
 //	Step 3   ui.core.default_model       — the workspace-wide fallback
 //	Step 4   defaultDispatchModel        — an unrouted run still dispatches
 //
 // Steps 1.5–4 are clamped into the mode's routed-tier envelope, at the same
 // position `resolveModel` clamps them (clampModelToEnvelope on the
-// lightweight/auto/default branches). Step 1 is NOT clamped, also mirroring
+// default/auto branches). Step 1 is NOT clamped, also mirroring
 // resolveModel: an explicit per-stage model is the operator overriding the
 // mode for that stage, not the pipeline choosing within it. `explicit` reports
 // that, so resolveDispatchModel knows which value the mode ceiling is allowed
@@ -239,8 +226,9 @@ func stageBaseModel(
 		return configured, true
 	}
 	envelope := routing.RoutedTierEnvelopeForWorkspace(workspaceRoot, mode, string(stage))
-	if lightweight, ok := lightweightStageDefaults[stage]; ok {
-		return routing.ClampToEnvelope(lightweight, envelope), false
+	def, hasDefault := stageDefaultModels[stage]
+	if hasDefault && (def == "haiku" || predictedModel == "") {
+		return routing.ClampToEnvelope(def, envelope), false
 	}
 	if predictedModel != "" {
 		// Eval-advice re-pick (#581, on by default since ADR-021): on the
@@ -257,11 +245,13 @@ func stageBaseModel(
 		if useEvalRecommendations(workspaceRoot) {
 			if advice, ok := routing.LoadRoutingAdvice(workspaceRoot); ok {
 				if band := routing.AdviseBand(advice, jobClass, mode, envelope); band != "" {
-					return band, false
+					return routing.ClampToEnvelope(enforceMinimumModel(band, def), envelope), false
 				}
 			}
 		}
-		return routing.ClampToEnvelope(predictedModel, envelope), false
+		// enforceMinimumModel with an empty default is a no-op, so a stage
+		// with no built-in default takes the routed tier unchanged.
+		return routing.ClampToEnvelope(enforceMinimumModel(predictedModel, def), envelope), false
 	}
 	if def := workspaceDefaultModel(workspaceRoot); def != "" {
 		return routing.ClampToEnvelope(def, envelope), false
@@ -299,7 +289,7 @@ func normalizeDispatchTier(model string) string {
 //
 // Used for the run.retryWithEscalation forced tier (ADR 015 §B). The forced
 // tier also becomes the run's predicted model, but a prediction alone is not
-// enough once stageBaseModel exists: the lightweight defaults sit ABOVE the
+// enough once stageBaseModel exists: the haiku stage defaults sit ABOVE the
 // prediction, so an operator escalating a stalled pr-create would have watched
 // it re-run on haiku. "Run at least this tier" is a floor, so it is expressed
 // as one — and like every other floor it lands inside the stage's routed-tier
@@ -347,7 +337,7 @@ var dispatchStages = []state.PipelineStage{
 // feature-dev's routed tier is raised to it, and only feature-dev's.
 //
 // It stays in the router's slot on purpose: an explicit per-stage model
-// (pipeline.stage_models, the env override, the manual-mode table) and the
+// (pipeline.stage_models, the env override) and the
 // `maximum` pin still win over it, eval advice may still re-pick it, and the
 // routed-tier envelope clamps it — so `efficiency` caps it at its ceiling.
 func routedStageModel(stage state.PipelineStage, predicted string, d routing.Decision) string {

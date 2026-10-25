@@ -47,11 +47,18 @@ vi.mock("../../src/utils/mergedConfigReader", () => ({
 }));
 
 import { resolveModel, resolveStageEffort } from "../../src/utils/skillRunner";
+import { getDefaultModel } from "../../src/utils/nightgaugeConfig";
 
 /** The tier both resolvers are handed for the un-overridden step. */
 const ROUTED_TIER = "opus";
 
 const STAGE = "feature-dev" as PipelineStage;
+
+/**
+ * A stage with no DEFAULT_STAGE_MODELS entry (#2512): the opus default would
+ * otherwise answer for feature-dev before ui.core.default_model (Step 3).
+ */
+const NO_DEFAULT_STAGE = "issue-refine" as PipelineStage;
 
 const MANUAL_HAIKU =
   "model_routing:\n  mode: manual\npipeline:\n  stage_models:\n    feature-dev: haiku\n";
@@ -385,19 +392,28 @@ describe("resolveModel Step 3 reads the same band set Go does (#340)", () => {
     delete process.env.NIGHTGAUGE_UI_CORE_DEFAULT_MODEL;
   });
 
-  it("accepts `fable` from ui.core.default_model", () => {
-    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
+  it("accepts `fable` from ui.core.default_model (the config reader)", () => {
     configText = "ui:\n  core:\n    default_model: fable\n";
     expect(
-      resolveModel(STAGE, "/test/workspace").model,
+      getDefaultModel("/test/workspace"),
       "fable is a registry band; DefaultModelSchema permits it and Go dispatches it"
     ).toBe("fable");
+  });
+
+  it("a stage with a built-in default never reaches ui.core.default_model (#2512)", () => {
+    // Under frontier, feature-dev's ceiling is fable, but the opus stage
+    // default answers before Step 3, so the configured default cannot raise it.
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
+    configText = "ui:\n  core:\n    default_model: fable\n";
+    const decision = resolveModel(STAGE, "/test/workspace");
+    expect(decision.model).toBe("opus");
+    expect(decision.source).toBe("stage-default");
   });
 
   it("clamps a `fable` default into the mode envelope, like every other Step 3 value", () => {
     configText = "ui:\n  core:\n    default_model: fable\n";
     expect(
-      resolveModel(STAGE, "/test/workspace").model,
+      resolveModel(NO_DEFAULT_STAGE, "/test/workspace").model,
       "elevated tops out at opus — accepting the band does not exempt it from the ceiling"
     ).toBe("opus");
   });
@@ -452,9 +468,13 @@ describe("resolveStageEffort mirrors resolveModel Step 0's env suppression (#340
  * in the Go test with the same inputs and the same expected value.
  */
 describe("resolveStageEffort ⇄ resolveWireEffort twin matrix (#581)", () => {
-  it("elevated, no config: no explicit effort — omit the flag", () => {
+  it("elevated, no config: the built-in stage effort applies (#2512)", () => {
     configText = "";
-    expect(resolveStageEffort(STAGE, "/test/workspace")).toBeUndefined();
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("low");
+    expect(resolveStageEffort("feature-planning" as PipelineStage, "/test/workspace")).toBe(
+      "medium"
+    );
+    expect(resolveStageEffort("pr-create" as PipelineStage, "/test/workspace")).toBeUndefined();
   });
 
   it("maximum + stage model env override: pin suppressed, effort floor still raises", () => {
@@ -486,12 +506,13 @@ describe("resolveStageEffort ⇄ resolveWireEffort twin matrix (#581)", () => {
 
   it("manual mode falls back to the DEFAULT_STAGE_EFFORTS table", () => {
     configText = "model_routing:\n  mode: manual\n";
-    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("medium");
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("low");
     expect(resolveStageEffort("pr-create" as PipelineStage, "/test/workspace")).toBeUndefined();
   });
 
   it("off-ladder values are ignored, not dispatched", () => {
     configText = "model_routing:\n  stage_efforts:\n    feature-dev: turbo\n";
-    expect(resolveStageEffort(STAGE, "/test/workspace")).toBeUndefined();
+    // Falls through to the built-in table, never to the off-ladder value.
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("low");
   });
 });

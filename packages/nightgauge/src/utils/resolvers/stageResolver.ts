@@ -287,14 +287,15 @@ const EFFORT_ALTERNATION = EFFORT_LEVELS.join("|");
 const BAND_ALTERNATION = TIER_BAND_ALTERNATION;
 
 /**
- * Default per-stage model overrides — Sonnet 4.6 era cost-optimized strategy.
+ * Built-in per-stage base models (#2512), applied by `resolveModel` Step 1.5
+ * in EVERY routing mode. Mirrors `stageDefaultModels`
+ * (internal/orchestrator/dispatch_routing.go).
  *
- * - **Sonnet**: Core reasoning stages (planning, development, validation)
- * - **Haiku**: Lightweight stages with structured, template-driven tasks
- *   (issue extraction, PR template filling, merge flow) — ~67% cost savings
- *   vs Sonnet on these stages
- *
- * null = use the global default model (no override).
+ * - **Opus**: reasoning stages (planning, development, validation, pr-merge
+ *   punts) — a floor under the router's pick, which may raise but never lower
+ * - **Haiku**: structured stages (issue pickup, PR template filling); the
+ *   routed tier is ignored, floors and the pr-create large-diff escalation
+ *   still raise them
  *
  * These are the AUTHORITATIVE per-stage model defaults. The `model:` tier name
  * in a SKILL.md frontmatter is advisory only and is NOT read by the execution
@@ -306,35 +307,42 @@ const BAND_ALTERNATION = TIER_BAND_ALTERNATION;
  *
  * @see Issue #638 - Pipeline token efficiency
  * @see Issue #725 - Haiku model routing for lightweight stages
- * @see Issue #944 - Recommended default config for Sonnet 4.6 era
+ * @see Issue #2512 - Opus 5.5 / Haiku 5.5 defaults
  * @see Issue #4021 - Provider-aware model routing / validation
  */
-const DEFAULT_STAGE_MODELS: Partial<Record<PipelineStage, DefaultModel>> = {
+export const DEFAULT_STAGE_MODELS: Partial<Record<PipelineStage, DefaultModel>> = {
+  // issue-refine (haiku) is dispatched only by the Go scheduler, so its entry
+  // lives in stageDefaultModels alone: it is not a PipelineStage here.
   "issue-pickup": "haiku",
-  "feature-planning": "sonnet",
-  "feature-dev": "sonnet",
-  "feature-validate": "sonnet",
+  "feature-planning": "opus",
+  "feature-dev": "opus",
+  "feature-validate": "opus",
   "pr-create": "haiku",
-  // sonnet, not haiku (#197): the pr-merge LLM path only runs when the
+  // opus, not haiku (#197): the pr-merge LLM path only runs when the
   // deterministic runner punted — i.e. exclusively on the judgment-heavy
   // instances (blocked merges, failing checks, dirty state). Issue size
   // does not predict punt difficulty.
-  "pr-merge": "sonnet",
+  "pr-merge": "opus",
 };
 
 /**
- * Default per-stage effort overrides for Sonnet 4.6 era.
+ * Built-in per-stage effort (#2512), applied in every routing mode when no
+ * explicit effort is configured, so an Opus stage never leaves effort to the
+ * API default. Mirrors `defaultStageEfforts`
+ * (internal/orchestrator/dispatch_envelope.go).
  *
- * - **medium**: Stages requiring thorough analysis (planning, development)
- * - **low**: Stages with structured validation patterns (validate)
- * - **undefined** (omitted): Lightweight stages use Claude default
+ * - **medium**: feature-planning, pr-merge
+ * - **low**: feature-validate; feature-dev as a base that `effort_auto` raises
+ *   by complexity (M → medium, L/XL → high)
+ * - **omitted**: the haiku stages use the model's own default
  *
- * @see Issue #944 - Recommended default config
+ * @see Issue #2512 - Opus 5.5 / Haiku 5.5 defaults
  */
 export const DEFAULT_STAGE_EFFORTS: Partial<Record<PipelineStage, ClaudeEffort>> = {
   "feature-planning": "medium",
-  "feature-dev": "medium",
+  "feature-dev": "low",
   "feature-validate": "low",
+  "pr-merge": "medium",
 };
 
 /**
@@ -621,21 +629,18 @@ function mapComplexityToEffort(
 /**
  * Get the model override for a specific pipeline stage.
  *
- * Behavior depends on the model routing mode:
- * - **manual** (default): env var > config stage_models > DEFAULT_STAGE_MODELS
- * - **automatic**: env var > undefined (defer to AutoModelSelector for all stages)
- * - **hybrid**: env var > config stage_models override > undefined (defer for non-overridden)
+ * Returns only the operator's EXPLICIT per-stage model:
+ * - **manual** / **hybrid**: env var > config stage_models > undefined
+ * - **automatic**: env var > undefined
  *
- * In all modes, env var overrides take highest priority.
- * Returning undefined signals "use AutoModelSelector" to the caller (skillRunner.ts).
- * In manual mode, undefined is never returned (falls back to DEFAULT_STAGE_MODELS).
+ * undefined means no explicit choice: `resolveModel` then applies the built-in
+ * DEFAULT_STAGE_MODELS (every mode, #2512) and the AutoModelSelector.
  *
  * Priority:
  * 1. Environment variable: NIGHTGAUGE_PIPELINE_STAGE_MODEL_{STAGE_UPPER}
  *    (e.g., NIGHTGAUGE_PIPELINE_STAGE_MODEL_ISSUE_PICKUP=haiku)
  * 2. Config file: pipeline.stage_models.{stage} (manual/hybrid only)
- * 3. Default from DEFAULT_STAGE_MODELS (manual only)
- * 4. undefined (automatic/hybrid: defer to AutoModelSelector)
+ * 3. undefined
  *
  * @param stage - The pipeline stage
  * @param workspaceRoot - Workspace root path (optional, auto-detected)
@@ -732,13 +737,8 @@ export function getStageModel(
     }
   }
 
-  // 5. In hybrid mode with no explicit override, return undefined (defer to AutoModelSelector)
-  if (mode === "hybrid") {
-    return undefined;
-  }
-
-  // 6. Manual mode: fall back to defaults
-  return DEFAULT_STAGE_MODELS[stage];
+  // 5. No explicit override: resolveModel applies DEFAULT_STAGE_MODELS.
+  return undefined;
 }
 
 /**
@@ -1159,9 +1159,10 @@ export function getModelDefaultEffort(workspaceRoot?: string): ClaudeEffort | un
  * Resolution order:
  * 1. Explicit per-stage env/config override (stage_efforts)
  * 2. Per-model default effort (model_routing.default_effort)
- * 3. Manual mode: DEFAULT_STAGE_EFFORTS fallback
- * 4. Deterministic auto-derivation (automatic/hybrid + effort_auto=true)
- * 5. undefined (omit --effort)
+ * 3. DEFAULT_STAGE_EFFORTS (every mode); feature-dev is raised by the
+ *    deterministic complexity derivation when effort_auto and issue metadata
+ *    are present (never below its `low` base)
+ * 4. undefined (haiku stages — omit --effort)
  *
  * @see Issue #1235 - Per-model effort level configuration
  */
@@ -1180,12 +1181,9 @@ export function getStageEffort(
     return modelDefaultEffort;
   }
 
-  const mode = getModelRoutingMode(workspaceRoot);
-  if (mode === "manual") {
-    return DEFAULT_STAGE_EFFORTS[stage];
-  }
-  if (!isEffortAutoEnabled(workspaceRoot) || !issueMetadata) {
-    return undefined;
+  const base = DEFAULT_STAGE_EFFORTS[stage];
+  if (stage !== "feature-dev" || !isEffortAutoEnabled(workspaceRoot) || !issueMetadata) {
+    return base;
   }
 
   try {
@@ -1208,6 +1206,6 @@ export function getStageEffort(
     return mapComplexityToEffort(stage, complexity);
   } catch (error) {
     console.error(`Failed to auto-derive stage effort for ${stage} from issue metadata:`, error);
-    return undefined;
+    return base;
   }
 }

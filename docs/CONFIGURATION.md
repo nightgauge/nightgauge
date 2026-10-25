@@ -3543,35 +3543,48 @@ Go scheduler classifies a ceiling kill as the `budget_ceiling_hit` terminal kind
 Per-stage model routing using a 3-tier model strategy. Each pipeline stage can
 use a different model tier to balance cost and capability.
 
-> **Requires `model_routing.mode: manual` or `hybrid`.** In the default
-> `automatic` mode every stage defers to the complexity router and this table is
-> ignored — on **both** dispatch paths. It is also outranked by the `maximum`
+> **This key requires `model_routing.mode: manual` or `hybrid`.** In the default
+> `automatic` mode an explicit `stage_models` entry is ignored on **both**
+> dispatch paths. The built-in defaults below apply in every mode and need no
+> config (#2512). It is also outranked by the `maximum`
 > performance mode, which pins Opus on every stage before this table is read
 > (the envelope modes — `efficiency`, `frontier` — pin nothing and honor it).
 > The per-stage environment variables below are the exception: they win in every
 > mode, ahead of the Maximum pin. See [model_routing.mode](#model_routing) and
 > [PIPELINE_EXECUTION.md § Who Resolves the Model](PIPELINE_EXECUTION.md#who-resolves-the-model-issue-340).
 
-**3-Tier Model Strategy:**
+**Model tiers:**
 
-| Tier        | Model  | Cost (per MTok) | Used For                            |
-| ----------- | ------ | --------------- | ----------------------------------- |
-| **Heavy**   | Opus   | $5/$25          | Planning, development, validation   |
-| **Default** | Sonnet | $3/$15          | Global default (no override needed) |
-| **Light**   | Haiku  | $1/$5           | Issue pickup, PR create, PR merge   |
+| Tier        | Model      | Cost (input/output per MTok) | Default for                                 |
+| ----------- | ---------- | ---------------------------- | ------------------------------------------- |
+| **Heavy**   | Opus 5.5   | $4/$20                       | Planning, development, validation, pr-merge |
+| **Default** | Sonnet 5.5 | $2/$10                       | Fallback for a stage with no default        |
+| **Light**   | Haiku 5.5  | $0.10/$0.50                  | Issue refine, issue pickup, PR create       |
 
-Lightweight stages perform structured, template-driven tasks (JSON extraction,
-PR template filling, merge flow) that don't require advanced reasoning. Routing
-these to Haiku saves ~67% per stage compared to Sonnet.
+**Built-in defaults (#2512).** Every routing mode a new install gets, including
+`automatic`, starts each stage from this table. Go (`stageDefaultModels`) and
+TypeScript (`DEFAULT_STAGE_MODELS`) hold the same table.
 
-| Stage              | Default Model | Rationale                                                    |
-| ------------------ | ------------- | ------------------------------------------------------------ |
-| `issue-pickup`     | `haiku`       | Structured JSON extraction                                   |
-| `feature-planning` | `opus`        | Deep reasoning for plan design                               |
-| `feature-dev`      | `opus`        | Complex code generation                                      |
-| `feature-validate` | `opus`        | Quality review and test validation                           |
-| `pr-create`        | `haiku`       | Template-based PR description                                |
-| `pr-merge`         | `sonnet`      | Runs only on deterministic punts — the hardest merges (#197) |
+| Stage              | Default model | Default effort                                    | Rationale                                                   |
+| ------------------ | ------------- | ------------------------------------------------- | ----------------------------------------------------------- |
+| `issue-refine`     | `haiku`       | model default                                     | Structured issue rewrite                                    |
+| `issue-pickup`     | `haiku`       | model default                                     | Structured JSON extraction                                  |
+| `feature-planning` | `opus`        | `medium`                                          | Deep reasoning for plan design                              |
+| `feature-dev`      | `opus`        | `low`, raised by complexity (M→medium, L/XL→high) | Code generation                                             |
+| `feature-validate` | `opus`        | `low`                                             | Quality review and test validation                          |
+| `pr-create`        | `haiku`       | model default                                     | Template-based PR description                               |
+| `pr-merge`         | `opus`        | `medium`                                          | Runs only on deterministic punts, the hardest merges (#197) |
+
+Haiku stages ignore the router's tier. The `minimum_model` floor, post-failure
+escalation and the pr-create large-diff escalation still raise them. Opus
+stages take the higher of the default and the router's tier, so the router
+(and `frontier`'s Fable) can raise a reasoning stage but never lower it. The
+mode envelope still applies: `efficiency` caps Opus at Sonnet, and `maximum`
+pins Opus at `high` effort. Effort is always sent explicitly for an Opus stage.
+
+Research and exploration subagents that skills dispatch (the
+`pipeline-researcher` agent and the skills' read-only `Task` helpers) run on
+`haiku`.
 
 **Example:**
 
@@ -4076,18 +4089,18 @@ Model routing configuration controls how pipeline stages select AI models. This
 is a cross-cutting concern placed at the top level (alongside `pipeline`,
 `routing`) because it affects how `pipeline.stage_models` are interpreted.
 
-| Option                     | Type   | Default                                      | Description                                                                                                                                                                                      |
-| -------------------------- | ------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mode`                     | enum   | `"automatic"`                                | Model selection strategy (see below)                                                                                                                                                             |
-| `complexity_thresholds`    | object | -                                            | Score boundaries for auto model tier selection                                                                                                                                                   |
-| `minimum_model`            | object | -                                            | Per-stage model floor (auto cannot go below)                                                                                                                                                     |
-| `max_model`                | enum   | -                                            | Cap on the strongest tier automatic routing may reach, below the performance mode's ceiling (see below). Never raises; does not cap an explicit stage model.                                     |
-| `confidence_threshold`     | number | `0.7`                                        | Min confidence for auto-selection (0.0-1.0)                                                                                                                                                      |
-| `stage_efforts`            | object | planning: medium, dev: medium, validate: low | Per-stage Claude effort (`low\|medium\|high\|xhigh\|max`)                                                                                                                                        |
-| `effort_auto`              | bool   | `true`                                       | Auto-derive effort from stage + complexity (automatic/hybrid)                                                                                                                                    |
-| `default_effort`           | enum   | -                                            | Default effort for all stages when the active model supports it (`low\|medium\|high\|xhigh\|max`). Overridden by `stage_efforts`. Silently ignored for Haiku.                                    |
-| `use_eval_recommendations` | bool   | `true`                                       | Consult the eval advisor's materialized advice file (see below). Read-only, and identical to pre-advice routing when no advice exists                                                            |
-| `auto_tune`                | bool   | `true`                                       | Write tuned routing values back into config. **Repository footprint** — it edits `.nightgauge/config.yaml`; guarded by `auto_tune_confidence`, `auto_tune_min_samples` and `auto_tune_max_delta` |
+| Option                     | Type   | Default                                                     | Description                                                                                                                                                                                      |
+| -------------------------- | ------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mode`                     | enum   | `"automatic"`                                               | Model selection strategy (see below)                                                                                                                                                             |
+| `complexity_thresholds`    | object | -                                                           | Score boundaries for auto model tier selection                                                                                                                                                   |
+| `minimum_model`            | object | -                                                           | Per-stage model floor (auto cannot go below)                                                                                                                                                     |
+| `max_model`                | enum   | -                                                           | Cap on the strongest tier automatic routing may reach, below the performance mode's ceiling (see below). Never raises; does not cap an explicit stage model.                                     |
+| `confidence_threshold`     | number | `0.7`                                                       | Min confidence for auto-selection (0.0-1.0)                                                                                                                                                      |
+| `stage_efforts`            | object | planning: medium, dev: low, validate: low, pr-merge: medium | Per-stage Claude effort (`low\|medium\|high\|xhigh\|max`)                                                                                                                                        |
+| `effort_auto`              | bool   | `true`                                                      | Raise feature-dev effort by complexity, every mode (env: `NIGHTGAUGE_MODEL_ROUTING_EFFORT_AUTO`)                                                                                                 |
+| `default_effort`           | enum   | -                                                           | Default effort for all stages when the active model supports it (`low\|medium\|high\|xhigh\|max`). Overridden by `stage_efforts`. Silently ignored for Haiku.                                    |
+| `use_eval_recommendations` | bool   | `true`                                                      | Consult the eval advisor's materialized advice file (see below). Read-only, and identical to pre-advice routing when no advice exists                                                            |
+| `auto_tune`                | bool   | `true`                                                      | Write tuned routing values back into config. **Repository footprint** — it edits `.nightgauge/config.yaml`; guarded by `auto_tune_confidence`, `auto_tune_min_samples` and `auto_tune_max_delta` |
 
 **Eval routing advice (`use_eval_recommendations`, #581):**
 
@@ -4109,11 +4122,11 @@ alone decides — identical to pre-advice behavior.
 
 **Model Routing Modes:**
 
-| Mode        | Behavior                                                                              |
-| ----------- | ------------------------------------------------------------------------------------- |
-| `manual`    | Static per-stage mapping — `pipeline.stage_models`, then the built-in per-stage table |
-| `automatic` | AutoModelSelector (#730) determines model for every stage (default)                   |
-| `hybrid`    | AutoModelSelector runs, but explicit per-stage config overrides win                   |
+| Mode        | Behavior                                                                             |
+| ----------- | ------------------------------------------------------------------------------------ |
+| `manual`    | Static per-stage mapping — `pipeline.stage_models`, then the built-in stage defaults |
+| `automatic` | AutoModelSelector (#730) determines model for every stage (default)                  |
+| `hybrid`    | AutoModelSelector runs, but explicit per-stage config overrides win                  |
 
 In all modes — and in every performance mode, ahead of the `maximum` pin —
 environment variable overrides (`NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`) take
@@ -4200,10 +4213,11 @@ would move planning, validation and merge to Opus too. So
 `ImplementationBand` is applied to `feature-dev`'s dispatch alone, and it only
 ever raises that stage to Opus.
 
-**Manual mode.** Under `model_routing.mode: manual` every stage takes its
-model from the manual table (or `pipeline.stage_models`), which wins over the
-router's slot, so the size rule does not apply. Only the high-risk Opus floor
-reaches a manual-mode workspace.
+**Built-in defaults.** Since #2512 every reasoning stage starts from an Opus
+default in every routing mode, so the size rule and the high-risk floor change
+the dispatched tier only where the envelope sits below Opus (`efficiency`
+caps both at Sonnet) or where an explicit `pipeline.stage_models` entry names a
+lower tier.
 
 **What the eval loop does not measure yet.** `use_eval_recommendations`
 advice compares pass rate, quality and cost **per run**. It does not see turns
@@ -4219,14 +4233,14 @@ does not apply this rule. The Go scheduler above is what autonomous runs use.
 **Mode Behavior with `getStageModel()`:**
 
 ```
-manual mode:     env var > config stage_models > DEFAULT_STAGE_MODELS
-automatic mode:  env var > undefined (defer to AutoModelSelector)
-hybrid mode:     env var > config stage_models override > undefined (defer)
+manual mode:     env var > config stage_models > undefined
+automatic mode:  env var > undefined
+hybrid mode:     env var > config stage_models override > undefined
 ```
 
-Returning `undefined` signals "use AutoModelSelector" to the caller
-(skillRunner.ts). In manual mode, `undefined` is never returned — it always
-falls back to `DEFAULT_STAGE_MODELS`.
+`getStageModel` returns only the operator's explicit choice. On `undefined`,
+`resolveModel` (skillRunner.ts) applies `DEFAULT_STAGE_MODELS` in every mode,
+with `AutoModelSelector` allowed to raise an Opus stage but not lower it.
 
 The Go scheduler applies the same three rules for autonomous runs, in
 `stageConfiguredModel` (`internal/orchestrator/dispatch_routing.go`), so a mode
@@ -4255,14 +4269,16 @@ When using the Claude adapter, effort is resolved with this precedence:
 1. Environment variable    NIGHTGAUGE_PIPELINE_STAGE_EFFORT_*         -> highest priority
 2. Config stage override   model_routing.stage_efforts.<stage>
 3. Per-model default       model_routing.default_effort                    (env: NIGHTGAUGE_MODEL_ROUTING_DEFAULT_EFFORT)
-4. Manual mode default     DEFAULT_STAGE_EFFORTS (medium/medium/low for planning/dev/validate)
-5. Auto-derive (optional)  model_routing.effort_auto + automatic|hybrid mode
-6. Omit --effort           default Claude behavior
+4. Built-in default        DEFAULT_STAGE_EFFORTS, every mode (planning medium, dev low,
+                           validate low, pr-merge medium); feature-dev is raised by
+                           complexity when model_routing.effort_auto is on (default)
+5. Omit --effort           haiku stages: the model's default
 ```
 
 > **Who runs this chain (#581):** on the autonomous (IPC) path the **Go
-> scheduler** resolves it (`resolveWireEffort`, a mirror of the TS chain —
-> step 5 excepted, since no issue metadata exists there) and puts the result
+> scheduler** resolves it (`resolveWireEffort`, a mirror of the TS chain; it
+> raises feature-dev from the run's routing complexity score, since no issue
+> metadata exists there) and puts the result
 > on the wire next to the model; the extension executes the wire effort
 > verbatim. On the extension-orchestrated path TypeScript resolves it locally
 > as before. One config, one thinking budget, both paths — see
@@ -4367,18 +4383,19 @@ When using the Claude adapter, effort is resolved with this precedence:
 > then writes them again. An explicit `xhigh`/`max` still passes through
 > unchanged, so the higher levels remain available by deliberate pin.
 
-> **Note (Issue #944):** In manual mode, `DEFAULT_STAGE_EFFORTS` provides
-> sensible defaults (`medium` for planning/dev, `low` for validate). Lightweight
-> stages (`issue-pickup`, `pr-create`, `pr-merge`) omit `--effort` by default.
+> **Note (Issue #2512):** `DEFAULT_STAGE_EFFORTS` applies in every routing
+> mode: `medium` for planning and pr-merge, `low` for dev and validate. The
+> haiku stages (`issue-refine`, `issue-pickup`, `pr-create`) omit `--effort`.
 > Override any stage via `model_routing.stage_efforts` or the corresponding
 > environment variable.
 
 Deterministic auto-derive rules:
 
-- Lightweight stages (`issue-pickup`, `pr-create`, `pr-merge`) -> `low`
-- Non-lightweight `XS`/`S` -> `low`
-- Non-lightweight `M` -> `medium`
-- Non-lightweight `L`/`XL` -> `high`
+These apply to `feature-dev` only, over its `low` base:
+
+- `XS`/`S` (complexity score ≤ 2) -> `low`
+- `M` (score 3) -> `medium`
+- `L`/`XL` (score ≥ 5) -> `high`
 
 **Example — Automatic mode (default, zero config change):**
 

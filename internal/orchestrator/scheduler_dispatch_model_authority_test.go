@@ -68,6 +68,9 @@ func TestResolveDispatchModelEmitsRegistryBandsOnly(t *testing.T) {
 
 	t.Run("pr-merge haiku floor", func(t *testing.T) {
 		s := testScheduler(t)
+		// The opus stage default (#2512) only reaches haiku through a sticky
+		// downgrade, which runs before this guard.
+		s.retryEngine.RecordDowngrade("opus", DowngradeDecision{NewTier: "haiku"})
 		if got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "haiku", nil, ""); got != "sonnet" {
 			t.Errorf("pr-merge model = %q, want the band %q", got, "sonnet")
 		}
@@ -75,6 +78,9 @@ func TestResolveDispatchModelEmitsRegistryBandsOnly(t *testing.T) {
 
 	t.Run("feature-validate haiku gate", func(t *testing.T) {
 		s := testScheduler(t)
+		// The opus stage default (#2512) only reaches haiku through a sticky
+		// downgrade, which runs before this guard.
+		s.retryEngine.RecordDowngrade("opus", DowngradeDecision{NewTier: "haiku"})
 		if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "haiku", nil, ""); got != "sonnet" {
 			t.Errorf("feature-validate model = %q, want the band %q", got, "sonnet")
 		}
@@ -88,7 +94,7 @@ func TestResolveDispatchModelEmitsRegistryBandsOnly(t *testing.T) {
 		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, routing.ModelOpus, nil, ""); got != "opus" {
 			t.Errorf("model = %q, want the band %q for the concrete id %q", got, "opus", routing.ModelOpus)
 		}
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 2, dir, routing.ModelSonnet, nil, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 2, dir, routing.ModelSonnet, nil, ""); got != "sonnet" {
 			t.Errorf("model = %q, want the band %q for the concrete id %q", got, "sonnet", routing.ModelSonnet)
 		}
 	})
@@ -205,10 +211,10 @@ func TestResolveDispatchModelHonorsExplicitStageModels(t *testing.T) {
 	t.Run("manual mode falls back to the built-in per-stage table", func(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  mode: manual\n")
 		s := testScheduler(t)
-		// manual means "explicit routing"; the built-in table is the explicit
-		// answer for a stage the operator did not name.
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil, ""); got != "sonnet" {
-			t.Errorf("feature-dev model = %q, want the manual-mode default sonnet", got)
+		// The built-in table answers for a stage the operator did not name,
+		// in manual mode as in every mode (#2512).
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", nil, ""); got != "opus" {
+			t.Errorf("feature-dev model = %q, want the built-in default opus", got)
 		}
 	})
 

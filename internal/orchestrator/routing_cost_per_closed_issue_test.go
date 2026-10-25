@@ -68,11 +68,11 @@ func TestResolveDispatchModel_ImplementationBandInsideEnvelope(t *testing.T) {
 	if got := s.resolveDispatchModel(dev, 1, dir, routedStageModel(dev, "", sizedM), nil, ""); got != "opus" {
 		t.Errorf("elevated, sized M feature-dev = %q, want opus", got)
 	}
-	if got := s.resolveDispatchModel(dev, 1, dir, routedStageModel(dev, "", unsized), nil, ""); got != "sonnet" {
-		t.Errorf("elevated, unsized feature-dev = %q, want today's sonnet default", got)
+	if got := s.resolveDispatchModel(dev, 1, dir, routedStageModel(dev, "", unsized), nil, ""); got != "opus" {
+		t.Errorf("elevated, unsized feature-dev = %q, want the opus stage default (#2512)", got)
 	}
-	if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, routedStageModel(state.StageFeatureValidate, "", sizedM), nil, ""); got != "sonnet" {
-		t.Errorf("elevated, sized M feature-validate = %q, want sonnet (unchanged)", got)
+	if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, routedStageModel(state.StageFeatureValidate, "", sizedM), nil, ""); got != "opus" {
+		t.Errorf("elevated, sized M feature-validate = %q, want the opus stage default (#2512)", got)
 	}
 
 	eff := isolatedWorkspace(t)
@@ -112,8 +112,8 @@ func TestRiskFloors_DispatchAndEnvelope(t *testing.T) {
 		if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", floors, ""); got != "opus" {
 			t.Errorf("elevated, high-risk %s = %q, want opus", stage, got)
 		}
-		if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", raiseRiskFloors(nil, plain), ""); got != "sonnet" {
-			t.Errorf("elevated, not high-risk %s = %q, want sonnet", stage, got)
+		if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", raiseRiskFloors(nil, plain), ""); got != "opus" {
+			t.Errorf("elevated, not high-risk %s = %q, want the opus stage default (#2512)", stage, got)
 		}
 	}
 	if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "sonnet", floors, ""); got != "haiku" {
@@ -281,9 +281,12 @@ func TestRunPipeline_PlannerSizeReachesFeatureDevDispatch(t *testing.T) {
 	if models[state.StageFeatureDev] != "opus" {
 		t.Errorf("feature-dev dispatched on %q, want opus from the planner's L", models[state.StageFeatureDev])
 	}
+	// Planning and validation dispatch on their own opus stage default
+	// (#2512), not on the size rule; TestRoutedStageModel pins that the rule
+	// is feature-dev's only.
 	for _, stage := range []state.PipelineStage{state.StageFeaturePlanning, state.StageFeatureValidate} {
-		if got := models[stage]; got != "sonnet" {
-			t.Errorf("%s dispatched on %q, want sonnet (the size rule is feature-dev's only)", stage, got)
+		if got := models[stage]; got != "opus" {
+			t.Errorf("%s dispatched on %q, want the opus stage default", stage, got)
 		}
 	}
 
@@ -346,11 +349,14 @@ func TestReRouteContext_SizeRuleStaysOnFeatureDev(t *testing.T) {
 	}
 
 	sizedL := decisionFor("type:feature", "size:L")
+	// Every reasoning stage dispatches on opus: feature-dev from the size
+	// rule, the rest from their opus stage default (#2512), which the
+	// router's sonnet cannot lower.
 	want := map[state.PipelineStage]string{
-		state.StageFeaturePlanning: "sonnet",
+		state.StageFeaturePlanning: "opus",
 		state.StageFeatureDev:      "opus",
-		state.StageFeatureValidate: "sonnet",
-		state.StagePRMerge:         "sonnet",
+		state.StageFeatureValidate: "opus",
+		state.StagePRMerge:         "opus",
 	}
 	for stage, w := range want {
 		if got := s.resolveDispatchModel(stage, 1909, dir, routedStageModel(stage, devModel, sizedL), nil, ""); got != w {

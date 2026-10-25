@@ -157,7 +157,7 @@ function mockSkillFileExists() {
 // ---------------------------------------------------------------------------
 
 import { runStageSkillHeadless, runStageSkillInteractive } from "../../src/utils/skillRunner";
-import { getCopilotModel } from "../../src/utils/nightgaugeConfig";
+import { getCopilotModel, getStageModel } from "../../src/utils/nightgaugeConfig";
 import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
 import { createMockChildProcess } from "../mocks/child-process";
 
@@ -484,6 +484,8 @@ describe("copilotEnv — spawn env", () => {
 
   it("passes NIGHTGAUGE_COPILOT_MODEL when env var is set", () => {
     process.env.NIGHTGAUGE_COPILOT_MODEL = "gpt-4o";
+    // Pin the Sonnet band: feature-dev's built-in default is Opus (#2512).
+    vi.mocked(getStageModel).mockReturnValueOnce("sonnet");
 
     const mockProcess = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockProcess);
@@ -502,7 +504,8 @@ describe("copilotEnv — spawn env", () => {
   });
 
   it("sets NIGHTGAUGE_COPILOT_MODEL from the dispatched band when not configured", () => {
-    // No env var set and no config file: the default Sonnet band maps to gpt-4o.
+    // No env var set and no config file: the built-in Opus default (#2512)
+    // maps to claude-sonnet-4.5 on Copilot; a Sonnet band maps to gpt-4o.
     const mockProcess = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockProcess);
 
@@ -513,7 +516,7 @@ describe("copilotEnv — spawn env", () => {
       expect.any(Array),
       expect.objectContaining({
         env: expect.objectContaining({
-          NIGHTGAUGE_COPILOT_MODEL: "gpt-4o",
+          NIGHTGAUGE_COPILOT_MODEL: "claude-sonnet-4.5",
         }),
       })
     );
