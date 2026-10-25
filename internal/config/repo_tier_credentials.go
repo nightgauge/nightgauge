@@ -39,6 +39,8 @@ type repoTierProtectedKey struct {
 // repository's history, and only the operator can rotate it.
 var repoTierProtectedKeys = []repoTierProtectedKey{
 	{root: "platform", hardStrip: true, secrets: []string{"license_key"}},
+	// users maps chat identities to forge logins for inbound auth (#2510).
+	{root: "users", hardStrip: true},
 	{root: "github_auth", secrets: []string{"token", "tokens.*", "app.private_key", "app.private_key_path"}},
 }
 
@@ -183,6 +185,8 @@ func ValidateLegacyJSONCredentials(cfg *Config, path string) error {
 	cfg.LicenseKey = ""
 	cfg.PlatformURL = ""
 	cfg.PlatformEnabled = nil
+	// users is hard-stripped too (#2510): a repository cannot grant an identity.
+	cfg.Users = nil
 	return nil
 }
 

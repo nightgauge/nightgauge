@@ -517,6 +517,8 @@ func TestMachineTierKeysSnapshot(t *testing.T) {
 		"ui.core.auth_provider",
 		"platform",
 		"pipeline.max_concurrent",
+		"concurrency",
+		"users",
 		"pipeline.logs.max_size_mb",
 		"pipeline.logs.max_age_days",
 	}

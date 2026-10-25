@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A `concurrency` block in the machine config now takes effect. The config parser
+  dropped it, so `per_repo_max` and `repository_overrides` were ignored and every
+  repository ran one pipeline at a time. `config show --key concurrency` prints it,
+  and `--tier-audit` classifies it as machine tier (#2510).
+- The `users` block (Mattermost user mappings) was dropped by the same parser
+  defect, so slash-command authorization never saw it. It is now loaded (#2510).
 - **The runaway gate no longer kills a stage waiting on a background task
   (#2517).** A Bash call that outlives its timeout is moved to the background
   and returns its tool_result at once, so it stopped counting as in flight
