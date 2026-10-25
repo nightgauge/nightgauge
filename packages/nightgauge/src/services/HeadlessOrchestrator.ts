@@ -38,6 +38,7 @@ import { promisify } from "util";
 // any file under packages/nightgauge/src/services/.
 const execFileAsync = promisify(execFile);
 import { BinaryResolver } from "./BinaryResolver";
+import { moveToInReviewIfPRBacked } from "../utils/inReviewGuard";
 import { IpcClient } from "./IpcClient";
 import { runWithPhaseStream, type PrStagePhaseTransition } from "./prStagePhaseStream";
 import type { AttentionRaiseCheck } from "./IpcClientBase";
@@ -2190,6 +2191,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
     }
 
+    // "In review" goes through the guarded CLI: it is written only when an
+    // open PR backs the issue, the evidence every In review writer needs (#1496).
+    if (statusValue === BOARD_STATUS.inReview) {
+      await moveToInReviewIfPRBacked(issueNumber, workspaceRoot, this.logger, issueRepo);
+      return;
+    }
+
     // Update project board Status field via GraphQL
     try {
       const result = await updateProjectItemStatus(
@@ -2225,19 +2233,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
-   * Move the failed issue to "In review" on the project board so it leaves the
-   * Ready tree (not eligible for re-dequeue or drag pickup) without getting
-   * permanently stuck at "In progress".
+   * Move the failed issue to "In review" when, and only when, an open PR backs
+   * it, so a failed run with a PR leaves the Ready tree for review.
    *
-   * Prior behavior reverted to "Ready", which silently put failed issues back
-   * in line for re-processing. That produced cross-issue conflicts when some
-   * epic children completed and others failed — see Issue #2967.
+   * The write goes through the guarded CLI (`moveToInReviewIfPRBacked`): with
+   * no open PR it refuses and nothing is written, leaving the board to the
+   * scheduler's revert. Writing In review unconditionally here raced that
+   * revert and stranded PR-less issues in In review (#1496). A TS-only run
+   * with no PR stays "In progress", which the non-terminal reconcile recovers.
    *
    * Non-blocking: failures are logged but never throw.
    * @see Issue #1115 - Stale status after pipeline failure
    * @see Issue #2967 - Failed pipelines must not silently return issues to Ready
+   * @see Issue #1496 - In review requires an open PR
    */
-  private async markStatusInReviewOnFailure(issueNumber: number): Promise<void> {
+  private async parkFailedIssueIfPRBacked(issueNumber: number): Promise<void> {
     if (
       !this.contextLoader &&
       (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0)
@@ -2245,41 +2255,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return;
     }
     // Use the main repo root (not worktree path) so config.yaml is found.
-    const workspaceRoot = this.getPersistentRoot();
-    const issueRepo = this.repoOverride;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const result = await updateProjectItemStatus(
-          issueNumber,
-          "In review",
-          workspaceRoot,
-          this.logger,
-          issueRepo
-        );
-        if (result.success) {
-          this.logger.info(
-            "Moved project status to In review after failure (awaiting human review)",
-            { issueNumber }
-          );
-          return;
-        }
-        this.logger.warn("Failed to move project status to In review after failure", {
-          issueNumber,
-          error: result.error,
-          attempt,
-        });
-      } catch (err) {
-        this.logger.warn("Failed to move project status to In review after failure", {
-          issueNumber,
-          err: err instanceof Error ? err.message : String(err),
-          attempt,
-        });
-      }
-      // Brief delay before retry
-      if (attempt === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-      }
-    }
+    await moveToInReviewIfPRBacked(
+      issueNumber,
+      this.getPersistentRoot(),
+      this.logger,
+      this.repoOverride
+    );
   }
 
   /**
@@ -13461,7 +13442,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         }
       }
       if (!wasPaused) {
-        await this.markStatusInReviewOnFailure(issueNumber);
+        await this.parkFailedIssueIfPRBacked(issueNumber);
       }
     }
 

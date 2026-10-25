@@ -579,19 +579,7 @@ func (as *AutonomousScheduler) ownOpenPR(ctx context.Context, owner, repoName st
 	if as.ghClient == nil {
 		return 0, false, fmt.Errorf("no forge client")
 	}
-	heads, err := gh.NewPRService(as.ghClient).ListOpenPRHeads(ctx, owner, repoName)
-	if err != nil {
-		return 0, false, err
-	}
-	for _, h := range heads {
-		if h.CrossRepository {
-			continue
-		}
-		if n, ok := gitpkg.ParseIssueNumberFromBranch(h.HeadRefName); ok && n == issue {
-			return h.Number, true, nil
-		}
-	}
-	return 0, false, nil
+	return gh.NewPRService(as.ghClient).OwnOpenPRForIssue(ctx, owner, repoName, issue)
 }
 
 // projectForRepo resolves the GitHub project number and owner type for a repo

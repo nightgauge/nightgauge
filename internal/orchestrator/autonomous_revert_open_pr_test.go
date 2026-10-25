@@ -292,3 +292,48 @@ func TestRecoverOrphanedRunningItems_RespectsTheIssuesOwnOpenPR(t *testing.T) {
 		})
 	}
 }
+
+// #1496: a failed issue whose only PR is merged ends in Ready, the status the
+// revert-status line names. A merged PR is not in the open list, so it does
+// not back the issue, and no writer may put the issue in In review.
+func TestRevertFailedIssueStatus_MergedPROnlyEndsReady(t *testing.T) {
+	buf := withCapturedLog(t)
+	as, writes, _ := revertFixture(t, map[int]string{})
+
+	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 312)
+
+	got := buf.String()
+	if !strings.Contains(got, "revert-status:") || !strings.Contains(got, "back to Ready") {
+		t.Errorf("want the Ready revert for an issue only a merged PR backs; got log: %q", got)
+	}
+	if strings.Contains(got, "move-to-in-review:") {
+		t.Errorf("an issue with no open PR was moved to In review: %q", got)
+	}
+	if n := writes.Load(); n == 0 {
+		t.Error("no board write was attempted")
+	}
+}
+
+// moveIssueToInReview requires the open PR as evidence (#1496): without one it
+// writes nothing at all, so "In review" never stands for a PR that is not there.
+func TestMoveIssueToInReview_RequiresOpenPREvidence(t *testing.T) {
+	buf := withCapturedLog(t)
+	as, writes, prReads := revertFixture(t)
+
+	as.moveIssueToInReview(as.backgroundContext(), "O/a", 1, 0)
+
+	if n := writes.Load(); n != 0 {
+		t.Errorf("board requests = %d, want 0 — In review was written with no open PR", n)
+	}
+	if n := prReads.Load(); n != 0 {
+		t.Errorf("open-PR reads = %d, want 0", n)
+	}
+	if got := buf.String(); !strings.Contains(got, "no open PR backs it") {
+		t.Errorf("want the refusal logged; got %q", got)
+	}
+
+	as.moveIssueToInReview(as.backgroundContext(), "O/a", 1, 42)
+	if writes.Load() == 0 {
+		t.Error("an open PR's In review move was not attempted")
+	}
+}

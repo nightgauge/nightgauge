@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/shurcooL/graphql"
+
+	"github.com/nightgauge/nightgauge/internal/git"
 )
 
 // OpenPRHead is one open pull request and the branch it merges from.
@@ -77,4 +79,28 @@ func (s *PRService) ListOpenPRHeads(ctx context.Context, owner, repo string) ([]
 		after = &cursor
 	}
 	return nil, fmt.Errorf("list open PRs of %s/%s: more than %d pages of open pull requests", owner, repo, maxOpenPRPages)
+}
+
+// OwnOpenPRForIssue reports the number of the OPEN pull request whose head
+// branch belongs to the issue (the feat/<n>-… convention), counting only a
+// branch in the repository itself: anyone who can open a pull request can name
+// a fork's branch, and counting one would let them hold an issue out of Ready.
+// A merged or closed PR never counts. This is the one definition of "an open
+// PR backs this issue" that every "In review" writer applies (#1496), so the
+// writers cannot disagree about the status. err is non-nil when the list could
+// not be read; a caller must not take that as "no PR".
+func (s *PRService) OwnOpenPRForIssue(ctx context.Context, owner, repo string, issue int) (pr int, found bool, err error) {
+	heads, err := s.ListOpenPRHeads(ctx, owner, repo)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, h := range heads {
+		if h.CrossRepository {
+			continue
+		}
+		if n, ok := git.ParseIssueNumberFromBranch(h.HeadRefName); ok && n == issue {
+			return h.Number, true, nil
+		}
+	}
+	return 0, false, nil
 }
