@@ -153,6 +153,11 @@ func dirLockFor(dir string) chan struct{} {
 	return c.(chan struct{})
 }
 
+// LOCK ORDER (#2528): this store lock → AutonomousScheduler.mu. Resolve runs
+// verbs that take the scheduler mutex, so scheduler code holding that mutex
+// must never reach acquireDir — it dispatches through
+// AutonomousScheduler.dispatchAttention instead.
+//
 // acquireDir takes both locks for dir and returns the release func, waiting as
 // long as it takes. Reserved for the daemon's own background producers (raise,
 // sweep, streak, standing), which run on their own goroutines and whose being

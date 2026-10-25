@@ -974,6 +974,10 @@ type AutonomousScheduler struct {
 	// closed and do not need it. Guarded by mu.
 	prQueryOKRepos map[string]bool
 
+	// mu guards scheduler state. LOCK ORDER (#2528): attention store lock →
+	// mu. An attention verb running under Store.Resolve may take mu, so code
+	// holding mu must never touch the attention store, even indirectly — route
+	// that I/O through dispatchAttention.
 	mu      sync.Mutex
 	running bool
 	// runningChangedCh is closed — and replaced with a fresh channel — every
@@ -5121,7 +5125,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// A run cannot complete while the architecture gate is blocking it, so
 		// success proves the approval landed — including approval granted
 		// out-of-band via the label, which never touches the card.
-		as.retractArchitectureApproval(repo, issue)
+		as.dispatchAttention(func() { as.retractArchitectureApproval(repo, issue) })
 		log.Printf("autonomous: completed %s#%d — triggering cascade re-scan + promotion", repo, issue)
 
 		// Promote newly-unblocked downstream issues from Backlog → Ready.
@@ -5760,7 +5764,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			// Action Center blockedBy-deferral producer (ADR 015 §F #5): surface
 			// the deferral so the operator can remove a stale edge / requeue /
 			// leave, instead of the issue silently backing off (#305/#310).
-			as.raiseBlockedByDeferral(repo, issue, title, detail)
+			as.dispatchAttention(func() { as.raiseBlockedByDeferral(repo, issue, title, detail) })
 			return
 		}
 
@@ -6000,7 +6004,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			// auto_accept_stages, so nothing but a human resolving this will
 			// requeue the issue. Raised after persistState so the record and the
 			// card cannot disagree about the issue's state.
-			as.raiseArchitectureApproval(repo, issue, title, detail)
+			as.dispatchAttention(func() { as.raiseArchitectureApproval(repo, issue, title, detail) })
 			as.goTrackedBoardOp(func(genCtx context.Context) { as.sidelineHalt(genCtx, repo, issue, "architecture approval required") })
 			select {
 			case as.rescanCh <- struct{}{}:
@@ -6082,7 +6086,8 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				// two-way replacement for the one-way Discord embed — surface a
 				// resume/keep-paused/triage card the operator can answer from any
 				// surface.
-				as.raiseCascadePause(repo, issue, cascadeTripReason)
+				reason := cascadeTripReason
+				as.dispatchAttention(func() { as.raiseCascadePause(repo, issue, reason) })
 				// Fall through to persist + revert path so the cascade pause
 				// is durable and the failing issue's board status is reset.
 			}
