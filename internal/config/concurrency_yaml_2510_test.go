@@ -157,3 +157,15 @@ func TestEveryConfigKeyIsParsed(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadMergedStripsRepoTierUsers: users is an identity map read by inbound
+// auth, so a repository tier must never supply it (#2510).
+func TestLoadMergedStripsRepoTierUsers(t *testing.T) {
+	cfg, err := parseYAMLNested([]byte("owner: o\nrepo: r\nusers:\n  - mattermost_user_id: u1\n    github_login: a\n"))
+	if err != nil || len(cfg.Users) != 1 {
+		t.Fatalf("parse users: %v %+v", err, cfg)
+	}
+	if !isHardStrippedMachineKey("users") {
+		t.Fatal("users is not hard-stripped from repository tiers")
+	}
+}

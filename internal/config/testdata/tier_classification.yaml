@@ -37,6 +37,7 @@ keys:
   lm_studio: machine
   opencode: machine
   concurrency: machine
+  users: machine
   autonomous.enabled_repos: machine
   autonomous.allow_self_repo: machine
   autonomous.repositories.*: machine

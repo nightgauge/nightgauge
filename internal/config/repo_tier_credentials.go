@@ -39,6 +39,8 @@ type repoTierProtectedKey struct {
 // repository's history, and only the operator can rotate it.
 var repoTierProtectedKeys = []repoTierProtectedKey{
 	{root: "platform", hardStrip: true, secrets: []string{"license_key"}},
+	// users maps chat identities to forge logins for inbound auth (#2510).
+	{root: "users", hardStrip: true},
 	{root: "github_auth", secrets: []string{"token", "tokens.*", "app.private_key", "app.private_key_path"}},
 }
 

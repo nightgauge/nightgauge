@@ -518,6 +518,7 @@ func TestMachineTierKeysSnapshot(t *testing.T) {
 		"platform",
 		"pipeline.max_concurrent",
 		"concurrency",
+		"users",
 		"pipeline.logs.max_size_mb",
 		"pipeline.logs.max_age_days",
 	}
