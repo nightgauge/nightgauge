@@ -191,6 +191,8 @@ export const HistoryStageDetailSchema = z.object({
   error: z.string().optional(),
   execution_mode: StageExecutionModeSchema.optional(),
   auto_retry_count: z.number().int().min(0).optional(),
+  /** Why each auto-retry re-dispatched this stage, in order (#1489). */
+  auto_retry_reasons: z.array(z.string()).optional(),
   manual_retry_count: z.number().int().min(0).optional(),
   /** Reason why this stage was skipped, if applicable (Issue #843) */
   skip_reason: z.string().optional(),

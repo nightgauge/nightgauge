@@ -200,6 +200,8 @@ export const StageStateSchema = z.object({
   is_retrying: z.boolean().optional(),
   next_retry_at: z.string().datetime().optional(),
   auto_retry_count: z.number().int().min(0).optional(),
+  /** Why each auto-retry re-dispatched this stage, in order (#1489). */
+  auto_retry_reasons: z.array(z.string()).optional(),
   manual_retry_count: z.number().int().min(0).optional(),
   retry_count: z.number().int().min(0).optional(), // deprecated
   /**
