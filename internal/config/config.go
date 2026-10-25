@@ -2155,6 +2155,8 @@ type yamlConfigNested struct {
 	Knowledge        *KnowledgeConfig             `yaml:"knowledge,omitempty"`
 	PipelineExecutor *PipelineExecutorConfig      `yaml:"pipeline_executor,omitempty"`
 	Pipeline         *PipelineConfig              `yaml:"pipeline,omitempty"`
+	Concurrency      *ConcurrencyConfig           `yaml:"concurrency,omitempty"`
+	Users            []UserMappingEntry           `yaml:"users,omitempty"`
 	Routing          *RoutingConfig               `yaml:"routing,omitempty"`
 	PR               *PRConfig                    `yaml:"pr,omitempty"`
 	ModelRouting     *ModelRoutingConfig          `yaml:"model_routing,omitempty"`
@@ -2193,6 +2195,8 @@ type yamlConfigFlat struct {
 	Knowledge        *KnowledgeConfig             `yaml:"knowledge,omitempty"`
 	PipelineExecutor *PipelineExecutorConfig      `yaml:"pipeline_executor,omitempty"`
 	Pipeline         *PipelineConfig              `yaml:"pipeline,omitempty"`
+	Concurrency      *ConcurrencyConfig           `yaml:"concurrency,omitempty"`
+	Users            []UserMappingEntry           `yaml:"users,omitempty"`
 	Routing          *RoutingConfig               `yaml:"routing,omitempty"`
 	PR               *PRConfig                    `yaml:"pr,omitempty"`
 	ModelRouting     *ModelRoutingConfig          `yaml:"model_routing,omitempty"`
@@ -2406,6 +2410,8 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.Knowledge = nested.Knowledge
 	cfg.PipelineExecutor = nested.PipelineExecutor
 	cfg.Pipeline = nested.Pipeline
+	cfg.Concurrency = nested.Concurrency
+	cfg.Users = nested.Users
 	cfg.Routing = nested.Routing
 	cfg.PR = nested.PR
 	cfg.ModelRouting = nested.ModelRouting
@@ -2514,6 +2520,8 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 	cfg.Knowledge = flat.Knowledge
 	cfg.PipelineExecutor = flat.PipelineExecutor
 	cfg.Pipeline = flat.Pipeline
+	cfg.Concurrency = flat.Concurrency
+	cfg.Users = flat.Users
 	cfg.Routing = flat.Routing
 	cfg.PR = flat.PR
 	cfg.ModelRouting = flat.ModelRouting

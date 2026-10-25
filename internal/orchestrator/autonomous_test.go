@@ -3864,6 +3864,50 @@ func TestPerRepoOverrideResolvesBothForms(t *testing.T) {
 	}
 }
 
+// TestMaxConcurrentForRepoFromMachineYAML loads repository_overrides from a
+// machine-tier YAML file and wires it the way buildAutonomousConfig does, so
+// the scheduler's cap is proven from the file, not a Go literal (#2510).
+func TestMaxConcurrentForRepoFromMachineYAML(t *testing.T) {
+	dir := t.TempDir()
+	machine := filepath.Join(dir, "machine.yaml")
+	body := "concurrency:\n  workspace_max: 3\n  per_repo_max: 1\n" +
+		"  repository_overrides:\n    nightgauge/nightgauge: 2\n"
+	if err := os.WriteFile(machine, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(config.SwapMachineConfigPathForTest(func() (string, error) { return machine, nil }))
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, ".nightgauge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".nightgauge", "config.yaml"),
+		[]byte("schema_version: \"2\"\nowner: nightgauge\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadMerged(ws)
+	if err != nil {
+		t.Fatalf("LoadMerged: %v", err)
+	}
+	if cfg.Concurrency == nil {
+		t.Fatal("machine-tier concurrency block was dropped")
+	}
+
+	as := &AutonomousScheduler{
+		trustGateOverride: allWritersGate(),
+		config: AutonomousConfig{
+			PerRepoMax:              config.ResolveConcurrency(cfg).PerRepoMax,
+			RepositoryMaxConcurrent: cfg.Concurrency.RepositoryOverrides,
+		},
+		state: &AutonomousState{},
+	}
+	if got := as.maxConcurrentForRepo("nightgauge/nightgauge"); got != 2 {
+		t.Errorf("maxConcurrentForRepo(nightgauge/nightgauge) = %d, want 2", got)
+	}
+	if got := as.maxConcurrentForRepo("other/repo"); got != 1 {
+		t.Errorf("maxConcurrentForRepo(other/repo) = %d, want 1", got)
+	}
+}
+
 func TestDefaultIsSequential(t *testing.T) {
 	// With no concurrency config, every repo defaults to per-repo cap 1.
 	as := &AutonomousScheduler{

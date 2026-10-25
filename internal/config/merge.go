@@ -63,6 +63,9 @@ var MachineTierKeys = []string{
 	// docs/DEPRECATIONS.md) — adding it as a machine-tier key would steer
 	// users toward a setting they should be removing entirely.
 	"pipeline.max_concurrent",
+	// concurrency is the scheduler's capacity policy, owned by the machine
+	// tier (#2510): how many pipelines a box runs is a property of the box.
+	"concurrency",
 	// Log retention caps (ADR-024 § 11, #2029): how much disk a machine gives
 	// its logs is a property of the machine, read by internal/logretention
 	// from this tier alone.

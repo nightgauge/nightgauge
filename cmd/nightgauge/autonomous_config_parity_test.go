@@ -1,10 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -311,5 +314,45 @@ func TestAutonomousSchedulerCallSitesShareOneConfigBuilder(t *testing.T) {
 	}
 	if found == 0 {
 		t.Fatal("found no orchestrator.NewAutonomousScheduler call site; the guard is vacuous")
+	}
+}
+
+// TestBuildAutonomousConfigReadsMachineConcurrencyYAML loads the concurrency
+// block from a machine-tier YAML file rather than a Go literal: the parser
+// dropped it, so every literal-built test passed while serve ran PerRepoMax=1
+// with no overrides (#2510).
+func TestBuildAutonomousConfigReadsMachineConcurrencyYAML(t *testing.T) {
+	for _, tc := range []struct {
+		perRepo, want int
+	}{{1, 1}, {3, 3}} {
+		dir := t.TempDir()
+		machine := filepath.Join(dir, "machine.yaml")
+		body := fmt.Sprintf("concurrency:\n  workspace_max: 3\n  per_repo_max: %d\n"+
+			"  repository_overrides:\n    nightgauge/nightgauge: 2\n", tc.perRepo)
+		if err := os.WriteFile(machine, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		restore := config.SwapMachineConfigPathForTest(func() (string, error) { return machine, nil })
+		ws := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(ws, ".nightgauge"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ws, ".nightgauge", "config.yaml"),
+			[]byte("schema_version: \"2\"\nowner: nightgauge\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.LoadMerged(ws)
+		restore()
+		if err != nil {
+			t.Fatalf("LoadMerged: %v", err)
+		}
+
+		got := buildAutonomousConfig(cfg, autonomousConfigOverrides{})
+		if got.PerRepoMax != tc.want {
+			t.Errorf("per_repo_max %d: PerRepoMax = %d, want %d", tc.perRepo, got.PerRepoMax, tc.want)
+		}
+		if got.RepositoryMaxConcurrent["nightgauge/nightgauge"] != 2 {
+			t.Errorf("RepositoryMaxConcurrent = %v, want nightgauge/nightgauge: 2", got.RepositoryMaxConcurrent)
+		}
 	}
 }

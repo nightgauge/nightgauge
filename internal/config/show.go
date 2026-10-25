@@ -42,6 +42,7 @@ type renderView struct {
 	// likely to be tuned. PipelineExec below is `pipeline_executor`, a
 	// different key, which is what made the omission easy to miss.
 	Pipeline     *PipelineConfig         `yaml:"pipeline,omitempty"`
+	Concurrency  *ConcurrencyConfig      `yaml:"concurrency,omitempty"`
 	AgentTeams   *AgentTeamsConfig       `yaml:"agent_teams,omitempty"`
 	Autonomous   *AutonomousConfig       `yaml:"autonomous,omitempty"`
 	Knowledge    *KnowledgeConfig        `yaml:"knowledge,omitempty"`
@@ -103,6 +104,7 @@ func toRenderView(cfg *Config) renderView {
 		Knowledge:    cfg.Knowledge,
 		PipelineExec: cfg.PipelineExecutor,
 		Pipeline:     cfg.Pipeline,
+		Concurrency:  cfg.Concurrency,
 	}
 	// api_url / license_key mirror the on-disk platform: block (#333) — render
 	// them nested, matching the schema the VSCode extension actually writes,
