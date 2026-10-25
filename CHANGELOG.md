@@ -27,6 +27,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The autonomous scheduler now dispatches a Ready issue whose open PR is only
+  behind its base branch (green, strict up-to-date policy); the run resumes at
+  pr-merge, which rebases it. Previously the issue stalled in Ready. A behind PR
+  with a failing required check is still held for a human (#2544).
 - **A re-dispatched issue with an open PR resumes at pr-merge even after its
   worktree is gone (#2541).** The autonomous scan already lists each repo's
   open PRs; it now carries a dispatchable issue's open, unblocked PR number
