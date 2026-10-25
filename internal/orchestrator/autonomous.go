@@ -3726,9 +3726,9 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		//
 		// Order matters (#159): the in-review sweep rewrites node.BoardStatus to
 		// "Ready" in this same graph to hand an issue back for ONE bounded
-		// pr-merge retry. Refreshing after that would let the guard — which now
-		// also treats a stale head under a strict base as un-mergeable — mark
-		// the just-handed-back issue blocked, stranding it in Ready where the
+		// pr-merge retry. Refreshing after that would let the guard mark a
+		// just-handed-back issue blocked (a BEHIND PR that also fails a
+		// required check is un-mergeable, #159), stranding it in Ready where the
 		// in-review sweep can no longer see it. Snapshotting first gives the
 		// recovery its attempt; if that attempt does not fix the PR, the NEXT
 		// fresh scan sees a Ready issue with an un-mergeable PR and blocks it.

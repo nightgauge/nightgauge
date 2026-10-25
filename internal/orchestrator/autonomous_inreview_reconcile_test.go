@@ -222,3 +222,53 @@ func TestEvaluateDeps_InReviewWithPRBacking_Satisfies(t *testing.T) {
 		t.Fatalf("expected blocked=false for In-review dep with confirmed PR backing, got %+v", res)
 	}
 }
+
+// TestReconcileThenRefresh_BehindPRIsDispatchedNextFreshCycle (#2544): the
+// in-review sweep hands a BEHIND PR back to Ready so pr-merge can rebase it; the
+// next fresh scan's dispatch guard must not then hold that issue for a human.
+// The two sweeps used to contradict each other and strand the issue in Ready. A
+// BEHIND PR that also fails a required check stays blocked (#159).
+func TestReconcileThenRefresh_BehindPRIsDispatchedNextFreshCycle(t *testing.T) {
+	tests := []struct {
+		name        string
+		conclusion  string
+		wantBlocked bool
+	}{
+		{name: "green and only behind is dispatched", conclusion: "SUCCESS", wantBlocked: false},
+		{name: "behind with a failing required check stays blocked", conclusion: "FAILURE", wantBlocked: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &blockedPRGhStub{
+				prListJSON: `[{"number":77,"headRefName":"feat/1-x","baseRefName":"main","mergeStateStatus":"BEHIND",
+					"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"` + tc.conclusion + `"}]}]`,
+				rulesJSON: strictRulesJSON(true),
+			}
+			stubReconcileGh(t, stub.exec)
+
+			as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
+			g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
+				"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "In review"},
+			}}
+
+			// Cycle 1, in autonomous.go's order: refresh first (In review is not
+			// a dispatch candidate), then the in-review handoff.
+			as.refreshBlockedReadyPRs(context.Background(), g)
+			if as.blockedReadyPRIssues["O/app#1"] {
+				t.Fatal("an In-review issue must not be in the dispatch-blocked set")
+			}
+			// reconcileStuckInReviewPRs needs a live project service for
+			// MoveStatus; apply its documented in-graph effect directly.
+			g.Nodes["O/app#1"].BoardStatus = "Ready"
+
+			// Cycle 2: the next fresh scan.
+			as.refreshBlockedReadyPRs(context.Background(), g)
+			if got := as.blockedReadyPRIssues["O/app#1"]; got != tc.wantBlocked {
+				t.Fatalf("blocked=%v, want %v (set=%v)", got, tc.wantBlocked, as.blockedReadyPRIssues)
+			}
+			if !tc.wantBlocked && as.readyOpenPRs["O/app#1"] != 77 {
+				t.Fatalf("expected resume at pr-merge with PR 77; readyOpenPRs=%v", as.readyOpenPRs)
+			}
+		})
+	}
+}

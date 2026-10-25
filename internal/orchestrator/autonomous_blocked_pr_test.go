@@ -131,46 +131,37 @@ func TestRefreshBlockedReadyPRs_GhErrorFailsOpen(t *testing.T) {
 // is both stale and failing a required check reports BEHIND — the state the
 // pre-#159 guard read as "fine, dispatch". Each row asserts the union verdict.
 func TestPRCannotMergeReason_Matrix(t *testing.T) {
-	strict := branchCheckPolicy{Known: true, Strict: true, Required: map[string]bool{"ci": true}}
-	loose := branchCheckPolicy{Known: true, Strict: false, Required: map[string]bool{"ci": true}}
+	known := branchCheckPolicy{Known: true, Required: map[string]bool{"ci": true}}
 	unknown := branchCheckPolicy{}
 
 	tests := []struct {
-		name        string
-		pr          openPR
-		policy      branchCheckPolicy
-		wantBlocked bool
+		name         string
+		pr           openPR
+		policy       branchCheckPolicy
+		wantBlocked  bool
+		wantInReason string
 	}{
 		{
 			// THE REGRESSION: base moved ahead, so the same un-mergeable PR is
 			// relabelled BEHIND and the BLOCKED-only guard let it through.
-			name:        "behind with a failing required check is blocked",
-			pr:          openPR{MergeState: "BEHIND", BaseRef: "main", FailedChecks: []string{"ci"}},
-			policy:      strict,
-			wantBlocked: true,
+			name:         "behind with a failing required check is blocked",
+			pr:           openPR{MergeState: "BEHIND", BaseRef: "main", FailedChecks: []string{"ci"}},
+			policy:       known,
+			wantBlocked:  true,
+			wantInReason: "ci",
 		},
 		{
-			name:        "behind with a failing required check is blocked even when the base is not strict",
-			pr:          openPR{MergeState: "BEHIND", BaseRef: "main", FailedChecks: []string{"ci"}},
-			policy:      loose,
-			wantBlocked: true,
-		},
-		{
-			name:        "behind and green is blocked when the base requires up-to-date branches",
+			// #2544: pr-merge rebases a stale head, so a green BEHIND PR is
+			// retry-clearable whatever the base's up-to-date policy is.
+			name:        "behind and green is dispatchable even when the base is strict (pr-merge rebases it, #2544)",
 			pr:          openPR{MergeState: "BEHIND", BaseRef: "main"},
-			policy:      strict,
-			wantBlocked: true,
-		},
-		{
-			name:        "behind and green is dispatchable when the base is not strict",
-			pr:          openPR{MergeState: "BEHIND", BaseRef: "main"},
-			policy:      loose,
+			policy:      known,
 			wantBlocked: false,
 		},
 		{
 			name:        "blocked stays blocked (pre-#159 behaviour preserved)",
 			pr:          openPR{MergeState: "BLOCKED", BaseRef: "main"},
-			policy:      loose,
+			policy:      known,
 			wantBlocked: true,
 		},
 		{
@@ -182,7 +173,7 @@ func TestPRCannotMergeReason_Matrix(t *testing.T) {
 		{
 			name:        "clean is dispatchable",
 			pr:          openPR{MergeState: "CLEAN", BaseRef: "main"},
-			policy:      strict,
+			policy:      known,
 			wantBlocked: false,
 		},
 		{
@@ -190,7 +181,7 @@ func TestPRCannotMergeReason_Matrix(t *testing.T) {
 			// must not suppress dispatch.
 			name:        "a failing non-required check is dispatchable",
 			pr:          openPR{MergeState: "UNSTABLE", BaseRef: "main", FailedChecks: []string{"optional-lint"}},
-			policy:      strict,
+			policy:      known,
 			wantBlocked: false,
 		},
 		{
@@ -205,7 +196,7 @@ func TestPRCannotMergeReason_Matrix(t *testing.T) {
 			// can clear it, so the dispatch guard must leave it alone.
 			name:        "dirty is left to the in-review reconcile",
 			pr:          openPR{MergeState: "DIRTY", BaseRef: "main"},
-			policy:      strict,
+			policy:      known,
 			wantBlocked: false,
 		},
 	}
@@ -215,6 +206,9 @@ func TestPRCannotMergeReason_Matrix(t *testing.T) {
 			reason := prCannotMergeReason(tc.pr, tc.policy)
 			if got := reason != ""; got != tc.wantBlocked {
 				t.Fatalf("prCannotMergeReason(%+v) = %q (blocked=%v), want blocked=%v", tc.pr, reason, got, tc.wantBlocked)
+			}
+			if tc.wantInReason != "" && !strings.Contains(reason, tc.wantInReason) {
+				t.Fatalf("reason %q does not name %q", reason, tc.wantInReason)
 			}
 		})
 	}
@@ -232,7 +226,8 @@ func TestPRNeedsBranchPolicy_OnlyWhenTheVerdictTurnsOnIt(t *testing.T) {
 		{"clean and green", openPR{MergeState: "CLEAN"}, false},
 		{"blocked is already conclusive", openPR{MergeState: "BLOCKED", FailedChecks: []string{"ci"}}, false},
 		{"dirty and green", openPR{MergeState: "DIRTY"}, false},
-		{"behind and green needs the strict flag", openPR{MergeState: "BEHIND"}, true},
+		{"behind and green is decided without protection (#2544)", openPR{MergeState: "BEHIND"}, false},
+		{"behind with a failing check needs the required set", openPR{MergeState: "BEHIND", FailedChecks: []string{"ci"}}, true},
 		{"failing check needs the required set", openPR{MergeState: "UNSTABLE", FailedChecks: []string{"ci"}}, true},
 	}
 	for _, tc := range tests {
@@ -339,10 +334,10 @@ func TestRefreshBlockedReadyPRs_UnionMatrix(t *testing.T) {
 			wantBlocked: true,
 		},
 		{
-			name:        "behind and green under a strict base",
+			name:        "behind and green under a strict base (#2544)",
 			prJSON:      `{"number":10,"headRefName":"feat/1-x","baseRefName":"main","mergeStateStatus":"BEHIND",` + greenCI + `}`,
 			strict:      true,
-			wantBlocked: true,
+			wantBlocked: false,
 		},
 		{
 			name:        "behind and green under a non-strict base",
@@ -378,6 +373,9 @@ func TestRefreshBlockedReadyPRs_UnionMatrix(t *testing.T) {
 			if got := as.blockedReadyPRIssues["O/app#1"]; got != tc.wantBlocked {
 				t.Fatalf("blocked=%v, want %v (set=%v)", got, tc.wantBlocked, as.blockedReadyPRIssues)
 			}
+			if !tc.wantBlocked && as.readyOpenPRs["O/app#1"] != 10 {
+				t.Fatalf("a dispatchable PR must be recorded for pr-merge resume; readyOpenPRs=%v", as.readyOpenPRs)
+			}
 			if stub.listCalls != 1 {
 				t.Fatalf("expected exactly 1 batched gh pr list, got %d", stub.listCalls)
 			}
@@ -406,10 +404,15 @@ func TestRefreshBlockedReadyPRs_OneListAndOnePolicyCallPerRepo(t *testing.T) {
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
 	as.refreshBlockedReadyPRs(context.Background(), readyGraph(1, 2, 3))
 
-	for _, key := range []string{"O/app#1", "O/app#2", "O/app#3"} {
+	for _, key := range []string{"O/app#1", "O/app#2"} {
 		if !as.blockedReadyPRIssues[key] {
 			t.Errorf("expected %s blocked, set=%v", key, as.blockedReadyPRIssues)
 		}
+	}
+	// #2544: green and only BEHIND — dispatchable, resumes at pr-merge.
+	if as.blockedReadyPRIssues["O/app#3"] || as.readyOpenPRs["O/app#3"] != 12 {
+		t.Errorf("expected O/app#3 dispatchable with PR 12; blocked=%v readyOpenPRs=%v",
+			as.blockedReadyPRIssues, as.readyOpenPRs)
 	}
 	if stub.listCalls != 1 {
 		t.Fatalf("expected exactly 1 batched gh pr list, got %d", stub.listCalls)
@@ -463,7 +466,7 @@ func TestRefreshBlockedReadyPRs_BranchPolicyErrorFailsOpen(t *testing.T) {
 // TestFetchBranchCheckPolicy_FallsBackToClassicProtection: rulesets are probed
 // first (no administration:read needed), classic branch protection second —
 // the same two-source union internal/github uses for required check names. A
-// repo on classic protection must still yield strict + required contexts.
+// repo on classic protection must still yield its required contexts.
 func TestFetchBranchCheckPolicy_FallsBackToClassicProtection(t *testing.T) {
 	var paths []string
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
@@ -477,8 +480,8 @@ func TestFetchBranchCheckPolicy_FallsBackToClassicProtection(t *testing.T) {
 
 	policy := fetchBranchCheckPolicy(context.Background(), "O/app", "main")
 
-	if !policy.Known || !policy.Strict {
-		t.Fatalf("expected a known, strict policy from classic protection; got %+v", policy)
+	if !policy.Known {
+		t.Fatalf("expected a known policy from classic protection; got %+v", policy)
 	}
 	if !policy.Required["ci"] || !policy.Required["lint"] {
 		t.Fatalf("expected required contexts ci+lint; got %+v", policy.Required)
@@ -499,8 +502,8 @@ func TestFetchBranchCheckPolicy_RulesetsShortCircuitClassic(t *testing.T) {
 
 	policy := fetchBranchCheckPolicy(context.Background(), "O/app", "main")
 
-	if !policy.Known || !policy.Strict || !policy.Required["ci"] {
-		t.Fatalf("expected strict policy requiring ci; got %+v", policy)
+	if !policy.Known || !policy.Required["ci"] {
+		t.Fatalf("expected a known policy requiring ci; got %+v", policy)
 	}
 	if calls != 1 {
 		t.Fatalf("rulesets answered — expected exactly 1 probe, got %d", calls)

@@ -118,9 +118,8 @@ func (as *AutonomousScheduler) reconcileStuckInReviewPRs(ctx context.Context, gr
 }
 
 // refreshBlockedReadyPRs recomputes the set of dispatchable (Ready/Backlog)
-// issues whose OPEN PR cannot merge as-is — a failing REQUIRED status check, a
-// branch-protection rule, or a stale head under a strict up-to-date policy. No
-// amount of pipeline retry clears those; only a human can (fix the failing
+// issues whose OPEN PR cannot merge as-is — a failing REQUIRED status check or
+// a branch-protection rule. No amount of pipeline retry clears those; only a human can (fix the failing
 // check, or correct the required-checks config). It stores the set on the
 // scheduler so prioritize() skips re-dispatching those issues, ending the
 // re-run churn where a failed pr-merge reverts the issue to Ready and the WHOLE
@@ -133,6 +132,10 @@ func (as *AutonomousScheduler) reconcileStuckInReviewPRs(ctx context.Context, gr
 // is both out-of-date with base AND failing a required check reports BEHIND —
 // keying the guard on BLOCKED alone let exactly that PR through and re-ran the
 // whole pipeline against it. See prCannotMergeReason for the union.
+//
+// A green PR that is merely BEHIND is NOT blocked, even under a strict
+// up-to-date policy (#2544): pr-merge rebases a stale head, so a retry clears
+// it. Such a PR lands in readyOpenPRs and the dispatch resumes at pr-merge.
 //
 // Like reconcileStuckInReviewPRs this makes one gh-pr-list call per repo, so the
 // caller gates it to FRESH graph builds (the graph TTL cadence) to protect the
@@ -388,7 +391,6 @@ func failedCheckNames(rows []checkRollupRow) []string {
 // protection, which keeps it fail-open.
 type branchCheckPolicy struct {
 	Known    bool
-	Strict   bool
 	Required map[string]bool
 }
 
@@ -399,7 +401,9 @@ func prNeedsBranchPolicy(pr openPR) bool {
 	if strings.EqualFold(pr.MergeState, "BLOCKED") {
 		return false // already conclusive
 	}
-	return len(pr.FailedChecks) > 0 || strings.EqualFold(pr.MergeState, "BEHIND")
+	// Only a failing check turns on the required set; a green PR's verdict
+	// never depends on protection (#2544), so it costs no lookup (#159 quota).
+	return len(pr.FailedChecks) > 0
 }
 
 // prCannotMergeReason returns why an OPEN PR cannot merge without a human, or
@@ -412,9 +416,11 @@ func prNeedsBranchPolicy(pr openPR) bool {
 //   - a failing REQUIRED check — disqualifying at ANY mergeStateStatus. This is
 //     the case the old BLOCKED-only guard missed: as soon as base moved ahead,
 //     the same un-mergeable PR was relabelled BEHIND and let through.
-//   - BEHIND under a strict up-to-date policy — the head is stale and the base
-//     branch refuses stale heads, so the PR is un-mergeable by the repo's own
-//     rules.
+//
+// BEHIND on its own is NOT here, even when the base requires up-to-date
+// branches (#2544): pr-merge rebases a stale head, so a retry clears it.
+// Blocking it contradicted reconcileStuckInReviewPRs, which hands a BEHIND PR
+// back to Ready precisely so pr-merge can rebase it, and stranded the issue.
 //
 // DIRTY (content conflict) is deliberately NOT here: reconcileStuckInReviewPRs
 // owns that case and pr-merge's rebase path can clear it.
@@ -430,9 +436,6 @@ func prCannotMergeReason(pr openPR, policy branchCheckPolicy) string {
 	if failing := failingRequiredChecks(pr.FailedChecks, policy); len(failing) > 0 {
 		return fmt.Sprintf("required check(s) failing: %s (mergeStateStatus=%s)",
 			strings.Join(failing, ", "), pr.MergeState)
-	}
-	if strings.EqualFold(pr.MergeState, "BEHIND") && policy.Known && policy.Strict {
-		return fmt.Sprintf("mergeStateStatus=BEHIND and %s requires branches be up to date before merging", pr.BaseRef)
 	}
 	return ""
 }
@@ -475,8 +478,8 @@ func (c *branchPolicyCache) get(ctx context.Context, baseRef string) branchCheck
 	return policy
 }
 
-// fetchBranchCheckPolicy reads the required-check contexts and the strict
-// up-to-date flag for a base branch. Rulesets are consulted first — they need
+// fetchBranchCheckPolicy reads the required-check contexts for a base
+// branch. Rulesets are consulted first — they need
 // no administration:read scope and are where modern protection lives — and
 // classic branch protection is the fallback, mirroring the two-source union in
 // internal/github's GetRequiredCheckNames (a ruleset-enforced required check is
@@ -496,7 +499,6 @@ func fetchBranchCheckPolicy(ctx context.Context, repo, baseRef string) branchChe
 		var rules []struct {
 			Type       string `json:"type"`
 			Parameters struct {
-				Strict   bool `json:"strict_required_status_checks_policy"`
 				Required []struct {
 					Context string `json:"context"`
 				} `json:"required_status_checks"`
@@ -508,9 +510,6 @@ func fetchBranchCheckPolicy(ctx context.Context, repo, baseRef string) branchChe
 					continue
 				}
 				policy.Known = true
-				if rule.Parameters.Strict {
-					policy.Strict = true
-				}
 				for _, check := range rule.Parameters.Required {
 					if check.Context != "" {
 						policy.Required[check.Context] = true
@@ -525,12 +524,10 @@ func fetchBranchCheckPolicy(ctx context.Context, repo, baseRef string) branchChe
 
 	if out, err := reconcileExecGh(ctx, "api", fmt.Sprintf("repos/%s/branches/%s/protection/required_status_checks", repo, baseRef)); err == nil {
 		var classic struct {
-			Strict   bool     `json:"strict"`
 			Contexts []string `json:"contexts"`
 		}
 		if json.Unmarshal(out, &classic) == nil {
 			policy.Known = true
-			policy.Strict = classic.Strict
 			for _, name := range classic.Contexts {
 				if name != "" {
 					policy.Required[name] = true
