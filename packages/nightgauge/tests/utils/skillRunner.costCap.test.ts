@@ -223,3 +223,16 @@ describe("skillRunner cost cap — diagnostic log filename (Issue #3002)", () =>
     expect(typeof fs.mkdirSync).toBe("function");
   });
 });
+
+describe("skillRunner cost cap — pinned stages drop the preset multiplier (#2527)", () => {
+  it("frontier preset multiplies an unpinned stage, but not a pinned one (mode undefined)", () => {
+    const opus = { model: "opus", effort: "high" };
+    const unpinned = getEffectiveStageCostCap("feature-dev", opus, undefined, "frontier");
+    const pinned = getEffectiveStageCostCap("feature-dev", opus, undefined, undefined);
+    expect(unpinned.modeMultiplier).toBe(3.0);
+    expect(pinned.modeMultiplier).toBe(1.0);
+    // The model scale still sizes the pinned stage's cap.
+    expect(pinned.scale).toBe(unpinned.scale);
+    expect(pinned.scale).toBeGreaterThan(1.0);
+  });
+});

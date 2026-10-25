@@ -204,3 +204,34 @@ export function clearStageModelSelections(workspaceRoot: string): void {
     fs.writeFileSync(filePath, doc.toString(), "utf-8");
   }
 }
+
+/**
+ * The concrete per-stage pins that are actually honored (non-`auto` entries of
+ * `readStageModelSelections`). Empty when nothing is pinned or routing mode
+ * ignores pins — the same rule `hasCustomStageOverrides` applies (#2527).
+ */
+export function readStagePins(workspaceRoot: string): Partial<Record<PipelineStage, DefaultModel>> {
+  const pins: Partial<Record<PipelineStage, DefaultModel>> = {};
+  for (const [stage, choice] of Object.entries(readStageModelSelections(workspaceRoot))) {
+    if (choice !== "auto") pins[stage as PipelineStage] = choice;
+  }
+  return pins;
+}
+
+/** True when `stage` is pinned to a concrete model and the pin is honored (#2527). */
+export function isStagePinned(workspaceRoot: string, stage: string): boolean {
+  return stage in readStagePins(workspaceRoot);
+}
+
+/**
+ * The performance mode a stage's cost cap is sized by. A pinned stage's model
+ * is already priced in by `COST_CAP_MODEL_SCALE`, so it drops the preset
+ * multiplier (`undefined` → 1.0); an unpinned stage keeps the preset (#2527).
+ */
+export function costCapModeForStage<M extends string>(
+  workspaceRoot: string,
+  stage: string,
+  presetMode: M
+): M | undefined {
+  return isStagePinned(workspaceRoot, stage) ? undefined : presetMode;
+}

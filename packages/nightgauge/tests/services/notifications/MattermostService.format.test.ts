@@ -213,6 +213,32 @@ describe("MattermostService.format — attachment for outcome types", () => {
     [undefined, "Elevated"],
   ];
 
+  it("all stages pinned under a stale frontier preset → Custom with pinned models (#2527)", () => {
+    const state = makeState(42, "productive", {
+      pipeline_meta: {
+        performance_mode: "frontier",
+        effective_mode: "custom",
+        stage_model_pins: {
+          "issue-pickup": "haiku",
+          "feature-planning": "opus",
+          "feature-dev": "opus",
+          "feature-validate": "opus",
+          "pr-create": "haiku",
+          "pr-merge": "opus",
+        },
+      },
+    });
+    const att = service.buildAttachment(makeRun() as never, state as never);
+    const limits = (att.fields as Array<{ title: string; value: string }>).find(
+      (f) => f.title === "Limits"
+    );
+    expect(limits!.value).toBe(
+      "Custom  ·  Haiku (pickup, pr-create)  ·  Opus (planning, dev, validate, merge)"
+    );
+    expect(JSON.stringify(att)).not.toContain("Fable");
+    expect(JSON.stringify(att)).not.toContain("up to");
+  });
+
   for (const [mode, label] of MODES) {
     it(`${mode ?? "(unset)"} → "${label}" appears exactly once in the attachment`, () => {
       const state = makeState(42, "productive", {

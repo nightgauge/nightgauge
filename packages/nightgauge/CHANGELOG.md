@@ -21,6 +21,14 @@ and this project adheres to
   of on every stage. Re-enter your credentials after upgrading; see
   `docs/MIGRATION.md`.
 
+- Discord and Slack run cards now show `Custom` and the pinned model per stage
+  (for example `Custom · Haiku (pickup, pr-create) · Opus (planning, dev, …)`)
+  when `pipeline.stage_models` pins are honored, matching the status bar,
+  instead of a stale preset's "up to Fable". `pipeline_meta` records the same
+  `effective_mode` and `stage_model_pins`. A pinned stage's cost cap no longer
+  takes the preset's multiplier (Frontier tripled it); the pinned model's own
+  scale still applies. Runs without pins are unchanged (#2527).
+
 ### Changed
 
 - **Extension-driven runs use the new built-in stage defaults (#2512).**

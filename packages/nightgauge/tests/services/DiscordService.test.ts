@@ -4,6 +4,7 @@ import {
   determineAction,
   formatErrorForDiscord,
   modeDisplay,
+  formatLimitsValue,
   redactSecrets,
 } from "../../src/services/DiscordService";
 // The real producer of the #289 error payload — regression fixtures are built
@@ -1004,6 +1005,32 @@ describe("DiscordService retry and flush", () => {
 // ─── determineAction tests ──────────────────────────────────────────────────
 
 describe("modeDisplay", () => {
+  it("effective_mode custom wins over a stale frontier preset (#2527)", () => {
+    const meta = {
+      performance_mode: "frontier" as const,
+      effective_mode: "custom" as const,
+      stage_model_pins: { "feature-dev": "opus", "issue-pickup": "haiku", "pr-merge": "opus" },
+    };
+    expect(modeDisplay(meta).label).toBe("Custom");
+    const limits = formatLimitsValue(meta);
+    expect(limits).toBe("Custom  ·  Haiku (pickup)  ·  Opus (dev, merge)");
+    expect(limits).not.toContain("Fable");
+    expect(limits).not.toContain("up to");
+  });
+
+  it("without pins the preset Limits values are unchanged (#2527)", () => {
+    expect(formatLimitsValue({ performance_mode: "frontier" })).toBe("Frontier  ·  up to Fable");
+    expect(formatLimitsValue({ performance_mode: "frontier", effective_mode: "frontier" })).toBe(
+      "Frontier  ·  up to Fable"
+    );
+    expect(formatLimitsValue({ performance_mode: "maximum", supercharge_model: "opus" })).toMatch(
+      /^Maximum {2}· {2}pinned/
+    );
+    expect(formatLimitsValue({ performance_mode: "efficiency", route: "fast" })).toBe(
+      "Efficiency  ·  up to Sonnet  ·  route: fast"
+    );
+  });
+
   it("frontier → Frontier 🚀 with a Fable ceiling (was mislabelled 'Elevated')", () => {
     // Regression: modeDisplay had no `frontier` case, so the one Fable-capable
     // mode fell through to the Elevated default. Fable runs showed "Elevated".
