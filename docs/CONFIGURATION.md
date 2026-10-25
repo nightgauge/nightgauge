@@ -1650,9 +1650,9 @@ When CI checks fail, pr-merge can automatically attempt to fix the failures:
 1. Fetches failure logs via `gh run view`
 2. Classifies the failure type (lint, test, build, type error)
 3. Generates a fix using AI
-4. Commits and pushes the fix
-5. Waits for CI to re-run
-6. Repeats until success or `auto_fix_max_attempts` reached
+4. Commits and pushes the fix, then hands back to the deterministic merge path
+5. The deterministic path waits up to `ci_check_timeout` for CI, then merges
+6. On a new CI failure, repeats until `auto_fix_max_attempts` sessions have run
 
 **When auto-fix is disabled or max attempts reached:**
 

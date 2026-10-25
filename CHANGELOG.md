@@ -99,6 +99,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **pr-merge no longer has the LLM poll CI after it pushes a fix (#2504).**
+  The skill now pushes the fix, writes `pr-merge-fix-{N}.json` and exits. The
+  deterministic runner then waits for CI and merges or enqueues the PR. If CI
+  fails again, the skill runs again, up to `pr.auto_fix_max_attempts`
+  sessions; after that the stage fails with `auto-fix-exhausted`. A
+  freshness rebase hands back the same way. The runner's CI wait now follows
+  `pr.ci_check_timeout`, in seconds.
+
 - **A validation stage that verified nothing is re-run, not skipped.** When
   `feature-validate` exited cleanly but recorded no quality-gate results, the
   `abandoned-commit-recoverable` recovery resumed the run at `pr-create`, so

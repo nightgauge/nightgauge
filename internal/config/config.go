@@ -931,6 +931,11 @@ type Config struct {
 	// packages/nightgauge/src/config/schema.ts.
 	Routing *RoutingConfig `json:"routing,omitempty" yaml:"routing,omitempty"`
 
+	// PR holds the subset of the pr: section the Go scheduler reads — the
+	// pr-merge auto-fix hand-back budget (#2504). Mirrors
+	// PullRequestConfigSchema in packages/nightgauge/src/config/schema.ts.
+	PR *PRConfig `json:"pr,omitempty" yaml:"pr,omitempty"`
+
 	// ModelRouting holds the subset of the model_routing: section the Go
 	// scheduler reads — the per-stage minimum_model floor (#366). Mirrors
 	// ModelRoutingConfigSchema.minimum_model in
@@ -2151,6 +2156,7 @@ type yamlConfigNested struct {
 	PipelineExecutor *PipelineExecutorConfig      `yaml:"pipeline_executor,omitempty"`
 	Pipeline         *PipelineConfig              `yaml:"pipeline,omitempty"`
 	Routing          *RoutingConfig               `yaml:"routing,omitempty"`
+	PR               *PRConfig                    `yaml:"pr,omitempty"`
 	ModelRouting     *ModelRoutingConfig          `yaml:"model_routing,omitempty"`
 	UI               *UIConfig                    `yaml:"ui,omitempty"`
 	Attention        *AttentionConfig             `yaml:"attention,omitempty"`
@@ -2188,6 +2194,7 @@ type yamlConfigFlat struct {
 	PipelineExecutor *PipelineExecutorConfig      `yaml:"pipeline_executor,omitempty"`
 	Pipeline         *PipelineConfig              `yaml:"pipeline,omitempty"`
 	Routing          *RoutingConfig               `yaml:"routing,omitempty"`
+	PR               *PRConfig                    `yaml:"pr,omitempty"`
 	ModelRouting     *ModelRoutingConfig          `yaml:"model_routing,omitempty"`
 	UI               *UIConfig                    `yaml:"ui,omitempty"`
 	Attention        *AttentionConfig             `yaml:"attention,omitempty"`
@@ -2400,6 +2407,7 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.PipelineExecutor = nested.PipelineExecutor
 	cfg.Pipeline = nested.Pipeline
 	cfg.Routing = nested.Routing
+	cfg.PR = nested.PR
 	cfg.ModelRouting = nested.ModelRouting
 	cfg.UI = nested.UI
 	cfg.SchemaVersion = nested.SchemaVersion
@@ -2507,6 +2515,7 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 	cfg.PipelineExecutor = flat.PipelineExecutor
 	cfg.Pipeline = flat.Pipeline
 	cfg.Routing = flat.Routing
+	cfg.PR = flat.PR
 	cfg.ModelRouting = flat.ModelRouting
 	cfg.UI = flat.UI
 	cfg.SchemaVersion = flat.SchemaVersion

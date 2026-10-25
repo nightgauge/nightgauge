@@ -419,6 +419,16 @@ func (r *DeterministicRunner) SetMergeQueueWaitTimeout(d time.Duration) {
 	r.queueWait.Timeout = d
 }
 
+// SetCIWaitTimeout sizes the CI-completion wait (pr.ci_check_timeout, #2504)
+// in whole poll intervals, rounding up. A non-positive value keeps
+// DefaultCIPollMax.
+func (r *DeterministicRunner) SetCIWaitTimeout(d time.Duration) {
+	if d <= 0 || r.ciPollInterval <= 0 {
+		return
+	}
+	r.ciPollMax = int((d + r.ciPollInterval - 1) / r.ciPollInterval)
+}
+
 // NewDeterministicRunner builds a runner using a real `gh`-backed client.
 // The workdir argument to Run is used as the cwd for `gh` invocations so
 // the runner respects the orchestrator-managed worktree.

@@ -343,48 +343,23 @@ concurrent sub-issues merge and shift main/epic branch forward.
 
 If `FRESHNESS_CHECK_FAILED=true`, proceed to Phase 6 anyway — the reactive
 conflict resolution (Step 6.1.5) may still succeed with a different strategy.
-If the rebase succeeded and pushed, CI will re-run. Wait for CI before merge:
+If the rebase succeeded and pushed, CI re-runs on the new head. Do not wait
+for it here: hand back to the deterministic merge path, which waits for CI and
+merges (#2504):
 
 ```bash
-if [ "$BEHIND_COUNT" -gt 0 ] && [ "$FRESHNESS_CHECK_FAILED" != "true" ]; then
-  echo "Branch was rebased. Waiting for CI to pass on rebased commits..."
-
-  BINARY="${NIGHTGAUGE_BIN:-}"
-  [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
-  [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-  if [ -z "$BINARY" ]; then
-    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-  fi
-  if [ -z "$BINARY" ]; then
-    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-    if [ -n "$GIT_COMMON_DIR" ]; then
-      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-      [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-    fi
-  fi
-  [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
-  [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
-
-  if [ -n "$BINARY" ] && [ "$CI_EPIC_SKIP" != "true" ]; then
-    # ONE bounded 90s chunk per Bash call (#187) — a 10-minute wait is
-    # SIGTERMed by the tool budget. Exit 2 = still pending: re-run this
-    # block in a NEW Bash call while the freshness budget
-    # (NIGHTGAUGE_PR_CI_CHECK_TIMEOUT minutes, default 10) remains.
-    CI_RESULT=$("$BINARY" ci wait "$PR_NUMBER" --timeout-secs 90 --json 2>/dev/null) || true
-    # Re-check state: PR may have been merged out-of-band during CI wait.
-    REBASE_POST_STATE=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.state // "UNKNOWN"')
-    if [ "$REBASE_POST_STATE" = "MERGED" ]; then
-      echo "PR #$PR_NUMBER was merged (detected after rebase CI wait). Exiting cleanly."
-      exit 0
-    fi
-    CI_ALL_PASSED=$(printf '%s\n' "$CI_RESULT" | jq -r 'if .state == "SUCCESS" then "true" else "false" end')
-    if [ "$CI_ALL_PASSED" != "true" ]; then
-      echo "WARNING: CI checks failed after rebase. Proceeding to merge phase for auto-fix."
-    fi
-  fi
+if [ "$BEHIND_COUNT" -gt 0 ] && [ "$FRESHNESS_CHECK_FAILED" != "true" ] && [ "$CI_EPIC_SKIP" != "true" ]; then
+  ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+  jq -n --argjson pr "$PR_NUMBER" --arg sha "$(git rev-parse HEAD)" \
+    '{result: "fix-pushed", pr_number: $pr, head_sha: $sha, attempt: 0}' \
+    | nightgauge layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
+  echo "Branch rebased and pushed — handing back to the deterministic merge path."
+  exit 0
 fi
 ```
+
+The marker contract is in `skills/_shared/AUTO_FIX_LOOP.md` Step 5. **NEVER**
+poll CI here with repeated `nightgauge ci wait` calls.
 
 ---
 

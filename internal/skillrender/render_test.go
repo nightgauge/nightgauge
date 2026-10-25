@@ -1343,6 +1343,9 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // Re-pinned again for #1932, by the same method: every changed line (4 to 6
 // per capture) is a shell block's own derivation of ISSUE_NUMBER, BRANCH or
 // REPO, which each block now carries instead of inheriting from an earlier one.
+// The pr-merge capture was re-pinned for #2504 by the same method: every changed
+// line is the auto-fix loop handing back to the deterministic merge path instead
+// of polling CI itself.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which

@@ -279,6 +279,31 @@ cannot author:
   [FEEDBACK_LOOPS.md](FEEDBACK_LOOPS.md#conflict-resolution_needed-4072).
 - Future: opt-in release-note authoring (out of scope for #3264).
 
+### Fix hand-back (#2504)
+
+The skill fixes. It does not wait for CI and it does not merge after a fix.
+When it pushes a CI fix, a transient re-run, or a freshness rebase, it writes
+`pr-merge-fix-{N}.json`
+(`{"result":"fix-pushed","pr_number":P,"head_sha":"<sha>","attempt":k}`) and
+exits 0. The scheduler (`runPRMergeSkillWithFixHandback`) deletes the marker
+and runs the deterministic runner again. The runner waits for CI as described
+in [Bounded CI wait](#bounded-ci-wait-issue-297), then merges or enqueues.
+
+| Runner result after the fix         | Stage outcome                                 |
+| ----------------------------------- | --------------------------------------------- |
+| merged                              | success; `execution_path` stays `llm`         |
+| `failed-ci-checks`, attempts remain | skill runs again with the new failure         |
+| `failed-ci-checks`, budget spent    | fails with `auto-fix-exhausted: <reason>`     |
+| any other punt                      | fails with `auto-fix-exhausted: <reason>`     |
+| rate-limited or refused             | same handling as the first deterministic pass |
+
+`pr.auto_fix_max_attempts` (default 2, env
+`NIGHTGAUGE_PR_AUTO_FIX_MAX_ATTEMPTS`) caps how many skill sessions run.
+`pr.ci_check_timeout` (seconds, env `NIGHTGAUGE_PR_CI_CHECK_TIMEOUT`) sets the
+runner's CI wait. When it is unset, the built-in 15-minute budget applies.
+Tokens and cost are summed across the sessions. Without a marker, the skill's
+own result stands.
+
 ## Phase reporting on both routes (#1247, #1397)
 
 A deterministic stage has no model in the loop, so it emits none of the

@@ -167,9 +167,9 @@ printf '<!-- phase:start name="freshness-check" index=8 total=14 stage="pr-merge
 Rebase onto the latest base branch BEFORE attempting merge, so the reactive
 conflict resolution in Phase 6 is rarely needed. **Read
 `skills/_shared/FRESHNESS_CHECK.md` now and follow it before continuing this
-phase.** If the rebase pushed, wait for CI on the rebased commits before
-proceeding to Phase 6 — see `_includes/context-bootstrap.md` for the bounded
-90s-chunk wait pattern this phase reuses.
+phase.** If the rebase pushed, do not wait for CI: write the
+`pr-merge-fix-{N}.json` marker and exit 0 so the deterministic path waits and
+merges (`skills/_shared/AUTO_FIX_LOOP.md` Step 5, #2504).
 
 ### Phase 6: Merge
 
