@@ -2015,6 +2015,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     if (item.repoName) {
       orchestrator.setRepoOverride(item.repoName);
     }
+    // #2541: the issue's open PR lets the run resume at pr-merge.
+    if (item.openPrNumber) orchestrator.setDispatchedOpenPr(item.openPrNumber);
 
     // Pin the root of the repo THIS RUN targets (#305 review). The factory
     // seeded `mainRepoRoot` from the RUNNER root, which is one fixed path for

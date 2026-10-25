@@ -1105,6 +1105,10 @@ type QueueEntry struct {
 	// state.VisibilityPrivate when the member who started it chose private,
 	// empty for team.
 	Visibility string `json:"visibility,omitempty"`
+	// OpenPRNumber is the issue's open PR the autonomous scan saw (#2541), so
+	// the run resumes at pr-merge when the worktree holding pr-{N}.json is
+	// gone. 0 (omitted) when there is none.
+	OpenPRNumber int `json:"openPrNumber,omitempty"`
 }
 
 // QueueItem represents a queued issue with full metadata (authoritative).
@@ -1133,9 +1137,13 @@ type QueueItem struct {
 	// EpicNumber names a different issue and epic/<N>-* is that issue's
 	// branch, so a consumer bases the sub-issue on the epic branch only when
 	// EpicRepo is its own repository (#2377).
-	EpicRepo string    `json:"epicRepo,omitempty"`
-	AddedAt  time.Time `json:"addedAt"`
-	Position int       `json:"position"` // 1-indexed
+	EpicRepo string `json:"epicRepo,omitempty"`
+	// OpenPRNumber is the issue's open PR the autonomous scan saw (#2541), so
+	// the run resumes at pr-merge when the worktree holding pr-{N}.json is
+	// gone. 0 (omitted) when there is none.
+	OpenPRNumber int       `json:"openPrNumber,omitempty"`
+	AddedAt      time.Time `json:"addedAt"`
+	Position     int       `json:"position"` // 1-indexed
 	// PausedReason is set when Status == "paused" (Issue #3001). Discriminated
 	// by Kind so future paused reasons (manual hold, license check) can be
 	// added without re-shaping callers.
@@ -2660,6 +2668,7 @@ func (s *Scheduler) RunQueue(ctx context.Context) (QueueRunSummary, error) {
 			continue
 		}
 
+		item.OpenPRNumber = entry.OpenPRNumber
 		ok, terminalKind := s.runPipeline(ctx, *item)
 		if ok {
 			record(entry, QueueOutcomeCompleted, "", "")
@@ -2683,14 +2692,15 @@ func (s *Scheduler) QueueAdd(entries ...QueueEntry) {
 			continue
 		}
 		item := QueueItem{
-			Repo:        e.Repo,
-			IssueNumber: e.IssueNumber,
-			Priority:    e.Priority,
-			Status:      "pending",
-			AddedAt:     time.Now().UTC(),
-			Position:    len(s.queue) + 1,
-			RemoteRunID: e.RemoteRunID,
-			Visibility:  state.RaiseVisibility("", e.Visibility),
+			Repo:         e.Repo,
+			IssueNumber:  e.IssueNumber,
+			Priority:     e.Priority,
+			Status:       "pending",
+			AddedAt:      time.Now().UTC(),
+			Position:     len(s.queue) + 1,
+			RemoteRunID:  e.RemoteRunID,
+			Visibility:   state.RaiseVisibility("", e.Visibility),
+			OpenPRNumber: e.OpenPRNumber,
 		}
 		s.queue = append(s.queue, item)
 	}
@@ -5881,6 +5891,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	defer func() { lifecycle.finish(ctx, pipelineSuccess) }()
 
 	stageIdx := resumeStageIndex(stages, resumeFrom)
+	// A dispatch carrying the issue's open PR (#2541) starts at pr-merge
+	// instead of re-running pickup→validate on shipped work.
+	if stageIdx == 0 {
+		if i := dispatchedPRResumeIndex(ctx, stages, workspaceRoot, item.Repo, item.Number, item.OpenPRNumber); i > 0 {
+			log.Printf("#%d: skipping %v — %s", item.Number, stages[:i], dispatchedPRResumeReason)
+			stageIdx = i
+		}
+	}
 	if stageIdx > 0 {
 		log.Printf("#%d: resuming at %s — skipping %v, completed by an earlier attempt of this run",
 			item.Number, stages[stageIdx], stages[:stageIdx])

@@ -1147,13 +1147,20 @@ func (s *Server) SetAutonomousScheduler(as *orchestrator.AutonomousScheduler) {
 	// Wire dispatch callback: when the autonomous scheduler wants to run an
 	// issue, emit an IPC event so the TypeScript extension can route it through
 	// HeadlessOrchestrator (same path as clicking "Pick Up Issue").
-	as.OnDispatch(func(owner, repo string, issueNumber int, title string) {
-		s.Emit("autonomous.dispatch", map[string]interface{}{
+	as.OnDispatch(func(owner, repo string, issueNumber int, title string, openPRNumber int) {
+		payload := map[string]interface{}{
 			"owner":       owner,
 			"repo":        repo,
 			"issueNumber": issueNumber,
 			"title":       title,
-		})
+		}
+		// The issue's open PR lets the extension resume at pr-merge when the
+		// worktree holding pr-{N}.json is gone (#2541). Omitted when there is
+		// none, so a dispatch without a PR is unchanged.
+		if openPRNumber > 0 {
+			payload["openPrNumber"] = openPRNumber
+		}
+		s.Emit("autonomous.dispatch", payload)
 	})
 
 	// Wire status-change callback: every Status transition (Pause, Resume,
@@ -4588,6 +4595,7 @@ func (s *Server) registerMethods() {
 			RemoteRunID:       p.RemoteRunID,
 			RemoteRunAttached: p.RemoteRunAttached && p.RemoteRunID != "",
 			Visibility:        visibility,
+			OpenPRNumber:      max(p.OpenPRNumber, 0),
 		})
 		return map[string]string{"status": "ok"}, nil
 	}

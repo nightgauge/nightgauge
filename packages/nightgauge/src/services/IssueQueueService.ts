@@ -145,6 +145,11 @@ export class IssueQueueService implements vscode.Disposable {
        * request for an issue already waiting raises that item.
        */
       visibility?: "private";
+      /**
+       * The issue's open PR from an autonomous dispatch (#2541). Go stores it
+       * on the queue item so the run resumes at pr-merge.
+       */
+      openPrNumber?: number;
     }
   ): Promise<QueueItem | null> {
     // Stop-control guard — refuse new items while a stop is in progress.
@@ -206,7 +211,8 @@ export class IssueQueueService implements vscode.Disposable {
       _options?.remoteRunId && _options.remoteRunAttached ? true : undefined,
       _options?.requestedAdapter,
       _options?.requestedModel,
-      _options?.visibility === "private" ? "private" : undefined
+      _options?.visibility === "private" ? "private" : undefined,
+      _options?.openPrNumber && _options.openPrNumber > 0 ? _options.openPrNumber : undefined
     );
 
     const item: QueueItem = {
@@ -218,6 +224,7 @@ export class IssueQueueService implements vscode.Disposable {
       labels: resolvedLabels,
       blockedBy,
       ...(_options?.visibility === "private" ? { visibility: "private" as const } : {}),
+      ...(_options?.openPrNumber ? { openPrNumber: _options.openPrNumber } : {}),
     };
 
     this.callbacks.onItemAdded?.(item);
@@ -624,6 +631,7 @@ export class IssueQueueService implements vscode.Disposable {
       requestedAdapter: item.requestedAdapter || undefined,
       requestedModel: item.requestedModel || undefined,
       ...(item.visibility === "private" ? { visibility: "private" as const } : {}),
+      ...(item.openPrNumber && item.openPrNumber > 0 ? { openPrNumber: item.openPrNumber } : {}),
     };
   }
 

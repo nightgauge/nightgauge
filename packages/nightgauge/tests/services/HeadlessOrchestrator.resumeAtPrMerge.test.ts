@@ -211,4 +211,68 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
     expect(mockState.skipStage).not.toHaveBeenCalled();
     expect(mockState.completeStage).not.toHaveBeenCalled();
   });
+
+  describe("dispatched open PR, worktree gone (Issue #2541)", () => {
+    /** Stub the deterministic pr-create restore; `writes` is what it puts on disk. */
+    function stubRestore(orchestrator: HeadlessOrchestrator, writes: unknown | null) {
+      const assembler = (
+        orchestrator as unknown as {
+          contextAssembler: {
+            generateDeterministicContext: (s: string, n: number) => Promise<unknown>;
+          };
+        }
+      ).contextAssembler;
+      return vi.spyOn(assembler, "generateDeterministicContext").mockImplementation(async () => {
+        if (writes === null) return { generated: false };
+        withPrContext(writes);
+        return { generated: true };
+      });
+    }
+
+    it("restores pr-{N}.json from the dispatched PR and resumes at pr-merge", async () => {
+      withPrContext(null);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1501));
+      orchestrator.setDispatchedOpenPr(2526);
+      const generate = stubRestore(orchestrator, {
+        issue_number: 1501,
+        pr_number: 2526,
+        status: "open",
+      });
+      await detect(orchestrator, 1431);
+
+      expect(generate).toHaveBeenCalledWith("pr-create", 1431);
+      for (const stage of ["issue-pickup", "feature-planning", "feature-dev", "feature-validate"]) {
+        expect(mockState.skipStage).toHaveBeenCalledWith(
+          stage,
+          expect.stringContaining("resuming at pr-merge (#1531)")
+        );
+      }
+      expect(mockState.completeStage).toHaveBeenCalledWith("pr-create");
+      expect(mockState.setMeta).toHaveBeenCalledWith({ pr_number: 2526 });
+    });
+
+    it("makes no restore call and skips nothing without a dispatched PR", async () => {
+      withPrContext(null);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
+      const generate = stubRestore(orchestrator, { pr_number: 1, status: "open" });
+      await detect(orchestrator, 1431);
+
+      expect(generate).not.toHaveBeenCalled();
+      expect(mockState.skipStage).not.toHaveBeenCalled();
+    });
+
+    it("runs the normal pipeline when the restore finds no open PR", async () => {
+      withPrContext(null);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
+      orchestrator.setDispatchedOpenPr(2526);
+      stubRestore(orchestrator, { issue_number: 1431, pr_number: 2526, status: "merged" });
+      await detect(orchestrator, 1431);
+      expect(mockState.skipStage).not.toHaveBeenCalled();
+      expect(mockState.completeStage).not.toHaveBeenCalled();
+
+      stubRestore(orchestrator, null);
+      await detect(orchestrator, 1431);
+      expect(mockState.skipStage).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -115,6 +115,7 @@ describe("IssueQueueService (IPC delegation)", () => {
         undefined,
         undefined,
         undefined,
+        undefined,
         undefined
       );
       expect(result).not.toBeNull();
@@ -139,6 +140,7 @@ describe("IssueQueueService (IPC delegation)", () => {
         undefined,
         undefined,
         undefined,
+        undefined,
         undefined
       );
     });
@@ -154,10 +156,12 @@ describe("IssueQueueService (IPC delegation)", () => {
         undefined,
         undefined,
         undefined,
+        undefined,
       ]);
 
       await service.enqueue(43, "Other issue", [], undefined, { remoteRunAttached: true });
       expect(mockQueueAdd.mock.calls[1].slice(6)).toEqual([
+        undefined,
         undefined,
         undefined,
         undefined,
@@ -184,6 +188,7 @@ describe("IssueQueueService (IPC delegation)", () => {
         undefined,
         "opencode",
         "lmstudio/qwen/qwen3.8-27b",
+        undefined,
         undefined
       );
     });
@@ -196,6 +201,15 @@ describe("IssueQueueService (IPC delegation)", () => {
       expect(mockQueueAdd).toHaveBeenCalledTimes(1);
       expect(mockQueueAdd.mock.calls[0][10]).toBe("private");
       expect(item?.visibility).toBe("private");
+    });
+
+    it("forwards an autonomous dispatch's open PR to IPC queueAdd (#2541)", async () => {
+      const item = await service.enqueue(42, "Test issue", [], undefined, { openPrNumber: 2526 });
+      expect(mockQueueAdd.mock.calls[0][11]).toBe(2526);
+      expect(item?.openPrNumber).toBe(2526);
+
+      await service.enqueue(43, "Other issue", [], undefined, { openPrNumber: 0 });
+      expect(mockQueueAdd.mock.calls[1][11]).toBeUndefined();
     });
 
     it("a team run names no visibility in the start request (#2400)", async () => {

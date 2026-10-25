@@ -1514,6 +1514,8 @@ export function registerAutonomousCommands(
         repo: string;
         issueNumber: number;
         title: string;
+        /** The issue's open PR (#2541); absent when it has none. */
+        openPrNumber?: number;
       };
       const channel = getOutputChannel();
       channel.appendLine(
@@ -1524,6 +1526,9 @@ export function registerAutonomousCommands(
         queueService
           .enqueue(data.issueNumber, data.title, [], undefined, {
             repoOverride: { owner: data.owner, repo: data.repo },
+            ...(typeof data.openPrNumber === "number" && data.openPrNumber > 0
+              ? { openPrNumber: data.openPrNumber }
+              : {}),
           })
           .then((result) => {
             if (result) {
