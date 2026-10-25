@@ -9,7 +9,9 @@ import (
 )
 
 // CIHost reports whether the process runs under CI (`CI=true` in any case, or `CI=1`),
-// read through getenv. On a CI host Nightgauge never writes a credential to
+// read through getenv. A pipeline stage forces `CI=true` for its tools and
+// carries the operator's own value in NIGHTGAUGE_HOST_CI, which wins when set,
+// so a stage on an operator machine is not taken for a CI runner (#2514). On a CI host Nightgauge never writes a credential to
 // disk, neither to the OS keychain nor to the 0600 machine-tier file, and
 // resolves credentials from the environment first (ADR-024 § 5): a
 // self-hosted runner shared between jobs would otherwise carry one job's key
@@ -18,7 +20,10 @@ func CIHost(getenv func(string) string) bool {
 	if getenv == nil {
 		return false
 	}
-	v := strings.TrimSpace(getenv("CI"))
+	v := strings.TrimSpace(getenv("NIGHTGAUGE_HOST_CI"))
+	if v == "" {
+		v = strings.TrimSpace(getenv("CI"))
+	}
 	return strings.EqualFold(v, "true") || v == "1"
 }
 
