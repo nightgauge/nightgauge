@@ -3573,14 +3573,28 @@ export function resolveTokenForSubprocess(
  * Load auto-accept configuration from nightgauge config file
  * Returns environment variables to pass to Claude CLI
  */
+/**
+ * The CI variables every stage spawn gets. `CI=true` keeps tools
+ * non-interactive; `NIGHTGAUGE_HOST_CI` carries the operator's own value so
+ * `config.CIHost` does not mistake an operator machine for a shared CI runner
+ * (#2514). A nested spawn keeps the outermost host value.
+ */
+export function stageCIEnv(hostEnv: NodeJS.ProcessEnv = process.env): {
+  CI: string;
+  NIGHTGAUGE_HOST_CI: string;
+} {
+  const host = (hostEnv.NIGHTGAUGE_HOST_CI ?? hostEnv.CI ?? "").trim();
+  return {
+    CI: "true",
+    NIGHTGAUGE_HOST_CI: host.toLowerCase() === "true" || host === "1" ? "true" : "false",
+  };
+}
+
 function loadAutoAcceptConfigSync(
   workspaceRoot: string,
   stage: PipelineStage
 ): Record<string, string> {
-  const env: Record<string, string> = {
-    // Always set CI=true to ensure non-interactive mode
-    CI: "true",
-  };
+  const env: Record<string, string> = stageCIEnv();
 
   try {
     // Resolve config path with fallback to legacy
@@ -8337,7 +8351,7 @@ export function resumeSessionWithResponse(
     stdio: ["pipe", "pipe", "pipe"],
     env: {
       ...process.env,
-      CI: "true",
+      ...stageCIEnv(),
     },
   });
 

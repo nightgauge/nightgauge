@@ -535,9 +535,13 @@ func ghFallbackWarning() string {
 }
 
 // ciHost reports `CI=true` (any case) or `CI=1`, matching config.CIHost,
-// which this package cannot import.
+// which this package cannot import: NIGHTGAUGE_HOST_CI, which a stage sets to
+// the operator's own value, wins over the stage's forced `CI=true` (#2514).
 func ciHost() bool {
-	ci := strings.TrimSpace(os.Getenv("CI"))
+	ci := strings.TrimSpace(os.Getenv("NIGHTGAUGE_HOST_CI"))
+	if ci == "" {
+		ci = strings.TrimSpace(os.Getenv("CI"))
+	}
 	return strings.EqualFold(ci, "true") || ci == "1"
 }
 

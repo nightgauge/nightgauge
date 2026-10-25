@@ -99,6 +99,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A stage on an operator machine is no longer taken for a CI runner (#2514).**
+  The extension forces `CI=true` into every stage for its tools, and the CI
+  rules of ADR-024 § 5 read `CI` alone, so feature-validate's `nightgauge
+doctor` preflight failed on `ci_machine_credentials` and `github_auth` and
+  halted every validate. Stages now also carry the operator's own value in
+  `NIGHTGAUGE_HOST_CI`, which `config.CIHost` and the GitHub client prefer
+  when set; a real CI job is unchanged.
 - **verify-and-close no longer closes an issue whose fix exists only on its own
   unmerged branch (#2509).** The already-resolved early exit now closes only
   when the issue branch has no commits beyond the base (default or epic base)
