@@ -374,3 +374,64 @@ func TestPhaseInferer_PerCloneWrites(t *testing.T) {
 		})
 	}
 }
+
+// TestExtractToolUses_GrokToolCall reads #533's real Grok capture: its one
+// `tool_call` (run_terminal_command, "echo one") maps to Bash with rawInput as
+// the input, and its four `tool_call_update` lines, which carry no toolName,
+// yield nothing (#559).
+func TestExtractToolUses_GrokToolCall(t *testing.T) {
+	data, err := os.ReadFile("testdata/grok_stream_real_capture.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []toolUse
+	updates := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		uses := extractToolUses(line)
+		if strings.Contains(line, `"type":"tool_call_update"`) {
+			updates++
+			if uses != nil {
+				t.Fatalf("tool_call_update yielded %+v, want nil", uses)
+			}
+		}
+		got = append(got, uses...)
+	}
+	if updates != 4 {
+		t.Fatalf("fixture has %d tool_call_update lines, want 4", updates)
+	}
+	if len(got) != 1 || got[0].Name != "Bash" || inputStr(got[0].Input, "command") != "echo one" {
+		t.Fatalf("tool uses = %+v, want one Bash {command: echo one}", got)
+	}
+
+	// An unmapped Grok tool matches no rule, like an unknown Claude tool.
+	if uses := extractToolUses(`{"type":"tool_call","toolName":"web_search","rawInput":{}}`); uses != nil {
+		t.Fatalf("unmapped Grok tool yielded %+v, want nil", uses)
+	}
+}
+
+// TestPhaseInferer_GrokToolCallsAdvanceFeatureValidate drives Grok-shaped
+// tool_call lines (rawInput keys as grok 1.0.70 records them) through the loop
+// manager.go runs. Removing extractGrokToolUse from extractToolUses leaves the
+// cursor at phase 0 and turns this red.
+func TestPhaseInferer_GrokToolCallsAdvanceFeatureValidate(t *testing.T) {
+	inf := NewPhaseInferer("feature-validate")
+	inf.Start()
+	steps := []struct {
+		line string
+		want int
+	}{
+		{`{"type":"tool_call","toolCallId":"c0","status":"pending","toolName":"read_file","rawInput":{"target_file":"dev.json","limit":50}}`, 1},
+		{`{"type":"tool_call","toolCallId":"c1","status":"pending","toolName":"grep","rawInput":{"pattern":"func","glob":"*.go"}}`, 1},
+		{`{"type":"tool_call","toolCallId":"c2","status":"pending","toolName":"run_terminal_command","rawInput":{"command":"go test ./..."}}`, 10},
+		{`{"type":"tool_call_update","toolCallId":"c2","status":"completed","rawInput":{"command":"git push origin x"}}`, 10},
+		{`{"type":"tool_call","toolCallId":"c3","status":"pending","toolName":"run_terminal_command","rawInput":{"command":"git push origin x"}}`, 18},
+	}
+	for i, s := range steps {
+		for _, tu := range extractToolUses(s.line) {
+			inf.ObserveToolUse(tu.Name, tu.Input)
+		}
+		if inf.cursor != s.want {
+			t.Fatalf("step %d: cursor = %d, want %d", i, inf.cursor, s.want)
+		}
+	}
+}

@@ -31,6 +31,21 @@ real capture exposes, both of which the old code got wrong:
 **Do not replace this file with a synthesized equivalent.** Recapture it if the
 CLI's shape changes.
 
+### Tool names phase inference maps (#559)
+
+`grokToolNameToClaudeName` (Go) and `GROK_TOOL_NAME_TO_CLAUDE_NAME` (SDK) list
+only tool names a real Grok run shows, with the `rawInput` keys it shows:
+
+| toolName               | Claude name | `rawInput` keys          | source                          |
+| ---------------------- | ----------- | ------------------------ | ------------------------------- |
+| `run_terminal_command` | `Bash`      | `command`, `description` | this capture (grok 1.0.4)       |
+| `read_file`            | `Read`      | `target_file`, `limit`   | grok 1.0.70 session `tool_call` |
+| `grep`                 | `Grep`      | `pattern`, `glob`        | grok 1.0.70 session `tool_call` |
+
+The grok 1.0.70 rows come from a local session's `updates.jsonl`, which holds
+private prompts and is not committed. `write` and `search_replace` stay unmapped
+until a committed capture records which key names their target file.
+
 ### Redaction
 
 `redact.jq` is shape-preserving: it only rewrites values and drops whole

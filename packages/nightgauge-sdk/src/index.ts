@@ -233,7 +233,12 @@ export {
 } from "./events/phaseRegistry.js";
 
 // Phase Inference (deterministic phase progress from tool activity — Issue #3760)
-export { createPhaseInference, type PhaseInference } from "./events/phaseInference.js";
+export {
+  createPhaseInference,
+  grokToolCall,
+  GROK_TOOL_NAME_TO_CLAUDE_NAME,
+  type PhaseInference,
+} from "./events/phaseInference.js";
 
 // Lifecycle trace recorder — the "sdk" producer for the per-run decision
 // trace (ADR 013, Issue #180)

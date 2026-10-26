@@ -10,7 +10,11 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, it, expect } from "vitest";
-import { createPhaseInference } from "../events/phaseInference.js";
+import {
+  createPhaseInference,
+  grokToolCall,
+  GROK_TOOL_NAME_TO_CLAUDE_NAME,
+} from "../events/phaseInference.js";
 import { PHASE_REGISTRY } from "../events/phaseRegistry.js";
 
 const DEV_TOTAL = PHASE_REGISTRY["feature-dev"].length; // 18
@@ -364,5 +368,70 @@ describe("createPhaseInference — per-clone writes (Go parity fixture)", () => 
     inf.start();
     for (const s of c.setup) inf.observeToolUse(s.tool, s.input);
     expect(inf.observeToolUse(c.tool, c.input)?.marker.index ?? -1).toBe(c.want);
+  });
+});
+
+describe("grokToolCall (#559)", () => {
+  const root = resolve(__dirname, "../../../..");
+
+  it("maps the real capture's tool_call to Bash and ignores tool_call_update", () => {
+    const lines = readFileSync(
+      join(root, "internal/execution/testdata/grok_stream_real_capture.jsonl"),
+      "utf-8"
+    )
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { type?: string });
+    const calls = lines.map(grokToolCall).filter((c) => c !== null);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe("Bash");
+    expect((calls[0]?.input as { command?: string }).command).toBe("echo one");
+    expect(lines.filter((l) => l.type === "tool_call_update")).toHaveLength(4);
+  });
+
+  it("returns null for an unmapped tool", () => {
+    expect(grokToolCall({ type: "tool_call", toolName: "web_search", rawInput: {} })).toBeNull();
+  });
+
+  it("advances feature-validate the same way the Go mirror does", () => {
+    const inf = createPhaseInference("feature-validate");
+    inf.start();
+    const steps: Array<[unknown, number]> = [
+      [{ type: "tool_call", toolName: "read_file", rawInput: { target_file: "dev.json" } }, 1],
+      [
+        {
+          type: "tool_call",
+          toolName: "run_terminal_command",
+          rawInput: { command: "go test ./..." },
+        },
+        10,
+      ],
+      [{ type: "tool_call_update", rawInput: { command: "git push origin x" } }, 10],
+      [
+        {
+          type: "tool_call",
+          toolName: "run_terminal_command",
+          rawInput: { command: "git push origin x" },
+        },
+        18,
+      ],
+    ];
+    let reached = 0;
+    for (const [event, want] of steps) {
+      const call = grokToolCall(event);
+      const advance = call ? inf.observeToolUse(call.name, call.input) : null;
+      if (advance) reached = advance.marker.index;
+      expect(reached).toBe(want);
+    }
+  });
+
+  it("matches the Go grokToolNameToClaudeName table entry for entry", () => {
+    const src = readFileSync(join(root, "internal/execution/phase_inference.go"), "utf-8");
+    const block =
+      /var grokToolNameToClaudeName = map\[string\]string\{([^}]*)\}/.exec(src)?.[1] ?? "";
+    const goMap = Object.fromEntries(
+      [...block.matchAll(/"([^"]+)":\s*"([^"]+)"/g)].map((m) => [m[1], m[2]])
+    );
+    expect(goMap).toEqual(GROK_TOOL_NAME_TO_CLAUDE_NAME);
   });
 });
