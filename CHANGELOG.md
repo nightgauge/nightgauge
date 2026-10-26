@@ -63,9 +63,9 @@ changelog, and the release workflow refuses a tag that does not.
   excluded from accuracy.
 
 - **An epic is no longer closed while its branch has commits not on `main`
-  (#2560).** Every epic-close path — the scheduler, `nightgauge epic
-  auto-close`, `nightgauge hook post-merge`, `nightgauge project reconcile` and
-  `nightgauge epic complete` — now merges `main` into the epic branch
+  (#2560).** Every epic-close path — the scheduler,
+  `nightgauge epic auto-close`, `nightgauge hook post-merge`,
+  `nightgauge project reconcile` and `nightgauge epic complete` — now merges `main` into the epic branch
   (resolving CHANGELOG-only conflicts), opens or reuses the epic PR and merges it
   through the merge queue, and closes the epic only after that. A conflict or red
   CI leaves the epic open with a comment and an Action Center card.
