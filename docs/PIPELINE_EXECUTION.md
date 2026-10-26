@@ -515,6 +515,13 @@ adapters spawn via `os.Environ()` plus their explicit `NIGHTGAUGE_*` overrides
 first. Nothing in that chain strips or replaces the inherited environment; it is
 only ever added to.
 
+Both dispatch paths export the stage's identity on top of that inheritance:
+`NIGHTGAUGE_STAGE` and `NIGHTGAUGE_DISPATCH_MODEL`, the concrete model the
+stage launched with, for every adapter. `nightgauge knowledge stamp --stage`
+builds its provenance actor from `NIGHTGAUGE_DISPATCH_MODEL`. When the extension
+launches no model, it removes an inherited value rather than pass an outer
+run's model to the child, as it does for `NIGHTGAUGE_RUN_ID`.
+
 This inheritance is why thinking is **not** force-disabled on any Claude spawn
 today. A `CLAUDE_CODE_DISABLE_THINKING=1` workaround was unconditionally set by
 all three spawn sites for a period and has since been removed; none of them
