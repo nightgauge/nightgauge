@@ -351,10 +351,12 @@ resume from the phase after load-context.
 is healthy before executing any pipeline stage. Skills halt immediately with
 actionable instructions when this check fails.
 
-Two-layer check:
+Three-layer check:
 
 1. **Binary discovery** — shell-level, runs before invoking the binary
 2. **Doctor check** — binary-level, full environment health via `doctor --json`
+3. **Project environment** — the checks the project declares under
+   `preflight.environment` (#101); opt-in, silent when none are declared
 
 The binary discovery cascade below is **provider-neutral** (#4029): it works
 identically under every adapter (Claude, Codex, Gemini, …) and references no
@@ -445,6 +447,14 @@ if [ "$DOCTOR_EXIT" -eq 1 ]; then
   printf '%s\n' "$DOCTOR_RESULT" | jq -r '.warnings[]' >&2 2>/dev/null || true
   # Continue — warnings do not block skill execution
 fi
+
+# Layer 3: project-declared environment checks (preflight.environment, #101).
+# Opt-in: with none declared this prints nothing and continues. The verb
+# writes one `[environment-halt]` line per failed check, with its remedy.
+if ! "$BINARY" preflight environment >/dev/null; then
+  echo "[environment-halt] Project environment check failed — fix the environment, not the code." >&2
+  exit 1
+fi
 ```
 
 **Exit codes from `nightgauge doctor`**:
@@ -454,6 +464,13 @@ fi
 | 0    | Healthy                         | Continue                                |
 | 1    | Degraded (warnings only)        | Continue with warning printed to stderr |
 | 2    | Broken (required checks failed) | Halt immediately with error details     |
+
+**Layer 3** halts the stage when any check declared under
+`preflight.environment` in the workspace's `.nightgauge/config.yaml` fails
+(exit 1) or the declaration is invalid (exit 2). The failure is in the
+operator's environment, not the code: do not edit code to work around it, do
+not run the remedy yourself, and end the stage. The pipeline records it as
+`environment_halt` and holds the issue for an operator.
 
 Do not theorize about the cause beyond what is printed here — the failing
 check name (`failed_checks`) and its `.errors[]` message are the complete

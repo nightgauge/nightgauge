@@ -550,6 +550,15 @@ const (
 	// instead of looping forever. Classified `infrastructure` (harness
 	// behavior, not a code or issue defect) in docs/FAILURE_TAXONOMY.md.
 	TerminalKindPermissionDenied = "permission_denied"
+	// TerminalKindEnvironmentHalt is set when a project-declared
+	// preflight.environment check fails in a stage's Phase 0 (#101) and the
+	// stage halts on the `[environment-halt]` marker. The operator's local
+	// environment is broken, not the code, so the kind PARKS (TerminalKindParks):
+	// no escalation, no retry, no LifetimeIssueFailures increment, no
+	// cascade-breaker feed, no pause, and a hold released with `nightgauge
+	// autonomous clear-failures`. The run is also excluded from the
+	// calibration corpus (learning.IsCalibrationExcludedKind).
+	TerminalKindEnvironmentHalt = "environment_halt"
 	// Gate-sourced structured kinds for the KindFail sites that used to emit an
 	// empty TerminalKind (#1237). Every one of them fell through
 	// ResolveTerminalKind's prose ladder, which has no clause for the
@@ -592,7 +601,9 @@ const (
 	// prompt against the same context window, the same permission rule, the
 	// same binary — and each is a fault of the configuration, not of the
 	// issue. TerminalKindParks and TerminalKindRemediation are their one
-	// definition; docs/FAILURE_TAXONOMY.md carries the prose.
+	// definition; docs/FAILURE_TAXONOMY.md carries the prose. #101 adds
+	// TerminalKindEnvironmentHalt to the parked set: a broken local
+	// environment is met unchanged by every retry until an operator fixes it.
 	//
 	// TerminalKindContextWindowExceeded: the prompt outgrew the context the
 	// model server has the model loaded with. Classified only from the model
@@ -632,7 +643,8 @@ const (
 // entry for an operator.
 func TerminalKindParks(kind string) bool {
 	switch kind {
-	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible:
+	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible,
+		TerminalKindEnvironmentHalt:
 		return true
 	}
 	return false
@@ -648,6 +660,10 @@ const parkedReleaseStep = "then release the issue with `nightgauge autonomous cl
 // for every other kind. It reaches the failed entry's reason and the log line.
 func TerminalKindRemediation(kind string) string {
 	switch kind {
+	case TerminalKindEnvironmentHalt:
+		return "a project-declared preflight.environment check failed, so the local environment is broken, not the code; " +
+			"apply the remedy the check names (in the failure text), " + parkedReleaseStep +
+			" — a retry meets the same environment"
 	case TerminalKindContextWindowExceeded:
 		return "the prompt outgrew the context the model server has the model loaded with; " +
 			"reload the model with a larger context, route the stage to a model with a larger one, " +

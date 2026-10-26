@@ -79,7 +79,7 @@
     },
     {
       "name": "learning-outcome-record",
-      "note": "Wired on both paths as of #304, and rooted identically \u2014 the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes \u2014 the Go scheduler's recordOutcome is unreachable from the extension path. SKIP PARITY: both paths record NOTHING for a blocked-dependency deferral (#305) and a network_unavailable failure (#3296). The scheduler keys both on terminal_failure_kind; the extension keys the deferral on record.outcome_type (which #305 sets from the wire flag and which clears terminal_failure_kind) and the network case on terminal_failure_kind. Same two states, different fields, because the deferral override on the extension path erases the kind.",
+      "note": "Wired on both paths as of #304, and rooted identically \u2014 the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes \u2014 the Go scheduler's recordOutcome is unreachable from the extension path. SKIP PARITY: both paths record NOTHING for a blocked-dependency deferral (#305), a network_unavailable failure (#3296) and an environment_halt (#101). The scheduler keys all three on terminal_failure_kind; the extension keys the deferral on record.outcome_type (which #305 sets from the wire flag and which clears terminal_failure_kind) and the network and environment cases on terminal_failure_kind. Same three states, different fields, because the deferral override on the extension path erases the kind.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, workspaceRoot)"
@@ -569,7 +569,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "14f26f4ccb4eca82bfcbf4ecbaf7d6eae0c28ce18ced27489126d3e00e460050"
+      "sha256": "8086b0f50d24af7db5c122be00d0be2174a4725cf7cda50a2ba62d5bf5e52ec6"
     },
     {
       "id": "extension-runSlotPipeline-finally",

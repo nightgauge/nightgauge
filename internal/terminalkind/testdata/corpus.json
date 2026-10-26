@@ -1835,6 +1835,24 @@
       "source": "synthetic",
       "producer": "cost-cap circuit breaker (unstamped wording)",
       "rationale": "The cost-cap wording without the bracketed stamp. stamped-stage-stop claims only the stamped marker, so the bare wording keeps its original precedence: below the retryable API rules and above the stall rules."
+    },
+    {
+      "id": "environment-halt-bracket",
+      "input": "[environment-halt] Project environment check failed — fix the environment, not the code.\n  local-stack: exit code 7, want 0\n    remedy: Run ./scripts/dev-up.sh",
+      "expected": "environment_halt",
+      "expected_signal": "environment_halt",
+      "source": "synthetic",
+      "producer": "skills/_shared/PREFLIGHT.md Layer 3 (#101)",
+      "rationale": "The shared preflight's Layer 3 stderr when a declared check fails. A broken local environment needs an operator fix; booked as subagent_crash it would charge the issue a lifetime failure and feed the cascade breaker for a fault no code change can clear."
+    },
+    {
+      "id": "environment-halt-verb-after-exit",
+      "input": "exit 1: [environment-halt] emulator-storage: observed 1500, want >= 2000 — remedy: Run scripts/sweep-avd.sh --recreate",
+      "expected": "environment_halt",
+      "expected_signal": "environment_halt",
+      "source": "synthetic",
+      "producer": "nightgauge preflight environment (#101)",
+      "rationale": "The verb's own per-check line wrapped in the stage's exit text. The `exit ` prefix is what the subagent-crash fallback keys on, so this pins the environment-halt rule sitting above it in the table."
     }
   ]
 }

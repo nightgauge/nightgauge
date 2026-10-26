@@ -5460,14 +5460,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// emitting. Writes stop at the seal, not here.
 		runtime.MarkTerminal(schedulerTerminalOutcome(pipelineSuccess, terminalFailureKind))
 
-		// Two terminal kinds record NOTHING, and the extension path skips the
-		// same two (internal/ipc/outcome_record.go) — one corpus, one meaning
+		// Three terminal kinds record NOTHING, and the extension path skips the
+		// same three (internal/ipc/outcome_record.go) — one corpus, one meaning
 		// per field, or `success` and `costUsd` carry two meanings across the
 		// file's two writers with no discriminator to tell them apart.
 		//
 		//   network_unavailable (#3296) — the cost / duration / token data from
 		//   a half-completed network-killed run is environmental noise, not
 		//   signal about model or stage performance.
+		//
+		//   environment_halt (#101) — a project-declared preflight.environment
+		//   check halted the run in Phase 0: the operator's environment was
+		//   broken, so the row would measure the environment, not the model.
 		//
 		//   blocked_dependency (#305) — a deferral is not a failure and did no
 		//   work: no AI stage ran, so the row would book success:false at ~$0.
@@ -5485,6 +5489,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		case TerminalKindBlockedDependency:
 			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — deferral, no work done)",
 				item.Number, TerminalKindBlockedDependency)
+		case TerminalKindEnvironmentHalt:
+			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — operator environment broken, not model)",
+				item.Number, TerminalKindEnvironmentHalt)
 		default:
 			// recordOutcome re-resolves the prediction from the run's worktree
 			// before writing the row (#994) — the values here were read at

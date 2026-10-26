@@ -541,6 +541,36 @@
       "signal": ""
     },
     {
+      "input": "[environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "exit 1: [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[ENVIRONMENT-HALT]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "environment_halt",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "exit 1: environment_halt",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "ENVIRONMENT_HALT",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -2696,6 +2726,11 @@
       "signal": ""
     },
     {
+      "input": "stage_budget_exceeded: | [environment-halt]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "stage_budget_exceeded: | ai_apicallerror context_length_exceeded",
       "kind": "budget_exceeded",
       "signal": ""
@@ -2927,6 +2962,11 @@
     },
     {
       "input": "network unavailable: extended github connectivity loss | [adapter-auth-failed]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | [environment-halt]",
       "kind": "network_unavailable",
       "signal": ""
     },
@@ -3166,6 +3206,11 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | [environment-halt]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "adapter_incompatible | ai_apicallerror context_length_exceeded",
       "kind": "adapter_incompatible",
       "signal": ""
@@ -3397,6 +3442,11 @@
     },
     {
       "input": "[model-stream-stalled] | [adapter-auth-failed]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [environment-halt]",
       "kind": "model_stream_stalled",
       "signal": ""
     },
@@ -3636,6 +3686,11 @@
       "signal": "stream_idle_timeout"
     },
     {
+      "input": "stream idle timeout | [environment-halt]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
       "input": "stream idle timeout | ai_apicallerror context_length_exceeded",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3867,6 +3922,11 @@
     },
     {
       "input": "overloaded | [adapter-auth-failed]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | [environment-halt]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -4106,6 +4166,11 @@
       "signal": "api_connection_lost"
     },
     {
+      "input": "socket connection was closed | [environment-halt]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
       "input": "socket connection was closed | ai_apicallerror context_length_exceeded",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
@@ -4337,6 +4402,11 @@
     },
     {
       "input": "[rate-limit-quota-exhausted] | [adapter-auth-failed]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [environment-halt]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
@@ -4576,6 +4646,11 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[adapter-auth-failed] | [environment-halt]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "[adapter-auth-failed] | ai_apicallerror context_length_exceeded",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
@@ -4771,6 +4846,246 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[environment-halt] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[environment-halt] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[environment-halt] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[environment-halt] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[environment-halt] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[environment-halt] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[environment-halt] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[environment-halt] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[environment-halt] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[environment-halt] | ai_apicallerror context_length_exceeded",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | not_found_error model",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | pipeline-start-failure issue-closed",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [blocked-dependency]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | architecture approval required",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | github-quota-low",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | github-network-outage",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | secondary rate limit",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [pr-merge-unmerged",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [stage:worktree-containment]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [not-pipeline-actionable]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [dev-produced-no-changes]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [dev-handoff-missing]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [dev-step-cap-reached]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [dev-step-progress-unproven]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | invalid auth method",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | premature turn end",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | worktree_uncommitted",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | budget_ceiling_hit",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [runaway-progress-exceeded]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [runaway-ceiling-exceeded]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[environment-halt] | stage-no-output-timeout",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [stall-killed]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | pipeline_budget_exceeded",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | schema validation",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [no-changes-produced]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [validation-failed]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [validation-inconclusive]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [branch-forked]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [commit-orphaned]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [adapter-permission-rejected]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [permission-denied]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | stage_context_unreadable",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | dev_build_verification_missing",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | dev_build_verification_failed",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | dev_tests_failed",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | pr_merge_lookup_failed",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | subagent crash",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -4814,6 +5129,11 @@
       "input": "ai_apicallerror context_length_exceeded | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "ai_apicallerror context_length_exceeded | not_found_error model",
@@ -5051,6 +5371,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "not_found_error model | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "not_found_error model | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -5284,6 +5609,11 @@
       "input": "pipeline-start-failure issue-closed | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "pipeline-start-failure issue-closed | ai_apicallerror context_length_exceeded",
@@ -5521,6 +5851,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[blocked-dependency] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[blocked-dependency] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -5754,6 +6089,11 @@
       "input": "architecture approval required | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "architecture approval required | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "architecture approval required | ai_apicallerror context_length_exceeded",
@@ -5991,6 +6331,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "github-quota-low | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "github-quota-low | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -6224,6 +6569,11 @@
       "input": "github-network-outage | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "github-network-outage | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "github-network-outage | ai_apicallerror context_length_exceeded",
@@ -6461,6 +6811,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "secondary rate limit | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "secondary rate limit | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -6694,6 +7049,11 @@
       "input": "[pr-merge-unmerged | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[pr-merge-unmerged | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "[pr-merge-unmerged | ai_apicallerror context_length_exceeded",
@@ -6931,6 +7291,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[stage:worktree-containment] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[stage:worktree-containment] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -7164,6 +7529,11 @@
       "input": "[not-pipeline-actionable] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[not-pipeline-actionable] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "[not-pipeline-actionable] | ai_apicallerror context_length_exceeded",
@@ -7401,6 +7771,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[dev-produced-no-changes] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[dev-produced-no-changes] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -7634,6 +8009,11 @@
       "input": "[dev-handoff-missing] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[dev-handoff-missing] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "[dev-handoff-missing] | ai_apicallerror context_length_exceeded",
@@ -7871,6 +8251,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[dev-step-cap-reached] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[dev-step-cap-reached] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -8104,6 +8489,11 @@
       "input": "[dev-step-progress-unproven] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "[dev-step-progress-unproven] | ai_apicallerror context_length_exceeded",
@@ -8341,6 +8731,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "invalid auth method | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "invalid auth method | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -8574,6 +8969,11 @@
       "input": "premature turn end | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "premature turn end | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "premature turn end | ai_apicallerror context_length_exceeded",
@@ -8811,6 +9211,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "worktree_uncommitted | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "worktree_uncommitted | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -9044,6 +9449,11 @@
       "input": "budget_ceiling_hit | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "budget_ceiling_hit | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "budget_ceiling_hit | ai_apicallerror context_length_exceeded",
@@ -9281,6 +9691,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[runaway-progress-exceeded] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[runaway-progress-exceeded] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -9516,6 +9931,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[runaway-ceiling-exceeded] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -9747,6 +10167,11 @@
     },
     {
       "input": "[cost-cap-exceeded] | [adapter-auth-failed]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | [environment-halt]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -9986,6 +10411,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "stage-no-output-timeout | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "stage-no-output-timeout | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -10219,6 +10649,11 @@
       "input": "[stall-killed] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[stall-killed] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "[stall-killed] | ai_apicallerror context_length_exceeded",
@@ -10456,6 +10891,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "pipeline_budget_exceeded | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "pipeline_budget_exceeded | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -10689,6 +11129,11 @@
       "input": "schema validation | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "schema validation | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "schema validation | ai_apicallerror context_length_exceeded",
@@ -10926,6 +11371,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[no-changes-produced] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[no-changes-produced] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -11159,6 +11609,11 @@
       "input": "[validation-failed] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[validation-failed] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "[validation-failed] | ai_apicallerror context_length_exceeded",
@@ -11396,6 +11851,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[validation-inconclusive] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[validation-inconclusive] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -11629,6 +12089,11 @@
       "input": "[branch-forked] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[branch-forked] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "[branch-forked] | ai_apicallerror context_length_exceeded",
@@ -11866,6 +12331,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[commit-orphaned] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[commit-orphaned] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -12099,6 +12569,11 @@
       "input": "[adapter-permission-rejected] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-permission-rejected] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "[adapter-permission-rejected] | ai_apicallerror context_length_exceeded",
@@ -12336,6 +12811,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[permission-denied] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[permission-denied] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -12569,6 +13049,11 @@
       "input": "stage_context_unreadable | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "stage_context_unreadable | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "stage_context_unreadable | ai_apicallerror context_length_exceeded",
@@ -12806,6 +13291,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "dev_build_verification_missing | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "dev_build_verification_missing | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -13039,6 +13529,11 @@
       "input": "dev_build_verification_failed | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "dev_build_verification_failed | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "dev_build_verification_failed | ai_apicallerror context_length_exceeded",
@@ -13276,6 +13771,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "dev_tests_failed | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "dev_tests_failed | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -13511,6 +14011,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "pr_merge_lookup_failed | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "pr_merge_lookup_failed | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -13744,6 +14249,11 @@
       "input": "subagent crash | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "subagent crash | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "subagent crash | ai_apicallerror context_length_exceeded",
@@ -14034,6 +14544,26 @@
       "input": "usage limit | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[environment-halt] | session limit",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "session limit | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | usage limit",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "usage limit | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "architecture approval required | session limit",
