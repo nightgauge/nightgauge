@@ -80,6 +80,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **An architecture-approval pause is held for a human instead of being booked
+  as an operator stop (#2577).** A run that halted at the approval gate after
+  `autonomous stop` was rewritten to `operator_stop`, reverted to Ready with no
+  Action Center card, and re-planned into the same gate on the next dispatch. A
+  kind that carries a human hold now keeps its verdict during a pending stop:
+  the issue is sidelined, the approval card is raised, and the card is
+  retracted as soon as the approval label or file releases the hold. After
+  approval, the re-dispatched run reuses the approved plan and starts at
+  feature-dev instead of running feature-planning again.
+
 - **The coverage card's "Add to the workspace manifest" action works when the
   active folder is a member checkout (#2540).** `workspace.addRepo`, the
   workspace repository panel and the coverage sweep now find

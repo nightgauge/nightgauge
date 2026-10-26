@@ -2931,6 +2931,38 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * gate positively reports the decision requires approval.
    */
   private async verifyArchitectureApproval(issueNumber: number): Promise<Error | null> {
+    const result = await this.runArchitectureApprovalGate(issueNumber);
+    if (!result?.requires_approval) {
+      return null;
+    }
+
+    const reasons =
+      Array.isArray(result.reasons) && result.reasons.length > 0
+        ? result.reasons.join("; ")
+        : "high-impact architectural decision";
+    return new Error(
+      `${ARCHITECTURE_APPROVAL_REQUIRED_MARKER} — issue #${issueNumber} is a high-impact ` +
+        `decision that must be human-approved before feature-dev implements it. Why: ${reasons}. ` +
+        `This is NOT a failure and NO development or validation cost was incurred — the pipeline ` +
+        `halted before implementation. To proceed: add the \`approved:architecture\` label to the ` +
+        `issue (or write ${PIPELINE_STATE_DISPLAY}/approval-${issueNumber}.json with ` +
+        `{"approved": true}), then re-queue. To turn the gate off entirely, set ` +
+        `pipeline.architecture_approval.enabled: false.`
+    );
+  }
+
+  /**
+   * Run `nightgauge approval-gate <N> --json` and return its verdict, or null
+   * when there is none to act on (binary unresolved, errored, or unparseable).
+   * Exit 0 with non-JSON stdout is the proceed verdict of an older binary and
+   * also returns null. Callers treat null as "proceed" — fail-open.
+   */
+  private async runArchitectureApprovalGate(issueNumber: number): Promise<{
+    high_impact?: boolean;
+    requires_approval?: boolean;
+    approval_granted?: boolean;
+    reasons?: string[];
+  } | null> {
     try {
       const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
       const resolver = BinaryResolver.fromVSCode();
@@ -2943,7 +2975,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         return null;
       }
 
-      let result: { requires_approval?: boolean; reasons?: string[] } | null = null;
       try {
         // Exit 0 → proceed (not high-impact, already approved, or gate disabled).
         const { stdout } = await execFileAsync(
@@ -2952,7 +2983,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           { encoding: "utf-8", cwd, timeout: 30_000 }
         );
         try {
-          result = JSON.parse(stdout);
+          return JSON.parse(stdout);
         } catch {
           // Exit code 0 IS the verdict (proceed) — an unparseable stdout is a
           // formatting quirk, not a binary error. Older binaries printed plain
@@ -2965,37 +2996,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // Exit 1 → requires approval; the JSON verdict is on stdout.
         if (e.stdout && e.code === 1) {
           try {
-            result = JSON.parse(e.stdout);
+            return JSON.parse(e.stdout);
           } catch {
             return null; // unparseable — fail open
           }
-        } else {
-          this.logger.debug("Architecture-approval pre-check: binary error — skipping", {
-            issueNumber,
-            code: e.code,
-            stderr: typeof e.stderr === "string" ? e.stderr.slice(0, 300) : undefined,
-          });
-          return null; // binary/other error — fail open
         }
+        this.logger.debug("Architecture-approval pre-check: binary error — skipping", {
+          issueNumber,
+          code: e.code,
+          stderr: typeof e.stderr === "string" ? e.stderr.slice(0, 300) : undefined,
+        });
+        return null; // binary/other error — fail open
       }
-
-      if (!result?.requires_approval) {
-        return null;
-      }
-
-      const reasons =
-        Array.isArray(result.reasons) && result.reasons.length > 0
-          ? result.reasons.join("; ")
-          : "high-impact architectural decision";
-      return new Error(
-        `${ARCHITECTURE_APPROVAL_REQUIRED_MARKER} — issue #${issueNumber} is a high-impact ` +
-          `decision that must be human-approved before feature-dev implements it. Why: ${reasons}. ` +
-          `This is NOT a failure and NO development or validation cost was incurred — the pipeline ` +
-          `halted before implementation. To proceed: add the \`approved:architecture\` label to the ` +
-          `issue (or write ${PIPELINE_STATE_DISPLAY}/approval-${issueNumber}.json with ` +
-          `{"approved": true}), then re-queue. To turn the gate off entirely, set ` +
-          `pipeline.architecture_approval.enabled: false.`
-      );
     } catch (err) {
       this.logger.debug("Architecture-approval pre-check skipped (unexpected error)", {
         issueNumber,
@@ -3003,6 +3015,46 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
       return null; // fail-open
     }
+  }
+
+  /**
+   * Resume-after-approval check (#2577). Returns the skip reason when this run
+   * should reuse the plan the human approved instead of running
+   * feature-planning again, or null to plan as usual.
+   *
+   * A run that halted at the approval gate leaves `planning-{N}.json` and no
+   * `dev-{N}.json`. The halt is recorded only in the Go scheduler, so the
+   * signal read here is its outcome: the gate (run after issue-pickup has
+   * refreshed the issue's labels) reports a high-impact decision that is now
+   * approved. Re-planning then would cost a full planning pass, and it could
+   * produce a different plan from the one the human approved.
+   *
+   * Every check falls back to planning: a missing, unparseable or foreign plan,
+   * an existing dev context, or a gate that is not a positive "approved".
+   */
+  private async approvalResumeSkipReason(issueNumber: number): Promise<string | null> {
+    if (fs.existsSync(this.getContextPath("dev", issueNumber))) {
+      return null;
+    }
+    const planningPath = this.getContextPath("planning", issueNumber);
+    if (!fs.existsSync(planningPath)) {
+      return null;
+    }
+    try {
+      const plan = PlanningContextSchema.safeParse(
+        JSON.parse(fs.readFileSync(planningPath, "utf-8"))
+      );
+      if (!plan.success || plan.data.issue_number !== issueNumber) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const gate = await this.runArchitectureApprovalGate(issueNumber);
+    if (!gate?.high_impact || !gate.approval_granted || gate.requires_approval) {
+      return null;
+    }
+    return "resuming after architecture approval — reusing the approved plan (#2577)";
   }
 
   /**
@@ -11324,6 +11376,28 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           }
           skippedStages.push(stage);
           continue;
+        }
+
+        // #2577: a run that halted at the architecture-approval gate already
+        // has the plan the human approved. Skip planning and go straight to
+        // the feature-dev pre-check, which runs the gate again.
+        if (stage === "feature-planning") {
+          const approvalResumeReason = await this.approvalResumeSkipReason(issueNumber);
+          if (approvalResumeReason) {
+            this.logger.info("Skipping feature-planning: approved plan already on disk", {
+              issueNumber,
+            });
+            this.eventDispatcher.onStageSkipped(stage, approvalResumeReason);
+            if (this.stateService) {
+              try {
+                await this.stateService.skipStage(stage, approvalResumeReason);
+              } catch (err) {
+                this.logger.warn("Failed to update state for skipped stage", { stage, err });
+              }
+            }
+            skippedStages.push(stage);
+            continue;
+          }
         }
 
         // Check routing-based stage skipping (after issue-pickup completes)
