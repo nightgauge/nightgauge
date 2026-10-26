@@ -28,6 +28,10 @@
  *   npx tsx scripts/evaluate-models.ts --mode live --judge --variants concise-preamble
  *   npx tsx scripts/evaluate-models.ts --variants a,b --variants-dir evals/variants
  *
+ *   # Check only that the pinned control issue still matches its registered hash (#2117).
+ *   # Live runs do this automatically before any cell is dispatched.
+ *   npx tsx scripts/evaluate-models.ts --verify-control
+ *
  * Defaults to MOCK execution (deterministic, zero API cost) so the wiring is
  * exercised without live models. Live execution (`--mode live`) uses the
  * `LiveCellExecutor`: it spawns each model against each task inside the cell's
@@ -62,6 +66,7 @@ import {
   getModelDescriptor,
   buildRoutingAdvice,
   loadEvalTasks,
+  verifyControlIssue,
   loadPromptVariants,
   resolveEvalEmitConfig,
   runEvalSuite,
@@ -101,6 +106,8 @@ interface CliArgs {
   variants: string[];
   /** Directory holding `<name>.json` variant definitions. */
   variantsDir: string;
+  /** Only run the control-issue drift check, then exit (#2117). */
+  verifyControl: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -135,6 +142,7 @@ function parseArgs(argv: string[]): CliArgs {
     platformUrl: get("--platform-url"),
     variants: csv(get("--variants")) ?? [],
     variantsDir: get("--variants-dir") ?? "evals/variants",
+    verifyControl: argv.includes("--verify-control"),
     out:
       get("--out") ??
       path.join(
@@ -255,7 +263,7 @@ async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
 
   const claudeCommand = process.env.NIGHTGAUGE_CLAUDE_CLI_COMMAND ?? "claude";
-  if (args.mode === "live") {
+  if (args.mode === "live" && !args.verifyControl) {
     const preflightError = preflightClaudeCli(claudeCommand);
     if (preflightError) {
       console.error(preflightError);
@@ -267,6 +275,25 @@ async function main(): Promise<number> {
   if (tasks.length === 0) {
     console.error(`no tasks found under ${args.tasksDir}`);
     return 1;
+  }
+
+  // Pinned control (#2117): the live issue must still match its registered
+  // hash. Checked before any cell is dispatched so drift costs no model spend;
+  // mock runs make no network calls and skip it.
+  const control = tasks.find((t) => t.control);
+  if (args.verifyControl || (args.mode === "live" && control)) {
+    if (!control) {
+      console.error(`no control task under ${args.tasksDir}`);
+      return 1;
+    }
+    try {
+      const hash = await verifyControlIssue(control);
+      console.log(`control ${control.id}: hash ${hash} OK`);
+    } catch (err) {
+      console.error((err as Error).message);
+      return 1;
+    }
+    if (args.verifyControl) return 0;
   }
 
   const models: ModelDescriptor[] = args.models

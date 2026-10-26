@@ -501,8 +501,42 @@ export const CheckCommandSchema = z
 export type CheckCommand = z.infer<typeof CheckCommandSchema>;
 
 /**
+ * The real GitHub issue a control task is pinned to (#2117). `content_sha256`
+ * is `controlContentHash({ title, body, base_sha })` (see `controlTask.ts`) over
+ * the task's own `title` / `instruction` snapshot, so neither the task file nor
+ * the live issue can drift without the hash check failing.
+ */
+export const EvalSourceIssueSchema = z
+  .object({
+    url: z.string().url(),
+    /** `owner/name` of the repository holding the issue. */
+    repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "repo must be owner/name"),
+    number: z.number().int().positive(),
+    /** Frozen commit the control is evaluated against; never moved. */
+    base_sha: z.string().regex(/^[0-9a-f]{40}$/, "base_sha must be a 40-hex commit SHA"),
+    content_sha256: z.string().regex(/^[0-9a-f]{64}$/, "content_sha256 must be 64-hex"),
+  })
+  .strict();
+export type EvalSourceIssue = z.infer<typeof EvalSourceIssueSchema>;
+
+/** Objective pass criteria recorded next to a control for the quality scorer. */
+export const EvalPassCriteriaSchema = z
+  .object({
+    /** Test files that must exist and pass in the finished workspace. */
+    tests_must_pass: z.array(z.string().min(1)).min(1),
+    /** Paths the change must touch. */
+    files_must_change: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+export type EvalPassCriteria = z.infer<typeof EvalPassCriteriaSchema>;
+
+/**
  * A realistic evaluation task. One task × one matrix cell = one
  * `ModelEvalCellResult`.
+ *
+ * A **control** task (`control: true`, at most one per corpus, #2117) is a real
+ * GitHub issue pinned to a frozen base commit: it must carry `source_issue` and
+ * `pass_criteria`, and its fixture must be that issue's repo at `base_sha`.
  */
 export const EvalTaskSchema = z
   .object({
@@ -522,8 +556,40 @@ export const EvalTaskSchema = z
     /** Deterministic checks scored by the correctness component. */
     checks: z.array(CheckCommandSchema),
     rubric: EvalRubricSchema,
+    /** Marks the corpus's single pinned control task. */
+    control: z.literal(true).optional(),
+    /** Required when `control` is set. */
+    source_issue: EvalSourceIssueSchema.optional(),
+    /** Required when `control` is set. */
+    pass_criteria: EvalPassCriteriaSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((task, ctx) => {
+    if (task.control !== true) return;
+    const issue = (message: string, path: (string | number)[]) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message, path });
+    if (!task.pass_criteria) issue("a control task requires pass_criteria", ["pass_criteria"]);
+    const src = task.source_issue;
+    if (!src) {
+      issue("a control task requires source_issue", ["source_issue"]);
+      return;
+    }
+    if (task.fixture.kind !== "base-commit") {
+      issue("a control task's fixture must be kind base-commit", ["fixture", "kind"]);
+    }
+    if (task.fixture.ref !== src.base_sha) {
+      issue("a control task's fixture.ref must equal source_issue.base_sha", ["fixture", "ref"]);
+    }
+    if (task.fixture.repo !== src.repo) {
+      issue("a control task's fixture.repo must equal source_issue.repo", ["fixture", "repo"]);
+    }
+    if (src.url !== `https://github.com/${src.repo}/issues/${src.number}`) {
+      issue("source_issue.url must be https://github.com/<repo>/issues/<number>", [
+        "source_issue",
+        "url",
+      ]);
+    }
+  });
 export type EvalTask = z.infer<typeof EvalTaskSchema>;
 
 // ---------------------------------------------------------------------------

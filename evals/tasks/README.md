@@ -89,3 +89,46 @@ wrong (a hack that passes tests, a race that only trips under interleaving).
 2. Add `evals/fixtures/<id>/setup.sh` (idempotent seed).
 3. `loadEvalTasks()` picks it up automatically; the corpus test asserts every
    job class is represented and every fixture script exists.
+
+## Control task
+
+Exactly one task may set `"control": true` (#2117). It is a real, public GitHub
+issue pinned to a frozen base commit, so the same input is evaluated across
+every model generation. A control task must carry:
+
+- `fixture: { "kind": "base-commit", "ref": <base_sha>, "repo": <owner/name> }`.
+  The workspace provider clones `repo` into a cache under the workspaces
+  directory and adds a detached worktree at `ref`.
+- `source_issue`: `url`, `repo`, `number`, `base_sha` (equal to `fixture.ref`)
+  and `content_sha256`.
+- `pass_criteria`: `tests_must_pass` and `files_must_change`, objective criteria
+  for the quality scorer.
+
+The task's `title` and `instruction` are the issue's title and body, copied
+verbatim from `gh issue view <url> --json title,body`. `content_sha256` is
+`controlContentHash({ title, body, base_sha })` (`src/eval/controlTask.ts`):
+sha256 of `JSON.stringify([title, body, base_sha])` with CRLF normalized to LF.
+Compute it with that function, never by hand.
+
+The hash is enforced twice:
+
+- `loadEvalTasks()` rejects a second control, and rejects a control whose task
+  file no longer matches its registered hash.
+- `scripts/evaluate-models.ts` fetches the live issue and compares hashes before
+  any cell is dispatched in `--mode live`. `--verify-control` runs only this
+  check and exits 0 or 1.
+
+The control issue and its base commit are frozen. Changing either means
+registering a new control (new `base_sha`, new hash), not editing the old one.
+The fixture seed is `evals/fixtures/eval-control/`.
+
+### Capability findings for the whole-pipeline sweep
+
+- **CI**: the seed includes a GitHub Actions workflow that runs typecheck and
+  tests on push and pull request.
+- **Project board**: the fixture repository has none. A pickup-to-merge sweep
+  needs a board or a board-less mode.
+- **Pipeline config**: the fixture has no `.nightgauge/config.yaml`. Committing
+  one changes the base SHA, so decide it before relying on the hash.
+- **Harness**: the workspace provider used to ignore `fixture.repo` for
+  `base-commit` fixtures. It now honours it.
