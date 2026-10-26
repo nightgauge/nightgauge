@@ -421,3 +421,48 @@ describe("model-eval schemas — defaults & bounds", () => {
     ).toThrow();
   });
 });
+
+describe("EvalTaskSchema control task (#2117)", () => {
+  const SHA = "f".repeat(40);
+  const CONTROL = {
+    ...TASK,
+    fixture: { kind: "base-commit", ref: SHA, repo: "acme/fixture" },
+    control: true,
+    source_issue: {
+      url: "https://github.com/acme/fixture/issues/3",
+      repo: "acme/fixture",
+      number: 3,
+      base_sha: SHA,
+      content_sha256: "0".repeat(64),
+    },
+    pass_criteria: { tests_must_pass: ["tests/a.test.ts"], files_must_change: ["src/a.ts"] },
+  };
+
+  it("accepts a well-formed control", () => {
+    expect(EvalTaskSchema.safeParse(CONTROL).success).toBe(true);
+  });
+
+  it("rejects a control missing source_issue or pass_criteria", () => {
+    expect(EvalTaskSchema.safeParse({ ...CONTROL, source_issue: undefined }).success).toBe(false);
+    expect(EvalTaskSchema.safeParse({ ...CONTROL, pass_criteria: undefined }).success).toBe(false);
+  });
+
+  it("rejects a control whose fixture is not the issue repo at base_sha", () => {
+    const bad = (fixture: object) => EvalTaskSchema.safeParse({ ...CONTROL, fixture }).success;
+    expect(bad({ kind: "scaffold-script", ref: SHA, repo: "acme/fixture" })).toBe(false);
+    expect(bad({ kind: "base-commit", ref: "1".repeat(40), repo: "acme/fixture" })).toBe(false);
+    expect(bad({ kind: "base-commit", ref: SHA, repo: "acme/other" })).toBe(false);
+  });
+
+  it("rejects a source_issue url that does not match repo and number", () => {
+    const source_issue = {
+      ...CONTROL.source_issue,
+      url: "https://github.com/acme/fixture/issues/4",
+    };
+    expect(EvalTaskSchema.safeParse({ ...CONTROL, source_issue }).success).toBe(false);
+  });
+
+  it("leaves non-control tasks unaffected", () => {
+    expect(EvalTaskSchema.safeParse(TASK).success).toBe(true);
+  });
+});

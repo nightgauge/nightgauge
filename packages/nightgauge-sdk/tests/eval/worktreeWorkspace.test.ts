@@ -167,4 +167,59 @@ describe("WorktreeWorkspaceProvider", () => {
     expect(ws.dir).toContain("concise-preamble");
     await ws.dispose();
   });
+
+  it("base-commit with fixture.repo: clones once into a cache and adds the worktree there", async () => {
+    const root = await tmpRoot();
+    const calls: Array<{ cmd: string; args: string[]; cwd?: string }> = [];
+    const exec: ExecFn = async (cmd, args, opts) => {
+      calls.push({ cmd, args, cwd: opts.cwd });
+      // No cache yet, and the fresh clone lacks the pinned commit.
+      const fail = args[0] === "rev-parse" || args[0] === "cat-file";
+      return { code: fail ? 1 : 0, stdout: "", stderr: "" };
+    };
+    const provider = new WorktreeWorkspaceProvider({
+      repoRoot: root,
+      workspacesDir: join(root, "ws"),
+      exec,
+    });
+    const sha = "d".repeat(40);
+    const t = {
+      ...task("base-commit", sha),
+      fixture: { kind: "base-commit" as const, ref: sha, repo: "acme/fixture" },
+    };
+    const [a, b] = await Promise.all([provider.acquire(t, CELL), provider.acquire(t, CELL)]);
+    const cache = join(root, "ws", "_repos", "acme__fixture");
+
+    const clones = calls.filter((c) => c.args[0] === "clone");
+    expect(clones).toHaveLength(1);
+    expect(clones[0].args).toEqual([
+      "clone",
+      "--no-checkout",
+      "https://github.com/acme/fixture.git",
+      cache,
+    ]);
+    expect(calls.filter((c) => c.args[0] === "fetch")).toEqual([
+      { cmd: "git", args: ["fetch", "origin", sha], cwd: cache },
+    ]);
+    const adds = calls.filter((c) => c.args[0] === "worktree" && c.args[1] === "add");
+    expect(adds.map((c) => c.cwd)).toEqual([cache, cache]);
+    expect(adds[0].args).toEqual(["worktree", "add", "--detach", a.dir, sha]);
+
+    await b.dispose();
+    const remove = calls.find((c) => c.args[1] === "remove");
+    expect(remove?.cwd).toBe(cache);
+    await a.dispose();
+  });
+
+  it("base-commit without fixture.repo still uses the host repo", async () => {
+    const root = await tmpRoot();
+    const { exec, calls } = recordingExec();
+    const provider = new WorktreeWorkspaceProvider({
+      repoRoot: root,
+      workspacesDir: join(root, "ws"),
+      exec,
+    });
+    await provider.acquire(task("base-commit", "e".repeat(40)), CELL);
+    expect(calls.some((c) => c.args[0] === "clone")).toBe(false);
+  });
 });
