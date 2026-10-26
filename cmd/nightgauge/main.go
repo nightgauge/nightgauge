@@ -1310,6 +1310,10 @@ resolved against --workdir. Findings never change the exit code.`,
 			}
 
 			exists := func(p string) bool {
+				// Paths come from an untrusted issue body: never stat outside the repo.
+				if !filepath.IsLocal(filepath.FromSlash(p)) {
+					return false
+				}
 				_, err := os.Stat(filepath.Join(workdir, filepath.FromSlash(p)))
 				return err == nil
 			}
