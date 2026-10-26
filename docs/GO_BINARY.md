@@ -3812,7 +3812,10 @@ Four run-scoped producers remain Go-only, with reasons recorded in
 `branch-fork`, `unverified-deliverable` and `unverified-deliverable-streak` —
 the last two share a seam (the `gate verify` CLI raising directly, rather than
 an IPC round-trip that would make the extension re-classify a finding Go
-already classified) but are two producers, not one.
+already classified) but are two producers, not one. `auth-preflight` has two
+Go triggers sharing the key `auth-failure:{repo}#{issue}`: the identity
+preflight, and the `CatPermission` escalation gate in the stage loop. The gate
+covers the default single-identity path and both dispatch arms (#4).
 
 **One declared coverage gap on the extension path:** of
 `HeadlessOrchestrator`'s three pipeline-ceiling stops, only the BETWEEN-STAGE

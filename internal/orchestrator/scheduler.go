@@ -2230,6 +2230,20 @@ func (s *Scheduler) preflightIdentity(ctx context.Context, item types.BoardItem,
 	return false, reason
 }
 
+// permissionBlockedEscalation runs the CatPermission escalation gate over a
+// failed stage's texts and, when it blocks, raises the Action Center
+// auth-failure card (#4). This is the trigger that fires on the default
+// single-identity path, where preflightIdentity is disabled. Only the
+// classifier's reason reaches the card, never the raw texts, which can carry
+// credential-bearing output.
+func (s *Scheduler) permissionBlockedEscalation(item types.BoardItem, runID string, texts ...string) (bool, string) {
+	blocked, reason := EscalationBlockedByCategory(texts...)
+	if blocked {
+		s.raiseAuthFailure(item.Repo, item.Number, runID, reason)
+	}
+	return blocked, reason
+}
+
 // PickNext selects the highest-priority unblocked ready issue to execute.
 func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 	// One scan, one permission-cache cycle (#2130, #842).
@@ -8231,7 +8245,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// over everything we know about the failure, the captured output
 			// tail included, because the cause is usually several lines above
 			// whatever symptom ended the stage.
-			catBlocked, catReason := EscalationBlockedByCategory(failText, runtime.StageOutputTail(stage))
+			catBlocked, catReason := s.permissionBlockedEscalation(item, runtime.RunID, failText, runtime.StageOutputTail(stage))
 			if catBlocked {
 				log.Printf("#%d: stage %s failed — NOT escalating model: %s (no model can supply a missing credential)",
 					item.Number, stage, catReason)
@@ -8388,7 +8402,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// sitting in the tail. The observed run's cause was a
 			// credential-less `git push`; escalating re-sent the whole prompt
 			// at a higher tier to reach the identical failure.
-			catBlocked, catReason := EscalationBlockedByCategory(outputTailBeforeClear, outputErr.Error())
+			catBlocked, catReason := s.permissionBlockedEscalation(item, runtime.RunID, outputTailBeforeClear, outputErr.Error())
 			if catBlocked {
 				log.Printf("#%d: stage %s missing output — NOT escalating model: %s (no model can supply a missing credential)",
 					item.Number, stage, catReason)
