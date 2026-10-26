@@ -115,7 +115,17 @@ changelog, and the release workflow refuses a tag that does not.
   (the model the stage launched with, for every adapter) and
   `NIGHTGAUGE_STAGE`, as Go-dispatched stages already did. Before, recording
   provenance on a planning decision failed in every extension-run stage.
-
+- **The serve daemon's attention sweep and board probe keep authenticating
+  past the GitHub App token's hour (#2578).** The daemon caches a router per
+  board, and that router held the installation token as a string. One to
+  seven hours after `serve` started, every sweep and probe failed with
+  `401 Bad credentials` on every repository until a restart. Routers now
+  carry a token source that re-mints the installation token before it
+  expires. A REST `401` is now classified as an authentication failure, so
+  the sweep skips the repository instead of failing one producer at a time.
+  A sweep that GitHub rejects raises one "GitHub rejects the credential"
+  card per owner. The card names the affected repositories and retracts
+  itself once they sweep cleanly.
 - **`epic complete` no longer enqueues the epic PR before GitHub has computed
   its mergeability (#2584).** Every merge-queue enqueue now waits, within the 15-minute CI
   budget, until the PR is mergeable and its checks are green. A PR that is still

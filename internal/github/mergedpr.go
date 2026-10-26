@@ -166,7 +166,7 @@ func (s *PRService) CommitParents(ctx context.Context, owner, repo, oid string) 
 		// object carried, and the door reads it as "no containment".
 		return nil, nil
 	case status < 200 || status >= 300:
-		return nil, fmt.Errorf("commit parents for %s: REST %d: %s", oid, status, restErrorSummary(body))
+		return nil, fmt.Errorf("commit parents for %s: %w", oid, restStatusErr(status, body))
 	}
 	var resp commitParentsResponse
 	if err := json.Unmarshal(body, &resp); err != nil {

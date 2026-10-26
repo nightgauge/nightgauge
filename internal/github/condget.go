@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/forge"
 )
 
 // callerConditionalKey marks a request whose conditional headers the caller
@@ -171,4 +173,34 @@ type restStatusError struct {
 
 func (e *restStatusError) Error() string {
 	return fmt.Sprintf("REST GET %s: status %d: %s", e.Target, e.Status, restErrorSummary(e.Body))
+}
+
+// Unwrap classifies a rejected credential as forge.ErrUnauthorized, so the
+// attention sweep skips a repo whose token is dead instead of trusting every
+// other producer's empty answer (#2578).
+func (e *restStatusError) Unwrap() error { return unauthorizedFor(e.Status) }
+
+// restStatusErr describes a non-2xx REST answer as "REST <status>: <summary>".
+// Every REST call site reports through it, so a 401 is forge.ErrUnauthorized
+// on all of them rather than a string only a human can classify (#2578).
+func restStatusErr(status int, body []byte) error {
+	return &restHTTPError{status: status, summary: restErrorSummary(body)}
+}
+
+type restHTTPError struct {
+	status  int
+	summary string
+}
+
+func (e *restHTTPError) Error() string { return fmt.Sprintf("REST %d: %s", e.status, e.summary) }
+
+func (e *restHTTPError) Unwrap() error { return unauthorizedFor(e.status) }
+
+// unauthorizedFor maps 401 alone to forge.ErrUnauthorized. A 403 is not
+// mapped: GitHub also answers a secondary rate limit with 403.
+func unauthorizedFor(status int) error {
+	if status == http.StatusUnauthorized {
+		return forge.ErrUnauthorized
+	}
+	return nil
 }
