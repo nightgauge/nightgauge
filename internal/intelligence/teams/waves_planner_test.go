@@ -259,3 +259,70 @@ func TestPlanWavesFromIssues_TargetSource(t *testing.T) {
 		t.Errorf("TargetSource = %v, want 100:declared 200:inferred", got)
 	}
 }
+
+// An issue blocked by an issue outside the batch — here in another
+// repository — is reported, not silently dropped (#2573).
+func TestPlanWavesFromIssues_ReportsExternalBlocker(t *testing.T) {
+	issues := []pkgtypes.Issue{
+		{Number: 10, Repo: "o/b", Title: "Dependent", BlockedBy: []pkgtypes.BlockingRef{
+			{Number: 7, Repo: "o/a", State: "OPEN"},
+		}},
+		{Number: 11, Repo: "o/b", Title: "Free"},
+	}
+	result := PlanWavesFromIssues(issues)
+	if len(result.Waves) != 1 || len(result.Waves[0].Issues) != 2 {
+		t.Fatalf("external blocker must not form a wave edge; waves = %+v", result.Waves)
+	}
+	want := []ExternalBlocker{{Issue: "o/b#10", Blocker: "o/a#7", State: "OPEN"}}
+	if len(result.ExternalBlockers) != 1 || result.ExternalBlockers[0] != want[0] {
+		t.Fatalf("ExternalBlockers = %+v, want %+v", result.ExternalBlockers, want)
+	}
+}
+
+// A blocker with no repository of its own is in the blocked issue's
+// repository, so an in-batch same-repo blocker still forms a wave edge.
+func TestPlanWavesFromIssues_RepoLessBlockerDefaultsToIssueRepo(t *testing.T) {
+	issues := []pkgtypes.Issue{
+		{Number: 1, Repo: "o/a", Title: "Blocker"},
+		{Number: 2, Repo: "o/a", Title: "Dependent", BlockedBy: []pkgtypes.BlockingRef{{Number: 1}}},
+	}
+	result := PlanWavesFromIssues(issues)
+	if len(result.Waves) != 2 || len(result.ExternalBlockers) != 0 {
+		t.Fatalf("waves=%d external=%+v, want 2 waves and none external", len(result.Waves), result.ExternalBlockers)
+	}
+}
+
+// The same issue number in two repositories names two issues. A blocker
+// A#7 is not satisfied — or wave-ordered — by B#7 being in the batch.
+func TestPlanWavesFromIssues_SameNumberAcrossReposDoesNotCollide(t *testing.T) {
+	issues := []pkgtypes.Issue{
+		{Number: 7, Repo: "o/b", Title: "B seven"},
+		{Number: 8, Repo: "o/b", Title: "Dependent", BlockedBy: []pkgtypes.BlockingRef{
+			{Number: 7, Repo: "o/a", State: "OPEN"},
+		}},
+	}
+	result := PlanWavesFromIssues(issues)
+	if len(result.Waves) != 1 {
+		t.Fatalf("o/a#7 must not be matched to o/b#7; waves = %+v", result.Waves)
+	}
+	if len(result.ExternalBlockers) != 1 || result.ExternalBlockers[0].Blocker != "o/a#7" {
+		t.Fatalf("ExternalBlockers = %+v, want o/a#7", result.ExternalBlockers)
+	}
+}
+
+// A cross-repo blocker that IS in the batch orders the waves.
+func TestPlanWavesFromIssues_InBatchCrossRepoBlockerFormsEdge(t *testing.T) {
+	issues := []pkgtypes.Issue{
+		{Number: 7, Repo: "O/A", Title: "A seven"},
+		{Number: 3, Repo: "o/b", Title: "Dependent", BlockedBy: []pkgtypes.BlockingRef{
+			{Number: 7, Repo: "o/a"},
+		}},
+	}
+	result := PlanWavesFromIssues(issues)
+	if len(result.Waves) != 2 || len(result.ExternalBlockers) != 0 {
+		t.Fatalf("waves=%d external=%+v, want 2 waves, none external", len(result.Waves), result.ExternalBlockers)
+	}
+	if result.Waves[1].Issues[0].Number != 3 {
+		t.Errorf("wave 1 = %+v, want o/b#3", result.Waves[1].Issues)
+	}
+}

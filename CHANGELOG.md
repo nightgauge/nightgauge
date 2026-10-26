@@ -16,6 +16,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge program status` reports a program's progress (#2573).** One
+  command reads a programs file and prints, per program, how many of its
+  issues are open, closed, validated (closed as completed, until #2574's
+  marker) and dispatchable now, with each blocked Ready issue and why.
+
+- **The work-order frontier now agrees across repositories (#2573).**
+  `nightgauge next` looks up a dependency on no board it read, as the
+  scheduler does: closed satisfies it, and open or unconfirmable blocks it.
+  It used to list such a dependency and dispatch anyway. A Ready issue whose
+  only blocker is a closed board item is no longer reported as a cycle.
+  `epic plan-waves` keys issues by repository, so `acme/api#7` and
+  `acme/web#7` no longer collide, and it reports blockers outside the planned
+  set instead of dropping them. A deferral by `deps-gate check` now names a
+  blocker in another repository as `owner/repo#N` instead of a bare `#N`.
+
 - **Auth-failure Action Center card on the default single-identity path (#4).**
   A stage that fails on a GitHub permission error (`HTTP 401`,
   `invalid auth method`) now raises the "Authentication failed" card even when

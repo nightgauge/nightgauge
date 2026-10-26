@@ -193,3 +193,69 @@ func TestOwnerRepoForItem(t *testing.T) {
 		t.Errorf("got %q/%q, want fallbackOwner/bare-repo", o, r)
 	}
 }
+
+// An issue in repository B whose blocker is an OPEN issue in repository A is
+// deferred, the reason names the blocker with its repository (a bare "#7"
+// would name B#7), and the queue pause records the blocker's repository so
+// the promote sweep re-evaluates the right issue (#2573).
+func TestEvaluateDepsGate_CrossRepoOpenBlockerDefersWithQualifiedRef(t *testing.T) {
+	mock := &depsMockFetcher{issues: map[string]*types.Issue{
+		"o/b#20": {
+			Number:    20,
+			BlockedBy: []types.BlockingRef{{Number: 7, Title: "Upstream", State: "OPEN", Repo: "o/a"}},
+		},
+	}}
+
+	res, err := evaluateDepsGate(context.Background(), mock, "o", "b", 20, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Decision != depsDecisionDeferred {
+		t.Fatalf("Decision = %q, want deferred", res.Decision)
+	}
+	if !strings.Contains(res.Reason, "o/a#7") {
+		t.Errorf("Reason must name the cross-repo blocker as o/a#7, got %q", res.Reason)
+	}
+
+	s := newTestScheduler(t)
+	pauseBlockedDependencyItem(s, "o", "b", 20, "Downstream", res)
+	paused := s.ListPausedByKind("blocked_dependency")
+	if len(paused) != 1 {
+		t.Fatalf("paused = %d, want 1", len(paused))
+	}
+	refs := paused[0].PausedReason.BlockingIssues
+	if len(refs) != 1 || refs[0].Number != 7 || refs[0].Repo != "o/a" {
+		t.Errorf("BlockingIssues = %+v, want o/a#7", refs)
+	}
+}
+
+// An issue in repository B whose only blocker is a CLOSED issue in
+// repository A passes the gate (#2573).
+func TestEvaluateDepsGate_CrossRepoClosedBlockerAllows(t *testing.T) {
+	mock := &depsMockFetcher{issues: map[string]*types.Issue{
+		"o/b#20": {
+			Number:    20,
+			BlockedBy: []types.BlockingRef{{Number: 7, Title: "Upstream", State: "CLOSED", Repo: "o/a"}},
+		},
+	}}
+
+	res, err := evaluateDepsGate(context.Background(), mock, "o", "b", 20, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Decision != depsDecisionAllow {
+		t.Errorf("Decision = %q, want allow", res.Decision)
+	}
+}
+
+func TestDepsDeferReason_QualifiesOnlyCrossRepoBlockers(t *testing.T) {
+	got := depsDeferReason("o/b", []hooks.OpenDependency{
+		{Number: 3, Repo: "o/b"},
+		{Number: 4},
+		{Number: 7, Repo: "o/a"},
+	})
+	want := "blocked by open dependency #3, #4, o/a#7 (PR not merged)"
+	if got != want {
+		t.Errorf("depsDeferReason = %q, want %q", got, want)
+	}
+}

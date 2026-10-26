@@ -9039,7 +9039,7 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 	return key[:idx], num, true
 }
 
-// resolveIssueStatesByKey batch-resolves the current GitHub State ("OPEN" or
+// ResolveIssueStatesByKey batch-resolves the current GitHub State ("OPEN" or
 // "CLOSED") of the given graph node keys ("owner/repo#number") via
 // issueSvc.GetIssuesByNumbersWithoutRelations (State is all it reads), grouped
 // by repo so any number of keys sharing a
@@ -9047,7 +9047,9 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 // refreshBlockerStates above (a queue of N items spread across R repos
 // collapses from N calls to R). Used by the autonomous scheduler's
 // candidate-selection dep check to resolve "dangling" dependency edges that
-// reference an issue with no node in the graph (#306).
+// reference an issue with no node in the graph (#306), and by `nightgauge
+// next` / `nightgauge program status` so the program frontier resolves those
+// edges exactly as dispatch does (#2573).
 //
 // Keys the resolver couldn't confirm — a malformed key, a per-repo fetch
 // error, or an issue simply absent from the batch response (deleted /
@@ -9058,7 +9060,7 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 // A key whose repository is not "owner/repo" — the name an issue body gave a
 // repository the workspace cannot identify (depgraph's Unresolved reference)
 // — names no issue GitHub could return, so it is left out without a request.
-func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []string) map[string]string {
+func ResolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []string) map[string]string {
 	if issueSvc == nil || len(keys) == 0 {
 		return nil
 	}
@@ -9067,7 +9069,7 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 	for _, key := range keys {
 		repo, num, ok := splitNodeKey(key)
 		if !ok {
-			log.Printf("WARN: resolveIssueStatesByKey: malformed node key %q, skipping", key)
+			log.Printf("WARN: ResolveIssueStatesByKey: malformed node key %q, skipping", key)
 			continue
 		}
 		if !isOwnerRepo(repo) {
@@ -9081,7 +9083,7 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 		owner, name := splitOwnerRepo(repo)
 		issues, err := issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, nums)
 		if err != nil {
-			log.Printf("WARN: resolveIssueStatesByKey: batch fetch failed for %s: %v", repo, err)
+			log.Printf("WARN: ResolveIssueStatesByKey: batch fetch failed for %s: %v", repo, err)
 			continue
 		}
 		for n, iss := range issues {

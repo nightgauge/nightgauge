@@ -1267,7 +1267,7 @@ type AutonomousScheduler struct {
 	// — the graph only builds nodes from project-board items (depgraph/
 	// builder.go), so a blockedBy/depends-on edge can point at an issue
 	// (commonly an epic) that was never added to any board (#306). Defaults to
-	// wrapping resolveIssueStatesByKey against a real IssueService;
+	// wrapping ResolveIssueStatesByKey against a real IssueService;
 	// overridable in tests without a real GitHub client. A nil func, or a nil
 	// return, means resolution is unavailable — callers must fail closed,
 	// never assume the dep is satisfied.
@@ -1448,7 +1448,7 @@ func NewAutonomousScheduler(
 	// Wire the default off-board dependency resolver. Tests override this
 	// field to inject a fake without requiring a real GitHub client (#306).
 	as.resolveDepStatesFn = func(ctx context.Context, keys []string) map[string]string {
-		return resolveIssueStatesByKey(ctx, gh.NewIssueService(as.ghClient), keys)
+		return ResolveIssueStatesByKey(ctx, gh.NewIssueService(as.ghClient), keys)
 	}
 
 	// Wire the board-wide post-merge backstop (#656). This is the SAME
@@ -4406,7 +4406,7 @@ func depKeyNamesNoRepository(depKey string) bool {
 //
 // A dep with NO node in g.Nodes is "dangling" (see rawAdjacency) and is
 // resolved against `resolved`, the batch lookup populated once per
-// prioritize() pass by resolveIssueStatesByKey:
+// prioritize() pass by ResolveIssueStatesByKey:
 //   - resolved[depKey] == "CLOSED" -> satisfied; keep scanning other deps.
 //   - resolved[depKey] == "OPEN"   -> BLOCKED. The blocker is real and open,
 //     it just isn't board-synced.
