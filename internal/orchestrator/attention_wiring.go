@@ -1747,6 +1747,52 @@ func BuildOutOfScopeBlocker(repo string, issue int, runID, stage string) attenti
 	}
 }
 
+// ProducerBoardStatusWriteFailed names the run-scoped producer for a project
+// board status write the extension could not make (#1501).
+const ProducerBoardStatusWriteFailed = "board-status-write-failed"
+
+// BuildBoardStatusWriteFailed constructs the card for a stage transition whose
+// board Status write failed on the extension path (#1501).
+//
+// EXTENSION-ONLY: the Go scheduler's board writes resolve the board through
+// ProjectService and already fail loudly in its own log; this card exists
+// because the extension's failures were a WARN in a session log nobody reads,
+// so the board silently drifted from the pipeline. Like the other raiseable
+// producers it carries no caller prose — the extension reports the condition
+// and the stage, and every word here is the builder's. The card is
+// informational: the run itself is unaffected, so there is no remedy verb to
+// offer, and `nightgauge doctor` names the persistent cause (`project_fields`).
+func BuildBoardStatusWriteFailed(repo string, issue int, runID, stage string) attention.DecisionRequest {
+	if stage == "" {
+		stage = "unknown"
+	}
+	return attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("%s:%s#%d", ProducerBoardStatusWriteFailed, repo, issue),
+		Kind:           attention.KindApprove,
+		Severity:       attention.SeverityFYI,
+		Title:          fmt.Sprintf("#%d: board status was not updated", issue),
+		Body: fmt.Sprintf(
+			"The run for #%d moved to stage `%s`, but its project board Status could not be "+
+				"written, so the board no longer shows where this issue is. The pipeline run "+
+				"itself is unaffected.\n\n"+
+				"Run `nightgauge doctor`: its `project_fields` check reports a board whose "+
+				"Status, Priority or Size field cannot be resolved from the repository's "+
+				"project, and `nightgauge project resolve --repo %s` shows which board the "+
+				"repository maps to. The session log carries the exact write error.",
+			issue, stage, repo),
+		Producer: ProducerBoardStatusWriteFailed,
+		Context: attention.Context{
+			Repo: repo, Issue: issue, RunID: runID, Stage: stage,
+			TraceRef: runTraceRef(runID),
+		},
+		Options: []attention.Option{
+			noopOption("acknowledged", "Acknowledged"),
+		},
+		DefaultAction: attention.ExpireNoop,
+		ExpiresAt:     expiryFromNow(48 * time.Hour),
+	}
+}
+
 // steerRootFor resolves the root a run-scoped artifact for `repo` belongs in:
 // the per-repo run root when the scheduler can resolve one, else the daemon's
 // launch root.

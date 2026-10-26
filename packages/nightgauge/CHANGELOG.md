@@ -56,6 +56,12 @@ and this project adheres to
   GitHub parent. The pr-create safety-net fallback opens its PR through the
   `nightgauge` binary, so it is authored by the configured identity and
   carries the pipeline marker (#2506).
+- **Board status writes no longer need `project.fields` in config (#1501).**
+  The extension resolves the board and its Status options from the repository's
+  project, so status sync works on every repository the scheduler can write. A
+  write that fails now raises an Action Center card instead of only a warning
+  in the session log.
+
 - **A failed run is moved to In review only when an open PR backs it
   (#1496).** The failure safety nets and the pr-create stage exit now write
   In review through `nightgauge project sync-status`, which refuses without an

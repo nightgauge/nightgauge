@@ -122,6 +122,15 @@ changelog, and the release workflow refuses a tag that does not.
   and autonomous dispatch stopped. Scheduler-held attention updates now run in the background
   (#2528).
 
+- **The VS Code extension's board status writes work without hand-copied field
+  IDs (#1501).** The extension resolves the board with
+  `nightgauge project resolve --repo` and reads the Status field and its
+  options from the board, the same way the scheduler does, caching the result per workspace and
+  repository. `project.fields` in `config.yaml` is no longer read by the
+  extension, and the "No project configuration found" failure is gone. A
+  status write that still fails raises a `board-status-write-failed` Action
+  Center card instead of only a log line, and `nightgauge doctor` reports a
+  board missing its Status, Priority or Size field (`project_fields`, NGD049).
 - **`scripts/ci-local.sh` no longer fails on a clean `main` when a pipeline
   stage runs it (#2524).** The gate passed its caller's environment to every
   step, and an extension-hosted stage exports three variables CI never has:

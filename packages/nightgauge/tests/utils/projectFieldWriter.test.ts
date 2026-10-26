@@ -7,6 +7,7 @@
  * @see Issue #1713 — original GraphQL project field write utility
  * @see Issue #2866 — server-side filter / cached projectItem ID lookup
  * @see Issue #2867 — cross-repo issue lookups
+ * @see Issue #1501 — board fields resolved from the board, not from config
  */
 
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
@@ -15,6 +16,7 @@ import {
   getProjectItemStatus,
   ensureIssueOnProject,
   clearConfigCache,
+  _testing,
 } from "../../src/utils/projectFieldWriter";
 import type { Logger } from "../../src/utils/logger";
 
@@ -32,7 +34,7 @@ vi.mock("child_process", () => {
         else resolve({ stdout, stderr });
       });
     });
-  return { exec: execMock };
+  return { exec: execMock, execFile: vi.fn() };
 });
 
 vi.mock("fs", () => ({
@@ -61,34 +63,37 @@ import { resolveConfigPath } from "../../src/utils/configPathResolver";
 const MOCK_CWD = "/test/workspace";
 const PROJECT_ID = "PVT_test_project";
 
+/** A repo config with a project number and no `project.fields` (#1501). */
 const MOCK_YAML_CONFIG = {
   owner: "TestOrg",
   repo: "test-repo",
-  project: {
-    number: 1,
-    id: PROJECT_ID,
-    fields: {
-      status: {
-        id: "PVTSSF_test_status",
-        options: {
-          backlog: "opt_backlog",
-          ready: "opt_ready",
-          "in-progress": "opt_in_progress",
-          "in-review": "opt_in_review",
-          done: "opt_done",
-        },
-      },
-      priority: {
-        id: "PVTSSF_test_priority",
-        options: { p0: "opt_p0", p1: "opt_p1", p2: "opt_p2" },
-      },
-      size: {
-        id: "PVTSSF_test_size",
-        options: { xs: "opt_xs", s: "opt_s", m: "opt_m", l: "opt_l", xl: "opt_xl" },
-      },
-    },
-  },
+  project: { number: 1 },
 };
+
+/** The board's single-select fields as `ProjectV2.fields` returns them. */
+const BOARD_FIELDS = [
+  {
+    id: "PVTSSF_test_status",
+    name: "Status",
+    options: [
+      { id: "opt_backlog", name: "Backlog" },
+      { id: "opt_ready", name: "Ready" },
+      { id: "opt_in_progress", name: "In progress" },
+      { id: "opt_in_review", name: "In review" },
+      { id: "opt_done", name: "Done" },
+    ],
+  },
+  { id: "PVTSSF_test_priority", name: "Priority", options: [{ id: "opt_p1", name: "P1" }] },
+  { id: "PVTSSF_test_size", name: "Size", options: [{ id: "opt_m", name: "M" }] },
+  {},
+];
+
+let boardFields: unknown[] = BOARD_FIELDS;
+const resolveExec = vi.fn();
+
+function resolvesTo(project: unknown) {
+  resolveExec.mockResolvedValue({ stdout: JSON.stringify(project) });
+}
 
 function createMockLogger(): Logger {
   return {
@@ -164,20 +169,34 @@ function contentNodeResponse(opts: {
   };
 }
 
+/**
+ * Answer `gh api graphql` calls in order. The board field-discovery query is
+ * answered out of band from `boardFields` and counted separately, so each
+ * test's sequence and call indexes name only issue lookups and mutations.
+ */
 function setupExecMockSequential(responses: unknown[]) {
   const execMock = exec as unknown as Mock;
   let callIndex = 0;
 
   execMock.mockImplementation((cmd: string, opts: unknown, callback?: Function) => {
-    if (typeof callback === "function") {
-      const response = responses[callIndex] ?? { data: {} };
-      callIndex++;
-      if (response instanceof Error) callback(response, "", "error");
-      else callback(null, JSON.stringify(response), "");
+    if (typeof callback !== "function") return;
+    if (isFieldQuery(cmd)) {
+      callback(null, JSON.stringify({ data: { node: { fields: { nodes: boardFields } } } }), "");
+      return;
     }
+    const response = responses[callIndex] ?? { data: {} };
+    callIndex++;
+    if (response instanceof Error) callback(response, "", "error");
+    else callback(null, JSON.stringify(response), "");
   });
 
-  return execMock;
+  const calls = () => execMock.mock.calls.filter((c) => !isFieldQuery(c[0] as string));
+  const fieldQueries = () => execMock.mock.calls.filter((c) => isFieldQuery(c[0] as string)).length;
+  return { calls, fieldQueries };
+}
+
+function isFieldQuery(cmd: string): boolean {
+  return cmd.includes("ProjectV2SingleSelectField { id name options");
 }
 
 // ============================================================================
@@ -191,6 +210,12 @@ describe("projectFieldWriter", () => {
     vi.clearAllMocks();
     clearConfigCache();
     logger = createMockLogger();
+    boardFields = BOARD_FIELDS;
+    resolvesTo({ number: 1, owner: "TestOrg", owner_type: "org", id: PROJECT_ID });
+    _testing.setBoardResolverDeps({
+      resolveBinary: async () => "/bin/nightgauge",
+      exec: resolveExec,
+    });
   });
 
   describe("updateProjectItemStatus", () => {
@@ -212,8 +237,76 @@ describe("projectFieldWriter", () => {
       });
     });
 
-    describe("config loading", () => {
-      it("fails when config.yaml is missing", async () => {
+    describe("board resolution (#1501)", () => {
+      it("resolves fields from the board with no project.fields in config", async () => {
+        setupConfigMocks();
+        const find = projectItemsResponse({ itemId: "PVTI_item42" });
+        const update = {
+          data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "PVTI_item42" } } },
+        };
+        const execMock = setupExecMockSequential([find, update]);
+
+        const result = await updateProjectItemStatus(42, "In review", MOCK_CWD, logger);
+
+        expect(result).toEqual({ success: true });
+        expect(resolveExec).toHaveBeenCalledWith(
+          "/bin/nightgauge",
+          ["project", "resolve", "--repo", "TestOrg/test-repo", "--json"],
+          MOCK_CWD
+        );
+        expect(execMock.fieldQueries()).toBe(1);
+        const cmd = execMock.calls()[1][0] as string;
+        expect(cmd).toContain("PVTSSF_test_status");
+        expect(cmd).toContain("opt_in_review");
+        expect(cmd).toContain(PROJECT_ID);
+      });
+
+      it("caches the board: a second transition issues no discovery", async () => {
+        setupConfigMocks();
+        const find = projectItemsResponse({ itemId: "PVTI_item42" });
+        const update = {
+          data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "PVTI_item42" } } },
+        };
+        const execMock = setupExecMockSequential([find, update, update]);
+
+        await updateProjectItemStatus(42, "Ready", MOCK_CWD, logger);
+        const second = await updateProjectItemStatus(42, "In progress", MOCK_CWD, logger);
+
+        expect(second.success).toBe(true);
+        expect(resolveExec).toHaveBeenCalledTimes(1);
+        expect(execMock.fieldQueries()).toBe(1);
+      });
+
+      it("fails with an unresolvable-board error when no project is mapped", async () => {
+        setupConfigMocks();
+        resolveExec.mockRejectedValue(
+          Object.assign(new Error("exit 1"), { stderr: "no project mapped for TestOrg/test-repo" })
+        );
+        const execMock = setupExecMockSequential([]);
+
+        const result = await updateProjectItemStatus(42, "Ready", MOCK_CWD, logger);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBe(
+          "Board fields unresolvable for TestOrg/test-repo: no project mapped for TestOrg/test-repo"
+        );
+        expect(execMock.calls()).toHaveLength(0);
+      });
+
+      it("fails when the board has no Status field, and does not cache the failure", async () => {
+        setupConfigMocks();
+        boardFields = [BOARD_FIELDS[1]];
+        setupExecMockSequential([]);
+
+        const first = await updateProjectItemStatus(42, "Ready", MOCK_CWD, logger);
+        expect(first.success).toBe(false);
+        expect(first.error).toContain("has no Status field");
+
+        await updateProjectItemStatus(42, "Ready", MOCK_CWD, logger);
+        expect(resolveExec).toHaveBeenCalledTimes(2);
+      });
+
+      it("fails when no repository is named and config has none", async () => {
         (resolveConfigPath as Mock).mockResolvedValue({
           path: `${MOCK_CWD}/.nightgauge/config.yaml`,
           isLegacy: false,
@@ -222,54 +315,17 @@ describe("projectFieldWriter", () => {
 
         const result = await updateProjectItemStatus(42, "Ready", MOCK_CWD, logger);
         expect(result.success).toBe(false);
-        expect(result.error).toContain("No project configuration found");
+        expect(result.error).toContain("Board fields unresolvable");
+        expect(resolveExec).not.toHaveBeenCalled();
       });
 
-      it("fails when config.yaml has no field data", async () => {
-        setupConfigMocks({ owner: "TestOrg", repo: "test-repo", project: { number: 1 } });
-        const result = await updateProjectItemStatus(42, "Ready", MOCK_CWD, logger);
-        expect(result.success).toBe(false);
-      });
+      it("resolves the board of the override repository", async () => {
+        setupConfigMocks();
+        setupExecMockSequential([projectItemsResponse({ itemId: "PVTI_x" }), { data: {} }]);
 
-      it("loads the flat field schema (project.*_field_id + field_options) — #3773", async () => {
-        // Mirrors the acmeapp config layout that previously warned
-        // "No project configuration found" despite being fully populated.
-        setupConfigMocks({
-          owner: "TestOrg",
-          repo: "test-repo",
-          project: {
-            number: 1,
-            id: PROJECT_ID,
-            status_field_id: "PVTSSF_test_status",
-            priority_field_id: "PVTSSF_test_priority",
-            size_field_id: "PVTSSF_test_size",
-            field_options: {
-              status: {
-                backlog: "opt_backlog",
-                ready: "opt_ready",
-                in_progress: "opt_in_progress",
-                in_review: "opt_in_review",
-                done: "opt_done",
-              },
-              priority: { p0: "opt_p0", p1: "opt_p1", p2: "opt_p2" },
-              size: { xs: "opt_xs", s: "opt_s", m: "opt_m", l: "opt_l", xl: "opt_xl" },
-            },
-          },
-        });
+        await updateProjectItemStatus(7, "Ready", MOCK_CWD, logger, "OtherOrg/other-repo");
 
-        const find = projectItemsResponse({ itemId: "PVTI_item42" });
-        const update = {
-          data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "PVTI_item42" } } },
-        };
-        const execMock = setupExecMockSequential([find, update]);
-
-        // snake_case "in_review" must remap to the "In review" runtime key.
-        const result = await updateProjectItemStatus(42, "In review", MOCK_CWD, logger);
-        expect(result.success).toBe(true);
-        const cmd = execMock.mock.calls[1][0] as string;
-        expect(cmd).toContain("PVTSSF_test_status");
-        expect(cmd).toContain("opt_in_review");
-        expect(cmd).toContain(PROJECT_ID);
+        expect(resolveExec.mock.calls[0][1]).toContain("OtherOrg/other-repo");
       });
     });
 
@@ -288,7 +344,7 @@ describe("projectFieldWriter", () => {
 
         expect(result.success).toBe(true);
         // Two calls: lookup + mutation. NO pagination.
-        expect(execMock).toHaveBeenCalledTimes(2);
+        expect(execMock.calls()).toHaveLength(2);
         expect(logger.info).toHaveBeenCalledWith(
           "Updated project board status",
           expect.objectContaining({ issueNumber: 42, status: "In progress" })
@@ -307,7 +363,7 @@ describe("projectFieldWriter", () => {
 
         await updateProjectItemStatus(42, "Done", MOCK_CWD, logger);
 
-        const mutationCall = execMock.mock.calls[1];
+        const mutationCall = execMock.calls()[1];
         const cmd = mutationCall[0] as string;
         expect(cmd).toContain("PVTSSF_test_status");
         expect(cmd).toContain("opt_done");
@@ -373,7 +429,7 @@ describe("projectFieldWriter", () => {
 
         expect(result.success).toBe(true);
         // The lookup query must reference the override repo, not the config default.
-        const lookupCall = execMock.mock.calls[0];
+        const lookupCall = execMock.calls()[0];
         const lookupBody = lookupCall[0] as string;
         expect(lookupBody).toContain("acme");
         expect(lookupBody).toContain("platform");
@@ -390,7 +446,7 @@ describe("projectFieldWriter", () => {
 
         await updateProjectItemStatus(42, "Ready", MOCK_CWD, logger);
 
-        const lookupBody = execMock.mock.calls[0][0] as string;
+        const lookupBody = execMock.calls()[0][0] as string;
         expect(lookupBody).toContain("TestOrg");
         expect(lookupBody).toContain("test-repo");
       });
@@ -406,7 +462,7 @@ describe("projectFieldWriter", () => {
 
         await updateProjectItemStatus(42, "Ready", MOCK_CWD, logger, "not-a-repo-string");
 
-        const lookupBody = execMock.mock.calls[0][0] as string;
+        const lookupBody = execMock.calls()[0][0] as string;
         expect(lookupBody).toContain("TestOrg");
       });
     });
@@ -425,7 +481,7 @@ describe("projectFieldWriter", () => {
         await updateProjectItemStatus(42, "Ready", MOCK_CWD, logger);
         await updateProjectItemStatus(42, "In progress", MOCK_CWD, logger);
 
-        expect(execMock).toHaveBeenCalledTimes(3);
+        expect(execMock.calls()).toHaveLength(3);
       });
 
       it("clearConfigCache also clears the projectItem ID cache", async () => {
@@ -442,7 +498,7 @@ describe("projectFieldWriter", () => {
         clearConfigCache();
         await updateProjectItemStatus(42, "In progress", MOCK_CWD, logger);
 
-        expect(execMock).toHaveBeenCalledTimes(4);
+        expect(execMock.calls()).toHaveLength(4);
       });
     });
 
@@ -521,7 +577,7 @@ describe("projectFieldWriter", () => {
       const result = await getProjectItemStatus(714, MOCK_CWD, logger, "acme/platform");
 
       expect(result).toBe("Done");
-      const body = execMock.mock.calls[0][0] as string;
+      const body = execMock.calls()[0][0] as string;
       expect(body).toContain("platform");
     });
 
@@ -612,7 +668,7 @@ describe("projectFieldWriter", () => {
       const result = await ensureIssueOnProject(714, MOCK_CWD, logger, "acme/platform");
       expect(result).toBe("PVTI_platform_existing");
 
-      const body = execMock.mock.calls[0][0] as string;
+      const body = execMock.calls()[0][0] as string;
       expect(body).toContain("platform");
     });
 
@@ -625,43 +681,6 @@ describe("projectFieldWriter", () => {
 
       const result = await ensureIssueOnProject(714, MOCK_CWD, logger);
       expect(result).toBe("PVTI_pr714");
-    });
-  });
-
-  describe("multi-project config", () => {
-    it("updates status across all configured projects", async () => {
-      setupConfigMocks({
-        owner: "TestOrg",
-        repo: "test-repo",
-        project: { id: PROJECT_ID, fields: MOCK_YAML_CONFIG.project.fields },
-        projects: [
-          {
-            name: "Dev Board",
-            owner: "TestOrg",
-            repo: "test-repo",
-            id: "PVT_dev_board",
-            default: true,
-          },
-          {
-            name: "Roadmap",
-            owner: "TestOrg",
-            repo: "test-repo",
-            id: "PVT_roadmap",
-            default: false,
-          },
-        ],
-      });
-
-      const find1 = projectItemsResponse({ itemId: "PVTI_dev42", matchProjectId: "PVT_dev_board" });
-      const find2 = projectItemsResponse({ itemId: "PVTI_road42", matchProjectId: "PVT_roadmap" });
-      const update = {
-        data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "PVTI_x" } } },
-      };
-
-      setupExecMockSequential([find1, update, find2, update]);
-
-      const result = await updateProjectItemStatus(42, "Done", MOCK_CWD, logger);
-      expect(result.success).toBe(true);
     });
   });
 });

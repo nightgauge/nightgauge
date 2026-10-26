@@ -203,8 +203,8 @@ Create the pipeline directory structure and `.gitignore`, then generate
 
 ### Phase 6.5: Verify field IDs in config.yaml
 
-Verify `project.id` and `project.fields` are present in `config.yaml` — without
-them every pipeline stage skips board status sync.
+Verify `project.id` and `project.fields` are present in `config.yaml`. Board
+status sync resolves fields from the board and does not depend on them (#1501).
 
 > **Read `_includes/config-generation.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
