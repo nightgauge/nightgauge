@@ -8,6 +8,12 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Phase 5 epic riders `MISSING_EPIC_FALSIFIER` and `MISSING_EPIC_DEMAND`
+  (WARNING, never auto-fixed, never CRITICAL) flag a `type:epic` whose
+  `## Summary` lacks a non-empty `Falsifier:` or `Demand:` line (#105).
+
 ### Changed
 
 - Per-clone pipeline state, plans, retros and logs are read at

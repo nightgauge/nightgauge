@@ -174,3 +174,23 @@ func TestGenerateEpicBody_SatisfiesHeadingContract(t *testing.T) {
 		c.assertBody(t, "epic", GenerateEpicBody(epic))
 	}
 }
+
+// TestGenerateEpicBody_CarriesFalsifierAndDemand pins the issue-audit epic
+// riders MISSING_EPIC_FALSIFIER / MISSING_EPIC_DEMAND against machine-authored
+// epics: both lines must sit inside `## Summary` with content (#105).
+func TestGenerateEpicBody_CarriesFalsifierAndDemand(t *testing.T) {
+	body := GenerateEpicBody(&Epic{Title: "security (repo-b)", Dimension: "security", Repository: "repo-b",
+		Findings: []*AuditFinding{{ID: "abc", Category: "SEC", Description: "leak", Severity: "high"}}})
+	start := strings.Index(body, "## Summary\n")
+	end := strings.Index(body, "\n## Sub-Issues")
+	if start < 0 || end < start {
+		t.Fatalf("body lacks ## Summary before ## Sub-Issues:\n%s", body)
+	}
+	summary := body[start:end]
+	for _, label := range []string{"Falsifier", "Demand"} {
+		re := regexp.MustCompile(`(?m)^[ \t]*(-[ \t]+)?(\*\*)?` + label + `(\*\*)?:(\*\*)?[ \t]*[^[:space:]*]`)
+		if !re.MatchString(summary) {
+			t.Errorf("## Summary lacks a non-empty %s: line:\n%s", label, summary)
+		}
+	}
+}

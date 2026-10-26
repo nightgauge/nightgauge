@@ -157,14 +157,16 @@ check and had to author one for each. The bar is
 per acceptance criterion, the test or command, the input, and the expected
 observable output.
 
-| Finding type                   | Severity                                    | Trigger                                                                                  |
-| ------------------------------ | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `MISSING_REQUIRED_HEADING`     | CRITICAL in `--manifest` mode, else WARNING | A heading required by the issue's type is absent — see [Severity Tiers](#severity-tiers) |
-| `EMPTY_REQUIRED_HEADING`       | WARNING                                     | A required heading is present but its body is empty                                      |
-| `WEAK_VERIFICATION`            | WARNING                                     | `## Verification` names no test, command, or file — "add tests" is not verification      |
-| `SECURITY_SURFACE_UNADDRESSED` | WARNING                                     | Body touches auth/secrets/endpoints/retries/spawn/shell/uploads with no security AC      |
-| `MISSING_SPIKE_RECS_BLOCK`     | CRITICAL                                    | Spike issue is missing the `yaml recommendations` block per `docs/SPIKE_CONTRACT.md`     |
-| `OVERSIZED_SCOPE`              | WARNING                                     | Issue bundles many independent units of work into a single ticket — see below            |
+| Finding type                   | Severity                                    | Trigger                                                                                     |
+| ------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `MISSING_REQUIRED_HEADING`     | CRITICAL in `--manifest` mode, else WARNING | A heading required by the issue's type is absent — see [Severity Tiers](#severity-tiers)    |
+| `EMPTY_REQUIRED_HEADING`       | WARNING                                     | A required heading is present but its body is empty                                         |
+| `WEAK_VERIFICATION`            | WARNING                                     | `## Verification` names no test, command, or file — "add tests" is not verification         |
+| `SECURITY_SURFACE_UNADDRESSED` | WARNING                                     | Body touches auth/secrets/endpoints/retries/spawn/shell/uploads with no security AC         |
+| `MISSING_EPIC_FALSIFIER`       | WARNING                                     | `type:epic` `## Summary` has no non-empty `Falsifier:` line — no result would stop the work |
+| `MISSING_EPIC_DEMAND`          | WARNING                                     | `type:epic` `## Summary` has no non-empty `Demand:` line — nobody is recorded as asking     |
+| `MISSING_SPIKE_RECS_BLOCK`     | CRITICAL                                    | Spike issue is missing the `yaml recommendations` block per `docs/SPIKE_CONTRACT.md`        |
+| `OVERSIZED_SCOPE`              | WARNING                                     | Issue bundles many independent units of work into a single ticket — see below               |
 
 #### `OVERSIZED_SCOPE` heuristic
 
