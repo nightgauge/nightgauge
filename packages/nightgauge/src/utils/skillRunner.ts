@@ -6974,7 +6974,7 @@ function runStageSkillHeadlessImpl(
   // the background returns its tool_result at once, which drops it from
   // `inFlightToolCallIds` while the command keeps running; a stage waiting on
   // it went cold on every clock and was killed mid-`ci-local.sh`.
-  const backgroundTaskIds = new Set<string>();
+  const backgroundTaskIds = new Map<string, number>();
 
   // A stage declaring a long external process it is waiting on (#1488).
   //
@@ -7206,7 +7206,10 @@ function runStageSkillHeadlessImpl(
       }
 
       if (applyBackgroundTaskEvent(line, backgroundTaskIds)) {
-        progressMonitor.setBackgroundTasks(backgroundTaskIds.size);
+        progressMonitor.setBackgroundTasks(
+          backgroundTaskIds.size,
+          backgroundTaskIds.size > 0 ? Math.min(...backgroundTaskIds.values()) : null
+        );
       }
 
       // Detect CI progress from wait-for-ci-checks.sh (Issue #902)

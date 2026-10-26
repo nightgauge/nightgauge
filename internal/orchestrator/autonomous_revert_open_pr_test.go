@@ -92,7 +92,7 @@ func TestRevertFailedIssueStatus_OpenPRMovesToInReviewNotReady(t *testing.T) {
 		map[int]string{42: "feat/1-x"},
 	)
 
-	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1)
+	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "")
 
 	got := buf.String()
 	if strings.Contains(got, "back to Ready") {
@@ -116,7 +116,7 @@ func TestRevertFailedIssueStatus_NoOwnPRStillRevertsToReady(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t, map[int]string{43: "feat/2-other", 44: "feat/10-ten"})
 
-	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1)
+	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "")
 
 	got := buf.String()
 	if !strings.Contains(got, "back to Ready") {
@@ -137,7 +137,7 @@ func TestRevertFailedIssueStatus_ForkPRDoesNotBackTheIssue(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t, map[int]string{42: "fork:feat/1-x"})
 
-	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1)
+	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "")
 
 	got := buf.String()
 	if strings.Contains(got, "move-to-in-review:") || strings.Contains(got, "PR #42") {
@@ -195,7 +195,7 @@ func TestRevertFailedIssueStatus_PRQueryFailureLeavesStatusUnchanged(t *testing.
 			buf := withCapturedLog(t)
 			as, writes, _ := revertFixture(t, pages...)
 
-			as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1)
+			as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, "")
 
 			if n := writes.Load(); n != 0 {
 				t.Errorf("board requests = %d, want 0: no status may be written without the PR answer", n)
@@ -208,10 +208,11 @@ func TestRevertFailedIssueStatus_PRQueryFailureLeavesStatusUnchanged(t *testing.
 	}
 }
 
-// The whole path: a terminal kind that can end a run in pr-merge, after
-// pr-create opened the PR, must not send the issue to Ready.
+// The whole path: a non-transient terminal kind that can end a run in
+// pr-merge, after pr-create opened the PR, must not send the issue to Ready.
+// Transient kinds go to Ready on purpose (#2554), covered below.
 func TestOnPipelineComplete_FailureAfterPRCreate_DoesNotRevertToReady(t *testing.T) {
-	for _, kind := range []string{TerminalKindStallKill, TerminalKindOperatorStop, TerminalKindStreamIdleTimeout, ""} {
+	for _, kind := range []string{TerminalKindOperatorStop, ""} {
 		t.Run("kind="+kind, func(t *testing.T) {
 			buf := withCapturedLog(t)
 			as, _, _ := revertFixture(t, map[int]string{42: "feat/1-x"})
@@ -300,7 +301,7 @@ func TestRevertFailedIssueStatus_MergedPROnlyEndsReady(t *testing.T) {
 	buf := withCapturedLog(t)
 	as, writes, _ := revertFixture(t, map[int]string{})
 
-	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 312)
+	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 312, "")
 
 	got := buf.String()
 	if !strings.Contains(got, "revert-status:") || !strings.Contains(got, "back to Ready") {
@@ -335,5 +336,85 @@ func TestMoveIssueToInReview_RequiresOpenPREvidence(t *testing.T) {
 	as.moveIssueToInReview(as.backgroundContext(), "O/a", 1, 42)
 	if writes.Load() == 0 {
 		t.Error("an open PR's In review move was not attempted")
+	}
+}
+
+// A transient failure on an open PR returns the issue to Ready (#2554): the
+// retry backoff gates the re-dispatch and the resume path runs pr-merge on the
+// PR it already has. #1501's runaway kill mid-gate otherwise sat in In review
+// with nothing left to re-run it.
+func TestRevertFailedIssueStatus_TransientKindWithOpenPRMovesToReady(t *testing.T) {
+	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindApiOverloaded} {
+		t.Run(kind, func(t *testing.T) {
+			buf := withCapturedLog(t)
+			as, writes, _ := revertFixture(t, map[int]string{42: "feat/1-x"})
+
+			as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, kind)
+
+			got := buf.String()
+			if strings.Contains(got, "move-to-in-review:") {
+				t.Errorf("a transient %s on an open PR was moved to In review: %q", kind, got)
+			}
+			if !strings.Contains(got, "back to Ready after transient "+kind) || !strings.Contains(got, "open PR #42") {
+				t.Errorf("want the Ready move naming %s and PR #42; got log: %q", kind, got)
+			}
+			if writes.Load() == 0 {
+				t.Error("no board write was attempted")
+			}
+		})
+	}
+}
+
+// Non-transient kinds keep the #1707 behaviour: an open PR means In review.
+func TestRevertFailedIssueStatus_NonTransientKindWithOpenPRStaysInReview(t *testing.T) {
+	for _, kind := range []string{TerminalKindOperatorStop, TerminalKindValidationFailed, ""} {
+		t.Run(kind, func(t *testing.T) {
+			buf := withCapturedLog(t)
+			as, _, _ := revertFixture(t, map[int]string{42: "feat/1-x"})
+
+			as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, kind)
+
+			got := buf.String()
+			if strings.Contains(got, "Ready after transient") {
+				t.Errorf("non-transient %q on an open PR was moved toward Ready: %q", kind, got)
+			}
+			if !strings.Contains(got, "move-to-in-review:") {
+				t.Errorf("want the In review move for %q; got log: %q", kind, got)
+			}
+		})
+	}
+}
+
+// The whole path for #1501: a runaway kill in a resumed pr-merge takes the
+// stall-kill route (fixed backoff, no lifetime charge) and returns the issue to
+// Ready on top of its open PR, where the resume path re-runs pr-merge (#2554).
+func TestOnPipelineComplete_TransientFailureAfterPRCreate_RevertsToReady(t *testing.T) {
+	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindStreamIdleTimeout} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			buf := withCapturedLog(t)
+			as, _, _ := revertFixture(t, map[int]string{42: "feat/1-x"})
+			as.state.Running = []RunningItem{{Repo: "O/a", Number: 1, Title: "t"}}
+
+			as.onPipelineComplete("O/a", 1, false, false, kind, "", false)
+			as.waitBackground()
+
+			got := buf.String()
+			if strings.Contains(got, "move-to-in-review:") {
+				t.Errorf("transient %q after pr-create was moved to In review: %q", kind, got)
+			}
+			if !strings.Contains(got, "Ready after transient "+kind) {
+				t.Errorf("want the Ready move after transient %s; got log: %q", kind, got)
+			}
+			as.mu.Lock()
+			_, planned := as.retryBackoff["O/a#1"]
+			lifetime := as.state.LifetimeIssueFailures["O/a#1"]
+			as.mu.Unlock()
+			if !planned {
+				t.Errorf("no retry plan scheduled for transient %s", kind)
+			}
+			if lifetime != 0 {
+				t.Errorf("transient %s charged %d lifetime failure(s), want 0", kind, lifetime)
+			}
+		})
 	}
 }

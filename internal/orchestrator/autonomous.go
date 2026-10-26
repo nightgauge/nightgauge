@@ -596,6 +596,30 @@ const streamIdleTimeoutBackoff = 1 * time.Hour
 // repeated infrastructure stalls cannot permanently block a valid issue.
 const stallKillBackoff = 30 * time.Minute
 
+// isTransientRevertKind reports whether a terminal failure kind is an
+// infrastructure event the retry backoff recovers from, not a defect of the
+// issue or a stop someone asked for. revertFailedIssueStatus returns such an
+// issue to Ready even when its own PR is open (#2554): the re-dispatch resumes
+// at pr-merge on that PR. operator_stop is deliberately absent — the operator
+// asked the run to end.
+func isTransientRevertKind(kind string) bool {
+	switch kind {
+	case TerminalKindStallKill,
+		TerminalKindRunawayProgress,
+		TerminalKindStreamIdleTimeout,
+		TerminalKindRateLimitQuotaExhausted,
+		TerminalKindApiOverloaded,
+		TerminalKindApiConnectionLost,
+		TerminalKindModelStreamStalled,
+		TerminalKindGitHubRateLimited,
+		TerminalKindGitHubQuotaLow,
+		TerminalKindGitHubNetworkOutage,
+		TerminalKindNetworkUnavailable:
+		return true
+	}
+	return false
+}
+
 // apiOverloadedBackoff is the per-issue backoff applied when the Anthropic API
 // returns a 529 "Overloaded" response (TerminalKindApiOverloaded). Overload is
 // a brief capacity blip that clears within minutes — unlike a depleted
@@ -5288,7 +5312,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: github-quota-low for %s — environmental, retry after %s (no lifetime-cap increment)",
 				key, resetAt.UTC().Format(time.RFC3339))
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5322,7 +5346,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: github-network-outage for %s — environmental, retry after %s (no lifetime-cap increment, no pause)",
 				key, resetAt.UTC().Format(time.RFC3339))
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5394,7 +5418,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — environmental failure, retry in %v (no lifetime-cap increment)",
 				label, key, streamIdleTimeoutBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			// Trigger an immediate re-scan so other unblocked items proceed
 			// while this one waits out its backoff.
 			select {
@@ -5444,7 +5468,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			return
 		}
 
@@ -5457,14 +5481,14 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// this branch, two stall-kills on the same issue exhaust
 		// MaxLifetimeFailuresPerIssue (=2) and require manual triage every
 		// time — which defeats the purpose of autonomous mode.
-		if terminalFailureKind == TerminalKindStallKill {
+		if terminalFailureKind == TerminalKindStallKill || terminalFailureKind == TerminalKindRunawayProgress {
 			as.recordFailureLocked(repo, issue, title, now,
 				"stall-killed (transient) — will retry after backoff", terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind, "stage stalled and was killed", time.Now().Add(stallKillBackoff))
 			log.Printf("autonomous: stall-kill for %s — transient, retry in %v (no lifetime-cap increment)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5534,7 +5558,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 					delete(as.retryBackoff, key)
 				}
 				as.persistStateLocked()
-				as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+				as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 				select {
 				case as.rescanCh <- struct{}{}:
 				default:
@@ -5554,7 +5578,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — transient, retry in %v (attempt %d, no lifetime-cap increment, no pause)",
 				terminalFailureKind, key, backoff, priorAttempts+1)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5591,7 +5615,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: adapter_auth_failed for %s — retryable infra, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5638,7 +5662,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				log.Printf("autonomous: permission_denied for %s exceeded %d consecutive denials — held for an operator, no lifetime-cap increment",
 					key, permissionDeniedMaxAttempts)
 				as.persistStateLocked()
-				as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+				as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 				select {
 				case as.rescanCh <- struct{}{}:
 				default:
@@ -5657,7 +5681,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: permission_denied for %s — retryable harness fault, retry in %v (attempt %d, no lifetime-cap increment, no cascade feed, no pause)",
 				key, permissionDeniedBackoff, priorAttempts+1)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5686,7 +5710,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: model_unavailable for %s — environmental, retry in %v (no lifetime-cap increment, no pause)",
 				key, streamIdleTimeoutBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5733,7 +5757,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: network_unavailable for %s — environmental, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5762,7 +5786,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				terminalFailureKind, key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5791,7 +5815,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: validation_inconclusive for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5825,7 +5849,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s#%d blocked-dependency deferral (non-failure) — board → Ready, retry in %v (no lifetime-cap increment, no pause) — %s",
 				repo, issue, blockedDependencyBackoff, detail)
 			as.persistStateLocked()
-			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -6210,7 +6234,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// idempotent — MoveStatus to Ready is a no-op if the issue is already
 		// at Ready (e.g., terminal kill before status moved). Runs in a
 		// goroutine to avoid holding as.mu during a network call.
-		as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+		as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 	}
 
 	// Record completion with safety rails (tokens are tracked via AddTokensSpent)
@@ -6274,7 +6298,15 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 // says. An unanswered PR query reverts
 // nothing: the issue is left where it is, which a human can see and recover,
 // rather than in Ready.
-func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, repo string, issue int) {
+//
+// A TRANSIENT kind on an open PR is the exception (#2554): it goes to Ready,
+// not In review. The run died on infrastructure (a runaway kill mid-gate, a
+// stall, a quota or network blip), the per-issue retry backoff already gates
+// the re-dispatch, and an open PR now resumes at pr-merge on that same PR
+// (#2541/#2550/#2544) rather than opening a second one. In review had no
+// re-dispatch path for a PR that is neither BEHIND nor DIRTY, so #1501 sat
+// there with nothing left to run it.
+func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, repo string, issue int, kind string) {
 	owner, repoName := splitOwnerRepo(repo)
 	var projectNum int
 	var ownerType gh.OwnerType
@@ -6299,6 +6331,17 @@ func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, r
 		log.Printf("autonomous: revert-status: NOT moving %s#%d to Ready after pipeline failure — could not list the repository's open PRs (%v), "+
 			"so an open PR of its own may back it; status left unchanged (move it to Ready by hand once no PR backs it)",
 			repo, issue, err)
+		return
+	}
+	if found && isTransientRevertKind(kind) {
+		projSvc := as.projectService(owner, projectNum, ownerType)
+		if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "Ready"); err != nil {
+			log.Printf("autonomous: revert-status: failed to move %s#%d back to Ready after transient %s (open PR #%d): %v",
+				repo, issue, kind, pr, err)
+			return
+		}
+		log.Printf("autonomous: revert-status: moved %s#%d → Ready after transient %s (open PR #%d; re-dispatch after backoff resumes at pr-merge)",
+			repo, issue, kind, pr)
 		return
 	}
 	if found {
