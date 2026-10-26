@@ -93,6 +93,9 @@ const (
 	TerminalKindDevBuildVerificationFailed  = "dev_build_verification_failed"
 	TerminalKindDevTestsFailed              = "dev_tests_failed"
 	TerminalKindPrMergeLookupFailed         = "pr_merge_lookup_failed"
+	// TerminalKindNotPipelineActionable: FeaturePlanningGate's publication
+	// boundary backstop (#2562) — the deliverable needs an owner decision.
+	TerminalKindNotPipelineActionable = "not_pipeline_actionable"
 )
 
 // GateResult is the in-process value returned by a StageGate.Verify call.

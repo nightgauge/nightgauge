@@ -69,6 +69,18 @@ changelog, and the release workflow refuses a tag that does not.
   raises coverage cards for repos the manifest already lists, and when no
   manifest exists the action fails with an error naming every path searched.
 
+- **A publication-boundary denial parks one issue instead of halting the
+  repository (#2562).** feature-planning now checks every planned new path with
+  `nightgauge gate check-publication` (backed by the new
+  `scripts/publication-boundary-check.py --classify`), and `FeaturePlanningGate`
+  fails a denied or unclassified path as `not_pipeline_actionable`. When
+  ci-local's `publication boundary` step rejects a path the change adds,
+  feature-validate emits `NOT_PIPELINE_ACTIONABLE`. The issue is labelled
+  `owner-action` and parked for an owner publication decision, and the queue
+  keeps running. `scripts/ci-local.sh` also runs `npm ci` before its first step
+  when `node_modules` is missing or stale, so a fresh worktree's first run no
+  longer fails on missing dependencies.
+
 - **Routing accuracy now measures the model feature-dev actually dispatches on
   (#2537).** The learning corpus compared feature-dev's served model against the
   router's run-wide tier (`dev_model`), which the feature-dev stage default
