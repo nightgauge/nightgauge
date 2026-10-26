@@ -147,7 +147,8 @@ func integrateEpicWith(ctx context.Context, gitSvc *git.Service, prs epicPRMerge
 	}
 	if err := prs.MergeEpicPR(ctx, ref.Owner, ref.Repo, pr.PRNodeID, branch); err != nil {
 		var mq *MergeQueueError
-		if errors.As(err, &mq) && mq.Kind == MergeQueueTimeout {
+		if errors.As(err, &mq) && (mq.Kind == MergeQueueTimeout || mq.Kind == MergeQueueNotReady) {
+			// Still settling (#2584): retried on the next cycle.
 			res.Outcome = IntegrationPending
 		} else if errors.As(err, &mq) {
 			res.Outcome = IntegrationCIFailed

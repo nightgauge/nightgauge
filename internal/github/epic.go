@@ -935,9 +935,12 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 		}
 		// integration.Error is raw git/exec text that can carry remote URLs and
 		// local paths; it stays in the result and attention card, never in a
-		// public issue comment.
-		if err := issueSvc.AddComment(ctx, epicIssue.NodeID, msg); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to add comment to %s: %v\n", ref, err)
+		// public issue comment. A pending integration retries every cycle,
+		// so only a blocked one comments (#2584).
+		if integration.Blocked() {
+			if err := issueSvc.AddComment(ctx, epicIssue.NodeID, msg); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to add comment to %s: %v\n", ref, err)
+			}
 		}
 		status := "error"
 		if integration.Outcome == IntegrationPending {

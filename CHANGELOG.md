@@ -95,6 +95,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`epic complete` no longer enqueues the epic PR before GitHub has computed
+  its mergeability (#2584).** Every merge-queue enqueue now waits, within the 15-minute CI
+  budget, until the PR is mergeable and its checks are green. A PR that is still
+  settling is reported as `integration_pending` and retried without a new epic
+  comment; red checks still report `integration_ci_failed` and name the failing
+  checks.
+
 - **An architecture-approval pause is held for a human instead of being booked
   as an operator stop (#2577).** A run that halted at the approval gate after
   `autonomous stop` was rewritten to `operator_stop`, reverted to Ready with no

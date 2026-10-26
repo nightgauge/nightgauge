@@ -115,7 +115,7 @@ const (
 	// DefaultMainCheckPollInterval matches the CI wait in internal/github/ci.go.
 	DefaultMainCheckPollInterval = 30 * time.Second
 	// DefaultMainCheckNoCheckGrace matches the pr-merge runner's zero-check
-	// window (#1027): DefaultCINoCheckGracePolls x DefaultCIPollInterval.
+	// window (#1027): stages.DefaultCINoCheckGracePolls x github.DefaultCIPollInterval.
 	DefaultMainCheckNoCheckGrace = 2 * time.Minute
 )
 

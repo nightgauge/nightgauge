@@ -45,11 +45,43 @@ const (
 	DefaultMergeQueueDequeueGrace = 3
 )
 
+// MergeableUnknown is GitHub's "I have not computed this yet" answer for a
+// pull request's `mergeable` field. It is returned for the first seconds after
+// a push or a PR creation.
+const MergeableUnknown = "UNKNOWN"
+
+// DefaultMergeabilityPolls / DefaultMergeabilityPollInterval bound the
+// pr-merge stage's wait for GitHub to compute mergeability (#1933).
+//
+// Its own budget, deliberately short: mergeability resolves in seconds, unlike
+// CI, which takes minutes and gets the far larger CI budget below. A long
+// budget would delay the punt on a PR whose mergeability never resolves.
+const (
+	DefaultMergeabilityPolls        = 10
+	DefaultMergeabilityPollInterval = 2 * time.Second
+)
+
+// DefaultCIPollInterval / DefaultCIPollMax are the CI-wait budget (#297):
+// 30 × 30s = 15 min. The pr-merge stage waits on CI with it, and the merge
+// queue's readiness wait (#2584) is bounded by the same total.
+const (
+	DefaultCIPollInterval = 30 * time.Second
+	DefaultCIPollMax      = 30
+)
+
 // MergeQueueWaitOptions bounds WaitForMergeQueue. Zero fields take defaults.
 type MergeQueueWaitOptions struct {
 	Timeout      time.Duration
 	PollInterval time.Duration
 	DequeueGrace int
+	// ReadyTimeout and ReadyPollInterval bound the pre-enqueue readiness wait
+	// (#2584). ReadyTimeout defaults to DefaultCIPollInterval x
+	// DefaultCIPollMax; ReadyPollInterval, the poll spacing once mergeability
+	// is known, defaults to DefaultCIPollInterval. While mergeability is
+	// UNKNOWN the wait polls at the shorter of it and
+	// DefaultMergeabilityPollInterval.
+	ReadyTimeout      time.Duration
+	ReadyPollInterval time.Duration
 }
 
 func (o MergeQueueWaitOptions) withDefaults() MergeQueueWaitOptions {
@@ -61,6 +93,12 @@ func (o MergeQueueWaitOptions) withDefaults() MergeQueueWaitOptions {
 	}
 	if o.DequeueGrace <= 0 {
 		o.DequeueGrace = DefaultMergeQueueDequeueGrace
+	}
+	if o.ReadyTimeout <= 0 {
+		o.ReadyTimeout = DefaultCIPollInterval * DefaultCIPollMax
+	}
+	if o.ReadyPollInterval <= 0 {
+		o.ReadyPollInterval = DefaultCIPollInterval
 	}
 	return o
 }
@@ -83,6 +121,14 @@ type MergeQueueStatus struct {
 	// EntryHeadOID is the merge-group commit the queue is testing. Kept after
 	// the entry disappears so the failing checks can still be fetched.
 	EntryHeadOID string
+	// Mergeable is the PR's mergeability (MERGEABLE, CONFLICTING, UNKNOWN),
+	// MergeStateStatus its merge state (CLEAN, BLOCKED, …), HeadOID its head
+	// commit, and ChecksState the head commit's check rollup state (SUCCESS,
+	// PENDING, FAILURE, …; "" when no check has been created).
+	Mergeable        string
+	MergeStateStatus string
+	HeadOID          string
+	ChecksState      string
 }
 
 // Merge-queue failure kinds carried on MergeQueueError.
@@ -91,6 +137,12 @@ const (
 	MergeQueueUnmergeable = "unmergeable"
 	MergeQueueClosed      = "closed"
 	MergeQueueTimeout     = "timeout"
+	// MergeQueueNotReady: the PR never became ready to enqueue (mergeability
+	// or its checks still pending) within the readiness budget (#2584).
+	MergeQueueNotReady = "not_ready"
+	// MergeQueueChecksFailed: the PR's own checks are red, so it was not
+	// enqueued (#2584).
+	MergeQueueChecksFailed = "checks_failed"
 )
 
 // MergeQueueError is the classified failure of a queued merge. It names the
@@ -102,11 +154,20 @@ type MergeQueueError struct {
 	EntryHeadOID string
 	FailedChecks []string
 	Cause        error
+	// Detail qualifies a MergeQueueNotReady error: what was still pending.
+	Detail string
 }
 
 func (e *MergeQueueError) Error() string {
 	var b strings.Builder
 	switch e.Kind {
+	case MergeQueueNotReady:
+		fmt.Fprintf(&b, "merge queue: PR #%d not ready to enqueue", e.PRNumber)
+		if e.Detail != "" {
+			fmt.Fprintf(&b, " (%s)", e.Detail)
+		}
+	case MergeQueueChecksFailed:
+		fmt.Fprintf(&b, "merge queue: PR #%d checks failed; not enqueued", e.PRNumber)
 	case MergeQueueTimeout:
 		fmt.Fprintf(&b, "merge queue: PR #%d not merged before the queue wait budget expired", e.PRNumber)
 	case MergeQueueClosed:
@@ -116,11 +177,15 @@ func (e *MergeQueueError) Error() string {
 	default:
 		fmt.Fprintf(&b, "merge queue: PR #%d was removed from the queue", e.PRNumber)
 	}
-	if e.EntryHeadOID != "" {
+	if e.EntryHeadOID != "" && e.Kind != MergeQueueChecksFailed {
 		fmt.Fprintf(&b, " (merge-group commit %s)", shortOID(e.EntryHeadOID))
 	}
 	if len(e.FailedChecks) > 0 {
-		fmt.Fprintf(&b, "; failed merge-group checks: %s", strings.Join(e.FailedChecks, ", "))
+		label := "merge-group checks"
+		if e.Kind == MergeQueueChecksFailed {
+			label = "checks"
+		}
+		fmt.Fprintf(&b, "; failed %s: %s", label, strings.Join(e.FailedChecks, ", "))
 	}
 	if e.Cause != nil {
 		fmt.Fprintf(&b, ": %v", e.Cause)
@@ -161,6 +226,8 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 }
 
 const mergeQueuePRFields = `id number state baseRefName isMergeQueueEnabled isInMergeQueue
+mergeable mergeStateStatus headRefOid
+commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 mergeCommit { oid }
 mergeQueueEntry { state position headCommit { oid } }`
 
@@ -179,7 +246,19 @@ type mqPRNode struct {
 	BaseRefName         string `json:"baseRefName"`
 	IsMergeQueueEnabled bool   `json:"isMergeQueueEnabled"`
 	IsInMergeQueue      bool   `json:"isInMergeQueue"`
-	MergeCommit         *struct {
+	Mergeable           string `json:"mergeable"`
+	MergeStateStatus    string `json:"mergeStateStatus"`
+	HeadRefOID          string `json:"headRefOid"`
+	Commits             *struct {
+		Nodes []struct {
+			Commit struct {
+				StatusCheckRollup *struct {
+					State string `json:"state"`
+				} `json:"statusCheckRollup"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+	MergeCommit *struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
 	MergeQueueEntry *struct {
@@ -199,6 +278,15 @@ func (n *mqPRNode) status() MergeQueueStatus {
 		BaseRef:       n.BaseRefName,
 		QueueRequired: n.IsMergeQueueEnabled,
 		InQueue:       n.IsInMergeQueue,
+
+		Mergeable:        n.Mergeable,
+		MergeStateStatus: n.MergeStateStatus,
+		HeadOID:          n.HeadRefOID,
+	}
+	if n.Commits != nil && len(n.Commits.Nodes) > 0 {
+		if r := n.Commits.Nodes[len(n.Commits.Nodes)-1].Commit.StatusCheckRollup; r != nil {
+			st.ChecksState = r.State
+		}
 	}
 	if n.MergeCommit != nil {
 		st.MergeCommitOID = n.MergeCommit.OID
@@ -292,6 +380,92 @@ func (q *MergeQueue) Enqueue(ctx context.Context, prID string) error {
 		return fmt.Errorf("enqueue pull request: %w", err)
 	}
 	return nil
+}
+
+// enqueueNotReadyMessage is GitHub's rejection of an enqueue issued before
+// the PR's mergeability was computed (#2584).
+const enqueueNotReadyMessage = "mergeability check has not yet completed"
+
+// ClassifyEnqueueReadiness reports whether a PR may be enqueued now. When it
+// may not, kind names a terminal failure (MergeQueueUnmergeable,
+// MergeQueueChecksFailed), or is "" while mergeability or checks are pending.
+// A PR with no checks at all is ready only when GitHub reports it CLEAN: a
+// missing rollup is otherwise read as checks not created yet (#1027).
+func ClassifyEnqueueReadiness(st MergeQueueStatus) (ready bool, kind string) {
+	switch st.Mergeable {
+	case MergeableUnknown, "":
+		return false, ""
+	case "CONFLICTING":
+		return false, MergeQueueUnmergeable
+	}
+	switch st.ChecksState {
+	case "FAILURE", "ERROR":
+		return false, MergeQueueChecksFailed
+	case "SUCCESS":
+		return st.Mergeable == "MERGEABLE", ""
+	case "":
+		return st.Mergeable == "MERGEABLE" && st.MergeStateStatus == "CLEAN", ""
+	}
+	return false, ""
+}
+
+// WaitReady polls the PR until it may be enqueued (returns its status), its
+// checks fail or it conflicts (*MergeQueueError with MergeQueueChecksFailed or
+// MergeQueueUnmergeable), or the readiness budget expires (MergeQueueNotReady).
+// A PR that leaves OPEN or enters the queue meanwhile is returned as is.
+// initial is checked first, so a ready PR costs no extra read.
+func (q *MergeQueue) WaitReady(ctx context.Context, initial MergeQueueStatus, opts MergeQueueWaitOptions) (MergeQueueStatus, error) {
+	opts = opts.withDefaults()
+	deadline := q.now().Add(opts.ReadyTimeout)
+	st := initial
+	for {
+		if st.State != "OPEN" || st.InQueue {
+			return st, nil
+		}
+		ready, kind := ClassifyEnqueueReadiness(st)
+		if ready {
+			return st, nil
+		}
+		if kind != "" {
+			e := &MergeQueueError{PRNumber: st.Number, Kind: kind}
+			if kind == MergeQueueChecksFailed && st.HeadOID != "" {
+				failed, err := q.FailedMergeGroupChecks(ctx, st.PRID, st.HeadOID)
+				if err != nil {
+					log.Printf("merge queue: could not read checks for PR #%d at %s: %v", st.Number, shortOID(st.HeadOID), err)
+				}
+				e.FailedChecks = failed
+			}
+			return st, e
+		}
+		interval := opts.ReadyPollInterval
+		if (st.Mergeable == MergeableUnknown || st.Mergeable == "") && DefaultMergeabilityPollInterval < interval {
+			interval = DefaultMergeabilityPollInterval
+		}
+		if !q.now().Add(interval).Before(deadline) {
+			return st, &MergeQueueError{PRNumber: st.Number, Kind: MergeQueueNotReady, Detail: notReadyDetail(st)}
+		}
+		if err := q.sleep(ctx, interval); err != nil {
+			return st, &MergeQueueError{PRNumber: st.Number, Kind: MergeQueueNotReady, Detail: notReadyDetail(st), Cause: err}
+		}
+		next, err := q.StatusByID(ctx, st.PRID)
+		if err != nil {
+			if isRateLimited(err) || ctx.Err() != nil {
+				return st, err
+			}
+			continue
+		}
+		st = next
+	}
+}
+
+func notReadyDetail(st MergeQueueStatus) string {
+	if st.Mergeable == MergeableUnknown || st.Mergeable == "" {
+		return "mergeability not yet computed"
+	}
+	if st.ChecksState == "" {
+		return "no checks reported yet"
+	}
+	return "checks " + strings.ToLower(st.ChecksState)
 }
 
 // FailedMergeGroupChecks returns the names of the checks that failed on the
@@ -439,12 +613,28 @@ func (q *MergeQueue) failure(ctx context.Context, prID string, number int, kind,
 
 // EnqueueAndWait enqueues the PR when it is not already queued and waits for
 // the outcome. status is the observation that established QueueRequired.
+// Before enqueueing it waits for the PR to be ready (#2584): GitHub rejects an
+// enqueue issued before mergeability is computed, and a PR whose checks are
+// still running would only be enqueued to fail.
 func (q *MergeQueue) EnqueueAndWait(ctx context.Context, status MergeQueueStatus, opts MergeQueueWaitOptions) (MergeQueueStatus, error) {
 	if status.State == "MERGED" {
 		return status, nil
 	}
 	if !status.InQueue {
+		ready, err := q.WaitReady(ctx, status, opts)
+		if err != nil {
+			return ready, err
+		}
+		status = ready
+		if status.State == "MERGED" {
+			return status, nil
+		}
+	}
+	if !status.InQueue && status.State == "OPEN" {
 		if err := q.Enqueue(ctx, status.PRID); err != nil {
+			if strings.Contains(err.Error(), enqueueNotReadyMessage) {
+				return status, &MergeQueueError{PRNumber: status.Number, Kind: MergeQueueNotReady, Detail: "mergeability not yet computed", Cause: err}
+			}
 			return status, err
 		}
 	}
