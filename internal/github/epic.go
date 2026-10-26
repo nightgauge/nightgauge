@@ -933,9 +933,9 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 		if len(integration.ConflictFiles) > 0 {
 			msg += "\n\nConflicting files:\n- `" + strings.Join(integration.ConflictFiles, "`\n- `") + "`"
 		}
-		if integration.Error != "" {
-			msg += "\n\nError: " + integration.Error
-		}
+		// integration.Error is raw git/exec text that can carry remote URLs and
+		// local paths; it stays in the result and attention card, never in a
+		// public issue comment.
 		if err := issueSvc.AddComment(ctx, epicIssue.NodeID, msg); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to add comment to %s: %v\n", ref, err)
 		}
