@@ -9117,7 +9117,7 @@ type TrustedCommentReader interface {
 // callers fail closed on it. The marker is only ever read from trusted
 // comments, so a marker pasted by anyone else never releases a dependent.
 func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments TrustedCommentReader, known map[string][]string, unknown []string) map[string]ValidationState {
-	labels := make(map[string][]string, len(known)+len(unknown))
+	labels := make(map[string][]string, len(known))
 	for k, l := range known {
 		labels[k] = l
 	}
