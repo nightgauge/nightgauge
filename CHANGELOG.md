@@ -40,10 +40,21 @@ changelog, and the release workflow refuses a tag that does not.
   Code extension sends it when the Codex terminal shows real activity, at most
   once a minute and never on a timer.
 
+- **A closed program issue releases its dependents only once main is green
+  (#2574).** The post-merge hook now comments a validation marker on the merged
+  issue when the merge commit verifies green, and never on red, pending or
+  unreadable checks; a re-run does not post it twice. The scheduler,
+  `nightgauge next` and `nightgauge program status` hold a dependent behind a
+  closed `program:` blocker until that marker is there, read only from users
+  with write access or trusted bots. Blockers outside a program still release
+  on closure. A program issue closed before this change holds its dependents
+  until you re-run `nightgauge hook post-merge` for it. `program status` now
+  counts an issue as validated only when it carries the marker.
+
 - **`nightgauge program status` reports a program's progress (#2573).** One
   command reads a programs file and prints, per program, how many of its
-  issues are open, closed, validated (closed as completed, until #2574's
-  marker) and dispatchable now, with each blocked Ready issue and why.
+  issues are open, closed, validated and dispatchable now, with each blocked
+  Ready issue and why.
 
 - **The work-order frontier now agrees across repositories (#2573).**
   `nightgauge next` looks up a dependency on no board it read, as the

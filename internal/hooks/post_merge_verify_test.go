@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -735,5 +737,130 @@ func TestVerifyMergeCommit_RequiredStatusOnlyContextIsGreenOnFirstPoll(t *testin
 
 	if res.Verdict != MainChecksGreen || res.Polls != 1 {
 		t.Fatalf("verdict = %q after %d poll(s) (%v), want green on the first", res.Verdict, res.Polls, res.Reasons)
+	}
+}
+
+// ── Validation marker (#2574) ───────────────────────────────────────────────
+
+// fakeMarks stores the comments it is given, so a second hook run reads the
+// first run's marker back.
+type fakeMarks struct {
+	comments []trust.Comment
+	readErr  error
+	writeErr error
+	writes   []string
+	subjects []string
+}
+
+func (f *fakeMarks) TrustedComments(context.Context, string, string, int) ([]trust.Comment, error) {
+	return f.comments, f.readErr
+}
+
+func (f *fakeMarks) AddComment(_ context.Context, subjectID, body string) error {
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	f.writes = append(f.writes, body)
+	f.subjects = append(f.subjects, subjectID)
+	f.comments = append(f.comments, trust.Comment{Author: "nightgauge-pipeline[bot]", Body: body})
+	return nil
+}
+
+func runHookWithMarks(t *testing.T, reader MainCheckReader, marks ValidationMarkWriter) PostMergeResult {
+	t.Helper()
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{"o/r#7": {NodeID: "I_7", Number: 7}}}
+	verifier := &mockPRVerifierWithMerge{state: "MERGED", sha: "cafe1234", mergedAt: "2026-10-26T10:00:00Z", baseRef: "main"}
+	return EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, &mockEpicAutoCloser{}, verifier, nil, PostMergeInput{
+		IssueNumber: 7, RepositoryOwner: "o", RepositoryName: "r", PRNumber: 8,
+		MainChecks: reader, MainCheckWait: fastWait(2, 1), ValidationMarks: marks,
+	})
+}
+
+// The marker is written only on the verdict that is post-merge-check exit 0
+// (green); every other verdict — red (exit 1), pending, no checks and an
+// unreadable forge (exit 2), or no reader — writes nothing.
+func TestEvaluatePostMerge_ValidationMarkerOnlyOnGreen(t *testing.T) {
+	green := []forgetypes.CheckDetail{run("test", "COMPLETED", "SUCCESS")}
+	tests := []struct {
+		name        string
+		reader      MainCheckReader
+		wantVerdict MainCheckVerdict
+		want        ValidationMarkerOutcome
+	}{
+		{"green writes", &scriptedChecks{frames: [][]forgetypes.CheckDetail{green}, required: []string{"test"}}, MainChecksGreen, ValidationMarkerWritten},
+		{"red writes nothing", &scriptedChecks{frames: [][]forgetypes.CheckDetail{{run("test", "COMPLETED", "FAILURE")}}, required: []string{"test"}}, MainChecksRed, ValidationMarkerNotGreen},
+		{"pending writes nothing", &scriptedChecks{frames: [][]forgetypes.CheckDetail{{run("test", "IN_PROGRESS", "")}}, required: []string{"test"}}, MainChecksPending, ValidationMarkerNotGreen},
+		{"no checks writes nothing", &scriptedChecks{}, MainChecksNone, ValidationMarkerNotGreen},
+		{"unreadable checks write nothing", &scriptedChecks{errAt: map[int]error{0: errors.New("REST 502")}}, MainChecksError, ValidationMarkerNotGreen},
+		{"no reader writes nothing", nil, MainChecksSkipped, ValidationMarkerNotGreen},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			marks := &fakeMarks{}
+			res := runHookWithMarks(t, tc.reader, marks)
+			if res.MainChecks == nil || res.MainChecks.Verdict != tc.wantVerdict {
+				t.Fatalf("MainChecks = %+v, want verdict %q", res.MainChecks, tc.wantVerdict)
+			}
+			if res.ValidationMarker != tc.want {
+				t.Fatalf("ValidationMarker = %q, want %q", res.ValidationMarker, tc.want)
+			}
+			wantWrites := 0
+			if tc.want == ValidationMarkerWritten {
+				wantWrites = 1
+			}
+			if len(marks.writes) != wantWrites {
+				t.Fatalf("writes = %q, want %d", marks.writes, wantWrites)
+			}
+			if wantWrites == 1 {
+				if marks.subjects[0] != "I_7" || !forge.HasValidationMarker(marks.writes[0]) ||
+					!strings.Contains(marks.writes[0], "sha=cafe1234") {
+					t.Errorf("wrote %q on %q, want the marker for cafe1234 on I_7", marks.writes[0], marks.subjects[0])
+				}
+			}
+			if res.Failed {
+				t.Errorf("Failed set for %s", tc.name)
+			}
+		})
+	}
+}
+
+// A second hook run on the same issue finds the first run's marker and posts
+// no duplicate.
+func TestEvaluatePostMerge_ValidationMarkerIsIdempotent(t *testing.T) {
+	green := func() MainCheckReader {
+		return &scriptedChecks{frames: [][]forgetypes.CheckDetail{{run("test", "COMPLETED", "SUCCESS")}}, required: []string{"test"}}
+	}
+	marks := &fakeMarks{}
+	if got := runHookWithMarks(t, green(), marks).ValidationMarker; got != ValidationMarkerWritten {
+		t.Fatalf("first run = %q, want written", got)
+	}
+	if got := runHookWithMarks(t, green(), marks).ValidationMarker; got != ValidationMarkerPresent {
+		t.Fatalf("second run = %q, want present", got)
+	}
+	if len(marks.writes) != 1 {
+		t.Fatalf("writes = %d, want exactly 1 across two runs", len(marks.writes))
+	}
+}
+
+// A failed comment read posts nothing (it cannot rule out a duplicate) and a
+// failed write is reported; both set Failed, since the program dependents stay
+// held until the marker exists. No writer is reported as not wired.
+func TestEvaluatePostMerge_ValidationMarkerFailures(t *testing.T) {
+	green := func() MainCheckReader {
+		return &scriptedChecks{frames: [][]forgetypes.CheckDetail{{run("test", "COMPLETED", "SUCCESS")}}, required: []string{"test"}}
+	}
+	readFail := &fakeMarks{readErr: errors.New("REST 502")}
+	res := runHookWithMarks(t, green(), readFail)
+	if res.ValidationMarker != ValidationMarkerError || len(readFail.writes) != 0 || !res.Failed {
+		t.Errorf("read failure: marker=%q writes=%d failed=%v, want error, 0, true", res.ValidationMarker, len(readFail.writes), res.Failed)
+	}
+	writeFail := &fakeMarks{writeErr: errors.New("GraphQL forbidden")}
+	res = runHookWithMarks(t, green(), writeFail)
+	if res.ValidationMarker != ValidationMarkerError || !res.Failed {
+		t.Errorf("write failure: marker=%q failed=%v, want error, true", res.ValidationMarker, res.Failed)
+	}
+	res = runHookWithMarks(t, green(), nil)
+	if res.ValidationMarker != ValidationMarkerNotWired || res.Failed {
+		t.Errorf("no writer: marker=%q failed=%v, want not_wired, false", res.ValidationMarker, res.Failed)
 	}
 }

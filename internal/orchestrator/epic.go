@@ -9,6 +9,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -60,6 +61,12 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 	if s.client != nil && s.mainCheckReaderFn != nil {
 		input.MainChecks = s.mainCheckReaderFn(s.client)
 		input.MainCheckWait = hooks.DefaultMainCheckWait()
+		// (#2574) Comment the validation marker on a green merge, read
+		// through the eligibility gate's trusted-comment filter, so the
+		// issue's program dependents are released.
+		if s.trustGate != nil {
+			input.ValidationMarks = validationMarks{Gate: s.trustGate, issues: gh.NewIssueService(s.client)}
+		}
 	}
 	result := evaluate(ctx, s.issueSvc, s.issueSvc, epicSvc, prVerifier, boardSvc, input)
 
@@ -100,9 +107,20 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 
 	// boardSync is logged because the hook is non-blocking: a board that failed
 	// to reach Done is otherwise invisible on this path too (#691).
-	log.Printf("#%d: post-merge hook: issueClosed=%v autoClosed=%v epic=#%d reason=%s boardSync=%s mainChecks=%s",
-		item.Number, result.IssueClosed, result.AutoClosed, result.EpicNumber, result.Reason, result.IssueDoneSync, mainCheckWord(result))
+	log.Printf("#%d: post-merge hook: issueClosed=%v autoClosed=%v epic=#%d reason=%s boardSync=%s mainChecks=%s validationMarker=%s",
+		item.Number, result.IssueClosed, result.AutoClosed, result.EpicNumber, result.Reason, result.IssueDoneSync, mainCheckWord(result), result.ValidationMarker)
 	return result
+}
+
+// validationMarks is the in-process post-merge hook's ValidationMarkWriter
+// (#2574): comments read through the trust gate, written by node id.
+type validationMarks struct {
+	*trust.Gate
+	issues *gh.IssueService
+}
+
+func (m validationMarks) AddComment(ctx context.Context, subjectID, body string) error {
+	return m.issues.AddComment(ctx, subjectID, body)
 }
 
 // GetEpicSubIssuesByRepo groups an epic's sub-issues by repository for cross-repo dispatch.

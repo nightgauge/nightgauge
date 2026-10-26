@@ -674,6 +674,7 @@ out. The hook stays non-blocking and exits 0 whatever the verdict.
 | Run record (`runtime-*.json`) | `mainCheckVerdict`, `mainCheckFailing`           |
 | Survival record               | `main_check_verdict`, `main_check_failing`       |
 | Action Center                 | `merge-commit-checks` card, see below            |
+| Issue comment (green only)    | validation marker, `validationMarker` (#2574)    |
 
 **The card.** A `red` verdict raises a **standing** `merge-commit-checks` card
 keyed per `(repo, branch)` — one card per red default branch — naming the merge

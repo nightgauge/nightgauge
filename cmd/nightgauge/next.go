@@ -45,7 +45,10 @@ when its label set was truncated so an exclusion cannot be ruled out. A
 dependency on no board that was read — usually an issue in another
 repository — is looked up on GitHub, as the autonomous scheduler does: CLOSED
 satisfies it, OPEN blocks, and a state that cannot be confirmed blocks and is
-listed as unresolved.
+listed as unresolved. A closed blocker that is a program member (a program:
+label) blocks until it carries the post-merge validation marker, written by
+` + "`nightgauge hook post-merge`" + ` when the merge commit verifies green; it is listed
+as unvalidated.
 
 The repos read are --repos if given, else every repo the programs file names,
 else the sibling checkouts that carry .nightgauge/config.yaml. Each repo's
@@ -190,14 +193,22 @@ func rankWorkOrder(ctx context.Context, client *gh.Client, programs *workorder.F
 	if err != nil {
 		return nil, fmt.Errorf("build graph: %w", err)
 	}
-	resolved := orchestrator.ResolveIssueStatesByKey(ctx, gh.NewIssueService(client), workorder.ExternalDependencies(graph))
-	return workorder.Rank(programs, graph, resolved), nil
+	issueSvc := gh.NewIssueService(client)
+	resolved := orchestrator.ResolveIssueStatesByKey(ctx, issueSvc, workorder.ExternalDependencies(graph))
+	// (#2574) A closed program blocker releases only with the validation
+	// marker, read through the trust gate as dispatch reads it.
+	known, unknown := workorder.ValidationCandidates(graph, resolved)
+	validation := orchestrator.ResolveValidationByKey(ctx, issueSvc, markerTrustGate(client, scope.workdir), known, unknown)
+	return workorder.Rank(programs, graph, resolved, validation), nil
 }
 
 // blockedReasons names everything holding an item: its open blockers and
 // labels, then each dependency whose state could not be resolved.
 func blockedReasons(it workorder.Item) string {
 	reasons := append([]string{}, it.BlockedBy...)
+	for _, u := range it.Unvalidated {
+		reasons = append(reasons, u+" (closed without validation marker)")
+	}
 	for _, u := range it.Unresolved {
 		reasons = append(reasons, u+" (state unresolved)")
 	}

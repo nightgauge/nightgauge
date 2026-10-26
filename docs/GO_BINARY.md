@@ -2968,6 +2968,30 @@ issue is also blocked when it is in a dependency cycle, carries an exclude
 label, or has a truncated label set, because then an exclusion cannot be ruled
 out.
 
+**A closed program blocker needs the post-merge validation marker (#2574).**
+Closure says the PR merged, not that the base branch was green afterwards. A
+closed blocker that is a program member (it carries a `program:` label) satisfies
+the edge only when a trusted comment on it — by a user with write access or a
+trusted bot — carries:
+
+```text
+<!-- nightgauge:validated sha=<merge-sha> -->
+```
+
+`nightgauge hook post-merge` (and the scheduler's in-process post-merge path)
+posts that comment only when the merge commit verifies `green`, the verdict
+`nightgauge ci checks-complete` exits `0` for, and posts nothing when one is
+already there. Its result reports `validationMarker`: `written`, `present`,
+`not_green`, `not_wired` or `error` (which sets `failed`). Without the marker
+the dependent is listed under `unvalidated_dependencies`; when the blocker's
+labels or comments cannot be read it fails closed under
+`unresolved_dependencies`. The autonomous scheduler applies the same rule
+(rejection reason `blocked-by-unvalidated-dep`), and a program blocker that is
+open "In review" does not release its dependents there either. A closed blocker
+outside any program keeps closure-based release. An issue closed before the
+marker existed holds its program dependents until the hook is re-run for it:
+`nightgauge hook post-merge --issue <N> --owner <org> --repo <repo> --pr <PR>`.
+
 Items are ordered by board Priority (P0 first, unset last), then repo, then
 issue number. Ready, blocked issues no program selects are omitted.
 
@@ -3024,8 +3048,10 @@ label marks in the repos it covers, in any state, read whole; a repository
 that cannot be read fails the report rather than undercounting it.
 
 - `closed` counts every closed issue, including one closed as not planned.
-- `validated` counts issues closed as completed. It is one predicate that the
-  post-merge validation marker (#2574) replaces.
+- `validated` counts closed issues that carry the post-merge validation
+  marker in a trusted comment (#2574); a comment that cannot be read fails the
+  report. An issue closed as not planned, or merged into a red base branch, is
+  closed but not validated.
 - `dispatchable` is `next`'s Ready list for the program: open, Ready on its
   board, and unblocked under the scheduler's rule. `blocked` lists the
   program's Ready issues that are not, with why.

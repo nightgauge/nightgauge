@@ -110,7 +110,7 @@ func TestRank_Populated(t *testing.T) {
 	if got := strings.Join(ExternalDependencies(g), " "); got != "acme/acme-api#1 acme/other#5" {
 		t.Fatalf("ExternalDependencies = %s", got)
 	}
-	res := Rank(f, g, map[string]string{api + "#1": "CLOSED"})
+	res := Rank(f, g, map[string]string{api + "#1": "CLOSED"}, map[string]ValidationState{api + "#1": {}})
 
 	if len(res.Programs) != 3 {
 		t.Fatalf("programs = %d", len(res.Programs))
@@ -154,7 +154,7 @@ func TestRank_TruncatedLabelsAndCyclesFailClosed(t *testing.T) {
 		{From: depgraph.NodeID{Repo: api, Number: 2}, To: depgraph.NodeID{Repo: api, Number: 3}, Resolvable: true},
 		{From: depgraph.NodeID{Repo: api, Number: 3}, To: depgraph.NodeID{Repo: api, Number: 2}, Resolvable: true},
 	}
-	res := Rank(f, graphOf(nodes, edges), nil)
+	res := Rank(f, graphOf(nodes, edges), nil, nil)
 	if len(res.Programs[0].Ready) != 0 || len(res.Programs[0].Blocked) != 3 {
 		t.Fatalf("result = %+v", res.Programs[0])
 	}
@@ -166,7 +166,7 @@ func TestRank_TruncatedLabelsAndCyclesFailClosed(t *testing.T) {
 func TestRank_Empty(t *testing.T) {
 	f, _ := Parse([]byte("programs: []"))
 	for _, g := range []*depgraph.Graph{nil, depgraph.NewGraph()} {
-		res := Rank(f, g, nil)
+		res := Rank(f, g, nil, nil)
 		b, _ := json.Marshal(res)
 		for _, key := range []string{`"programs":[]`, `"unprogrammed_ready":[]`, `"totals":{"ready":0,"blocked":0,"unprogrammed_ready":0}`} {
 			if !strings.Contains(string(b), key) {
@@ -176,7 +176,7 @@ func TestRank_Empty(t *testing.T) {
 	}
 	// A program with no matching issues is listed with empty arrays.
 	f, _ = Parse([]byte("programs: [{ id: a }]"))
-	b, _ := json.Marshal(Rank(f, depgraph.NewGraph(), nil))
+	b, _ := json.Marshal(Rank(f, depgraph.NewGraph(), nil, nil))
 	if !strings.Contains(string(b), `"ready":[],"blocked":[]`) {
 		t.Fatalf("empty program: %s", b)
 	}
@@ -205,7 +205,7 @@ func TestRank_ExternalBlockerFollowsTheSchedulerRule(t *testing.T) {
 		"unknown state fails closed":                  {resolved: nil, wantUnresolv: "o/a#7"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			p := Rank(f, g, tc.resolved).Programs[0]
+			p := Rank(f, g, tc.resolved, map[string]ValidationState{"o/a#7": {}}).Programs[0]
 			if tc.wantReady {
 				if refs(p.Ready) != "o/b#1" {
 					t.Fatalf("ready = %s, blocked = %+v", refs(p.Ready), p.Blocked)
@@ -232,7 +232,92 @@ func TestRank_OnBoardClosedBlockerIsSatisfied(t *testing.T) {
 	done.State = "CLOSED"
 	nodes := []*depgraph.Node{node(a, 1, "Ready", "", "program:p"), done}
 	edges := []depgraph.Edge{{From: depgraph.NodeID{Repo: a, Number: 1}, To: depgraph.NodeID{Repo: a, Number: 2}, Type: "blockedBy", Resolvable: true}}
-	if p := Rank(f, graphOf(nodes, edges), nil).Programs[0]; refs(p.Ready) != "o/a#1" {
+	if p := Rank(f, graphOf(nodes, edges), nil, nil).Programs[0]; refs(p.Ready) != "o/a#1" {
 		t.Fatalf("ready = %s, blocked = %+v", refs(p.Ready), p.Blocked)
+	}
+}
+
+// A closed program blocker holds its dependents until it carries the
+// post-merge validation marker (#2574), on a board or off it; a closed blocker
+// outside any program does not; an unknown standing fails closed. `next`
+// applies the scheduler's rule.
+func TestRank_ClosedProgramBlockerNeedsTheValidationMarker(t *testing.T) {
+	f, _ := Parse([]byte("programs: [{ id: p }]"))
+	a := "o/a"
+	onBoard := node(a, 2, "Done", "", "program:p")
+	onBoard.State = "CLOSED"
+	plain := node(a, 3, "Done", "")
+	plain.State = "CLOSED"
+	nodes := []*depgraph.Node{node(a, 1, "Ready", "", "program:p"), onBoard, plain}
+	edge := func(to depgraph.NodeID) []depgraph.Edge {
+		return []depgraph.Edge{{From: depgraph.NodeID{Repo: a, Number: 1}, To: to, Type: "blockedBy", Resolvable: true}}
+	}
+	onBoardID, plainID, offBoardID := depgraph.NodeID{Repo: a, Number: 2}, depgraph.NodeID{Repo: a, Number: 3}, depgraph.NodeID{Repo: "o/x", Number: 9}
+	closedOff := map[string]string{"o/x#9": "CLOSED"}
+
+	for name, tc := range map[string]struct {
+		to          depgraph.NodeID
+		resolved    map[string]string
+		validation  map[string]ValidationState
+		wantReady   bool
+		wantUnvalid string
+		wantUnres   string
+	}{
+		"on-board without marker blocks":        {to: onBoardID, validation: map[string]ValidationState{"o/a#2": {Program: true}}, wantUnvalid: "o/a#2"},
+		"on-board with marker dispatches":       {to: onBoardID, validation: map[string]ValidationState{"o/a#2": {Program: true, Validated: true}}, wantReady: true},
+		"on-board unread standing fails closed": {to: onBoardID, wantUnres: "o/a#2"},
+		"non-program closed blocker dispatches": {to: plainID, wantReady: true},
+		"off-board without marker blocks":       {to: offBoardID, resolved: closedOff, validation: map[string]ValidationState{"o/x#9": {Program: true}}, wantUnvalid: "o/x#9"},
+		"off-board non-program dispatches":      {to: offBoardID, resolved: closedOff, validation: map[string]ValidationState{"o/x#9": {}}, wantReady: true},
+		"off-board unread labels fail closed":   {to: offBoardID, resolved: closedOff, wantUnres: "o/x#9"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := graphOf(nodes, edge(tc.to))
+			p := Rank(f, g, tc.resolved, tc.validation).Programs[0]
+			if tc.wantReady {
+				if refs(p.Ready) != "o/a#1" {
+					t.Fatalf("ready = %s, blocked = %+v", refs(p.Ready), p.Blocked)
+				}
+				return
+			}
+			if len(p.Blocked) != 1 {
+				t.Fatalf("blocked = %+v, want o/a#1", p.Blocked)
+			}
+			it := p.Blocked[0]
+			if strings.Join(it.Unvalidated, ",") != tc.wantUnvalid || strings.Join(it.Unresolved, ",") != tc.wantUnres {
+				t.Fatalf("item = %+v", it)
+			}
+		})
+	}
+}
+
+func TestValidationCandidates(t *testing.T) {
+	a := "o/a"
+	prog := node(a, 2, "Done", "", "program:p")
+	prog.State = "CLOSED"
+	plain := node(a, 3, "Done", "")
+	plain.State = "CLOSED"
+	open := node(a, 4, "In review", "", "program:p")
+	from := depgraph.NodeID{Repo: a, Number: 1}
+	var edges []depgraph.Edge
+	for _, to := range []depgraph.NodeID{{Repo: a, Number: 2}, {Repo: a, Number: 3}, {Repo: a, Number: 4}, {Repo: "o/x", Number: 9}, {Repo: "o/x", Number: 8}} {
+		edges = append(edges, depgraph.Edge{From: from, To: to, Type: "blockedBy"})
+	}
+	g := graphOf([]*depgraph.Node{node(a, 1, "Ready", ""), prog, plain, open}, edges)
+	known, unknown := ValidationCandidates(g, map[string]string{"o/x#9": "CLOSED", "o/x#8": "OPEN"})
+	if len(known) != 1 || known["o/a#2"] == nil {
+		t.Errorf("known = %v, want only the closed program member o/a#2", known)
+	}
+	if strings.Join(unknown, ",") != "o/x#9" {
+		t.Errorf("unknown = %v, want the off-board CLOSED o/x#9", unknown)
+	}
+}
+
+func TestIsProgramMember(t *testing.T) {
+	if !IsProgramMember([]string{"type:feature", "Program:billing"}) {
+		t.Error("a program: label was not recognised")
+	}
+	if IsProgramMember([]string{"programs", "type:feature"}) || IsProgramMember(nil) {
+		t.Error("a non-program label set was taken as a program member")
 	}
 }
