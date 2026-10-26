@@ -5218,8 +5218,9 @@ function runStageSkillHeadlessImpl(
   // run history, cost and telemetry tied to the process that actually ran;
   // `scheduler.go` re-records the stage on this value.
   //
-  // Claude takes `--model` directly and sets no model env, so it is the
-  // decision itself.
+  // Claude takes `--model` directly and sets no adapter model env, so it is
+  // the decision itself. Every adapter's value is exported to the child as
+  // NIGHTGAUGE_DISPATCH_MODEL below (#2576).
   const launchedModel =
     (adapter === "codex"
       ? codexEnv.NIGHTGAUGE_CODEX_MODEL
@@ -5320,6 +5321,11 @@ function runStageSkillHeadlessImpl(
     // per-stage manual invocation, which has no run identity to name and must
     // not invent one; the delete below makes that absence real.
     ...(runId ? { NIGHTGAUGE_RUN_ID: runId } : {}),
+    // The launched model and stage, at parity with the Go adapters' exports.
+    // `nightgauge knowledge stamp --stage` builds its provenance actor from
+    // NIGHTGAUGE_DISPATCH_MODEL and fails without it (#2576).
+    ...(launchedModel ? { NIGHTGAUGE_DISPATCH_MODEL: launchedModel } : {}),
+    NIGHTGAUGE_STAGE: stage,
   };
 
   // A dispatch with no run identity must leave the child with NONE, which takes
@@ -5331,6 +5337,11 @@ function runStageSkillHeadlessImpl(
   // Mirrors composeStageEnv's reconcile on the Go side.
   if (!runId) {
     delete spawnEnv.NIGHTGAUGE_RUN_ID;
+  }
+  // Same reconcile for the dispatch model: an outer run's model must not become
+  // this child's provenance actor when no model was launched here (#2576).
+  if (!launchedModel) {
+    delete spawnEnv.NIGHTGAUGE_DISPATCH_MODEL;
   }
 
   // The OpenCode stage's inherited overrides and foreign credentials go, and a

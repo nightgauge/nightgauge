@@ -11,6 +11,12 @@ and this project adheres to
 
 ### Fixed
 
+- **`knowledge stamp --stage` works in stages the VS Code extension runs
+  (#2576).** Extension-spawned stages now receive `NIGHTGAUGE_DISPATCH_MODEL`
+  (the model the stage launched with, for every adapter) and
+  `NIGHTGAUGE_STAGE`, as Go-dispatched stages already did. Before, recording
+  provenance on a planning decision failed in every extension-run stage.
+
 - **An approved architecture decision resumes at feature-dev (#2577).** When a
   run halted at the architecture-approval gate and a human then approved it,
   the next run reuses the plan the human approved and skips feature-planning.

@@ -95,6 +95,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`knowledge stamp --stage` works in stages the VS Code extension runs
+  (#2576).** Extension-spawned stages now receive `NIGHTGAUGE_DISPATCH_MODEL`
+  (the model the stage launched with, for every adapter) and
+  `NIGHTGAUGE_STAGE`, as Go-dispatched stages already did. Before, recording
+  provenance on a planning decision failed in every extension-run stage.
+
 - **`epic complete` no longer enqueues the epic PR before GitHub has computed
   its mergeability (#2584).** Every merge-queue enqueue now waits, within the 15-minute CI
   budget, until the PR is mergeable and its checks are green. A PR that is still

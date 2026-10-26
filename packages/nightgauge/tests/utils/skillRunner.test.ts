@@ -2498,6 +2498,59 @@ allowed-tools: Read Write Edit Bash
     }
   });
 
+  // #2576: `nightgauge knowledge stamp --stage` builds its provenance actor
+  // from NIGHTGAUGE_DISPATCH_MODEL, so every extension-spawned stage must
+  // carry the model that actually launched — at parity with the Go adapters.
+  it("exports the Claude --model as NIGHTGAUGE_DISPATCH_MODEL with NIGHTGAUGE_STAGE", () => {
+    vi.mocked(getDefaultModel).mockReturnValue("opus");
+
+    runStageSkillHeadless("feature-planning", 42, {});
+
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    const args = spawnCall[1] as string[];
+    const env = (spawnCall[2] as { env: Record<string, string> }).env;
+    expect(env.NIGHTGAUGE_DISPATCH_MODEL).toBe(args[args.indexOf("--model") + 1]);
+    expect(env.NIGHTGAUGE_DISPATCH_MODEL).toBe("opus");
+    expect(env.NIGHTGAUGE_STAGE).toBe("feature-planning");
+  });
+
+  it("exports a non-Claude adapter's launched model as NIGHTGAUGE_DISPATCH_MODEL", () => {
+    const previousAdapter = process.env.NIGHTGAUGE_UI_CORE_ADAPTER;
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "codex";
+
+    try {
+      runStageSkillHeadless("feature-dev", 42, {}, undefined, undefined, undefined, "gpt-5.5");
+
+      const env = (vi.mocked(spawn).mock.calls[0][2] as { env: Record<string, string> }).env;
+      expect(env.NIGHTGAUGE_CODEX_MODEL).toBe("gpt-5.5");
+      expect(env.NIGHTGAUGE_DISPATCH_MODEL).toBe("gpt-5.5");
+    } finally {
+      if (previousAdapter === undefined) {
+        delete process.env.NIGHTGAUGE_UI_CORE_ADAPTER;
+      } else {
+        process.env.NIGHTGAUGE_UI_CORE_ADAPTER = previousAdapter;
+      }
+    }
+  });
+
+  it("overrides an INHERITED NIGHTGAUGE_DISPATCH_MODEL with the launched model", () => {
+    vi.mocked(getDefaultModel).mockReturnValue("opus");
+    const inherited = process.env.NIGHTGAUGE_DISPATCH_MODEL;
+    process.env.NIGHTGAUGE_DISPATCH_MODEL = "outer-run-model";
+    try {
+      runStageSkillHeadless("feature-dev", 42, {});
+
+      const env = (vi.mocked(spawn).mock.calls[0][2] as { env: Record<string, string> }).env;
+      expect(env.NIGHTGAUGE_DISPATCH_MODEL).toBe("opus");
+    } finally {
+      if (inherited === undefined) {
+        delete process.env.NIGHTGAUGE_DISPATCH_MODEL;
+      } else {
+        process.env.NIGHTGAUGE_DISPATCH_MODEL = inherited;
+      }
+    }
+  });
+
   it("should translate a lightweight stage tier to a cheaper Codex model", () => {
     const previousAdapter = process.env.NIGHTGAUGE_UI_CORE_ADAPTER;
     process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "codex";
