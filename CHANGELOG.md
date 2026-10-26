@@ -152,6 +152,13 @@ changelog, and the release workflow refuses a tag that does not.
   `nightgauge autonomous clear-cooldown` lifts a cooldown without the VS Code
   extension.
 
+- The VS Code extension README now tells you to run **Nightgauge: Run Doctor**
+  to check your prerequisites; it named the removed Adapter Doctor command
+  (#2099).
+- `nightgauge doctor`'s guided session now names each check as it starts on
+  terminals without the live spinner (`TERM=dumb`, `NO_COLOR`, screen readers),
+  with a `RUNNING <check>` line before its result, so a slow check is no longer
+  silent there (#2095).
 - The autonomous scheduler now dispatches a Ready issue whose open PR is only
   behind its base branch (green, strict up-to-date policy); the run resumes at
   pr-merge, which rebases it. Previously the issue stalled in Ready. A behind PR

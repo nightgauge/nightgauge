@@ -10767,9 +10767,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // codex / copilot) actually probe auth (`codex login status`,
       // `claude auth status`, …) instead of short-circuiting to "passed". Without
       // a runner the gate is a no-op for exactly the adapters it must guard, and
-      // a logged-out user only fails later at spawn time (#4044). Same runner the
-      // #4031 Adapter Doctor uses. Set `pipeline.skip_auth_preflight: true` to
-      // bypass (handled above).
+      // a logged-out user only fails later at spawn time (#4044). Set
+      // `pipeline.skip_auth_preflight: true` to bypass (handled above).
       const preflight = await runAdapterAuthPreflight(adapters, {
         cwd: this.getWorkingDirectory(),
         runner: createDefaultPreflightRunner(),
