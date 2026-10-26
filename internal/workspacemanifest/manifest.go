@@ -40,6 +40,7 @@ package workspacemanifest
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -100,6 +101,34 @@ type Manifest struct {
 
 func ManifestPath(root string) string {
 	return filepath.Join(root, ".vscode", "nightgauge-workspace.yaml")
+}
+
+// FindRoot returns the first candidate root whose manifest exists (#2540).
+//
+// A workspace has one manifest, but a server's current root can be any member
+// folder, so callers search an ordered list of roots instead of trusting one.
+// Candidates are trimmed and de-duplicated with order kept. When none holds a
+// manifest the error names every path searched and wraps fs.ErrNotExist.
+func FindRoot(candidates []string) (string, error) {
+	seen := map[string]bool{}
+	searched := []string{}
+	for _, c := range candidates {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] {
+			continue
+		}
+		seen[c] = true
+		path := ManifestPath(c)
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			return c, nil
+		}
+		searched = append(searched, path)
+	}
+	if len(searched) == 0 {
+		return "", fmt.Errorf("no workspace manifest found (no candidate roots to search): %w", fs.ErrNotExist)
+	}
+	return "", fmt.Errorf("no workspace manifest found (searched: %s): %w",
+		strings.Join(searched, ", "), fs.ErrNotExist)
 }
 
 // Load reads and parses the manifest, recording both its structure and

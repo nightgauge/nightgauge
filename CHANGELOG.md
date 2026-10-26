@@ -52,6 +52,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The coverage card's "Add to the workspace manifest" action works when the
+  active folder is a member checkout (#2540).** `workspace.addRepo`, the
+  workspace repository panel and the coverage sweep now find
+  `.vscode/nightgauge-workspace.yaml` in the launch root, the current root or a
+  registered repo path, instead of only the current root. The sweep no longer
+  raises coverage cards for repos the manifest already lists, and when no
+  manifest exists the action fails with an error naming every path searched.
+
 - **Routing accuracy now measures the model feature-dev actually dispatches on
   (#2537).** The learning corpus compared feature-dev's served model against the
   router's run-wide tier (`dev_model`), which the feature-dev stage default

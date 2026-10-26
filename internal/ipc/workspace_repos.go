@@ -16,7 +16,9 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,16 +99,23 @@ func (s *Server) handleWorkspaceRepoList(_ context.Context, raw json.RawMessage)
 		_ = json.Unmarshal(raw, &params)
 	}
 
-	root := s.workspaceRootPath()
+	root, ferr := s.workspaceManifestRoot()
+	if ferr != nil {
+		// No manifest is a legitimate state (single-repo mode), not an
+		// error the panel should render as a failure.
+		if errors.Is(ferr, fs.ErrNotExist) {
+			fallback := s.launchRootPath()
+			if fallback == "" {
+				fallback = s.workspaceRootPath()
+			}
+			return &WorkspaceRepoListResult{ManifestPath: workspacemanifest.ManifestPath(fallback), Unmanaged: true}, nil
+		}
+		return nil, ferr
+	}
 	path := workspacemanifest.ManifestPath(root)
 
 	m, err := workspacemanifest.Load(path)
 	if err != nil {
-		// No manifest is a legitimate state (single-repo mode), not an
-		// error the panel should render as a failure.
-		if os.IsNotExist(err) || strings.Contains(err.Error(), "no such file") {
-			return &WorkspaceRepoListResult{ManifestPath: path, Unmanaged: true}, nil
-		}
 		return nil, err
 	}
 
@@ -156,7 +165,7 @@ func (s *Server) handleWorkspaceRepoList(_ context.Context, raw json.RawMessage)
 		remember(spec, p)
 	}
 
-	configured := sweep.ConfiguredRepos(root)
+	configured := sweep.ConfiguredRepos(s.workspaceRootPath(), root)
 	for _, spec := range order {
 		owner, name := splitSpec(spec)
 		if _, already := m.Find(name); already {
@@ -183,7 +192,10 @@ func (s *Server) handleWorkspaceRepoAdd(_ context.Context, raw json.RawMessage) 
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, fmt.Errorf("parse params: %w", err)
 	}
-	root := s.workspaceRootPath()
+	root, err := s.workspaceManifestRoot()
+	if err != nil {
+		return nil, err
+	}
 	m, err := workspacemanifest.Load(workspacemanifest.ManifestPath(root))
 	if err != nil {
 		return nil, err
@@ -241,7 +253,10 @@ func (s *Server) handleWorkspaceRepoRemove(_ context.Context, raw json.RawMessag
 		return nil, fmt.Errorf("name is required")
 	}
 
-	root := s.workspaceRootPath()
+	root, err := s.workspaceManifestRoot()
+	if err != nil {
+		return nil, err
+	}
 	path := workspacemanifest.ManifestPath(root)
 	m, err := workspacemanifest.Load(path)
 	if err != nil {

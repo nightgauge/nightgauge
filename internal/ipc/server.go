@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 
 	platformapi "github.com/nightgauge/nightgauge/api/generated/go/platform"
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/execution"
@@ -40,6 +42,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -1069,6 +1072,33 @@ func (s *Server) launchRootPath() string {
 	s.workspaceRootMu.RLock()
 	defer s.workspaceRootMu.RUnlock()
 	return s.launchRoot
+}
+
+// workspaceManifestRoot resolves the root holding the workspace manifest (#2540).
+//
+// workspace.setRoot re-points the current root at whichever folder is active,
+// which in a multi-root workspace can be a member with no manifest. The
+// manifest is searched in the launch root, then the current root, then every
+// registered repo path in sorted order, so the answer is deterministic.
+func (s *Server) workspaceManifestRoot() (string, error) {
+	candidates := []string{s.launchRootPath(), s.workspaceRootPath()}
+	if s.resolver != nil {
+		registered := s.resolver.RegisteredPaths()
+		sort.Strings(registered)
+		candidates = append(candidates, registered...)
+	}
+	return workspacemanifest.FindRoot(candidates)
+}
+
+// configuredRepos is the configured set every attention verb and the coverage
+// producer check against: config from the current root, manifest entries from
+// the resolved manifest root.
+func (s *Server) configuredRepos() []string {
+	manifestRoot, err := s.workspaceManifestRoot()
+	if err != nil {
+		manifestRoot = ""
+	}
+	return sweep.ConfiguredRepos(s.workspaceRootPath(), manifestRoot)
 }
 
 // WithRateLimitTracker injects a SharedRateLimitTracker (primarily for tests
