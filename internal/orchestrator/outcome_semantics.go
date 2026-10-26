@@ -45,8 +45,9 @@ import (
 
 // OutcomeModelStage is the stage the corpus's model pair is about.
 //
-// The prediction half is routing.pickup_recommendation.dev_model — the router's
-// recommendation for the IMPLEMENTATION stage — so the measured half must be
+// The prediction half is routing.pickup_recommendation.dispatch_dev_model — the
+// model dispatch selects for the IMPLEMENTATION stage (PlannedStageModel,
+// #2537) — so the measured half must be
 // the model that stage actually served. Attributing the run to some other stage
 // (the terminal one, the alphabetically first one, or the one that dominated
 // cost) compares two different quantities: on this machine's real history the
@@ -177,7 +178,7 @@ func OutcomeServedDevModel(snap *state.RuntimeState) string {
 func OutcomePredictedModelDiagnostic(issueNumber int, predicted string) string {
 	if strings.TrimSpace(predicted) == "" {
 		return fmt.Sprintf(
-			"learning outcome has no PREDICTED model — issue-%d.json carried no routing.pickup_recommendation.dev_model, so model routing cannot be calibrated for this run (#304)",
+			"learning outcome has no PREDICTED model — issue-%d.json carried no routing.pickup_recommendation.dispatch_dev_model, so model routing cannot be calibrated for this run (#304)",
 			issueNumber)
 	}
 	return fmt.Sprintf(

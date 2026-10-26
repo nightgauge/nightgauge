@@ -5480,7 +5480,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// recordOutcome re-resolves the prediction from the run's worktree
 			// before writing the row (#994) — the values here were read at
 			// pickup, before the file existed.
-			outcomePrediction = s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel, workspaceRoot)
+			outcomePrediction = s.recordOutcome(item, snap, pipelineSuccess, complexityScore, workspaceRoot)
 		}
 
 		// Write V2/V3-format execution history to daily JSONL (dashboard reads
@@ -6129,7 +6129,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// size can put implementation on Opus (routedStageModel), while every
 		// other stage keeps the run-wide prediction.
 		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot,
-			routedStageModel(stage, predictedModel, routingDecision), modelFloors, issueJobClass)
+			predictedModel, routingDecision, modelFloors, issueJobClass)
+		// Record the corpus's routing PREDICTION from the selection dispatch
+		// just used (#2537): PlannedStageModel over the very inputs above, so
+		// a pickup, a perf-mode re-route and a planner re-derivation are all
+		// reflected, and prediction and dispatch cannot run different
+		// selectors. Non-fatal: a missing context only loses the prediction.
+		if stage == state.StageFeatureDev {
+			planned := PlannedStageModel(workspaceRoot, stage, predictedModel, routingDecision, modelFloors, issueJobClass)
+			if err := stampDispatchDevModel(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item.Repo, item.Number, planned); err != nil {
+				log.Printf("#%d: could not record dispatch_dev_model %q: %v", item.Number, planned, err)
+			}
+		}
 		// The requested model is dispatched as requested: no escalation, floor
 		// or descent rewrites it. After a cap-hop the run is on another
 		// adapter, which the requested model does not name, so the ordinary
@@ -9956,6 +9967,20 @@ func rewriteIssueContextRouting(workspaceRoot, worktreeDir, repo string, issueNu
 	return nil
 }
 
+// stampDispatchDevModel writes routing.pickup_recommendation.dispatch_dev_model,
+// the feature-dev model PlannedStageModel selects — the prediction both
+// outcome writers score (#2537). dev_model is left alone: it is the router's
+// run-wide tier every reasoning stage reads.
+func stampDispatchDevModel(workspaceRoot, worktreeDir, repo string, issueNumber int, model string) error {
+	return rewriteIssueContextRouting(workspaceRoot, worktreeDir, repo, issueNumber, func(routingRaw map[string]interface{}) {
+		if pickupRec, ok := routingRaw["pickup_recommendation"].(map[string]interface{}); ok {
+			pickupRec["dispatch_dev_model"] = model
+		} else {
+			routingRaw["pickup_recommendation"] = map[string]interface{}{"dispatch_dev_model": model}
+		}
+	})
+}
+
 // recordPlannerRoutingDecision writes a planner-re-derived Decision (#1909)
 // into the issue context the later stages and the run record read: the route
 // (`suggested_route`), the complexity (`complexity_score`, the same Fibonacci
@@ -10042,19 +10067,45 @@ func loadPRNumberForRecovery(workspaceRoot string, issueNumber int) int {
 //
 // Each half is upgraded independently: a context that carries a model but no
 // score must not discard a score the caller already had, and vice versa.
-func (s *Scheduler) resolveOutcomePrediction(runRoot, worktreeDir, repo string, issueNumber, pickupScore int, pickupModel string) (int, string) {
-	score, model := pickupScore, pickupModel
-	freshScore, _, freshModel := loadIssueContext(runRoot, worktreeDir, repo, issueNumber)
+//
+// The model half is routing.pickup_recommendation.dispatch_dev_model — the
+// feature-dev selection dispatch makes (PlannedStageModel, #2537) — and never
+// the router's run-wide dev_model, which the scheduler overrides with the
+// stage default on every feature-dev. A context without the field records no
+// prediction (excluded from accuracy) rather than a tier dispatch never used.
+func (s *Scheduler) resolveOutcomePrediction(runRoot, worktreeDir, repo string, issueNumber, pickupScore int) (int, string) {
+	score := pickupScore
+	freshScore, _, _ := loadIssueContext(runRoot, worktreeDir, repo, issueNumber)
 	if freshScore > 0 {
 		score = freshScore
 	}
-	if freshModel != "" {
-		model = freshModel
-	}
-	return score, model
+	return score, loadDispatchDevModel(runRoot, worktreeDir, repo, issueNumber)
 }
 
-func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState, success bool, complexityScore int, predictedModel, runRoot string) *state.OutcomePrediction {
+// loadDispatchDevModel reads routing.pickup_recommendation.dispatch_dev_model
+// from the issue context, "" when the file or field is absent.
+func loadDispatchDevModel(workspaceRoot, worktreeDir, repo string, issueNumber int) string {
+	for _, path := range execution.IssueContextCandidates(workspaceRoot, worktreeDir, repo, issueNumber) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var ctx struct {
+			Routing struct {
+				PickupRecommendation struct {
+					DispatchDevModel string `json:"dispatch_dev_model"`
+				} `json:"pickup_recommendation"`
+			} `json:"routing"`
+		}
+		if json.Unmarshal(data, &ctx) != nil {
+			return ""
+		}
+		return ctx.Routing.PickupRecommendation.DispatchDevModel
+	}
+	return ""
+}
+
+func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState, success bool, complexityScore int, runRoot string) *state.OutcomePrediction {
 	if !s.recordOutcomes || runRoot == "" {
 		return nil
 	}
@@ -10075,8 +10126,9 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 	// file is guaranteed to exist and its location is known. Only ever an
 	// upgrade: a re-read that finds nothing keeps whatever the caller had, so a
 	// run whose context genuinely never appeared is no worse off.
+	var predictedModel string
 	complexityScore, predictedModel = s.resolveOutcomePrediction(
-		runRoot, snap.WorktreeDir, item.Repo, item.Number, complexityScore, predictedModel)
+		runRoot, snap.WorktreeDir, item.Repo, item.Number, complexityScore)
 	// Predicted vs actual, in the vocabulary the corpus's OTHER writer uses —
 	// see internal/orchestrator/outcome_semantics.go for the three rules both
 	// paths obey. The helpers are shared precisely so they cannot drift: this
@@ -10404,6 +10456,7 @@ func (s *Scheduler) resolveDispatchModel(
 	issueNumber int,
 	workspaceRoot string,
 	predictedModel string,
+	decision routing.Decision,
 	modelFloors map[string]string,
 	jobClass string,
 ) string {
@@ -10419,8 +10472,12 @@ func (s *Scheduler) resolveDispatchModel(
 	// RecordStageModel drops the empty value so the run record carries no
 	// per-stage attribution, and tokens.CalculateCost("") returns a
 	// truthful-looking $0.
-	mode := routing.ResolvePerformanceMode(workspaceRoot)
-	baseModel, explicitBase := stageBaseModel(workspaceRoot, mode, stage, predictedModel, jobClass)
+	// The base, the floor and the ceiling are PlannedStageModel's (#2537) —
+	// the same selection the learning corpus records as its prediction — with
+	// retry escalation slotted between base and floor, the one runtime input
+	// the prediction cannot know.
+	mode, envelope, baseModel, explicitBase := plannedStageBase(
+		workspaceRoot, stage, predictedModel, decision, jobClass)
 	model := baseModel
 	// Escalation override if set, otherwise the base.
 	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {
@@ -10428,15 +10485,9 @@ func (s *Scheduler) resolveDispatchModel(
 	}
 	// Per-stage model_routing.minimum_model floor (#366) so an autonomous run
 	// honors a configured minimum tier — parity with the TS SkillRunner's
-	// enforceMinimumModel. Before RecordStageModel too, so attribution
-	// reflects the floored tier.
-	if floor := stageModelFloor(modelFloors, string(stage)); floor != "" {
-		if raised := enforceMinimumModel(model, floor); raised != model {
-			log.Printf("#%d: stage %s — minimum-model floor %q raised %s → %s",
-				issueNumber, stage, floor, model, raised)
-			model = raised
-		}
-	}
+	// enforceMinimumModel — then the mode's ceiling. Before RecordStageModel
+	// too, so attribution reflects the floored tier.
+	//
 	// The performance mode's CEILING binds everything the pipeline chose (#340,
 	// #19). Escalation and the minimum_model floor both only RAISE, and TS
 	// re-clamps its own enforceMinimumModel result to the envelope ceiling for
@@ -10471,18 +10522,10 @@ func (s *Scheduler) resolveDispatchModel(
 	// plumbing on Fable under `frontier` — the exact behavior #19 deleted for
 	// having "empirically failed validation in dogfooding". stageBaseModel
 	// clamps its own branches against the same narrowed envelope.
-	envelope := routing.RoutedTierEnvelopeForWorkspace(workspaceRoot, mode, string(stage))
-	if capped := routing.ClampToCeiling(model, envelope); capped != model {
-		if explicitBase && routing.TierRank(capped) < routing.TierRank(baseModel) {
-			// The ceiling landed below the operator's own per-stage model.
-			// Keep theirs: the raise is discarded, not the override.
-			capped = baseModel
-		}
-		if capped != model {
-			log.Printf("#%d: stage %s — performance mode %s caps %s → %s",
-				issueNumber, stage, mode, model, capped)
-			model = capped
-		}
+	if bounded := floorAndCeil(stage, model, baseModel, explicitBase, modelFloors, envelope); bounded != model {
+		log.Printf("#%d: stage %s — minimum-model floor / performance mode %s moved %s → %s",
+			issueNumber, stage, mode, model, bounded)
+		model = bounded
 	}
 	// Reroute through any sticky model-unavailable downgrades (#42): once the
 	// API rejected a tier this run, every later stage resolving to it runs on
