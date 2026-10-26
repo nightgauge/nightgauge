@@ -3818,6 +3818,48 @@ func (s *Server) registerMethods() {
 		return map[string]string{"status": "ok"}, nil
 	}
 
+	// pipeline.notifyStageAlive is the liveness producer for a stage that has
+	// no child process in this host (#431, ADR-017 C18) — the Codex
+	// interactive TUI, which runs inside a VSCode terminal. The extension calls
+	// it on REAL terminal activity (a shell-execution-end event for the stage's
+	// terminal, the TUI launch, an OutputWindow relay), never on a timer.
+	//
+	// It re-asserts exactly two ladder arms and changes nothing else: the
+	// resolve touches the run's lease (arm 1), and the snapshot is re-persisted
+	// so its mtime is fresh (arm 4). It is NOT a transition — a repeated
+	// `running` would re-enter BeginStage and reset the stage clock — and it
+	// carries no tokens. The persist is gated exactly like
+	// notifyStageTransition's: a known repo and not scheduler-owned. After the
+	// terminal claim Persist returns ErrRunSealed without writing, so a late
+	// alive call cannot resurrect a sealed snapshot.
+	//
+	//ipc:method pipelineNotifyStageAlive params:PipelineNotifyStageAliveParams result:void skip
+	s.methods["pipeline.notifyStageAlive"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p PipelineNotifyStageAliveParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		res, err := s.resolveRun("pipeline.notifyStageAlive", verbRunProgress, p.RunID, p.Repo, p.IssueNumber)
+		if err != nil {
+			return nil, err
+		}
+		if res.schedulerOwned {
+			return map[string]string{"status": "ok"}, nil
+		}
+		repo := res.rs.TargetRepo()
+		if repo == "" {
+			repo = p.Repo
+		}
+		if repo != "" {
+			if stateDir := s.pipelineStateDir(repo); stateDir != "" {
+				if err := res.rs.Persist(stateDir); err != nil {
+					log.Printf("notifyStageAlive: persist runtime snapshot failed (non-fatal): %v", err)
+				}
+			}
+		}
+		return map[string]string{"status": "ok"}, nil
+	}
+
 	// pipeline.recordStageGateResult is the single-authoritative-writer route
 	// for `nightgauge gate verify --record` (#377, ADR-017 R-1).
 	//

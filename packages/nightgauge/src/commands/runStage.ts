@@ -21,7 +21,10 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import type { Logger } from "../utils/logger";
 import type { StatusBarManager } from "../utils/statusBar";
 import type { StageTreeItem, PipelineTreeProvider, OutputWindow } from "../views";
-import type { PipelineStateService } from "../services/PipelineStateService";
+import {
+  createStageAliveNotifier,
+  type PipelineStateService,
+} from "../services/PipelineStateService";
 import {
   runStageSkillHeadless,
   runStageSkillInteractive,
@@ -117,7 +120,7 @@ async function selectExecutionMode(
   const adapter = getExecutionAdapter();
   // Claude and Codex support interactive mode; every other adapter is
   // headless-only (Gemini, Copilot, LM Studio, …). Codex runs its TUI in a
-  // terminal (#4024); Claude streams over piped stdio.
+  // terminal; Claude streams over piped stdio.
   if (adapter !== "claude" && adapter !== "codex") {
     logger.debug("Adapter is headless-only - forcing headless execution", { adapter });
     return "headless";
@@ -735,6 +738,12 @@ export function registerRunStageCommand(
         onStageChildSpawned: (pid) => {
           stageChildPid = pid;
         },
+        // #431: the Codex TUI's liveness producer (no child, so no arm 3).
+        onStageAlive: createStageAliveNotifier(
+          pipelineStateService,
+          stage,
+          () => runningTransitionSent
+        ),
         onStdout: (data) => {
           const items = parseStreamOutput(data);
           for (const item of items) {
@@ -1001,14 +1010,14 @@ export function registerRunStageCommand(
         // the pid the synchronous spawn callback captured. BOTH runners surface
         // one now — `runStageSkillInteractive` spawns a `claude` child too, and
         // that pid is the interactive population's only ladder arm past the
-        // liveness window. The Codex TUI sub-path (#4024) still has none: it
-        // runs the stage inside a VSCode terminal, and no VSCode API names a
-        // process running inside one.
+        // liveness window. The Codex TUI sub-path has none: it runs the stage
+        // inside a VSCode terminal, and no VSCode API names a process running
+        // inside one — `onStageAlive` re-asserts its lease and snapshot (#431).
         void markStageRunning(stageChildPid || undefined);
 
         // A failed launch returns an error stub (no child process, no stdin
         // writer) after reporting via callbacks — bail then. The Codex
-        // interactive TUI path (#4024) has no child process (it runs in a
+        // interactive TUI path has no child process (it runs in a
         // terminal) but exposes writeToStdin, so it is NOT a bail. Mirrors the
         // guard in runInteractiveStage.ts.
         if (!handle.process && !handle.writeToStdin) {

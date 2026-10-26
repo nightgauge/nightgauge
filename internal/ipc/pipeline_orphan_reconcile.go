@@ -120,22 +120,21 @@ type runEvidence struct {
 //     detector for the process itself, and the pin is bounded twice over (by the
 //     child's own exit, and by the snapshot age cap that now bounds this arm).
 //
-//   - THE CODEX INTERACTIVE TUI SUB-PATH (#4024) HAS NO ARM 3, and cannot be
-//     given one from this host. It runs the stage inside a VSCode terminal
-//     (`vscode.window.createTerminal` + `sendText`), so the extension host never
-//     holds a ChildProcess for it, and the VSCode API exposes no pid for a
-//     process running INSIDE a terminal: `Terminal.processId` is documented as
-//     "the process ID of the shell process" (@types/vscode 1.125.0), and
-//     `TerminalShellExecution` carries only commandLine/cwd/read(). Sending the
-//     shell's pid would answer arm 3 with a process that is not the stage child
-//     — it exists before the stage starts and outlives it whenever the launch
-//     command's trailing `exit` does not run — i.e. a pin that never expires,
-//     which is the one thing 7.4's rows cannot correct for. So this
-//     sub-population is carried by arms 1 and 4 only (its transitions still
-//     lease and still persist), and a >30-minute silent Codex TUI session past
-//     the grace is reconcilable. Every other interactive stage DOES carry a pid
-//     since step 5 (`commands/runInteractiveStage.ts` defers its one `running`
-//     transition to the spawn).
+//   - THE CODEX INTERACTIVE TUI SUB-PATH HAS NO ARM 3, and cannot be given
+//     one from this host. It runs the stage as a VSCode terminal's own process,
+//     so the extension host never holds a ChildProcess for it, and the VSCode
+//     API exposes no pid for the stage child: `Terminal.processId` is the
+//     terminal's process, which exists before the stage starts — a pin that
+//     never expires, which is the one thing 7.4's rows cannot correct for. So
+//     this sub-population is carried by arms 1 and 4, which the extension
+//     re-asserts through pipeline.notifyStageAlive (#431) on REAL terminal
+//     activity: a shell-execution-end event for the stage terminal where the
+//     VSCode build exposes one, and the driver's own checkpoints (the TUI
+//     launch, every OutputWindow relay). There is no timer keepalive, so a TUI
+//     session silent past the window and the grace is still reconcilable, by
+//     design. Every other interactive stage DOES carry a pid since step 5
+//     (`commands/runInteractiveStage.ts` defers its one `running` transition to
+//     the spawn).
 func (s *Server) serverEvidence(now time.Time) runEvidence {
 	return runEvidence{
 		leaseFresh: func(runID string) bool { return s.runLeaseIsFresh(runID, now) },

@@ -3176,8 +3176,11 @@ reintroduce the hazard.
 Arm 3 is the arm that scopes this: `stagePid` →
 `RuntimeState.SetStageChild` is what keeps a still-working child from being
 closed, so the sub-population that carries no obtainable child pid — the Codex
-interactive TUI (#4024), whose stage runs inside a VSCode terminal — rests on
-arms 1 and 4 alone.
+interactive TUI, whose stage runs inside a VSCode terminal — rests on arms 1
+and 4. `pipeline.notifyStageAlive` (#431) re-asserts both on real terminal
+activity (the TUI launch, each OutputWindow relay, and shell-execution-end
+events where VS Code exposes them): it touches the run's lease and re-persists
+the snapshot, and changes no stage state. No timer drives it.
 
 **Arm 3 covers the EXTENSION population only.** On the scheduler / CLI path the
 snapshot's `PID` is **0 while a stage runs, by design (#534)**: the orchestrator

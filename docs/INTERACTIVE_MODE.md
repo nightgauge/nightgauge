@@ -35,7 +35,7 @@ other adapter (Gemini, Gemini SDK, Copilot, LM Studio) is **headless-only** and
 | Adapter    | Interactive surface                      | Mechanism                                                                 |
 | ---------- | ---------------------------------------- | ------------------------------------------------------------------------- |
 | **Claude** | Streamed into the Output panel           | Spawns `claude` (no `-p`) with piped stdio; prompt + follow-ups via stdin |
-| **Codex**  | Full-screen **TUI in a VSCode terminal** | Launches the `codex` TUI seeded with the stage prompt (#4024)             |
+| **Codex**  | Full-screen **TUI in a VSCode terminal** | Launches the `codex` TUI seeded with the stage prompt                     |
 
 Codex's interactive mode is a full-screen terminal UI, so it cannot be streamed
 through the Output panel the way Claude is. Instead the pipeline opens a VSCode
