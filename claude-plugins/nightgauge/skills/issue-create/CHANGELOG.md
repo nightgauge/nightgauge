@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Epic bodies carry `Falsifier:` and `Demand:` lines in `## Summary`, and the
+  Acceptance Criteria Quality Bar checks for a falsifier. When no falsifier
+  can be named the skill asks the requester instead of writing boilerplate
+  (#105).
+
 ### Changed
 
 - Size prediction reads this checkout's `complexity-model.yaml`

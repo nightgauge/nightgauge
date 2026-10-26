@@ -965,7 +965,12 @@ export interface MergeBlockerSnapshot {
  * @internal Exported for testing.
  */
 export interface RunScopedAttentionRaise {
-  producer: "budget-ceiling" | "branch-protection" | "abandoned-dispatch" | "out-of-scope-blocker";
+  producer:
+    | "budget-ceiling"
+    | "branch-protection"
+    | "abandoned-dispatch"
+    | "out-of-scope-blocker"
+    | "board-status-write-failed";
   issueNumber: number;
   /**
    * budget-ceiling carries NO fields at all, and that is the security boundary
@@ -2236,6 +2241,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           statusValue,
           error: result.error,
         });
+        await this.raiseBoardStatusWriteFailed(issueNumber, stage);
       }
     } catch (err) {
       this.logger.warn("Failed to sync stage status transition", {
@@ -2244,7 +2250,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         statusValue,
         err: err instanceof Error ? err.message : String(err),
       });
+      await this.raiseBoardStatusWriteFailed(issueNumber, stage);
     }
+  }
+
+  /**
+   * Surface a board Status write that failed in the Action Center (#1501).
+   * The WARN alone went to a session log nobody reads, so the board drifted
+   * from the pipeline silently. Fail-open, like every run-scoped raise.
+   */
+  private async raiseBoardStatusWriteFailed(issueNumber: number, stage: string): Promise<void> {
+    await this.raiseRunScopedAttention({
+      producer: "board-status-write-failed",
+      issueNumber,
+      stage,
+    });
   }
 
   /**
@@ -5217,6 +5237,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    *
    * @see Issue #1531 — a re-dispatched issue with an open PR re-ran the whole
    *   pipeline because a fresh slot's state had no memory of pr-create.
+   * @see Issue #2550 — pr-create must be begun before it is completed, or Go
+   *   drops the completion and pr-create runs anyway.
    */
   private async resumeAtPrMerge(issueNumber: number): Promise<boolean> {
     if (!this.stateService) return false;
@@ -5287,7 +5309,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
     }
 
+    // Begin pr-create before completing it: the Go notify handler books a
+    // completion only for the stage that has begun (#2536), so an unbegun
+    // completion is dropped and the stage loop then runs pr-create (#2550).
     try {
+      await this.stateService.startStage("pr-create");
       await this.stateService.completeStage("pr-create");
     } catch (err) {
       this.logger.warn("Resume-at-pr-merge: could not mark pr-create complete", { err });
@@ -10165,7 +10191,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     }
 
     try {
-      await updateProjectItemStatus(issueNumber, "Backlog", cwd, this.logger, this.repoOverride);
+      const parked = await updateProjectItemStatus(
+        issueNumber,
+        "Backlog",
+        cwd,
+        this.logger,
+        this.repoOverride
+      );
+      if (!parked.success) {
+        this.logger.warn("Could not park the human-only issue in Backlog (non-blocking, #1241)", {
+          issueNumber,
+          err: parked.error,
+        });
+        await this.raiseBoardStatusWriteFailed(issueNumber, signal.emitted_by_stage ?? "");
+      }
     } catch (err) {
       // Presentation only — the label above already ended dispatch.
       this.logger.warn("Could not park the human-only issue in Backlog (non-blocking, #1241)", {
@@ -10436,6 +10475,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     const completedStages: PipelineStage[] = [];
     const skippedStages: PipelineStage[] = [];
     let branchOnlyResume = false; // #2509
+    // Set only by the verify-and-close close path below (#2554). A resume at
+    // pr-merge also skips feature-dev, so skippedStages cannot tell them apart.
+    let earlyExitTaken = false;
     const deferredStages: PipelineStage[] = [];
     let failedStage: PipelineStage | undefined;
     let error: Error | undefined;
@@ -12855,6 +12897,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               const planningIndex = STAGE_ORDER.indexOf("feature-planning");
               const remainingStages = STAGE_ORDER.slice(planningIndex + 1);
               skippedStages.push(...remainingStages);
+              earlyExitTaken = true;
 
               this.eventDispatcher.onEarlyExit(issueNumber, "already-resolved");
               break; // Exit stage loop
@@ -13157,8 +13200,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Deferred stages mean pr-merge hasn't run yet, so issue is expected open.
     // Early-exit (feature-dev skipped) means runAlreadyResolvedClosePath()
     // already handled close/labels/sync. @see Issue #628, #708
-    const earlyExitHandled = skippedStages.includes("feature-dev");
-    if (!failedStage && deferredStages.length === 0 && !earlyExitHandled && !budgetCeilingStopped) {
+    const reconcileSkippedForEarlyExit = skippedStages.includes("feature-dev");
+    // The OUTCOME is keyed on the close path itself, never on feature-dev
+    // being skipped: a resume at pr-merge skips feature-dev too, and a failed
+    // resume was reported as `already-resolved` (#2554).
+    const earlyExitHandled = earlyExitTaken && !failedStage;
+    if (
+      !failedStage &&
+      deferredStages.length === 0 &&
+      !reconcileSkippedForEarlyExit &&
+      !budgetCeilingStopped
+    ) {
       // #253: time-bound the network-bound completion awaits. A wedge in the
       // `gh`-backed reconcile stranded run #236 for 8.5h with no terminal
       // record — completing the run WITHOUT closure sync beats never

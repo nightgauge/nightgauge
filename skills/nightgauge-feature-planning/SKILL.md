@@ -83,6 +83,11 @@ artifacts at `docs/spikes/<N>-*.md`). Include placeholder ids for each
 anticipated recommendation so the author has an outline to fill the YAML block
 from in feature-dev. See [docs/SPIKE_CONTRACT.md](../../docs/SPIKE_CONTRACT.md).
 
+A spike path is still subject to the publication boundary, and in this
+repository `docs/spikes/**` is PRIVATE by default. Run the
+[Publication Boundary Check](#publication-boundary-check) on the artifact path
+before planning it (#2562).
+
 ## Gotchas
 
 - **Read docs and the knowledge base before proposing.** Skipping
@@ -322,6 +327,30 @@ It covers Phase 4 (produce the `{N}-*.md` plan file with
 `nightgauge layout write plans`) and
 Phase 5.5 (knowledge base enrichment). Phase 5 below is the inline output
 contract.
+
+#### Publication Boundary Check
+
+Before writing `planning-{N}.json`, classify every path the plan would ADD
+(`files_to_create`, plus any `files_to_modify` entry that does not exist yet)
+against the repository's publication boundary (#2562):
+
+```bash
+nightgauge gate check-publication --paths "docs/spikes/42-x.md,internal/new.go" --json
+```
+
+- Exit `0`: every path is allowed, or the repository has no boundary
+  (`"applicable": false`). Continue.
+- Exit `1`: a path is `deny` or `unclassified`. Never plan that path. Re-plan
+  to an allowed location when the issue permits one (for a spike, the
+  alternatives in [docs/SPIKE_CONTRACT.md](../../docs/SPIKE_CONTRACT.md)). When
+  the issue allows no permitted location, the deliverable needs an owner
+  publication decision: write no plan, and emit the
+  [Not-Pipeline-Actionable Signal](#not-pipeline-actionable-signal) with the
+  checker's verdict (path, rule, class) quoted in `evidence`.
+- Exit `2`: the checker could not run. Fail the stage; do not plan blind.
+
+`FeaturePlanningGate` re-runs this check on the written context, and fails a
+rejected path as `not_pipeline_actionable`.
 
 ### Phase 5: Write Planning Context
 

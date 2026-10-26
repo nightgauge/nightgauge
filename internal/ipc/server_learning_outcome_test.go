@@ -904,7 +904,7 @@ func TestLearningOutcomeFor_FromCapturedFailedRunRecord(t *testing.T) {
 // every future caller.
 func TestOutcomeDecision_ThreeDistinctStates(t *testing.T) {
 	seen := map[string]outcomeDecision{}
-	for _, d := range []outcomeDecision{outcomeRecord, outcomeSkipDeferred, outcomeSkipNetworkUnavailable} {
+	for _, d := range []outcomeDecision{outcomeRecord, outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt} {
 		name := d.String()
 		if name == "" || name == "unset" {
 			t.Errorf("decision %d has no distinct name (%q)", int(d), name)
@@ -938,6 +938,12 @@ func TestLearningOutcomeFor_SkipVerdictsFromRecordFields(t *testing.T) {
 	netdown.TerminalFailureKind = orchestrator.TerminalKindNetworkUnavailable
 	if _, d := learningOutcomeFor(netdown, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeSkipNetworkUnavailable {
 		t.Errorf("network-unavailable record: decision = %s, want %s", d, outcomeSkipNetworkUnavailable)
+	}
+
+	envhalt := base
+	envhalt.TerminalFailureKind = orchestrator.TerminalKindEnvironmentHalt
+	if _, d := learningOutcomeFor(envhalt, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeSkipEnvironmentHalt {
+		t.Errorf("environment-halt record: decision = %s, want %s", d, outcomeSkipEnvironmentHalt)
 	}
 }
 

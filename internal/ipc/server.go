@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 
 	platformapi "github.com/nightgauge/nightgauge/api/generated/go/platform"
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/execution"
@@ -40,6 +42,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -1069,6 +1072,33 @@ func (s *Server) launchRootPath() string {
 	s.workspaceRootMu.RLock()
 	defer s.workspaceRootMu.RUnlock()
 	return s.launchRoot
+}
+
+// workspaceManifestRoot resolves the root holding the workspace manifest (#2540).
+//
+// workspace.setRoot re-points the current root at whichever folder is active,
+// which in a multi-root workspace can be a member with no manifest. The
+// manifest is searched in the launch root, then the current root, then every
+// registered repo path in sorted order, so the answer is deterministic.
+func (s *Server) workspaceManifestRoot() (string, error) {
+	candidates := []string{s.launchRootPath(), s.workspaceRootPath()}
+	if s.resolver != nil {
+		registered := s.resolver.RegisteredPaths()
+		sort.Strings(registered)
+		candidates = append(candidates, registered...)
+	}
+	return workspacemanifest.FindRoot(candidates)
+}
+
+// configuredRepos is the configured set every attention verb and the coverage
+// producer check against: config from the current root, manifest entries from
+// the resolved manifest root.
+func (s *Server) configuredRepos() []string {
+	manifestRoot, err := s.workspaceManifestRoot()
+	if err != nil {
+		manifestRoot = ""
+	}
+	return sweep.ConfiguredRepos(s.workspaceRootPath(), manifestRoot)
 }
 
 // WithRateLimitTracker injects a SharedRateLimitTracker (primarily for tests
@@ -3088,13 +3118,6 @@ func (s *Server) registerMethods() {
 		// OnStateChanged, OnPhaseDetected) are registered once at server init in
 		// registerMethods() to avoid overwriting them on concurrent calls (#3348).
 
-		// OnEpicComplete: deterministic epic PR creation, merge, and branch cleanup.
-		// Runs only on successful pipeline completion (all sub-issues closed).
-		// The callback names the epic in its own repository (#2377).
-		s.scheduler.OnEpicComplete(func(epicRepo string, epicNumber int) {
-			s.completeEpicPR(context.Background(), epicRepo, epicNumber)
-		})
-
 		// Update autonomous stall escalation mode on the shared runner (#3348).
 		// The shared ipcRunner was created once at server init; AutonomousMode
 		// must still reflect the current autonomous scheduler state.
@@ -4276,7 +4299,7 @@ func (s *Server) registerMethods() {
 				if err := learning.NewRecorder(root).Record(outcome); err != nil {
 					log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
 				}
-			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable:
+			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt:
 				log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
 					p.IssueNumber, outcomeVerdict)
 			case outcomeUnset:
@@ -6057,110 +6080,6 @@ func (s *Server) gitService(workDir string) (*gitops.Service, error) {
 		return nil, fmt.Errorf("no workspace root configured for git operations")
 	}
 	return gitops.NewService(dir)
-}
-
-// completeEpicPR opens and merges the epic branch → main PR of an epic that
-// auto-closed. epicRepo is the epic's own repository ("owner/name"), and every
-// read and write happens there: the epic branch in that repository's checkout,
-// the title, and the PR. In the merged sub-issue's repository the same number
-// is a different issue, and the launch checkout can be another repository
-// altogether (#2377).
-func (s *Server) completeEpicPR(ctx context.Context, epicRepo string, epicNumber int) {
-	owner, repo := splitOwnerRepo(epicRepo)
-	if owner == "" || repo == "" {
-		log.Printf("epic #%d: invalid repo format %q", epicNumber, epicRepo)
-		return
-	}
-
-	// 1. Find the epic branch on remote, in the epic repository's checkout. A
-	// workspace with no checkout of it ran none of its sub-issues, so it holds
-	// no epic branch to merge, as when none was found.
-	gitSvc, err := s.epicGitService(epicRepo)
-	if err != nil {
-		log.Printf("epic %s#%d: no checkout of the epic's repository, skipping PR creation: %v", epicRepo, epicNumber, err)
-		return
-	}
-	epicBranch, err := gitSvc.FindEpicBranch(epicNumber)
-	if err != nil {
-		log.Printf("epic %s#%d: no epic branch found, skipping PR creation: %v", epicRepo, epicNumber, err)
-		return
-	}
-
-	// 2. Get epic title for PR; its sub-issue list is not read.
-	issueSvc := gh.NewIssueService(s.client)
-	epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.NoRelations)
-	if err != nil {
-		log.Printf("epic %s#%d: failed to fetch issue: %v", epicRepo, epicNumber, err)
-		return
-	}
-
-	// 3. Create epic PR (epic branch → main)
-	prSvc := gh.NewPRService(s.client)
-	baseBranch := "main"
-	result, err := prSvc.CreateEpicPR(ctx, owner, repo, epicNumber, epicIssue.Title, epicBranch, baseBranch)
-	if err != nil {
-		log.Printf("epic %s#%d: failed to create epic PR: %v", epicRepo, epicNumber, err)
-		s.Emit("epic.prFailed", map[string]interface{}{
-			"repo":       epicRepo,
-			"epicNumber": epicNumber,
-			"error":      err.Error(),
-		})
-		return
-	}
-
-	log.Printf("epic %s#%d: PR %s (%s)", epicRepo, epicNumber, result.PRURL, result.Action)
-
-	if result.Action == "already_merged" {
-		// PR was already merged — just cleanup branches
-		log.Printf("epic %s#%d: already merged, cleaning up branches", epicRepo, epicNumber)
-		_ = gitSvc.BranchCleanup(epicBranch)
-		s.Emit("epic.completed", map[string]interface{}{
-			"repo":       epicRepo,
-			"epicNumber": epicNumber,
-			"action":     "already_merged",
-			"prUrl":      result.PRURL,
-		})
-		return
-	}
-
-	// 4. Merge the epic PR (MERGE strategy to preserve commit history)
-	prNodeID := result.PRNodeID
-	if prNodeID == "" {
-		log.Printf("epic %s#%d: no PR node ID, cannot auto-merge", epicRepo, epicNumber)
-		s.Emit("epic.prCreated", map[string]interface{}{
-			"repo":       epicRepo,
-			"epicNumber": epicNumber,
-			"prUrl":      result.PRURL,
-			"prNumber":   result.PRNumber,
-			"action":     "created_manual_merge_required",
-		})
-		return
-	}
-
-	if err := prSvc.MergeEpicPR(ctx, owner, repo, prNodeID, epicBranch); err != nil {
-		log.Printf("epic %s#%d: failed to merge epic PR: %v", epicRepo, epicNumber, err)
-		s.Emit("epic.mergeFailed", map[string]interface{}{
-			"repo":       epicRepo,
-			"epicNumber": epicNumber,
-			"prUrl":      result.PRURL,
-			"error":      err.Error(),
-		})
-		return
-	}
-
-	// 5. Cleanup: delete epic branch locally + remote tracking refs
-	if err := gitSvc.BranchCleanup(epicBranch); err != nil {
-		log.Printf("epic %s#%d: branch cleanup warning: %v", epicRepo, epicNumber, err)
-	}
-
-	log.Printf("epic %s#%d: completed — PR merged, branches cleaned", epicRepo, epicNumber)
-	s.Emit("epic.completed", map[string]interface{}{
-		"repo":       epicRepo,
-		"epicNumber": epicNumber,
-		"action":     "merged",
-		"prUrl":      result.PRURL,
-		"prNumber":   result.PRNumber,
-	})
 }
 
 // epicGitService opens the checkout of epicRepo ("owner/name"), the one

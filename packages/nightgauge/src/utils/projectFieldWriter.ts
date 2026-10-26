@@ -12,7 +12,7 @@
  * @see Issue #1711 - Epic: Eliminate Label-Field Bidirectional Sync
  */
 
-import { exec } from "child_process";
+import { exec, execFile } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
@@ -22,6 +22,7 @@ import { IpcClient } from "../services/IpcClient";
 import type { Logger } from "./logger";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // ============================================================================
 // Public Types
@@ -40,30 +41,50 @@ export interface ProjectFieldResult {
 // Internal Types
 // ============================================================================
 
-/** Cached project configuration loaded from local config files */
+/** A project board and its Status/Priority/Size fields, resolved from the board itself */
 interface ProjectFieldConfig {
   owner: string;
   repo: string;
   projectId: string;
   fields: {
     status: { id: string; options: Record<string, string> };
-    priority: { id: string; options: Record<string, string> };
-    size: { id: string; options: Record<string, string> };
+    priority: { id: string; options: Record<string, string> } | null;
+    size: { id: string; options: Record<string, string> } | null;
   };
 }
 
-/** A single project configuration for multi-project support */
-interface MultiProjectConfig extends ProjectFieldConfig {
-  name?: string;
-  isDefault: boolean;
+/** Outcome of resolving a repository's board: a config, or why there is none */
+type BoardResolution = { config: ProjectFieldConfig } | { error: string };
+
+/** Board identity as printed by `nightgauge project resolve --repo <slug> --json` */
+interface ResolvedProject {
+  id: string;
+  owner: string;
+  number: number;
 }
 
+/** Injectable process boundary for `nightgauge project resolve` (tests replace it) */
+export interface BoardResolverDeps {
+  resolveBinary: () => Promise<string | null>;
+  exec: (binary: string, args: string[], cwd: string) => Promise<{ stdout: string }>;
+}
+
+const defaultBoardResolverDeps: BoardResolverDeps = {
+  resolveBinary: async () => {
+    const { BinaryResolver } = await import("../services/BinaryResolver");
+    return BinaryResolver.fromVSCode().resolve();
+  },
+  exec: (binary, args, cwd) => execFileAsync(binary, args, { cwd, timeout: 60000 }),
+};
+
+let boardResolverDeps: BoardResolverDeps = defaultBoardResolverDeps;
+
 // ============================================================================
-// Config Cache (field IDs don't change between calls)
+// Board Cache (a board's field and option IDs don't change between calls)
 // ============================================================================
 
-let cachedConfigs: MultiProjectConfig[] | null = null;
-let cachedConfigCwd: string | null = null;
+/** Resolved boards keyed by `${cwd}|${owner/repo}`. Failures are never cached. */
+const boardCache = new Map<string, ProjectFieldConfig>();
 
 /**
  * Project item ID cache — keyed by `${projectId}|${owner}/${repo}#${number}`.
@@ -85,11 +106,10 @@ function projectItemCacheKey(
 }
 
 /**
- * Clear the cached configuration. Call when workspace changes.
+ * Clear the cached boards. Call when workspace changes.
  */
 export function clearConfigCache(): void {
-  cachedConfigs = null;
-  cachedConfigCwd = null;
+  boardCache.clear();
   projectItemIdCache.clear();
 }
 
@@ -102,195 +122,121 @@ export function clearProjectItemIdCache(): void {
 }
 
 // ============================================================================
-// Config Loading (local files only — zero API calls)
+// Board Resolution (project by repo, fields by project)
 // ============================================================================
 
 /**
- * Map config.yaml option keys to title-case runtime keys.
- * Supports both kebab-case (in-progress) and snake_case (in_progress).
+ * The workspace's own `owner/repo`, read from `.nightgauge/config.yaml`.
+ * Used only when the caller names no repository.
  */
-const STATUS_KEY_MAP: Record<string, string> = {
-  backlog: "Backlog",
-  ready: "Ready",
-  "in-progress": "In progress",
-  in_progress: "In progress",
-  "in-review": "In review",
-  in_review: "In review",
-  done: "Done",
-};
-
-const PRIORITY_KEY_MAP: Record<string, string> = {
-  p0: "P0",
-  p1: "P1",
-  p2: "P2",
-};
-
-const SIZE_KEY_MAP: Record<string, string> = {
-  xs: "XS",
-  s: "S",
-  m: "M",
-  l: "L",
-  xl: "XL",
-};
-
-/** Remap lowercase option keys to their title-case equivalents */
-function remapOptions(
-  options: Record<string, string>,
-  keyMap: Record<string, string>
-): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(options)) {
-    result[keyMap[key] ?? key] = value;
-  }
-  return result;
-}
-
-/**
- * Load field mappings from `.nightgauge/config.yaml`.
- *
- * Supports three layouts for backward compatibility:
- * - `project.fields.status` (canonical nested, used by newer repos)
- * - `fields.status` (legacy top-level nested, used by older repos)
- * - flat: `project.{status,priority,size}_field_id` + `project.field_options`
- *   (used by configs generated in the flat format; valid per
- *   `config/schema.ts` `ProjectEntrySchema`)
- *
- * Option keys are remapped from lowercase (kebab or snake_case) to
- * title-case for the GraphQL API (e.g. "in-progress" → "In progress").
- *
- * Returns null if config.yaml is missing or lacks field data.
- */
-async function loadFieldMappings(cwd: string): Promise<ProjectFieldConfig["fields"] | null> {
+async function readWorkspaceRepo(cwd: string): Promise<string | null> {
   try {
     const configResult = await resolveConfigPath(cwd);
     if (!configResult.exists) return null;
-
-    const configRaw = await fs.promises.readFile(configResult.path, "utf-8");
-    const config = yaml.parse(configRaw);
-    const project = config?.project;
-
-    // Nested layout (canonical): project.fields, or legacy top-level fields.
-    const fields = project?.fields || config?.fields;
-    if (fields?.status?.id && fields?.status?.options && fields?.priority?.id && fields?.size?.id) {
-      return {
-        status: {
-          id: fields.status.id,
-          options: remapOptions(fields.status.options, STATUS_KEY_MAP),
-        },
-        priority: {
-          id: fields.priority.id,
-          options: remapOptions(fields.priority.options ?? {}, PRIORITY_KEY_MAP),
-        },
-        size: {
-          id: fields.size.id,
-          options: remapOptions(fields.size.options ?? {}, SIZE_KEY_MAP),
-        },
-      };
-    }
-
-    // Flat layout: project.{status,priority,size}_field_id + project.field_options.
-    if (project?.status_field_id && project?.priority_field_id && project?.size_field_id) {
-      const opts = project.field_options ?? {};
-      return {
-        status: {
-          id: project.status_field_id,
-          options: remapOptions(opts.status ?? {}, STATUS_KEY_MAP),
-        },
-        priority: {
-          id: project.priority_field_id,
-          options: remapOptions(opts.priority ?? {}, PRIORITY_KEY_MAP),
-        },
-        size: { id: project.size_field_id, options: remapOptions(opts.size ?? {}, SIZE_KEY_MAP) },
-      };
-    }
-
-    return null;
+    const config = yaml.parse(await fs.promises.readFile(configResult.path, "utf-8"));
+    const owner = config?.project?.owner || config?.owner;
+    const repo = config?.project?.repo || config?.repo;
+    return owner && repo ? `${owner}/${repo}` : null;
   } catch {
     return null;
   }
 }
 
+/** Map a ProjectV2 single-select field's option names to their IDs. */
+function optionMap(field: { id: string; options?: { id: string; name: string }[] }): {
+  id: string;
+  options: Record<string, string>;
+} {
+  const options: Record<string, string> = {};
+  for (const opt of field.options ?? []) {
+    if (opt?.name && opt?.id) options[opt.name] = opt.id;
+  }
+  return { id: field.id, options };
+}
+
 /**
- * Load project configurations from config.yaml.
- *
- * All configuration comes from a single source: `.nightgauge/config.yaml`.
- * Supports both single-project (`project:`) and multi-project (`projects:`)
- * formats. Field IDs, project ID, and owner are all read from config.yaml.
- *
- * Results are cached — field IDs don't change between calls.
+ * Resolve the board for a repository, the same way the Go scheduler does:
+ * the project comes from `nightgauge project resolve --repo <slug>`, and the
+ * Status/Priority/Size field and option IDs come from one `ProjectV2.fields`
+ * query against that project. Nothing is read from hand-copied
+ * `project.fields` config (#1501). Successful resolutions are cached per
+ * workspace and repository, so a second transition issues no discovery calls.
  */
-async function loadProjectConfigs(cwd: string): Promise<MultiProjectConfig[] | null> {
-  // Return cached if same workspace
-  if (cachedConfigs && cachedConfigCwd === cwd) {
-    return cachedConfigs;
+async function resolveBoard(cwd: string, repoNameWithOwner?: string): Promise<BoardResolution> {
+  const slug =
+    repoNameWithOwner && /^[^/\s]+\/[^/\s]+$/.test(repoNameWithOwner)
+      ? repoNameWithOwner
+      : await readWorkspaceRepo(cwd);
+  if (!slug) {
+    return {
+      error: "Board fields unresolvable: no repository named and none in .nightgauge/config.yaml",
+    };
   }
+  const cacheKey = `${cwd}|${slug}`;
+  const cached = boardCache.get(cacheKey);
+  if (cached) return { config: cached };
 
-  const fields = await loadFieldMappings(cwd);
-  if (!fields) {
-    return null;
-  }
+  const fail = (cause: string): BoardResolution => ({
+    error: `Board fields unresolvable for ${slug}: ${cause}`,
+  });
 
-  const configResult = await resolveConfigPath(cwd);
-  if (!configResult.exists) {
-    return null;
-  }
+  const binary = await boardResolverDeps.resolveBinary();
+  if (!binary) return fail("nightgauge binary not found");
 
+  let project: ResolvedProject;
   try {
-    const configRaw = await fs.promises.readFile(configResult.path, "utf-8");
-    const config = yaml.parse(configRaw);
-
-    const configs: MultiProjectConfig[] = [];
-
-    // Top-level owner (flat format used by all repos)
-    const topOwner = config?.owner;
-
-    if (config?.projects && Array.isArray(config.projects)) {
-      // Multi-project mode
-      for (const proj of config.projects) {
-        const owner = proj.owner || config?.project?.owner || topOwner;
-        const repo = proj.repo || config?.project?.repo || config?.repo;
-        const projectId = proj.id || config?.project?.id;
-
-        if (!owner || !repo || !projectId) continue;
-
-        configs.push({
-          name: proj.name,
-          owner: String(owner),
-          repo: String(repo),
-          projectId: String(projectId),
-          fields,
-          isDefault: proj.default === true,
-        });
-      }
-    } else if (config?.project) {
-      // Single-project mode
-      const owner = config.project.owner || topOwner;
-      const repo = config.project.repo || config?.repo;
-      const projectId = config.project.id;
-
-      if (owner && projectId) {
-        configs.push({
-          name: undefined,
-          owner: String(owner),
-          repo: repo ? String(repo) : "nightgauge",
-          projectId: String(projectId),
-          fields,
-          isDefault: true,
-        });
-      }
-    }
-
-    if (configs.length === 0) {
-      return null;
-    }
-
-    // Cache for subsequent calls
-    cachedConfigs = configs;
-    cachedConfigCwd = cwd;
-    return configs;
-  } catch {
-    return null;
+    const { stdout } = await boardResolverDeps.exec(
+      binary,
+      ["project", "resolve", "--repo", slug, "--json"],
+      cwd
+    );
+    project = JSON.parse(stdout) as ResolvedProject;
+  } catch (err) {
+    const e = err as { stderr?: unknown; message?: unknown };
+    return fail(String(e?.stderr || e?.message || err).trim());
   }
+  if (!project?.id) return fail("no project is mapped to this repository");
+
+  let nodes: { id?: string; name?: string; options?: { id: string; name: string }[] }[];
+  try {
+    const result = await executeGraphQL(
+      `query($projectId: ID!) {
+        node(id: $projectId) {
+          ... on ProjectV2 {
+            fields(first: 50) {
+              nodes { ... on ProjectV2SingleSelectField { id name options { id name } } }
+            }
+          }
+        }
+      }`,
+      { projectId: project.id },
+      cwd
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    nodes = (result as any)?.data?.node?.fields?.nodes ?? [];
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err));
+  }
+
+  const byName = (name: string) => nodes.find((n) => n?.name === name && n?.id);
+  const status = byName("Status");
+  if (!status?.id) return fail(`project ${project.owner}/${project.number} has no Status field`);
+  const priority = byName("Priority");
+  const size = byName("Size");
+
+  const [owner, repo] = slug.split("/", 2);
+  const config: ProjectFieldConfig = {
+    owner,
+    repo,
+    projectId: project.id,
+    fields: {
+      status: optionMap({ id: status.id, options: status.options }),
+      priority: priority?.id ? optionMap({ id: priority.id, options: priority.options }) : null,
+      size: size?.id ? optionMap({ id: size.id, options: size.options }) : null,
+    },
+  };
+  boardCache.set(cacheKey, config);
+  return { config };
 }
 
 // ============================================================================
@@ -498,14 +444,12 @@ export async function ensureIssueOnProject(
     return null;
   }
 
-  const configs = await loadProjectConfigs(cwd);
-  if (!configs || configs.length === 0) {
-    logger.warn("No project configuration found", { cwd });
+  const board = await resolveBoard(cwd, repoNameWithOwner);
+  if ("error" in board) {
+    logger.warn(board.error, { cwd, issueNumber });
     return null;
   }
-
-  // Use default project (or first)
-  const config = configs.find((c) => c.isDefault) || configs[0];
+  const { config } = board;
 
   // Check if already on the project (single targeted query, cached on hit)
   let itemId = await findProjectItem(config, issueNumber, cwd, repoNameWithOwner);
@@ -580,12 +524,12 @@ export async function getProjectItemStatus(
     return null;
   }
 
-  const configs = await loadProjectConfigs(cwd);
-  if (!configs || configs.length === 0) {
+  const board = await resolveBoard(cwd, repoNameWithOwner);
+  if ("error" in board) {
+    logger.warn(board.error, { cwd, issueNumber });
     return null;
   }
-
-  const config = configs.find((c) => c.isDefault) || configs[0];
+  const { config } = board;
   const { owner, repo } = resolveOwnerRepo(config, repoNameWithOwner);
 
   try {
@@ -642,7 +586,8 @@ export async function getProjectItemStatus(
  * Update the Status field on the project board for an issue.
  *
  * Finds the project item, then uses `updateProjectV2ItemFieldValue` to set
- * the Status single-select field. Supports multi-project configs.
+ * the Status single-select field. The board is resolved from the
+ * repository, not from config (#1501).
  *
  * @param issueNumber - The GitHub issue number
  * @param statusValue - The status to set (e.g. "Ready", "In progress", "Done")
@@ -661,144 +606,127 @@ export async function updateProjectItemStatus(
     return { success: false, error: `Invalid issue number: ${issueNumber}` };
   }
 
-  const configs = await loadProjectConfigs(cwd);
-  if (!configs || configs.length === 0) {
+  const board = await resolveBoard(cwd, repoNameWithOwner);
+  if ("error" in board) {
+    return { success: false, error: board.error };
+  }
+  const { config } = board;
+
+  const optionId = config.fields.status.options[statusValue];
+  if (!optionId) {
     return {
       success: false,
-      error:
-        "No project configuration found. Check .nightgauge/config.yaml has project.fields with status/priority/size field IDs",
+      error: `Status option "${statusValue}" not found on the Status field of the board for ${config.owner}`,
     };
   }
 
-  const errors: string[] = [];
-  let anySuccess = false;
+  try {
+    // Find or add the issue to the project (cached on hit)
+    let itemId = await findProjectItem(config, issueNumber, cwd, repoNameWithOwner);
 
-  for (const config of configs) {
-    const optionId = config.fields.status.options[statusValue];
-    if (!optionId) {
-      errors.push(
-        `Status option "${statusValue}" not found in field mappings for project ${config.name || config.owner}`
-      );
-      continue;
-    }
-
-    try {
-      // Find or add the issue to the project (cached on hit)
-      let itemId = await findProjectItem(config, issueNumber, cwd, repoNameWithOwner);
-
-      if (!itemId) {
-        // Issue not on project — add it first
-        const issueNodeId = await getContentNodeId(config, issueNumber, cwd, repoNameWithOwner);
-        if (!issueNodeId) {
-          const { owner, repo } = resolveOwnerRepo(config, repoNameWithOwner);
-          errors.push(`Issue #${issueNumber} not found in ${owner}/${repo}`);
-          continue;
-        }
-
-        const addResult = await executeGraphQL(
-          `mutation($projectId: ID!, $contentId: ID!) {
-            addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
-              item { id }
-            }
-          }`,
-          { projectId: config.projectId, contentId: issueNodeId },
-          cwd
-        );
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        itemId = (addResult as any)?.data?.addProjectV2ItemById?.item?.id;
-
-        if (!itemId) {
-          errors.push(
-            `Failed to add issue #${issueNumber} to project ${config.name || config.owner}`
-          );
-          continue;
-        }
-        // Cache the freshly-created item ID so subsequent stage transitions
-        // skip even the lookup query.
+    if (!itemId) {
+      // Issue not on project — add it first
+      const issueNodeId = await getContentNodeId(config, issueNumber, cwd, repoNameWithOwner);
+      if (!issueNodeId) {
         const { owner, repo } = resolveOwnerRepo(config, repoNameWithOwner);
-        projectItemIdCache.set(
-          projectItemCacheKey(config.projectId, owner, repo, issueNumber),
-          itemId
-        );
-        logger.info("Added issue to project board before status update", {
-          issueNumber,
-          project: config.name || config.owner,
-        });
+        return { success: false, error: `Issue #${issueNumber} not found in ${owner}/${repo}` };
       }
 
-      // Update the status field
-      const mutation = `
-        mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-          updateProjectV2ItemFieldValue(input: {
-            projectId: $projectId
-            itemId: $itemId
-            fieldId: $fieldId
-            value: { singleSelectOptionId: $optionId }
-          }) {
-            projectV2Item { id }
+      const addResult = await executeGraphQL(
+        `mutation($projectId: ID!, $contentId: ID!) {
+          addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+            item { id }
           }
-        }
-      `;
-
-      await executeGraphQL(
-        mutation,
-        {
-          projectId: config.projectId,
-          itemId,
-          fieldId: config.fields.status.id,
-          optionId,
-        },
+        }`,
+        { projectId: config.projectId, contentId: issueNodeId },
         cwd
       );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      itemId = (addResult as any)?.data?.addProjectV2ItemById?.item?.id;
 
-      logger.info("Updated project board status", {
-        issueNumber,
-        status: statusValue,
-        project: config.name || config.owner,
-      });
-      anySuccess = true;
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      errors.push(`Failed to update status in project ${config.name || config.owner}: ${msg}`);
-      logger.warn("Failed to update project board status", {
-        issueNumber,
-        status: statusValue,
-        project: config.name || config.owner,
-        error: msg,
-      });
-    }
-  }
-
-  if (anySuccess) {
-    // #3023 phase 1: a successful promote-to-Ready is the most common path
-    // by which users tell autonomous "go work this now". Trigger an
-    // immediate scheduler rescan so the user sees instant dispatch instead
-    // of waiting for the next poll. Best-effort — IPC failure must not
-    // shadow the (already successful) status update; the scheduler's
-    // polling loop is the safety net.
-    if (statusValue === "Ready") {
-      try {
-        // Lazy require to avoid pulling IPC into projectFieldWriter's hot
-        // path for non-Ready transitions.
-        const { IpcClient } = await import("../services/IpcClient");
-        await IpcClient.getInstance().autonomousRescan();
-        logger.debug("Triggered autonomous rescan after promote to Ready", {
-          issueNumber,
-        });
-      } catch (rescanErr) {
-        logger.debug("Autonomous rescan trigger failed (non-fatal)", {
-          issueNumber,
-          error: rescanErr instanceof Error ? rescanErr.message : String(rescanErr),
-        });
+      if (!itemId) {
+        return {
+          success: false,
+          error: `Failed to add issue #${issueNumber} to project ${config.owner}`,
+        };
       }
+      // Cache the freshly-created item ID so subsequent stage transitions
+      // skip even the lookup query.
+      const { owner, repo } = resolveOwnerRepo(config, repoNameWithOwner);
+      projectItemIdCache.set(
+        projectItemCacheKey(config.projectId, owner, repo, issueNumber),
+        itemId
+      );
+      logger.info("Added issue to project board before status update", {
+        issueNumber,
+        project: config.owner,
+      });
     }
-    return { success: true };
+
+    // Update the status field
+    const mutation = `
+      mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+        updateProjectV2ItemFieldValue(input: {
+          projectId: $projectId
+          itemId: $itemId
+          fieldId: $fieldId
+          value: { singleSelectOptionId: $optionId }
+        }) {
+          projectV2Item { id }
+        }
+      }
+    `;
+
+    await executeGraphQL(
+      mutation,
+      {
+        projectId: config.projectId,
+        itemId,
+        fieldId: config.fields.status.id,
+        optionId,
+      },
+      cwd
+    );
+
+    logger.info("Updated project board status", {
+      issueNumber,
+      status: statusValue,
+      project: config.owner,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.warn("Failed to update project board status", {
+      issueNumber,
+      status: statusValue,
+      project: config.owner,
+      error: msg,
+    });
+    return { success: false, error: `Failed to update status in project ${config.owner}: ${msg}` };
   }
 
-  return {
-    success: false,
-    error: errors.join("; "),
-  };
+  // #3023 phase 1: a successful promote-to-Ready is the most common path
+  // by which users tell autonomous "go work this now". Trigger an
+  // immediate scheduler rescan so the user sees instant dispatch instead
+  // of waiting for the next poll. Best-effort — IPC failure must not
+  // shadow the (already successful) status update; the scheduler's
+  // polling loop is the safety net.
+  if (statusValue === "Ready") {
+    try {
+      // Lazy require to avoid pulling IPC into projectFieldWriter's hot
+      // path for non-Ready transitions.
+      const { IpcClient } = await import("../services/IpcClient");
+      await IpcClient.getInstance().autonomousRescan();
+      logger.debug("Triggered autonomous rescan after promote to Ready", {
+        issueNumber,
+      });
+    } catch (rescanErr) {
+      logger.debug("Autonomous rescan trigger failed (non-fatal)", {
+        issueNumber,
+        error: rescanErr instanceof Error ? rescanErr.message : String(rescanErr),
+      });
+    }
+  }
+  return { success: true };
 }
 
 // ============================================================================
@@ -806,12 +734,12 @@ export async function updateProjectItemStatus(
 // ============================================================================
 
 export const _testing = {
-  loadProjectConfigs,
-  loadFieldMappings,
+  resolveBoard,
+  setBoardResolverDeps: (deps: BoardResolverDeps | null): void => {
+    boardResolverDeps = deps ?? defaultBoardResolverDeps;
+  },
   findProjectItem,
   getContentNodeId,
-  /** @deprecated Use getContentNodeId — kept as an alias for test compatibility. */
-  getIssueNodeId: getContentNodeId,
   executeGraphQL,
   clearConfigCache,
 };

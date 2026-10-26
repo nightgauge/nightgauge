@@ -166,7 +166,7 @@ func (s *Scheduler) enforceIssueCapacity(ctx context.Context, d capacityDispatch
 		adapter := d.adapterName
 		if model == "" {
 			model = s.resolveDispatchModel(st, d.item.Number, d.workspaceRoot,
-				routedStageModel(st, d.predictedModel, d.decision), d.modelFloors, d.jobClass)
+				d.predictedModel, d.decision, d.modelFloors, d.jobClass)
 			adapter = capacityStageAdapter(d.workspaceRoot, st, d.adapterName)
 		}
 		consider(st, model, DispatchContextWindow(ctx, d.workspaceRoot, adapter, model))

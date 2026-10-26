@@ -19,6 +19,7 @@ var parkedKinds = []string{
 	TerminalKindContextWindowExceeded,
 	TerminalKindAdapterPermissionRejected,
 	TerminalKindAdapterIncompatible,
+	TerminalKindEnvironmentHalt, // #101: a broken local environment
 }
 
 // TestParkedKinds_NoRetryNoLifetimeIncrementNoCascade drives each parked kind
@@ -165,6 +166,48 @@ func TestTerminalKindParks_OnlyTheThreeKinds(t *testing.T) {
 		}
 		if TerminalKindRemediation(kind) != "" {
 			t.Errorf("TerminalKindRemediation(%q) = %q, want empty", kind, TerminalKindRemediation(kind))
+		}
+	}
+}
+
+func TestIsStageDeclaredBlockedOutcome(t *testing.T) {
+	cases := []struct {
+		detail string
+		want   bool
+	}{
+		{"BLOCKED — PR unmerged: out-of-scope: X. Remediation: usage limit", true},
+		{"  BLOCKED — PR unmerged", true},
+		{"[not-pipeline-actionable] needs a human", true},
+		{"exit 1: You've hit your usage limit", false},
+		{"[rate-limit-quota-exhausted] resetsAt=1", false},
+		{"stage said: BLOCKED — quoted mid-string", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := IsStageDeclaredBlockedOutcome(c.detail); got != c.want {
+			t.Errorf("IsStageDeclaredBlockedOutcome(%q) = %v, want %v", c.detail, got, c.want)
+		}
+	}
+}
+
+func TestDemoteEnvironmentalKindForOutcome(t *testing.T) {
+	blocked := "BLOCKED — PR unmerged: Remediation: You've hit your usage limit"
+	npa := "[not-pipeline-actionable] codex: usage limit"
+	cases := []struct {
+		kind, detail, want string
+		demoted            bool
+	}{
+		{TerminalKindRateLimitQuotaExhausted, blocked, TerminalKindBlockedOutcomeHold, true},
+		{TerminalKindStreamIdleTimeout, blocked, TerminalKindBlockedOutcomeHold, true},
+		{TerminalKindRateLimitQuotaExhausted, npa, TerminalKindNotPipelineActionable, true},
+		{TerminalKindRateLimitQuotaExhausted, "exit 1: You've hit your usage limit", TerminalKindRateLimitQuotaExhausted, false},
+		{TerminalKindSubagentCrash, blocked, TerminalKindSubagentCrash, false},
+		{"", blocked, "", false},
+	}
+	for _, c := range cases {
+		got, ok := DemoteEnvironmentalKindForOutcome(c.kind, c.detail)
+		if got != c.want || ok != c.demoted {
+			t.Errorf("Demote(%q, %q) = (%q, %v), want (%q, %v)", c.kind, c.detail, got, ok, c.want, c.demoted)
 		}
 	}
 }

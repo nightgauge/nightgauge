@@ -224,10 +224,14 @@ func TestOutcomeRecording(t *testing.T) {
 	snap.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6", "")
 	snapshot := snap.Snapshot()
 
+	// The prediction is the feature-dev dispatch selection persisted in the
+	// issue context (#2537).
+	writeDispatchPrediction(t, tmpDir, 42, "claude-sonnet-4-6")
+
 	// Record a successful outcome. tmpDir stands in for the run's TARGET repo
 	// root — the corpus lands beside that repo's run records, not at the
 	// daemon's launch root (#304).
-	s.recordOutcome(item, snapshot, true, 5, "claude-sonnet-4-6", tmpDir)
+	s.recordOutcome(item, snapshot, true, 5, tmpDir)
 
 	outcomesFile := filepath.Join(layouttest.PipelineDir(t, tmpDir), "history", "outcomes.jsonl")
 	data, err := os.ReadFile(outcomesFile)
@@ -273,7 +277,8 @@ func TestOutcomeRecording(t *testing.T) {
 	snap2 := state.NewRuntimeState(item.Repo, item.Number, "item-id-2", testRunID())
 	snap2.BeginStage(state.StageFeatureValidate)
 	snapshot2 := snap2.Snapshot()
-	s.recordOutcome(item, snapshot2, false, 2, "claude-haiku-4-5-20251001", tmpDir)
+	writeDispatchPrediction(t, tmpDir, 42, "haiku")
+	s.recordOutcome(item, snapshot2, false, 2, tmpDir)
 
 	data2, err := os.ReadFile(outcomesFile)
 	if err != nil {
@@ -308,6 +313,20 @@ func TestOutcomeRecording(t *testing.T) {
 	}
 	if failedOutcome.ActualModel != "" {
 		t.Errorf("ActualModel = %q, want empty", failedOutcome.ActualModel)
+	}
+}
+
+// writeDispatchPrediction writes an issue context whose only routing field is
+// pickup_recommendation.dispatch_dev_model, the outcome writers' prediction.
+func writeDispatchPrediction(t *testing.T, repoRoot string, issue int, model string) {
+	t.Helper()
+	dir := layouttest.PipelineDir(t, repoRoot)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"routing":{"pickup_recommendation":{"dispatch_dev_model":%q}}}`, model)
+	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("issue-%d.json", issue)), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

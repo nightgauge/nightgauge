@@ -1178,6 +1178,7 @@ func issueCmd() *cobra.Command {
 		issueMarkRefinedCmd(),
 		issueHasLabelCmd(),
 		issueExtractTargetsCmd(),
+		issueCheckOwnershipCmd(),
 	)
 	return cmd
 }
@@ -1240,6 +1241,119 @@ Resolution order:
 
 	cmd.Flags().StringVar(&bodyFile, "body-file", "", "Read the issue body from a file instead of stdin (- = stdin)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON {targets, count, source}")
+	return cmd
+}
+
+// issueCheckOwnershipCmd verifies an issue's declared file_ownership set
+// against its acceptance criteria (#561). Findings never change the exit
+// code — the caller (issue-audit WARNING, issue-create promotion gate)
+// decides severity, matching extract-targets.
+func issueCheckOwnershipCmd() *cobra.Command {
+	var (
+		owner      string
+		repo       string
+		bodyFile   string
+		workdir    string
+		outputJSON bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "check-ownership [number]",
+		Short: "Check an issue's declared file_ownership against its acceptance criteria",
+		Long: `Deterministically verify the file_ownership set in an issue's
+nightgauge:dependency-metadata block against its acceptance criteria (#561).
+Each finding is FILE_OWNERSHIP_UNSUBSTANTIATED with one rule:
+
+  test-missing      an AC requires a test; no declared path is or has a test
+  generated-mirror  a declared path is generated; the finding names the canonical
+  path-missing      a declared path does not exist and no AC says to create it
+
+A body without a declared set is a no-op. With a number the body is fetched
+from the forge; otherwise it is read from stdin or --body-file. Paths are
+resolved against --workdir. Findings never change the exit code.`,
+		Args: cobra.MaximumNArgs(1),
+		Example: `  nightgauge issue check-ownership 536 --json
+  printf '%s' "$ISSUE_BODY" | nightgauge issue check-ownership --json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var (
+				body   string
+				number int
+			)
+			if len(args) == 1 {
+				if _, err := fmt.Sscanf(args[0], "%d", &number); err != nil {
+					return fmt.Errorf("invalid issue number: %s", args[0])
+				}
+				client, err := clientFromConfig()
+				if err != nil {
+					return err
+				}
+				ownerPart, repoPart := splitRepo(owner, repo)
+				issue, err := gh.NewIssueService(client).GetIssue(cmd.Context(), ownerPart, repoPart, number)
+				if err != nil {
+					return fmt.Errorf("get issue #%d in %s/%s: %w", number, ownerPart, repoPart, enrichError(err))
+				}
+				body = issue.Body
+			} else {
+				var (
+					data []byte
+					err  error
+				)
+				if bodyFile != "" && bodyFile != "-" {
+					data, err = os.ReadFile(bodyFile)
+				} else {
+					data, err = io.ReadAll(cmd.InOrStdin())
+				}
+				if err != nil {
+					return fmt.Errorf("read issue body: %w", err)
+				}
+				body = string(data)
+			}
+
+			exists := func(p string) bool {
+				// Paths come from an untrusted issue body: never stat outside the repo.
+				if !filepath.IsLocal(filepath.FromSlash(p)) {
+					return false
+				}
+				_, err := os.Stat(filepath.Join(workdir, filepath.FromSlash(p)))
+				return err == nil
+			}
+			declared, source := teams.ExtractTargetFilesDetailed(body)
+			if source != "declared" {
+				declared = []string{}
+			}
+			findings := teams.CheckFileOwnership(body, exists)
+			if findings == nil {
+				findings = []teams.OwnershipFinding{}
+			}
+
+			if outputJSON {
+				out := map[string]interface{}{
+					"source":   source,
+					"declared": declared,
+					"findings": findings,
+					"count":    len(findings),
+				}
+				if number > 0 {
+					out["issue"] = number
+				}
+				return printJSON(out)
+			}
+			for _, f := range findings {
+				target := f.Path
+				if target == "" {
+					target = "(set)"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %s %s: %s\n", f.Type, f.Rule, target, f.Reason)
+			}
+			return nil
+		},
+	}
+
+	ownerFlag(cmd, &owner, "GitHub organization")
+	repoNameFlag(cmd, &repo, "", "Repository name (when fetching by number)")
+	cmd.Flags().StringVar(&bodyFile, "body-file", "", "Read the issue body from a file instead of stdin (- = stdin)")
+	cmd.Flags().StringVar(&workdir, "workdir", ".", "Repository root that declared paths resolve against")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON {issue, source, declared, findings, count}")
 	return cmd
 }
 
@@ -3112,7 +3226,11 @@ func epicPlanWavesCmd() *cobra.Command {
 				}
 				fmt.Printf("Wave %d (%d issue(s) — %s):\n", w.WaveIndex, len(w.Issues), parallel)
 				for _, issue := range w.Issues {
-					fmt.Printf("  #%d %s\n", issue.Number, issue.Title)
+					source := issue.TargetSource
+					if source == "" {
+						source = "inferred"
+					}
+					fmt.Printf("  #%d %s [targets: %s]\n", issue.Number, issue.Title, source)
 				}
 			}
 			// Surface deterministic file-overlap serializations so the
@@ -3212,12 +3330,14 @@ func epicCompleteCmd() *cobra.Command {
 		Short: "Complete an epic: check, close, create PR, merge, cleanup",
 		Long: `Run the full epic completion flow:
 1. Check if all sub-issues are closed
-2. Close the epic issue
-3. Create epic→main PR (MERGE strategy to preserve commit history)
-4. Merge the PR
-5. Cleanup epic branch (local + remote)
+2. Merge main into the epic branch (CHANGELOG-only conflicts resolved by union)
+3. Create or reuse the epic→main PR and merge it (via the merge queue when required)
+4. Cleanup epic branch (local + remote)
+5. Close the epic issue — only once its branch is on main
 
-If sub-issues remain open, reports progress and exits without action.
+If sub-issues remain open, reports progress and exits without action. If the
+epic branch cannot be integrated (conflict, red CI), the epic stays open and
+the action is integration_<outcome>.
 
 Run it in a checkout of --repo: the epic branch is found, merged and deleted in
 the current checkout, so a checkout whose origin is another repository is
@@ -3483,6 +3603,16 @@ func epicSummaryTierCmd() *cobra.Command {
 	return cmd
 }
 
+// installEpicCheckout lets the epic service integrate an epic branch in the
+// current directory's checkout before closing the epic (#2560). The checkout
+// serves only an epic of its own origin repository (#2388); for any other an
+// epic with an unintegrated branch stays open.
+func installEpicCheckout(epicSvc *gh.EpicService) {
+	if wd, err := os.Getwd(); err == nil {
+		epicSvc.SetCheckoutResolver(gh.CheckoutResolverForPath(wd))
+	}
+}
+
 func epicAutoCloseCmd() *cobra.Command {
 	var (
 		owner         string
@@ -3495,7 +3625,9 @@ func epicAutoCloseCmd() *cobra.Command {
 		Use:   "auto-close",
 		Short: "Automatically close completed epics and move to Done",
 		Long: `Check all open epics in a repo. For each epic:
-- If ALL sub-issues are closed: close the epic with automated comment, move to Done
+- If ALL sub-issues are closed: integrate its epic branch into main, then close
+  the epic with automated comment and move to Done. An epic whose branch cannot
+  be integrated (or inspected from this checkout) stays open.
 - If some sub-issues are open: skip
 - If no sub-issues: skip
 
@@ -3510,6 +3642,7 @@ Returns a summary with checked, closed, and skipped counts.`,
 
 			ownerPart, repoPart := splitRepo(owner, repo)
 			epicSvc := gh.NewEpicService(client)
+			installEpicCheckout(epicSvc)
 
 			result, err := epicSvc.AutoClose(cmd.Context(), ownerPart, repoPart, projectNumber)
 			if err != nil {
@@ -4035,6 +4168,7 @@ common case at merge time.`,
 			}
 
 			epicSvc := gh.NewEpicService(client)
+			installEpicCheckout(epicSvc)
 			res, err := epicSvc.ReconcileBoard(cmd.Context(), owner, projectNumber, getOwnerType(cmd))
 			if err != nil {
 				return fmt.Errorf("reconcile board %s/%d: %w", owner, projectNumber, enrichError(err))
@@ -6853,6 +6987,7 @@ cause the command to exit non-zero.`,
 			ownerPart, repoPart := splitRepo(owner, repo)
 			issueSvc := gh.NewIssueService(client)
 			epicSvc := gh.NewEpicService(client)
+			installEpicCheckout(epicSvc)
 			prSvc := gh.NewPRService(client)
 
 			// Board syncer is only wired when a project is configured; the hook
@@ -11154,6 +11289,7 @@ func autonomousCmd() *cobra.Command {
 	cmd.AddCommand(autonomousStatusCmd())
 	cmd.AddCommand(autonomousResumeCmd())
 	cmd.AddCommand(autonomousClearFailuresCmd())
+	cmd.AddCommand(autonomousClearCooldownCmd())
 	cmd.AddCommand(autonomousStopCmd())
 	cmd.AddCommand(autonomousStuckEpicsCmd())
 	cmd.AddCommand(autonomousEligibilityCmd())
@@ -12075,6 +12211,74 @@ func autonomousClearFailuresCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "Clear the lifetime failure counter for every issue")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output the result as JSON")
+	return cmd
+}
+
+// autonomousClearCooldownCmd lifts the global quota dispatch cooldown (#2551).
+// It mirrors clear-failures: the running daemon's scheduler first, then the
+// state file, so a headless operator can recover without the extension.
+func autonomousClearCooldownCmd() *cobra.Command {
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "clear-cooldown",
+		Short: "Clear the global quota cooldown that suspends every dispatch",
+		Long: "Removes the global dispatch cooldown the scheduler applies after a quota failure, " +
+			"so the next cycle dispatches without waiting for the recorded deadline.",
+		Example:      "  nightgauge autonomous clear-cooldown\n  nightgauge autonomous clear-cooldown --json",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workdir, _ := os.Getwd()
+			out := cmd.OutOrStdout()
+			ctx := context.Background()
+
+			if client, dialErr := ipc.DialDaemon(ctx, workdir, daemonDialTimeout); dialErr == nil {
+				defer client.Close()
+				var res ipc.AutonomousClearQuotaCooldownResult
+				if err := client.Call(ctx, "autonomous.clearQuotaCooldown", ipc.AutonomousClearQuotaCooldownParams{}, &res); err != nil {
+					return err
+				}
+				if outputJSON {
+					return printJSON(map[string]any{
+						"daemon":        true,
+						"cleared":       res.Cleared,
+						"previousUntil": res.PreviousUntil,
+					})
+				}
+				if !res.Cleared {
+					fmt.Fprintln(out, "No quota cooldown is active — nothing to clear.")
+					return nil
+				}
+				fmt.Fprintf(out, "Cleared the quota cooldown (was until %s) on the running scheduler.\n", res.PreviousUntil)
+				return nil
+			}
+
+			cleared, previousUntil, found, err := orchestrator.ClearQuotaCooldownOffline(workdir)
+			if err != nil {
+				return err
+			}
+			if outputJSON {
+				return printJSON(map[string]any{
+					"daemon":        false,
+					"cleared":       cleared,
+					"previousUntil": previousUntil,
+					"found":         found,
+				})
+			}
+			if !found {
+				fmt.Fprintln(out, "No autonomous scheduler state found. Run 'nightgauge autonomous run' first.")
+				return nil
+			}
+			if !cleared {
+				fmt.Fprintln(out, "No quota cooldown is active — nothing to clear.")
+				return nil
+			}
+			fmt.Fprintf(out, "Cleared the quota cooldown (was until %s) in the state file.\n", previousUntil)
+			return nil
+		},
+	}
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output the result as JSON")
 	return cmd
 }

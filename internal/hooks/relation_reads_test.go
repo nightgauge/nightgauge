@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/github/githubtest"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // These tests drive the hooks through the real issue, epic and project reads
@@ -123,7 +125,7 @@ func TestEvaluatePostMerge_EpicStepsReadOnlyTheSubIssueList(t *testing.T) {
 		})
 		c := forge.Client()
 
-		result := EvaluatePostMerge(context.Background(), gh.NewIssueService(c), &mockIssueCloser{}, gh.NewEpicService(c), nil, nil, PostMergeInput{
+		result := EvaluatePostMerge(context.Background(), gh.NewIssueService(c), &mockIssueCloser{}, epicServiceWithoutBranch(t, c), nil, nil, PostMergeInput{
 			IssueNumber:     11,
 			RepositoryOwner: githubtest.Owner,
 			RepositoryName:  githubtest.Repo,
@@ -150,7 +152,7 @@ func TestEvaluatePostMerge_EpicStepsReadOnlyTheSubIssueList(t *testing.T) {
 		})
 		c := forge.Client()
 
-		result := EvaluatePostMerge(context.Background(), gh.NewIssueService(c), &mockIssueCloser{}, gh.NewEpicService(c), nil, nil, PostMergeInput{
+		result := EvaluatePostMerge(context.Background(), gh.NewIssueService(c), &mockIssueCloser{}, epicServiceWithoutBranch(t, c), nil, nil, PostMergeInput{
 			IssueNumber:     10,
 			RepositoryOwner: githubtest.Owner,
 			RepositoryName:  githubtest.Repo,
@@ -214,4 +216,14 @@ func TestEvaluatePostMerge_BoardRepairReadsNoList(t *testing.T) {
 	if n := forge.FollowUps(); n != 0 {
 		t.Errorf("the board repair read %d later page(s) of lists it does not use", n)
 	}
+}
+
+// epicServiceWithoutBranch is an epic service whose checkout has no epic
+// branch, so the close is decided by sub-issue state alone (#2560).
+func epicServiceWithoutBranch(t *testing.T, c *gh.Client) *gh.EpicService {
+	t.Helper()
+	clone, _ := gittest.ClonedRepo(t)
+	svc := gh.NewEpicService(c)
+	svc.SetCheckoutResolver(func(string) (*git.Service, error) { return git.NewService(clone) })
+	return svc
 }

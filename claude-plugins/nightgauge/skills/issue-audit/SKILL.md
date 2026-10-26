@@ -9,7 +9,7 @@ description: Deterministic post-creation gate that verifies every issue created 
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.2.3"
+  version: "1.3.0"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
@@ -273,8 +273,9 @@ if [ -z "$(echo "$SECTION" | tr -d '[:space:]')" ]; then
 fi
 ```
 
-Two quality riders on the body, both WARNING and never auto-fixed — they are
-heuristics, and a false positive must cost a glance, not a block:
+Quality riders on the body, all WARNING and never auto-fixed — they are
+heuristics, and a false positive must cost a glance, not a block. Two run on
+every type; the epic riders below run only for `type: epic`:
 
 ```bash
 # WEAK_VERIFICATION — the section exists but names no test, command, or file.
@@ -292,6 +293,31 @@ fi
 if printf '%s\n' "$BODY" | grep -qiE 'auth|token|secret|credential|webhook|endpoint|retry|retries|spawn|exec|shell|symlink|upload|permission' \
    && ! printf '%s\n' "$BODY" | grep -qiE '^##[[:space:]]+Security|^- \[ \].*(secur|sanitiz|validat|authoriz|authent|bound|rate.?limit|scope|confine|redact)'; then
   FINDINGS+=( /* SECURITY_SURFACE_UNADDRESSED (WARNING) — never auto-fix */ )
+fi
+```
+
+For `type: epic`, two more riders check that `## Summary` justifies the epic's
+existence. Each is a presence check only — a cheap signal, not a quality
+judge — and stays WARNING in every mode, `--manifest` included:
+
+```bash
+# MISSING_EPIC_FALSIFIER / MISSING_EPIC_DEMAND — the Summary lacks a non-empty
+# `Falsifier:` / `Demand:` line (optionally bulleted or bolded). A line outside
+# `## Summary`, or with nothing after the colon, does not count.
+TYPE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '[.labels[].name | select(startswith("type:"))][0] // "" | sub("^type:"; "")')
+if [ "$TYPE" = "epic" ]; then
+  SSEC=$(printf '%s\n' "$BODY" | awk '
+    $0 ~ /^##[[:space:]]+Summary[[:space:]]*$/ {flag=1; next}
+    flag && /^##[[:space:]]/ {flag=0}
+    flag {print}')
+  for LABEL in Falsifier Demand; do
+    if ! printf '%s\n' "$SSEC" \
+       | grep -qE "^[[:space:]]*(-[[:space:]]+)?(\*\*)?${LABEL}(\*\*)?:(\*\*)?[[:space:]]*[^[:space:]*]"; then
+      # Falsifier: no answer to the motivating question would stop the work.
+      # Demand: nobody is recorded as having asked for it.
+      FINDINGS+=( /* MISSING_EPIC_FALSIFIER | MISSING_EPIC_DEMAND (WARNING) — never auto-fix */ )
+    fi
+  done
 fi
 ```
 
@@ -397,6 +423,24 @@ Finding:
   finding has **no repair primitive**: decomposition into sub-issues under an
   epic is a human/planning decision, never auto-applied by `--fix`. Even with
   `--fix`, `OVERSIZED_SCOPE` remains a WARNING.
+
+#### Step 5.x: Declared `file_ownership` substantiation (#561)
+
+When the body carries a `nightgauge:dependency-metadata` block with a
+`file_ownership` list, check it against the ACs with the deterministic verb
+(no block means no-op):
+
+```bash
+OWNERSHIP_JSON=$(printf '%s' "$BODY" | nightgauge issue check-ownership --json 2>/dev/null \
+  || echo '{"findings":[],"count":0}')
+# One FILE_OWNERSHIP_UNSUBSTANTIATED (WARNING) per entry in .findings[]
+```
+
+- `FILE_OWNERSHIP_UNSUBSTANTIATED` (WARNING): a declared set cannot satisfy the
+  issue's own ACs — `test-missing`, `generated-mirror` (names the canonical
+  path), or `path-missing`. **No repair primitive**: correcting a declared set
+  is a planning edit. "No edit needed" and "provably inert" sets are not
+  detected; see [docs/ISSUE_AUDIT.md](../../../../docs/ISSUE_AUDIT.md).
 
 ---
 
@@ -562,7 +606,7 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","issue":"'$ISSUE'","finding":"'$T
    stays CRITICAL.
 3. **`OVERSIZED_SCOPE` is never auto-fixed**: decomposing a bundled issue into
    sub-issues under an epic is a human/planning decision. Even with `--fix`,
-   this stays a WARNING.
+   this stays a WARNING. The same holds for `FILE_OWNERSHIP_UNSUBSTANTIATED`.
 4. **`STALE_BLOCKED_BY_NOT_PLANNED` requires `--fix-interactive`**: under
    `--fix` alone, the finding remains a WARNING. Under `--fix-interactive`,
    prompt the operator and only repair on explicit `yes`.
@@ -598,7 +642,7 @@ issue's relationship.
 
 `MISSING_TYPE_LABEL`, `MULTIPLE_TYPE_LABELS`, `MISSING_REQUIRED_HEADING`,
 `EMPTY_REQUIRED_HEADING`, `MISSING_SPIKE_RECS_BLOCK`, `OVERSIZED_SCOPE`,
-`INCONSISTENT_PROJECT_MAPPING`, `EMPTY_PRD_FILE` — no auto-fix. Human action
+`FILE_OWNERSHIP_UNSUBSTANTIATED`, `INCONSISTENT_PROJECT_MAPPING`, `EMPTY_PRD_FILE` — no auto-fix. Human action
 required.
 
 ---

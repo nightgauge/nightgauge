@@ -36,6 +36,11 @@ const (
 	// is environmental noise, not signal about model or stage performance.
 	// Exact parity with the Go scheduler's skip in scheduler.go.
 	outcomeSkipNetworkUnavailable
+	// outcomeSkipEnvironmentHalt: a project-declared preflight.environment
+	// check halted the run in Phase 0 (#101). The operator's environment was
+	// broken; nothing about the model or the issue was measured. Exact parity
+	// with the Go scheduler's skip in scheduler.go.
+	outcomeSkipEnvironmentHalt
 )
 
 // String names the decision for logs. Distinct strings per state so a log line
@@ -48,6 +53,8 @@ func (d outcomeDecision) String() string {
 		return "skip-deferred"
 	case outcomeSkipNetworkUnavailable:
 		return "skip-network-unavailable"
+	case outcomeSkipEnvironmentHalt:
+		return "skip-environment-halt"
 	default:
 		return "unset"
 	}
@@ -82,6 +89,9 @@ func learningOutcomeFor(
 	}
 	if record.TerminalFailureKind == orchestrator.TerminalKindNetworkUnavailable {
 		return learning.Outcome{}, outcomeSkipNetworkUnavailable
+	}
+	if record.TerminalFailureKind == orchestrator.TerminalKindEnvironmentHalt {
+		return learning.Outcome{}, outcomeSkipEnvironmentHalt
 	}
 
 	// Post-#266 ground truth: the record's outcome is authoritative (a run whose

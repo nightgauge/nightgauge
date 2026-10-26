@@ -133,6 +133,12 @@ const SKIP_CASES: { text: string; kind: string; branch: string }[] = [
     kind: "adapter_incompatible",
     branch: "parked",
   },
+  // #101 — a project-declared environment check failed in Phase 0.
+  {
+    text: "exit 1: [environment-halt] local-stack: exit code 7, want 0 — remedy: Run ./scripts/dev-up.sh",
+    kind: "environment_halt",
+    branch: "parked",
+  },
 ];
 
 /** Failures that MUST reach the halt — the bugs the halt exists to surface. */
@@ -191,13 +197,18 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
     expect(source).toContain("const haltKind = classifyTerminalKind(haltErrMsg);");
   });
 
-  it("exempts the three parked kinds from the halt, as not_pipeline_actionable is (#1753)", () => {
+  it("exempts the parked kinds from the halt, as not_pipeline_actionable is (#1753, #101)", () => {
     // A park holds ONE issue for an operator; Go schedules no retry and does
     // not pause the fleet (docs/FAILURE_TAXONOMY.md, "The parked kinds."). The
     // extension used to halt the whole repository queue on it.
     const parked = setLiteral(source, "HALT_SKIP_PARKED");
     expect(parked).toEqual(
-      ["adapter_incompatible", "adapter_permission_rejected", "context_window_exceeded"].sort()
+      [
+        "adapter_incompatible",
+        "adapter_permission_rejected",
+        "context_window_exceeded",
+        "environment_halt",
+      ].sort()
     );
     for (const c of SKIP_CASES.filter((c) => c.branch === "parked")) {
       expect(parked, c.text).toContain(classifyTerminalKind(c.text));

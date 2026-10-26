@@ -73,6 +73,15 @@ export {
 
 export { loadEvalTasks, parseEvalTask, DEFAULT_TASKS_DIR } from "./taskLoader.js";
 
+export {
+  controlContentHash,
+  verifyRegisteredHash,
+  verifyControlIssue,
+  ghIssueFetcher,
+  type ControlIssueContent,
+  type IssueFetcher,
+} from "./controlTask.js";
+
 // ---------------------------------------------------------------------------
 // Model Evaluation & Benchmarking System (model-eval lane) — see
 // docs/decisions/011-model-eval-system.md and Issue #4168.
@@ -101,6 +110,8 @@ export {
   JobClassSchema,
   DifficultySchema,
   EvalFixtureRefSchema,
+  EvalSourceIssueSchema,
+  EvalPassCriteriaSchema,
   CheckCommandSchema,
   EvalTaskSchema,
   EvalMatrixCellSchema,
@@ -123,6 +134,8 @@ export {
   type JobClass,
   type Difficulty,
   type EvalFixtureRef,
+  type EvalSourceIssue,
+  type EvalPassCriteria,
   type CheckCommand,
   type EvalTask,
   type EvalMatrixCell,

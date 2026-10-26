@@ -521,6 +521,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `context_window_exceeded` — the prompt outgrew the model server's loaded context; parked, never retried on the same model and adapter (#1631)
  *  - `adapter_permission_rejected` — the adapter auto-rejected a tool the stage's allowed tools grant under an `ask` rule, OpenCode's `.env` read guard included; parked (#1631)
  *  - `adapter_incompatible` — the adapter's binary cannot serve the dispatch (version floor or unreadable version); parked (#1631)
+ *  - `environment_halt` — a project-declared preflight.environment check failed in Phase 0; parked (#101)
  *
  * MUST stay in lockstep with the Go constants in
  * internal/orchestrator/failure_handler.go and the SDK `TerminalFailureKind`
@@ -563,6 +564,7 @@ export const TerminalFailureKindSchema = z.enum([
   "blocked_dependency", // Issue #305 — scheduler dispatched an issue whose blockedBy dependencies are still open; non-failure deferral
   "architecture_approval_required", // Issue #4098/#4222 — architecture-approval gate halted the run before feature-dev for a human-owned decision
   "not_pipeline_actionable", // Issue #1241 — a stage DECLARED the issue's deliverable is not producible by any pipeline lap (counsel sign-off, an operator-only credential, a human decision); not a failure and not a deferral, so the issue is labelled owner-action and left parked rather than retried
+  "blocked_outcome_hold", // Issue #2551 — a stage-declared BLOCKED outcome misread as an environmental quota failure; held for that one issue, no retry, no global cooldown
   "validation_inconclusive", // Issue #221 — feature-validate's unit-test tier ran but executed zero tests
   // Declared-but-unmatched, mirroring Go: set structurally (a gate/evidence
   // override), never derived from error text.
@@ -583,6 +585,7 @@ export const TerminalFailureKindSchema = z.enum([
   "context_window_exceeded", // Issue #1631 — the prompt outgrew the context the model server has the model loaded with; classified only from the adapter's failed-request line, never from model text
   "adapter_permission_rejected", // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's marker) under an `ask` rule, OpenCode's `.env` read guard included, distinct from permission_denied
   "adapter_incompatible", // Issue #1631 — the adapter's binary cannot serve the dispatch (#1627's version floor / unreadable version)
+  "environment_halt", // Issue #101 — a project-declared preflight.environment check failed in Phase 0; the operator's environment, not the code
 ]);
 export type TerminalFailureKind = z.infer<typeof TerminalFailureKindSchema>;
 

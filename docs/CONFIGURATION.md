@@ -4991,6 +4991,54 @@ performance:
 
 ---
 
+### preflight.environment
+
+Project-declared environment checks (Issue #101). Every pipeline stage runs
+them as Layer 3 of its Phase 0 preflight through
+`nightgauge preflight environment`. A failed check halts the stage with its
+remedy, before the agent can misread a broken local environment as a code
+defect. The run is recorded as `environment_halt`, a parked, non-fault outcome
+(see [FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md#project-environment-halt-101)).
+The key is opt-in. When it is absent, nothing runs and nothing prints.
+
+```yaml
+preflight:
+  environment:
+    - name: local-stack
+      run: [curl, -sf, http://localhost:3001/health]
+      remedy: "Run ./scripts/dev-up.sh"
+    - name: emulator-storage
+      run: [adb, shell, df, -m, /data]
+      expect:
+        stdout_number: { capture: '(\d+)\s+\d+%', min: 2000 }
+      timeout: 30s
+      remedy: "Run scripts/sweep-avd.sh --recreate"
+```
+
+| Field                          | Type     | Default | Description                                                                |
+| ------------------------------ | -------- | ------- | -------------------------------------------------------------------------- |
+| `name`                         | string   | —       | Required, unique. Names the check in output and in the halt line           |
+| `run`                          | string[] | —       | Required argument list, executed without a shell. A string is a load error |
+| `remedy`                       | string   | —       | Required. Printed on failure and never executed                            |
+| `timeout`                      | duration | `30s`   | Per-check limit, at most `10m`. The check's whole process group is killed  |
+| `expect.exit_code`             | integer  | `0`     | Required exit status                                                       |
+| `expect.stdout_matches`        | regex    | —       | Stdout must match                                                          |
+| `expect.stdout_number.capture` | regex    | —       | Exactly one capture group. Its match is parsed as a number                 |
+| `expect.stdout_number.min/max` | number   | —       | Bounds on the captured number (at least one is required)                   |
+
+`expect` is a closed set of typed fields, not an expression language. An
+unknown key, or a string such as `expect: "free_mb > 2000"`, is a load error.
+Checks run in declared order, and all of them run, so one halt reports every
+failure. Up to 4 KiB of stdout is kept per check.
+
+The section is read only from the main checkout's
+`.nightgauge/config.yaml`, never from a worktree, so a branch cannot change
+what its own preflight runs.
+
+Exit codes of `nightgauge preflight environment`: `0` means every check passed
+or none are declared, `1` means a check failed, and `2` means the declaration
+is invalid.
+
 ### validation
 
 PR validation and quality gate settings.

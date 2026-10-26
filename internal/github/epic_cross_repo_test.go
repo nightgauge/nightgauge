@@ -244,6 +244,7 @@ func TestGetIssue_ParentCarriesItsOwnRepository(t *testing.T) {
 func TestAutoCloseSingle_CrossRepoEpicClosesInItsOwnRepo(t *testing.T) {
 	f := acmeForge()
 	svc := NewEpicService(newForgeClient(t, f))
+	svc.checkout = noEpicBranchCheckout(t)
 
 	res, err := svc.AutoCloseSingle(context.Background(), EpicRef{
 		Owner:                "acme",
@@ -311,6 +312,7 @@ func TestAutoCloseSingle_Face2_RealIssueCollisionIsNotSilentSuccess(t *testing.T
 func TestAutoCloseSingle_Face1_PullRequestCollisionSurfacesLoudly(t *testing.T) {
 	f := acmeForge()
 	svc := NewEpicService(newForgeClient(t, f))
+	svc.checkout = noEpicBranchCheckout(t)
 
 	res, err := svc.AutoCloseSingle(context.Background(), EpicRef{
 		Owner:                "acme",
@@ -385,6 +387,7 @@ func TestAutoCloseSingle_SameRepoEpicUnchanged(t *testing.T) {
 		},
 	}}
 	svc := NewEpicService(newForgeClient(t, f))
+	svc.checkout = noEpicBranchCheckout(t)
 
 	res, err := svc.AutoCloseSingle(context.Background(), EpicRef{
 		Owner:                "acme",

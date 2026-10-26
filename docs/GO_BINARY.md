@@ -1731,6 +1731,29 @@ the epic lives in another repository, an issue that only shares its number is
 a legitimate blocker (#2369). `epic validate`'s `circular_blocker` check and
 the scheduler's circular-parent auto-fix match the same way.
 
+#### Epic close integrates the epic branch first
+
+Every path that closes an epic — `nightgauge epic complete`,
+`nightgauge epic auto-close`, `nightgauge hook post-merge`,
+`nightgauge project reconcile`, and the scheduler's post-merge check and
+backstop sweep — runs one integration step before it closes (#2560):
+
+1. Find `epic/<N>-*` in the epic repository's own checkout. No branch, or a
+   branch already contained in `main`, closes the epic (the branch is cleaned up).
+2. Merge `origin/main` into the epic branch in a temporary worktree. The branch
+   is shared history, so it is merged rather than rebased. Conflicts confined to
+   files named `CHANGELOG.md` are resolved by union (`main`'s lines, then the
+   epic's lines `main` lacks); any other conflict aborts and pushes nothing.
+3. Create or reuse the epic→`main` PR and merge it, through the merge queue when
+   the base requires one. The queue's merge method then applies.
+
+The epic closes only after step 1 or a merged PR. Otherwise it stays open, gets
+a comment naming the outcome (`conflict`, `ci_failed`, `pending`,
+`no_checkout`, `error`) and any conflicting files, and the JSON result carries
+an `integration` object. The scheduler raises an `epic-integration` Action
+Center card for a blocked integration and retracts it when the epic closes. A
+CLI run integrates only an epic of the current checkout's origin repository.
+
 ### Git Operations
 
 ```bash
@@ -2447,6 +2470,14 @@ The implementation moved out of `internal/gitworktree` into
 advisory lock in the tree. A second copy would be fixed in one place and not the
 other, and a locking bug stays invisible until the day two processes do the
 thing the lock existed to prevent.
+
+**Clearing the global quota cooldown (#2551).** After a quota failure the
+scheduler suspends every dispatch until `QuotaCooldownUntil`. Run
+`nightgauge autonomous clear-cooldown` to lift it. Like `clear-failures`, it
+clears the cooldown on the running daemon's scheduler (`autonomous.clearQuotaCooldown`)
+and falls back to the state file when no daemon is up. It reports the
+deadline it removed. `--json` prints `{daemon, cleared, previousUntil}`, plus
+`found` on the offline path.
 
 **What each entry point does with a held lease:**
 
@@ -3781,7 +3812,10 @@ Four run-scoped producers remain Go-only, with reasons recorded in
 `branch-fork`, `unverified-deliverable` and `unverified-deliverable-streak` —
 the last two share a seam (the `gate verify` CLI raising directly, rather than
 an IPC round-trip that would make the extension re-classify a finding Go
-already classified) but are two producers, not one.
+already classified) but are two producers, not one. `auth-preflight` has two
+Go triggers sharing the key `auth-failure:{repo}#{issue}`: the identity
+preflight, and the `CatPermission` escalation gate in the stage loop. The gate
+covers the default single-identity path and both dispatch arms (#4).
 
 **One declared coverage gap on the extension path:** of
 `HeadlessOrchestrator`'s three pipeline-ceiling stops, only the BETWEEN-STAGE

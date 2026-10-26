@@ -6,7 +6,9 @@
  * S4 `WorkspaceProvider` boundary. Three fixture kinds (per EvalFixtureRef):
  *   - scaffold-script : fresh temp dir + run the task's setup.sh
  *   - base-commit     : `git worktree add --detach <dir> <sha>` (reuses the
- *                       pipeline's worktree isolation)
+ *                       pipeline's worktree isolation). With `fixture.repo`
+ *                       (#2117) the worktree comes from a cached clone of that
+ *                       repo under `<workspacesDir>/_repos/`, not the host repo.
  *   - snapshot-dir    : copy a pre-built tree
  *
  * **Isolation from the host repo (critical for live mode).** Scaffold/snapshot
@@ -64,6 +66,7 @@ export class WorktreeWorkspaceProvider implements WorkspaceProvider {
   private readonly workspacesDir: string;
   private readonly exec: ExecFn;
   private counter = 0;
+  private readonly repoCaches = new Map<string, Promise<string>>();
 
   constructor(options: WorktreeWorkspaceOptions) {
     this.repoRoot = options.repoRoot;
@@ -81,14 +84,16 @@ export class WorktreeWorkspaceProvider implements WorkspaceProvider {
     const { kind, ref } = task.fixture;
 
     if (kind === "base-commit") {
-      // Reuse git-worktree isolation: a detached worktree at the seed commit.
-      await this.run("git", ["worktree", "add", "--detach", dir, ref], this.repoRoot);
+      // Reuse git-worktree isolation: a detached worktree at the seed commit,
+      // taken from the fixture's own repo when it names one.
+      const gitDir = task.fixture.repo
+        ? await this.ensureRepoCache(task.fixture.repo, ref)
+        : this.repoRoot;
+      await this.run("git", ["worktree", "add", "--detach", dir, ref], gitDir);
       return {
         dir,
         dispose: async () => {
-          await this.run("git", ["worktree", "remove", "--force", dir], this.repoRoot).catch(
-            () => {}
-          );
+          await this.run("git", ["worktree", "remove", "--force", dir], gitDir).catch(() => {});
         },
       };
     }
@@ -110,6 +115,47 @@ export class WorktreeWorkspaceProvider implements WorkspaceProvider {
         await rm(dir, { recursive: true, force: true }).catch(() => {});
       },
     };
+  }
+
+  /**
+   * Return a local clone of `repo` (`owner/name`) that contains `sha`, cloning
+   * it on first use and fetching the commit when the cache lacks it. Concurrent
+   * cells for the same repo share one in-flight clone.
+   */
+  private ensureRepoCache(repo: string, sha: string): Promise<string> {
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+      return Promise.reject(new Error(`fixture.repo must be owner/name, got "${repo}"`));
+    }
+    const key = `${repo}@${sha}`;
+    let pending = this.repoCaches.get(key);
+    if (!pending) {
+      pending = this.prepareRepoCache(repo, sha);
+      this.repoCaches.set(key, pending);
+      pending.catch(() => this.repoCaches.delete(key));
+    }
+    return pending;
+  }
+
+  private async prepareRepoCache(repo: string, sha: string): Promise<string> {
+    const cache = resolve(this.repoRoot, this.workspacesDir, "_repos", repo.replace("/", "__"));
+    const probe = await this.exec("git", ["rev-parse", "--git-dir"], { cwd: cache }).catch(() => ({
+      code: 1,
+      stdout: "",
+      stderr: "",
+    }));
+    if (probe.code !== 0) {
+      await mkdir(resolve(cache, ".."), { recursive: true });
+      await this.run(
+        "git",
+        ["clone", "--no-checkout", `https://github.com/${repo}.git`, cache],
+        resolve(cache, "..")
+      );
+    }
+    const has = await this.exec("git", ["cat-file", "-e", `${sha}^{commit}`], { cwd: cache });
+    if (has.code !== 0) {
+      await this.run("git", ["fetch", "origin", sha], cache);
+    }
+    return cache;
   }
 
   /**

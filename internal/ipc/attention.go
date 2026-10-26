@@ -407,11 +407,12 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 			forge.IssueRef{Owner: owner, Repo: name, Number: blocker})
 
 	case attention.VerbWorkspaceAddRepo:
-		// The workspace root, not s.repoRoot(repo): the manifest lives once at
-		// the workspace root, and repo is by definition NOT yet a configured
-		// repository, so it has no root of its own to resolve.
-		root := s.workspaceRootPath()
-		return attention.ExecuteAddRepo(ctx, workspaceRepoAdder{root: root}, req, opt, sweep.ConfiguredRepos(root))
+		// The manifest root, not s.repoRoot(repo) or the mutable current root:
+		// the manifest lives once per workspace, and repo is by definition NOT
+		// yet a configured repository (#2540). A resolver error rides on the
+		// adder so the verb fails naming every path searched.
+		root, ferr := s.workspaceManifestRoot()
+		return attention.ExecuteAddRepo(ctx, workspaceRepoAdder{root: root, err: ferr}, req, opt, s.configuredRepos())
 
 	case attention.VerbBlockedFindingClear:
 		// The RUN'S OWN REPO ROOT, not s.workspaceRoot — the same per-repo
@@ -421,7 +422,7 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		// instead would report success and leave the issue deferring forever,
 		// which is the multi-repo inertness #305 had to fix on the budget path.
 		return attention.ExecuteClearBlockedFinding(ctx, blockedFindingClearer{server: s},
-			req, opt, sweep.ConfiguredRepos(s.workspaceRootPath()))
+			req, opt, s.configuredRepos())
 
 	case attention.VerbPRUpdateBranch:
 		// The workspace root's configured set, the same one workspace.addRepo
@@ -431,7 +432,7 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		// multi-repo workspace authenticates with that repo's configured
 		// identity rather than the daemon's single startup client.
 		return attention.ExecuteUpdatePRBranch(ctx, prBranchUpdater{server: s}, req, opt,
-			sweep.ConfiguredRepos(s.workspaceRootPath()))
+			s.configuredRepos())
 
 	case attention.VerbIssueApproveArchitecture:
 		return s.approveArchitecture(ctx, key, repo, owner, name, issue)
@@ -737,10 +738,13 @@ func argInt(m map[string]any, k string) int {
 // workspaceRepoAdder backs attention.VerbWorkspaceAddRepo with the
 // deterministic manifest writer (#703/#706).
 //
-// It holds only the workspace root: the target repository arrives from the
+// It holds only the manifest root and the error resolving it: the target repository arrives from the
 // card's own Context.Repo through ExecuteAddRepo, never from this struct, so
 // there is no field here a surface could influence.
-type workspaceRepoAdder struct{ root string }
+type workspaceRepoAdder struct {
+	root string
+	err  error
+}
 
 // AddWorkspaceRepo appends repo to the workspace manifest, resolving its
 // project board through the single authoritative repo→project resolver.
@@ -751,6 +755,9 @@ type workspaceRepoAdder struct{ root string }
 // edits the entry afterwards. Guessing from a card would be judgement, which is
 // the one thing a registry verb may not do.
 func (a workspaceRepoAdder) AddWorkspaceRepo(_ context.Context, repo string) error {
+	if a.err != nil {
+		return a.err
+	}
 	m, err := workspacemanifest.Load(workspacemanifest.ManifestPath(a.root))
 	if err != nil {
 		return err

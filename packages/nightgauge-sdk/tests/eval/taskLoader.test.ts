@@ -12,6 +12,7 @@ import { resolve } from "node:path";
 import { parseEvalTask, loadEvalTasks, DEFAULT_TASKS_DIR } from "../../src/eval/taskLoader.js";
 import type { DirReader } from "../../src/eval/loader.js";
 import { JOB_CLASSES, type EvalTask } from "../../src/eval/modelEvalSchemas.js";
+import { controlContentHash } from "../../src/eval/controlTask.js";
 
 const REPO_ROOT = resolve(__dirname, "../../../..");
 const CORPUS_DIR = resolve(REPO_ROOT, DEFAULT_TASKS_DIR);
@@ -71,6 +72,61 @@ describe("loadEvalTasks", () => {
   });
 });
 
+const CONTROL_SHA = "c".repeat(40);
+function controlTask(id: string): EvalTask {
+  const title = "Control issue";
+  const instruction = "## Summary\nDo the thing.";
+  return {
+    ...VALID,
+    id,
+    title,
+    instruction,
+    fixture: { kind: "base-commit", ref: CONTROL_SHA, repo: "acme/fixture" },
+    control: true,
+    source_issue: {
+      url: "https://github.com/acme/fixture/issues/7",
+      repo: "acme/fixture",
+      number: 7,
+      base_sha: CONTROL_SHA,
+      content_sha256: controlContentHash({ title, body: instruction, base_sha: CONTROL_SHA }),
+    },
+    pass_criteria: { tests_must_pass: ["tests/x.test.ts"], files_must_change: ["src/x.ts"] },
+  };
+}
+
+describe("loadEvalTasks control task (#2117)", () => {
+  it("loads exactly one control with its registered SHA and hash", async () => {
+    const c = controlTask("ctl");
+    const tasks = await loadEvalTasks(
+      "d",
+      memReader({ "a.json": JSON.stringify(VALID), "c.json": JSON.stringify(c) })
+    );
+    const controls = tasks.filter((t) => t.control);
+    expect(controls).toHaveLength(1);
+    expect(controls[0].source_issue?.base_sha).toBe(CONTROL_SHA);
+    expect(controls[0].source_issue?.content_sha256).toBe(c.source_issue?.content_sha256);
+  });
+
+  it("throws on a second control task", async () => {
+    await expect(
+      loadEvalTasks(
+        "d",
+        memReader({
+          "c1.json": JSON.stringify(controlTask("ctl-a")),
+          "c2.json": JSON.stringify(controlTask("ctl-b")),
+        })
+      )
+    ).rejects.toThrow(/second control task "ctl-b" in c2\.json/);
+  });
+
+  it("throws when the control's issue body was edited without re-registering", async () => {
+    const edited = { ...controlTask("ctl"), instruction: "## Summary\nDo a different thing." };
+    await expect(
+      loadEvalTasks("d", memReader({ "c.json": JSON.stringify(edited) }))
+    ).rejects.toThrow(/drifted from its registered hash/);
+  });
+});
+
 describe("the shipped corpus (evals/tasks/)", () => {
   it("loads and validates every task file", async () => {
     const tasks = await loadEvalTasks(CORPUS_DIR);
@@ -90,9 +146,9 @@ describe("the shipped corpus (evals/tasks/)", () => {
     expect(tasks.some((t) => t.difficulty === "hard")).toBe(true);
   });
 
-  it("references a fixture scaffold script that exists on disk", async () => {
+  it("every scaffold-script fixture exists on disk", async () => {
     const tasks = await loadEvalTasks(CORPUS_DIR);
-    for (const t of tasks) {
+    for (const t of tasks.filter((x) => x.fixture.kind === "scaffold-script")) {
       const fixturePath = resolve(REPO_ROOT, t.fixture.ref);
       expect(existsSync(fixturePath), `${t.id}: missing fixture ${t.fixture.ref}`).toBe(true);
     }

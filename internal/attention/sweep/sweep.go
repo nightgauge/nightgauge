@@ -228,6 +228,10 @@ type Sweeper struct {
 	// also handed to every producer as Input.WorkspaceRoot, which is where a
 	// producer reads its operator-configured thresholds from (#649).
 	WorkspaceRoot string
+	// ManifestRoot is the directory holding the workspace manifest, which can
+	// differ from WorkspaceRoot when that root is a member folder (#2540).
+	// Empty falls back to WorkspaceRoot.
+	ManifestRoot string
 	// Timeout bounds one sweep. Zero uses DefaultTimeout.
 	Timeout time.Duration
 	// Logf receives degradation messages. Nil uses the standard logger.

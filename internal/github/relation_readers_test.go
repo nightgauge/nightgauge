@@ -6,8 +6,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/github/githubtest"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // TestReadersFollowOnlyTheListsTheyUse drives each single-issue reader that
@@ -83,7 +85,9 @@ func TestReadersFollowOnlyTheListsTheyUse(t *testing.T) {
 			return err
 		}, nil},
 		{"EpicService.AutoCloseSingle", func(ctx context.Context, c *gh.Client) error {
-			res, _ := gh.NewEpicService(c).AutoCloseSingle(ctx, gh.EpicRef{Owner: owner, Repo: repo, Number: 500}, 0)
+			svc := gh.NewEpicService(c)
+			svc.SetCheckoutResolver(noBranchResolver(t))
+			res, _ := svc.AutoCloseSingle(ctx, gh.EpicRef{Owner: owner, Repo: repo, Number: 500}, 0)
 			if res.Status != "closed" {
 				return fmt.Errorf("auto-close = %s (%s): %s, want closed", res.Status, res.Reason, res.Error)
 			}
@@ -127,4 +131,12 @@ func TestReadersFollowOnlyTheListsTheyUse(t *testing.T) {
 			}
 		})
 	}
+}
+
+// noBranchResolver serves a checkout whose origin has no epic branch, so the
+// close is decided by sub-issue state alone (#2560).
+func noBranchResolver(t *testing.T) gh.EpicCheckoutResolver {
+	t.Helper()
+	clone, _ := gittest.ClonedRepo(t)
+	return func(string) (*git.Service, error) { return git.NewService(clone) }
 }

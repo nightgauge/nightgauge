@@ -1,6 +1,8 @@
 package workspacemanifest
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -496,5 +498,51 @@ func TestRealRepositoryManifestRoundTrip(t *testing.T) {
 	}
 	if back := m2.render(); !bytesEqual(back, original) {
 		t.Errorf("round trip over the real manifest is not byte-identical.\n--- want ---\n%s\n--- got ---\n%s", original, back)
+	}
+}
+
+func writeFindRootManifest(t *testing.T, root string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ManifestPath(root), []byte("repositories: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFindRoot_FirstCandidateWithManifestWins(t *testing.T) {
+	empty, a, b := t.TempDir(), t.TempDir(), t.TempDir()
+	writeFindRootManifest(t, a)
+	writeFindRootManifest(t, b)
+	got, err := FindRoot([]string{"", empty, a, a, b})
+	if err != nil || got != a {
+		t.Fatalf("FindRoot = %q, %v; want %q", got, err, a)
+	}
+}
+
+func TestFindRoot_NoManifestNamesEverySearchedPath(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	_, err := FindRoot([]string{a, " ", b, a})
+	if err == nil || !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("err = %v, want fs.ErrNotExist", err)
+	}
+	for _, r := range []string{a, b} {
+		if !strings.Contains(err.Error(), ManifestPath(r)) {
+			t.Errorf("error %q does not name %s", err, ManifestPath(r))
+		}
+	}
+	if _, err := FindRoot(nil); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("no candidates: err = %v, want fs.ErrNotExist", err)
+	}
+}
+
+func TestFindRoot_DirectoryAtManifestPathIsNotAManifest(t *testing.T) {
+	a := t.TempDir()
+	if err := os.MkdirAll(ManifestPath(a), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FindRoot([]string{a}); err == nil {
+		t.Fatal("a directory at the manifest path must not count")
 	}
 }

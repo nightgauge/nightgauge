@@ -201,7 +201,18 @@ When creating an epic with 3+ sub-issues:
    headings, because `## Summary` / `## Sub-Issues` / `## Acceptance Criteria`
    are what the audit requires of a `type:epic`:
    - `## Summary` — the goal, and the scope split into implementation work vs
-     decision-oriented spikes
+     decision-oriented spikes. It also carries two labelled lines (lines inside
+     `## Summary`, not headings; `type:epic` only — other types get no new
+     requirement):
+     - `Falsifier:` — the answer to the epic's motivating question that would
+       have killed it: an observable result, not "nothing".
+     - `Demand:` — who asked and what they asked for (not who would benefit),
+       with a link or quote where one exists.
+
+     If no falsifier can be named, stop and ask the requester. Never write
+     boilerplate such as "nothing would have killed it" — an epic no answer
+     could have stopped has a description, not a reason.
+
    - `## Sub-Issues` — one line per child, grouped or ordered by wave when
      sequencing matters; prerequisites belong here as `Depends on:` notes or
      as the `blockedBy` edges Phase 3.5 sets
@@ -223,6 +234,9 @@ Before finalizing any issue, check:
 - If external tool behavior matters, is there an explicit verification guard?
 - For spike issues, does the issue end with `adopt`, `defer`, or `skip`?
 - For epics, are implementation items and spikes clearly separated?
+- For epics, does `## Summary` name a falsifier and a demand? If no answer to
+  the motivating question would have stopped the work, the justification is a
+  description, not a reason.
 - Does every acceptance criterion have a matching `## Verification` bullet a
   reviewer could run? An AC with no way to observe it is a wish, not a
   criterion — rewrite or drop it.

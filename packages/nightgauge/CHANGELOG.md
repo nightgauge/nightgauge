@@ -11,6 +11,17 @@ and this project adheres to
 
 ### Fixed
 
+- **A pr-merge waiting on its background gate is no longer killed, and a
+  transient kill no longer strands the issue (#2554).** Each Claude Code
+  background task now defers the runaway kill for up to
+  `pipeline.progress_runaway.background_task_ceiling_ms` (default 45 minutes)
+  measured from when that task started, instead of 20 minutes from the last
+  productive signal, which ran out mid-`ci-local.sh` on a resumed pr-merge. A
+  `runaway_progress` kill now takes the stall-kill route (30-minute backoff,
+  no lifetime-failure charge), and a transient failure on an open PR returns
+  the issue to Ready so the retry resumes at pr-merge on that PR; other
+  failures still go to In review. A failed resume is no longer reported as
+  `Outcome: already-resolved`.
 - The README now tells you to run **Nightgauge: Run Doctor** to check your
   prerequisites; it named the removed **Nightgauge: Adapter Doctor** command
   (#2099).
@@ -60,6 +71,12 @@ and this project adheres to
   GitHub parent. The pr-create safety-net fallback opens its PR through the
   `nightgauge` binary, so it is authored by the configured identity and
   carries the pipeline marker (#2506).
+- **Board status writes no longer need `project.fields` in config (#1501).**
+  The extension resolves the board and its Status options from the repository's
+  project, so status sync works on every repository the scheduler can write. A
+  write that fails now raises an Action Center card instead of only a warning
+  in the session log.
+
 - **A failed run is moved to In review only when an open PR backs it
   (#1496).** The failure safety nets and the pr-create stage exit now write
   In review through `nightgauge project sync-status`, which refuses without an

@@ -246,6 +246,7 @@ export type TerminalFailureKind =
   | "blocked_dependency" // Issue #305 — the autonomous scheduler dispatched an issue whose blockedBy dependencies are still open; a non-failure deferral
   | "architecture_approval_required" // Issue #4098/#4222 — the architecture-approval gate halted the run before feature-dev for a human-owned decision
   | "not_pipeline_actionable" // Issue #1241 — a stage DECLARED the issue's deliverable is not producible by any pipeline lap (counsel sign-off, an operator-only credential, a human decision); not a failure and not a deferral, so the issue is labelled owner-action and left parked rather than retried
+  | "blocked_outcome_hold" // Issue #2551 — a stage-declared BLOCKED outcome misread as an environmental quota failure; held for that one issue, no retry, no global cooldown
   | "validation_inconclusive" // Issue #221 — feature-validate's unit-test tier ran but executed zero tests; usually an environmental misconfiguration
   // Declared-but-unmatched, mirroring Go: set by the recovery action from
   // structured evidence, never derived from error text, so
@@ -267,6 +268,7 @@ export type TerminalFailureKind =
   // increment, no cascade feed, and the entry is held for an operator.
   | "context_window_exceeded" // Issue #1631 — the prompt outgrew the context the model server has the model loaded with; classified only from the adapter's own failed-request line (`AI_APICallError: …`), never from model text. Not an agent failure; parked with remediation until re-route (#1645) and decomposition (#1655) land
   | "adapter_permission_rejected" // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's `[adapter-permission-rejected]` marker): an `ask` rule from OpenCode's own `.env` read guard or a repository's or the user's opencode.json, the same kind whatever tool it names. Distinct from permission_denied, which retries
+  | "environment_halt" // Issue #101 — a project-declared preflight.environment check failed in Phase 0 (`[environment-halt]`); the operator's environment, not the code; parked and excluded from the calibration corpus
   | "adapter_incompatible"; // Issue #1631 — the adapter's binary cannot serve the dispatch (below the compat floor or unreadable; #1627; a newer version is never refused); install a build at or above the floor
 
 /**
@@ -310,6 +312,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "architecture_approval_required",
   "validation_inconclusive",
   "not_pipeline_actionable",
+  "blocked_outcome_hold",
   "operator_stop",
   "abandoned_commit",
   "commit_orphaned",
@@ -321,6 +324,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "pr_merge_lookup_failed",
   "context_window_exceeded",
   "adapter_permission_rejected",
+  "environment_halt",
   "adapter_incompatible",
 ];
 

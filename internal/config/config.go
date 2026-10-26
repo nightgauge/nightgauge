@@ -965,6 +965,10 @@ type Config struct {
 	// Center's repo-scoped sweep producers (#649).
 	Attention *AttentionConfig `json:"attention,omitempty" yaml:"attention,omitempty"`
 
+	// Preflight holds the preflight: section — project-declared environment
+	// checks run as Layer 3 of every stage's Phase 0 (#101). Nil means none.
+	Preflight *PreflightConfig `json:"preflight,omitempty" yaml:"preflight,omitempty"`
+
 	// SchemaVersion is the config file format version ("1" or "2"). Missing or
 	// empty version is treated as v1 and triggers automatic in-memory v1→v2
 	// migration (inserting a default forges.github block). The file on disk is
@@ -2168,6 +2172,7 @@ type yamlConfigNested struct {
 	ModelRouting     *ModelRoutingConfig          `yaml:"model_routing,omitempty"`
 	UI               *UIConfig                    `yaml:"ui,omitempty"`
 	Attention        *AttentionConfig             `yaml:"attention,omitempty"`
+	Preflight        *PreflightConfig             `yaml:"preflight,omitempty"`
 	Forges           map[string]*ForgeConfigEntry `yaml:"forges,omitempty"`
 	Notifications    *NotificationsConfig         `yaml:"notifications,omitempty"`
 	Notifiers        *NotifiersConfig             `yaml:"notifiers,omitempty"`
@@ -2208,6 +2213,7 @@ type yamlConfigFlat struct {
 	ModelRouting     *ModelRoutingConfig          `yaml:"model_routing,omitempty"`
 	UI               *UIConfig                    `yaml:"ui,omitempty"`
 	Attention        *AttentionConfig             `yaml:"attention,omitempty"`
+	Preflight        *PreflightConfig             `yaml:"preflight,omitempty"`
 	Forges           map[string]*ForgeConfigEntry `yaml:"forges,omitempty"`
 	Notifications    *NotificationsConfig         `yaml:"notifications,omitempty"`
 	Notifiers        *NotifiersConfig             `yaml:"notifiers,omitempty"`
@@ -2247,6 +2253,11 @@ func Load(workspaceRoot string) (*Config, error) {
 		}
 		if rerr := ValidateNoRemovedTrustKeys(cfg); rerr != nil {
 			return nil, rerr
+		}
+		if cfg.Preflight != nil {
+			if rerr := ValidateEnvironmentChecks(cfg.Preflight.Environment); rerr != nil {
+				return nil, rerr
+			}
 		}
 	}
 	// The GitHub request ledger is a process-wide instrument switched on
@@ -2428,6 +2439,7 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.Notifiers = nested.Notifiers
 	cfg.Cadence = nested.Cadence
 	cfg.Attention = nested.Attention
+	cfg.Preflight = nested.Preflight
 	if len(nested.Project.SizeToEstimate) > 0 {
 		cfg.SizeToEstimate = nested.Project.SizeToEstimate
 	}
@@ -2538,6 +2550,7 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 	cfg.Notifiers = flat.Notifiers
 	cfg.Cadence = flat.Cadence
 	cfg.Attention = flat.Attention
+	cfg.Preflight = flat.Preflight
 	if len(flat.SizeToEstimate) > 0 {
 		cfg.SizeToEstimate = flat.SizeToEstimate
 	}

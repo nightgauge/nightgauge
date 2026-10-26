@@ -87,6 +87,9 @@ type PostMergeResult struct {
 	// "what", and before #1025 it was computed on every call and never copied
 	// out — so "Epic #N skipped: skipped" was the best the CLI could print.
 	EpicReason string `json:"epicReason,omitempty"`
+	// Integration reports how the epic branch was brought onto main before
+	// the epic closed, or why the epic stayed open (#2560).
+	Integration *gh.EpicIntegration `json:"integration,omitempty"`
 	// Failed is set on every return that did not do what the caller asked. It
 	// exists because the hook is deliberately non-blocking and always exits 0:
 	// without one boolean, every consumer has to re-derive failure from a string
@@ -419,6 +422,9 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// failure arrived as the bare word "error" that nothing branched on. The
 	// two are the same event and must not be distinguishable by accident of
 	// which implementation is wired.
+	if result != nil {
+		out.Integration = result.Integration
+	}
 	if err != nil || (result != nil && result.Status == "error") {
 		out.Reason = "auto_close_error"
 		out.Failed = true

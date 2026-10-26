@@ -259,6 +259,70 @@ func stageBaseModel(
 	return routing.ClampToEnvelope(defaultDispatchModel, envelope), false
 }
 
+// PlannedStageModel is the ONE deterministic selection of a stage's dispatch
+// model (#2537): the per-stage base (stageBaseModel over the stage's routed
+// tier, routedStageModel), the model_routing.minimum_model / risk floors, and
+// the performance mode's ceiling. resolveDispatchModel starts from exactly this
+// pipeline and the learning corpus's PREDICTION is this function's feature-dev
+// result (routing.pickup_recommendation.dispatch_dev_model), so a routing miss
+// can only mean a runtime override fired — retry escalation, a sticky
+// model-unavailable downgrade, a requested-model pin or a per-stage haiku
+// exclusion — never that prediction and dispatch ran different selectors.
+//
+// predicted is the run-wide router tier (pickup_recommendation.dev_model), NOT
+// a per-stage routed tier: the feature-dev ImplementationBand raise is applied
+// here. The result is a registry band when the registry recognizes it.
+func PlannedStageModel(
+	workspaceRoot string,
+	stage state.PipelineStage,
+	predicted string,
+	d routing.Decision,
+	floors map[string]string,
+	jobClass string,
+) string {
+	_, envelope, base, explicit := plannedStageBase(workspaceRoot, stage, predicted, d, jobClass)
+	return normalizeDispatchTier(floorAndCeil(stage, base, base, explicit, floors, envelope))
+}
+
+// plannedStageBase resolves the mode, the stage's routed-tier envelope and the
+// per-stage base model — the inputs both PlannedStageModel and
+// resolveDispatchModel build on.
+func plannedStageBase(
+	workspaceRoot string,
+	stage state.PipelineStage,
+	predicted string,
+	d routing.Decision,
+	jobClass string,
+) (routing.PerformanceMode, routing.ModeEnvelope, string, bool) {
+	mode := routing.ResolvePerformanceMode(workspaceRoot)
+	base, explicit := stageBaseModel(workspaceRoot, mode, stage, routedStageModel(stage, predicted, d), jobClass)
+	envelope := routing.RoutedTierEnvelopeForWorkspace(workspaceRoot, mode, string(stage))
+	return mode, envelope, base, explicit
+}
+
+// floorAndCeil applies the stage's minimum-model floor and then the mode's
+// ceiling to model, the order and the explicit-base exemption documented on
+// resolveDispatchModel: the ceiling never lowers a dispatch below the
+// operator's own explicit per-stage model.
+func floorAndCeil(
+	stage state.PipelineStage,
+	model, baseModel string,
+	explicitBase bool,
+	floors map[string]string,
+	envelope routing.ModeEnvelope,
+) string {
+	if floor := stageModelFloor(floors, string(stage)); floor != "" {
+		model = enforceMinimumModel(model, floor)
+	}
+	if capped := routing.ClampToCeiling(model, envelope); capped != model {
+		if explicitBase && routing.TierRank(capped) < routing.TierRank(baseModel) {
+			capped = baseModel
+		}
+		model = capped
+	}
+	return model
+}
+
 // normalizeDispatchTier collapses a dispatch model onto the registry BAND
 // vocabulary (#340) — the single vocabulary the wire, both executors and every
 // ladder in this package speak.

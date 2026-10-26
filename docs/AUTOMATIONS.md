@@ -672,11 +672,10 @@ upstream half of the release-prep pair (it runs **before**
 
 ### Trigger
 
-Epic closure — the same `epic.completed` event (`OnEpicComplete` in
-`internal/ipc/server.go`) that drives the release-notes skill. Invocation-driven:
-run `/nightgauge:version-bump <epic> --repo <owner/repo>` (then
-`/nightgauge:release-notes`), or have a consumer of `epic.completed` invoke
-both. No auto-deploy wiring lives in `server.go`.
+Epic closure — the same trigger as the release-notes skill. An epic closes only
+after its branch is merged into `main` (#2560). Invocation-driven: run
+`/nightgauge:version-bump <epic> --repo <owner/repo>` (then
+`/nightgauge:release-notes`). No auto-deploy wiring exists.
 
 ### What it derives and writes
 
@@ -723,12 +722,12 @@ bodies. The output is a **reviewable draft, not an auto-deploy**.
 
 ### Trigger
 
-Epic closure. The pipeline already surfaces this as the `epic.completed` event
-emitted from `OnEpicComplete` in `internal/ipc/server.go`; its payload carries
-`repo` + `epicNumber` — exactly the skill's inputs. The skill is
-invocation-driven: run it manually with `/nightgauge:release-notes <epic>
---repo <owner/repo>`, or have a consumer of `epic.completed` invoke it. No
-auto-trigger wiring lives in `server.go` (a human runs the deploy after review).
+Epic closure. An epic closes only after its branch is merged into `main`
+(#2560); the close is reported by `nightgauge hook post-merge` and
+`nightgauge epic auto-close` with the epic's `repo` and number — exactly the
+skill's inputs. The skill is invocation-driven: run it with
+`/nightgauge:release-notes <epic> --repo <owner/repo>`. No auto-trigger wiring
+exists (a human runs the deploy after review).
 
 ### What it writes
 

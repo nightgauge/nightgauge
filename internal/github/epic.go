@@ -18,6 +18,11 @@ import (
 // and closed-to-done board synchronization.
 type EpicService struct {
 	client *Client
+	// checkout resolves the epic repository's checkout so every close can
+	// integrate the epic branch first (#2560). prs overrides the PR service
+	// in tests.
+	checkout EpicCheckoutResolver
+	prs      epicPRMerger
 }
 
 // NewEpicService creates an epic service.
@@ -615,39 +620,42 @@ func (e *EpicService) TransitionStatus(ctx context.Context, owner, repo string, 
 
 // EpicCompleteResult holds the result of the full epic completion flow.
 type EpicCompleteResult struct {
-	EpicNumber int    `json:"epicNumber"`
-	Complete   bool   `json:"complete"`
-	Total      int    `json:"total"`
-	Closed     int    `json:"closed"`
-	Open       int    `json:"open"`
-	Action     string `json:"action"` // "not_complete", "closed_and_merged", "closed_pr_created", "already_merged", "no_epic_branch"
-	PRURL      string `json:"prUrl,omitempty"`
-	PRNumber   int    `json:"prNumber,omitempty"`
-	Error      string `json:"error,omitempty"`
-	OpenIssues []struct {
+	EpicNumber int  `json:"epicNumber"`
+	Complete   bool `json:"complete"`
+	Total      int  `json:"total"`
+	Closed     int  `json:"closed"`
+	Open       int  `json:"open"`
+	// Action: "not_complete", "closed_and_merged", "already_merged",
+	// "no_epic_branch", or "integration_<outcome>" when the epic stayed open.
+	Action      string           `json:"action"`
+	Integration *EpicIntegration `json:"integration,omitempty"`
+	PRURL       string           `json:"prUrl,omitempty"`
+	PRNumber    int              `json:"prNumber,omitempty"`
+	Error       string           `json:"error,omitempty"`
+	OpenIssues  []struct {
 		Number int    `json:"number"`
 		Title  string `json:"title"`
 	} `json:"openIssues,omitempty"`
 }
 
-// CompleteEpic runs the full epic completion flow:
-// 1. Check if all sub-issues are closed
-// 2. If complete: close the epic issue, create epic→main PR, merge it, cleanup branches
-// This is the CLI equivalent of the OnEpicComplete callback in server.go.
+// CompleteEpic runs the full epic completion flow: check that every
+// sub-issue is closed, integrate the epic branch into main (merge main into
+// it, open or reuse the epic PR, merge it), and only then close the epic. A
+// failed integration leaves the epic open (#2560). With no checkout at
+// repoPath the epic is closed only when no branch can be inspected at all.
 func (e *EpicService) CompleteEpic(ctx context.Context, owner, repo string, epicNumber int, repoPath string) (*EpicCompleteResult, error) {
-	// The epic branch is found, merged and deleted in repoPath's checkout,
-	// and epic/<N>-* names #N of the repository it was pushed to: in a
-	// checkout of another repository it is that repository's #N's branch.
-	// Refuse such a checkout before anything changes (#2388). With no
-	// checkout at all, the epic is still closed and no branch is touched.
-	gitSvc, gitErr := git.NewService(repoPath)
-	if gitErr == nil {
+	// epic/<N>-* names #N of the repository it was pushed to: in a checkout
+	// of another repository it is that repository's #N's branch. Refuse such
+	// a checkout before anything changes (#2388).
+	if gitSvc, err := git.NewService(repoPath); err == nil {
 		if err := gitSvc.RequireOriginRepo(owner + "/" + repo); err != nil {
 			return nil, fmt.Errorf("epic complete %s/%s#%d: %w", owner, repo, epicNumber, err)
 		}
+		if e.checkout == nil {
+			e.checkout = CheckoutResolverForPath(repoPath)
+		}
 	}
 
-	// Step 1: Check completion
 	check, err := e.CheckCompletion(ctx, owner, repo, epicNumber)
 	if err != nil {
 		return nil, err
@@ -667,12 +675,27 @@ func (e *EpicService) CompleteEpic(ctx context.Context, owner, repo string, epic
 		return result, nil
 	}
 
-	// Step 2: Close the epic issue. Its state, node id and title are all this
-	// uses; the sub-issues were counted by CheckCompletion.
 	issueSvc := NewIssueService(e.client)
 	epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, NoRelations)
 	if err != nil {
 		return nil, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
+	}
+
+	// Integrate FIRST, close after (#2560).
+	integration := e.integrateEpic(ctx, EpicRef{Owner: owner, Repo: repo, Number: epicNumber}, epicIssue.Title)
+	result.Integration = &integration
+	result.PRURL, result.PRNumber = integration.PRURL, integration.PRNumber
+	switch integration.Outcome {
+	case IntegrationMerged:
+		result.Action = "closed_and_merged"
+	case IntegrationAlreadyOnBase:
+		result.Action = "already_merged"
+	case IntegrationNoBranch:
+		result.Action = "no_epic_branch"
+	default:
+		result.Action = "integration_" + integration.Outcome
+		result.Error = integration.Error
+		return result, nil
 	}
 
 	if !strings.EqualFold(epicIssue.State, "CLOSED") {
@@ -681,70 +704,25 @@ func (e *EpicService) CompleteEpic(ctx context.Context, owner, repo string, epic
 			return result, nil
 		}
 	}
-
-	// Step 3: Find epic branch
-	if gitErr != nil {
-		// No git service — still report completion but can't create PR
-		result.Action = "no_epic_branch"
-		result.Error = fmt.Sprintf("git service unavailable: %v", gitErr)
-		return result, nil
-	}
-
-	epicBranch, err := gitSvc.FindEpicBranch(epicNumber)
-	if err != nil {
-		result.Action = "no_epic_branch"
-		result.Error = fmt.Sprintf("find epic branch: %v", err)
-		return result, nil
-	}
-
-	// Step 4: Create epic PR (epic branch → main)
-	prSvc := NewPRService(e.client)
-	prResult, err := prSvc.CreateEpicPR(ctx, owner, repo, epicNumber, epicIssue.Title, epicBranch, "main")
-	if err != nil {
-		result.Error = fmt.Sprintf("failed to create epic PR: %v", err)
-		return result, nil
-	}
-
-	result.PRURL = prResult.PRURL
-	result.PRNumber = prResult.PRNumber
-
-	if prResult.Action == "already_merged" {
-		result.Action = "already_merged"
-		_ = gitSvc.BranchCleanup(epicBranch)
-		return result, nil
-	}
-
-	// Step 5: Merge the epic PR
-	if prResult.PRNodeID == "" {
-		result.Action = "closed_pr_created"
-		return result, nil
-	}
-
-	if err := prSvc.MergeEpicPR(ctx, owner, repo, prResult.PRNodeID, epicBranch); err != nil {
-		result.Action = "closed_pr_created"
-		result.Error = fmt.Sprintf("PR created but merge failed: %v", err)
-		return result, nil
-	}
-
-	// Step 6: Cleanup branches
-	_ = gitSvc.BranchCleanup(epicBranch)
-
-	result.Action = "closed_and_merged"
 	return result, nil
 }
 
 // AutoCloseResult holds the result of the auto-close operation.
 type AutoCloseResult struct {
-	Checked int `json:"checked"`
-	Closed  int `json:"closed"`
-	Skipped int `json:"skipped"`
-	Summary []struct {
-		EpicNumber int    `json:"epicNumber"`
-		Title      string `json:"title"`
-		Status     string `json:"status"` // "closed", "skipped", "error"
-		Reason     string `json:"reason,omitempty"`
-		Error      string `json:"error,omitempty"`
-	} `json:"summary,omitempty"`
+	Checked int                    `json:"checked"`
+	Closed  int                    `json:"closed"`
+	Skipped int                    `json:"skipped"`
+	Summary []AutoCloseSummaryItem `json:"summary,omitempty"`
+}
+
+// AutoCloseSummaryItem is one epic's outcome in an AutoCloseResult.
+type AutoCloseSummaryItem struct {
+	EpicNumber  int              `json:"epicNumber"`
+	Title       string           `json:"title"`
+	Status      string           `json:"status"` // "closed", "skipped", "error"
+	Reason      string           `json:"reason,omitempty"`
+	Error       string           `json:"error,omitempty"`
+	Integration *EpicIntegration `json:"integration,omitempty"`
 }
 
 // AutoClose checks all open epics, closes completed ones, and moves them to Done.
@@ -768,10 +746,11 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 	}
 
 	type closeResult struct {
-		index  int
-		status string
-		reason string
-		err    error
+		index       int
+		status      string
+		reason      string
+		err         error
+		integration *EpicIntegration
 	}
 
 	ch := make(chan closeResult, len(issues))
@@ -781,12 +760,12 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 		wg.Add(1)
 		go func(i int, epicNumber int) {
 			defer wg.Done()
-			status, reason, cerr := e.closeOneEpic(ctx, EpicRef{
+			status, reason, integ, cerr := e.closeOneEpic(ctx, EpicRef{
 				Owner:  owner,
 				Repo:   repo,
 				Number: epicNumber,
 			}, projectNumber)
-			ch <- closeResult{i, status, reason, cerr}
+			ch <- closeResult{i, status, reason, cerr, integ}
 		}(idx, epic.Number)
 	}
 
@@ -794,20 +773,22 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 	close(ch)
 
 	type summaryItem struct {
-		EpicNumber int
-		Title      string
-		Status     string
-		Reason     string
-		Error      string
+		EpicNumber  int
+		Title       string
+		Status      string
+		Reason      string
+		Error       string
+		Integration *EpicIntegration
 	}
 	summaryByIndex := make(map[int]summaryItem)
 
 	for res := range ch {
 		item := summaryItem{
-			EpicNumber: issues[res.index].Number,
-			Title:      issues[res.index].Title,
-			Status:     res.status,
-			Reason:     res.reason,
+			EpicNumber:  issues[res.index].Number,
+			Title:       issues[res.index].Title,
+			Status:      res.status,
+			Reason:      res.reason,
+			Integration: res.integration,
 		}
 		if res.err != nil {
 			item.Status = "error"
@@ -822,13 +803,7 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 
 	for i := 0; i < len(issues); i++ {
 		item := summaryByIndex[i]
-		result.Summary = append(result.Summary, struct {
-			EpicNumber int    `json:"epicNumber"`
-			Title      string `json:"title"`
-			Status     string `json:"status"`
-			Reason     string `json:"reason,omitempty"`
-			Error      string `json:"error,omitempty"`
-		}{item.EpicNumber, item.Title, item.Status, item.Reason, item.Error})
+		result.Summary = append(result.Summary, AutoCloseSummaryItem{item.EpicNumber, item.Title, item.Status, item.Reason, item.Error, item.Integration})
 	}
 
 	return result, nil
@@ -883,15 +858,15 @@ func (r EpicRef) String() string {
 // this is likely a GitHub eventual-consistency window after the final sub-issue
 // merge. We retry up to 3 times with exponential backoff (2s, 4s, 8s) to let
 // the API catch up before giving up.
-func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumber int) (string, string, error) {
+func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumber int) (string, string, *EpicIntegration, error) {
 	if ref.Owner == "" || ref.Repo == "" {
-		return "", "epic_repo_missing", fmt.Errorf("epic #%d: no repository given; an epic number without its repository is not a coordinate", ref.Number)
+		return "", "epic_repo_missing", nil, fmt.Errorf("epic #%d: no repository given; an epic number without its repository is not a coordinate", ref.Number)
 	}
 	owner, repo, epicNumber := ref.Owner, ref.Repo, ref.Number
 
 	completion, err := e.CheckCompletion(ctx, owner, repo, epicNumber)
 	if err != nil {
-		return "", "check_failed", err
+		return "", "check_failed", nil, err
 	}
 
 	// Identity guard (#1181). The caller told us a sub-issue that belongs to
@@ -905,13 +880,13 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 		if ref.ExpectSubIssueRepo != "" {
 			expected = fmt.Sprintf("%s#%d", ref.ExpectSubIssueRepo, ref.ExpectSubIssueNumber)
 		}
-		return "", "wrong_epic", fmt.Errorf(
+		return "", "wrong_epic", nil, fmt.Errorf(
 			"epic %s does not list %s among its %d sub-issue(s): the epic number resolved to the wrong issue",
 			ref, expected, completion.Total)
 	}
 
 	if completion.Total == 0 {
-		return "skipped", "no_subs", nil
+		return "skipped", "no_subs", nil, nil
 	}
 
 	// Retry on eventual-consistency: GitHub may not have propagated the final
@@ -921,17 +896,17 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 	for attempt := 1; attempt <= maxRetries && !completion.Complete && completion.Open > 0; attempt++ {
 		select {
 		case <-ctx.Done():
-			return "", "check_failed", ctx.Err()
+			return "", "check_failed", nil, ctx.Err()
 		case <-time.After(baseDelay * time.Duration(1<<uint(attempt-1))):
 		}
 		completion, err = e.CheckCompletion(ctx, owner, repo, epicNumber)
 		if err != nil {
-			return "", "check_failed", err
+			return "", "check_failed", nil, err
 		}
 	}
 
 	if !completion.Complete {
-		return "skipped", "has_open", nil
+		return "skipped", "has_open", nil, nil
 	}
 
 	// Only the epic's state and node id are used here; completion already
@@ -939,18 +914,43 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 	issueSvc := NewIssueService(e.client)
 	epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, NoRelations)
 	if err != nil {
-		return "", "fetch_failed", err
+		return "", "fetch_failed", nil, err
 	}
 
 	if strings.EqualFold(epicIssue.State, "CLOSED") {
-		return "skipped", "already_closed", nil
+		return "skipped", "already_closed", nil, nil
+	}
+
+	// Integrate before closing (#2560): an epic whose branch holds commits
+	// not on main is never closed. #2085 was closed with its sub-issues' code
+	// stranded on the epic branch.
+	integration := e.integrateEpic(ctx, ref, epicIssue.Title)
+	if !integration.AllowsClose() {
+		msg := fmt.Sprintf("Not closing: all %d sub-issues are complete, but the epic branch could not be integrated into main (%s).", completion.Total, integration.Outcome)
+		if integration.PRURL != "" {
+			msg += "\n\nEpic PR: " + integration.PRURL
+		}
+		if len(integration.ConflictFiles) > 0 {
+			msg += "\n\nConflicting files:\n- `" + strings.Join(integration.ConflictFiles, "`\n- `") + "`"
+		}
+		// integration.Error is raw git/exec text that can carry remote URLs and
+		// local paths; it stays in the result and attention card, never in a
+		// public issue comment.
+		if err := issueSvc.AddComment(ctx, epicIssue.NodeID, msg); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to add comment to %s: %v\n", ref, err)
+		}
+		status := "error"
+		if integration.Outcome == IntegrationPending {
+			status = "skipped"
+		}
+		return status, "integration_" + integration.Outcome, &integration, nil
 	}
 
 	if err := issueSvc.CloseIssue(ctx, epicIssue.NodeID); err != nil {
-		return "", "close_failed", fmt.Errorf("close issue: %w", err)
+		return "", "close_failed", &integration, fmt.Errorf("close issue: %w", err)
 	}
 
-	commentBody := fmt.Sprintf("Auto-closed: all %d sub-issues are complete.", completion.Total)
+	commentBody := fmt.Sprintf("Auto-closed: all %d sub-issues are complete (epic branch: %s).", completion.Total, integration.Outcome)
 	if err := issueSvc.AddComment(ctx, epicIssue.NodeID, commentBody); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to add comment to %s: %v\n", ref, err)
 	}
@@ -961,7 +961,7 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 		}
 	}
 
-	return "closed", "all_closed", nil
+	return "closed", "all_closed", &integration, nil
 }
 
 // moveToProjectDone moves an epic to "Done" status on the project board.
@@ -980,6 +980,9 @@ type AutoCloseSingleResult struct {
 	Status   string `json:"status"` // "closed", "skipped", "error"
 	Reason   string `json:"reason,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// Integration reports how the epic branch was brought onto main before
+	// the close, or why the epic stayed open (#2560).
+	Integration *EpicIntegration `json:"integration,omitempty"`
 }
 
 // AutoCloseSingle checks and closes a single epic if all its sub-issues are closed.
@@ -991,16 +994,17 @@ type AutoCloseSingleResult struct {
 // mis-resolved epic is rejected rather than silently reported as having no
 // sub-issues (#1181).
 func (e *EpicService) AutoCloseSingle(ctx context.Context, ref EpicRef, projectNumber int) (*AutoCloseSingleResult, error) {
-	status, reason, err := e.closeOneEpic(ctx, ref, projectNumber)
+	status, reason, integration, err := e.closeOneEpic(ctx, ref, projectNumber)
 	epicRepo := ""
 	if ref.Owner != "" && ref.Repo != "" {
 		epicRepo = ref.Owner + "/" + ref.Repo
 	}
 	result := &AutoCloseSingleResult{
-		EpicNumber: ref.Number,
-		EpicRepo:   epicRepo,
-		Status:     status,
-		Reason:     reason,
+		EpicNumber:  ref.Number,
+		EpicRepo:    epicRepo,
+		Status:      status,
+		Reason:      reason,
+		Integration: integration,
 	}
 	if err != nil {
 		result.Status = "error"

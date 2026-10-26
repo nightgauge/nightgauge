@@ -2299,6 +2299,7 @@ func TestGateTerminalKindConstantsMirrorOrchestrator(t *testing.T) {
 		"DevBuildVerificationFailed":  {gates.TerminalKindDevBuildVerificationFailed, TerminalKindDevBuildVerificationFailed},
 		"DevTestsFailed":              {gates.TerminalKindDevTestsFailed, TerminalKindDevTestsFailed},
 		"PrMergeLookupFailed":         {gates.TerminalKindPrMergeLookupFailed, TerminalKindPrMergeLookupFailed},
+		"NotPipelineActionable":       {gates.TerminalKindNotPipelineActionable, TerminalKindNotPipelineActionable},
 	}
 	for name, p := range pairs {
 		if p[0] != p[1] {

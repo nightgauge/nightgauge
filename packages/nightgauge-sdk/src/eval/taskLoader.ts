@@ -12,6 +12,7 @@
 
 import { EvalTaskSchema, type EvalTask } from "./modelEvalSchemas.js";
 import { defaultDirReader, type DirReader } from "./loader.js";
+import { verifyRegisteredHash } from "./controlTask.js";
 
 /** Default repo-relative root for the realistic-task corpus. */
 export const DEFAULT_TASKS_DIR = "evals/tasks";
@@ -37,6 +38,9 @@ export function parseEvalTask(contents: string, sourcePath: string): EvalTask {
  * Load and validate every task JSON under `dir`. Task ids must be unique across
  * the corpus (the runner keys results by id), so a duplicate id throws. Results
  * are returned sorted by id for deterministic ordering.
+ *
+ * At most one task may be the pinned control (#2117), and its snapshot must
+ * still match its registered content hash.
  */
 export async function loadEvalTasks(
   dir: string = DEFAULT_TASKS_DIR,
@@ -45,6 +49,7 @@ export async function loadEvalTasks(
   const files = await reader.listJson(dir);
   const tasks: EvalTask[] = [];
   const seen = new Map<string, string>();
+  let control: { id: string; file: string } | undefined;
   for (const file of files) {
     const task = parseEvalTask(await reader.readFile(file), file);
     const prior = seen.get(task.id);
@@ -52,6 +57,15 @@ export async function loadEvalTasks(
       throw new Error(`duplicate task id "${task.id}" in ${file} (already defined in ${prior})`);
     }
     seen.set(task.id, file);
+    if (task.control) {
+      if (control) {
+        throw new Error(
+          `second control task "${task.id}" in ${file} (control already defined by "${control.id}" in ${control.file})`
+        );
+      }
+      control = { id: task.id, file };
+      verifyRegisteredHash(task);
+    }
     tasks.push(task);
   }
   return tasks.sort((a, b) => a.id.localeCompare(b.id));

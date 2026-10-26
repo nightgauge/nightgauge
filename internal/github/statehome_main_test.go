@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hometest"
 )
 
@@ -17,6 +18,7 @@ import (
 // It also clears CI, which a CI runner sets and which changes token
 // resolution (ADR-024 § 5); tests of the CI rules set it themselves.
 func TestMain(m *testing.M) {
+	gittest.IsolateProcess()
 	_ = os.Unsetenv("CI")
 	// An extension-hosted stage exports NIGHTGAUGE_HOST_CI, which ciHost reads
 	// ahead of CI (#2514); a leaked value flips every token-chain test (#2524).

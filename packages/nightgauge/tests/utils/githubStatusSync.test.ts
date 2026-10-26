@@ -98,13 +98,15 @@ describe("githubStatusSync", () => {
     it("should return failure when updateProjectItemStatus fails", async () => {
       vi.mocked(updateProjectItemStatus).mockResolvedValue({
         success: false,
-        error: "No project configuration found",
+        error: "Board fields unresolvable for TestOrg/test-repo: no project mapped",
       });
 
       const result = await resetGitHubStatus(42, MOCK_CWD, logger);
 
       expect(result.success).toBe(false);
-      expect(result.error).toBe("No project configuration found");
+      expect(result.error).toBe(
+        "Board fields unresolvable for TestOrg/test-repo: no project mapped"
+      );
     });
 
     it("should log warning on failure", async () => {

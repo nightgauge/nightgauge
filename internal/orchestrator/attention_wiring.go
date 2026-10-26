@@ -31,6 +31,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/trace"
@@ -52,6 +53,7 @@ const (
 	producerRefinementLabels    = "refinement-labels-missing"
 	producerRefinementExhausted = "refinement-exhausted"
 	producerSafetyRailTrip      = "safety-rail-trip"
+	producerEpicIntegration     = "epic-integration"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -83,6 +85,12 @@ func keyOwnerActionHandoff(repo string, issue int) string {
 
 func keyStuckEpic(repo string, epic int) string {
 	return fmt.Sprintf("stuck-epic:%s#%d", repo, epic)
+}
+
+// keyEpicIntegration identifies the card for an epic whose sub-issues are done
+// but whose branch could not be integrated into main (#2560).
+func keyEpicIntegration(repo string, epic int) string {
+	return fmt.Sprintf("%s:%s#%d", producerEpicIntegration, repo, epic)
 }
 
 func keyArchitectureApproval(repo string, issue int) string {
@@ -1560,7 +1568,11 @@ func (s *Scheduler) resolveUnverifiedDeliverableStreak(repo string, tier deliver
 // --- Producer 7: definitive auth failure (run-scoped, Scheduler) -------------
 
 // raiseAuthFailure surfaces a fail-closed identity/permission block. Needs the
-// operator to re-authenticate. provide_input kind.
+// operator to re-authenticate. provide_input kind. Two triggers share the
+// idempotency key, so they coalesce into one open card: the identity preflight
+// (when an identityChecker is wired) and the CatPermission escalation gate in
+// the stage loop, which covers the default single-identity path (#4). The
+// adapter CLI login condition is not this card; see adapterAuthNotice.ts.
 func (s *Scheduler) raiseAuthFailure(repo string, issue int, runID, reason string) {
 	s.raiseAttention(attention.DecisionRequest{
 		IdempotencyKey: fmt.Sprintf("auth-failure:%s#%d", repo, issue),
@@ -1747,6 +1759,52 @@ func BuildOutOfScopeBlocker(repo string, issue int, runID, stage string) attenti
 	}
 }
 
+// ProducerBoardStatusWriteFailed names the run-scoped producer for a project
+// board status write the extension could not make (#1501).
+const ProducerBoardStatusWriteFailed = "board-status-write-failed"
+
+// BuildBoardStatusWriteFailed constructs the card for a stage transition whose
+// board Status write failed on the extension path (#1501).
+//
+// EXTENSION-ONLY: the Go scheduler's board writes resolve the board through
+// ProjectService and already fail loudly in its own log; this card exists
+// because the extension's failures were a WARN in a session log nobody reads,
+// so the board silently drifted from the pipeline. Like the other raiseable
+// producers it carries no caller prose — the extension reports the condition
+// and the stage, and every word here is the builder's. The card is
+// informational: the run itself is unaffected, so there is no remedy verb to
+// offer, and `nightgauge doctor` names the persistent cause (`project_fields`).
+func BuildBoardStatusWriteFailed(repo string, issue int, runID, stage string) attention.DecisionRequest {
+	if stage == "" {
+		stage = "unknown"
+	}
+	return attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("%s:%s#%d", ProducerBoardStatusWriteFailed, repo, issue),
+		Kind:           attention.KindApprove,
+		Severity:       attention.SeverityFYI,
+		Title:          fmt.Sprintf("#%d: board status was not updated", issue),
+		Body: fmt.Sprintf(
+			"The run for #%d moved to stage `%s`, but its project board Status could not be "+
+				"written, so the board no longer shows where this issue is. The pipeline run "+
+				"itself is unaffected.\n\n"+
+				"Run `nightgauge doctor`: its `project_fields` check reports a board whose "+
+				"Status, Priority or Size field cannot be resolved from the repository's "+
+				"project, and `nightgauge project resolve --repo %s` shows which board the "+
+				"repository maps to. The session log carries the exact write error.",
+			issue, stage, repo),
+		Producer: ProducerBoardStatusWriteFailed,
+		Context: attention.Context{
+			Repo: repo, Issue: issue, RunID: runID, Stage: stage,
+			TraceRef: runTraceRef(runID),
+		},
+		Options: []attention.Option{
+			noopOption("acknowledged", "Acknowledged"),
+		},
+		DefaultAction: attention.ExpireNoop,
+		ExpiresAt:     expiryFromNow(48 * time.Hour),
+	}
+}
+
 // steerRootFor resolves the root a run-scoped artifact for `repo` belongs in:
 // the per-repo run root when the scheduler can resolve one, else the daemon's
 // launch root.
@@ -1883,5 +1941,61 @@ func BuildMissingCredentials(repo string, creds []string, legacy bool) attention
 		},
 		DefaultAction: "reentered",
 		ExpiresAt:     expiryFromNow(72 * time.Hour),
+	}
+}
+
+// --- Producer: epic integration blocked (per-epic, Scheduler) ---------------
+
+// raiseEpicIntegration surfaces an epic left open because its branch holds
+// commits main lacks and integration could not finish (#2560). Pending
+// integrations (a queued PR waiting on CI) raise nothing: the next sweep
+// re-checks them. The fingerprint is the outcome plus the conflicting files,
+// so a different blocker re-alerts and a repeat sweep does not.
+func (s *Scheduler) raiseEpicIntegration(repo string, epic int, in gh.EpicIntegration) {
+	if !in.Blocked() || repo == "" || epic <= 0 {
+		return
+	}
+	log.Printf("epic %s#%d: left open, epic branch not integrated (%s): %s", repo, epic, in.Outcome, in.Error)
+	owner, name := splitRepo(repo)
+	body := fmt.Sprintf("All sub-issues of %s#%d are closed, but its epic branch %s could not be merged into main (%s). The epic stays open until its branch is on main.",
+		repo, epic, in.Branch, in.Outcome)
+	if in.PRURL != "" {
+		body += "\n\nEpic PR: " + in.PRURL
+	}
+	if len(in.ConflictFiles) > 0 {
+		body += "\n\nConflicting files: " + strings.Join(in.ConflictFiles, ", ")
+	}
+	if in.Error != "" {
+		body += "\n\nError: " + in.Error
+	}
+	s.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyEpicIntegration(repo, epic),
+		Kind:           attention.KindChoose,
+		Severity:       attention.SeverityFYI,
+		Title:          fmt.Sprintf("Epic #%d not integrated: %s", epic, in.Outcome),
+		Body:           body,
+		Producer:       producerEpicIntegration,
+		Context:        attention.Context{Repo: repo, Issue: epic, Blocker: in.Outcome},
+		Standing:       true,
+		Fingerprint:    in.Outcome + ":" + strings.Join(in.ConflictFiles, ","),
+		Options: []attention.Option{
+			{ID: "requeue", Label: "Requeue epic", Verb: attention.VerbQueueAdd,
+				Args: map[string]any{"owner": owner, "repo": name, "issueNumber": epic}, Style: attention.StylePrimary},
+			noopOption("wait", "Wait"),
+		},
+		DefaultAction: "wait",
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Tell the pipeline how to resolve the epic branch"},
+	})
+}
+
+// resolveEpicIntegration retracts the integration card once the epic closed,
+// which happens only after its branch reached main.
+func (s *Scheduler) resolveEpicIntegration(repo string, epic int) {
+	if s == nil || s.attention == nil || repo == "" || epic <= 0 {
+		return
+	}
+	if _, err := s.attention.AutoResolveKey(producerEpicIntegration, keyEpicIntegration(repo, epic)); err != nil {
+		log.Printf("attention: resolve %s failed (fail-open): %v", keyEpicIntegration(repo, epic), err)
 	}
 }

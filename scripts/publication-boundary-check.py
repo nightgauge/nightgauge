@@ -967,6 +967,57 @@ def repository_is_shallow() -> bool:
     return out == "true"
 
 
+def classify(paths: list[str]) -> int:
+    """`--classify PATH...`: verdict per path, no tree/content/reference scan (#2562).
+
+    Planning calls this before any file exists, so the deny/allow rules are
+    applied to the planned paths alone, with the same `matches()` and `except`
+    logic the tree scan uses -- one rule implementation, not a port.
+    Prints a JSON array of {path, verdict, rule, class}; exit 0 when every path
+    is allowed, 1 when any is denied or unclassified, 2 when the guard cannot run.
+    """
+    import json  # noqa: PLC0415
+
+    if not MANIFEST.exists():
+        die(2, f"manifest not found: {MANIFEST}. Failing closed.")
+    try:
+        import yaml  # noqa: PLC0415
+    except ImportError:
+        die(2, "PyYAML is not available. Failing closed.")
+    try:
+        manifest = yaml.safe_load(MANIFEST.read_text())
+    except yaml.YAMLError as exc:
+        die(2, f"manifest is malformed YAML -- failing closed.\n\n{exc}")
+    if not isinstance(manifest, dict) or not manifest.get("allow"):
+        die(2, "manifest has no `allow` rules. Failing closed.")
+    allow = manifest.get("allow") or []
+    deny = manifest.get("deny") or []
+    deny_except = {e for r in deny for e in (r.get("except") or [])}
+
+    results = []
+    for raw in paths:
+        p = raw.strip().removeprefix("./")
+        if not p:
+            continue
+        verdict, rule, klass = "unclassified", None, None
+        denied = next(
+            (r for r in deny if p not in deny_except and matches(p, r["path"])), None
+        )
+        if denied is not None:
+            verdict, rule, klass = "deny", denied["path"], denied.get("class")
+        elif not any(matches(p, r["path"]) for r in deny):
+            allowed = next((r for r in allow if matches(p, r["path"])), None)
+            if allowed is not None:
+                verdict, rule, klass = "allow", allowed["path"], allowed.get("class")
+        else:
+            # Excepted from a deny rule. The tree scan reports such a path under
+            # neither rule, so it is allowed; mirror that exactly.
+            verdict, rule, klass = "allow", "except", None
+        results.append({"path": p, "verdict": verdict, "rule": rule, "class": klass})
+    print(json.dumps(results, indent=2))
+    return 0 if all(r["verdict"] == "allow" for r in results) else 1
+
+
 def main() -> int:
     if not MANIFEST.exists():
         die(
@@ -1560,6 +1611,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     try:
+        if len(sys.argv) > 1 and sys.argv[1] == "--classify":
+            sys.exit(classify([a for a in sys.argv[2:] if a != "--"]))
         sys.exit(main())
     except subprocess.CalledProcessError as exc:
         die(2, f"git failed: {exc}. Failing closed.")

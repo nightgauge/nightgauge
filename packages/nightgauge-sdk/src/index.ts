@@ -233,7 +233,12 @@ export {
 } from "./events/phaseRegistry.js";
 
 // Phase Inference (deterministic phase progress from tool activity — Issue #3760)
-export { createPhaseInference, type PhaseInference } from "./events/phaseInference.js";
+export {
+  createPhaseInference,
+  grokToolCall,
+  GROK_TOOL_NAME_TO_CLAUDE_NAME,
+  type PhaseInference,
+} from "./events/phaseInference.js";
 
 // Lifecycle trace recorder — the "sdk" producer for the per-run decision
 // trace (ADR 013, Issue #180)
@@ -835,6 +840,12 @@ export {
   DEFAULT_SCENARIOS_DIR,
   DEFAULT_FIXTURES_DIR,
   loadEvalTasks,
+  controlContentHash,
+  verifyRegisteredHash,
+  verifyControlIssue,
+  ghIssueFetcher,
+  type ControlIssueContent,
+  type IssueFetcher,
   parseEvalTask,
   DEFAULT_TASKS_DIR,
   type DirReader,
@@ -883,6 +894,8 @@ export {
   JobClassSchema,
   DifficultySchema,
   EvalFixtureRefSchema,
+  EvalSourceIssueSchema,
+  EvalPassCriteriaSchema,
   CheckCommandSchema,
   EvalTaskSchema,
   EvalMatrixCellSchema,
@@ -905,6 +918,8 @@ export {
   type JobClass,
   type Difficulty,
   type EvalFixtureRef,
+  type EvalSourceIssue,
+  type EvalPassCriteria,
   type CheckCommand,
   type EvalTask,
   type EvalMatrixCell,

@@ -161,6 +161,7 @@ export type RetroFailureCategory =
   | "context-window-exceeded"
   | "adapter-permission-rejected"
   | "adapter-incompatible"
+  | "environment-halt"
   | "unknown";
 
 export interface RetroFinding {
@@ -606,11 +607,16 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // The adapter's binary cannot serve the dispatch; pin or install the build
   // the refusal names (#1631).
   adapter_incompatible: "adapter-incompatible",
+
+  // A project-declared environment check failed in Phase 0; the operator
+  // fixes the environment the check's remedy names (#101).
+  environment_halt: "environment-halt",
   git_transport_auth_failed: "credential-failure",
 
   // A person owns the next move.
   architecture_approval_required: "human-decision-required",
   not_pipeline_actionable: "human-decision-required",
+  blocked_outcome_hold: "human-decision-required",
 
   // Dispatched over an open dependency edge: a scheduler decision, not a stage
   // failure.
@@ -1904,6 +1910,8 @@ export class AutoRetroService {
         "The adapter rejected a tool the stage is allowed to use — an `ask` rule refused it headless. Nightgauge's permission map never asks, so the rule is in OpenCode configuration outside it, such as the repository's or the user's",
       "adapter-incompatible":
         "The adapter's binary cannot serve the dispatch — its version is below the tested floor or unreadable",
+      "environment-halt":
+        "A project-declared preflight.environment check failed before the stage did any work — the local environment is broken, not the code",
       unknown: "Pipeline failure detected but category could not be determined",
     };
 
@@ -1972,6 +1980,8 @@ export class AutoRetroService {
         "OpenCode asked before a tool the stage's allowed tools grant, and a headless run rejects every ask. The permission map Nightgauge generates holds only `allow` and `deny`, and denies reading `*.env` and `*.env.*` files outright, so the `ask` rule comes from OpenCode config outside that map, such as the repository's or the user's opencode.json. Retrying under the same rule is rejected identically, and a retry would let the model or the issue text loop the issue, so the issue is parked after one dispatch and charged nothing. Find the rule for the permission the `[adapter-permission-rejected] tool=<permission>` line names. For `tool=read`, check whether the issue text asks the stage to read secret files and remove that ask. Change a rule only if the stage should have that tool, never by loosening a rule that guards secret files, then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`.",
       "adapter-incompatible":
         "The dispatch was refused before anything ran: the adapter's binary is below the compat manifest's floor or its version could not be read. Install a build at or above the floor (the refusal names the tested one) and pin the adapter's binary to it (for OpenCode, `opencode.binary` in ~/.nightgauge/config.yaml; see `nightgauge doctor`), then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. A retry on the same binary is refused the same way.",
+      "environment-halt":
+        "Apply the remedy the failed check names, then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. Do not change code: a retry meets the same environment.",
       unknown: "Review logs manually. Run /nightgauge:retro for AI-powered root cause analysis.",
     };
 
@@ -2014,6 +2024,7 @@ export class AutoRetroService {
       // on that repository fails the same way until someone changes it.
       "adapter-permission-rejected": "high",
       "adapter-incompatible": "high",
+      "environment-halt": "medium",
       unknown: "low",
     };
 

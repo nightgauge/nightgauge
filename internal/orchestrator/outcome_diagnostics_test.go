@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -44,14 +45,14 @@ func captureLog(t *testing.T, fn func()) string {
 func TestOutcomeModelDiagnosticsNameTheCause(t *testing.T) {
 	t.Run("predicted: nothing was predicted", func(t *testing.T) {
 		got := OutcomePredictedModelDiagnostic(340, "")
-		if !strings.Contains(got, "carried no routing.pickup_recommendation.dev_model") {
+		if !strings.Contains(got, "carried no routing.pickup_recommendation.dispatch_dev_model") {
 			t.Errorf("diagnostic = %q, want the absent-prediction cause", got)
 		}
 	})
 
 	t.Run("predicted: an id with no registry band", func(t *testing.T) {
 		got := OutcomePredictedModelDiagnostic(340, "gpt-5.5")
-		if strings.Contains(got, "carried no routing.pickup_recommendation.dev_model") {
+		if strings.Contains(got, "carried no routing.pickup_recommendation.dispatch_dev_model") {
 			t.Errorf("diagnostic = %q — a prediction WAS recorded; this text denies it", got)
 		}
 		if !strings.Contains(got, "gpt-5.5") {
@@ -98,7 +99,7 @@ func TestRecordOutcomeDiagnosesAnUnregisteredServedModel(t *testing.T) {
 	snap.RecordStageModel(state.StageFeatureDev, "gemini-2.0-flash")
 
 	out := captureLog(t, func() {
-		s.recordOutcome(item, snap, true, 5, "opus", root)
+		s.recordOutcome(item, snap, true, 5, root)
 	})
 
 	if strings.Contains(out, "reported no served model") {
@@ -112,7 +113,7 @@ func TestRecordOutcomeDiagnosesAnUnregisteredServedModel(t *testing.T) {
 // The mirror case: a prediction that IS present but unregistered must not be
 // reported as an issue-{N}.json that carried no recommendation.
 func TestRecordOutcomeDiagnosesAnUnregisteredPrediction(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := &Scheduler{recordOutcomes: true}
 	item := types.BoardItem{Number: 340, Repo: "acme/widget", Size: types.SizeM}
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
@@ -120,11 +121,13 @@ func TestRecordOutcomeDiagnosesAnUnregisteredPrediction(t *testing.T) {
 	snap.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 20}, "claude-sonnet-5", "")
 	snap.RecordStageModel(state.StageFeatureDev, "claude-sonnet-5")
 
+	writeDispatchPrediction(t, root, item.Number, "my-local-llama")
+
 	out := captureLog(t, func() {
-		s.recordOutcome(item, snap, true, 5, "my-local-llama", root)
+		s.recordOutcome(item, snap, true, 5, root)
 	})
 
-	if strings.Contains(out, "carried no routing.pickup_recommendation.dev_model") {
+	if strings.Contains(out, "carried no routing.pickup_recommendation.dispatch_dev_model") {
 		t.Errorf("log says no prediction was recorded, but the router recommended my-local-llama:\n%s", out)
 	}
 	if !strings.Contains(out, "my-local-llama") {
@@ -141,10 +144,10 @@ func TestRecordOutcomeStillReportsGenuineAbsence(t *testing.T) {
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
 
 	out := captureLog(t, func() {
-		s.recordOutcome(item, snap, false, 5, "", root)
+		s.recordOutcome(item, snap, false, 5, root)
 	})
 
-	if !strings.Contains(out, "carried no routing.pickup_recommendation.dev_model") {
+	if !strings.Contains(out, "carried no routing.pickup_recommendation.dispatch_dev_model") {
 		t.Errorf("an absent prediction must still say so:\n%s", out)
 	}
 	if !strings.Contains(out, "reported no served model") {

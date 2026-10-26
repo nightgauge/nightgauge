@@ -111,6 +111,7 @@ const HALT_SKIP_PARKED: ReadonlySet<string> = new Set([
   "context_window_exceeded",
   "adapter_permission_rejected",
   "adapter_incompatible",
+  "environment_halt",
 ]);
 
 /**
@@ -2355,6 +2356,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // must be impossible to mistake for success OR for a generic crash —
         // surface the blocker classification and the remediation the stage
         // already computed.
+        // The leading `BLOCKED — ` is matched by the Go scheduler
+        // (StageBlockedOutcomePrefix, internal/orchestrator/failure_handler.go)
+        // to keep a quoted quota line from applying the global cooldown
+        // (#2551). Change both together.
         const slotError = result.blocked
           ? new Error(
               `BLOCKED — PR ${result.blocked.prNumber ? `#${result.blocked.prNumber} ` : ""}unmerged: ` +

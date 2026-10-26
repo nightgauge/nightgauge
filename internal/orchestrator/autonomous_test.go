@@ -4275,7 +4275,7 @@ func TestRevertFailedIssueStatus_NoProjectConfigIsNoOp(t *testing.T) {
 	// an empty generation and say nothing.
 	done := make(chan struct{})
 	go func() {
-		as.revertFailedIssueStatus(as.backgroundContext(), "nightgauge/unknown", 999)
+		as.revertFailedIssueStatus(as.backgroundContext(), "nightgauge/unknown", 999, "")
 		close(done)
 	}()
 	select {

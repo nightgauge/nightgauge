@@ -224,8 +224,12 @@ catastrophic-cost backstop are untouched. A dead pid stops deferring
 immediately, a log that stops growing stops deferring at the next poll, and the
 whole mechanism is bounded by `external_progress_ceiling_ms` (20 minutes,
 matching `WEDGED_TOOL_CALL_CEILING_S`) so a wedged child cannot make a stage
-immortal. A stage that loops on `ls`/`cat` with nothing declared is killed on
-exactly the old schedule.
+immortal. Claude Code background tasks (a `run_in_background` gate, a Monitor)
+are the exception: each is bounded by its own age against
+`background_task_ceiling_ms` (45 minutes), measured from when the oldest live
+task started rather than from the last productive signal, so a full gate begun
+after minutes of rebasing is not killed mid-run (#2554). A stage that loops on
+`ls`/`cat` with nothing declared is killed on exactly the old schedule.
 
 ### Dollar-Ceiling Demotion
 
@@ -244,6 +248,7 @@ pipeline:
     min_cost_to_activate_usd: 0.50 # don't fire on cheap stages
     catastrophic_limit_usd: 200 # warn-only backstop if monitor itself fails
     external_progress_ceiling_ms: 1200000 # 20 min cap on external-progress deferral (0 disables)
+    background_task_ceiling_ms: 2700000 # 45 min cap per background task, by its own age (0 = use the external cap)
 ```
 
 All fields support env var overrides:
@@ -253,6 +258,7 @@ All fields support env var overrides:
 - `NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_MIN_COST_USD`
 - `NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_CATASTROPHIC_LIMIT_USD`
 - `NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_EXTERNAL_CEILING_MS`
+- `NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_BACKGROUND_TASK_CEILING_MS`
 
 ### Interaction with Performance Modes
 

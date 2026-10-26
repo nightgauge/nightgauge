@@ -138,6 +138,9 @@ func GenerateEpicTitle(dimension, repo string) string {
 // Acceptance Criteria, Verification — exact casing. These bodies are
 // machine-authored with no author in the loop, so the shape is pinned by
 // TestGenerateEpicBody_SatisfiesHeadingContract against that table (#1116).
+// `## Summary` also carries the `Falsifier:` and `Demand:` lines the issue
+// audit's epic riders require (#105), pinned by
+// TestGenerateEpicBody_CarriesFalsifierAndDemand.
 func GenerateEpicBody(epic *Epic) string {
 	sevCounts := map[string]int{
 		"critical": 0,
@@ -156,6 +159,10 @@ func GenerateEpicBody(epic *Epic) string {
 	sb.WriteString("## Summary\n\n")
 	sb.WriteString(fmt.Sprintf("Audit epic for **%s** in **%s**: %d finding(s) from the `%s` dimension.\n\n",
 		epic.Title, epic.Repository, len(epic.Findings), epic.Dimension))
+	sb.WriteString(fmt.Sprintf("Falsifier: re-running the `%s` audit on %s reports none of these findings.\n\n",
+		epic.Dimension, epic.Repository))
+	sb.WriteString(fmt.Sprintf("Demand: the `%s` audit raised %d finding(s); this epic tracks resolving them.\n\n",
+		epic.Dimension, len(epic.Findings)))
 	sb.WriteString("| Severity | Count |\n")
 	sb.WriteString("|----------|------:|\n")
 	for _, sev := range []string{"critical", "high", "medium", "low"} {

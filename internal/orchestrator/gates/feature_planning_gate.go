@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/deliverable"
 )
 
 // FeaturePlanningGate verifies the post-conditions of feature-planning:
@@ -13,6 +16,10 @@ import (
 //  2. The context references a plan_file path that exists on disk, inside the
 //     clone's plans directory (ResolvePlanFile), and is non-empty (a zero-byte
 //     plan is a skill-no-op masquerading as success)
+//  3. No planned NEW path is rejected by the publication boundary (#2562): a
+//     denied or unclassified path fails as not_pipeline_actionable, parking the
+//     issue for an owner publication decision instead of spending dev and
+//     validate to reach the same verdict in ci-local.
 type FeaturePlanningGate struct{}
 
 // Name implements StageGate.
@@ -33,11 +40,16 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 		}
 
 		var planCtx struct {
-			PlanFile string `json:"plan_file"`
+			PlanFile      string   `json:"plan_file"`
+			FilesToCreate []string `json:"files_to_create"`
+			FilesToModify []string `json:"files_to_modify"`
 		}
 		if err := json.Unmarshal(data, &planCtx); err != nil {
 			reason, ev := describeDecodeFailure("planning context", err)
 			return false, reason, ev, KindFail, TerminalKindValidationError
+		}
+		if ok, reason, ev, kind, tk := checkPlannedPublication(workspace, planCtx.FilesToCreate, planCtx.FilesToModify); !ok {
+			return ok, reason, ev, kind, tk
 		}
 		if planCtx.PlanFile == "" {
 			return false, "planning context missing plan_file", []string{
@@ -75,4 +87,38 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 			fmt.Sprintf("size=%d", stat.Size()),
 		}, KindOK, ""
 	})
+}
+
+// checkPlannedPublication runs the publication boundary over every path the
+// plan would add: files_to_create, plus any files_to_modify entry that does not
+// exist yet. An existing tracked file already passed the boundary, so it is not
+// re-asked. A checker that cannot run fails the gate rather than passing it.
+func checkPlannedPublication(workspace string, create, modify []string) (bool, string, []string, Kind, string) {
+	paths := append([]string{}, create...)
+	for _, p := range modify {
+		if _, err := os.Stat(filepath.Join(workspace, p)); os.IsNotExist(err) {
+			paths = append(paths, p)
+		}
+	}
+	if len(paths) == 0 {
+		return true, "", nil, KindOK, ""
+	}
+	res, err := deliverable.CheckPublication(workspace, paths)
+	if err != nil {
+		return false, "publication boundary check could not run", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
+	}
+	rejected := res.Rejected()
+	if len(rejected) == 0 {
+		return true, "", nil, KindOK, ""
+	}
+	ev := make([]string, 0, len(rejected)+1)
+	for _, v := range rejected {
+		if v.Verdict == "deny" {
+			ev = append(ev, fmt.Sprintf("%s: denied by publication rule %s (class %s)", v.Path, v.Rule, v.Class))
+		} else {
+			ev = append(ev, fmt.Sprintf("%s: unclassified — no publication allow rule matches it", v.Path))
+		}
+	}
+	ev = append(ev, "an owner must choose an allowed location or change .github/publication-boundary.yaml")
+	return false, "plan targets a path the publication boundary rejects", ev, KindFail, TerminalKindNotPipelineActionable
 }

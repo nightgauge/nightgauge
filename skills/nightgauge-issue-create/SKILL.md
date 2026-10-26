@@ -7,7 +7,7 @@ description: Create well-structured GitHub issues with SDLC metadata, project bo
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.25.1"
+  version: "1.26.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 ---
@@ -169,7 +169,7 @@ All created issues MUST be added to the project board with Status set, passing B
 
 ### Phase 4.6: Promote to Ready (After All Relationships Are Configured)
 
-**Epics only.** After board sync, fields, `blockedBy`, and `addSubIssue` are all complete, promote the epic and its sub-issues from Backlog to Ready — closing the race window where the scheduler dispatches before relationships exist.
+**Epics only.** After board sync, fields, `blockedBy`, and `addSubIssue` are all complete, promote the epic and its sub-issues from Backlog to Ready — closing the race window where the scheduler dispatches before relationships exist. A sub-issue whose declared `file_ownership` fails `nightgauge issue check-ownership` stays in Backlog (#561).
 
 > **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 

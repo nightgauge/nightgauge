@@ -8,7 +8,11 @@
  */
 
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
-import { getProjectItemStatus, clearConfigCache } from "../../src/utils/projectFieldWriter";
+import {
+  getProjectItemStatus,
+  clearConfigCache,
+  _testing,
+} from "../../src/utils/projectFieldWriter";
 import type { Logger } from "../../src/utils/logger";
 
 vi.mock("child_process", () => {
@@ -21,7 +25,7 @@ vi.mock("child_process", () => {
         else resolve({ stdout, stderr });
       });
     });
-  return { exec: execMock };
+  return { exec: execMock, execFile: vi.fn() };
 });
 
 vi.mock("fs", () => ({ promises: { readFile: vi.fn() } }));
@@ -58,20 +62,23 @@ const mockLogger = createMockLogger();
 const MOCK_YAML_CONFIG = {
   owner: "TestOrg",
   repo: "test-repo",
-  project: {
-    number: 1,
-    id: PROJECT_ID,
-    fields: {
-      status: { id: "PVTSSF_status", options: { ready: "opt_ready" } },
-      priority: { id: "PVTSSF_priority", options: {} },
-      size: { id: "PVTSSF_size", options: {} },
-    },
-  },
+  project: { number: 1 },
 };
 
-/** The single-query projectItems lookup response getProjectItemStatus reads. */
+/**
+ * One response for every query: the board field discovery reads `node`, and
+ * the single-query projectItems lookup getProjectItemStatus makes reads
+ * `repository`.
+ */
 const STATUS_RESPONSE = {
   data: {
+    node: {
+      fields: {
+        nodes: [
+          { id: "PVTSSF_status", name: "Status", options: [{ id: "opt_ready", name: "Ready" }] },
+        ],
+      },
+    },
     repository: {
       issue: {
         projectItems: {
@@ -92,6 +99,10 @@ const STATUS_RESPONSE = {
 beforeEach(() => {
   vi.clearAllMocks();
   clearConfigCache();
+  _testing.setBoardResolverDeps({
+    resolveBinary: async () => "/bin/nightgauge",
+    exec: async () => ({ stdout: JSON.stringify({ id: PROJECT_ID, owner: "TestOrg", number: 1 }) }),
+  });
   ipcState.isConnected = false;
   ipcState.githubGraphqlRaw = vi.fn();
 

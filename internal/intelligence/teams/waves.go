@@ -94,6 +94,9 @@ type SubIssue struct {
 	Repo       string   `json:"repo,omitempty"`
 	Files      []string `json:"files,omitempty"`
 	Complexity string   `json:"complexity,omitempty"` // "simple", "medium", "complex"
+	// TargetSource is how Files was resolved: "declared" (file_ownership
+	// block) or "inferred" (prose scan) — surfaced by plan-waves (#561).
+	TargetSource string `json:"targetSource,omitempty"`
 }
 
 // WaveAssignment groups issues into execution waves.
