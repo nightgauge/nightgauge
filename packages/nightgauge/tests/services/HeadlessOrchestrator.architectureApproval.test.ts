@@ -11,7 +11,10 @@
  * @see Issue #4222 - approval gate should halt at feature-dev, not leak into validate
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import { ARCHITECTURE_APPROVAL_REQUIRED_MARKER } from "../../src/utils/failureComment";
 import type { Logger } from "../../src/utils/logger";
@@ -186,5 +189,79 @@ describe("HeadlessOrchestrator.verifyArchitectureApproval (Issue #4222)", () => 
     expect(await (orch as any).verifyArchitectureApproval(237)).toBeNull();
     const debugCalls = (logger.debug as Mock).mock.calls.map((c) => String(c[0]));
     expect(debugCalls.some((m) => m.includes("binary error"))).toBe(false);
+  });
+});
+
+describe("HeadlessOrchestrator.approvalResumeSkipReason (Issue #2577)", () => {
+  let logger: Logger;
+  let dir: string;
+  let orch: HeadlessOrchestrator;
+
+  const writeContext = (type: string, issue: number, body: unknown) =>
+    fs.writeFileSync(path.join(dir, `${type}-${issue}.json`), JSON.stringify(body));
+  const plan = (issue: number) => ({
+    schema_version: "1.9",
+    issue_number: issue,
+    plan_file: `/plans/${issue}-plan.md`,
+    approach: "standard",
+    files_to_create: [],
+    files_to_modify: ["internal/orchestrator/autonomous.go"],
+    created_at: "2026-10-26T14:22:33Z",
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    binaryResolves.value = true;
+    scenario.value = "approved";
+    logger = makeLogger();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "approval-resume-"));
+    orch = new HeadlessOrchestrator(null as any, logger, { contextFileWaitMs: 0 });
+    (orch as any).getContextPath = (type: string, issue: number) =>
+      path.join(dir, `${type}-${issue}.json`);
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("skips planning when the approved decision's plan is on disk and no dev ran", async () => {
+    writeContext("planning", 2577, plan(2577));
+    const reason = await (orch as any).approvalResumeSkipReason(2577);
+    expect(reason).toMatch(/resuming after architecture approval/);
+  });
+
+  it("plans as usual when no plan is on disk", async () => {
+    expect(await (orch as any).approvalResumeSkipReason(2577)).toBeNull();
+  });
+
+  it("plans as usual when approval has not landed — the gate still blocks", async () => {
+    scenario.value = "requires-approval";
+    writeContext("planning", 2577, plan(2577));
+    expect(await (orch as any).approvalResumeSkipReason(2577)).toBeNull();
+  });
+
+  it("plans as usual for a decision that is not high-impact", async () => {
+    scenario.value = "not-high-impact";
+    writeContext("planning", 2577, plan(2577));
+    expect(await (orch as any).approvalResumeSkipReason(2577)).toBeNull();
+  });
+
+  it("plans as usual when feature-dev already ran from that plan", async () => {
+    writeContext("planning", 2577, plan(2577));
+    writeContext("dev", 2577, { issue_number: 2577 });
+    expect(await (orch as any).approvalResumeSkipReason(2577)).toBeNull();
+  });
+
+  it("plans as usual when the plan is invalid or names another issue", async () => {
+    writeContext("planning", 2577, plan(2578));
+    expect(await (orch as any).approvalResumeSkipReason(2577)).toBeNull();
+    fs.writeFileSync(path.join(dir, "planning-2577.json"), "not json {");
+    expect(await (orch as any).approvalResumeSkipReason(2577)).toBeNull();
+  });
+
+  it("plans as usual when the gate binary is unavailable", async () => {
+    binaryResolves.value = false;
+    writeContext("planning", 2577, plan(2577));
+    expect(await (orch as any).approvalResumeSkipReason(2577)).toBeNull();
   });
 });

@@ -5455,7 +5455,16 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// cascade feed, NO safety-rails failure, and no backoff — the stop is
 		// what stops re-dispatch, and once the operator resumes, the issue
 		// should be immediately eligible again.
-		if terminalFailureKind == TerminalKindOperatorStop || as.stopRequested {
+		//
+		// A kind that already carries a human hold (HoldForTerminalKind) is
+		// exempt from the `stopRequested` half (#2577). That kind is the run's
+		// own verdict, such as an architecture-approval halt. It is not a stage
+		// the teardown killed. Rewriting it to operator_stop reverted the issue
+		// to Ready with no Action Center card, and the next dispatch paid for a
+		// second planning pass that halted at the same gate. A kill still
+		// reaches here as TerminalKindOperatorStop through `Cancelled`.
+		if terminalFailureKind == TerminalKindOperatorStop ||
+			(as.stopRequested && HoldForTerminalKind(terminalFailureKind) == HoldNone) {
 			terminalFailureKind = TerminalKindOperatorStop
 			as.recordFailureLocked(repo, issue, title, now,
 				"stopped by the operator — not a failure of this issue", terminalFailureKind)
@@ -7869,6 +7878,13 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 					continue
 				}
 				log.Printf("autonomous: releasing %s — %s hold cleared: %s", key, hold, why)
+				if hold == HoldArchitectureApproval {
+					// The card's lifetime is the hold's (#2577): once the
+					// approval lands it asks for nothing, so it must not
+					// wait for the run to succeed before it is retracted.
+					repo, number := f.Repo, f.Number
+					as.dispatchAttention(func() { as.retractArchitectureApproval(repo, number) })
+				}
 			}
 			// Still open and not held — re-admit for potential retry.
 			readmittedFailed++

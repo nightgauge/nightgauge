@@ -11,6 +11,12 @@ and this project adheres to
 
 ### Fixed
 
+- **An approved architecture decision resumes at feature-dev (#2577).** When a
+  run halted at the architecture-approval gate and a human then approved it,
+  the next run reuses the plan the human approved and skips feature-planning.
+  The gate still runs before feature-dev, so an unapproved issue halts again
+  without a second planning pass.
+
 - **A pr-merge waiting on its background gate is no longer killed, and a
   transient kill no longer strands the issue (#2554).** Each Claude Code
   background task now defers the runaway kill for up to
