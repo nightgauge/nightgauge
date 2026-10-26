@@ -348,6 +348,20 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "The pipeline-start auth gate refused to launch (#312) — an adapter probe timed out after a retry (transient starvation under a concurrent dispatch burst) or the adapter CLI is logged out. Above the subagent-crash fallback, whose `exit ` substring would otherwise feed the cascade breaker a false crash. All three spellings: the wrapped pipeline-start form carries the marker BARE, which the SDK mirror missed on a real observed failure (#306). `not signed in` is the FOURTH producer of this same taxonomy kind (#591): the grok Build CLI's own vendor text — `Error: Not signed in. To authenticate without a browser, run: grok login --device-code…` — when credentials are absent. That text carries none of the three markers above; it never passes through the pipeline-start probe at all because the CLI fails too fast for the probe to run, so it reaches the classifier only as the adapter's raw stderr reason (#533's cliFailureText carry) and fell all the way through to subagent_crash before this clause existed. MOVED HERE FROM BELOW model-unavailable/issue-closed/…/stall-kill BY #565: adapter-auth-failed and rate-limit-quota-exhausted are the two rules that exist specifically to classify RAW, unmarked vendor CLI stderr (#560/#591 are the same fix for two different grok failures) rather than a pipeline-stamped marker, and every rule between the old and new position matches on bare, generic-sounding literals (`hard cap`, `budget ceiling`, `premature turn end`, …) that a vendor CLI's own unrelated log chatter can satisfy incidentally. #565's negative-control corpus row (multiline-grok-hard-cap-notice-then-not-signed-in) pins the concrete case this closes: a retry-configuration line mentioning `hard cap` printed before the real `Not signed in` failure used to win under stall-kill's old higher position, sending an unauthenticated CLI through backoff-and-retry recovery for a failure retrying can never fix. Matching is over the WHOLE joined string, not per line, so position IN THE TEXT never protected this — only position in the RULE TABLE does. The `ai_apicallerror`+`unauthorized` clause is the FIFTH producer (#1631): a model server that refused OpenCode's credentials with a 401, which opencode 1.18.30 reports as `AI_APICallError: Unauthorized` — the HTTP reason phrase, since the capture's 401 had no body (internal/terminalkind/testdata/opencode/auth.stderr). A conjunction because each half alone belongs to someone else: bare `unauthorized` is a forge refusal's word too, which git-transport-auth-failed below claims in its `401 unauthorized` form, and a bare `AI_APICallError` is any failed model request."
     },
     {
+      "id": "environment-halt",
+      "kind": "environment_halt",
+      "signal": true,
+      "clauses": [
+        [
+          "[environment-halt]"
+        ],
+        [
+          "environment_halt"
+        ]
+      ],
+      "why": "A project-declared preflight.environment check failed in a stage's Phase 0 (#101): the operator's local environment (a service down, emulator storage full, PATH order) is broken, not the code. `nightgauge preflight environment` and the shared PREFLIGHT.md Layer 3 stamp the bracketed marker. Next to adapter-auth-failed and above the subagent-crash fallback, whose `exit ` substring would otherwise book an environment halt as a crash and feed the cascade breaker. The marker literal is unique to this producer, so its position among the other marker rules changes no other classification. Deliberately not matched on prose such as `environment check failed`, which a test runner's own output can print."
+    },
+    {
       "id": "context-window-exceeded",
       "kind": "context_window_exceeded",
       "signal": false,

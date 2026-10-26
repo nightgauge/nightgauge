@@ -252,6 +252,7 @@ record may carry both fields, neither, or only one.
 | `context_window_exceeded`        | The prompt outgrew the context the model server has the model loaded with (Issue #1631) — read only from the adapter's own failed-request line, never from model text; parked, never retried on the same model and adapter                                                                                                                                                                                                           |
 | `adapter_permission_rejected`    | The adapter rejected a call to a tool the stage's allowed tools grant, #1624's `[adapter-permission-rejected]` marker (Issue #1631) — usually a `deny` in the generated permission map (#1638), such as its `.env` read backstop, else an `ask` rule in a repository's or the user's OpenCode config; parked whatever tool it names, not retried, not charged to the issue                                                           |
 | `adapter_incompatible`           | The adapter's binary cannot serve the dispatch: below the compat floor or unreadable (Issues #1627, #1631; a newer version is never refused) — parked; install a build at or above the floor                                                                                                                                                                                                                                         |
+| `environment_halt`               | A project-declared `preflight.environment` check failed in Phase 0, the `[environment-halt]` marker (Issue #101) — the operator's environment, not the code; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                      |
 
 A rejected tool call the session recovered from (a later call completed and its step finished) is a warning, not `adapter_permission_rejected`: only a rejection still open when the session ends classifies it. A non-zero OpenCode exit whose only errors were recovered is handed to the stage's post-condition gate, which decides (Issue #2168).
 
@@ -547,6 +548,7 @@ kinds that halt on purpose and say so, and the three parked kinds (#1631):
 | `context_window_exceeded`        | A larger context, another model, or a split          | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `adapter_permission_rejected`    | A changed permission rule or issue text              | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `adapter_incompatible`           | A binary at or above the floor, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `environment_halt`               | The check's remedy, applied to the environment       | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 
 The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
 derives the hold from it via `HoldForTerminalKind`, so retryability has one
@@ -593,6 +595,24 @@ not a recovery attempt.
 `worktree_uncommitted` and `budget_ceiling_hit` are **recoverable** kinds: the
 autonomous scheduler does not increment `LifetimeIssueFailures` for them and the
 Go scheduler skips the board-status revert — the issue is re-dispatchable.
+
+### Project environment halt (#101)
+
+A project can declare environment checks under `preflight.environment` (see
+[CONFIGURATION.md](CONFIGURATION.md#preflightenvironment)). Every stage runs
+them as Layer 3 of its Phase 0 preflight through
+`nightgauge preflight environment`. A failed check writes
+`[environment-halt] <name>: <message> — remedy: <remedy>` to stderr and ends the
+stage, and the rule table classifies the marker as `environment_halt`, above
+the `subagent_crash` fallback.
+
+The kind parks (`TerminalKindParks`). There is no model escalation and no
+retry. The issue is not charged a lifetime failure, the cascade breaker gets
+no feed, and the fleet does not pause. The issue stays held until an operator
+fixes the environment and runs `nightgauge autonomous clear-failures`. Both
+outcome writers skip the run, the scheduler and the extension IPC path alike,
+so a broken environment never reaches the calibration corpus as a model or
+size miss.
 
 ### Gate-Sourced Structured Terminal Kind (Issue #9)
 
@@ -661,6 +681,7 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `context_window_exceeded`        | parked — the loaded model's limit, not the issue; no lifetime-cap increment, no cascade     |
 | `adapter_permission_rejected`    | parked — a `deny` or `ask` rule on an allowed tool; no lifetime-cap increment, no cascade   |
 | `adapter_incompatible`           | parked — the adapter's binary, not the issue; no lifetime-cap increment, no cascade         |
+| `environment_halt`               | parked — the operator's environment, not the issue; no lifetime-cap increment, no cascade   |
 
 **The sweep (#1237).** #9 built the mechanism but left eleven `KindFail`
 sites emitting an empty `TerminalKind` — four in `feature_dev_gate.go`, two

@@ -4299,7 +4299,7 @@ func (s *Server) registerMethods() {
 				if err := learning.NewRecorder(root).Record(outcome); err != nil {
 					log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
 				}
-			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable:
+			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt:
 				log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
 					p.IssueNumber, outcomeVerdict)
 			case outcomeUnset:

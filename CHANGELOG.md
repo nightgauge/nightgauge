@@ -22,6 +22,19 @@ changelog, and the release workflow refuses a tag that does not.
   no identity checker is configured. It shares one card with the identity preflight, and
   the card shows only the classifier's reason, never raw output.
 
+- **Projects can declare environment preflight checks (#101).** List commands
+  under `preflight.environment` in `.nightgauge/config.yaml`, for example
+  `run: [curl, -sf, http://localhost:3001/health]` with a `remedy`. Every
+  stage runs them before doing any work, through the new
+  `nightgauge preflight environment` verb. A failed check stops the stage
+  with your remedy instead of letting the agent misread a broken local
+  environment as a code defect. The run is recorded as `environment_halt`
+  and the issue is held until you fix the environment and run
+  `nightgauge autonomous clear-failures`. It is not charged as a failure and
+  it does not skew routing calibration. Commands run without a shell, use
+  typed `expect` assertions and a timeout, and are read only from the main
+  checkout's config.
+
 - **Shared model overlays for Claude and OpenAI models (#81).** Every Claude
   model now renders with an `anthropic` overlay (run the named `nightgauge`
   command, carry out each step explicitly), and Opus 5.5 and Sonnet 5.5 add

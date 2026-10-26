@@ -42,6 +42,27 @@ After generation, verify the configuration:
 
 ---
 
+## Declaring environment preflight checks
+
+When the pipeline depends on local services, an emulator or a toolchain, you
+can declare a check for each in `.nightgauge/config.yaml`. A failed check then
+halts every stage up front with your remedy, instead of failing mid-stage in a
+way the agent mistakes for a code defect:
+
+```yaml
+preflight:
+  environment:
+    - name: local-stack
+      run: [curl, -sf, http://localhost:3001/health]
+      remedy: "Run ./scripts/dev-up.sh"
+```
+
+Run `nightgauge preflight environment` to try the checks by hand. See
+[CONFIGURATION.md](CONFIGURATION.md#preflightenvironment) for the typed
+`expect` fields and timeouts.
+
+---
+
 ## Overview
 
 | Property    | Value                                                |
