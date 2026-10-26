@@ -4,7 +4,8 @@
   "routing": {
     "complexity_score": 5,
     "pickup_recommendation": {
-      "dev_model": "sonnet"
+      "dev_model": "sonnet",
+      "dispatch_dev_model": "sonnet"
     }
   },
   "type": "feature"

@@ -100,12 +100,12 @@ codex/gemini/copilot run as a routing miss. `OutcomeActualBand` inverts the
 mapping against the prediction instead. See
 [OUTCOME_RECORDING.md](OUTCOME_RECORDING.md) for the worked table.
 
-| Field            | Meaning                                                                                                                                                | Absent when                                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| `predictedSize`  | `SizeBucketForScore(routing.complexity_score)`                                                                                                         | the issue carried no size input (see below), or is unscored                    |
-| `actualSize`     | how big the change turned out to be, bucketed from lines **changed** captured at `pr-create` exit                                                      | the run never reached `pr-create`, or the pre-merge diff could not be measured |
-| `predictedModel` | `routing.pickup_recommendation.dev_model` as a registry band (`OutcomeModelBand`)                                                                      | the router made no recommendation, or the recommendation has no registry band  |
-| `actualModel`    | the band the **`feature-dev`** stage served — the adapter mapping inverted against the prediction (`OutcomeActualBand`), not a strongest-band collapse | that stage never ran, reported no model, or served an id with no registry band |
+| Field            | Meaning                                                                                                                                                     | Absent when                                                                    |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `predictedSize`  | `SizeBucketForScore(routing.complexity_score)`                                                                                                              | the issue carried no size input (see below), or is unscored                    |
+| `actualSize`     | how big the change turned out to be, bucketed from lines **changed** captured at `pr-create` exit                                                           | the run never reached `pr-create`, or the pre-merge diff could not be measured |
+| `predictedModel` | `routing.pickup_recommendation.dispatch_dev_model` (the feature-dev dispatch selection, `PlannedStageModel`, #2537) as a registry band (`OutcomeModelBand`) | feature-dev was never dispatched, or the selection has no registry band        |
+| `actualModel`    | the band the **`feature-dev`** stage served — the adapter mapping inverted against the prediction (`OutcomeActualBand`), not a strongest-band collapse      | that stage never ran, reported no model, or served an id with no registry band |
 
 **What counts as a size input, and why it is one rule.** Presence follows the
 **router's own** resolution order — project board **Size** field, then a `size:*`

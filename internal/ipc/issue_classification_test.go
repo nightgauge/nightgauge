@@ -123,3 +123,19 @@ func TestLoadIssueClassificationNoSizeLabel(t *testing.T) {
 		t.Errorf("Type = %q, want bug", cls.Type)
 	}
 }
+
+// The extension path's prediction is the feature-dev model dispatch selected
+// (dispatch_dev_model), never the router's run-wide dev_model, which the stage
+// default overrides (#2537). The two differ here so reading the wrong field fails.
+func TestLoadIssueClassificationPredictsDispatchDevModel(t *testing.T) {
+	root := layouttest.Repo(t)
+	writeIssueContext(t, root, 2537, `{
+	  "type": "bug",
+	  "labels": ["size:S"],
+	  "routing": {"pickup_recommendation": {"dev_model": "sonnet", "dispatch_dev_model": "opus"}}
+	}`)
+
+	if got := loadIssueClassification(root, "", 2537).PredictedModel; got != "opus" {
+		t.Errorf("PredictedModel = %q, want opus (dispatch_dev_model, not dev_model)", got)
+	}
+}

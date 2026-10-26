@@ -32,8 +32,10 @@ type issueClassification struct {
 	// callers can tell "unscored" from any real score and must not spell it as
 	// a real one.
 	ComplexityScore int
-	// PredictedModel is routing.pickup_recommendation.dev_model — the model
-	// tier the router chose for the implementation stage. Empty when unknown,
+	// PredictedModel is routing.pickup_recommendation.dispatch_dev_model — the
+	// model the scheduler's dispatch selection (orchestrator.PlannedStageModel,
+	// #2537) picks for the implementation stage, never the router's run-wide
+	// dev_model, which the feature-dev stage default overrides. Empty when unknown,
 	// and deliberately NOT defaulted: a fabricated prediction is worse for
 	// calibration than an absent one, because no reader can tell the two apart.
 	// The scheduler's loadIssueContext returns the same raw value for the same
@@ -82,7 +84,7 @@ func loadIssueClassification(repoRoot, worktreeDir string, issueNumber int) issu
 				// the run RECORD's routing block (#1484).
 				SuggestedRoute       string `json:"suggested_route"`
 				PickupRecommendation struct {
-					DevModel string `json:"dev_model"`
+					DispatchDevModel string `json:"dispatch_dev_model"`
 				} `json:"pickup_recommendation"`
 			} `json:"routing"`
 		}
@@ -99,7 +101,7 @@ func loadIssueClassification(repoRoot, worktreeDir string, issueNumber int) issu
 			Type:            issueType,
 			Size:            state.ExtractSizeFromLabels(labels),
 			ComplexityScore: ctx.Routing.ComplexityScore,
-			PredictedModel:  ctx.Routing.PickupRecommendation.DevModel,
+			PredictedModel:  ctx.Routing.PickupRecommendation.DispatchDevModel,
 			SuggestedRoute:  ctx.Routing.SuggestedRoute,
 			Title:           ctx.Title,
 		}

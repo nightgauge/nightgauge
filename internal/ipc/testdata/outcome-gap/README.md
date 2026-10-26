@@ -55,7 +55,7 @@ the same run's outcome was written without.
 
 ## The MATCH/MISS pair these fixtures exist to make possible
 
-`issue-context.json` predicts `dev_model: sonnet`; `run-record.json`'s
+`issue-context.json` predicts `dispatch_dev_model: sonnet`; `run-record.json`'s
 `feature-dev` stage served `claude-sonnet-5`. Normalized onto registry bands
 those agree, so the canonical run records a routing **HIT** —
 `TestLearningOutcomeFor_ModelPairMatchesWhenRoutedRight_MissesWhenNot` then
@@ -93,7 +93,7 @@ string values**, not an allowlist of known-sensitive field names:
   `priority:`, `status:`); `component:`/`area:` labels can name private
   subsystems and are dropped.
 - `issue-context.json` is a strict **projection** — only `issue_number`,
-  `type`, `labels` and `routing.{complexity_score,pickup_recommendation.dev_model}`
+  `type`, `labels` and `routing.{complexity_score,pickup_recommendation.{dev_model,dispatch_dev_model}}`
   are emitted; the issue body, acceptance criteria and routing rationale are
   never read into the output at all.
 - **High-resolution join keys are blunted, because the string allowlist cannot

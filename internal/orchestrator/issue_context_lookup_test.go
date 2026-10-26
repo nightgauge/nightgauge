@@ -29,7 +29,8 @@ func writeIssueContext(t *testing.T, root string, issue int, devModel string, co
 	}
 	dir := layouttest.MkPipelineDir(t, layouttest.Init(t, root))
 	body := `{"routing":{"complexity_score":` + strconv.Itoa(complexity) +
-		`,"suggested_route":"standard","pickup_recommendation":{"dev_model":"` + devModel + `"}}}`
+		`,"suggested_route":"standard","pickup_recommendation":{"dev_model":"` + devModel +
+		`","dispatch_dev_model":"` + devModel + `"}}}`
 	if err := os.WriteFile(filepath.Join(dir, "issue-"+strconv.Itoa(issue)+".json"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -155,7 +156,7 @@ func TestResolveOutcomePrediction_UpgradesFromTheWorktree(t *testing.T) {
 
 	s := &Scheduler{}
 	// The pickup values: what runPipeline actually had — nothing.
-	score, model := s.resolveOutcomePrediction(root, "", "acme/widget", 42, 0, "")
+	score, model := s.resolveOutcomePrediction(root, "", "acme/widget", 42, 0)
 
 	if model != "opus" {
 		t.Errorf("predictedModel = %q, want \"opus\" — the context is in the worktree, "+
@@ -168,14 +169,39 @@ func TestResolveOutcomePrediction_UpgradesFromTheWorktree(t *testing.T) {
 }
 
 // TestResolveOutcomePrediction_NeverDowngrades guards the safety direction. A
-// re-read that finds nothing must keep whatever the caller already had, so a
-// run whose context genuinely never appeared is no worse off than before.
+// re-read that finds nothing keeps the caller's score, and records no model
+// prediction at all rather than a tier dispatch never used (#2537).
 func TestResolveOutcomePrediction_NeverDowngrades(t *testing.T) {
 	s := &Scheduler{}
-	score, model := s.resolveOutcomePrediction(t.TempDir(), "", "acme/widget", 42, 4, "sonnet")
-	if score != 4 || model != "sonnet" {
-		t.Errorf("got score=%d model=%q, want the pickup values 4/sonnet preserved when "+
-			"no context exists anywhere", score, model)
+	score, model := s.resolveOutcomePrediction(t.TempDir(), "", "acme/widget", 42, 4)
+	if score != 4 || model != "" {
+		t.Errorf("got score=%d model=%q, want the pickup score 4 preserved and no "+
+			"prediction when no context exists anywhere", score, model)
+	}
+}
+
+// TestResolveOutcomePrediction_ScoresTheDispatchSelection is the #2537 guard:
+// the prediction is dispatch_dev_model, never the router's run-wide dev_model
+// that the feature-dev stage default overrides on every dispatch — and an old
+// context carrying only dev_model records no prediction (no fallback).
+func TestResolveOutcomePrediction_ScoresTheDispatchSelection(t *testing.T) {
+	root := t.TempDir()
+	dir := layouttest.MkPipelineDir(t, layouttest.Init(t, root))
+	write := func(issue int, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "issue-"+strconv.Itoa(issue)+".json"), []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	write(7, `{"routing":{"complexity_score":5,"pickup_recommendation":{"dev_model":"sonnet","dispatch_dev_model":"opus"}}}`)
+	write(8, `{"routing":{"complexity_score":5,"pickup_recommendation":{"dev_model":"sonnet"}}}`)
+
+	s := &Scheduler{}
+	if _, model := s.resolveOutcomePrediction(root, "", "acme/widget", 7, 0); model != "opus" {
+		t.Errorf("predictedModel = %q, want dispatch_dev_model \"opus\", not dev_model", model)
+	}
+	if _, model := s.resolveOutcomePrediction(root, "", "acme/widget", 8, 0); model != "" {
+		t.Errorf("predictedModel = %q, want \"\" — no fallback to dev_model", model)
 	}
 }
 
@@ -188,7 +214,7 @@ func TestResolveOutcomePrediction_UpgradesEachHalfIndependently(t *testing.T) {
 	writeIssueContext(t, root, 5, "opus", 0)
 
 	s := &Scheduler{}
-	score, model := s.resolveOutcomePrediction(root, "", "acme/widget", 5, 6, "sonnet")
+	score, model := s.resolveOutcomePrediction(root, "", "acme/widget", 5, 6)
 	if model != "opus" {
 		t.Errorf("predictedModel = %q, want the fresher \"opus\"", model)
 	}
@@ -218,7 +244,7 @@ func TestRecordOutcome_RecordsThePredictionFromTheWorktree(t *testing.T) {
 	// Pickup values are empty, exactly as runPipeline has them on a first run.
 	got := s.recordOutcome(
 		types.BoardItem{Repo: "acme/widget", Number: 42, Size: "M"},
-		snap, true, 0, "", root)
+		snap, true, 0, root)
 
 	if got == nil {
 		t.Fatal("recordOutcome returned nil")

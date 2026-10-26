@@ -55,7 +55,7 @@ func TestRecordOutcome_UsesPreMergeLinesCapturedAtPRCreate(t *testing.T) {
 		&StageRunResult{ExitCode: 0}, 0, nil, 0, "haiku",
 		0, 0, 0, time.Now().Add(-time.Second), root, "OPEN", "small")
 
-	prediction := s.recordOutcome(item, runtime.Snapshot(), true, 3, "sonnet", root)
+	prediction := s.recordOutcome(item, runtime.Snapshot(), true, 3, root)
 	got := readCorpus(t, root)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 outcome, got %d", len(got))
@@ -117,7 +117,7 @@ func TestRecordOutcome_LandsInTheRunsTargetRepo(t *testing.T) {
 	snap.BeginStage(state.StageFeatureDev)
 	snap.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 20}, "claude-sonnet-5", "")
 
-	s.recordOutcome(item, snap.Snapshot(), true, 3, "sonnet", targetRepoRoot)
+	s.recordOutcome(item, snap.Snapshot(), true, 3, targetRepoRoot)
 
 	if got := readCorpus(t, targetRepoRoot); len(got) != 1 {
 		t.Fatalf("expected 1 outcome in the target repo, got %d", len(got))
@@ -135,7 +135,7 @@ func TestRecordOutcome_NoRootRecordsNothing(t *testing.T) {
 	item := types.BoardItem{Number: 78, Repo: "acme/widget"}
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID()).Snapshot()
 
-	if got := s.recordOutcome(item, snap, true, 3, "sonnet", ""); got != nil {
+	if got := s.recordOutcome(item, snap, true, 3, ""); got != nil {
 		t.Errorf("recordOutcome with no root returned %+v, want nil", got)
 	}
 }
@@ -188,7 +188,7 @@ func TestRecordOutcome_SizePresenceFollowsTheRoutersResolutionOrder(t *testing.T
 			item := types.BoardItem{Number: 79, Repo: "acme/widget", Size: tc.size, Labels: tc.labels}
 			snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID()).Snapshot()
 
-			s.recordOutcome(item, snap, true, tc.score, "sonnet", root)
+			s.recordOutcome(item, snap, true, tc.score, root)
 
 			got := readCorpus(t, root)
 			if len(got) != 1 {
@@ -253,7 +253,10 @@ func TestRecordOutcome_ModelPairIsMeasuredNotCopied(t *testing.T) {
 				rs.RecordStageModel(state.StageFeatureDev, tc.devStageModel)
 			}
 
-			s.recordOutcome(item, rs.Snapshot(), true, 5, tc.predicted, root)
+			if tc.predicted != "" {
+				writeDispatchPrediction(t, root, item.Number, tc.predicted)
+			}
+			s.recordOutcome(item, rs.Snapshot(), true, 5, root)
 
 			got := readCorpus(t, root)
 			if len(got) != 1 {

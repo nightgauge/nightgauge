@@ -52,6 +52,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Routing accuracy now measures the model feature-dev actually dispatches on
+  (#2537).** The learning corpus compared feature-dev's served model against the
+  router's run-wide tier (`dev_model`), which the feature-dev stage default
+  overrides on every dispatch, so most elevated-mode runs booked a sonnet/opus
+  miss. Dispatch and the prediction now share one selection function
+  (`PlannedStageModel`). The scheduler records its feature-dev result as
+  `routing.pickup_recommendation.dispatch_dev_model`, and both outcome writers
+  score that field. Older contexts without it record no prediction and are
+  excluded from accuracy.
+
 - **Grok runs now advance inferred phase markers (#559).** A Grok
   `streaming-json` `tool_call` line was invisible to phase inference on both
   the CLI and VS Code paths, so Grok-driven feature-dev, planning and validate
