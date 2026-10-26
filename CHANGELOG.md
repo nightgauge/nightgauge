@@ -32,6 +32,14 @@ changelog, and the release workflow refuses a tag that does not.
   pipeline's state service drops a completion for a stage that never began
   (#2536). pr-create then ran, and failed because `validate-{N}.json` was
   missing. The fast-forward now begins pr-create before completing it.
+- **A BLOCKED verdict that quotes another tool's quota no longer suspends the
+  fleet (#2551).** A stage that ended BLOCKED because a tool it investigated
+  was out of quota had the quoted usage-limit text read as an Anthropic quota
+  failure. That applied the global one-hour dispatch cooldown to every repo.
+  The scheduler now holds such an outcome for that issue only. Real adapter
+  quota failures still set the cooldown. The new
+  `nightgauge autonomous clear-cooldown` lifts a cooldown without the VS Code
+  extension.
 
 - The autonomous scheduler now dispatches a Ready issue whose open PR is only
   behind its base branch (green, strict up-to-date policy); the run resumes at

@@ -3139,6 +3139,35 @@ func ClearIssueFailuresOffline(workspaceRoot, key string) (cleared int, found bo
 	return cleared, true, nil
 }
 
+// ClearQuotaCooldownOffline clears the global quota cooldown in the
+// workspace's state file when no daemon is running, through the same
+// ClearQuotaCooldown a live scheduler uses. Returns (cleared, previousUntil,
+// found); found is false when the workspace has no autonomous state file.
+// Issue #2551.
+func ClearQuotaCooldownOffline(workspaceRoot string) (cleared bool, previousUntil string, found bool, err error) {
+	if workspaceRoot == "" {
+		return false, "", false, fmt.Errorf("workspace root is required")
+	}
+	p, err := AutonomousStatePath(workspaceRoot)
+	if err != nil {
+		return false, "", false, fmt.Errorf("resolve state: %w", err)
+	}
+	data, readErr := os.ReadFile(p)
+	if os.IsNotExist(readErr) {
+		return false, "", false, nil
+	}
+	if readErr != nil {
+		return false, "", false, fmt.Errorf("read state: %w", readErr)
+	}
+	var st AutonomousState
+	if unmarshalErr := json.Unmarshal(data, &st); unmarshalErr != nil {
+		return false, "", false, fmt.Errorf("parse state: %w", unmarshalErr)
+	}
+	as := &AutonomousScheduler{workspaceRoot: workspaceRoot, state: &st}
+	cleared, previousUntil = as.ClearQuotaCooldown()
+	return cleared, previousUntil, true, nil
+}
+
 // ClearQuotaCooldown unconditionally removes the global Anthropic-quota
 // cooldown so the next runCycle dispatches without waiting for the recorded
 // deadline. Returns (cleared, previousUntil) — cleared=false when no cooldown
@@ -5304,6 +5333,37 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
+			return
+		}
+
+		// A stage-declared BLOCKED / not-pipeline-actionable outcome that
+		// quotes another tool's usage-limit text is not an Anthropic quota
+		// failure: the stage's own adapter worked well enough to reach a
+		// verdict. Demote the kind before it reaches the GLOBAL cooldown
+		// below (#2551).
+		if demoted, ok := DemoteEnvironmentalKindForOutcome(terminalFailureKind, failureDetail); ok {
+			log.Printf("autonomous: %s quota kind demoted — stage-declared BLOCKED outcome quotes quota text; no global cooldown (%s → %s)",
+				key, terminalFailureKind, demoted)
+			terminalFailureKind = demoted
+		}
+
+		// The demoted BLOCKED outcome is held for this one issue as a
+		// non-fault outcome, like not_pipeline_actionable below: no retry, no
+		// cooldown, no lifetime-cap increment, no board revert — the extension
+		// already parked the issue with its blocked finding (#2551).
+		if terminalFailureKind == TerminalKindBlockedOutcomeHold {
+			as.recordFailureLocked(repo, issue, title, now, failureDetail, terminalFailureKind)
+			log.Printf("autonomous: %s blocked by its stage (non-failure) — held, no retry, no cooldown, no lifetime-cap increment", key)
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
 			return
 		}
 

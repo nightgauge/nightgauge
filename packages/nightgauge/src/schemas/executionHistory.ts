@@ -563,6 +563,7 @@ export const TerminalFailureKindSchema = z.enum([
   "blocked_dependency", // Issue #305 — scheduler dispatched an issue whose blockedBy dependencies are still open; non-failure deferral
   "architecture_approval_required", // Issue #4098/#4222 — architecture-approval gate halted the run before feature-dev for a human-owned decision
   "not_pipeline_actionable", // Issue #1241 — a stage DECLARED the issue's deliverable is not producible by any pipeline lap (counsel sign-off, an operator-only credential, a human decision); not a failure and not a deferral, so the issue is labelled owner-action and left parked rather than retried
+  "blocked_outcome_hold", // Issue #2551 — a stage-declared BLOCKED outcome misread as an environmental quota failure; held for that one issue, no retry, no global cooldown
   "validation_inconclusive", // Issue #221 — feature-validate's unit-test tier ran but executed zero tests
   // Declared-but-unmatched, mirroring Go: set structurally (a gate/evidence
   // override), never derived from error text.

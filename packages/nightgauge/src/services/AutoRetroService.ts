@@ -611,6 +611,7 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // A person owns the next move.
   architecture_approval_required: "human-decision-required",
   not_pipeline_actionable: "human-decision-required",
+  blocked_outcome_hold: "human-decision-required",
 
   // Dispatched over an open dependency edge: a scheduler decision, not a stage
   // failure.

@@ -833,6 +833,18 @@ shape to `[rate-limit-quota-exhausted]` **only** on the Claude stream-json
 result-envelope path, so for plain-text and Codex runs this branch _is_ the
 routing.
 
+**A stage-declared outcome never feeds the global cooldown (#2551).** The
+extension cannot see where matched text came from. A stage that ends BLOCKED, or
+declares itself not-pipeline-actionable, may quote another tool's usage-limit
+text as evidence, and this extension classifies the quote as
+`rate_limit_quota_exhausted`. The scheduler therefore demotes a
+`rate_limit_quota_exhausted` or `stream_idle_timeout` kind whose detail starts
+with the extension's `BLOCKED — ` slot-error prefix, or which the record ladder
+classifies `not_pipeline_actionable`
+(`DemoteEnvironmentalKindForOutcome`). The issue is held on its own as a
+non-fault outcome, with no retry, no global cooldown and no lifetime-cap
+increment. A stage that reached a verdict proves its own adapter was working.
+
 **Why it is bounded.** Extensions are consulted only after the rule ladder has
 projected **no signal**, so an extension can never overrule a kind projected by a
 `signal: true` **rule** — the widest it can reach is text the signal subset
