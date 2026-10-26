@@ -123,3 +123,65 @@ the file.`,
 	_ = cmd.MarkFlagRequired("issue")
 	return cmd
 }
+
+// gateCheckPublicationCmd runs `nightgauge gate check-publication` (#2562):
+// classify planned paths against the publication boundary BEFORE they are
+// planned, using the repository's own checker. Exit 1 when any path is denied
+// or unclassified; exit 2 when the checker could not run.
+func gateCheckPublicationCmd() *cobra.Command {
+	var (
+		paths   []string
+		workdir string
+		asJSON  bool
+	)
+	cmd := &cobra.Command{
+		Use:   "check-publication",
+		Short: "Classify planned paths against .github/publication-boundary.yaml",
+		Long: `Ask the publication boundary whether each path may be added, before the
+path is planned (#2562). The verdict comes from
+scripts/publication-boundary-check.py --classify, the same rules ci-local and CI
+enforce. A repository without the manifest or checker reports "not applicable"
+and exits 0.`,
+		Example:      `  nightgauge gate check-publication --paths docs/spikes/42-x.md --json`,
+		SilenceUsage: true,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			work := workdir
+			if work == "" {
+				wd, err := os.Getwd()
+				if err != nil {
+					return err
+				}
+				work = wd
+			}
+			res, err := deliverable.CheckPublication(work, paths)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "check-publication: %v\n", err)
+				os.Exit(2)
+			}
+			rejected := res.Rejected()
+			if asJSON {
+				enc, _ := json.MarshalIndent(map[string]any{
+					"applicable": res.Applicable,
+					"ok":         len(rejected) == 0,
+					"verdicts":   res.Verdicts,
+				}, "", "  ")
+				fmt.Println(string(enc))
+			} else if !res.Applicable {
+				fmt.Println("publication boundary: not applicable (no manifest or checker)")
+			} else {
+				for _, v := range res.Verdicts {
+					fmt.Printf("%-12s %s  (rule: %s)\n", v.Verdict, v.Path, v.Rule)
+				}
+			}
+			if len(rejected) > 0 {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringSliceVar(&paths, "paths", nil, "Comma-separated paths to classify (required)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (default: cwd)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit verdicts as JSON")
+	_ = cmd.MarkFlagRequired("paths")
+	return cmd
+}

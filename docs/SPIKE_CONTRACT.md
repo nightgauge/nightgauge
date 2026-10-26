@@ -26,6 +26,15 @@ The materializer locates the artifact by scanning the merged spike PR's
 changed files for entries matching `docs/spikes/{N}-*.md`. The number prefix
 must match the spike issue number.
 
+The path is also subject to the publication boundary
+(`.github/publication-boundary.yaml`). In this repository `docs/spikes/**` is
+PRIVATE unless a reviewed spike is listed in the rule's `except:`, so a new
+spike artifact there fails `scripts/publication-boundary-check.py`.
+feature-planning runs `nightgauge gate check-publication` on the planned path
+first. When no permitted location exists, the issue is parked as
+`NOT_PIPELINE_ACTIONABLE` for an owner publication decision, before dev or
+validate spend (#2562).
+
 ## Required structure
 
 ````markdown

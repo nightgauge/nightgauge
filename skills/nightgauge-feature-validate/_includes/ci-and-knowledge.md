@@ -103,6 +103,49 @@ fi
 per-check results) are written to the validate context's `ci_parity` field by
 the writer in `context-and-board.md`.
 
+### Step 2.5.2b: Publication-Boundary Failure Is an Owner Decision (#2562)
+
+A `publication boundary` failure on a path THIS change adds is not a defect an
+auto-fix can settle: the path is denied (or unclassified) by
+`.github/publication-boundary.yaml`, and choosing another location or changing
+the manifest is the owner's publication decision. Reported as an ordinary
+`validation_failed`, it halted the whole repository's queue on #1684. Ask the
+binary, with the same rules CI enforces, whether the change's added paths are
+rejected:
+
+```bash
+if [ "$CI_PARITY_PASSED" = "false" ] && \
+   printf '%s\n' "$CI_PARITY_FAILED_CMD" | grep -q 'publication-boundary'; then
+  BASE_REF="${BASE_REF:-origin/main}"
+  ADDED_PATHS=$( { git diff --name-only --diff-filter=A "$BASE_REF"...HEAD; \
+    git ls-files --others --exclude-standard; } 2>/dev/null | sort -u | paste -sd, -)
+  if [ -n "$ADDED_PATHS" ]; then
+    PUB_RESULT=$(nightgauge gate check-publication --paths "$ADDED_PATHS" --json)
+    if [ $? -eq 1 ]; then
+      PUB_EVIDENCE=$(printf '%s\n' "$PUB_RESULT" | jq -c '[.verdicts[]
+        | select(.verdict != "allow")
+        | "\(.path): \(.verdict) by publication rule \(.rule // "none") (class \(.class // "none"))"]')
+      FEEDBACK_JSON=$(jq -n --argjson ev "$PUB_EVIDENCE" '[{
+        signal_type: "NOT_PIPELINE_ACTIONABLE",
+        emitted_by_stage: "feature-validate",
+        backtrack_target_stage: null,
+        severity: "blocking",
+        rationale: "The change adds a path the publication boundary rejects. Choosing an allowed location or changing .github/publication-boundary.yaml is an owner publication decision.",
+        evidence: $ev
+      }]')
+      CI_PARITY_MAX_ATTEMPTS=0 # no auto-fix: moving or reclassifying the path is not the agent's call
+      VALIDATION_STATUS="failed"
+    fi
+  fi
+fi
+```
+
+`FEEDBACK_JSON` reaches `validate-{N}.json`'s `feedback` field through the
+writer in `context-and-board.md`, and the orchestrator books the run `blocked`
+for that one issue (`owner-action` label, Backlog, Action Center card) instead
+of halting the repository. A boundary failure on a path this change did NOT add
+stays an ordinary failure.
+
 ### Step 2.5.3: Auto-Fix Loop (If Failures Detected)
 
 When a CI parity command fails, attempt to fix it using the same pattern as the

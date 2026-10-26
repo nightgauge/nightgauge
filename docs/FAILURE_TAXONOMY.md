@@ -491,6 +491,14 @@ empty tree, and it is neither a failure nor a deferral:
 | Re-dispatched? | Yes, on blocker close       | Yes — hence the repeat spend | **No.** Labelled and parked       |
 | Raised by      | The pickup dependency check | pr-create's create fallback  | The stage that read the issue     |
 
+A **publication-boundary denial** is one such declaration (#2562). A deliverable
+path that `.github/publication-boundary.yaml` denies, or does not classify, needs
+the owner to choose a permitted location or change the manifest. feature-planning
+checks planned paths with `nightgauge gate check-publication`, `FeaturePlanningGate`
+fails a rejected path as `not_pipeline_actionable`, and feature-validate emits the
+signal in `validate-{N}.json` when ci-local's `publication boundary` step rejects a
+path the change adds. The issue is parked; the repository's queue is not halted.
+
 The routing follows from "nothing here is defective": no
 `LifetimeIssueFailures` increment, no cascade-breaker feed, no queue pause, and
 — unlike every transient kind — **no retry and no board revert to Ready**. A
