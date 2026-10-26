@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Shared model overlays for Claude and OpenAI models (#81).** Every Claude
+  model now renders with an `anthropic` overlay (run the named `nightgauge`
+  command, carry out each step explicitly), and Opus 5.5 and Sonnet 5.5 add
+  fragments that relax it: no extra verification pass, tight PR and issue
+  bodies, no per-call narration. GPT models get an `openai` overlay covering
+  missing Claude-only tools, exit codes and completion. The `grok-4.6` overlay
+  no longer restates registry facts. See `docs/MODEL_ADAPTATION.md` § The
+  corpus today.
+
 - **Declared `file_ownership` sets are checked against their issue's ACs
   (#561).** `nightgauge issue check-ownership` reports
   `FILE_OWNERSHIP_UNSUBSTANTIATED` when a declared set has no test file but an

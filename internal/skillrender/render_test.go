@@ -1263,7 +1263,7 @@ func TestOpenCodeXaiGrokDoesNotGetGrokHostOverlay(t *testing.T) {
 	}
 	// The model-level grok-4.6 fragment (now host-prose-free) still applies:
 	// it is keyed to the concrete id, not the host.
-	if !strings.Contains(res.Content, "Thinking is on by default") {
+	if !strings.Contains(res.Content, "Prefer one thorough pass over") {
 		t.Error("grok-4.6 model-level overlay missing from an opencode dispatch of that model")
 	}
 }
@@ -1274,6 +1274,8 @@ func TestOpenCodeXaiGrokDoesNotGetGrokHostOverlay(t *testing.T) {
 // just sourced from hosts/grok.md plus the trimmed grok-4.6.md. Captured from
 // a real `nightgauge skill render --stage feature-dev --adapter grok --model
 // grok-4.6` run before this change (see red_green in the PR description).
+// #81 dropped the two grok-4.6 sentences that restated registry facts
+// (thinking default, propensity levels); the dispositions stay pinned.
 func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 	root := realSkillsRoot(t)
 	res := mustRender(t, Options{
@@ -1292,10 +1294,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 		"If a decision is\nundecidable without the operator, fail the stage with a clear reason",
 		"Subagent fan-out is optional",
 		"Grok 4.6 is the default Grok Build model",
-		"Thinking is on by default",
 		"Keep `--effort` at the\nresolved Nightgauge envelope",
-		"Verification and delegation propensity are\nhigh",
-		"Prefer one thorough\npass over narrating every tool call",
+		"Prefer one thorough pass over\nnarrating every tool call",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(res.Content, want) {
@@ -1362,11 +1362,12 @@ func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	const placeholder = "<REPO_ROOT>"
 	for _, tt := range []struct {
 		stage, adapter, model, golden string
+		providerKey                   string
 	}{
-		{"feature-dev", "claude-headless", "claude-sonnet-5", "testdata/host-overlay/feature-dev_claude-headless_claude-sonnet-5.pre-1636.txt"},
-		{"feature-dev", "codex", "gpt-5.6-sol", "testdata/host-overlay/feature-dev_codex_gpt-5.6-sol.pre-1636.txt"},
-		{"feature-dev", "gemini", "", "testdata/host-overlay/feature-dev_gemini_none.pre-1636.txt"},
-		{"pr-merge", "claude-headless", "claude-sonnet-5", "testdata/host-overlay/pr-merge_claude-headless_claude-sonnet-5.pre-1636.txt"},
+		{"feature-dev", "claude-headless", "claude-sonnet-5", "testdata/host-overlay/feature-dev_claude-headless_claude-sonnet-5.pre-1636.txt", "anthropic"},
+		{"feature-dev", "codex", "gpt-5.6-sol", "testdata/host-overlay/feature-dev_codex_gpt-5.6-sol.pre-1636.txt", "openai"},
+		{"feature-dev", "gemini", "", "testdata/host-overlay/feature-dev_gemini_none.pre-1636.txt", ""},
+		{"pr-merge", "claude-headless", "claude-sonnet-5", "testdata/host-overlay/pr-merge_claude-headless_claude-sonnet-5.pre-1636.txt", "anthropic"},
 	} {
 		t.Run(tt.golden, func(t *testing.T) {
 			want, err := os.ReadFile(tt.golden)
@@ -1375,16 +1376,28 @@ func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 			}
 			// IncludeBudget -1: these captures pin the overlay cascade, not the
 			// supplied includes appended after it (#2178, TestSupplyPhaseIncludes).
+			// The goldens pin the base text. Since #81 a shared provider
+			// fragment applies to the Claude and Codex models, so the base is
+			// rendered without the model, and the model render is checked to
+			// add exactly that one provider fragment and no host fragment.
+			base := mustRender(t, Options{
+				Stage: tt.stage, Adapter: tt.adapter, SkillsRoots: []string{root},
+				IncludeBudget: -1,
+			})
+			got := strings.ReplaceAll(base.Content, repoRoot, placeholder)
+			if got != string(want) {
+				t.Errorf("%s/%s/%s render changed after the host segment landed:\n--- got ---\n%s", tt.stage, tt.adapter, tt.model, got)
+			}
 			res := mustRender(t, Options{
 				Stage: tt.stage, Model: tt.model, Adapter: tt.adapter, SkillsRoots: []string{root},
 				IncludeBudget: -1,
 			})
-			got := strings.ReplaceAll(res.Content, repoRoot, placeholder)
-			if got != string(want) {
-				t.Errorf("%s/%s/%s render changed after the host segment landed:\n--- got ---\n%s", tt.stage, tt.adapter, tt.model, got)
+			var keys []string
+			for _, f := range res.Fragments {
+				keys = append(keys, f.Key)
 			}
-			if len(res.Fragments) != 0 {
-				t.Errorf("%s/%s/%s: unexpected fragments applied: %v", tt.stage, tt.adapter, tt.model, res.Fragments)
+			if strings.Join(keys, ",") != tt.providerKey {
+				t.Errorf("%s/%s/%s: fragments applied = %v, want only %q", tt.stage, tt.adapter, tt.model, res.Fragments, tt.providerKey)
 			}
 		})
 	}
@@ -1534,5 +1547,43 @@ func TestOpenCodeHostOverlayToolIDsArePinned(t *testing.T) {
 			t.Errorf("hosts/opencode.md names tool id %q, which opencode 1.18.30's build agent does not expose — "+
 				"record the finding and amend ADR-022 before changing the overlay", m[1])
 		}
+	}
+}
+
+// TestSharedOverlayComposition pins the shared overlay cascade over the real
+// tree (#81): provider fragment first, then the concrete id, and nothing for a
+// model with no registry entry. Only shared-scope fragments are compared,
+// because feature-dev also carries a skill-scoped Fable fragment.
+func TestSharedOverlayComposition(t *testing.T) {
+	root := realSkillsRoot(t)
+	cases := []struct {
+		model, adapter string
+		want           []string
+	}{
+		{"claude-opus-5-5", "", []string{"anthropic", "claude-opus-5-5"}},
+		{"claude-sonnet-5-5", "", []string{"anthropic", "claude-sonnet-5-5"}},
+		{"claude-haiku-4-5-20251001", "", []string{"anthropic"}},
+		{"claude-fable-5-1", "", []string{"anthropic", "claude-fable-5-1"}},
+		{"gpt-5.5", "codex", []string{"openai"}},
+		{"some-local-model", "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			res := mustRender(t, Options{
+				Stage:       "feature-dev",
+				Model:       tc.model,
+				Adapter:     tc.adapter,
+				SkillsRoots: []string{root},
+			})
+			var got []string
+			for _, f := range res.Fragments {
+				if f.Scope == ScopeShared {
+					got = append(got, f.Key)
+				}
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("shared fragment keys = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
