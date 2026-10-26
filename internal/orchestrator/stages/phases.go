@@ -111,20 +111,18 @@ func (s stagePhaseSpec) index(name string) int {
 // The off-path set is written out by hand on purpose. Six of these are the
 // LLM's own judgement work — reading reviews, categorising them, editing code
 // in response, retrying a failed check, writing a retro note, grading itself —
-// and the deterministic path has no analogue for any of them. The other three
-// are structural: the runner does no batch detection, validates no
-// environment, and returns a struct rather than narrating a summary.
+// and the deterministic path has no analogue for any of them. The other two
+// are structural: the runner validates no environment and returns a struct rather than narrating a summary.
 var prMergePhases = stagePhaseSpec{
 	stage: "pr-merge",
 	order: []string{
-		"read-pr-context", "batch-detection", "validate-environment", "ci-gate",
+		"read-pr-context", "validate-environment", "ci-gate",
 		"auto-fix-retry", "fetch-reviews", "categorize-issues", "address-feedback",
 		"freshness-check", "merge", "post-merge-cleanup", "retrospective-feedback",
 		"output-summary", "self-assessment",
 	},
 	roles: map[string]phaseRole{
 		"read-pr-context":        phaseRunner,
-		"batch-detection":        phaseOffPath,
 		"validate-environment":   phaseOffPath,
 		"ci-gate":                phaseRunner,
 		"auto-fix-retry":         phaseOffPath,
@@ -150,7 +148,7 @@ var prMergePhases = stagePhaseSpec{
 var prCreatePhases = stagePhaseSpec{
 	stage: "pr-create",
 	order: []string{
-		"auto-merge-guard", "load-context", "batch-detection", "build-knowledge-section",
+		"auto-merge-guard", "load-context", "build-knowledge-section",
 		"build-what-to-test-section", "preflight-checks", "proactive-main-merge",
 		"security-rescan", "scope-drift-gate", "create-pr", "verify-pr-created",
 		"monitor-ci-status", "write-context", "self-assessment",
@@ -158,7 +156,6 @@ var prCreatePhases = stagePhaseSpec{
 	roles: map[string]phaseRole{
 		"auto-merge-guard":           phaseOffPath,
 		"load-context":               phaseRunner,
-		"batch-detection":            phaseOffPath,
 		"build-knowledge-section":    phaseOffPath,
 		"build-what-to-test-section": phaseOffPath,
 		"preflight-checks":           phaseRunner,

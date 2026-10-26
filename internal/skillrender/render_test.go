@@ -4,15 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
-	"github.com/nightgauge/nightgauge/internal/gittest"
-	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -941,132 +938,23 @@ func TestDeadIncludeFixture_StillExhibitsThePreFixDefect(t *testing.T) {
 }
 
 // TestDeadIncludeFixture_SameStageRendersCleanNow is the "after" half: the
-// stage the fixture captured, rendered from the working tree, hands the model
-// the shared batch contract instead of the comment.
+// stage the fixture captured, rendered from the working tree, carries neither
+// the dead directive nor the batch phase it sat beside. Batch mode was
+// descoped in #366, so the shared contract the directive named is gone too.
 func TestDeadIncludeFixture_SameStageRendersCleanNow(t *testing.T) {
 	root := filepath.Join("..", "..", "skills")
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("skills/ not present: %v", err)
 	}
 	res := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}})
-	if strings.Contains(res.Content, "<!-- include: ../_shared/BATCH_MODE.md -->") {
-		t.Error("the dead directive is still in the live pr-merge render")
-	}
-	if !strings.Contains(res.Content, "## Batch Mode") {
-		t.Error("expected the expanded batch contract in the live pr-merge render")
-	}
-}
-
-// TestPRMergeBatchDetailReadIsConditional guards #367's context-cost
-// regression: the 124-line batch procedure must stay out of the common
-// single-issue path, without moving or renumbering Phase 0.5.
-func TestPRMergeBatchDetailReadIsConditional(t *testing.T) {
-	path := filepath.Join("..", "..", "skills", "nightgauge-pr-merge", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	content := string(data)
-	marker := `printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'`
-	phaseStart := strings.Index(content, marker)
-	phaseEnd := strings.Index(content, "### Phase 1: Validate Environment")
-	if phaseStart < 0 || phaseEnd < phaseStart {
-		t.Fatalf("Phase 0.5 boundaries changed (marker=%d next phase=%d)", phaseStart, phaseEnd)
-	}
-	phase := content[phaseStart:phaseEnd]
-
-	wantInOrder := []string{
-		`[ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]`,
-		`BATCH_CONTEXT_FOUND=$BATCH_DEV`,
-		"Only when the probe prints `BATCH_CONTEXT_FOUND=...`",
+	for _, gone := range []string{
+		"<!-- include: ../_shared/BATCH_MODE.md -->",
+		`name="batch-detection"`,
 		"_includes/batch-detection.md",
-		"Do not read the file when the probe prints `SINGLE_ISSUE`",
-	}
-	last := -1
-	for _, want := range wantInOrder {
-		idx := strings.Index(phase, want)
-		if idx < 0 {
-			t.Errorf("Phase 0.5 missing conditional-read contract %q", want)
-			continue
+	} {
+		if strings.Contains(res.Content, gone) {
+			t.Errorf("live pr-merge render still carries %q", gone)
 		}
-		if idx <= last {
-			t.Errorf("Phase 0.5 contract %q is out of order", want)
-		}
-		last = idx
-	}
-
-	unconditional := "> **Read `_includes/batch-detection.md` (same directory as this SKILL.md) now"
-	if strings.Contains(phase, unconditional) {
-		t.Errorf("single-issue path still carries the unconditional batch-detail read: %q", unconditional)
-	}
-}
-
-func TestPRMergeBatchProbeSignalsContextPresence(t *testing.T) {
-	path := filepath.Join("..", "..", "skills", "nightgauge-pr-merge", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	content := string(data)
-	marker := `printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'`
-	phaseStart := strings.Index(content, marker)
-	phaseEnd := strings.Index(content, "### Phase 1: Validate Environment")
-	if phaseStart < 0 || phaseEnd < phaseStart {
-		t.Fatalf("Phase 0.5 boundaries changed (marker=%d next phase=%d)", phaseStart, phaseEnd)
-	}
-	phase := content[phaseStart:phaseEnd]
-	open := strings.Index(phase, "```bash\n")
-	if open < 0 {
-		t.Fatal("Phase 0.5 has no inline bash probe")
-	}
-	probeStart := open + len("```bash\n")
-	close := strings.Index(phase[probeStart:], "\n```")
-	if close < 0 {
-		t.Fatal("Phase 0.5 bash probe has no closing fence")
-	}
-	probe := phase[probeStart : probeStart+close]
-
-	repo := t.TempDir()
-	gittest.Run(t, repo, "init", "-q", "-b", "fix/367-test")
-	pipelineDir := layouttest.PipelineDir(t, repo)
-	// The probe asks the binary where the clone's pipeline state lives
-	// (ADR-024 § 7). A stub stands in for `nightgauge layout path pipeline
-	// <name>`: it answers the resolved directory for exactly that form and
-	// fails for anything else, so a probe that hard-codes a path, or asks for
-	// another class, cannot pass.
-	binDir := t.TempDir()
-	stub := "#!/bin/sh\n" +
-		"[ \"$1 $2 $3\" = \"layout path pipeline\" ] && [ -n \"$4\" ] || exit 2\n" +
-		"printf '%s/%s\\n' \"$NG_TEST_PIPELINE_DIR\" \"$4\"\n"
-	if err := os.WriteFile(filepath.Join(binDir, "nightgauge"), []byte(stub), 0o755); err != nil {
-		t.Fatalf("write nightgauge stub: %v", err)
-	}
-	runProbe := func() string {
-		t.Helper()
-		cmd := exec.Command("bash", "-c", probe)
-		cmd.Dir = repo
-		cmd.Env = append(os.Environ(),
-			"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-			"NG_TEST_PIPELINE_DIR="+pipelineDir)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("run Phase 0.5 probe: %v\n%s", err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-
-	if got := runProbe(); got != "SINGLE_ISSUE" {
-		t.Fatalf("probe without a batch file = %q, want SINGLE_ISSUE", got)
-	}
-	batchPath := filepath.Join(pipelineDir, "dev-batch-367.json")
-	if err := os.MkdirAll(pipelineDir, 0o700); err != nil {
-		t.Fatalf("create pipeline directory: %v", err)
-	}
-	if err := os.WriteFile(batchPath, []byte(`{"issue_numbers":[367]}`), 0o644); err != nil {
-		t.Fatalf("write batch fixture: %v", err)
-	}
-	if got := runProbe(); got != "BATCH_CONTEXT_FOUND="+batchPath {
-		t.Fatalf("probe with a batch file = %q, want the batch context signal", got)
 	}
 }
 
@@ -1346,6 +1234,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // The pr-merge capture was re-pinned for #2504 by the same method: every changed
 // line is the auto-fix loop handing back to the deterministic merge path instead
 // of polling CI itself.
+// All four captures were re-pinned for #366 by the same method: every changed
+// line is the removed batch phase, its include and the renumbered markers.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which

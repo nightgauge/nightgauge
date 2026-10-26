@@ -375,22 +375,6 @@ describe("PTCContextGatherer", () => {
       expect(prompt).toContain('base="develop"');
     });
 
-    it("includes batch mode section when batchMode is true", async () => {
-      const prompt = await runAndCapturePrompt({
-        batchMode: true,
-        epicNumber: 100,
-        stages: ["issue", "dev"],
-      });
-      expect(prompt).toContain("Batch Mode");
-      expect(prompt).toContain("issue-batch-100.json");
-      expect(prompt).toContain("dev-batch-100.json");
-    });
-
-    it("does not include batch section when batchMode is false", async () => {
-      const prompt = await runAndCapturePrompt({ batchMode: false });
-      expect(prompt).not.toContain("Batch Mode");
-    });
-
     it("instructs to output JSON only", async () => {
       const prompt = await runAndCapturePrompt();
       expect(prompt).toContain("Output ONLY the JSON object");

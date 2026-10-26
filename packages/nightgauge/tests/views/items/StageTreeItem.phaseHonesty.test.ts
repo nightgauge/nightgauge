@@ -28,7 +28,6 @@ function issue336Phases(): StagePhase[] {
     phase("read-planning-context", "complete"),
     phase("implementation", "complete"),
     phase("sync-project-status", "complete"),
-    phase("batch-plan-detection", "unreported"),
     phase("feedback-context-check", "unreported"),
     phase("plan-verification", "unreported"),
     phase("knowledge-base-read", "unreported"),
@@ -49,15 +48,15 @@ describe("StageTreeItem phase counting (#1246)", () => {
   it("excludes unreported phases from the completed count and names them", () => {
     const item = new StageTreeItem(STAGE, "pending");
     item.setStatus("complete");
-    item.setPhases(issue336Phases(), undefined, 18);
+    item.setPhases(issue336Phases(), undefined, 17);
 
     const label = String(item.description ?? "");
     // A coverage statement, not a completion fraction (#1887): the stage was
     // not seen doing fourteen of its phases, which is not the same as not
     // doing them. `unreported` is still never folded into the count (#1246).
-    expect(label).toContain("18 phases · 4 observed, 14 unobserved");
-    expect(label).not.toContain("4/18");
-    expect(label).not.toContain("18/18");
+    expect(label).toContain("17 phases · 4 observed, 13 unobserved");
+    expect(label).not.toContain("4/17");
+    expect(label).not.toContain("17/17");
   });
 
   // #1246 pinned the opposite of this ("still counts a deliberate skip as

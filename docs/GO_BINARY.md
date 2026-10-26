@@ -1062,7 +1062,8 @@ receives the literal HTML comment where the shared content belonged, and
 nothing warns. Six shipped stage skills carried
 `<!-- include: ../_shared/BATCH_MODE.md -->` against a file that had never been
 written, for the whole life of the repository; `pr-merge` carried it as the
-entire body of its declared Phase 0.5.
+entire body of its declared Phase 0.5. (Batch mode itself was later removed,
+#366.)
 
 The gate resolves targets with the composer's **own** `IncludePattern`, not a
 copy, and reports the captured path **verbatim**. That matters for the second

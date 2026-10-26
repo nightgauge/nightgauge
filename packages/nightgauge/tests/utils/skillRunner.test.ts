@@ -827,7 +827,7 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
 
       mockProcess.stdout!.emit("data", Buffer.from('{"type":"system","subtype":"init"}\n'));
 
-      expect(onPhaseStart).toHaveBeenCalledWith("feature-dev", "validate-environment", 0, 18);
+      expect(onPhaseStart).toHaveBeenCalledWith("feature-dev", "validate-environment", 0, 17);
     });
 
     it("advances through implementation → testing as the agent works", () => {
@@ -847,8 +847,8 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
         "implementation",
         "testing",
       ]);
-      // testing should report index 9 of 18
-      expect(onPhaseStart).toHaveBeenLastCalledWith("feature-dev", "testing", 9, 18);
+      // testing should report index 8 of 17
+      expect(onPhaseStart).toHaveBeenLastCalledWith("feature-dev", "testing", 8, 17);
     });
 
     it("is monotonic — a context read after implementation does not regress", () => {
@@ -856,7 +856,7 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
       runStageSkillHeadless("feature-dev", 42, { onPhaseStart });
 
       mockProcess.stdout!.emit("data", Buffer.from('{"type":"system","subtype":"init"}\n'));
-      emitAssistantToolUse("Write", { file_path: "src/feature.ts", content: "x" }); // implementation (8)
+      emitAssistantToolUse("Write", { file_path: "src/feature.ts", content: "x" }); // implementation (7)
       onPhaseStart.mockClear();
       emitAssistantToolUse("Read", { file_path: "src/other.ts" }); // would be index 1 — ignored
 
@@ -877,7 +877,7 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
 
       const phases = onPhaseStart.mock.calls.map((c) => c[1]);
       expect(phases).toEqual(["validate-environment", "read-dev-context", "run-tests"]);
-      expect(onPhaseStart).toHaveBeenLastCalledWith("feature-validate", "run-tests", 10, 23);
+      expect(onPhaseStart).toHaveBeenLastCalledWith("feature-validate", "run-tests", 9, 22);
     });
   });
 

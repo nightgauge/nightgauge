@@ -205,12 +205,12 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
   // feature-dev (18 phases). Maps the durable, observable waypoints of an
   // edit-heavy implementation run to their canonical phase indices.
   "feature-dev": [
-    // Context loading (covers phases 0-7, which run in seconds at the start).
+    // Context loading (covers phases 0-6, which run in seconds at the start).
     { index: 1, match: (name) => READ_TOOLS.has(name) },
     // First edit to real source code → implementation. Excludes pipeline
     // bookkeeping and the dev-context handoff file so those don't mis-fire here.
     {
-      index: 8,
+      index: 7,
       match: (name, input) => {
         if (!EDIT_TOOLS.has(name)) return false;
         const path = inputString(input, "file_path") || inputString(input, "notebook_path");
@@ -219,21 +219,21 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
     },
     // Running the test/build suite → testing.
     {
-      index: 9,
-      after: 8,
+      index: 8,
+      after: 7,
       match: (name, input) =>
         name === "Bash" && isTestOrBuildCommand(inputString(input, "command")),
     },
     // Writing the downstream dev context handoff → write-dev-context.
     {
-      index: 14,
-      after: 8,
+      index: 13,
+      after: 7,
       match: (name, input) => writes(name, input, isDevContextPath),
     },
     // Syncing project board status → sync-project-status.
     {
-      index: 15,
-      after: 8,
+      index: 14,
+      after: 7,
       match: (name, input) => name === "Bash" && isStatusSyncCommand(inputString(input, "command")),
     },
   ],
@@ -244,13 +244,13 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
   // from the durable observable waypoints. Real markers still win (#3771).
   "feature-planning": [
     // Reading docs/standards/source → documentation-analysis, where planning
-    // spends the bulk of its time. Covers the fast early phases 0-6.
-    { index: 6, match: (name) => READ_TOOLS.has(name) },
+    // spends the bulk of its time. Covers the fast early phases 0-5.
+    { index: 5, match: (name) => READ_TOOLS.has(name) },
     // Writing the plan file (plans/{N}-*.md in the clone) → produce-plan.
-    { index: 9, match: (name, input) => writes(name, input, isPlanFilePath) },
+    { index: 8, match: (name, input) => writes(name, input, isPlanFilePath) },
     // Writing the planning-context handoff → write-planning-context.
     {
-      index: 10,
+      index: 9,
       match: (name, input) => writes(name, input, isPlanningContextPath),
     },
   ],
@@ -271,24 +271,24 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
     // uses: the two stages run the same commands, and a second pattern for one
     // vocabulary is a drift source.
     {
-      index: 10,
+      index: 9,
       match: (name, input) =>
         name === "Bash" && isTestOrBuildCommand(inputString(input, "command")),
     },
     // Pushing the branch -> commit-and-push.
     {
-      index: 18,
+      index: 17,
       match: (name, input) => name === "Bash" && isBranchPushCommand(inputString(input, "command")),
     },
     // Writing the validate-context handoff -> write-validate-context.
     {
-      index: 19,
+      index: 18,
       match: (name, input) => writes(name, input, isValidateContextPath),
     },
     // Syncing project board status -> sync-project-status, the stage's last
     // observable act before it narrates.
     {
-      index: 20,
+      index: 19,
       match: (name, input) => name === "Bash" && isStatusSyncCommand(inputString(input, "command")),
     },
   ],

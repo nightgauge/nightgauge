@@ -39,9 +39,6 @@ Obtain the paths from the binary — `nightgauge layout` prints them all as JSON
 │   ├── dev-{N}.json           # Output of /feature-dev
 │   ├── validate-{N}.json      # Output of /feature-validate (optional)
 │   ├── pr-{N}.json            # Output of /pr-create
-│   ├── batch-{E}.json         # Output of /issue-pickup (batch mode)
-│   ├── planning-batch-{E}.json # Output of /feature-planning (batch mode)
-│   ├── dev-batch-{E}.json     # Output of /feature-dev (batch mode)
 │   ├── feedback-{N}.json      # Written by orchestrator on backtrack
 │   └── epic-context-{E}.json  # Epic context accumulator (persistent across sub-issues)
 ├── plans/                      # Feature plans (cleaned up after PR)
@@ -799,196 +796,15 @@ issue #1608)
 | `issue_closed_verified`                     | bool   | No       | Whether issue close was verified within 10s retry window (v1.5+, issue #2933)                  |
 | `created_at`                                | string | Yes      | ISO 8601 timestamp                                                                             |
 
-### Batch Context Schemas
+### No batch context files
 
-Batch context files carry requirements, plans, and results for multiple issues
-processed together as part of an epic. They live alongside single-issue context
-files in the clone's pipeline state directory (`nightgauge layout path pipeline`)
-and use the **epic number** as the file key (e.g., `batch-799.json`).
-
-> **Note**: Batch context is additive — existing single-issue pipeline paths
-> remain unchanged. See Issue #801.
-
-> **Status (#337)**: these schemas are a contract, not a live path. No stage
-> writes `batch-{E}.json` — `issue-pickup` has no batch producer step — so the
-> first file in the chain never reaches disk and every later stage's batch file
-> test fails. The batch path is dormant end-to-end and the single-issue path is
-> the only one that runs. A stage must never synthesize one of these files to
-> "enable" batch mode mid-run: `groups[]` in particular has no source, since
-> `epic-assessment-{E}.json` carries a strategy, per-issue assessments, and cost
-> estimates, but no grouping or file-overlap data. Building the producer is a
-> deliberate change to `issue-pickup` (shared epic branch, dependency-aware
-> grouping), not something a run improvises.
-
-#### batch-{E}.json
-
-**Created by**: `/nightgauge-issue-pickup` (batch mode) **Read by**:
-`/nightgauge-feature-planning` (batch mode)
-
-**Schema Version**: 1.0
-
-```json
-{
-  "schema_version": "1.0",
-  "epic_number": 799,
-  "issue_numbers": [801, 802, 803],
-  "batch_strategy": "batch",
-  "branch": "feat/799-epic-batch-pipeline",
-  "base_branch": "main",
-  "issues": [
-    {
-      "issue_number": 801,
-      "title": "Multi-issue context schema",
-      "type": "feature",
-      "requirements": {
-        "summary": "Add batch context schemas for batched pipeline runs",
-        "acceptance_criteria": ["Zod schemas for batch context files"]
-      },
-      "labels": ["type:feature", "size:M"],
-      "size_label": "M"
-    }
-  ],
-  "shared_files": ["packages/sdk/src/context/ContextManager.ts"],
-  "groups": [
-    {
-      "issue_numbers": [801, 802],
-      "group_reason": "High file overlap (65.0%) enables batching",
-      "shared_files": ["packages/sdk/src/context/ContextManager.ts"],
-      "estimated_tokens": 120000
-    }
-  ],
-  "created_at": "2026-02-15T12:00:00Z"
-}
-```
-
-| Field                       | Type   | Required | Description                                         |
-| --------------------------- | ------ | -------- | --------------------------------------------------- |
-| `schema_version`            | string | Yes      | Schema version (`1.0`)                              |
-| `epic_number`               | number | Yes      | Epic issue number (file key)                        |
-| `issue_numbers`             | array  | Yes      | All issue numbers in this batch                     |
-| `batch_strategy`            | string | Yes      | Strategy: `batch`, `sequential`, or `hybrid`        |
-| `branch`                    | string | Yes      | Shared feature branch                               |
-| `base_branch`               | string | Yes      | Target branch for PR                                |
-| `issues`                    | array  | Yes      | Per-issue requirements (embedded inline)            |
-| `issues[].issue_number`     | number | Yes      | Issue number                                        |
-| `issues[].title`            | string | Yes      | Issue title                                         |
-| `issues[].type`             | string | Yes      | Issue type: feature, bug, docs, refactor, spike     |
-| `issues[].requirements`     | object | Yes      | Extracted requirements (same shape as single-issue) |
-| `issues[].labels`           | array  | Yes      | GitHub labels                                       |
-| `issues[].size_label`       | string | No       | Size label: XS, S, M, L, XL                         |
-| `shared_files`              | array  | Yes      | Files mentioned across multiple issues              |
-| `groups`                    | array  | Yes      | Issue groups from EpicBatchAssessor                 |
-| `groups[].issue_numbers`    | array  | Yes      | Issue numbers in this group                         |
-| `groups[].group_reason`     | string | Yes      | Why these issues are grouped                        |
-| `groups[].shared_files`     | array  | Yes      | Files shared within the group                       |
-| `groups[].estimated_tokens` | number | Yes      | Token estimate for the group                        |
-| `created_at`                | string | Yes      | ISO 8601 timestamp                                  |
-
-#### planning-batch-{E}.json
-
-**Created by**: `/nightgauge-feature-planning` (batch mode) **Read by**:
-`/nightgauge-feature-dev` (batch mode)
-
-**Schema Version**: 1.0
-
-```json
-{
-  "schema_version": "1.0",
-  "epic_number": 799,
-  "issue_numbers": [801, 802],
-  "plan_file": "/path/to/repo/.git/nightgauge/plans/799-epic-batch-pipeline.md",
-  "approach": "batch",
-  "per_issue_plans": [
-    {
-      "issue_number": 801,
-      "files_to_create": ["src/context/schemas/batch.ts"],
-      "files_to_modify": ["src/context/schemas/index.ts"]
-    }
-  ],
-  "shared_files_to_modify": ["src/context/ContextManager.ts"],
-  "files_to_read": ["src/context/schemas/issue.ts"],
-  "decisions": [
-    {
-      "topic": "Batch Key Identifier",
-      "options": ["issue_number", "epic_number"],
-      "selection": "epic_number",
-      "rationale": "Batches are scoped to epics"
-    }
-  ],
-  "created_at": "2026-02-15T12:30:00Z"
-}
-```
-
-| Field                               | Type   | Required | Description                                          |
-| ----------------------------------- | ------ | -------- | ---------------------------------------------------- |
-| `schema_version`                    | string | Yes      | Schema version (`1.0`)                               |
-| `epic_number`                       | number | Yes      | Epic issue number                                    |
-| `issue_numbers`                     | array  | Yes      | All issue numbers in this batch                      |
-| `plan_file`                         | string | Yes      | Path to the batch plan .md file                      |
-| `approach`                          | string | Yes      | Implementation approach (e.g., `batch`)              |
-| `per_issue_plans`                   | array  | Yes      | Per-issue file change plans                          |
-| `per_issue_plans[].issue_number`    | number | Yes      | Issue number                                         |
-| `per_issue_plans[].files_to_create` | array  | Yes      | New files for this issue                             |
-| `per_issue_plans[].files_to_modify` | array  | Yes      | Modified files for this issue                        |
-| `shared_files_to_modify`            | array  | Yes      | Files changed by multiple issues                     |
-| `files_to_read`                     | array  | Yes      | Files to pre-load for implementation context         |
-| `decisions`                         | array  | Yes      | Architectural decisions (same shape as single-issue) |
-| `created_at`                        | string | Yes      | ISO 8601 timestamp                                   |
-
-#### dev-batch-{E}.json
-
-**Created by**: `/nightgauge-feature-dev` (batch mode) **Read by**:
-`/nightgauge-pr-create` (batch mode)
-
-**Schema Version**: 1.0
-
-```json
-{
-  "schema_version": "1.0",
-  "epic_number": 799,
-  "issue_numbers": [801, 802],
-  "commit_sha": "abc123def456",
-  "per_issue_results": [
-    {
-      "issue_number": 801,
-      "files_changed": {
-        "created": ["src/context/schemas/batch.ts"],
-        "modified": ["src/context/schemas/index.ts"],
-        "deleted": []
-      }
-    }
-  ],
-  "tests_status": {
-    "passed": 25,
-    "failed": 0,
-    "coverage": 92.5
-  },
-  "quality_checks": {
-    "code_standards": "passed",
-    "security_review": "passed"
-  },
-  "created_at": "2026-02-15T13:00:00Z"
-}
-```
-
-| Field                                        | Type   | Required | Description                     |
-| -------------------------------------------- | ------ | -------- | ------------------------------- |
-| `schema_version`                             | string | Yes      | Schema version (`1.0`)          |
-| `epic_number`                                | number | Yes      | Epic issue number               |
-| `issue_numbers`                              | array  | Yes      | All issue numbers in this batch |
-| `commit_sha`                                 | string | Yes      | Git commit SHA                  |
-| `per_issue_results`                          | array  | Yes      | Per-issue file change results   |
-| `per_issue_results[].issue_number`           | number | Yes      | Issue number                    |
-| `per_issue_results[].files_changed`          | object | Yes      | Files changed for this issue    |
-| `per_issue_results[].files_changed.created`  | array  | Yes      | New files created               |
-| `per_issue_results[].files_changed.modified` | array  | Yes      | Files modified                  |
-| `per_issue_results[].files_changed.deleted`  | array  | Yes      | Files deleted                   |
-| `tests_status`                               | object | Yes      | Test results (aggregated)       |
-| `tests_status.passed`                        | number | Yes      | Passing test count              |
-| `tests_status.failed`                        | number | Yes      | Failing test count              |
-| `tests_status.coverage`                      | number | No       | Coverage percentage             |
-| `quality_checks`                             | object | Yes      | Review results                  |
-| `created_at`                                 | string | Yes      | ISO 8601 timestamp              |
+There is no multi-issue pipeline run. An earlier `batch-{E}.json` →
+`planning-batch-{E}.json` → `dev-batch-{E}.json` chain had consumers in every
+stage but no producer, and was removed in #366. One PR per epic comes from the
+epic-branch flow instead: sub-issue PRs merge into `epic/{N}-{slug}`
+(`auto_create_epic_branch` in [CONFIGURATION.md](CONFIGURATION.md)), and
+`epic-complete` opens the single epic PR. Each sub-issue keeps its own
+pipeline run and gates.
 
 ### Epic Context Accumulator
 
@@ -998,8 +814,7 @@ must re-discover the same codebase independently. The epic context file solves
 this by recording findings from each completed sub-issue so later issues can
 read them and skip redundant research.
 
-Unlike batch context (which groups multiple issues into a single pipeline run),
-epic context is **persistent across independent pipeline runs** and is
+Epic context is **persistent across independent pipeline runs** and is
 incrementally appended after each sub-issue completes.
 
 **Forward injection (#4096).** The accumulator only _wrote_ this file until
@@ -1477,11 +1292,6 @@ rm -f "$PIPELINE_DIR/validate-{N}.json"
 find "$PIPELINE_DIR" -name "validate-{N}-*.md" -delete
 rm -f "$PIPELINE_DIR/pr-{N}.json"
 rm -f "$PLANS_DIR/{N}-"*.md
-
-# Batch context cleanup (when epic completes)
-rm -f "$PIPELINE_DIR/batch-{E}.json"
-rm -f "$PIPELINE_DIR/planning-batch-{E}.json"
-rm -f "$PIPELINE_DIR/dev-batch-{E}.json"
 ```
 
 **All file patterns handled by `cleanup-context-files.sh`:**
@@ -1594,22 +1404,6 @@ history JSONLs — are written by the Go side and are what post-hoc tooling
 | `/nightgauge-pr-create`        | `dev-{N}.json` (+ validate) | `pr-{N}.json` + PR             |
 | `/nightgauge-pr-merge`         | `pr-{N}.json`               | Cleanup all context            |
 
-**Batch mode contracts** (Issue #801):
-
-| Skill (batch mode)             | Input                               | Output                                  |
-| ------------------------------ | ----------------------------------- | --------------------------------------- |
-| `/nightgauge-issue-pickup`     | GitHub Epic + sub-issues            | `batch-{E}.json`                        |
-| `/nightgauge-feature-planning` | `batch-{E}.json`                    | `planning-batch-{E}.json` + PLAN.md     |
-| `/nightgauge-feature-dev`      | `planning-batch-{E}.json`           | `dev-batch-{E}.json` + code             |
-| `/nightgauge-feature-validate` | `dev-batch-{E}.json`                | `validate-{E}.json`                     |
-| `/nightgauge-pr-create`        | `dev-batch-{E}.json`                | `pr-{E}.json` + PR (multi-issue Closes) |
-| `/nightgauge-pr-merge`         | `dev-batch-{E}.json`, `pr-{E}.json` | Removes the batch set (Step 7.8)        |
-
-Every batch context file is keyed on the **epic** number `E`, never a
-sub-issue number — including `validate-{E}.json` and `pr-{E}.json`, which reuse
-the single-issue schemas with `E` in the key slot. The canonical stage-by-stage
-contract is [skills/\_shared/BATCH_MODE.md](../skills/_shared/BATCH_MODE.md).
-
 ## Schema Versioning
 
 All context files include `schema_version` to enable future evolution:
@@ -1650,12 +1444,6 @@ All context files include `schema_version` to enable future evolution:
   `test_command`, `includes_integration`, `includes_e2e`, `test_files_run`, and
   extended `quality_checks` with `type_check` and `dead_code_scan` to
   `dev-{N}.json` for richer validate handoff (issue #867)
-- **1.0** (batch): Initial `batch-{E}.json` schema for batched issue-pickup
-  output (issue #801)
-- **1.0** (planning-batch): Initial `planning-batch-{E}.json` schema for batched
-  feature-planning output (issue #801)
-- **1.0** (dev-batch): Initial `dev-batch-{E}.json` schema for batched
-  feature-dev output (issue #801)
 - **1.0** (epic-context): Initial `epic-context-{E}.json` schema for
   accumulating cross-sub-issue findings within an epic (issue #2404)
 - **1.5** (planning): Added optional `pattern_mining_results` object to

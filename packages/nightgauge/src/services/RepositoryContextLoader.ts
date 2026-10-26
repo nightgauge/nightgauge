@@ -29,9 +29,6 @@ export type ContextFileType =
   | "feedback"
   | "batch-state"
   | "running"
-  | "batch"
-  | "planning-batch"
-  | "dev-batch"
   | "ac-reconcile";
 
 /**
@@ -258,12 +255,6 @@ export class RepositoryContextLoader implements vscode.Disposable {
         return path.join(contextDir, `feedback-${issueNumber}.json`);
       case "running":
         return path.join(contextDir, `running-${issueNumber}.json`);
-      case "batch":
-        return path.join(contextDir, `batch-${issueNumber}.json`);
-      case "planning-batch":
-        return path.join(contextDir, `planning-batch-${issueNumber}.json`);
-      case "dev-batch":
-        return path.join(contextDir, `dev-batch-${issueNumber}.json`);
       case "ac-reconcile":
         return path.join(contextDir, `ac-reconcile-${issueNumber}.json`);
       default:

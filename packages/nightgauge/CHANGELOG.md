@@ -9,6 +9,11 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Removed
+
+- **Batch-detection phases (#366).** Stage phase lists no longer show the
+  never-reachable `batch-detection` / `batch-plan-detection` phase.
+
 ### Fixed
 
 - **`knowledge stamp --stage` works in stages the VS Code extension runs

@@ -1,7 +1,6 @@
-# Reference: Context Load, Batch Detection & AC Gate (Phases 0, 0.5, 0.6)
+# Reference: Context Load & AC Gate (Phases 0, 0.6)
 
-Procedural detail for **Phase 0 (Read Dev Context)**, **Phase 0.5 (Batch Dev
-Context Detection)**, and the binary-resolution + gating steps of **Phase 0.6
+Procedural detail for **Phase 0 (Read Dev Context)** and the binary-resolution + gating steps of **Phase 0.6
 (AC Completion Check)**. Read this when those phases fire.
 
 Phase 0.6 Step 0.6.1 (the `type:docs` label detection) stays inline in
@@ -10,7 +9,6 @@ Phase 0.6 Step 0.6.1 (the `type:docs` label detection) stays inline in
 ## Contents
 
 - [Phase 0: Read Dev Context](#phase-0-read-dev-context)
-- [Phase 0.5: Batch Dev Context Detection](#phase-05-batch-dev-context-detection)
 - [Phase 0.6: AC Completion Check — Steps 0.6.2 & 0.6.3](#phase-06-ac-completion-check--steps-062--063)
 
 ---
@@ -103,40 +101,6 @@ fi
 [ -n "$BINARY" ] && \
   "$BINARY" project move-status "$ISSUE_NUMBER" "in-progress" 2>/dev/null || true
 ```
-
----
-
-## Phase 0.5: Batch Dev Context Detection
-
-**PURPOSE**: Detect batch mode when `dev-batch-{E}.json` exists and route to
-consolidated validation — run build and tests once for all changes.
-
-**Detection**: After loading dev context, check for `dev-batch-{E}.json`.
-
-```bash
-BRANCH=$(git branch --show-current)
-: "${BRANCH:?detached HEAD: check out the issue branch}"
-EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
-
-if [ -f "$BATCH_DEV" ]; then
-  BATCH_MODE=true
-  BATCH_ISSUES=$(jq -r '.issue_numbers | @json' "$BATCH_DEV")
-  BATCH_COMMIT=$(jq -r '.commit_sha' "$BATCH_DEV")
-  # Aggregate all changed files from per_issue_results
-  ALL_CREATED=$(jq -r '[.per_issue_results[].files_changed.created[]] | unique | @json' "$BATCH_DEV")
-  ALL_MODIFIED=$(jq -r '[.per_issue_results[].files_changed.modified[]] | unique | @json' "$BATCH_DEV")
-fi
-```
-
-**Single-issue path**: If `dev-batch-{E}.json` does not exist, continue with
-existing single-issue validation unchanged.
-
-### Batch Validation Path
-
-When `BATCH_MODE=true`: aggregate all changed files, run build and tests once,
-scope dead code analysis to all changed files, write `validate-{E}.json`. On
-failure, options are: retry all, split batch into single-issue runs, or skip.
 
 ---
 

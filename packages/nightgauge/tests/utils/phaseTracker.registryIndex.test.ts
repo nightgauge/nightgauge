@@ -58,17 +58,17 @@ describe("phase index comes from the registry (#1008)", () => {
     const tracker = createPhaseTracker(service as never);
 
     // Two phases arrive; the second is sync-project-status, which the registry
-    // places at 15 in feature-dev. Its arrival order here is 1.
+    // places at 14 in feature-dev. Its arrival order here is 1.
     tracker.onPhaseDetected("feature-dev" as PipelineStage, {
       name: "validate-environment",
       index: 0,
-      total: 18,
+      total: 17,
       stage: "feature-dev",
     });
     tracker.onPhaseDetected("feature-dev" as PipelineStage, {
       name: "sync-project-status",
-      index: 15,
-      total: 18,
+      index: 14,
+      total: 17,
       stage: "feature-dev",
     });
     await settle();
@@ -78,7 +78,7 @@ describe("phase index comes from the registry (#1008)", () => {
     expect(
       sync!.index,
       "the record must carry the registry position; arrival order made a phase-2 record display as 15 of 18"
-    ).toBe(15);
+    ).toBe(14);
   });
 
   it("ignores a marker index that disagrees with the registry", async () => {
@@ -95,8 +95,8 @@ describe("phase index comes from the registry (#1008)", () => {
     });
     await settle();
 
-    expect(started[0].index).toBe(15);
-    expect(started[0].total).toBe(18);
+    expect(started[0].index).toBe(14);
+    expect(started[0].total).toBe(17);
   });
 
   it("auto-skipped phases carry their registry position too", async () => {
@@ -108,7 +108,7 @@ describe("phase index comes from the registry (#1008)", () => {
 
     expect(skipped.length).toBeGreaterThan(0);
     const sync = skipped.find((p) => p.name === "sync-project-status");
-    expect(sync?.index).toBe(15);
+    expect(sync?.index).toBe(14);
     // Every skipped phase's index must equal its position in the sweep.
     skipped.forEach((p, i) => expect(p.index).toBe(i));
   });

@@ -70,15 +70,15 @@ func TestDeterministicPhaseReporter_FansOutToTheLiveView(t *testing.T) {
 	})
 	s.OnPhaseSettled(func(_ string, _ int, _, name string, index, total int, status string) {
 		settled = append(settled, name+"="+status)
-		if total != 14 || index < 0 {
+		if total != 13 || index < 0 {
 			t.Errorf("settled event for %q carries index=%d total=%d — consumers key on both", name, index, total)
 		}
 	})
 
 	rep := s.newDeterministicPhaseReporter(rs, "nightgauge/nightgauge", 1247)
-	rep.PhaseStart("pr-merge", "merge", 9, 14)
+	rep.PhaseStart("pr-merge", "merge", 8, 13)
 	rep.PhaseComplete("pr-merge", "merge")
-	rep.PhaseSkip("pr-merge", "self-assessment", 13, 14)
+	rep.PhaseSkip("pr-merge", "self-assessment", 12, 13)
 
 	if len(starts) != 1 || starts[0] != "merge" {
 		t.Errorf("live starts = %v, want [merge]", starts)

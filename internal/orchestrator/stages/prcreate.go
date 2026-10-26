@@ -33,7 +33,7 @@ import (
 //     already-existing open PR for this branch) and wrote pr-{N}.json.
 //     Scheduler skips the LLM skill.
 //   - CreatePathPunt    — the runner declined to create the PR for a reason
-//     that requires LLM judgment (sparse context, spike, batch, security
+//     that requires LLM judgment (sparse context, spike, security
 //     concern, push failure, …). Scheduler falls through to the existing
 //     skill path.
 type PRCreatePath string
@@ -62,7 +62,6 @@ const (
 	ReasonScopeDriftFailed       = "scope-drift-failed"
 	ReasonChecklistUnverified    = "manual-checklist-unverified"
 	ReasonSpikeIssue             = "spike-issue"
-	ReasonBatchMode              = "batch-mode"
 	ReasonNoChanges              = "no-changes"
 	ReasonBranchIsBase           = "branch-is-base"
 	ReasonPushFailed             = "push-failed"
@@ -152,7 +151,6 @@ type PRCreateSnapshot struct {
 	KnowledgeSection string
 
 	// Pipeline metadata
-	BatchPresent bool
 	// RunID is the pipeline run id stamped into the PR footer (#1479). Read
 	// from NIGHTGAUGE_RUN_ID by defaultReadCreateContext; empty renders "-".
 	RunID string
@@ -170,7 +168,6 @@ type PRCreateDecision struct {
 // Decision matrix (in priority order — first match wins):
 //
 //	!HasDev                                    → Punt (missing-dev-context)
-//	BatchPresent                               → Punt (batch-mode)
 //	IssueType == "spike"                       → Punt (spike-issue)
 //	Branch == BaseBranch                       → Punt (branch-is-base)
 //	!HasValidate && ValidateSkippedByRoute     → dev-only checks, then Create
@@ -187,9 +184,6 @@ type PRCreateDecision struct {
 func DecideCreate(snap PRCreateSnapshot) PRCreateDecision {
 	if !snap.HasDev {
 		return PRCreateDecision{Punt: true, Reason: ReasonMissingDevContext}
-	}
-	if snap.BatchPresent {
-		return PRCreateDecision{Punt: true, Reason: ReasonBatchMode}
 	}
 	if strings.EqualFold(snap.IssueType, "spike") {
 		return PRCreateDecision{Punt: true, Reason: ReasonSpikeIssue}
@@ -498,9 +492,7 @@ type DeterministicPRCreateRunner struct {
 	git      gitClient
 	now      func() time.Time
 
-	// Hook for tests to read context from a synthetic source. Returns the
-	// snapshot AND a marker indicating whether dev-batch-{E}.json was found
-	// (which forces a punt regardless of other fields).
+	// Hook for tests to read context from a synthetic source.
 	readContext func(workdir string, issueNumber int) (PRCreateSnapshot, error)
 
 	// writeContext writes pr-{N}.json after a successful create. Indirected
@@ -821,12 +813,6 @@ func pipelineContextPath(workdir, name string) string {
 // tolerated — the snapshot keeps zero-values.
 func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot, error) {
 	snap := PRCreateSnapshot{RunID: os.Getenv("NIGHTGAUGE_RUN_ID")}
-
-	// dev-batch-{E}.json — when present, force batch mode regardless of other fields.
-	batchPath := pipelineContextPath(workdir, fmt.Sprintf("dev-batch-%d.json", issueNumber))
-	if _, err := readFile(batchPath); err == nil {
-		snap.BatchPresent = true
-	}
 
 	// issue-{N}.json
 	if data, err := readFile(pipelineContextPath(workdir, fmt.Sprintf("issue-%d.json", issueNumber))); err == nil {

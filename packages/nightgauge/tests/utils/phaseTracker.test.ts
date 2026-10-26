@@ -37,13 +37,13 @@ describe("createPhaseTracker", () => {
     const marker1: ParsedPhaseMarker = {
       name: "read-pr-context",
       index: 0,
-      total: 14,
+      total: 13,
       stage: "pr-merge",
     };
     const marker2: ParsedPhaseMarker = {
-      name: "batch-detection",
+      name: "validate-environment",
       index: 1,
-      total: 14,
+      total: 13,
       stage: "pr-merge",
     };
 
@@ -55,21 +55,25 @@ describe("createPhaseTracker", () => {
       expect(mockStateService.startPhase).toHaveBeenCalledTimes(2);
     });
 
-    expect(mockStateService.completePhase).toHaveBeenCalledWith("pr-merge", "read-pr-context", 14);
-    // #1008: the fourth argument is the phase's REGISTRY position — batch-detection
-    // is index 1 of pr-merge's 14. Asserting it here rather than relaxing the
+    expect(mockStateService.completePhase).toHaveBeenCalledWith("pr-merge", "read-pr-context", 13);
+    // #1008: the fourth argument is the phase's REGISTRY position — validate-environment
+    // is index 1 of pr-merge's 13. Asserting it here rather than relaxing the
     // matcher keeps this test pinning the full call, which is what caught the
     // signature change in the first place.
-    expect(mockStateService.startPhase).toHaveBeenCalledWith("pr-merge", "batch-detection", 14, 1);
+    expect(mockStateService.startPhase).toHaveBeenCalledWith(
+      "pr-merge",
+      "validate-environment",
+      13,
+      1
+    );
   });
 
   it("should auto-skip untracked phases when stage completes (Issue #1232)", async () => {
     const tracker = createPhaseTracker(mockStateService as any);
 
-    // Simulate pr-merge with only 6 of 14 phases emitted
+    // Simulate pr-merge with only 6 of 13 phases emitted
     const emittedPhases = [
       "read-pr-context",
-      "batch-detection",
       "validate-environment",
       "ci-gate",
       "auto-fix-retry",
@@ -80,7 +84,7 @@ describe("createPhaseTracker", () => {
       tracker.onPhaseDetected("pr-merge" as PipelineStage, {
         name: emittedPhases[i],
         index: i,
-        total: 14,
+        total: 13,
         stage: "pr-merge",
       });
     }
@@ -89,12 +93,12 @@ describe("createPhaseTracker", () => {
     tracker.completeStagePhases("pr-merge" as PipelineStage);
 
     // Wait for all enqueued work to finish.
-    // skipPhase is now called for ALL 14 registry phases (not just the 8
+    // skipPhase is now called for ALL 13 registry phases (not just the 8
     // untracked ones). It's idempotent in real state.json because
     // skipPhase returns early when a phase already exists; the mock always
     // resolves, so the call count reflects all registry phases.
     await vi.waitFor(() => {
-      expect(mockStateService.markPhaseUnreported).toHaveBeenCalledTimes(14);
+      expect(mockStateService.markPhaseUnreported).toHaveBeenCalledTimes(13);
     });
 
     // The 8 genuinely-untracked phases must still be in the skip list
@@ -113,10 +117,9 @@ describe("createPhaseTracker", () => {
   it("back-fills all registry phases via markPhaseUnreported (idempotent) when all phases are emitted", async () => {
     const tracker = createPhaseTracker(mockStateService as any);
 
-    // Emit all 14 pr-merge phases
+    // Emit all 13 pr-merge phases
     const allPhases = [
       "read-pr-context",
-      "batch-detection",
       "validate-environment",
       "ci-gate",
       "auto-fix-retry",
@@ -134,7 +137,7 @@ describe("createPhaseTracker", () => {
       tracker.onPhaseDetected("pr-merge" as PipelineStage, {
         name: allPhases[i],
         index: i,
-        total: 14,
+        total: 13,
         stage: "pr-merge",
       });
     }
@@ -146,15 +149,15 @@ describe("createPhaseTracker", () => {
       expect(mockStateService.completePhase).toHaveBeenCalledWith(
         "pr-merge",
         "self-assessment",
-        14
+        13
       );
     });
 
-    // skipPhase is called for ALL 14 registry phases — in real state.json
+    // skipPhase is called for ALL 13 registry phases — in real state.json
     // the phases already exist so skipPhase is a no-op for each one, but
-    // the mock always resolves so we see all 14 calls.
+    // the mock always resolves so we see all 13 calls.
     await vi.waitFor(() => {
-      expect(mockStateService.markPhaseUnreported).toHaveBeenCalledTimes(14);
+      expect(mockStateService.markPhaseUnreported).toHaveBeenCalledTimes(13);
     });
   });
 
@@ -166,8 +169,8 @@ describe("createPhaseTracker", () => {
 
     // Wait for enqueued work
     await vi.waitFor(() => {
-      // All 14 pr-merge phases should be skipped
-      expect(mockStateService.markPhaseUnreported).toHaveBeenCalledTimes(14);
+      // All 13 pr-merge phases should be skipped
+      expect(mockStateService.markPhaseUnreported).toHaveBeenCalledTimes(13);
     });
 
     expect(mockStateService.completePhase).not.toHaveBeenCalled();
@@ -180,13 +183,13 @@ describe("createPhaseTracker", () => {
     tracker.onPhaseDetected("pr-merge" as PipelineStage, {
       name: "read-pr-context",
       index: 0,
-      total: 14,
+      total: 13,
       stage: "pr-merge",
     });
     tracker.onPhaseDetected("feature-dev" as PipelineStage, {
       name: "validate-environment",
       index: 0,
-      total: 18,
+      total: 17,
       stage: "feature-dev",
     });
 
@@ -197,12 +200,12 @@ describe("createPhaseTracker", () => {
       expect(mockStateService.completePhase).toHaveBeenCalledWith(
         "pr-merge",
         "read-pr-context",
-        14
+        13
       );
       expect(mockStateService.completePhase).toHaveBeenCalledWith(
         "feature-dev",
         "validate-environment",
-        18
+        17
       );
     });
   });
@@ -220,7 +223,7 @@ describe("createPhaseTracker", () => {
         {
           name: "read-pr-context",
           index: 0,
-          total: 14,
+          total: 13,
           stage: "pr-merge",
         } as ParsedPhaseMarker
       );
@@ -245,7 +248,7 @@ describe("createPhaseTracker", () => {
         {
           name: "read-pr-context",
           index: 0,
-          total: 14,
+          total: 13,
           stage: "pr-merge",
         } as ParsedPhaseMarker
       );

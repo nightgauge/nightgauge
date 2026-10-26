@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- **Batch mode removed (#366).** Nothing ever wrote `batch-{E}.json`, so the
+  batch phase and the `_shared/BATCH_MODE.md` contract were dead weight in every
+  run. They are gone; phase indices after it shift down by one. Grouping
+  sub-issues into one PR is the epic-branch flow's job.
+
 ### Changed
 
 - The clone's pipeline state and plans are read at `$(nightgauge layout path <class> <name>)`

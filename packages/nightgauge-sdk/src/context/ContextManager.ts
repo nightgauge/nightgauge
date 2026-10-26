@@ -247,50 +247,13 @@ export class ContextManager {
   }
 
   /**
-   * Cleanup all batch context files for an epic
-   *
-   * Removes: batch-{N}.json, planning-batch-{N}.json, dev-batch-{N}.json
-   *
-   * @see Issue #801 - Multi-issue context schema for batched pipeline runs
-   */
-  async cleanupBatch(epicNumber: number): Promise<string[]> {
-    const files = [
-      `batch-${epicNumber}.json`,
-      `planning-batch-${epicNumber}.json`,
-      `dev-batch-${epicNumber}.json`,
-    ];
-
-    const deleted: string[] = [];
-
-    for (const file of files) {
-      if (await this.exists(file)) {
-        await this.delete(file);
-        deleted.push(file);
-      }
-    }
-
-    return deleted;
-  }
-
-  /**
    * Get the standard filename for a context type and issue/epic
    *
-   * For batch types (batch, planning-batch, dev-batch), the number parameter
-   * represents the epic number. For all other types, it represents the issue number.
-   *
-   * @see Issue #801 - Batch type support
+   * For `epic-context`, the number is the epic number; for all other types, it
+   * is the issue number.
    */
   static getFilename(
-    type:
-      | "issue"
-      | "planning"
-      | "dev"
-      | "validate"
-      | "pr"
-      | "batch"
-      | "planning-batch"
-      | "dev-batch"
-      | "epic-context",
+    type: "issue" | "planning" | "dev" | "validate" | "pr" | "epic-context",
     number: number
   ): string {
     return `${type}-${number}.json`;
@@ -300,17 +263,6 @@ export class ContextManager {
    * Infer which skill created a context file based on its name
    */
   private inferCreatedBy(filename: string): string {
-    // Batch prefixes must be checked before single-issue prefixes
-    // to avoid 'batch-' matching 'dev-' or 'planning-' prematurely
-    if (filename.startsWith("batch-")) {
-      return "/nightgauge-issue-pickup (batch)";
-    }
-    if (filename.startsWith("planning-batch-")) {
-      return "/nightgauge-feature-planning (batch)";
-    }
-    if (filename.startsWith("dev-batch-")) {
-      return "/nightgauge-feature-dev (batch)";
-    }
     if (filename.startsWith("issue-")) {
       return "/nightgauge-issue-pickup";
     }

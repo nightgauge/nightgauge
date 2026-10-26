@@ -14,6 +14,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Removed
+
+- **Dormant batch mode (#366).** Six stage skills, the pr-create runner, the
+  SDK and the extension consumed `batch-{E}.json`, `planning-batch-{E}.json`
+  and `dev-batch-{E}.json`, but nothing ever wrote the first one, so the path
+  never ran. It is gone, with `skills/_shared/BATCH_MODE.md` and each stage's
+  batch phase; phase indices after it shift down by one. One PR per epic
+  still comes from the epic-branch flow.
+
 ### Added
 
 - **`nightgauge program status` reports a program's progress (#2573).** One

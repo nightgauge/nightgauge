@@ -23,11 +23,11 @@ const EXECUTION_STAGES: ExecutionStage[] = [
 /** Expected phase counts per stage */
 const EXPECTED_PHASE_COUNTS: Record<ExecutionStage, number> = {
   "issue-pickup": 14, // added blocked-dependency-gate phase (Issue #231)
-  "feature-planning": 14, // added recall-prior-decisions phase (Issue #3593)
-  "feature-dev": 18, // added recall-architectural-constraints phase (Issue #3594)
-  "feature-validate": 23, // added verify-ui-gate phase (Issue #4193)
-  "pr-create": 14, // added scope-drift-gate phase (Issue #3040)
-  "pr-merge": 14, // added retrospective-feedback phase (Issue #14)
+  "feature-planning": 13, // removed batch-detection (Issue #366); added recall-prior-decisions phase (Issue #3593)
+  "feature-dev": 17, // removed batch-plan-detection (Issue #366); added recall-architectural-constraints phase (Issue #3594)
+  "feature-validate": 22, // removed batch-detection (Issue #366); added verify-ui-gate phase (Issue #4193)
+  "pr-create": 13, // removed batch-detection (Issue #366); added scope-drift-gate phase (Issue #3040)
+  "pr-merge": 13, // removed batch-detection (Issue #366); added retrospective-feedback phase (Issue #14)
 };
 
 describe("Phase Registry", () => {
@@ -103,8 +103,8 @@ describe("Phase Registry", () => {
     it("should return correct index for known phases", () => {
       expect(getPhaseIndex("feature-dev", "validate-environment")).toBe(0);
       expect(getPhaseIndex("feature-dev", "read-planning-context")).toBe(1);
-      expect(getPhaseIndex("feature-dev", "implementation")).toBe(8);
-      expect(getPhaseIndex("feature-dev", "output-summary")).toBe(16);
+      expect(getPhaseIndex("feature-dev", "implementation")).toBe(7);
+      expect(getPhaseIndex("feature-dev", "output-summary")).toBe(15);
     });
 
     it("should return -1 for unknown phase name", () => {
@@ -127,7 +127,7 @@ describe("Phase Registry", () => {
     it("should produce valid HTML comment format", () => {
       const marker = formatPhaseMarker("feature-dev", "implementation");
       expect(marker).toBe(
-        '<!-- phase:start name="implementation" index=8 total=18 stage="feature-dev" -->'
+        '<!-- phase:start name="implementation" index=7 total=17 stage="feature-dev" -->'
       );
     });
 
@@ -164,23 +164,23 @@ describe("Phase Registry", () => {
   describe("parsePhaseMarkers", () => {
     it("returns array of length 1 for a single marker", () => {
       const text =
-        '<!-- phase:start name="implementation" index=8 total=18 stage="feature-dev" -->';
+        '<!-- phase:start name="implementation" index=7 total=17 stage="feature-dev" -->';
       const result = parsePhaseMarkers(text);
       expect(result).toHaveLength(1);
       expect(result[0]).toEqual({
         name: "implementation",
-        index: 8,
-        total: 18,
+        index: 7,
+        total: 17,
         stage: "feature-dev",
       });
     });
 
     it("returns all 3 markers in document order for bundled delivery", () => {
       const text = [
-        '<!-- phase:start name="plan-verification" index=4 total=18 stage="feature-dev" -->',
+        '<!-- phase:start name="plan-verification" index=3 total=17 stage="feature-dev" -->',
         "Some output between markers",
-        '<!-- phase:start name="implementation" index=8 total=18 stage="feature-dev" -->',
-        '<!-- phase:start name="testing" index=9 total=18 stage="feature-dev" -->',
+        '<!-- phase:start name="implementation" index=7 total=17 stage="feature-dev" -->',
+        '<!-- phase:start name="testing" index=8 total=17 stage="feature-dev" -->',
       ].join("\n");
       const result = parsePhaseMarkers(text);
       expect(result).toHaveLength(3);
@@ -199,13 +199,13 @@ describe("Phase Registry", () => {
 
     it("regression: parsePhaseMarker on single-marker input still returns the parsed object", () => {
       const text =
-        '<!-- phase:start name="validate-environment" index=0 total=18 stage="feature-dev" -->';
+        '<!-- phase:start name="validate-environment" index=0 total=17 stage="feature-dev" -->';
       const result = parsePhaseMarker(text);
       expect(result).not.toBeNull();
       expect(result).toEqual({
         name: "validate-environment",
         index: 0,
-        total: 18,
+        total: 17,
         stage: "feature-dev",
       });
     });

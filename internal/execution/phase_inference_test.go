@@ -17,7 +17,7 @@ func TestPhaseInferer_FeatureDevStartsAtValidateEnvironment(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a start marker")
 	}
-	if m.Name != "validate-environment" || m.Index != 0 || m.Total != 18 || m.Stage != "feature-dev" {
+	if m.Name != "validate-environment" || m.Index != 0 || m.Total != 17 || m.Stage != "feature-dev" {
 		t.Fatalf("unexpected start marker: %+v", m)
 	}
 }
@@ -33,10 +33,10 @@ func TestPhaseInferer_AdvancesThroughWaypoints(t *testing.T) {
 		index int
 	}{
 		{"Read", map[string]any{"file_path": "PLAN.md"}, "read-planning-context", 1},
-		{"Write", map[string]any{"file_path": "src/feature.ts"}, "implementation", 8},
-		{"Bash", map[string]any{"command": "go test ./..."}, "testing", 9},
-		{"Write", map[string]any{"file_path": "/repo/.git/nightgauge/pipeline/dev-42.json"}, "write-dev-context", 14},
-		{"Bash", map[string]any{"command": "nightgauge project move-status 42"}, "sync-project-status", 15},
+		{"Write", map[string]any{"file_path": "src/feature.ts"}, "implementation", 7},
+		{"Bash", map[string]any{"command": "go test ./..."}, "testing", 8},
+		{"Write", map[string]any{"file_path": "/repo/.git/nightgauge/pipeline/dev-42.json"}, "write-dev-context", 13},
+		{"Bash", map[string]any{"command": "nightgauge project move-status 42"}, "sync-project-status", 14},
 	}
 	for _, c := range cases {
 		m, _, ok := inf.ObserveToolUse(c.tool, c.input)
@@ -80,7 +80,7 @@ func TestPhaseInferer_DevContextWriteIsNotImplementation(t *testing.T) {
 	if !ok {
 		t.Fatal("expected advancement")
 	}
-	if m.Name != "write-dev-context" || m.Index != 14 {
+	if m.Name != "write-dev-context" || m.Index != 13 {
 		t.Fatalf("dev-context write should map to write-dev-context, got %s/%d", m.Name, m.Index)
 	}
 }
@@ -125,8 +125,8 @@ func TestPhaseInferer_FeatureValidateInfersFromItsRealWork(t *testing.T) {
 	}
 
 	m, ok := inf.Start()
-	if !ok || m.Index != 0 || m.Total != 23 {
-		t.Fatalf("Start should open validate-environment of 23, got %+v ok=%v", m, ok)
+	if !ok || m.Index != 0 || m.Total != 22 {
+		t.Fatalf("Start should open validate-environment of 22, got %+v ok=%v", m, ok)
 	}
 
 	if m, _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "dev-42.json"}); !ok ||
@@ -160,7 +160,7 @@ func TestPhaseInferer_FeaturePlanningWaypoints(t *testing.T) {
 		t.Fatal("expected feature-planning inference to be enabled")
 	}
 	m, ok := inf.Start()
-	if !ok || m.Name != "feedback-context-check" || m.Index != 0 || m.Total != 14 {
+	if !ok || m.Name != "feedback-context-check" || m.Index != 0 || m.Total != 13 {
 		t.Fatalf("unexpected start marker: %+v ok=%v", m, ok)
 	}
 
@@ -170,9 +170,9 @@ func TestPhaseInferer_FeaturePlanningWaypoints(t *testing.T) {
 		want  string
 		index int
 	}{
-		{"Grep", map[string]any{"pattern": "x", "path": "docs/"}, "documentation-analysis", 6},
-		{"Write", map[string]any{"file_path": "/repo/.git/nightgauge/plans/6-flutter-ia-nav.md"}, "produce-plan", 9},
-		{"Write", map[string]any{"file_path": "/repo/.git/nightgauge/pipeline/planning-6.json"}, "write-planning-context", 10},
+		{"Grep", map[string]any{"pattern": "x", "path": "docs/"}, "documentation-analysis", 5},
+		{"Write", map[string]any{"file_path": "/repo/.git/nightgauge/plans/6-flutter-ia-nav.md"}, "produce-plan", 8},
+		{"Write", map[string]any{"file_path": "/repo/.git/nightgauge/pipeline/planning-6.json"}, "write-planning-context", 9},
 	}
 	for _, c := range cases {
 		m, _, ok := inf.ObserveToolUse(c.tool, c.input)
@@ -287,11 +287,11 @@ func TestPhaseInferer_OpenCodeFixtureAdvancesOnEdit(t *testing.T) {
 			}
 		}
 	}
-	if reached != 8 {
-		t.Fatalf("phase index after the fixture = %d, want 8 (implementation)", reached)
+	if reached != 7 {
+		t.Fatalf("phase index after the fixture = %d, want 7 (implementation)", reached)
 	}
-	if inf.cursor != 8 {
-		t.Fatalf("cursor after the fixture = %d, want 8", inf.cursor)
+	if inf.cursor != 7 {
+		t.Fatalf("cursor after the fixture = %d, want 7", inf.cursor)
 	}
 }
 
@@ -319,11 +319,11 @@ func TestPhaseInferer_LatePhasesWaitForImplementation(t *testing.T) {
 		}
 	}
 	m, _, ok := inf.ObserveToolUse("Edit", map[string]any{"file_path": "internal/github/client.go"})
-	if !ok || m.Index != 8 {
+	if !ok || m.Index != 7 {
 		t.Fatalf("an implementation edit did not reach implementation: %+v %v", m, ok)
 	}
 	m, _, ok = inf.ObserveToolUse("Bash", map[string]any{"command": "nightgauge project move-status 42 Done"})
-	if !ok || m.Index != 15 {
+	if !ok || m.Index != 14 {
 		t.Fatalf("a status move after implementation did not reach sync-project-status: %+v %v", m, ok)
 	}
 }
@@ -422,9 +422,9 @@ func TestPhaseInferer_GrokToolCallsAdvanceFeatureValidate(t *testing.T) {
 	}{
 		{`{"type":"tool_call","toolCallId":"c0","status":"pending","toolName":"read_file","rawInput":{"target_file":"dev.json","limit":50}}`, 1},
 		{`{"type":"tool_call","toolCallId":"c1","status":"pending","toolName":"grep","rawInput":{"pattern":"func","glob":"*.go"}}`, 1},
-		{`{"type":"tool_call","toolCallId":"c2","status":"pending","toolName":"run_terminal_command","rawInput":{"command":"go test ./..."}}`, 10},
-		{`{"type":"tool_call_update","toolCallId":"c2","status":"completed","rawInput":{"command":"git push origin x"}}`, 10},
-		{`{"type":"tool_call","toolCallId":"c3","status":"pending","toolName":"run_terminal_command","rawInput":{"command":"git push origin x"}}`, 18},
+		{`{"type":"tool_call","toolCallId":"c2","status":"pending","toolName":"run_terminal_command","rawInput":{"command":"go test ./..."}}`, 9},
+		{`{"type":"tool_call_update","toolCallId":"c2","status":"completed","rawInput":{"command":"git push origin x"}}`, 9},
+		{`{"type":"tool_call","toolCallId":"c3","status":"pending","toolName":"run_terminal_command","rawInput":{"command":"git push origin x"}}`, 17},
 	}
 	for i, s := range steps {
 		for _, tu := range extractToolUses(s.line) {
