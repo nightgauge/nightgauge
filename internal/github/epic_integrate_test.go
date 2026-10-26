@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,12 +126,18 @@ func TestIntegrateEpic_RedCIAndPendingKeepEpicOpen(t *testing.T) {
 	}{
 		{&MergeQueueError{PRNumber: 900, Kind: MergeQueueDequeued}, IntegrationCIFailed},
 		{&MergeQueueError{PRNumber: 900, Kind: MergeQueueTimeout}, IntegrationPending},
+		{&MergeQueueError{PRNumber: 900, Kind: MergeQueueNotReady}, IntegrationPending},
+		{&MergeQueueError{PRNumber: 900, Kind: MergeQueueChecksFailed}, IntegrationCIFailed},
+		{errors.New("graphql: something else"), IntegrationError},
 	} {
 		clone := epicFixture(t, "")
 		svc, _ := git.NewService(clone)
 		got := integrateEpicWith(context.Background(), svc, &fakeEpicPRs{mergeErr: tc.err}, EpicRef{Owner: "o", Repo: "r", Number: 2085}, "Thing", "main")
 		if got.Outcome != tc.want || got.AllowsClose() {
 			t.Errorf("merge err %v: outcome = %+v, want %s", tc.err, got, tc.want)
+		}
+		if got.Blocked() != (tc.want != IntegrationPending) {
+			t.Errorf("merge err %v: Blocked() = %v; only a pending integration is retried silently", tc.err, got.Blocked())
 		}
 	}
 }

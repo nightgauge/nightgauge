@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/github"
 )
 
 // Issue #1933 — a PR is punted to the LLM eleven seconds in because GitHub has
@@ -38,7 +40,7 @@ func newRunnerWithSeqMergeability(seq *sequenceGh, prNumber, mergeabilityMax, ci
 }
 
 func TestDeterministicRunner_MergeabilityUnknown_WaitsThenMerges(t *testing.T) {
-	unknown := PRViewSnapshot{State: "OPEN", Mergeable: mergeableUnknown, MergeStateStatus: "UNKNOWN", ReviewDecision: "APPROVED"}
+	unknown := PRViewSnapshot{State: "OPEN", Mergeable: github.MergeableUnknown, MergeStateStatus: "UNKNOWN", ReviewDecision: "APPROVED"}
 	clean := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", ReviewDecision: "APPROVED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: "SUCCESS"}}}
 	merged := PRViewSnapshot{State: "MERGED"}
 	seq := &sequenceGh{responses: []sequenceResp{
@@ -66,7 +68,7 @@ func TestDeterministicRunner_MergeabilityUnknown_WaitsThenMerges(t *testing.T) {
 // still pending, so the run must end up in the CI wait and merge from there —
 // not punt.
 func TestDeterministicRunner_MergeabilityUnknown_ThenCIWaitGetsItsTurn(t *testing.T) {
-	unknown := PRViewSnapshot{State: "OPEN", Mergeable: mergeableUnknown, MergeStateStatus: "UNKNOWN", ReviewDecision: "APPROVED"}
+	unknown := PRViewSnapshot{State: "OPEN", Mergeable: github.MergeableUnknown, MergeStateStatus: "UNKNOWN", ReviewDecision: "APPROVED"}
 	pending := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", ReviewDecision: "APPROVED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: ""}}}
 	clean := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", ReviewDecision: "APPROVED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: "SUCCESS"}}}
 	merged := PRViewSnapshot{State: "MERGED"}
@@ -92,7 +94,7 @@ func TestDeterministicRunner_MergeabilityUnknown_ThenCIWaitGetsItsTurn(t *testin
 }
 
 func TestDeterministicRunner_MergeabilityUnknown_TimesOut_PuntsNamingTheAbsence(t *testing.T) {
-	unknown := PRViewSnapshot{State: "OPEN", Mergeable: mergeableUnknown, MergeStateStatus: "UNKNOWN", ReviewDecision: "APPROVED"}
+	unknown := PRViewSnapshot{State: "OPEN", Mergeable: github.MergeableUnknown, MergeStateStatus: "UNKNOWN", ReviewDecision: "APPROVED"}
 	seq := &sequenceGh{responses: []sequenceResp{{snap: unknown}}} // never resolves
 	r := newRunnerWithSeqMergeability(seq, 42, 3, 5)
 
@@ -142,7 +144,7 @@ func TestDeterministicRunner_Conflicting_PuntsWithoutWaiting(t *testing.T) {
 
 // A PR that leaves OPEN while the wait is running has a verdict of its own.
 func TestWaitForMergeability_StopsWhenPRLeavesOpen(t *testing.T) {
-	unknown := PRViewSnapshot{State: "OPEN", Mergeable: mergeableUnknown}
+	unknown := PRViewSnapshot{State: "OPEN", Mergeable: github.MergeableUnknown}
 	merged := PRViewSnapshot{State: "MERGED"}
 	seq := &sequenceGh{responses: []sequenceResp{{snap: unknown}, {snap: merged}}}
 	r := newRunnerWithSeqMergeability(seq, 42, 10, 5)
@@ -161,7 +163,7 @@ func TestWaitForMergeability_StopsWhenPRLeavesOpen(t *testing.T) {
 
 // The budget, not the first bad response, bounds the wait.
 func TestWaitForMergeability_TransientErrorDoesNotEndTheWait(t *testing.T) {
-	unknown := PRViewSnapshot{State: "OPEN", Mergeable: mergeableUnknown}
+	unknown := PRViewSnapshot{State: "OPEN", Mergeable: github.MergeableUnknown}
 	resolved := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN"}
 	seq := &sequenceGh{responses: []sequenceResp{
 		{err: context.DeadlineExceeded}, // transient
