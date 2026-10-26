@@ -369,10 +369,54 @@ func extractOpenCodeToolUse(line string) (toolUse, bool) {
 	return toolUse{Name: name, Input: input}, true
 }
 
+// grokToolNameToClaudeName maps a Grok Build CLI `tool_call` event's toolName
+// to the Claude tool name stageRules matches on (#559), the way
+// openCodeToolNameToClaudeName does for OpenCode. Only names a real capture
+// shows are listed, with the input keys it shows:
+//
+//   - run_terminal_command: {command, description}
+//     (testdata/grok_stream_real_capture.jsonl, grok 1.0.4)
+//   - read_file: {target_file, limit}; grep: {pattern, glob}
+//     (grok 1.0.70 session updates, testdata/README.md)
+//
+// The Read/Grep rules match on the name alone, so their keys need no
+// translation. Grok's file-writing tools (write, search_replace) are left
+// out on purpose: no capture records which key names their target file, and
+// the edit rules read file_path, so guessing a key would invent an
+// implementation waypoint. Every unmapped tool matches no phase rule, the
+// same as an unrecognized Claude tool name.
+var grokToolNameToClaudeName = map[string]string{
+	"run_terminal_command": "Bash",
+	"read_file":            "Read",
+	"grep":                 "Grep",
+}
+
+// extractGrokToolUse reads one Grok `--output-format streaming-json` line:
+// `{"type":"tool_call","toolName":"run_terminal_command","rawInput":{...}}`.
+// Grok emits tool_call once, at status "pending" (the call's start), the same
+// timing as a Claude assistant tool_use block. The `tool_call_update` lines
+// that follow carry no toolName and are ignored.
+func extractGrokToolUse(line string) (toolUse, bool) {
+	var env struct {
+		Type     string         `json:"type"`
+		ToolName string         `json:"toolName"`
+		RawInput map[string]any `json:"rawInput"`
+	}
+	if err := json.Unmarshal([]byte(line), &env); err != nil || env.Type != "tool_call" {
+		return toolUse{}, false
+	}
+	name, ok := grokToolNameToClaudeName[env.ToolName]
+	if !ok {
+		return toolUse{}, false
+	}
+	return toolUse{Name: name, Input: env.RawInput}, true
+}
+
 // extractToolUses parses one line of stage stdout and returns its tool_use
 // blocks: an assistant stream-json line (the CLI's shape, tool calls inside
-// complete `assistant` messages) or an OpenCode `tool_use` event
-// (extractOpenCodeToolUse). Returns nil for a line that is neither.
+// complete `assistant` messages), an OpenCode `tool_use` event
+// (extractOpenCodeToolUse) or a Grok `tool_call` event (extractGrokToolUse).
+// Returns nil for a line that is none of these.
 func extractToolUses(line string) []toolUse {
 	var env struct {
 		Type    string `json:"type"`
@@ -394,6 +438,9 @@ func extractToolUses(line string) []toolUse {
 		return out
 	}
 	if tu, ok := extractOpenCodeToolUse(line); ok {
+		return []toolUse{tu}
+	}
+	if tu, ok := extractGrokToolUse(line); ok {
 		return []toolUse{tu}
 	}
 	return nil

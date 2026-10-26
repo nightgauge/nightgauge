@@ -14,6 +14,7 @@
  * @see docs/ARCHITECTURE_DIAGRAMS.md - Token Counting Data Flow
  */
 
+import { grokToolCall } from "@nightgauge/sdk";
 import type { ExecutionAdapter } from "../config/schema";
 import type { TokenUsageUpdate } from "../services/PipelineStateService";
 import { computeStageCost } from "./computeStageCost";
@@ -117,7 +118,12 @@ export type StreamJsonMessageType =
    * absent from this union, so `parseStreamJsonLine` returned null for it and
    * the one signal that proves a blocked stage is alive reached nothing.
    */
-  | "tool_progress";
+  | "tool_progress"
+  /**
+   * A Grok Build CLI tool call at its start (#559), surfaced in the singular
+   * `toolName`/`toolInput`/`toolUseId` shape with the name mapped to Claude's.
+   */
+  | "tool_call";
 
 /**
  * One `tool_result` block from a user message.
@@ -500,6 +506,20 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
         type: "content_block_delta",
         content: parsed.delta.text ?? "",
       };
+    }
+
+    // #559: a Grok `tool_call`. Its `tool_call_update` lines carry no toolName
+    // and fall through to the generic return below with no tool.
+    if (parsed.type === "tool_call") {
+      const call = grokToolCall(parsed);
+      return call
+        ? {
+            type: "tool_call",
+            toolName: call.name,
+            toolInput: call.input,
+            ...(call.id !== undefined ? { toolUseId: call.id } : {}),
+          }
+        : { type: "tool_call" };
     }
 
     // Handle tool use messages

@@ -43,6 +43,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Grok runs now advance inferred phase markers (#559).** A Grok
+  `streaming-json` `tool_call` line was invisible to phase inference on both
+  the CLI and VS Code paths, so Grok-driven feature-dev, planning and validate
+  stages stayed on their first phase. `run_terminal_command`, `read_file` and
+  `grep` now map to `Bash`, `Read` and `Grep` ahead of the unchanged rule
+  tables; `tool_call_update` lines are ignored. Grok's file-writing tools stay
+  unmapped until a capture records their input keys.
+
 - **A pr-merge waiting on its background gate is no longer killed, and a
   transient kill no longer strands the issue (#2554).** Each Claude Code
   background task now defers the runaway kill for up to

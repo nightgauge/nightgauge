@@ -432,3 +432,40 @@ export function createPhaseInference(stage: string): PhaseInference {
     },
   };
 }
+
+/**
+ * Grok Build CLI `tool_call` toolName → the Claude tool name the rule tables
+ * match on (#559). Mirrors `grokToolNameToClaudeName` in
+ * internal/execution/phase_inference.go entry for entry. Only names a real
+ * capture shows are listed; Grok's file-writing tools (`write`,
+ * `search_replace`) are left out because no capture records which key names
+ * their target file, and the edit rules read `file_path`.
+ */
+export const GROK_TOOL_NAME_TO_CLAUDE_NAME: Readonly<Record<string, string>> = {
+  run_terminal_command: "Bash",
+  read_file: "Read",
+  grep: "Grep",
+};
+
+/**
+ * Read one parsed Grok `--output-format streaming-json` event:
+ * `{"type":"tool_call","toolName":...,"rawInput":{...}}`. Grok emits
+ * `tool_call` once, at status "pending" (the call's start); the
+ * `tool_call_update` lines that follow carry no toolName and yield null, as
+ * does any toolName the map does not list.
+ */
+export function grokToolCall(
+  parsed: unknown
+): { name: string; input: unknown; id?: string } | null {
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const event = parsed as Record<string, unknown>;
+  if (event.type !== "tool_call" || typeof event.toolName !== "string") return null;
+  if (!Object.prototype.hasOwnProperty.call(GROK_TOOL_NAME_TO_CLAUDE_NAME, event.toolName)) {
+    return null;
+  }
+  return {
+    name: GROK_TOOL_NAME_TO_CLAUDE_NAME[event.toolName],
+    input: event.rawInput,
+    ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}),
+  };
+}
