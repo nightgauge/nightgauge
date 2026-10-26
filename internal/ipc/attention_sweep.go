@@ -255,11 +255,14 @@ func (s *Server) sweepWorkspace(ctx context.Context, store *attention.Store, rep
 			client = shared.Wrap(c)
 		}
 	}
+	// Best-effort: an unresolved manifest root falls back to WorkspaceRoot.
+	manifestRoot, _ := s.workspaceManifestRoot()
 	sweeper := &sweep.Sweeper{
 		Store:         store,
 		Registry:      sweep.Default,
 		Forge:         client,
 		WorkspaceRoot: s.workspaceRootPath(),
+		ManifestRoot:  manifestRoot,
 	}
 	wres, err := sweeper.SweepWorkspace(ctx, repos)
 	if err != nil {
@@ -283,11 +286,14 @@ func (s *Server) sweepOneRepo(ctx context.Context, store *attention.Store, repo 
 		return out
 	}
 	client = shared.Wrap(client)
+	// Best-effort: an unresolved manifest root falls back to WorkspaceRoot.
+	manifestRoot, _ := s.workspaceManifestRoot()
 	sweeper := &sweep.Sweeper{
 		Store:         store,
 		Registry:      sweep.Default,
 		Forge:         client,
 		WorkspaceRoot: s.workspaceRootPath(),
+		ManifestRoot:  manifestRoot,
 	}
 	result, err := sweeper.Sweep(ctx, repo)
 	if err != nil {

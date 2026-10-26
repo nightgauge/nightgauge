@@ -525,3 +525,50 @@ func TestCoverageGap_CoveredReposAreRefusedByTheRepairVerb(t *testing.T) {
 		}
 	}
 }
+
+// Regression (#2540): when WorkspaceRoot is a manifest-less member folder, the
+// manifest root's entries still count as configured, so no coverage card is
+// raised for a repo the real manifest already lists.
+func TestSweepWorkspace_ManifestRootSuppliesEntriesForAMemberRoot(t *testing.T) {
+	member := layouttest.Repo(t)
+	writeWorkspaceFixture(t, member, `
+project:
+  owner: acme
+  number: 4
+  repo: internal
+`, "")
+	core := t.TempDir()
+	writeWorkspaceFixture(t, core, `
+project:
+  owner: acme
+  number: 3
+  repo: core
+`, `
+workspace:
+  name: test
+repositories:
+  - name: core
+    path: .
+  - name: listed
+    path: ../listed
+`)
+
+	cap := &captureProducer{}
+	reg := NewRegistry()
+	reg.RegisterWorkspace(cap)
+	s := &Sweeper{Store: attention.New(member), Registry: reg, WorkspaceRoot: member, ManifestRoot: core}
+	if _, err := s.SweepWorkspace(context.Background(), nil); err != nil {
+		t.Fatalf("SweepWorkspace: %v", err)
+	}
+	for _, want := range []string{"acme/listed", "acme/core", "acme/internal"} {
+		if !cap.got.Covers(want) {
+			t.Errorf("%s should be covered; got %v", want, cap.got.ConfiguredRepos)
+		}
+	}
+
+	// Without ManifestRoot the member root has no manifest and the listed repo
+	// would be carded — the bug.
+	if got := ConfiguredRepos(member, ""); attention.RepoInConfiguredSet(got, "acme/listed") {
+		t.Errorf("member root alone must not see the manifest; got %v", got)
+	}
+}

@@ -187,7 +187,7 @@ func (s *Sweeper) SweepWorkspace(ctx context.Context, configuredRepos []string) 
 	// were configured perfectly well — look uncovered. Coverage is a property
 	// of configuration; the swept count is a property of the call. Both are
 	// reported, separately.
-	configured := workspaceConfiguredRepos(s.WorkspaceRoot)
+	configured := workspaceConfiguredRepos(s.WorkspaceRoot, s.ManifestRoot)
 	if len(configured) == 0 {
 		// No manifest and no config: the invocation list is the only evidence
 		// of intent available, and is better than declaring everything
@@ -288,28 +288,59 @@ func (s *Sweeper) SweepWorkspace(ctx context.Context, configuredRepos []string) 
 // read the same list: if the executor consulted a different one, the producer
 // could raise a card whose repair button the executor then refuses — a dead
 // affordance on the one card that exists to have a working one.
-func ConfiguredRepos(workspaceRoot string) []string {
-	return workspaceConfiguredRepos(workspaceRoot)
+func ConfiguredRepos(workspaceRoot, manifestRoot string) []string {
+	return workspaceConfiguredRepos(workspaceRoot, manifestRoot)
 }
 
-func workspaceConfiguredRepos(workspaceRoot string) []string {
-	if strings.TrimSpace(workspaceRoot) == "" {
-		return nil
+// workspaceConfiguredRepos reads config from workspaceRoot (unioned with
+// manifestRoot's config when that is a different directory) and manifest
+// entries from manifestRoot, or from workspaceRoot when manifestRoot is empty
+// (#2540). Bare manifest names take the manifest root's owner, falling back to
+// the workspace root's.
+func workspaceConfiguredRepos(workspaceRoot, manifestRoot string) []string {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	manifestRoot = strings.TrimSpace(manifestRoot)
+	if manifestRoot == "" {
+		manifestRoot = workspaceRoot
 	}
-	cfg, err := config.Load(workspaceRoot)
-	if err != nil || cfg == nil {
+	if workspaceRoot == "" && manifestRoot == "" {
 		return nil
 	}
 
 	out := []string{}
-	owner := cfg.Owner
-	if owner != "" && cfg.DefaultRepo != "" {
-		out = append(out, owner+"/"+cfg.DefaultRepo)
+	loaded := false
+	workspaceOwner, manifestOwner := "", ""
+	addConfig := func(root string) string {
+		if root == "" {
+			return ""
+		}
+		cfg, err := config.Load(root)
+		if err != nil || cfg == nil {
+			return ""
+		}
+		loaded = true
+		if cfg.Owner != "" && cfg.DefaultRepo != "" {
+			out = append(out, cfg.Owner+"/"+cfg.DefaultRepo)
+		}
+		out = append(out, cfg.Autonomous.ResolvedEnabledRepos(cfg.Owner)...)
+		return cfg.Owner
 	}
-	out = append(out, cfg.Autonomous.ResolvedEnabledRepos(owner)...)
+	workspaceOwner = addConfig(workspaceRoot)
+	if filepath.Clean(manifestRoot) != filepath.Clean(workspaceRoot) {
+		manifestOwner = addConfig(manifestRoot)
+	} else {
+		manifestOwner = workspaceOwner
+	}
+	if !loaded {
+		return nil
+	}
+	owner := manifestOwner
+	if owner == "" {
+		owner = workspaceOwner
+	}
 
 	// Manifest entries may be bare names or owner/name pairs.
-	for _, name := range manifestRepoNames(workspaceRoot) {
+	for _, name := range manifestRepoNames(manifestRoot) {
 		if name == "" {
 			continue
 		}

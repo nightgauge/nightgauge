@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest"
 	"github.com/nightgauge/nightgauge/internal/workspacemanifest/wsmfixture"
 )
 
@@ -246,5 +247,77 @@ func TestWorkspaceRepoList_ToleratesMalformedParams(t *testing.T) {
 	}
 	if len(raw.(*WorkspaceRepoListResult).Configured) == 0 {
 		t.Error("configured list was blanked by malformed params")
+	}
+}
+
+// repointedWorkspace returns a server launched at the manifest-holding root and
+// then re-pointed by workspace.setRoot at a member folder with no manifest —
+// the multi-root shape #2540 broke.
+func repointedWorkspace(t *testing.T) (*Server, string, string) {
+	t.Helper()
+	s, root := newRepoWorkspace(t, "delta")
+	s.workspaceRoot = ""
+	s.setWorkspaceRoot(root)
+	member := filepath.Join(filepath.Dir(root), "member")
+	if err := os.MkdirAll(member, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.setWorkspaceRoot(member)
+	return s, root, member
+}
+
+func TestWorkspaceManifestRoot_PrefersLaunchRootOverRepointedMember(t *testing.T) {
+	s, root, _ := repointedWorkspace(t)
+	got, err := s.workspaceManifestRoot()
+	if err != nil || got != root {
+		t.Fatalf("workspaceManifestRoot = %q, %v; want %q", got, err, root)
+	}
+}
+
+func TestWorkspaceRepoAdd_RepointedRootWritesTheLaunchManifest(t *testing.T) {
+	s, root, member := repointedWorkspace(t)
+	params, _ := json.Marshal(WorkspaceRepoAddParams{Name: "delta", Path: "../delta", Role: "primary", Project: 9})
+	if _, err := s.handleWorkspaceRepoAdd(context.Background(), params); err != nil {
+		t.Fatalf("repoAdd: %v", err)
+	}
+	body, err := os.ReadFile(workspacemanifest.ManifestPath(root))
+	if err != nil || !strings.Contains(string(body), "name: delta") {
+		t.Fatalf("delta not written to the launch root's manifest (err=%v)", err)
+	}
+	if _, err := os.Stat(workspacemanifest.ManifestPath(member)); !os.IsNotExist(err) {
+		t.Errorf("the member must get no manifest; stat err = %v", err)
+	}
+}
+
+func TestWorkspaceRepoList_RepointedRootReportsTheRealManifest(t *testing.T) {
+	s, root, _ := repointedWorkspace(t)
+	raw, err := s.handleWorkspaceRepoList(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("repoList: %v", err)
+	}
+	res := raw.(*WorkspaceRepoListResult)
+	if res.Unmanaged || res.ManifestPath != workspacemanifest.ManifestPath(root) || len(res.Configured) == 0 {
+		t.Errorf("want the launch root's manifest, got %+v", res)
+	}
+}
+
+func TestWorkspaceRepoAdder_NoManifestAnywhereNamesEverySearchedPath(t *testing.T) {
+	launch, member := t.TempDir(), t.TempDir()
+	s := &Server{methods: map[string]Handler{}}
+	s.setWorkspaceRoot(launch)
+	s.setWorkspaceRoot(member)
+
+	root, ferr := s.workspaceManifestRoot()
+	err := workspaceRepoAdder{root: root, err: ferr}.AddWorkspaceRepo(context.Background(), "acme/new")
+	if err == nil {
+		t.Fatal("want an error when no manifest exists in any candidate root")
+	}
+	for _, r := range []string{launch, member} {
+		if !strings.Contains(err.Error(), workspacemanifest.ManifestPath(r)) {
+			t.Errorf("error %q does not name %s", err, workspacemanifest.ManifestPath(r))
+		}
+	}
+	if _, serr := os.Stat(workspacemanifest.ManifestPath(member)); !os.IsNotExist(serr) {
+		t.Errorf("no manifest may be created; stat err = %v", serr)
 	}
 }
