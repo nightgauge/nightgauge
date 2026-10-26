@@ -181,7 +181,10 @@ const (
 
 // depsGateCheckResult is the JSON shape for `deps-gate check --json`.
 type depsGateCheckResult struct {
-	IssueNumber      int                    `json:"issue_number"`
+	IssueNumber int `json:"issue_number"`
+	// Repo is the gated issue's "owner/repo"; a blocker outside it is named
+	// with its repository.
+	Repo             string                 `json:"repo"`
 	Decision         string                 `json:"decision"` // "allow" | "deferred"
 	OpenDependencies []hooks.OpenDependency `json:"open_dependencies,omitempty"`
 	OpenCount        int                    `json:"open_count"`
@@ -200,12 +203,13 @@ func evaluateDepsGate(ctx context.Context, fetcher hooks.IssueFetcher, owner, re
 	}
 	out := depsGateCheckResult{
 		IssueNumber:      issueNum,
+		Repo:             owner + "/" + repo,
 		OpenDependencies: res.OpenDependencies,
 		OpenCount:        res.OpenCount,
 	}
 	if res.HasOpenDependencies {
 		out.Decision = depsDecisionDeferred
-		out.Reason = depsDeferReason(issueNum, res.OpenDependencies)
+		out.Reason = depsDeferReason(owner+"/"+repo, res.OpenDependencies)
 	} else {
 		out.Decision = depsDecisionAllow
 	}
@@ -213,12 +217,23 @@ func evaluateDepsGate(ctx context.Context, fetcher hooks.IssueFetcher, owner, re
 }
 
 // depsDeferReason builds the human summary naming the open blockers.
-func depsDeferReason(issueNum int, blockers []hooks.OpenDependency) string {
-	nums := make([]string, 0, len(blockers))
+// selfRepo is the gated issue's "owner/repo".
+func depsDeferReason(selfRepo string, blockers []hooks.OpenDependency) string {
+	refs := make([]string, 0, len(blockers))
 	for _, b := range blockers {
-		nums = append(nums, fmt.Sprintf("#%d", b.Number))
+		refs = append(refs, depsBlockerRef(selfRepo, b))
 	}
-	return fmt.Sprintf("blocked by open dependency %s (PR not merged)", strings.Join(nums, ", "))
+	return fmt.Sprintf("blocked by open dependency %s (PR not merged)", strings.Join(refs, ", "))
+}
+
+// depsBlockerRef renders a blocker as "#N" when it is in selfRepo and as
+// "owner/repo#N" when it is not: a bare "#N" names a different issue — the
+// one in the gated issue's own repository — when the blocker lives elsewhere.
+func depsBlockerRef(selfRepo string, b hooks.OpenDependency) string {
+	if b.Repo == "" || strings.EqualFold(b.Repo, selfRepo) {
+		return fmt.Sprintf("#%d", b.Number)
+	}
+	return fmt.Sprintf("%s#%d", b.Repo, b.Number)
 }
 
 // pauseBlockedDependencyItem inserts (or marks paused) the issue in the queue
@@ -323,7 +338,7 @@ func renderDepsCheckHuman(res depsGateCheckResult) {
 	fmt.Fprintf(os.Stderr, "Dependency gate: DEFERRED\n")
 	fmt.Fprintf(os.Stderr, "Issue #%d: %s\n", res.IssueNumber, res.Reason)
 	for _, b := range res.OpenDependencies {
-		fmt.Fprintf(os.Stderr, "  - #%d %s (%s)\n", b.Number, b.Title, b.State)
+		fmt.Fprintf(os.Stderr, "  - %s %s (%s)\n", depsBlockerRef(res.Repo, b), b.Title, b.State)
 	}
 }
 

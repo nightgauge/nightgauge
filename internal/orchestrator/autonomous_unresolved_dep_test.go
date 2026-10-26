@@ -42,7 +42,7 @@ func TestPrioritize_UnresolvedRepositoryNameFailsClosed(t *testing.T) {
 	}
 	mock := newMockIssueSvc()
 	as.resolveDepStatesFn = func(ctx context.Context, keys []string) map[string]string {
-		return resolveIssueStatesByKey(ctx, mock, keys)
+		return ResolveIssueStatesByKey(ctx, mock, keys)
 	}
 
 	for _, c := range as.prioritize(context.Background(), g) {

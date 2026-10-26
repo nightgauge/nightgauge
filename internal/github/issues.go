@@ -459,6 +459,62 @@ func (s *IssueService) getIssuesByNumbers(ctx context.Context, owner, repo strin
 	return out, nil
 }
 
+// ListIssuesByLabel lists every issue in a repository that carries label,
+// OPEN and CLOSED, with its close reason, reading every page. A program's
+// status counts its whole issue set (#2573), so a partial read would report
+// a program as further along — or less — than it is; a page that cannot be
+// read fails the call rather than returning what was read so far.
+func (s *IssueService) ListIssuesByLabel(ctx context.Context, owner, repo, label string) ([]types.Issue, error) {
+	type issueNode struct {
+		ID          graphql.ID
+		Number      graphql.Int
+		Title       graphql.String
+		State       graphql.String
+		StateReason graphql.String
+		URL         graphql.String
+		Labels      labelPage `graphql:"labels(first: 20)"`
+	}
+	var q struct {
+		Repository struct {
+			Issues struct {
+				PageInfo pageInfo
+				Nodes    []issueNode
+			} `graphql:"issues(first: 100, after: $after, states: [OPEN, CLOSED], labels: $labels)"`
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+	vars := map[string]interface{}{
+		"owner":  graphql.String(owner),
+		"name":   graphql.String(repo),
+		"labels": []graphql.String{graphql.String(label)},
+		"after":  (*graphql.String)(nil),
+	}
+
+	var issues []types.Issue
+	for {
+		if err := s.client.query(ctx, &q, vars); err != nil {
+			return nil, fmt.Errorf("list issues labelled %q in %s/%s: %w", label, owner, repo, err)
+		}
+		for _, n := range q.Repository.Issues.Nodes {
+			issues = append(issues, types.Issue{
+				NodeID:          fmt.Sprintf("%v", n.ID),
+				Number:          int(n.Number),
+				Title:           string(n.Title),
+				State:           string(n.State),
+				StateReason:     string(n.StateReason),
+				Repo:            owner + "/" + repo,
+				URL:             string(n.URL),
+				Labels:          n.Labels.names(),
+				LabelsTruncated: n.Labels.truncated(),
+			})
+		}
+		if !q.Repository.Issues.PageInfo.HasNextPage {
+			return issues, nil
+		}
+		cursor := q.Repository.Issues.PageInfo.EndCursor
+		vars["after"] = &cursor
+	}
+}
+
 // ListIssues lists open issues for a repository.
 // When labels is nil or empty, all open issues are returned (no label filter).
 func (s *IssueService) ListIssues(ctx context.Context, owner, repo string, labels []string) ([]types.Issue, error) {

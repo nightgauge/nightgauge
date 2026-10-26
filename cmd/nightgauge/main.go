@@ -1055,6 +1055,7 @@ func rootCmd() *cobra.Command {
 		wipCmd(),
 		handoffCmd(),
 		nextCmd(),
+		programCmd(),
 		configCmd(),
 		scanCmd(),
 		preflightCmd(),
@@ -3243,6 +3244,15 @@ func epicPlanWavesCmd() *cobra.Command {
 				}
 				earlier, later := c.Issues[0], c.Issues[1]
 				fmt.Printf("Serialized #%d after #%d — shared target file %s\n", later, earlier, c.Path)
+			}
+			// Blockers outside the planned set create no wave edge, so an
+			// issue in any wave stays undispatchable until they close.
+			for _, b := range result.ExternalBlockers {
+				state := b.State
+				if state == "" {
+					state = "state unknown"
+				}
+				fmt.Printf("External blocker: %s is blocked by %s (%s)\n", b.Issue, b.Blocker, state)
 			}
 			return nil
 		},

@@ -18,9 +18,11 @@
 // Rank answers, per program in rank order, which of its issues are on-board
 // Ready and unblocked (dispatchable now) and which are Ready but blocked, then
 // lists Ready, unblocked issues no program selects. Blockers come from the
-// cross-repo dependency graph (internal/depgraph): an issue is unblocked when
-// it is in the graph's first topological wave, i.e. no open issue on a board
-// that was read blocks it, and it is not in a cycle.
+// cross-repo dependency graph (internal/depgraph) under the autonomous
+// scheduler's rule (#2573): a blocker on a board that was read blocks while it
+// is open; a blocker on no board read is looked up in the caller's resolved
+// states (ExternalDependencies names them) and blocks when OPEN or when its
+// state is unknown — fail closed; an issue in a dependency cycle is blocked.
 //
 // Rank is pure and deterministic. No LLM participates (#1481).
 package workorder
@@ -149,8 +151,9 @@ type Item struct {
 	Size      string   `json:"size,omitempty"`
 	Labels    []string `json:"labels"`
 	BlockedBy []string `json:"blocked_by,omitempty"`
-	// Unresolved lists dependencies on repos outside the read set. Their state
-	// is unknown, so they do not block; they are reported for the consumer.
+	// Unresolved lists dependencies on no board that was read whose state
+	// could not be resolved. They block — the scheduler fails closed on an
+	// unknown blocker, and so does this ranking.
 	Unresolved []string `json:"unresolved_dependencies,omitempty"`
 }
 
@@ -182,8 +185,27 @@ type Result struct {
 	Totals            Totals          `json:"totals"`
 }
 
-// Rank classifies the graph's Ready issues by the programs file.
-func Rank(f *File, g *depgraph.Graph) *Result {
+// ExternalDependencies lists, sorted and deduplicated, the dependency keys
+// ("owner/repo#N") whose issue is on no board that was read. Their state
+// decides whether the issues they block are dispatchable, so the caller
+// resolves them from the forge and passes the result to Rank.
+func ExternalDependencies(g *depgraph.Graph) []string {
+	if g == nil {
+		return nil
+	}
+	var keys []string
+	for _, e := range g.Edges {
+		if _, ok := g.Nodes[e.To.String()]; !ok {
+			keys = append(keys, e.To.String())
+		}
+	}
+	return dedupe(keys)
+}
+
+// Rank classifies the graph's Ready issues by the programs file. resolved
+// maps an external dependency's key (see ExternalDependencies) to its forge
+// state, "OPEN" or "CLOSED"; a key absent from it is unresolved and blocks.
+func Rank(f *File, g *depgraph.Graph, resolved map[string]string) *Result {
 	res := &Result{
 		ReadyStatus:       f.ReadyStatus,
 		ExcludeLabels:     append([]string{}, f.ExcludeLabels...),
@@ -194,10 +216,10 @@ func Rank(f *File, g *depgraph.Graph) *Result {
 		g = depgraph.NewGraph()
 	}
 
-	firstWave := map[string]bool{}
-	if len(g.Waves) > 0 {
-		for _, id := range g.Waves[0] {
-			firstWave[id.String()] = true
+	inCycle := map[string]bool{}
+	for _, cycle := range g.Cycles {
+		for _, id := range cycle {
+			inCycle[id.String()] = true
 		}
 	}
 	openBlockers := map[string][]string{}
@@ -205,10 +227,19 @@ func Rank(f *File, g *depgraph.Graph) *Result {
 	for _, e := range g.Edges {
 		from := e.From.String()
 		to := e.To.String()
-		if _, ok := g.Nodes[to]; ok {
-			openBlockers[from] = append(openBlockers[from], to)
-		} else if !e.Resolvable {
+		if dep, ok := g.Nodes[to]; ok {
+			// A blocker that is not open is satisfied; an empty state is
+			// unknown, so it blocks.
+			if dep.State == "" || strings.EqualFold(dep.State, "OPEN") {
+				openBlockers[from] = append(openBlockers[from], to)
+			}
+			continue
+		}
+		switch state, ok := resolved[to]; {
+		case !ok:
 			unresolved[from] = append(unresolved[from], to)
+		case strings.EqualFold(state, "OPEN"):
+			openBlockers[from] = append(openBlockers[from], to)
 		}
 	}
 
@@ -240,7 +271,7 @@ func Rank(f *File, g *depgraph.Graph) *Result {
 		if it.Labels == nil {
 			it.Labels = []string{}
 		}
-		blocked := len(it.BlockedBy) > 0
+		blocked := len(it.BlockedBy) > 0 || len(it.Unresolved) > 0
 		for _, l := range f.ExcludeLabels {
 			if hasLabel(n.Labels, l) {
 				it.BlockedBy = append(it.BlockedBy, "label `"+l+"`")
@@ -253,8 +284,7 @@ func Rank(f *File, g *depgraph.Graph) *Result {
 			it.BlockedBy = append(it.BlockedBy, "labels truncated: exclusions unverifiable")
 			blocked = true
 		}
-		if !blocked && len(g.Waves) > 0 && !firstWave[key] {
-			// Not in the first wave and no open blocker named: a cycle.
+		if !blocked && inCycle[key] {
 			it.BlockedBy = append(it.BlockedBy, "dependency cycle")
 			blocked = true
 		}

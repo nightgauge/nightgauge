@@ -1718,9 +1718,16 @@ nightgauge epic plan-waves --sub-issues <N,M,...> [--owner ORG] [--repo REPO] [-
 # `nightgauge issue add-blocked-by <later> <earlier>` — the sequencing is computed
 # deterministically here, not left to author judgment.
 #
+# Issues and blockers are keyed by owner/repo#N, so same-numbered issues in two
+# repositories never collide. A blocker outside the listed issues (usually in another
+# repository) creates no wave edge and is reported, never dropped (#2573):
+#   External blocker: acme/web#10 is blocked by acme/api#7 (OPEN)
+# An issue it blocks is not dispatchable until it closes, whatever its wave.
+#
 # JSON output schema: { "subIssueCount": N,
 #   "waves": [{ "waveIndex": 0, "issues": [{ "number": N, "title": "...", "files": [...] }] }],
-#   "conflicts": [{ "path": "lib/.../page.dart", "issues": [143, 144], "severity": "error" }] }
+#   "conflicts": [{ "path": "lib/.../page.dart", "issues": [143, 144], "severity": "error" }],
+#   "externalBlockers": [{ "issue": "acme/web#10", "blocker": "acme/api#7", "state": "OPEN" }] }
 # Determinism audit: SKILL_DETERMINISM_AUDIT.md row B23
 ```
 
@@ -2948,13 +2955,17 @@ the sibling checkouts with `.nightgauge/config.yaml`. Each repo's board is
 resolved as the scheduler resolves it.
 
 Readiness comes from the board Status. "Unblocked" comes from the cross-repo
-dependency graph `nightgauge graph build` prints: an issue is unblocked when it
-is in the graph's first topological wave, so no open issue on a board that was
-read blocks it, by GitHub's `blockedBy` relation or a dependency declared in its
-body. An issue is also blocked when it is in a dependency cycle, carries an
-exclude label, or has a truncated label set, because then an exclusion cannot
-be ruled out. A dependency on a repo outside the read set has an unknown state.
-It is listed under `unresolved_dependencies` and does not block.
+dependency graph `nightgauge graph build` prints, judged by the autonomous
+scheduler's rule so the frontier `next` reports is the one dispatch acts on
+(#2573). A dependency — GitHub's `blockedBy` relation or one declared in the
+issue body — on an issue on a board that was read blocks while that issue is
+open. A dependency on an issue on no board read, usually in another
+repository, is looked up on GitHub in one batch per repository: CLOSED
+satisfies it, OPEN blocks it (listed in `blocked_by`), and a state that cannot
+be confirmed blocks it too and is listed under `unresolved_dependencies`. An
+issue is also blocked when it is in a dependency cycle, carries an exclude
+label, or has a truncated label set, because then an exclusion cannot be ruled
+out.
 
 Items are ordered by board Priority (P0 first, unset last), then repo, then
 issue number. Ready, blocked issues no program selects are omitted.
@@ -2981,15 +2992,15 @@ issue number. Ready, blocked issues no program selects are omitted.
           "status": "Ready",
           "priority": "P0",
           "size": "M",
-          "labels": ["program:billing"],
-          "unresolved_dependencies": ["acme/other#5"]
+          "labels": ["program:billing"]
         }
       ],
       "blocked": [
         {
           "ref": "acme/acme-api#12",
           "…": "…",
-          "blocked_by": ["acme/acme-api#20", "label `blocked`"]
+          "blocked_by": ["acme/acme-api#20", "label `blocked`"],
+          "unresolved_dependencies": ["acme/other#5"]
         }
       ]
     }
@@ -2997,6 +3008,46 @@ issue number. Ready, blocked issues no program selects are omitted.
   "unprogrammed_ready": [],
   "totals": { "ready": 1, "blocked": 1, "unprogrammed_ready": 0 }
 }
+```
+
+#### `nightgauge program status` — a program's progress from the forge (Issue #2573)
+
+```bash
+nightgauge program status --programs <file> [--id <program>] [--owner <org>] [--project N] [--repos a,b] [--json]
+```
+
+Reads the same programs file, repos and boards as `nightgauge next` and
+reports, per program in rank order, how many of its issues are open, closed,
+validated and dispatchable. A program's issues are every issue its selector
+label marks in the repos it covers, in any state, read whole; a repository
+that cannot be read fails the report rather than undercounting it.
+
+- `closed` counts every closed issue, including one closed as not planned.
+- `validated` counts issues closed as completed. It is one predicate that the
+  post-merge validation marker (#2574) replaces.
+- `dispatchable` is `next`'s Ready list for the program: open, Ready on its
+  board, and unblocked under the scheduler's rule. `blocked` lists the
+  program's Ready issues that are not, with why.
+
+`--json` shape (an array, one entry per program):
+
+```json
+[
+  {
+    "id": "billing",
+    "rank": 1,
+    "title": "Customers can pay",
+    "selector": "program:billing",
+    "repos": ["acme-api"],
+    "total": 4,
+    "open": 2,
+    "closed": 2,
+    "validated": 1,
+    "dispatchable": 1,
+    "dispatchable_refs": ["acme/acme-api#11"],
+    "blocked": [{ "ref": "acme/acme-api#12", "…": "…", "blocked_by": ["acme/core#9"] }]
+  }
+]
 ```
 
 ### PR Operations

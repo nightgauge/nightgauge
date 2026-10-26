@@ -210,7 +210,7 @@ func TestEnsureEpicBranchForItem_EpicTitleReadSkipsRelationships(t *testing.T) {
 }
 
 // TestBlockerStateReadsSkipRelationships: refreshBlockerStates and
-// resolveIssueStatesByKey read only each issue's State. Reading it through the
+// ResolveIssueStatesByKey read only each issue's State. Reading it through the
 // relationship read meant a blocker's own long relationship list could fail
 // the refresh, leaving a closed blocker recorded OPEN, or an OPEN one
 // unresolved. The scheduler's issueGetter now offers no batch read that
@@ -241,8 +241,8 @@ func TestBlockerStateReadsSkipRelationships(t *testing.T) {
 		}
 	})
 
-	t.Run("resolveIssueStatesByKey", func(t *testing.T) {
-		resolved := resolveIssueStatesByKey(context.Background(), newMock(),
+	t.Run("ResolveIssueStatesByKey", func(t *testing.T) {
+		resolved := ResolveIssueStatesByKey(context.Background(), newMock(),
 			[]string{"test/repo-a#50", "test/repo-a#51"})
 		if resolved["test/repo-a#50"] != "CLOSED" || resolved["test/repo-a#51"] != "OPEN" {
 			t.Fatalf("resolved = %v, want #50 CLOSED and #51 OPEN", resolved)
