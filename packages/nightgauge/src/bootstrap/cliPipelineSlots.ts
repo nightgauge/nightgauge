@@ -19,11 +19,13 @@
  * `registerServices()` cannot be executed by a test, which is why the missing
  * half stayed missing.
  *
- * What it deliberately does NOT do is fabricate a stream. A CLI run's stdout
- * goes to the launching terminal and nothing in this tree writes a session log
- * for it, so the registered slot carries its identity (issue, repo, run id,
- * `cli` origin) and renders an honest empty state. Identity without content is
- * the truth here; content borrowed from another run is the defect.
+ * What it deliberately does NOT do is fabricate a stream. A CLI run's raw
+ * adapter stdout goes to the launching terminal, so the registered slot carries
+ * its identity (issue, repo, run id, `cli` origin) and renders an honest empty
+ * state. Identity without content is the truth here; content borrowed from
+ * another run is the defect. What the CLI does write is a session log of stage,
+ * phase and scheduler narration (`cmd/nightgauge/run_session_log.go`); once it
+ * exists the slot node names it and `Nightgauge: Open Run Output` opens it.
  */
 
 import type { PipelineStateService } from "../services/PipelineStateService";
@@ -36,7 +38,7 @@ import type { SlotRegistrationOptions } from "../views/outputWindow/OutputWindow
 /** The `PipelineTreeProvider` surface these callbacks touch. */
 export interface CliSlotTreeView {
   // Slots are named by repository and number (#2403).
-  getConcurrentSlot(issueNumber: number, repo?: string): unknown;
+  getConcurrentSlot(issueNumber: number, repo?: string): CliRunSlot | undefined;
   addConcurrentSlot(
     slotIndex: number,
     issueNumber: number,
@@ -51,6 +53,11 @@ export interface CliSlotTreeView {
     stateService: PipelineStateService,
     repo?: string
   ): void;
+}
+
+/** The slot-node surface that shows where a CLI run's output lives. */
+export interface CliRunSlot {
+  setRunOutput?(logPath: string): void;
 }
 
 /** The `OutputWindow` surface these callbacks touch. */
@@ -78,6 +85,11 @@ export interface CliPipelineSlotDeps {
   output: () => CliSlotOutputWindow;
   /** Builds the state relay for a discovered run; `PipelineStateService.createForWorktree`. */
   createStateService: (root: string, issueNumber: number) => PipelineStateService;
+  /**
+   * Resolves the run's session log under its root, or null while the CLI has
+   * not written one yet; `LogFileWriter.findLatestLogForIssue`.
+   */
+  findRunLog?: (root: string, issueNumber: number) => Promise<string | null>;
   /** Allocates the next free slot index for a CLI run. */
   nextSlotIndex: () => number;
   /** Optional structured logger. */
@@ -94,6 +106,10 @@ interface TrackedCliRun {
   slotIndex: number;
   runId: string;
   service: PipelineStateService;
+  /** The checkout the run executes in, where its session log lives. */
+  root: string;
+  /** The session log once found; looked up again on each update until then. */
+  runLog?: string;
 }
 
 /**
@@ -115,6 +131,18 @@ function slotTitle(run: ReconciledCliRun): string {
  */
 export function createCliPipelineSlotCallbacks(deps: CliPipelineSlotDeps): CliPipelineSlotBinding {
   const tracked = new Map<string, TrackedCliRun>();
+
+  // Point the slot node at the run's session log. The CLI creates the log at
+  // its first stage, which can follow discovery, so a miss is retried on the
+  // next snapshot update rather than recorded as absent.
+  const resolveRunLog = async (key: string): Promise<void> => {
+    const entry = tracked.get(key);
+    if (!entry || entry.runLog || !deps.findRunLog) return;
+    const logPath = await deps.findRunLog(entry.root, entry.issueNumber);
+    if (!logPath || tracked.get(key) !== entry) return;
+    entry.runLog = logPath;
+    deps.tree().getConcurrentSlot(entry.issueNumber, entry.repo)?.setRunOutput?.(logPath);
+  };
 
   return {
     disposeAll: () => {
@@ -138,6 +166,7 @@ export function createCliPipelineSlotCallbacks(deps: CliPipelineSlotDeps): CliPi
           slotIndex,
           runId: run.snapshot.runId,
           service: stateService,
+          root: run.root,
         });
 
         deps
@@ -167,6 +196,7 @@ export function createCliPipelineSlotCallbacks(deps: CliPipelineSlotDeps): CliPi
             { runId: run.snapshot.runId, origin: "cli" }
           );
         deps.output().setSlotLogRoot(slotIndex, run.root);
+        void resolveRunLog(run.key);
 
         deps.logger?.info("Discovered direct CLI pipeline", {
           repo: run.snapshot.repo,
@@ -178,6 +208,7 @@ export function createCliPipelineSlotCallbacks(deps: CliPipelineSlotDeps): CliPi
 
       onUpdated: (run) => {
         tracked.get(run.key)?.service.applyRuntimeSnapshot(run.snapshot);
+        void resolveRunLog(run.key);
       },
 
       onSettled: (run) => {

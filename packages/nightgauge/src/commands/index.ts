@@ -10,6 +10,7 @@ export { registerShowDashboardCommand, registerRescrubDashboardCommand } from ".
 export { registerStopPipelineCommand } from "./stopPipeline";
 export { registerStopBatchAfterCurrentCommand } from "./stopBatchAfterCurrent";
 export { registerStopSlotCommand } from "./stopSlot";
+export { registerOpenRunOutputCommand } from "./openRunOutput";
 export { registerStopEpicCommand } from "./stopEpic";
 export { registerPipelineQuickActionsCommand } from "./pipelineQuickActions";
 export { registerRefreshPipelineCommand } from "./refreshPipeline";

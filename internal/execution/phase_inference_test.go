@@ -94,6 +94,27 @@ func TestPhaseInferer_RealMarkerWins(t *testing.T) {
 	}
 }
 
+// The verification sequence from #586: real markers 1, 5 and 14, then an Edit
+// tool use. Every phase passed is reported below the marker that revealed it,
+// and the trailing edit infers nothing below 14 — the live progress the
+// extension reads never runs backwards.
+func TestPhaseInferer_RealMarkersThenEditNeverRegress(t *testing.T) {
+	inf := NewPhaseInferer("feature-dev")
+	inf.Start()
+	high := 0
+	for _, idx := range []int{1, 5, 14} {
+		for _, m := range inf.ObserveRealMarker(idx) {
+			if m.Index >= idx || m.Index < high {
+				t.Fatalf("marker %d reported passed phase %d out of order (high=%d)", idx, m.Index, high)
+			}
+		}
+		high = idx
+	}
+	if m, _, ok := inf.ObserveToolUse("Edit", map[string]any{"file_path": "src/a.ts"}); ok && m.Index < 14 {
+		t.Fatalf("Edit after real marker 14 inferred %s/%d, a regression", m.Name, m.Index)
+	}
+}
+
 // TestPhaseInferer_DisabledForSelfReportingStages uses pr-merge, which really
 // does self-report: its phases come from the deterministic Go reporter as
 // direct function calls, so there is nothing for inference to add.

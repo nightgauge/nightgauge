@@ -21,6 +21,7 @@ import {
   registerStopPipelineCommand,
   registerStopBatchAfterCurrentCommand,
   registerStopSlotCommand,
+  registerOpenRunOutputCommand,
   registerStopEpicCommand,
   registerPipelineQuickActionsCommand,
   registerPausePipelineCommand,
@@ -669,6 +670,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
       concurrentPipelineManager
     ),
     registerStopSlotCommand(logger, concurrentPipelineManager),
+    registerOpenRunOutputCommand(),
     registerStopEpicCommand(logger, concurrentPipelineManager),
     registerPipelineQuickActionsCommand(logger, concurrentPipelineManager),
     registerPausePipelineCommand(

@@ -14,6 +14,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **Live phase progress and run output for CLI-started runs (#586).** The
+  scheduler now writes the run snapshot on every phase event, not only at stage
+  boundaries, so a `nightgauge run` started in a terminal shows its current
+  phase in VS Code while the stage runs instead of `0/N`. The run's tree node
+  names its session log, and `Nightgauge: Open Run Output` opens it. A test now
+  pins `run --adapter` help to the adapter registry.
+
 ### Removed
 
 - **Dormant batch mode (#366).** Six stage skills, the pr-create runner, the
