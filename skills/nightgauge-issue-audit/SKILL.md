@@ -424,6 +424,24 @@ Finding:
   epic is a human/planning decision, never auto-applied by `--fix`. Even with
   `--fix`, `OVERSIZED_SCOPE` remains a WARNING.
 
+#### Step 5.x: Declared `file_ownership` substantiation (#561)
+
+When the body carries a `nightgauge:dependency-metadata` block with a
+`file_ownership` list, check it against the ACs with the deterministic verb
+(no block means no-op):
+
+```bash
+OWNERSHIP_JSON=$(printf '%s' "$BODY" | nightgauge issue check-ownership --json 2>/dev/null \
+  || echo '{"findings":[],"count":0}')
+# One FILE_OWNERSHIP_UNSUBSTANTIATED (WARNING) per entry in .findings[]
+```
+
+- `FILE_OWNERSHIP_UNSUBSTANTIATED` (WARNING): a declared set cannot satisfy the
+  issue's own ACs — `test-missing`, `generated-mirror` (names the canonical
+  path), or `path-missing`. **No repair primitive**: correcting a declared set
+  is a planning edit. "No edit needed" and "provably inert" sets are not
+  detected; see [docs/ISSUE_AUDIT.md](../../docs/ISSUE_AUDIT.md).
+
 ---
 
 ### Phase 6: Sub-Issue & Parent Linking
@@ -588,7 +606,7 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","issue":"'$ISSUE'","finding":"'$T
    stays CRITICAL.
 3. **`OVERSIZED_SCOPE` is never auto-fixed**: decomposing a bundled issue into
    sub-issues under an epic is a human/planning decision. Even with `--fix`,
-   this stays a WARNING.
+   this stays a WARNING. The same holds for `FILE_OWNERSHIP_UNSUBSTANTIATED`.
 4. **`STALE_BLOCKED_BY_NOT_PLANNED` requires `--fix-interactive`**: under
    `--fix` alone, the finding remains a WARNING. Under `--fix-interactive`,
    prompt the operator and only repair on explicit `yes`.
@@ -624,7 +642,7 @@ issue's relationship.
 
 `MISSING_TYPE_LABEL`, `MULTIPLE_TYPE_LABELS`, `MISSING_REQUIRED_HEADING`,
 `EMPTY_REQUIRED_HEADING`, `MISSING_SPIKE_RECS_BLOCK`, `OVERSIZED_SCOPE`,
-`INCONSISTENT_PROJECT_MAPPING`, `EMPTY_PRD_FILE` — no auto-fix. Human action
+`FILE_OWNERSHIP_UNSUBSTANTIATED`, `INCONSISTENT_PROJECT_MAPPING`, `EMPTY_PRD_FILE` — no auto-fix. Human action
 required.
 
 ---

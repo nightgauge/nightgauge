@@ -241,3 +241,21 @@ func TestPlanWavesFromIssues_CodeCollisionStillSerializedWithDocCitation(t *test
 		}
 	}
 }
+
+func TestPlanWavesFromIssues_TargetSource(t *testing.T) {
+	declared := "<!-- nightgauge:dependency-metadata\nfile_ownership:\n  - internal/a/a.go\n-->\n"
+	issues := []pkgtypes.Issue{
+		{Number: 100, Title: "Declared", Body: declared},
+		{Number: 200, Title: "Inferred", Body: "Edit `internal/b/b.go`."},
+	}
+	result := PlanWavesFromIssues(issues)
+	got := map[int]string{}
+	for _, w := range result.Waves {
+		for _, si := range w.Issues {
+			got[si.Number] = si.TargetSource
+		}
+	}
+	if got[100] != "declared" || got[200] != "inferred" {
+		t.Errorf("TargetSource = %v, want 100:declared 200:inferred", got)
+	}
+}
