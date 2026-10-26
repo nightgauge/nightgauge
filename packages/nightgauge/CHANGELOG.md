@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **CLI-started runs show phase progress and their output (#586).** A run
+  started with `nightgauge run` in a terminal now shows live phase progress on
+  its tree node. The node's tooltip names the run's session log, and the new
+  `Nightgauge: Open Run Output` context-menu command opens it.
+
 ### Removed
 
 - **Batch-detection phases (#366).** Stage phase lists no longer show the

@@ -747,6 +747,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(debug-stop)",
     },
     {
+      command: "nightgauge.openRunOutput",
+      title: "Nightgauge: Open Run Output",
+      icon: "$(output)",
+    },
+    {
       command: "nightgauge.stopEpic",
       title: "Nightgauge: Stop Epic",
       icon: "$(close-all)",
@@ -1314,6 +1319,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
         command: "nightgauge-pipeline.showSlotOutput",
         when: "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^concurrentSlot\\./",
         group: "inline@3",
+      },
+      {
+        command: "nightgauge.openRunOutput",
+        when: "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^concurrentSlot\\./",
+        group: "1_run@1",
       },
       {
         command: "nightgauge.knowledge.newEntry",

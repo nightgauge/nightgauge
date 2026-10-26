@@ -6772,7 +6772,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 		// Build phase event callback for this stage — always record in runtime
 		phaseEventFn := func(pStage, pName string, pIndex, pTotal int) {
-			runtime.BeginPhase(stage, pName, pIndex, pTotal)
+			recordPhaseProgress(runtime, workspaceRoot, item.Number, stage, pName, pIndex, pTotal, false)
 			if s.onPhaseDetected != nil {
 				s.onPhaseDetected(item.Repo, item.Number, pStage, pName, pIndex, pTotal)
 			}
@@ -6781,7 +6781,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// Terminal on arrival, and deliberately not routed through
 		// onPhaseDetected's "a phase started" channel.
 		phasePassedFn := func(pStage, pName string, pIndex, pTotal int) {
-			runtime.PassPhase(stage, pName, pIndex, pTotal)
+			recordPhaseProgress(runtime, workspaceRoot, item.Number, stage, pName, pIndex, pTotal, true)
 			if s.onPhaseSettled != nil {
 				s.onPhaseSettled(item.Repo, item.Number, pStage, pName, pIndex, pTotal, "passed")
 			}

@@ -191,6 +191,7 @@ import {
   type RegisteredPipelineRoot,
 } from "../services/CliPipelineReconciliationService";
 import { createCliPipelineSlotCallbacks } from "./cliPipelineSlots";
+import { LogFileWriter } from "../utils/log-file-writer";
 import { SlotOutputManager } from "../views/SlotOutputManager";
 import { getConcurrentPipelineConfig, getPerformanceMode } from "../utils/nightgaugeConfig";
 import { hasCustomStageOverrides } from "../utils/customStageModels";
@@ -2149,6 +2150,7 @@ export async function initializeServices(
       output: () => outputWindow,
       createStateService: (root, issueNumber) =>
         PipelineStateService.createForWorktree(root, issueNumber),
+      findRunLog: (root, issueNumber) => LogFileWriter.findLatestLogForIssue(root, issueNumber),
       nextSlotIndex: () => nextCliSlotIndex++,
       logger,
     });
