@@ -713,7 +713,7 @@ func (s *IssueService) doLinkWrite(ctx context.Context, method, path string, bod
 			op, subject, referenced, restErrorSummary(respBody))
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("%s: REST %d: %s", op, status, restErrorSummary(respBody))
+		return fmt.Errorf("%s: %w", op, restStatusErr(status, respBody))
 	}
 	return nil
 }

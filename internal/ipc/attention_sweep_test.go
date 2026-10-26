@@ -13,7 +13,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -512,5 +514,84 @@ func TestUnavailableSweepDoesNotStartTheMinGap(t *testing.T) {
 	if res.Throttled {
 		t.Fatal("the first real sweep after an Unavailable one was throttled — a " +
 			"call that issued no forge traffic must not consume the gap")
+	}
+}
+
+// --- #2578: a dead credential is one card, not N silent skips ---------------
+
+// deadCredentialForge answers every read the repo producers make with the 401
+// the GitHub adapter now classifies as forge.ErrUnauthorized.
+type deadCredentialForge struct{ sweepFakeForge }
+
+type deadCredentialCI struct{ forge.CIService }
+
+func (deadCredentialCI) GetRequiredCheckNames(context.Context, string, string, string) ([]string, error) {
+	return nil, fmt.Errorf("required checks: REST 401: Bad credentials: %w", forge.ErrUnauthorized)
+}
+
+func (deadCredentialCI) GetIndividualCheckRuns(context.Context, string, string, string) ([]forgetypes.CheckDetail, error) {
+	return nil, fmt.Errorf("check runs: REST 401: Bad credentials: %w", forge.ErrUnauthorized)
+}
+
+type deadCredentialPRs struct{ forge.PRService }
+
+func (deadCredentialPRs) ListPRs(context.Context, string, string, string, string) ([]types.PullRequest, error) {
+	return nil, fmt.Errorf("list PRs: REST 401: Bad credentials: %w", forge.ErrUnauthorized)
+}
+
+type deadCredentialSecurity struct{ forge.SecurityService }
+
+func (deadCredentialSecurity) ListOpenAlerts(context.Context, string, string) (*forgetypes.SecurityAlerts, error) {
+	return nil, fmt.Errorf("alerts: REST 401: Bad credentials: %w", forge.ErrUnauthorized)
+}
+
+type deadCredentialRepo struct{ forge.RepoService }
+
+func (deadCredentialRepo) RepoMetadata(_ context.Context, owner, name string) (*forgetypes.Repo, error) {
+	return nil, fmt.Errorf("repo view %s/%s: REST 401: Bad credentials: %w", owner, name, forge.ErrUnauthorized)
+}
+
+func (f *deadCredentialForge) CI() forge.CIService             { return deadCredentialCI{} }
+func (f *deadCredentialForge) PRs() forge.PRService            { return deadCredentialPRs{} }
+func (f *deadCredentialForge) Security() forge.SecurityService { return deadCredentialSecurity{} }
+func (f *deadCredentialForge) Repo() forge.RepoService         { return deadCredentialRepo{} }
+
+func credentialCards(t *testing.T, s *Server) []attention.DecisionRequest {
+	t.Helper()
+	var out []attention.DecisionRequest
+	for _, r := range listOpen(t, s) {
+		if r.Producer == sweep.ProducerForgeCredential {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestAttentionSweepRaisesOneCredentialCardWhenEveryRepoIs401(t *testing.T) {
+	var current forge.ForgeClient = &deadCredentialForge{}
+	s := newAttentionTestServer(t)
+	s.workspaceRoot = t.TempDir()
+	s.forgeClientFn = func(string) (forge.ForgeClient, error) { return current, nil }
+
+	res := runSweep(t, s, "octocat/acme-web", "octocat/acme-api")
+	for _, r := range res.Repos {
+		if !r.Skipped || !r.Unauthorized {
+			t.Fatalf("repo %s = %+v, want a skip marked unauthorized", r.Repo, r)
+		}
+	}
+	cards := credentialCards(t, s)
+	if len(cards) != 1 {
+		t.Fatalf("a sweep failing on 401 for every repo raised %d credential cards, want exactly 1", len(cards))
+	}
+	if !strings.Contains(cards[0].Body, "octocat/acme-web") || !strings.Contains(cards[0].Body, "octocat/acme-api") {
+		t.Errorf("the card must name every affected repo:\n%s", cards[0].Body)
+	}
+
+	// The credential works again: the next clean pass retracts the card.
+	current = greenMain()
+	advanceSweepClock(t, SweepMinGap)
+	runSweep(t, s, "octocat/acme-web", "octocat/acme-api")
+	if got := len(credentialCards(t, s)); got != 0 {
+		t.Fatalf("credential cards after a clean sweep = %d, want 0", got)
 	}
 }

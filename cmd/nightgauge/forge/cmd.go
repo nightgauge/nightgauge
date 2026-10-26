@@ -136,11 +136,18 @@ func BuildRouterAt(root string, ownerOverride string, projectOverride int, owner
 	// Resolve token via the standard chain (config → env → gh CLI). Failures
 	// are non-fatal so subcommands that don't need auth (e.g. `--help`)
 	// still work; downstream service calls will surface auth errors.
-	token, _ := gh.ResolveTokenChain(cfg, owner)
+	//
+	// The source matters to every holder that outlives one token: a router
+	// is cached per board for the serve daemon's whole life, and an App
+	// installation token frozen into it as a string answers 401 within the
+	// hour, on every repo, until a restart (#2578). One source per router, so
+	// every client it hands out shares one token and one refresh.
+	tokenSource, token, _ := gh.ResolveTokenSource(cfg, owner)
 
 	r.Register("github", forge.Config{
 		Kind:          forge.KindGitHub,
 		Token:         token,
+		TokenSource:   tokenSource,
 		Owner:         owner,
 		ProjectNumber: projectNumber,
 		OwnerType:     ownerType,
@@ -152,15 +159,20 @@ func BuildRouterAt(root string, ownerOverride string, projectOverride int, owner
 			if fc == nil {
 				continue
 			}
-			t := token
+			t, src := token, tokenSource
 			if fc.TokenEnv != "" {
 				if v := os.Getenv(fc.TokenEnv); v != "" {
-					t = v
+					t, src = v, nil
 				}
 			}
 			k := forge.Kind(fc.Kind)
 			if k == "" {
 				k = forge.KindGitHub
+			}
+			if k != forge.KindGitHub {
+				// The source refreshes a GitHub App credential; another forge
+				// that inherits the default takes the string as before.
+				src = nil
 			}
 			o := fc.Owner
 			if o == "" {
@@ -177,6 +189,7 @@ func BuildRouterAt(root string, ownerOverride string, projectOverride int, owner
 			r.Register(id, forge.Config{
 				Kind:          k,
 				Token:         t,
+				TokenSource:   src,
 				Owner:         o,
 				ProjectNumber: p,
 				OwnerType:     ot,

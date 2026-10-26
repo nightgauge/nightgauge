@@ -563,7 +563,7 @@ func (c *Client) openPulls(ctx context.Context, owner, repo string) (openPullsDi
 		return openPullsDigest{}, "", fmt.Errorf("list open PRs for %s/%s: %w", owner, repo, err)
 	}
 	if resp.Status != http.StatusOK && resp.Status != http.StatusNotModified {
-		return openPullsDigest{}, "", fmt.Errorf("list open PRs for %s/%s: REST %d: %s", owner, repo, resp.Status, restErrorSummary(resp.Body))
+		return openPullsDigest{}, "", fmt.Errorf("list open PRs for %s/%s: %w", owner, repo, restStatusErr(resp.Status, resp.Body))
 	}
 	var d openPullsDigest
 	if err := json.Unmarshal(resp.Payload, &d); err != nil {

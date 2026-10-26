@@ -101,7 +101,7 @@ func (r *RepoService) RepoMetadata(ctx context.Context, owner, name string) (*fo
 		return nil, fmt.Errorf("repo view %s/%s: %w", owner, name, err)
 	}
 	if resp.Status != http.StatusOK && resp.Status != http.StatusNotModified {
-		return nil, fmt.Errorf("repo view %s/%s: REST %d: %s", owner, name, resp.Status, restErrorSummary(resp.Body))
+		return nil, fmt.Errorf("repo view %s/%s: %w", owner, name, restStatusErr(resp.Status, resp.Body))
 	}
 	var meta repoReduced
 	if err := json.Unmarshal(resp.Payload, &meta); err != nil {
@@ -129,7 +129,7 @@ func (r *RepoService) RepoMetadata(ctx context.Context, owner, name string) (*fo
 	case http.StatusNotFound:
 		// No such ref: a repository with no commits. DefaultBranch stays "".
 	default:
-		return nil, fmt.Errorf("repo view %s/%s: default branch: REST %d: %s", owner, name, br.Status, restErrorSummary(br.Body))
+		return nil, fmt.Errorf("repo view %s/%s: default branch: %w", owner, name, restStatusErr(br.Status, br.Body))
 	}
 	return out, nil
 }

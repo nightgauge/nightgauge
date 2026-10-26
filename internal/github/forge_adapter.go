@@ -199,11 +199,35 @@ func init() {
 		// and nothing is recorded: every `forge` subcommand, which is how
 		// skills reach GitHub, and `forge graphql` among them, spent into a
 		// budget already known to be exhausted (#1695).
-		client := withMachineTracker(NewClientWithToken(cfg.Token))
+		client := clientForForgeConfig(cfg)
 		ot := OwnerTypeOrg
 		if cfg.OwnerType == string(OwnerTypeUser) {
 			ot = OwnerTypeUser
 		}
 		return NewForgeAdapter(client, cfg.Owner, cfg.ProjectNumber, ot), nil
 	})
+}
+
+// clientForForgeConfig authenticates through cfg.TokenSource when the router
+// supplied one, so a client handed out after the first token expired still
+// sends a live credential (#2578). An App source keeps the installation's
+// identity wiring; any other source spends the machine-wide user bucket, as
+// the plain token does.
+func clientForForgeConfig(cfg forge.Config) *Client {
+	switch src := cfg.TokenSource.(type) {
+	case nil:
+		return withMachineTracker(NewClientWithToken(cfg.Token))
+	case *appReuseSource:
+		return newAppClientFromSource(src)
+	default:
+		// A refreshed token is the same principal, so the first token's
+		// identity keys the conditional-GET store for the client's life. A
+		// source that cannot answer now fails every request too, so nothing
+		// is ever filed under the empty identity it leaves.
+		identity := ""
+		if tok, err := src.Token(); err == nil {
+			identity = tokenIdentity(tok.AccessToken)
+		}
+		return withMachineTracker(newClientWithSource(src, identity))
+	}
 }

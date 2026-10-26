@@ -2,14 +2,21 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"golang.org/x/oauth2"
 )
 
 // The sweep's forge client used to be built as BuildRouter("", 0, "") — one
@@ -324,5 +331,108 @@ func TestSweepForgeClientDoesNotShareSnapshotsAcrossDistinctBoards(t *testing.T)
 		if b.listOpen != 1 {
 			t.Errorf("board %d was read %d times, want exactly 1", project, b.listOpen)
 		}
+	}
+}
+
+// --- #2578: a router built before the token expired ------------------------
+//
+// The daemon builds one router per board and keeps it for its whole life. The
+// router used to hold the GitHub App installation token as a string, so every
+// client it handed out after that token's hour was up sent a dead credential:
+// 401 on every repo, every sweep and every board probe, until a restart.
+
+// rotatingSource is a token source whose current token the test replaces, the
+// way an installation token is re-minted when the old one expires.
+type rotatingSource struct {
+	mu  sync.Mutex
+	cur *oauth2.Token
+}
+
+func (s *rotatingSource) Token() (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cur, nil
+}
+
+func (s *rotatingSource) rotate(next string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cur.Expiry = time.Now().Add(-time.Minute)
+	s.cur = &oauth2.Token{AccessToken: next, Expiry: time.Now().Add(time.Hour)}
+}
+
+type sweepRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f sweepRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestSweepForgeClientAuthenticatesAfterTheTokenExpires(t *testing.T) {
+	t.Setenv(layout.EnvStateHome, t.TempDir())
+	var (
+		mu   sync.Mutex
+		auth []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth = append(auth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"full_name":"acme/primary","name":"primary","owner":{"login":"acme"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	// An oauth2 client with no base transport sends through
+	// http.DefaultTransport: point it at the recorder for this test.
+	target, _ := url.Parse(srv.URL)
+	prevTransport := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = prevTransport })
+	http.DefaultTransport = sweepRoundTrip(func(r *http.Request) (*http.Response, error) {
+		r2 := r.Clone(r.Context())
+		r2.URL.Scheme, r2.URL.Host, r2.Host = target.Scheme, target.Host, target.Host
+		return prevTransport.RoundTrip(r2)
+	})
+
+	root := writeSweepWorkspace(t, "acme", 3, nil)
+	cfg, err := config.Load(root)
+	if err != nil {
+		t.Fatalf("load primary config: %v", err)
+	}
+	src := &rotatingSource{cur: &oauth2.Token{AccessToken: "ghs_first", Expiry: time.Now().Add(time.Hour)}}
+	builds := 0
+	prev := buildSweepRouter
+	t.Cleanup(func() { buildSweepRouter = prev })
+	buildSweepRouter = func(root, owner string, project int, ownerType string) (*forge.Router, error) {
+		builds++
+		first, _ := src.Token()
+		r := forge.NewRouter()
+		// What BuildRouterAt registers: the resolved string AND the source.
+		r.Register("github", forge.Config{
+			Kind: forge.KindGitHub, Token: first.AccessToken, TokenSource: src,
+			Owner: owner, ProjectNumber: project, OwnerType: ownerType,
+		})
+		r.SetDefault("github")
+		return r, nil
+	}
+
+	resolve := cachedSweepForgeClient(root, cfg)
+	read := func() {
+		t.Helper()
+		client, err := resolve("acme/primary")
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if _, err := client.Repo().RepoMetadata(context.Background(), "acme", "primary"); err != nil {
+			t.Fatalf("repo metadata: %v", err)
+		}
+	}
+	read()
+	src.rotate("ghs_second") // the installation token expires and is re-minted
+	read()
+
+	if builds != 1 {
+		t.Fatalf("built %d routers, want 1 — the expiry must be survived by the cached router, not by rebuilding it", builds)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(auth) != 2 || auth[0] != "Bearer ghs_first" || auth[1] != "Bearer ghs_second" {
+		t.Fatalf("Authorization across expiry = %q, want [Bearer ghs_first Bearer ghs_second] — the cached router still sends the expired token (#2578)", auth)
 	}
 }

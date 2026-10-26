@@ -49,8 +49,8 @@ func (s *IssueService) ApplySizeLabel(ctx context.Context, owner, repo string, n
 		return fmt.Errorf("apply %s to %s/%s#%d: %w", name, owner, repo, number, err)
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("apply %s to %s/%s#%d: REST %d: %s",
-			name, owner, repo, number, status, restErrorSummary(body))
+		return fmt.Errorf("apply %s to %s/%s#%d: %w",
+			name, owner, repo, number, restStatusErr(status, body))
 	}
 	return nil
 }

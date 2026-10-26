@@ -64,8 +64,8 @@ func listRepoLabels(ctx context.Context, c *Client, owner, repo string) ([]restL
 		// predecessor also failed there, so an absent repo stays an error
 		// rather than becoming an empty label set — an empty map would read
 		// as "this repo has no labels" and silently skip every label write.
-		return nil, fmt.Errorf("list labels for %s/%s: REST %d: %s",
-			owner, repo, status, restErrorSummary(body))
+		return nil, fmt.Errorf("list labels for %s/%s: %w",
+			owner, repo, restStatusErr(status, body))
 	}
 	var labels []restLabel
 	if err := json.Unmarshal(body, &labels); err != nil {

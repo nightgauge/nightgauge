@@ -292,13 +292,14 @@ func (s appTokenSource) Token() (*oauth2.Token, error) {
 // whole life, so after SyncAppTokenPermissions discards the cached copy the
 // in-process copy must go too.
 type appReuseSource struct {
-	mu  sync.Mutex
-	tok *oauth2.Token
-	src oauth2.TokenSource
+	mu    sync.Mutex
+	tok   *oauth2.Token
+	src   oauth2.TokenSource
+	creds *AppCredentials
 }
 
 func newAppReuseSource(first *oauth2.Token, creds *AppCredentials) *appReuseSource {
-	return &appReuseSource{tok: first, src: appTokenSource{creds: creds}}
+	return &appReuseSource{tok: first, src: appTokenSource{creds: creds}, creds: creds}
 }
 
 func (s *appReuseSource) Token() (*oauth2.Token, error) {
