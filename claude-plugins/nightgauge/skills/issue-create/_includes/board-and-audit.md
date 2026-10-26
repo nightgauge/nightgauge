@@ -124,9 +124,22 @@ nightgauge project sync-status <epic-number> ready
 # (blockedBy relationships enforce ordering — the pipeline respects them
 # even when all sub-issues are in Ready status)
 for SUB_NUMBER in <sub-issue-numbers>; do
+  # file_ownership gate (#561): a declared set that cannot satisfy the
+  # sub-issue's own ACs blocks promotion — it stays in Backlog.
+  OWN=$(nightgauge issue check-ownership "$SUB_NUMBER" --repo "$REPO" --json) || {
+    echo "check-ownership failed for #$SUB_NUMBER — left in Backlog" >&2; continue; }
+  if [ "$(printf '%s\n' "$OWN" | jq '.count')" -gt 0 ]; then
+    printf '%s\n' "$OWN" | jq -r '.findings[] | "#'"$SUB_NUMBER"' \(.type) \(.rule) \(.path): \(.reason)"' >&2
+    continue
+  fi
   nightgauge project sync-status "$SUB_NUMBER" ready
 done
 ```
+
+A sub-issue held back by `FILE_OWNERSHIP_UNSUBSTANTIATED` is reported in the
+Phase 5 result with its findings. Fix the declared set (or the AC), then
+promote it. The rules and the decision behind them are in
+[docs/ISSUE_AUDIT.md](../../../../../docs/ISSUE_AUDIT.md).
 
 **WHY**: Issues start in Backlog (Phase 4) to give Phase 3.5 time to set
 `blockedBy` relationships. Promoting to Ready here ensures the autonomous

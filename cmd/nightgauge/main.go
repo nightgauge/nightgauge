@@ -1178,6 +1178,7 @@ func issueCmd() *cobra.Command {
 		issueMarkRefinedCmd(),
 		issueHasLabelCmd(),
 		issueExtractTargetsCmd(),
+		issueCheckOwnershipCmd(),
 	)
 	return cmd
 }
@@ -1240,6 +1241,119 @@ Resolution order:
 
 	cmd.Flags().StringVar(&bodyFile, "body-file", "", "Read the issue body from a file instead of stdin (- = stdin)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON {targets, count, source}")
+	return cmd
+}
+
+// issueCheckOwnershipCmd verifies an issue's declared file_ownership set
+// against its acceptance criteria (#561). Findings never change the exit
+// code — the caller (issue-audit WARNING, issue-create promotion gate)
+// decides severity, matching extract-targets.
+func issueCheckOwnershipCmd() *cobra.Command {
+	var (
+		owner      string
+		repo       string
+		bodyFile   string
+		workdir    string
+		outputJSON bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "check-ownership [number]",
+		Short: "Check an issue's declared file_ownership against its acceptance criteria",
+		Long: `Deterministically verify the file_ownership set in an issue's
+nightgauge:dependency-metadata block against its acceptance criteria (#561).
+Each finding is FILE_OWNERSHIP_UNSUBSTANTIATED with one rule:
+
+  test-missing      an AC requires a test; no declared path is or has a test
+  generated-mirror  a declared path is generated; the finding names the canonical
+  path-missing      a declared path does not exist and no AC says to create it
+
+A body without a declared set is a no-op. With a number the body is fetched
+from the forge; otherwise it is read from stdin or --body-file. Paths are
+resolved against --workdir. Findings never change the exit code.`,
+		Args: cobra.MaximumNArgs(1),
+		Example: `  nightgauge issue check-ownership 536 --json
+  printf '%s' "$ISSUE_BODY" | nightgauge issue check-ownership --json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var (
+				body   string
+				number int
+			)
+			if len(args) == 1 {
+				if _, err := fmt.Sscanf(args[0], "%d", &number); err != nil {
+					return fmt.Errorf("invalid issue number: %s", args[0])
+				}
+				client, err := clientFromConfig()
+				if err != nil {
+					return err
+				}
+				ownerPart, repoPart := splitRepo(owner, repo)
+				issue, err := gh.NewIssueService(client).GetIssue(cmd.Context(), ownerPart, repoPart, number)
+				if err != nil {
+					return fmt.Errorf("get issue #%d in %s/%s: %w", number, ownerPart, repoPart, enrichError(err))
+				}
+				body = issue.Body
+			} else {
+				var (
+					data []byte
+					err  error
+				)
+				if bodyFile != "" && bodyFile != "-" {
+					data, err = os.ReadFile(bodyFile)
+				} else {
+					data, err = io.ReadAll(cmd.InOrStdin())
+				}
+				if err != nil {
+					return fmt.Errorf("read issue body: %w", err)
+				}
+				body = string(data)
+			}
+
+			exists := func(p string) bool {
+				// Paths come from an untrusted issue body: never stat outside the repo.
+				if !filepath.IsLocal(filepath.FromSlash(p)) {
+					return false
+				}
+				_, err := os.Stat(filepath.Join(workdir, filepath.FromSlash(p)))
+				return err == nil
+			}
+			declared, source := teams.ExtractTargetFilesDetailed(body)
+			if source != "declared" {
+				declared = []string{}
+			}
+			findings := teams.CheckFileOwnership(body, exists)
+			if findings == nil {
+				findings = []teams.OwnershipFinding{}
+			}
+
+			if outputJSON {
+				out := map[string]interface{}{
+					"source":   source,
+					"declared": declared,
+					"findings": findings,
+					"count":    len(findings),
+				}
+				if number > 0 {
+					out["issue"] = number
+				}
+				return printJSON(out)
+			}
+			for _, f := range findings {
+				target := f.Path
+				if target == "" {
+					target = "(set)"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %s %s: %s\n", f.Type, f.Rule, target, f.Reason)
+			}
+			return nil
+		},
+	}
+
+	ownerFlag(cmd, &owner, "GitHub organization")
+	repoNameFlag(cmd, &repo, "", "Repository name (when fetching by number)")
+	cmd.Flags().StringVar(&bodyFile, "body-file", "", "Read the issue body from a file instead of stdin (- = stdin)")
+	cmd.Flags().StringVar(&workdir, "workdir", ".", "Repository root that declared paths resolve against")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON {issue, source, declared, findings, count}")
 	return cmd
 }
 
@@ -3112,7 +3226,11 @@ func epicPlanWavesCmd() *cobra.Command {
 				}
 				fmt.Printf("Wave %d (%d issue(s) — %s):\n", w.WaveIndex, len(w.Issues), parallel)
 				for _, issue := range w.Issues {
-					fmt.Printf("  #%d %s\n", issue.Number, issue.Title)
+					source := issue.TargetSource
+					if source == "" {
+						source = "inferred"
+					}
+					fmt.Printf("  #%d %s [targets: %s]\n", issue.Number, issue.Title, source)
 				}
 			}
 			// Surface deterministic file-overlap serializations so the

@@ -31,10 +31,12 @@ func PlanWavesFromIssues(issues []pkgtypes.Issue) *EpicWaveResult {
 
 	subIssues := make([]SubIssue, len(issues))
 	for i, issue := range issues {
+		files, source := ExtractTargetFilesDetailed(issue.Body)
 		subIssues[i] = SubIssue{
-			Number: issue.Number,
-			Title:  issue.Title,
-			Files:  ExtractTargetFiles(issue.Body),
+			Number:       issue.Number,
+			Title:        issue.Title,
+			Files:        files,
+			TargetSource: source,
 		}
 	}
 

@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Declared `file_ownership` sets are checked against their issue's ACs
+  (#561).** `nightgauge issue check-ownership` reports
+  `FILE_OWNERSHIP_UNSUBSTANTIATED` when a declared set has no test file but an
+  AC asks for a test, when it names a generated mirror (the finding names the
+  canonical file), or when it names a path that does not exist and that no AC
+  says to create. `issue-audit` reports these findings as warnings.
+  `issue-create` keeps a sub-issue with findings in Backlog instead of
+  promoting it to Ready. `epic plan-waves` now shows whether each issue's
+  target files were `declared` or `inferred`.
 - **The model-eval corpus supports one pinned control task (#2117).** A task
   marked `control: true` names a real GitHub issue and a frozen base commit, and
   records a content hash over the issue's title, body and base SHA. The task

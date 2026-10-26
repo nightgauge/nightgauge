@@ -157,16 +157,17 @@ check and had to author one for each. The bar is
 per acceptance criterion, the test or command, the input, and the expected
 observable output.
 
-| Finding type                   | Severity                                    | Trigger                                                                                     |
-| ------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `MISSING_REQUIRED_HEADING`     | CRITICAL in `--manifest` mode, else WARNING | A heading required by the issue's type is absent — see [Severity Tiers](#severity-tiers)    |
-| `EMPTY_REQUIRED_HEADING`       | WARNING                                     | A required heading is present but its body is empty                                         |
-| `WEAK_VERIFICATION`            | WARNING                                     | `## Verification` names no test, command, or file — "add tests" is not verification         |
-| `SECURITY_SURFACE_UNADDRESSED` | WARNING                                     | Body touches auth/secrets/endpoints/retries/spawn/shell/uploads with no security AC         |
-| `MISSING_EPIC_FALSIFIER`       | WARNING                                     | `type:epic` `## Summary` has no non-empty `Falsifier:` line — no result would stop the work |
-| `MISSING_EPIC_DEMAND`          | WARNING                                     | `type:epic` `## Summary` has no non-empty `Demand:` line — nobody is recorded as asking     |
-| `MISSING_SPIKE_RECS_BLOCK`     | CRITICAL                                    | Spike issue is missing the `yaml recommendations` block per `docs/SPIKE_CONTRACT.md`        |
-| `OVERSIZED_SCOPE`              | WARNING                                     | Issue bundles many independent units of work into a single ticket — see below               |
+| Finding type                     | Severity                                    | Trigger                                                                                     |
+| -------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `MISSING_REQUIRED_HEADING`       | CRITICAL in `--manifest` mode, else WARNING | A heading required by the issue's type is absent — see [Severity Tiers](#severity-tiers)    |
+| `EMPTY_REQUIRED_HEADING`         | WARNING                                     | A required heading is present but its body is empty                                         |
+| `WEAK_VERIFICATION`              | WARNING                                     | `## Verification` names no test, command, or file — "add tests" is not verification         |
+| `SECURITY_SURFACE_UNADDRESSED`   | WARNING                                     | Body touches auth/secrets/endpoints/retries/spawn/shell/uploads with no security AC         |
+| `MISSING_EPIC_FALSIFIER`         | WARNING                                     | `type:epic` `## Summary` has no non-empty `Falsifier:` line — no result would stop the work |
+| `MISSING_EPIC_DEMAND`            | WARNING                                     | `type:epic` `## Summary` has no non-empty `Demand:` line — nobody is recorded as asking     |
+| `MISSING_SPIKE_RECS_BLOCK`       | CRITICAL                                    | Spike issue is missing the `yaml recommendations` block per `docs/SPIKE_CONTRACT.md`        |
+| `OVERSIZED_SCOPE`                | WARNING                                     | Issue bundles many independent units of work into a single ticket — see below               |
+| `FILE_OWNERSHIP_UNSUBSTANTIATED` | WARNING                                     | Declared `file_ownership` cannot satisfy the issue's own ACs — see below                    |
 
 #### `OVERSIZED_SCOPE` heuristic
 
@@ -197,6 +198,34 @@ The finding fires when **any** of these signals trips:
 **No repair primitive.** Decomposition into sub-issues under an epic is a
 human/planning decision; `--fix` never auto-applies it. Even under `--fix`,
 `OVERSIZED_SCOPE` remains a WARNING.
+
+#### `FILE_OWNERSHIP_UNSUBSTANTIATED` check
+
+Epic #531 shipped sub-issues whose declared `file_ownership` could not satisfy
+their own ACs, and `epic plan-waves` trusted those sets, hiding real
+shared-file collisions (#561). `nightgauge issue check-ownership` checks a
+declared set deterministically; a body with no declaration is a no-op. Rules:
+
+- `test-missing` — an AC asks for a test and no declared path is a test file.
+  An existing sibling test outside the set does not count: the issue cannot
+  edit it.
+- `generated-mirror` — a declared path is generated (`teams.GeneratedMirrors`,
+  parity-tested against `scripts/install-agent-skills.sh` and
+  `scripts/sync-model-registry.sh`); the finding names the canonical path.
+- `path-missing` — a declared path does not exist and nothing in the body says
+  to create it.
+
+**Decision (#561 AC3): issue-audit carries this check** as a WARNING with **no
+repair primitive** — correcting a declared set needs judgement about the real
+change surface. `issue-create` runs the same verb before Ready promotion and
+leaves a sub-issue with findings in Backlog, so a wrong set never feeds
+`plan-waves`. Two #531 classes are **not** detected, because they need
+reasoning about runtime behaviour: "no production edit is needed" and "the
+change is provably inert". Those stay a human planning-review item.
+
+`epic plan-waves` prints `[targets: declared|inferred]` per issue (JSON
+`targetSource`), so the computed shared-file serializations show which sets
+were authored and which were inferred.
 
 ### Phase 6 — Sub-issue & parent linking
 
@@ -354,6 +383,7 @@ them — they MUST hold regardless of operator flags:
    sub-issues under an epic is a human/planning decision. `--fix` never applies
    it; the finding stays a WARNING for manual resolution (decompose into an epic
    or add the `<!-- nightgauge:oversized-scope-accepted -->` override).
+   `FILE_OWNERSHIP_UNSUBSTANTIATED` is likewise never auto-fixed.
 
 ## Manifest Schema (`CreationManifest`)
 
