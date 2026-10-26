@@ -375,6 +375,7 @@ deny:
       - "docs/decisions/024-data-and-state-layout.md"
       - "docs/decisions/025-doctor-findings-and-remedies.md"
       - "docs/decisions/026-demo-mode-architecture.md"
+      - "docs/decisions/027-discovered-work-substrate.md"
     rationale: >-
       ADRs are private until individually reviewed and excepted. The exceptions
       describe shipped open-source implementation decisions.

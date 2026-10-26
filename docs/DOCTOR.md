@@ -733,6 +733,17 @@ A daemon serves this workspace and a pipeline ran recently, but none of its call
 reached the ledger. Manual `restart`: restart it with
 `nightgauge serve --workspace <root>`.
 
+#### NGD050
+
+**Discovered work was never materialized.** `orphaned_discovered_work` · `warning`.
+
+A `discovered-work-{N}.json` capture file in the clone's pipeline state directory
+(`nightgauge layout path pipeline`) has no live run, because its
+`issue-{N}.json` is gone, or is older than seven days. Only the discovered-work
+materializer deletes these files, and only after it has filed their records, so
+the check never deletes one (ADR 027). Manual `materialize`: inspect it with
+`nightgauge discovered-work list --issue <N>`, then run the materializer.
+
 #### NGD043
 
 **A log directory is over its size cap.** `log_retention` · `housekeeping` or

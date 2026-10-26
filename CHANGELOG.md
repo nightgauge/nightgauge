@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Discovered-work capture substrate (#478).** A run can now record follow-up
+  work it found but must not do itself: `nightgauge discovered-work record`
+  validates each record (closed type, priority and size enums, a one-line
+  summary, repository-relative file hints) and appends it to
+  `discovered-work-{N}.json` in the pipeline state directory. A refused record
+  names the field and leaves the file unchanged. `discovered-work list` prints
+  an issue's records, and `discovered-work orphans` and doctor check NGD050
+  report files no run will materialize, without deleting them. The SDK exports
+  the matching `DiscoveredWorkContextSchema`. No stage records anything yet;
+  ADR 027 records the design.
 - **Declared `file_ownership` sets are checked against their issue's ACs
   (#561).** `nightgauge issue check-ownership` reports
   `FILE_OWNERSHIP_UNSUBSTANTIATED` when a declared set has no test file but an

@@ -1049,6 +1049,7 @@ func rootCmd() *cobra.Command {
 		versionDowngradeCmd(),
 		knowledgeCmd(),
 		spikeCmd(),
+		discoveredWorkCmd(),
 		cleanupCmd(),
 		worktreeCmd(),
 		stashCmd(),

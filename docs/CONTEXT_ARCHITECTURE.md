@@ -1463,8 +1463,8 @@ Please run the pipeline in order:
 
 ### Cleanup
 
-After successful merge, `/nightgauge-pr-merge` removes all context files
-via `cleanup-context-files.sh`:
+After successful merge, `/nightgauge-pr-merge` removes the issue's context
+files (the `rm -f` patterns in `skills/nightgauge-pr-merge/`):
 
 ```bash
 PIPELINE_DIR="$(nightgauge layout path pipeline)"
@@ -1484,7 +1484,7 @@ rm -f "$PIPELINE_DIR/planning-batch-{E}.json"
 rm -f "$PIPELINE_DIR/dev-batch-{E}.json"
 ```
 
-**All file patterns handled by `cleanup-context-files.sh`:**
+**File patterns removed after merge:**
 
 | Pattern                          | Description                                                    |
 | -------------------------------- | -------------------------------------------------------------- |
@@ -1497,6 +1497,77 @@ rm -f "$PIPELINE_DIR/dev-batch-{E}.json"
 | `pipeline/pr-{N}.json`           | PR create output                                               |
 | `pipeline/running-*-{N}.json`    | Stale running signal files (deprecated pattern)                |
 | `plans/{N}-*.md`                 | Feature plan documents                                         |
+
+`pipeline/discovered-work-{N}.json` is **deliberately not** in this list. Only the
+discovered-work materializer (#480) deletes it, after filing its records; see
+[Discovered-Work Capture File](#discovered-work-capture-file). A test
+(`TestCaptureFile_SurvivesPRMergeCleanupPatterns`) replays the patterns above and fails if
+one starts matching it.
+
+### Discovered-Work Capture File
+
+Work a stage finds but must not do in its own run is recorded as discovered work
+([ADR 027](decisions/027-discovered-work-substrate.md)). Records go to
+`discovered-work-{N}.json` in the clone's pipeline state directory
+(`nightgauge layout path pipeline`), written only by `nightgauge discovered-work record`.
+The SDK schema is `DiscoveredWorkContextSchema`; the Go peer is
+`internal/cmd/discoveredwork`.
+
+```json
+{
+  "schema_version": "1.0",
+  "issue_number": 478,
+  "records": [
+    {
+      "id": "dw-274c1759adb2",
+      "summary": "Retry budget in the CI waiter ignores the configured ceiling",
+      "evidence": ["internal/ci/wait.go:88 hard-codes 5 retries"],
+      "source_stage": "feature-validate",
+      "issue_number": 478,
+      "run_id": "0192f3a4-0000-7000-8000-000000000000",
+      "suggested_type": "bug",
+      "suggested_priority": "medium",
+      "suggested_size": "S",
+      "candidate_target_files": ["internal/ci/wait.go"],
+      "recorded_at": "2026-10-26T00:00:00Z"
+    }
+  ]
+}
+```
+
+| Field                    | Rule                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| `id`                     | `dw-` + first 12 hex of sha256(`source_stage` NUL `summary`); set by the binary |
+| `summary`                | Required, one line, trimmed, at most 200 characters (becomes an issue title)    |
+| `evidence`               | 1–10 entries, each 1–2000 characters                                            |
+| `source_stage`           | A pipeline stage, or `producer:<kebab-name>` for a non-skill producer           |
+| `issue_number`           | Positive integer, equal to the envelope's                                       |
+| `run_id`                 | `--run-id`, else the checkout's run-state for the issue, else `null`            |
+| `suggested_type`         | `feature\|bug\|docs\|chore\|spike`                                              |
+| `suggested_priority`     | `critical\|high\|medium\|low`                                                   |
+| `suggested_size`         | `XS\|S\|M\|L\|XL`                                                               |
+| `candidate_target_files` | 0–20 repository-relative paths, no `..`, NUL or leading `-`; never opened       |
+| `recorded_at`            | RFC 3339 UTC, set by the binary                                                 |
+
+Unknown keys are refused. A refused record exits non-zero, names the field, and leaves the
+file unchanged. Re-recording the same discovery prints `already recorded` and exits 0.
+
+A non-skill producer records the same way:
+
+```bash
+nightgauge discovered-work record --issue 948 \
+  --source-stage producer:post-merge-impact-set \
+  --summary "Re-verify the impact set for the renamed config key" \
+  --evidence "config key pipeline.x renamed in #948" \
+  --suggested-type chore --suggested-priority low --suggested-size XS
+```
+
+**Lifecycle.** Stages append during the run. pr-merge cleanup never deletes the file. The
+materializer (#480) files the records and is the only deleter. A file with no live run (no
+`issue-{N}.json`) or older than seven days is reported by
+`nightgauge discovered-work orphans` and by doctor check
+[NGD050](DOCTOR.md#ngd050), and is never swept. A run that records nothing writes no file. Appends serialize on a
+`discovered-work-{N}.json.lock` sidecar, which the materializer removes with the file.
 
 ## Pipeline State Management
 
