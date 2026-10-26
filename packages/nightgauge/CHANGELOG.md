@@ -11,6 +11,18 @@ and this project adheres to
 
 ### Fixed
 
+- **A pr-merge waiting on its background gate is no longer killed, and a
+  transient kill no longer strands the issue (#2554).** Each Claude Code
+  background task now defers the runaway kill for up to
+  `pipeline.progress_runaway.background_task_ceiling_ms` (default 45 minutes)
+  measured from when that task started, instead of 20 minutes from the last
+  productive signal, which ran out mid-`ci-local.sh` on a resumed pr-merge. A
+  `runaway_progress` kill now takes the stall-kill route (30-minute backoff,
+  no lifetime-failure charge), and a transient failure on an open PR returns
+  the issue to Ready so the retry resumes at pr-merge on that PR; other
+  failures still go to In review. A failed resume is no longer reported as
+  `Outcome: already-resolved`.
+
 - **A re-dispatched issue with an open PR resumes at pr-merge even after its
   worktree is gone (#2541).** The autonomous scan already lists each repo's
   open PRs; it now carries a dispatchable issue's open, unblocked PR number

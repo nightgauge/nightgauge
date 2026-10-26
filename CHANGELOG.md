@@ -32,6 +32,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A pr-merge waiting on its background gate is no longer killed, and a
+  transient kill no longer strands the issue (#2554).** Each Claude Code
+  background task now defers the runaway kill for up to
+  `pipeline.progress_runaway.background_task_ceiling_ms` (default 45 minutes)
+  measured from when that task started, instead of 20 minutes from the last
+  productive signal, which ran out mid-`ci-local.sh` on a resumed pr-merge. A
+  `runaway_progress` kill now takes the stall-kill route (30-minute backoff,
+  no lifetime-failure charge), and a transient failure on an open PR returns
+  the issue to Ready so the retry resumes at pr-merge on that PR; other
+  failures still go to In review. A failed resume is no longer reported as
+  `Outcome: already-resolved`.
+
 - **A re-dispatched issue with an open PR now starts at pr-merge (#2550).** The
   fast-forward marked pr-create complete without beginning it, and the
   pipeline's state service drops a completion for a stage that never began

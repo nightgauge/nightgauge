@@ -59,30 +59,30 @@ function tickTo(monitor: ProgressMonitor, seconds: number, costUsd = 1.5) {
 
 describe("applyBackgroundTaskEvent (#2517)", () => {
   it("replaces the set with the list in background_tasks_changed", () => {
-    const ids = new Set<string>(["stale"]);
+    const ids = new Map<string, number>([["stale", 0]]);
     expect(applyBackgroundTaskEvent(CHANGED_TWO, ids)).toBe(true);
-    expect([...ids].sort()).toEqual(["bewmujgwv", "bv61n5dmb"]);
+    expect([...ids.keys()].sort()).toEqual(["bewmujgwv", "bv61n5dmb"]);
     expect(applyBackgroundTaskEvent(CHANGED_NONE, ids)).toBe(true);
     expect(ids.size).toBe(0);
   });
 
   it("adds a task started in the background, not a foreground one", () => {
-    const ids = new Set<string>();
+    const ids = new Map<string, number>();
     applyBackgroundTaskEvent(STARTED_FOREGROUND, ids);
     expect(ids.size).toBe(0);
     applyBackgroundTaskEvent(STARTED_BACKGROUND, ids);
-    expect([...ids]).toEqual(["bv61n5dmb"]);
+    expect([...ids.keys()]).toEqual(["bv61n5dmb"]);
   });
 
   it("removes a task on task_notification", () => {
-    const ids = new Set<string>();
+    const ids = new Map<string, number>();
     applyBackgroundTaskEvent(CHANGED_ONE, ids);
     expect(applyBackgroundTaskEvent(NOTIFIED, ids)).toBe(true);
     expect(ids.size).toBe(0);
   });
 
   it("ignores lines that are not background-task events", () => {
-    const ids = new Set<string>(["bewmujgwv"]);
+    const ids = new Map<string, number>([["bewmujgwv", 0]]);
     expect(applyBackgroundTaskEvent('{"type":"system","subtype":"init"}', ids)).toBe(false);
     expect(applyBackgroundTaskEvent("not json, mentions task", ids)).toBe(false);
     expect(
@@ -91,7 +91,7 @@ describe("applyBackgroundTaskEvent (#2517)", () => {
         ids
       )
     ).toBe(false);
-    expect([...ids]).toEqual(["bewmujgwv"]);
+    expect([...ids.keys()]).toEqual(["bewmujgwv"]);
   });
 });
 
@@ -122,7 +122,7 @@ describe("ProgressMonitor — background tasks (#2517)", () => {
     expect(done.ceiling?.name).toBe("progress-no-progress-window");
   });
 
-  it("stops deferring once the external ceiling is passed", () => {
+  it("bounds a task with no known start by the external ceiling", () => {
     const monitor = new ProgressMonitor(
       makeConfig({ externalProgressCeilingMs: 600_000 }),
       noProbe
@@ -132,5 +132,79 @@ describe("ProgressMonitor — background tasks (#2517)", () => {
     expect(tickTo(monitor, 300).shouldKill).toBe(false);
     // A wedged background job must not make the stage immortal.
     expect(tickTo(monitor, 400).shouldKill).toBe(true);
+  });
+});
+
+describe("ProgressMonitor — background task ceiling (#2554)", () => {
+  const MIN = 60_000;
+  const MONITOR_STARTED =
+    '{"type":"system","subtype":"task_started","task_id":"mon1","is_backgrounded":true,"task_type":"monitor"}';
+  const MONITOR_DONE = '{"type":"system","subtype":"task_notification","task_id":"mon1"}';
+  const GATE_STARTED =
+    '{"type":"system","subtype":"task_started","task_id":"gate1","is_backgrounded":true,"task_type":"local_bash"}';
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-25T00:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function sync(monitor: ProgressMonitor, tasks: Map<string, number>) {
+    monitor.setBackgroundTasks(tasks.size, tasks.size > 0 ? Math.min(...tasks.values()) : null);
+  }
+
+  it("keeps a gate started 4 min after the last progress alive past the external ceiling (#1501)", () => {
+    const monitor = new ProgressMonitor(makeConfig({ backgroundTaskCeilingMs: 45 * MIN }), noProbe);
+    const tasks = new Map<string, number>();
+
+    // Four minutes of rebasing, then the gate goes to the background.
+    vi.advanceTimersByTime(4 * MIN);
+    monitor.check(1.5);
+    applyBackgroundTaskEvent(GATE_STARTED, tasks, Date.now());
+    sync(monitor, tasks);
+
+    // Tick every 30s to t=48 min, re-arming a Monitor every 10 min.
+    for (let t = 4 * MIN + 30_000; t <= 48 * MIN; t += 30_000) {
+      vi.setSystemTime(new Date(Date.parse("2026-10-25T00:00:00Z") + t));
+      if (t % (10 * MIN) === 0) {
+        applyBackgroundTaskEvent(MONITOR_DONE, tasks, Date.now());
+        applyBackgroundTaskEvent(MONITOR_STARTED, tasks, Date.now());
+        sync(monitor, tasks);
+      }
+      const result = monitor.check(1.5);
+      expect(result.shouldKill, `t=${t / 1000}s: ${result.reason}`).toBe(false);
+    }
+  });
+
+  it("kills once the oldest task outlives the background ceiling", () => {
+    const monitor = new ProgressMonitor(makeConfig({ backgroundTaskCeilingMs: 30 * MIN }), noProbe);
+    const tasks = new Map<string, number>();
+    applyBackgroundTaskEvent(GATE_STARTED, tasks, Date.now());
+    sync(monitor, tasks);
+
+    let killed = false;
+    for (let minute = 1; minute <= 40 && !killed; minute++) {
+      const result = tickTo(monitor, 60);
+      if (minute <= 30) expect(result.shouldKill).toBe(false);
+      killed = result.shouldKill;
+    }
+    expect(killed).toBe(true);
+  });
+
+  it("re-syncs from background_tasks_changed keep the oldest start time", () => {
+    const tasks = new Map<string, number>();
+    applyBackgroundTaskEvent(GATE_STARTED, tasks, 1_000);
+    applyBackgroundTaskEvent(
+      '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"gate1"},{"task_id":"mon1"}]}',
+      tasks,
+      9_000
+    );
+    expect(tasks.get("gate1")).toBe(1_000);
+    expect(tasks.get("mon1")).toBe(9_000);
+    applyBackgroundTaskEvent(GATE_STARTED, tasks, 20_000);
+    expect(tasks.get("gate1")).toBe(1_000);
   });
 });

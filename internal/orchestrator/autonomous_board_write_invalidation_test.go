@@ -33,7 +33,7 @@ import (
 func TestSchedulerStatusMovesInvalidateSharedBoardCache(t *testing.T) {
 	moves := map[string]func(as *AutonomousScheduler, ctx context.Context){
 		"revertFailedIssueStatus": func(as *AutonomousScheduler, ctx context.Context) {
-			as.revertFailedIssueStatus(ctx, "O/a", 1)
+			as.revertFailedIssueStatus(ctx, "O/a", 1, "")
 		},
 		"moveIssueToDone": func(as *AutonomousScheduler, ctx context.Context) {
 			as.moveIssueToDone(ctx, "O/a", 1)
@@ -107,7 +107,7 @@ func TestSchedulerWithoutBoardCacheStillWrites(t *testing.T) {
 	repos := []depgraph.RepoConfig{{Owner: "O", Name: "a", Project: 7}}
 	as := NewAutonomousScheduler(nil, gh.NewClientWithURL("test-token", srv.URL), repos, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.trustGateOverride = allWritersGate()
-	as.revertFailedIssueStatus(context.Background(), "O/a", 1)
+	as.revertFailedIssueStatus(context.Background(), "O/a", 1, "")
 	if requests.Load() == 0 {
 		t.Fatal("no forge request without a board cache")
 	}

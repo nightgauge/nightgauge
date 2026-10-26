@@ -10475,6 +10475,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     const completedStages: PipelineStage[] = [];
     const skippedStages: PipelineStage[] = [];
     let branchOnlyResume = false; // #2509
+    // Set only by the verify-and-close close path below (#2554). A resume at
+    // pr-merge also skips feature-dev, so skippedStages cannot tell them apart.
+    let earlyExitTaken = false;
     const deferredStages: PipelineStage[] = [];
     let failedStage: PipelineStage | undefined;
     let error: Error | undefined;
@@ -12895,6 +12898,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               const planningIndex = STAGE_ORDER.indexOf("feature-planning");
               const remainingStages = STAGE_ORDER.slice(planningIndex + 1);
               skippedStages.push(...remainingStages);
+              earlyExitTaken = true;
 
               this.eventDispatcher.onEarlyExit(issueNumber, "already-resolved");
               break; // Exit stage loop
@@ -13197,8 +13201,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Deferred stages mean pr-merge hasn't run yet, so issue is expected open.
     // Early-exit (feature-dev skipped) means runAlreadyResolvedClosePath()
     // already handled close/labels/sync. @see Issue #628, #708
-    const earlyExitHandled = skippedStages.includes("feature-dev");
-    if (!failedStage && deferredStages.length === 0 && !earlyExitHandled && !budgetCeilingStopped) {
+    const reconcileSkippedForEarlyExit = skippedStages.includes("feature-dev");
+    // The OUTCOME is keyed on the close path itself, never on feature-dev
+    // being skipped: a resume at pr-merge skips feature-dev too, and a failed
+    // resume was reported as `already-resolved` (#2554).
+    const earlyExitHandled = earlyExitTaken && !failedStage;
+    if (
+      !failedStage &&
+      deferredStages.length === 0 &&
+      !reconcileSkippedForEarlyExit &&
+      !budgetCeilingStopped
+    ) {
       // #253: time-bound the network-bound completion awaits. A wedge in the
       // `gh`-backed reconcile stranded run #236 for 8.5h with no terminal
       // record — completing the run WITHOUT closure sync beats never

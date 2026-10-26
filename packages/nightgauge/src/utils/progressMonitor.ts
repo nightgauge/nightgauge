@@ -99,7 +99,8 @@
  * no progress" describes a poll loop around a live child exactly as well as it
  * describes the #3811 churn — the live child is what tells the two apart.
  *
- * Both arms are bounded by `externalProgressCeilingMs` (20 minutes, matching
+ * Claude Code background tasks are bounded by their own age against
+ * `backgroundTaskCeilingMs` (#2554); the other arms are bounded by `externalProgressCeilingMs` (20 minutes, matching
  * `WEDGED_TOOL_CALL_CEILING_S`): past it the probe is not consulted at all, so
  * a wedged child cannot make a stage immortal, and the existing kill paths
  * reclaim it with no new kill path added. A stage that loops on `ls`/`cat`
@@ -187,6 +188,16 @@ export interface ProgressMonitorConfig {
    * immortal. 0 disables external-progress deferral entirely.
    */
   externalProgressCeilingMs: number;
+  /**
+   * Ms a single Claude Code background task may run and still defer the kill
+   * (Issue #2554). Measured from the OLDEST live task's own start, not from
+   * the last productive signal: a full `ci-local.sh` takes ~20 minutes, so a
+   * gate started after a few minutes of rebasing outlived the
+   * `externalProgressCeilingMs` window and was killed mid-run on #1501.
+   * Default 2_700_000 (45 minutes). 0 removes the per-task bound, leaving
+   * background tasks under `externalProgressCeilingMs` like other sources.
+   */
+  backgroundTaskCeilingMs?: number;
 }
 
 /**
@@ -195,6 +206,9 @@ export interface ProgressMonitorConfig {
  * Injected so the deferral logic is testable without spawning processes or
  * writing files; {@link defaultExternalProgressProbe} is the production one.
  */
+/** Default {@link ProgressMonitorConfig.backgroundTaskCeilingMs} (Issue #2554). */
+export const DEFAULT_BACKGROUND_TASK_CEILING_MS = 45 * 60_000;
+
 export interface ExternalProgressProbe {
   /** True when a process with this pid exists (any owner). */
   isProcessAlive(pid: number): boolean;
@@ -302,6 +316,7 @@ export class ProgressMonitor {
   private inFlightToolCalls = 0;
   /** Claude Code background tasks still running (Issue #2517). */
   private backgroundTasks = 0;
+  private oldestBackgroundTaskStartMs: number | null = null;
 
   constructor(
     private readonly config: ProgressMonitorConfig,
@@ -456,11 +471,12 @@ export class ProgressMonitor {
    * `task_notification` is idle on the stream but not stalled: #2505's
    * feature-validate was killed 127s into waiting on a full `ci-local.sh`.
    * Fed by skillRunner from {@link applyBackgroundTaskEvent}. Bounded by
-   * `externalProgressCeilingMs` like every other external source, so a wedged
-   * background job cannot make a stage immortal.
+   * `backgroundTaskCeilingMs`, measured from the oldest live task's start
+   * (#2554), so a wedged background job cannot make a stage immortal.
    */
-  setBackgroundTasks(count: number): void {
+  setBackgroundTasks(count: number, oldestStartedAtMs: number | null = null): void {
     this.backgroundTasks = Math.max(0, count);
+    this.oldestBackgroundTaskStartMs = this.backgroundTasks > 0 ? oldestStartedAtMs : null;
   }
 
   /**
@@ -470,8 +486,12 @@ export class ProgressMonitor {
    * here — one `kill(pid, 0)` and one `stat` per declaration, both bounded by
    * {@link MAX_EXTERNAL_DECLARATIONS} — run at most twice a minute.
    */
-  private pollExternalProgress(): { active: boolean; reason: string } {
+  private pollExternalProgress(sources: { declared: boolean; background: boolean }): {
+    active: boolean;
+    reason: string;
+  } {
     const reasons: string[] = [];
+    if (!sources.declared) return this.finishExternalPoll(reasons, sources.background);
 
     for (const [pid, label] of [...this.declaredPids]) {
       if (this.probe.isProcessAlive(pid)) {
@@ -496,8 +516,19 @@ export class ProgressMonitor {
       reasons.push(`${this.inFlightToolCalls} tool call(s) in flight`);
     }
 
-    if (this.backgroundTasks > 0) {
-      reasons.push(`${this.backgroundTasks} background task(s) running`);
+    return this.finishExternalPoll(reasons, sources.background);
+  }
+
+  private finishExternalPoll(
+    reasons: string[],
+    background: boolean
+  ): { active: boolean; reason: string } {
+    if (background && this.backgroundTasks > 0) {
+      const age =
+        this.oldestBackgroundTaskStartMs === null
+          ? ""
+          : `, oldest for ${Math.round((Date.now() - this.oldestBackgroundTaskStartMs) / 1000)}s`;
+      reasons.push(`${this.backgroundTasks} background task(s) running${age}`);
     }
 
     if (reasons.length === 0) {
@@ -630,10 +661,22 @@ export class ProgressMonitor {
     const externalCeilingReached =
       this.config.externalProgressCeilingMs <= 0 ||
       msSinceLastProgress > this.config.externalProgressCeilingMs;
-    const external =
-      windowExceeded && !externalCeilingReached
-        ? this.pollExternalProgress()
-        : { active: false, reason: "" };
+    // Background tasks carry their own bound (#2554): the oldest task's age
+    // against `backgroundTaskCeilingMs`, independent of when the stage last
+    // made productive progress. With the bound disabled (0) or no start time
+    // known, they fall back under the external ceiling.
+    const backgroundCeilingMs =
+      this.config.backgroundTaskCeilingMs ?? DEFAULT_BACKGROUND_TASK_CEILING_MS;
+    const backgroundAllowed =
+      backgroundCeilingMs > 0 && this.oldestBackgroundTaskStartMs !== null
+        ? Date.now() - this.oldestBackgroundTaskStartMs <= backgroundCeilingMs
+        : !externalCeilingReached;
+    const external = windowExceeded
+      ? this.pollExternalProgress({
+          declared: !externalCeilingReached,
+          background: backgroundAllowed,
+        })
+      : { active: false, reason: "" };
 
     // ── Churn detector (Issue #3851) ──────────────────────────────────────
     // Lots of novel activity, no productive progress, past the cost floor.
@@ -690,7 +733,8 @@ export class ProgressMonitor {
         reason:
           `No productive progress for ${Math.round(msSinceLastProgress / 1000)}s, but external ` +
           `progress observed: ${external.reason} — waiting on real work, not stalled ` +
-          `(external ceiling: ${this.config.externalProgressCeilingMs / 1000}s, Issue #1488)`,
+          `(external ceiling: ${this.config.externalProgressCeilingMs / 1000}s, background task ` +
+          `ceiling: ${backgroundCeilingMs / 1000}s, Issues #1488/#2554)`,
         msSinceLastProgress,
         ...base(),
       };
@@ -878,7 +922,11 @@ export function isBlindMonitorKill(signalsSeen: number, parsedToolEventCount: nu
  * in the background (a foreground one is already an in-flight tool call);
  * `task_notification` removes a task that finished, failed or was stopped.
  */
-export function applyBackgroundTaskEvent(line: string, taskIds: Set<string>): boolean {
+export function applyBackgroundTaskEvent(
+  line: string,
+  tasks: Map<string, number>,
+  nowMs: number = Date.now()
+): boolean {
   if (!line.includes('"subtype":"') || !line.includes("task")) return false;
   let event: {
     type?: unknown;
@@ -895,20 +943,24 @@ export function applyBackgroundTaskEvent(line: string, taskIds: Set<string>): bo
   if (event.type !== "system") return false;
   switch (event.subtype) {
     case "background_tasks_changed": {
-      taskIds.clear();
+      // Keep the start time of every task already known, so a re-sync (or a
+      // re-armed Monitor) never resets the oldest task's age (#2554).
+      const next = new Map<string, number>();
       for (const task of Array.isArray(event.tasks) ? event.tasks : []) {
         const id = (task as { task_id?: unknown } | null)?.task_id;
-        if (typeof id === "string") taskIds.add(id);
+        if (typeof id === "string") next.set(id, tasks.get(id) ?? nowMs);
       }
+      tasks.clear();
+      for (const [id, startedAt] of next) tasks.set(id, startedAt);
       return true;
     }
     case "task_started":
       if (event.is_backgrounded === true && typeof event.task_id === "string") {
-        taskIds.add(event.task_id);
+        if (!tasks.has(event.task_id)) tasks.set(event.task_id, nowMs);
       }
       return true;
     case "task_notification":
-      if (typeof event.task_id === "string") taskIds.delete(event.task_id);
+      if (typeof event.task_id === "string") tasks.delete(event.task_id);
       return true;
     default:
       return false;
