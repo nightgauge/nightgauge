@@ -1568,7 +1568,11 @@ func (s *Scheduler) resolveUnverifiedDeliverableStreak(repo string, tier deliver
 // --- Producer 7: definitive auth failure (run-scoped, Scheduler) -------------
 
 // raiseAuthFailure surfaces a fail-closed identity/permission block. Needs the
-// operator to re-authenticate. provide_input kind.
+// operator to re-authenticate. provide_input kind. Two triggers share the
+// idempotency key, so they coalesce into one open card: the identity preflight
+// (when an identityChecker is wired) and the CatPermission escalation gate in
+// the stage loop, which covers the default single-identity path (#4). The
+// adapter CLI login condition is not this card; see adapterAuthNotice.ts.
 func (s *Scheduler) raiseAuthFailure(repo string, issue int, runID, reason string) {
 	s.raiseAttention(attention.DecisionRequest{
 		IdempotencyKey: fmt.Sprintf("auth-failure:%s#%d", repo, issue),

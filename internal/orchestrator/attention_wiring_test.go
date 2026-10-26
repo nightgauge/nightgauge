@@ -14,6 +14,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
+	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // newAttentionProducerScheduler builds a scheduler through the real constructor
@@ -1368,5 +1370,75 @@ func TestIsBranchProtectionPuntMatchesDecideReasons(t *testing.T) {
 		if IsBranchProtectionPunt(reason) {
 			t.Errorf("IsBranchProtectionPunt(%q) = true, want false — a CI-wait outcome is not a human-needed block", reason)
 		}
+	}
+}
+
+// --- Auth failure from the CatPermission escalation gate (#4) ----------------
+
+// TestEscalationGatePermissionRaisesAuthFailureCard pins the default
+// single-identity trigger: no identityChecker is wired, and a permission
+// failure in a stage's output still raises exactly one auth-failure card.
+func TestEscalationGatePermissionRaisesAuthFailureCard(t *testing.T) {
+	cases := map[string]string{
+		"http 401":            "remote: HTTP 401: Bad credentials",
+		"invalid auth method": "error: failed to push some refs: invalid auth method",
+	}
+	for name, tail := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := newAttentionProducerRunScheduler(t)
+			item := types.BoardItem{Repo: "octocat/acme", Number: 42}
+			blocked, reason := s.permissionBlockedEscalation(item, "run-1", "stage failed", tail)
+			if !blocked {
+				t.Fatalf("permission tail %q did not block escalation", tail)
+			}
+			reqs := openRunRequests(t, s)
+			if len(reqs) != 1 {
+				t.Fatalf("got %d requests, want 1", len(reqs))
+			}
+			r := reqs[0]
+			if r.IdempotencyKey != "auth-failure:octocat/acme#42" || r.Producer != "auth-preflight" {
+				t.Errorf("key/producer = %q/%q", r.IdempotencyKey, r.Producer)
+			}
+			if r.Kind != attention.KindProvideInput || r.Severity != attention.SeverityBlockingRun {
+				t.Errorf("kind/severity = %q/%q, want provide_input/blocking_run", r.Kind, r.Severity)
+			}
+			if r.FindOption("login-and-retry") == nil {
+				t.Error("missing login-and-retry option")
+			}
+			if r.Context.Blocker != reason {
+				t.Errorf("card blocker = %q, want classifier reason %q (never the raw tail)", r.Context.Blocker, reason)
+			}
+		})
+	}
+}
+
+// TestEscalationGateInfraFailureRaisesNoAuthCard: a non-permission failure must
+// not raise an auth card.
+func TestEscalationGateInfraFailureRaisesNoAuthCard(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	item := types.BoardItem{Repo: "octocat/acme", Number: 42}
+	if blocked, _ := s.permissionBlockedEscalation(item, "run-1", "dial tcp: connection refused"); blocked {
+		t.Fatal("infra failure blocked escalation as a permission failure")
+	}
+	if reqs := openRunRequests(t, s); len(reqs) != 0 {
+		t.Fatalf("got %d requests, want 0", len(reqs))
+	}
+}
+
+// TestAuthFailureTriggersCoalesce: the identity preflight and the CatPermission
+// gate share one idempotency key, so firing both leaves one open card.
+func TestAuthFailureTriggersCoalesce(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	s.WithIdentityChecker(&fakeIdentityChecker{allowed: false, reason: "token expired"})
+	item := types.BoardItem{Repo: "octocat/acme", Number: 42, ID: "I_42"}
+	rt := state.NewRuntimeState(item.Repo, item.Number, item.ID, testRunID())
+	if ok, _ := s.preflightIdentity(context.Background(), item, rt); ok {
+		t.Fatal("identity preflight should block")
+	}
+	if blocked, _ := s.permissionBlockedEscalation(item, rt.RunID, "remote: HTTP 401: Bad credentials"); !blocked {
+		t.Fatal("permission gate should block")
+	}
+	if reqs := openRunRequests(t, s); len(reqs) != 1 {
+		t.Fatalf("got %d open requests, want 1 (coalesced)", len(reqs))
 	}
 }

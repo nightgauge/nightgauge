@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Auth-failure Action Center card on the default single-identity path (#4).**
+  A stage that fails on a GitHub permission error (`HTTP 401`,
+  `invalid auth method`) now raises the "Authentication failed" card even when
+  no identity checker is configured. It shares one card with the identity preflight, and
+  the card shows only the classifier's reason, never raw output.
+
 - **Shared model overlays for Claude and OpenAI models (#81).** Every Claude
   model now renders with an `anthropic` overlay (run the named `nightgauge`
   command, carry out each step explicitly), and Opus 5.5 and Sonnet 5.5 add
