@@ -994,7 +994,6 @@ type Scheduler struct {
 	// Callbacks
 	onStageStart    func(repo string, issue int, stage string, title string)
 	onStageComplete func(repo string, issue int, stage string, err error, cost StageCost, model string)
-	onEpicComplete  func(epicRepo string, epicNumber int) // the epic's own repository (#2377)
 	// evaluatePostMergeFn performs the post-merge evaluation. A field, not a
 	// direct call, for the same reason buildGraphFn is one: checkEpicCompletion
 	// otherwise constructs its own GitHub services from a live client, so the
@@ -1016,12 +1015,8 @@ type Scheduler struct {
 	// epicCheckpoint latches the autonomous scheduler's between-epic safety
 	// pause when an epic auto-closes.
 	//
-	// A DEDICATED field rather than a second registration on onEpicComplete,
-	// which is a single slot that internal/ipc/server.go re-assigns inside the
-	// `pipeline.run` method closure — per REQUEST, not at startup. Chaining
-	// onto it would be silently wiped by the next pipeline.run, or born nil,
-	// depending on ordering; both failures are invisible (#991). Mirrors the
-	// SetAttention shape: one writer, nil-safe on both ends. nil in CLI mode.
+	// Mirrors the SetAttention shape: one writer, nil-safe on both ends (#991).
+	// nil in CLI mode.
 	// It receives the epic's own repository with its number (#2377).
 	epicCheckpoint     func(epicRepo string, epicNumber int)
 	onPipelineComplete func(repo string, issue int, runtime *state.RuntimeState, success bool)
@@ -2509,6 +2504,7 @@ func (s *Scheduler) runEpicBackstopSweep(ctx context.Context) {
 	if s.epicSvc == nil {
 		return
 	}
+	s.epicSvc.SetCheckoutResolver(s.EpicCheckout)
 
 	// Collect unique repos from board items (all statuses). Only each item's
 	// repo is used, so no relationship list is read: a long list on any item
@@ -2537,17 +2533,16 @@ func (s *Scheduler) runEpicBackstopSweep(ctx context.Context) {
 			log.Printf("backstop sweep %s: error: %v", fullRepo, err)
 			continue
 		}
-		if result.Closed == 0 {
-			continue
-		}
-
-		log.Printf("backstop sweep %s: closed %d stalled epic(s)", fullRepo, result.Closed)
-		if s.onEpicComplete != nil {
-			for _, item := range result.Summary {
-				if item.Status == "closed" {
-					s.onEpicComplete(fullRepo, item.EpicNumber)
-				}
+		for _, item := range result.Summary {
+			switch {
+			case item.Status == "closed":
+				s.resolveEpicIntegration(fullRepo, item.EpicNumber)
+			case item.Integration != nil:
+				s.raiseEpicIntegration(fullRepo, item.EpicNumber, *item.Integration)
 			}
+		}
+		if result.Closed > 0 {
+			log.Printf("backstop sweep %s: closed %d stalled epic(s)", fullRepo, result.Closed)
 		}
 	}
 }
@@ -4171,34 +4166,34 @@ func (s *Scheduler) OnStageComplete(fn func(repo string, issue int, stage string
 	s.onStageComplete = fn
 }
 
-// OnEpicComplete sets a callback for when an epic auto-closes.
-//
-// fn receives the epic's own repository ("owner/name") and number. For an
-// epic with sub-issues in other repositories that is not the merged
-// sub-issue's repository, which holds a different issue with that number
-// (#2377).
-//
-// SINGLE SLOT: a second call replaces the first. internal/ipc/server.go
-// registers one per `pipeline.run` request, so anything that needs to observe
-// epic completion durably must NOT register here — see SetEpicCheckpointFn for
-// the shape that survives (#991).
-func (s *Scheduler) OnEpicComplete(fn func(epicRepo string, epicNumber int)) {
-	s.onEpicComplete = fn
-}
-
-// EpicCompleteCallback returns the callback OnEpicComplete last registered, or
-// nil. The IPC server's tests fire the one `pipeline.run` registers, to check
-// that it opens the epic PR in the repository it is handed (#2377).
-func (s *Scheduler) EpicCompleteCallback() func(epicRepo string, epicNumber int) {
-	return s.onEpicComplete
+// EpicCheckout opens the checkout of epicRepo ("owner/name") that the epic
+// service integrates the epic branch in before closing an epic (#2560). It is
+// the checkout runs in that repository are rooted at, where the epic's own
+// sub-issues created the branch, and it must have that repository as origin:
+// epic/<N>-* names #N of the repository it was pushed to (#2377, #2388).
+func (s *Scheduler) EpicCheckout(epicRepo string) (*git.Service, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no scheduler to resolve %s's checkout", epicRepo)
+	}
+	root, err := s.RepoRoot(epicRepo)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := git.NewService(root)
+	if err != nil {
+		return nil, err
+	}
+	if err := svc.RequireOriginRepo(epicRepo); err != nil {
+		return nil, err
+	}
+	return svc, nil
 }
 
 // SetEpicCheckpointFn injects the autonomous scheduler's epic-checkpoint
 // recorder, so the fleet-scoped SafetyRails pause fires from the one place an
 // epic actually closes.
 //
-// fn receives the epic's own repository ("owner/name") and number, as
-// OnEpicComplete's callback does (#2377).
+// fn receives the epic's own repository ("owner/name") and number (#2377).
 //
 // Nil-receiver guard is required: NewAutonomousScheduler is called with a nil
 // *Scheduler throughout the test suite.

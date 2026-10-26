@@ -31,6 +31,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/trace"
@@ -52,6 +53,7 @@ const (
 	producerRefinementLabels    = "refinement-labels-missing"
 	producerRefinementExhausted = "refinement-exhausted"
 	producerSafetyRailTrip      = "safety-rail-trip"
+	producerEpicIntegration     = "epic-integration"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -83,6 +85,12 @@ func keyOwnerActionHandoff(repo string, issue int) string {
 
 func keyStuckEpic(repo string, epic int) string {
 	return fmt.Sprintf("stuck-epic:%s#%d", repo, epic)
+}
+
+// keyEpicIntegration identifies the card for an epic whose sub-issues are done
+// but whose branch could not be integrated into main (#2560).
+func keyEpicIntegration(repo string, epic int) string {
+	return fmt.Sprintf("%s:%s#%d", producerEpicIntegration, repo, epic)
 }
 
 func keyArchitectureApproval(repo string, issue int) string {
@@ -1929,5 +1937,61 @@ func BuildMissingCredentials(repo string, creds []string, legacy bool) attention
 		},
 		DefaultAction: "reentered",
 		ExpiresAt:     expiryFromNow(72 * time.Hour),
+	}
+}
+
+// --- Producer: epic integration blocked (per-epic, Scheduler) ---------------
+
+// raiseEpicIntegration surfaces an epic left open because its branch holds
+// commits main lacks and integration could not finish (#2560). Pending
+// integrations (a queued PR waiting on CI) raise nothing: the next sweep
+// re-checks them. The fingerprint is the outcome plus the conflicting files,
+// so a different blocker re-alerts and a repeat sweep does not.
+func (s *Scheduler) raiseEpicIntegration(repo string, epic int, in gh.EpicIntegration) {
+	if !in.Blocked() || repo == "" || epic <= 0 {
+		return
+	}
+	log.Printf("epic %s#%d: left open, epic branch not integrated (%s): %s", repo, epic, in.Outcome, in.Error)
+	owner, name := splitRepo(repo)
+	body := fmt.Sprintf("All sub-issues of %s#%d are closed, but its epic branch %s could not be merged into main (%s). The epic stays open until its branch is on main.",
+		repo, epic, in.Branch, in.Outcome)
+	if in.PRURL != "" {
+		body += "\n\nEpic PR: " + in.PRURL
+	}
+	if len(in.ConflictFiles) > 0 {
+		body += "\n\nConflicting files: " + strings.Join(in.ConflictFiles, ", ")
+	}
+	if in.Error != "" {
+		body += "\n\nError: " + in.Error
+	}
+	s.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyEpicIntegration(repo, epic),
+		Kind:           attention.KindChoose,
+		Severity:       attention.SeverityFYI,
+		Title:          fmt.Sprintf("Epic #%d not integrated: %s", epic, in.Outcome),
+		Body:           body,
+		Producer:       producerEpicIntegration,
+		Context:        attention.Context{Repo: repo, Issue: epic, Blocker: in.Outcome},
+		Standing:       true,
+		Fingerprint:    in.Outcome + ":" + strings.Join(in.ConflictFiles, ","),
+		Options: []attention.Option{
+			{ID: "requeue", Label: "Requeue epic", Verb: attention.VerbQueueAdd,
+				Args: map[string]any{"owner": owner, "repo": name, "issueNumber": epic}, Style: attention.StylePrimary},
+			noopOption("wait", "Wait"),
+		},
+		DefaultAction: "wait",
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Tell the pipeline how to resolve the epic branch"},
+	})
+}
+
+// resolveEpicIntegration retracts the integration card once the epic closed,
+// which happens only after its branch reached main.
+func (s *Scheduler) resolveEpicIntegration(repo string, epic int) {
+	if s == nil || s.attention == nil || repo == "" || epic <= 0 {
+		return
+	}
+	if _, err := s.attention.AutoResolveKey(producerEpicIntegration, keyEpicIntegration(repo, epic)); err != nil {
+		log.Printf("attention: resolve %s failed (fail-open): %v", keyEpicIntegration(repo, epic), err)
 	}
 }

@@ -1423,10 +1423,8 @@ func NewAutonomousScheduler(
 
 	// Wire the epic checkpoint through to the plain Scheduler, which owns the
 	// one call site where an epic actually auto-closes. Registered here rather
-	// than in Run() so it is live for the scheduler's whole lifetime, and via a
-	// dedicated setter rather than by chaining OnEpicComplete — that slot is
-	// re-assigned per pipeline.run request and a chain built on it is silently
-	// wiped (#991). SetEpicCheckpointFn is nil-receiver safe.
+	// than in Run() so it is live for the scheduler's whole lifetime (#991).
+	// SetEpicCheckpointFn is nil-receiver safe.
 	scheduler.SetEpicCheckpointFn(func(epicRepo string, epicNumber int) {
 		if as.safetyRails != nil {
 			as.safetyRails.RecordEpicComplete(epicRepo, epicNumber)
@@ -1459,6 +1457,7 @@ func NewAutonomousScheduler(
 	// override this field to drive the wiring without a real GitHub client.
 	if ghClient != nil {
 		epicSvc := gh.NewEpicService(ghClient)
+		epicSvc.SetCheckoutResolver(scheduler.EpicCheckout)
 		as.reconcileBoardFn = func(ctx context.Context, owner string, projectNumber int, ownerType gh.OwnerType) (*gh.ReconcileResult, error) {
 			return epicSvc.ReconcileBoard(ctx, owner, projectNumber, ownerType)
 		}

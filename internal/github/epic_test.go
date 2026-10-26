@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/git"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 func TestNewEpicService(t *testing.T) {
@@ -135,13 +138,7 @@ func TestAutoCloseResultJSONFields(t *testing.T) {
 		Checked: 1,
 		Closed:  1,
 		Skipped: 0,
-		Summary: []struct {
-			EpicNumber int    `json:"epicNumber"`
-			Title      string `json:"title"`
-			Status     string `json:"status"`
-			Reason     string `json:"reason,omitempty"`
-			Error      string `json:"error,omitempty"`
-		}{
+		Summary: []AutoCloseSummaryItem{
 			{EpicNumber: 42, Title: "Test Epic", Status: "closed", Reason: "all_closed"},
 		},
 	}
@@ -164,13 +161,7 @@ func TestAutoCloseResultSummaryOmitEmpty(t *testing.T) {
 	result := &AutoCloseResult{
 		Checked: 1,
 		Skipped: 1,
-		Summary: []struct {
-			EpicNumber int    `json:"epicNumber"`
-			Title      string `json:"title"`
-			Status     string `json:"status"`
-			Reason     string `json:"reason,omitempty"`
-			Error      string `json:"error,omitempty"`
-		}{
+		Summary: []AutoCloseSummaryItem{
 			{EpicNumber: 10, Title: "Empty Epic", Status: "skipped", Reason: "no_subs"},
 		},
 	}
@@ -490,6 +481,7 @@ func TestCloseOneEpicEventualConsistencyRetry(t *testing.T) {
 
 	client := NewClientWithURL("test-token", srv.URL)
 	svc := NewEpicService(client)
+	svc.checkout = noEpicBranchCheckout(t)
 
 	result, err := svc.AutoClose(context.Background(), "o", "r", 0)
 	if err != nil {
@@ -531,6 +523,7 @@ func TestCloseOneEpicNoRetryWhenComplete(t *testing.T) {
 
 	client := NewClientWithURL("test-token", srv.URL)
 	svc := NewEpicService(client)
+	svc.checkout = noEpicBranchCheckout(t)
 
 	result, err := svc.AutoClose(context.Background(), "o", "r", 0)
 	if err != nil {
@@ -538,5 +531,51 @@ func TestCloseOneEpicNoRetryWhenComplete(t *testing.T) {
 	}
 	if result.Closed != 1 {
 		t.Errorf("AutoClose.Closed = %d, want 1", result.Closed)
+	}
+}
+
+// TestCloseOneEpic_ConflictingEpicBranchStaysOpen is #2560's invariant: every
+// sub-issue is closed, but the epic branch has commits main lacks and cannot
+// be integrated, so the epic is NOT closed and the outcome names why.
+func TestCloseOneEpic_ConflictingEpicBranchStaysOpen(t *testing.T) {
+	clone := epicFixture(t, "internal/x.go")
+	gittest.Run(t, clone, "push", "-q", "origin", "refs/remotes/origin/epic/2085-thing:refs/heads/epic/100-x")
+
+	var calls int32
+	var closed int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "closeIssue") {
+			atomic.AddInt32(&closed, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch atomic.AddInt32(&calls, 1) {
+		case 1:
+			fmt.Fprint(w, epicListResponse(100))
+		case 2:
+			fmt.Fprint(w, epicGetIssueSuccess(100))
+		case 3:
+			fmt.Fprint(w, epicIssueOpenState(100))
+		default:
+			fmt.Fprint(w, `{"data":{}}`)
+		}
+	}))
+	defer srv.Close()
+
+	svc := NewEpicService(NewClientWithURL("test-token", srv.URL))
+	svc.checkout = func(string) (*git.Service, error) { return git.NewService(clone) }
+	svc.prs = &fakeEpicPRs{}
+
+	result, err := svc.AutoClose(context.Background(), "o", "r", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Closed != 0 || atomic.LoadInt32(&closed) != 0 {
+		t.Fatalf("epic closed with an unintegrated branch: %+v", result)
+	}
+	item := result.Summary[0]
+	if item.Status != "error" || item.Reason != "integration_conflict" || item.Integration == nil ||
+		len(item.Integration.ConflictFiles) != 2 {
+		t.Errorf("summary = %+v integration=%+v", item, item.Integration)
 	}
 }
