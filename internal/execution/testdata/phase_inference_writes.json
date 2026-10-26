@@ -9,7 +9,7 @@
       "input": {
         "command": "nightgauge layout write pipeline dev-42.json <<'EOF'\n{\"issue\":42}\nEOF"
       },
-      "want": 14
+      "want": 13
     },
     {
       "name": "dev handoff via piped layout write",
@@ -17,7 +17,7 @@
       "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
       "tool": "Bash",
       "input": { "command": "jq -n '{issue:42}' | nightgauge layout write pipeline dev-42.json" },
-      "want": 14
+      "want": 13
     },
     {
       "name": "dev handoff via layout write --from",
@@ -25,7 +25,7 @@
       "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
       "tool": "Bash",
       "input": { "command": "nightgauge layout write pipeline dev-42.json --from /tmp/dev.json" },
-      "want": 14
+      "want": 13
     },
     {
       "name": "dev handoff with flags before the class and a quoted name",
@@ -35,7 +35,7 @@
       "input": {
         "command": "nightgauge layout --workdir /repo write --from=/tmp/d.json pipeline \"dev-42.json\""
       },
-      "want": 14
+      "want": 13
     },
     {
       "name": "dev handoff named through a shell variable",
@@ -45,7 +45,7 @@
       "input": {
         "command": "nightgauge layout write pipeline \"dev-${ISSUE}.json\" --from /tmp/dev.json"
       },
-      "want": 14
+      "want": 13
     },
     {
       "name": "dev handoff edited in the clone data dir",
@@ -53,7 +53,7 @@
       "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
       "tool": "Write",
       "input": { "file_path": "/repo/.git/nightgauge/pipeline/dev-42.json" },
-      "want": 14
+      "want": 13
     },
     {
       "name": "layout path only reads the dev handoff",
@@ -77,7 +77,7 @@
       "setup": [{ "tool": "Read", "input": { "file_path": "PLAN.md" } }],
       "tool": "Edit",
       "input": { "file_path": "/repo/internal/feature.go" },
-      "want": 8
+      "want": 7
     },
     {
       "name": "clone data dir write is not a source edit",
@@ -117,7 +117,7 @@
       "setup": [],
       "tool": "Bash",
       "input": { "command": "nightgauge layout write plans 42-add-widget.md <<'EOF'\n# Plan\nEOF" },
-      "want": 9
+      "want": 8
     },
     {
       "name": "plan via layout write --from",
@@ -125,7 +125,7 @@
       "setup": [],
       "tool": "Bash",
       "input": { "command": "nightgauge layout write plans 42-add-widget.md --from /tmp/plan.md" },
-      "want": 9
+      "want": 8
     },
     {
       "name": "plan edited in the clone data dir",
@@ -133,7 +133,7 @@
       "setup": [],
       "tool": "Write",
       "input": { "file_path": "/repo/.git/nightgauge/plans/42-add-widget.md" },
-      "want": 9
+      "want": 8
     },
     {
       "name": "in-tree plan path is no longer the plan",
@@ -159,7 +159,7 @@
       "input": {
         "command": "jq -n '{issue:42}' | nightgauge layout write pipeline planning-42.json"
       },
-      "want": 10
+      "want": 9
     },
     {
       "name": "planning handoff via layout append",
@@ -169,7 +169,7 @@
       "input": {
         "command": "nightgauge layout append pipeline planning-42.json --from /tmp/c.json"
       },
-      "want": 10
+      "want": 9
     },
     {
       "name": "planning handoff edited in the clone data dir",
@@ -177,7 +177,7 @@
       "setup": [],
       "tool": "Write",
       "input": { "file_path": "/repo/.git/nightgauge/pipeline/planning-42.json" },
-      "want": 10
+      "want": 9
     },
     {
       "name": "plan and planning handoff in one command reach the later phase",
@@ -187,7 +187,7 @@
       "input": {
         "command": "nightgauge layout write plans 42-x.md --from /tmp/p.md && nightgauge layout write pipeline planning-42.json --from /tmp/c.json"
       },
-      "want": 10
+      "want": 9
     },
     {
       "name": "validate handoff via layout write heredoc",
@@ -197,7 +197,7 @@
       "input": {
         "command": "nightgauge layout write pipeline validate-42.json <<'EOF'\n{\"issue\":42}\nEOF"
       },
-      "want": 19
+      "want": 18
     },
     {
       "name": "validate handoff edited in the clone data dir",
@@ -205,7 +205,7 @@
       "setup": [],
       "tool": "Write",
       "input": { "file_path": "/repo/.git/nightgauge/pipeline/validate-42.json" },
-      "want": 19
+      "want": 18
     },
     {
       "name": "a validate log is not the validate handoff",

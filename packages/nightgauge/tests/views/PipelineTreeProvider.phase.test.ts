@@ -591,7 +591,7 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
       const stageItem = provider.getStage("feature-dev")!;
       // getPhaseCount() returns the registry total (authoritative denominator),
       // not the number of phases recorded so far in state.json. Issue #1608: 14, #1684: 15 (knowledge-base-read added).
-      expect(stageItem.getPhaseCount()).toBe(18);
+      expect(stageItem.getPhaseCount()).toBe(17);
       const children = stageItem.getChildren();
       expect(children.every((c) => c instanceof PhaseTreeItem)).toBe(true);
     });
@@ -664,11 +664,11 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
       provider = await createProvider(mockService);
       mockService._fireStateChanged(state);
 
-      // feature-dev is complete: fill-in adds all 18 registry phases (e2e-testing added in #9).
-      expect(provider.getStage("feature-dev")!.getPhaseCount()).toBe(18);
-      // feature-validate is running: total is still registry count (23,
+      // feature-dev is complete: fill-in adds all 17 registry phases (e2e-testing added in #9).
+      expect(provider.getStage("feature-dev")!.getPhaseCount()).toBe(17);
+      // feature-validate is running: total is still registry count (22,
       // verify-ui-gate added in #4193), not the number of phases recorded so far.
-      expect(provider.getStage("feature-validate")!.getPhaseCount()).toBe(23);
+      expect(provider.getStage("feature-validate")!.getPhaseCount()).toBe(22);
     });
   });
 
@@ -729,7 +729,7 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
       mockService._fireStateChanged(stateWithPhases);
 
       const stageItem = provider.getStage("feature-dev")!;
-      expect(stageItem.getPhaseCount()).toBe(18);
+      expect(stageItem.getPhaseCount()).toBe(17);
 
       // Second sync: state no longer carries phases (e.g. reset).
       const stateWithoutPhases = makeState({
@@ -1030,7 +1030,7 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
       const stageItem = provider.getStage("feature-dev")!;
       // Registry total (18) is always the authoritative count.
       // Issue #1608: was 16, now 18 (commit + push-commits phases removed, recall phase added). #1684: 15 (knowledge-base-read added).
-      expect(stageItem.getPhaseCount()).toBe(18);
+      expect(stageItem.getPhaseCount()).toBe(17);
 
       // Second state: stage is now complete, phases still present in state.
       const completedState = makeState({
@@ -1053,12 +1053,12 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
       mockService._fireStateChanged(completedState);
 
       // Completed stage: fill-in adds all missing registry phases.
-      // feature-dev has 18 registry phases; 'implementation' is the only one
-      // in the original 3 that matches a registry name, so 18 are added as
-      // skipped. getPhaseCount() = registry total (18).
-      // Children = 3 original + 18 fill-in = 20.
-      expect(stageItem.getPhaseCount()).toBe(18);
-      expect(stageItem.getChildren()).toHaveLength(20);
+      // feature-dev has 17 registry phases; 'implementation' is the only one
+      // in the original 3 that matches a registry name, so 16 are added as
+      // skipped. getPhaseCount() = registry total (17).
+      // Children = 3 original + 16 fill-in = 19.
+      expect(stageItem.getPhaseCount()).toBe(17);
+      expect(stageItem.getChildren()).toHaveLength(19);
     });
 
     it("stage collapsibleState becomes Collapsed (not None) after completing with phases", async () => {
@@ -1162,7 +1162,7 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
       // Failed stage: fill-in adds all missing registry phases.
       // feature-dev has 18 registry phases; 'implementation' matches one,
       // so 18 are added as skipped. getPhaseCount() = registry total (18).
-      expect(stageItem.getPhaseCount()).toBe(18);
+      expect(stageItem.getPhaseCount()).toBe(17);
       expect(stageItem.getStatus()).toBe("failed");
     });
 

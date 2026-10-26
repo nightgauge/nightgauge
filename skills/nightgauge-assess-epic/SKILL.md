@@ -6,7 +6,7 @@ description: Analyze an epic's sub-issues and recommend batch vs sequential pipe
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.0.1"
+  version: "1.0.2"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Bash Glob Grep
@@ -21,6 +21,10 @@ batch, sequential, or hybrid pipeline execution. Extracts file overlap, size
 variance, and dependency signals from sub-issues, then computes a deterministic
 strategy recommendation with confidence scoring and estimated savings.
 
+The recommendation is advisory: every sub-issue still runs its own pipeline and
+PR into the epic branch, and `epic-complete` opens the single epic PR. There is
+no multi-issue pipeline run (#366).
+
 **Use Cases:**
 
 - Planning pipeline execution strategy before starting an epic
@@ -33,7 +37,7 @@ strategy recommendation with confidence scoring and estimated savings.
 - Before queuing an epic for pipeline processing
 - When an epic has 3+ sub-issues and you want to optimize execution
 - After sub-issues change (new issues added, scope changes) to refresh strategy
-- When deciding between batch mode and sequential processing
+- When deciding the order in which to queue an epic's sub-issues
 
 ## Invocation
 
@@ -53,7 +57,7 @@ strategy recommendation with confidence scoring and estimated savings.
 ### Examples
 
 ```bash
-# Assess epic #799 for batch processing
+# Assess epic #799's execution strategy
 /nightgauge:assess-epic 799
 
 # Assess a different epic
@@ -232,10 +236,10 @@ echo ""
 echo "Recommendation:"
 case "$STRATEGY" in
   parallel)
-    echo "  Process all $OPEN_COUNT sub-issues in parallel batch mode."
+    echo "  All $OPEN_COUNT sub-issues are independent — queue them concurrently."
     ;;
   mixed)
-    echo "  Group independent sub-issues for parallel batch processing."
+    echo "  Queue independent sub-issues concurrently."
     echo "  Run dependency-blocked issues sequentially after their blockers."
     ;;
   sequential)

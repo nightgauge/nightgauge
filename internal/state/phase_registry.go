@@ -18,7 +18,6 @@ var PhaseRegistry = map[PipelineStage][]string{
 	StageFeatureDev: {
 		"validate-environment",
 		"read-planning-context",
-		"batch-plan-detection",
 		"feedback-context-check",
 		"plan-verification",
 		"knowledge-base-read",
@@ -38,7 +37,6 @@ var PhaseRegistry = map[PipelineStage][]string{
 	StageFeaturePlanning: {
 		"feedback-context-check",
 		"load-context",
-		"batch-detection",
 		"ac-reconcile",
 		"assess-complexity",
 		"pattern-mining",
@@ -54,7 +52,6 @@ var PhaseRegistry = map[PipelineStage][]string{
 	StageFeatureValidate: {
 		"validate-environment",
 		"read-dev-context",
-		"batch-detection",
 		"ac-completion-check",
 		"detect-testing-environment",
 		"ptc-detection",

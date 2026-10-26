@@ -1,23 +1,6 @@
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
 <!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
 
-## Batch Mode
-
-**Batch mode is additive.** Every stage has a single-issue path that is the
-default and is never modified by this section. A batch context file is an
-_optional overlay_: when the file this stage looks for is absent — the normal
-case — continue the single-issue path unchanged and do not mention batch mode
-again. Never invent, guess at, or synthesize a batch context file that is not
-on disk.
-
-### The per-stage contract
-
-| Stage              | Batch input      | Batch output              |
-| ------------------ | ---------------- | ------------------------- |
-| `feature-planning` | `batch-{E}.json` | `planning-batch-{E}.json` |
-
-Full contract and invariants: Read `skills/_shared/BATCH_MODE.md` when `batch-{E}.json` exists.
-
 # Feature Planning (compact)
 
 > Compact render profile (ADR 023 §Q5, #1661). Keeps every phase marker, the
@@ -117,12 +100,12 @@ any other output for that phase.
 ---
 
 ```bash
-printf '<!-- phase:start name="feedback-context-check" index=0 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="feedback-context-check" index=0 total=13 stage="feature-planning" -->\n'
 ```
 
 > **Read `_includes/feedback-and-context.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
-It covers Phase 0 (feedback/revision detection), Phase 1, and Phase 1.5. Emit
+It covers Phase 0 (feedback/revision detection) and Phase 1. Emit
 each phase's marker inline (below) as you reach it.
 
 ---
@@ -130,24 +113,15 @@ each phase's marker inline (below) as you reach it.
 ### Phase 1: Load Context and Start Stage
 
 ```bash
-printf '<!-- phase:start name="load-context" index=1 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="load-context" index=1 total=13 stage="feature-planning" -->\n'
 ```
 
 Load issue context and signal stage start — see `_includes/feedback-and-context.md`.
 
-### Phase 1.5: Batch Context Detection
-
-```bash
-printf '<!-- phase:start name="batch-detection" index=2 total=14 stage="feature-planning" -->\n'
-```
-
-Detect batch mode and route to consolidated planning — see the supporting
-file.
-
 ### Phase 1.7: AC Reconciliation Pre-Flight (Deterministic)
 
 ```bash
-printf '<!-- phase:start name="ac-reconcile" index=3 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="ac-reconcile" index=2 total=13 stage="feature-planning" -->\n'
 ```
 
 **PURPOSE**: Deterministic, pre-LLM check classifying each AC as
@@ -180,7 +154,7 @@ exits, and overwrites whatever is there.
 ### Phase 2: Assess Complexity (Deterministic)
 
 ```bash
-printf '<!-- phase:start name="assess-complexity" index=4 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="assess-complexity" index=3 total=13 stage="feature-planning" -->\n'
 ```
 
 Select documentation scope via a deterministic decision tree. Extract size and
@@ -205,7 +179,7 @@ complexity.
 ### Phase 2.5: Pattern Mining
 
 ```bash
-printf '<!-- phase:start name="pattern-mining" index=5 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="pattern-mining" index=4 total=13 stage="feature-planning" -->\n'
 ```
 
 > **Read `_includes/pattern-and-docs.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
@@ -216,7 +190,7 @@ analysis). Emit each phase's marker inline (below) as you reach it.
 ### Phase 3: Documentation-First Analysis
 
 ```bash
-printf '<!-- phase:start name="documentation-analysis" index=6 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="documentation-analysis" index=5 total=13 stage="feature-planning" -->\n'
 ```
 
 Greenfield detection, parallel/sequential doc gathering — see the supporting
@@ -232,7 +206,7 @@ any open question in the plan instead of reading further.
 ### Phase 3.5: Knowledge Base Read
 
 ```bash
-printf '<!-- phase:start name="knowledge-base-read" index=7 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="knowledge-base-read" index=6 total=13 stage="feature-planning" -->\n'
 ```
 
 > **Read `_includes/knowledge-recall.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
@@ -244,7 +218,7 @@ reach it.
 ### Phase 3.7: Recall Prior Decisions
 
 ```bash
-printf '<!-- phase:start name="recall-prior-decisions" index=8 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="recall-prior-decisions" index=7 total=13 stage="feature-planning" -->\n'
 ```
 
 Query the knowledge base for semantically-related prior decisions and set
@@ -255,7 +229,7 @@ Query the knowledge base for semantically-related prior decisions and set
 ### Phase 4: Produce Plan File in the Clone's Plans Directory
 
 ```bash
-printf '<!-- phase:start name="produce-plan" index=9 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="produce-plan" index=8 total=13 stage="feature-planning" -->\n'
 ```
 
 > **Read `_includes/plan-and-enrichment.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
@@ -268,7 +242,7 @@ each implementation step as a `- [ ] task` checkbox — see Gotchas) and Phase
 ### Phase 5: Write Planning Context
 
 ```bash
-printf '<!-- phase:start name="write-planning-context" index=10 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="write-planning-context" index=9 total=13 stage="feature-planning" -->\n'
 ```
 
 Write `planning-{N}.json` through `nightgauge layout write pipeline
@@ -380,7 +354,7 @@ jq . "$CONTEXT_FILE" > /dev/null || { echo "ERROR: issue context JSON invalid af
 ### Phase 5.5: Knowledge Base Enrichment
 
 ```bash
-printf '<!-- phase:start name="knowledge-base-enrichment" index=11 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="knowledge-base-enrichment" index=10 total=13 stage="feature-planning" -->\n'
 ```
 
 > **Follow this phase's section of the plan-and-enrichment include, read in Phase 4 above.**
@@ -397,7 +371,7 @@ silently continue to Phase 6.
 ### Phase 6: Complete Stage
 
 ```bash
-printf '<!-- phase:start name="complete-stage" index=12 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="complete-stage" index=11 total=13 stage="feature-planning" -->\n'
 ```
 
 1. Signal completion via Go binary: `"$BINARY" project move-status "$ISSUE_NUMBER" "in-progress" 2>/dev/null || true`
@@ -449,7 +423,7 @@ Signal) when needed. @see Issue #1492.
 ### Phase 7: Self-Assessment Epilogue
 
 ```bash
-printf '<!-- phase:start name="self-assessment" index=13 total=14 stage="feature-planning" -->\n'
+printf '<!-- phase:start name="self-assessment" index=12 total=13 stage="feature-planning" -->\n'
 ```
 
 **Read `skills/_shared/SELF_ASSESSMENT_EPILOGUE.md` now and follow it before

@@ -16,10 +16,10 @@ describe("phase gap-fill", () => {
     expect(toOne?.marker.index).toBe(1);
     expect(toOne?.passed).toEqual([]);
 
-    const toEight = inf.observeToolUse("Write", { file_path: "src/app.ts" });
-    expect(toEight?.marker.index).toBe(8);
-    expect(toEight?.passed.map((p) => p.index)).toEqual([2, 3, 4, 5, 6, 7]);
-    for (const p of toEight!.passed) {
+    const toSeven = inf.observeToolUse("Write", { file_path: "src/app.ts" });
+    expect(toSeven?.marker.index).toBe(7);
+    expect(toSeven?.passed.map((p) => p.index)).toEqual([2, 3, 4, 5, 6]);
+    for (const p of toSeven!.passed) {
       expect(p.name).not.toBe("");
       expect(p.stage).toBe("feature-dev");
     }

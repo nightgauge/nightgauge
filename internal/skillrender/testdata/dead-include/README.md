@@ -66,9 +66,9 @@ over that path returns nothing — and all six stage skills carried the same
 directive. `pr-merge` is the worst of the six because the directive was not
 supplementary context at the head of the file: it was the phase body.
 
-The same render after the fix expands to the shared batch contract (`## Batch
-Mode` at line 65) and Phase 0.5 carries a real body with a read-directive to
-`_includes/batch-detection.md`. No directive survives — asserted live by
+The fix first expanded the directive into a shared batch contract; #366 then
+descoped batch mode, removing the contract, the directive and Phase 0.5
+altogether. No directive survives — asserted live by
 `TestRealSkillsRenderClean` and `TestSkillIncludes_WorkingTreeIsClean`, not by
 a second golden file.
 

@@ -603,8 +603,6 @@ agent MUST NOT continue to feature planning in this conversation.
 
 ---
 
-<!-- include: ../_shared/BATCH_MODE.md -->
-
 ---
 
 ## Output Contract

@@ -5,7 +5,7 @@ description: Claim a GitHub issue, extract requirements, and set up the developm
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.21.2"
+  version: "1.21.3"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 context: fork
@@ -401,8 +401,6 @@ the routing field, verify the context file, and signal stage completion — all
 detailed in the reference file already loaded for this phase (Steps 8.3–8.7).
 
 ---
-
-<!-- include: ../_shared/BATCH_MODE.md -->
 
 ---
 

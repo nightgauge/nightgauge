@@ -298,7 +298,6 @@ describe("StageTreeItem — phase child management (Issue #1028)", () => {
       const phases: StagePhase[] = [
         makePhase("validate-environment", "complete"),
         makePhase("read-planning-context", "complete"),
-        makePhase("batch-plan-detection", "complete"),
         makePhase("feedback-context-check", "complete"),
         makePhase("plan-verification", "complete"),
         makePhase("knowledge-base-read", "complete"),
@@ -306,10 +305,10 @@ describe("StageTreeItem — phase child management (Issue #1028)", () => {
         makePhase("implementation", "complete"), // completed, next hasn't started
       ];
       item.setStatus("running");
-      item.setPhases(phases, "implementation", 18);
+      item.setPhases(phases, "implementation", 17);
 
       // "implementation" is index 8 in feature-dev registry (was 7 with 17 phases) → next is "testing"
-      expect(item.description).toBe("Testing [8/18]");
+      expect(item.description).toBe("Testing [7/17]");
     });
 
     it('shows "running... [N/T]" when currentPhase is the last in the registry (no next phase)', () => {

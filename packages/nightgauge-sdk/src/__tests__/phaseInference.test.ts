@@ -45,7 +45,7 @@ describe("createPhaseInference — feature-dev", () => {
     inf.start();
     const m = inf.observeToolUse("Write", { file_path: "src/foo.ts" })?.marker ?? null;
     expect(m?.name).toBe("implementation");
-    expect(m?.index).toBe(8);
+    expect(m?.index).toBe(7);
   });
 
   it("does NOT treat a per-clone bookkeeping write as implementation", () => {
@@ -61,7 +61,7 @@ describe("createPhaseInference — feature-dev", () => {
         file_path: "/repo/.git/nightgauge/pipeline/dev-3760.json",
       })?.marker ?? null;
     // dev-context path → write-dev-context (14), not implementation (8)
-    expect(m?.index).toBe(14);
+    expect(m?.index).toBe(13);
     expect(m?.name).toBe("write-dev-context");
   });
 
@@ -73,7 +73,7 @@ describe("createPhaseInference — feature-dev", () => {
       inf.observeToolUse("Bash", {
         command: "npx -w packages/nightgauge vitest run",
       })?.marker ?? null;
-    expect(m?.index).toBe(9);
+    expect(m?.index).toBe(8);
     expect(m?.name).toBe("testing");
   });
 
@@ -94,7 +94,7 @@ describe("createPhaseInference — feature-dev", () => {
     const m =
       inf.observeToolUse("Bash", { command: "nightgauge project move-status 3760" })?.marker ??
       null;
-    expect(m?.index).toBe(15);
+    expect(m?.index).toBe(14);
     expect(m?.name).toBe("sync-project-status");
   });
 
@@ -103,14 +103,14 @@ describe("createPhaseInference — feature-dev", () => {
     inf.start();
     inf.observeToolUse("Write", { file_path: "src/foo.ts" }); // → implementation (8)
     const regress = inf.observeToolUse("Read", { file_path: "src/other.ts" })?.marker ?? null;
-    expect(regress).toBeNull(); // index 1 < cursor 8, no emission
+    expect(regress).toBeNull(); // index 1 < cursor 7, no emission
   });
 
   it("emits each advancement only once", () => {
     const inf = createPhaseInference("feature-dev");
     inf.start();
     const first = inf.observeToolUse("Edit", { file_path: "src/a.ts" })?.marker ?? null;
-    expect(first?.index).toBe(8);
+    expect(first?.index).toBe(7);
     const second = inf.observeToolUse("Edit", { file_path: "src/b.ts" })?.marker ?? null;
     expect(second).toBeNull(); // already at implementation
   });
@@ -120,10 +120,10 @@ describe("createPhaseInference — feature-dev", () => {
     inf.start();
     // Skill emitted a genuine marker for quality-review (index 11).
     inf.observeRealMarker(11);
-    // A subsequent source edit (would infer index 8) must not regress.
+    // A subsequent source edit (would infer index 7) must not regress.
     const m = inf.observeToolUse("Write", { file_path: "src/foo.ts" })?.marker ?? null;
     expect(m).toBeNull();
-    // But a later test run (index 9) is also behind 11 → still null.
+    // But a later test run (index 8) is also behind 11 → still null.
     const t = inf.observeToolUse("Bash", { command: "go test ./..." })?.marker ?? null;
     expect(t).toBeNull();
   });
@@ -155,7 +155,7 @@ describe("createPhaseInference — feature-planning (#3771)", () => {
     const inf = createPhaseInference("feature-planning");
     inf.start();
     const m = inf.observeToolUse("Grep", { pattern: "foo", path: "docs/" })?.marker ?? null;
-    expect(m?.index).toBe(6);
+    expect(m?.index).toBe(5);
     expect(m?.name).toBe("documentation-analysis");
   });
 
@@ -166,7 +166,7 @@ describe("createPhaseInference — feature-planning (#3771)", () => {
       inf.observeToolUse("Write", {
         file_path: "/repo/.git/nightgauge/plans/6-flutter-ia-nav.md",
       })?.marker ?? null;
-    expect(m?.index).toBe(9);
+    expect(m?.index).toBe(8);
     expect(m?.name).toBe("produce-plan");
   });
 
@@ -178,7 +178,7 @@ describe("createPhaseInference — feature-planning (#3771)", () => {
       inf.observeToolUse("Write", {
         file_path: "/repo/.git/nightgauge/pipeline/planning-6.json",
       })?.marker ?? null;
-    expect(m?.index).toBe(10);
+    expect(m?.index).toBe(9);
     expect(m?.name).toBe("write-planning-context");
   });
 
@@ -190,7 +190,7 @@ describe("createPhaseInference — feature-planning (#3771)", () => {
       inf.observeToolUse("Edit", {
         file_path: "/repo/.git/nightgauge/plans/6-flutter-ia-nav.md",
       })?.marker ?? null;
-    expect(m?.index).toBe(9);
+    expect(m?.index).toBe(8);
   });
 
   it("is monotonic — a late read does not regress past produce-plan", () => {
@@ -199,7 +199,7 @@ describe("createPhaseInference — feature-planning (#3771)", () => {
     inf.observeToolUse("Write", { file_path: "/repo/.git/nightgauge/plans/6-x.md" }); // → 9
     const regress =
       inf.observeToolUse("Read", { file_path: "docs/ARCHITECTURE.md" })?.marker ?? null;
-    expect(regress).toBeNull(); // index 6 < cursor 9
+    expect(regress).toBeNull(); // index 5 < cursor 8
   });
 
   it("real markers take precedence over inferred planning phases", () => {
@@ -221,7 +221,7 @@ describe("createPhaseInference — feature-validate (#1850)", () => {
     const inf = createPhaseInference("feature-validate");
     expect(inf.enabled).toBe(true);
 
-    expect(inf.start()).toMatchObject({ index: 0, total: 23 });
+    expect(inf.start()).toMatchObject({ index: 0, total: 22 });
     expect(inf.observeToolUse("Read", { file_path: "dev-42.json" })?.marker).toMatchObject({
       name: "read-dev-context",
     });
@@ -249,7 +249,7 @@ describe("createPhaseInference — feature-validate (#1850)", () => {
   it("yields to a real marker", () => {
     const inf = createPhaseInference("feature-validate");
     inf.start();
-    inf.observeRealMarker(19); // the skill emitted write-validate-context
+    inf.observeRealMarker(18); // the skill emitted write-validate-context
     expect(inf.observeToolUse("Bash", { command: "npm run test" })).toBeNull();
   });
 });
@@ -282,7 +282,7 @@ describe("createPhaseInference — test/build command coverage (#1246)", () => {
   const advancesToTesting = (command: string): boolean => {
     const inf = createPhaseInference("feature-dev");
     inf.start();
-    // Put the cursor at implementation (8) so only a Testing match (9) can advance.
+    // Put the cursor at implementation (7) so only a Testing match (8) can advance.
     inf.observeToolUse("Write", { file_path: "src/app.ts" });
     return inf.observeToolUse("Bash", { command })?.marker.name === "testing";
   };
@@ -404,16 +404,16 @@ describe("grokToolCall (#559)", () => {
           toolName: "run_terminal_command",
           rawInput: { command: "go test ./..." },
         },
-        10,
+        9,
       ],
-      [{ type: "tool_call_update", rawInput: { command: "git push origin x" } }, 10],
+      [{ type: "tool_call_update", rawInput: { command: "git push origin x" } }, 9],
       [
         {
           type: "tool_call",
           toolName: "run_terminal_command",
           rawInput: { command: "git push origin x" },
         },
-        18,
+        17,
       ],
     ];
     let reached = 0;

@@ -6,7 +6,7 @@ description: Create a pull request with correct base/head, issue linkage, valida
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.21.2"
+  version: "1.22.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 inputs:
@@ -18,7 +18,6 @@ disable-model-invocation: true
 
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
 <!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
-<!-- include: ../_shared/BATCH_MODE.md -->
 
 # PR Create
 
@@ -131,7 +130,7 @@ any other output for that phase.
 ### Phase 0.5: Auto-Merge Guard
 
 ```bash
-printf '<!-- phase:start name="auto-merge-guard" index=0 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="auto-merge-guard" index=0 total=13 stage="pr-create" -->\n'
 ```
 
 **PURPOSE**: Verify the target repository does NOT have auto-merge enabled and
@@ -187,7 +186,7 @@ The VSCode extension provides a proactive warning at workspace load time.
 ### Phase 1: Load Context and Start Stage
 
 ```bash
-printf '<!-- phase:start name="load-context" index=1 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="load-context" index=1 total=13 stage="pr-create" -->\n'
 ```
 
 **Step 1.1: Parse issue number from branch**
@@ -220,22 +219,10 @@ fi
 > **Read `_includes/context-load.md` (same directory as this SKILL.md) now and
 > follow its instructions before continuing this phase.**
 
-### Phase 1.5: Batch Context Detection
-
-```bash
-printf '<!-- phase:start name="batch-detection" index=2 total=14 stage="pr-create" -->\n'
-```
-
-**PURPOSE**: Detect batch mode when `dev-batch-{E}.json` exists and create a
-single PR with multi-issue closing keywords.
-
-> **Read `_includes/context-load.md` (same directory as this SKILL.md) now and
-> follow its instructions before continuing this phase.**
-
 ### Phase 1.7: Build Knowledge Section
 
 ```bash
-printf '<!-- phase:start name="build-knowledge-section" index=3 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="build-knowledge-section" index=2 total=13 stage="pr-create" -->\n'
 ```
 
 **PURPOSE**: Construct the `## Knowledge` section for the PR body from knowledge
@@ -248,7 +235,7 @@ entirely** when no knowledge entries exist — never include an empty section.
 ### Phase 1.8: Build What to Test Section
 
 ```bash
-printf '<!-- phase:start name="build-what-to-test-section" index=4 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="build-what-to-test-section" index=3 total=13 stage="pr-create" -->\n'
 ```
 
 **PURPOSE**: Generate the `## What to Test` section from the dependency graph
@@ -263,7 +250,7 @@ continue without error.
 ### Phase 2: Preflight Checks
 
 ```bash
-printf '<!-- phase:start name="preflight-checks" index=5 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="preflight-checks" index=4 total=13 stage="pr-create" -->\n'
 ```
 
 1. Ensure current branch is not base branch (for example, not `main`).
@@ -284,7 +271,7 @@ If checks fail, stop with clear fixes.
 ### Phase 2.3: Proactive Main Branch Merge
 
 ```bash
-printf '<!-- phase:start name="proactive-main-merge" index=6 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="proactive-main-merge" index=5 total=13 stage="pr-create" -->\n'
 ```
 
 **PURPOSE**: Merge the latest base branch into the feature branch before
@@ -307,7 +294,7 @@ requires manual conflict resolution.
 ### Phase 2.5: Security Re-Scan
 
 ```bash
-printf '<!-- phase:start name="security-rescan" index=7 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="security-rescan" index=6 total=13 stage="pr-create" -->\n'
 ```
 
 **PURPOSE**: Defense-in-depth secret and vulnerability scan on changed files
@@ -323,7 +310,7 @@ changed between `BASE_BRANCH` and HEAD.
 ### Phase 2.6: Scope Drift Gate
 
 ```bash
-printf '<!-- phase:start name="scope-drift-gate" index=8 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="scope-drift-gate" index=7 total=13 stage="pr-create" -->\n'
 ```
 
 **PURPOSE**: For `type:docs` and `type:chore` issues, verify that modified files
@@ -342,7 +329,7 @@ when `pr-{N}.json` is written in Phase 4.
 ### Phase 3: Create PR via Go Binary
 
 ```bash
-printf '<!-- phase:start name="create-pr" index=9 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="create-pr" index=8 total=13 stage="pr-create" -->\n'
 ```
 
 Create the PR using the Go binary. The skill constructs the title, body (with
@@ -355,7 +342,7 @@ guard. Append `KNOWLEDGE_SECTION` to the PR body when non-empty.
 ### Phase 3.6: Verify PR Created
 
 ```bash
-printf '<!-- phase:start name="verify-pr-created" index=10 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="verify-pr-created" index=9 total=13 stage="pr-create" -->\n'
 ```
 
 **PURPOSE**: Post-condition verification that a PR actually exists on GitHub for
@@ -375,7 +362,7 @@ exits with status 1, and the orchestrator classifies this as
 ### Phase 3.5: Snapshot CI Status
 
 ```bash
-printf '<!-- phase:start name="monitor-ci-status" index=11 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="monitor-ci-status" index=10 total=13 stage="pr-create" -->\n'
 ```
 
 **PURPOSE**: Take **one** non-blocking reading of CI check status after PR
@@ -425,7 +412,7 @@ gracefully (sets `CI_MONITORED=false`) if it is absent.
 ### Phase 4: Write Context and Finalize Stage
 
 ```bash
-printf '<!-- phase:start name="write-context" index=12 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="write-context" index=11 total=13 stage="pr-create" -->\n'
 ```
 
 1. Write `pr-{N}.json` where **N is the ISSUE number**
@@ -508,7 +495,7 @@ printf '<!-- phase:start name="write-context" index=12 total=14 stage="pr-create
 ### Phase 5: Self-Assessment Epilogue
 
 ```bash
-printf '<!-- phase:start name="self-assessment" index=13 total=14 stage="pr-create" -->\n'
+printf '<!-- phase:start name="self-assessment" index=12 total=13 stage="pr-create" -->\n'
 ```
 
 <!-- include: ../_shared/SELF_ASSESSMENT_EPILOGUE.md -->

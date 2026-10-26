@@ -18,7 +18,7 @@ import type { StagePhase } from "../../src/schemas/pipelineState";
 const DEV_PHASES = PHASE_REGISTRY["feature-dev" as ExecutionStage];
 
 /** The exact arrival order recorded in runtime-336-*.json. */
-const ARRIVAL_336 = [0, 1, 8, 15, 2, 3, 4, 5, 6, 11, 7, 9, 10, 13, 12, 14, 16, 17];
+const ARRIVAL_336 = [0, 1, 7, 14, 2, 3, 4, 5, 10, 6, 8, 9, 12, 11, 13, 15, 16];
 
 describe("orderPhasesByRegistry (#1246)", () => {
   it("restores execution order from issue #336's arrival order", () => {
@@ -30,11 +30,11 @@ describe("orderPhasesByRegistry (#1246)", () => {
 
     expect(ordered.map((p) => p.name)).toEqual(DEV_PHASES.map((p) => p.name));
     // The specific confusion the operator hit: sync-project-status is index
-    // 15 of 18, so it must render near the END, not fourth.
-    expect(ordered.findIndex((p) => p.name === "sync-project-status")).toBe(15);
-    // And batch-plan-detection (2) runs BEFORE implementation (8), despite
+    // 14 of 17, so it must render near the END, not fourth.
+    expect(ordered.findIndex((p) => p.name === "sync-project-status")).toBe(14);
+    // And feedback-context-check (2) runs BEFORE implementation (7), despite
     // arriving after it.
-    expect(ordered.findIndex((p) => p.name === "batch-plan-detection")).toBeLessThan(
+    expect(ordered.findIndex((p) => p.name === "feedback-context-check")).toBeLessThan(
       ordered.findIndex((p) => p.name === "implementation")
     );
   });

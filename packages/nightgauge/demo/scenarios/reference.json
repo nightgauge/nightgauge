@@ -894,7 +894,7 @@
         "runId": "demo-run-133",
         "name": "feedback-context-check",
         "index": 0,
-        "total": 14
+        "total": 13
       }
     },
     {
@@ -908,7 +908,7 @@
         "runId": "demo-run-133",
         "name": "feedback-context-check",
         "index": 0,
-        "total": 14,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -923,7 +923,7 @@
         "runId": "demo-run-133",
         "name": "load-context",
         "index": 1,
-        "total": 14
+        "total": 13
       }
     },
     {
@@ -937,36 +937,7 @@
         "runId": "demo-run-133",
         "name": "load-context",
         "index": 1,
-        "total": 14,
-        "status": "completed"
-      }
-    },
-    {
-      "at": 9750,
-      "kind": "event",
-      "method": "phase.start",
-      "payload": {
-        "issueNumber": 133,
-        "stage": "feature-planning",
-        "repo": "lanternworks/harbor-api",
-        "runId": "demo-run-133",
-        "name": "batch-detection",
-        "index": 2,
-        "total": 14
-      }
-    },
-    {
-      "at": 10550,
-      "kind": "event",
-      "method": "phase.complete",
-      "payload": {
-        "issueNumber": 133,
-        "stage": "feature-planning",
-        "repo": "lanternworks/harbor-api",
-        "runId": "demo-run-133",
-        "name": "batch-detection",
-        "index": 2,
-        "total": 14,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -980,8 +951,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "ac-reconcile",
-        "index": 3,
-        "total": 14
+        "index": 2,
+        "total": 13
       }
     },
     {
@@ -994,8 +965,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "ac-reconcile",
-        "index": 3,
-        "total": 14,
+        "index": 2,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1009,8 +980,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "assess-complexity",
-        "index": 4,
-        "total": 14
+        "index": 3,
+        "total": 13
       }
     },
     {
@@ -1023,8 +994,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "assess-complexity",
-        "index": 4,
-        "total": 14,
+        "index": 3,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1038,8 +1009,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "pattern-mining",
-        "index": 5,
-        "total": 14
+        "index": 4,
+        "total": 13
       }
     },
     {
@@ -1065,8 +1036,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "pattern-mining",
-        "index": 5,
-        "total": 14,
+        "index": 4,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1080,8 +1051,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "documentation-analysis",
-        "index": 6,
-        "total": 14
+        "index": 5,
+        "total": 13
       }
     },
     {
@@ -1094,8 +1065,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "documentation-analysis",
-        "index": 6,
-        "total": 14,
+        "index": 5,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1109,8 +1080,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "knowledge-base-read",
-        "index": 7,
-        "total": 14
+        "index": 6,
+        "total": 13
       }
     },
     {
@@ -1123,8 +1094,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "knowledge-base-read",
-        "index": 7,
-        "total": 14,
+        "index": 6,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1138,8 +1109,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "recall-prior-decisions",
-        "index": 8,
-        "total": 14
+        "index": 7,
+        "total": 13
       }
     },
     {
@@ -1152,8 +1123,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "recall-prior-decisions",
-        "index": 8,
-        "total": 14,
+        "index": 7,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1167,8 +1138,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "produce-plan",
-        "index": 9,
-        "total": 14
+        "index": 8,
+        "total": 13
       }
     },
     {
@@ -1187,8 +1158,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "produce-plan",
-        "index": 9,
-        "total": 14,
+        "index": 8,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1202,8 +1173,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "write-planning-context",
-        "index": 10,
-        "total": 14
+        "index": 9,
+        "total": 13
       }
     },
     {
@@ -1216,8 +1187,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "write-planning-context",
-        "index": 10,
-        "total": 14,
+        "index": 9,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1231,8 +1202,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "knowledge-base-enrichment",
-        "index": 11,
-        "total": 14
+        "index": 10,
+        "total": 13
       }
     },
     {
@@ -1245,8 +1216,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "knowledge-base-enrichment",
-        "index": 11,
-        "total": 14,
+        "index": 10,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1260,8 +1231,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "complete-stage",
-        "index": 12,
-        "total": 14
+        "index": 11,
+        "total": 13
       }
     },
     {
@@ -1274,8 +1245,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "complete-stage",
-        "index": 12,
-        "total": 14,
+        "index": 11,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1289,8 +1260,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-assessment",
-        "index": 13,
-        "total": 14
+        "index": 12,
+        "total": 13
       }
     },
     {
@@ -1303,8 +1274,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-assessment",
-        "index": 13,
-        "total": 14,
+        "index": 12,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -1405,7 +1376,7 @@
         "runId": "demo-run-133",
         "name": "validate-environment",
         "index": 0,
-        "total": 18
+        "total": 17
       }
     },
     {
@@ -1419,7 +1390,7 @@
         "runId": "demo-run-133",
         "name": "validate-environment",
         "index": 0,
-        "total": 18,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1434,7 +1405,7 @@
         "runId": "demo-run-133",
         "name": "read-planning-context",
         "index": 1,
-        "total": 18
+        "total": 17
       }
     },
     {
@@ -1454,36 +1425,7 @@
         "runId": "demo-run-133",
         "name": "read-planning-context",
         "index": 1,
-        "total": 18,
-        "status": "completed"
-      }
-    },
-    {
-      "at": 24139,
-      "kind": "event",
-      "method": "phase.start",
-      "payload": {
-        "issueNumber": 133,
-        "stage": "feature-dev",
-        "repo": "lanternworks/harbor-api",
-        "runId": "demo-run-133",
-        "name": "batch-plan-detection",
-        "index": 2,
-        "total": 18
-      }
-    },
-    {
-      "at": 24694,
-      "kind": "event",
-      "method": "phase.complete",
-      "payload": {
-        "issueNumber": 133,
-        "stage": "feature-dev",
-        "repo": "lanternworks/harbor-api",
-        "runId": "demo-run-133",
-        "name": "batch-plan-detection",
-        "index": 2,
-        "total": 18,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1497,8 +1439,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "feedback-context-check",
-        "index": 3,
-        "total": 18
+        "index": 2,
+        "total": 17
       }
     },
     {
@@ -1511,8 +1453,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "feedback-context-check",
-        "index": 3,
-        "total": 18,
+        "index": 2,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1526,8 +1468,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "plan-verification",
-        "index": 4,
-        "total": 18
+        "index": 3,
+        "total": 17
       }
     },
     {
@@ -1540,8 +1482,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "plan-verification",
-        "index": 4,
-        "total": 18,
+        "index": 3,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1555,8 +1497,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "knowledge-base-read",
-        "index": 5,
-        "total": 18
+        "index": 4,
+        "total": 17
       }
     },
     {
@@ -1569,8 +1511,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "knowledge-base-read",
-        "index": 5,
-        "total": 18,
+        "index": 4,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1584,8 +1526,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "recall-architectural-constraints",
-        "index": 6,
-        "total": 18
+        "index": 5,
+        "total": 17
       }
     },
     {
@@ -1598,8 +1540,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "recall-architectural-constraints",
-        "index": 6,
-        "total": 18,
+        "index": 5,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1613,8 +1555,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "standards-loading",
-        "index": 7,
-        "total": 18
+        "index": 6,
+        "total": 17
       }
     },
     {
@@ -1627,8 +1569,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "standards-loading",
-        "index": 7,
-        "total": 18,
+        "index": 6,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1642,8 +1584,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "implementation",
-        "index": 8,
-        "total": 18
+        "index": 7,
+        "total": 17
       }
     },
     {
@@ -1656,8 +1598,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "implementation",
-        "index": 8,
-        "total": 18,
+        "index": 7,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1671,8 +1613,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "testing",
-        "index": 9,
-        "total": 18
+        "index": 8,
+        "total": 17
       }
     },
     {
@@ -1685,8 +1627,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "testing",
-        "index": 9,
-        "total": 18,
+        "index": 8,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1700,8 +1642,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "e2e-testing",
-        "index": 10,
-        "total": 18
+        "index": 9,
+        "total": 17
       }
     },
     {
@@ -1714,8 +1656,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "e2e-testing",
-        "index": 10,
-        "total": 18,
+        "index": 9,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1729,8 +1671,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "quality-review",
-        "index": 11,
-        "total": 18
+        "index": 10,
+        "total": 17
       }
     },
     {
@@ -1743,8 +1685,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "quality-review",
-        "index": 11,
-        "total": 18,
+        "index": 10,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1758,8 +1700,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-correction",
-        "index": 12,
-        "total": 18
+        "index": 11,
+        "total": 17
       }
     },
     {
@@ -1772,8 +1714,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-correction",
-        "index": 12,
-        "total": 18,
+        "index": 11,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1787,8 +1729,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "feedback-signal-evaluation",
-        "index": 13,
-        "total": 18
+        "index": 12,
+        "total": 17
       }
     },
     {
@@ -1801,8 +1743,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "feedback-signal-evaluation",
-        "index": 13,
-        "total": 18,
+        "index": 12,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1816,8 +1758,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "write-dev-context",
-        "index": 14,
-        "total": 18
+        "index": 13,
+        "total": 17
       }
     },
     {
@@ -1830,8 +1772,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "write-dev-context",
-        "index": 14,
-        "total": 18,
+        "index": 13,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1845,8 +1787,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "sync-project-status",
-        "index": 15,
-        "total": 18
+        "index": 14,
+        "total": 17
       }
     },
     {
@@ -1859,8 +1801,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "sync-project-status",
-        "index": 15,
-        "total": 18,
+        "index": 14,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1874,8 +1816,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "output-summary",
-        "index": 16,
-        "total": 18
+        "index": 15,
+        "total": 17
       }
     },
     {
@@ -1888,8 +1830,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "output-summary",
-        "index": 16,
-        "total": 18,
+        "index": 15,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -1903,8 +1845,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-assessment",
-        "index": 17,
-        "total": 18
+        "index": 16,
+        "total": 17
       }
     },
     {
@@ -1917,8 +1859,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-assessment",
-        "index": 17,
-        "total": 18,
+        "index": 16,
+        "total": 17,
         "status": "completed"
       }
     },
@@ -2025,7 +1967,7 @@
         "runId": "demo-run-133",
         "name": "validate-environment",
         "index": 0,
-        "total": 23
+        "total": 22
       }
     },
     {
@@ -2039,7 +1981,7 @@
         "runId": "demo-run-133",
         "name": "validate-environment",
         "index": 0,
-        "total": 23,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2054,7 +1996,7 @@
         "runId": "demo-run-133",
         "name": "read-dev-context",
         "index": 1,
-        "total": 23
+        "total": 22
       }
     },
     {
@@ -2068,36 +2010,7 @@
         "runId": "demo-run-133",
         "name": "read-dev-context",
         "index": 1,
-        "total": 23,
-        "status": "completed"
-      }
-    },
-    {
-      "at": 37033,
-      "kind": "event",
-      "method": "phase.start",
-      "payload": {
-        "issueNumber": 133,
-        "stage": "feature-validate",
-        "repo": "lanternworks/harbor-api",
-        "runId": "demo-run-133",
-        "name": "batch-detection",
-        "index": 2,
-        "total": 23
-      }
-    },
-    {
-      "at": 37346,
-      "kind": "event",
-      "method": "phase.complete",
-      "payload": {
-        "issueNumber": 133,
-        "stage": "feature-validate",
-        "repo": "lanternworks/harbor-api",
-        "runId": "demo-run-133",
-        "name": "batch-detection",
-        "index": 2,
-        "total": 23,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2111,8 +2024,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "ac-completion-check",
-        "index": 3,
-        "total": 23
+        "index": 2,
+        "total": 22
       }
     },
     {
@@ -2125,8 +2038,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "ac-completion-check",
-        "index": 3,
-        "total": 23,
+        "index": 2,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2140,8 +2053,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "detect-testing-environment",
-        "index": 4,
-        "total": 23
+        "index": 3,
+        "total": 22
       }
     },
     {
@@ -2154,8 +2067,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "detect-testing-environment",
-        "index": 4,
-        "total": 23,
+        "index": 3,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2169,8 +2082,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "ptc-detection",
-        "index": 5,
-        "total": 23
+        "index": 4,
+        "total": 22
       }
     },
     {
@@ -2183,8 +2096,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "ptc-detection",
-        "index": 5,
-        "total": 23,
+        "index": 4,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2198,8 +2111,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "freshness-check",
-        "index": 6,
-        "total": 23
+        "index": 5,
+        "total": 22
       }
     },
     {
@@ -2212,8 +2125,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "freshness-check",
-        "index": 6,
-        "total": 23,
+        "index": 5,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2227,8 +2140,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "build-verification",
-        "index": 7,
-        "total": 23
+        "index": 6,
+        "total": 22
       }
     },
     {
@@ -2241,8 +2154,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "build-verification",
-        "index": 7,
-        "total": 23,
+        "index": 6,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2256,8 +2169,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "dead-code-detection",
-        "index": 8,
-        "total": 23
+        "index": 7,
+        "total": 22
       }
     },
     {
@@ -2270,8 +2183,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "dead-code-detection",
-        "index": 8,
-        "total": 23,
+        "index": 7,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2285,8 +2198,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "baseline-comparison",
-        "index": 9,
-        "total": 23
+        "index": 8,
+        "total": 22
       }
     },
     {
@@ -2299,8 +2212,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "baseline-comparison",
-        "index": 9,
-        "total": 23,
+        "index": 8,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2314,8 +2227,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "run-tests",
-        "index": 10,
-        "total": 23
+        "index": 9,
+        "total": 22
       }
     },
     {
@@ -2328,8 +2241,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "run-tests",
-        "index": 10,
-        "total": 23,
+        "index": 9,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2343,8 +2256,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "mobile-mcp-tests",
-        "index": 11,
-        "total": 23
+        "index": 10,
+        "total": 22
       }
     },
     {
@@ -2357,8 +2270,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "mobile-mcp-tests",
-        "index": 11,
-        "total": 23,
+        "index": 10,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2372,8 +2285,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "verify-ui-gate",
-        "index": 12,
-        "total": 23
+        "index": 11,
+        "total": 22
       }
     },
     {
@@ -2386,8 +2299,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "verify-ui-gate",
-        "index": 12,
-        "total": 23,
+        "index": 11,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2401,8 +2314,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "ci-parity-check",
-        "index": 13,
-        "total": 23
+        "index": 12,
+        "total": 22
       }
     },
     {
@@ -2415,8 +2328,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "ci-parity-check",
-        "index": 13,
-        "total": 23,
+        "index": 12,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2430,8 +2343,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "knowledge-coverage-check",
-        "index": 14,
-        "total": 23
+        "index": 13,
+        "total": 22
       }
     },
     {
@@ -2444,8 +2357,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "knowledge-coverage-check",
-        "index": 14,
-        "total": 23,
+        "index": 13,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2459,8 +2372,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "pre-push-merge-validation",
-        "index": 15,
-        "total": 23
+        "index": 14,
+        "total": 22
       }
     },
     {
@@ -2473,8 +2386,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "pre-push-merge-validation",
-        "index": 15,
-        "total": 23,
+        "index": 14,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2488,8 +2401,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "generate-checklist",
-        "index": 16,
-        "total": 23
+        "index": 15,
+        "total": 22
       }
     },
     {
@@ -2502,8 +2415,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "generate-checklist",
-        "index": 16,
-        "total": 23,
+        "index": 15,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2517,8 +2430,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "feedback-signal-evaluation",
-        "index": 17,
-        "total": 23
+        "index": 16,
+        "total": 22
       }
     },
     {
@@ -2531,8 +2444,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "feedback-signal-evaluation",
-        "index": 17,
-        "total": 23,
+        "index": 16,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2546,8 +2459,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "commit-and-push",
-        "index": 18,
-        "total": 23
+        "index": 17,
+        "total": 22
       }
     },
     {
@@ -2560,8 +2473,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "commit-and-push",
-        "index": 18,
-        "total": 23,
+        "index": 17,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2575,8 +2488,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "write-validate-context",
-        "index": 19,
-        "total": 23
+        "index": 18,
+        "total": 22
       }
     },
     {
@@ -2589,8 +2502,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "write-validate-context",
-        "index": 19,
-        "total": 23,
+        "index": 18,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2604,8 +2517,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "sync-project-status",
-        "index": 20,
-        "total": 23
+        "index": 19,
+        "total": 22
       }
     },
     {
@@ -2618,8 +2531,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "sync-project-status",
-        "index": 20,
-        "total": 23,
+        "index": 19,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2633,8 +2546,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "output-summary",
-        "index": 21,
-        "total": 23
+        "index": 20,
+        "total": 22
       }
     },
     {
@@ -2647,8 +2560,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "output-summary",
-        "index": 21,
-        "total": 23,
+        "index": 20,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2662,8 +2575,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-assessment",
-        "index": 22,
-        "total": 23
+        "index": 21,
+        "total": 22
       }
     },
     {
@@ -2676,8 +2589,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-assessment",
-        "index": 22,
-        "total": 23,
+        "index": 21,
+        "total": 22,
         "status": "completed"
       }
     },
@@ -2790,7 +2703,7 @@
         "runId": "demo-run-133",
         "name": "auto-merge-guard",
         "index": 0,
-        "total": 14
+        "total": 13
       }
     },
     {
@@ -2804,7 +2717,7 @@
         "runId": "demo-run-133",
         "name": "auto-merge-guard",
         "index": 0,
-        "total": 14,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -2819,7 +2732,7 @@
         "runId": "demo-run-133",
         "name": "load-context",
         "index": 1,
-        "total": 14
+        "total": 13
       }
     },
     {
@@ -2833,36 +2746,7 @@
         "runId": "demo-run-133",
         "name": "load-context",
         "index": 1,
-        "total": 14,
-        "status": "completed"
-      }
-    },
-    {
-      "at": 46536,
-      "kind": "event",
-      "method": "phase.start",
-      "payload": {
-        "issueNumber": 133,
-        "stage": "pr-create",
-        "repo": "lanternworks/harbor-api",
-        "runId": "demo-run-133",
-        "name": "batch-detection",
-        "index": 2,
-        "total": 14
-      }
-    },
-    {
-      "at": 46650,
-      "kind": "event",
-      "method": "phase.complete",
-      "payload": {
-        "issueNumber": 133,
-        "stage": "pr-create",
-        "repo": "lanternworks/harbor-api",
-        "runId": "demo-run-133",
-        "name": "batch-detection",
-        "index": 2,
-        "total": 14,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -2876,8 +2760,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "build-knowledge-section",
-        "index": 3,
-        "total": 14
+        "index": 2,
+        "total": 13
       }
     },
     {
@@ -2890,8 +2774,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "build-knowledge-section",
-        "index": 3,
-        "total": 14,
+        "index": 2,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -2905,8 +2789,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "build-what-to-test-section",
-        "index": 4,
-        "total": 14
+        "index": 3,
+        "total": 13
       }
     },
     {
@@ -2919,8 +2803,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "build-what-to-test-section",
-        "index": 4,
-        "total": 14,
+        "index": 3,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -2934,8 +2818,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "preflight-checks",
-        "index": 5,
-        "total": 14
+        "index": 4,
+        "total": 13
       }
     },
     {
@@ -2948,8 +2832,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "preflight-checks",
-        "index": 5,
-        "total": 14,
+        "index": 4,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -2963,8 +2847,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "proactive-main-merge",
-        "index": 6,
-        "total": 14
+        "index": 5,
+        "total": 13
       }
     },
     {
@@ -2977,8 +2861,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "proactive-main-merge",
-        "index": 6,
-        "total": 14,
+        "index": 5,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -2992,8 +2876,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "security-rescan",
-        "index": 7,
-        "total": 14
+        "index": 6,
+        "total": 13
       }
     },
     {
@@ -3006,8 +2890,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "security-rescan",
-        "index": 7,
-        "total": 14,
+        "index": 6,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3021,8 +2905,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "scope-drift-gate",
-        "index": 8,
-        "total": 14
+        "index": 7,
+        "total": 13
       }
     },
     {
@@ -3035,8 +2919,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "scope-drift-gate",
-        "index": 8,
-        "total": 14,
+        "index": 7,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3050,8 +2934,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "create-pr",
-        "index": 9,
-        "total": 14
+        "index": 8,
+        "total": 13
       }
     },
     {
@@ -3064,8 +2948,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "create-pr",
-        "index": 9,
-        "total": 14,
+        "index": 8,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3079,8 +2963,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "verify-pr-created",
-        "index": 10,
-        "total": 14
+        "index": 9,
+        "total": 13
       }
     },
     {
@@ -3093,8 +2977,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "verify-pr-created",
-        "index": 10,
-        "total": 14,
+        "index": 9,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3108,8 +2992,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "monitor-ci-status",
-        "index": 11,
-        "total": 14
+        "index": 10,
+        "total": 13
       }
     },
     {
@@ -3122,8 +3006,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "monitor-ci-status",
-        "index": 11,
-        "total": 14,
+        "index": 10,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3137,8 +3021,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "write-context",
-        "index": 12,
-        "total": 14
+        "index": 11,
+        "total": 13
       }
     },
     {
@@ -3151,8 +3035,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "write-context",
-        "index": 12,
-        "total": 14,
+        "index": 11,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3166,8 +3050,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-assessment",
-        "index": 13,
-        "total": 14
+        "index": 12,
+        "total": 13
       }
     },
     {
@@ -3180,8 +3064,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-assessment",
-        "index": 13,
-        "total": 14,
+        "index": 12,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3306,7 +3190,7 @@
         "runId": "demo-run-133",
         "name": "read-pr-context",
         "index": 0,
-        "total": 14
+        "total": 13
       }
     },
     {
@@ -3320,36 +3204,7 @@
         "runId": "demo-run-133",
         "name": "read-pr-context",
         "index": 0,
-        "total": 14,
-        "status": "completed"
-      }
-    },
-    {
-      "at": 49393,
-      "kind": "event",
-      "method": "phase.start",
-      "payload": {
-        "issueNumber": 133,
-        "stage": "pr-merge",
-        "repo": "lanternworks/harbor-api",
-        "runId": "demo-run-133",
-        "name": "batch-detection",
-        "index": 1,
-        "total": 14
-      }
-    },
-    {
-      "at": 49507,
-      "kind": "event",
-      "method": "phase.complete",
-      "payload": {
-        "issueNumber": 133,
-        "stage": "pr-merge",
-        "repo": "lanternworks/harbor-api",
-        "runId": "demo-run-133",
-        "name": "batch-detection",
-        "index": 1,
-        "total": 14,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3363,8 +3218,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "validate-environment",
-        "index": 2,
-        "total": 14
+        "index": 1,
+        "total": 13
       }
     },
     {
@@ -3377,8 +3232,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "validate-environment",
-        "index": 2,
-        "total": 14,
+        "index": 1,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3392,8 +3247,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "ci-gate",
-        "index": 3,
-        "total": 14
+        "index": 2,
+        "total": 13
       }
     },
     {
@@ -3406,8 +3261,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "ci-gate",
-        "index": 3,
-        "total": 14,
+        "index": 2,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3421,8 +3276,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "auto-fix-retry",
-        "index": 4,
-        "total": 14
+        "index": 3,
+        "total": 13
       }
     },
     {
@@ -3435,8 +3290,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "auto-fix-retry",
-        "index": 4,
-        "total": 14,
+        "index": 3,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3450,8 +3305,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "fetch-reviews",
-        "index": 5,
-        "total": 14
+        "index": 4,
+        "total": 13
       }
     },
     {
@@ -3464,8 +3319,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "fetch-reviews",
-        "index": 5,
-        "total": 14,
+        "index": 4,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3479,8 +3334,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "categorize-issues",
-        "index": 6,
-        "total": 14
+        "index": 5,
+        "total": 13
       }
     },
     {
@@ -3493,8 +3348,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "categorize-issues",
-        "index": 6,
-        "total": 14,
+        "index": 5,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3508,8 +3363,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "address-feedback",
-        "index": 7,
-        "total": 14
+        "index": 6,
+        "total": 13
       }
     },
     {
@@ -3522,8 +3377,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "address-feedback",
-        "index": 7,
-        "total": 14,
+        "index": 6,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3537,8 +3392,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "freshness-check",
-        "index": 8,
-        "total": 14
+        "index": 7,
+        "total": 13
       }
     },
     {
@@ -3551,8 +3406,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "freshness-check",
-        "index": 8,
-        "total": 14,
+        "index": 7,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3566,8 +3421,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "merge",
-        "index": 9,
-        "total": 14
+        "index": 8,
+        "total": 13
       }
     },
     {
@@ -3580,8 +3435,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "merge",
-        "index": 9,
-        "total": 14,
+        "index": 8,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3595,8 +3450,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "post-merge-cleanup",
-        "index": 10,
-        "total": 14
+        "index": 9,
+        "total": 13
       }
     },
     {
@@ -3609,8 +3464,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "post-merge-cleanup",
-        "index": 10,
-        "total": 14,
+        "index": 9,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3624,8 +3479,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "retrospective-feedback",
-        "index": 11,
-        "total": 14
+        "index": 10,
+        "total": 13
       }
     },
     {
@@ -3638,8 +3493,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "retrospective-feedback",
-        "index": 11,
-        "total": 14,
+        "index": 10,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3653,8 +3508,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "output-summary",
-        "index": 12,
-        "total": 14
+        "index": 11,
+        "total": 13
       }
     },
     {
@@ -3667,8 +3522,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "output-summary",
-        "index": 12,
-        "total": 14,
+        "index": 11,
+        "total": 13,
         "status": "completed"
       }
     },
@@ -3682,8 +3537,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-assessment",
-        "index": 13,
-        "total": 14
+        "index": 12,
+        "total": 13
       }
     },
     {
@@ -3696,8 +3551,8 @@
         "repo": "lanternworks/harbor-api",
         "runId": "demo-run-133",
         "name": "self-assessment",
-        "index": 13,
-        "total": 14,
+        "index": 12,
+        "total": 13,
         "status": "completed"
       }
     },

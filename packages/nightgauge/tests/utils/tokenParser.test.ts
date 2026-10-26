@@ -574,7 +574,7 @@ describe("parseStreamJsonLine", () => {
               name: "Bash",
               input: {
                 command:
-                  'printf \'<!-- phase:start name="batch-detection" index=2 total=13 stage="feature-planning" -->\\n\'',
+                  'printf \'<!-- phase:start name="ac-reconcile" index=2 total=13 stage="feature-planning" -->\\n\'',
                 description: "Emit phase marker",
               },
             },

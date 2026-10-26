@@ -22,10 +22,6 @@ export interface ContextGatherInput {
   baseBranch: string;
   /** Pipeline stages to read context for (e.g., ["issue", "planning", "dev", "validate"]) */
   stages: string[];
-  /** Whether to read batch context files */
-  batchMode?: boolean;
-  /** Epic number for batch mode */
-  epicNumber?: number;
 }
 
 /** Result from context gathering */
@@ -123,17 +119,6 @@ export class PTCContextGatherer {
     const input = this.options.gatherInput;
     const contextFiles = input.stages.map((stage) => `${stage}-${input.issueNumber}.json`);
 
-    let batchSection = "";
-    if (input.batchMode && input.epicNumber) {
-      const batchFiles = input.stages.map((stage) => `${stage}-batch-${input.epicNumber}.json`);
-      batchSection = `
-## Batch Mode
-Also read these batch context files:
-${batchFiles.map((f) => `- "${f}"`).join("\n")}
-
-Include batch results under the "batch_contexts" key in output.`;
-    }
-
     return `You are a context gatherer for issue #${input.issueNumber}.
 
 Your task: Read all pipeline context files and git state, then return a single JSON summary.
@@ -141,7 +126,6 @@ Write Python code that calls the available tools to gather all data.
 
 ## Context Files to Read
 ${contextFiles.map((f) => `- "${f}"`).join("\n")}
-${batchSection}
 
 ## Git Operations
 1. Call git_diff_summary(base="${input.baseBranch}")

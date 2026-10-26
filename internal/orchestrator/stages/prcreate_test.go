@@ -51,15 +51,6 @@ func TestDecideCreate_MissingDev_Punts(t *testing.T) {
 	}
 }
 
-func TestDecideCreate_BatchMode_Punts(t *testing.T) {
-	s := richSnap()
-	s.BatchPresent = true
-	d := DecideCreate(s)
-	if !d.Punt || d.Reason != ReasonBatchMode {
-		t.Errorf("batch mode should punt with %q, got %+v", ReasonBatchMode, d)
-	}
-}
-
 func TestDecideCreate_Spike_Punts(t *testing.T) {
 	s := richSnap()
 	s.IssueType = "spike"
