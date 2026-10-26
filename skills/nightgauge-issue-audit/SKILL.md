@@ -9,7 +9,7 @@ description: Deterministic post-creation gate that verifies every issue created 
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.2.3"
+  version: "1.3.0"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
@@ -273,8 +273,9 @@ if [ -z "$(echo "$SECTION" | tr -d '[:space:]')" ]; then
 fi
 ```
 
-Two quality riders on the body, both WARNING and never auto-fixed — they are
-heuristics, and a false positive must cost a glance, not a block:
+Quality riders on the body, all WARNING and never auto-fixed — they are
+heuristics, and a false positive must cost a glance, not a block. Two run on
+every type; the epic riders below run only for `type: epic`:
 
 ```bash
 # WEAK_VERIFICATION — the section exists but names no test, command, or file.
@@ -292,6 +293,31 @@ fi
 if printf '%s\n' "$BODY" | grep -qiE 'auth|token|secret|credential|webhook|endpoint|retry|retries|spawn|exec|shell|symlink|upload|permission' \
    && ! printf '%s\n' "$BODY" | grep -qiE '^##[[:space:]]+Security|^- \[ \].*(secur|sanitiz|validat|authoriz|authent|bound|rate.?limit|scope|confine|redact)'; then
   FINDINGS+=( /* SECURITY_SURFACE_UNADDRESSED (WARNING) — never auto-fix */ )
+fi
+```
+
+For `type: epic`, two more riders check that `## Summary` justifies the epic's
+existence. Each is a presence check only — a cheap signal, not a quality
+judge — and stays WARNING in every mode, `--manifest` included:
+
+```bash
+# MISSING_EPIC_FALSIFIER / MISSING_EPIC_DEMAND — the Summary lacks a non-empty
+# `Falsifier:` / `Demand:` line (optionally bulleted or bolded). A line outside
+# `## Summary`, or with nothing after the colon, does not count.
+TYPE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '[.labels[].name | select(startswith("type:"))][0] // "" | sub("^type:"; "")')
+if [ "$TYPE" = "epic" ]; then
+  SSEC=$(printf '%s\n' "$BODY" | awk '
+    $0 ~ /^##[[:space:]]+Summary[[:space:]]*$/ {flag=1; next}
+    flag && /^##[[:space:]]/ {flag=0}
+    flag {print}')
+  for LABEL in Falsifier Demand; do
+    if ! printf '%s\n' "$SSEC" \
+       | grep -qE "^[[:space:]]*(-[[:space:]]+)?(\*\*)?${LABEL}(\*\*)?:(\*\*)?[[:space:]]*[^[:space:]*]"; then
+      # Falsifier: no answer to the motivating question would stop the work.
+      # Demand: nobody is recorded as having asked for it.
+      FINDINGS+=( /* MISSING_EPIC_FALSIFIER | MISSING_EPIC_DEMAND (WARNING) — never auto-fix */ )
+    fi
+  done
 fi
 ```
 
