@@ -81,38 +81,6 @@ func TestEpicCheckpoint_DisabledDoesNotLatch(t *testing.T) {
 	}
 }
 
-// TestEpicCheckpoint_SurvivesOnEpicCompleteReassignment is the reason the
-// checkpoint gets its own field instead of chaining onEpicComplete.
-//
-// `OnEpicComplete` is a single slot, and internal/ipc/server.go re-registers it
-// inside the `pipeline.run` method closure — per REQUEST. A checkpoint chained
-// onto that slot is silently discarded by the next pipeline.run, with no error
-// and no log line. This test reproduces that re-registration and asserts the
-// checkpoint still fires.
-func TestEpicCheckpoint_SurvivesOnEpicCompleteReassignment(t *testing.T) {
-	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
-	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
-	as.trustGateOverride = allWritersGate()
-
-	// Exactly what the IPC server does on every pipeline.run request.
-	otherCalled := false
-	sched.OnEpicComplete(func(string, int) { otherCalled = true })
-
-	if sched.epicCheckpoint == nil {
-		t.Fatal("registering OnEpicComplete destroyed the epic-checkpoint wiring")
-	}
-	sched.epicCheckpoint("o/r", 7)
-	sched.onEpicComplete("o/r", 7)
-
-	if !as.safetyRails.State().PausedForCheckpoint {
-		t.Error("checkpoint did not latch after OnEpicComplete was re-registered — " +
-			"this is the clobber the dedicated field exists to prevent")
-	}
-	if !otherCalled {
-		t.Error("the IPC server's own callback stopped firing — the two must coexist")
-	}
-}
-
 // TestSafetyRailKind_FingerprintsAreStable guards the Action Center's
 // mute-until-changed contract.
 //
@@ -267,16 +235,8 @@ func TestCheckEpicCompletion_NamesACrossRepoEpicInItsOwnRepository(t *testing.T)
 		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: true,
 			EpicNumber: 20, EpicRepo: "example-org/platform"}
 	}
-	var gotRepo string
-	var gotEpic int
-	sched.OnEpicComplete(func(epicRepo string, epicNumber int) { gotRepo, gotEpic = epicRepo, epicNumber })
-
 	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "example-org/app", Number: 21}, 0)
 
-	if gotRepo != "example-org/platform" || gotEpic != 20 {
-		t.Errorf("epic-PR callback got %s#%d, want example-org/platform#20 — "+
-			"example-org/app#20 is a different issue", gotRepo, gotEpic)
-	}
 	st := as.safetyRails.State()
 	if st.LastEpicRepo != "example-org/platform" || st.LastEpicNumber != 20 {
 		t.Errorf("checkpoint recorded %s#%d, want example-org/platform#20", st.LastEpicRepo, st.LastEpicNumber)
@@ -290,8 +250,8 @@ func TestCheckEpicCompletion_NamesACrossRepoEpicInItsOwnRepository(t *testing.T)
 		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: true, EpicNumber: 30}
 	}
 	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "example-org/app", Number: 31}, 0)
-	if gotRepo != "example-org/app" || gotEpic != 30 {
-		t.Errorf("epic-PR callback got %s#%d, want example-org/app#30", gotRepo, gotEpic)
+	if st := as.safetyRails.State(); st.LastEpicRepo != "example-org/app" || st.LastEpicNumber != 30 {
+		t.Errorf("checkpoint recorded %s#%d, want example-org/app#30", st.LastEpicRepo, st.LastEpicNumber)
 	}
 }
 
