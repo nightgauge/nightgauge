@@ -11,6 +11,12 @@ and this project adheres to
 
 ### Fixed
 
+- **An interactive Codex stage stays alive while you work in its terminal
+  (#431).** The TUI launch, each message relayed from the Output panel, and
+  shell-execution events for the Codex terminal (on VS Code builds that report
+  them) now tell the backend the stage is alive. A backend restart after 30
+  minutes no longer closes the run as an orphan.
+
 - **`knowledge stamp --stage` works in stages the VS Code extension runs
   (#2576).** Extension-spawned stages now receive `NIGHTGAUGE_DISPATCH_MODEL`
   (the model the stage launched with, for every adapter) and

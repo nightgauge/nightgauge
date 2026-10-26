@@ -940,3 +940,64 @@ func TestApplyReconcileAction_RemoveDoesNotEmit(t *testing.T) {
 		t.Fatalf("got %d emitted events for non-emitting dispositions, want 0: %+v", len(got), got)
 	}
 }
+
+// #431: the Codex TUI sub-path has no arm 3, so pipeline.notifyStageAlive is
+// what carries it. A `running` snapshot aged past the liveness window and then
+// re-asserted must survive the ladder with arms 1, 2, 3 and 5 all false; the
+// same snapshot left untouched must be reconciled. Remove the verb's Persist
+// and the first case fails.
+func TestNotifyStageAlive_RePersistKeepsASilentTUIRunOffTheOrphanList(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		alive      bool
+		wantOrphan bool
+	}{
+		{"re-asserted within the window is not an orphan", true, false},
+		{"untouched past window and grace is reconciled", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspaceRoot := layouttest.Repo(t)
+			s := NewServer(nil, WithWorkspaceRoot(workspaceRoot))
+			stateDir := layouttest.PipelineDir(t, workspaceRoot)
+			runID := newTestRunID()
+			params := fmt.Sprintf(`{"repo":"nightgauge/acmeapp","issueNumber":431,"stage":"feature-dev","status":"running","runId":%q}`, runID)
+			if _, err := s.methods["pipeline.notifyStageTransition"](t.Context(), []byte(params)); err != nil {
+				t.Fatalf("notifyStageTransition: %v", err)
+			}
+			path := filepath.Join(stateDir, state.SnapshotFilename(431, runID))
+			now := time.Now()
+			backdate(t, path, now.Add(-2*livenessWindow))
+
+			if tc.alive {
+				if _, err := s.methods["pipeline.notifyStageAlive"](t.Context(), []byte(params)); err != nil {
+					t.Fatalf("notifyStageAlive: %v", err)
+				}
+			}
+
+			// No lease, no scheduler, no pid, no grace: arm 4 alone decides.
+			orphans := collectReconcileActions(stateDir, runEvidence{}, now)
+			if got := len(orphans) == 1; got != tc.wantOrphan {
+				t.Fatalf("orphan = %v (%d actions), want %v", got, len(orphans), tc.wantOrphan)
+			}
+		})
+	}
+}
+
+func TestNotifyStageAlive_RequiresRunIDAndSkipsPersistWithoutRepo(t *testing.T) {
+	workspaceRoot := layouttest.Repo(t)
+	s := NewServer(nil, WithWorkspaceRoot(workspaceRoot))
+	stateDir := layouttest.PipelineDir(t, workspaceRoot)
+	alive := s.methods["pipeline.notifyStageAlive"]
+
+	if _, err := alive(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":431,"stage":"feature-dev"}`)); err == nil {
+		t.Fatal("notifyStageAlive without a runId must be refused")
+	}
+
+	runID := newTestRunID()
+	if _, err := alive(t.Context(), []byte(fmt.Sprintf(`{"issueNumber":432,"stage":"feature-dev","runId":%q}`, runID))); err != nil {
+		t.Fatalf("notifyStageAlive: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, state.SnapshotFilename(432, runID))); !os.IsNotExist(err) {
+		t.Fatalf("a repo-less alive must not persist a snapshot, stat err = %v", err)
+	}
+}

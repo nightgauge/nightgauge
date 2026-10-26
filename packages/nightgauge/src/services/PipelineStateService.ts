@@ -1220,6 +1220,34 @@ export class PipelineStateService implements vscode.Disposable {
     }
   }
 
+  /**
+   * Re-assert that a stage with no child process in this host is still alive
+   * (#431, ADR-017 C18). Go touches the run's lease (arm 1) and re-persists its
+   * snapshot (arm 4); stage state is untouched. Called only on real terminal
+   * activity — never on a timer — and best-effort: a refusal is logged and
+   * swallowed, because a missed liveness hint must never fail the stage.
+   */
+  async notifyStageAlive(stage: string): Promise<void> {
+    const runId = this.wireIdentityOrSkip("pipeline.notifyStageAlive", stage);
+    if (runId === null) return;
+    try {
+      await this.ipc.call("pipeline.notifyStageAlive", {
+        repo: this.runRepo,
+        issueNumber: this.issueNumber ?? 0,
+        stage,
+        runId,
+      });
+    } catch (err) {
+      handleIpcRejection({
+        method: "pipeline.notifyStageAlive",
+        stage,
+        runId,
+        err,
+        logger: this.rejectionLogger,
+      });
+    }
+  }
+
   private currentStageUsage(stage: string): BookedStageUsage {
     const usage = this._lastState?.tokens?.per_stage?.[stage];
     return {
@@ -3128,4 +3156,31 @@ export class PipelineStateService implements vscode.Disposable {
       })
     );
   }
+}
+
+/** Minimum spacing between two liveness re-assertions for one stage attempt. */
+export const STAGE_ALIVE_THROTTLE_MS = 60_000;
+
+/**
+ * Build the `onStageAlive` consumer for one stage attempt (#431). Forwards real
+ * terminal activity to {@link PipelineStateService.notifyStageAlive}, at most
+ * once per {@link STAGE_ALIVE_THROTTLE_MS} — far inside the 30-minute liveness
+ * window, and a bound on snapshot writes. Activity before `isStarted()` is
+ * dropped: the stage's `running` transition persists the snapshot itself, and
+ * an alive call ahead of it would describe a stage Go has not begun.
+ */
+export function createStageAliveNotifier(
+  service: Pick<PipelineStateService, "notifyStageAlive"> | null | undefined,
+  stage: string,
+  isStarted: () => boolean,
+  now: () => number = Date.now
+): () => void {
+  let last: number | undefined;
+  return () => {
+    if (!service || !isStarted()) return;
+    const t = now();
+    if (last !== undefined && t - last < STAGE_ALIVE_THROTTLE_MS) return;
+    last = t;
+    void service.notifyStageAlive(stage);
+  };
 }

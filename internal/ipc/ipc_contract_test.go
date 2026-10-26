@@ -114,6 +114,7 @@ var contractTestedMethods = map[string]bool{
 	"pipeline.notifyComplete":               true,
 	"pipeline.notifyPhaseTransition":        true,
 	"pipeline.notifyStageProgress":          true,
+	"pipeline.notifyStageAlive":             true,
 	"pipeline.recordStageGateResult":        true, // Issue #377
 	"pipeline.notifyStageTransition":        true,
 	"pipeline.pause":                        true,
@@ -895,6 +896,17 @@ func TestContract_Pipeline(t *testing.T) {
 			"costUsd":         0.42,
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.notifyStageProgress")
+	})
+
+	// pipeline.notifyStageAlive — the Codex TUI liveness producer (#431).
+	t.Run("pipeline.notifyStageAlive/registered", func(t *testing.T) {
+		h.bind(t)
+		id := h.sendRequest("pipeline.notifyStageAlive", map[string]interface{}{
+			"repo":        "test-repo",
+			"issueNumber": 8890,
+			"stage":       "feature-dev",
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.notifyStageAlive")
 	})
 
 	// pipeline.recordStageGateResult — the gate CLI's route to the single

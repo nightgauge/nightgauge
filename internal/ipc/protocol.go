@@ -1317,6 +1317,19 @@ type PipelineNotifyStageProgressParams struct {
 	RunID string `json:"runId,omitempty"`
 }
 
+// PipelineNotifyStageAliveParams are parameters for pipeline.notifyStageAlive
+// (#431). A liveness re-assertion for a stage with no child process in the
+// extension host (the Codex interactive TUI): it refreshes the run's lease and
+// re-persists its snapshot, and records nothing else.
+type PipelineNotifyStageAliveParams struct {
+	Repo        string `json:"repo"`
+	IssueNumber int    `json:"issueNumber"`
+	Stage       string `json:"stage"`
+	// RunID is REQUIRED (ADR-017 Decision 1): absent is run_id_required,
+	// non-canonical is run_id_invalid. RUN-PROGRESS class (Decision 3).
+	RunID string `json:"runId,omitempty"`
+}
+
 // PipelineRecordStageGateResultParams are parameters for
 // pipeline.recordStageGateResult (#377, ADR-017 R-1).
 //

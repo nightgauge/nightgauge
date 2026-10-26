@@ -24,7 +24,10 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import type { Logger } from "../utils/logger";
 import type { StatusBarManager } from "../utils/statusBar";
 import type { StageTreeItem, PipelineTreeProvider, OutputWindow } from "../views";
-import type { PipelineStateService } from "../services/PipelineStateService";
+import {
+  createStageAliveNotifier,
+  type PipelineStateService,
+} from "../services/PipelineStateService";
 import {
   runStageSkillInteractive,
   getStageLabel,
@@ -120,7 +123,7 @@ export function registerRunInteractiveStageCommand(
     "nightgauge.runInteractiveStage",
     async (item?: StageTreeItem | PipelineStage) => {
       const adapter = getExecutionAdapter();
-      // Claude (piped-stdio) and Codex (TUI in a terminal, #4024) support
+      // Claude (piped-stdio) and Codex (TUI in a terminal) support
       // interactive mode; all other adapters are headless-only.
       if (adapter !== "claude" && adapter !== "codex") {
         logger.warn("Interactive mode requires the Claude or Codex adapter", { adapter });
@@ -315,9 +318,9 @@ export function registerRunInteractiveStageCommand(
       /**
        * The stage child's pid, captured synchronously by the spawn callback so
        * this attempt's single `running` transition carries it (§7.2). Stays 0
-       * on the Codex TUI sub-path (#4024), which spawns no child in this host
-       * — see the KNOWN LIMITATION note in `serverEvidence`
-       * (internal/ipc/pipeline_orphan_reconcile.go).
+       * on the Codex TUI sub-path, which spawns no child in this host; its
+       * lease and snapshot are re-asserted by `onStageAlive` instead (#431) —
+       * see `serverEvidence` (internal/ipc/pipeline_orphan_reconcile.go).
        */
       let stageChildPid = 0;
 
@@ -326,6 +329,12 @@ export function registerRunInteractiveStageCommand(
         onStageChildSpawned: (pid) => {
           stageChildPid = pid;
         },
+        // #431: the Codex TUI's liveness producer (no child, so no arm 3).
+        onStageAlive: createStageAliveNotifier(
+          pipelineStateService,
+          stage,
+          () => runningTransitionSent
+        ),
         onStdout: (data) => {
           const lines = parseInteractiveOutput(data);
           for (const line of lines) {
@@ -442,7 +451,7 @@ export function registerRunInteractiveStageCommand(
 
         // A failed launch returns an error stub (no child process, no stdin
         // writer) after firing onError/onComplete — bail then. The Codex TUI
-        // path (#4024) legitimately has no child process (it runs in a terminal)
+        // path legitimately has no child process (it runs in a terminal)
         // but exposes writeToStdin, so it is NOT a bail.
         if (!handle.process && !handle.writeToStdin) {
           // No child, so no terminal callback is coming. No `running`

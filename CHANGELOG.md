@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **A Codex interactive TUI stage is no longer closed as an orphan while you
+  work in it (#431).** A new IPC verb, `pipeline.notifyStageAlive`, refreshes a
+  run's lease and its on-disk snapshot without changing stage state. The VS
+  Code extension sends it when the Codex terminal shows real activity, at most
+  once a minute and never on a timer.
+
 - **`nightgauge program status` reports a program's progress (#2573).** One
   command reads a programs file and prints, per program, how many of its
   issues are open, closed, validated (closed as completed, until #2574's
