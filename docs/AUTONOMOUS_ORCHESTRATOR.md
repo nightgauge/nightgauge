@@ -1400,6 +1400,34 @@ autonomous:
 The webhook **URL is read from the environment**, never stored in `config.yaml`.
 Detection still surfaces via state and the CLI when no webhook is configured.
 
+## PR Recheck After a Transient Failure — #2607
+
+A run can die on a transient failure (`api_connection_lost`, a network outage,
+a stall) after pr-create opened its PR. The merge queue can then merge that PR
+while the scheduler cannot reach the forge. The merge closes the issue, so the
+issue leaves the board graph. Before this change, nothing read the PR again, and
+the post-merge path never ran.
+
+The scheduler records such runs in `pendingPrRechecks` in its state file:
+
+- the run's PR, when a transient failure ends a run with a PR on record;
+- any failed or orphaned issue whose revert could not list the repository's
+  open PRs.
+
+Each scan cycle starts a background sweep, one at a time, that reads every
+entry whose issue is not running again. The next successful read is the
+connectivity signal.
+
+| PR state                   | Action                                                                                                                                                                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MERGED`                   | Runs the post-merge path once, as a run that reached pr-merge would: issue close, main-check verdict, validation marker on green, and epic rollup. Records the issue completed and forces the rollup sweep so every configured board reaches Done. |
+| `OPEN`                     | Reverts the issue as the failure path would. A transient kind goes to Ready and resumes at pr-merge on the same PR.                                                                                                                                |
+| `CLOSED`, or no PR on file | Reverts the issue. The open-PR list decides the status.                                                                                                                                                                                            |
+| unreadable                 | Keeps the entry for the next scan.                                                                                                                                                                                                                 |
+
+A pending entry also keeps the issue's failure record when the issue leaves the
+graph. No log line asks a human to move the issue by hand.
+
 ## Bounded Shutdown for Detached Board Work — #489
 
 Board-status recovery does not run on the dispatch loop. When a pipeline fails,

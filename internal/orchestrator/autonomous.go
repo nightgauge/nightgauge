@@ -31,6 +31,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/layout"
@@ -38,6 +39,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/workorder"
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // AutonomousConfig holds configuration for the autonomous scheduler loop.
@@ -365,6 +367,15 @@ type AutonomousState struct {
 	// or by reconcileStateAgainstGraph pruning a stale entry (issue
 	// transferred/deleted/closed). Key: "repo#number".
 	QuarantinedIssues map[string]bool `json:"quarantinedIssues,omitempty"`
+
+	// PendingPRRechecks are failed runs whose PR nobody has been able to read
+	// since the run ended (#2607): a transient kill after pr-create, or a
+	// revert that could not list the repository's open PRs. The PR may merge
+	// server-side while the forge is unreachable, and once the issue closes it
+	// leaves the graph, so without this list the post-merge path never runs.
+	// reconcilePRRechecks re-reads each entry every scan until the forge
+	// answers. See autonomous_pr_recheck.go.
+	PendingPRRechecks []PRRecheckItem `json:"pendingPrRechecks,omitempty"`
 
 	// Refinement state
 	RefinementRunning    []RefinementItem `json:"refinementRunning,omitempty"`
@@ -1298,6 +1309,16 @@ type AutonomousScheduler struct {
 	// See autonomous_epic_rollup_reconcile.go (#656).
 	reconcileBoardFn func(ctx context.Context, owner string, projectNumber int, ownerType gh.OwnerType) (*gh.ReconcileResult, error)
 
+	// prStateFn reads a PR's state ("OPEN", "MERGED", "CLOSED") for the
+	// PR-recheck sweep; postMergeFn runs the post-merge path for a PR it found
+	// MERGED. Nil uses the forge client and Scheduler.runPostMerge. Test seams
+	// (#2607); see autonomous_pr_recheck.go.
+	prStateFn   func(ctx context.Context, owner, repo string, number int) (string, error)
+	postMergeFn func(ctx context.Context, item types.BoardItem, prNumber int) hooks.PostMergeResult
+	// prRecheckInFlight is set while a detached PR-recheck sweep runs, so a
+	// scan never starts a second one on top of it.
+	prRecheckInFlight atomic.Bool
+
 	// lastEpicRollupSweepAt is when reconcileEpicRollup last swept, used to
 	// pace it to epicRollupReconcileInterval instead of the cycle cadence.
 	// Zero means "never" — the first cycle sweeps. Protected by mu.
@@ -1661,6 +1682,9 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 			}
 		}
 		as.onPipelineComplete(repo, issue, success, false, terminalKind, failureDetail, merged)
+		if !success && !merged {
+			as.recordTransientRunPR(repo, issue, runtime, terminalKind)
+		}
 		// Chain to any previously registered callback.
 		if prevCallback != nil {
 			prevCallback(repo, issue, runtime, success)
@@ -3682,6 +3706,12 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	// It stays BELOW the two quota gates above, which are the real budget
 	// authority: a board-wide sweep is exactly the kind of call that must not
 	// run while the GraphQL bucket is known-low.
+	//
+	// The PR-recheck sweep (#2607) is dispatched here under the same placement
+	// argument. It runs detached, because its reads and reverts carry the
+	// board-recovery deadline, and on a recovered merge it zeroes the rollup
+	// pace so the next rollup sweep brings every configured board to Done.
+	as.startPRRecheckSweep()
 	as.reconcileEpicRollup(ctx)
 
 	// 0b. (#885) Baseline-deferral promote sweep. Same placement argument as
@@ -5328,6 +5358,8 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		if as.state.LifetimeIssueFailures != nil {
 			delete(as.state.LifetimeIssueFailures, key)
 		}
+		// #2607: the run that succeeded saw its own PR; nothing is left to recheck.
+		as.removePRRecheckLocked(repo, issue)
 		// A run cannot complete while the architecture gate is blocking it, so
 		// success proves the approval landed — including approval granted
 		// out-of-band via the label, which never touches the card.
@@ -6443,8 +6475,8 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 // through the guarded CLI, which refuses without an open PR, so on a PR-less
 // failure this revert is the only write and the board ends where its log line
 // says. An unanswered PR query reverts
-// nothing: the issue is left where it is, which a human can see and recover,
-// rather than in Ready.
+// nothing: the issue is left where it is, rather than in Ready, and is queued
+// for the PR-recheck sweep, which retries once the forge answers (#2607).
 //
 // A TRANSIENT kind on an open PR is the exception (#2554): it goes to Ready,
 // not In review. The run died on infrastructure (a runaway kill mid-gate, a
@@ -6453,7 +6485,12 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 // (#2541/#2550/#2544) rather than opening a second one. In review had no
 // re-dispatch path for a PR that is neither BEHIND nor DIRTY, so #1501 sat
 // there with nothing left to run it.
-func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, repo string, issue int, kind string) {
+//
+// It returns false only when the open-PR list could not be read, so the
+// status question is still unanswered; the recheck sweep keeps its entry for
+// the next scan on false. Every other outcome, including a refused board
+// write, is an answer.
+func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, repo string, issue int, kind string) bool {
 	owner, repoName := splitOwnerRepo(repo)
 	var projectNum int
 	var ownerType gh.OwnerType
@@ -6468,7 +6505,7 @@ func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, r
 	as.mu.Unlock()
 	if projectNum == 0 {
 		log.Printf("autonomous: revert-status: no project config for %s — skipping #%d", repo, issue)
-		return
+		return true
 	}
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
@@ -6476,35 +6513,37 @@ func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, r
 	pr, found, err := as.ownOpenPR(ctx, owner, repoName, issue)
 	if err != nil {
 		log.Printf("autonomous: revert-status: NOT moving %s#%d to Ready after pipeline failure — could not list the repository's open PRs (%v), "+
-			"so an open PR of its own may back it; status left unchanged (move it to Ready by hand once no PR backs it)",
+			"so an open PR of its own may back it; status left unchanged, will re-check once the forge answers",
 			repo, issue, err)
-		return
+		as.enqueuePRRecheck(repo, issue, 0, kind)
+		return false
 	}
 	if found && isTransientRevertKind(kind) {
 		projSvc := as.projectService(owner, projectNum, ownerType)
 		if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "Ready"); err != nil {
 			log.Printf("autonomous: revert-status: failed to move %s#%d back to Ready after transient %s (open PR #%d): %v",
 				repo, issue, kind, pr, err)
-			return
+			return true
 		}
 		log.Printf("autonomous: revert-status: moved %s#%d → Ready after transient %s (open PR #%d; re-dispatch after backoff resumes at pr-merge)",
 			repo, issue, kind, pr)
-		return
+		return true
 	}
 	if found {
 		log.Printf("autonomous: revert-status: NOT moving %s#%d to Ready after pipeline failure — its PR #%d is open; moving it to In review instead",
 			repo, issue, pr)
 		as.moveIssueToInReview(parent, repo, issue, pr)
-		return
+		return true
 	}
 	projSvc := as.projectService(owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "Ready"); err != nil {
 		log.Printf("autonomous: revert-status: failed to move %s#%d back to Ready after pipeline failure: %v",
 			repo, issue, err)
-		return
+		return true
 	}
 	log.Printf("autonomous: revert-status: moved %s#%d from In progress → Ready after pipeline failure (will re-dispatch when backoff expires)",
 		repo, issue)
+	return true
 }
 
 // moveIssueToDone moves an issue's board status to Done. Called when
@@ -6824,8 +6863,9 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 		pr, found, err := as.ownOpenPR(opCtx, owner, repoName, item.Number)
 		if err != nil {
 			log.Printf("autonomous: recovery: NOT moving %s#%d to Ready — could not list the repository's open PRs (%v), "+
-				"so an open PR of its own may back it; status left unchanged (move it to Ready by hand once no PR backs it)",
+				"so an open PR of its own may back it; status left unchanged, will re-check once the forge answers",
 				item.Repo, item.Number, err)
+			as.enqueuePRRecheck(item.Repo, item.Number, 0, "")
 			recovered++
 			continue
 		}
@@ -7999,6 +8039,14 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 	for _, f := range as.state.Failed {
 		key := fmt.Sprintf("%s#%d", f.Repo, f.Number)
 		node, exists := g.Nodes[key]
+		if !exists && as.hasPRRecheckLocked(f.Repo, f.Number) {
+			// (#2607) Its PR may have merged while nobody could read it,
+			// closing the issue: the recheck sweep owns this entry until the
+			// forge answers.
+			keptFailed = append(keptFailed, f)
+			log.Printf("autonomous: keeping failed %s — absent from the board, but its PR re-check is pending", key)
+			continue
+		}
 		if !exists {
 			// Issue no longer on project board — safe to drop.
 			prunedFailed++

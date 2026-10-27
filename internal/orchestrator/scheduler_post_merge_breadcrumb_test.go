@@ -11,6 +11,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -266,5 +267,43 @@ func TestVerifyPRMergeForStage_SurvivalRecordStaysAtTheLaunchRoot(t *testing.T) 
 		t.Errorf("a survival journal exists under the run's target root %s (stat err: %v) — the survival "+
 			"writer must stay launch-rooted to agree with its launch-rooted readers",
 			targetRoot, statErr)
+	}
+}
+
+// runPostMerge with no runtime is the PR-recheck sweep's call (#2607): the run
+// record has already ended, so the post-merge evaluation runs once and no
+// snapshot is written anywhere.
+func TestRunPostMerge_NilRuntimeEvaluatesOnceAndWritesNoBreadcrumb(t *testing.T) {
+	launchRoot := layouttest.Repo(t)
+	targetRoot := layouttest.Repo(t)
+	s := newBreadcrumbScheduler(t, launchRoot, targetRoot)
+	calls := 0
+	s.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
+		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer, in hooks.PostMergeInput) hooks.PostMergeResult {
+		calls++
+		if in.PRNumber != 931 || in.IssueNumber != breadcrumbIssue {
+			t.Errorf("post-merge input = %+v, want issue %d, PR 931", in, breadcrumbIssue)
+		}
+		return hooks.PostMergeResult{IssueClosed: true, MergedCommitSha: breadcrumbMergeSHA, MergedAt: breadcrumbMergedAt}
+	}
+	item := types.BoardItem{Number: breadcrumbIssue, Repo: breadcrumbTargetRepo}
+
+	res := s.runPostMerge(context.Background(), item, nil, 931)
+
+	if calls != 1 {
+		t.Errorf("post-merge evaluated %d times, want 1", calls)
+	}
+	if res.MergedCommitSha != breadcrumbMergeSHA {
+		t.Errorf("result merge SHA = %q, want the evaluation's", res.MergedCommitSha)
+	}
+	for _, root := range []string{launchRoot, targetRoot} {
+		dir := layouttest.PipelineDir(t, root)
+		found, err := state.FindPersistedStatesForIssue(dir, breadcrumbIssue)
+		if err != nil {
+			t.Fatalf("scan %s: %v", dir, err)
+		}
+		if len(found) != 0 {
+			t.Errorf("%s holds %d snapshots for #%d, want 0 with no runtime", dir, len(found), breadcrumbIssue)
+		}
 	}
 }
