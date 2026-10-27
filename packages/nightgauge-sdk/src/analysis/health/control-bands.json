@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "metric": "cost_per_run_usd",
+  "enabled": false,
+  "rolling_window": 20,
+  "baseline": { "min_samples": 15, "max_cv": 0.5, "max_drift_sigma": 1.0 },
+  "tiers": [
+    { "name": "innermost", "min_sigma": 1, "action": "record" },
+    { "name": "middle", "min_sigma": 2, "action": "diagnose" },
+    { "name": "outermost", "min_sigma": 3, "action": "finding" }
+  ]
+}

@@ -16,6 +16,8 @@
 import { describe, it, expect } from "vitest";
 import { analyzeCostHealth } from "../../../../src/analysis/health/dimensions/costHealth.js";
 import { DEFAULT_HEALTH_CONFIG } from "../../../../src/analysis/health/types.js";
+import { CONTROL_BAND_DEFINITION } from "../../../../src/analysis/health/controlBands.js";
+import { standardDeviation } from "../../../../src/analysis/health/statistics.js";
 import type { HealthAnalysisInput } from "../../../../src/analysis/health/types.js";
 import {
   makeExecutionRecord,
@@ -932,5 +934,60 @@ describe("analyzeCostHealth — score accumulation", () => {
     const result = analyzeCostHealth(dataset, DEFAULT_HEALTH_CONFIG);
 
     expect(result.score).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ── Control bands (#1286) ─────────────────────────────────────────────────────
+
+describe("analyzeCostHealth — control bands", () => {
+  const def = { ...CONTROL_BAND_DEFINITION, enabled: true };
+  const baselineCosts = Array.from({ length: 20 }, (_, i) => (i % 2 === 0 ? 9 : 11));
+  const sd = standardDeviation(baselineCosts);
+  const withLatest = (z: number) =>
+    datasetFromRecords(
+      [...baselineCosts, 10 + z * sd].map((costUsd, i) =>
+        makeExecutionRecord({
+          issueNumber: 700 + i,
+          costUsd,
+          timestamp: new Date(Date.UTC(2026, 0, 1) + i * 86_400_000).toISOString(),
+        })
+      )
+    );
+  const bandFinding = (r: ReturnType<typeof analyzeCostHealth>) =>
+    r.findings.find((f) => f.title === "Run Cost Beyond Outermost Control Band");
+
+  it("innermost: records only — no diagnosis, no finding", () => {
+    const r = analyzeCostHealth(withLatest(1.5), DEFAULT_HEALTH_CONFIG, undefined, def);
+    expect(r.controlBand?.evaluation.tier).toBe("innermost");
+    expect(r.controlBand?.diagnosis).toBeUndefined();
+    expect(bandFinding(r)).toBeUndefined();
+    expect(r.metrics.controlBandTier).toBe(1);
+  });
+
+  it("middle: attaches a diagnosis, no finding", () => {
+    const r = analyzeCostHealth(withLatest(2.5), DEFAULT_HEALTH_CONFIG, undefined, def);
+    expect(r.controlBand?.evaluation.tier).toBe("middle");
+    expect(r.controlBand?.diagnosis?.stages[0].stage).toBe("feature-dev");
+    expect(bandFinding(r)).toBeUndefined();
+  });
+
+  it("outermost: opens a finding and leaves the score unchanged", () => {
+    const fired = analyzeCostHealth(withLatest(3.5), DEFAULT_HEALTH_CONFIG, undefined, def);
+    const dormant = analyzeCostHealth(withLatest(3.5), DEFAULT_HEALTH_CONFIG);
+    expect(bandFinding(fired)?.severity).toBe("high");
+    expect(fired.metrics.controlBandTier).toBe(3);
+    expect(fired.score).toBe(dormant.score);
+  });
+
+  it("shipped (disabled) definition never fires", () => {
+    const r = analyzeCostHealth(withLatest(3.5), DEFAULT_HEALTH_CONFIG);
+    expect(r.controlBand?.evaluation.reason).toBe("disabled");
+    expect(bandFinding(r)).toBeUndefined();
+  });
+
+  it("insufficient data carries no band", () => {
+    expect(
+      analyzeCostHealth(makeEmptyDataset(), DEFAULT_HEALTH_CONFIG).controlBand
+    ).toBeUndefined();
   });
 });

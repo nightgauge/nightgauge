@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Added
 
+- **Each run's health record also logs cost control-band excursions
+  (#1286).** Excursions are appended to `health/control-bands.jsonl` beside the
+  health series. The band ships disabled until its baseline is proven stable.
 - **CLI-started runs show phase progress and their output (#586).** A run
   started with `nightgauge run` in a terminal now shows live phase progress on
   its tree node. The node's tooltip names the run's session log, and the new

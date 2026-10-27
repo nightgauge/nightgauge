@@ -584,6 +584,59 @@ commit.
 
 ---
 
+## Control Bands
+
+Health analysis has one graduated response between silence and the
+[cascade circuit breaker](CASCADE_CIRCUIT_BREAKER.md)'s full stop: a control
+band over **per-run cloud cost** (#1286). It is computed in the cost-health
+dimension over run history, sits below the breaker, and never pauses or drives
+it. Local-model runs are excluded exactly as cost-health excludes them.
+
+### Tiers
+
+The tiers live in the version-controlled
+`packages/nightgauge-sdk/src/analysis/health/control-bands.json`, validated by
+Zod when the SDK loads. Changing a tier is a reviewed file change; there is no
+runtime override. The latest run's cost is scored as
+`z = (cost − mean) / σ` against the preceding `rolling_window` runs, using
+`mean` and `standardDeviation` from `statistics.ts`. Excursions are upward only.
+
+| Tier      | Default threshold | Action                                                                     |
+| --------- | ----------------- | -------------------------------------------------------------------------- |
+| innermost | z ≥ 1σ            | Record the evaluation in `health/control-bands.jsonl`. Nothing else.       |
+| middle    | z ≥ 2σ            | Record, with a read-only diagnosis: per-stage cost delta, retries, models. |
+| outermost | z ≥ 3σ            | Record, and open a high-severity cost-health finding.                      |
+
+The score is not changed by a band: the anomaly-rate penalty already prices
+outliers. Each run's result is in `metrics.controlBandTier` (0–3) and, when a
+baseline exists, `metrics.controlBandZ`.
+
+### Baseline stability gate
+
+A band never fires against an unproven baseline. At runtime the window must
+have at least `baseline.min_samples` runs, non-zero σ, a coefficient of
+variation at most `baseline.max_cv`, and a half-window drift (second-half mean
+minus first-half mean, in σ) within `baseline.max_drift_sigma`. Otherwise the
+evaluation is `none` with the failing reason.
+
+### Baseline evidence and current state
+
+The band ships **disabled** (`enabled: false`). The proof was run on
+2026-10-27 over three months of this repository's run history: 115 runs with a
+recorded cost.
+
+| Window (runs) | CV   | Drift (σ) |
+| ------------- | ---- | --------- |
+| 20            | 0.68 | −0.66     |
+| 30            | 0.62 | −0.69     |
+| 50            | 0.55 | −0.10     |
+| all           | 1.11 | —         |
+
+Drift is within bounds, but the CV exceeds the 0.5 cap at every window, so
+per-run cost is not yet a stable baseline. Enable the band by changing
+`enabled` in the tier file once a re-run of the proof passes, and record the
+new evidence here.
+
 ## Health Status and Severity
 
 ### `HealthStatus` Thresholds

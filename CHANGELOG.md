@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Health has tiered control bands over per-run cost (#1286).** A run whose
+  cloud cost is 1σ, 2σ or 3σ above a stable rolling baseline is recorded,
+  diagnosed, or raised as a cost-health finding, as defined in a
+  version-controlled tier file. The band stays dormant until the baseline is
+  proven stable; current history does not pass, so it ships disabled. See
+  [Control Bands](docs/HEALTH_MONITORING.md#control-bands).
 - **Program items validated by the retired bypass keep releasing dependents
   (#2575).** A trusted `<!-- opencode-program:validated -->` comment now counts
   as the post-merge validation marker; an untrusted copy is still ignored, and

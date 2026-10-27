@@ -20,6 +20,7 @@
  */
 
 import {
+  ControlBandLogWriter,
   HealthAnalysisEngine,
   HealthTrendsWriter,
   recordHealthTrend,
@@ -54,6 +55,16 @@ export async function recordHealthForRun(
     const filter = DataAggregator.parseDateFilter({ period: HEALTH_SERIES_PERIOD_DAYS });
     const dataset = await DataAggregator.aggregate(repoRoot, filter);
     const result = new HealthAnalysisEngine().analyze(buildHealthInput(dataset));
+    const band = result.dimensions["cost-health"]?.controlBand;
+    if (band) {
+      // Every tier persists its excursion; `none` is skipped by the writer (#1286).
+      await ControlBandLogWriter.append(repoRoot, {
+        timestamp: new Date().toISOString(),
+        run_id: run.runId,
+        issue_number: run.issueNumber,
+        ...band,
+      });
+    }
     return await recordHealthTrend(repoRoot, result, run);
   } catch (error) {
     console.warn(`[Nightgauge] Failed to record health for run ${run.runId}: ${error}`);
