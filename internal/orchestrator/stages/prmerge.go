@@ -16,13 +16,16 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
+	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
 // PRMergePath is the outcome of a deterministic pr-merge attempt.
@@ -162,7 +165,16 @@ type PRMergeResult struct {
 	// deterministic merge use this to drive it themselves through a
 	// common-dir-aware git service, without shelling to `gh` a second time.
 	HeadRefName string
+	// PartialDelivery is set when the acceptance-criteria backstop (#2623)
+	// rewrote the PR body from `Closes #N` to `Refs #N` before merging, so the
+	// merge leaves the issue open. PartialDeliveryReason says why.
+	PartialDelivery       bool
+	PartialDeliveryReason string
 }
+
+// PartialDeliveryACUncovered is the PartialDeliveryReason when the issue has
+// unchecked criteria the run never reconciled (#2623).
+const PartialDeliveryACUncovered = "acceptance-criteria-uncovered"
 
 // PRMergeRunner is the contract the scheduler uses to invoke the deterministic
 // path. The default implementation (NewDeterministicRunner) shells out to
@@ -265,6 +277,15 @@ type PRStatusCheckRow struct {
 type ghClient interface {
 	View(ctx context.Context, prNumber int) (PRViewSnapshot, error)
 	Merge(ctx context.Context, prNumber int) error
+}
+
+// prBodyClient is implemented by ghClients that can read and edit a PR body
+// and read an issue body: the acceptance-criteria backstop (#2623). A client
+// without it skips the backstop.
+type prBodyClient interface {
+	PRBody(ctx context.Context, prNumber int) (string, error)
+	EditPRBody(ctx context.Context, prNumber int, body string) error
+	IssueBody(ctx context.Context, issueNumber int) (string, error)
 }
 
 // mergeQueueClient is implemented by ghClients that can see and drive
@@ -506,6 +527,20 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	if refused := r.refuseGeneratedSteering(ctx, workdir, prNumber, snap); refused != nil {
 		ph.supersedeInFlight()
 		return finish(*refused, nil)
+	}
+
+	// Acceptance-criteria backstop (#2623): before anything can merge or
+	// enqueue, demote `Closes #N` when the issue gained criteria the run never
+	// reconciled. Placed ahead of the queue branch so a PR resumed while
+	// already queued is covered too.
+	partial := r.acBackstop(ctx, gh, workdir, issueNumber, prNumber)
+	finishBase := finish
+	finish = func(res PRMergeResult, err error) (PRMergeResult, error) {
+		if partial {
+			res.PartialDelivery = true
+			res.PartialDeliveryReason = PartialDeliveryACUncovered
+		}
+		return finishBase(res, err)
 	}
 
 	// Merge-queue detection (#2214), once per Run. A read failure keeps the
@@ -878,6 +913,75 @@ func (r *DeterministicRunner) queueWaitTimeout() time.Duration {
 		return r.queueWait.Timeout
 	}
 	return github.DefaultMergeQueueWaitTimeout
+}
+
+// acBackstop re-reads the issue body and, when the PR body still closes the
+// issue while an unchecked criterion is absent from ac-reconcile-{N}.json,
+// rewrites the body to `Refs #N` listing those criteria and records
+// closes_issue:false in pr-{N}.json (#2623). Returns true when it demoted the
+// PR. A client without prBodyClient, or a failed read, leaves the body as
+// pr-create wrote it: an unreadable body is no evidence of a missing
+// criterion.
+func (r *DeterministicRunner) acBackstop(ctx context.Context, gh ghClient, workdir string, issueNumber, prNumber int) bool {
+	bc, ok := gh.(prBodyClient)
+	if !ok {
+		return false
+	}
+	prBody, err := bc.PRBody(ctx, prNumber)
+	if err != nil {
+		log.Printf("pr-merge: AC backstop skipped for PR #%d: read PR body: %v", prNumber, err)
+		return false
+	}
+	if !BodyClosesIssue(prBody, issueNumber) {
+		return false
+	}
+	issueBody, err := bc.IssueBody(ctx, issueNumber)
+	if err != nil {
+		log.Printf("pr-merge: AC backstop skipped for #%d: read issue body: %v", issueNumber, err)
+		return false
+	}
+	var rec *preflight.ACReconcileResult
+	if data, readErr := readFile(pipelineContextPath(workdir, fmt.Sprintf("ac-reconcile-%d.json", issueNumber))); readErr == nil {
+		var parsed preflight.ACReconcileResult
+		if json.Unmarshal(data, &parsed) == nil {
+			rec = &parsed
+		}
+	}
+	uncovered := preflight.UncoveredACs(issueBody, rec)
+	if len(uncovered) == 0 {
+		return false
+	}
+	newBody := AppendUnmetACs(RewriteClosesToRefs(prBody, issueNumber), issueNumber, uncovered)
+	if err := bc.EditPRBody(ctx, prNumber, newBody); err != nil {
+		log.Printf("pr-merge: AC backstop could not edit PR #%d body: %v", prNumber, err)
+		return false
+	}
+	log.Printf("pr-merge: #%d has %d acceptance criteria this run never reconciled — PR #%d now says Refs #%d",
+		issueNumber, len(uncovered), prNumber, issueNumber)
+	if err := markPRContextPartial(workdir, issueNumber); err != nil {
+		log.Printf("pr-merge: could not record closes_issue:false for #%d: %v", issueNumber, err)
+	}
+	return true
+}
+
+// markPRContextPartial sets closes_issue:false in pr-{N}.json, keeping every
+// other field as written.
+func markPRContextPartial(workdir string, issueNumber int) error {
+	p := pipelineContextPath(workdir, fmt.Sprintf("pr-%d.json", issueNumber))
+	data, err := readFile(p)
+	if err != nil {
+		return err
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	doc["closes_issue"] = false
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, append(out, '\n'), 0o644)
 }
 
 // refuseGeneratedSteering is the steering gate (issue 1675). It returns a
@@ -1378,6 +1482,51 @@ func (c *execGhClient) Merge(ctx context.Context, prNumber int) error {
 	_, err := github.RunGhSubprocess(ctx, c.workdir,
 		"pr", "merge", fmt.Sprintf("%d", prNumber), "--squash")
 	if err != nil {
+		return normalizeGhError(err)
+	}
+	return nil
+}
+
+// PRBody implements prBodyClient.
+func (c *execGhClient) PRBody(ctx context.Context, prNumber int) (string, error) {
+	return c.viewBody(ctx, "pr", prNumber)
+}
+
+// IssueBody implements prBodyClient.
+func (c *execGhClient) IssueBody(ctx context.Context, issueNumber int) (string, error) {
+	return c.viewBody(ctx, "issue", issueNumber)
+}
+
+func (c *execGhClient) viewBody(ctx context.Context, kind string, number int) (string, error) {
+	stdout, err := github.RunGhSubprocess(ctx, c.workdir, kind, "view", strconv.Itoa(number), "--json", "body")
+	if err != nil {
+		return "", normalizeGhError(err)
+	}
+	var raw struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(stdout, &raw); err != nil {
+		return "", fmt.Errorf("parse gh %s view JSON: %w", kind, err)
+	}
+	return raw.Body, nil
+}
+
+// EditPRBody implements prBodyClient. The body goes through a temp file so
+// its size and content never touch the argument list.
+func (c *execGhClient) EditPRBody(ctx context.Context, prNumber int, body string) error {
+	f, err := os.CreateTemp("", "nightgauge-pr-body-*.md")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(body); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if _, err := github.RunGhSubprocess(ctx, c.workdir, "pr", "edit", strconv.Itoa(prNumber), "--body-file", f.Name()); err != nil {
 		return normalizeGhError(err)
 	}
 	return nil

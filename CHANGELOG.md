@@ -181,6 +181,13 @@ changelog, and the release workflow refuses a tag that does not.
   fill from forge data. The row's age and the order within a severity band
   both use it. Where onset is unknown, the row reads "observed …".
 
+- **A resumed run no longer merges past acceptance criteria added after its PR
+  opened (#2623).** Resuming at pr-merge now requires the issue's current
+  criteria to match the fingerprint recorded when the PR was created; otherwise
+  the run re-plans and reuses the open PR. As a backstop, pr-merge changes
+  `Closes #N` to `Refs #N` and lists any unchecked criterion the run never
+  reconciled, so the merge leaves the issue open.
+
 - **A PR that picks up a conflict in the merge queue is sent back to be
   resolved, not failed** (#2611). pr-merge now names the conflict
   (`merge-queue-failed: merge conflict with main: …`), and conflict recovery

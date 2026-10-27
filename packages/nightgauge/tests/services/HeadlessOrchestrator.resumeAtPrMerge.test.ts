@@ -13,7 +13,8 @@
  * ($2.11, 16 minutes) only to rediscover PR #1447 and push more commits onto it.
  *
  * An open PR recorded on disk is proof the work shipped, whatever state
- * remembers.
+ * remembers — while the issue's acceptance criteria still match the
+ * fingerprint the PR was built against (Issue #2623).
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -130,6 +131,9 @@ const STAGE_ORDER = [
 
 const PR_CONTEXT_SUFFIX = "pr-1431.json";
 
+/** The fingerprint every "unchanged criteria" case records and reads back. */
+const FP = "sha256:unchanged";
+
 describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Issue #1531)", () => {
   let logger: Logger;
 
@@ -156,9 +160,20 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
     });
   }
 
-  function makeOrchestrator(state: unknown) {
+  /** Stub the binary's current-criteria fingerprint (#2623). */
+  function stubFingerprint(orchestrator: HeadlessOrchestrator, value: string | null) {
+    return vi
+      .spyOn(
+        orchestrator as unknown as { currentAcFingerprint(n: number): Promise<string | null> },
+        "currentAcFingerprint"
+      )
+      .mockResolvedValue(value);
+  }
+
+  function makeOrchestrator(state: unknown, currentFingerprint: string | null = FP) {
     const mockState = createMockStateService(state);
     const orchestrator = new HeadlessOrchestrator(mockState, logger, { contextFileWaitMs: 0 });
+    stubFingerprint(orchestrator, currentFingerprint);
     return { orchestrator, mockState };
   }
 
@@ -177,6 +192,7 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
       pr_number: 1447,
       pr_url: "https://github.com/acme/acme-platform/pull/1447",
       status: "open",
+      ac_fingerprint: FP,
     });
 
     const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
@@ -254,6 +270,52 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
     expect(mockState.completeStage).not.toHaveBeenCalled();
   });
 
+  describe("acceptance criteria changed since the PR opened (Issue #2623)", () => {
+    const open = { issue_number: 1431, pr_number: 1447, status: "open", ac_fingerprint: FP };
+
+    function expectReplanned(mockState: PipelineStateService, why: string) {
+      expect(mockState.skipStage).not.toHaveBeenCalled();
+      expect(mockState.completeStage).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `acceptance criteria changed since PR #1447 was opened — re-planning (${why})`
+        ),
+        expect.anything()
+      );
+    }
+
+    it("re-plans when a criterion was added after the PR opened", async () => {
+      withPrContext(open);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431), "sha256:six-acs");
+      await detect(orchestrator, 1431);
+      expectReplanned(mockState, "fingerprint mismatch");
+    });
+
+    it("re-plans when the PR context recorded no fingerprint", async () => {
+      withPrContext({ issue_number: 1431, pr_number: 1447, status: "open" });
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
+      await detect(orchestrator, 1431);
+      expectReplanned(mockState, "no fingerprint recorded");
+    });
+
+    it("re-plans when the current fingerprint cannot be computed", async () => {
+      withPrContext(open);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431), null);
+      await detect(orchestrator, 1431);
+      expectReplanned(mockState, "fingerprint unavailable");
+    });
+
+    it("replays #2611: four criteria fingerprinted, two added since — no fast-forward", async () => {
+      // The real fingerprints, as `nightgauge preflight ac-fingerprint` prints
+      // them for the four-criteria body and the six-criteria body.
+      withPrContext({ ...open, ac_fingerprint: "sha256:four-criteria" });
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431), "sha256:six-criteria");
+      await detect(orchestrator, 1431);
+      expect(mockState.skipStage).not.toHaveBeenCalledWith("feature-planning", expect.anything());
+      expect(mockState.completeStage).not.toHaveBeenCalledWith("pr-create");
+    });
+  });
+
   describe("dispatched open PR, worktree gone (Issue #2541)", () => {
     /** Stub the deterministic pr-create restore; `writes` is what it puts on disk. */
     function stubRestore(orchestrator: HeadlessOrchestrator, writes: unknown | null) {
@@ -279,6 +341,7 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
         issue_number: 1501,
         pr_number: 2526,
         status: "open",
+        ac_fingerprint: FP,
       });
       await detect(orchestrator, 1431);
 
@@ -337,12 +400,14 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
         base_branch: "main",
         title: "feat(#1501): example",
         status: "open",
+        ac_fingerprint: FP,
         created_at: "2026-10-25T22:38:56Z",
       };
 
       function makeGoFaithful() {
         const { service, stages } = createGoFaithfulStateService(1501);
         const orchestrator = new HeadlessOrchestrator(service, logger, { contextFileWaitMs: 0 });
+        stubFingerprint(orchestrator, FP);
         return { orchestrator, service, stages };
       }
 

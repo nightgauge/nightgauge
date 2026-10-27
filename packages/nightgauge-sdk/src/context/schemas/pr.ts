@@ -9,6 +9,7 @@ import { flexEnum } from "./helpers.js";
  * - 1.1: Added optional knowledge_path field (Issue #1679)
  * - 1.2: Added optional retrospective_feedback field (Issue #14)
  * - 1.3: Added scope_drift_check to preflight_results (Issue #3040)
+ * - 1.4: Added optional ac_fingerprint field (Issue #2623)
  * Note: schema_version literal remains "1.0" — all additions are backwards-compatible optional fields.
  *
  * Created by: /nightgauge-pr-create
@@ -42,6 +43,11 @@ export const PRContextSchema = z
      * Relative to workspace root: .nightgauge/knowledge/features/{N}-slug/
      */
     knowledge_path: z.string().nullish(),
+    /** ac-reconcile fingerprint of the criteria this PR was built against
+     * (v1.4+, Issue #2623). Resume fast-forwards to pr-merge only while the
+     * issue's current criteria still produce it.
+     */
+    ac_fingerprint: z.string().nullish(),
     /** Retrospective feedback captured after merge (v1.2+, Issue #14).
      * Optional — only present when user provided feedback in VSCode interactive mode.
      */
