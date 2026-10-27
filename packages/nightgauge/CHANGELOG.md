@@ -26,6 +26,11 @@ and this project adheres to
 
 ### Fixed
 
+- **Action Center bands now rank the way they read (#1583).** The tree shows
+  one band per severity, most urgent first: "Blocking the fleet", "Blocking a
+  run", "FYI". The lowest band no longer reads "Needs a human", and a red
+  default branch sits above green dependency-update PRs.
+
 - **An interactive Codex stage stays alive while you work in its terminal
   (#431).** The TUI launch, each message relayed from the Output panel, and
   shell-execution events for the Codex terminal (on VS Code builds that report

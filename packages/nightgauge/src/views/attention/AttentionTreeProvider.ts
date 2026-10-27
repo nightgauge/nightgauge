@@ -1,9 +1,9 @@
 /**
  * AttentionTreeProvider — the Action Center sidebar tree (ADR 015 §E).
  *
- * Renders open DecisionRequests as severity-ordered cards grouped into the
- * two bands from the ADR's VSCode mockup: "Blocking" (`blocking_fleet` +
- * `blocking_run`) and "Needs a human" (`fyi`). State is fetched once via
+ * Renders open DecisionRequests as severity-ordered cards grouped into one
+ * band per severity, most urgent first: "Blocking the fleet", "Blocking a
+ * run", "FYI" (SEVERITY_BANDS; ADR-009 Decision 5, #1583). State is fetched once via
  * `attention.list` and kept live thereafter by folding the `attention.event`
  * push (created | updated | acknowledged | resolved | expired) — no polling,
  * using the subscribe-and-fold shape the workflow tree used before #1208
@@ -30,7 +30,13 @@ import type {
   AttentionEvent,
   AttentionListResult,
 } from "../../services/IpcClientBase";
-import { AttentionGroupTreeItem, AttentionTreeItem, compareRequests } from "./attentionTreeItems";
+import {
+  AttentionGroupTreeItem,
+  AttentionTreeItem,
+  SEVERITY_BANDS,
+  compareRequests,
+  severityRank,
+} from "./attentionTreeItems";
 import { getPrefixedMainChannel } from "../../utils/logger";
 
 // Folded into the shared main channel behind an "attention" tag (#749) rather
@@ -199,12 +205,12 @@ export class AttentionTreeProvider
       return element.getChildren();
     }
     const sorted = [...this.requests].sort(compareRequests);
-    const blocking = sorted.filter((r) => isBlocking(r.severity));
-    const fyi = sorted.filter((r) => !isBlocking(r.severity));
-
     const groups: AttentionTreeItem[] = [];
-    if (blocking.length > 0) groups.push(new AttentionGroupTreeItem("Blocking", blocking));
-    if (fyi.length > 0) groups.push(new AttentionGroupTreeItem("Needs a human", fyi));
+    SEVERITY_BANDS.forEach((band, rank) => {
+      // By rank, not severity equality: an unknown severity lands in the last band.
+      const members = sorted.filter((r) => severityRank(r.severity) === rank);
+      if (members.length > 0) groups.push(new AttentionGroupTreeItem(band.label, members));
+    });
     return groups;
   }
 
