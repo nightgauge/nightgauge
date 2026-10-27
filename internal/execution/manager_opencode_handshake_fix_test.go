@@ -19,23 +19,23 @@ import (
 )
 
 // installHandshakeFake writes a fake `opencode` first on PATH running body,
-// a shell fragment invoked for the stage's own `run`. versionDelay is the
-// pause before `opencode --version` (the manager's own post-failure probe,
-// openCodePluginHandshakeMarker) answers — 0 for instant, as the real binary
-// normally is.
-func installHandshakeFake(t *testing.T, versionDelay time.Duration, body string) {
+// a shell fragment invoked for the stage's own `run`. onVersion is a shell
+// fragment run when `opencode --version` (the manager's own post-failure
+// probe, openCodePluginHandshakeMarker) starts, before it answers — "" for
+// an instant answer, as the real binary normally gives.
+func installHandshakeFake(t *testing.T, onVersion string, body string) {
 	t.Helper()
 	dir := t.TempDir()
 	script := fmt.Sprintf(`#!/bin/sh
 if [ "$1" = "--version" ]; then
-  sleep %.3f
+%s
   echo 1.18.30
   exit 0
 fi
 %s
 cat > /dev/null
 exit 0
-`, versionDelay.Seconds(), body)
+`, onVersion, body)
 	if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -47,25 +47,43 @@ exit 0
 // signalled before the manager spends any time naming the binary in the
 // failure marker. The fake never writes a valid sentinel (simulating the
 // plugin failing to load), so VerifyLoaded fails the instant step_start is
-// read; a slow `--version` stands in for the observed ~0.3s a real probe
-// took. The fake's own shell process sleeps 300ms after step_start and then
-// writes a marker file — representing a tool call already running — so the
-// marker's presence tells "the kill arrived after that window" apart from
-// "before it": on unfixed code, the marker exists (the probe delays the
-// kill well past 300ms); fixed, it must not.
+// read. The test orders on events, not a clock (#2621): the `--version`
+// branch touches a probe-started file, and the stage's shell — representing
+// a tool call already running — writes the marker only once it sees that
+// file. So the marker exists only if the group was still alive when the
+// probe started. The probe then holds its answer (bounded at 3s, below the
+// manager's 5s probe timeout) until the marker appears, so on unfixed code
+// the kill cannot land before the marker is written, however loaded the
+// host. Fixed, the group is gone before the probe starts and the marker
+// never appears.
 func TestOpenCodeHandshakeKillPrecedesVersionProbe(t *testing.T) {
 	home := isolateOpenCodeHome(t)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	writeOpenCodeMachineConfig(t, openCodeMachineConfig)
 	workspace := openCodeWorkspace(t)
 	const runID = "01890a5d-ac96-774b-bcce-b30209a81701"
-	marker := filepath.Join(t.TempDir(), "ran-after-kill-window.marker")
+	marker := filepath.Join(t.TempDir(), "ran-after-probe-start.marker")
+	probe := filepath.Join(t.TempDir(), "probe-started")
+	// The manager also runs `--version` before the stage starts; only a probe
+	// that begins after the stage's step_start counts as the handshake one.
+	stepped := filepath.Join(t.TempDir(), "step-started")
 
-	installHandshakeFake(t, 800*time.Millisecond, fmt.Sprintf(`
+	installHandshakeFake(t, fmt.Sprintf(`
+  if [ -e %q ]; then
+    : > %q
+    i=0
+    while [ ! -e %q ] && [ $i -lt 150 ]; do sleep 0.02; i=$((i+1)); done
+  fi
+`, stepped, probe, marker), fmt.Sprintf(`
+: > %q
 echo '{"type":"step_start","sessionID":"s1"}'
-sleep 0.3
-echo ran > %q
-`, marker))
+i=0
+while [ $i -lt 1000 ]; do
+  if [ -e %q ]; then echo ran > %q; break; fi
+  sleep 0.02
+  i=$((i+1))
+done
+`, stepped, probe, marker))
 
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 1612, "item-1612", runID)
 	captureStderr(t, func() {
@@ -76,8 +94,11 @@ echo ran > %q
 	})
 	_ = home
 
+	if _, err := os.Stat(probe); err != nil {
+		t.Fatalf("the --version probe never started, so this case is not exercising the kill/probe ordering: %v", err)
+	}
 	if _, err := os.Stat(marker); err == nil {
-		t.Error("the stage's shell kept running (and wrote the post-window marker) past its 300ms mark: the SIGKILL was delayed behind the --version probe")
+		t.Error("the stage's shell observed the --version probe start (and wrote the marker), so the group was still alive when the probe ran: the SIGKILL was delayed behind the probe")
 	}
 }
 
@@ -86,7 +107,10 @@ echo ran > %q
 // fail the stage (VerifyNotLate, checked at exit). The fake writes a valid
 // sentinel before step_start (VerifyLoaded passes), emits tool_use, then
 // rewrites the sentinel — simulating a plugin that reloaded, or loaded a
-// second time, after a tool had already run.
+// second time, after a tool had already run. The rewrite's mtime is set an
+// hour ahead (#2621), so it falls after the observed tool_use time however
+// long the manager's reader takes to see the line; the tool_use carries no
+// state.time.start, so this still exercises the observed-time path.
 func TestOpenCodeLateHandshakeFailsTheStage(t *testing.T) {
 	home := isolateOpenCodeHome(t)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
@@ -94,14 +118,15 @@ func TestOpenCodeLateHandshakeFailsTheStage(t *testing.T) {
 	workspace := openCodeWorkspace(t)
 	const runID = "01890a5d-ac96-774b-bcce-b30209a81702"
 
-	installHandshakeFake(t, 0, `
+	future := time.Now().Add(time.Hour).Format("200601021504.05")
+	installHandshakeFake(t, "", fmt.Sprintf(`
 sentinel_body="{\"nonce\":\"$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE\",\"plugin_version\":\"1\",\"hooks\":[]}"
-printf '%s' "$sentinel_body" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+printf '%%s' "$sentinel_body" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
 echo '{"type":"step_start","sessionID":"s1"}'
 echo '{"type":"tool_use","sessionID":"s1","part":{"tool":"bash","state":{"status":"completed"}}}'
-sleep 0.3
-printf '%s' "$sentinel_body" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
-`)
+printf '%%s' "$sentinel_body" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+touch -t %s "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+`, future))
 
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 1612, "item-1612", runID)
 	var result *adapters.RunResult
@@ -146,7 +171,7 @@ func TestOpenCodeHandshakeUsesToolStartTime(t *testing.T) {
 
 	longAgoMillis := time.Now().Add(-1 * time.Hour).UnixMilli()
 
-	installHandshakeFake(t, 0, fmt.Sprintf(`
+	installHandshakeFake(t, "", fmt.Sprintf(`
 sleep 0.3
 sentinel_body="{\"nonce\":\"$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE\",\"plugin_version\":\"1\",\"hooks\":[]}"
 printf '%%s' "$sentinel_body" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
