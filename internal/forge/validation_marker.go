@@ -17,6 +17,12 @@ import (
 const (
 	// ValidationMarkerPrefix opens the marker. Detection matches on it.
 	ValidationMarkerPrefix = "<!-- nightgauge:validated "
+
+	// LegacyValidationMarker is the marker the retired program-office bypass
+	// script posted (#2575). Detection accepts it so items the bypass
+	// validated keep releasing their dependents; nothing writes it. It has no
+	// closing "-->" so a variant with a trailing payload matches too.
+	LegacyValidationMarker = "<!-- opencode-program:validated"
 )
 
 // ValidationMarker renders the marker line (without trailing newline):
@@ -37,7 +43,9 @@ func ValidationMarkerComment(baseRef, sha string) string {
 		ValidationMarker(sha), base, strings.TrimSpace(sha))
 }
 
-// HasValidationMarker reports whether body carries a validation marker.
+// HasValidationMarker reports whether body carries a validation marker: the
+// current one, or the legacy bypass marker. Callers apply the trust filter.
 func HasValidationMarker(body string) bool {
-	return strings.Contains(body, ValidationMarkerPrefix)
+	return strings.Contains(body, ValidationMarkerPrefix) ||
+		strings.Contains(body, LegacyValidationMarker)
 }

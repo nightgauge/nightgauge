@@ -228,3 +228,30 @@ func TestIntegration_Program_TwoRepos_ValidationGated(t *testing.T) {
 		t.Errorf("hook re-run = %q, want present", again.ValidationMarker)
 	}
 }
+
+// The legacy bypass marker (#2575) releases a program blocker only from a
+// trusted comment: the same trust filter gates it as the current marker.
+func TestResolveValidationByKey_LegacyMarkerTrustGated(t *testing.T) {
+	const key = "O/platform#10"
+	program := []string{"program:demo"}
+	resolve := func(author string) ValidationState {
+		t.Helper()
+		store := &programCommentForge{
+			fakeTrustForge: fakeTrustForge{levels: map[string]trust.Level{
+				"maintainer": trust.LevelWrite,
+				"mallory":    trust.LevelRead,
+			}},
+			comments: map[string][]trust.Comment{},
+			bot:      "nightgauge-pipeline[bot]",
+		}
+		store.post(key, author, "<!-- opencode-program:validated -->")
+		gate := trust.NewGate(store, nil)
+		return ResolveValidationByKey(context.Background(), nil, gate, map[string][]string{key: program}, nil)[key]
+	}
+	if got := resolve("maintainer"); !got.Program || !got.Validated {
+		t.Errorf("trusted legacy marker = %+v, want program and validated", got)
+	}
+	if got := resolve("mallory"); !got.Program || got.Validated {
+		t.Errorf("untrusted legacy marker = %+v, want program, not validated", got)
+	}
+}
