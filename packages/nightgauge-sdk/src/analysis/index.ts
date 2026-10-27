@@ -292,6 +292,11 @@ export {
   recordHealthTrend,
   type HealthTrendRunMeta,
   type HealthTrendEntry,
+  // Control bands over per-run cost (#1286)
+  ControlBandLogWriter,
+  type ControlBandLogEntry,
+  type ControlBandResult,
+  type ControlBandEvaluation,
 } from "./health/index.js";
 export type { HealthReport } from "./health/index.js";
 export type {

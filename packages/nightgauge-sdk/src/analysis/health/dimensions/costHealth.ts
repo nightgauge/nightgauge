@@ -25,6 +25,15 @@ import {
   hasEnoughData,
   buildPeriodComparison,
 } from "../statistics.js";
+import {
+  CONTROL_BAND_DEFINITION,
+  buildControlBandFinding,
+  diagnoseCostExcursion,
+  evaluateControlBand,
+  tierOrdinal,
+  type ControlBandDefinition,
+  type ControlBandResult,
+} from "../controlBands.js";
 
 // ── Internal helpers ───────────────────────────────────────────────
 
@@ -138,7 +147,8 @@ function costEfficiencyRatio(records: HealthAnalysisInput["executionHistory"]): 
 export function analyzeCostHealth(
   dataset: HealthAnalysisInput,
   config: HealthAnalysisConfig,
-  baseline?: HealthAnalysisInput
+  baseline?: HealthAnalysisInput,
+  bandDefinition: ControlBandDefinition = CONTROL_BAND_DEFINITION
 ): DimensionResult {
   const records = dataset.executionHistory;
   const minimumSamples = config.minimumSampleSizes.basic;
@@ -188,14 +198,13 @@ export function analyzeCostHealth(
       runEarliestTs.set(r.issueNumber, ts);
     }
   }
-  const chronologicalRunCosts = Array.from(runEarliestTs.entries())
+  const chronologicalRuns = Array.from(runEarliestTs.entries())
     .sort(([, tsA], [, tsB]) => tsA - tsB)
-    .map(([issue]) => {
-      // Re-sum cost for this issue from statsRecords.
-      return statsRecords
-        .filter((r) => r.issueNumber === issue)
-        .reduce((sum, r) => sum + r.costUsd, 0);
-    });
+    .map(([issue]) => issue);
+  const chronologicalRunCosts = chronologicalRuns.map((issue) =>
+    // Re-sum cost for this issue from statsRecords.
+    statsRecords.filter((r) => r.issueNumber === issue).reduce((sum, r) => sum + r.costUsd, 0)
+  );
 
   const trend = computeTrend(chronologicalRunCosts);
 
@@ -214,6 +223,21 @@ export function analyzeCostHealth(
 
   // Cost efficiency ratio.
   const efficiencyRatio = costEfficiencyRatio(statsRecords);
+
+  // Control band over the latest run (#1286). Score is deliberately unchanged:
+  // the anomaly-rate penalty already prices outliers.
+  const bandEvaluation = evaluateControlBand(chronologicalRunCosts, bandDefinition);
+  const controlBand: ControlBandResult = { evaluation: bandEvaluation };
+  if (bandEvaluation.action === "diagnose" || bandEvaluation.action === "finding") {
+    const latest = chronologicalRuns[chronologicalRuns.length - 1];
+    const baselineRuns = new Set(
+      chronologicalRuns.slice(0, -1).slice(-bandDefinition.rolling_window)
+    );
+    controlBand.diagnosis = diagnoseCostExcursion(
+      statsRecords.filter((r) => r.issueNumber === latest),
+      statsRecords.filter((r) => baselineRuns.has(r.issueNumber))
+    );
+  }
 
   // ── Scoring ────────────────────────────────────────────────────
   let score = 100;
@@ -264,6 +288,13 @@ export function analyzeCostHealth(
       },
       confidence,
     });
+  }
+
+  // Finding: latest run beyond the outermost control band.
+  if (bandEvaluation.action === "finding") {
+    findings.push(
+      buildControlBandFinding(bandEvaluation, controlBand.diagnosis, `ch-${findingIndex++}`)
+    );
   }
 
   // Finding: worsening cost trend.
@@ -372,9 +403,12 @@ export function analyzeCostHealth(
       localRunCount: localRecords.length,
       cloudRunCount: cloudRecords.length,
       hasMixedProviders: hasMixedProviders ? 1 : 0,
+      controlBandTier: tierOrdinal(bandEvaluation.tier),
+      ...(bandEvaluation.z !== null ? { controlBandZ: bandEvaluation.z } : {}),
     },
     hasEnoughData: true,
     sampleSize,
     ...(periodComparison !== undefined ? { periodComparison } : {}),
+    controlBand,
   };
 }
