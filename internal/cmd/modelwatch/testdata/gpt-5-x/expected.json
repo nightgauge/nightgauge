@@ -1,0 +1,38 @@
+{
+  "v": 1,
+  "provider": "openai",
+  "model_id": "gpt-5.7",
+  "patch": {
+    "add": {
+      "id": "gpt-5.7",
+      "provider": "openai",
+      "tiers": ["opus", "fable"],
+      "display_name": "GPT-5.7",
+      "concrete_version": "gpt-5.7",
+      "rates": {
+        "input": 2.5,
+        "output": 20
+      },
+      "rate_provenance": "list",
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
+      "context_window": 400000,
+      "behavior": {
+        "max_output_tokens": 128000
+      }
+    },
+    "demote": [
+      {
+        "id": "gpt-5.6-sol",
+        "replacement": "gpt-5.7"
+      }
+    ],
+    "target_files": [
+      "packages/nightgauge-sdk/src/eval/model-registry.json",
+      "internal/models/model-registry.json"
+    ]
+  },
+  "overlays": [],
+  "defects": [],
+  "capabilities": [],
+  "dropped": []
+}

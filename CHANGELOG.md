@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge-model-watch` turns a model release into reviewable work (#83).**
+  `nightgauge model-watch classify --input <dir>` reads a provider's fetched
+  release pages and proposes a registry patch: the new descriptor and the
+  demotion of the model it displaces. It also reports new effort levels,
+  thinking/effort 400 defects, and overlay proposals with issue drafts. It works
+  for any provider from a manifest, screens vendor quotes for prompt injection,
+  and never writes the registry. See
+  [Adding a model](docs/MODEL_ADAPTATION.md#6-adding-a-model).
 - **Health has tiered control bands over per-run cost (#1286).** A run whose
   cloud cost is 1σ, 2σ or 3σ above a stable rolling baseline is recorded,
   diagnosed, or raised as a cost-health finding, as defined in a
