@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Record findings discovered outside a pipeline run (#102).**
+  `nightgauge finding record` saves an environment gotcha, precondition or API
+  shape to `.nightgauge/findings.jsonl` in the main checkout, and
+  `nightgauge finding list` reads it back. Continuous improvement turns
+  pipeline-scope findings into proposals and lists project-scope ones in its
+  report. Feature planning adds a Known Findings section when a finding
+  concerns a planned path. With no findings file, nothing changes.
 - **Recover an issue's full decision chain from its number (#1283).**
   `nightgauge trace list <issue>` lists every traced run, oldest first.
   `trace export` now adds `issue_runs`, `merge` (PR, merge SHA, who merged it)

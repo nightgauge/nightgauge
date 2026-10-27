@@ -7,7 +7,7 @@ description: Documentation-first feature planning. Read docs before code, propos
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.17.0"
+  version: "1.18.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 context: fork
@@ -34,6 +34,8 @@ Design a complete implementation plan with documentation-first context loading.
   state directory (`nightgauge layout path pipeline`)
 - Loads project docs before source exploration
 - Reads scaffolded PRD.md from `knowledge_path` (when present) for planning context
+- Carries out-of-band findings that concern the planned paths into a
+  `## Known Findings` plan section (only when any match)
 - Produces the plan `{N}-*.md` in the clone's plans directory
   (`nightgauge layout path plans`) with concrete implementation and validation
   steps
@@ -319,6 +321,25 @@ It covers Phase 4 (produce the `{N}-*.md` plan file with
 `nightgauge layout write plans`) and
 Phase 5.5 (knowledge base enrichment). Phase 5 below is the inline output
 contract.
+
+#### Known Findings (before writing the plan)
+
+Operators record findings discovered outside pipeline runs with
+`nightgauge finding record` (#102). Before writing the plan, ask the binary
+which ones concern the paths you plan to change. The binary decides the match;
+do not filter findings yourself.
+
+```bash
+PLANNED_PATHS="<comma-separated files_to_create + files_to_modify>"
+KNOWN_FINDINGS=$(nightgauge finding list --match-paths "$PLANNED_PATHS" --json 2>/dev/null || echo "[]")
+```
+
+When `KNOWN_FINDINGS` is a non-empty array, the plan carries a
+`## Known Findings` section before the step-by-step implementation plan, one
+entry per finding with its `kind`, `scope`, `summary`, `remedy` and `evidence`,
+and the steps account for each remedy. When it is `[]` (no match, or no
+findings file), add nothing: the plan is identical to one written without this
+step. `planning-{N}.json` gains no field.
 
 #### Publication Boundary Check
 

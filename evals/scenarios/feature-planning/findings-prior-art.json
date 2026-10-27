@@ -1,0 +1,24 @@
+{
+  "id": "fp-findings-prior-art",
+  "skill": "feature-planning",
+  "description": "Planning carries out-of-band findings that match a planned path into a Known Findings section, and leaves unrelated findings out.",
+  "failure_mode": "Model ignores a recorded finding about a file it plans to change, or pastes every finding regardless of the planned paths.",
+  "prompt": "The plan modifies scripts/ci-local.sh. `nightgauge finding list --match-paths scripts/ci-local.sh --json` returns one finding: kind environment, scope pipeline, summary 'Gate needs mikefarah yq', remedy 'brew install yq before scripts/ci-local.sh'. The findings file also holds 'Seed data needs migrations first', which did not match. Write the plan's findings section, and put the section itself in one fenced markdown block.",
+  "assertions": [
+    {
+      "type": "contains",
+      "value": "Known Findings",
+      "scope": "last_fenced_block"
+    },
+    {
+      "type": "contains",
+      "value": "Gate needs mikefarah yq",
+      "scope": "last_fenced_block"
+    },
+    {
+      "type": "not_contains",
+      "value": "Seed data needs migrations first",
+      "scope": "last_fenced_block"
+    }
+  ]
+}

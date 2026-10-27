@@ -477,6 +477,65 @@ on them. The underlying SDK classes (`AdaptivePolicyEngine`,
 `packages/nightgauge-sdk/src/` with full test suites, available for offline
 analysis and platform use.
 
+## Out-of-Band Findings
+
+The loops above learn only from telemetry that pipeline runs produce. A finding
+an operator makes while working beside the pipeline (an environment gotcha, a
+precondition, an API shape) is recorded with `nightgauge finding record` so the
+next review and the next plan can use it (#102).
+
+Each record is one line of `<main-checkout>/.nightgauge/findings.jsonl`,
+validated against [`schemas/finding-v1.json`](../schemas/finding-v1.json):
+
+| Field         | Rule                                                                    |
+| ------------- | ----------------------------------------------------------------------- |
+| `id`          | `fd-` + 12 hex of sha256(kind, scope, summary); re-recording is a no-op |
+| `kind`        | `environment`, `precondition`, `api-shape` or `gotcha`                  |
+| `scope`       | `pipeline` (about Nightgauge) or `project` (about this repository)      |
+| `summary`     | Required, one line, at most 200 characters                              |
+| `remedy`      | Optional, at most 2000 characters                                       |
+| `evidence`    | 0–10 entries                                                            |
+| `paths`       | 0–20 repository-relative paths or globs; hints only, never opened       |
+| `recorded_at` | RFC 3339 UTC, set by the binary                                         |
+
+Control and bidi characters, absolute paths and `..` segments are refused, and
+a refused record leaves the file unchanged.
+
+```bash
+nightgauge finding record --kind environment --scope pipeline \
+  --summary "Gate needs mikefarah yq, not the Python yq" \
+  --remedy "brew install yq before scripts/ci-local.sh" \
+  --evidence "yq: error: unrecognized arguments" --path scripts/ci-local.sh
+nightgauge finding list                       # id kind/scope summary
+nightgauge finding list --scope pipeline --json
+nightgauge finding list --match-paths scripts/ci-local.sh,docs/TESTING.md --json
+```
+
+**Location.** The file resolves to the main checkout, even when the command runs
+in a pipeline worktree, so removing a worktree cannot lose a finding. It is
+git-ignored by default because findings can carry machine-specific detail. To
+share findings, review the file, then add `!/findings.jsonl` under Local
+additions in `.nightgauge/.gitignore`.
+
+**Matching.** `--match-paths` keeps a finding when, for some target `t`, an
+entry in `paths` equals `t`, is a directory prefix of it, or globs it
+(`path.Match`); or `t` appears verbatim in the summary, remedy or evidence.
+
+**Consumers.** Both run only when the list is non-empty, so with no findings
+file their output is unchanged.
+
+- `continuous-improvement` Signal Group 7: a `pipeline` finding becomes a
+  proposal in dogfood mode, and only an "report upstream" `investigation` in
+  customer mode. A `project` finding is listed in the report's Findings section
+  and never becomes a proposal
+  ([SELF_IMPROVEMENT_BOUNDARIES.md](SELF_IMPROVEMENT_BOUNDARIES.md)).
+- `feature-planning`: findings that match the planned paths are written into
+  the plan as a `## Known Findings` section.
+
+**Boundary.** Findings are learning signals, not issue candidates. A finding
+that warrants an issue goes through `nightgauge discovered-work record`
+([ADR 027](decisions/027-discovered-work-substrate.md)).
+
 ## Data Flow
 
 ```
@@ -538,6 +597,13 @@ Generate prioritized improvement proposals
         └─ Customer mode: config-adjust, workflow, calibration, investigation
 ```
 
+```
+Operator → nightgauge finding record → <main-checkout>/.nightgauge/findings.jsonl
+        │
+        ├─ continuous-improvement Signal Group 7 → proposals (pipeline scope) / report
+        └─ feature-planning → ## Known Findings (paths match the plan)
+```
+
 ## File Locations
 
 `<pipeline>` is the clone's pipeline state directory
@@ -561,3 +627,4 @@ Generate prioritized improvement proposals
 | `<pipeline>/proposals/retro-epic-<N>.json`    | SkillImprovementProposal records from retro runs             |
 | `<pipeline>/continuous-improvement-*.json`    | Periodic continuous improvement review reports               |
 | `<pipeline>/survival-records.jsonl`           | Post-merge survival verdicts feeding #4152/#4153 calibration |
+| `<main-checkout>/.nightgauge/findings.jsonl`  | Out-of-band findings (#102), git-ignored by default          |

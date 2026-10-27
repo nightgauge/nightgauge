@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "The Seed data needs migrations first finding did not match a planned path, so it stays out.\n\n```markdown\n## Known Findings\n\n- environment/pipeline: Gate needs mikefarah yq. Remedy: brew install yq before scripts/ci-local.sh. The implementation steps install yq before running the gate.\n```",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "The Seed data needs migrations first finding did not match a planned path, so it stays out.\n\n```markdown\n## Known Findings\n\n- environment/pipeline: Gate needs mikefarah yq. Remedy: brew install yq before scripts/ci-local.sh. The implementation steps install yq before running the gate.\n```",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "The Seed data needs migrations first finding did not match a planned path, so it stays out.\n\n```markdown\n## Known Findings\n\n- environment/pipeline: Gate needs mikefarah yq. Remedy: brew install yq before scripts/ci-local.sh. The implementation steps install yq before running the gate.\n```",
+    "exit_code": 0
+  }
+}
