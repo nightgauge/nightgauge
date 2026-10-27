@@ -193,7 +193,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 - **A required check that failed and then passed on re-run is green (#2603).**
   Among check runs with the same name, app and commit, only the latest run
-  counts, as in GitHub's ruleset. `nightgauge ci checks-complete`, the
+  counts, as in GitHub's ruleset, even when the re-run ran as a new workflow
+  run in a new check suite. `nightgauge ci checks-complete`, the
   post-merge hook and `scripts/post-merge-check.sh` used to report such a merge
   RED, so the validation marker was never posted. A success followed by a
   failure is still RED, and a commit status never masks a check run of the same
