@@ -952,6 +952,13 @@ the likelier explanation, so those paths are never attributed to the stage,
 never captured, and never fail the run — they are only named so you can check
 them. Only paths that went **clean → dirty** during the stage are attributed.
 
+**The retry ledger is scoped per issue (#2608).** Attributed paths are recorded
+in `containment/attributed.json` with the fingerprint, issue and stage that left
+them. Only a retry of that same issue re-attributes an untouched path; every
+other issue treats it as pre-existing operator work, so a later issue's stage is
+never failed for a path an earlier issue escaped with. A ledger written before
+this change has no owner, and is ignored and overwritten.
+
 **`[containment-ref-move]` means HEAD moved, not that a stage wrote (#1499).**
 `git status` is relative to HEAD, so if a checkout's branch ref moves while its
 tree does not — a raw `git update-ref`, or any in-process ref write that skips

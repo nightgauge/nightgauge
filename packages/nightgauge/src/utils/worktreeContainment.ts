@@ -71,7 +71,9 @@
  *
  * The attributed paths are also recorded in a small ledger so that a RETRY
  * rewriting the same paths is still attributed to the stage rather than read
- * as pre-existing operator dirt.
+ * as pre-existing operator dirt. Each entry is scoped to the issue that
+ * recorded it: only a retry of that issue re-attributes the path, and every
+ * other issue treats it as pre-existing operator work (#2608).
  */
 
 import { execFile } from "child_process";
@@ -464,7 +466,8 @@ export async function resolveContainmentTargets(
 }
 
 /**
- * What a previous attempt left behind: `repoPath → { filePath → fingerprint }`.
+ * What a previous attempt left behind:
+ * `repos: repoPath → { filePath → { fingerprint, issueNumber, stage } }`.
  *
  * The fingerprint, not just the path, is what makes the ledger safe. It records
  * the exact state the pipeline left the file in, so a later baseline can ask
@@ -475,20 +478,84 @@ export async function resolveContainmentTargets(
  * matches, and reverts to being the operator's. Without the fingerprint the
  * entry would be permanent and would eventually blame the operator's own future
  * edit of that path on a stage.
+ *
+ * The owning issue is what keeps one issue's leftover from being blamed on
+ * another (#2608). Only a baseline for the SAME issue subtracts a matching
+ * entry; any other issue keeps the path in its baseline as pre-existing dirt.
+ * A ledger in any other shape (including the unowned v1 shape) is ignored and
+ * overwritten.
  */
-type ContainmentLedger = Record<string, Record<string, string>>;
+interface LedgerEntry {
+  fingerprint: string;
+  issueNumber: number;
+  stage: string;
+}
 
-async function readLedger(artifactRoot: string): Promise<ContainmentLedger> {
+interface ContainmentLedger {
+  version: 2;
+  repos: Record<string, Record<string, LedgerEntry>>;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function isLedgerEntry(v: unknown): v is LedgerEntry {
+  return (
+    isRecord(v) &&
+    typeof v.fingerprint === "string" &&
+    typeof v.issueNumber === "number" &&
+    v.issueNumber > 0 &&
+    typeof v.stage === "string"
+  );
+}
+
+/**
+ * Read the ledger. `discarded` is true when the file on disk held anything
+ * the read dropped (a legacy shape or a malformed entry), so the caller can
+ * rewrite it.
+ */
+async function readLedger(
+  artifactRoot: string
+): Promise<{ ledger: ContainmentLedger; discarded: boolean }> {
+  const ledger: ContainmentLedger = { version: 2, repos: {} };
+  let raw: string;
   try {
-    const raw = await fs.readFile(path.join(containmentDir(artifactRoot), LEDGER_FILE), "utf-8");
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as ContainmentLedger;
-    }
+    raw = await fs.readFile(path.join(containmentDir(artifactRoot), LEDGER_FILE), "utf-8");
   } catch {
-    /* no ledger yet */
+    return { ledger, discarded: false }; // no ledger yet
   }
-  return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ledger, discarded: true };
+  }
+  if (!isRecord(parsed) || parsed.version !== 2 || !isRecord(parsed.repos)) {
+    return { ledger, discarded: true };
+  }
+  let discarded = false;
+  for (const [repoPath, files] of Object.entries(parsed.repos)) {
+    if (!isRecord(files)) {
+      discarded = true;
+      continue;
+    }
+    const kept: Record<string, LedgerEntry> = {};
+    for (const [filePath, entry] of Object.entries(files)) {
+      if (isLedgerEntry(entry)) {
+        kept[filePath] = {
+          fingerprint: entry.fingerprint,
+          issueNumber: entry.issueNumber,
+          stage: entry.stage,
+        };
+      } else {
+        discarded = true;
+      }
+    }
+    if (Object.keys(kept).length > 0) ledger.repos[repoPath] = kept;
+    else discarded = true;
+  }
+  return { ledger, discarded };
 }
 
 async function writeLedger(artifactRoot: string, ledger: ContainmentLedger): Promise<void> {
@@ -518,6 +585,11 @@ export async function captureContainmentBaseline(args: {
    * exact where guessing a root from a `.worktrees/` path is not.
    */
   runningWorktreePaths?: readonly string[];
+  /**
+   * The issue this stage works on (#2608). Only ledger entries recorded by
+   * this same issue are subtracted from the baseline; without it, nothing is.
+   */
+  issueNumber?: number;
 }): Promise<ContainmentBaseline> {
   const stageCwd = path.resolve(args.stageCwd);
   let artifactRoot = stageCwd;
@@ -540,18 +612,22 @@ export async function captureContainmentBaseline(args: {
       // operator work, even though they are dirty now. Dropping them from the
       // baseline is what makes a retry that rewrites the same paths fail again
       // instead of reading its own output as pre-existing dirt.
-      const ledger = await readLedger(artifactRoot);
-      let ledgerChanged = false;
+      // Only THIS issue's leftovers are subtracted: another issue's leftover
+      // stays in the baseline as pre-existing dirt (#2608).
+      const { ledger, discarded } = await readLedger(artifactRoot);
+      let ledgerChanged = discarded;
       for (const repoPath of targets) {
         const snap = await snapshotRepo(repoPath);
         if (!snap) continue;
-        const remembered = ledger[repoPath] ?? {};
-        const surviving: Record<string, string> = {};
-        for (const [filePath, rememberedFp] of Object.entries(remembered)) {
-          // Untouched since we left it → still ours.
-          if (snap.entries[filePath] === rememberedFp) {
-            surviving[filePath] = rememberedFp;
-            delete snap.entries[filePath];
+        const remembered = ledger.repos[repoPath] ?? {};
+        const surviving: Record<string, LedgerEntry> = {};
+        for (const [filePath, entry] of Object.entries(remembered)) {
+          // Untouched since it was left → the entry still holds.
+          if (snap.entries[filePath] === entry.fingerprint) {
+            surviving[filePath] = entry;
+            if (args.issueNumber !== undefined && entry.issueNumber === args.issueNumber) {
+              delete snap.entries[filePath];
+            }
           }
           // Otherwise it has been recovered, reverted or edited since; the
           // entry has outlived its purpose and is dropped, so the path goes
@@ -559,8 +635,8 @@ export async function captureContainmentBaseline(args: {
         }
         if (Object.keys(surviving).length !== Object.keys(remembered).length) {
           ledgerChanged = true;
-          if (Object.keys(surviving).length > 0) ledger[repoPath] = surviving;
-          else delete ledger[repoPath];
+          if (Object.keys(surviving).length > 0) ledger.repos[repoPath] = surviving;
+          else delete ledger.repos[repoPath];
         }
         snapshots.push(snap);
       }
@@ -721,7 +797,9 @@ export async function detectContainmentBreach(
     return report;
   }
 
-  const ledger = await readLedger(baseline.artifactRoot);
+  const { ledger } = await readLedger(baseline.artifactRoot);
+  // An entry with no owner could never be applied, so none is recorded.
+  const owner = issueNumber !== undefined && issueNumber > 0 ? issueNumber : undefined;
   for (const breach of report.breaches) {
     const after = post.get(breach.repoPath);
     try {
@@ -734,12 +812,13 @@ export async function detectContainmentBreach(
     }
     // Remember the exact state we are leaving behind, so the next baseline can
     // tell our own leftovers from anything that happens to the path afterwards.
-    const entry = { ...(ledger[breach.repoPath] ?? {}) };
+    if (owner === undefined) continue;
+    const entry = { ...(ledger.repos[breach.repoPath] ?? {}) };
     for (const p of breach.paths) {
       const fp = after?.entries[p];
-      if (fp !== undefined) entry[p] = fp;
+      if (fp !== undefined) entry[p] = { fingerprint: fp, issueNumber: owner, stage };
     }
-    ledger[breach.repoPath] = entry;
+    ledger.repos[breach.repoPath] = entry;
   }
 
   try {
