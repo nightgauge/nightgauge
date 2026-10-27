@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/internal/workorder"
 	pkgtypes "github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -95,5 +98,46 @@ func TestPrintProgramStatus(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// fakeMarkerComments answers TrustedComments by "owner/repo#N".
+type fakeMarkerComments struct {
+	byKey map[string][]trust.Comment
+	err   error
+	reads []string
+}
+
+func (f *fakeMarkerComments) TrustedComments(_ context.Context, owner, repo string, number int) ([]trust.Comment, error) {
+	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	f.reads = append(f.reads, key)
+	return f.byKey[key], f.err
+}
+
+// Validated reads the marker from closed issues only, once each, and a failed
+// read fails the report rather than undercounting (#2574).
+func TestReadValidationMarks(t *testing.T) {
+	issues := []pkgtypes.Issue{
+		{Repo: "o/api", Number: 1, State: "CLOSED"},
+		{Repo: "o/api", Number: 1, State: "CLOSED"},
+		{Repo: "o/api", Number: 2, State: "CLOSED"},
+		{Repo: "o/api", Number: 3, State: "OPEN"},
+	}
+	src := &fakeMarkerComments{byKey: map[string][]trust.Comment{
+		"o/api#1": {{Body: forge.ValidationMarkerComment("main", "abc")}},
+		"o/api#2": {{Body: "looks good"}},
+	}}
+	marked, err := readValidationMarks(context.Background(), src, issues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !marked[workorder.IssueKey("o/api", 1)] || marked[workorder.IssueKey("o/api", 2)] || len(marked) != 1 {
+		t.Errorf("marked = %v, want only o/api#1", marked)
+	}
+	if strings.Join(src.reads, ",") != "o/api#1,o/api#2" {
+		t.Errorf("reads = %v, want each closed issue once", src.reads)
+	}
+	if _, err := readValidationMarks(context.Background(), &fakeMarkerComments{err: errors.New("REST 502")}, issues); err == nil {
+		t.Error("a failed comment read did not fail the report")
 	}
 }

@@ -21,7 +21,8 @@ type ProgramStatus struct {
 	Total  int `json:"total"`
 	Open   int `json:"open"`
 	Closed int `json:"closed"`
-	// Validated counts closed issues that pass isValidated.
+	// Validated counts closed issues that carry the post-merge validation
+	// marker (isValidated, #2574).
 	Validated int `json:"validated"`
 	// Dispatchable counts open issues that are Ready on their board and
 	// unblocked under the scheduler's rule — Rank's Ready list.
@@ -34,8 +35,10 @@ type ProgramStatus struct {
 // Status reports each program's progress, in rank order. issues is every
 // issue the programs' selectors label, in any state; ranked is Rank over the
 // same programs file, which supplies the dispatchable frontier so status and
-// `nightgauge next` cannot disagree. Status is pure and deterministic.
-func Status(f *File, issues []pkgtypes.Issue, ranked *Result) []ProgramStatus {
+// `nightgauge next` cannot disagree. marked holds the keys (IssueKey) of the
+// closed issues whose trusted comments carry the validation marker. Status is
+// pure and deterministic.
+func Status(f *File, issues []pkgtypes.Issue, ranked *Result, marked map[string]bool) []ProgramStatus {
 	byID := map[string]ProgramResult{}
 	if ranked != nil {
 		for _, p := range ranked.Programs {
@@ -57,7 +60,7 @@ func Status(f *File, issues []pkgtypes.Issue, ranked *Result) []ProgramStatus {
 		}
 		seen := map[string]bool{}
 		for _, is := range issues {
-			key := strings.ToLower(is.Repo) + "#" + strconv.Itoa(is.Number)
+			key := IssueKey(is.Repo, is.Number)
 			if seen[key] || !hasLabel(is.Labels, sel) || !inRepos(is.Repo, p.Repos) {
 				continue
 			}
@@ -68,7 +71,7 @@ func Status(f *File, issues []pkgtypes.Issue, ranked *Result) []ProgramStatus {
 				continue
 			}
 			st.Closed++
-			if isValidated(is) {
+			if isValidated(is, marked) {
 				st.Validated++
 			}
 		}
@@ -85,12 +88,18 @@ func Status(f *File, issues []pkgtypes.Issue, ranked *Result) []ProgramStatus {
 	return out
 }
 
-// isValidated is the single definition of a validated program issue. Until
-// the post-merge validation marker exists (#2574), it is an issue closed as
-// completed; #2574 replaces this body with the marker read and nothing else
-// changes. An issue closed as not planned is closed, never validated.
-func isValidated(is pkgtypes.Issue) bool {
-	return strings.EqualFold(is.State, "CLOSED") && strings.EqualFold(is.StateReason, "COMPLETED")
+// isValidated is the single definition of a validated program issue: closed,
+// and carrying the post-merge validation marker in a trusted comment (#2574).
+// The marker is written only when the merge commit verified green, so an
+// issue closed without a green merge — closed as not planned, or merged into
+// a red main — is closed, never validated.
+func isValidated(is pkgtypes.Issue, marked map[string]bool) bool {
+	return strings.EqualFold(is.State, "CLOSED") && marked[IssueKey(is.Repo, is.Number)]
+}
+
+// IssueKey is the case-folded "owner/repo#N" key Status reads marked by.
+func IssueKey(repo string, number int) string {
+	return strings.ToLower(repo) + "#" + strconv.Itoa(number)
 }
 
 // Covers reports whether the program applies to repo ("owner/name"): its

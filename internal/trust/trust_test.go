@@ -312,6 +312,36 @@ func TestFilterComments(t *testing.T) {
 	}
 }
 
+// commentForge is a fakeForge that can also list comments.
+type commentForge struct {
+	*fakeForge
+	err error
+}
+
+func (c commentForge) IssueComments(context.Context, string, string, int) ([]Comment, error) {
+	return c.comments, c.err
+}
+
+// TrustedComments drops untrusted authors and refuses a forge that cannot
+// list comments, so a caller never mistakes "unreadable" for "none".
+func TestTrustedComments(t *testing.T) {
+	f := &fakeForge{perms: basePerms(), comments: []Comment{
+		{Author: "admin-user", Body: "kept"},
+		{Author: "read-user", Body: "dropped"},
+	}}
+	kept, err := NewGate(commentForge{fakeForge: f}, nil).TrustedComments(context.Background(), "o", "r", 1)
+	if err != nil || len(kept) != 1 || kept[0].Body != "kept" {
+		t.Fatalf("TrustedComments = %+v, %v; want only the admin's comment", kept, err)
+	}
+	if _, err := NewGate(commentForge{fakeForge: f, err: errors.New("REST 502")}, nil).
+		TrustedComments(context.Background(), "o", "r", 1); err == nil {
+		t.Fatal("a failed comment read returned no error")
+	}
+	if _, err := NewGate(f, nil).TrustedComments(context.Background(), "o", "r", 1); err == nil {
+		t.Fatal("a forge without comments returned no error")
+	}
+}
+
 func TestParseLevel(t *testing.T) {
 	for _, tc := range []struct {
 		role, perm string

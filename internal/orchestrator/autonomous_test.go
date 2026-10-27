@@ -5205,6 +5205,15 @@ func TestPrioritize_OffBoardDependencyResolution(t *testing.T) {
 				}
 				return tt.resolved
 			}
+			// The off-board blocker is not a program member, so a CLOSED
+			// one releases on closure (#2574 AC4).
+			as.resolveValidationFn = func(_ context.Context, _ map[string][]string, unknown []string) map[string]ValidationState {
+				out := map[string]ValidationState{}
+				for _, k := range unknown {
+					out[k] = ValidationState{}
+				}
+				return out
+			}
 
 			candidates := as.prioritize(context.Background(), g)
 

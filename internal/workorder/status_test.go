@@ -12,8 +12,8 @@ func issue(repo string, n int, state, reason string, labels ...string) pkgtypes.
 	return pkgtypes.Issue{Repo: repo, Number: n, State: state, StateReason: reason, Labels: labels}
 }
 
-// Status counts a program's whole issue set by state, counts only issues
-// closed as completed as validated, and takes "dispatchable" from Rank so the
+// Status counts a program's whole issue set by state, counts only closed
+// issues carrying the validation marker as validated (#2574), and takes "dispatchable" from Rank so the
 // readout and `nightgauge next` agree (#2573).
 func TestStatus_CountsAndAgreesWithRank(t *testing.T) {
 	f, err := Parse([]byte(`programs:
@@ -38,9 +38,11 @@ func TestStatus_CountsAndAgreesWithRank(t *testing.T) {
 		node(api, 2, "Ready", "", "program:billing"),
 	}
 	edges := []depgraph.Edge{{From: depgraph.NodeID{Repo: api, Number: 2}, To: depgraph.NodeID{Repo: "o/core", Number: 9}, Type: "crossRepo"}}
-	ranked := Rank(f, graphOf(nodes, edges), map[string]string{"o/core#9": "OPEN"})
+	ranked := Rank(f, graphOf(nodes, edges), map[string]string{"o/core#9": "OPEN"}, nil)
 
-	got := Status(f, issues, ranked)
+	// #3 and #6 carry the marker; #4 (closed as not planned) does not.
+	marked := map[string]bool{IssueKey(api, 3): true, IssueKey(web, 6): true}
+	got := Status(f, issues, ranked, marked)
 	if len(got) != 2 || got[0].ID != "billing" || got[1].ID != "docs" {
 		t.Fatalf("programs = %+v", got)
 	}
@@ -60,25 +62,27 @@ func TestStatus_CountsAndAgreesWithRank(t *testing.T) {
 	}
 }
 
+// Validated means closed with the post-merge validation marker (#2574):
+// closure as completed without the marker is not validated.
 func TestIsValidated(t *testing.T) {
+	marked := map[string]bool{IssueKey("O/A", 1): true}
 	for _, tc := range []struct {
 		is   pkgtypes.Issue
 		want bool
 	}{
 		{issue("o/a", 1, "CLOSED", "COMPLETED"), true},
-		{issue("o/a", 1, "CLOSED", "NOT_PLANNED"), false},
-		{issue("o/a", 1, "CLOSED", ""), false},
+		{issue("o/a", 2, "CLOSED", "COMPLETED"), false},
 		{issue("o/a", 1, "OPEN", ""), false},
 	} {
-		if got := isValidated(tc.is); got != tc.want {
-			t.Errorf("isValidated(%s/%s) = %v, want %v", tc.is.State, tc.is.StateReason, got, tc.want)
+		if got := isValidated(tc.is, marked); got != tc.want {
+			t.Errorf("isValidated(%s#%d %s) = %v, want %v", tc.is.Repo, tc.is.Number, tc.is.State, got, tc.want)
 		}
 	}
 }
 
 func TestStatus_EmptyProgramHasEmptyArrays(t *testing.T) {
 	f, _ := Parse([]byte("programs: [{ id: a }]"))
-	got := Status(f, nil, nil)
+	got := Status(f, nil, nil, nil)
 	if len(got) != 1 || got[0].DispatchableRefs == nil || got[0].Blocked == nil || got[0].Repos == nil {
 		t.Fatalf("status = %+v", got)
 	}

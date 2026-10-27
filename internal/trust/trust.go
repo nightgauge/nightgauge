@@ -503,6 +503,24 @@ func (g *Gate) Decide(ctx context.Context, s Subject) Decision {
 	return d
 }
 
+// TrustedComments lists an issue's comments and keeps those FilterComments
+// keeps. It is the one read for a comment whose text releases or gates work,
+// such as the post-merge validation marker (#2574): a comment by anyone else
+// is dropped before a caller can see it. A forge that cannot list comments is
+// an error, never an empty list — an empty list would read as "no marker".
+func (g *Gate) TrustedComments(ctx context.Context, owner, repo string, number int) ([]Comment, error) {
+	src, ok := g.forge.(CommentSource)
+	if !ok {
+		return nil, fmt.Errorf("comments of %s/%s#%d: this forge cannot list comments", owner, repo, number)
+	}
+	all, err := src.IssueComments(ctx, owner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+	kept, _ := g.FilterComments(ctx, owner, repo, all)
+	return kept, nil
+}
+
 // FilterComments keeps the comments whose author may vouch for an issue: a
 // user with write access or higher, or a trusted bot. It returns the kept
 // comments in order and how many it removed. A lookup that fails removes the

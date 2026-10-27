@@ -23,6 +23,9 @@
 // is open; a blocker on no board read is looked up in the caller's resolved
 // states (ExternalDependencies names them) and blocks when OPEN or when its
 // state is unknown — fail closed; an issue in a dependency cycle is blocked.
+// A closed blocker that is a program member blocks until it carries the
+// post-merge validation marker (#2574; ValidationCandidates names the closed
+// blockers whose standing the caller resolves).
 //
 // Rank is pure and deterministic. No LLM participates (#1481).
 package workorder
@@ -43,6 +46,29 @@ const (
 	DefaultReadyStatus = "Ready"
 	BlockedLabel       = "blocked"
 )
+
+// IsProgramMember reports whether labels put an issue in a program under the
+// default selector: a label with prefix DefaultLabelPrefix. A closed program
+// member releases its dependents only once it carries the post-merge
+// validation marker (#2574); any other closed issue releases them on closure.
+func IsProgramMember(labels []string) bool {
+	for _, l := range labels {
+		if len(l) >= len(DefaultLabelPrefix) && strings.EqualFold(l[:len(DefaultLabelPrefix)], DefaultLabelPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidationState is a closed issue's standing under the post-merge
+// validation gate (#2574). Program says it is a program member
+// (IsProgramMember); Validated says a trusted comment on it carries the
+// validation marker. Only a Program issue needs Validated to release its
+// dependents. The autonomous scheduler applies the same rule.
+type ValidationState struct {
+	Program   bool
+	Validated bool
+}
 
 // Program is one entry of the programs file.
 type Program struct {
@@ -152,9 +178,13 @@ type Item struct {
 	Labels    []string `json:"labels"`
 	BlockedBy []string `json:"blocked_by,omitempty"`
 	// Unresolved lists dependencies on no board that was read whose state
-	// could not be resolved. They block — the scheduler fails closed on an
-	// unknown blocker, and so does this ranking.
+	// could not be resolved, and closed dependencies whose validation
+	// standing could not be read. They block — the scheduler fails closed on
+	// an unknown blocker, and so does this ranking.
 	Unresolved []string `json:"unresolved_dependencies,omitempty"`
+	// Unvalidated lists closed program dependencies without the post-merge
+	// validation marker (#2574). They block until the marker is written.
+	Unvalidated []string `json:"unvalidated_dependencies,omitempty"`
 }
 
 // ProgramResult is one program's slice of the work.
@@ -202,10 +232,37 @@ func ExternalDependencies(g *depgraph.Graph) []string {
 	return dedupe(keys)
 }
 
+// ValidationCandidates lists the closed blockers whose validation standing
+// decides whether the issues they block are dispatchable (#2574): known maps
+// an on-board closed program member's key to its labels; unknown lists the
+// external dependencies resolved CLOSED, whose labels the caller must read.
+func ValidationCandidates(g *depgraph.Graph, resolved map[string]string) (known map[string][]string, unknown []string) {
+	known = map[string][]string{}
+	if g == nil {
+		return known, nil
+	}
+	for _, e := range g.Edges {
+		to := e.To.String()
+		if dep, ok := g.Nodes[to]; ok {
+			if dep.State != "" && !strings.EqualFold(dep.State, "OPEN") && IsProgramMember(dep.Labels) {
+				known[to] = dep.Labels
+			}
+			continue
+		}
+		if strings.EqualFold(resolved[to], "CLOSED") {
+			unknown = append(unknown, to)
+		}
+	}
+	return known, dedupe(unknown)
+}
+
 // Rank classifies the graph's Ready issues by the programs file. resolved
 // maps an external dependency's key (see ExternalDependencies) to its forge
 // state, "OPEN" or "CLOSED"; a key absent from it is unresolved and blocks.
-func Rank(f *File, g *depgraph.Graph, resolved map[string]string) *Result {
+// validation maps a closed blocker's key (see ValidationCandidates) to its
+// standing; a closed program blocker without the marker blocks, and one whose
+// standing is absent is unresolved and blocks.
+func Rank(f *File, g *depgraph.Graph, resolved map[string]string, validation map[string]ValidationState) *Result {
 	res := &Result{
 		ReadyStatus:       f.ReadyStatus,
 		ExcludeLabels:     append([]string{}, f.ExcludeLabels...),
@@ -224,14 +281,27 @@ func Rank(f *File, g *depgraph.Graph, resolved map[string]string) *Result {
 	}
 	openBlockers := map[string][]string{}
 	unresolved := map[string][]string{}
+	unvalidated := map[string][]string{}
+	// closedBlocks applies the validation gate to a closed blocker.
+	closedBlocks := func(from, to string) {
+		switch v, ok := validation[to]; {
+		case !ok:
+			unresolved[from] = append(unresolved[from], to)
+		case v.Program && !v.Validated:
+			unvalidated[from] = append(unvalidated[from], to)
+		}
+	}
 	for _, e := range g.Edges {
 		from := e.From.String()
 		to := e.To.String()
 		if dep, ok := g.Nodes[to]; ok {
-			// A blocker that is not open is satisfied; an empty state is
-			// unknown, so it blocks.
+			// A blocker that is not open is satisfied unless it is an
+			// unvalidated program member; an empty state is unknown, so it
+			// blocks.
 			if dep.State == "" || strings.EqualFold(dep.State, "OPEN") {
 				openBlockers[from] = append(openBlockers[from], to)
+			} else if IsProgramMember(dep.Labels) {
+				closedBlocks(from, to)
 			}
 			continue
 		}
@@ -240,6 +310,8 @@ func Rank(f *File, g *depgraph.Graph, resolved map[string]string) *Result {
 			unresolved[from] = append(unresolved[from], to)
 		case strings.EqualFold(state, "OPEN"):
 			openBlockers[from] = append(openBlockers[from], to)
+		default:
+			closedBlocks(from, to)
 		}
 	}
 
@@ -257,21 +329,22 @@ func Rank(f *File, g *depgraph.Graph, resolved map[string]string) *Result {
 	classify := func(n *depgraph.Node) (Item, bool) {
 		key := n.ID().String()
 		it := Item{
-			Ref:        key,
-			Repo:       n.Repo,
-			Number:     n.Number,
-			Title:      n.Title,
-			Status:     n.BoardStatus,
-			Priority:   n.Priority,
-			Size:       n.Size,
-			Labels:     append([]string{}, n.Labels...),
-			BlockedBy:  dedupe(openBlockers[key]),
-			Unresolved: dedupe(unresolved[key]),
+			Ref:         key,
+			Repo:        n.Repo,
+			Number:      n.Number,
+			Title:       n.Title,
+			Status:      n.BoardStatus,
+			Priority:    n.Priority,
+			Size:        n.Size,
+			Labels:      append([]string{}, n.Labels...),
+			BlockedBy:   dedupe(openBlockers[key]),
+			Unresolved:  dedupe(unresolved[key]),
+			Unvalidated: dedupe(unvalidated[key]),
 		}
 		if it.Labels == nil {
 			it.Labels = []string{}
 		}
-		blocked := len(it.BlockedBy) > 0 || len(it.Unresolved) > 0
+		blocked := len(it.BlockedBy) > 0 || len(it.Unresolved) > 0 || len(it.Unvalidated) > 0
 		for _, l := range f.ExcludeLabels {
 			if hasLabel(n.Labels, l) {
 				it.BlockedBy = append(it.BlockedBy, "label `"+l+"`")

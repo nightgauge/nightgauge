@@ -7,7 +7,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/trust"
 )
 
 // PostMergeInput holds parameters for the post-merge hook.
@@ -26,7 +28,39 @@ type PostMergeInput struct {
 	// MainCheckWait bounds the verification poll. The zero value is a single
 	// read (see MainCheckWait); the pipeline passes DefaultMainCheckWait().
 	MainCheckWait MainCheckWait
+	// ValidationMarks writes the post-merge validation marker (#2574) on the
+	// merged issue when MainChecks reports the merge commit green. Nil skips
+	// it and the result says so (ValidationMarkerNotWired).
+	ValidationMarks ValidationMarkWriter
 }
+
+// ValidationMarkWriter reads an issue's comments through the trust filter and
+// comments on it by node ID. Implemented by a trust.Gate over the forge's
+// comment source plus *github.IssueService.
+type ValidationMarkWriter interface {
+	TrustedComments(ctx context.Context, owner, repo string, number int) ([]trust.Comment, error)
+	AddComment(ctx context.Context, subjectID, body string) error
+}
+
+// ValidationMarkerOutcome is what the hook did about the validation marker.
+type ValidationMarkerOutcome string
+
+const (
+	// ValidationMarkerWritten: main verified green and the marker was posted.
+	ValidationMarkerWritten ValidationMarkerOutcome = "written"
+	// ValidationMarkerPresent: main verified green and a trusted comment
+	// already carried the marker, so nothing was posted (idempotent re-run).
+	ValidationMarkerPresent ValidationMarkerOutcome = "present"
+	// ValidationMarkerNotGreen: main was not verified green (red, pending, no
+	// checks, unreadable, or skipped), so no marker — dependents stay held.
+	ValidationMarkerNotGreen ValidationMarkerOutcome = "not_green"
+	// ValidationMarkerNotWired: no writer was wired.
+	ValidationMarkerNotWired ValidationMarkerOutcome = "not_wired"
+	// ValidationMarkerError: main was green but the marker could not be read
+	// or written. Nothing is posted when the read fails, so a re-run cannot
+	// duplicate it.
+	ValidationMarkerError ValidationMarkerOutcome = "error"
+)
 
 // PRVerifier abstracts querying the current state of a PR so EvaluatePostMerge
 // can verify the PR is actually MERGED before closing the issue.
@@ -112,6 +146,10 @@ type PostMergeResult struct {
 	// captured. A red verdict does NOT set Failed — the hook did its job; what
 	// failed is main, and the Action Center card is where that goes.
 	MainChecks *MainCheckResult `json:"mainChecks,omitempty"`
+	// ValidationMarker reports the post-merge validation marker (#2574). Empty
+	// when the hook refused before the merge was confirmed. An error sets
+	// Failed: a green merge without its marker holds its program dependents.
+	ValidationMarker ValidationMarkerOutcome `json:"validationMarker,omitempty"`
 	// SurvivalEligible is true when this merge should seed a post-merge survival
 	// record (#4151): the issue closed, a merge commit SHA + mergedAt were
 	// captured, and the merged issue is a SINGLE issue (not an epic-umbrella PR,
@@ -338,7 +376,18 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// run, not before: the poll can take minutes, and the issue close, board
 	// sync and epic rollup must not wait on CI. Every return path past this
 	// point goes through verifyMain.
-	defer func() { out.MainChecks = verifyMain(ctx, input, out) }()
+	//
+	// (#2574) The validation marker follows the verification: it is written
+	// only on the green verdict, which is `nightgauge ci checks-complete`'s
+	// exit 0 for the same commit (both apply github.EvaluateMergedCommit).
+	issueNodeID := issue.NodeID
+	defer func() {
+		out.MainChecks = verifyMain(ctx, input, out)
+		out.ValidationMarker = writeValidationMarker(ctx, input, issueNodeID, out)
+		if out.ValidationMarker == ValidationMarkerError {
+			out.Failed = true
+		}
+	}()
 
 	// (#4151) Mark this merge eligible to seed a survival record: the issue
 	// closed, both breadcrumb fields were captured, and the merged issue is a
@@ -492,4 +541,37 @@ func verifyMain(ctx context.Context, input PostMergeInput, out PostMergeResult) 
 			out.BaseRef, shortSHA(out.MergedCommitSha), res.Error, out.BaseRef)
 	}
 	return &res
+}
+
+// writeValidationMarker posts the #2574 validation marker on the merged issue
+// when main verified green. It reads the issue's trusted comments first and
+// posts nothing when one already carries a marker, so a re-run never
+// duplicates it; a failed read posts nothing either.
+func writeValidationMarker(ctx context.Context, input PostMergeInput, issueNodeID string, out PostMergeResult) ValidationMarkerOutcome {
+	if out.MainChecks == nil || out.MainChecks.Verdict != MainChecksGreen {
+		return ValidationMarkerNotGreen
+	}
+	if input.ValidationMarks == nil {
+		return ValidationMarkerNotWired
+	}
+	owner, repo, num := input.RepositoryOwner, input.RepositoryName, input.IssueNumber
+	comments, err := input.ValidationMarks.TrustedComments(ctx, owner, repo, num)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: post-merge: could not read #%d's comments for the validation marker: %v — not writing it\n", num, err)
+		return ValidationMarkerError
+	}
+	for _, c := range comments {
+		if forge.HasValidationMarker(c.Body) {
+			fmt.Fprintf(os.Stderr, "Post-merge: #%d already carries the validation marker\n", num)
+			return ValidationMarkerPresent
+		}
+	}
+	body := forge.ValidationMarkerComment(out.BaseRef, out.MergedCommitSha)
+	if err := input.ValidationMarks.AddComment(ctx, issueNodeID, body); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: post-merge: could not write the validation marker on #%d: %v\n", num, err)
+		return ValidationMarkerError
+	}
+	fmt.Fprintf(os.Stderr, "Post-merge: wrote the validation marker on #%d (%s green at %s)\n",
+		num, out.BaseRef, shortSHA(out.MergedCommitSha))
+	return ValidationMarkerWritten
 }

@@ -37,6 +37,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/workorder"
 )
 
 // AutonomousConfig holds configuration for the autonomous scheduler loop.
@@ -1272,6 +1273,16 @@ type AutonomousScheduler struct {
 	// return, means resolution is unavailable — callers must fail closed,
 	// never assume the dep is satisfied.
 	resolveDepStatesFn func(ctx context.Context, keys []string) map[string]string
+	// resolveValidationFn resolves the post-merge validation standing of
+	// closed dependencies (#2574, ResolveValidationByKey): known maps a key to
+	// the labels its on-board node carries, unknown lists off-board keys. Nil
+	// leaves every such dependency unresolved, so it fails closed. Tests
+	// override it.
+	resolveValidationFn func(ctx context.Context, known map[string][]string, unknown []string) map[string]ValidationState
+	// validatedDeps caches dependency keys seen carrying the validation marker
+	// (guarded by mu). A marker is never retracted, so a validated dep is not
+	// re-read on later passes; every other standing is re-resolved each pass.
+	validatedDeps map[string]bool
 
 	// refinementEmptyCache tracks when each repo last returned zero refinement
 	// candidates. Repos that return empty results are skipped for
@@ -1449,6 +1460,16 @@ func NewAutonomousScheduler(
 	// field to inject a fake without requiring a real GitHub client (#306).
 	as.resolveDepStatesFn = func(ctx context.Context, keys []string) map[string]string {
 		return ResolveIssueStatesByKey(ctx, gh.NewIssueService(as.ghClient), keys)
+	}
+	// Wire the default post-merge validation resolver (#2574). The marker is
+	// read only through the eligibility gate's trusted-comment filter; with
+	// no gate the reader is nil and program dependencies fail closed.
+	as.resolveValidationFn = func(ctx context.Context, known map[string][]string, unknown []string) map[string]ValidationState {
+		var comments TrustedCommentReader
+		if s := as.eligibility(); s != nil && s.trustGate != nil {
+			comments = s.trustGate
+		}
+		return ResolveValidationByKey(ctx, gh.NewIssueService(as.ghClient), comments, known, unknown)
 	}
 
 	// Wire the board-wide post-merge backstop (#656). This is the SAME
@@ -4387,6 +4408,9 @@ type depBlockResult struct {
 	status   string // human-readable status for the log line
 	offBoard bool   // true when the block came from a dep with no node in the
 	// graph (resolved — or left unresolved — via the issue service instead)
+	// unvalidated is true when the dep is held by the post-merge validation
+	// gate (#2574) rather than by being open.
+	unvalidated bool
 }
 
 // depKeyNamesNoRepository reports whether depKey's repository is not spelled
@@ -4421,7 +4445,18 @@ func depKeyNamesNoRepository(depKey string) bool {
 // is also present in prBacked (a confirmed OPEN PR backs it). A status-only
 // match without confirmed PR evidence falls through to BLOCKED — the same
 // fail-closed posture as the off-board case above.
-func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]string, prBacked map[string]bool) depBlockResult {
+//
+// validation (see ResolveValidationByKey) is the post-merge validation gate
+// (#2574). A closed dep that is a program member — an on-board node carrying a
+// `program:` label, or an off-board issue whose labels say so — satisfies the
+// edge only when it carries the trusted validation marker: closure says the
+// PR merged, the marker says main was green afterwards. A closed dep whose
+// standing is absent from validation fails closed when it could be a program
+// member (an off-board dep, whose labels only the resolver knows, or an
+// on-board program member). A program member "In review" never satisfies the
+// edge: the marker needs a merged, verified commit. A closed dep that is not
+// a program member keeps closure-based release.
+func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]string, prBacked map[string]bool, validation map[string]ValidationState) depBlockResult {
 	for _, depKey := range depKeys {
 		depNode, exists := g.Nodes[depKey]
 		if !exists {
@@ -4442,15 +4477,28 @@ func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]strin
 					blocked: true, blocker: depKey, offBoard: true,
 					status: "OPEN (resolved via GitHub — not on any project board)",
 				}
-			default:
-				continue // resolved CLOSED -> satisfied, keep scanning
 			}
+			// Resolved CLOSED: satisfied unless it is an unvalidated program member.
+			if res, held := validationHold(depKey, validation, true); held {
+				return res
+			}
+			continue
 		}
+		program := workorder.IsProgramMember(depNode.Labels)
 		if !strings.EqualFold(depNode.State, "OPEN") {
+			if program {
+				if res, held := validationHold(depKey, validation, false); held {
+					return res
+				}
+			}
 			continue
 		}
 		if isWorkCompleteStatus(depNode.BoardStatus) {
 			key := fmt.Sprintf("%s#%d", depNode.Repo, depNode.Number)
+			if program {
+				return depBlockResult{blocked: true, blocker: depKey, unvalidated: true,
+					status: depNode.BoardStatus + " (program issue — released only by the post-merge validation marker after it merges)"}
+			}
 			if prBacked[key] {
 				continue // satisfied — PR confirmed
 			}
@@ -4460,6 +4508,88 @@ func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]strin
 		return depBlockResult{blocked: true, blocker: depKey, status: depNode.BoardStatus}
 	}
 	return depBlockResult{}
+}
+
+// resolveDepValidation resolves the validation standing (ResolveValidationByKey)
+// of every dependency in adj that is CLOSED and could be a program member: an
+// on-board node with a `program:` label, or an off-board dep resolved CLOSED.
+// Keys already seen validated come from the cache without a read.
+func (as *AutonomousScheduler) resolveDepValidation(ctx context.Context, g *depgraph.Graph, adj map[string][]string, resolved map[string]string) map[string]ValidationState {
+	out := map[string]ValidationState{}
+	known := map[string][]string{}
+	var unknown []string
+	seen := map[string]bool{}
+	as.mu.Lock()
+	cached := as.validatedDeps
+	as.mu.Unlock()
+	for _, targets := range adj {
+		for _, t := range targets {
+			if seen[t] {
+				continue
+			}
+			seen[t] = true
+			if node, ok := g.Nodes[t]; ok {
+				if strings.EqualFold(node.State, "OPEN") || !workorder.IsProgramMember(node.Labels) {
+					continue
+				}
+				if cached[t] {
+					out[t] = ValidationState{Program: true, Validated: true}
+					continue
+				}
+				known[t] = node.Labels
+				continue
+			}
+			if !strings.EqualFold(resolved[t], "CLOSED") {
+				continue
+			}
+			if cached[t] {
+				out[t] = ValidationState{Program: true, Validated: true}
+				continue
+			}
+			unknown = append(unknown, t)
+		}
+	}
+	if len(known) == 0 && len(unknown) == 0 {
+		return out
+	}
+	sort.Strings(unknown)
+	if as.resolveValidationFn == nil {
+		log.Printf("autonomous: WARNING no validation resolver wired — %d closed dependency key(s) will fail closed", len(known)+len(unknown))
+		return out
+	}
+	got := as.resolveValidationFn(ctx, known, unknown)
+	as.mu.Lock()
+	for k, v := range got {
+		out[k] = v
+		if v.Program && v.Validated {
+			if as.validatedDeps == nil {
+				as.validatedDeps = map[string]bool{}
+			}
+			as.validatedDeps[k] = true
+		}
+	}
+	as.mu.Unlock()
+	return out
+}
+
+// missingValidationMarkerStatus is the hold reason for a closed program
+// dependency without the post-merge validation marker (#2574).
+const missingValidationMarkerStatus = "CLOSED without validation marker (" + forge.ValidationMarkerPrefix +
+	"--> missing — the post-merge check has not passed; re-run `nightgauge hook post-merge` once main is green)"
+
+// validationHold reports whether closed dependency depKey is held by the
+// post-merge validation gate. An unknown standing holds it (fail closed).
+func validationHold(depKey string, validation map[string]ValidationState, offBoard bool) (depBlockResult, bool) {
+	v, ok := validation[depKey]
+	switch {
+	case !ok:
+		return depBlockResult{blocked: true, blocker: depKey, offBoard: offBoard, unvalidated: true,
+			status: "CLOSED, but its program membership or validation marker could not be read — failing closed"}, true
+	case v.Program && !v.Validated:
+		return depBlockResult{blocked: true, blocker: depKey, offBoard: offBoard, unvalidated: true,
+			status: missingValidationMarkerStatus}, true
+	}
+	return depBlockResult{}, false
 }
 
 // prioritize selects and orders open, unblocked items from the graph.
@@ -4588,6 +4718,11 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 				len(keys), keys)
 		}
 	}
+
+	// (#2574) Resolve the post-merge validation standing of every CLOSED
+	// dependency that needs it — an on-board program member, or an off-board
+	// dep resolved CLOSED (its labels are unknown) — once for this pass.
+	depValidation := as.resolveDepValidation(ctx, g, adj, resolvedDepStates)
 
 	// Build an allowed-repos set from as.repos. When non-empty, only nodes
 	// belonging to those repos are dispatched. Cross-repo edges are still
@@ -4787,17 +4922,21 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		// reaches this branch.
 		blocked := false
 		var blocker, blockerStatus, blockerEdge string
-		offBoard := false
-		if res := evaluateDeps(adj[key], g, resolvedDepStates, prBackedSet); res.blocked {
+		offBoard, unvalidated := false, false
+		if res := evaluateDeps(adj[key], g, resolvedDepStates, prBackedSet, depValidation); res.blocked {
 			blocked = true
 			blocker = res.blocker
 			blockerStatus = res.status
 			offBoard = res.offBoard
+			unvalidated = res.unvalidated
 			blockerEdge = describeEdgeSource(g, key, res.blocker)
 		}
 		if blocked {
 			reason := "blocked-by-open-dep"
-			if offBoard {
+			if unvalidated {
+				reason = "blocked-by-unvalidated-dep"
+				log.Printf("autonomous: blocked %s by dep %s (%s, edge=%s)", key, blocker, blockerStatus, blockerEdge)
+			} else if offBoard {
 				reason = "blocked-by-offboard-dep"
 				log.Printf("autonomous: blocked %s by off-board dep %s (%s, edge=%s) — this blocker is not on any project board; fix board hygiene (add it to a board, or correct/remove the blockedBy edge)",
 					key, blocker, blockerStatus, blockerEdge)
@@ -4825,7 +4964,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 					log.Printf("autonomous: ignoring epic %s's edges to its own sub-issues %v in the cascade — an epic blocked by its child is a data defect, not a gate (#1937)",
 						epicKey, ownSubs)
 				}
-				if res := evaluateDeps(gating, g, resolvedDepStates, prBackedSet); res.blocked {
+				if res := evaluateDeps(gating, g, resolvedDepStates, prBackedSet, depValidation); res.blocked {
 					blocked = true
 					blocker = res.blocker
 					offBoard = res.offBoard
@@ -4902,7 +5041,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			}
 			epicKey := g.NodeKey(node.ID())
 			gating, _ := epicCascadeDeps(g, adj, epicKey)
-			hasOpenBlocker := evaluateDeps(gating, g, resolvedDepStates, prBackedSet).blocked
+			hasOpenBlocker := evaluateDeps(gating, g, resolvedDepStates, prBackedSet, depValidation).blocked
 			if !hasOpenBlocker {
 				continue
 			}

@@ -6,7 +6,9 @@ import (
 	"io"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/workorder"
 	pkgtypes "github.com/nightgauge/nightgauge/pkg/types"
 	"github.com/spf13/cobra"
@@ -50,9 +52,11 @@ open, closed and validated, and which are dispatchable now.
 
 Dispatchable is the frontier ` + "`nightgauge next`" + ` computes: open, Ready on its
 board, and unblocked under the autonomous scheduler's rule — a blocker in any
-repository blocks while it is open or its state cannot be confirmed. Validated
-is an issue closed as completed; an issue closed as not planned is closed but
-not validated.
+repository blocks while it is open or its state cannot be confirmed, and a
+closed program blocker blocks until it carries the validation marker. Validated
+is a closed issue whose trusted comments carry the post-merge validation marker,
+which ` + "`nightgauge hook post-merge`" + ` writes when the merge commit verifies green;
+an issue closed without it is closed but not validated.
 
 Repos and boards are resolved as ` + "`nightgauge next`" + ` resolves them. No LLM
 participates.`,
@@ -92,7 +96,12 @@ participates.`,
 				return err
 			}
 
-			status := workorder.Status(programs, issues, ranked)
+			marked, err := readValidationMarks(cmd.Context(), markerTrustGate(client, scope.workdir), issues)
+			if err != nil {
+				return err
+			}
+
+			status := workorder.Status(programs, issues, ranked, marked)
 			if jsonOut {
 				return printJSON(status)
 			}
@@ -145,6 +154,37 @@ func listProgramIssues(ctx context.Context, lister labeledIssueLister, f *workor
 		}
 	}
 	return out, nil
+}
+
+// readValidationMarks reads each closed issue's trusted comments and returns
+// the keys (workorder.IssueKey) of those carrying the post-merge validation
+// marker (#2574). A comment read that fails fails the report, as an unreadable
+// repository does: a validated count missing an issue would misstate progress.
+func readValidationMarks(ctx context.Context, comments orchestrator.TrustedCommentReader, issues []pkgtypes.Issue) (map[string]bool, error) {
+	marked := map[string]bool{}
+	seen := map[string]bool{}
+	for _, is := range issues {
+		key := workorder.IssueKey(is.Repo, is.Number)
+		if seen[key] || !strings.EqualFold(is.State, "CLOSED") {
+			continue
+		}
+		seen[key] = true
+		o, r, ok := strings.Cut(is.Repo, "/")
+		if !ok {
+			return nil, fmt.Errorf("repository %q is not owner/name", is.Repo)
+		}
+		cs, err := comments.TrustedComments(ctx, o, r, is.Number)
+		if err != nil {
+			return nil, fmt.Errorf("validation marker of %s#%d: %w", is.Repo, is.Number, err)
+		}
+		for _, c := range cs {
+			if forge.HasValidationMarker(c.Body) {
+				marked[key] = true
+				break
+			}
+		}
+	}
+	return marked, nil
 }
 
 func printProgramStatus(w io.Writer, status []workorder.ProgramStatus) {

@@ -7022,6 +7022,9 @@ cause the command to exit non-zero.`,
 				PRNumber:        prNumber,
 				MainChecks:      gh.NewCIService(client),
 				MainCheckWait:   wait,
+				// (#2574) Comment the validation marker on a green merge so
+				// the issue's program dependents are released.
+				ValidationMarks: hookValidationMarks{Gate: markerTrustGate(client, workdir), issues: issueSvc},
 			})
 			reportMainChecks(workdir, ownerPart, repoPart, issueNumber, prNumber, result)
 

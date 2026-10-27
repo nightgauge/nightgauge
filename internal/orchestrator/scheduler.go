@@ -58,6 +58,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/trace"
+	"github.com/nightgauge/nightgauge/internal/workorder"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -9091,6 +9092,86 @@ func ResolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 		}
 	}
 	return resolved
+}
+
+// ValidationState is a closed dependency's standing under the post-merge
+// validation gate (#2574). It is workorder's type, so dispatch and `nightgauge
+// next` / `program status` judge a closed blocker by one definition.
+type ValidationState = workorder.ValidationState
+
+// TrustedCommentReader lists an issue's comments by authors who may vouch for
+// it (trust.Gate.TrustedComments).
+type TrustedCommentReader interface {
+	TrustedComments(ctx context.Context, owner, repo string, number int) ([]trust.Comment, error)
+}
+
+// ResolveValidationByKey resolves the validation state of closed dependency
+// keys ("owner/repo#N"). known maps a key to labels the caller already holds
+// (an on-board node); keys in unknown have their labels read, batched per
+// repository like ResolveIssueStatesByKey. A key whose labels name no program
+// is {Program: false} with no further read; a program member's trusted
+// comments are read for the marker.
+//
+// A key the resolver could not decide — a failed label or comment read, an
+// issue absent from the batch, no comment reader — is left OUT of the map, and
+// callers fail closed on it. The marker is only ever read from trusted
+// comments, so a marker pasted by anyone else never releases a dependent.
+func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments TrustedCommentReader, known map[string][]string, unknown []string) map[string]ValidationState {
+	labels := make(map[string][]string, len(known))
+	for k, l := range known {
+		labels[k] = l
+	}
+	if issueSvc != nil {
+		byRepo := make(map[string][]int)
+		for _, key := range unknown {
+			repo, num, ok := splitNodeKey(key)
+			if !ok || !isOwnerRepo(repo) {
+				continue
+			}
+			byRepo[repo] = append(byRepo[repo], num)
+		}
+		for repo, nums := range byRepo {
+			owner, name := splitOwnerRepo(repo)
+			issues, err := issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, nums)
+			if err != nil {
+				log.Printf("WARN: ResolveValidationByKey: label fetch failed for %s: %v", repo, err)
+				continue
+			}
+			for n, iss := range issues {
+				labels[fmt.Sprintf("%s#%d", repo, n)] = append([]string{}, iss.Labels...)
+			}
+		}
+	}
+
+	out := make(map[string]ValidationState, len(labels))
+	for key, l := range labels {
+		if !workorder.IsProgramMember(l) {
+			out[key] = ValidationState{}
+			continue
+		}
+		if comments == nil {
+			continue
+		}
+		repo, num, ok := splitNodeKey(key)
+		if !ok || !isOwnerRepo(repo) {
+			continue
+		}
+		owner, name := splitOwnerRepo(repo)
+		cs, err := comments.TrustedComments(ctx, owner, name, num)
+		if err != nil {
+			log.Printf("WARN: ResolveValidationByKey: comment read failed for %s: %v", key, err)
+			continue
+		}
+		st := ValidationState{Program: true}
+		for _, c := range cs {
+			if forge.HasValidationMarker(c.Body) {
+				st.Validated = true
+				break
+			}
+		}
+		out[key] = st
+	}
+	return out
 }
 
 // issueBodyCaptureMax bounds the issue body captured at pickup (#183) to a
