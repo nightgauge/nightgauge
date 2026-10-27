@@ -176,15 +176,69 @@ func TestMergePRWithStrategy_Dequeued_ReturnsClassifiedFailureWithChecks(t *test
 	}
 }
 
+// withMergeable sets the PR's own mergeability on a status node.
+func withMergeable(n map[string]any, mergeable string) map[string]any {
+	n["mergeable"] = mergeable
+	return n
+}
+
+// behind is an UNMERGEABLE entry at position 2, blocked behind an entry ahead.
+func behind(head string) map[string]any {
+	e := entry("UNMERGEABLE", head)
+	e["position"] = 2
+	return e
+}
+
 func TestMergePRWithStrategy_Unmergeable_Fails(t *testing.T) {
 	qs := &queueServer{statuses: []map[string]any{
 		prNode("OPEN", true, false, nil, ""),
-		prNode("OPEN", true, true, entry("UNMERGEABLE", "mg2"), ""),
+		withMergeable(prNode("OPEN", true, true, entry("UNMERGEABLE", "mg2"), ""), "CONFLICTING"),
 	}}
 	_, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
 	var qe *MergeQueueError
 	if !errors.As(err, &qe) || qe.Kind != MergeQueueUnmergeable {
 		t.Fatalf("err = %v, want unmergeable MergeQueueError", err)
+	}
+}
+
+// An UNMERGEABLE entry on a still-mergeable PR is waited out; once the PR
+// reads CONFLICTING after removal the wait fails as unmergeable (#2611).
+func TestMergePRWithStrategy_UnmergeableBehindEntry_ConflictAfterRemoval(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{
+		prNode("OPEN", true, false, nil, ""),
+		prNode("OPEN", true, true, behind("mg2"), ""),
+		prNode("OPEN", true, true, behind("mg2"), ""),
+		withMergeable(prNode("OPEN", true, false, nil, ""), "CONFLICTING"),
+	}}
+	_, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	var qe *MergeQueueError
+	if !errors.As(err, &qe) || qe.Kind != MergeQueueUnmergeable {
+		t.Fatalf("err = %v, want unmergeable MergeQueueError", err)
+	}
+	if qs.enqueued != 1 {
+		t.Errorf("enqueued=%d, want 1 (no re-enqueue of a conflicting PR)", qs.enqueued)
+	}
+}
+
+// A blocked entry that GitHub removes while the PR stays MERGEABLE is
+// re-enqueued once and then merges, never failing (#2611).
+func TestMergePRWithStrategy_UnmergeableBehindEntry_ReEnqueuesAndMerges(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{
+		prNode("OPEN", true, false, nil, ""),
+		prNode("OPEN", true, true, behind("mg2"), ""),
+		prNode("OPEN", true, false, nil, ""), // removed, still MERGEABLE
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg3"), ""),
+		prNode("MERGED", true, false, nil, "landed2"),
+	}}
+	sha, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	if err != nil {
+		t.Fatalf("MergePRWithStrategy: %v", err)
+	}
+	if sha != "landed2" {
+		t.Errorf("sha = %q, want landed2", sha)
+	}
+	if qs.enqueued != 2 {
+		t.Errorf("enqueued=%d, want 2 (initial + one re-enqueue)", qs.enqueued)
 	}
 }
 
@@ -227,7 +281,9 @@ func TestClassifyMergeQueue(t *testing.T) {
 		{"merged", MergeQueueStatus{State: "MERGED"}, true, 0, MergeQueueMerged, ""},
 		{"closed", MergeQueueStatus{State: "CLOSED"}, true, 0, MergeQueueFailed, MergeQueueClosed},
 		{"queued", queued, true, 0, MergeQueuePending, ""},
-		{"unmergeable", MergeQueueStatus{State: "OPEN", InQueue: true, EntryState: "UNMERGEABLE"}, true, 0, MergeQueueFailed, MergeQueueUnmergeable},
+		{"unmergeable conflicting", MergeQueueStatus{State: "OPEN", InQueue: true, EntryState: "UNMERGEABLE", Mergeable: "CONFLICTING"}, true, 0, MergeQueueFailed, MergeQueueUnmergeable},
+		{"unmergeable behind entry", MergeQueueStatus{State: "OPEN", InQueue: true, EntryState: "UNMERGEABLE", Mergeable: "MERGEABLE"}, true, 0, MergeQueuePending, ""},
+		{"unmergeable unknown", MergeQueueStatus{State: "OPEN", InQueue: true, EntryState: "UNMERGEABLE", Mergeable: "UNKNOWN"}, true, 0, MergeQueuePending, ""},
 		{"left the queue after being seen", open, true, 1, MergeQueueFailed, MergeQueueDequeued},
 		{"not yet visible inside the grace", open, false, 1, MergeQueuePending, ""},
 		{"never visible past the grace", open, false, 3, MergeQueueFailed, MergeQueueDequeued},

@@ -201,7 +201,9 @@ changelog, and the release workflow refuses a tag that does not.
   (`merge-queue-failed: merge conflict with main: …`), and conflict recovery
   rebases the branch: a real conflict rewinds the run to `feature-dev` on the
   same branch, and a stale one re-enqueues. Failed merge-group checks and
-  closed PRs are reported as before.
+  closed PRs are reported as before. A queue entry marked unmergeable only
+  because an entry ahead of it conflicts is now waited out, and re-enqueued if
+  GitHub removes it while the PR is still mergeable, instead of failing.
 
 - **An epic no longer auto-closes while its decomposition is unfinished
   (#1581).** Closing its only filed sub-issue used to close the epic even with
