@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	forgecmd "github.com/nightgauge/nightgauge/cmd/nightgauge/forge"
 	"github.com/nightgauge/nightgauge/internal/config"
 	docspkg "github.com/nightgauge/nightgauge/internal/docs"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
@@ -47,6 +50,7 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightSkillPortabilityCmd())
 	cmd.AddCommand(preflightDependencyGuardCmd())
 	cmd.AddCommand(preflightACReconcileCmd())
+	cmd.AddCommand(preflightACFingerprintCmd())
 	cmd.AddCommand(preflightThinkingEffortCmd())
 	cmd.AddCommand(preflightMitigationRuleCmd())
 	cmd.AddCommand(preflightManagedSteeringCmd())
@@ -286,6 +290,101 @@ scope narrowing. Consumes zero LLM tokens.`,
 	cmd.Flags().StringVar(&bodyFile, "body-file", "", "Path to a file containing the issue body (required)")
 	cmd.Flags().StringVar(&outPath, "out", "", "Write the ac-reconcile-{N}.json report to this path")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print the report JSON to stdout")
+	return cmd
+}
+
+// acFingerprintReport is the `preflight ac-fingerprint --json` output.
+type acFingerprintReport struct {
+	IssueNumber   int    `json:"issue_number"`
+	ACFingerprint string `json:"ac_fingerprint"`
+	CriteriaCount int    `json:"criteria_count"`
+}
+
+// readIssueBodyForFingerprint reads the issue body from the forge. The
+// fingerprint is only compared, never shown to a model, and a mismatch makes
+// the caller re-plan, where planning reads the issue through the vouched path.
+var readIssueBodyForFingerprint = func(cmd *cobra.Command, repoSpec string, number int) (string, error) {
+	router, err := forgecmd.BuildRouter("", 0, "")
+	if err != nil {
+		return "", err
+	}
+	client, err := router.For("", repoSpec)
+	if err != nil {
+		return "", err
+	}
+	owner, repo := "", ""
+	if parts := strings.SplitN(repoSpec, "/", 2); len(parts) == 2 {
+		owner, repo = parts[0], parts[1]
+	}
+	issue, err := client.Issues().GetIssue(cmd.Context(), owner, repo, number)
+	if err != nil {
+		return "", err
+	}
+	return issue.Body, nil
+}
+
+// preflightACFingerprintCmd implements `nightgauge preflight ac-fingerprint
+// <issue-number> [--body-file F|-] [--repo owner/repo] [--json]` (#2623).
+// It prints the fingerprint of the issue's checkbox acceptance criteria, the
+// same value ac-reconcile records, so a resumed run can tell whether the
+// criteria changed after the PR opened.
+func preflightACFingerprintCmd() *cobra.Command {
+	var (
+		bodyFile   string
+		repoSpec   string
+		jsonOutput bool
+	)
+	cmd := &cobra.Command{
+		Use:   "ac-fingerprint <issue-number>",
+		Short: "Print the fingerprint of an issue's acceptance criteria",
+		Long: `Fingerprint the Markdown checkbox acceptance criteria of an issue body: sha256
+over the ordered criteria texts with whitespace collapsed, checkbox state
+excluded. The body comes from --body-file ('-' reads stdin), or from the forge
+when the flag is absent. ac-reconcile records the same value as ac_fingerprint.`,
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issueNumber, err := strconv.Atoi(args[0])
+			if err != nil || issueNumber <= 0 {
+				return fmt.Errorf("invalid issue number: %s", args[0])
+			}
+			var body string
+			switch bodyFile {
+			case "":
+				body, err = readIssueBodyForFingerprint(cmd, repoSpec, issueNumber)
+				if err != nil {
+					return fmt.Errorf("read issue #%d: %w", issueNumber, err)
+				}
+			case "-":
+				data, readErr := io.ReadAll(cmd.InOrStdin())
+				if readErr != nil {
+					return fmt.Errorf("read body from stdin: %w", readErr)
+				}
+				body = string(data)
+			default:
+				data, readErr := os.ReadFile(bodyFile)
+				if readErr != nil {
+					return fmt.Errorf("read body file: %w", readErr)
+				}
+				body = string(data)
+			}
+			report := acFingerprintReport{
+				IssueNumber:   issueNumber,
+				ACFingerprint: preflight.ACFingerprint(body),
+				CriteriaCount: preflight.ACCount(body),
+			}
+			if jsonOutput {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(report)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), report.ACFingerprint)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&bodyFile, "body-file", "", "File holding the issue body ('-' for stdin; default: read from the forge)")
+	cmd.Flags().StringVar(&repoSpec, "repo", "", "Repository as owner/repo (default: the current repository)")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print a JSON report")
 	return cmd
 }
 

@@ -444,6 +444,7 @@ short-circuits to `verify-and-close`, narrows scope, or continues normally.
 | `suggested_route.approach`             | string       | Yes      | `verify-and-close` \| `narrow-scope` \| `standard`                                                         |
 | `suggested_route.focus_acs`            | array        | Yes      | 0-based indices the planner should focus on                                                                |
 | `suggested_route.rationale`            | string       | Yes      | Human-readable explanation                                                                                 |
+| `ac_fingerprint`                       | string       | No       | `sha256:` fingerprint of the ordered criteria texts, whitespace collapsed, checkbox state excluded (#2623) |
 
 The reconciler consumes zero LLM tokens. Aggregate status of `all-satisfied`
 maps `approach` to `verify-and-close`, which short-circuits feature-dev via
@@ -753,48 +754,49 @@ issue #1608)
 }
 ```
 
-| Field                                       | Type   | Required | Description                                                                                    |
-| ------------------------------------------- | ------ | -------- | ---------------------------------------------------------------------------------------------- |
-| `schema_version`                            | string | Yes      | Schema version for compatibility                                                               |
-| `issue_number`                              | number | Yes      | GitHub issue number                                                                            |
-| `pr_number`                                 | number | Yes      | Pull request number                                                                            |
-| `pr_url`                                    | string | Yes      | Full PR URL                                                                                    |
-| `title`                                     | string | Yes      | PR title                                                                                       |
-| `base_branch`                               | string | Yes      | Target branch                                                                                  |
-| `status`                                    | string | Yes      | PR status: `open`, `draft`                                                                     |
-| `reviewers`                                 | array  | Yes      | Requested reviewers                                                                            |
-| `knowledge_path`                            | string | No       | Path to knowledge directory for this issue (v1.1+)                                             |
-| `preflight_results`                         | object | Yes      | Pre-flight check results from Phase 2 and Phase 2.5                                            |
-| `preflight_results.json_validation`         | string | Yes      | JSON context file validation: `passed`, `failed`, `skipped`                                    |
-| `preflight_results.yaml_validation`         | string | Yes      | YAML config validation: `passed`, `failed`, `skipped`                                          |
-| `preflight_results.version_consistency`     | string | Yes      | Package version consistency check: `passed`, `failed`, `skipped`                               |
-| `preflight_results.security_scan`           | string | Yes      | Secret detection scan (gitleaks + grep fallback): `passed`, `failed`, `skipped`                |
-| `preflight_results.coverage_check`          | string | Yes      | Test coverage threshold check: `passed`, `failed`, `skipped`                                   |
-| `ci_monitoring`                             | object | Yes      | CI check monitoring results from Phase 3.5 (v1.2+)                                             |
-| `ci_monitoring.monitored`                   | bool   | Yes      | Whether CI monitoring ran (false when PR number unavailable)                                   |
-| `ci_monitoring.monitor_duration_secs`       | number | Yes      | Elapsed seconds from PR creation to final CI state                                             |
-| `ci_monitoring.final_status`                | string | Yes      | `success`, `failure`, `error`, `timeout`, `pending`, `unknown`                                 |
-| `ci_monitoring.checks_summary`              | object | Yes      | Aggregated check counts                                                                        |
-| `ci_monitoring.checks_summary.total`        | number | Yes      | Total CI checks triggered                                                                      |
-| `ci_monitoring.checks_summary.passed`       | number | Yes      | Checks that completed successfully                                                             |
-| `ci_monitoring.checks_summary.failed`       | number | Yes      | Checks that completed with failure or error                                                    |
-| `ci_monitoring.checks_summary.pending`      | number | Yes      | Checks still pending at monitor end                                                            |
-| `ci_monitoring.failures`                    | array  | Yes      | Classified failure objects (empty when no failures)                                            |
-| `ci_monitoring.failures[].name`             | string | Yes      | CI check name                                                                                  |
-| `ci_monitoring.failures[].failure_type`     | string | Yes      | `lint`, `test`, `build`, `typecheck`, `security`, `format`, `unknown`                          |
-| `ci_monitoring.failures[].is_transient`     | bool   | Yes      | Whether failure matches transient patterns (timed_out, network errors)                         |
-| `ci_monitoring.failures[].conclusion`       | string | Yes      | GitHub check conclusion (`failure`, `timed_out`, `action_required`)                            |
-| `ci_monitoring.failures[].details_url`      | string | No       | Link to CI logs for the failed check                                                           |
-| `ci_monitoring.timestamp`                   | string | No       | ISO 8601 timestamp when monitoring completed (null if not monitored)                           |
-| `ci_monitoring.notes`                       | string | No       | Human-readable note (e.g., quick-fix instructions for lint/format failures)                    |
-| `retrospective_feedback`                    | object | No       | Post-merge workflow feedback captured after PR merge (v1.2+, Issue #14). Null if not captured. |
-| `retrospective_feedback.what_went_well`     | array  | No       | User-selected or typed items describing what worked well in the workflow                       |
-| `retrospective_feedback.what_could_improve` | array  | No       | User-selected or typed items describing areas for workflow improvement                         |
-| `retrospective_feedback.captured_at`        | string | Yes      | ISO 8601 timestamp when feedback was captured                                                  |
-| `retrospective_feedback.execution_mode`     | string | Yes      | `interactive` (user was prompted) or `headless` (skipped, no terminal)                         |
-| `issue_closed`                              | bool   | No       | Whether issue close was called (written by `/pr-merge`, v1.5+, issue #2933)                    |
-| `issue_closed_verified`                     | bool   | No       | Whether issue close was verified within 10s retry window (v1.5+, issue #2933)                  |
-| `created_at`                                | string | Yes      | ISO 8601 timestamp                                                                             |
+| Field                                       | Type   | Required | Description                                                                                                                                       |
+| ------------------------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema_version`                            | string | Yes      | Schema version for compatibility                                                                                                                  |
+| `issue_number`                              | number | Yes      | GitHub issue number                                                                                                                               |
+| `pr_number`                                 | number | Yes      | Pull request number                                                                                                                               |
+| `pr_url`                                    | string | Yes      | Full PR URL                                                                                                                                       |
+| `title`                                     | string | Yes      | PR title                                                                                                                                          |
+| `base_branch`                               | string | Yes      | Target branch                                                                                                                                     |
+| `status`                                    | string | Yes      | PR status: `open`, `draft`                                                                                                                        |
+| `reviewers`                                 | array  | Yes      | Requested reviewers                                                                                                                               |
+| `knowledge_path`                            | string | No       | Path to knowledge directory for this issue (v1.1+)                                                                                                |
+| `ac_fingerprint`                            | string | No       | ac-reconcile fingerprint of the criteria the PR was built against; resume fast-forwards to pr-merge only while the issue still matches it (#2623) |
+| `preflight_results`                         | object | Yes      | Pre-flight check results from Phase 2 and Phase 2.5                                                                                               |
+| `preflight_results.json_validation`         | string | Yes      | JSON context file validation: `passed`, `failed`, `skipped`                                                                                       |
+| `preflight_results.yaml_validation`         | string | Yes      | YAML config validation: `passed`, `failed`, `skipped`                                                                                             |
+| `preflight_results.version_consistency`     | string | Yes      | Package version consistency check: `passed`, `failed`, `skipped`                                                                                  |
+| `preflight_results.security_scan`           | string | Yes      | Secret detection scan (gitleaks + grep fallback): `passed`, `failed`, `skipped`                                                                   |
+| `preflight_results.coverage_check`          | string | Yes      | Test coverage threshold check: `passed`, `failed`, `skipped`                                                                                      |
+| `ci_monitoring`                             | object | Yes      | CI check monitoring results from Phase 3.5 (v1.2+)                                                                                                |
+| `ci_monitoring.monitored`                   | bool   | Yes      | Whether CI monitoring ran (false when PR number unavailable)                                                                                      |
+| `ci_monitoring.monitor_duration_secs`       | number | Yes      | Elapsed seconds from PR creation to final CI state                                                                                                |
+| `ci_monitoring.final_status`                | string | Yes      | `success`, `failure`, `error`, `timeout`, `pending`, `unknown`                                                                                    |
+| `ci_monitoring.checks_summary`              | object | Yes      | Aggregated check counts                                                                                                                           |
+| `ci_monitoring.checks_summary.total`        | number | Yes      | Total CI checks triggered                                                                                                                         |
+| `ci_monitoring.checks_summary.passed`       | number | Yes      | Checks that completed successfully                                                                                                                |
+| `ci_monitoring.checks_summary.failed`       | number | Yes      | Checks that completed with failure or error                                                                                                       |
+| `ci_monitoring.checks_summary.pending`      | number | Yes      | Checks still pending at monitor end                                                                                                               |
+| `ci_monitoring.failures`                    | array  | Yes      | Classified failure objects (empty when no failures)                                                                                               |
+| `ci_monitoring.failures[].name`             | string | Yes      | CI check name                                                                                                                                     |
+| `ci_monitoring.failures[].failure_type`     | string | Yes      | `lint`, `test`, `build`, `typecheck`, `security`, `format`, `unknown`                                                                             |
+| `ci_monitoring.failures[].is_transient`     | bool   | Yes      | Whether failure matches transient patterns (timed_out, network errors)                                                                            |
+| `ci_monitoring.failures[].conclusion`       | string | Yes      | GitHub check conclusion (`failure`, `timed_out`, `action_required`)                                                                               |
+| `ci_monitoring.failures[].details_url`      | string | No       | Link to CI logs for the failed check                                                                                                              |
+| `ci_monitoring.timestamp`                   | string | No       | ISO 8601 timestamp when monitoring completed (null if not monitored)                                                                              |
+| `ci_monitoring.notes`                       | string | No       | Human-readable note (e.g., quick-fix instructions for lint/format failures)                                                                       |
+| `retrospective_feedback`                    | object | No       | Post-merge workflow feedback captured after PR merge (v1.2+, Issue #14). Null if not captured.                                                    |
+| `retrospective_feedback.what_went_well`     | array  | No       | User-selected or typed items describing what worked well in the workflow                                                                          |
+| `retrospective_feedback.what_could_improve` | array  | No       | User-selected or typed items describing areas for workflow improvement                                                                            |
+| `retrospective_feedback.captured_at`        | string | Yes      | ISO 8601 timestamp when feedback was captured                                                                                                     |
+| `retrospective_feedback.execution_mode`     | string | Yes      | `interactive` (user was prompted) or `headless` (skipped, no terminal)                                                                            |
+| `issue_closed`                              | bool   | No       | Whether issue close was called (written by `/pr-merge`, v1.5+, issue #2933)                                                                       |
+| `issue_closed_verified`                     | bool   | No       | Whether issue close was verified within 10s retry window (v1.5+, issue #2933)                                                                     |
+| `created_at`                                | string | Yes      | ISO 8601 timestamp                                                                                                                                |
 
 ### No batch context files
 

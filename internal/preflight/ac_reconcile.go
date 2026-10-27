@@ -57,6 +57,10 @@ type ACReconcileResult struct {
 	AcceptanceCriteria []ReconciledCriterion `json:"acceptance_criteria"`
 	AggregateStatus    string                `json:"aggregate_status"`
 	SuggestedRoute     SuggestedRoute        `json:"suggested_route"`
+	// ACFingerprint identifies the criteria this report was built from
+	// (#2623); pr-create copies it into pr-{N}.json so a resumed run can
+	// tell whether the issue's criteria changed after the PR opened.
+	ACFingerprint string `json:"ac_fingerprint,omitempty"`
 }
 
 // ReconciledCriterion is one checkbox AC with its deterministic verdict.
@@ -176,6 +180,7 @@ func ReconcileACs(workdir string, issueNumber int, issueBody string) *ACReconcil
 		AcceptanceCriteria: criteria,
 		AggregateStatus:    status,
 		SuggestedRoute:     route,
+		ACFingerprint:      ACFingerprint(issueBody),
 	}
 }
 
