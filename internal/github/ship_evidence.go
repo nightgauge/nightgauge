@@ -165,11 +165,13 @@ func (s *IssueService) ShipEvidence(ctx context.Context, owner, repo string, num
 			addMerged(n.ConnectedEvent.Subject, true)
 		case "IssueComment":
 			body := string(n.IssueComment.Body)
+			// The marker counts only inside the closer's own comment, so a
+			// comment pasting it elsewhere cannot vouch for a close.
 			if strings.HasPrefix(body, orphanCloseCommentPrefix) {
 				orphanComment = true
-			}
-			if strings.Contains(body, orphanCloseMarkerPrefix) {
-				marker = true
+				if strings.Contains(body, orphanCloseMarkerPrefix) {
+					marker = true
+				}
 			}
 		}
 	}
