@@ -189,8 +189,8 @@ on core, #2225). The runner therefore:
    `pipeline.merge_queue.wait_timeout` (default `90m`) — a budget sized for a
    full CI run on the merge-group commit, not the eventual-consistency budget.
 4. **Classifies** the outcome. `MERGED` → `Path: "merged"`, reason
-   `merge-queue: merged`. Removal from the queue, an `UNMERGEABLE` entry or a
-   closed PR → `Path: "refused"`, reason `merge-queue-failed: …` naming the
+   `merge-queue: merged`. Removal from the queue, an `UNMERGEABLE` entry on a
+   `CONFLICTING` PR or a closed PR → `Path: "refused"`, reason `merge-queue-failed: …` naming the
    failing check runs and statuses on the merge-group commit. An expired
    budget → `merge-queue-timeout: …`. None of these fall through to the LLM
    skill: the scheduler fails the stage, and the failure reason carries the
@@ -204,6 +204,10 @@ on core, #2225). The runner therefore:
    `conflict-context-{N}.json` and rewinds to `feature-dev` on the same
    branch; a stale one pushes and re-enqueues. Failed merge-group checks and
    closed PRs keep their reasons and are not routed to conflict recovery.
+   An `UNMERGEABLE` entry on a PR that still reads `MERGEABLE` or `UNKNOWN`
+   is blocked behind an entry ahead, so the wait continues. If GitHub removes
+   that entry while the PR reads `MERGEABLE`, the wait re-enqueues it; once
+   the PR reads `CONFLICTING` it fails as above. The wait budget bounds this.
 
 Enqueueing is done only by this Go code (and by `PRService.MergePRWithStrategy`,
 which `nightgauge pr merge`, `forge pr merge`, the IPC `pr.merge` method and the

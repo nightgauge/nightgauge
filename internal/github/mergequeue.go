@@ -531,6 +531,10 @@ const (
 // ClassifyMergeQueue maps one observation to an outcome. absentPolls is the
 // number of consecutive polls (including this one) that saw the PR OPEN and
 // outside the queue; seenEntry is whether an entry was ever observed.
+//
+// An UNMERGEABLE entry is terminal only when the PR itself reads CONFLICTING
+// (#2611). On a still-mergeable PR it means the entry is blocked behind an
+// entry ahead (or the read is stale), so it stays pending and Wait handles it.
 func ClassifyMergeQueue(st MergeQueueStatus, seenEntry bool, absentPolls, grace int) (MergeQueueOutcome, string) {
 	switch st.State {
 	case "MERGED":
@@ -539,7 +543,10 @@ func ClassifyMergeQueue(st MergeQueueStatus, seenEntry bool, absentPolls, grace 
 		return MergeQueueFailed, MergeQueueClosed
 	}
 	if st.EntryState == "UNMERGEABLE" {
-		return MergeQueueFailed, MergeQueueUnmergeable
+		if st.Mergeable == "CONFLICTING" {
+			return MergeQueueFailed, MergeQueueUnmergeable
+		}
+		return MergeQueuePending, ""
 	}
 	if st.InQueue {
 		return MergeQueuePending, ""
@@ -555,6 +562,11 @@ func ClassifyMergeQueue(st MergeQueueStatus, seenEntry bool, absentPolls, grace 
 // initial may carry the status observed before the wait (its entry head is
 // remembered); pass a zero value when there is none. Rate-limit errors are
 // returned immediately; other read errors are retried until the budget ends.
+//
+// An entry last seen UNMERGEABLE on a non-conflicting PR is waited out
+// (#2611): when GitHub removes it, a CONFLICTING PR fails with
+// MergeQueueUnmergeable, a MERGEABLE PR is re-enqueued, and an UNKNOWN one
+// stays pending. The deadline bounds the whole wait.
 func (q *MergeQueue) Wait(ctx context.Context, prID string, initial MergeQueueStatus, opts MergeQueueWaitOptions) (MergeQueueStatus, error) {
 	opts = opts.withDefaults()
 	deadline := q.now().Add(opts.Timeout)
@@ -562,6 +574,7 @@ func (q *MergeQueue) Wait(ctx context.Context, prID string, initial MergeQueueSt
 	seenEntry := initial.InQueue
 	headOID := initial.EntryHeadOID
 	absent := 0
+	blockedUnmergeable := false
 	var lastErr error
 	for {
 		st, err := q.StatusByID(ctx, prID)
@@ -576,18 +589,37 @@ func (q *MergeQueue) Wait(ctx context.Context, prID string, initial MergeQueueSt
 			if st.EntryHeadOID != "" {
 				headOID = st.EntryHeadOID
 			}
-			if st.InQueue {
-				seenEntry = true
-				absent = 0
-			} else if st.State == "OPEN" {
-				absent++
-			}
-			outcome, kind := ClassifyMergeQueue(st, seenEntry, absent, opts.DequeueGrace)
-			switch outcome {
-			case MergeQueueMerged:
-				return st, nil
-			case MergeQueueFailed:
-				return st, q.failure(ctx, prID, st.Number, kind, headOID, nil)
+			if !st.InQueue && st.State == "OPEN" && blockedUnmergeable {
+				switch st.Mergeable {
+				case "CONFLICTING":
+					return st, q.failure(ctx, prID, st.Number, MergeQueueUnmergeable, headOID, nil)
+				case "MERGEABLE":
+					if err := q.Enqueue(ctx, prID); err != nil {
+						if isRateLimited(err) {
+							return st, err
+						}
+						log.Printf("merge queue: re-enqueue of PR #%d failed, retrying next poll: %v", st.Number, err)
+					} else {
+						seenEntry = false
+						absent = 0
+						blockedUnmergeable = false
+					}
+				}
+			} else {
+				if st.InQueue {
+					seenEntry = true
+					absent = 0
+					blockedUnmergeable = st.EntryState == "UNMERGEABLE" && st.Mergeable != "CONFLICTING"
+				} else if st.State == "OPEN" {
+					absent++
+				}
+				outcome, kind := ClassifyMergeQueue(st, seenEntry, absent, opts.DequeueGrace)
+				switch outcome {
+				case MergeQueueMerged:
+					return st, nil
+				case MergeQueueFailed:
+					return st, q.failure(ctx, prID, st.Number, kind, headOID, nil)
+				}
 			}
 		}
 		if !q.now().Add(opts.PollInterval).Before(deadline) {
