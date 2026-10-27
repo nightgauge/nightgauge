@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -621,6 +622,42 @@ func isUnversionedBuild(versionLine string) bool {
 	return v == "dev" || strings.HasPrefix(v, "dev+")
 }
 
+// A `nightgauge version` line can name its commit in two stamped forms:
+// git describe (`make build-cli`, `v0.7.2-70-g0a198e35[-dirty]`) and the Go
+// pseudo-version (`0.7.3-0.20261027102022-0a198e354e6e`). #2612.
+var (
+	describeCommitRe = regexp.MustCompile(`-g([0-9a-f]{7,40})(?:$|-dirty|\s|\+)`)
+	pseudoCommitRe   = regexp.MustCompile(`\d{14}-([0-9a-f]{12})(?:$|\s|\+|\.)`)
+)
+
+// buildCommit returns the lowercase commit hash a version line carries, or "".
+func buildCommit(versionLine string) string {
+	line := strings.ToLower(strings.TrimSpace(versionLine))
+	for _, re := range []*regexp.Regexp{describeCommitRe, pseudoCommitRe} {
+		if m := re.FindStringSubmatch(line); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// sameBuild reports whether two version lines name the same build: equal
+// strings, or both carry a commit hash and the shorter prefixes the longer.
+// Lines without a hash keep the plain string comparison.
+func sameBuild(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ca, cb := buildCommit(a), buildCommit(b)
+	if ca == "" || cb == "" {
+		return false
+	}
+	if len(ca) > len(cb) {
+		ca, cb = cb, ca
+	}
+	return strings.HasPrefix(cb, ca)
+}
+
 func probeBinary() binaryProbe {
 	resolved := ResolveBinary()
 	p := binaryProbe{resolved: resolved}
@@ -651,6 +688,8 @@ func probeBinary() binaryProbe {
 			detail += fmt.Sprintf("; recorded VSCode bundle binary %s reports version %s", scan.SelectedPath, recordedVersion)
 			switch {
 			case p.resolvedVersion == "" || p.resolvedVersion == recordedVersion:
+			case sameBuild(p.resolvedVersion, recordedVersion):
+				detail += fmt.Sprintf("; same commit as the recorded bundle (%s)", buildCommit(p.resolvedVersion))
 			case isUnversionedBuild(p.resolvedVersion) || isUnversionedBuild(recordedVersion):
 				// #2201: a plain `go build` stamps no release version, so
 				// "stale" is a claim nothing here can back. Say so, as detail.
