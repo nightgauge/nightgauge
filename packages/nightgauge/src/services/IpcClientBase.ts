@@ -1413,6 +1413,9 @@ export interface AttentionRequestView {
   options: AttentionOption[];
   steer?: { enabled: boolean; hint?: string };
   created_at: string;
+  /** When the condition itself began, as opposed to `created_at` (when a sweep
+   * first stored the card). Absent when the producer cannot know it (#1582). */
+  onset_at?: string;
   expires_at: string;
   default_action: string;
   lifecycle: AttentionLifecycle;

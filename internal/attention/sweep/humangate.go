@@ -226,6 +226,8 @@ func (p *HumanGate) individual(repo string, g gatedPR) attention.DecisionRequest
 		Title:       fmt.Sprintf("PR #%d is green and waiting — %s", pr.Number, g.gate.reason),
 		Body:        body,
 		Fingerprint: "gate:" + g.gate.code,
+		// The wait the body states in prose, carried structurally (#1582).
+		OnsetAt: pr.CreatedAt,
 		Context: attention.Context{
 			Repo:    repo,
 			PR:      pr.Number,
@@ -303,6 +305,7 @@ func (p *HumanGate) aggregate(repo string, gated []gatedPR) attention.DecisionRe
 		Title:          fmt.Sprintf("%d green PRs are waiting on a person in %s", len(gated), repo),
 		Body:           b.String(),
 		Fingerprint:    "backlog:" + strings.Join(nums, ","),
+		OnsetAt:        earliestOpened(gated),
 		Context: attention.Context{
 			Repo:    repo,
 			Blocker: fmt.Sprintf("%d green PRs blocked on a human", len(gated)),
@@ -322,6 +325,25 @@ func (p *HumanGate) waitedFor(createdAt string) string {
 		return ""
 	}
 	return humanizeDuration(p.now().Sub(ts))
+}
+
+// earliestOpened is the creation time of the longest-waiting gated PR: the
+// backlog has existed at least that long. "" when none parses.
+func earliestOpened(gated []gatedPR) string {
+	var earliest time.Time
+	for _, g := range gated {
+		ts, err := time.Parse(time.RFC3339, g.pr.CreatedAt)
+		if err != nil {
+			continue
+		}
+		if earliest.IsZero() || ts.Before(earliest) {
+			earliest = ts
+		}
+	}
+	if earliest.IsZero() {
+		return ""
+	}
+	return earliest.UTC().Format(time.RFC3339)
 }
 
 // openPRProbe is the optional capability of answering "does this repository
