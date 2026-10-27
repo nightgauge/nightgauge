@@ -3077,6 +3077,48 @@ that cannot be read fails the report rather than undercounting it.
 ]
 ```
 
+#### Running a program without an orchestrator session (Issue #2575)
+
+An ordered, multi-repository program runs on the autonomous scheduler and the
+post-merge hook alone. No session has to sequence it or vouch for a merge.
+
+Setup:
+
+1. List the program in the programs file that `next` and `program status` read.
+2. Label every member issue with its selector (`program:<id>`) in every
+   repository it covers.
+3. Record order as native `blockedBy` edges, including cross-repository ones.
+   A wave boundary is a gate issue that every next-wave issue is `blockedBy`.
+   The forge graph is the plan; nothing else sequences the program.
+
+The loop:
+
+1. The autonomous scheduler dispatches each Ready, unblocked member. It reads a
+   cross-repository blocker's state in that blocker's own repository.
+2. pr-merge runs the post-merge hook in-process. When the merge commit verifies
+   green, the hook comments `<!-- nightgauge:validated sha=<sha> -->` on the
+   merged issue. A red, pending or unreadable base branch writes nothing.
+3. A closed program blocker releases its dependents only when a trusted
+   comment carries that marker. A marker pasted by anyone else is ignored, and
+   the dependent stays `blocked-by-unvalidated-dep`.
+
+`TestIntegration_Program_TwoRepos_ValidationGated` in
+`internal/orchestrator/program_e2e_test.go` covers this chain.
+
+Replacing the earlier bypass script, verb by verb:
+
+| Bypass verb      | Replacement                                                                            |
+| ---------------- | -------------------------------------------------------------------------------------- |
+| `status`         | `nightgauge program status --programs <file>`                                          |
+| `frontier`       | `nightgauge next --programs <file>`                                                    |
+| `show`           | `nightgauge program status --id <program>` and the issue's `blockedBy`                 |
+| `mark-validated` | `nightgauge hook post-merge --issue N --owner O --repo R --pr P` (marks only on green) |
+| `audit-edges`    | Not carried: the forge graph is the plan, with no snapshot to drift from               |
+
+A program issue closed before #2574 carries no marker. Re-run
+`nightgauge hook post-merge` for it once its base branch is green. The old
+`opencode-program:validated` marker is not honoured.
+
 ### PR Operations
 
 ```bash
