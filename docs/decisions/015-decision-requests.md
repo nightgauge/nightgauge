@@ -608,14 +608,18 @@ the view container, quick-pick on click:
 
 ```
   NIGHTGAUGE: ATTENTION                                    3 ⬤
-  ▾ Blocking (2)
+  ▾ Blocking the fleet (1)
       ⛔ Fleet stopped — cascade breaker tripped        acme-web
+  ▾ Blocking a run (1)
       ⚠  Budget ceiling hit — $12.00                    acme-api
-  ▾ Needs a human (1)
+  ▾ FYI (1)
       ●  owner-action: Cloudflare DNS checklist         acme-web
   ─────────────────────────────────────────────────────────────
   ✓ all clear when empty
 ```
+
+One band per severity, most urgent first, labelled by meaning (ADR-009
+Decision 5, #1583); an empty band is hidden.
 
 Beauty is a requirement, not decoration: the severity rail gives instant
 triage, the empty state is the reward, and the same three primitives (badge,

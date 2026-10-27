@@ -2,9 +2,9 @@
  * attentionTreeItems — the vscode.TreeItem rendering for the Action Center
  * (ADR 015 §E, VSCode tree-section mockup).
  *
- * Root children are severity-band group headers ("Blocking" for
- * `blocking_fleet`/`blocking_run`, "Needs a human" for `fyi`), each containing
- * one card per open {@link AttentionRequestView}. Rendering decisions (icon
+ * Root children are severity-band group headers, one per severity in rank
+ * order ({@link SEVERITY_BANDS}), each containing one card per open
+ * {@link AttentionRequestView}. Rendering decisions (icon
  * per `kind`, severity color, the one-line context string, relative age, and
  * the option-consequence text used by the quick-pick) live here so the
  * provider stays a thin fetch-then-render shell.
@@ -213,17 +213,26 @@ export function describeAttentionOption(
   }
 }
 
-/** Rank used to order the "Blocking" band: fleet-wide stops surface first. */
-function severityRank(severity: AttentionRequestView["severity"]): number {
-  switch (severity) {
-    case "blocking_fleet":
-      return 0;
-    case "blocking_run":
-      return 1;
-    case "fyi":
-    default:
-      return 2;
-  }
+/**
+ * The tree's severity bands, most urgent first: one band per severity value,
+ * labelled with what that severity means (internal/attention/schema.go), so no
+ * band reads as more urgent than one ranked above it (ADR-009 Decision 5,
+ * #1583). A band's index is its severity's rank, so ordering and labelling
+ * cannot drift apart.
+ */
+export const SEVERITY_BANDS: ReadonlyArray<{
+  severity: AttentionRequestView["severity"];
+  label: string;
+}> = [
+  { severity: "blocking_fleet", label: "Blocking the fleet" },
+  { severity: "blocking_run", label: "Blocking a run" },
+  { severity: "fyi", label: "FYI" },
+];
+
+/** Index into {@link SEVERITY_BANDS}; an unknown severity ranks with `fyi`, last. */
+export function severityRank(severity: AttentionRequestView["severity"]): number {
+  const rank = SEVERITY_BANDS.findIndex((band) => band.severity === severity);
+  return rank === -1 ? SEVERITY_BANDS.length - 1 : rank;
 }
 
 /** Severity-desc, then newest-first — matches the store's own list ordering. */
@@ -273,7 +282,7 @@ export class AttentionRequestTreeItem extends AttentionTreeItem {
   }
 }
 
-/** Severity-band group header ("Blocking" / "Needs a human") from the mockup. */
+/** Severity-band group header, one per {@link SEVERITY_BANDS} entry. */
 export class AttentionGroupTreeItem extends AttentionTreeItem {
   constructor(
     label: string,

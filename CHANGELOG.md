@@ -181,6 +181,17 @@ changelog, and the release workflow refuses a tag that does not.
   same branch, and a stale one re-enqueues. Failed merge-group checks and
   closed PRs are reported as before.
 
+- **Action Center bands now rank the way they read (#1583).** The tree shows
+  one band per severity, most urgent first: "Blocking the fleet", "Blocking a
+  run", "FYI". The lowest band no longer reads "Needs a human", and a red
+  default branch sits above green dependency-update PRs.
+
+- **Doctor no longer reports a stale binary for the same commit (#2612).**
+  NGD001 compared version strings verbatim, so a `make build-cli` binary
+  (`v0.7.2-70-g0a198e35`) and a packaged one (`0.7.3-0.20261027102022-0a198e354e6e`)
+  built from one commit were flagged stale. Versions carrying a commit hash are
+  now compared by commit.
+
 - **Worktree containment no longer fails one issue for another issue's
   leftovers (#2608).** The retry ledger in `containment/attributed.json` now
   records which issue attributed each path, and only a retry of that issue
