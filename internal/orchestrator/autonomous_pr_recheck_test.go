@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"github.com/nightgauge/nightgauge/internal/state"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -235,5 +236,24 @@ func TestStartPRRecheckSweep_OneSweepInFlight(t *testing.T) {
 	as.waitBackground()
 	if n := stateReads.Load(); n != 2 {
 		t.Errorf("PR state reads = %d, want 2: the guard was not released after the sweep", n)
+	}
+}
+
+// A run PR in another repository is not this issue's PR: re-checking it could
+// close the issue on a merge that never touched it.
+func TestRecordTransientRunPR_RejectsAPRInAnotherRepository(t *testing.T) {
+	as, _, _ := revertFixture(t)
+	foreign := state.NewRuntimeState("O/a", 1, "item-1", "run-1")
+	foreign.SetPrUrl("https://github.com/O/other/pull/7")
+	as.recordTransientRunPR("O/a", 1, foreign, TerminalKindApiConnectionLost)
+	if n := len(as.state.PendingPRRechecks); n != 0 {
+		t.Fatalf("entries = %d, want 0 for a PR in another repository", n)
+	}
+
+	own := state.NewRuntimeState("O/a", 1, "item-1", "run-1")
+	own.SetPrUrl("https://github.com/O/a/pull/7")
+	as.recordTransientRunPR("O/a", 1, own, TerminalKindApiConnectionLost)
+	if e, ok := pendingRecheck(as, "O/a", 1); !ok || e.PRNumber != 7 {
+		t.Fatalf("entry = %+v (found %v), want PR #7 recorded", e, ok)
 	}
 }

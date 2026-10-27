@@ -59,9 +59,18 @@ func (as *AutonomousScheduler) recordTransientRunPR(repo string, issue int, runt
 	if runtime == nil || !isTransientRevertKind(kind) {
 		return
 	}
-	if _, _, prNum, err := parsePRURL(runtime.Snapshot().PrUrl); err == nil && prNum > 0 {
-		as.enqueuePRRecheck(repo, issue, prNum, kind)
+	// The PR is bound to the run by its URL: one naming another repository is
+	// not this issue's PR, and reading it MERGED must never close this issue.
+	prOwner, prRepo, prNum, err := parsePRURL(runtime.Snapshot().PrUrl)
+	if err != nil || prNum <= 0 {
+		return
 	}
+	if !strings.EqualFold(prOwner+"/"+prRepo, repo) {
+		log.Printf("autonomous: pr-recheck: %s#%d run PR %s/%s#%d is in another repository — not re-checking it",
+			repo, issue, prOwner, prRepo, prNum)
+		return
+	}
+	as.enqueuePRRecheck(repo, issue, prNum, kind)
 }
 
 // enqueuePRRecheck records a recheck for repo#issue and persists the state.
