@@ -174,6 +174,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Action Center cards are aged from when the condition began (#1582).** A
+  `main` red for ten hours, or a PR waiting a day for review, no longer reads
+  "just now" because a sweep only just stored it. Decision requests carry an
+  optional `onset_at`, which the human-gate and default-branch-health producers
+  fill from forge data. The row's age and the order within a severity band
+  both use it. Where onset is unknown, the row reads "observed …".
+
 - **A PR that picks up a conflict in the merge queue is sent back to be
   resolved, not failed** (#2611). pr-merge now names the conflict
   (`merge-queue-failed: merge conflict with main: …`), and conflict recovery

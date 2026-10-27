@@ -524,3 +524,36 @@ type updaterFunc func(ctx context.Context, owner, repo string, number int) error
 func (f updaterFunc) UpdatePRBranch(ctx context.Context, owner, repo string, number int) error {
 	return f(ctx, owner, repo, number)
 }
+
+// #1582: the wait the body states in prose is carried structurally, so the
+// inbox ages the card from when the PR opened, not from the sweep.
+func TestHumanGate_OnsetIsWhenThePROpened(t *testing.T) {
+	got := evaluateGate(t, newHumanGate(), gateInput(&gatePRs{list: []types.PullRequest{
+		greenPR(42, "BLOCKED", "REVIEW_REQUIRED"),
+	}}))
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want 1", len(got))
+	}
+	want := fixedNow.Add(-26 * time.Hour).Format(time.RFC3339)
+	if got[0].OnsetAt != want {
+		t.Errorf("onset_at = %q, want %q (the PR's creation time)", got[0].OnsetAt, want)
+	}
+}
+
+func TestHumanGate_AggregateOnsetIsTheLongestWaitingPR(t *testing.T) {
+	p := &HumanGate{Now: func() time.Time { return fixedNow }, MaxIndividual: 3}
+	var list []types.PullRequest
+	for n := 1; n <= 4; n++ {
+		pr := greenPR(n, "BLOCKED", "REVIEW_REQUIRED")
+		pr.CreatedAt = fixedNow.Add(-time.Duration(n) * time.Hour).Format(time.RFC3339)
+		list = append(list, pr)
+	}
+	got := evaluateGate(t, p, gateInput(&gatePRs{list: list}))
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want 1 aggregate", len(got))
+	}
+	want := fixedNow.Add(-4 * time.Hour).Format(time.RFC3339)
+	if got[0].OnsetAt != want {
+		t.Errorf("onset_at = %q, want %q (the oldest gated PR)", got[0].OnsetAt, want)
+	}
+}

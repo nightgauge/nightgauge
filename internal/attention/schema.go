@@ -140,6 +140,11 @@ type DecisionRequest struct {
 	Steer *Steer `json:"steer,omitempty"`
 	// CreatedAt / ExpiresAt are RFC3339Nano UTC.
 	CreatedAt string `json:"created_at"`
+	// OnsetAt is when the condition itself began (RFC3339Nano UTC), as
+	// distinct from CreatedAt, when a sweep first stored it. Producers that
+	// know it from forge data set it; empty means onset is unknown. Never part
+	// of the fingerprint: onset is not material state (#1582).
+	OnsetAt   string `json:"onset_at,omitempty"`
 	ExpiresAt string `json:"expires_at"`
 	// DefaultAction is an option id applied on expiry, or ExpireNoop.
 	DefaultAction string    `json:"default_action"`
@@ -307,4 +312,13 @@ func (r *DecisionRequest) IsOpenish() bool {
 // IsMuted reports whether alerting on this request is currently suppressed.
 func (r *DecisionRequest) IsMuted() bool {
 	return r != nil && r.Lifecycle.Muted != nil
+}
+
+// ConditionSince is the instant the inbox ages and orders a request by: its
+// onset when known, otherwise when it was first stored.
+func (r DecisionRequest) ConditionSince() string {
+	if r.OnsetAt != "" {
+		return r.OnsetAt
+	}
+	return r.CreatedAt
 }

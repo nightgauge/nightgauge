@@ -834,3 +834,72 @@ func TestRaiseOutcomesCoverAllFourValues(t *testing.T) {
 		seen[o] = true
 	}
 }
+
+// #1582: within a band the inbox orders by condition onset — the instant the
+// row's age is measured from — not by when a sweep stored the card.
+func TestListOrdersWithinABandByConditionOnset(t *testing.T) {
+	s := New(layouttest.Repo(t))
+	old := validRequest(mustID(t), "old-condition")
+	old.OnsetAt = time.Now().UTC().Add(-10 * time.Hour).Format(time.RFC3339)
+	if _, _, err := s.Raise(old); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	recent := validRequest(mustID(t), "recent-condition")
+	recent.OnsetAt = time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
+	if _, _, err := s.Raise(recent); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	// Stored last, so the newest created_at — but its onset is the oldest.
+	oldest := validRequest(mustID(t), "oldest-condition")
+	oldest.OnsetAt = time.Now().UTC().Add(-20 * time.Hour).Format(time.RFC3339)
+	if _, _, err := s.Raise(oldest); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	list, err := s.List(ListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	want := []string{"recent-condition", "old-condition", "oldest-condition"}
+	for i, w := range want {
+		if list[i].IdempotencyKey != w {
+			t.Errorf("position %d = %q, want %q", i, list[i].IdempotencyKey, w)
+		}
+	}
+}
+
+func TestRaiseNormalisesOnsetAndDropsImpossibleOnes(t *testing.T) {
+	s := New(layouttest.Repo(t))
+	cases := map[string]struct {
+		onset string
+		want  func(created string) string
+	}{
+		"utc normalised": {
+			onset: "2020-01-02T03:04:05+02:00",
+			want:  func(string) string { return "2020-01-02T01:04:05Z" },
+		},
+		"garbage dropped": {onset: "yesterday", want: func(string) string { return "" }},
+		"future dropped": {
+			onset: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+			want:  func(string) string { return "" },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := validRequest(mustID(t), "onset-"+name)
+			r.OnsetAt = tc.onset
+			_, id, err := s.Raise(r)
+			if err != nil {
+				t.Fatalf("Raise: %v", err)
+			}
+			got, ok, err := s.Get(id)
+			if err != nil || !ok {
+				t.Fatalf("Get = %v, %v", ok, err)
+			}
+			if got.OnsetAt != tc.want(got.CreatedAt) {
+				t.Errorf("onset_at = %q, want %q", got.OnsetAt, tc.want(got.CreatedAt))
+			}
+		})
+	}
+}

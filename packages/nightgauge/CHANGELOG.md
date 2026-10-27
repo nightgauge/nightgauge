@@ -26,6 +26,13 @@ and this project adheres to
 
 ### Fixed
 
+- **Action Center cards are aged from when the condition began (#1582).** A
+  `main` red for ten hours, or a PR waiting a day for review, no longer reads
+  "just now" because a sweep only just stored it. Decision requests carry an
+  optional `onset_at`, which the human-gate and default-branch-health producers
+  fill from forge data. The row's age and the order within a severity band
+  both use it. Where onset is unknown, the row reads "observed …".
+
 - **Action Center bands now rank the way they read (#1583).** The tree shows
   one band per severity, most urgent first: "Blocking the fleet", "Blocking a
   run", "FYI". The lowest band no longer reads "Needs a human", and a red

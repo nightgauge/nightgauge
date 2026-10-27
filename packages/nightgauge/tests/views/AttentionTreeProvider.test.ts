@@ -24,6 +24,9 @@ import {
   AttentionGroupTreeItem,
   AttentionRequestTreeItem,
   SEVERITY_BANDS,
+  compareRequests,
+  conditionTime,
+  formatDescription,
   type AttentionTreeItem,
 } from "../../src/views/attention/attentionTreeItems";
 import type {
@@ -457,5 +460,36 @@ describe("AttentionTreeProvider — repo-scoped cards", () => {
     expect(String(card.description)).toContain("octocat/acme-web#42");
 
     provider.dispose();
+  });
+});
+
+// #1582: a card is aged from when its condition began, not from the sweep that
+// noticed it; where onset is unknown the row says the time is an observation.
+describe("Attention card age — condition onset", () => {
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+
+  it("ages a card from its onset even when it was stored just now", () => {
+    const r = request({ created_at: hoursAgo(0), onset_at: hoursAgo(10) });
+    expect(formatDescription(r)).toContain("10h ago");
+    expect(formatDescription(r)).not.toContain("observed");
+  });
+
+  it("labels the time as observed when onset is unknown", () => {
+    const r = request({ created_at: hoursAgo(0) });
+    expect(formatDescription(r)).toContain("observed just now");
+  });
+
+  it("ignores an onset later than the card's creation", () => {
+    const r = request({ created_at: hoursAgo(2), onset_at: hoursAgo(1) });
+    expect(conditionTime(r)).toEqual({ iso: r.created_at, observed: true });
+    expect(formatDescription(r)).toContain("observed 2h ago");
+  });
+
+  it("orders within a band by the same instant the row displays", () => {
+    // Stored most recently, but its condition is the oldest.
+    const oldCondition = request({ created_at: hoursAgo(0), onset_at: hoursAgo(20) });
+    const newCondition = request({ created_at: hoursAgo(1), onset_at: hoursAgo(1) });
+    const sorted = [oldCondition, newCondition].sort(compareRequests);
+    expect(sorted.map((r) => r.id)).toEqual([newCondition.id, oldCondition.id]);
   });
 });
