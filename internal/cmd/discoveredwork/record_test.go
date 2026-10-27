@@ -317,3 +317,31 @@ func TestCaptureFile_UnmaterializedIsReported(t *testing.T) {
 		t.Fatalf("aged orphans = %+v", got)
 	}
 }
+
+// The Go and SDK validators must agree on hostile input (parser differential)
+// and keep terminal escapes out of printed records.
+func TestRecord_RejectsHostileText(t *testing.T) {
+	cases := map[string]func(*Record){
+		"backslash dotdot": func(r *Record) { r.CandidateTargetFiles = []string{`a\..\..\etc`} },
+		"drive prefix":     func(r *Record) { r.CandidateTargetFiles = []string{"C:foo"} },
+		"summary ESC":      func(r *Record) { r.Summary = "x\x1b[2Jy" },
+		"summary bidi":     func(r *Record) { r.Summary = "x‮y" },
+		"evidence C1":      func(r *Record) { r.Evidence = []string{"x\u009by"} },
+	}
+	for name, mut := range cases {
+		r := validRecord(7)
+		mut(&r)
+		r.ID = ID(r.SourceStage, r.Summary)
+		r.RecordedAt = now.Format(time.RFC3339)
+		if err := Validate(&r); err == nil {
+			t.Errorf("%s: Validate accepted hostile input", name)
+		}
+	}
+	r := validRecord(7)
+	r.Evidence = []string{"line one\n\tline two"}
+	r.ID = ID(r.SourceStage, r.Summary)
+	r.RecordedAt = now.Format(time.RFC3339)
+	if err := Validate(&r); err != nil {
+		t.Errorf("multi-line evidence rejected: %v", err)
+	}
+}

@@ -53,6 +53,12 @@ const CandidateTargetFileSchema = z
   .refine((p) => !normalizedSegments(p).includes(".."), "must not contain a '..' segment");
 
 /** Segments after the same lexical clean Go's filepath.Clean applies. */
+// C0/C1 controls, DEL and bidi overrides; mirrors Go checkPrintable.
+// eslint-disable-next-line no-control-regex
+const CONTROL_OR_BIDI = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+const noControl = (s: string) => !CONTROL_OR_BIDI.test(s);
+const noControlMultiline = (s: string) => !CONTROL_OR_BIDI.test(s.replace(/[\n\t]/g, ""));
+
 function normalizedSegments(p: string): string[] {
   const out: string[] = [];
   for (const seg of p.replace(/\\/g, "/").split("/")) {
@@ -74,8 +80,18 @@ export const DiscoveredWorkRecordSchema = z
       .min(1)
       .max(200)
       .refine((s) => s.trim() === s && s.trim() !== "", "must be trimmed and non-empty")
-      .refine((s) => !/[\r\n]/.test(s), "must be a single line"),
-    evidence: z.array(z.string().min(1).max(2000)).min(1).max(10),
+      .refine((s) => !/[\r\n]/.test(s), "must be a single line")
+      .refine(noControl, "must not contain control or bidi characters"),
+    evidence: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(2000)
+          .refine(noControlMultiline, "must not contain control or bidi characters")
+      )
+      .min(1)
+      .max(10),
     source_stage: z.union([DiscoveredWorkStageSchema, DiscoveredWorkProducerSchema]),
     issue_number: z.number().int().positive(),
     run_id: z.string().min(1).nullable(),

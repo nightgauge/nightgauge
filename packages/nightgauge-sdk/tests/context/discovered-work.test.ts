@@ -66,6 +66,17 @@ describe("DiscoveredWorkRecordSchema", () => {
     ).toBe(true);
   });
 
+  it("refuses control and bidi characters, matching the Go validator", () => {
+    refuses({ summary: "x\u001b[2Jy" }, "summary");
+    refuses({ summary: "x\u202ey" }, "summary");
+    refuses({ evidence: ["x\u009by"] }, "evidence");
+    const ok = DiscoveredWorkRecordSchema.safeParse({
+      ...fixtureRecord,
+      evidence: ["line one\n\tline two"],
+    });
+    expect(ok.success).toBe(true);
+  });
+
   it("refuses an unknown key", () => {
     const r = DiscoveredWorkRecordSchema.safeParse({ ...fixtureRecord, target_repo: "x/y" });
     expect(r.success).toBe(false);

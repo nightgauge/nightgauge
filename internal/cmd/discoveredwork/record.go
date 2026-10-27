@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -108,6 +109,9 @@ func Validate(rec *Record) error {
 	if strings.ContainsAny(s, "\r\n") {
 		return errors.New("summary: must be a single line")
 	}
+	if err := checkPrintable(s, false); err != nil {
+		return fmt.Errorf("summary: %w", err)
+	}
 	if n := len([]rune(s)); n > maxSummary {
 		return fmt.Errorf("summary: must be at most %d characters (got %d)", maxSummary, n)
 	}
@@ -117,6 +121,9 @@ func Validate(rec *Record) error {
 	for i, e := range rec.Evidence {
 		if n := len([]rune(e)); n == 0 || n > maxEvidenceSz {
 			return fmt.Errorf("evidence[%d]: must be 1-%d characters (got %d)", i, maxEvidenceSz, n)
+		}
+		if err := checkPrintable(e, true); err != nil {
+			return fmt.Errorf("evidence[%d]: %w", i, err)
 		}
 	}
 	if !allowedStages[rec.SourceStage] && !producerRe.MatchString(rec.SourceStage) {
@@ -172,12 +179,34 @@ func validateTargetPath(p string) error {
 		return errors.New("must not contain NUL")
 	case strings.HasPrefix(p, "-"):
 		return errors.New("must not start with '-'")
-	case filepath.IsAbs(p) || strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`):
+	case filepath.IsAbs(p) || strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) ||
+		hasDrivePrefix(p):
 		return errors.New("must be repository-relative, not absolute")
 	}
-	for _, seg := range strings.Split(filepath.ToSlash(filepath.Clean(p)), "/") {
+	// Normalize both separators on every OS so this agrees with the SDK schema.
+	for _, seg := range strings.Split(path.Clean(strings.ReplaceAll(p, `\`, "/")), "/") {
 		if seg == ".." {
 			return errors.New("must not contain a '..' segment")
+		}
+	}
+	return nil
+}
+
+func hasDrivePrefix(p string) bool {
+	return len(p) >= 2 && p[1] == ':' && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z'))
+}
+
+// checkPrintable rejects C0/C1 control characters, DEL and bidi override code
+// points, so a record printed to a terminal cannot carry escape sequences.
+// Multi-line text may keep \n and \t.
+func checkPrintable(s string, multiline bool) error {
+	for _, r := range s {
+		if multiline && (r == '\n' || r == '\t') {
+			continue
+		}
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || (r >= 0x202a && r <= 0x202e) ||
+			(r >= 0x2066 && r <= 0x2069) {
+			return fmt.Errorf("must not contain control or bidi character %U", r)
 		}
 	}
 	return nil
