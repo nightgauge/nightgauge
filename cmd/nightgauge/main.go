@@ -1050,6 +1050,7 @@ func rootCmd() *cobra.Command {
 		knowledgeCmd(),
 		spikeCmd(),
 		discoveredWorkCmd(),
+		findingCmd(),
 		cleanupCmd(),
 		worktreeCmd(),
 		stashCmd(),

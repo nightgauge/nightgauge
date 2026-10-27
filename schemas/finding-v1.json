@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nightgauge.dev/schemas/finding-v1.json",
+  "title": "Finding",
+  "description": "One out-of-band finding: a learning signal an operator recorded outside a pipeline run (#102). One object per line of <main-checkout>/.nightgauge/findings.jsonl. Separate from discovered work by ADR 027.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "kind",
+    "scope",
+    "summary",
+    "remedy",
+    "evidence",
+    "paths",
+    "recorded_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1" },
+    "id": {
+      "type": "string",
+      "pattern": "^fd-[0-9a-f]{12}$",
+      "description": "fd- + first 12 hex of sha256(kind NUL scope NUL summary)."
+    },
+    "kind": { "enum": ["environment", "precondition", "api-shape", "gotcha"] },
+    "scope": {
+      "enum": ["project", "pipeline"],
+      "description": "pipeline: about Nightgauge itself; project: about the repository being worked on."
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "remedy": { "type": "string", "maxLength": 2000 },
+    "evidence": {
+      "type": "array",
+      "maxItems": 10,
+      "items": { "type": "string", "minLength": 1, "maxLength": 2000 }
+    },
+    "paths": {
+      "type": "array",
+      "maxItems": 20,
+      "description": "Repository-relative paths or path.Match globs. Hints only; never opened.",
+      "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+    },
+    "recorded_at": { "type": "string", "format": "date-time" }
+  }
+}

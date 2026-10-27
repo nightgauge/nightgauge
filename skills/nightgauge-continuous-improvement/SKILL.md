@@ -9,7 +9,7 @@ description: Unified continuous improvement review — orchestrates all self-imp
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.1.0"
+  version: "1.2.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 context: fork
@@ -230,6 +230,10 @@ CHECKOUT_DIR="$(nightgauge layout path checkout)"
 [ -d "${CHECKOUT_DIR}/health" ] && DATA_SOURCES="$DATA_SOURCES health-trends"
 [ -f "${CHECKOUT_DIR}/complexity-model.yaml" ] && DATA_SOURCES="$DATA_SOURCES complexity-model"
 [ -f "${PIPELINE_DIR}/recommendation-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES recommendations"
+# Out-of-band findings (#102): only when the list is non-empty, so an absent
+# file leaves the review unchanged.
+FINDINGS_JSON=$(nightgauge finding list --json 2>/dev/null || echo "[]")
+[ "$(printf '%s\n' "$FINDINGS_JSON" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] && DATA_SOURCES="$DATA_SOURCES findings"
 ```
 
 Report available sources. If fewer than 3 sources exist, warn that analysis will
@@ -372,6 +376,20 @@ activations:
 - Ralph Loop success rate (fixed vs escalated to human)
 - Gate effectiveness (hit rates from `logs/gate-metrics.jsonl`, the clone's cross-run history)
 - Skill effectiveness deltas (from `.nightgauge/skill-effectiveness.jsonl`)
+
+### Signal Group 7: Out-of-Band Findings (SHARED)
+
+Gather only when `findings` is in `DATA_SOURCES`; otherwise skip this group
+entirely. Findings are learning signals operators recorded outside a pipeline
+run with `nightgauge finding record` (see
+[docs/SELF_IMPROVEMENT_LOOP.md](../../docs/SELF_IMPROVEMENT_LOOP.md#out-of-band-findings)).
+Read them from `$FINDINGS_JSON`; never open `findings.jsonl` directly.
+
+**Key metrics to extract:**
+
+- Count by `kind` (`environment`, `precondition`, `api-shape`, `gotcha`)
+- Count by `scope` (`pipeline`, `project`)
+- Repeats: the same `kind` across several findings that share a `paths` entry
 
 <!-- phase:end name="signal-gathering" -->
 
@@ -635,6 +653,21 @@ Each proposal is categorized by type and priority:
 
 ### Proposal Generation Rules
 
+#### Out-of-Band Findings Routing (Signal Group 7)
+
+Only when Signal Group 7 ran. Route each finding by `scope` and mode
+(see [docs/SELF_IMPROVEMENT_BOUNDARIES.md](../../docs/SELF_IMPROVEMENT_BOUNDARIES.md)):
+
+| `scope`    | Mode     | Result                                                                                          |
+| ---------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `pipeline` | dogfood  | One proposal: `skill-fix` for `gotcha`/`precondition`, `investigation` otherwise                |
+| `pipeline` | customer | One `investigation` proposal titled "Report upstream: <summary>" — never a code or skill change |
+| `project`  | any      | Listed in the report's **Findings** section only — never a proposal                             |
+
+Each finding proposal cites the finding `id` in its evidence and copies its
+`remedy` into the action. Two findings with the same `kind` and a shared path
+raise the proposal to `high` (a recurring unaddressed finding).
+
 #### Focus-Aware Prioritization
 
 When generating proposals, apply weighting based on the `ACTIVE_LENS` cached in
@@ -857,6 +890,17 @@ proposals before unaligned proposals within the same priority tier.
 `★` marks focus-aligned proposals. When `ACTIVE_LENS` is `general`, omit the
 `★` marker, the `Active Focus` header line, and the `Focus-Aligned Proposals`
 stat line.
+
+When Signal Group 7 ran, append a **Findings** section after the proposals
+listing every finding, project-scope ones included:
+
+```
+Findings (3): 2 pipeline, 1 project
+  fd-1a2b3c4d5e6f  environment/pipeline  Gate needs mikefarah yq  → proposal
+  fd-9f8e7d6c5b4a  gotcha/project        Migrations must run before seed  → reported only
+```
+
+When no findings exist, the report has no Findings section at all.
 
 ### Step 5.3 — Write JSON Report
 
