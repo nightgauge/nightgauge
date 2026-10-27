@@ -6,7 +6,7 @@ description: Validate feature implementation with integration/E2E tests and manu
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.21.0"
+  version: "1.22.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -273,7 +273,7 @@ printf '<!-- phase:start name="commit-and-push" index=17 total=22 stage="feature
 printf '<!-- phase:start name="write-validate-context" index=18 total=22 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Write `validate-{N}.json` with `nightgauge layout write pipeline validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above).
+> **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Write `validate-{N}.json` with `nightgauge layout write pipeline validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above). Record a verdict for each acceptance criterion (Step 6.0); an `unmet` one makes pr-create write `Refs #N`, not `Closes #N` (#2595).
 
 ### Phase 7: Sync Project Board Status
 

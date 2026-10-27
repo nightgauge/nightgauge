@@ -25,6 +25,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
 // PRCreatePath is the outcome of a deterministic pr-create attempt.
@@ -145,6 +146,11 @@ type PRCreateSnapshot struct {
 	SecurityScan          string // "passed" | "failed" | "skipped" | ""
 	ScopeDrift            string // "passed" | "failed" | "skipped" | ""
 	ManualChecklistOpen   bool   // true when any manual_checklist entry has verified == false
+
+	// ACVerdicts is one resolved verdict per issue acceptance criterion
+	// (#2595), built by ResolveACVerdicts. Any unmet verdict renders the
+	// body with `Refs #N` instead of `Closes #N`.
+	ACVerdicts []ACVerdict
 
 	// Planning / knowledge
 	KnowledgePath    string
@@ -310,8 +316,11 @@ func stripTitlePrefix(title string) string {
 //	## Summary       (always)
 //	## Changes       (always; sorted file lists)
 //	## Validation    (always)
+//	## Acceptance criteria (only when the issue has checkbox ACs)
+//	## ⚠️ Unmet acceptance criteria (only when any AC is unmet)
 //	## Knowledge     (only when KnowledgeSection is non-empty)
-//	closing keywords (Closes #N; "Part of #PARENT" when NativeParent > 0)
+//	closing keywords (Closes #N, or Refs #N when any AC is unmet;
+//	                  "Part of #PARENT" when NativeParent > 0)
 //	pipeline stamp   (always; forge.PipelineMarker, see docs/PR_CREATE_STAGE.md)
 //
 // Output is byte-equal across repeated calls on identical input.
@@ -358,8 +367,7 @@ func RenderBody(snap PRCreateSnapshot) string {
 		b.WriteString("- feature-validate: skipped by the route (routing skip list); results below are feature-dev's own\n")
 	}
 	b.WriteString(fmt.Sprintf("- Build: %s\n", buildLabel(snap.BuildPassed, snap.BuildStatus)))
-	b.WriteString(fmt.Sprintf("- Unit tests: %s (%d passed, %d failed)\n",
-		passLabel(snap.UnitTestsPassed), snap.TestsPassed, snap.TestsFailed))
+	b.WriteString(fmt.Sprintf("- Unit tests: %s\n", unitTestsLabel(snap)))
 	if snap.IntegrationPassed {
 		b.WriteString("- Integration tests: passed\n")
 	}
@@ -392,6 +400,31 @@ func RenderBody(snap PRCreateSnapshot) string {
 		b.WriteString("Validation reported `passed` for everything that did run; that verdict was superseded because it would otherwise read as though this code had been exercised.\n\n")
 	}
 
+	// Acceptance criteria (#2595): every criterion with its verdict, then the
+	// unmet ones again under their own heading, which the post-merge hook
+	// reads to name the remainder on the issue.
+	if len(snap.ACVerdicts) > 0 {
+		b.WriteString("## Acceptance criteria\n\n")
+		for _, v := range snap.ACVerdicts {
+			b.WriteString(fmt.Sprintf("- %s: %s", acStatusLabel(v.Status), v.Text))
+			if v.Evidence != "" {
+				b.WriteString(fmt.Sprintf(" (%s: %s)", v.Source, v.Evidence))
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	if HasUnmet(snap.ACVerdicts) {
+		b.WriteString(UnmetACHeading + "\n\n")
+		b.WriteString(fmt.Sprintf("This PR leaves #%d open. These criteria remain:\n\n", snap.IssueNumber))
+		for _, v := range snap.ACVerdicts {
+			if v.Status == ACUnmet {
+				b.WriteString(fmt.Sprintf("- %s\n", v.Text))
+			}
+		}
+		b.WriteString("\n")
+	}
+
 	// Knowledge — caller pre-renders the block (or leaves empty).
 	if snap.KnowledgeSection != "" {
 		b.WriteString(strings.TrimRight(snap.KnowledgeSection, "\n"))
@@ -399,11 +432,12 @@ func RenderBody(snap PRCreateSnapshot) string {
 	}
 
 	// Closing keywords — Part of first (so GitHub renders it above Closes
-	// in the PR sidebar's linked-issues list), then Closes.
+	// in the PR sidebar's linked-issues list), then Closes. A partial
+	// delivery says Refs, so neither GitHub nor post-merge closes the issue.
 	if snap.NativeParent > 0 {
 		b.WriteString(fmt.Sprintf("Part of #%d\n", snap.NativeParent))
 	}
-	b.WriteString(fmt.Sprintf("Closes #%d\n", snap.IssueNumber))
+	b.WriteString(fmt.Sprintf("%s #%d\n", closingKeyword(snap), snap.IssueNumber))
 
 	// Pipeline stamp (#1479) — always last, so a reviewer never sees it and
 	// tooling finds it at a fixed position. forge.CreatePR adapters apply the
@@ -425,11 +459,43 @@ func buildLabel(passed bool, status string) string {
 	return status
 }
 
-func passLabel(passed bool) string {
-	if passed {
-		return "passed"
+// unitTestsLabel reports what actually ran (#2595). Counts come from
+// feature-dev and the pass flag from feature-validate, so "not run" is said
+// only when there are no counts at all — never beside a pass count.
+func unitTestsLabel(snap PRCreateSnapshot) string {
+	p, f := snap.TestsPassed, snap.TestsFailed
+	switch {
+	case p == 0 && f == 0:
+		if snap.UnitTestsPassed {
+			return "passed"
+		}
+		return "not run"
+	case f > 0:
+		return fmt.Sprintf("failed (%d passed, %d failed)", p, f)
+	case snap.UnitTestsPassed:
+		return fmt.Sprintf("passed (%d passed, %d failed)", p, f)
+	default:
+		return fmt.Sprintf("feature-dev reported %d passed, %d failed; not confirmed by feature-validate", p, f)
 	}
-	return "not run"
+}
+
+// closingKeyword is "Closes" unless an acceptance criterion is unmet.
+func closingKeyword(snap PRCreateSnapshot) string {
+	if HasUnmet(snap.ACVerdicts) {
+		return "Refs"
+	}
+	return "Closes"
+}
+
+func acStatusLabel(status string) string {
+	switch status {
+	case ACMet:
+		return "✅ met"
+	case ACUnmet:
+		return "❌ unmet"
+	default:
+		return "❔ not verifiable"
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -598,6 +664,8 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 			Title:         title,
 			BaseBranch:    snap.BaseBranch,
 			KnowledgePath: snap.KnowledgePath,
+			ClosesIssue:   !HasUnmet(snap.ACVerdicts),
+			ACVerdicts:    snap.ACVerdicts,
 		})
 		ph.complete("write-context")
 		ph.skipOffPath()
@@ -662,6 +730,8 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		Title:         title,
 		BaseBranch:    snap.BaseBranch,
 		KnowledgePath: snap.KnowledgePath,
+		ClosesIssue:   !HasUnmet(snap.ACVerdicts),
+		ACVerdicts:    snap.ACVerdicts,
 	}); writeErr != nil {
 		// The PR exists, so the stage still succeeded deterministically — but
 		// pr-{N}.json did not land, so write-context failed and says so.
@@ -730,8 +800,14 @@ type prContextPayload struct {
 	// deterministic-first pr-create path (#300). The Go scheduler never runs that
 	// Zod validation, but the dogfood TS path does — a nil slice marshals to
 	// `null` and fails `z.array(z.string())`, so it is always emitted as `[]`.
-	Reviewers        []string          `json:"reviewers"`
-	KnowledgePath    string            `json:"knowledge_path,omitempty"`
+	Reviewers     []string `json:"reviewers"`
+	KnowledgePath string   `json:"knowledge_path,omitempty"`
+	// ClosesIssue is false when the body says `Refs #N` because an
+	// acceptance criterion is unmet (#2595); merged-PR reconcilers must not
+	// close or mark Done an issue whose PR did not close it.
+	ClosesIssue bool `json:"closes_issue"`
+	// ACVerdicts records the per-criterion verdict the body was rendered from.
+	ACVerdicts       []ACVerdict       `json:"acceptance_criteria"`
 	PreflightResults map[string]string `json:"preflight_results"`
 	CIMonitoring     map[string]any    `json:"ci_monitoring"`
 	CreatedAt        string            `json:"created_at"`
@@ -748,6 +824,9 @@ func defaultWritePRContext(workdir string, p prContextPayload) error {
 	}
 	if p.Reviewers == nil {
 		p.Reviewers = []string{}
+	}
+	if p.ACVerdicts == nil {
+		p.ACVerdicts = []ACVerdict{}
 	}
 	if p.PreflightResults == nil {
 		p.PreflightResults = map[string]string{
@@ -813,6 +892,7 @@ func pipelineContextPath(workdir, name string) string {
 // tolerated — the snapshot keeps zero-values.
 func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot, error) {
 	snap := PRCreateSnapshot{RunID: os.Getenv("NIGHTGAUGE_RUN_ID")}
+	var validateVerdicts []ACVerdict
 
 	// issue-{N}.json
 	if data, err := readFile(pipelineContextPath(workdir, fmt.Sprintf("issue-%d.json", issueNumber))); err == nil {
@@ -897,6 +977,12 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 				Severity string `json:"severity"`
 			} `json:"dead_code_warnings"`
 			ManualChecklist json.RawMessage `json:"manual_checklist"`
+			ACVerdicts      []struct {
+				Index    int    `json:"index"`
+				Text     string `json:"text"`
+				Status   string `json:"status"`
+				Evidence string `json:"evidence"`
+			} `json:"acceptance_criteria_verdicts"`
 		}
 		if jsonErr := json.Unmarshal(data, &raw); jsonErr != nil {
 			return snap, fmt.Errorf("parse validate context: %w", jsonErr)
@@ -921,6 +1007,29 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 			}
 		}
 		snap.ManualChecklistOpen = manualChecklistOpen(raw.ManualChecklist)
+		for _, v := range raw.ACVerdicts {
+			validateVerdicts = append(validateVerdicts, ACVerdict{Index: v.Index, Text: v.Text, Status: v.Status, Evidence: v.Evidence})
+		}
+	}
+
+	// Acceptance criteria (#2595): the list comes from ac-reconcile-{N}.json,
+	// which planning's preflight wrote from the issue body. Re-run the
+	// deterministic rules on the branch tree so a mechanical result reflects
+	// this branch rather than main at planning time.
+	if data, err := readFile(pipelineContextPath(workdir, fmt.Sprintf("ac-reconcile-%d.json", issueNumber))); err == nil {
+		var rec preflight.ACReconcileResult
+		if jsonErr := json.Unmarshal(data, &rec); jsonErr != nil {
+			return snap, fmt.Errorf("parse ac-reconcile context: %w", jsonErr)
+		}
+		criteria := make([]string, 0, len(rec.AcceptanceCriteria))
+		for _, c := range rec.AcceptanceCriteria {
+			criteria = append(criteria, c.Text)
+		}
+		var det *preflight.ACReconcileResult
+		if len(criteria) > 0 && workdir != "" {
+			det = preflight.ReconcileACs(workdir, issueNumber, acCheckboxBody(criteria))
+		}
+		snap.ACVerdicts = ResolveACVerdicts(criteria, validateVerdicts, det)
 	}
 
 	// planning-{N}.json — picks up knowledge_path when not already set.

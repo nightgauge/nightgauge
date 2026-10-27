@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A partial delivery says `Refs #N`, not `Closes #N` (#2595).** An `unmet`
+  acceptance-criterion verdict in `validate-{N}.json` makes the body reference
+  the issue and list the unmet criteria, so merging leaves the issue open. The
+  Validation section never pairs "not run" with a test count.
+
 ### Removed
 
 - **Batch mode removed (#366).** Nothing ever wrote `batch-{E}.json`, so the

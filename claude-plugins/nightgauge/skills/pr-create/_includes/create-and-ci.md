@@ -111,6 +111,23 @@ Closes #N
 For standalone issues (no epic parent), omit the `Part of` line. For epic
 sub-issues, include BOTH lines so the sub-issue auto-closes on merge.
 
+**Partial delivery (#2595).** If any `acceptance_criteria_verdicts` entry in
+`validate-{N}.json` is `unmet`, replace `Closes #N` with `Refs #N` and add, above
+the closing lines:
+
+```markdown
+## ⚠️ Unmet acceptance criteria
+
+This PR leaves #N open. These criteria remain:
+
+- <criterion text>
+```
+
+Post-merge reads that heading to name the remainder on the issue, which it
+leaves open and returns to Ready. Never write "close #N" or "fixes #N" in such a
+body. In `## Validation`, write `not run` only when no tests ran; if feature-dev
+reported counts that feature-validate did not confirm, say exactly that.
+
 **Always end `PR_BODY` with the pipeline stamp** (#1479),
 byte-for-byte in this form, as the last line:
 

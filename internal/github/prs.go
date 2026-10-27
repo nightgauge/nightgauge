@@ -50,6 +50,9 @@ type PRMergeInfo struct {
 	// MergedBy is the login of the actor GitHub records as having merged the
 	// PR (#1283); empty when un-merged or the actor is gone.
 	MergedBy string
+	// Body is the PR body as merged (#2595). Post-merge reads its closing
+	// keyword: a PR that says `Refs #N` delivered only part of the issue.
+	Body string
 }
 
 // GetPRMergeInfo fetches the merge breadcrumb of a merged PR. Satisfies
@@ -59,7 +62,7 @@ func (s *PRService) GetPRMergeInfo(ctx context.Context, owner, repo string, numb
 	if err != nil {
 		return PRMergeInfo{}, err
 	}
-	return PRMergeInfo{SHA: pr.MergeCommitSHA, MergedAt: pr.MergedAt, BaseRef: pr.BaseRef, MergedBy: pr.MergedBy}, nil
+	return PRMergeInfo{SHA: pr.MergeCommitSHA, MergedAt: pr.MergedAt, BaseRef: pr.BaseRef, MergedBy: pr.MergedBy, Body: pr.Body}, nil
 }
 
 // GetPR fetches a single pull request with review and check status.

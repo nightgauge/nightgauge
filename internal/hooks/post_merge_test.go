@@ -473,6 +473,7 @@ type mockPRVerifierWithMerge struct {
 	mergedAt        string
 	baseRef         string
 	mergedBy        string
+	body            string
 	infoErr         error
 	mergeInfoCalled bool
 }
@@ -486,7 +487,7 @@ func (m *mockPRVerifierWithMerge) GetPRMergeInfo(_ context.Context, _, _ string,
 	if m.infoErr != nil {
 		return gh.PRMergeInfo{}, m.infoErr
 	}
-	return gh.PRMergeInfo{SHA: m.sha, MergedAt: m.mergedAt, BaseRef: m.baseRef, MergedBy: m.mergedBy}, nil
+	return gh.PRMergeInfo{SHA: m.sha, MergedAt: m.mergedAt, BaseRef: m.baseRef, MergedBy: m.mergedBy, Body: m.body}, nil
 }
 
 func TestPostMergeCapturesMergeBreadcrumb(t *testing.T) {

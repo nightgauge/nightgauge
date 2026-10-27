@@ -263,6 +263,16 @@ function checklistValueVerified(value: unknown): boolean {
   return value === true;
 }
 
+const AC_VERDICT_STATUSES = ["met", "unmet", "not_verifiable"] as const;
+
+/** Map an acceptance-criterion verdict onto met | unmet | not_verifiable. */
+function normalizeACStatus(val: unknown): string {
+  const s = typeof val === "string" ? val.trim().toLowerCase().replace(/-/g, "_") : "";
+  if (["met", "satisfied", "pass", "passed"].includes(s)) return "met";
+  if (["unmet", "unsatisfied", "not_met", "fail", "failed"].includes(s)) return "unmet";
+  return "not_verifiable";
+}
+
 export const ValidateContextSchema = z
   .object({
     schema_version: z.string().regex(/^\d+\.\d+$/),
@@ -452,6 +462,23 @@ export const ValidateContextSchema = z
         )
         .nullish()
     ),
+    /**
+     * Per-criterion verdicts for the issue's `- [ ]` acceptance criteria
+     * (#2595), judged against the branch diff. pr-create renders `Refs #N`
+     * instead of `Closes #N` when any is `unmet`. Status synonyms
+     * (satisfied/unsatisfied/undetectable) are normalised, and an unknown
+     * value reads as `not_verifiable`, matching the Go resolver.
+     */
+    acceptance_criteria_verdicts: z
+      .array(
+        z.object({
+          index: z.number().int().min(0),
+          text: z.string(),
+          status: z.preprocess(normalizeACStatus, z.enum(AC_VERDICT_STATUSES)),
+          evidence: optionalString(),
+        })
+      )
+      .nullish(),
     project_type: optionalString(),
     notes: z.preprocess(
       (v) => (typeof v === "string" && v.trim() === "" ? null : v),

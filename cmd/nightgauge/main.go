@@ -7026,6 +7026,8 @@ cause the command to exit non-zero.`,
 				// (#2574) Comment the validation marker on a green merge so
 				// the issue's program dependents are released.
 				ValidationMarks: hookValidationMarks{Gate: markerTrustGate(client, workdir), issues: issueSvc},
+				// (#2595) Name the remainder on an issue whose PR said Refs.
+				Remainder: issueSvc,
 			})
 			reportMainChecks(workdir, ownerPart, repoPart, issueNumber, prNumber, result)
 
@@ -7117,7 +7119,7 @@ cause the command to exit non-zero.`,
 					"Warning: issue #%d is closed but its board status is NOT Done — the board is out of date.\n",
 					issueNumber)
 			case hooks.BoardSyncNotAttempted:
-				if projectNumber > 0 {
+				if projectNumber > 0 && !result.PartialDelivery {
 					fmt.Fprintf(os.Stderr,
 						"Note: no board sync was attempted for #%d (the issue is not closed).\n", issueNumber)
 				}
@@ -7133,6 +7135,9 @@ cause the command to exit non-zero.`,
 				// "skipped" itself, so this line used to read "Epic #N skipped:
 				// skipped" and told the operator nothing (#1025).
 				fmt.Printf("Epic #%d skipped: %s\n", result.EpicNumber, result.EpicReason)
+			case "partial_delivery":
+				fmt.Printf("PR #%d does not close issue #%d (Refs, not Closes) — left open and returned to Ready; %d unmet criteria named.\n",
+					prNumber, issueNumber, len(result.UnmetCriteria))
 			case "pr_verify_error", "pr_not_merged", "issue_fetch_error", "auto_close_error":
 				// Already reported to stderr above, in both output modes.
 			default:

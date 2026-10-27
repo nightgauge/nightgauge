@@ -76,6 +76,10 @@ fanned out. Detail: Read
   When a single PR delivers more than one of an epic's sub-issue
   deliverables, enumerate `Closes #sub` for **each** sub whose work is in the
   diff — do NOT rely on `Closes #epic` alone.
+- **Partial delivery says `Refs #N` (#2595).** Any `unmet` entry in
+  `validate-{N}.json` `acceptance_criteria_verdicts` means `Refs #N` plus a
+  `## ⚠️ Unmet acceptance criteria` list, and no "close #N" anywhere in the
+  body. Never pair "not run" with a test count in `## Validation`.
 - **Pipeline stamp is mandatory (#1479).** `PR_BODY` must end with
   `<!-- nightgauge:pipeline stage=pr-create issue=${ISSUE_NUMBER} run=${NIGHTGAUGE_RUN_ID:--} -->`
   as its last line; `nightgauge pr create` labels such PRs `pipeline:created`.
