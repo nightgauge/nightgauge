@@ -673,6 +673,7 @@ indistinguishable by exit status alone. Expected lines:
 | `Issue #N has no parent epic — skipping…`    | normal for a standalone issue            |
 | `Epic #N auto-closed (all sub-issues …)`     | the rollup fired                         |
 | `Epic #N skipped: has_open`                  | siblings still open — nothing to do yet  |
+| `Epic #N skipped: unfinished_decomposition`  | unticked epic-body items listed below it |
 | `Warning: post-merge FAILED for issue #N: …` | **it did not run**; re-run once resolved |
 
 **`--json` reports failures too, since #1025.** It did not before: the reporting

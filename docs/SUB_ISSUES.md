@@ -291,6 +291,12 @@ Roadmap view.
 
 **Causes**:
 
+1. **Unticked task-list items in the epic body** (`unfinished_decomposition`,
+   #1581): an unchecked `- [ ]` item holds the epic open unless every issue
+   it references is a closed sub-issue. Planned-but-unfiled work and unticked
+   acceptance criteria count. The post-merge hook lists the pending items;
+   tick them, or file the work as a sub-issue and reference it from the item.
+
 1. **Epic body doesn't reference sub-issues**: Add references:
 
    ```markdown
@@ -301,11 +307,11 @@ Roadmap view.
    - #303
    ```
 
-2. **`check-epic-completion.sh` not running**: Verify the `pr-merge` skill
+1. **`check-epic-completion.sh` not running**: Verify the `pr-merge` skill
    includes Step 7.2.5 (Epic completion check). If using an older version,
    update to the latest skill.
 
-3. **Manual intervention needed**: Close the epic manually:
+1. **Manual intervention needed**: Close the epic manually:
 
    ```bash
    gh issue close <epic-number> --comment "All sub-issues complete"

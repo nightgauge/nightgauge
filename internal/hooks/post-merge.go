@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strconv"
@@ -142,6 +143,9 @@ type PostMergeResult struct {
 	// "what", and before #1025 it was computed on every call and never copied
 	// out — so "Epic #N skipped: skipped" was the best the CLI could print.
 	EpicReason string `json:"epicReason,omitempty"`
+	// EpicPendingTasks lists the epic body's outstanding task-list items when
+	// the close was declined as unfinished_decomposition (#1581).
+	EpicPendingTasks []string `json:"epicPendingTasks,omitempty"`
 	// Integration reports how the epic branch was brought onto main before
 	// the epic closed, or why the epic stayed open (#2560).
 	Integration *gh.EpicIntegration `json:"integration,omitempty"`
@@ -535,12 +539,32 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 		return out
 	}
 
-	fmt.Fprintf(os.Stderr, "Post-merge epic check: %s#%d status=%s reason=%s\n", out.EpicRepo, epicNumber, result.Status, result.Reason)
-
 	out.AutoClosed = result.Status == "closed"
 	out.Reason = result.Status
 	out.EpicReason = result.Reason
+	out.EpicPendingTasks = result.PendingTasks
+	reportEpicDecision(os.Stderr, out.EpicRepo, epicNumber, result)
 	return out
+}
+
+// maxReportedPendingTasks bounds the pending items printed per declined epic.
+const maxReportedPendingTasks = 5
+
+// reportEpicDecision tells the operator which epic the hook closed, or that it
+// declined to close it and why, naming the work still pending (#1581).
+func reportEpicDecision(w io.Writer, epicRepo string, epicNumber int, result *gh.AutoCloseSingleResult) {
+	if result.Status == "closed" {
+		fmt.Fprintf(w, "Post-merge: closed epic %s#%d\n", epicRepo, epicNumber)
+		return
+	}
+	fmt.Fprintf(w, "Post-merge: not closing epic %s#%d (%s)\n", epicRepo, epicNumber, result.Reason)
+	for i, task := range result.PendingTasks {
+		if i == maxReportedPendingTasks {
+			fmt.Fprintf(w, "  +%d more\n", len(result.PendingTasks)-i)
+			break
+		}
+		fmt.Fprintf(w, "  - %s\n", task)
+	}
 }
 
 // verifyMain runs the #1249 post-merge observation for a hook that confirmed

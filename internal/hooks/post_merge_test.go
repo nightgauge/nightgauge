@@ -3,6 +3,7 @@ package hooks
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
@@ -1331,5 +1332,51 @@ func TestPostMergeNoParentIsNotFailed(t *testing.T) {
 	}
 	if result.Reason != "no_parent" {
 		t.Errorf("Reason = %q, want no_parent", result.Reason)
+	}
+}
+
+// TestPostMergeEpicUnfinishedDecompositionIsReported is #1581: a declined
+// close carries the pending items out and leaves the epic open.
+func TestPostMergeEpicUnfinishedDecompositionIsReported(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#1575": {NodeID: "I_1575", Number: 1575, ParentIssueNumber: 1574},
+	}}
+	pending := []string{"Phase 2: pipeline wiring", "Operators see the result"}
+	closer := &mockEpicAutoCloser{result: &gh.AutoCloseSingleResult{
+		EpicNumber: 1574, Status: "skipped", Reason: "unfinished_decomposition", PendingTasks: pending,
+	}}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, closer, nil, nil, PostMergeInput{
+		IssueNumber: 1575, RepositoryOwner: "nightgauge", RepositoryName: "nightgauge",
+	})
+
+	if result.AutoClosed || result.Reason != "skipped" || result.EpicReason != "unfinished_decomposition" {
+		t.Fatalf("result = %+v, want skipped/unfinished_decomposition without close", result)
+	}
+	if len(result.EpicPendingTasks) != 2 || result.EpicPendingTasks[0] != pending[0] {
+		t.Errorf("EpicPendingTasks = %q", result.EpicPendingTasks)
+	}
+}
+
+func TestReportEpicDecision(t *testing.T) {
+	var b strings.Builder
+	reportEpicDecision(&b, "o/r", 7, &gh.AutoCloseSingleResult{Status: "closed", Reason: "all_closed"})
+	if got := b.String(); got != "Post-merge: closed epic o/r#7\n" {
+		t.Errorf("closed line = %q", got)
+	}
+
+	b.Reset()
+	tasks := []string{"a", "b", "c", "d", "e", "f", "g"}
+	reportEpicDecision(&b, "o/r", 7, &gh.AutoCloseSingleResult{
+		Status: "skipped", Reason: "unfinished_decomposition", PendingTasks: tasks,
+	})
+	got := b.String()
+	for _, want := range []string{"not closing epic o/r#7 (unfinished_decomposition)", "  - a\n", "  - e\n", "  +2 more\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("decline output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "  - f\n") {
+		t.Errorf("decline output exceeded %d items:\n%s", maxReportedPendingTasks, got)
 	}
 }
