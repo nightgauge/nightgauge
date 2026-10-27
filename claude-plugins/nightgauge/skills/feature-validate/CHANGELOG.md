@@ -10,6 +10,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Out-of-scope findings are recorded (#479).** Pre-existing test failures and
+  adversarial-review findings outside the acceptance criteria are recorded with
+  `nightgauge discovered-work record` instead of being skipped silently or
+  blocking validation.
+
 - **Per-criterion verdicts (#2595).** `validate-{N}.json` records
   `acceptance_criteria_verdicts`, one `met`, `unmet` or `not_verifiable` per
   issue acceptance criterion with evidence. pr-create uses them to choose

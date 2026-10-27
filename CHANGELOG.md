@@ -23,6 +23,14 @@ changelog, and the release workflow refuses a tag that does not.
   pipeline-scope findings into proposals and lists project-scope ones in its
   report. Feature planning adds a Known Findings section when a finding
   concerns a planned path. With no findings file, nothing changes.
+- **Stages record out-of-scope work instead of widening or dropping it (#479).**
+  feature-planning, feature-dev and feature-validate now apply one rule: work
+  this issue's acceptance criteria need still backtracks with
+  `SCOPE_DISCOVERED`; anything else is captured with
+  `nightgauge discovered-work record` and the stage continues. Pre-existing
+  test failures, out-of-scope review findings and actionable Out of Scope plan
+  entries are recorded. The rule lives in
+  [docs/FEEDBACK_LOOPS.md](docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work).
 - **Recover an issue's full decision chain from its number (#1283).**
   `nightgauge trace list <issue>` lists every traced run, oldest first.
   `trace export` now adds `issue_runs`, `merge` (PR, merge SHA, who merged it)

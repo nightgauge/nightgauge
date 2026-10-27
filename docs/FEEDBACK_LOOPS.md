@@ -13,14 +13,14 @@ guard — prevent infinite revision loops.
 
 ## Signal Type Reference
 
-| Signal Type                     | Emitted By                    | Typical Severity    | Orchestrator Action                                                                  | `backtrack_target_stage` |
-| ------------------------------- | ----------------------------- | ------------------- | ------------------------------------------------------------------------------------ | ------------------------ |
-| `PLAN_REVISION_NEEDED`          | feature-dev                   | blocking            | Backtrack to feature-planning                                                        | feature-planning         |
-| `SCOPE_DISCOVERED`              | feature-dev, feature-validate | blocking            | Backtrack to feature-planning                                                        | feature-planning         |
-| `COMPLEXITY_UNDERESTIMATED`     | feature-dev, feature-validate | warning or blocking | If blocking: backtrack; always: update complexity model via FeedbackLearningService  | feature-planning or null |
-| `MODEL_ESCALATION_NEEDED`       | feature-dev, feature-validate | blocking            | Retry same stage with next model in escalation path                                  | null (same-stage retry)  |
-| `ACCEPTANCE_CRITERIA_AMBIGUOUS` | feature-validate              | blocking            | Backtrack to feature-planning                                                        | feature-planning         |
-| `CONFLICT_RESOLUTION_NEEDED`    | pr-merge                      | blocking            | Backtrack to **feature-dev** on the same branch to resolve a rebase conflict (#4072) | feature-dev              |
+| Signal Type                     | Emitted By                    | Typical Severity    | Orchestrator Action                                                                                                   | `backtrack_target_stage` |
+| ------------------------------- | ----------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `PLAN_REVISION_NEEDED`          | feature-dev                   | blocking            | Backtrack to feature-planning                                                                                         | feature-planning         |
+| `SCOPE_DISCOVERED`              | feature-dev, feature-validate | blocking            | Backtrack to feature-planning (AC-blocking only; [record otherwise](#record-vs-backtrack-deferrable-discovered-work)) | feature-planning         |
+| `COMPLEXITY_UNDERESTIMATED`     | feature-dev, feature-validate | warning or blocking | If blocking: backtrack; always: update complexity model via FeedbackLearningService                                   | feature-planning or null |
+| `MODEL_ESCALATION_NEEDED`       | feature-dev, feature-validate | blocking            | Retry same stage with next model in escalation path                                                                   | null (same-stage retry)  |
+| `ACCEPTANCE_CRITERIA_AMBIGUOUS` | feature-validate              | blocking            | Backtrack to feature-planning                                                                                         | feature-planning         |
+| `CONFLICT_RESOLUTION_NEEDED`    | pr-merge                      | blocking            | Backtrack to **feature-dev** on the same branch to resolve a rebase conflict (#4072)                                  | feature-dev              |
 
 ### `CONFLICT_RESOLUTION_NEEDED` (#4072)
 
@@ -536,6 +536,55 @@ even without one.
 See [CONFIGURATION.md](CONFIGURATION.md) for full documentation of each option,
 including YAML examples and environment override syntax.
 
+## Record vs. Backtrack: Deferrable Discovered Work
+
+feature-planning, feature-dev and feature-validate regularly find real work
+outside the issue: an adjacent bug, a refactor, a test that also fails on
+`main`, a review finding the issue never asked about. Widening the change to
+absorb it, or dropping it, are both wrong. Each stage applies one rule:
+
+> **Must this change land for THIS issue's acceptance criteria to hold?**
+> Yes → emit `SCOPE_DISCOVERED` (backtrack to feature-planning).
+> No → record it with `nightgauge discovered-work record` and continue.
+
+The stages link here and do not restate the rule. Recorded work is not
+implemented in the current change and does not count toward the
+`SCOPE_DISCOVERED` file threshold. Record only real, actionable work: style
+nits and pure boundary statements ("no UI changes") are not recorded.
+
+```bash
+nightgauge discovered-work record \
+  --issue "$ISSUE_NUMBER" \
+  --source-stage feature-dev \
+  --summary "One line, at most 200 chars; becomes the issue title" \
+  --evidence "path/to/file.go:42 — what was observed" \
+  --suggested-type chore \
+  --suggested-priority medium \
+  --suggested-size S \
+  --candidate-file path/to/file.go \
+  || echo "discovered work not recorded (non-fatal)"
+```
+
+- `--source-stage`: `feature-planning`, `feature-dev` or `feature-validate`.
+- `--evidence` repeats (1-10); `--candidate-file` repeats (at most 20).
+- `--suggested-type`: `feature|bug|docs|chore|spike`; `--suggested-priority`:
+  `critical|high|medium|low`; `--suggested-size`: `XS|S|M|L|XL`.
+- The command prints the record id (`dw-…`), or `<id> already recorded` — the
+  id hashes stage and summary, so a retry is idempotent.
+- Recording is best-effort. A refused record names the bad field; log it and
+  continue. Recording never fails a stage.
+
+Records land in `discovered-work-{N}.json` in the clone's pipeline state
+directory (ADR 027), outside the worktree. `nightgauge discovered-work list`
+and doctor check NGD050 surface them until the materializer files them.
+
+| Stage            | Trigger                                                         | Record, not backtrack, when                        |
+| ---------------- | --------------------------------------------------------------- | -------------------------------------------------- |
+| feature-planning | An actionable `## Out of Scope` entry (concrete follow-up work) | Always — out-of-scope work is deferrable           |
+| feature-dev      | An adjacent bug, refactor or cleanup noticed while implementing | The ACs hold without it                            |
+| feature-validate | A test that also fails on `main` (pre-existing failure)         | Always — the failure predates the change           |
+| feature-validate | An adversarial-review finding whose fix lies outside the ACs    | The finding does not break an acceptance criterion |
+
 ## When NOT to Emit Feedback Signals
 
 Feedback signals are reserved for **upstream structural problems** that require
@@ -555,6 +604,9 @@ error reporting.
   mismatch)
 - 1–2 extra files were touched beyond what was planned (normal implementation
   variance)
+- The discovery is real but this issue's acceptance criteria hold without it —
+  record it instead; see
+  [Record vs. Backtrack](#record-vs-backtrack-deferrable-discovered-work)
 
 **Severity guidance:**
 
@@ -568,7 +620,7 @@ error reporting.
   describe the situation.
 
 **Decision threshold for `SCOPE_DISCOVERED`:** Only emit when 3 or more files
-beyond the plan's scope were required. Under this threshold, implementation
+beyond the plan's scope were required by the acceptance criteria. Under this threshold, implementation
 variance is expected and does not warrant replanning.
 
 **Decision threshold for `PLAN_REVISION_NEEDED`:** Only emit when a core API,

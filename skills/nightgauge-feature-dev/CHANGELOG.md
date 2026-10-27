@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Deferrable discoveries are recorded (#479).** An adjacent bug, refactor or
+  cleanup the acceptance criteria do not need is recorded with
+  `nightgauge discovered-work record`, not implemented, and does not count
+  toward the `SCOPE_DISCOVERED` threshold.
+
 ### Removed
 
 - **Batch mode removed (#366).** Nothing ever wrote `batch-{E}.json`, so the

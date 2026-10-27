@@ -470,8 +470,26 @@ fi
 
 When enabled, perform the four-lens critique **yourself** (single-agent
 portability floor; reference the adversarial-review skill's critic-lens prompt).
-Fix any **real** defect found (not a nitpick) and re-review. Then record exactly
-one verdict — a `catch` fails validation through the existing gate:
+Fix any **real** defect found (not a nitpick) and re-review. A real finding
+whose fix lies outside this issue's acceptance criteria does not block: record
+it as discovered work per
+[Record vs. Backtrack](../../../../../docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work)
+and leave it out of the verdict.
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+nightgauge discovered-work record --issue "$ISSUE_NUMBER" \
+  --source-stage feature-validate \
+  --summary "<lens>: <one-line out-of-scope defect>" \
+  --evidence "<file:line> — <what the critic observed>" \
+  --suggested-type bug --suggested-priority medium --suggested-size S \
+  --candidate-file "<file>" \
+  || echo "discovered work not recorded (non-fatal)"
+```
+
+Then record exactly one verdict — a `catch` fails validation through the
+existing gate:
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"

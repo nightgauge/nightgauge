@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "The ACs hold without it, so I do not implement it and do not emit SCOPE_DISCOVERED. I record it with `nightgauge discovered-work record --source-stage feature-dev` and continue.\n\n```json\n{\"action\": \"record_discovered_work\", \"source_stage\": \"feature-dev\", \"counts_toward_scope_threshold\": false}\n```",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "The ACs hold without it, so I do not implement it and do not emit SCOPE_DISCOVERED. I record it with `nightgauge discovered-work record --source-stage feature-dev` and continue.\n\n```json\n{\"action\": \"record_discovered_work\", \"source_stage\": \"feature-dev\", \"counts_toward_scope_threshold\": false}\n```",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "The ACs hold without it, so I do not implement it and do not emit SCOPE_DISCOVERED. I record it with `nightgauge discovered-work record --source-stage feature-dev` and continue.\n\n```json\n{\"action\": \"record_discovered_work\", \"source_stage\": \"feature-dev\", \"counts_toward_scope_threshold\": false}\n```",
+    "exit_code": 0
+  }
+}

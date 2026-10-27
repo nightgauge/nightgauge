@@ -1,0 +1,33 @@
+{
+  "id": "fv-discovered-work-record",
+  "skill": "feature-validate",
+  "description": "Feature-validate records a pre-existing test failure as discovered work and skips it.",
+  "failure_mode": "Model fixes the unrelated pre-existing failure in this change, blocks validation on it, or skips it without a record.",
+  "prompt": "During validation of issue #420, internal/cache/cache_test.go fails. Baseline comparison shows it also fails on main; the issue's change does not touch that package. What do you do? End your answer with a single ```json fenced block containing exactly this object, with one value chosen for each field: {\"action\": \"record_and_skip\" | \"fix_in_this_change\" | \"block_validation\" | \"skip_silently\", \"source_stage\": \"feature-validate\" | \"feature-dev\" | \"none\", \"suggested_type\": \"bug\" | \"chore\" | \"feature\"}",
+  "assertions": [
+    {
+      "type": "json_path_equals",
+      "path": "action",
+      "value": "record_and_skip",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "pre-existing failure is recorded and skipped"
+    },
+    {
+      "type": "json_path_equals",
+      "path": "source_stage",
+      "value": "feature-validate",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "records under its own stage"
+    },
+    {
+      "type": "json_path_equals",
+      "path": "suggested_type",
+      "value": "bug",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "a failing test is a bug"
+    }
+  ]
+}

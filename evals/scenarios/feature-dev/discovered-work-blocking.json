@@ -1,0 +1,25 @@
+{
+  "id": "fd-discovered-work-blocking",
+  "skill": "feature-dev",
+  "description": "Feature-dev backtracks with SCOPE_DISCOVERED when the discovered change is required by the acceptance criteria.",
+  "failure_mode": "Model records AC-blocking work as deferrable discovered work, shipping a change whose acceptance criteria cannot hold.",
+  "prompt": "While implementing issue #415 (acceptance criterion: `nightgauge status --json` includes each worktree's branch), you find the branch is not exposed by internal/worktree, internal/state or internal/status — three unplanned files must change before the criterion can hold. What do you do? End your answer with a single ```json fenced block containing exactly this object, with one value chosen for each field: {\"action\": \"record_discovered_work\" | \"emit_scope_discovered\" | \"implement_now\" | \"ignore\", \"record_discovered_work\": true | false}",
+  "assertions": [
+    {
+      "type": "json_path_equals",
+      "path": "action",
+      "value": "emit_scope_discovered",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "AC-blocking work backtracks"
+    },
+    {
+      "type": "json_path_equals",
+      "path": "record_discovered_work",
+      "value": false,
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "AC-blocking work is not deferred"
+    }
+  ]
+}

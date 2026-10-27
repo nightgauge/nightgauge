@@ -201,6 +201,27 @@ fragile half-finished implementation.
 > method with the same purpose) do NOT warrant a signal. Ask: "Would a
 > reasonable developer throw away the current approach and start over?"
 
+### Deferrable Discoveries: Record, Do Not Widen
+
+An adjacent bug, refactor or cleanup noticed while implementing is not
+implemented here and is not dropped. Apply the rule in
+[Record vs. Backtrack](../../../docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work):
+if this issue's acceptance criteria hold without it, record it and continue.
+Recorded work does not count toward the `SCOPE_DISCOVERED` file threshold.
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+nightgauge discovered-work record \
+  --issue "$ISSUE_NUMBER" \
+  --source-stage feature-dev \
+  --summary "Refactor duplicated retry loop in internal/forge/client.go" \
+  --evidence "internal/forge/client.go:120 duplicates the loop at :88" \
+  --suggested-type chore --suggested-priority low --suggested-size S \
+  --candidate-file internal/forge/client.go \
+  || echo "discovered work not recorded (non-fatal)"
+```
+
 ### Decision Tree: Adaptation vs. Structural Mismatch
 
 ```
@@ -209,7 +230,7 @@ Implementation complete?
 │         ├── YES → Was a reasonable adaptation possible?
 │         │         ├── YES → No signal. Continue.
 │         │         └── NO  → PLAN_REVISION_NEEDED (blocking)
-│         └── NO  → Did implementation touch 3+ files beyond what was planned?
+│         └── NO  → Did the ACs require 3+ files beyond what was planned?
 │                   ├── YES → SCOPE_DISCOVERED (blocking)
 │                   └── NO  → Did implementation require unplanned architectural
 │                             changes (new abstraction layers, interface refactors)?
@@ -228,6 +249,7 @@ Implementation complete?
 | Modified 6 files beyond plan — had to refactor 3 services to add new interface                            | Yes — SCOPE_DISCOVERED          | 6 unexpected files far exceeds threshold |
 | Added a new abstraction layer not in plan because existing code made direct implementation impossible     | Yes — COMPLEXITY_UNDERESTIMATED | Architectural change required            |
 | Renamed a variable for clarity                                                                            | No                              | Minor adaptation                         |
+| Noticed an adjacent refactor the ACs do not need                                                          | No — record as discovered work  | Deferrable; not implemented here         |
 
 ### Step 6.5.1: Initialize Feedback State
 
@@ -286,8 +308,8 @@ fi
 
 ### Step 6.5.3: Evaluate SCOPE_DISCOVERED
 
-Emit when implementation required modifying 3 or more files beyond what the plan
-specified. This threshold (~60% scope increase for M-sized issues) indicates the
+Emit when the acceptance criteria required modifying 3 or more files beyond what
+the plan specified. This threshold (~60% scope increase for M-sized issues) indicates the
 plan's scope was materially wrong, not merely imprecise.
 
 **Trigger condition**: `UNEXPECTED_FILE_COUNT >= 3`

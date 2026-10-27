@@ -1,0 +1,41 @@
+{
+  "id": "fp-discovered-work-record",
+  "skill": "feature-planning",
+  "description": "Feature-planning records actionable Out of Scope entries as discovered work and leaves boundary statements alone.",
+  "failure_mode": "Model leaves actionable follow-up work only in plan prose, where it is lost, or records pure boundary statements as noise.",
+  "prompt": "Planning issue #430 (add a `--json` flag to `nightgauge discovered-work list`). Your Out of Scope section has two entries: (A) \"no UI changes\" and (B) \"list output is unbounded; add pagination\", which no issue tracks. Which do you record as discovered work? End your answer with a single ```json fenced block containing exactly this object, with one value chosen for each field: {\"record_entry_a\": true | false, \"record_entry_b\": true | false, \"source_stage\": \"feature-planning\" | \"feature-dev\" | \"none\", \"cite_dw_id_in_plan\": true | false}",
+  "assertions": [
+    {
+      "type": "json_path_equals",
+      "path": "record_entry_a",
+      "value": false,
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "boundary statements are not recorded"
+    },
+    {
+      "type": "json_path_equals",
+      "path": "record_entry_b",
+      "value": true,
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "actionable follow-up is recorded"
+    },
+    {
+      "type": "json_path_equals",
+      "path": "source_stage",
+      "value": "feature-planning",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "records under its own stage"
+    },
+    {
+      "type": "json_path_equals",
+      "path": "cite_dw_id_in_plan",
+      "value": true,
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "plan cross-references the record id"
+    }
+  ]
+}

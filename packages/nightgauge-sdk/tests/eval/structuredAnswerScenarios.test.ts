@@ -366,6 +366,98 @@ const CASES: Case[] = [
     ],
     noBlock: "Validate against a known-good and a known-bad case; don't ship it until both agree.",
   },
+  {
+    id: "fd-discovered-work-record",
+    correct: [
+      json("The ACs hold without it: I don't implement it or emit SCOPE_DISCOVERED; I record it.", {
+        action: "record_discovered_work",
+        source_stage: "feature-dev",
+        counts_toward_scope_threshold: false,
+      }),
+    ],
+    wrong: [
+      json("I record it as discovered work.", {
+        action: "implement_now",
+        source_stage: "feature-dev",
+        counts_toward_scope_threshold: true,
+      }),
+      json("I never widen scope; I record it.", {
+        action: "emit_scope_discovered",
+        source_stage: "feature-dev",
+        counts_toward_scope_threshold: false,
+      }),
+    ],
+    noBlock: "I record it with nightgauge discovered-work record; no SCOPE_DISCOVERED.",
+  },
+  {
+    id: "fd-discovered-work-blocking",
+    correct: [
+      json("This is not deferrable, so I don't record it as discovered work; I backtrack.", {
+        action: "emit_scope_discovered",
+        record_discovered_work: false,
+      }),
+    ],
+    wrong: [
+      json("The ACs need it, so I emit SCOPE_DISCOVERED.", {
+        action: "record_discovered_work",
+        record_discovered_work: true,
+      }),
+      json("I backtrack with SCOPE_DISCOVERED.", {
+        action: "emit_scope_discovered",
+        record_discovered_work: true,
+      }),
+    ],
+    noBlock: "Emit SCOPE_DISCOVERED; do not record it as discovered work.",
+  },
+  {
+    id: "fv-discovered-work-record",
+    correct: [
+      json("I don't fix it here or block on it, and I don't skip it silently.", {
+        action: "record_and_skip",
+        source_stage: "feature-validate",
+        suggested_type: "bug",
+      }),
+    ],
+    wrong: [
+      json("It is pre-existing, so I record it and skip it.", {
+        action: "skip_silently",
+        source_stage: "feature-validate",
+        suggested_type: "bug",
+      }),
+      json("I record and skip it.", {
+        action: "fix_in_this_change",
+        source_stage: "feature-validate",
+        suggested_type: "bug",
+      }),
+    ],
+    noBlock: "Log it, record it as discovered work, and skip it.",
+  },
+  {
+    id: "fp-discovered-work-record",
+    correct: [
+      json("A is a boundary statement, not work, so I don't record it; B I record.", {
+        record_entry_a: false,
+        record_entry_b: true,
+        source_stage: "feature-planning",
+        cite_dw_id_in_plan: true,
+      }),
+    ],
+    wrong: [
+      json("Only B is actionable.", {
+        record_entry_a: true,
+        record_entry_b: true,
+        source_stage: "feature-planning",
+        cite_dw_id_in_plan: true,
+      }),
+      json("I record B.", {
+        record_entry_a: false,
+        record_entry_b: false,
+        source_stage: "feature-planning",
+        cite_dw_id_in_plan: false,
+      }),
+    ],
+    noBlock: "Record B only, with --source-stage feature-planning, and cite its dw- id.",
+  },
 ];
 
 describe("structured-answer assertions in shipped scenarios", () => {
