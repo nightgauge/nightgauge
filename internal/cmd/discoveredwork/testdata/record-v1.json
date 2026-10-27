@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "issue_number": 478,
+  "records": [
+    {
+      "id": "dw-274c1759adb2",
+      "summary": "Retry budget in the CI waiter ignores the configured ceiling",
+      "evidence": ["internal/ci/wait.go:88 hard-codes 5 retries"],
+      "source_stage": "feature-validate",
+      "issue_number": 478,
+      "run_id": "0192f3a4-0000-7000-8000-000000000000",
+      "suggested_type": "bug",
+      "suggested_priority": "medium",
+      "suggested_size": "S",
+      "candidate_target_files": ["internal/ci/wait.go"],
+      "recorded_at": "2026-10-26T00:00:00Z"
+    }
+  ]
+}

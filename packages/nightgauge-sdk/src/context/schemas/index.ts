@@ -41,6 +41,18 @@ export {
   type ReviewerSignal,
 } from "./feedback.js";
 export {
+  DiscoveredWorkStageSchema,
+  DiscoveredWorkProducerSchema,
+  DiscoveredWorkTypeSchema,
+  DiscoveredWorkPrioritySchema,
+  DiscoveredWorkSizeSchema,
+  DiscoveredWorkRecordSchema,
+  DiscoveredWorkContextSchema,
+  type DiscoveredWorkStage,
+  type DiscoveredWorkRecord,
+  type DiscoveredWorkContext,
+} from "./discovered-work.js";
+export {
   ComplexityModelSchema,
   ComplexityPatternSchema,
   SizeCalibrationSchema,
