@@ -16,6 +16,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Discovered work is now filed after every merge, under one set of filing
+  controls (#480).** A new `followup-materialize` stage runs after pr-merge on
+  every issue and turns the run's `discovered-work-{N}.json` records into
+  issues with a type label, Priority, Size, Status=Backlog and a
+  `Discovered in #N (run R, stage S)` line, through
+  `nightgauge followup materialize <N>`. It skips records already filed,
+  comments on an open issue with the same title instead of duplicating it, and
+  consumes the capture. The scheduler skips the stage without a dispatch when
+  nothing was recorded. A new `follow_up_filing` config key (`enabled`, `mode`,
+  `max_per_run`, `allow_untrusted_authors`) governs it and `spike materialize`:
+  the default is report-only, a missing or broken config fails closed to
+  report-only, and records beyond the per-run cap are refused with exit 3
+  instead of truncated. Spike materialization therefore gains a kill switch and
+  a cap; an in-cap run in file mode is unchanged.
+
 - **`nightgauge-model-watch` turns a model release into reviewable work (#83).**
   `nightgauge model-watch classify --input <dir>` reads a provider's fetched
   release pages and proposes a registry patch: the new descriptor and the

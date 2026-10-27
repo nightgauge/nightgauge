@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/filing"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,9 +37,9 @@ type SpikeArtifact struct {
 // Allowed enum values per docs/SPIKE_CONTRACT.md.
 var (
 	allowedActions    = map[string]bool{"adopt": true, "defer": true, "skip": true}
-	allowedTypes      = map[string]bool{"feature": true, "bug": true, "docs": true, "chore": true, "spike": true}
-	allowedPriorities = map[string]bool{"critical": true, "high": true, "medium": true, "low": true}
-	allowedSizes      = map[string]bool{"XS": true, "S": true, "M": true, "L": true, "XL": true}
+	allowedTypes      = filing.AllowedTypes
+	allowedPriorities = filing.AllowedPriorities
+	allowedSizes      = filing.AllowedSizes
 	kebabCase         = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 )
 
@@ -232,6 +233,8 @@ type MaterializedIssue struct {
 	AlreadyExists bool   `json:"already_exists,omitempty"`
 	Skipped       bool   `json:"skipped,omitempty"`
 	DryRun        bool   `json:"dry_run,omitempty"`
+	// Refused is set when the per-run cap refused this create (#480).
+	Refused bool `json:"refused,omitempty"`
 }
 
 // MaterializeResult is the structured output of a materialize run.
@@ -241,6 +244,12 @@ type MaterializeResult struct {
 	DryRun    bool                `json:"dry_run"`
 	Issues    []MaterializedIssue `json:"issues"`
 	BlockedBy []BlockedByEdge     `json:"blocked_by,omitempty"`
+	// ReportOnly is set when the follow_up_filing gate forced report mode;
+	// Reason says why (#480).
+	ReportOnly bool   `json:"report_only,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	// Refused counts creates the per-run cap refused.
+	Refused int `json:"refused,omitempty"`
 }
 
 // BlockedByEdge records a `blockedBy` relationship that was (or would be) added.
@@ -289,6 +298,26 @@ func BodyFor(spikeNumber int, rec Recommendation) string {
 // creates an issue. `skip` recommendations are recorded but not created.
 // When dryRun is true, no GitHub mutations occur — only lookups.
 func Materialize(ctx context.Context, art *SpikeArtifact, repo string, m Materializer, dryRun bool) (*MaterializeResult, error) {
+	return materialize(ctx, art, repo, m, dryRun, nil)
+}
+
+// MaterializeGated is Materialize under the follow_up_filing gate (#480,
+// Rule 5). Report mode behaves like dry-run (lookups only, no mutations) and
+// marks the result ReportOnly. In file mode at most gate.Cap issues are
+// created; the rest are marked Refused and a *filing.CapError is returned
+// after the accepted creates and their blockedBy edges are applied, so a
+// refusal is loud and never a silent truncation. An in-cap, file-mode run is
+// identical to Materialize.
+func MaterializeGated(ctx context.Context, art *SpikeArtifact, repo string, m Materializer, dryRun bool, gate filing.Gate) (*MaterializeResult, error) {
+	return materialize(ctx, art, repo, m, dryRun, &gate)
+}
+
+func materialize(ctx context.Context, art *SpikeArtifact, repo string, m Materializer, dryRun bool, gate *filing.Gate) (*MaterializeResult, error) {
+	reportOnly := gate != nil && !gate.Files()
+	if reportOnly {
+		dryRun = true
+	}
+	created, refused := 0, 0
 	if err := ValidateSchema(art); err != nil {
 		return nil, err
 	}
@@ -301,6 +330,10 @@ func Materialize(ctx context.Context, art *SpikeArtifact, repo string, m Materia
 		Spike:  art.Spike,
 		Repo:   repo,
 		DryRun: dryRun,
+	}
+	if reportOnly {
+		res.ReportOnly = true
+		res.Reason = gate.Reason
 	}
 
 	// Map id → resolved issue number for blockedBy chain assembly.
@@ -335,11 +368,19 @@ func Materialize(ctx context.Context, art *SpikeArtifact, repo string, m Materia
 			continue
 		}
 
+		if gate != nil && created >= gate.Cap {
+			mi.Refused = true
+			refused++
+			res.Issues = append(res.Issues, mi)
+			continue
+		}
+
 		body := BodyFor(art.Spike, rec)
 		num, url, err := m.CreateIssue(ctx, art.Spike, rec, body)
 		if err != nil {
 			return res, fmt.Errorf("create issue for id=%s: %w", rec.ID, err)
 		}
+		created++
 		mi.IssueNumber = num
 		mi.URL = url
 		resolved[rec.ID] = num
@@ -374,6 +415,10 @@ func Materialize(ctx context.Context, art *SpikeArtifact, repo string, m Materia
 		}
 	}
 
+	if refused > 0 {
+		res.Refused = refused
+		return res, &filing.CapError{Refused: refused, Total: created + refused, Cap: gate.Cap}
+	}
 	return res, nil
 }
 

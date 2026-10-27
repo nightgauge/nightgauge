@@ -25,6 +25,11 @@ const (
 	// recommendations YAML block. Appended after StagePRMerge for type:spike
 	// issues only — see internal/orchestrator/scheduler.go.
 	StageSpikeMaterialize PipelineStage = "spike-materialize"
+	// StageFollowupMaterialize files the run's discovered-work records as
+	// follow-up issues (#480). Appended after StagePRMerge (and after
+	// StageSpikeMaterialize on spikes) for every issue; the scheduler skips it
+	// without dispatch when the capture holds zero records.
+	StageFollowupMaterialize PipelineStage = "followup-materialize"
 	// StageIssueRefine is NOT part of the pipeline sequence: it is the
 	// autonomous scheduler's own refinement dispatch, which rewrites an
 	// issue's body before anything picks it up. It is a PipelineStage because
@@ -51,6 +56,7 @@ var AllPipelineStages = []PipelineStage{
 	StagePRCreate,
 	StagePRMerge,
 	StageSpikeMaterialize,
+	StageFollowupMaterialize,
 	StageIssueRefine,
 }
 

@@ -59,14 +59,15 @@ func TestAllPipelineStagesMatchesDeclaredConstants(t *testing.T) {
 	// lookup table already gives us for free and cannot itself drift from
 	// the constants (it's the constants).
 	nameToValue := map[string]PipelineStage{
-		"StageIssuePickup":      StageIssuePickup,
-		"StageFeaturePlanning":  StageFeaturePlanning,
-		"StageFeatureDev":       StageFeatureDev,
-		"StageFeatureValidate":  StageFeatureValidate,
-		"StagePRCreate":         StagePRCreate,
-		"StagePRMerge":          StagePRMerge,
-		"StageSpikeMaterialize": StageSpikeMaterialize,
-		"StageIssueRefine":      StageIssueRefine,
+		"StageIssuePickup":         StageIssuePickup,
+		"StageFeaturePlanning":     StageFeaturePlanning,
+		"StageFeatureDev":          StageFeatureDev,
+		"StageFeatureValidate":     StageFeatureValidate,
+		"StagePRCreate":            StagePRCreate,
+		"StagePRMerge":             StagePRMerge,
+		"StageSpikeMaterialize":    StageSpikeMaterialize,
+		"StageFollowupMaterialize": StageFollowupMaterialize,
+		"StageIssueRefine":         StageIssueRefine,
 	}
 
 	declaredValues := map[PipelineStage]string{}

@@ -38,7 +38,8 @@ SHARED_DIR="$REPO_ROOT/skills/_shared"
 for skill in nightgauge-issue-pickup nightgauge-feature-planning \
              nightgauge-feature-dev nightgauge-feature-validate \
              nightgauge-pr-create nightgauge-pr-merge \
-             nightgauge-issue-refine nightgauge-spike-materialize; do
+             nightgauge-issue-refine nightgauge-spike-materialize \
+             nightgauge-followup-materialize; do
   src="$REPO_ROOT/skills/$skill"
   if [ -d "$src" ]; then
     dest="$SKILLS_DIR/$skill"

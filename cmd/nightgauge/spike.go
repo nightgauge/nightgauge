@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
 	spikepkg "github.com/nightgauge/nightgauge/internal/cmd/spike"
+	"github.com/nightgauge/nightgauge/internal/filing"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/spf13/cobra"
@@ -85,8 +87,11 @@ func spikeMaterializeCmd() *cobra.Command {
 			ownerPart, repoPart := splitRepo(owner, repo)
 			repoFull := ownerPart + "/" + repoPart
 
+			// Rule 5 controls (#480): the follow_up_filing gate fails closed
+			// to report-only, and report-only never constructs a client.
+			gate := filing.ResolveGate(workdir)
 			var materializer spikepkg.Materializer
-			if dryRun {
+			if dryRun || !gate.Files() {
 				materializer = &noopMaterializer{}
 			} else {
 				client, err := clientFromConfig()
@@ -96,15 +101,23 @@ func spikeMaterializeCmd() *cobra.Command {
 				materializer = newGitHubMaterializer(client, ownerPart, repoPart, projectNumber, getOwnerType(cmd))
 			}
 
-			res, err := spikepkg.Materialize(cmd.Context(), art, repoFull, materializer, dryRun)
-			if err != nil {
+			res, err := spikepkg.MaterializeGated(cmd.Context(), art, repoFull, materializer, dryRun, gate)
+			var capErr *filing.CapError
+			if err != nil && !errors.As(err, &capErr) {
 				return enrichError(err)
 			}
 
 			if outputJSON {
-				return printJSON(res)
+				if perr := printJSON(res); perr != nil {
+					return perr
+				}
+			} else {
+				renderMaterializeHuman(res, path)
 			}
-			renderMaterializeHuman(res, path)
+			if capErr != nil {
+				fmt.Fprintf(os.Stderr, "spike materialize: %v\n", capErr)
+				return verdictExit{code: exitCapRefused}
+			}
 			return nil
 		},
 	}
@@ -197,7 +210,9 @@ func runSpikeValidate(body string) (ok bool, message string) {
 
 func renderMaterializeHuman(res *spikepkg.MaterializeResult, path string) {
 	mode := "live"
-	if res.DryRun {
+	if res.ReportOnly {
+		mode = "report-only: " + res.Reason
+	} else if res.DryRun {
 		mode = "dry-run"
 	}
 	fmt.Printf("Spike materialize (%s) — spike #%d, artifact %s\n", mode, res.Spike, path)
@@ -209,6 +224,8 @@ func renderMaterializeHuman(res *spikepkg.MaterializeResult, path string) {
 		switch {
 		case mi.Skipped:
 			fmt.Printf("  · %s  [skip]  %s\n", mi.ID, mi.Title)
+		case mi.Refused:
+			fmt.Printf("  ✗ %s  [%s]  refused by per-run cap: %s\n", mi.ID, mi.Action, mi.Title)
 		case mi.AlreadyExists:
 			fmt.Printf("  ✓ %s  [%s]  #%d %s (already materialized)\n", mi.ID, mi.Action, mi.IssueNumber, mi.Title)
 		case mi.DryRun:
@@ -321,7 +338,7 @@ func (g *githubMaterializer) CreateIssue(ctx context.Context, spikeNumber int, r
 	)
 
 	if itemID, err := g.projSvc.AddItem(ctx, issue.NodeID); err == nil {
-		_ = g.projSvc.SetSingleSelectField(ctx, itemID, "Priority", priorityToBoardOption(rec.Priority))
+		_ = g.projSvc.SetSingleSelectField(ctx, itemID, "Priority", filing.PriorityToBoardOption(rec.Priority))
 		_ = g.projSvc.SetSingleSelectField(ctx, itemID, "Size", rec.Size)
 		_ = g.projSvc.SetSingleSelectField(ctx, itemID, "Status", statusForAction(rec.Action))
 	}
@@ -333,22 +350,6 @@ func (g *githubMaterializer) AddBlockedByByNumber(ctx context.Context, blockedNu
 	return g.projSvc.AddBlockedByNumber(ctx,
 		forge.IssueRef{Owner: g.owner, Repo: g.repo, Number: blockedNumber},
 		forge.IssueRef{Owner: g.owner, Repo: g.repo, Number: blockerNumber})
-}
-
-// priorityToBoardOption maps the contract's lowercase priority to the project
-// board's "P0..P3" option names (mirrors syncPriorityLabel in project.go).
-func priorityToBoardOption(priority string) string {
-	switch priority {
-	case "critical":
-		return "P0"
-	case "high":
-		return "P1"
-	case "medium":
-		return "P2"
-	case "low":
-		return "P3"
-	}
-	return "P2"
 }
 
 // statusForAction returns the board Status name for an action: adopt → Ready,

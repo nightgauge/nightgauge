@@ -391,6 +391,7 @@ var dispatchStages = []state.PipelineStage{
 	state.StagePRCreate,
 	state.StagePRMerge,
 	state.StageSpikeMaterialize,
+	state.StageFollowupMaterialize,
 }
 
 // routedStageModel returns the run's routed tier (stageBaseModel Step 2) for

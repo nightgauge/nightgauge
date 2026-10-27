@@ -4308,6 +4308,8 @@ var stagePrerequisites = map[state.PipelineStage]struct {
 	// is terminal (no output context), so the prerequisite is pr-create's
 	// "pr" context — same as pr-merge itself.
 	state.StageSpikeMaterialize: {state.StagePRCreate, "pr"},
+	// followup-materialize (#480) runs last on every issue; same reasoning.
+	state.StageFollowupMaterialize: {state.StagePRCreate, "pr"},
 }
 
 // stageOutputContextType maps stages to their output context file prefix.
@@ -5800,14 +5802,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// the function.
 	stages = applyDependabotFastTrack(item, stages, runtime, tracer)
 
-	// Spike issues append a spike-materialize stage after pr-merge that creates
-	// follow-up issues from the artifact's YAML recommendations block. See
-	// docs/SPIKE_CONTRACT.md and #3054.
-	if gh.IsSpikeIssue(item.Labels) {
-		log.Printf("#%d: spike issue detected — appending spike-materialize stage after pr-merge",
-			item.Number)
-		stages = append(stages, state.StageSpikeMaterialize)
-	}
+	// Post-merge filers: spike-materialize on spikes, then followup-materialize
+	// on every issue (#3054, #480).
+	stages = appendPostMergeStages(item, stages)
 
 	// Routing fast-track (#4126): honor the deterministic routing Decision and
 	// skip the stages it marks skippable, on top of any Dependabot/spike
@@ -5973,6 +5970,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		case <-ctx.Done():
 			return
 		default:
+		}
+
+		// followup-materialize (#480) runs on every issue, so it must not
+		// spend a dispatch to find an empty capture: skip it deterministically
+		// when the run recorded no discoveries.
+		if stage == state.StageFollowupMaterialize && !followupCaptureHasRecords(stageWorkspace(runtime, workspaceRoot), item.Number) {
+			runtime.SkipStage(stage)
+			stageIdx++
+			continue
 		}
 
 		lifecycle.stage(stage, runtime.FeatureBranch())

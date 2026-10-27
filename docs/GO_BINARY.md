@@ -4782,6 +4782,48 @@ registry snapshot.
 
 ---
 
+### Follow-up Filing Operations
+
+Post-merge filers governed by
+[SELF_IMPROVEMENT_BOUNDARIES.md Rule 5](SELF_IMPROVEMENT_BOUNDARIES.md#rule-5-autonomous-issue-filing-is-governed)
+and the [`follow_up_filing`](CONFIGURATION.md#follow-up-filing) gate (#480).
+Both `followup materialize` and `spike materialize` resolve the gate from
+`.nightgauge/config.yaml` and fail closed to report-only.
+
+#### `followup materialize`
+
+Files the run's `discovered-work-<N>.json` records (ADR 027) as issues. Behind
+`skills/nightgauge-followup-materialize/SKILL.md`, which the scheduler runs after
+pr-merge on every issue whose capture holds records.
+
+```bash
+nightgauge followup materialize <issue-number> [flags]
+```
+
+| Flag        | Description                                                     |
+| ----------- | --------------------------------------------------------------- |
+| `--repo`    | Repository (default: config). Never taken from a record         |
+| `--project` | Project board number (default: config)                          |
+| `--workdir` | Directory holding `.nightgauge/config.yaml` (default: cwd)      |
+| `--run-dir` | Directory holding the capture (default: the pipeline state dir) |
+| `--dry-run` | Report the would-file list; no forge calls, the capture is kept |
+| `--json`    | Emit `{issue, gate, report_only, reason, items[], refused}`     |
+
+Per record: an issue whose body already carries the
+`<!-- discovered-work: id=… issue=#N -->` marker is `already-exists`; an open
+issue with the same normalized title gets a provenance comment (`deduped`);
+otherwise the issue is created with `type:<t>`, Priority, Size, Status=Backlog
+and `Discovered in #N (run R, stage S)` (`filed`). Report mode, the kill switch
+or an untrusted issue author make every record `would-file` with no forge call.
+Filed, deduped, existing and reported records are removed from the capture;
+refused and invalid ones stay.
+
+Exit `0` on success, including a silent no-op when the capture is absent or
+empty; exit `3` when the per-run cap refused records (`refused: K of T`);
+exit `1` on an error. `spike materialize` uses the same gate and exit `3`.
+
+---
+
 ### Hook Subcommands
 
 Used by Claude Code hook entry points (thin shell wrappers):

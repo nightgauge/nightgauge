@@ -1874,14 +1874,15 @@ parseable, and schema-valid.
 
 **Stage prerequisites chain:**
 
-| Stage               | Requires           | Context Type |
-| ------------------- | ------------------ | ------------ |
-| `feature-planning`  | `issue-pickup`     | `issue`      |
-| `feature-dev`       | `feature-planning` | `planning`   |
-| `feature-validate`  | `feature-dev`      | `dev`        |
-| `pr-create`         | `feature-dev`      | `dev`        |
-| `pr-merge`          | `pr-create`        | `pr`         |
-| `spike-materialize` | `pr-create`        | `pr`         |
+| Stage                  | Requires           | Context Type |
+| ---------------------- | ------------------ | ------------ |
+| `feature-planning`     | `issue-pickup`     | `issue`      |
+| `feature-dev`          | `feature-planning` | `planning`   |
+| `feature-validate`     | `feature-dev`      | `dev`        |
+| `pr-create`            | `feature-dev`      | `dev`        |
+| `pr-merge`             | `pr-create`        | `pr`         |
+| `spike-materialize`    | `pr-create`        | `pr`         |
+| `followup-materialize` | `pr-create`        | `pr`         |
 
 Stages not listed (issue-pickup, bookends) have no prerequisites.
 
