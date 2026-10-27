@@ -168,17 +168,27 @@ Deleted:
 ## Validation
 
 - Build: <passed | failed | skipped>
-- Unit tests: <passed | not run> (<P> passed, <F> failed)
+- Unit tests: <label>                    (see "Unit-test label" below)
 - Integration tests: passed             (only when integration tests passed)
 - Security scan: <result>                (only when not skipped)
 - Scope drift:  <result>                 (only when not skipped)
+
+## Acceptance criteria                    (only when the issue has `- [ ]` ACs)
+
+- <✅ met | ❌ unmet | ❔ not verifiable>: <text> (<source>: <evidence>)
+
+## ⚠️ Unmet acceptance criteria           (only when any AC is unmet)
+
+This PR leaves #<N> open. These criteria remain:
+
+- <text>
 
 ## Knowledge                              (only when knowledge dir is populated)
 
 <rendered knowledge bullets — same Go renderer the skill calls>
 
 Part of #<PARENT>                         (only when issue.native_parent > 0)
-Closes #<N>
+Closes #<N>                               (Refs #<N> when any AC is unmet)
 
 <!-- nightgauge:pipeline stage=pr-create issue=<N> run=<run-id> -->
 ```
@@ -188,6 +198,43 @@ no `time.Now`, no map iteration, no environment reads, sorted file lists.
 The deterministic-property test calls each function 100× and asserts
 byte-equal output across calls. (The run id is read from
 `NIGHTGAUGE_RUN_ID` by the context loader, not by `RenderBody`.)
+
+### Acceptance criteria and partial delivery (#2595)
+
+The criteria come from `ac-reconcile-{N}.json`, which planning's preflight
+wrote from the issue body. `ResolveACVerdicts` (`prcreate_ac.go`) gives each
+one a status:
+
+1. A deterministic `satisfied` or `unsatisfied` from `preflight.ReconcileACs`,
+   re-run on the branch tree, wins.
+2. Otherwise, the verdict feature-validate wrote in `validate-{N}.json`
+   `acceptance_criteria_verdicts` decides.
+3. With neither, the criterion is `not_verifiable`.
+
+Only `unmet` switches `Closes #<N>` to `Refs #<N>`. A `not_verifiable`
+criterion is listed but keeps `Closes`, because most criteria cannot be checked
+mechanically. `pr-{N}.json` records the verdicts as `acceptance_criteria` and the
+outcome as `closes_issue`.
+
+The post-merge hook reads the merged PR body. When it has no closing keyword
+for the issue, the hook skips the close, the Done sync, the epic rollup, the
+survival record and the validation marker. It returns the board row to Ready
+and comments the bullets under `## ⚠️ Unmet acceptance criteria` on the issue
+(`reason: partial_delivery`). An unreadable body keeps the close.
+
+### Unit-test label
+
+Counts come from feature-dev's `tests_status`; the pass flag comes from
+feature-validate's `unit_tests.passed`. `not run` appears only when there
+are no counts:
+
+| Counts            | Validate passed | Label                                                                        |
+| ----------------- | --------------- | ---------------------------------------------------------------------------- |
+| none              | no              | `not run`                                                                    |
+| none              | yes             | `passed`                                                                     |
+| `F > 0`           | either          | `failed (P passed, F failed)`                                                |
+| `P > 0`, `F == 0` | yes             | `passed (P passed, 0 failed)`                                                |
+| `P > 0`, `F == 0` | no              | `feature-dev reported P passed, 0 failed; not confirmed by feature-validate` |
 
 ### Pipeline stamp (#1479)
 

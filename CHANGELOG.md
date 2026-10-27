@@ -148,6 +148,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A PR that meets only some acceptance criteria no longer closes its issue
+  (#2595).** feature-validate records a `met`, `unmet` or `not_verifiable`
+  verdict per acceptance criterion, and pr-create combines it with a
+  deterministic re-check on the branch. If any criterion is unmet, the PR body
+  says `Refs #N` and lists the unmet criteria. The post-merge hook then leaves
+  the issue open, returns its board row to Ready and comments the remainder,
+  instead of closing it as Done. The Validation line no longer reads
+  `Unit tests: not run (829 passed, 0 failed)`: it reports what ran and who
+  confirmed it.
+
 - **`knowledge stamp --stage` works in stages the VS Code extension runs
   (#2576).** Extension-spawned stages now receive `NIGHTGAUGE_DISPATCH_MODEL`
   (the model the stage launched with, for every adapter) and

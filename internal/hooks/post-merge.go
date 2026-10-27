@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -32,6 +34,16 @@ type PostMergeInput struct {
 	// merged issue when MainChecks reports the merge commit green. Nil skips
 	// it and the result says so (ValidationMarkerNotWired).
 	ValidationMarks ValidationMarkWriter
+	// Remainder comments on an issue whose merged PR did not close it
+	// (#2595), naming the unmet acceptance criteria. Nil skips the comment;
+	// the issue is still left open and returned to Ready.
+	Remainder IssueCommenter
+}
+
+// IssueCommenter comments on an issue by node ID. Implemented by
+// *github.IssueService.
+type IssueCommenter interface {
+	AddComment(ctx context.Context, subjectID, body string) error
 }
 
 // ValidationMarkWriter reads an issue's comments through the trust filter and
@@ -56,6 +68,9 @@ const (
 	ValidationMarkerNotGreen ValidationMarkerOutcome = "not_green"
 	// ValidationMarkerNotWired: no writer was wired.
 	ValidationMarkerNotWired ValidationMarkerOutcome = "not_wired"
+	// ValidationMarkerNotClosing: the merged PR did not close the issue
+	// (#2595), so its program dependents stay held until the remainder ships.
+	ValidationMarkerNotClosing ValidationMarkerOutcome = "not_closing"
 	// ValidationMarkerError: main was green but the marker could not be read
 	// or written. Nothing is posted when the read fails, so a re-run cannot
 	// duplicate it.
@@ -109,6 +124,8 @@ type PostMergeResult struct {
 	OrphanSubsClosed int `json:"orphanSubsClosed"`
 	// Reason is the hook's own outcome word. The full vocabulary:
 	//   no_parent | closed | skipped        — the hook did its job
+	//   partial_delivery                    — the PR said `Refs #N`, so the
+	//                                         issue stays open (#2595)
 	//   pr_verify_error | pr_not_merged     — it refused before doing anything
 	//   issue_fetch_error | auto_close_error — it tried and failed
 	// "error" is deliberately NOT in this set (#1025). It used to be, copied
@@ -160,6 +177,14 @@ type PostMergeResult struct {
 	// survival record to the survival store when this is set — kept as a flag,
 	// not a side effect, so the hook stays free of survival-store deps.
 	SurvivalEligible bool `json:"survivalEligible,omitempty"`
+	// PartialDelivery is set when the merged PR body has no closing keyword
+	// for the issue (#2595). The issue is left open, its board row returned to
+	// Ready, and UnmetCriteria names the remainder.
+	PartialDelivery bool     `json:"partialDelivery,omitempty"`
+	UnmetCriteria   []string `json:"unmetCriteria,omitempty"`
+	// RemainderComment reports the comment naming the remainder: "posted",
+	// "failed", or empty when no commenter was wired.
+	RemainderComment string `json:"remainderComment,omitempty"`
 }
 
 // BoardSyncOutcome is what the post-merge board-Done sync actually did.
@@ -342,6 +367,14 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 			Failed: true,
 			Error:  err.Error(),
 		}
+	}
+
+	// (#2595) A PR that says `Refs #N` instead of `Closes #N` delivered only
+	// part of the issue: pr-create found an unmet acceptance criterion. Leave
+	// the issue open, return it to Ready and name the remainder. Only a body
+	// we actually read can say this; an unread body keeps the close below.
+	if strings.TrimSpace(merge.Body) != "" && !ClosesIssue(merge.Body, input.IssueNumber) {
+		return partialDelivery(ctx, boardSvc, input, issue.NodeID, merge)
 	}
 
 	// Explicitly close the issue. This is the fallback in case GitHub's
@@ -577,4 +610,102 @@ func writeValidationMarker(ctx context.Context, input PostMergeInput, issueNodeI
 	fmt.Fprintf(os.Stderr, "Post-merge: wrote the validation marker on #%d (%s green at %s)\n",
 		num, out.BaseRef, shortSHA(out.MergedCommitSha))
 	return ValidationMarkerWritten
+}
+
+// closingKeywordRE matches GitHub's closing keywords followed by an issue
+// reference, optionally repo-qualified.
+var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(?:[\w.-]+/[\w.-]+)?#(\d+)\b`)
+
+// ClosesIssue reports whether a PR body carries a closing keyword for issue
+// number (#2595).
+func ClosesIssue(body string, number int) bool {
+	want := strconv.Itoa(number)
+	for _, m := range closingKeywordRE.FindAllStringSubmatch(body, -1) {
+		if m[1] == want {
+			return true
+		}
+	}
+	return false
+}
+
+// unmetCriteriaHeading must equal stages.UnmetACHeading, which renders the
+// section; it is restated here because hooks must not import the orchestrator.
+const unmetCriteriaHeading = "## ⚠️ Unmet acceptance criteria"
+
+// UnmetCriteria returns the bullet items under the unmet-criteria heading of
+// a PR body, in order.
+func UnmetCriteria(body string) []string {
+	var out []string
+	in := false
+	for _, line := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "#") {
+			in = t == unmetCriteriaHeading
+			continue
+		}
+		if in && strings.HasPrefix(t, "- ") {
+			out = append(out, strings.TrimSpace(t[2:]))
+		}
+	}
+	return out
+}
+
+// partialDelivery handles a merged PR that did not close its issue: no close,
+// no Done, no epic rollup and no survival record. The board returns to Ready
+// so the remainder is scheduled, and a comment names it.
+func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeInput, issueNodeID string, merge gh.PRMergeInfo) (out PostMergeResult) {
+	out = PostMergeResult{
+		Reason:          "partial_delivery",
+		PartialDelivery: true,
+		UnmetCriteria:   UnmetCriteria(merge.Body),
+		IssueDoneSync:   BoardSyncNotAttempted,
+		MergedCommitSha: merge.SHA,
+		MergedAt:        merge.MergedAt,
+		BaseRef:         merge.BaseRef,
+		MergedBy:        merge.MergedBy,
+	}
+	fmt.Fprintf(os.Stderr, "Post-merge: PR #%d does not close issue #%d — leaving it open (partial delivery)\n", input.PRNumber, input.IssueNumber)
+	defer func() {
+		out.MainChecks = verifyMain(ctx, input, out)
+		out.ValidationMarker = ValidationMarkerNotClosing
+	}()
+
+	if boardSvc != nil && input.ProjectNumber > 0 {
+		if err := boardSvc.SyncStatus(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, "Ready"); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to Ready failed for #%d: %v\n", input.IssueNumber, err)
+			out.Failed = true
+			out.Error = err.Error()
+		}
+	}
+
+	if input.Remainder != nil {
+		if err := input.Remainder.AddComment(ctx, issueNodeID, remainderComment(input.PRNumber, out.UnmetCriteria)); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: post-merge remainder comment failed for #%d: %v\n", input.IssueNumber, err)
+			out.RemainderComment = "failed"
+			out.Failed = true
+			if out.Error == "" {
+				out.Error = err.Error()
+			}
+		} else {
+			out.RemainderComment = "posted"
+		}
+	}
+	return out
+}
+
+func remainderComment(prNumber int, unmet []string) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("PR #%d merged part of this issue and referenced it with `Refs`, so the issue stays open and is back in Ready.\n\n", prNumber))
+	if len(unmet) == 0 {
+		b.WriteString("The PR did not list the remaining acceptance criteria; check them against the issue body.\n")
+		return b.String()
+	}
+	b.WriteString("Remaining acceptance criteria:\n\n")
+	for _, c := range unmet {
+		// Escape HTML-comment openers: this comment is posted by the trusted
+		// identity, and a criterion carrying the validation marker would
+		// release program dependents (forge.HasValidationMarker).
+		b.WriteString("- " + strings.ReplaceAll(c, "<!--", "&lt;!--") + "\n")
+	}
+	return b.String()
 }

@@ -29,6 +29,29 @@ full canonical form.
 | `AC_COMPLETION_STATUS` | `passed`, `failed`, `skipped`, `not_applicable`, `error`                                       |
 | `NOTES`                | A plain string (not a JSON array). Use newlines for multiple notes. Pass empty string if none. |
 
+### Step 6.0: Acceptance-criterion verdicts (#2595)
+
+pr-create decides `Closes #N` versus `Refs #N` from these verdicts, so a PR
+that delivers one of three criteria no longer closes the issue as Done. For
+each criterion in `ac-reconcile-{N}.json` (`.acceptance_criteria[]`, in index
+order), judge it against `git diff <base>...HEAD` and record one entry:
+
+- `met`: the diff satisfies it. `evidence` must name a `file:line` or a test
+  name; without one, the verdict is `not_verifiable`.
+- `unmet`: the diff does not deliver it. Say what is missing in `evidence`.
+- `not_verifiable`: it cannot be judged from the diff (an operator action,
+  a post-merge observation).
+
+Only `unmet` keeps the issue open, so do not mark a criterion `unmet` because
+it is hard to verify, and do not mark it `met` on intent. A deterministic
+`satisfied`/`unsatisfied` re-run by pr-create overrides your verdict. With no
+`ac-reconcile-{N}.json`, leave the array empty.
+
+```bash
+# One object per criterion: {index, text, status, evidence}
+AC_VERDICTS_JSON='[]'
+```
+
 ### Step 6.1–6.3: Write Context Inline
 
 Determine validation status, construct JSON, and validate:
@@ -123,6 +146,7 @@ jq -n \
   --argjson ac_unchecked "${UNCHECKED:-0}" \
   --argjson ac_applicable "$([ "${AC_CHECK_REQUIRED:-false}" = "true" ] && echo true || echo false)" \
   --argjson manual_checklist "$(printf '%s\n' "${MANUAL_CHECKLIST_JSON:-[]}" | jq -c .)" \
+  --argjson ac_verdicts "$(printf '%s\n' "${AC_VERDICTS_JSON:-[]}" | jq -c .)" \
   --argjson feedback "$(printf '%s\n' "${FEEDBACK_JSON:-[]}" | jq -c .)" \
   --arg notes "${NOTES:-}" \
   --arg pre_push_status "${PREPUSH_STATUS:-skipped}" \
@@ -179,6 +203,7 @@ jq -n \
     skipped_phases: $skipped_phases,
     ci_parity: (if $ci_parity_ran then { ran: true, passed: $ci_parity_passed, checks: $ci_parity_checks } else null end),
     manual_checklist: $manual_checklist,
+    acceptance_criteria_verdicts: $ac_verdicts,
     feedback: $feedback,
     notes: $notes,
     created_at: $created_at

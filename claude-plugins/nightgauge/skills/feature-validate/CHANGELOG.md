@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-criterion verdicts (#2595).** `validate-{N}.json` records
+  `acceptance_criteria_verdicts`, one `met`, `unmet` or `not_verifiable` per
+  issue acceptance criterion with evidence. pr-create uses them to choose
+  `Closes #N` or `Refs #N`.
+
 ### Removed
 
 - **Batch mode removed (#366).** Nothing ever wrote `batch-{E}.json`, so the

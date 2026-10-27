@@ -406,3 +406,37 @@ describe("ValidateContextSchema — ci_parity (#2503)", () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe("ValidateContextSchema — acceptance_criteria_verdicts (#2595)", () => {
+  it("normalises status synonyms and reads unknown values as not_verifiable", () => {
+    const parsed = ValidateContextSchema.parse({
+      ...minimalValidate,
+      acceptance_criteria_verdicts: [
+        { index: 0, text: "a", status: "met", evidence: "a.go:1" },
+        { index: 1, text: "b", status: "Unsatisfied" },
+        { index: 2, text: "c", status: "undetectable" },
+        { index: 3, text: "d", status: "not-verifiable" },
+        { index: 4, text: "e", status: "maybe" },
+      ],
+    });
+    expect(parsed.acceptance_criteria_verdicts?.map((v) => v.status)).toEqual([
+      "met",
+      "unmet",
+      "not_verifiable",
+      "not_verifiable",
+      "not_verifiable",
+    ]);
+  });
+
+  it("is optional", () => {
+    expect(ValidateContextSchema.safeParse(minimalValidate).success).toBe(true);
+  });
+
+  it("rejects a verdict without its criterion index", () => {
+    const result = ValidateContextSchema.safeParse({
+      ...minimalValidate,
+      acceptance_criteria_verdicts: [{ text: "a", status: "met" }],
+    });
+    expect(result.success).toBe(false);
+  });
+});
