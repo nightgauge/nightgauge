@@ -1,0 +1,25 @@
+{
+  "schema_version": "2.7",
+  "issue_number": 4242,
+  "validation_status": "passed",
+  "project_type": "go",
+  "build": { "ran": true, "passed": true, "duration_ms": 1200, "exit_code": 0 },
+  "unit_tests": {
+    "ran": true,
+    "passed": true,
+    "framework": "go",
+    "tests_run": 40,
+    "tests_passed": 40
+  },
+  "dead_code_warnings": [],
+  "preexisting_failures": [],
+  "skipped_phases": [],
+  "ci_parity": { "checks": [] },
+  "ac_completion_check": { "status": "complete" },
+  "manual_checklist": [],
+  "coverage_map_path": "coverage-map-4242.json",
+  "mobile_mcp": { "ran": false, "passed": false, "skipped_reason": "no test/mobile_mcp/specs" },
+  "verify_ui": { "ran": false, "passed": false, "skipped_reason": "no UI files changed" },
+  "commit_sha": "abc123",
+  "created_at": "2026-10-27T00:00:00Z"
+}

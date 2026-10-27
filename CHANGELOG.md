@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Agentic stages report their phases from evidence, not narration (#1887).**
+  After `feature-planning`, `feature-dev` or `feature-validate` exits 0 and
+  passes its gate, the scheduler maps each registry phase to the artifact that
+  proves it (the handoff file, the plan, the pushed commit, and so on). A phase
+  with that proof is recorded `complete`. A phase with no proof stays
+  `unreported` and is never counted as observed. Markers and inference keep
+  their outcomes. `nightgauge phase reconcile` prints the same verdicts as JSON.
+
 - **Program items validated by the retired bypass keep releasing dependents
   (#2575).** A trusted `<!-- opencode-program:validated -->` comment now counts
   as the post-merge validation marker; an untrusted copy is still ignored, and

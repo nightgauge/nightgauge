@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.6",
+  "issue_number": 4242,
+  "plan_file": "PLAN-4242.md",
+  "approach": "Add a reconciler.",
+  "files_to_create": ["internal/a.go"],
+  "files_to_modify": ["internal/b.go"],
+  "files_to_read": ["internal/c.go"],
+  "docs_consulted": ["docs/ARCHITECTURE.md"],
+  "complexity_assessment": { "score": 5, "size_label": "M" },
+  "pattern_mining_results": { "patterns": [] },
+  "recalled_decisions": [],
+  "ac_reconcile": { "status": "reconciled" },
+  "knowledge_path": "knowledge/4242",
+  "knowledge_read": ["PRD.md"],
+  "knowledge_entries": ["decisions.md"],
+  "revision_count": 0,
+  "created_at": "2026-10-27T00:00:00Z"
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.9",
+  "issue_number": 4242,
+  "commit_sha": null,
+  "files_changed": { "created": ["internal/a.go"], "modified": ["internal/b.go"], "deleted": [] },
+  "build_verification": {
+    "ran": true,
+    "status": "passed",
+    "commands_run": ["go build ./..."],
+    "timestamp": null
+  },
+  "tests_status": {
+    "passed": 12,
+    "failed": 0,
+    "coverage": null,
+    "test_command": "go test ./internal/...",
+    "includes_integration": false,
+    "includes_e2e": false,
+    "test_files_run": 2,
+    "e2e_framework": null,
+    "e2e_tests_generated": false
+  },
+  "quality_checks": {
+    "code_standards": "pass",
+    "security_review": "pass",
+    "type_check": "pass",
+    "dead_code_scan": "not_run"
+  },
+  "handoff_source": "authored",
+  "feedback": [],
+  "retry_count": 0,
+  "retry_reasons": [],
+  "knowledge_path": "knowledge/4242",
+  "architectural_constraints": [],
+  "created_at": "2026-10-27T00:00:00Z"
+}

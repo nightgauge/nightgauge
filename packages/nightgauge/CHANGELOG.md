@@ -11,6 +11,14 @@ and this project adheres to
 
 ### Added
 
+- **Agentic stages report their phases from evidence, not narration (#1887).**
+  After `feature-planning`, `feature-dev` or `feature-validate` exits 0 and
+  passes its gate, the scheduler maps each registry phase to the artifact that
+  proves it (the handoff file, the plan, the pushed commit, and so on). A phase
+  with that proof is recorded `complete`. A phase with no proof stays
+  `unreported` and is never counted as observed. Markers and inference keep
+  their outcomes. `nightgauge phase reconcile` prints the same verdicts as JSON.
+
 - **CLI-started runs show phase progress and their output (#586).** A run
   started with `nightgauge run` in a terminal now shows live phase progress on
   its tree node. The node's tooltip names the run's session log, and the new

@@ -1518,6 +1518,46 @@ func (rs *RuntimeState) unreportedPhaseLocked(stage PipelineStage, name string, 
 	})
 }
 
+// ObservePhase records a terminal outcome ("complete" or "skipped") that the
+// runner proved from the stage's artifacts after it exited (#1887), returning
+// whether it wrote anything.
+//
+// First-writer-wins against every record that carries evidence: a marker, an
+// inference result, a skip, a fail or a pass keeps its outcome. The one record
+// it may replace is `unreported`, which by definition is the absence of
+// evidence — the success boundary back-fills it before the stage gate (and so
+// the reconciler) has run, and leaving it in place would discard the proof.
+func (rs *RuntimeState) ObservePhase(stage PipelineStage, name string, index, total int, status string) bool {
+	if status != "complete" && status != "skipped" {
+		return false
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	now := time.Now()
+	for i := range rs.PhaseHistory {
+		p := &rs.PhaseHistory[i]
+		if p.Stage != stage || p.Name != name {
+			continue
+		}
+		if p.Status != "unreported" {
+			return false
+		}
+		p.Status = status
+		p.CompletedAt = &now
+		return true
+	}
+	rs.PhaseHistory = append(rs.PhaseHistory, PhaseRecord{
+		Stage:       stage,
+		Name:        name,
+		Index:       index,
+		Total:       total,
+		Status:      status,
+		StartedAt:   now,
+		CompletedAt: &now,
+	})
+	return true
+}
+
 // FailPhase closes the most recent running record for stage+name as failed
 // (#1026), or appends a terminal record when the phase never started.
 //
