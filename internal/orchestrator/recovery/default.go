@@ -39,8 +39,12 @@ func Default(workspaceRoot string, prMergeRunner pmstages.PRMergeRunner, prCreat
 	// First-match-wins: conflict ≠ plain BEHIND, so it must precede branch-out-of-
 	// date. When disabled (pipeline.recovery.conflict_recovery.enabled: false), a
 	// conflict falls through to branch-out-of-date / triage.
+	branchOutOfDate := NewBranchOutOfDate(prMergeRunner)
 	if GetConflictRecoveryEnabled(workspaceRoot) {
-		actions = append(actions, NewConflictRecoveryLoop(GetConflictMaxDevRedispatch(workspaceRoot)))
+		// A merge-queue conflict has no conflict context; the loop rebases
+		// through branch-out-of-date to capture one (#2611).
+		actions = append(actions, NewConflictRecoveryLoop(GetConflictMaxDevRedispatch(workspaceRoot)).
+			WithRebaseFallback(branchOutOfDate))
 	}
 
 	actions = append(actions,
@@ -51,7 +55,7 @@ func Default(workspaceRoot string, prMergeRunner pmstages.PRMergeRunner, prCreat
 		// MUST precede SkillExitedWithoutMerging (which matches ANY pr-merge
 		// KindNoOp and would otherwise shadow it, re-running the runner that
 		// just punted on BEHIND). #4071.
-		NewBranchOutOfDate(prMergeRunner),
+		branchOutOfDate,
 		NewSkillExitedWithoutMerging(prMergeRunner),
 		// AbandonedCommitRecoverable fires for stages upstream of pr-create
 		// (feature-dev, feature-validate) that were killed after committing

@@ -174,6 +174,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A PR that picks up a conflict in the merge queue is sent back to be
+  resolved, not failed** (#2611). pr-merge now names the conflict
+  (`merge-queue-failed: merge conflict with main: …`), and conflict recovery
+  rebases the branch: a real conflict rewinds the run to `feature-dev` on the
+  same branch, and a stale one re-enqueues. Failed merge-group checks and
+  closed PRs are reported as before.
+
 - **Action Center bands now rank the way they read (#1583).** The tree shows
   one band per severity, most urgent first: "Blocking the fleet", "Blocking a
   run", "FYI". The lowest band no longer reads "Needs a human", and a red

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
+	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -462,5 +463,83 @@ func TestDefaultRegistry_ConflictRoutesToConflictRecovery(t *testing.T) {
 	}
 	if first != "conflict-recovery-loop" {
 		t.Errorf("a conflict pr-merge no-op must route to conflict-recovery-loop first, got %q", first)
+	}
+}
+
+// fakeFallback records whether ConflictRecoveryLoop delegated to it (#2611).
+type fakeFallback struct{ calls int }
+
+func (f *fakeFallback) Name() string              { return "branch-out-of-date" }
+func (f *fakeFallback) Description() string       { return "fake" }
+func (f *fakeFallback) Matches(StageFailure) bool { return true }
+func (f *fakeFallback) Execute(context.Context, StageFailure) RecoveryResult {
+	f.calls++
+	return RecoveryResult{Action: f.Name(), FollowUp: FollowUpStageCanResume, Evidence: []string{"rebased"}}
+}
+
+// queueConflictFailure is the failure the scheduler builds when deterministic
+// pr-merge refuses a queue conflict: the refusal is the stage error, the
+// post-condition gate supplies Reason/Evidence (#2611).
+func queueConflictFailure(ws string) StageFailure {
+	return StageFailure{
+		Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: ws, IssueNumber: 99, PRNumber: 42,
+		Reason:     "PR #42 is not MERGED (state=OPEN, mergeStateStatus=UNKNOWN)",
+		Evidence:   []string{"pr=42", "state=OPEN", "mergeable=UNKNOWN"},
+		StageError: "pr-merge refused: " + pmstages.ReasonMergeQueueFailed + ": " + pmstages.MergeQueueConflictReason("main", 42, "DIRTY"),
+	}
+}
+
+func TestAction_ConflictRecoveryLoop_MatchesQueueConflict(t *testing.T) {
+	a := NewConflictRecoveryLoop(2)
+	if !a.Matches(queueConflictFailure("/x")) {
+		t.Error("queue conflict refusal must route to conflict recovery")
+	}
+	asReason := queueConflictFailure("/x")
+	asReason.Reason, asReason.StageError, asReason.Evidence = asReason.StageError, "", nil
+	if !a.Matches(asReason) {
+		t.Error("queue conflict reason must match when carried in Reason")
+	}
+	b := NewBranchOutOfDate(nil)
+	for name, reason := range map[string]string{
+		"checks failed": "pr-merge refused: merge-queue-failed: merge queue: PR #42 checks failed; not enqueued; failed checks: ci",
+		"group checks":  "pr-merge refused: merge-queue-failed: merge queue: PR #42 was removed from the queue (merge-group commit abc); failed merge-group checks: test",
+	} {
+		f := StageFailure{Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: "/x", IssueNumber: 99, Reason: reason}
+		if a.Matches(f) {
+			t.Errorf("%s: conflict recovery must not match %q", name, reason)
+		}
+		if b.Matches(f) {
+			t.Errorf("%s: branch-out-of-date must not match %q", name, reason)
+		}
+	}
+}
+
+func TestAction_ConflictRecoveryLoop_QueueConflictNoContext_Rebases(t *testing.T) {
+	fb := &fakeFallback{}
+	a := NewConflictRecoveryLoop(2).WithRebaseFallback(fb)
+	res := a.Execute(context.Background(), queueConflictFailure(layouttest.Repo(t)))
+	if fb.calls != 1 {
+		t.Fatalf("fallback calls = %d, want 1", fb.calls)
+	}
+	if res.Action != "branch-out-of-date" || res.FollowUp != FollowUpStageCanResume {
+		t.Errorf("res = %+v, want the fallback's result", res)
+	}
+	if len(res.Evidence) == 0 || res.Evidence[0] != "queue_conflict=true" {
+		t.Errorf("Evidence = %v, want queue_conflict=true first", res.Evidence)
+	}
+}
+
+func TestAction_ConflictRecoveryLoop_NonQueueNoContext_StillEscalates(t *testing.T) {
+	fb := &fakeFallback{}
+	a := NewConflictRecoveryLoop(2).WithRebaseFallback(fb)
+	res := a.Execute(context.Background(), StageFailure{
+		Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: layouttest.Repo(t),
+		IssueNumber: 99, PRNumber: 7, Reason: "rebase conflict with no markers",
+	})
+	if fb.calls != 0 {
+		t.Errorf("fallback called %d times for a non-queue conflict", fb.calls)
+	}
+	if res.FollowUp != FollowUpHumanTriageRequired || !strings.Contains(res.Reason, "conflict-context-99.json not found") {
+		t.Errorf("res = %+v, want the missing-context escalation", res)
 	}
 }
