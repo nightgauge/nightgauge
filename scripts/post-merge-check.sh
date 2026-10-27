@@ -256,20 +256,21 @@ def ident: if .app == "github-actions" and .suite != null and (.sha // "") != ""
 
 # Only the latest run of one check run counts (#2603), as in GitHub's ruleset:
 # a failure re-run green is GREEN, a success followed by a failure is RED.
-# "One check run" is the same name, app and head SHA; commit statuses (no app)
-# pass through, so a status never merges with a check run and the two
-# surfaces still fail closed in JUDGE. Latest is the later started_at, then
+# "One check run" is the same name, app, check suite and head SHA (a re-run
+# keeps its suite; two workflows with a same-named job are two suites); commit
+# statuses (no app) and runs with no suite pass through, so a status never
+# merges with a check run and the two surfaces still fail closed in JUDGE. Latest is the later started_at, then
 # the higher id; runs that cannot be ordered are all kept. Same rule as
 # github.LatestCheckRuns.
 # shellcheck disable=SC2016 # jq program, not shell
 LATEST='
 def key: ascii_downcase | gsub("^\\s+|\\s+$"; "");
-def ident: [(.name | key), .app, ((.sha // "") | ascii_downcase)];
+def ident: [(.name | key), .app, .suite, ((.sha // "") | ascii_downcase)];
 def newer($a; $b): if ($a.started_at // "") != "" and ($b.started_at // "") != "" and $a.started_at != $b.started_at
   then $a.started_at > $b.started_at
   else ($a.id // 0) != 0 and ($b.id // 0) != 0 and $a.id > $b.id end;
 . as $all
-| [ .[] | . as $c | select($c.app == null or (($c | ident) as $i | any($all[]; .app != null and ident == $i and newer(.; $c)) | not)) ]'
+| [ .[] | . as $c | select($c.app == null or $c.suite == null or (($c | ident) as $i | any($all[]; .app != null and .suite != null and ident == $i and newer(.; $c)) | not)) ]'
 
 # supersede <sha> <checks> — <checks> with every superseded cancelled check run
 # dropped (SUPERSEDE). The workflow runs on <sha> are read only when a check

@@ -209,7 +209,7 @@ func TestVerifyMergeCommit_DuplicateRunsOfOneCheckCountOnce(t *testing.T) {
 func TestVerifyMergeCommit_RerunGreenIsNotBad(t *testing.T) {
 	attempt := func(id int64, started, conclusion string) forgetypes.CheckDetail {
 		c := run("test", "COMPLETED", conclusion)
-		c.App, c.HeadSHA, c.ID, c.StartedAt = "github-actions", "abc1234", id, started
+		c.App, c.HeadSHA, c.CheckSuiteID, c.ID, c.StartedAt = "github-actions", "abc1234", 7, id, started
 		return c
 	}
 	reader := &scriptedChecks{frames: [][]forgetypes.CheckDetail{{
