@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -142,5 +143,12 @@ func TestUnmetCriteriaStopsAtNextHeading(t *testing.T) {
 	body := unmetCriteriaHeading + "\n\n- a\n- b\n\n## Knowledge\n\n- not this\n"
 	if got := strings.Join(UnmetCriteria(body), "|"); got != "a|b" {
 		t.Errorf("UnmetCriteria = %q, want a|b", got)
+	}
+}
+
+func TestRemainderCommentCannotCarryValidationMarker(t *testing.T) {
+	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")})
+	if forge.HasValidationMarker(body) {
+		t.Fatalf("remainder comment carries a validation marker: %q", body)
 	}
 }

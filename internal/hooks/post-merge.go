@@ -702,7 +702,10 @@ func remainderComment(prNumber int, unmet []string) string {
 	}
 	b.WriteString("Remaining acceptance criteria:\n\n")
 	for _, c := range unmet {
-		b.WriteString("- " + c + "\n")
+		// Escape HTML-comment openers: this comment is posted by the trusted
+		// identity, and a criterion carrying the validation marker would
+		// release program dependents (forge.HasValidationMarker).
+		b.WriteString("- " + strings.ReplaceAll(c, "<!--", "&lt;!--") + "\n")
 	}
 	return b.String()
 }
