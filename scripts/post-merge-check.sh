@@ -242,11 +242,10 @@ def bad: .conclusion != "success" and .conclusion != "skipped" and .conclusion !
 # a commit status, or another workflow with a colliding job name supersedes
 # nothing; neither does an observation whose identity is unknown.
 # Deliberately narrow: only `cancelled` is dropped and only a `success`
-# drops it. A cancelled check alone is still RED, and a `failure` next to a
-# `success` (a failed run re-run green) is still RED, because a failed run is
-# a real failure signal: never re-run hoping for a better answer. Applied to a
-# merged PR's commits only (post-merge observation), never to a commit with
-# no merged PR. Same rule as github.DropSupersededCancelled.
+# drops it. A cancelled check alone is still RED. A `failure` re-run is
+# decided by LATEST below, not here. Applied to a merged PR's commits only
+# (post-merge observation), never to a commit with no merged PR. Same rule as
+# github.DropSupersededCancelled.
 # shellcheck disable=SC2016 # jq program, not shell
 SUPERSEDE='
 def key: ascii_downcase | gsub("^\\s+|\\s+$"; "");
@@ -254,6 +253,24 @@ def ident: if .app == "github-actions" and .suite != null and (.sha // "") != ""
   then [(.name | key), $wf[.suite | tostring], (.sha | ascii_downcase)] else null end;
 ([ .[] | select(.status == "completed" and .conclusion == "success") | ident | select(. != null) ]) as $ok
 | [ .[] | select((.status == "completed" and .conclusion == "cancelled" and (ident as $i | $i != null and any($ok[]; . == $i))) | not) ]'
+
+# Only the latest run of one check run counts (#2603), as in GitHub's ruleset:
+# a failure re-run green is GREEN, a success followed by a failure is RED.
+# "One check run" is the same name, app, check suite and head SHA (a re-run
+# keeps its suite; two workflows with a same-named job are two suites); commit
+# statuses (no app) and runs with no suite pass through, so a status never
+# merges with a check run and the two surfaces still fail closed in JUDGE. Latest is the later started_at, then
+# the higher id; runs that cannot be ordered are all kept. Same rule as
+# github.LatestCheckRuns.
+# shellcheck disable=SC2016 # jq program, not shell
+LATEST='
+def key: ascii_downcase | gsub("^\\s+|\\s+$"; "");
+def ident: [(.name | key), .app, .suite, ((.sha // "") | ascii_downcase)];
+def newer($a; $b): if ($a.started_at // "") != "" and ($b.started_at // "") != "" and $a.started_at != $b.started_at
+  then $a.started_at > $b.started_at
+  else ($a.id // 0) != 0 and ($b.id // 0) != 0 and $a.id > $b.id end;
+. as $all
+| [ .[] | . as $c | select($c.app == null or $c.suite == null or (($c | ident) as $i | any($all[]; .app != null and .suite != null and ident == $i and newer(.; $c)) | not)) ]'
 
 # supersede <sha> <checks> — <checks> with every superseded cancelled check run
 # dropped (SUPERSEDE). The workflow runs on <sha> are read only when a check
@@ -287,7 +304,7 @@ supersede() {
 read_checks() {
   local sha="$1" runs statuses
   runs=$(gh api --paginate "repos/$REPO/commits/$sha/check-runs?per_page=100" \
-    --jq '.check_runs[] | select((.name | ascii_downcase) != "cache-warm") | {name, status, conclusion, url: .html_url, app: (.app.slug // null), suite: (.check_suite.id // null), sha: (.head_sha // null)} | tojson' 2>/dev/null) || {
+    --jq '.check_runs[] | select((.name | ascii_downcase) != "cache-warm") | {name, status, conclusion, id, started_at, url: .html_url, app: (.app.slug // null), suite: (.check_suite.id // null), sha: (.head_sha // null)} | tojson' 2>/dev/null) || {
     echo "NOT-YET  could not read check-runs for $REPO@${sha:0:8} (API error or unknown sha)"
     exit 2
   }
@@ -296,7 +313,7 @@ read_checks() {
     echo "NOT-YET  could not read commit statuses for $REPO@${sha:0:8} (API error or unknown sha)"
     exit 2
   }
-  printf '%s\n%s\n' "$runs" "$statuses" | jq -s '.' || {
+  printf '%s\n%s\n' "$runs" "$statuses" | jq -s "$LATEST" || {
     echo "NOT-YET  could not parse the check-runs and statuses for $REPO@${sha:0:8}"
     exit 2
   }

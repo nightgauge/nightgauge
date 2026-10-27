@@ -271,3 +271,50 @@ func TestEvaluateCommitChecks_EveryContextCounts(t *testing.T) {
 		})
 	}
 }
+
+// #2603: only the latest run of one check run (same name, app, head SHA)
+// counts, as in GitHub's ruleset; surfaces and apps never collapse together.
+func TestEvaluateChecksComplete_LatestRunDecides(t *testing.T) {
+	run := func(id int64, started, conclusion string) CheckDetail {
+		return CheckDetail{Name: "api", Status: "COMPLETED", Conclusion: conclusion,
+			App: "github-actions", HeadSHA: "abc", CheckSuiteID: 7, ID: id, StartedAt: started}
+	}
+	cases := []struct {
+		name   string
+		checks []CheckDetail
+		want   ChecksCompleteVerdict
+	}{
+		{"failure then success re-run", []CheckDetail{
+			run(1, "2026-10-27T10:00:00Z", "FAILURE"), run(2, "2026-10-27T10:05:00Z", "SUCCESS")}, ChecksComplete},
+		{"success then failure", []CheckDetail{
+			run(1, "2026-10-27T10:00:00Z", "SUCCESS"), run(2, "2026-10-27T10:05:00Z", "FAILURE")}, ChecksIncomplete},
+		{"listed newest first", []CheckDetail{
+			run(2, "2026-10-27T10:05:00Z", "SUCCESS"), run(1, "2026-10-27T10:00:00Z", "FAILURE")}, ChecksComplete},
+		{"same start time, higher id wins", []CheckDetail{
+			run(9, "2026-10-27T10:00:00Z", "FAILURE"), run(3, "2026-10-27T10:00:00Z", "SUCCESS")}, ChecksIncomplete},
+		{"unorderable runs both kept", []CheckDetail{
+			run(0, "", "FAILURE"), run(0, "", "SUCCESS")}, ChecksIncomplete},
+		{"cross-surface status failure stays red", []CheckDetail{
+			{Name: "api", Status: "COMPLETED", Conclusion: "FAILURE"},
+			run(2, "2026-10-27T10:05:00Z", "SUCCESS")}, ChecksIncomplete},
+		{"other app's failure stays red", []CheckDetail{
+			{Name: "api", Status: "COMPLETED", Conclusion: "FAILURE", App: "other", HeadSHA: "abc", ID: 1, StartedAt: "2026-10-27T10:00:00Z"},
+			run(2, "2026-10-27T10:05:00Z", "SUCCESS")}, ChecksIncomplete},
+		{"another workflow's same-named job stays red", []CheckDetail{
+			{Name: "api", Status: "COMPLETED", Conclusion: "FAILURE", App: "github-actions", HeadSHA: "abc", CheckSuiteID: 8, ID: 1, StartedAt: "2026-10-27T10:00:00Z"},
+			run(2, "2026-10-27T10:05:00Z", "SUCCESS")}, ChecksIncomplete},
+		{"runs with no suite are not collapsed", []CheckDetail{
+			{Name: "api", Status: "COMPLETED", Conclusion: "FAILURE", App: "github-actions", HeadSHA: "abc", ID: 1, StartedAt: "2026-10-27T10:00:00Z"},
+			{Name: "api", Status: "COMPLETED", Conclusion: "SUCCESS", App: "github-actions", HeadSHA: "abc", ID: 2, StartedAt: "2026-10-27T10:05:00Z"}}, ChecksIncomplete},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, reasons := EvaluateChecksComplete(tc.checks, []string{"api"}); got != tc.want {
+				t.Errorf("EvaluateChecksComplete = %q (%v), want %q", got, reasons, tc.want)
+			}
+			if got, reasons := EvaluateCommitChecks(tc.checks, []string{"api"}); got != tc.want {
+				t.Errorf("EvaluateCommitChecks = %q (%v), want %q", got, reasons, tc.want)
+			}
+		})
+	}
+}

@@ -237,9 +237,11 @@ func (s *CIService) GetIndividualCheckRuns(ctx context.Context, owner, repo, ref
 	err := s.getAllPages(ctx, url, checkRunsStatusError, func(body io.Reader) error {
 		var page struct {
 			CheckRuns []struct {
+				ID          int64  `json:"id"`
 				Name        string `json:"name"`
 				Status      string `json:"status"`
 				Conclusion  string `json:"conclusion"`
+				StartedAt   string `json:"started_at"`
 				CompletedAt string `json:"completed_at"`
 				DetailsURL  string `json:"details_url"`
 				HTMLURL     string `json:"html_url"`
@@ -269,6 +271,8 @@ func (s *CIService) GetIndividualCheckRuns(ctx context.Context, owner, repo, ref
 				HeadSHA:      run.HeadSHA,
 				App:          run.App.Slug,
 				CheckSuiteID: run.CheckSuite.ID,
+				ID:           run.ID,
+				StartedAt:    run.StartedAt,
 			})
 		}
 		return nil

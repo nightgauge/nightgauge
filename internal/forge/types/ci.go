@@ -59,6 +59,12 @@ type CheckDetail struct {
 	// CheckSuiteID is the check suite a check run belongs to; for GitHub
 	// Actions, one suite per workflow run. Zero for a commit status.
 	CheckSuiteID int64 `json:"checkSuiteId,omitempty"`
+	// ID is the check run's id, zero for a commit status. With StartedAt it
+	// orders re-runs of one check so only the latest counts (#2603).
+	ID int64 `json:"id,omitempty"`
+	// StartedAt is the RFC3339 instant the check run started, empty for a
+	// commit status.
+	StartedAt string `json:"startedAt,omitempty"`
 }
 
 // WaitConfig configures CI wait polling.

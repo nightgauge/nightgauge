@@ -478,8 +478,30 @@ expect_head "PR head: cancelled superseded by a success of the same check: GREEN
   "$(head_run build cancelled 1)" "$(head_run ' Build' success 2)"
 expect_head "PR head: a required check only cancelled: RED" 1 "build" \
   "$(head_run build cancelled 1)"
-expect_head "PR head: a failure re-run green is still RED" 1 "build" \
+# #2603: only the latest run of one check run counts, as in GitHub's ruleset.
+# head_attempt <conclusion> <id> <started_at> [suite] — one run of `build` on
+# the head, in check suite 1 unless named.
+head_attempt() {
+  printf '{"id": %s, "started_at": "%s", "name": "build", "status": "completed", "conclusion": "%s", "app": {"slug": "github-actions"}, "check_suite": {"id": %s}, "head_sha": "%s"}' \
+    "$2" "$3" "$1" "${4:-1}" "$HEAD_SHA"
+}
+expect_head "PR head: a failure re-run green is GREEN" 0 "same tree as PR #42 head" \
+  "$(head_attempt failure 11 2026-10-27T10:00:00Z)" "$(head_attempt success 12 2026-10-27T10:05:00Z)"
+expect_head "PR head: a success followed by a failure is RED" 1 "build" \
+  "$(head_attempt success 11 2026-10-27T10:00:00Z)" "$(head_attempt failure 12 2026-10-27T10:05:00Z)"
+expect_head "PR head: same start time, the higher id decides: RED" 1 "build" \
+  "$(head_attempt failure 19 2026-10-27T10:00:00Z)" "$(head_attempt success 12 2026-10-27T10:00:00Z)"
+expect_head "PR head: another workflow's same-named job re-run green does not mask a failure: RED" 1 "build" \
+  "$(head_attempt failure 11 2026-10-27T10:00:00Z 3)" "$(head_attempt success 12 2026-10-27T10:05:00Z 1)"
+expect_head "PR head: a failure and a success that cannot be ordered stay RED" 1 "build" \
   "$(head_run build failure 1)" "$(head_run build success 2)"
+# A same-name commit status failure is another surface: a re-run-green check
+# run never masks it.
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "{\"check_runs\": [$(head_attempt failure 11 2026-10-27T10:00:00Z), $(head_attempt success 12 2026-10-27T10:05:00Z)]}" \
+  '{"statuses": [{"context": "build", "state": "failure"}, {"context": "cla", "state": "success"}]}'
+echo '{"workflow_runs": [{"check_suite_id": 1, "workflow_id": 100}]}' >"$FAKE_BIN/pages/head-runs.1.json"
+expect "PR head: a same-name commit status failure beside a re-run green check run: RED" 1 "build"
 expect_head "PR head: cancelled beside a skipped sibling is still RED" 1 "build" \
   "$(head_run build cancelled 1)" "$(head_run build skipped 2)"
 expect_head "PR head spoof: a same-name success from another app is not the same check: RED" 1 "build" \

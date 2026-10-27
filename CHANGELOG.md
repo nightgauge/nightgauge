@@ -179,6 +179,15 @@ changelog, and the release workflow refuses a tag that does not.
   rollup also no longer re-closes a reopened epic while a sub-issue still
   carries the old closer's comment and no PR has closed it since. Reopen that
   sub-issue or close the epic by hand to release it.
+
+- **A required check that failed and then passed on re-run is green (#2603).**
+  Among check runs with the same name, app and commit, only the latest run
+  counts, as in GitHub's ruleset. `nightgauge ci checks-complete`, the
+  post-merge hook and `scripts/post-merge-check.sh` used to report such a merge
+  RED, so the validation marker was never posted. A success followed by a
+  failure is still RED, and a commit status never masks a check run of the same
+  name. The hook's RED line now counts the checks it lists.
+
 - **A PR that meets only some acceptance criteria no longer closes its issue
   (#2595).** feature-validate records a `met`, `unmet` or `not_verifiable`
   verdict per acceptance criterion, and pr-create combines it with a

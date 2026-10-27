@@ -204,6 +204,27 @@ func TestVerifyMergeCommit_DuplicateRunsOfOneCheckCountOnce(t *testing.T) {
 	}
 }
 
+// A failed run re-run green on the merge commit is not a failure (#2603): the
+// three numbers count only the latest run of each check.
+func TestVerifyMergeCommit_RerunGreenIsNotBad(t *testing.T) {
+	attempt := func(id int64, started, conclusion string) forgetypes.CheckDetail {
+		c := run("test", "COMPLETED", conclusion)
+		c.App, c.HeadSHA, c.CheckSuiteID, c.ID, c.StartedAt = "github-actions", "abc1234", 7, id, started
+		return c
+	}
+	reader := &scriptedChecks{frames: [][]forgetypes.CheckDetail{{
+		attempt(1, "2026-10-27T10:00:00Z", "FAILURE"),
+		attempt(2, "2026-10-27T10:05:00Z", "SUCCESS"),
+		run("build", "COMPLETED", "SUCCESS"),
+	}}}
+
+	res := VerifyMergeCommit(context.Background(), reader, "o", "r", "main", "abc1234", fastWait(2, 2))
+
+	if res.Verdict != MainChecksGreen || res.Bad != 0 || res.Total != 2 || len(res.Failing) != 0 {
+		t.Errorf("verdict=%q total=%d bad=%d failing=%v, want green / 2 / 0 / none", res.Verdict, res.Total, res.Bad, res.Failing)
+	}
+}
+
 // TestVerifyMergeCommit_MissingRequiredCheckIsPending is the #1540 regression
 // guard at the post-merge verifier: a rollup that OMITS a required check
 // entirely (not merely leaves it pending) must not read as green just

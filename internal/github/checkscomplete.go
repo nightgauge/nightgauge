@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 // ChecksCompleteVerdict is the closed vocabulary returned by
@@ -56,6 +57,70 @@ func MissingRequiredChecks(checks []CheckDetail, requiredNames []string) []strin
 	return missing
 }
 
+// checkRunKey is the identity under which re-runs of one check run collapse:
+// the same name, posted by the same app, in the same check suite, against the
+// same commit. GitHub keeps a re-run attempt in its original suite, while two
+// workflows with a same-named job are two suites, so neither masks the other.
+type checkRunKey struct {
+	name, app, sha string
+	suite          int64
+}
+
+// LatestCheckRuns keeps only the most recent run of each check run (#2603).
+// GitHub's ruleset, the merge authority, counts the latest run, so a FAILURE
+// superseded by a re-run that went green is not a failure, and a SUCCESS
+// followed by a FAILURE is.
+//
+// Only the check-run surface collapses (a non-empty App and suite), keyed by
+// (name, app, check suite, head SHA). A run with no suite, and every commit
+// status, passes through, so a status and a check run with the same name
+// still fail closed in the callers. "Latest" is the
+// later StartedAt, then the higher ID; when two runs of one identity cannot be
+// ordered, both are kept, which fails closed. Kept observations retain their
+// input order.
+func LatestCheckRuns(checks []CheckDetail) []CheckDetail {
+	groups := make(map[checkRunKey][]int)
+	for i, c := range checks {
+		if c.App == "" || c.CheckSuiteID == 0 {
+			continue
+		}
+		k := checkRunKey{strings.ToLower(strings.TrimSpace(c.Name)), c.App, strings.ToLower(c.HeadSHA), c.CheckSuiteID}
+		groups[k] = append(groups[k], i)
+	}
+	drop := make(map[int]bool)
+	for _, idx := range groups {
+		for _, i := range idx {
+			for _, j := range idx {
+				if i != j && runIsNewer(checks[j], checks[i]) {
+					drop[i] = true
+					break
+				}
+			}
+		}
+	}
+	if len(drop) == 0 {
+		return checks
+	}
+	kept := make([]CheckDetail, 0, len(checks)-len(drop))
+	for i, c := range checks {
+		if !drop[i] {
+			kept = append(kept, c)
+		}
+	}
+	return kept
+}
+
+// runIsNewer reports whether run a provably started after run b: a later
+// StartedAt, or on an equal or missing time, a higher ID.
+func runIsNewer(a, b CheckDetail) bool {
+	ta, errA := time.Parse(time.RFC3339, a.StartedAt)
+	tb, errB := time.Parse(time.RFC3339, b.StartedAt)
+	if errA == nil && errB == nil && !ta.Equal(tb) {
+		return ta.After(tb)
+	}
+	return a.ID != 0 && b.ID != 0 && a.ID > b.ID
+}
+
 // EvaluateChecksComplete answers "are this SHA's checks complete?" by
 // asserting the POSITIVE PRESENCE of every name in requiredNames among
 // checks, not merely the absence of a bad conclusion among whatever showed
@@ -69,6 +134,7 @@ func MissingRequiredChecks(checks []CheckDetail, requiredNames []string) []strin
 // the pre-#1540 total>0/pending==0/bad==0 idiom, so an unprotected branch
 // still gets a real verdict instead of a permanent NOT-YET.
 func EvaluateChecksComplete(checks []CheckDetail, requiredNames []string) (ChecksCompleteVerdict, []string) {
+	checks = LatestCheckRuns(checks)
 	present := make(map[string][]CheckDetail, len(checks))
 	for _, c := range checks {
 		name := strings.ToLower(strings.TrimSpace(c.Name))
@@ -326,6 +392,7 @@ func CrossCheckWorkflowRuns(checks []CheckDetail, runs []WorkflowRunSummary) (ag
 // A failure already observed while other checks still run is named in the
 // not-yet reasons, so it is visible before the verdict can be final.
 func EvaluateCommitChecks(checks []CheckDetail, requiredNames []string) (ChecksCompleteVerdict, []string) {
+	checks = LatestCheckRuns(checks)
 	if len(checks) == 0 {
 		return ChecksNotYet, []string{"no checks present on the commit yet"}
 	}
