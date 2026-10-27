@@ -69,6 +69,9 @@ if [ -f "$FEEDBACK_FILE" ]; then
     echo "**SCOPE_DISCOVERED**: Explicitly expand the plan's scope section to"
     echo "include all newly discovered files listed in the evidence. These files"
     echo "MUST appear in files_to_modify or files_to_create."
+    echo "Evidence files the acceptance criteria do not need are recorded with"
+    echo "'nightgauge discovered-work record', not absorbed — see"
+    echo "docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work."
     echo ""
   fi
 

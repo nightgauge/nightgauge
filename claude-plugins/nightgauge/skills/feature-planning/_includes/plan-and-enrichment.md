@@ -46,7 +46,23 @@ Write a concise plan that includes:
   - **Wiring verification**: consumer code modified in THIS PR, or tracked in
     dependent issue #NNN
 - Risks and mitigations
-- Explicit out-of-scope items
+- Explicit out-of-scope items. Record each **actionable** entry (concrete
+  follow-up work) as discovered work per
+  [Record vs. Backtrack](../../../../../docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work),
+  and append the printed `dw-` id to the plan entry so the two cross-reference.
+  Pure boundary statements ("no UI changes") and work already tracked by an
+  issue are not recorded.
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+nightgauge discovered-work record --issue "$ISSUE_NUMBER" \
+  --source-stage feature-planning \
+  --summary "Add pagination to the discovered-work list command" \
+  --evidence "Out of Scope in the #$ISSUE_NUMBER plan: list output is unbounded" \
+  --suggested-type feature --suggested-priority low --suggested-size S \
+  || echo "discovered work not recorded (non-fatal)"
+```
 
 Plans that create new services or exports without documented consumers in the
 "Integration points" section are considered incomplete. If no consumer exists
@@ -144,7 +160,8 @@ Requirements` with the test strategy (unit/integration/e2e) plus any
   performance, security, accessibility, or reliability budgets. Write "None
   beyond the acceptance criteria" when there are genuinely none.
 - Replace the placeholder comment under `## Out of Scope` with the scope
-  boundaries the plan established.
+  boundaries the plan established. Actionable entries carry the `dw-` id recorded in
+  Phase 4; do not record them a second time.
 
 **decisions.md format** (ADR block — one block per key decision):
 

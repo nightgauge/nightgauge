@@ -56,6 +56,15 @@ for FAILING_FILE in $FAILING_TEST_FILES; do
   timeout 60 $TEST_CMD "$FAILING_FILE" 2>&1
   if [ $? -ne 0 ]; then
     echo "⏭ Pre-existing failure: $FAILING_FILE (also fails on main)"
+    # Deferrable by definition — record it, never widen the fix (#479):
+    # docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work
+    nightgauge discovered-work record --issue "$ISSUE_NUMBER" \
+      --source-stage feature-validate \
+      --summary "Pre-existing test failure: $FAILING_FILE (also fails on main)" \
+      --evidence "$FAILING_FILE fails on main and on the branch" \
+      --suggested-type bug --suggested-priority medium --suggested-size S \
+      --candidate-file "$FAILING_FILE" \
+      || echo "discovered work not recorded (non-fatal)"
     PREEXISTING_COUNT=$((PREEXISTING_COUNT + 1))
     # Append structured entry — required by PreexistingFailureSchema:
     #   { test_file: string, failure_count: int >= 1, baseline_verified: boolean }

@@ -1,0 +1,33 @@
+{
+  "id": "fd-discovered-work-record",
+  "skill": "feature-dev",
+  "description": "Feature-dev records an adjacent refactor the ACs do not need instead of widening scope or dropping it.",
+  "failure_mode": "Model implements the unrelated refactor (scope creep), emits SCOPE_DISCOVERED for it, or silently drops it.",
+  "prompt": "While implementing issue #412 (add an --json flag to `nightgauge status`), you notice internal/forge/client.go duplicates a retry loop in three places. The issue's acceptance criteria hold without touching it. What do you do? End your answer with a single ```json fenced block containing exactly this object, with one value chosen for each field: {\"action\": \"record_discovered_work\" | \"emit_scope_discovered\" | \"implement_now\" | \"ignore\", \"source_stage\": \"feature-dev\" | \"feature-planning\" | \"none\", \"counts_toward_scope_threshold\": true | false}",
+  "assertions": [
+    {
+      "type": "json_path_equals",
+      "path": "action",
+      "value": "record_discovered_work",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "records instead of widening or dropping"
+    },
+    {
+      "type": "json_path_equals",
+      "path": "source_stage",
+      "value": "feature-dev",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "records under its own stage"
+    },
+    {
+      "type": "json_path_equals",
+      "path": "counts_toward_scope_threshold",
+      "value": false,
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "recorded work is outside the SCOPE_DISCOVERED threshold"
+    }
+  ]
+}

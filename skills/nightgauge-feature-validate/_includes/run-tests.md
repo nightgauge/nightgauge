@@ -273,7 +273,10 @@ needed — all results are captured in `validate-{N}.json`.
 
 After collecting failures, invoke Phase 1.7 (Baseline Comparison) to classify
 each. **New failures** (pass on main, fail on branch) go to Ralph Loop.
-**Pre-existing failures** (also fail on main) are logged and skipped. If ALL
+**Pre-existing failures** (also fail on main) are logged, recorded as
+discovered work (Phase 1.7, per
+[Record vs. Backtrack](../../../docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work)),
+and skipped. If ALL
 failures are pre-existing, treat as passed. Report results: PASSED, FAILED, or
 Not configured.
 

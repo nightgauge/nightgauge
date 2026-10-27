@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Actionable Out of Scope entries are recorded (#479).** Each concrete
+  follow-up in the plan's Out of Scope list is recorded with
+  `nightgauge discovered-work record` and cites its `dw-` id; boundary
+  statements are not recorded.
+
 ### Removed
 
 - **Batch mode removed (#366).** Nothing ever wrote `batch-{E}.json`, so the
