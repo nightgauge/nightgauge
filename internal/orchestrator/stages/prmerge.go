@@ -119,6 +119,10 @@ const (
 	// failure handling and retro can act; the LLM skill is never invoked for
 	// a queue outcome.
 	ReasonMergeQueueFailed = "merge-queue-failed"
+	// MergeQueueConflictMarker is the token a queue-failure reason carries
+	// when the PR was removed because it conflicts with its base (#2611).
+	// Conflict recovery matches on it to rebase instead of failing the run.
+	MergeQueueConflictMarker = "merge conflict with"
 	// ReasonMergeQueueTimeout is recorded (with PathRefused) when the PR was
 	// still queued when the merge-queue wait budget expired.
 	ReasonMergeQueueTimeout = "merge-queue-timeout"
@@ -813,12 +817,60 @@ func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmit
 		res.Reason = ReasonRateLimited
 	case errors.As(err, &qe) && qe.Kind == github.MergeQueueTimeout:
 		res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueTimeout, truncateErr(err, 300))
+	case errors.As(err, &qe) && qe.Kind == github.MergeQueueUnmergeable:
+		if base, mergeState, ok := r.queueConflict(ctx, mq, prNumber, st); ok {
+			res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueFailed, MergeQueueConflictReason(base, prNumber, mergeState))
+		} else {
+			res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueFailed, truncateErr(err, 500))
+		}
 	case errors.As(err, &qe):
 		res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueFailed, truncateErr(err, 500))
 	default:
 		res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueEnqueueFailed, truncateErr(err, 300))
 	}
 	return res
+}
+
+// MergeQueueConflictReason names a queue-side conflict (#2611). pr-merge
+// emits it and conflict recovery matches on MergeQueueConflictMarker, so
+// both sides share this one builder.
+func MergeQueueConflictReason(base string, prNumber int, mergeState string) string {
+	return fmt.Sprintf("%s %s: PR #%d is CONFLICTING (mergeStateStatus %s)", MergeQueueConflictMarker, base, prNumber, mergeState)
+}
+
+// queueConflict re-reads an unmergeable PR's mergeability, polling while
+// GitHub reports UNKNOWN within the runner's mergeability budget. It reports
+// ok only when the PR reads CONFLICTING; anything else keeps the queue's
+// own reason (#2611).
+func (r *DeterministicRunner) queueConflict(ctx context.Context, mq mergeQueueClient, prNumber int, prior github.MergeQueueStatus) (base, mergeState string, ok bool) {
+	for poll := 0; poll < r.mergeabilityPollMax; poll++ {
+		if poll > 0 {
+			select {
+			case <-ctx.Done():
+				return "", "", false
+			case <-time.After(r.mergeabilityPollInterval):
+			}
+		}
+		st, err := mq.MergeQueueStatus(ctx, prNumber)
+		if err != nil {
+			return "", "", false
+		}
+		if st.Mergeable == github.MergeableUnknown {
+			continue
+		}
+		if st.Mergeable != "CONFLICTING" {
+			return "", "", false
+		}
+		base = st.BaseRef
+		if base == "" {
+			base = prior.BaseRef
+		}
+		if base == "" {
+			base = "main"
+		}
+		return base, st.MergeStateStatus, true
+	}
+	return "", "", false
 }
 
 func (r *DeterministicRunner) queueWaitTimeout() time.Duration {

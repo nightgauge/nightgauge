@@ -13,8 +13,12 @@ import (
 // queueGh is a ghClient that can also drive a merge queue (#2214).
 type queueGh struct {
 	fakeGh
-	status      github.MergeQueueStatus
-	statusErr   error
+	status    github.MergeQueueStatus
+	statusErr error
+	// rereads, when set, answers every MergeQueueStatus call after the
+	// first (detection) in order, repeating the last (#2611).
+	rereads     []github.MergeQueueStatus
+	rereadErr   error
 	final       github.MergeQueueStatus
 	waitErr     error
 	statusCalls int
@@ -25,7 +29,17 @@ type queueGh struct {
 
 func (q *queueGh) MergeQueueStatus(_ context.Context, _ int) (github.MergeQueueStatus, error) {
 	q.statusCalls++
-	return q.status, q.statusErr
+	if q.statusCalls == 1 || (len(q.rereads) == 0 && q.rereadErr == nil) {
+		return q.status, q.statusErr
+	}
+	if q.rereadErr != nil {
+		return github.MergeQueueStatus{}, q.rereadErr
+	}
+	i := q.statusCalls - 2
+	if i >= len(q.rereads) {
+		i = len(q.rereads) - 1
+	}
+	return q.rereads[i], nil
 }
 
 func (q *queueGh) EnqueueAndWait(_ context.Context, st github.MergeQueueStatus, opts github.MergeQueueWaitOptions) (github.MergeQueueStatus, error) {
@@ -41,6 +55,7 @@ func newQueueRunner(q *queueGh) *DeterministicRunner {
 	r := newRunnerWith(q, 42)
 	r.knowledgeConformance = nil
 	r.steeringGate = nil
+	r.mergeabilityPollInterval = 0
 	return r
 }
 
@@ -175,5 +190,78 @@ func TestRun_MergeQueueFailure_NotECTimeout(t *testing.T) {
 	res, _ := newQueueRunner(q).Run(context.Background(), 7, "", "")
 	if res.Path == PathPunt || strings.Contains(res.Reason, ReasonMergeECTimeout) {
 		t.Errorf("res = %+v, a queue failure must not punt or read as an EC timeout", res)
+	}
+}
+
+// A PR the queue drops as unmergeable that re-reads CONFLICTING names the
+// conflict, so conflict recovery picks it up instead of booking a failure
+// (#2611).
+func TestRun_MergeQueueUnmergeable_Conflicting_NamesConflict(t *testing.T) {
+	for name, rereads := range map[string][]github.MergeQueueStatus{
+		"conflicting": {{Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY", BaseRef: "main"}},
+		"unknown then conflicting": {
+			{Mergeable: github.MergeableUnknown},
+			{Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := &queueGh{
+				fakeGh:  fakeGh{preMerge: cleanOpen},
+				status:  github.MergeQueueStatus{PRID: "PR_1", State: "OPEN", QueueRequired: true, BaseRef: "main"},
+				waitErr: &github.MergeQueueError{PRNumber: 42, Kind: github.MergeQueueUnmergeable},
+				rereads: rereads,
+			}
+			res, _ := newQueueRunner(q).Run(context.Background(), 7, "", "")
+			want := ReasonMergeQueueFailed + ": " + MergeQueueConflictReason("main", 42, "DIRTY")
+			if res.Path != PathRefused || res.Reason != want {
+				t.Errorf("res = %+v, want refused with %q", res, want)
+			}
+			if !strings.HasPrefix(res.Reason, "merge-queue-failed: merge conflict with main") ||
+				!strings.Contains(res.Reason, "PR #42 is CONFLICTING") {
+				t.Errorf("Reason = %q", res.Reason)
+			}
+		})
+	}
+}
+
+// Every queue failure that is not a re-read conflict keeps its own reason
+// and never names a conflict (#2611).
+func TestRun_MergeQueueNonConflict_KeepsReason(t *testing.T) {
+	unmergeable := &github.MergeQueueError{PRNumber: 42, Kind: github.MergeQueueUnmergeable}
+	checks := &github.MergeQueueError{PRNumber: 42, Kind: github.MergeQueueChecksFailed, FailedChecks: []string{"ci"}}
+	closed := &github.MergeQueueError{PRNumber: 42, Kind: github.MergeQueueClosed}
+	cases := map[string]struct {
+		err       error
+		rereads   []github.MergeQueueStatus
+		rereadErr error
+		maxCalls  int
+	}{
+		"checks failed":         {err: checks, rereads: []github.MergeQueueStatus{{Mergeable: "CONFLICTING"}}, maxCalls: 1},
+		"closed":                {err: closed, rereads: []github.MergeQueueStatus{{Mergeable: "CONFLICTING"}}, maxCalls: 1},
+		"unmergeable mergeable": {err: unmergeable, rereads: []github.MergeQueueStatus{{Mergeable: "MERGEABLE"}}},
+		"unmergeable unknown":   {err: unmergeable, rereads: []github.MergeQueueStatus{{Mergeable: github.MergeableUnknown}}},
+		"unmergeable read err":  {err: unmergeable, rereadErr: errors.New("boom")},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			q := &queueGh{
+				fakeGh:    fakeGh{preMerge: cleanOpen},
+				status:    github.MergeQueueStatus{PRID: "PR_1", State: "OPEN", QueueRequired: true, BaseRef: "main"},
+				waitErr:   tc.err,
+				rereads:   tc.rereads,
+				rereadErr: tc.rereadErr,
+			}
+			res, _ := newQueueRunner(q).Run(context.Background(), 7, "", "")
+			want := ReasonMergeQueueFailed + ": " + tc.err.Error()
+			if res.Path != PathRefused || res.Reason != want {
+				t.Errorf("res = %+v, want refused with %q", res, want)
+			}
+			if strings.Contains(strings.ToLower(res.Reason), "conflict") {
+				t.Errorf("Reason = %q must not name a conflict", res.Reason)
+			}
+			if tc.maxCalls > 0 && q.statusCalls > tc.maxCalls {
+				t.Errorf("MergeQueueStatus called %d times; a non-unmergeable outcome must not re-read", q.statusCalls)
+			}
+		})
 	}
 }

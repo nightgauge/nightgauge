@@ -174,6 +174,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A PR that picks up a conflict in the merge queue is sent back to be
+  resolved, not failed** (#2611). pr-merge now names the conflict
+  (`merge-queue-failed: merge conflict with main: …`), and conflict recovery
+  rebases the branch: a real conflict rewinds the run to `feature-dev` on the
+  same branch, and a stale one re-enqueues. Failed merge-group checks and
+  closed PRs are reported as before.
+
 - **Worktree containment no longer fails one issue for another issue's
   leftovers (#2608).** The retry ledger in `containment/attributed.json` now
   records which issue attributed each path, and only a retry of that issue

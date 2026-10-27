@@ -14,6 +14,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
+	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -50,6 +51,11 @@ import (
 //     the loop at exactly max_dev_redispatch re-dispatches (#4072 review).
 type ConflictRecoveryLoop struct {
 	maxDevRedispatch int
+	// rebaseFallback produces the missing conflict context for a merge-queue
+	// conflict (#2611): the queue path never rebases locally, so no
+	// conflict-context-{N}.json exists. Rebasing captures it on a real
+	// conflict, or re-enqueues when the CONFLICTING read was stale.
+	rebaseFallback RecoveryAction
 }
 
 // NewConflictRecoveryLoop builds the action with the configured re-dispatch
@@ -59,6 +65,14 @@ func NewConflictRecoveryLoop(maxDevRedispatch int) *ConflictRecoveryLoop {
 		maxDevRedispatch = DefaultConflictMaxDevRedispatch
 	}
 	return &ConflictRecoveryLoop{maxDevRedispatch: maxDevRedispatch}
+}
+
+// WithRebaseFallback sets the action Execute delegates to when a merge-queue
+// conflict arrives with no conflict context (#2611). Default() passes the
+// registry's BranchOutOfDate.
+func (a *ConflictRecoveryLoop) WithRebaseFallback(fallback RecoveryAction) *ConflictRecoveryLoop {
+	a.rebaseFallback = fallback
+	return a
 }
 
 // Name implements RecoveryAction.
@@ -97,7 +111,16 @@ func (a *ConflictRecoveryLoop) Matches(failure StageFailure) bool {
 	if failure.IssueNumber == 0 {
 		return false
 	}
-	return mentionsConflict(failure.Reason, failure.Evidence)
+	return mentionsConflict(failure.Reason, failure.Evidence) || isQueueConflict(failure)
+}
+
+// isQueueConflict reports whether the failure is pr-merge's merge-queue
+// conflict refusal (#2611). The refusal text arrives as the stage error while
+// the post-condition gate supplies Reason, so all three fields are read.
+func isQueueConflict(failure StageFailure) bool {
+	combined := strings.ToLower(failure.Reason + " " + failure.StageError + " " + strings.Join(failure.Evidence, " "))
+	return strings.Contains(combined, pmstages.ReasonMergeQueueFailed) &&
+		strings.Contains(combined, strings.ToLower(pmstages.MergeQueueConflictMarker))
 }
 
 // mentionsConflict reports whether the reason or any evidence string names a
@@ -243,6 +266,14 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 	contextPath := filepath.Join(pipelineDir, fmt.Sprintf("conflict-context-%d.json", failure.IssueNumber))
 
 	data, err := os.ReadFile(contextPath)
+	if err != nil && os.IsNotExist(err) && a.rebaseFallback != nil && isQueueConflict(failure) {
+		// A merge-queue conflict never rebased locally, so there is no context
+		// yet: rebase to capture it (rewinds to feature-dev) or, when the
+		// conflict was stale, re-enqueue (#2611).
+		res := a.rebaseFallback.Execute(ctx, failure)
+		res.Evidence = append([]string{"queue_conflict=true"}, res.Evidence...)
+		return res
+	}
 	if err != nil {
 		// No conflict context — pr-merge could not capture the conflicting
 		// files (e.g. rebase failed with no markers). A dev re-dispatch with no
