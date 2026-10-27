@@ -3571,21 +3571,37 @@ fails a stage. The event fields and CLI JSON output are the public schema
 contract.
 
 ```bash
+# List every traced run for an issue, oldest first (#1283)
+nightgauge trace list 179
+nightgauge trace list 179 --json
+
 # Show a run's ordered decision timeline (issue number or run id)
 nightgauge trace show 179
 nightgauge trace show 01890a5d-ac96-774b-bcce-b302099a8057
 nightgauge trace show 179 --json
 
-# Export one joined document: trace events + V3 RunRecord + exit records,
-# ordered by (ts, producer, seq). Indented by default; --json for compact.
+# Export one joined document: trace events + V3 RunRecord + exit records +
+# issue_runs + merge + survival, ordered by (ts, producer, seq). Indented by default; --json for compact.
 nightgauge trace export 01890a5d-ac96-774b-bcce-b302099a8057 --json
 ```
 
 The trace is the source of record for **decisions**; outcomes and forensics
 stay in the history and exit-records stores, joined by the shared `run_id`
 (UUID v7). `trace show <issue>` resolves the most recent traced run for that
-issue. Runs pre-dating trace capture simply have no file — consumers degrade
-to stage-level data.
+issue; `trace list <issue>` lists every run, ordered by first-event time.
+Runs pre-dating trace capture simply have no file — consumers degrade to
+stage-level data.
+
+`trace export` also anchors the run in its issue's decision chain (#1283).
+`issue_runs`, `merge` and `survival` are always present, each with `status`
+(`joined` or `unavailable`) and a `reason` when unavailable. `merge` and
+`survival` come from the survival record the post-merge hook writes: the record
+for the same issue and repo whose `merged_at` falls between the run's first
+event and 30 minutes after its last. The earliest match wins. The join is offline. The
+merge actor (`merged_by`) is the forge's PR `mergedBy`, captured at merge time.
+A merge-queue merge reports the actor that enqueued the PR. Records written
+before capture report `merged_by_status: unavailable`; the actor is never
+inferred.
 
 ### Attention Operations
 

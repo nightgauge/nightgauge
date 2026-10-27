@@ -47,6 +47,9 @@ type PRMergeInfo struct {
 	SHA      string
 	MergedAt string
 	BaseRef  string
+	// MergedBy is the login of the actor GitHub records as having merged the
+	// PR (#1283); empty when un-merged or the actor is gone.
+	MergedBy string
 }
 
 // GetPRMergeInfo fetches the merge breadcrumb of a merged PR. Satisfies
@@ -56,7 +59,7 @@ func (s *PRService) GetPRMergeInfo(ctx context.Context, owner, repo string, numb
 	if err != nil {
 		return PRMergeInfo{}, err
 	}
-	return PRMergeInfo{SHA: pr.MergeCommitSHA, MergedAt: pr.MergedAt, BaseRef: pr.BaseRef}, nil
+	return PRMergeInfo{SHA: pr.MergeCommitSHA, MergedAt: pr.MergedAt, BaseRef: pr.BaseRef, MergedBy: pr.MergedBy}, nil
 }
 
 // GetPR fetches a single pull request with review and check status.
@@ -102,6 +105,9 @@ func (s *PRService) GetPR(ctx context.Context, owner, repo string, number int) (
 	}
 	if pr.MergeCommit != nil {
 		result.MergeCommitSHA = string(pr.MergeCommit.OID)
+	}
+	if pr.MergedBy != nil {
+		result.MergedBy = string(pr.MergedBy.Login)
 	}
 
 	for _, l := range pr.Labels.Nodes {

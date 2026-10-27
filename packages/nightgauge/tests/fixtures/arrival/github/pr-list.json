@@ -19,7 +19,8 @@
     "deletions": 14,
     "createdAt": "__RECENT_MINUS_30D__",
     "mergeCommitSha": "",
-    "mergedAt": ""
+    "mergedAt": "",
+    "mergedBy": ""
   },
   {
     "nodeId": "PR_kwDOM1c9Ns6hR8kL",
@@ -41,7 +42,8 @@
     "deletions": 6,
     "createdAt": "__RECENT_MINUS_2D__",
     "mergeCommitSha": "",
-    "mergedAt": ""
+    "mergedAt": "",
+    "mergedBy": ""
   },
   {
     "nodeId": "PR_kwDOM1c9Ns6hS1mN",
@@ -63,6 +65,7 @@
     "deletions": 12,
     "createdAt": "__RECENT_MINUS_1D__",
     "mergeCommitSha": "",
-    "mergedAt": ""
+    "mergedAt": "",
+    "mergedBy": ""
   }
 ]

@@ -472,6 +472,7 @@ type mockPRVerifierWithMerge struct {
 	sha             string
 	mergedAt        string
 	baseRef         string
+	mergedBy        string
 	infoErr         error
 	mergeInfoCalled bool
 }
@@ -485,7 +486,7 @@ func (m *mockPRVerifierWithMerge) GetPRMergeInfo(_ context.Context, _, _ string,
 	if m.infoErr != nil {
 		return gh.PRMergeInfo{}, m.infoErr
 	}
-	return gh.PRMergeInfo{SHA: m.sha, MergedAt: m.mergedAt, BaseRef: m.baseRef}, nil
+	return gh.PRMergeInfo{SHA: m.sha, MergedAt: m.mergedAt, BaseRef: m.baseRef, MergedBy: m.mergedBy}, nil
 }
 
 func TestPostMergeCapturesMergeBreadcrumb(t *testing.T) {
@@ -498,6 +499,7 @@ func TestPostMergeCapturesMergeBreadcrumb(t *testing.T) {
 		state:    "MERGED",
 		sha:      "abc123def456",
 		mergedAt: "2026-06-26T12:00:00Z",
+		mergedBy: "octo-maintainer",
 	}
 
 	result := EvaluatePostMerge(context.Background(), fetcher, issueCloser, epicCloser, verifier, nil, PostMergeInput{
@@ -515,6 +517,9 @@ func TestPostMergeCapturesMergeBreadcrumb(t *testing.T) {
 	}
 	if result.MergedAt != "2026-06-26T12:00:00Z" {
 		t.Errorf("MergedAt = %q, want 2026-06-26T12:00:00Z", result.MergedAt)
+	}
+	if result.MergedBy != "octo-maintainer" {
+		t.Errorf("MergedBy = %q, want octo-maintainer (#1283)", result.MergedBy)
 	}
 	if !result.IssueClosed {
 		t.Error("issue must still be closed alongside the breadcrumb capture")

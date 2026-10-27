@@ -27,10 +27,13 @@ func traceCmd() *cobra.Command {
 in ` + layout.PipelineStateDisplay() + `/trace/<run_id>.jsonl capturing every stage boundary
 and every decision with its rationale and rejected alternatives.
 
-Use 'show' to print a run's ordered timeline (by issue number or run id) and
-'export' to emit one joined JSON document combining the trace with the run's
-RunRecord and stage-exit forensic records.`,
+Use 'list' to see every traced run for an issue (oldest first), 'show' to
+print a run's ordered timeline (by issue number or run id), and 'export' to
+emit one joined JSON document combining the trace with the run's RunRecord,
+stage-exit forensic records, the issue's other runs, the merge (PR, SHA,
+actor) and the post-merge survival verdict.`,
 	}
+	cmd.AddCommand(traceListCmd())
 	cmd.AddCommand(traceShowCmd())
 	cmd.AddCommand(traceExportCmd())
 	return cmd
@@ -78,6 +81,72 @@ func traceShowCmd() *cobra.Command {
 	return cmd
 }
 
+// traceListResult is the `trace list --json` document.
+type traceListResult struct {
+	Issue  int                `json:"issue"`
+	Status trace.JoinStatus   `json:"status"`
+	Reason string             `json:"reason,omitempty"`
+	Runs   []trace.RunSummary `json:"runs"`
+}
+
+// traceListCmd implements `nightgauge trace list <issue>` (#1283).
+func traceListCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		workdir    string
+	)
+	cmd := &cobra.Command{
+		Use:          "list <issue>",
+		Short:        "List every traced run for an issue, oldest first",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		Example: `  nightgauge trace list 179
+  nightgauge trace list 179 --json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issue, err := strconv.Atoi(args[0])
+			if err != nil || issue <= 0 {
+				return fmt.Errorf("invalid issue number %q", args[0])
+			}
+			root, err := resolveTraceWorkdir(workdir)
+			if err != nil {
+				return err
+			}
+			runs, err := trace.ListIssueRuns(root, issue)
+			if err != nil {
+				return err
+			}
+			res := traceListResult{Issue: issue, Status: trace.JoinJoined, Runs: runs}
+			if len(runs) == 0 {
+				res.Status = trace.JoinUnavailable
+				res.Reason = fmt.Sprintf("no traced runs for issue #%d (runs that predate trace capture have no file)", issue)
+			}
+			out := cmd.OutOrStdout()
+			if jsonOutput {
+				return json.NewEncoder(out).Encode(res)
+			}
+			if len(runs) == 0 {
+				fmt.Fprintln(out, res.Reason)
+				return nil
+			}
+			fmt.Fprintf(out, "Traced runs for issue #%d (oldest first):\n", issue)
+			for _, r := range runs {
+				outcome := "-"
+				if r.OutcomeSuccess != nil {
+					outcome = "failure"
+					if *r.OutcomeSuccess {
+						outcome = "success"
+					}
+				}
+				fmt.Fprintf(out, "  %s  %s  outcome=%s  events=%d\n", r.RunID, r.StartedAt, outcome, r.Events)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output the run list as JSON")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Project root (default: current working directory)")
+	return cmd
+}
+
 // traceExportCmd implements `nightgauge trace export <run-id> --json`.
 func traceExportCmd() *cobra.Command {
 	var (
@@ -86,7 +155,7 @@ func traceExportCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:          "export <run-id>",
-		Short:        "Export one joined document: trace + RunRecord + exit records",
+		Short:        "Export one joined document: trace + RunRecord + exit records + merge + survival",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		Example:      `  nightgauge trace export 01890a5d-ac96-774b-bcce-b302099a8057 --json`,

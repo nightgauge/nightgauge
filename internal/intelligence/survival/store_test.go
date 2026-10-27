@@ -168,3 +168,26 @@ func TestStore_LoadPreservesFirstSeenOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestStore_MergedByRoundTripsThroughFinalize: the merge actor captured at
+// post-merge (#1283) survives the journal and the terminal rewrite.
+func TestStore_MergedByRoundTripsThroughFinalize(t *testing.T) {
+	s := newTestStore(t)
+	rec := NewPending("nightgauge/nightgauge", 1, 2, "sha-actor", testMergedAt, "main")
+	rec.MergedBy = "octo-maintainer"
+	if _, err := s.Append(rec); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	loaded, err := s.Load()
+	if err != nil || len(loaded) != 1 || loaded[0].MergedBy != "octo-maintainer" {
+		t.Fatalf("pending load = %+v, %v; want merged_by octo-maintainer", loaded, err)
+	}
+	final, _ := DecideVerdict(loaded[0], mergedAtTime(t).Add(8*24*time.Hour), 7, Observation{})
+	if err := s.Finalize(final); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	all, _ := s.Load()
+	if len(all) != 1 || all[0].Verdict != Survived || all[0].MergedBy != "octo-maintainer" {
+		t.Errorf("finalized = %+v; want survived with merged_by preserved", all)
+	}
+}

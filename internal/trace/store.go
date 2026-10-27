@@ -278,12 +278,66 @@ func FindLatestRunIDForIssue(rootDir string, issue int) (string, error) {
 	return "", nil
 }
 
+// FindAllRunIDsForIssue returns every run id whose trace carries the given
+// issue number, oldest first by the first event's timestamp (#1283). File
+// mtime is only a tiebreaker: appending to an old run's file bumps its mtime,
+// so mtime alone would misorder the chain. Remaining ties break by run id.
+// An issue with no trace returns (nil, nil).
+func FindAllRunIDsForIssue(rootDir string, issue int) ([]string, error) {
+	runIDs, err := ListRunIDs(rootDir)
+	if err != nil {
+		return nil, err
+	}
+	type match struct {
+		runID string
+		ts    string
+		mod   time.Time
+	}
+	var matches []match
+	for _, runID := range runIDs {
+		path, err := FilePath(rootDir, runID)
+		if err != nil {
+			continue
+		}
+		ev, ok := firstEvent(path)
+		if !ok || ev.Issue != issue {
+			continue
+		}
+		m := match{runID: runID, ts: ev.Ts}
+		if info, statErr := os.Stat(path); statErr == nil {
+			m.mod = info.ModTime()
+		}
+		matches = append(matches, m)
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].ts != matches[j].ts {
+			return matches[i].ts < matches[j].ts
+		}
+		if !matches[i].mod.Equal(matches[j].mod) {
+			return matches[i].mod.Before(matches[j].mod)
+		}
+		return matches[i].runID < matches[j].runID
+	})
+	var out []string
+	for _, m := range matches {
+		out = append(out, m.runID)
+	}
+	return out, nil
+}
+
 // firstEventIssue reads the first parseable event of a trace file and
 // returns its issue number (0 when unreadable).
 func firstEventIssue(path string) int {
+	ev, _ := firstEvent(path)
+	return ev.Issue
+}
+
+// firstEvent returns the first parseable event of a trace file in file order;
+// ok is false when the file is unreadable or holds no parseable event.
+func firstEvent(path string) (Event, bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0
+		return Event{}, false
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
@@ -297,7 +351,7 @@ func firstEventIssue(path string) int {
 		if err := json.Unmarshal(line, &ev); err != nil {
 			continue
 		}
-		return ev.Issue
+		return ev, true
 	}
-	return 0
+	return Event{}, false
 }

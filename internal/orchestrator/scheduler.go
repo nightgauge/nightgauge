@@ -11147,6 +11147,7 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 	if pmResult.SurvivalEligible && s.workspaceRoot != "" {
 		store := survival.NewStore(s.workspaceRoot)
 		rec := survival.NewPending(item.Repo, item.Number, mergedPRNumber, pmResult.MergedCommitSha, pmResult.MergedAt, pmResult.BaseRef)
+		rec.MergedBy = pmResult.MergedBy
 		if mc := pmResult.MainChecks; mc != nil {
 			rec.MainCheckVerdict = string(mc.Verdict)
 			rec.MainCheckFailing = mc.FailingNames()
