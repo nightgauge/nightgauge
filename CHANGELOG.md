@@ -174,6 +174,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Action Center bands now rank the way they read (#1583).** The tree shows
+  one band per severity, most urgent first: "Blocking the fleet", "Blocking a
+  run", "FYI". The lowest band no longer reads "Needs a human", and a red
+  default branch sits above green dependency-update PRs.
+
 - **Worktree containment no longer fails one issue for another issue's
   leftovers (#2608).** The retry ledger in `containment/attributed.json` now
   records which issue attributed each path, and only a retry of that issue

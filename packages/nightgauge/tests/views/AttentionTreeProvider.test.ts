@@ -3,8 +3,8 @@
  * count, and live updates off the `attention.event` push (ADR 015 / #325).
  *
  * Drives the provider with a fake {@link AttentionIpcSource} (no real IPC
- * connection) and asserts: the two mockup severity bands ("Blocking" /
- * "Needs a human"), ordering within the blocking band (fleet before run),
+ * connection) and asserts: one band per severity in rank order ("Blocking the
+ * fleet" / "Blocking a run" / "FYI", #1583),
  * the open-blocking badge count, and that a resolved/expired push removes a
  * card everywhere ("one queue, many mirrors" — ADR 015 §D) while a created
  * push adds one.
@@ -23,6 +23,7 @@ import {
 import {
   AttentionGroupTreeItem,
   AttentionRequestTreeItem,
+  SEVERITY_BANDS,
   type AttentionTreeItem,
 } from "../../src/views/attention/attentionTreeItems";
 import type {
@@ -139,10 +140,11 @@ describe("AttentionTreeProvider", () => {
     provider.dispose();
   });
 
-  it("groups into Blocking / Needs a human and orders fleet before run", async () => {
+  it("places each severity in its own band, most urgent first", async () => {
     const fyi = request({ id: "dr_fyi", severity: "fyi", title: "owner-action: DNS checklist" });
     const run = request({ id: "dr_run", severity: "blocking_run", title: "Budget ceiling hit" });
     const fleet = request({ id: "dr_fleet", severity: "blocking_fleet", title: "Fleet stopped" });
+    const bySeverity = { fyi, blocking_run: run, blocking_fleet: fleet };
 
     const provider = new AttentionTreeProvider();
     const source = new FakeSource();
@@ -153,18 +155,54 @@ describe("AttentionTreeProvider", () => {
     await Promise.resolve();
 
     const roots = await children(provider);
-    expect(roots).toHaveLength(2);
-    expect(String(roots[0].label)).toBe("Blocking (2)");
-    expect(String(roots[1].label)).toBe("Needs a human (1)");
-
-    const blockingChildren = await children(provider, roots[0]);
-    expect(blockingChildren.map((c) => (c as AttentionRequestTreeItem).request.id)).toEqual([
-      "dr_fleet",
-      "dr_run",
+    // The exact ordered labels: no band reads as more urgent than one above it.
+    expect(roots.map((r) => String(r.label))).toEqual([
+      "Blocking the fleet (1)",
+      "Blocking a run (1)",
+      "FYI (1)",
     ]);
+    // Iterating the table means a severity added without a band fails here.
+    for (const [rank, band] of SEVERITY_BANDS.entries()) {
+      const members = await children(provider, roots[rank]);
+      expect(members.map((c) => (c as AttentionRequestTreeItem).request.id)).toEqual([
+        bySeverity[band.severity].id,
+      ]);
+    }
 
-    const fyiChildren = await children(provider, roots[1]);
-    expect(fyiChildren.map((c) => (c as AttentionRequestTreeItem).request.id)).toEqual(["dr_fyi"]);
+    provider.dispose();
+  });
+
+  it("puts a red default branch above green dependabot PRs (#1583)", async () => {
+    const redMain = request({
+      id: "dr_red_main",
+      severity: "blocking_fleet",
+      producer: "default-branch-health",
+      title: 'main is red — "ci" is failing on octocat/acme-web',
+      context: { repo: "octocat/acme-web" },
+      created_at: new Date(2026, 0, 1).toISOString(),
+    });
+    const bump = (id: string, pr: number) =>
+      request({
+        id,
+        severity: "blocking_run",
+        producer: "human-gate",
+        title: `PR #${pr} is green and waiting — bump lodash`,
+        context: { repo: "octocat/acme-web", pr },
+        created_at: new Date(2026, 0, 3).toISOString(),
+      });
+
+    const provider = new AttentionTreeProvider();
+    const source = new FakeSource();
+    source.list = [bump("dr_bump_1", 12), bump("dr_bump_2", 13), redMain];
+    provider.attach(source);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const roots = await children(provider);
+    expect(String(roots[0].label)).toBe("Blocking the fleet (1)");
+    const top = await children(provider, roots[0]);
+    expect(top.map((c) => (c as AttentionRequestTreeItem).request.id)).toEqual(["dr_red_main"]);
+    expect(String(roots[1].label)).toBe("Blocking a run (2)");
 
     provider.dispose();
   });
@@ -213,7 +251,7 @@ describe("AttentionTreeProvider", () => {
     expect(provider.getOpenBlockingCount()).toBe(1);
     const roots = await children(provider);
     const blocking = roots.find((r) =>
-      String(r.label).startsWith("Blocking")
+      String(r.label).startsWith("Blocking the fleet")
     ) as AttentionGroupTreeItem;
     const blockingChildren = await children(provider, blocking);
     expect(blockingChildren.map((c) => (c as AttentionRequestTreeItem).request.id)).toEqual([
@@ -280,7 +318,7 @@ describe("AttentionTreeProvider — repo-scoped cards", () => {
       ...overrides,
     });
 
-  it("renders a card with no run and no issue in the Blocking band", async () => {
+  it("renders a card with no run and no issue in the fleet band", async () => {
     const provider = new AttentionTreeProvider();
     const source = new FakeSource();
     source.list = [repoScoped({ id: "dr_repo" })];
@@ -290,7 +328,7 @@ describe("AttentionTreeProvider — repo-scoped cards", () => {
 
     const roots = await children(provider);
     expect(roots).toHaveLength(1);
-    expect(String(roots[0].label)).toBe("Blocking (1)");
+    expect(String(roots[0].label)).toBe("Blocking the fleet (1)");
 
     const [card] = (await children(provider, roots[0])) as AttentionRequestTreeItem[];
     expect(card.request.id).toBe("dr_repo");
@@ -334,7 +372,7 @@ describe("AttentionTreeProvider — repo-scoped cards", () => {
 
     // Muting is not resolving — the card stays in the inbox at its severity.
     const roots = await children(provider);
-    expect(String(roots[0].label)).toBe("Blocking (1)");
+    expect(String(roots[0].label)).toBe("Blocking the fleet (1)");
     const [card] = (await children(provider, roots[0])) as AttentionRequestTreeItem[];
     expect(String(card.description)).toContain("muted");
     expect(card.contextValue).toBe("attention.request.link.muted");
