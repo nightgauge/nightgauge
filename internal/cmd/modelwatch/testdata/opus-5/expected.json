@@ -1,0 +1,106 @@
+{
+  "v": 1,
+  "provider": "anthropic",
+  "model_id": "claude-opus-5",
+  "patch": {
+    "add": {
+      "id": "claude-opus-5",
+      "provider": "anthropic",
+      "tiers": ["opus"],
+      "display_name": "Claude Opus 5",
+      "concrete_version": "claude-opus-5",
+      "rates": {
+        "input": 5,
+        "output": 25,
+        "cache_read": 0.5
+      },
+      "rate_provenance": "list",
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "context_window": 1000000,
+      "behavior": {
+        "thinking_default": "on",
+        "thinking_disable_max_effort": "high",
+        "effort_default": "high",
+        "max_output_tokens": 128000,
+        "propensity": {
+          "verification": "high",
+          "delegation": "high",
+          "narration": "low"
+        }
+      }
+    },
+    "demote": [
+      {
+        "id": "claude-opus-4-8",
+        "replacement": "claude-opus-5"
+      }
+    ],
+    "target_files": [
+      "packages/nightgauge-sdk/src/eval/model-registry.json",
+      "internal/models/model-registry.json"
+    ]
+  },
+  "overlays": [
+    {
+      "axis": "verification",
+      "level": "high",
+      "target": "skills/_shared/_overlays/claude-opus-5.md",
+      "action": "create",
+      "quote": "Claude Opus 5 verifies its own work more readily than earlier models, so explicit verification instructions are often redundant",
+      "source": "https://docs.example.com/prompting/opus-5",
+      "issue": {
+        "title": "feat(skills): claude-opus-5 overlay for high verification",
+        "body": "claude-opus-5 documents high verification propensity; create skills/_shared/_overlays/claude-opus-5.md to adapt skill guidance on this axis\n\nReview the quoted vendor guidance before changing the overlay.\n\nSource: https://docs.example.com/prompting/opus-5\n\n```text\nClaude Opus 5 verifies its own work more readily than earlier models, so explicit verification instructions are often redundant\n```\n\nFound by nightgauge-model-watch. Triage before dispatch.\n",
+        "labels": ["type:feature"]
+      }
+    },
+    {
+      "axis": "delegation",
+      "level": "high",
+      "target": "skills/_shared/_overlays/claude-opus-5.md",
+      "action": "create",
+      "quote": "Opus 5 delegates to subagents more readily; state when work should stay in the main session",
+      "source": "https://docs.example.com/prompting/opus-5",
+      "issue": {
+        "title": "feat(skills): claude-opus-5 overlay for high delegation",
+        "body": "claude-opus-5 documents high delegation propensity; create skills/_shared/_overlays/claude-opus-5.md to adapt skill guidance on this axis\n\nReview the quoted vendor guidance before changing the overlay.\n\nSource: https://docs.example.com/prompting/opus-5\n\n```text\nOpus 5 delegates to subagents more readily; state when work should stay in the main session\n```\n\nFound by nightgauge-model-watch. Triage before dispatch.\n",
+        "labels": ["type:feature"]
+      }
+    },
+    {
+      "axis": "narration",
+      "level": "low",
+      "target": "skills/_shared/_overlays/claude-opus-5.md",
+      "action": "create",
+      "quote": "Opus 5 narrates its progress less between tool calls",
+      "source": "https://docs.example.com/prompting/opus-5",
+      "issue": {
+        "title": "feat(skills): claude-opus-5 overlay for low narration",
+        "body": "claude-opus-5 documents low narration propensity; create skills/_shared/_overlays/claude-opus-5.md to adapt skill guidance on this axis\n\nReview the quoted vendor guidance before changing the overlay.\n\nSource: https://docs.example.com/prompting/opus-5\n\n```text\nOpus 5 narrates its progress less between tool calls\n```\n\nFound by nightgauge-model-watch. Triage before dispatch.\n",
+        "labels": ["type:feature"]
+      }
+    }
+  ],
+  "defects": [
+    {
+      "kind": "thinking_effort_400",
+      "summary": "claude-opus-5 rejects requests that disable thinking above effort high (HTTP 400)",
+      "quote": "Disabling thinking is supported at effort high or lower; requests that disable thinking at xhigh or max return a 400 error",
+      "source": "https://docs.example.com/models/whats-new-opus-5",
+      "issue": {
+        "title": "fix(models): claude-opus-5 thinking/effort pairing returns 400",
+        "body": "claude-opus-5 rejects requests that disable thinking above effort high (HTTP 400)\n\nClamp effort or keep thinking enabled wherever a stage disables thinking for this model.\n\nSource: https://docs.example.com/models/whats-new-opus-5\n\n```text\nDisabling thinking is supported at effort high or lower; requests that disable thinking at xhigh or max return a 400 error\n```\n\nFound by nightgauge-model-watch. Triage before dispatch.\n",
+        "labels": ["type:bug"]
+      }
+    }
+  ],
+  "capabilities": [
+    {
+      "kind": "effort_level",
+      "value": "max",
+      "quote": "The effort parameter supports low, medium, high, xhigh, and max",
+      "source": "https://docs.example.com/models/whats-new-opus-5"
+    }
+  ],
+  "dropped": []
+}

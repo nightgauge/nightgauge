@@ -1,0 +1,24 @@
+{
+  "models": [
+    {
+      "id": "gpt-5.6-sol",
+      "provider": "openai",
+      "tiers": ["opus", "fable"],
+      "display_name": "GPT-5.6 Sol",
+      "concrete_version": "gpt-5.6-sol",
+      "rates": { "input": 2.5, "output": 20 },
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
+      "context_window": 400000
+    },
+    {
+      "id": "claude-opus-4-8",
+      "provider": "anthropic",
+      "tiers": ["opus"],
+      "display_name": "Claude Opus 4.8",
+      "concrete_version": "claude-opus-4-8",
+      "rates": { "input": 5, "output": 25 },
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
+      "context_window": 1000000
+    }
+  ]
+}

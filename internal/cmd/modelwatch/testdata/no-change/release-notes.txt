@@ -1,0 +1,3 @@
+We improved rate-limit headers on the Messages API.
+Batch requests now report per-item latency.
+The Files API accepts larger uploads.

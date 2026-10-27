@@ -15,9 +15,9 @@ the composer is
 
 > **Status.** The composer (`nightgauge skill render`), the registry `behavior`
 > block, the extension's migration onto the composer, and the shared provider
-> and Anthropic overlays (#81) have shipped. The `preflight skill-overlays`
-> gate, base-skill prose
-> extraction, `nightgauge-model-watch`, and the overlay-delta evals are still
+> and Anthropic overlays (#81), and the `nightgauge-model-watch` intake (#83)
+> have shipped. The `preflight skill-overlays` gate, base-skill prose
+> extraction, and the overlay-delta evals are still
 > open — see [Not yet enforced](#not-yet-enforced) before relying on any of them.
 
 ## 1. The mental model
@@ -217,7 +217,8 @@ that expansion would otherwise have erased.
    overlay. "Run the tests, then open the PR" is the base skill.
 3. **No model-conditional language in a base skill.** Any sentence of the form
    "if you are a large model…" moves into an overlay. Skills whose _subject_ is
-   models (`nightgauge-release-watch`, the eval skills) legitimately name them;
+   models (`nightgauge-release-watch`, `nightgauge-model-watch`, the eval
+   skills) legitimately name them;
    that residue is covered by an inline `<!-- overlay-exempt: reason -->` marker.
 4. **Write for composition.** Your fragment may be read after a provider-level
    one. Countermand explicitly ("ignore the subagent guidance above") rather
@@ -233,6 +234,12 @@ that expansion would otherwise have erased.
 
 ## 6. Adding a model
 
+0. Intake: run `/nightgauge-model-watch` against the provider's release and
+   prompting pages. It runs `nightgauge model-watch classify`, which proposes
+   the descriptor and band demotions as a patch. It also reports new effort
+   levels, defects such as a thinking/effort 400, and one overlay proposal per
+   documented propensity axis. It never writes the registry; the steps below
+   apply its patch.
 1. Add the descriptor to `packages/nightgauge-sdk/src/eval/model-registry.json`
    and mirror it into `internal/models/model-registry.json` with
    `scripts/sync-model-registry.sh`. The Go binary reads the embedded mirror, so
@@ -276,8 +283,7 @@ Two things in this guide are specified but not yet mechanically gated:
 - **`<!-- overlay-exempt: reason -->`** is the marker that gate will honour. It
   is inert today.
 
-`nightgauge-model-watch` (#83), the
-base-skill prose extraction (#82), and the overlay-delta harness (#84) are open
+The base-skill prose extraction (#82) and the overlay-delta harness (#84) are open
 for the same reason. Write overlays as if the gate existed; it is coming, and
 the review burden until then is human.
 

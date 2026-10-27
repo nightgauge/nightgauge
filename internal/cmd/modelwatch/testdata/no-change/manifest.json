@@ -1,0 +1,11 @@
+{
+  "provider": "anthropic",
+  "tiers": ["opus"],
+  "sources": [
+    {
+      "file": "release-notes.txt",
+      "url": "https://docs.example.com/release-notes/api",
+      "kind": "release-notes"
+    }
+  ]
+}

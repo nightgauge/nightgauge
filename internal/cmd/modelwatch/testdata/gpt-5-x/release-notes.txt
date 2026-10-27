@@ -1,0 +1,5 @@
+GPT-5.7 is now available in the API under the model name `gpt-5.7`.
+Pricing: $2.50 / 1M input tokens and $20 / 1M output tokens.
+GPT-5.7 offers a 400K context window.
+The maximum output is 128K tokens.
+The reasoning effort parameter supports low, medium, high and xhigh.

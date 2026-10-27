@@ -4739,6 +4739,49 @@ secret.
 
 ---
 
+### Model Watch Operations
+
+Deterministic intake for vendor **model** releases, behind
+`skills/nightgauge-model-watch/SKILL.md` (#83). Output schemas are stable v1;
+additive evolution only.
+
+#### `model-watch classify`
+
+Reads an input directory: a `manifest.json` (`provider`, `tiers`, optional
+`model_id` and `display_name`, `sources[]{file,url,kind}`) plus the fetched page
+text it names. It compares the release against the baseline registry and emits
+`{v, provider, model_id, patch, overlays[], defects[], capabilities[], dropped[]}`.
+
+```bash
+nightgauge model-watch classify --input <dir> [flags]
+```
+
+| Flag         | Description                                                           |
+| ------------ | --------------------------------------------------------------------- |
+| `--input`    | Directory holding `manifest.json` and the page text (required)        |
+| `--registry` | Baseline registry snapshot (`{"models": [...]}`); default is embedded |
+| `--overlays` | Overlay directory used to choose `create` or `edit` proposals         |
+| `--json`     | Emit JSON for the skill                                               |
+
+- `patch.add` is the proposed descriptor. It holds typed values only. `patch.demote` deprecates each
+  non-deprecated holder of the same (provider, band). A model already in the
+  baseline, or none named, yields an empty patch and no findings.
+- `capabilities[]` lists `effort_level` entries the band's prior holder lacked
+  and `unextracted` facts no rule found.
+- `defects[]` reports a thinking-disable ceiling below the top supported effort
+  as `thinking_effort_400`. `overlays[]` holds one proposal per documented
+  propensity axis. Each carries an `issue` (`title`, `body`, `labels`); labels
+  are only `type:bug` or `type:feature`.
+- Every quote is truncated to 240 runes, stripped of backticks and screened for
+  prompt injection in block mode, whatever `sanitization.mode` says. A
+  screened-out finding appears in `dropped[]`.
+
+The verb has no `--apply` and never writes the registry. Exit `0` on success,
+including an empty result; exit `2` on a bad input dir, manifest, source file or
+registry snapshot.
+
+---
+
 ### Hook Subcommands
 
 Used by Claude Code hook entry points (thin shell wrappers):

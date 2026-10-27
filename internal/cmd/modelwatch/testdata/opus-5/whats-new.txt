@@ -1,0 +1,10 @@
+Claude Opus 5 is the most capable model in the family. Its API model id is `claude-opus-5`.
+
+Pricing is $5 per million input tokens and $25 per million output tokens.
+Cache reads cost $0.50 per million tokens.
+Claude Opus 5 has a context window of 1,000,000 tokens.
+Responses can use up to 128,000 max output tokens, shared between thinking and text.
+The effort parameter supports low, medium, high, xhigh, and max.
+The default effort is high.
+Extended thinking is on by default.
+Disabling thinking is supported at effort high or lower; requests that disable thinking at xhigh or max return a 400 error.
