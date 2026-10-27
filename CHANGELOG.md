@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Program items validated by the retired bypass keep releasing dependents
+  (#2575).** A trusted `<!-- opencode-program:validated -->` comment now counts
+  as the post-merge validation marker; an untrusted copy is still ignored, and
+  the post-merge hook still writes only `<!-- nightgauge:validated sha=… -->`.
+
 - **Record findings discovered outside a pipeline run (#102).**
   `nightgauge finding record` saves an environment gotcha, precondition or API
   shape to `.nightgauge/findings.jsonl` in the main checkout, and

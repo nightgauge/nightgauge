@@ -2978,6 +2978,8 @@ trusted bot — carries:
 <!-- nightgauge:validated sha=<merge-sha> -->
 ```
 
+This is the only marker the post-merge hook writes.
+
 `nightgauge hook post-merge` (and the scheduler's in-process post-merge path)
 posts that comment only when the merge commit verifies `green`, the verdict
 `nightgauge ci checks-complete` exits `0` for, and posts nothing when one is
@@ -3116,8 +3118,11 @@ Replacing the earlier bypass script, verb by verb:
 | `audit-edges`    | Not carried: the forge graph is the plan, with no snapshot to drift from               |
 
 A program issue closed before #2574 carries no marker. Re-run
-`nightgauge hook post-merge` for it once its base branch is green. The old
-`opencode-program:validated` marker is not honoured.
+`nightgauge hook post-merge` for it once its base branch is green. A trusted
+`<!-- opencode-program:validated -->` comment left by the retired bypass is
+accepted for compatibility, so items it validated keep releasing dependents.
+The hook never writes it and reports `present` for such an issue; an untrusted
+copy is ignored like any pasted marker.
 
 ### PR Operations
 
