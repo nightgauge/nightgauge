@@ -300,12 +300,12 @@ func TestEvaluateChecksComplete_LatestRunDecides(t *testing.T) {
 		{"other app's failure stays red", []CheckDetail{
 			{Name: "api", Status: "COMPLETED", Conclusion: "FAILURE", App: "other", HeadSHA: "abc", ID: 1, StartedAt: "2026-10-27T10:00:00Z"},
 			run(2, "2026-10-27T10:05:00Z", "SUCCESS")}, ChecksIncomplete},
-		{"another workflow's same-named job stays red", []CheckDetail{
+		{"a re-run in a new check suite collapses", []CheckDetail{
 			{Name: "api", Status: "COMPLETED", Conclusion: "FAILURE", App: "github-actions", HeadSHA: "abc", CheckSuiteID: 8, ID: 1, StartedAt: "2026-10-27T10:00:00Z"},
-			run(2, "2026-10-27T10:05:00Z", "SUCCESS")}, ChecksIncomplete},
-		{"runs with no suite are not collapsed", []CheckDetail{
+			run(2, "2026-10-27T10:05:00Z", "SUCCESS")}, ChecksComplete},
+		{"runs with no suite still collapse", []CheckDetail{
 			{Name: "api", Status: "COMPLETED", Conclusion: "FAILURE", App: "github-actions", HeadSHA: "abc", ID: 1, StartedAt: "2026-10-27T10:00:00Z"},
-			{Name: "api", Status: "COMPLETED", Conclusion: "SUCCESS", App: "github-actions", HeadSHA: "abc", ID: 2, StartedAt: "2026-10-27T10:05:00Z"}}, ChecksIncomplete},
+			{Name: "api", Status: "COMPLETED", Conclusion: "SUCCESS", App: "github-actions", HeadSHA: "abc", ID: 2, StartedAt: "2026-10-27T10:05:00Z"}}, ChecksComplete},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -58,12 +58,12 @@ func MissingRequiredChecks(checks []CheckDetail, requiredNames []string) []strin
 }
 
 // checkRunKey is the identity under which re-runs of one check run collapse:
-// the same name, posted by the same app, in the same check suite, against the
-// same commit. GitHub keeps a re-run attempt in its original suite, while two
-// workflows with a same-named job are two suites, so neither masks the other.
+// the same name, posted by the same app, against the same commit. The check
+// suite is not part of it: a re-triggered workflow is a new workflow run, so
+// its re-run lands in a new suite. GitHub's ruleset matches a required check
+// by name and app the same way, so the later of two same-named jobs wins.
 type checkRunKey struct {
 	name, app, sha string
-	suite          int64
 }
 
 // LatestCheckRuns keeps only the most recent run of each check run (#2603).
@@ -71,20 +71,19 @@ type checkRunKey struct {
 // superseded by a re-run that went green is not a failure, and a SUCCESS
 // followed by a FAILURE is.
 //
-// Only the check-run surface collapses (a non-empty App and suite), keyed by
-// (name, app, check suite, head SHA). A run with no suite, and every commit
-// status, passes through, so a status and a check run with the same name
-// still fail closed in the callers. "Latest" is the
-// later StartedAt, then the higher ID; when two runs of one identity cannot be
+// Only the check-run surface collapses (a non-empty App), keyed by
+// (name, app, head SHA). Every commit status passes through, so a status and
+// a check run with the same name still fail closed in the callers. "Latest" is
+// the later StartedAt, then the higher ID; when two runs of one identity cannot be
 // ordered, both are kept, which fails closed. Kept observations retain their
 // input order.
 func LatestCheckRuns(checks []CheckDetail) []CheckDetail {
 	groups := make(map[checkRunKey][]int)
 	for i, c := range checks {
-		if c.App == "" || c.CheckSuiteID == 0 {
+		if c.App == "" {
 			continue
 		}
-		k := checkRunKey{strings.ToLower(strings.TrimSpace(c.Name)), c.App, strings.ToLower(c.HeadSHA), c.CheckSuiteID}
+		k := checkRunKey{strings.ToLower(strings.TrimSpace(c.Name)), c.App, strings.ToLower(c.HeadSHA)}
 		groups[k] = append(groups[k], i)
 	}
 	drop := make(map[int]bool)
