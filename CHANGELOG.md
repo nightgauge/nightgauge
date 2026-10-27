@@ -174,6 +174,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Worktree containment no longer fails one issue for another issue's
+  leftovers (#2608).** The retry ledger in `containment/attributed.json` now
+  records which issue attributed each path, and only a retry of that issue
+  re-attributes it. Other issues treat the path as pre-existing operator work.
+  A ledger in the old, unowned shape is ignored and rewritten.
 - **Reconcile no longer closes unstarted sub-issues of an epic that a partial
   PR closed (#2602).** The orphan-sub closer used to close every open
   sub-issue of an epic closed as completed. It now closes one only when the

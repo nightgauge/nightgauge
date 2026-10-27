@@ -5281,6 +5281,7 @@ function runStageSkillHeadlessImpl(
           stageCwd: workspaceRoot,
           repoPaths: containmentRepoPaths,
           runningWorktreePaths: resolveRunningWorktreePaths(),
+          ...(issueNumber != null ? { issueNumber } : {}),
         })
       : null;
 
