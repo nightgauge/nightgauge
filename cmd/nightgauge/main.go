@@ -7036,6 +7036,7 @@ cause the command to exit non-zero.`,
 			if result.SurvivalEligible && workdir != "" {
 				store := survival.NewStore(workdir)
 				rec := survival.NewPending(ownerPart+"/"+repoPart, issueNumber, prNumber, result.MergedCommitSha, result.MergedAt, result.BaseRef)
+				rec.MergedBy = result.MergedBy
 				if result.MainChecks != nil {
 					rec.MainCheckVerdict = string(result.MainChecks.Verdict)
 					rec.MainCheckFailing = result.MainChecks.FailingNames()

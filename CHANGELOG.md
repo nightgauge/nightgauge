@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Recover an issue's full decision chain from its number (#1283).**
+  `nightgauge trace list <issue>` lists every traced run, oldest first.
+  `trace export` now adds `issue_runs`, `merge` (PR, merge SHA, who merged it)
+  and `survival` (the post-merge verdict). A piece that cannot be recovered is
+  marked `unavailable` with a reason. The post-merge hook now records the merge
+  actor from the forge on the survival record. Records written before this
+  change report the actor as unavailable.
 - **Discovered-work capture substrate (#478).** A run can now record follow-up
   work it found but must not do itself: `nightgauge discovered-work record`
   validates each record (closed type, priority and size enums, a one-line
@@ -26,6 +33,7 @@ changelog, and the release workflow refuses a tag that does not.
   report files no run will materialize, without deleting them. The SDK exports
   the matching `DiscoveredWorkContextSchema`. No stage records anything yet;
   ADR 027 records the design.
+
 - **Live phase progress and run output for CLI-started runs (#586).** The
   scheduler now writes the run snapshot on every phase event, not only at stage
   boundaries, so a `nightgauge run` started in a terminal shows its current
