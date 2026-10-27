@@ -3,11 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	docspkg "github.com/nightgauge/nightgauge/internal/docs"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 	"github.com/nightgauge/nightgauge/internal/scan"
 	"github.com/spf13/cobra"
@@ -47,6 +50,7 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightThinkingEffortCmd())
 	cmd.AddCommand(preflightMitigationRuleCmd())
 	cmd.AddCommand(preflightManagedSteeringCmd())
+	cmd.AddCommand(preflightEnvironmentCmd())
 	return cmd
 }
 
@@ -1061,4 +1065,95 @@ func printPreflightMitigationRuleHuman(r *preflight.MitigationRuleResult) {
 	if len(r.Findings) == 0 {
 		fmt.Println("the unobserved-mechanism rule is stated where it must be, and every mitigation marker is tracked ✓")
 	}
+}
+
+// environmentHaltMarker prefixes every stderr line that halts a stage on a
+// project environment check. The terminal-kind classifier keys on it (#101).
+const environmentHaltMarker = "[environment-halt]"
+
+func preflightEnvironmentCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		workdir    string
+	)
+	cmd := &cobra.Command{
+		Use:   "environment",
+		Short: "Run the project-declared preflight.environment checks",
+		Long: `Run the checks declared under preflight.environment in the workspace's
+.nightgauge/config.yaml (#101). Every stage runs this as Layer 3 of its Phase 0
+preflight, so a broken local environment halts the stage with the declared
+remedy instead of failing mid-stage as an apparent code defect.
+
+Config is read only from the main checkout root, never from a worktree, so a
+branch cannot change what preflight runs. Commands run as argv, without a
+shell; remedies are printed, never executed. With no checks declared the verb
+prints {"ok":true,"checks":[]} under --json and nothing otherwise.
+
+Exit codes:
+  0  every check passed, or none are declared
+  1  one or more checks failed
+  2  the preflight.environment declaration could not be loaded or is invalid`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			dir := workdir
+			if dir == "" {
+				wd, err := os.Getwd()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "%s preflight environment: %v\n", environmentHaltMarker, err)
+					os.Exit(2)
+				}
+				dir = wd
+			}
+			cfg, err := config.Load(environmentConfigRoot(dir))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s preflight environment: invalid config: %v\n", environmentHaltMarker, err)
+				os.Exit(2)
+			}
+			var checks []config.EnvironmentCheck
+			if cfg.Preflight != nil {
+				checks = cfg.Preflight.Environment
+			}
+			result := preflight.RunEnvironmentChecks(cmd.Context(), checks, dir)
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to encode JSON output: %v\n", err)
+				}
+			} else {
+				for _, c := range result.Checks {
+					mark := "✓"
+					if c.Status != "ok" {
+						mark = "✗"
+					}
+					if c.Message == "" {
+						fmt.Printf("  %s %s\n", mark, c.Name)
+					} else {
+						fmt.Printf("  %s %s: %s\n", mark, c.Name, c.Message)
+					}
+				}
+			}
+			for _, c := range result.Checks {
+				if c.Status != "ok" {
+					fmt.Fprintf(os.Stderr, "%s %s: %s — remedy: %s\n", environmentHaltMarker, c.Name, c.Message, c.Remedy)
+				}
+			}
+			if !result.OK {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Directory checks run in (default: current working directory)")
+	return cmd
+}
+
+// environmentConfigRoot returns the main checkout root for dir: the parent of
+// its git common dir. Config is never read from a linked worktree, so a branch
+// cannot alter its own Phase 0. Outside git, dir itself is the root.
+func environmentConfigRoot(dir string) string {
+	common, err := layout.GitCommonDir(dir)
+	if err != nil {
+		return dir
+	}
+	return filepath.Dir(common)
 }

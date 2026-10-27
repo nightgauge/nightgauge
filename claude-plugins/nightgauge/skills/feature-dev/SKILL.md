@@ -6,7 +6,7 @@ description: Implement features following the approved PLAN.md and documented st
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.16.1"
+  version: "1.17.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -54,7 +54,6 @@ disable-model-invocation: true
 
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
 <!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
-<!-- include: ../_shared/BATCH_MODE.md -->
 
 # Feature Development
 
@@ -247,7 +246,7 @@ resume from the phase after load-context.
 ---
 
 ```bash
-printf '<!-- phase:start name="validate-environment" index=0 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="validate-environment" index=0 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Verify the skill is running in the correct repository before
@@ -321,7 +320,7 @@ fi
 ### Phase 0: Read Planning Context
 
 ```bash
-printf '<!-- phase:start name="read-planning-context" index=1 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="read-planning-context" index=1 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Load context from previous pipeline stage.
@@ -330,23 +329,10 @@ printf '<!-- phase:start name="read-planning-context" index=1 total=18 stage="fe
 
 ---
 
-### Phase 0.5: Batch Plan Detection
-
-```bash
-printf '<!-- phase:start name="batch-plan-detection" index=2 total=18 stage="feature-dev" -->\n'
-```
-
-**PURPOSE**: Detect batch mode and route to consolidated development when
-`planning-batch-{E}.json` exists.
-
-> **Read `_includes/context-and-feedback-intake.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
-
----
-
 ### Phase 0.7: Feedback Context Check
 
 ```bash
-printf '<!-- phase:start name="feedback-context-check" index=3 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="feedback-context-check" index=2 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Detect whether this is a retry run triggered by validate feedback
@@ -359,7 +345,7 @@ and load prior failure evidence so the agent avoids repeating the same mistakes.
 ### Phase 1: Plan Verification
 
 ```bash
-printf '<!-- phase:start name="plan-verification" index=4 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="plan-verification" index=3 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Pre-load context files, locate and validate the plan, and confirm
@@ -428,7 +414,7 @@ bigger than planned" (`COMPLEXITY_UNDERESTIMATED`).
 ### Phase 1.5: Knowledge Base Read
 
 ```bash
-printf '<!-- phase:start name="knowledge-base-read" index=5 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="knowledge-base-read" index=4 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: When `knowledge_path` is set in the planning context (or issue
@@ -443,7 +429,7 @@ agent builds on prior knowledge rather than re-deriving it.
 ### Phase 1.6: Recall Architectural Constraints
 
 ```bash
-printf '<!-- phase:start name="recall-architectural-constraints" index=6 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="recall-architectural-constraints" index=5 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Query the knowledge recall index using the files being modified as
@@ -458,7 +444,7 @@ above the implementation prompt so the agent cannot inadvertently violate them.
 ### Phase 2: Standards Loading
 
 ```bash
-printf '<!-- phase:start name="standards-loading" index=7 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="standards-loading" index=6 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Load code, security, and testing standards (with graceful greenfield
@@ -471,7 +457,7 @@ fallbacks) so implementation follows documented conventions.
 ### Phase 3: Implementation
 
 ```bash
-printf '<!-- phase:start name="implementation" index=8 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="implementation" index=7 total=17 stage="feature-dev" -->\n'
 ```
 
 **PERFORMANCE**: This phase uses parallel execution when multiple independent
@@ -485,7 +471,7 @@ their dependencies are complete.
 ### Phase 4: Testing
 
 ```bash
-printf '<!-- phase:start name="testing" index=9 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="testing" index=8 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Write unit tests, run a build-before-tests gate, run the suite,
@@ -496,7 +482,7 @@ check coverage, and fix failures.
 ### Phase 4b: E2E Testing (Conditional)
 
 ```bash
-printf '<!-- phase:start name="e2e-testing" index=10 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="e2e-testing" index=9 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Generate and, when a framework is configured (Playwright, Cypress,
@@ -511,7 +497,7 @@ gracefully.
 ### Phase 5: Quality Review
 
 ```bash
-printf '<!-- phase:start name="quality-review" index=11 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="quality-review" index=10 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Run the 6 reviewer units declared in this skill's `orchestration:`
@@ -530,7 +516,7 @@ below is the portability floor. See
 ### Phase 6: Self-Correction
 
 ```bash
-printf '<!-- phase:start name="self-correction" index=12 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="self-correction" index=11 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Address review findings, re-run tests, run the formatter, and pass
@@ -549,7 +535,7 @@ issue #2779 for the incident that motivated this gate.
 ### Phase 6.5: Feedback Signal Evaluation
 
 ```bash
-printf '<!-- phase:start name="feedback-signal-evaluation" index=13 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="feedback-signal-evaluation" index=12 total=17 stage="feature-dev" -->\n'
 ```
 
 **PURPOSE**: Evaluate whether implementation encountered structural mismatches
@@ -569,7 +555,7 @@ fragile half-finished implementation.
 ### Phase 7: Write Dev Context
 
 ```bash
-printf '<!-- phase:start name="write-dev-context" index=14 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="write-dev-context" index=13 total=17 stage="feature-dev" -->\n'
 ```
 
 > **No commit or push in feature-dev.** Code is committed and pushed by
@@ -593,7 +579,7 @@ before the context file is written.
 ### Phase 8: Sync Project Board Status
 
 ```bash
-printf '<!-- phase:start name="sync-project-status" index=15 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="sync-project-status" index=14 total=17 stage="feature-dev" -->\n'
 ```
 
 Sync project board to "In progress" via Go binary `project sync-status`
@@ -606,7 +592,7 @@ Sync project board to "In progress" via Go binary `project sync-status`
 ### Phase 9: Output Summary
 
 ```bash
-printf '<!-- phase:start name="output-summary" index=16 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="output-summary" index=15 total=17 stage="feature-dev" -->\n'
 ```
 
 Report implementation results: branch, files changed, quality check results,
@@ -639,7 +625,7 @@ schema documentation.
 ### Phase 10: Self-Assessment Epilogue
 
 ```bash
-printf '<!-- phase:start name="self-assessment" index=17 total=18 stage="feature-dev" -->\n'
+printf '<!-- phase:start name="self-assessment" index=16 total=17 stage="feature-dev" -->\n'
 ```
 
 <!-- include: ../_shared/SELF_ASSESSMENT_EPILOGUE.md -->

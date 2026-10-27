@@ -212,7 +212,7 @@ func (e *EpicService) ReconcileBoard(ctx context.Context, owner string, projectN
 		if it.IsEpic && !closed && len(it.SubIssues) > 0 && allSubsClosed(it.SubIssues) {
 			// The board item carries the epic's OWN owner/repo, so this path was
 			// already cross-repo correct; EpicRef makes that visible (#1181).
-			status, reason, cerr := e.closeOneEpic(ctx, EpicRef{
+			status, reason, _, cerr := e.closeOneEpic(ctx, EpicRef{
 				Owner:  iOwner,
 				Repo:   iRepo,
 				Number: it.Number,
@@ -223,6 +223,8 @@ func (e *EpicService) ReconcileBoard(ctx context.Context, owner string, projectN
 				res.EpicsClosed++
 				res.Actions = append(res.Actions, ReconcileAction{Kind: "epic_closed", Number: it.Number, Repo: it.Repo, Detail: reason})
 				continue
+			} else if strings.HasPrefix(reason, "integration_") {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("epic #%d: left open, epic branch not on main (%s)", it.Number, reason))
 			}
 		}
 

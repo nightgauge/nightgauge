@@ -345,6 +345,15 @@ func TestDoctorInteractive_ProgressSummaryAndPlainOutput(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
+	// Without the spinner each check's start is its own line, before its
+	// completion line.
+	for _, o := range []*fixtureObject{a, b, c} {
+		start := strings.Index(out, "  RUNNING "+o.check()+"\n")
+		end := strings.Index(out, "FINDING "+o.check()+"\n")
+		if start < 0 || end < 0 || start > end {
+			t.Errorf("no RUNNING line before %s finished:\n%s", o.check(), out)
+		}
+	}
 	// Blockers first in the summary.
 	if i, j := strings.Index(out, "BLOCKER NGD901"), strings.Index(out, "WARNING NGD902"); i < 0 || j < 0 || i > j {
 		t.Errorf("summary is not blockers first:\n%s", out)

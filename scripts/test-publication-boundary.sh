@@ -703,6 +703,23 @@ else
   bad "a non-integer NG_BOUNDARY_JOBS did not fail closed"
 fi
 
+# ── --classify (#2562): planning-time verdicts on paths that do not exist ──
+classify_case() { # $1 path, $2 expected verdict, $3 expected exit, $4 label
+  local out rc verdict
+  out=$(python3 "$CHECK" --classify "$1" 2>/dev/null)
+  rc=$?
+  verdict=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["verdict"])' 2>/dev/null)
+  if [ "$rc" = "$3" ] && [ "$verdict" = "$2" ]; then
+    ok "$4"
+  else
+    bad "$4 (exit=$rc verdict=${verdict:-<none>}, want exit=$3 verdict=$2)"
+  fi
+}
+classify_case "internal/x.go" allow 0 "--classify allows a path under an allow rule"
+classify_case "docs/spikes/9999-x.md" deny 1 "--classify denies a planned spike path under docs/spikes/**"
+classify_case "docs/spikes/README.md" allow 0 "--classify allows a path a deny rule excepts"
+classify_case "zz-unclassified-top/a.md" unclassified 1 "--classify rejects an unclassified path"
+
 # NOTE: there is deliberately no "clean tree passes" case here. CI runs the guard
 # against the real tree on every pull request, which proves that continuously and
 # for real. Asserting it a second time here would only couple this test to

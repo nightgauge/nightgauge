@@ -1303,7 +1303,7 @@ that population.
 | **Scheduler-path runs** (`PipelineBridge`)                     | never (never adopted into `activeRuntimes`, Decision 11) | **yes** — the primary arm    | **no** — see below (#534)                      | at stage starts and completions | yes, 120s     |
 | **CLI runs** (`nightgauge run`)                                | never                                                    | never                        | **no** — see below (#534)                      | at stage starts and completions | yes, 120s     |
 | **Interactive stage runs** (`commands/runInteractiveStage.ts`) | one `running` transition, then nothing                   | never (not in that registry) | **yes, via the same wire field**               | that one transition only        | yes, 120s     |
-| ↳ **Codex TUI sub-path** (#4024)                               | one `running` transition, then nothing                   | never                        | **no — structurally unobtainable** (see below) | that one transition only        | yes, 120s     |
+| ↳ **Codex TUI sub-path** (#431)                                | **yes** — `notifyStageAlive` on real terminal activity   | never                        | **no — structurally unobtainable** (see below) | each `notifyStageAlive`         | yes, 120s     |
 
 **Arm 3 is DENIED, not merely weak, on both scheduler-driven rows — corrected
 here rather than softened (#534).** Two revisions of this table gave those cells
@@ -1351,18 +1351,20 @@ callback). Sent pid-less — which is what it did before this — a live interac
 session past the window is closed as an orphan.
 
 **The Codex TUI sub-path cannot be given arm 3 from this host, and that is a
-verified API limit rather than an omission.** #4024 launches the Codex TUI with
-`vscode.window.createTerminal` + `sendText`, so the extension host never holds a
-`ChildProcess`; VSCode exposes no pid for a process running _inside_ a terminal
-(`Terminal.processId` is documented as "the process ID of the **shell**
-process"; `TerminalShellExecution` carries only `commandLine`, `cwd` and
-`read()`). The shell's pid is not a substitute: it exists before the stage
-starts and outlives it whenever the launch command's trailing `exit` does not
-run, so it would answer arm 3 for a session that ended — a pin that never
-expires, which is the one thing 7.4's rows cannot correct for. This sub-path is
-therefore carried by arms 1 and 4 only, and a >30-minute silent TUI session past
-the grace is reconcilable. A liveness producer for it (terminal-close driven,
-not pid driven) is follow-up work.
+verified API limit rather than an omission.** The Codex TUI runs as a VSCode
+terminal's own process (`shellPath`/`shellArgs`), so the extension host never
+holds a `ChildProcess`, and VSCode exposes no pid for the stage child that could
+not also outlive it (`Terminal.processId` names the terminal's process, which
+exists before the stage starts) — a pin that never expires, which is the one
+thing 7.4's rows cannot correct for. So arms 1 and 4 carry this sub-path, and
+#431 gives them a producer: `pipeline.notifyStageAlive` touches the run's lease
+and re-persists its snapshot, with no stage-state change. The extension sends
+it on real terminal activity only — a shell-execution-end event for the stage's
+terminal where the VS Code build exposes the API (feature-checked at runtime;
+the pinned `^1.85.0` floor predates it), and otherwise the driver's own
+checkpoints: the TUI launch and each OutputWindow relay — throttled to one per
+60 seconds. There is no timer keepalive: a TUI session with no such activity
+past the window and the grace is still reconcilable, by design.
 
 **The extension path gets a PID, and this ADR specifies the wire field rather
 than assuming one.** Without it the surviving F26 trace is still open, and it is

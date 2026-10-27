@@ -332,6 +332,11 @@ func TestAuthAndRateLimitFailuresSkipTheWholeSweep(t *testing.T) {
 			if !res.Skipped || res.SkipReason == "" {
 				t.Fatalf("want a logged skip, got %+v", res)
 			}
+			// Only a rejected credential is Unauthorized: it is what the
+			// forge-credential card is raised for (#2578).
+			if want := errors.Is(cause, forge.ErrUnauthorized); res.Unauthorized != want {
+				t.Errorf("Unauthorized = %v, want %v", res.Unauthorized, want)
+			}
 			if res.OK() {
 				t.Error("a skipped sweep must not report OK")
 			}

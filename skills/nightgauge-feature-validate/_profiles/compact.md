@@ -1,29 +1,6 @@
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
 <!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
 
-## Batch Mode
-
-**Batch mode is additive.** Every stage has a single-issue path that is the
-default and is never modified by this section. A batch context file is an
-_optional overlay_: when the file this stage looks for is absent — the normal
-case — continue the single-issue path unchanged and do not mention batch mode
-again. Never invent, guess at, or synthesize a batch context file that is not
-on disk.
-
-### The per-stage contract
-
-| Stage              | Batch input          | Batch output        |
-| ------------------ | -------------------- | ------------------- |
-| `feature-validate` | `dev-batch-{E}.json` | `validate-{E}.json` |
-
-All files live in the clone's pipeline state directory (`nightgauge layout path pipeline`).
-
-- **Every gate still runs.** Batch mode changes how many issues a run covers,
-  never which validations execute. Build, tests, and stage gates run once over
-  the combined change set — they are not skipped or sampled.
-
-Full contract, detection block and invariants: Read `skills/_shared/BATCH_MODE.md` when `dev-batch-{E}.json` exists.
-
 # Feature Validation (compact)
 
 > Compact render profile (ADR 023 §Q5, #1663). Keeps every phase marker, every
@@ -83,7 +60,7 @@ Validation is an ordered pipeline — build (1.5) → tests (2) → CI-parity (2
 **Read `skills/_shared/PREFLIGHT.md` now and follow it before continuing.**
 
 ```bash
-printf '<!-- phase:start name="validate-environment" index=0 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="validate-environment" index=0 total=22 stage="feature-validate" -->\n'
 ```
 
 <!-- include: ../_shared/REPO_IDENTITY_CHECK.md -->
@@ -91,23 +68,15 @@ printf '<!-- phase:start name="validate-environment" index=0 total=23 stage="fea
 ### Phase 0: Read Dev Context
 
 ```bash
-printf '<!-- phase:start name="read-dev-context" index=1 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="read-dev-context" index=1 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/context-load.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Extract the issue number from the branch; load `"$(nightgauge layout path pipeline dev-{N}.json)"`. Missing file → ask git ground truth via `gate verify feature-dev` (#134); proceed against the working tree if git finds changes, otherwise exit 1.
 
-### Phase 0.5: Batch Dev Context Detection
-
-```bash
-printf '<!-- phase:start name="batch-detection" index=2 total=23 stage="feature-validate" -->\n'
-```
-
-> **Read `_includes/context-load.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** If `dev-batch-{E}.json` exists, route to consolidated validation — build and test once for all changes.
-
 ### Phase 0.6: AC Completion Check (type:docs)
 
 ```bash
-printf '<!-- phase:start name="ac-completion-check" index=3 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="ac-completion-check" index=2 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/context-load.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** `type:docs` issues only (no-op otherwise): set `AC_CHECK_REQUIRED=true` when the label is present, else `AC_CHECK_REQUIRED=false` and `AC_CHECK_SKIP=true`. Steps 0.6.2 (run ac-check), 0.6.2b (substantiate unchecked criteria against the diff and mark what the change demonstrably satisfies, #1233) and 0.6.3 (gate on result) live in the include — run all three; criteria that cannot be substantiated remain unchecked → exit 1 naming them.
@@ -115,7 +84,7 @@ printf '<!-- phase:start name="ac-completion-check" index=3 total=23 stage="feat
 ### Phase 1: Detect Testing Environment (Deterministic)
 
 ```bash
-printf '<!-- phase:start name="detect-testing-environment" index=4 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="detect-testing-environment" index=3 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/test-setup.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Identify available frameworks and project type; no tests configured → proceed with manual checklist only.
@@ -123,7 +92,7 @@ printf '<!-- phase:start name="detect-testing-environment" index=4 total=23 stag
 ### Phase 1.8: PTC Detection and Execution (CONDITIONAL)
 
 ```bash
-printf '<!-- phase:start name="ptc-detection" index=5 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="ptc-detection" index=4 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/test-setup.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** If Programmatic Tool Calling is available, run validation through a single PTC session instead of individual Bash calls.
@@ -131,7 +100,7 @@ printf '<!-- phase:start name="ptc-detection" index=5 total=23 stage="feature-va
 ### Phase 1.4: Base Branch Freshness Check
 
 ```bash
-printf '<!-- phase:start name="freshness-check" index=6 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="freshness-check" index=5 total=22 stage="feature-validate" -->\n'
 ```
 
 **Read `skills/_shared/FRESHNESS_CHECK.md` now and follow it before continuing this phase.**
@@ -141,7 +110,7 @@ Best-effort: if `FRESHNESS_CHECK_FAILED=true`, log a warning and continue — pr
 ### Phase 1.5: Run Build Verification (CONDITIONAL)
 
 ```bash
-printf '<!-- phase:start name="build-verification" index=7 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="build-verification" index=6 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/build-verification.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** **Hard gate** (see Gotchas): build failure fails validation with `errorCategory: "build-failed"` and a captured stderr tail.
@@ -149,7 +118,7 @@ printf '<!-- phase:start name="build-verification" index=7 total=23 stage="featu
 ### Phase 1.6: Dead Code Detection (CONFIGURABLE GATE)
 
 ```bash
-printf '<!-- phase:start name="dead-code-detection" index=8 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="dead-code-detection" index=7 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/dead-code.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** When `validation.dead_code=gate` (default), current-issue error-severity dead-code findings block validation.
@@ -157,7 +126,7 @@ printf '<!-- phase:start name="dead-code-detection" index=8 total=23 stage="feat
 ### Phase 1.7: Baseline Comparison for Test Failures
 
 ```bash
-printf '<!-- phase:start name="baseline-comparison" index=9 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="baseline-comparison" index=8 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/baseline-comparison.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Identify pre-existing failures (already failing on main) so the Ralph Loop skips them; runs ONLY when tests fail, skipped when dev context shows all passed.
@@ -167,7 +136,7 @@ Before waiting on any long external process, Read `skills/_shared/LONG_RUNNING_P
 ### Phase 2: Run Tests (Redundancy-Aware)
 
 ```bash
-printf '<!-- phase:start name="run-tests" index=10 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="run-tests" index=9 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/run-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run integration and E2E tests (dev does NOT); do not re-run unit tests the dev context confirms passed. Failures → record in context; Ralph Loop auto-fix if enabled. On a fix issue that touched a test file, Step 2.2.5 also proves the new assertion can go red — revert the fix from a COPY and confirm the test FAILS; green there means the test is decoration. Step 2.5 then closes the phase with `nightgauge gate check-test-execution`: a suite the configured test command structurally cannot reach has never been executed by anything, so a passing run says nothing about it (#1261). Silent in any repo that excludes nothing.
@@ -175,7 +144,7 @@ printf '<!-- phase:start name="run-tests" index=10 total=23 stage="feature-valid
 ### Phase 2.4: Mobile MCP E2E Tests (Agent-Driven)
 
 ```bash
-printf '<!-- phase:start name="mobile-mcp-tests" index=11 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="mobile-mcp-tests" index=10 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/mobile-mcp-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Build the debug APK, boot the `Pixel_9_Pro` emulator, run every `test/mobile_mcp/specs/*.md` spec via mobile-mcp tools with screenshot/result-JSON evidence, stop the emulator. Config: `validation.mobile_mcp_tests` (default `"strict"` — spec failures block PR creation); zero-overhead skip when no runnable specs or no `flutter`/`adb`/`emulator` toolchain.
@@ -183,7 +152,7 @@ printf '<!-- phase:start name="mobile-mcp-tests" index=11 total=23 stage="featur
 ### Phase 2.45: Web UI Verification Gate (verify-ui)
 
 ```bash
-printf '<!-- phase:start name="verify-ui-gate" index=12 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="verify-ui-gate" index=11 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/verify-ui-gate.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** When the diff touches frontend code in a UI-bearing repo, start the dev server, chain into `nightgauge-verify-ui` to drive the flow in a real browser, and gate on the result; emits the verify-ui `gate record-metric` per the include. Config: `validation.verify_ui_tests` (default `"strict"`). Trigger detection is deterministic (`nightgauge ci classify-ui-surface`), never LLM-judged. UI-relevant diff with no registered flow → record an explicit skip reason, never a silent pass.
@@ -191,7 +160,7 @@ printf '<!-- phase:start name="verify-ui-gate" index=12 total=23 stage="feature-
 ### Phase 2.5: CI Parity Check (Deterministic)
 
 ```bash
-printf '<!-- phase:start name="ci-parity-check" index=13 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="ci-parity-check" index=12 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run the repo's actual CI commands locally (format, lint, typecheck, full build). **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. The adversarial-review `gate record-metric` is emitted per the include.
@@ -199,7 +168,7 @@ printf '<!-- phase:start name="ci-parity-check" index=13 total=23 stage="feature
 ### Phase 2.6: Knowledge Coverage Check
 
 ```bash
-printf '<!-- phase:start name="knowledge-coverage-check" index=14 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="knowledge-coverage-check" index=13 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Cross-check the implementation against the issue's `PRD.md` ACs and `decisions.md`; emit a coverage map and telemetry. Non-blocking by default (`knowledge.validate.strict: true` to gate); skip when `knowledge_path` is unset or the files are missing.
@@ -207,7 +176,7 @@ printf '<!-- phase:start name="knowledge-coverage-check" index=14 total=23 stage
 ### Phase 2.7: Pre-Push Merge Validation Gate
 
 ```bash
-printf '<!-- phase:start name="pre-push-merge-validation" index=15 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="pre-push-merge-validation" index=14 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Validate against the latest target branch before commit/push (conflicts, merged-state regressions, security). **Gate**: on failure set `VALIDATION_STATUS=failed` and skip commit/push.
@@ -215,7 +184,7 @@ printf '<!-- phase:start name="pre-push-merge-validation" index=15 total=23 stag
 ### Phase 3: Generate Manual Checklist (Conditional)
 
 ```bash
-printf '<!-- phase:start name="generate-checklist" index=16 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="generate-checklist" index=15 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/feedback-and-commit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Component-specific checklist from project type and changed files; auto-passed at >1000 passing tests and 0 failures; security items omitted (feature-dev ran them).
@@ -223,7 +192,7 @@ printf '<!-- phase:start name="generate-checklist" index=16 total=23 stage="feat
 ### Phase 4: Feedback Signal Evaluation
 
 ```bash
-printf '<!-- phase:start name="feedback-signal-evaluation" index=17 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="feedback-signal-evaluation" index=16 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/feedback-and-commit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Emit backward signals ONLY for upstream structural problems (planning errors, ambiguous requirements, model limits) — normal test failures dev simply fixes do NOT warrant a signal.
@@ -235,7 +204,7 @@ printf '<!-- phase:start name="feedback-signal-evaluation" index=17 total=23 sta
 ### Phase 5: Commit and Push Validated Code
 
 ```bash
-printf '<!-- phase:start name="commit-and-push" index=18 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="commit-and-push" index=17 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/feedback-and-commit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Commit all changes (feature-dev implementation + Ralph fixes) and push — the commit lives here, not in feature-dev (#1608). **Gate**: if `VALIDATION_STATUS` is `"failed"`, do NOT commit or push. Commit-skip evidence rule: see Gotchas.
@@ -243,7 +212,7 @@ printf '<!-- phase:start name="commit-and-push" index=18 total=23 stage="feature
 ### Phase 6: Write Validate Context
 
 ```bash
-printf '<!-- phase:start name="write-validate-context" index=19 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="write-validate-context" index=18 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Write `validate-{N}.json` with `nightgauge layout write pipeline validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above).
@@ -251,7 +220,7 @@ printf '<!-- phase:start name="write-validate-context" index=19 total=23 stage="
 ### Phase 7: Sync Project Board Status
 
 ```bash
-printf '<!-- phase:start name="sync-project-status" index=20 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="sync-project-status" index=19 total=22 stage="feature-validate" -->\n'
 ```
 
 > **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Sync board Status to "In progress" via Go binary `project move-status` (idempotent, best-effort — never fail validation over it).
@@ -259,7 +228,7 @@ printf '<!-- phase:start name="sync-project-status" index=20 total=23 stage="fea
 ### Phase 8: Output Summary and Signal Complete
 
 ```bash
-printf '<!-- phase:start name="output-summary" index=21 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="output-summary" index=20 total=22 stage="feature-validate" -->\n'
 ```
 
 Display summary (branch, issue, status, commit SHA, build/test results, checklist). Next step: `passed`/`partial`/`skipped` → `/nightgauge-pr-create`; `failed` → fix issues first.
@@ -284,7 +253,7 @@ fi
 ### Phase 9: Self-Assessment Epilogue
 
 ```bash
-printf '<!-- phase:start name="self-assessment" index=22 total=23 stage="feature-validate" -->\n'
+printf '<!-- phase:start name="self-assessment" index=21 total=22 stage="feature-validate" -->\n'
 ```
 
 **Read `skills/_shared/SELF_ASSESSMENT_EPILOGUE.md` now and follow it before continuing this phase.**

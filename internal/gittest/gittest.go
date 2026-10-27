@@ -234,3 +234,21 @@ func InitRepo(t testing.TB, dir string, args ...string) string {
 	Run(t, dir, append([]string{"init"}, args...)...)
 	return dir
 }
+
+// ClonedRepo builds a bare origin with one commit on main and returns
+// (clone, origin): clone is a checkout of origin with a committer identity
+// configured, so fixtures can commit, merge and push in it.
+func ClonedRepo(t testing.TB) (string, string) {
+	t.Helper()
+	origin := InitRepo(t, t.TempDir(), "--bare", "-q", "-b", "main")
+	seed := InitRepo(t, t.TempDir(), "-q", "-b", "main")
+	Run(t, seed, "config", "user.email", "fixture@example.invalid")
+	Run(t, seed, "config", "user.name", "Fixture")
+	Run(t, seed, "commit", "-q", "--allow-empty", "-m", "init")
+	Run(t, seed, "push", "-q", origin, "main")
+	clone := t.TempDir()
+	Run(t, clone, "clone", "-q", origin, ".")
+	Run(t, clone, "config", "user.email", "fixture@example.invalid")
+	Run(t, clone, "config", "user.name", "Fixture")
+	return clone, origin
+}

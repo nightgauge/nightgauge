@@ -65,8 +65,8 @@ func (t *TrustForge) RepoPermission(ctx context.Context, owner, repo, login stri
 		return "", fmt.Errorf("permission of %s on %s/%s: %w", login, owner, repo, err)
 	}
 	if status < 200 || status >= 300 {
-		return "", fmt.Errorf("permission of %s on %s/%s: REST %d: %s",
-			login, owner, repo, status, restErrorSummary(body))
+		return "", fmt.Errorf("permission of %s on %s/%s: %w",
+			login, owner, repo, restStatusErr(status, body))
 	}
 	var resp struct {
 		Permission string `json:"permission"`
@@ -224,8 +224,8 @@ func (t *TrustForge) IssueComments(ctx context.Context, owner, repo string, numb
 			return nil, fmt.Errorf("comments of %s/%s#%d: %w", owner, repo, number, err)
 		}
 		if status < 200 || status >= 300 {
-			return nil, fmt.Errorf("comments of %s/%s#%d: REST %d: %s",
-				owner, repo, number, status, restErrorSummary(body))
+			return nil, fmt.Errorf("comments of %s/%s#%d: %w",
+				owner, repo, number, restStatusErr(status, body))
 		}
 		var batch []struct {
 			Body      string    `json:"body"`
@@ -277,7 +277,7 @@ func (t *TrustForge) OpenIssues(ctx context.Context, owner, repo string) ([]Open
 			return nil, fmt.Errorf("open issues of %s/%s: %w", owner, repo, err)
 		}
 		if status < 200 || status >= 300 {
-			return nil, fmt.Errorf("open issues of %s/%s: REST %d: %s", owner, repo, status, restErrorSummary(body))
+			return nil, fmt.Errorf("open issues of %s/%s: %w", owner, repo, restStatusErr(status, body))
 		}
 		var batch []struct {
 			Number int `json:"number"`

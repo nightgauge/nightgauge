@@ -105,6 +105,9 @@ SCOPE_PROBE=0
 # must then be non-zero, never a printed "N check(s) failed" over exit 0 (#1494).
 SUMMARY_PROBE=0
 SUMMARY_PROBE_FAIL=0
+# `--deps-probe DIR` prints the dependency-bootstrap decision for DIR and exits
+# (#2562), so scripts/test-ci-local-bootstrap.sh asserts it without running npm.
+DEPS_PROBE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --list-steps) LIST_STEPS=1; shift ;;
@@ -122,6 +125,7 @@ while [ "$#" -gt 0 ]; do
       case "${1:-}" in [0-9]*) SLOT_PROBE_HOLD="$1"; shift ;; esac
       ;;
     --release-probe) RELEASE_PROBE=1; shift ;;
+    --deps-probe) DEPS_PROBE="${2:-.}"; shift; [ "$#" -gt 0 ] && shift ;;
     --group-probe)
       shift
       case "${1:-}" in [0-9]*) GROUP_PROBE="$1"; shift ;; *) GROUP_PROBE=4 ;; esac
@@ -130,6 +134,30 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
+
+# ── Dependency bootstrap decision (#2562) ────────────────────────────────────
+# A fresh worktree has no node_modules, so run 1 of the gate in a new
+# feature-validate worktree failed every npm step on missing dependencies, not on
+# the change. Prints why `npm ci` is needed in $1, or nothing when it is not.
+# npm writes node_modules/.package-lock.json on install; it being older than
+# package-lock.json means the lock moved since the last install.
+deps_bootstrap_reason() {
+  local dir="$1"
+  [ -f "$dir/package-lock.json" ] || return 0
+  if [ ! -d "$dir/node_modules" ]; then
+    echo "node_modules is missing"
+  elif [ ! -f "$dir/node_modules/.package-lock.json" ]; then
+    echo "node_modules has no install record (node_modules/.package-lock.json)"
+  elif [ "$dir/package-lock.json" -nt "$dir/node_modules/.package-lock.json" ]; then
+    echo "package-lock.json is newer than the last install"
+  fi
+}
+
+if [ -n "$DEPS_PROBE" ]; then
+  reason="$(deps_bootstrap_reason "$DEPS_PROBE")"
+  if [ -n "$reason" ]; then echo "install: $reason"; else echo "skip"; fi
+  exit 0
+fi
 
 if [ "$ENV_PROBE" -eq 1 ]; then
   probe_env="$(env)"
@@ -426,6 +454,7 @@ REQUIRED_FILES=(
   scripts/lib/ci_local_failures.sh
   scripts/test-ci-local-concurrency.sh
   scripts/test-ci-local-changed-scope.sh
+  scripts/test-ci-local-bootstrap.sh
   scripts/state-backstop.sh
   scripts/test-state-backstop.sh
   scripts/doctor-app-permission-walkthrough.sh
@@ -1160,6 +1189,18 @@ fi
 
 if [ "$LIST_STEPS" -eq 0 ]; then
   echo "CI-parity local validation — order mirrors .github/workflows/ci.yml"
+  # Install dependencies once, before any step, when they are missing or stale
+  # (#2562). A failed install means no npm step can run, so it is an
+  # INFRASTRUCTURE stop, not a red step attributed to the change.
+  DEPS_REASON="$(deps_bootstrap_reason "$REPO_ROOT")"
+  if [ -n "$DEPS_REASON" ]; then
+    echo "→ dependency bootstrap: $DEPS_REASON — running npm ci"
+    if ! (cd "$REPO_ROOT" && npm ci --no-audit --no-fund); then
+      echo "! dependency bootstrap failed [INFRASTRUCTURE — the checks could not run]" >&2
+      echo "  npm ci exited non-zero; fix the install and re-run the gate." >&2
+      exit 2
+    fi
+  fi
 fi
 
 # ── The machine-state backstop (#2311) ───────────────────────────────────────
@@ -1211,6 +1252,11 @@ run_step "ci-local.sh concurrency and failure-reporting contract" \
 #     second full gate.
 run_step "ci-local.sh change-scoping contract" \
   bash scripts/test-ci-local-changed-scope.sh
+
+# 0c2. The dependency-bootstrap decision (#2562). Fixtures only, via
+#      `--deps-probe`; it never runs npm.
+run_step "ci-local.sh dependency bootstrap decision" \
+  bash scripts/test-ci-local-bootstrap.sh
 
 # 0d. The machine-state backstop's own regression suite (#2311), before the
 #     steps it watches: the last step trusts it to go red when a run removes or

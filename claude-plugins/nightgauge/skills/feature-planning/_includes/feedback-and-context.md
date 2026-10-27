@@ -1,15 +1,14 @@
-# Feedback Context, Load Context, and Batch Detection (Phases 0, 1, 1.5)
+# Feedback Context and Load Context (Phases 0, 1)
 
-This reference carries the procedural detail for three early planning phases:
-the feedback/revision detection (Phase 0), context loading and stage start
-(Phase 1), and batch-mode detection and routing (Phase 1.5). Follow the section
+This reference carries the procedural detail for two early planning phases:
+the feedback/revision detection (Phase 0) and context loading and stage start
+(Phase 1). Follow the section
 matching the phase you are currently in.
 
 ## Contents
 
 - [Phase 0: Feedback Context Check](#phase-0-feedback-context-check)
 - [Phase 1: Load Context and Start Stage](#phase-1-load-context-and-start-stage)
-- [Phase 1.5: Batch Context Detection](#phase-15-batch-context-detection)
 
 ## Phase 0: Feedback Context Check
 
@@ -151,73 +150,3 @@ rather than producing a re-written plan that ignores the original failures.
      "$BINARY" project move-status "$ISSUE_NUMBER" "in-progress" 2>/dev/null || true
    fi
    ```
-
-## Phase 1.5: Batch Context Detection
-
-**PURPOSE**: Detect batch mode and route to consolidated planning when
-`batch-{E}.json` exists.
-
-**Detection**: After loading issue context, check for `batch-{E}.json` where E
-is the `parent_issue` (epic number) from the issue context JSON.
-
-```bash
-ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
-: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-EPIC_NUMBER=$(jq -r '.parent_issue // empty' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
-BATCH_CONTEXT="$(nightgauge layout path pipeline batch-${EPIC_NUMBER}.json)"
-
-if [ -f "$BATCH_CONTEXT" ]; then
-  BATCH_MODE=true
-  BATCH_ISSUES=$(jq -r '.issue_numbers | @json' "$BATCH_CONTEXT")
-  BATCH_STRATEGY=$(jq -r '.batch_strategy' "$BATCH_CONTEXT")
-  SHARED_FILES=$(jq -r '.shared_files | @json' "$BATCH_CONTEXT")
-fi
-```
-
-**Single-issue path**: If `batch-{E}.json` does not exist, continue with
-existing single-issue planning unchanged.
-
-### Batch Planning Path
-
-When `BATCH_MODE=true`:
-
-1. Read combined requirements from all issues in `batch-{E}.json`
-2. Identify shared file modifications across issues
-3. Produce a single `{E}-*.md` plan file covering all issues, written with
-   `nightgauge layout write plans {E}-<slug>.md` (it prints the plan's path;
-   that path is `PLAN_FILE`)
-4. Write `planning-batch-{E}.json` with `per_issue_plans[]`,
-   `shared_files_to_modify`, `files_to_read`, and `decisions`
-
-#### Write planning-batch-{E}.json
-
-```bash
-nightgauge layout write pipeline "planning-batch-${EPIC_NUMBER}.json" >/dev/null << EOF
-{
-  "schema_version": "1.0",
-  "epic_number": ${EPIC_NUMBER},
-  "issue_numbers": ${BATCH_ISSUES},
-  "plan_file": "${PLAN_FILE}",
-  "approach": "${APPROACH}",
-  "per_issue_plans": ${PER_ISSUE_PLANS_JSON},
-  "shared_files_to_modify": ${SHARED_FILES_TO_MODIFY_JSON},
-  "files_to_read": ${FILES_TO_READ_JSON},
-  "decisions": ${DECISIONS_JSON},
-  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
-```
-
-The schema matches `PlanningBatchContextSchema` from
-`packages/nightgauge-sdk/src/context/schemas/batch.ts`.
-
-#### Verify Batch Planning Context
-
-```bash
-BATCH_PLANNING="$(nightgauge layout path pipeline planning-batch-${EPIC_NUMBER}.json)"
-jq . "$BATCH_PLANNING" > /dev/null && \
-  echo "Batch planning context written: $BATCH_PLANNING"
-```
-
-When in batch mode, skip Phase 5 (Write Planning Context) for single-issue
-`planning-{N}.json` — only the batch context file is written.

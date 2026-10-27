@@ -42,6 +42,9 @@ type AttentionSweepRepoResult struct {
 	// rate-limit failure). No cards were created, updated, or retracted.
 	Skipped    bool   `json:"skipped,omitempty"`
 	SkipReason string `json:"skipReason,omitempty"`
+	// Unauthorized is true when the skip was the forge rejecting the
+	// credential; the sweep raises one forge-credential card per owner.
+	Unauthorized bool `json:"unauthorized,omitempty"`
 	// Error is set when the repo could not be swept at all — an unresolvable
 	// forge client, or a malformed repo spec.
 	Error string `json:"error,omitempty"`
@@ -228,6 +231,11 @@ func (s *Server) handleAttentionSweep(ctx context.Context, raw json.RawMessage) 
 	}
 	res.SweptRepos = len(repos)
 
+	// A 401 skip touches no card, so on its own it is invisible: the Action
+	// Center keeps yesterday's cards while nothing is observed (#2578). One
+	// card per owner says so, and retracts once the owner sweeps cleanly.
+	s.reconcileCredentialCards(store, &res)
+
 	// Workspace-scoped producers run ONCE, after the per-repo loop, and are
 	// given the same repo list (#260). They exist to reason about that list as
 	// an object — most importantly, about what is missing from it, which no
@@ -275,6 +283,27 @@ func (s *Server) sweepWorkspace(ctx context.Context, store *attention.Store, rep
 	res.WorkspaceFailed = wres.Failed
 }
 
+// reconcileCredentialCards folds the per-repo credential outcomes into the
+// forge-credential cards. Like every other sweep step it never fails the call.
+func (s *Server) reconcileCredentialCards(store *attention.Store, res *AttentionSweepResult) {
+	obs := make([]sweep.CredentialObservation, 0, len(res.Repos))
+	for _, r := range res.Repos {
+		obs = append(obs, sweep.CredentialObservation{
+			Repo:         r.Repo,
+			Unauthorized: r.Unauthorized,
+			Evaluated:    !r.Skipped && r.Error == "",
+			Reason:       r.SkipReason,
+		})
+	}
+	cr, err := sweep.ReconcileCredentialCards(store, obs)
+	if err != nil {
+		log.Printf("attention.sweep: %v", err)
+	}
+	res.Created += cr.Created
+	res.Updated += cr.Updated
+	res.AutoResolved += cr.AutoResolved
+}
+
 // sweepOneRepo runs the registry against a single repo. It never returns an
 // error: everything is folded into the per-repo result.
 func (s *Server) sweepOneRepo(ctx context.Context, store *attention.Store, repo string, shared *sweep.SharedReads) AttentionSweepRepoResult {
@@ -306,6 +335,7 @@ func (s *Server) sweepOneRepo(ctx context.Context, store *attention.Store, repo 
 	}
 	out.Skipped = result.Skipped
 	out.SkipReason = result.SkipReason
+	out.Unauthorized = result.Unauthorized
 	out.Evaluated = result.Evaluated
 	out.Failed = result.Failed
 	out.Created = result.Reconciled.Created

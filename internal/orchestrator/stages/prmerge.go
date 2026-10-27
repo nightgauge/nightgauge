@@ -132,10 +132,10 @@ const (
 // runner polls until the merge state clears rather than punting to the LLM
 // skill — which historically "won" pr-merge purely by babysitting CI for ~10
 // minutes at ~$3–4.44/run. Bounded so a genuinely stuck PR still falls through
-// to the LLM path within a predictable budget (30 × 30s = 15 min).
+// to the LLM path within a predictable budget: github.DefaultCIPollInterval x
+// github.DefaultCIPollMax (30 × 30s = 15 min), shared with the merge queue's
+// readiness wait (#2584).
 const (
-	DefaultCIPollInterval = 30 * time.Second
-	DefaultCIPollMax      = 30
 	// DefaultCINoCheckGracePolls bounds how many CI-wait polls the runner
 	// spends on a BLOCKED/UNSTABLE PR whose check rollup is still EMPTY
 	// (#1027): 4 × 30 s = 2 min for GitHub to create the first check run. It
@@ -352,22 +352,10 @@ func logPuntSnapshot(prNumber int, reason string, snap PRViewSnapshot) {
 		len(snap.StatusCheckRollup), strings.Join(checks, ", "), strings.Join(snap.RequiredChecks, ", "))
 }
 
-// mergeableUnknown is GitHub's "I have not computed this yet" answer for a
-// pull request's `mergeable` field. It is returned for the first seconds after
-// a push or a PR creation, and pr-merge starts seconds after pr-create.
-const mergeableUnknown = "UNKNOWN"
-
-// DefaultMergeabilityPolls / DefaultMergeabilityPollInterval bound the wait for
-// GitHub to compute mergeability (#1933).
-//
-// Its own budget, deliberately short: mergeability resolves in seconds, unlike
-// CI, which takes minutes and gets the far larger #297 budget. A long budget
-// here would delay the punt on a PR whose mergeability genuinely never
-// resolves, and that PR needs the LLM path promptly.
-const (
-	DefaultMergeabilityPolls        = 10
-	DefaultMergeabilityPollInterval = 2 * time.Second
-)
+// The mergeability wait (#1933) is bounded by github.DefaultMergeabilityPolls x
+// github.DefaultMergeabilityPollInterval; github.MergeableUnknown is GitHub's
+// "not computed yet" answer. They live in internal/github so the merge queue's
+// readiness wait shares the budget (#2584).
 
 // DefaultECPolls / DefaultECPollInterval mirror the eventual-consistency
 // budget the TS verifyPostMergeState uses. Re-declared here so the Go runner
@@ -421,7 +409,7 @@ func (r *DeterministicRunner) SetMergeQueueWaitTimeout(d time.Duration) {
 
 // SetCIWaitTimeout sizes the CI-completion wait (pr.ci_check_timeout, #2504)
 // in whole poll intervals, rounding up. A non-positive value keeps
-// DefaultCIPollMax.
+// github.DefaultCIPollMax.
 func (r *DeterministicRunner) SetCIWaitTimeout(d time.Duration) {
 	if d <= 0 || r.ciPollInterval <= 0 {
 		return
@@ -438,12 +426,12 @@ func NewDeterministicRunner() *DeterministicRunner {
 		prContextRead:  readPRContextNumber,
 		pollInterval:   DefaultECPollInterval,
 		pollMax:        DefaultECPolls,
-		ciPollInterval: DefaultCIPollInterval,
-		ciPollMax:      DefaultCIPollMax,
+		ciPollInterval: github.DefaultCIPollInterval,
+		ciPollMax:      github.DefaultCIPollMax,
 		ciNoCheckGrace: DefaultCINoCheckGracePolls,
 
-		mergeabilityPollInterval: DefaultMergeabilityPollInterval,
-		mergeabilityPollMax:      DefaultMergeabilityPolls,
+		mergeabilityPollInterval: github.DefaultMergeabilityPollInterval,
+		mergeabilityPollMax:      github.DefaultMergeabilityPolls,
 
 		now: time.Now,
 
@@ -544,7 +532,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// It runs AFTER the steering gate for the reason that gate documents: a
 	// refusal must precede anything that can punt, and waiting here would
 	// otherwise delay a refusal the runner can already make.
-	if snap.State == "OPEN" && snap.Mergeable == mergeableUnknown {
+	if snap.State == "OPEN" && snap.Mergeable == github.MergeableUnknown {
 		waited, waitErr := r.waitForMergeability(ctx, gh, prNumber, snap)
 		if waitErr != nil {
 			ph.supersedeInFlight()
@@ -558,7 +546,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		snap = waited
 		// Still no verdict when the budget expired. Punt — but name the absence
 		// rather than reporting a conflict the runner never observed.
-		if snap.State == "OPEN" && snap.Mergeable == mergeableUnknown {
+		if snap.State == "OPEN" && snap.Mergeable == github.MergeableUnknown {
 			ph.supersedeInFlight()
 			logPuntSnapshot(prNumber, ReasonMergeabilityUnresolved, snap)
 			return finish(PRMergeResult{
@@ -961,7 +949,7 @@ func (r *DeterministicRunner) waitForMergeability(ctx context.Context, gh ghClie
 			continue
 		}
 		last = snap
-		if snap.State != "OPEN" || snap.Mergeable != mergeableUnknown {
+		if snap.State != "OPEN" || snap.Mergeable != github.MergeableUnknown {
 			return snap, nil
 		}
 	}

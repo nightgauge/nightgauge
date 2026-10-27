@@ -20,6 +20,8 @@
 // counterpart, and the cross-forge interaction diagram.
 package forge
 
+import "golang.org/x/oauth2"
+
 // Kind discriminates between supported forges. New string values are added
 // when an adapter is implemented; until then they return ErrUnsupported.
 type Kind string
@@ -41,6 +43,13 @@ type Config struct {
 	// Token is the auth token for the forge. Resolution from env / gh CLI
 	// happens in the caller; Config carries only the resolved value.
 	Token string
+
+	// TokenSource, when set, is asked for a credential on every request and
+	// Token is ignored. A holder that outlives one token — the serve daemon
+	// caches a router per board for its whole life — must carry a source: a
+	// GitHub App installation token is a string that dies within the hour,
+	// and a client built from it fails with 401 from then on (#2578).
+	TokenSource oauth2.TokenSource
 
 	// Owner is the org or user namespace the client targets (e.g.
 	// "nightgauge" or "octocat").

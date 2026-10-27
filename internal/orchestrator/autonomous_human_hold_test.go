@@ -290,6 +290,7 @@ func TestHoldForTerminalKind(t *testing.T) {
 		TerminalKindContextWindowExceeded:        HoldOperatorResume,
 		TerminalKindAdapterPermissionRejected:    HoldOperatorResume,
 		TerminalKindAdapterIncompatible:          HoldOperatorResume,
+		TerminalKindEnvironmentHalt:              HoldOperatorResume,
 		"":                                       HoldNone,
 	}
 	for kind, want := range cases {

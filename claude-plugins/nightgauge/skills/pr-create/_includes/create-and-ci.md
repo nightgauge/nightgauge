@@ -62,20 +62,6 @@ RESULT=$("$BINARY" pr create \
 }
 ```
 
-If batch mode was detected in Phase 1.5, use the epic branch and batch PR body:
-
-```bash
-RESULT=$("$BINARY" pr create \
-  --title "$BATCH_PR_TITLE" \
-  --body "$BATCH_PR_BODY" \
-  --head "$EPIC_BRANCH" \
-  --base main \
-  --json 2>&1) || {
-  echo "ERROR: Batch PR creation failed: $RESULT" >&2
-  exit 1
-}
-```
-
 The skill handles:
 
 - PR title construction with correct prefix (feat/fix/docs/refactor/chore)
@@ -125,7 +111,7 @@ Closes #N
 For standalone issues (no epic parent), omit the `Part of` line. For epic
 sub-issues, include BOTH lines so the sub-issue auto-closes on merge.
 
-**Always end `PR_BODY` (and `BATCH_PR_BODY`) with the pipeline stamp** (#1479),
+**Always end `PR_BODY` with the pipeline stamp** (#1479),
 byte-for-byte in this form, as the last line:
 
 ```bash

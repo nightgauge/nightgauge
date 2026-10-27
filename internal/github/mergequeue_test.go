@@ -15,12 +15,15 @@ import (
 // queueServer is a stub GraphQL endpoint for the merge-queue cycle (#2214).
 // Status reads are served from statuses in order (the last one repeats).
 type queueServer struct {
-	mu          sync.Mutex
-	statuses    []map[string]any
-	reads       int
-	enqueued    int
-	directMerge int
-	checks      []map[string]any
+	mu         sync.Mutex
+	statuses   []map[string]any
+	reads      int
+	enqueued   int
+	enqueueErr string
+	// readsAtEnqueue is the number of status reads served before the enqueue.
+	readsAtEnqueue int
+	directMerge    int
+	checks         []map[string]any
 }
 
 func prNode(state string, queueEnabled, inQueue bool, entry map[string]any, mergeOID string) map[string]any {
@@ -28,12 +31,33 @@ func prNode(state string, queueEnabled, inQueue bool, entry map[string]any, merg
 		"id": "PR_1", "number": 42, "state": state, "baseRefName": "main",
 		"isMergeQueueEnabled": queueEnabled, "isInMergeQueue": inQueue,
 		"mergeCommit": nil, "mergeQueueEntry": nil,
+		"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "headRefOid": "head1",
+		"commits": rollup("SUCCESS"),
 	}
 	if entry != nil {
 		n["mergeQueueEntry"] = entry
 	}
 	if mergeOID != "" {
 		n["mergeCommit"] = map[string]any{"oid": mergeOID}
+	}
+	return n
+}
+
+func rollup(state string) map[string]any {
+	if state == "" {
+		return map[string]any{"nodes": []any{map[string]any{"commit": map[string]any{"statusCheckRollup": nil}}}}
+	}
+	return map[string]any{"nodes": []any{map[string]any{"commit": map[string]any{"statusCheckRollup": map[string]any{"state": state}}}}}
+}
+
+// readiness returns an OPEN, queue-enabled, unqueued PR with the given
+// mergeability and check rollup (#2584).
+func readiness(mergeable, checks string) map[string]any {
+	n := prNode("OPEN", true, false, nil, "")
+	n["mergeable"] = mergeable
+	n["commits"] = rollup(checks)
+	if mergeable != "MERGEABLE" || checks != "SUCCESS" {
+		n["mergeStateStatus"] = "BLOCKED"
 	}
 	return n
 }
@@ -55,11 +79,16 @@ func (qs *queueServer) handler(t *testing.T) http.HandlerFunc {
 		switch {
 		case strings.Contains(req.Query, "enqueuePullRequest"):
 			qs.enqueued++
+			qs.readsAtEnqueue = qs.reads
+			if qs.enqueueErr != "" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": nil, "errors": []any{map[string]any{"message": qs.enqueueErr}}})
+				return
+			}
 			data = map[string]any{"enqueuePullRequest": map[string]any{"mergeQueueEntry": map[string]any{"state": "QUEUED", "position": 1}}}
 		case strings.Contains(req.Query, "mergePullRequest"):
 			qs.directMerge++
 			data = map[string]any{"mergePullRequest": map[string]any{"pullRequest": map[string]any{"mergeCommit": map[string]any{"oid": "direct123"}}}}
-		case strings.Contains(req.Query, "statusCheckRollup"):
+		case strings.Contains(req.Query, "contexts("):
 			data = map[string]any{"node": map[string]any{"baseRepository": map[string]any{"object": map[string]any{
 				"statusCheckRollup": map[string]any{"contexts": map[string]any{"nodes": qs.checks}}}}}}
 		case strings.Contains(req.Query, "isMergeQueueEnabled"):
@@ -236,5 +265,113 @@ func TestEvaluateMergedCommit_MergeGroupCommit(t *testing.T) {
 	red.MergeChecks = []CheckDetail{check("build", "COMPLETED", "FAILURE"), check("lint", "COMPLETED", "SUCCESS")}
 	if v, _ := EvaluateMergedCommit(red); v != ChecksIncomplete {
 		t.Errorf("merge-group commit with a failed required check: got %v, want incomplete", v)
+	}
+}
+
+func TestMergePRWithStrategy_WaitsForMergeabilityThenEnqueues(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{
+		readiness("UNKNOWN", ""),          // detection, right after the push
+		readiness("MERGEABLE", "PENDING"), // computed, checks running
+		readiness("MERGEABLE", "SUCCESS"), // ready
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg1"), ""),
+		prNode("MERGED", true, false, nil, "landed1"),
+	}}
+	svc := newQueuePRService(t, qs)
+	svc.QueueWait.ReadyPollInterval = time.Millisecond
+	sha, err := svc.MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	if err != nil {
+		t.Fatalf("MergePRWithStrategy: %v", err)
+	}
+	if sha != "landed1" || qs.enqueued != 1 {
+		t.Errorf("sha=%q enqueued=%d, want landed1/1", sha, qs.enqueued)
+	}
+	if qs.readsAtEnqueue != 3 {
+		t.Errorf("enqueued after %d status reads, want 3: the enqueue must wait for the ready read", qs.readsAtEnqueue)
+	}
+}
+
+func TestMergePRWithStrategy_NeverReady_NotReadyWithoutEnqueue(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{readiness("UNKNOWN", "")}}
+	svc := newQueuePRService(t, qs)
+	svc.QueueWait.ReadyTimeout = 20 * time.Millisecond
+	svc.QueueWait.ReadyPollInterval = time.Millisecond
+	_, err := svc.MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	var qe *MergeQueueError
+	if !errors.As(err, &qe) || qe.Kind != MergeQueueNotReady {
+		t.Fatalf("err = %v, want not_ready MergeQueueError", err)
+	}
+	if !strings.Contains(err.Error(), "mergeability not yet computed") {
+		t.Errorf("error does not say what was pending: %v", err)
+	}
+	if qs.enqueued != 0 {
+		t.Errorf("enqueued=%d, want 0 for a PR that never became ready", qs.enqueued)
+	}
+}
+
+func TestMergePRWithStrategy_RedChecks_ChecksFailedWithoutEnqueue(t *testing.T) {
+	qs := &queueServer{
+		statuses: []map[string]any{readiness("MERGEABLE", "FAILURE")},
+		checks: []map[string]any{
+			{"__typename": "CheckRun", "name": "go-test", "status": "COMPLETED", "conclusion": "FAILURE"},
+			{"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS"},
+		},
+	}
+	_, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	var qe *MergeQueueError
+	if !errors.As(err, &qe) || qe.Kind != MergeQueueChecksFailed {
+		t.Fatalf("err = %v, want checks_failed MergeQueueError", err)
+	}
+	if strings.Join(qe.FailedChecks, ",") != "go-test" || !strings.Contains(err.Error(), "failed checks: go-test") {
+		t.Errorf("FailedChecks = %v, err = %v", qe.FailedChecks, err)
+	}
+	if qs.enqueued != 0 {
+		t.Errorf("enqueued=%d, want 0 for a red PR", qs.enqueued)
+	}
+}
+
+func TestMergePRWithStrategy_AlreadyQueued_SkipsReadinessWait(t *testing.T) {
+	queued := prNode("OPEN", true, true, entry("QUEUED", "mg1"), "")
+	queued["mergeable"] = "UNKNOWN"
+	qs := &queueServer{statuses: []map[string]any{queued, prNode("MERGED", true, false, nil, "landed1")}}
+	svc := newQueuePRService(t, qs)
+	svc.QueueWait.ReadyTimeout = time.Nanosecond
+	if _, err := svc.MergePRWithStrategy(context.Background(), "PR_1", "SQUASH"); err != nil {
+		t.Fatalf("MergePRWithStrategy: %v", err)
+	}
+}
+
+func TestMergePRWithStrategy_EnqueueRejectedNotReady_ClassifiedNotReady(t *testing.T) {
+	qs := &queueServer{
+		statuses:   []map[string]any{readiness("MERGEABLE", "SUCCESS")},
+		enqueueErr: "Pull request mergeability check has not yet completed",
+	}
+	_, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	var qe *MergeQueueError
+	if !errors.As(err, &qe) || qe.Kind != MergeQueueNotReady {
+		t.Fatalf("err = %v, want not_ready MergeQueueError", err)
+	}
+}
+
+func TestClassifyEnqueueReadiness(t *testing.T) {
+	cases := []struct {
+		name, mergeable, state, checks string
+		ready                          bool
+		kind                           string
+	}{
+		{"unknown", "UNKNOWN", "UNKNOWN", "", false, ""},
+		{"conflicting", "CONFLICTING", "DIRTY", "SUCCESS", false, MergeQueueUnmergeable},
+		{"red", "MERGEABLE", "BLOCKED", "FAILURE", false, MergeQueueChecksFailed},
+		{"errored", "MERGEABLE", "BLOCKED", "ERROR", false, MergeQueueChecksFailed},
+		{"green", "MERGEABLE", "BLOCKED", "SUCCESS", true, ""},
+		{"pending", "MERGEABLE", "BLOCKED", "PENDING", false, ""},
+		{"expected", "MERGEABLE", "BLOCKED", "EXPECTED", false, ""},
+		{"no checks yet", "MERGEABLE", "BLOCKED", "", false, ""},
+		{"no checks, clean", "MERGEABLE", "CLEAN", "", true, ""},
+	}
+	for _, tc := range cases {
+		ready, kind := ClassifyEnqueueReadiness(MergeQueueStatus{Mergeable: tc.mergeable, MergeStateStatus: tc.state, ChecksState: tc.checks})
+		if ready != tc.ready || kind != tc.kind {
+			t.Errorf("%s: got %v/%q, want %v/%q", tc.name, ready, kind, tc.ready, tc.kind)
+		}
 	}
 }

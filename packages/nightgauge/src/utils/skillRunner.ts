@@ -655,6 +655,15 @@ export interface SkillRunCallbacks {
    */
   onStageProgress?: (usage: ParsedTokenUsage) => void;
   /**
+   * Called when a stage that has no child process in this host shows REAL
+   * activity (#431, ADR-017 C18) — today only the Codex interactive TUI, which
+   * runs in a VSCode terminal: a shell-execution-end event for the stage's
+   * terminal (where the VS Code build exposes one), the TUI launch, and each
+   * OutputWindow relay. Never fired on a timer. Consumers forward it, throttled,
+   * to `pipeline.notifyStageAlive` so the run keeps its lease and snapshot.
+   */
+  onStageAlive?: () => void;
+  /**
    * Called with a LIVE in-stage cost snapshot for BUDGET ENFORCEMENT while a
    * stage is still running (Issue #254), throttled on a configurable cadence
    * (`pipeline.budget_eval_cadence_ms`, default 5s). Carries the same
@@ -3442,7 +3451,7 @@ export function validateAdapterPrerequisites(
   }
 
   // Remaining: codex adapter.
-  // Interactive Codex launches the Codex TUI directly in a terminal (#4024), so
+  // Interactive Codex launches the Codex TUI directly in a terminal, so
   // it only needs the `codex` CLI — not the headless run-stage.sh / SDK-CLI /
   // node/git/gh chain that the JSON pipeline path requires.
   if (mode === "interactive") {
@@ -5218,8 +5227,9 @@ function runStageSkillHeadlessImpl(
   // run history, cost and telemetry tied to the process that actually ran;
   // `scheduler.go` re-records the stage on this value.
   //
-  // Claude takes `--model` directly and sets no model env, so it is the
-  // decision itself.
+  // Claude takes `--model` directly and sets no adapter model env, so it is
+  // the decision itself. Every adapter's value is exported to the child as
+  // NIGHTGAUGE_DISPATCH_MODEL below (#2576).
   const launchedModel =
     (adapter === "codex"
       ? codexEnv.NIGHTGAUGE_CODEX_MODEL
@@ -5320,6 +5330,11 @@ function runStageSkillHeadlessImpl(
     // per-stage manual invocation, which has no run identity to name and must
     // not invent one; the delete below makes that absence real.
     ...(runId ? { NIGHTGAUGE_RUN_ID: runId } : {}),
+    // The launched model and stage, at parity with the Go adapters' exports.
+    // `nightgauge knowledge stamp --stage` builds its provenance actor from
+    // NIGHTGAUGE_DISPATCH_MODEL and fails without it (#2576).
+    ...(launchedModel ? { NIGHTGAUGE_DISPATCH_MODEL: launchedModel } : {}),
+    NIGHTGAUGE_STAGE: stage,
   };
 
   // A dispatch with no run identity must leave the child with NONE, which takes
@@ -5331,6 +5346,11 @@ function runStageSkillHeadlessImpl(
   // Mirrors composeStageEnv's reconcile on the Go side.
   if (!runId) {
     delete spawnEnv.NIGHTGAUGE_RUN_ID;
+  }
+  // Same reconcile for the dispatch model: an outer run's model must not become
+  // this child's provenance actor when no model was launched here (#2576).
+  if (!launchedModel) {
+    delete spawnEnv.NIGHTGAUGE_DISPATCH_MODEL;
   }
 
   // The OpenCode stage's inherited overrides and foreign credentials go, and a
@@ -8632,7 +8652,6 @@ export function sendInputToActiveProcess(input: string): boolean {
  * `&`, quotes, …) is rejected. The launch no longer goes through a shell
  * (#2321), but `.nightgauge/config.yaml` is untrusted on a cloned repo, so the
  * configured command and model are still held to one plain token.
- * (#4024 — commit security review)
  */
 const CODEX_SAFE_TOKEN = /^[A-Za-z0-9._/-]+$/;
 
@@ -8677,7 +8696,7 @@ export interface CodexInteractiveLaunch {
 
 /**
  * Build the argv that launches the Codex TUI seeded with a stage prompt
- * (#4024, #2321). There is no shell string: VS Code starts `codexCmd`
+ * (#2321). There is no shell string: VS Code starts `codexCmd`
  * directly with these arguments, so a markdown prompt full of backticks, `$`
  * and quotes is one argument, byte for byte, and needs no encoding.
  *
@@ -8736,7 +8755,17 @@ export function buildCodexInteractiveLaunch(
 }
 
 /**
- * Launch the Codex interactive TUI for a stage in a VSCode terminal (#4024).
+ * The slice of `vscode.window` shell integration adds after the pinned
+ * `@types/vscode` floor (#431). Optional: the producer feature-checks it.
+ */
+interface ShellIntegrationWindow {
+  onDidEndTerminalShellExecution?: (
+    listener: (e: { terminal: vscode.Terminal }) => void
+  ) => vscode.Disposable;
+}
+
+/**
+ * Launch the Codex interactive TUI for a stage in a VSCode terminal.
  *
  * Codex's interactive mode is a full-screen terminal UI, so — unlike Claude's
  * piped-stdio interactive path — it must run in a real terminal where the user
@@ -8758,14 +8787,13 @@ function launchCodexInteractiveTerminal(
 ): SkillProcessHandle {
   // Namespace the key like the Claude interactive path so an interactive Codex
   // run and a headless run of the same stage+issue can't clobber each other's
-  // activeProcesses registration (#4024 review #4).
+  // activeProcesses registration.
   const processKey = `interactive-${stage}-${issueNumber ?? "no-issue"}`;
   const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
   // Validate the configured Codex CLI command BEFORE any side effects: it
   // becomes the terminal's executable, and `.nightgauge/config.yaml` is
   // untrusted on a cloned repo, so an unsafe value must abort the launch.
-  // (#4024 — commit security review)
   const codexCmd = getCodexCliCommand(workspaceRoot);
   if (!CODEX_SAFE_TOKEN.test(codexCmd)) {
     const error = new Error(
@@ -8845,8 +8873,7 @@ function launchCodexInteractiveTerminal(
 
   const terminalName = issueNumber ? `Codex: Issue #${issueNumber} (${stage})` : `Codex: ${stage}`;
   // shellPath/shellArgs: VS Code starts Codex itself, so the terminal closes
-  // when Codex exits and onDidCloseTerminal carries its exit code (#4024
-  // review #1).
+  // when Codex exits and onDidCloseTerminal carries its exit code.
   const terminal = vscode.window.createTerminal({
     name: terminalName,
     cwd: workspaceRoot,
@@ -8865,16 +8892,31 @@ function launchCodexInteractiveTerminal(
   callbacks?.onMode?.("interactive");
 
   terminal.show(true);
+  // Liveness producer (#431). The TUI is now visible: the first floor
+  // checkpoint. The terminal holds no pid this host can report, so arms 1 and 4
+  // are re-asserted only on real activity — this launch, each OutputWindow
+  // relay below, and shell-execution-end events where the API exists.
+  callbacks?.onStageAlive?.();
 
   let completed = false;
   let closeListener: vscode.Disposable | undefined;
+  // Shell-integration events postdate the pinned `@types/vscode` floor, so the
+  // API is feature-checked at runtime through a local structural type. Absent,
+  // the floor checkpoints carry the stage alone — there is no third path.
+  const shellWindow = vscode.window as unknown as ShellIntegrationWindow;
+  const shellExecListener: vscode.Disposable | undefined =
+    typeof shellWindow.onDidEndTerminalShellExecution === "function"
+      ? shellWindow.onDidEndTerminalShellExecution((e) => {
+          if (e.terminal === terminal) callbacks?.onStageAlive?.();
+        })
+      : undefined;
   // `aborted` distinguishes an explicit kill()/abort from a natural terminal
-  // close: an aborted stage must report success:false, never completeStage
-  // (#4024 review #7).
+  // close: an aborted stage must report success:false, never completeStage.
   const finish = (exitCode: number | null, aborted = false): void => {
     if (completed) return;
     completed = true;
     closeListener?.dispose();
+    shellExecListener?.dispose();
     activeProcesses.delete(processKey);
     // Strip the AGENTS.md managed block now that the interactive session ended.
     try {
@@ -8901,7 +8943,7 @@ function launchCodexInteractiveTerminal(
   };
 
   // Codex is the terminal's own process, so the terminal closes when Codex
-  // exits and this fires with Codex's exit code (#4024 review #1).
+  // exits and this fires with Codex's exit code.
   closeListener = vscode.window.onDidCloseTerminal((closed) => {
     if (closed === terminal) {
       finish(closed.exitStatus?.code ?? null);
@@ -8927,6 +8969,7 @@ function launchCodexInteractiveTerminal(
     writeToStdin: (message: string): boolean => {
       try {
         terminal.sendText(message);
+        callbacks?.onStageAlive?.();
         return true;
       } catch {
         return false;
@@ -9016,7 +9059,7 @@ export function runStageSkillInteractive(
   }
 
   // Codex interactive mode launches the Codex TUI in a VSCode terminal seeded
-  // with the stage prompt (#4024). Codex's interactive mode is a full-screen TUI
+  // with the stage prompt. Codex's interactive mode is a full-screen TUI
   // — unlike Claude's piped-stdio interactive — so it needs a real terminal and
   // the user drives the conversation directly there. Returns early on this path.
   if (adapter === "codex") {

@@ -49,6 +49,22 @@ func persistPipelineState(runtime *state.RuntimeState, root string) error {
 	return runtime.Persist(dir)
 }
 
+// recordPhaseProgress records a phase event in the runtime and persists the
+// snapshot at once (#586). Stage-boundary persists alone left the on-disk
+// snapshot without the running stage's phases, so a run the extension did not
+// spawn read 0/N until the stage ended. passed marks a phase the run moved past
+// without reporting (#1924). A persist failure is logged, never fatal.
+func recordPhaseProgress(runtime *state.RuntimeState, root string, issue int, stage state.PipelineStage, name string, index, total int, passed bool) {
+	if passed {
+		runtime.PassPhase(stage, name, index, total)
+	} else {
+		runtime.BeginPhase(stage, name, index, total)
+	}
+	if err := persistPipelineState(runtime, root); err != nil {
+		log.Printf("#%d: failed to persist state at %s phase %d: %v", issue, stage, index, err)
+	}
+}
+
 // checkoutStatePath is the path of name inside root's CHECKOUT, the
 // per-checkout directory that holds the unkeyed run-control singletons
 // (current-run.json, queue-state.json, run-state.json, ...), resolved through

@@ -1,12 +1,10 @@
 # Feature-Dev — Context & Feedback Intake
 
-Procedural detail for Phase 0 (Read Planning Context), Phase 0.5 (Batch Plan
-Detection), and Phase 0.7 (Feedback Context Check).
+Procedural detail for Phase 0 (Read Planning Context) and Phase 0.7 (Feedback Context Check).
 
 ## Contents
 
 - [Phase 0: Read Planning Context](#phase-0-read-planning-context)
-- [Phase 0.5: Batch Plan Detection](#phase-05-batch-plan-detection)
 - [Phase 0.7: Feedback Context Check](#phase-07-feedback-context-check)
 
 ---
@@ -104,79 +102,6 @@ if [ -n "$BINARY" ]; then
   "$BINARY" project move-status "$ISSUE_NUMBER" "in-progress" 2>/dev/null || true
 fi
 ```
-
----
-
-## Phase 0.5: Batch Plan Detection
-
-**Detection**: After loading planning context, check for
-`planning-batch-{E}.json` where E matches the issue number from the branch.
-
-```bash
-BRANCH=$(git branch --show-current)
-: "${BRANCH:?detached HEAD: check out the issue branch}"
-EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_PLANNING="$(nightgauge layout path pipeline planning-batch-${EPIC_NUMBER}.json)"
-
-if [ -f "$BATCH_PLANNING" ]; then
-  BATCH_MODE=true
-  BATCH_PLAN_FILE=$(jq -r '.plan_file' "$BATCH_PLANNING")
-  PER_ISSUE_PLANS=$(jq -r '.per_issue_plans | @json' "$BATCH_PLANNING")
-  SHARED_FILES=$(jq -r '.shared_files_to_modify | @json' "$BATCH_PLANNING")
-  BATCH_FILES_TO_READ=$(jq -r '.files_to_read | @json' "$BATCH_PLANNING")
-fi
-```
-
-**Single-issue path**: If `planning-batch-{E}.json` does not exist, continue
-with existing single-issue development unchanged.
-
-### Batch Development Path
-
-When `BATCH_MODE=true`:
-
-1. Pre-load all `files_to_read` from the batch planning context
-2. Implement changes from `per_issue_plans[]` and `shared_files_to_modify`
-3. Commit with batch message format:
-   `feat(#A, #B, #C): combined implementation description`
-4. Write `dev-batch-{E}.json` with per-issue results
-
-#### Write dev-batch-{E}.json
-
-```bash
-nightgauge layout write pipeline "dev-batch-${EPIC_NUMBER}.json" >/dev/null << EOF
-{
-  "schema_version": "1.6",
-  "epic_number": ${EPIC_NUMBER},
-  "issue_numbers": ${ISSUE_NUMBERS_JSON},
-  "commit_sha": null,
-  "per_issue_results": ${PER_ISSUE_RESULTS_JSON},
-  "tests_status": {
-    "passed": ${TESTS_PASSED},
-    "failed": ${TESTS_FAILED},
-    "coverage": ${COVERAGE_PERCENT}
-  },
-  "quality_checks": {
-    "code_standards": "${CODE_STANDARDS_RESULT}",
-    "security_review": "${SECURITY_REVIEW_RESULT}"
-  },
-  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
-```
-
-The schema matches `DevBatchContextSchema` from
-`packages/nightgauge-sdk/src/context/schemas/batch.ts`.
-
-#### Verify Batch Dev Context
-
-```bash
-BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
-jq . "$BATCH_DEV" > /dev/null && \
-  echo "Batch dev context written: $BATCH_DEV"
-```
-
-When in batch mode, skip Phase 8 (Write Dev Context) for single-issue
-`dev-{N}.json` — only the batch context file is written.
 
 ---
 

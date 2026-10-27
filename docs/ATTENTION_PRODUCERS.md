@@ -693,3 +693,16 @@ enum (`slack-bot-token`, `discord-webhook`, `mattermost-webhook`,
 The daemon writes every word on the card (`BuildMissingCredentials`). The card
 is event-shaped, not standing: the daemon cannot read VS Code SecretStorage, so
 no sweep could retract it, and a human resolving it is its retraction.
+
+## `forge-credential` (#2578)
+
+Raised by the daemon's `attention.sweep`, after the per-repo pass, not by a
+registered producer. A repository whose sweep is skipped because the forge
+rejected the credential (`forge.ErrUnauthorized`, an HTTP `401`)
+reconciles nothing, so on its own that skip leaves no signal. The sweep groups
+those repositories by owner and raises one standing card per owner
+(`sweep.ReconcileCredentialCards`). The key is `forge-credential:<owner>` and
+the fingerprint is the owner alone, so each repeated 401 sweep refreshes the
+card silently. The card retracts on the first pass where every swept
+repository of that owner was evaluated. A pass that skipped one of them for
+another reason, such as a rate limit, leaves the card alone.

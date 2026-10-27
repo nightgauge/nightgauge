@@ -58,6 +58,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/trace"
+	"github.com/nightgauge/nightgauge/internal/workorder"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -994,7 +995,6 @@ type Scheduler struct {
 	// Callbacks
 	onStageStart    func(repo string, issue int, stage string, title string)
 	onStageComplete func(repo string, issue int, stage string, err error, cost StageCost, model string)
-	onEpicComplete  func(epicRepo string, epicNumber int) // the epic's own repository (#2377)
 	// evaluatePostMergeFn performs the post-merge evaluation. A field, not a
 	// direct call, for the same reason buildGraphFn is one: checkEpicCompletion
 	// otherwise constructs its own GitHub services from a live client, so the
@@ -1016,12 +1016,8 @@ type Scheduler struct {
 	// epicCheckpoint latches the autonomous scheduler's between-epic safety
 	// pause when an epic auto-closes.
 	//
-	// A DEDICATED field rather than a second registration on onEpicComplete,
-	// which is a single slot that internal/ipc/server.go re-assigns inside the
-	// `pipeline.run` method closure — per REQUEST, not at startup. Chaining
-	// onto it would be silently wiped by the next pipeline.run, or born nil,
-	// depending on ordering; both failures are invisible (#991). Mirrors the
-	// SetAttention shape: one writer, nil-safe on both ends. nil in CLI mode.
+	// Mirrors the SetAttention shape: one writer, nil-safe on both ends (#991).
+	// nil in CLI mode.
 	// It receives the epic's own repository with its number (#2377).
 	epicCheckpoint     func(epicRepo string, epicNumber int)
 	onPipelineComplete func(repo string, issue int, runtime *state.RuntimeState, success bool)
@@ -2235,6 +2231,20 @@ func (s *Scheduler) preflightIdentity(ctx context.Context, item types.BoardItem,
 	return false, reason
 }
 
+// permissionBlockedEscalation runs the CatPermission escalation gate over a
+// failed stage's texts and, when it blocks, raises the Action Center
+// auth-failure card (#4). This is the trigger that fires on the default
+// single-identity path, where preflightIdentity is disabled. Only the
+// classifier's reason reaches the card, never the raw texts, which can carry
+// credential-bearing output.
+func (s *Scheduler) permissionBlockedEscalation(item types.BoardItem, runID string, texts ...string) (bool, string) {
+	blocked, reason := EscalationBlockedByCategory(texts...)
+	if blocked {
+		s.raiseAuthFailure(item.Repo, item.Number, runID, reason)
+	}
+	return blocked, reason
+}
+
 // PickNext selects the highest-priority unblocked ready issue to execute.
 func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 	// One scan, one permission-cache cycle (#2130, #842).
@@ -2509,6 +2519,7 @@ func (s *Scheduler) runEpicBackstopSweep(ctx context.Context) {
 	if s.epicSvc == nil {
 		return
 	}
+	s.epicSvc.SetCheckoutResolver(s.EpicCheckout)
 
 	// Collect unique repos from board items (all statuses). Only each item's
 	// repo is used, so no relationship list is read: a long list on any item
@@ -2537,17 +2548,16 @@ func (s *Scheduler) runEpicBackstopSweep(ctx context.Context) {
 			log.Printf("backstop sweep %s: error: %v", fullRepo, err)
 			continue
 		}
-		if result.Closed == 0 {
-			continue
-		}
-
-		log.Printf("backstop sweep %s: closed %d stalled epic(s)", fullRepo, result.Closed)
-		if s.onEpicComplete != nil {
-			for _, item := range result.Summary {
-				if item.Status == "closed" {
-					s.onEpicComplete(fullRepo, item.EpicNumber)
-				}
+		for _, item := range result.Summary {
+			switch {
+			case item.Status == "closed":
+				s.resolveEpicIntegration(fullRepo, item.EpicNumber)
+			case item.Integration != nil:
+				s.raiseEpicIntegration(fullRepo, item.EpicNumber, *item.Integration)
 			}
+		}
+		if result.Closed > 0 {
+			log.Printf("backstop sweep %s: closed %d stalled epic(s)", fullRepo, result.Closed)
 		}
 	}
 }
@@ -4171,34 +4181,34 @@ func (s *Scheduler) OnStageComplete(fn func(repo string, issue int, stage string
 	s.onStageComplete = fn
 }
 
-// OnEpicComplete sets a callback for when an epic auto-closes.
-//
-// fn receives the epic's own repository ("owner/name") and number. For an
-// epic with sub-issues in other repositories that is not the merged
-// sub-issue's repository, which holds a different issue with that number
-// (#2377).
-//
-// SINGLE SLOT: a second call replaces the first. internal/ipc/server.go
-// registers one per `pipeline.run` request, so anything that needs to observe
-// epic completion durably must NOT register here — see SetEpicCheckpointFn for
-// the shape that survives (#991).
-func (s *Scheduler) OnEpicComplete(fn func(epicRepo string, epicNumber int)) {
-	s.onEpicComplete = fn
-}
-
-// EpicCompleteCallback returns the callback OnEpicComplete last registered, or
-// nil. The IPC server's tests fire the one `pipeline.run` registers, to check
-// that it opens the epic PR in the repository it is handed (#2377).
-func (s *Scheduler) EpicCompleteCallback() func(epicRepo string, epicNumber int) {
-	return s.onEpicComplete
+// EpicCheckout opens the checkout of epicRepo ("owner/name") that the epic
+// service integrates the epic branch in before closing an epic (#2560). It is
+// the checkout runs in that repository are rooted at, where the epic's own
+// sub-issues created the branch, and it must have that repository as origin:
+// epic/<N>-* names #N of the repository it was pushed to (#2377, #2388).
+func (s *Scheduler) EpicCheckout(epicRepo string) (*git.Service, error) {
+	if s == nil {
+		return nil, fmt.Errorf("no scheduler to resolve %s's checkout", epicRepo)
+	}
+	root, err := s.RepoRoot(epicRepo)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := git.NewService(root)
+	if err != nil {
+		return nil, err
+	}
+	if err := svc.RequireOriginRepo(epicRepo); err != nil {
+		return nil, err
+	}
+	return svc, nil
 }
 
 // SetEpicCheckpointFn injects the autonomous scheduler's epic-checkpoint
 // recorder, so the fleet-scoped SafetyRails pause fires from the one place an
 // epic actually closes.
 //
-// fn receives the epic's own repository ("owner/name") and number, as
-// OnEpicComplete's callback does (#2377).
+// fn receives the epic's own repository ("owner/name") and number (#2377).
 //
 // Nil-receiver guard is required: NewAutonomousScheduler is called with a nil
 // *Scheduler throughout the test suite.
@@ -5451,14 +5461,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// emitting. Writes stop at the seal, not here.
 		runtime.MarkTerminal(schedulerTerminalOutcome(pipelineSuccess, terminalFailureKind))
 
-		// Two terminal kinds record NOTHING, and the extension path skips the
-		// same two (internal/ipc/outcome_record.go) — one corpus, one meaning
+		// Three terminal kinds record NOTHING, and the extension path skips the
+		// same three (internal/ipc/outcome_record.go) — one corpus, one meaning
 		// per field, or `success` and `costUsd` carry two meanings across the
 		// file's two writers with no discriminator to tell them apart.
 		//
 		//   network_unavailable (#3296) — the cost / duration / token data from
 		//   a half-completed network-killed run is environmental noise, not
 		//   signal about model or stage performance.
+		//
+		//   environment_halt (#101) — a project-declared preflight.environment
+		//   check halted the run in Phase 0: the operator's environment was
+		//   broken, so the row would measure the environment, not the model.
 		//
 		//   blocked_dependency (#305) — a deferral is not a failure and did no
 		//   work: no AI stage ran, so the row would book success:false at ~$0.
@@ -5476,6 +5490,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		case TerminalKindBlockedDependency:
 			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — deferral, no work done)",
 				item.Number, TerminalKindBlockedDependency)
+		case TerminalKindEnvironmentHalt:
+			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — operator environment broken, not model)",
+				item.Number, TerminalKindEnvironmentHalt)
 		default:
 			// recordOutcome re-resolves the prediction from the run's worktree
 			// before writing the row (#994) — the values here were read at
@@ -6756,7 +6773,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 		// Build phase event callback for this stage — always record in runtime
 		phaseEventFn := func(pStage, pName string, pIndex, pTotal int) {
-			runtime.BeginPhase(stage, pName, pIndex, pTotal)
+			recordPhaseProgress(runtime, workspaceRoot, item.Number, stage, pName, pIndex, pTotal, false)
 			if s.onPhaseDetected != nil {
 				s.onPhaseDetected(item.Repo, item.Number, pStage, pName, pIndex, pTotal)
 			}
@@ -6765,7 +6782,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// Terminal on arrival, and deliberately not routed through
 		// onPhaseDetected's "a phase started" channel.
 		phasePassedFn := func(pStage, pName string, pIndex, pTotal int) {
-			runtime.PassPhase(stage, pName, pIndex, pTotal)
+			recordPhaseProgress(runtime, workspaceRoot, item.Number, stage, pName, pIndex, pTotal, true)
 			if s.onPhaseSettled != nil {
 				s.onPhaseSettled(item.Repo, item.Number, pStage, pName, pIndex, pTotal, "passed")
 			}
@@ -8236,7 +8253,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// over everything we know about the failure, the captured output
 			// tail included, because the cause is usually several lines above
 			// whatever symptom ended the stage.
-			catBlocked, catReason := EscalationBlockedByCategory(failText, runtime.StageOutputTail(stage))
+			catBlocked, catReason := s.permissionBlockedEscalation(item, runtime.RunID, failText, runtime.StageOutputTail(stage))
 			if catBlocked {
 				log.Printf("#%d: stage %s failed — NOT escalating model: %s (no model can supply a missing credential)",
 					item.Number, stage, catReason)
@@ -8393,7 +8410,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// sitting in the tail. The observed run's cause was a
 			// credential-less `git push`; escalating re-sent the whole prompt
 			// at a higher tier to reach the identical failure.
-			catBlocked, catReason := EscalationBlockedByCategory(outputTailBeforeClear, outputErr.Error())
+			catBlocked, catReason := s.permissionBlockedEscalation(item, runtime.RunID, outputTailBeforeClear, outputErr.Error())
 			if catBlocked {
 				log.Printf("#%d: stage %s missing output — NOT escalating model: %s (no model can supply a missing credential)",
 					item.Number, stage, catReason)
@@ -9023,7 +9040,7 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 	return key[:idx], num, true
 }
 
-// resolveIssueStatesByKey batch-resolves the current GitHub State ("OPEN" or
+// ResolveIssueStatesByKey batch-resolves the current GitHub State ("OPEN" or
 // "CLOSED") of the given graph node keys ("owner/repo#number") via
 // issueSvc.GetIssuesByNumbersWithoutRelations (State is all it reads), grouped
 // by repo so any number of keys sharing a
@@ -9031,7 +9048,9 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 // refreshBlockerStates above (a queue of N items spread across R repos
 // collapses from N calls to R). Used by the autonomous scheduler's
 // candidate-selection dep check to resolve "dangling" dependency edges that
-// reference an issue with no node in the graph (#306).
+// reference an issue with no node in the graph (#306), and by `nightgauge
+// next` / `nightgauge program status` so the program frontier resolves those
+// edges exactly as dispatch does (#2573).
 //
 // Keys the resolver couldn't confirm — a malformed key, a per-repo fetch
 // error, or an issue simply absent from the batch response (deleted /
@@ -9042,7 +9061,7 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 // A key whose repository is not "owner/repo" — the name an issue body gave a
 // repository the workspace cannot identify (depgraph's Unresolved reference)
 // — names no issue GitHub could return, so it is left out without a request.
-func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []string) map[string]string {
+func ResolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []string) map[string]string {
 	if issueSvc == nil || len(keys) == 0 {
 		return nil
 	}
@@ -9051,7 +9070,7 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 	for _, key := range keys {
 		repo, num, ok := splitNodeKey(key)
 		if !ok {
-			log.Printf("WARN: resolveIssueStatesByKey: malformed node key %q, skipping", key)
+			log.Printf("WARN: ResolveIssueStatesByKey: malformed node key %q, skipping", key)
 			continue
 		}
 		if !isOwnerRepo(repo) {
@@ -9065,7 +9084,7 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 		owner, name := splitOwnerRepo(repo)
 		issues, err := issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, nums)
 		if err != nil {
-			log.Printf("WARN: resolveIssueStatesByKey: batch fetch failed for %s: %v", repo, err)
+			log.Printf("WARN: ResolveIssueStatesByKey: batch fetch failed for %s: %v", repo, err)
 			continue
 		}
 		for n, iss := range issues {
@@ -9073,6 +9092,86 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 		}
 	}
 	return resolved
+}
+
+// ValidationState is a closed dependency's standing under the post-merge
+// validation gate (#2574). It is workorder's type, so dispatch and `nightgauge
+// next` / `program status` judge a closed blocker by one definition.
+type ValidationState = workorder.ValidationState
+
+// TrustedCommentReader lists an issue's comments by authors who may vouch for
+// it (trust.Gate.TrustedComments).
+type TrustedCommentReader interface {
+	TrustedComments(ctx context.Context, owner, repo string, number int) ([]trust.Comment, error)
+}
+
+// ResolveValidationByKey resolves the validation state of closed dependency
+// keys ("owner/repo#N"). known maps a key to labels the caller already holds
+// (an on-board node); keys in unknown have their labels read, batched per
+// repository like ResolveIssueStatesByKey. A key whose labels name no program
+// is {Program: false} with no further read; a program member's trusted
+// comments are read for the marker.
+//
+// A key the resolver could not decide — a failed label or comment read, an
+// issue absent from the batch, no comment reader — is left OUT of the map, and
+// callers fail closed on it. The marker is only ever read from trusted
+// comments, so a marker pasted by anyone else never releases a dependent.
+func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments TrustedCommentReader, known map[string][]string, unknown []string) map[string]ValidationState {
+	labels := make(map[string][]string, len(known))
+	for k, l := range known {
+		labels[k] = l
+	}
+	if issueSvc != nil {
+		byRepo := make(map[string][]int)
+		for _, key := range unknown {
+			repo, num, ok := splitNodeKey(key)
+			if !ok || !isOwnerRepo(repo) {
+				continue
+			}
+			byRepo[repo] = append(byRepo[repo], num)
+		}
+		for repo, nums := range byRepo {
+			owner, name := splitOwnerRepo(repo)
+			issues, err := issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, nums)
+			if err != nil {
+				log.Printf("WARN: ResolveValidationByKey: label fetch failed for %s: %v", repo, err)
+				continue
+			}
+			for n, iss := range issues {
+				labels[fmt.Sprintf("%s#%d", repo, n)] = append([]string{}, iss.Labels...)
+			}
+		}
+	}
+
+	out := make(map[string]ValidationState, len(labels))
+	for key, l := range labels {
+		if !workorder.IsProgramMember(l) {
+			out[key] = ValidationState{}
+			continue
+		}
+		if comments == nil {
+			continue
+		}
+		repo, num, ok := splitNodeKey(key)
+		if !ok || !isOwnerRepo(repo) {
+			continue
+		}
+		owner, name := splitOwnerRepo(repo)
+		cs, err := comments.TrustedComments(ctx, owner, name, num)
+		if err != nil {
+			log.Printf("WARN: ResolveValidationByKey: comment read failed for %s: %v", key, err)
+			continue
+		}
+		st := ValidationState{Program: true}
+		for _, c := range cs {
+			if forge.HasValidationMarker(c.Body) {
+				st.Validated = true
+				break
+			}
+		}
+		out[key] = st
+	}
+	return out
 }
 
 // issueBodyCaptureMax bounds the issue body captured at pickup (#183) to a

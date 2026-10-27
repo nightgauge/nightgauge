@@ -9,7 +9,37 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **CLI-started runs show phase progress and their output (#586).** A run
+  started with `nightgauge run` in a terminal now shows live phase progress on
+  its tree node. The node's tooltip names the run's session log, and the new
+  `Nightgauge: Open Run Output` context-menu command opens it.
+
+### Removed
+
+- **Batch-detection phases (#366).** Stage phase lists no longer show the
+  never-reachable `batch-detection` / `batch-plan-detection` phase.
+
 ### Fixed
+
+- **An interactive Codex stage stays alive while you work in its terminal
+  (#431).** The TUI launch, each message relayed from the Output panel, and
+  shell-execution events for the Codex terminal (on VS Code builds that report
+  them) now tell the backend the stage is alive. A backend restart after 30
+  minutes no longer closes the run as an orphan.
+
+- **`knowledge stamp --stage` works in stages the VS Code extension runs
+  (#2576).** Extension-spawned stages now receive `NIGHTGAUGE_DISPATCH_MODEL`
+  (the model the stage launched with, for every adapter) and
+  `NIGHTGAUGE_STAGE`, as Go-dispatched stages already did. Before, recording
+  provenance on a planning decision failed in every extension-run stage.
+
+- **An approved architecture decision resumes at feature-dev (#2577).** When a
+  run halted at the architecture-approval gate and a human then approved it,
+  the next run reuses the plan the human approved and skips feature-planning.
+  The gate still runs before feature-dev, so an unapproved issue halts again
+  without a second planning pass.
 
 - **A pr-merge waiting on its background gate is no longer killed, and a
   transient kill no longer strands the issue (#2554).** Each Claude Code
@@ -22,6 +52,9 @@ and this project adheres to
   the issue to Ready so the retry resumes at pr-merge on that PR; other
   failures still go to In review. A failed resume is no longer reported as
   `Outcome: already-resolved`.
+- The README now tells you to run **Nightgauge: Run Doctor** to check your
+  prerequisites; it named the removed **Nightgauge: Adapter Doctor** command
+  (#2099).
 
 - **A re-dispatched issue with an open PR resumes at pr-merge even after its
   worktree is gone (#2541).** The autonomous scan already lists each repo's

@@ -3118,13 +3118,6 @@ func (s *Server) registerMethods() {
 		// OnStateChanged, OnPhaseDetected) are registered once at server init in
 		// registerMethods() to avoid overwriting them on concurrent calls (#3348).
 
-		// OnEpicComplete: deterministic epic PR creation, merge, and branch cleanup.
-		// Runs only on successful pipeline completion (all sub-issues closed).
-		// The callback names the epic in its own repository (#2377).
-		s.scheduler.OnEpicComplete(func(epicRepo string, epicNumber int) {
-			s.completeEpicPR(context.Background(), epicRepo, epicNumber)
-		})
-
 		// Update autonomous stall escalation mode on the shared runner (#3348).
 		// The shared ipcRunner was created once at server init; AutonomousMode
 		// must still reflect the current autonomous scheduler state.
@@ -3825,6 +3818,48 @@ func (s *Server) registerMethods() {
 		return map[string]string{"status": "ok"}, nil
 	}
 
+	// pipeline.notifyStageAlive is the liveness producer for a stage that has
+	// no child process in this host (#431, ADR-017 C18) — the Codex
+	// interactive TUI, which runs inside a VSCode terminal. The extension calls
+	// it on REAL terminal activity (a shell-execution-end event for the stage's
+	// terminal, the TUI launch, an OutputWindow relay), never on a timer.
+	//
+	// It re-asserts exactly two ladder arms and changes nothing else: the
+	// resolve touches the run's lease (arm 1), and the snapshot is re-persisted
+	// so its mtime is fresh (arm 4). It is NOT a transition — a repeated
+	// `running` would re-enter BeginStage and reset the stage clock — and it
+	// carries no tokens. The persist is gated exactly like
+	// notifyStageTransition's: a known repo and not scheduler-owned. After the
+	// terminal claim Persist returns ErrRunSealed without writing, so a late
+	// alive call cannot resurrect a sealed snapshot.
+	//
+	//ipc:method pipelineNotifyStageAlive params:PipelineNotifyStageAliveParams result:void skip
+	s.methods["pipeline.notifyStageAlive"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p PipelineNotifyStageAliveParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		res, err := s.resolveRun("pipeline.notifyStageAlive", verbRunProgress, p.RunID, p.Repo, p.IssueNumber)
+		if err != nil {
+			return nil, err
+		}
+		if res.schedulerOwned {
+			return map[string]string{"status": "ok"}, nil
+		}
+		repo := res.rs.TargetRepo()
+		if repo == "" {
+			repo = p.Repo
+		}
+		if repo != "" {
+			if stateDir := s.pipelineStateDir(repo); stateDir != "" {
+				if err := res.rs.Persist(stateDir); err != nil {
+					log.Printf("notifyStageAlive: persist runtime snapshot failed (non-fatal): %v", err)
+				}
+			}
+		}
+		return map[string]string{"status": "ok"}, nil
+	}
+
 	// pipeline.recordStageGateResult is the single-authoritative-writer route
 	// for `nightgauge gate verify --record` (#377, ADR-017 R-1).
 	//
@@ -4306,7 +4341,7 @@ func (s *Server) registerMethods() {
 				if err := learning.NewRecorder(root).Record(outcome); err != nil {
 					log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
 				}
-			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable:
+			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt:
 				log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
 					p.IssueNumber, outcomeVerdict)
 			case outcomeUnset:
@@ -6087,110 +6122,6 @@ func (s *Server) gitService(workDir string) (*gitops.Service, error) {
 		return nil, fmt.Errorf("no workspace root configured for git operations")
 	}
 	return gitops.NewService(dir)
-}
-
-// completeEpicPR opens and merges the epic branch → main PR of an epic that
-// auto-closed. epicRepo is the epic's own repository ("owner/name"), and every
-// read and write happens there: the epic branch in that repository's checkout,
-// the title, and the PR. In the merged sub-issue's repository the same number
-// is a different issue, and the launch checkout can be another repository
-// altogether (#2377).
-func (s *Server) completeEpicPR(ctx context.Context, epicRepo string, epicNumber int) {
-	owner, repo := splitOwnerRepo(epicRepo)
-	if owner == "" || repo == "" {
-		log.Printf("epic #%d: invalid repo format %q", epicNumber, epicRepo)
-		return
-	}
-
-	// 1. Find the epic branch on remote, in the epic repository's checkout. A
-	// workspace with no checkout of it ran none of its sub-issues, so it holds
-	// no epic branch to merge, as when none was found.
-	gitSvc, err := s.epicGitService(epicRepo)
-	if err != nil {
-		log.Printf("epic %s#%d: no checkout of the epic's repository, skipping PR creation: %v", epicRepo, epicNumber, err)
-		return
-	}
-	epicBranch, err := gitSvc.FindEpicBranch(epicNumber)
-	if err != nil {
-		log.Printf("epic %s#%d: no epic branch found, skipping PR creation: %v", epicRepo, epicNumber, err)
-		return
-	}
-
-	// 2. Get epic title for PR; its sub-issue list is not read.
-	issueSvc := gh.NewIssueService(s.client)
-	epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.NoRelations)
-	if err != nil {
-		log.Printf("epic %s#%d: failed to fetch issue: %v", epicRepo, epicNumber, err)
-		return
-	}
-
-	// 3. Create epic PR (epic branch → main)
-	prSvc := gh.NewPRService(s.client)
-	baseBranch := "main"
-	result, err := prSvc.CreateEpicPR(ctx, owner, repo, epicNumber, epicIssue.Title, epicBranch, baseBranch)
-	if err != nil {
-		log.Printf("epic %s#%d: failed to create epic PR: %v", epicRepo, epicNumber, err)
-		s.Emit("epic.prFailed", map[string]interface{}{
-			"repo":       epicRepo,
-			"epicNumber": epicNumber,
-			"error":      err.Error(),
-		})
-		return
-	}
-
-	log.Printf("epic %s#%d: PR %s (%s)", epicRepo, epicNumber, result.PRURL, result.Action)
-
-	if result.Action == "already_merged" {
-		// PR was already merged — just cleanup branches
-		log.Printf("epic %s#%d: already merged, cleaning up branches", epicRepo, epicNumber)
-		_ = gitSvc.BranchCleanup(epicBranch)
-		s.Emit("epic.completed", map[string]interface{}{
-			"repo":       epicRepo,
-			"epicNumber": epicNumber,
-			"action":     "already_merged",
-			"prUrl":      result.PRURL,
-		})
-		return
-	}
-
-	// 4. Merge the epic PR (MERGE strategy to preserve commit history)
-	prNodeID := result.PRNodeID
-	if prNodeID == "" {
-		log.Printf("epic %s#%d: no PR node ID, cannot auto-merge", epicRepo, epicNumber)
-		s.Emit("epic.prCreated", map[string]interface{}{
-			"repo":       epicRepo,
-			"epicNumber": epicNumber,
-			"prUrl":      result.PRURL,
-			"prNumber":   result.PRNumber,
-			"action":     "created_manual_merge_required",
-		})
-		return
-	}
-
-	if err := prSvc.MergeEpicPR(ctx, owner, repo, prNodeID, epicBranch); err != nil {
-		log.Printf("epic %s#%d: failed to merge epic PR: %v", epicRepo, epicNumber, err)
-		s.Emit("epic.mergeFailed", map[string]interface{}{
-			"repo":       epicRepo,
-			"epicNumber": epicNumber,
-			"prUrl":      result.PRURL,
-			"error":      err.Error(),
-		})
-		return
-	}
-
-	// 5. Cleanup: delete epic branch locally + remote tracking refs
-	if err := gitSvc.BranchCleanup(epicBranch); err != nil {
-		log.Printf("epic %s#%d: branch cleanup warning: %v", epicRepo, epicNumber, err)
-	}
-
-	log.Printf("epic %s#%d: completed — PR merged, branches cleaned", epicRepo, epicNumber)
-	s.Emit("epic.completed", map[string]interface{}{
-		"repo":       epicRepo,
-		"epicNumber": epicNumber,
-		"action":     "merged",
-		"prUrl":      result.PRURL,
-		"prNumber":   result.PRNumber,
-	})
 }
 
 // epicGitService opens the checkout of epicRepo ("owner/name"), the one

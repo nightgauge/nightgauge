@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -174,5 +175,59 @@ func TestFeaturePlanningGate_Fail_InvalidJSON(t *testing.T) {
 	}
 	if gr.TerminalKind != TerminalKindValidationError {
 		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindValidationError)
+	}
+}
+
+// publicationWorkspace writes a plan, a boundary manifest, and a stub checker
+// that denies every path it is asked about (#2562).
+func publicationWorkspace(t *testing.T, ctx map[string]any) string {
+	t.Helper()
+	ws := t.TempDir()
+	planFile := filepath.Join(layouttest.PlansDir(t, ws), "42-thing.md")
+	writeFile(t, planFile, "# plan\n")
+	writeFile(t, filepath.Join(ws, ".github/publication-boundary.yaml"), "allow: []\n")
+	writeFile(t, filepath.Join(ws, "scripts/publication-boundary-check.py"), `import json, sys
+paths = [a for a in sys.argv[2:] if a != "--"]
+print(json.dumps([{"path": p, "verdict": "deny", "rule": "docs/spikes/**", "class": "PRIVATE"} for p in paths]))
+sys.exit(1)
+`)
+	writeFile(t, filepath.Join(ws, "internal/existing.go"), "package x\n")
+	ctx["plan_file"] = planFile
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "planning-42.json"), ctx)
+	return ws
+}
+
+func TestFeaturePlanningGate_PublicationDeniedPathIsNotPipelineActionable(t *testing.T) {
+	ws := publicationWorkspace(t, map[string]any{
+		"files_to_create": []string{"docs/spikes/42-x.md"},
+	})
+	gr := FeaturePlanningGate{}.Verify(context.Background(), 42, ws)
+	if gr.Passed || gr.TerminalKind != TerminalKindNotPipelineActionable {
+		t.Fatalf("want not_pipeline_actionable failure; passed=%v kind=%q reason=%q", gr.Passed, gr.TerminalKind, gr.Reason)
+	}
+	if len(gr.Evidence) == 0 || !strings.Contains(gr.Evidence[0], "docs/spikes/**") {
+		t.Fatalf("evidence must name the deny rule, got %v", gr.Evidence)
+	}
+}
+
+// An existing file the plan modifies already passed the boundary on main, so
+// it is never re-asked; only paths the change would add are checked.
+func TestFeaturePlanningGate_PublicationIgnoresExistingModifiedFiles(t *testing.T) {
+	ws := publicationWorkspace(t, map[string]any{
+		"files_to_modify": []string{"internal/existing.go"},
+	})
+	gr := FeaturePlanningGate{}.Verify(context.Background(), 42, ws)
+	if !gr.Passed {
+		t.Fatalf("expected pass; reason=%q evidence=%v", gr.Reason, gr.Evidence)
+	}
+}
+
+func TestFeaturePlanningGate_PublicationChecksNewModifiedPaths(t *testing.T) {
+	ws := publicationWorkspace(t, map[string]any{
+		"files_to_modify": []string{"docs/spikes/42-new.md"},
+	})
+	gr := FeaturePlanningGate{}.Verify(context.Background(), 42, ws)
+	if gr.Passed || gr.TerminalKind != TerminalKindNotPipelineActionable {
+		t.Fatalf("a not-yet-existing modify path must be checked; passed=%v kind=%q", gr.Passed, gr.TerminalKind)
 	}
 }

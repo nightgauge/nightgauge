@@ -1056,6 +1056,7 @@ func rootCmd() *cobra.Command {
 		wipCmd(),
 		handoffCmd(),
 		nextCmd(),
+		programCmd(),
 		configCmd(),
 		scanCmd(),
 		preflightCmd(),
@@ -3245,6 +3246,15 @@ func epicPlanWavesCmd() *cobra.Command {
 				earlier, later := c.Issues[0], c.Issues[1]
 				fmt.Printf("Serialized #%d after #%d — shared target file %s\n", later, earlier, c.Path)
 			}
+			// Blockers outside the planned set create no wave edge, so an
+			// issue in any wave stays undispatchable until they close.
+			for _, b := range result.ExternalBlockers {
+				state := b.State
+				if state == "" {
+					state = "state unknown"
+				}
+				fmt.Printf("External blocker: %s is blocked by %s (%s)\n", b.Issue, b.Blocker, state)
+			}
 			return nil
 		},
 	}
@@ -3331,12 +3341,14 @@ func epicCompleteCmd() *cobra.Command {
 		Short: "Complete an epic: check, close, create PR, merge, cleanup",
 		Long: `Run the full epic completion flow:
 1. Check if all sub-issues are closed
-2. Close the epic issue
-3. Create epic→main PR (MERGE strategy to preserve commit history)
-4. Merge the PR
-5. Cleanup epic branch (local + remote)
+2. Merge main into the epic branch (CHANGELOG-only conflicts resolved by union)
+3. Create or reuse the epic→main PR and merge it (via the merge queue when required)
+4. Cleanup epic branch (local + remote)
+5. Close the epic issue — only once its branch is on main
 
-If sub-issues remain open, reports progress and exits without action.
+If sub-issues remain open, reports progress and exits without action. If the
+epic branch cannot be integrated (conflict, red CI), the epic stays open and
+the action is integration_<outcome>.
 
 Run it in a checkout of --repo: the epic branch is found, merged and deleted in
 the current checkout, so a checkout whose origin is another repository is
@@ -3602,6 +3614,16 @@ func epicSummaryTierCmd() *cobra.Command {
 	return cmd
 }
 
+// installEpicCheckout lets the epic service integrate an epic branch in the
+// current directory's checkout before closing the epic (#2560). The checkout
+// serves only an epic of its own origin repository (#2388); for any other an
+// epic with an unintegrated branch stays open.
+func installEpicCheckout(epicSvc *gh.EpicService) {
+	if wd, err := os.Getwd(); err == nil {
+		epicSvc.SetCheckoutResolver(gh.CheckoutResolverForPath(wd))
+	}
+}
+
 func epicAutoCloseCmd() *cobra.Command {
 	var (
 		owner         string
@@ -3614,7 +3636,9 @@ func epicAutoCloseCmd() *cobra.Command {
 		Use:   "auto-close",
 		Short: "Automatically close completed epics and move to Done",
 		Long: `Check all open epics in a repo. For each epic:
-- If ALL sub-issues are closed: close the epic with automated comment, move to Done
+- If ALL sub-issues are closed: integrate its epic branch into main, then close
+  the epic with automated comment and move to Done. An epic whose branch cannot
+  be integrated (or inspected from this checkout) stays open.
 - If some sub-issues are open: skip
 - If no sub-issues: skip
 
@@ -3629,6 +3653,7 @@ Returns a summary with checked, closed, and skipped counts.`,
 
 			ownerPart, repoPart := splitRepo(owner, repo)
 			epicSvc := gh.NewEpicService(client)
+			installEpicCheckout(epicSvc)
 
 			result, err := epicSvc.AutoClose(cmd.Context(), ownerPart, repoPart, projectNumber)
 			if err != nil {
@@ -4154,6 +4179,7 @@ common case at merge time.`,
 			}
 
 			epicSvc := gh.NewEpicService(client)
+			installEpicCheckout(epicSvc)
 			res, err := epicSvc.ReconcileBoard(cmd.Context(), owner, projectNumber, getOwnerType(cmd))
 			if err != nil {
 				return fmt.Errorf("reconcile board %s/%d: %w", owner, projectNumber, enrichError(err))
@@ -6972,6 +6998,7 @@ cause the command to exit non-zero.`,
 			ownerPart, repoPart := splitRepo(owner, repo)
 			issueSvc := gh.NewIssueService(client)
 			epicSvc := gh.NewEpicService(client)
+			installEpicCheckout(epicSvc)
 			prSvc := gh.NewPRService(client)
 
 			// Board syncer is only wired when a project is configured; the hook
@@ -6996,6 +7023,9 @@ cause the command to exit non-zero.`,
 				PRNumber:        prNumber,
 				MainChecks:      gh.NewCIService(client),
 				MainCheckWait:   wait,
+				// (#2574) Comment the validation marker on a green merge so
+				// the issue's program dependents are released.
+				ValidationMarks: hookValidationMarks{Gate: markerTrustGate(client, workdir), issues: issueSvc},
 			})
 			reportMainChecks(workdir, ownerPart, repoPart, issueNumber, prNumber, result)
 

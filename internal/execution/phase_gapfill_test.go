@@ -11,7 +11,7 @@ func TestAdvanceReportsThePhasesItJumpedOver(t *testing.T) {
 		t.Fatal("Start() did not emit the stage's first phase")
 	}
 
-	// A Read advances to 1; an edit under a non-pipeline path advances to 8.
+	// A Read advances to 1; an edit under a non-pipeline path advances to 7.
 	if _, passed, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "PLAN.md"}); !ok {
 		t.Fatal("Read did not advance the cursor")
 	} else if len(passed) != 0 {
@@ -22,8 +22,8 @@ func TestAdvanceReportsThePhasesItJumpedOver(t *testing.T) {
 	if !ok {
 		t.Fatal("Write did not advance the cursor")
 	}
-	if len(passed) != 6 {
-		t.Fatalf("advance 1 -> 8 reported %d passed phases, want 6 (indices 2..7)", len(passed))
+	if len(passed) != 5 {
+		t.Fatalf("advance 1 -> 7 reported %d passed phases, want 5 (indices 2..6)", len(passed))
 	}
 	for i, m := range passed {
 		wantIndex := 2 + i

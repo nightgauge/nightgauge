@@ -437,3 +437,79 @@ describe("runStageSkillInteractive - Codex TUI branch (#4024)", () => {
     }
   });
 });
+
+describe("runStageSkillInteractive - Codex TUI liveness producer (#431)", () => {
+  type ShellEndListener = (e: { terminal: unknown }) => void;
+  const win = vscode.window as unknown as {
+    onDidEndTerminalShellExecution?: (cb: ShellEndListener) => { dispose: Mock };
+  };
+  let shellEndListeners: ShellEndListener[];
+  let shellEndDispose: Mock;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    shellEndListeners = [];
+    shellEndDispose = vi.fn();
+  });
+
+  afterEach(() => {
+    killAllActiveProcesses();
+    delete win.onDidEndTerminalShellExecution;
+    vi.useRealTimers();
+  });
+
+  function installShellIntegration(): void {
+    win.onDidEndTerminalShellExecution = vi.fn((cb: ShellEndListener) => {
+      shellEndListeners.push(cb);
+      return { dispose: shellEndDispose };
+    });
+  }
+
+  it("re-asserts on a shell-execution-end event for the stage terminal, and only that one", () => {
+    installShellIntegration();
+    const onStageAlive = vi.fn();
+    runStageSkillInteractive("feature-dev", 42, { onStageAlive });
+    expect(shellEndListeners).toHaveLength(1);
+    onStageAlive.mockClear(); // the launch checkpoint
+
+    shellEndListeners[0]({ terminal: { name: "some-other-terminal" } });
+    expect(onStageAlive).not.toHaveBeenCalled();
+
+    shellEndListeners[0]({ terminal: mockTerminal });
+    expect(onStageAlive).toHaveBeenCalledTimes(1);
+
+    closeTerminal(0);
+    expect(shellEndDispose).toHaveBeenCalled();
+  });
+
+  it("fabricates no re-assertion while the terminal is silent past the liveness window", () => {
+    vi.useFakeTimers();
+    installShellIntegration();
+    const onStageAlive = vi.fn();
+    runStageSkillInteractive("feature-dev", 42, { onStageAlive });
+    expect(onStageAlive).toHaveBeenCalledTimes(1); // the launch checkpoint only
+
+    vi.advanceTimersByTime(31 * 60 * 1000);
+    expect(onStageAlive).toHaveBeenCalledTimes(1);
+  });
+
+  it("without the shell-integration API, the floor re-asserts on launch and on each relay", () => {
+    expect(win.onDidEndTerminalShellExecution).toBeUndefined();
+    const onStageAlive = vi.fn();
+    const handle = runStageSkillInteractive("feature-dev", 42, { onStageAlive });
+    expect(onStageAlive).toHaveBeenCalledTimes(1);
+
+    expect(handle.writeToStdin!("continue")).toBe(true);
+    expect(onStageAlive).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failed relay is not activity", () => {
+    const onStageAlive = vi.fn();
+    const handle = runStageSkillInteractive("feature-dev", 42, { onStageAlive });
+    mockTerminal.sendText.mockImplementationOnce(() => {
+      throw new Error("terminal disposed");
+    });
+    expect(handle.writeToStdin!("continue")).toBe(false);
+    expect(onStageAlive).toHaveBeenCalledTimes(1);
+  });
+});

@@ -5205,6 +5205,15 @@ func TestPrioritize_OffBoardDependencyResolution(t *testing.T) {
 				}
 				return tt.resolved
 			}
+			// The off-board blocker is not a program member, so a CLOSED
+			// one releases on closure (#2574 AC4).
+			as.resolveValidationFn = func(_ context.Context, _ map[string][]string, unknown []string) map[string]ValidationState {
+				out := map[string]ValidationState{}
+				for _, k := range unknown {
+					out[k] = ValidationState{}
+				}
+				return out
+			}
 
 			candidates := as.prioritize(context.Background(), g)
 
@@ -5315,7 +5324,7 @@ func TestResolveIssueStatesByKey_BatchedPerRepo(t *testing.T) {
 	mock.addIssue("owner", "repo-b", 20, &types.Issue{Number: 20, State: "CLOSED"})
 
 	keys := []string{"owner/repo-a#10", "owner/repo-a#11", "owner/repo-b#20"}
-	resolved := resolveIssueStatesByKey(context.Background(), mock, keys)
+	resolved := ResolveIssueStatesByKey(context.Background(), mock, keys)
 
 	if len(mock.batchCalls) != 2 {
 		t.Fatalf("want 2 batched calls (one per repo), got %d: %+v", len(mock.batchCalls), mock.batchCalls)
@@ -5336,7 +5345,7 @@ func TestResolveIssueStatesByKey_BatchedPerRepo(t *testing.T) {
 // out of the result — never defaulted to a guessed state.
 func TestResolveIssueStatesByKey_MissingIssueAbsentFromResult(t *testing.T) {
 	mock := newMockIssueSvc() // no issues registered
-	resolved := resolveIssueStatesByKey(context.Background(), mock, []string{"owner/repo#999"})
+	resolved := ResolveIssueStatesByKey(context.Background(), mock, []string{"owner/repo#999"})
 	if state, ok := resolved["owner/repo#999"]; ok {
 		t.Errorf("expected #999 to be absent from resolved map (not found in batch response), got %q", state)
 	}
@@ -5345,7 +5354,7 @@ func TestResolveIssueStatesByKey_MissingIssueAbsentFromResult(t *testing.T) {
 // TestResolveIssueStatesByKey_NilIssueService verifies the nil-issueSvc guard
 // (no GitHub call attempted when the issue service is unavailable).
 func TestResolveIssueStatesByKey_NilIssueService(t *testing.T) {
-	resolved := resolveIssueStatesByKey(context.Background(), nil, []string{"owner/repo#1"})
+	resolved := ResolveIssueStatesByKey(context.Background(), nil, []string{"owner/repo#1"})
 	if resolved != nil {
 		t.Errorf("expected nil map when issueSvc is nil, got %+v", resolved)
 	}

@@ -14,7 +14,7 @@ The `pr-create` pipeline stage runs in one of two modes:
    tokens, zero subagent processes, completes in seconds.
 2. **LLM path** (fallback) — the existing `nightgauge-pr-create` skill
    runs via the normal `StageRunner` → Claude pipeline. Reached whenever the
-   deterministic runner punts (sparse context, spike, batch, security or
+   deterministic runner punts (sparse context, spike, security or
    scope concern, push failure, …).
 
 The skill's downstream contract is unchanged: it writes `pr-{N}.json` to the
@@ -101,7 +101,6 @@ wins):
 | Snapshot signal                                                                                        | Result | Reason                                    |
 | ------------------------------------------------------------------------------------------------------ | ------ | ----------------------------------------- |
 | `dev-{N}.json` missing or unparseable                                                                  | Punt   | `missing-dev-context`                     |
-| `dev-batch-{E}.json` present                                                                           | Punt   | `batch-mode`                              |
 | `issue.type == "spike"`                                                                                | Punt   | `spike-issue`                             |
 | Branch missing or equal to base branch                                                                 | Punt   | `branch-is-base`                          |
 | `validate-{N}.json` missing, route skipped feature-validate, dev build/tests not failed, files changed | Create | `rich-context: validate-skipped-by-route` |
@@ -241,7 +240,6 @@ release.
 | `scope-drift-failed`                      | type:docs / type:chore scope drift gate failed              | Punt → LLM   |
 | `manual-checklist-unverified`             | Validation produced an unchecked manual checklist           | Punt → LLM   |
 | `spike-issue`                             | `issue.type == "spike"` — defer to skill's spike artifact   | Punt → LLM   |
-| `batch-mode`                              | `dev-batch-{E}.json` present                                | Punt → LLM   |
 | `no-changes`                              | `dev.files_changed` is empty                                | Punt → LLM   |
 | `branch-is-base`                          | Current branch equals base                                  | Punt → LLM   |
 | `push-failed: …`                          | `git push -u origin <branch>` returned non-zero             | Punt → LLM   |
@@ -302,7 +300,7 @@ not author:
   required and the configured reviewer differs from the PR author).
 - CI monitoring with classified failures (Phase 3.5 of the skill).
 - Spike artifact authoring (`type:spike` issues bypass the runner).
-- Batch / cross-repo PR bodies.
+- Cross-repo PR bodies.
 
 ## Phase reporting on both routes (#1247, #1397)
 
@@ -363,7 +361,7 @@ Highlights:
 
 - **ADR-001** Deterministic path is the default; LLM is the punt fallback.
   Cost per pr-create run drops from ~$1–$3 to ~$0 for the rich-context
-  majority. The skill remains the canonical path for spike/batch/sparse runs.
+  majority. The skill remains the canonical path for spike/sparse runs.
 - **ADR-002** `execution_path` is per-stage, not per-run (mirrors #3264 ADR-002).
   Forward compatible for the next deterministic stage.
 - **ADR-003** Decision rule is a pure function over `PRCreateSnapshot`,
@@ -377,7 +375,7 @@ Highlights:
 
 ## Migration notes
 
-- Behavior is unchanged for spike, batch, or sparse runs (the LLM path
+- Behavior is unchanged for spike or sparse runs (the LLM path
   receives the same input it always did).
 - For clean-context runs that previously cost ~$1–$3, the same PR now
   lands in ~1 s with zero tokens.

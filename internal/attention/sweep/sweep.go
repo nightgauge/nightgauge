@@ -203,6 +203,11 @@ type Result struct {
 	Skipped bool `json:"skipped,omitempty"`
 	// SkipReason explains a skip in one line.
 	SkipReason string `json:"skip_reason,omitempty"`
+	// Unauthorized is true when the skip was the forge rejecting the
+	// credential. The caller raises one credential card for it (#2578): the
+	// skip itself leaves every card untouched, so without one the board looks
+	// healthy while nothing is being observed.
+	Unauthorized bool `json:"unauthorized,omitempty"`
 	// Evaluated lists the producers that observed the repo successfully.
 	Evaluated []string `json:"evaluated,omitempty"`
 	// Failed maps a producer name to the error that stopped it. Its cards were
@@ -316,6 +321,7 @@ func (s *Sweeper) Sweep(ctx context.Context, repo string) (Result, error) {
 				// retract live cards, so skip the whole sweep instead.
 				res.Skipped = true
 				res.SkipReason = fmt.Sprintf("%s: %v", p.Name(), perr)
+				res.Unauthorized = errors.Is(perr, forge.ErrUnauthorized)
 				res.Evaluated = nil
 				s.logf("attention sweep: skipped %s — %s", repo, res.SkipReason)
 				return res, nil

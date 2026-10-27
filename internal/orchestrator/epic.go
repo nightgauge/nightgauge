@@ -9,13 +9,14 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // checkEpicCompletion explicitly closes the merged sub-issue and, if its
 // parent epic now has all sub-issues closed, auto-closes the epic with a
-// comment and a project board move to Done. Fires OnEpicComplete on epic
-// closure.
+// comment and a project board move to Done. The epic service integrates the
+// epic branch into main before it closes the epic (#2560).
 //
 // Delegates to hooks.EvaluatePostMerge so the deterministic CLI path
 // (`nightgauge hook post-merge`) and the in-process scheduler path
@@ -29,6 +30,7 @@ import (
 func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardItem, prNumber int) hooks.PostMergeResult {
 	ownerPart, repoPart := splitOwnerRepo(item.Repo)
 	epicSvc := gh.NewEpicService(s.client)
+	epicSvc.SetCheckoutResolver(s.EpicCheckout)
 	var prVerifier hooks.PRVerifier
 	var boardSvc hooks.BoardSyncer
 	if s.client != nil {
@@ -59,6 +61,12 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 	if s.client != nil && s.mainCheckReaderFn != nil {
 		input.MainChecks = s.mainCheckReaderFn(s.client)
 		input.MainCheckWait = hooks.DefaultMainCheckWait()
+		// (#2574) Comment the validation marker on a green merge, read
+		// through the eligibility gate's trusted-comment filter, so the
+		// issue's program dependents are released.
+		if s.trustGate != nil {
+			input.ValidationMarks = validationMarks{Gate: s.trustGate, issues: gh.NewIssueService(s.client)}
+		}
 	}
 	result := evaluate(ctx, s.issueSvc, s.issueSvc, epicSvc, prVerifier, boardSvc, input)
 
@@ -69,7 +77,7 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		// DETACHED, bounded context: this runs on the pr-merge finalization path,
 		// so a hung webhook must not block the pipeline (the pipeline ctx may also
 		// be cancelled once the run returns) (#4076 review).
-		// The alert, the checkpoint and the epic-PR callback all name the closed
+		// The alert and the checkpoint both name the closed
 		// epic in its own repository, the one the hook resolved it in (EpicRepo);
 		// item.Repo can hold a different issue with that number (#2350, #2377).
 		repo, epic := result.EpicRepo, result.EpicNumber
@@ -83,22 +91,36 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 			defer cancel()
 			s.emitReadyToShipAlert(nctx, repo, epic)
 		}()
-		// Latch the checkpoint BEFORE handing control to the epic-PR callback.
-		// onEpicComplete does real network work (epic PR create + merge), so a
-		// panic or a long block there must not lose the pause (#991).
 		if s.epicCheckpoint != nil {
 			s.epicCheckpoint(repo, epic)
 		}
-		if s.onEpicComplete != nil {
-			s.onEpicComplete(repo, epic)
+		s.resolveEpicIntegration(repo, epic)
+	} else if result.Integration != nil && result.EpicNumber > 0 {
+		// The epic's sub-issues are done but its branch is not on main: it
+		// stays open, and a blocked integration needs an operator (#2560).
+		repo := result.EpicRepo
+		if repo == "" {
+			repo = item.Repo
 		}
+		s.raiseEpicIntegration(repo, result.EpicNumber, *result.Integration)
 	}
 
 	// boardSync is logged because the hook is non-blocking: a board that failed
 	// to reach Done is otherwise invisible on this path too (#691).
-	log.Printf("#%d: post-merge hook: issueClosed=%v autoClosed=%v epic=#%d reason=%s boardSync=%s mainChecks=%s",
-		item.Number, result.IssueClosed, result.AutoClosed, result.EpicNumber, result.Reason, result.IssueDoneSync, mainCheckWord(result))
+	log.Printf("#%d: post-merge hook: issueClosed=%v autoClosed=%v epic=#%d reason=%s boardSync=%s mainChecks=%s validationMarker=%s",
+		item.Number, result.IssueClosed, result.AutoClosed, result.EpicNumber, result.Reason, result.IssueDoneSync, mainCheckWord(result), result.ValidationMarker)
 	return result
+}
+
+// validationMarks is the in-process post-merge hook's ValidationMarkWriter
+// (#2574): comments read through the trust gate, written by node id.
+type validationMarks struct {
+	*trust.Gate
+	issues *gh.IssueService
+}
+
+func (m validationMarks) AddComment(ctx context.Context, subjectID, body string) error {
+	return m.issues.AddComment(ctx, subjectID, body)
 }
 
 // GetEpicSubIssuesByRepo groups an epic's sub-issues by repository for cross-repo dispatch.

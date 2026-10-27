@@ -14,8 +14,9 @@ the composer is
 [GO_BINARY.md § Skill Composition](GO_BINARY.md#skill-composition-issue-78--adr-016).
 
 > **Status.** The composer (`nightgauge skill render`), the registry `behavior`
-> block, and the extension's migration onto the composer have shipped. The
-> `preflight skill-overlays` gate, the full shared-overlay set, base-skill prose
+> block, the extension's migration onto the composer, and the shared provider
+> and Anthropic overlays (#81) have shipped. The `preflight skill-overlays`
+> gate, base-skill prose
 > extraction, `nightgauge-model-watch`, and the overlay-delta evals are still
 > open — see [Not yet enforced](#not-yet-enforced) before relying on any of them.
 
@@ -57,18 +58,28 @@ sharing `_overlays/` with provider and model keys.
 
 ### The corpus today
 
-Five shared-scope overlays ship — one of them host-keyed — alongside two
+Nine shared-scope overlays ship — two of them host-keyed — alongside two
 skill-specific fragments; no whole-file override exists. All land at the
 `after-context-includes` site (§4) because no base skill carries an
 `<!-- overlay -->` anchor.
 
-| Key                | Carries                                                                                                                                   |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `hosts/grok`       | Grok Build as execution host: no Stop hooks, no `AskUserQuestion`, the `--effort` flag, optional subagent fan-out.                        |
-| `hosts/opencode`   | OpenCode as execution host: lowercase tool ids, silent-reject-don't-retry, no `AskUserQuestion`, never edit `opencode.json`/`.opencode/`. |
-| `grok-4.6`         | Thinking-on-by-default; drop redundant verify-your-work scaffolding and extra review subagents.                                           |
-| `grok-build-0.1`   | The cheaper Grok coding model: stay inside the stage contract, no extra research loops.                                                   |
-| `claude-fable-5-1` | The Fable 5.1 behavioral shifts (#1276), one named block each — see below.                                                                |
+| Key                 | Carries                                                                                                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `hosts/grok`        | Grok Build as execution host: no Stop hooks, no `AskUserQuestion`, the `--effort` flag, optional subagent fan-out.                        |
+| `hosts/opencode`    | OpenCode as execution host: lowercase tool ids, silent-reject-don't-retry, no `AskUserQuestion`, never edit `opencode.json`/`.opencode/`. |
+| `anthropic`         | Every Claude model: run the named `nightgauge` primitive, carry out each step explicitly, including implied ones.                         |
+| `openai`            | GPT models: inline fallback for Claude-only tools, host edit tool, read exit codes, the context file (not markers) ends the stage.        |
+| `claude-opus-5-5`   | Countermands `anthropic`: no extra verify pass or subagents, tight bodies, latitude to skip a step already satisfied.                     |
+| `claude-sonnet-5-5` | As `claude-opus-5-5`, without the delegation line.                                                                                        |
+| `grok-4.6`          | Drop redundant verify-your-work scaffolding and extra review subagents; one thorough pass.                                                |
+| `grok-build-0.1`    | The cheaper Grok coding model: stay inside the stage contract, no extra research loops.                                                   |
+| `claude-fable-5-1`  | The Fable 5.1 behavioral shifts (#1276), one named block each — see below. Composes after `anthropic`.                                    |
+
+`anthropic` is the conservative default Haiku renders with; the frontier ids
+countermand it by name. It says nothing about verification, so it never fights
+Fable's "keep the verification" block. There are no band files (they cannot
+resolve) and no fragments for deprecated ids. New fragments hold to 1024 bytes
+until #80 fixes the budget.
 
 Both skill-specific fragments are keyed `claude-fable-5-1`, and each carries the
 batching-nudge block and nothing else:
@@ -265,7 +276,7 @@ Two things in this guide are specified but not yet mechanically gated:
 - **`<!-- overlay-exempt: reason -->`** is the marker that gate will honour. It
   is inert today.
 
-`nightgauge-model-watch` (#83), the shared-overlay authoring pass (#81), the
+`nightgauge-model-watch` (#83), the
 base-skill prose extraction (#82), and the overlay-delta harness (#84) are open
 for the same reason. Write overlays as if the gate existed; it is coming, and
 the review burden until then is human.

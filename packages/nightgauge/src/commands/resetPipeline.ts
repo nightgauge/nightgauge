@@ -299,11 +299,10 @@ export function registerResetPipelineCommand(
         ).map(toUris);
 
         // Keep only pipeline context files: issue-N, planning-N, dev-N,
-        // validate-N, pr-N, merge-N, dev-batch-N, planning-batch-N.
+        // validate-N, pr-N, merge-N.
         // Preserves calibration.json, history/, etc. (The
         // run-control singletons are in the checkout's own directory.)
-        const PIPELINE_CONTEXT_PATTERN =
-          /^(?:issue|planning|dev|validate|pr|merge|dev-batch|planning-batch)-\d+\.json$/;
+        const PIPELINE_CONTEXT_PATTERN = /^(?:issue|planning|dev|validate|pr|merge)-\d+\.json$/;
         const contextFiles = allContextFiles.filter((f) => {
           const name = f.fsPath.split("/").pop() ?? "";
           return PIPELINE_CONTEXT_PATTERN.test(name);

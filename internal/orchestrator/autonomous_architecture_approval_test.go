@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // Tests for the #4098/#4222 architecture_approval_required terminal kind on the
@@ -214,5 +217,123 @@ func TestArchitectureApproval_NoPRSidelinedIssueBlocksDependent(t *testing.T) {
 	got := buf.String()
 	if !strings.Contains(got, "move-to-in-progress:") {
 		t.Errorf("expected sidelineHalt to choose In progress with no PR, got log: %q", got)
+	}
+}
+
+// approvalCardScheduler is heldTestScheduler with a real attention store, so
+// the raise and retract of the approval card can be observed (#2577).
+func approvalCardScheduler(t *testing.T) *AutonomousScheduler {
+	t.Helper()
+	as := heldTestScheduler(t)
+	as.attention = attention.New(layouttest.Repo(t))
+	return as
+}
+
+func approvalCardOpen(t *testing.T, as *AutonomousScheduler, repo string, issue int) bool {
+	t.Helper()
+	for _, r := range openRequests(t, as) {
+		if r.IdempotencyKey == keyArchitectureApproval(repo, issue) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestOnPipelineComplete_ArchitectureApprovalSurvivesPendingStop pins #2577. An
+// extension-mode run is not killed by `autonomous stop`, so it can halt at the
+// approval gate after Stop() has set stopRequested. Pre-fix the operator-stop
+// branch rewrote that verdict to operator_stop: the issue went back to Ready
+// with no Action Center card and the next dispatch re-ran planning into the
+// same gate.
+func TestOnPipelineComplete_ArchitectureApprovalSurvivesPendingStop(t *testing.T) {
+	as := approvalCardScheduler(t)
+	as.stopRequested = true
+
+	addRunning(as, "nightgauge/nightgauge", 690, "High-impact decision")
+	as.onPipelineComplete("nightgauge/nightgauge", 690, false, false,
+		TerminalKindArchitectureApprovalRequired,
+		"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision", false)
+	as.drainBackground()
+
+	if len(as.state.Failed) != 1 {
+		t.Fatalf("got %d Failed entries, want 1", len(as.state.Failed))
+	}
+	if got := as.state.Failed[0].Kind; got != TerminalKindArchitectureApprovalRequired {
+		t.Fatalf("FailedItem.Kind = %q, want %q — a pending stop must not overwrite the run's own verdict",
+			got, TerminalKindArchitectureApprovalRequired)
+	}
+	if got := as.humanHoldFor("nightgauge/nightgauge", 690); got != HoldArchitectureApproval {
+		t.Errorf("humanHoldFor = %q, want %q", got, HoldArchitectureApproval)
+	}
+	if got := as.state.LifetimeIssueFailures["nightgauge/nightgauge#690"]; got != 0 {
+		t.Errorf("LifetimeIssueFailures = %d, want 0", got)
+	}
+	if !approvalCardOpen(t, as, "nightgauge/nightgauge", 690) {
+		t.Fatal("no architecture-approval card raised — the card is the only way back in")
+	}
+}
+
+// TestOnPipelineComplete_PendingStopStillBooksGenericFailureAsOperatorStop is
+// the #1487 guard for the #2577 narrowing: a kind with no human hold that ends
+// between Stop() and the next Run() is still the operator's stop.
+func TestOnPipelineComplete_PendingStopStillBooksGenericFailureAsOperatorStop(t *testing.T) {
+	as := approvalCardScheduler(t)
+	as.stopRequested = true
+
+	addRunning(as, "nightgauge/nightgauge", 691, "Killed by teardown")
+	as.onPipelineComplete("nightgauge/nightgauge", 691, false, false,
+		TerminalKindSubagentCrash, "signal: terminated", false)
+	as.drainBackground()
+
+	if len(as.state.Failed) != 1 {
+		t.Fatalf("got %d Failed entries, want 1", len(as.state.Failed))
+	}
+	if got := as.state.Failed[0].Kind; got != TerminalKindOperatorStop {
+		t.Errorf("FailedItem.Kind = %q, want %q", got, TerminalKindOperatorStop)
+	}
+	if got := as.state.LifetimeIssueFailures["nightgauge/nightgauge#691"]; got != 0 {
+		t.Errorf("LifetimeIssueFailures = %d, want 0 — an operator stop is not a failure of the issue", got)
+	}
+	if approvalCardOpen(t, as, "nightgauge/nightgauge", 691) {
+		t.Error("approval card raised for an operator stop")
+	}
+}
+
+// TestArchitectureApprovalHold_ReleaseRetractsCard pins the second half of
+// #2577: the card lives as long as the hold. Pre-fix it was retracted only when
+// a run succeeded, so a granted approval left it asking in the inbox.
+func TestArchitectureApprovalHold_ReleaseRetractsCard(t *testing.T) {
+	as := approvalCardScheduler(t)
+
+	addRunning(as, "acme/flutter", 530, "Rename the application id")
+	as.onPipelineComplete("acme/flutter", 530, false, false,
+		TerminalKindArchitectureApprovalRequired,
+		"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision", false)
+	as.drainBackground()
+	if !approvalCardOpen(t, as, "acme/flutter", 530) {
+		t.Fatal("precondition: approval card not raised")
+	}
+
+	as.reconcileStateAgainstGraph(holdTestGraph(&depgraph.Node{
+		Repo: "acme/flutter", Number: 530, State: "OPEN", BoardStatus: "In review",
+	}))
+	as.drainBackground()
+	if len(as.state.Failed) != 1 {
+		t.Fatal("unapproved issue was released by the reconcile")
+	}
+	if !approvalCardOpen(t, as, "acme/flutter", 530) {
+		t.Fatal("card retracted while the issue is still held")
+	}
+
+	as.reconcileStateAgainstGraph(holdTestGraph(&depgraph.Node{
+		Repo: "acme/flutter", Number: 530, State: "OPEN", BoardStatus: "Ready",
+		Labels: []string{config.DefaultArchitectureApprovalLabel},
+	}))
+	as.drainBackground()
+	if len(as.state.Failed) != 0 {
+		t.Fatal("approval label applied but the issue is still held")
+	}
+	if approvalCardOpen(t, as, "acme/flutter", 530) {
+		t.Error("approval card still open after the hold was released")
 	}
 }

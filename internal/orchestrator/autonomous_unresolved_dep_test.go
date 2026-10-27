@@ -42,7 +42,7 @@ func TestPrioritize_UnresolvedRepositoryNameFailsClosed(t *testing.T) {
 	}
 	mock := newMockIssueSvc()
 	as.resolveDepStatesFn = func(ctx context.Context, keys []string) map[string]string {
-		return resolveIssueStatesByKey(ctx, mock, keys)
+		return ResolveIssueStatesByKey(ctx, mock, keys)
 	}
 
 	for _, c := range as.prioritize(context.Background(), g) {
@@ -56,7 +56,7 @@ func TestPrioritize_UnresolvedRepositoryNameFailsClosed(t *testing.T) {
 	if len(mock.batchCalls) != 0 {
 		t.Errorf("a repository name that is not owner/repo was looked up on GitHub: %+v", mock.batchCalls)
 	}
-	res := evaluateDeps([]string{"core#12"}, g, nil, nil)
+	res := evaluateDeps([]string{"core#12"}, g, nil, nil, nil)
 	if !res.blocked || !strings.Contains(res.status, "names a repository that is not one of the workspace's") {
 		t.Errorf("evaluateDeps = %+v, want blocked with the unresolvable-repository reason", res)
 	}

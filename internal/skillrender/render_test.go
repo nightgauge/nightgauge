@@ -4,15 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
-	"github.com/nightgauge/nightgauge/internal/gittest"
-	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -941,132 +938,23 @@ func TestDeadIncludeFixture_StillExhibitsThePreFixDefect(t *testing.T) {
 }
 
 // TestDeadIncludeFixture_SameStageRendersCleanNow is the "after" half: the
-// stage the fixture captured, rendered from the working tree, hands the model
-// the shared batch contract instead of the comment.
+// stage the fixture captured, rendered from the working tree, carries neither
+// the dead directive nor the batch phase it sat beside. Batch mode was
+// descoped in #366, so the shared contract the directive named is gone too.
 func TestDeadIncludeFixture_SameStageRendersCleanNow(t *testing.T) {
 	root := filepath.Join("..", "..", "skills")
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("skills/ not present: %v", err)
 	}
 	res := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}})
-	if strings.Contains(res.Content, "<!-- include: ../_shared/BATCH_MODE.md -->") {
-		t.Error("the dead directive is still in the live pr-merge render")
-	}
-	if !strings.Contains(res.Content, "## Batch Mode") {
-		t.Error("expected the expanded batch contract in the live pr-merge render")
-	}
-}
-
-// TestPRMergeBatchDetailReadIsConditional guards #367's context-cost
-// regression: the 124-line batch procedure must stay out of the common
-// single-issue path, without moving or renumbering Phase 0.5.
-func TestPRMergeBatchDetailReadIsConditional(t *testing.T) {
-	path := filepath.Join("..", "..", "skills", "nightgauge-pr-merge", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	content := string(data)
-	marker := `printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'`
-	phaseStart := strings.Index(content, marker)
-	phaseEnd := strings.Index(content, "### Phase 1: Validate Environment")
-	if phaseStart < 0 || phaseEnd < phaseStart {
-		t.Fatalf("Phase 0.5 boundaries changed (marker=%d next phase=%d)", phaseStart, phaseEnd)
-	}
-	phase := content[phaseStart:phaseEnd]
-
-	wantInOrder := []string{
-		`[ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]`,
-		`BATCH_CONTEXT_FOUND=$BATCH_DEV`,
-		"Only when the probe prints `BATCH_CONTEXT_FOUND=...`",
+	for _, gone := range []string{
+		"<!-- include: ../_shared/BATCH_MODE.md -->",
+		`name="batch-detection"`,
 		"_includes/batch-detection.md",
-		"Do not read the file when the probe prints `SINGLE_ISSUE`",
-	}
-	last := -1
-	for _, want := range wantInOrder {
-		idx := strings.Index(phase, want)
-		if idx < 0 {
-			t.Errorf("Phase 0.5 missing conditional-read contract %q", want)
-			continue
+	} {
+		if strings.Contains(res.Content, gone) {
+			t.Errorf("live pr-merge render still carries %q", gone)
 		}
-		if idx <= last {
-			t.Errorf("Phase 0.5 contract %q is out of order", want)
-		}
-		last = idx
-	}
-
-	unconditional := "> **Read `_includes/batch-detection.md` (same directory as this SKILL.md) now"
-	if strings.Contains(phase, unconditional) {
-		t.Errorf("single-issue path still carries the unconditional batch-detail read: %q", unconditional)
-	}
-}
-
-func TestPRMergeBatchProbeSignalsContextPresence(t *testing.T) {
-	path := filepath.Join("..", "..", "skills", "nightgauge-pr-merge", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	content := string(data)
-	marker := `printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'`
-	phaseStart := strings.Index(content, marker)
-	phaseEnd := strings.Index(content, "### Phase 1: Validate Environment")
-	if phaseStart < 0 || phaseEnd < phaseStart {
-		t.Fatalf("Phase 0.5 boundaries changed (marker=%d next phase=%d)", phaseStart, phaseEnd)
-	}
-	phase := content[phaseStart:phaseEnd]
-	open := strings.Index(phase, "```bash\n")
-	if open < 0 {
-		t.Fatal("Phase 0.5 has no inline bash probe")
-	}
-	probeStart := open + len("```bash\n")
-	close := strings.Index(phase[probeStart:], "\n```")
-	if close < 0 {
-		t.Fatal("Phase 0.5 bash probe has no closing fence")
-	}
-	probe := phase[probeStart : probeStart+close]
-
-	repo := t.TempDir()
-	gittest.Run(t, repo, "init", "-q", "-b", "fix/367-test")
-	pipelineDir := layouttest.PipelineDir(t, repo)
-	// The probe asks the binary where the clone's pipeline state lives
-	// (ADR-024 § 7). A stub stands in for `nightgauge layout path pipeline
-	// <name>`: it answers the resolved directory for exactly that form and
-	// fails for anything else, so a probe that hard-codes a path, or asks for
-	// another class, cannot pass.
-	binDir := t.TempDir()
-	stub := "#!/bin/sh\n" +
-		"[ \"$1 $2 $3\" = \"layout path pipeline\" ] && [ -n \"$4\" ] || exit 2\n" +
-		"printf '%s/%s\\n' \"$NG_TEST_PIPELINE_DIR\" \"$4\"\n"
-	if err := os.WriteFile(filepath.Join(binDir, "nightgauge"), []byte(stub), 0o755); err != nil {
-		t.Fatalf("write nightgauge stub: %v", err)
-	}
-	runProbe := func() string {
-		t.Helper()
-		cmd := exec.Command("bash", "-c", probe)
-		cmd.Dir = repo
-		cmd.Env = append(os.Environ(),
-			"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-			"NG_TEST_PIPELINE_DIR="+pipelineDir)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("run Phase 0.5 probe: %v\n%s", err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-
-	if got := runProbe(); got != "SINGLE_ISSUE" {
-		t.Fatalf("probe without a batch file = %q, want SINGLE_ISSUE", got)
-	}
-	batchPath := filepath.Join(pipelineDir, "dev-batch-367.json")
-	if err := os.MkdirAll(pipelineDir, 0o700); err != nil {
-		t.Fatalf("create pipeline directory: %v", err)
-	}
-	if err := os.WriteFile(batchPath, []byte(`{"issue_numbers":[367]}`), 0o644); err != nil {
-		t.Fatalf("write batch fixture: %v", err)
-	}
-	if got := runProbe(); got != "BATCH_CONTEXT_FOUND="+batchPath {
-		t.Fatalf("probe with a batch file = %q, want the batch context signal", got)
 	}
 }
 
@@ -1263,7 +1151,7 @@ func TestOpenCodeXaiGrokDoesNotGetGrokHostOverlay(t *testing.T) {
 	}
 	// The model-level grok-4.6 fragment (now host-prose-free) still applies:
 	// it is keyed to the concrete id, not the host.
-	if !strings.Contains(res.Content, "Thinking is on by default") {
+	if !strings.Contains(res.Content, "Prefer one thorough pass over") {
 		t.Error("grok-4.6 model-level overlay missing from an opencode dispatch of that model")
 	}
 }
@@ -1274,6 +1162,8 @@ func TestOpenCodeXaiGrokDoesNotGetGrokHostOverlay(t *testing.T) {
 // just sourced from hosts/grok.md plus the trimmed grok-4.6.md. Captured from
 // a real `nightgauge skill render --stage feature-dev --adapter grok --model
 // grok-4.6` run before this change (see red_green in the PR description).
+// #81 dropped the two grok-4.6 sentences that restated registry facts
+// (thinking default, propensity levels); the dispositions stay pinned.
 func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 	root := realSkillsRoot(t)
 	res := mustRender(t, Options{
@@ -1292,10 +1182,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 		"If a decision is\nundecidable without the operator, fail the stage with a clear reason",
 		"Subagent fan-out is optional",
 		"Grok 4.6 is the default Grok Build model",
-		"Thinking is on by default",
 		"Keep `--effort` at the\nresolved Nightgauge envelope",
-		"Verification and delegation propensity are\nhigh",
-		"Prefer one thorough\npass over narrating every tool call",
+		"Prefer one thorough pass over\nnarrating every tool call",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(res.Content, want) {
@@ -1346,6 +1234,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // The pr-merge capture was re-pinned for #2504 by the same method: every changed
 // line is the auto-fix loop handing back to the deterministic merge path instead
 // of polling CI itself.
+// All four captures were re-pinned for #366 by the same method: every changed
+// line is the removed batch phase, its include and the renumbered markers.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which
@@ -1362,11 +1252,12 @@ func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	const placeholder = "<REPO_ROOT>"
 	for _, tt := range []struct {
 		stage, adapter, model, golden string
+		providerKey                   string
 	}{
-		{"feature-dev", "claude-headless", "claude-sonnet-5", "testdata/host-overlay/feature-dev_claude-headless_claude-sonnet-5.pre-1636.txt"},
-		{"feature-dev", "codex", "gpt-5.6-sol", "testdata/host-overlay/feature-dev_codex_gpt-5.6-sol.pre-1636.txt"},
-		{"feature-dev", "gemini", "", "testdata/host-overlay/feature-dev_gemini_none.pre-1636.txt"},
-		{"pr-merge", "claude-headless", "claude-sonnet-5", "testdata/host-overlay/pr-merge_claude-headless_claude-sonnet-5.pre-1636.txt"},
+		{"feature-dev", "claude-headless", "claude-sonnet-5", "testdata/host-overlay/feature-dev_claude-headless_claude-sonnet-5.pre-1636.txt", "anthropic"},
+		{"feature-dev", "codex", "gpt-5.6-sol", "testdata/host-overlay/feature-dev_codex_gpt-5.6-sol.pre-1636.txt", "openai"},
+		{"feature-dev", "gemini", "", "testdata/host-overlay/feature-dev_gemini_none.pre-1636.txt", ""},
+		{"pr-merge", "claude-headless", "claude-sonnet-5", "testdata/host-overlay/pr-merge_claude-headless_claude-sonnet-5.pre-1636.txt", "anthropic"},
 	} {
 		t.Run(tt.golden, func(t *testing.T) {
 			want, err := os.ReadFile(tt.golden)
@@ -1375,16 +1266,28 @@ func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 			}
 			// IncludeBudget -1: these captures pin the overlay cascade, not the
 			// supplied includes appended after it (#2178, TestSupplyPhaseIncludes).
+			// The goldens pin the base text. Since #81 a shared provider
+			// fragment applies to the Claude and Codex models, so the base is
+			// rendered without the model, and the model render is checked to
+			// add exactly that one provider fragment and no host fragment.
+			base := mustRender(t, Options{
+				Stage: tt.stage, Adapter: tt.adapter, SkillsRoots: []string{root},
+				IncludeBudget: -1,
+			})
+			got := strings.ReplaceAll(base.Content, repoRoot, placeholder)
+			if got != string(want) {
+				t.Errorf("%s/%s/%s render changed after the host segment landed:\n--- got ---\n%s", tt.stage, tt.adapter, tt.model, got)
+			}
 			res := mustRender(t, Options{
 				Stage: tt.stage, Model: tt.model, Adapter: tt.adapter, SkillsRoots: []string{root},
 				IncludeBudget: -1,
 			})
-			got := strings.ReplaceAll(res.Content, repoRoot, placeholder)
-			if got != string(want) {
-				t.Errorf("%s/%s/%s render changed after the host segment landed:\n--- got ---\n%s", tt.stage, tt.adapter, tt.model, got)
+			var keys []string
+			for _, f := range res.Fragments {
+				keys = append(keys, f.Key)
 			}
-			if len(res.Fragments) != 0 {
-				t.Errorf("%s/%s/%s: unexpected fragments applied: %v", tt.stage, tt.adapter, tt.model, res.Fragments)
+			if strings.Join(keys, ",") != tt.providerKey {
+				t.Errorf("%s/%s/%s: fragments applied = %v, want only %q", tt.stage, tt.adapter, tt.model, res.Fragments, tt.providerKey)
 			}
 		})
 	}
@@ -1534,5 +1437,43 @@ func TestOpenCodeHostOverlayToolIDsArePinned(t *testing.T) {
 			t.Errorf("hosts/opencode.md names tool id %q, which opencode 1.18.30's build agent does not expose — "+
 				"record the finding and amend ADR-022 before changing the overlay", m[1])
 		}
+	}
+}
+
+// TestSharedOverlayComposition pins the shared overlay cascade over the real
+// tree (#81): provider fragment first, then the concrete id, and nothing for a
+// model with no registry entry. Only shared-scope fragments are compared,
+// because feature-dev also carries a skill-scoped Fable fragment.
+func TestSharedOverlayComposition(t *testing.T) {
+	root := realSkillsRoot(t)
+	cases := []struct {
+		model, adapter string
+		want           []string
+	}{
+		{"claude-opus-5-5", "", []string{"anthropic", "claude-opus-5-5"}},
+		{"claude-sonnet-5-5", "", []string{"anthropic", "claude-sonnet-5-5"}},
+		{"claude-haiku-4-5-20251001", "", []string{"anthropic"}},
+		{"claude-fable-5-1", "", []string{"anthropic", "claude-fable-5-1"}},
+		{"gpt-5.5", "codex", []string{"openai"}},
+		{"some-local-model", "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			res := mustRender(t, Options{
+				Stage:       "feature-dev",
+				Model:       tc.model,
+				Adapter:     tc.adapter,
+				SkillsRoots: []string{root},
+			})
+			var got []string
+			for _, f := range res.Fragments {
+				if f.Scope == ScopeShared {
+					got = append(got, f.Key)
+				}
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("shared fragment keys = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

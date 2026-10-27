@@ -32,10 +32,10 @@ func TestBuildV2Record_CarriesPhaseRecordsIntoTheDurableRecord(t *testing.T) {
 	rs.PhaseHistory = []PhaseRecord{
 		// Deliberately out of arrival order: markers can arrive out of order and
 		// the INDEX is the authoritative position (#1008).
-		{Stage: StageFeaturePlanning, Name: "documentation-analysis", Index: 6, Total: 14, Status: "complete", StartedAt: start, CompletedAt: &done},
-		{Stage: StageFeaturePlanning, Name: "load-context", Index: 1, Total: 14, Status: "complete", StartedAt: start, CompletedAt: &done},
-		{Stage: StageFeaturePlanning, Name: "knowledge-base-read", Index: 7, Total: 14, Status: "skipped", StartedAt: start},
-		{Stage: StageFeaturePlanning, Name: "self-assessment", Index: 13, Total: 14, Status: "abandoned", StartedAt: start},
+		{Stage: StageFeaturePlanning, Name: "documentation-analysis", Index: 5, Total: 13, Status: "complete", StartedAt: start, CompletedAt: &done},
+		{Stage: StageFeaturePlanning, Name: "load-context", Index: 1, Total: 13, Status: "complete", StartedAt: start, CompletedAt: &done},
+		{Stage: StageFeaturePlanning, Name: "knowledge-base-read", Index: 6, Total: 13, Status: "skipped", StartedAt: start},
+		{Stage: StageFeaturePlanning, Name: "self-assessment", Index: 12, Total: 13, Status: "abandoned", StartedAt: start},
 	}
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "", "")
 
@@ -47,7 +47,7 @@ func TestBuildV2Record_CarriesPhaseRecordsIntoTheDurableRecord(t *testing.T) {
 	}
 	// A successful completion now back-fills every PhaseRegistry name the
 	// stage never reported as `unreported` (#1885 AC4), so the 4 explicit
-	// records above grow to the registry's full 14 — the denominator this
+	// records above grow to the registry's full 13 — the denominator this
 	// issue fixes is the registry total, not however many records happened
 	// to exist before the stage boundary.
 	if len(detail.Phases) != len(PhaseRegistry[StageFeaturePlanning]) {
@@ -56,7 +56,7 @@ func TestBuildV2Record_CarriesPhaseRecordsIntoTheDurableRecord(t *testing.T) {
 	}
 
 	// Sorted by registry index, not arrival order.
-	wantOrder := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+	wantOrder := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 	for i, want := range wantOrder {
 		if detail.Phases[i].Index != want {
 			t.Errorf("phase[%d].Index = %d, want %d (records must be ordered by registry index)", i, detail.Phases[i].Index, want)

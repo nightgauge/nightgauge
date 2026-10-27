@@ -190,7 +190,6 @@ const PHASE_KEYWORDS: ReadonlyArray<[string, PhaseType]> = [
   ["context", "context"],
   ["load", "context"],
   ["read", "context"],
-  ["batch-detection", "context"],
 ];
 
 // ---------------------------------------------------------------------------

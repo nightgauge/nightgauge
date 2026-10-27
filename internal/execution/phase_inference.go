@@ -122,7 +122,7 @@ func stageRules(stage string) []inferenceRule {
 	case "feature-dev":
 		return []inferenceRule{
 			{index: 1, match: func(name string, _ map[string]any) bool { return readToolRe.MatchString(name) }},
-			{index: 8, match: func(name string, input map[string]any) bool {
+			{index: 7, match: func(name string, input map[string]any) bool {
 				if !editToolRe.MatchString(name) {
 					return false
 				}
@@ -133,29 +133,29 @@ func stageRules(stage string) []inferenceRule {
 				return path != "" && !bookkeepingPathRe.MatchString(path) && !devContextRe.MatchString(path)
 			}},
 			// Tests, the dev handoff and the status sync each count only once
-			// an implementation edit has been seen (after: 8).
-			{index: 9, after: 8, match: func(name string, input map[string]any) bool {
+			// an implementation edit has been seen (after: 7).
+			{index: 8, after: 7, match: func(name string, input map[string]any) bool {
 				return name == "Bash" && testBuildRe.MatchString(inputStr(input, "command"))
 			}},
-			{index: 14, after: 8, match: func(name string, input map[string]any) bool {
+			{index: 13, after: 7, match: func(name string, input map[string]any) bool {
 				return writes(name, input, devContextRe)
 			}},
-			{index: 15, after: 8, match: func(name string, input map[string]any) bool {
+			{index: 14, after: 7, match: func(name string, input map[string]any) bool {
 				return name == "Bash" && statusSyncRe.MatchString(inputStr(input, "command"))
 			}},
 		}
 	case "feature-planning":
 		return []inferenceRule{
 			// Reading docs/standards/source → documentation-analysis, where
-			// planning spends the bulk of its time. Covers early phases 0-6.
-			{index: 6, match: func(name string, _ map[string]any) bool { return readToolRe.MatchString(name) }},
+			// planning spends the bulk of its time. Covers early phases 0-5.
+			{index: 5, match: func(name string, _ map[string]any) bool { return readToolRe.MatchString(name) }},
 			// Writing the plan file (plans/{N}-*.md in the per-clone data
 			// directory) → produce-plan.
-			{index: 9, match: func(name string, input map[string]any) bool {
+			{index: 8, match: func(name string, input map[string]any) bool {
 				return writes(name, input, planFileRe)
 			}},
 			// Writing the planning-context handoff → write-planning-context.
-			{index: 10, match: func(name string, input map[string]any) bool {
+			{index: 9, match: func(name string, input map[string]any) bool {
 				return writes(name, input, planningContextRe)
 			}},
 		}
@@ -169,22 +169,22 @@ func stageRules(stage string) []inferenceRule {
 			// all of its wall-clock. Deliberately the same testBuildRe
 			// feature-dev uses: the two stages run the same commands, and a
 			// second pattern for one vocabulary is a drift source.
-			{index: 10, match: func(name string, input map[string]any) bool {
+			{index: 9, match: func(name string, input map[string]any) bool {
 				return name == "Bash" && testBuildRe.MatchString(inputStr(input, "command"))
 			}},
 			// Pushing the branch → commit-and-push. Anchored on `git push`
 			// rather than any git call, because the stage runs `git status` and
 			// `git diff` throughout and neither is this waypoint.
-			{index: 18, match: func(name string, input map[string]any) bool {
+			{index: 17, match: func(name string, input map[string]any) bool {
 				return name == "Bash" && gitPushRe.MatchString(inputStr(input, "command"))
 			}},
 			// Writing the validate-context handoff → write-validate-context.
-			{index: 19, match: func(name string, input map[string]any) bool {
+			{index: 18, match: func(name string, input map[string]any) bool {
 				return writes(name, input, validateContextRe)
 			}},
 			// Board status sync → sync-project-status, the stage's last
 			// observable act before it narrates.
-			{index: 20, match: func(name string, input map[string]any) bool {
+			{index: 19, match: func(name string, input map[string]any) bool {
 				return name == "Bash" && statusSyncRe.MatchString(inputStr(input, "command"))
 			}},
 		}

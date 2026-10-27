@@ -63,101 +63,6 @@ were available is the same failure.
   the stage when this happens — but the run is dead either way, so do the work
   where you stand.
 
-## Batch Mode
-
-**Batch mode is additive.** Every stage has a single-issue path that is the
-default and is never modified by this section. A batch context file is an
-_optional overlay_: when the file this stage looks for is absent — the normal
-case — continue the single-issue path unchanged and do not mention batch mode
-again. Never invent, guess at, or synthesize a batch context file that is not
-on disk.
-
-### What batch mode is
-
-An epic whose sub-issues touch overlapping files can be run once instead of N
-times. `/nightgauge-assess-epic` makes that call and writes
-`epic-assessment-{E}.json` to the clone's pipeline state directory with a
-`strategy` of `parallel`, `mixed`, or `sequential`. When the pipeline acts on a
-`parallel` (or the independent part of a `mixed`) assessment, it carries **one
-shared feature branch and one PR for the whole group**, and each stage writes a
-batch context file alongside — never instead of — its normal single-issue
-output.
-
-**The batch key is the EPIC number `E`, never a sub-issue number.** Every batch
-context file is keyed on it and the shared branch is named for it. A stage that
-keys a batch file on a sub-issue number produces a file the next stage will
-never look for, and the batch silently degrades to a single issue.
-
-### The per-stage contract
-
-| Stage              | Batch input                         | Batch output                      |
-| ------------------ | ----------------------------------- | --------------------------------- |
-| `issue-pickup`     | — (no producer; see below)          | `batch-{E}.json`                  |
-| `feature-planning` | `batch-{E}.json`                    | `planning-batch-{E}.json`         |
-| `feature-dev`      | `planning-batch-{E}.json`           | `dev-batch-{E}.json`              |
-| `feature-validate` | `dev-batch-{E}.json`                | `validate-{E}.json`               |
-| `pr-create`        | `dev-batch-{E}.json`                | `pr-{E}.json`                     |
-| `pr-merge`         | `dev-batch-{E}.json`, `pr-{E}.json` | — (removes all five, in Step 7.8) |
-
-All files live in the clone's pipeline state directory
-(`nightgauge layout path pipeline`): read them at
-`$(nightgauge layout path pipeline <file>)` and write them with
-`nightgauge layout write pipeline <file>`. `batch-{E}.json`,
-`planning-batch-{E}.json` and `dev-batch-{E}.json` have explicit schemas — every
-field, every required key, worked examples — in `docs/CONTEXT_ARCHITECTURE.md`
-under the batch context file sections. `validate-{E}.json` and `pr-{E}.json`
-have no separate batch schema: they reuse the single-issue `validate-{N}` /
-`pr-{N}` shapes with the epic number in the key slot, which also means
-`pr-{E}.json` shares a namespace with a later single-issue run for issue #E —
-one more reason `pr-merge` must remove it. Do not improvise a shape: a batch
-file that does not match its schema is not detected by the next stage, which
-degrades to the single-issue path and silently drops the rest of the batch.
-
-**Nothing writes `batch-{E}.json` today.** `issue-pickup` has no batch producer
-step, so the first input in the chain never reaches disk, every later stage's
-file test fails, and the batch path is dormant end-to-end. That is the current
-expected state, not a gap to route around mid-run: the table is the contract a
-producer would have to satisfy, not a licence to synthesize the file. Adding
-that producer is a deliberate change to `issue-pickup` — it has to resolve the
-shared epic branch every later stage keys off, and derive `groups` from real
-dependency and file-overlap data rather than from the strategy string in
-`epic-assessment-{E}.json`, which carries neither.
-
-### Detection is a file test, nothing more
-
-Resolve `E`, test for this stage's batch input, and branch:
-
-```bash
-# E is the epic number: `.parent_issue` from the issue context when this stage
-# has one, otherwise the leading number in the branch name.
-BATCH_INPUT="$(nightgauge layout path pipeline <this stage's batch input, from the table above>)"
-if [ -f "$BATCH_INPUT" ]; then
-  BATCH_MODE=true
-else
-  BATCH_MODE=false # single-issue path, unchanged — the common case
-fi
-```
-
-A stage that has a batch phase gives the concrete detection block, the batch
-procedure, and its output schema in that phase. This section is the contract
-those phases share, not a substitute for any of them.
-
-### Invariants that hold in both paths
-
-- **One PR per batch, not per issue.** The PR body carries an explicit
-  `Closes #N` line for every issue in the batch, so no sub-issue is left open
-  after the merge.
-- **Every gate still runs.** Batch mode changes how many issues a run covers,
-  never which validations execute. Build, tests, and stage gates run once over
-  the combined change set — they are not skipped or sampled.
-- **A batch failure is not a batch-wide abort by default.** When validation
-  fails the options are: retry the batch, split it into single-issue runs, or
-  stop for a human. Splitting is preferred over discarding completed work.
-- **Batch context files are pipeline exhaust.** `pr-merge` removes them in Step
-  7.8, after outcome recording has read them — the epic-keyed files have no
-  `pipeline-finish` owner the way single-issue files do. Leaving them behind
-  makes the next, unrelated run for that epic number detect a stale batch.
-
 
 # PR Merge
 
@@ -243,7 +148,6 @@ attempt to populate that section itself; leave the placeholder from
 ## Supporting files (load on demand)
 
 - `<REPO_ROOT>/skills/nightgauge-pr-merge/_includes/context-bootstrap.md` (same directory as this SKILL.md) — read in Phase 0 (stage start + context reconstruction)
-- `<REPO_ROOT>/skills/nightgauge-pr-merge/_includes/batch-detection.md` (same directory as this SKILL.md) — read conditionally in Phase 0.5 only when the batch context file exists (multi-issue close, batch context cleanup)
 - `<REPO_ROOT>/skills/nightgauge-pr-merge/_includes/validate-environment.md` (same directory as this SKILL.md) — read in Phase 1 (verify branch, PR state, pre-CI Go build check)
 - `<REPO_ROOT>/skills/nightgauge-pr-merge/_includes/reviews.md` (same directory as this SKILL.md) — read in Phase 3 (fetch & parse review feedback, CI status)
 - `<REPO_ROOT>/skills/nightgauge-pr-merge/_includes/merge.md` (same directory as this SKILL.md) — read in Phase 6 (ruleset pre-check, knowledge conformance gate, conflict resolution, merge gate, execute merge)
@@ -431,10 +335,12 @@ proceed to the next phase.
 is healthy before executing any pipeline stage. Skills halt immediately with
 actionable instructions when this check fails.
 
-Two-layer check:
+Three-layer check:
 
 1. **Binary discovery** — shell-level, runs before invoking the binary
 2. **Doctor check** — binary-level, full environment health via `doctor --json`
+3. **Project environment** — the checks the project declares under
+   `preflight.environment` (#101); opt-in, silent when none are declared
 
 The binary discovery cascade below is **provider-neutral** (#4029): it works
 identically under every adapter (Claude, Codex, Gemini, …) and references no
@@ -525,6 +431,14 @@ if [ "$DOCTOR_EXIT" -eq 1 ]; then
   printf '%s\n' "$DOCTOR_RESULT" | jq -r '.warnings[]' >&2 2>/dev/null || true
   # Continue — warnings do not block skill execution
 fi
+
+# Layer 3: project-declared environment checks (preflight.environment, #101).
+# Opt-in: with none declared this prints nothing and continues. The verb
+# writes one `[environment-halt]` line per failed check, with its remedy.
+if ! "$BINARY" preflight environment >/dev/null; then
+  echo "[environment-halt] Project environment check failed — fix the environment, not the code." >&2
+  exit 1
+fi
 ```
 
 **Exit codes from `nightgauge doctor`**:
@@ -534,6 +448,13 @@ fi
 | 0    | Healthy                         | Continue                                |
 | 1    | Degraded (warnings only)        | Continue with warning printed to stderr |
 | 2    | Broken (required checks failed) | Halt immediately with error details     |
+
+**Layer 3** halts the stage when any check declared under
+`preflight.environment` in the workspace's `.nightgauge/config.yaml` fails
+(exit 1) or the declaration is invalid (exit 2). The failure is in the
+operator's environment, not the code: do not edit code to work around it, do
+not run the remedy yourself, and end the stage. The pipeline records it as
+`environment_halt` and holds the issue for an operator.
 
 Do not theorize about the cause beyond what is printed here — the failing
 check name (`failed_checks`) and its `.errors[]` message are the complete
@@ -595,7 +516,7 @@ invocations) or already matches the current repo.
 ---
 
 ```bash
-printf '<!-- phase:start name="read-pr-context" index=0 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="read-pr-context" index=0 total=13 stage="pr-merge" -->\n'
 ```
 
 Read PR context: resolve the issue number from the branch,
@@ -606,40 +527,10 @@ and reconstruct the context file from GitHub if it is missing.
 
 ---
 
-### Phase 0.5: Batch PR Detection
-
-```bash
-printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'
-```
-
-**PURPOSE**: Decide cheaply whether this PR closes one issue or a batch before
-loading the batch-only procedure. A batch run carries one shared branch and one
-PR for a whole epic; the common single-issue path needs none of that detail.
-
-Run this file probe first. It derives the epic key locally because `$BRANCH` is
-not assigned until Phase 1 and each Bash call is a fresh shell.
-
-```bash
-BRANCH=$(git branch --show-current)
-[ -z "$BRANCH" ] && BRANCH=$(git name-rev --name-only HEAD 2>/dev/null | sed 's|remotes/origin/||')
-EPIC_NUMBER=$(printf '%s' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
-if [ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]; then echo "BATCH_CONTEXT_FOUND=$BATCH_DEV"; else echo "SINGLE_ISSUE"; fi
-```
-
-**Only when the probe prints `BATCH_CONTEXT_FOUND=...`**: read
-`<REPO_ROOT>/skills/nightgauge-pr-merge/_includes/batch-detection.md` (same directory as this SKILL.md) now and follow its
-instructions before continuing this phase.
-
-**Do not read the file when the probe prints `SINGLE_ISSUE`**. Continue to
-Phase 1 unchanged.
-
----
-
 ### Phase 1: Validate Environment
 
 ```bash
-printf '<!-- phase:start name="validate-environment" index=2 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="validate-environment" index=1 total=13 stage="pr-merge" -->\n'
 ```
 
 Verify the feature branch (handling detached HEAD), resolve the PR number and
@@ -652,7 +543,7 @@ state, extract the issue number, and run the pre-CI Go build integrity check.
 ### Phase 2: Wait for CI Checks (CI Gate)
 
 ```bash
-printf '<!-- phase:start name="ci-gate" index=3 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="ci-gate" index=2 total=13 stage="pr-merge" -->\n'
 ```
 
 ### CI Check Gate
@@ -963,7 +854,7 @@ protection.
 ### Phase 2.5: Auto-Fix Retry Loop
 
 ```bash
-printf '<!-- phase:start name="auto-fix-retry" index=4 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="auto-fix-retry" index=3 total=13 stage="pr-merge" -->\n'
 ```
 
 ### Auto-Fix Retry Loop
@@ -1387,7 +1278,7 @@ On success, update context file with `ci_auto_fix_applied: true` and
 ### Phase 3: Fetch & Parse Review Feedback
 
 ```bash
-printf '<!-- phase:start name="fetch-reviews" index=5 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="fetch-reviews" index=4 total=13 stage="pr-merge" -->\n'
 ```
 
 Fetch PR details and reviews, wait for CI status, fetch inline review comments
@@ -1400,7 +1291,7 @@ and review summaries, and parse both automated and human reviews.
 ### Phase 4: Categorize Issues
 
 ```bash
-printf '<!-- phase:start name="categorize-issues" index=6 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="categorize-issues" index=5 total=13 stage="pr-merge" -->\n'
 ```
 
 #### Step 4.1: Define Categories
@@ -1425,7 +1316,7 @@ Ready if `APPROVED` and no critical issues. Not ready if `REVIEW_REQUIRED` or
 ### Phase 5: Address Feedback
 
 ```bash
-printf '<!-- phase:start name="address-feedback" index=7 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="address-feedback" index=6 total=13 stage="pr-merge" -->\n'
 ```
 
 #### Step 5.0: Check for Fast-Track Merge
@@ -1457,7 +1348,7 @@ push, and wait for CI to re-run.
 ### Phase 5.5: Proactive Freshness Check
 
 ```bash
-printf '<!-- phase:start name="freshness-check" index=8 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="freshness-check" index=7 total=13 stage="pr-merge" -->\n'
 ```
 
 **PURPOSE**: Proactively rebase the feature branch onto the latest base branch
@@ -1615,7 +1506,7 @@ poll CI here with repeated `nightgauge ci wait` calls.
 ### Phase 6: Merge
 
 ```bash
-printf '<!-- phase:start name="merge" index=9 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="merge" index=8 total=13 stage="pr-merge" -->\n'
 ```
 
 Run the ruleset pre-check, final mergeable verification, the knowledge
@@ -1636,7 +1527,7 @@ Go-binary merge (with its `blockedBy` gate), and merge verification.
 ### Phase 7: Post-Merge Verification & Cleanup
 
 ```bash
-printf '<!-- phase:start name="post-merge-cleanup" index=10 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="post-merge-cleanup" index=9 total=13 stage="pr-merge" -->\n'
 ```
 
 Verify the post-merge build, close the issue and sync the board deterministically,
@@ -1650,7 +1541,7 @@ record the outcome to the complexity model.
 ### Phase 7.8: Retrospective Feedback
 
 ```bash
-printf '<!-- phase:start name="retrospective-feedback" index=11 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="retrospective-feedback" index=10 total=13 stage="pr-merge" -->\n'
 ```
 
 Capture non-blocking post-merge workflow feedback (interactive only; skipped in
@@ -1663,7 +1554,7 @@ headless mode) and persist it to the context file.
 ### Phase 8: Output Summary
 
 ```bash
-printf '<!-- phase:start name="output-summary" index=12 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="output-summary" index=11 total=13 stage="pr-merge" -->\n'
 ```
 
 ```
@@ -1719,7 +1610,7 @@ fi
 ### Phase 9: Self-Assessment Epilogue
 
 ```bash
-printf '<!-- phase:start name="self-assessment" index=13 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="self-assessment" index=12 total=13 stage="pr-merge" -->\n'
 ```
 
 ### Self-Assessment Epilogue

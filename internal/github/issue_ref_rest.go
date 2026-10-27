@@ -86,8 +86,8 @@ func resolveIssueRef(ctx context.Context, c *Client, owner, repo string, number 
 		// Includes 404. The GraphQL predecessor also failed on an unknown
 		// number, so an absent issue stays an error rather than becoming a
 		// silent no-op — see docs/TESTING.md on fail-open vs fail-silent.
-		return nil, fmt.Errorf("resolve issue %s/%s#%d: REST %d: %s",
-			owner, repo, number, status, restErrorSummary(body))
+		return nil, fmt.Errorf("resolve issue %s/%s#%d: %w",
+			owner, repo, number, restStatusErr(status, body))
 	}
 	var resp issueRefResponse
 	if err := json.Unmarshal(body, &resp); err != nil {

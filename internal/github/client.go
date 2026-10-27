@@ -574,16 +574,36 @@ func ciEnvironmentToken() string {
 // The returned token can be fingerprinted without creating a client.
 // Returns empty string and error if no token is found.
 func ResolveTokenChain(cfg TokenResolver, owner string) (string, error) {
+	_, tok, err := ResolveTokenSource(cfg, owner)
+	return tok, err
+}
+
+// ResolveTokenSource is ResolveTokenChain for a holder that outlives one
+// token. When the chain resolves to owner's GitHub App it also returns a
+// source that re-mints the installation token before it expires; the string
+// is that source's first token. Every other tier is a long-lived token, so
+// the source is nil and the string is the credential (#2578).
+//
+// A forge.Config carrying the source authenticates as the App for as long as
+// the holder lives. One carrying only the string stops working within the
+// hour, which is what the serve daemon's cached sweep routers did.
+func ResolveTokenSource(cfg TokenResolver, owner string) (oauth2.TokenSource, string, error) {
 	if tok := ciEnvironmentToken(); tok != "" {
-		return tok, nil
+		return nil, tok, nil
 	}
 	if creds := usableApp(cfg, owner); creds != nil {
 		tok, err := appInstallationToken(context.Background(), creds, time.Now)
 		if err == nil {
-			return tok.AccessToken, nil
+			return newAppReuseSource(tok, creds), tok.AccessToken, nil
 		}
 		warnAppFallback(creds, err)
 	}
+	tok, err := resolvePersonalToken(cfg, owner)
+	return nil, tok, err
+}
+
+// resolvePersonalToken is the chain below the App tier.
+func resolvePersonalToken(cfg TokenResolver, owner string) (string, error) {
 	if cfg != nil {
 		tok, err := cfg.ResolveToken(owner)
 		if err == nil && tok != "" {
@@ -660,8 +680,17 @@ func newAppClient(ctx context.Context, creds *AppCredentials) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newAppClientFromSource(newAppReuseSource(first, creds)), nil
+}
+
+// newAppClientFromSource is the client that authenticates through src as its
+// installation. It is the one constructor for an App client, so a client the
+// forge adapter builds from a router's shared source keeps the installation's
+// rate-limit slot, conditional-GET identity and ledger label, exactly as
+// appClient's does.
+func newAppClientFromSource(src *appReuseSource) *Client {
+	creds := src.creds
 	slot := "app:" + strconv.FormatInt(creds.InstallationID, 10)
-	src := newAppReuseSource(first, creds)
 	c := newClientWithSource(src, slot)
 	c.app = creds
 	c.appSrc = src
@@ -669,7 +698,7 @@ func newAppClient(ctx context.Context, creds *AppCredentials) (*Client, error) {
 	if path, err := DefaultSharedTrackerPath(); err == nil {
 		c = c.WithRateLimitTracker(NewSharedRateLimitTracker(path), slot).WithRateLimitWait()
 	}
-	return c, nil
+	return c
 }
 
 // usableApp is resolveApp with a configuration error reported and treated as
@@ -1864,8 +1893,8 @@ func (c *Client) GetRepositoryID(ctx context.Context, owner, name string) (strin
 		return "", fmt.Errorf("get repository ID for %s/%s: %w", owner, name, err)
 	}
 	if status < 200 || status >= 300 {
-		return "", fmt.Errorf("get repository ID for %s/%s: REST %d: %s",
-			owner, name, status, restErrorSummary(body))
+		return "", fmt.Errorf("get repository ID for %s/%s: %w",
+			owner, name, restStatusErr(status, body))
 	}
 	var resp struct {
 		NodeID string `json:"node_id"`

@@ -82,7 +82,7 @@ function suggestedFixFor(adapter: NightgaugeAdapter): string {
  * (single-flight), a resolved result is reused for a short TTL, and a probe that
  * merely TIMES OUT retries once before failing — only a definitive negative
  * (logged out) fails without a retry (Issue #312). Pass `bypassCache: true` to
- * force a fresh probe (the Adapter Doctor does this).
+ * force a fresh probe.
  *
  * @param adapters - Adapter names. Duplicates are removed before probing.
  * @param opts - Per-probe options plus cache / retry controls.

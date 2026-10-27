@@ -1,12 +1,10 @@
-# PR Create — Context Load & Batch Detection (Phases 1, 1.5)
+# PR Create — Context Load (Phase 1)
 
-Procedural detail for Phase 1 (Load Context and Start Stage) and Phase 1.5
-(Batch Context Detection).
+Procedural detail for Phase 1 (Load Context and Start Stage).
 
 ## Contents
 
 - [Phase 1: parallel context gathering and stage start](#phase-1-parallel-context-gathering-and-stage-start)
-- [Phase 1.5: batch context detection](#phase-15-batch-context-detection)
 
 ## Phase 1: parallel context gathering and stage start
 
@@ -157,66 +155,4 @@ fi
 if [ -n "$BINARY" ]; then
   "$BINARY" project move-status "$ISSUE_NUMBER" "in-progress" 2>/dev/null || true
 fi
-```
-
-## Phase 1.5: batch context detection
-
-**PURPOSE**: Detect batch mode when `dev-batch-{E}.json` exists and create a
-single PR with multi-issue closing keywords.
-
-**Detection**: After loading dev context, check for `dev-batch-{E}.json`.
-
-```bash
-BRANCH=$(git branch --show-current)
-: "${BRANCH:?detached HEAD: check out the issue branch}"
-EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
-
-if [ -f "$BATCH_DEV" ]; then
-  BATCH_MODE=true
-  BATCH_ISSUES=$(jq -r '.issue_numbers | @json' "$BATCH_DEV")
-fi
-```
-
-**Single-issue path**: If `dev-batch-{E}.json` does not exist, continue with
-existing single-issue PR creation unchanged.
-
-### Batch PR Path
-
-When `BATCH_MODE=true`:
-
-1. **Title format**: `feat(#E): epic-description (#A, #B, #C)` — epic number
-   primary, sub-issues listed
-2. **Body**: Combined summary with per-issue sections, each with `Closes #A`,
-   `Closes #B`, `Closes #C` keywords
-3. Preflight checks run once (already aggregated from batch validation)
-4. Write `pr-{E}.json` with all linked issue numbers
-
-#### Batch PR Body Template
-
-```markdown
-## Summary
-
-Consolidated implementation for epic #E covering issues #A, #B, #C.
-
-### Per-Issue Changes
-
-#### Issue #A: [title]
-
-[Summary of changes for issue A]
-
-#### Issue #B: [title]
-
-[Summary of changes for issue B]
-
-#### Issue #C: [title]
-
-[Summary of changes for issue C]
-
-## Validation
-
-- Build: Passed
-- Tests: X passed, 0 failed
-
-Closes #A Closes #B Closes #C
 ```

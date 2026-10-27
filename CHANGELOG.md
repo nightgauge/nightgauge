@@ -26,6 +26,84 @@ changelog, and the release workflow refuses a tag that does not.
   report files no run will materialize, without deleting them. The SDK exports
   the matching `DiscoveredWorkContextSchema`. No stage records anything yet;
   ADR 027 records the design.
+- **Live phase progress and run output for CLI-started runs (#586).** The
+  scheduler now writes the run snapshot on every phase event, not only at stage
+  boundaries, so a `nightgauge run` started in a terminal shows its current
+  phase in VS Code while the stage runs instead of `0/N`. The run's tree node
+  names its session log, and `Nightgauge: Open Run Output` opens it. A test now
+  pins `run --adapter` help to the adapter registry.
+
+### Removed
+
+- **Dormant batch mode (#366).** Six stage skills, the pr-create runner, the
+  SDK and the extension consumed `batch-{E}.json`, `planning-batch-{E}.json`
+  and `dev-batch-{E}.json`, but nothing ever wrote the first one, so the path
+  never ran. It is gone, with `skills/_shared/BATCH_MODE.md` and each stage's
+  batch phase; phase indices after it shift down by one. One PR per epic
+  still comes from the epic-branch flow.
+
+### Added
+
+- **A Codex interactive TUI stage is no longer closed as an orphan while you
+  work in it (#431).** A new IPC verb, `pipeline.notifyStageAlive`, refreshes a
+  run's lease and its on-disk snapshot without changing stage state. The VS
+  Code extension sends it when the Codex terminal shows real activity, at most
+  once a minute and never on a timer.
+
+- **A closed program issue releases its dependents only once main is green
+  (#2574).** The post-merge hook now comments a validation marker on the merged
+  issue when the merge commit verifies green, and never on red, pending or
+  unreadable checks; a re-run does not post it twice. The scheduler,
+  `nightgauge next` and `nightgauge program status` hold a dependent behind a
+  closed `program:` blocker until that marker is there, read only from users
+  with write access or trusted bots. Blockers outside a program still release
+  on closure. A program issue closed before this change holds its dependents
+  until you re-run `nightgauge hook post-merge` for it. `program status` now
+  counts an issue as validated only when it carries the marker.
+
+- **`nightgauge program status` reports a program's progress (#2573).** One
+  command reads a programs file and prints, per program, how many of its
+  issues are open, closed, validated and dispatchable now, with each blocked
+  Ready issue and why.
+
+- **The work-order frontier now agrees across repositories (#2573).**
+  `nightgauge next` looks up a dependency on no board it read, as the
+  scheduler does: closed satisfies it, and open or unconfirmable blocks it.
+  It used to list such a dependency and dispatch anyway. A Ready issue whose
+  only blocker is a closed board item is no longer reported as a cycle.
+  `epic plan-waves` keys issues by repository, so `acme/api#7` and
+  `acme/web#7` no longer collide, and it reports blockers outside the planned
+  set instead of dropping them. A deferral by `deps-gate check` now names a
+  blocker in another repository as `owner/repo#N` instead of a bare `#N`.
+
+- **Auth-failure Action Center card on the default single-identity path (#4).**
+  A stage that fails on a GitHub permission error (`HTTP 401`,
+  `invalid auth method`) now raises the "Authentication failed" card even when
+  no identity checker is configured. It shares one card with the identity preflight, and
+  the card shows only the classifier's reason, never raw output.
+
+- **Projects can declare environment preflight checks (#101).** List commands
+  under `preflight.environment` in `.nightgauge/config.yaml`, for example
+  `run: [curl, -sf, http://localhost:3001/health]` with a `remedy`. Every
+  stage runs them before doing any work, through the new
+  `nightgauge preflight environment` verb. A failed check stops the stage
+  with your remedy instead of letting the agent misread a broken local
+  environment as a code defect. The run is recorded as `environment_halt`
+  and the issue is held until you fix the environment and run
+  `nightgauge autonomous clear-failures`. It is not charged as a failure and
+  it does not skew routing calibration. Commands run without a shell, use
+  typed `expect` assertions and a timeout, and are read only from the main
+  checkout's config.
+
+- **Shared model overlays for Claude and OpenAI models (#81).** Every Claude
+  model now renders with an `anthropic` overlay (run the named `nightgauge`
+  command, carry out each step explicitly), and Opus 5.5 and Sonnet 5.5 add
+  fragments that relax it: no extra verification pass, tight PR and issue
+  bodies, no per-call narration. GPT models get an `openai` overlay covering
+  missing Claude-only tools, exit codes and completion. The `grok-4.6` overlay
+  no longer restates registry facts. See `docs/MODEL_ADAPTATION.md` § The
+  corpus today.
+
 - **Declared `file_ownership` sets are checked against their issue's ACs
   (#561).** `nightgauge issue check-ownership` reports
   `FILE_OWNERSHIP_UNSUBSTANTIATED` when a declared set has no test file but an
@@ -62,6 +140,39 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`knowledge stamp --stage` works in stages the VS Code extension runs
+  (#2576).** Extension-spawned stages now receive `NIGHTGAUGE_DISPATCH_MODEL`
+  (the model the stage launched with, for every adapter) and
+  `NIGHTGAUGE_STAGE`, as Go-dispatched stages already did. Before, recording
+  provenance on a planning decision failed in every extension-run stage.
+- **The serve daemon's attention sweep and board probe keep authenticating
+  past the GitHub App token's hour (#2578).** The daemon caches a router per
+  board, and that router held the installation token as a string. One to
+  seven hours after `serve` started, every sweep and probe failed with
+  `401 Bad credentials` on every repository until a restart. Routers now
+  carry a token source that re-mints the installation token before it
+  expires. A REST `401` is now classified as an authentication failure, so
+  the sweep skips the repository instead of failing one producer at a time.
+  A sweep that GitHub rejects raises one "GitHub rejects the credential"
+  card per owner. The card names the affected repositories and retracts
+  itself once they sweep cleanly.
+- **`epic complete` no longer enqueues the epic PR before GitHub has computed
+  its mergeability (#2584).** Every merge-queue enqueue now waits, within the 15-minute CI
+  budget, until the PR is mergeable and its checks are green. A PR that is still
+  settling is reported as `integration_pending` and retried without a new epic
+  comment; red checks still report `integration_ci_failed` and name the failing
+  checks.
+
+- **An architecture-approval pause is held for a human instead of being booked
+  as an operator stop (#2577).** A run that halted at the approval gate after
+  `autonomous stop` was rewritten to `operator_stop`, reverted to Ready with no
+  Action Center card, and re-planned into the same gate on the next dispatch. A
+  kind that carries a human hold now keeps its verdict during a pending stop:
+  the issue is sidelined, the approval card is raised, and the card is
+  retracted as soon as the approval label or file releases the hold. After
+  approval, the re-dispatched run reuses the approved plan and starts at
+  feature-dev instead of running feature-planning again.
+
 - **The coverage card's "Add to the workspace manifest" action works when the
   active folder is a member checkout (#2540).** `workspace.addRepo`, the
   workspace repository panel and the coverage sweep now find
@@ -69,6 +180,18 @@ changelog, and the release workflow refuses a tag that does not.
   registered repo path, instead of only the current root. The sweep no longer
   raises coverage cards for repos the manifest already lists, and when no
   manifest exists the action fails with an error naming every path searched.
+
+- **A publication-boundary denial parks one issue instead of halting the
+  repository (#2562).** feature-planning now checks every planned new path with
+  `nightgauge gate check-publication` (backed by the new
+  `scripts/publication-boundary-check.py --classify`), and `FeaturePlanningGate`
+  fails a denied or unclassified path as `not_pipeline_actionable`. When
+  ci-local's `publication boundary` step rejects a path the change adds,
+  feature-validate emits `NOT_PIPELINE_ACTIONABLE`. The issue is labelled
+  `owner-action` and parked for an owner publication decision, and the queue
+  keeps running. `scripts/ci-local.sh` also runs `npm ci` before its first step
+  when `node_modules` is missing or stale, so a fresh worktree's first run no
+  longer fails on missing dependencies.
 
 - **Routing accuracy now measures the model feature-dev actually dispatches on
   (#2537).** The learning corpus compared feature-dev's served model against the
@@ -79,6 +202,14 @@ changelog, and the release workflow refuses a tag that does not.
   `routing.pickup_recommendation.dispatch_dev_model`, and both outcome writers
   score that field. Older contexts without it record no prediction and are
   excluded from accuracy.
+
+- **An epic is no longer closed while its branch has commits not on `main`
+  (#2560).** Every epic-close path — the scheduler,
+  `nightgauge epic auto-close`, `nightgauge hook post-merge`,
+  `nightgauge project reconcile` and `nightgauge epic complete` — now merges `main` into the epic branch
+  (resolving CHANGELOG-only conflicts), opens or reuses the epic PR and merges it
+  through the merge queue, and closes the epic only after that. A conflict or red
+  CI leaves the epic open with a comment and an Action Center card.
 
 - **Grok runs now advance inferred phase markers (#559).** A Grok
   `streaming-json` `tool_call` line was invisible to phase inference on both
@@ -114,6 +245,13 @@ changelog, and the release workflow refuses a tag that does not.
   `nightgauge autonomous clear-cooldown` lifts a cooldown without the VS Code
   extension.
 
+- The VS Code extension README now tells you to run **Nightgauge: Run Doctor**
+  to check your prerequisites; it named the removed Adapter Doctor command
+  (#2099).
+- `nightgauge doctor`'s guided session now names each check as it starts on
+  terminals without the live spinner (`TERM=dumb`, `NO_COLOR`, screen readers),
+  with a `RUNNING <check>` line before its result, so a slow check is no longer
+  silent there (#2095).
 - The autonomous scheduler now dispatches a Ready issue whose open PR is only
   behind its base branch (green, strict up-to-date policy); the run resumes at
   pr-merge, which rebases it. Previously the issue stalled in Ready. A behind PR

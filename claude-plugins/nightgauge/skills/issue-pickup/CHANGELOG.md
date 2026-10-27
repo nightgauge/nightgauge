@@ -8,6 +8,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- **Batch mode removed (#366).** The `_shared/BATCH_MODE.md` include is gone;
+  no stage has a batch path any more.
+
 ### Changed
 
 - `queue-state.json` is described as living in the checkout's git directory,

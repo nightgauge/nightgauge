@@ -2309,3 +2309,22 @@ func TestAdapterFlagUsage_ListsEveryRegisteredAdapter(t *testing.T) {
 		}
 	}
 }
+
+// `nightgauge run --adapter` help names every registered adapter (#586, #1670):
+// the list is generated from the registry, so a new adapter cannot be missing
+// from the help the way a hand-written list was.
+func TestRunAdapterFlagUsageListsEveryRegisteredAdapter(t *testing.T) {
+	flag := runCmd().Flags().Lookup("adapter")
+	if flag == nil {
+		t.Fatal("run has no --adapter flag")
+	}
+	names := adapters.NewRegistry().Names()
+	if len(names) == 0 {
+		t.Fatal("adapter registry is empty")
+	}
+	for _, name := range names {
+		if !strings.Contains(flag.Usage, name) {
+			t.Errorf("run --adapter usage %q does not name registered adapter %q", flag.Usage, name)
+		}
+	}
+}

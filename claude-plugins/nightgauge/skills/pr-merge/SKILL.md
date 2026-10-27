@@ -5,7 +5,7 @@ description: Wait for PR reviews, address feedback, and merge. Completes the Iss
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.17.1"
+  version: "1.18.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 model: haiku
@@ -17,7 +17,6 @@ disable-model-invocation: true
 
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
 <!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
-<!-- include: ../_shared/BATCH_MODE.md -->
 
 # PR Merge
 
@@ -103,7 +102,6 @@ attempt to populate that section itself; leave the placeholder from
 ## Supporting files (load on demand)
 
 - `_includes/context-bootstrap.md` (same directory as this SKILL.md) — read in Phase 0 (stage start + context reconstruction)
-- `_includes/batch-detection.md` (same directory as this SKILL.md) — read conditionally in Phase 0.5 only when the batch context file exists (multi-issue close, batch context cleanup)
 - `_includes/validate-environment.md` (same directory as this SKILL.md) — read in Phase 1 (verify branch, PR state, pre-CI Go build check)
 - `_includes/reviews.md` (same directory as this SKILL.md) — read in Phase 3 (fetch & parse review feedback, CI status)
 - `_includes/merge.md` (same directory as this SKILL.md) — read in Phase 6 (ruleset pre-check, knowledge conformance gate, conflict resolution, merge gate, execute merge)
@@ -184,7 +182,7 @@ proceed to the next phase.
 ---
 
 ```bash
-printf '<!-- phase:start name="read-pr-context" index=0 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="read-pr-context" index=0 total=13 stage="pr-merge" -->\n'
 ```
 
 Read PR context: resolve the issue number from the branch,
@@ -195,40 +193,10 @@ and reconstruct the context file from GitHub if it is missing.
 
 ---
 
-### Phase 0.5: Batch PR Detection
-
-```bash
-printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'
-```
-
-**PURPOSE**: Decide cheaply whether this PR closes one issue or a batch before
-loading the batch-only procedure. A batch run carries one shared branch and one
-PR for a whole epic; the common single-issue path needs none of that detail.
-
-Run this file probe first. It derives the epic key locally because `$BRANCH` is
-not assigned until Phase 1 and each Bash call is a fresh shell.
-
-```bash
-BRANCH=$(git branch --show-current)
-[ -z "$BRANCH" ] && BRANCH=$(git name-rev --name-only HEAD 2>/dev/null | sed 's|remotes/origin/||')
-EPIC_NUMBER=$(printf '%s' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
-if [ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]; then echo "BATCH_CONTEXT_FOUND=$BATCH_DEV"; else echo "SINGLE_ISSUE"; fi
-```
-
-**Only when the probe prints `BATCH_CONTEXT_FOUND=...`**: read
-`_includes/batch-detection.md` (same directory as this SKILL.md) now and follow its
-instructions before continuing this phase.
-
-**Do not read the file when the probe prints `SINGLE_ISSUE`**. Continue to
-Phase 1 unchanged.
-
----
-
 ### Phase 1: Validate Environment
 
 ```bash
-printf '<!-- phase:start name="validate-environment" index=2 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="validate-environment" index=1 total=13 stage="pr-merge" -->\n'
 ```
 
 Verify the feature branch (handling detached HEAD), resolve the PR number and
@@ -241,7 +209,7 @@ state, extract the issue number, and run the pre-CI Go build integrity check.
 ### Phase 2: Wait for CI Checks (CI Gate)
 
 ```bash
-printf '<!-- phase:start name="ci-gate" index=3 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="ci-gate" index=2 total=13 stage="pr-merge" -->\n'
 ```
 
 <!-- include: ../_shared/CI_GATE.md -->
@@ -251,7 +219,7 @@ printf '<!-- phase:start name="ci-gate" index=3 total=14 stage="pr-merge" -->\n'
 ### Phase 2.5: Auto-Fix Retry Loop
 
 ```bash
-printf '<!-- phase:start name="auto-fix-retry" index=4 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="auto-fix-retry" index=3 total=13 stage="pr-merge" -->\n'
 ```
 
 <!-- include: ../_shared/AUTO_FIX_LOOP.md -->
@@ -261,7 +229,7 @@ printf '<!-- phase:start name="auto-fix-retry" index=4 total=14 stage="pr-merge"
 ### Phase 3: Fetch & Parse Review Feedback
 
 ```bash
-printf '<!-- phase:start name="fetch-reviews" index=5 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="fetch-reviews" index=4 total=13 stage="pr-merge" -->\n'
 ```
 
 Fetch PR details and reviews, wait for CI status, fetch inline review comments
@@ -274,7 +242,7 @@ and review summaries, and parse both automated and human reviews.
 ### Phase 4: Categorize Issues
 
 ```bash
-printf '<!-- phase:start name="categorize-issues" index=6 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="categorize-issues" index=5 total=13 stage="pr-merge" -->\n'
 ```
 
 #### Step 4.1: Define Categories
@@ -299,7 +267,7 @@ Ready if `APPROVED` and no critical issues. Not ready if `REVIEW_REQUIRED` or
 ### Phase 5: Address Feedback
 
 ```bash
-printf '<!-- phase:start name="address-feedback" index=7 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="address-feedback" index=6 total=13 stage="pr-merge" -->\n'
 ```
 
 #### Step 5.0: Check for Fast-Track Merge
@@ -331,7 +299,7 @@ push, and wait for CI to re-run.
 ### Phase 5.5: Proactive Freshness Check
 
 ```bash
-printf '<!-- phase:start name="freshness-check" index=8 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="freshness-check" index=7 total=13 stage="pr-merge" -->\n'
 ```
 
 **PURPOSE**: Proactively rebase the feature branch onto the latest base branch
@@ -366,7 +334,7 @@ poll CI here with repeated `nightgauge ci wait` calls.
 ### Phase 6: Merge
 
 ```bash
-printf '<!-- phase:start name="merge" index=9 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="merge" index=8 total=13 stage="pr-merge" -->\n'
 ```
 
 Run the ruleset pre-check, final mergeable verification, the knowledge
@@ -387,7 +355,7 @@ Go-binary merge (with its `blockedBy` gate), and merge verification.
 ### Phase 7: Post-Merge Verification & Cleanup
 
 ```bash
-printf '<!-- phase:start name="post-merge-cleanup" index=10 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="post-merge-cleanup" index=9 total=13 stage="pr-merge" -->\n'
 ```
 
 Verify the post-merge build, close the issue and sync the board deterministically,
@@ -401,7 +369,7 @@ record the outcome to the complexity model.
 ### Phase 7.8: Retrospective Feedback
 
 ```bash
-printf '<!-- phase:start name="retrospective-feedback" index=11 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="retrospective-feedback" index=10 total=13 stage="pr-merge" -->\n'
 ```
 
 Capture non-blocking post-merge workflow feedback (interactive only; skipped in
@@ -414,7 +382,7 @@ headless mode) and persist it to the context file.
 ### Phase 8: Output Summary
 
 ```bash
-printf '<!-- phase:start name="output-summary" index=12 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="output-summary" index=11 total=13 stage="pr-merge" -->\n'
 ```
 
 ```
@@ -470,7 +438,7 @@ fi
 ### Phase 9: Self-Assessment Epilogue
 
 ```bash
-printf '<!-- phase:start name="self-assessment" index=13 total=14 stage="pr-merge" -->\n'
+printf '<!-- phase:start name="self-assessment" index=12 total=13 stage="pr-merge" -->\n'
 ```
 
 <!-- include: ../_shared/SELF_ASSESSMENT_EPILOGUE.md -->

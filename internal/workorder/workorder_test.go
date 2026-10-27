@@ -101,12 +101,16 @@ func TestRank_Populated(t *testing.T) {
 	}
 	edges := []depgraph.Edge{
 		{From: depgraph.NodeID{Repo: api, Number: 12}, To: depgraph.NodeID{Repo: api, Number: 20}, Type: "blockedBy", Resolvable: true},
-		// A closed blocker is not a node: it does not block.
+		// A blocker on no board read, resolved CLOSED: it does not block.
 		{From: depgraph.NodeID{Repo: api, Number: 10}, To: depgraph.NodeID{Repo: api, Number: 1}, Type: "blockedBy", Resolvable: true},
-		// A dependency outside the read set is reported, not blocking.
+		// A dependency whose state could not be resolved blocks (fail closed).
 		{From: depgraph.NodeID{Repo: web, Number: 16}, To: depgraph.NodeID{Repo: "acme/other", Number: 5}, Type: "crossRepo", Resolvable: false},
 	}
-	res := Rank(f, graphOf(nodes, edges))
+	g := graphOf(nodes, edges)
+	if got := strings.Join(ExternalDependencies(g), " "); got != "acme/acme-api#1 acme/other#5" {
+		t.Fatalf("ExternalDependencies = %s", got)
+	}
+	res := Rank(f, g, map[string]string{api + "#1": "CLOSED"}, map[string]ValidationState{api + "#1": {}})
 
 	if len(res.Programs) != 3 {
 		t.Fatalf("programs = %d", len(res.Programs))
@@ -125,8 +129,9 @@ func TestRank_Populated(t *testing.T) {
 		t.Fatalf("#13 blocked_by = %s", got)
 	}
 	onboarding := res.Programs[1]
-	if refs(onboarding.Ready) != "acme/acme-web#16" || strings.Join(onboarding.Ready[0].Unresolved, ",") != "acme/other#5" {
-		t.Fatalf("onboarding = %+v", onboarding.Ready)
+	if len(onboarding.Ready) != 0 || refs(onboarding.Blocked) != "acme/acme-web#16" ||
+		strings.Join(onboarding.Blocked[0].Unresolved, ",") != "acme/other#5" {
+		t.Fatalf("onboarding = %+v", onboarding)
 	}
 	if refs(res.Programs[2].Ready) != "acme/acme-web#17" {
 		t.Fatalf("docs = %s", refs(res.Programs[2].Ready))
@@ -134,7 +139,7 @@ func TestRank_Populated(t *testing.T) {
 	if refs(res.UnprogrammedReady) != "acme/acme-web#15 acme/acme-web#18" {
 		t.Fatalf("unprogrammed = %s", refs(res.UnprogrammedReady))
 	}
-	if res.Totals != (Totals{Ready: 4, Blocked: 2, UnprogrammedReady: 2}) {
+	if res.Totals != (Totals{Ready: 3, Blocked: 3, UnprogrammedReady: 2}) {
 		t.Fatalf("totals = %+v", res.Totals)
 	}
 }
@@ -149,7 +154,7 @@ func TestRank_TruncatedLabelsAndCyclesFailClosed(t *testing.T) {
 		{From: depgraph.NodeID{Repo: api, Number: 2}, To: depgraph.NodeID{Repo: api, Number: 3}, Resolvable: true},
 		{From: depgraph.NodeID{Repo: api, Number: 3}, To: depgraph.NodeID{Repo: api, Number: 2}, Resolvable: true},
 	}
-	res := Rank(f, graphOf(nodes, edges))
+	res := Rank(f, graphOf(nodes, edges), nil, nil)
 	if len(res.Programs[0].Ready) != 0 || len(res.Programs[0].Blocked) != 3 {
 		t.Fatalf("result = %+v", res.Programs[0])
 	}
@@ -161,7 +166,7 @@ func TestRank_TruncatedLabelsAndCyclesFailClosed(t *testing.T) {
 func TestRank_Empty(t *testing.T) {
 	f, _ := Parse([]byte("programs: []"))
 	for _, g := range []*depgraph.Graph{nil, depgraph.NewGraph()} {
-		res := Rank(f, g)
+		res := Rank(f, g, nil, nil)
 		b, _ := json.Marshal(res)
 		for _, key := range []string{`"programs":[]`, `"unprogrammed_ready":[]`, `"totals":{"ready":0,"blocked":0,"unprogrammed_ready":0}`} {
 			if !strings.Contains(string(b), key) {
@@ -171,8 +176,148 @@ func TestRank_Empty(t *testing.T) {
 	}
 	// A program with no matching issues is listed with empty arrays.
 	f, _ = Parse([]byte("programs: [{ id: a }]"))
-	b, _ := json.Marshal(Rank(f, depgraph.NewGraph()))
+	b, _ := json.Marshal(Rank(f, depgraph.NewGraph(), nil, nil))
 	if !strings.Contains(string(b), `"ready":[],"blocked":[]`) {
 		t.Fatalf("empty program: %s", b)
+	}
+}
+
+// The program frontier resolves a blocker on no board read the way the
+// scheduler does (#2573): o/a#7 decides, by its own state, whether o/b#1 is
+// dispatchable — and o/b's closed #7 never stands in for it.
+func TestRank_ExternalBlockerFollowsTheSchedulerRule(t *testing.T) {
+	f, _ := Parse([]byte("programs: [{ id: p }]"))
+	b := "o/b"
+	closedSameNumber := node(b, 7, "Done", "")
+	closedSameNumber.State = "CLOSED"
+	nodes := []*depgraph.Node{node(b, 1, "Ready", "", "program:p"), closedSameNumber}
+	edges := []depgraph.Edge{{From: depgraph.NodeID{Repo: b, Number: 1}, To: depgraph.NodeID{Repo: "o/a", Number: 7}, Type: "crossRepo", Resolvable: true}}
+	g := graphOf(nodes, edges)
+
+	for name, tc := range map[string]struct {
+		resolved      map[string]string
+		wantReady     bool
+		wantBlockedBy string
+		wantUnresolv  string
+	}{
+		"closed blocker in its repository dispatches": {resolved: map[string]string{"o/a#7": "CLOSED"}, wantReady: true},
+		"open blocker in its repository blocks":       {resolved: map[string]string{"o/a#7": "OPEN"}, wantBlockedBy: "o/a#7"},
+		"unknown state fails closed":                  {resolved: nil, wantUnresolv: "o/a#7"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := Rank(f, g, tc.resolved, map[string]ValidationState{"o/a#7": {}}).Programs[0]
+			if tc.wantReady {
+				if refs(p.Ready) != "o/b#1" {
+					t.Fatalf("ready = %s, blocked = %+v", refs(p.Ready), p.Blocked)
+				}
+				return
+			}
+			if len(p.Blocked) != 1 {
+				t.Fatalf("blocked = %+v, want o/b#1", p.Blocked)
+			}
+			it := p.Blocked[0]
+			if strings.Join(it.BlockedBy, ",") != tc.wantBlockedBy || strings.Join(it.Unresolved, ",") != tc.wantUnresolv {
+				t.Fatalf("item = %+v", it)
+			}
+		})
+	}
+}
+
+// A blocker on a board that was read and is CLOSED (a Done item) is
+// satisfied, as in the scheduler; an OPEN one blocks.
+func TestRank_OnBoardClosedBlockerIsSatisfied(t *testing.T) {
+	f, _ := Parse([]byte("programs: [{ id: p }]"))
+	a := "o/a"
+	done := node(a, 2, "Done", "")
+	done.State = "CLOSED"
+	nodes := []*depgraph.Node{node(a, 1, "Ready", "", "program:p"), done}
+	edges := []depgraph.Edge{{From: depgraph.NodeID{Repo: a, Number: 1}, To: depgraph.NodeID{Repo: a, Number: 2}, Type: "blockedBy", Resolvable: true}}
+	if p := Rank(f, graphOf(nodes, edges), nil, nil).Programs[0]; refs(p.Ready) != "o/a#1" {
+		t.Fatalf("ready = %s, blocked = %+v", refs(p.Ready), p.Blocked)
+	}
+}
+
+// A closed program blocker holds its dependents until it carries the
+// post-merge validation marker (#2574), on a board or off it; a closed blocker
+// outside any program does not; an unknown standing fails closed. `next`
+// applies the scheduler's rule.
+func TestRank_ClosedProgramBlockerNeedsTheValidationMarker(t *testing.T) {
+	f, _ := Parse([]byte("programs: [{ id: p }]"))
+	a := "o/a"
+	onBoard := node(a, 2, "Done", "", "program:p")
+	onBoard.State = "CLOSED"
+	plain := node(a, 3, "Done", "")
+	plain.State = "CLOSED"
+	nodes := []*depgraph.Node{node(a, 1, "Ready", "", "program:p"), onBoard, plain}
+	edge := func(to depgraph.NodeID) []depgraph.Edge {
+		return []depgraph.Edge{{From: depgraph.NodeID{Repo: a, Number: 1}, To: to, Type: "blockedBy", Resolvable: true}}
+	}
+	onBoardID, plainID, offBoardID := depgraph.NodeID{Repo: a, Number: 2}, depgraph.NodeID{Repo: a, Number: 3}, depgraph.NodeID{Repo: "o/x", Number: 9}
+	closedOff := map[string]string{"o/x#9": "CLOSED"}
+
+	for name, tc := range map[string]struct {
+		to          depgraph.NodeID
+		resolved    map[string]string
+		validation  map[string]ValidationState
+		wantReady   bool
+		wantUnvalid string
+		wantUnres   string
+	}{
+		"on-board without marker blocks":        {to: onBoardID, validation: map[string]ValidationState{"o/a#2": {Program: true}}, wantUnvalid: "o/a#2"},
+		"on-board with marker dispatches":       {to: onBoardID, validation: map[string]ValidationState{"o/a#2": {Program: true, Validated: true}}, wantReady: true},
+		"on-board unread standing fails closed": {to: onBoardID, wantUnres: "o/a#2"},
+		"non-program closed blocker dispatches": {to: plainID, wantReady: true},
+		"off-board without marker blocks":       {to: offBoardID, resolved: closedOff, validation: map[string]ValidationState{"o/x#9": {Program: true}}, wantUnvalid: "o/x#9"},
+		"off-board non-program dispatches":      {to: offBoardID, resolved: closedOff, validation: map[string]ValidationState{"o/x#9": {}}, wantReady: true},
+		"off-board unread labels fail closed":   {to: offBoardID, resolved: closedOff, wantUnres: "o/x#9"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := graphOf(nodes, edge(tc.to))
+			p := Rank(f, g, tc.resolved, tc.validation).Programs[0]
+			if tc.wantReady {
+				if refs(p.Ready) != "o/a#1" {
+					t.Fatalf("ready = %s, blocked = %+v", refs(p.Ready), p.Blocked)
+				}
+				return
+			}
+			if len(p.Blocked) != 1 {
+				t.Fatalf("blocked = %+v, want o/a#1", p.Blocked)
+			}
+			it := p.Blocked[0]
+			if strings.Join(it.Unvalidated, ",") != tc.wantUnvalid || strings.Join(it.Unresolved, ",") != tc.wantUnres {
+				t.Fatalf("item = %+v", it)
+			}
+		})
+	}
+}
+
+func TestValidationCandidates(t *testing.T) {
+	a := "o/a"
+	prog := node(a, 2, "Done", "", "program:p")
+	prog.State = "CLOSED"
+	plain := node(a, 3, "Done", "")
+	plain.State = "CLOSED"
+	open := node(a, 4, "In review", "", "program:p")
+	from := depgraph.NodeID{Repo: a, Number: 1}
+	var edges []depgraph.Edge
+	for _, to := range []depgraph.NodeID{{Repo: a, Number: 2}, {Repo: a, Number: 3}, {Repo: a, Number: 4}, {Repo: "o/x", Number: 9}, {Repo: "o/x", Number: 8}} {
+		edges = append(edges, depgraph.Edge{From: from, To: to, Type: "blockedBy"})
+	}
+	g := graphOf([]*depgraph.Node{node(a, 1, "Ready", ""), prog, plain, open}, edges)
+	known, unknown := ValidationCandidates(g, map[string]string{"o/x#9": "CLOSED", "o/x#8": "OPEN"})
+	if len(known) != 1 || known["o/a#2"] == nil {
+		t.Errorf("known = %v, want only the closed program member o/a#2", known)
+	}
+	if strings.Join(unknown, ",") != "o/x#9" {
+		t.Errorf("unknown = %v, want the off-board CLOSED o/x#9", unknown)
+	}
+}
+
+func TestIsProgramMember(t *testing.T) {
+	if !IsProgramMember([]string{"type:feature", "Program:billing"}) {
+		t.Error("a program: label was not recognised")
+	}
+	if IsProgramMember([]string{"programs", "type:feature"}) || IsProgramMember(nil) {
+		t.Error("a non-program label set was taken as a program member")
 	}
 }

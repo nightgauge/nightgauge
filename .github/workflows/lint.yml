@@ -164,6 +164,9 @@ jobs:
       # property would otherwise be observed only by the people relying on it.
       - name: ci-local.sh change-scoping contract
         run: bash scripts/test-ci-local-changed-scope.sh
+      # The local gate's dependency-bootstrap decision (#2562).
+      - name: ci-local.sh dependency bootstrap decision
+        run: bash scripts/test-ci-local-bootstrap.sh
       - name: Agent-skill install target regression suite
         run: bash scripts/test-install-agent-skills-targets.sh
       # Read-only, and free to sit anywhere in this job: `--check-mirror`

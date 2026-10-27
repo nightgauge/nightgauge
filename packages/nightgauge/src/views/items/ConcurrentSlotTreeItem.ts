@@ -126,6 +126,11 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
   private stages: Map<PipelineStage, StageTreeItem> = new Map();
   private disposables: vscode.Disposable[] = [];
   private onChange: (() => void) | null = null;
+  /**
+   * The session log a CLI-started run writes (#586), once known. The tooltip
+   * names it and `nightgauge.openRunOutput` opens it.
+   */
+  runOutputLog?: string;
 
   /** Build a truncated slot label and full tooltip from a title string. */
   private static formatLabel(
@@ -347,7 +352,9 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
         issueTokens && issueTokens.cost_usd > 0
           ? `\nCumulative cost and tokens across all completed stages: $${issueTokens.cost_usd.toFixed(4)}`
           : "";
-      this.tooltip = (this.repo ? `${this.repo}${fullTitle}` : fullTitle) + metricsSummary;
+      this.tooltip = this.withRunOutput(
+        (this.repo ? `${this.repo}${fullTitle}` : fullTitle) + metricsSummary
+      );
     }
 
     // Update description with cumulative metrics and current stage context
@@ -465,6 +472,20 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
         this.addChild(stageItem);
       }
     }
+  }
+
+  /** Name the run's session log on this node (#586). */
+  setRunOutput(logPath: string): void {
+    this.runOutputLog = logPath;
+    this.tooltip = this.withRunOutput(String(this.tooltip ?? ""));
+    this.onChange?.();
+  }
+
+  /** Append the run-output line to a tooltip, once. */
+  private withRunOutput(tooltip: string): string {
+    if (!this.runOutputLog) return tooltip;
+    const line = `Run output: ${this.runOutputLog}`;
+    return tooltip.includes(line) ? tooltip : `${tooltip}\n${line}`;
   }
 
   setSlotStatus(status: SlotStatus): void {

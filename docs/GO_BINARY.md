@@ -1062,7 +1062,8 @@ receives the literal HTML comment where the shared content belonged, and
 nothing warns. Six shipped stage skills carried
 `<!-- include: ../_shared/BATCH_MODE.md -->` against a file that had never been
 written, for the whole life of the repository; `pr-merge` carried it as the
-entire body of its declared Phase 0.5.
+entire body of its declared Phase 0.5. (Batch mode itself was later removed,
+#366.)
 
 The gate resolves targets with the composer's **own** `IncludePattern`, not a
 copy, and reports the captured path **verbatim**. That matters for the second
@@ -1718,9 +1719,16 @@ nightgauge epic plan-waves --sub-issues <N,M,...> [--owner ORG] [--repo REPO] [-
 # `nightgauge issue add-blocked-by <later> <earlier>` — the sequencing is computed
 # deterministically here, not left to author judgment.
 #
+# Issues and blockers are keyed by owner/repo#N, so same-numbered issues in two
+# repositories never collide. A blocker outside the listed issues (usually in another
+# repository) creates no wave edge and is reported, never dropped (#2573):
+#   External blocker: acme/web#10 is blocked by acme/api#7 (OPEN)
+# An issue it blocks is not dispatchable until it closes, whatever its wave.
+#
 # JSON output schema: { "subIssueCount": N,
 #   "waves": [{ "waveIndex": 0, "issues": [{ "number": N, "title": "...", "files": [...] }] }],
-#   "conflicts": [{ "path": "lib/.../page.dart", "issues": [143, 144], "severity": "error" }] }
+#   "conflicts": [{ "path": "lib/.../page.dart", "issues": [143, 144], "severity": "error" }],
+#   "externalBlockers": [{ "issue": "acme/web#10", "blocker": "acme/api#7", "state": "OPEN" }] }
 # Determinism audit: SKILL_DETERMINISM_AUDIT.md row B23
 ```
 
@@ -1730,6 +1738,29 @@ dependencies at the source. The parent is matched in its own repository: when
 the epic lives in another repository, an issue that only shares its number is
 a legitimate blocker (#2369). `epic validate`'s `circular_blocker` check and
 the scheduler's circular-parent auto-fix match the same way.
+
+#### Epic close integrates the epic branch first
+
+Every path that closes an epic — `nightgauge epic complete`,
+`nightgauge epic auto-close`, `nightgauge hook post-merge`,
+`nightgauge project reconcile`, and the scheduler's post-merge check and
+backstop sweep — runs one integration step before it closes (#2560):
+
+1. Find `epic/<N>-*` in the epic repository's own checkout. No branch, or a
+   branch already contained in `main`, closes the epic (the branch is cleaned up).
+2. Merge `origin/main` into the epic branch in a temporary worktree. The branch
+   is shared history, so it is merged rather than rebased. Conflicts confined to
+   files named `CHANGELOG.md` are resolved by union (`main`'s lines, then the
+   epic's lines `main` lacks); any other conflict aborts and pushes nothing.
+3. Create or reuse the epic→`main` PR and merge it, through the merge queue when
+   the base requires one. The queue's merge method then applies.
+
+The epic closes only after step 1 or a merged PR. Otherwise it stays open, gets
+a comment naming the outcome (`conflict`, `ci_failed`, `pending`,
+`no_checkout`, `error`) and any conflicting files, and the JSON result carries
+an `integration` object. The scheduler raises an `epic-integration` Action
+Center card for a blocked integration and retracts it when the epic closes. A
+CLI run integrates only an epic of the current checkout's origin repository.
 
 ### Git Operations
 
@@ -2925,13 +2956,41 @@ the sibling checkouts with `.nightgauge/config.yaml`. Each repo's board is
 resolved as the scheduler resolves it.
 
 Readiness comes from the board Status. "Unblocked" comes from the cross-repo
-dependency graph `nightgauge graph build` prints: an issue is unblocked when it
-is in the graph's first topological wave, so no open issue on a board that was
-read blocks it, by GitHub's `blockedBy` relation or a dependency declared in its
-body. An issue is also blocked when it is in a dependency cycle, carries an
-exclude label, or has a truncated label set, because then an exclusion cannot
-be ruled out. A dependency on a repo outside the read set has an unknown state.
-It is listed under `unresolved_dependencies` and does not block.
+dependency graph `nightgauge graph build` prints, judged by the autonomous
+scheduler's rule so the frontier `next` reports is the one dispatch acts on
+(#2573). A dependency — GitHub's `blockedBy` relation or one declared in the
+issue body — on an issue on a board that was read blocks while that issue is
+open. A dependency on an issue on no board read, usually in another
+repository, is looked up on GitHub in one batch per repository: CLOSED
+satisfies it, OPEN blocks it (listed in `blocked_by`), and a state that cannot
+be confirmed blocks it too and is listed under `unresolved_dependencies`. An
+issue is also blocked when it is in a dependency cycle, carries an exclude
+label, or has a truncated label set, because then an exclusion cannot be ruled
+out.
+
+**A closed program blocker needs the post-merge validation marker (#2574).**
+Closure says the PR merged, not that the base branch was green afterwards. A
+closed blocker that is a program member (it carries a `program:` label) satisfies
+the edge only when a trusted comment on it — by a user with write access or a
+trusted bot — carries:
+
+```text
+<!-- nightgauge:validated sha=<merge-sha> -->
+```
+
+`nightgauge hook post-merge` (and the scheduler's in-process post-merge path)
+posts that comment only when the merge commit verifies `green`, the verdict
+`nightgauge ci checks-complete` exits `0` for, and posts nothing when one is
+already there. Its result reports `validationMarker`: `written`, `present`,
+`not_green`, `not_wired` or `error` (which sets `failed`). Without the marker
+the dependent is listed under `unvalidated_dependencies`; when the blocker's
+labels or comments cannot be read it fails closed under
+`unresolved_dependencies`. The autonomous scheduler applies the same rule
+(rejection reason `blocked-by-unvalidated-dep`), and a program blocker that is
+open "In review" does not release its dependents there either. A closed blocker
+outside any program keeps closure-based release. An issue closed before the
+marker existed holds its program dependents until the hook is re-run for it:
+`nightgauge hook post-merge --issue <N> --owner <org> --repo <repo> --pr <PR>`.
 
 Items are ordered by board Priority (P0 first, unset last), then repo, then
 issue number. Ready, blocked issues no program selects are omitted.
@@ -2958,15 +3017,15 @@ issue number. Ready, blocked issues no program selects are omitted.
           "status": "Ready",
           "priority": "P0",
           "size": "M",
-          "labels": ["program:billing"],
-          "unresolved_dependencies": ["acme/other#5"]
+          "labels": ["program:billing"]
         }
       ],
       "blocked": [
         {
           "ref": "acme/acme-api#12",
           "…": "…",
-          "blocked_by": ["acme/acme-api#20", "label `blocked`"]
+          "blocked_by": ["acme/acme-api#20", "label `blocked`"],
+          "unresolved_dependencies": ["acme/other#5"]
         }
       ]
     }
@@ -2974,6 +3033,48 @@ issue number. Ready, blocked issues no program selects are omitted.
   "unprogrammed_ready": [],
   "totals": { "ready": 1, "blocked": 1, "unprogrammed_ready": 0 }
 }
+```
+
+#### `nightgauge program status` — a program's progress from the forge (Issue #2573)
+
+```bash
+nightgauge program status --programs <file> [--id <program>] [--owner <org>] [--project N] [--repos a,b] [--json]
+```
+
+Reads the same programs file, repos and boards as `nightgauge next` and
+reports, per program in rank order, how many of its issues are open, closed,
+validated and dispatchable. A program's issues are every issue its selector
+label marks in the repos it covers, in any state, read whole; a repository
+that cannot be read fails the report rather than undercounting it.
+
+- `closed` counts every closed issue, including one closed as not planned.
+- `validated` counts closed issues that carry the post-merge validation
+  marker in a trusted comment (#2574); a comment that cannot be read fails the
+  report. An issue closed as not planned, or merged into a red base branch, is
+  closed but not validated.
+- `dispatchable` is `next`'s Ready list for the program: open, Ready on its
+  board, and unblocked under the scheduler's rule. `blocked` lists the
+  program's Ready issues that are not, with why.
+
+`--json` shape (an array, one entry per program):
+
+```json
+[
+  {
+    "id": "billing",
+    "rank": 1,
+    "title": "Customers can pay",
+    "selector": "program:billing",
+    "repos": ["acme-api"],
+    "total": 4,
+    "open": 2,
+    "closed": 2,
+    "validated": 1,
+    "dispatchable": 1,
+    "dispatchable_refs": ["acme/acme-api#11"],
+    "blocked": [{ "ref": "acme/acme-api#12", "…": "…", "blocked_by": ["acme/core#9"] }]
+  }
+]
 ```
 
 ### PR Operations
@@ -3102,8 +3203,11 @@ reintroduce the hazard.
 Arm 3 is the arm that scopes this: `stagePid` →
 `RuntimeState.SetStageChild` is what keeps a still-working child from being
 closed, so the sub-population that carries no obtainable child pid — the Codex
-interactive TUI (#4024), whose stage runs inside a VSCode terminal — rests on
-arms 1 and 4 alone.
+interactive TUI, whose stage runs inside a VSCode terminal — rests on arms 1
+and 4. `pipeline.notifyStageAlive` (#431) re-asserts both on real terminal
+activity (the TUI launch, each OutputWindow relay, and shell-execution-end
+events where VS Code exposes them): it touches the run's lease and re-persists
+the snapshot, and changes no stage state. No timer drives it.
 
 **Arm 3 covers the EXTENSION population only.** On the scheduler / CLI path the
 snapshot's `PID` is **0 while a stage runs, by design (#534)**: the orchestrator
@@ -3789,7 +3893,10 @@ Four run-scoped producers remain Go-only, with reasons recorded in
 `branch-fork`, `unverified-deliverable` and `unverified-deliverable-streak` —
 the last two share a seam (the `gate verify` CLI raising directly, rather than
 an IPC round-trip that would make the extension re-classify a finding Go
-already classified) but are two producers, not one.
+already classified) but are two producers, not one. `auth-preflight` has two
+Go triggers sharing the key `auth-failure:{repo}#{issue}`: the identity
+preflight, and the `CatPermission` escalation gate in the stage loop. The gate
+covers the default single-identity path and both dispatch arms (#4).
 
 **One declared coverage gap on the extension path:** of
 `HeadlessOrchestrator`'s three pipeline-ceiling stops, only the BETWEEN-STAGE

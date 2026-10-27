@@ -453,6 +453,24 @@ func TestAttentionRaiseRejectsUnknownProducer(t *testing.T) {
 	}
 }
 
+// TestAttentionRaiseRejectsAuthPreflight pins the closed allowlist decision
+// from #4. The Go auth-failure card is a definitive GitHub identity block,
+// raised by the scheduler from the identity preflight and the CatPermission
+// escalation gate. The extension's adapter CLI login check is a different,
+// auto-clearing condition with its own notice (adapterAuthNotice.ts, #1168).
+// Admitting auth-preflight here would add a raiseable producer with no caller
+// whose primary option clears failures and rescans.
+func TestAttentionRaiseRejectsAuthPreflight(t *testing.T) {
+	s := newAttentionTestServer(t)
+	raw := raiseParams(t, AttentionRaiseParams{Producer: "auth-preflight", Repo: "octocat/acme", Issue: 1})
+	if _, err := s.handleAttentionRaise(context.Background(), raw); err == nil {
+		t.Fatal("auth-preflight was accepted over attention.raise, want rejection")
+	}
+	if reqs, _ := s.attentionStore().List(attention.ListFilter{IncludeTerminal: true}); len(reqs) != 0 {
+		t.Errorf("a rejected raise wrote %d record(s), want 0", len(reqs))
+	}
+}
+
 // TestAttentionRaiseParamsCarryNoExecutableSurface — a structural guard on the
 // wire shape. Card options are EXECUTED by the daemon on resolve, so the raise
 // params must not carry an options array, a verb, or an args map: a caller that

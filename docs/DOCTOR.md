@@ -67,7 +67,8 @@ passing.
 ### Report modes
 
 - **Guided repair (default on a terminal).** Plain `nightgauge doctor` shows live
-  check progress, then a summary by severity (blockers first, housekeeping
+  check progress (a spinner; with `NO_COLOR` or `TERM=dumb`, one `RUNNING` and
+  one result line per check), then a summary by severity (blockers first, housekeeping
   collapsed to one line), then walks each finding that has a remedy:
   `[f]ix [s]kip [d]etails [o]pen [a]ll safe [q]uit`. A `confirm` remedy shows its
   preview and asks again before applying. A `manual` remedy lists numbered steps
