@@ -122,6 +122,10 @@ type PostMergeResult struct {
 	// itself an epic that shipped via an umbrella PR without enumerating
 	// `Closes #sub` for each sub (#3979).
 	OrphanSubsClosed int `json:"orphanSubsClosed"`
+	// OrphanSubsFlagged counts open sub-issues of the merged epic left open
+	// because nothing proves their work shipped (#2602): the epic was not
+	// closed by merging its epic branch and no merged PR references them.
+	OrphanSubsFlagged int `json:"orphanSubsFlagged"`
 	// Reason is the hook's own outcome word. The full vocabulary:
 	//   no_parent | closed | skipped        — the hook did its job
 	//   partial_delivery                    — the PR said `Refs #N`, so the
@@ -448,16 +452,22 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// (#3979) If the merged issue is itself an epic, an umbrella PR may have
 	// shipped all the work and closed the epic without enumerating `Closes #sub`
 	// for each sub. Close the orphaned open subs so the picker does not re-spawn
-	// conflicting work. CloseOrphanSubs enforces the stateReason==COMPLETED guard
-	// and (#4197) skips `type:spike` parents entirely — a spike's native
+	// conflicting work. CloseOrphanSubs enforces the stateReason==COMPLETED guard,
+	// closes a sub only on evidence its own work shipped and flags the rest
+	// (#2602), and (#4197) skips `type:spike` parents entirely — a spike's native
 	// sub-issues are traceability links to independently-scheduled follow-up
 	// work, not decomposition children that are "done" when the spike closes.
 	if isEpicMerge {
 		if oc, ocErr := epicSvc.CloseOrphanSubs(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, input.ProjectNumber); ocErr != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge orphan-sub close failed for epic #%d: %v\n", input.IssueNumber, ocErr)
-		} else if oc != nil && oc.Closed > 0 {
-			out.OrphanSubsClosed = oc.Closed
-			fmt.Fprintf(os.Stderr, "Post-merge: closed %d orphaned sub-issue(s) of epic #%d\n", oc.Closed, input.IssueNumber)
+		} else if oc != nil {
+			out.OrphanSubsClosed, out.OrphanSubsFlagged = oc.Closed, oc.Flagged
+			if oc.Closed > 0 {
+				fmt.Fprintf(os.Stderr, "Post-merge: closed %d orphaned sub-issue(s) of epic #%d\n", oc.Closed, input.IssueNumber)
+			}
+			if oc.Flagged > 0 {
+				fmt.Fprintf(os.Stderr, "Post-merge: left %d sub-issue(s) of epic #%d open: no evidence their work shipped\n", oc.Flagged, input.IssueNumber)
+			}
 		}
 	}
 

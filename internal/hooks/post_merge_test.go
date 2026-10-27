@@ -820,6 +820,27 @@ func TestPostMergeEpicUmbrellaClosesOrphanSubs(t *testing.T) {
 	}
 }
 
+// TestPostMergeEpicReportsFlaggedOrphanSubs surfaces the sub-issues the
+// orphan closer left open for lack of ship evidence (#2602).
+func TestPostMergeEpicReportsFlaggedOrphanSubs(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#85": {NodeID: "I_node85", Number: 85, IsEpic: true},
+	}}
+	epicCloser := &mockEpicAutoCloser{
+		orphanResult: &gh.OrphanCloseResult{EpicNumber: 85, Guard: "no_evidence", Flagged: 2},
+	}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, epicCloser, nil, nil, PostMergeInput{
+		IssueNumber:     85,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+	})
+
+	if result.OrphanSubsClosed != 0 || result.OrphanSubsFlagged != 2 {
+		t.Errorf("OrphanSubsClosed/Flagged = %d/%d, want 0/2", result.OrphanSubsClosed, result.OrphanSubsFlagged)
+	}
+}
+
 func TestPostMergeNonEpicSkipsOrphanClose(t *testing.T) {
 	fetcher := &mockFetcher{issues: map[string]*types.Issue{
 		"nightgauge/nightgauge#600": {

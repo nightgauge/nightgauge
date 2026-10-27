@@ -16,10 +16,12 @@ import (
 //
 //	R1 (#3981) — a CLOSED issue whose board Status is not "Done" is synced to Done.
 //	R2 (#3980) — an OPEN epic whose every sub-issue is closed is auto-closed.
-//	R3 (#3979) — a CLOSED epic that still has OPEN sub-issues (shipped via an
-//	             epic-umbrella PR that did not enumerate `Closes #sub`) has those
-//	             orphaned subs auto-closed — but ONLY when the epic was closed as
-//	             COMPLETED, never when it was closed as NOT_PLANNED (cancelled).
+//	R3 (#3979, #2602) — a CLOSED epic that still has OPEN sub-issues has each
+//	             of them closed only on evidence its work shipped: the epic was
+//	             closed by merging its own epic/<N>- branch, or a merged PR
+//	             references the sub-issue. A sub-issue without evidence is
+//	             flagged, never closed. Nothing is touched when the epic was
+//	             closed as NOT_PLANNED (cancelled).
 //
 // The same per-epic primitives (CloseOrphanSubs) run on the post-merge hot path
 // so the common case self-heals at merge time; ReconcileBoard is the board-wide
@@ -42,23 +44,27 @@ import (
 type OrphanSubAction struct {
 	SubNumber int    `json:"subNumber"`
 	Repo      string `json:"repo,omitempty"`
-	Action    string `json:"action"` // "closed" | "error"
-	Error     string `json:"error,omitempty"`
+	Action    string `json:"action"` // "closed" | "flagged" | "error"
+	// Evidence names what a close rested on ("epic-branch:#PR" or "pr:#PR").
+	Evidence string `json:"evidence,omitempty"`
+	// Detail says why a flagged sub-issue was left open.
+	Detail string `json:"detail,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 // OrphanCloseResult is the outcome of CloseOrphanSubs for a single epic.
 type OrphanCloseResult struct {
 	EpicNumber int               `json:"epicNumber"`
-	Guard      string            `json:"guard"` // "completed" | "not_completed" | "epic_open" | "no_orphans" | "spike"
+	Guard      string            `json:"guard"` // "completed" | "no_evidence" | "not_completed" | "epic_open" | "no_orphans" | "spike"
 	Closed     int               `json:"closed"`
+	Flagged    int               `json:"flagged"`
 	Subs       []OrphanSubAction `json:"subs,omitempty"`
 }
 
-// CloseOrphanSubs closes the still-open sub-issues of a CLOSED epic that was
-// closed as completed (an epic-umbrella PR shipped the work but did not
-// enumerate `Closes #sub` for each sub). Each closed sub gets a back-reference
-// comment and is moved to "Done" on the board so the autonomous picker does not
-// re-spawn conflicting work (#3979).
+// CloseOrphanSubs closes the still-open sub-issues of a CLOSED epic whose work
+// is proven to have shipped. Each closed sub gets a back-reference comment
+// naming its evidence and is moved to "Done" on the board so the autonomous
+// picker does not re-spawn conflicting work (#3979).
 //
 // Safety guards (all must hold before any sub is touched):
 //   - the epic must be CLOSED (an open epic's subs follow the normal flow),
@@ -72,8 +78,16 @@ type OrphanCloseResult struct {
 //     implemented independently, later — the spike's own design-decision PR
 //     merging does not mean the follow-up work is done.
 //
-// The Guard field reports which branch was taken. Errors closing an individual
-// sub are recorded per-sub and do not abort the remaining subs.
+// COMPLETED alone is not evidence (#2602): a slice PR that says
+// `Closes #<epic>` sets it while other sub-issues are unstarted. So a sub is
+// closed only when the epic was closed by merging its own epic/<N>- branch
+// (the #2560 integration path), or when a merged PR references the sub
+// itself. Every other sub is flagged and left open for a human; so is one
+// whose evidence could not be read.
+//
+// The Guard field reports which branch was taken: "completed" when at least
+// one sub closed, "no_evidence" when every open sub was flagged. Errors closing
+// an individual sub are recorded per-sub and do not abort the remaining subs.
 func (e *EpicService) CloseOrphanSubs(ctx context.Context, owner, repo string, epicNumber, projectNumber int, ownerType ...OwnerType) (*OrphanCloseResult, error) {
 	issueSvc := NewIssueService(e.client)
 	epic, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, RelationSubIssues)
@@ -111,20 +125,59 @@ func (e *EpicService) CloseOrphanSubs(ctx context.Context, owner, repo string, e
 		res.Guard = "no_orphans"
 		return res, nil
 	}
-	res.Guard = "completed"
+
+	// An epic closed by merging its own branch shipped every sub-issue's work.
+	// Otherwise the PR that closed it is a slice PR, whose mentions of other
+	// sub-issues prove nothing about them.
+	epicBranchPR, epicCloserPR, epicBranchErr := 0, 0, error(nil)
+	if epicEv, err := issueSvc.ShipEvidence(ctx, owner, repo, epicNumber); err != nil {
+		epicBranchErr = err
+		fmt.Fprintf(os.Stderr, "Warning: reconcile: could not read how epic #%d was closed: %v\n", epicNumber, err)
+	} else if pr, ok := ClosedByEpicBranch(epicEv, epicNumber); ok {
+		epicBranchPR = pr
+	} else if epicEv.Closer != nil {
+		epicCloserPR = epicEv.Closer.Number
+	}
 
 	var projSvc *ProjectService
 	if projectNumber > 0 {
 		projSvc = NewProjectService(e.client, owner, projectNumber, ownerType...)
 	}
 
-	comment := fmt.Sprintf(
-		"Auto-closed: this sub-issue's work shipped as part of epic #%d, which merged and closed as completed. "+
-			"Closing the orphaned sub-issue so the autonomous picker does not re-spawn conflicting work. "+
-			"Reopen if scope remains.", epicNumber)
-
 	for _, si := range openSubs {
 		act := OrphanSubAction{SubNumber: si.Number, Repo: si.Repo}
+		siOwner, siRepo := owner, repo
+		if si.Repo != "" {
+			siOwner, siRepo = splitOwnerRepo(si.Repo)
+		}
+
+		var kind string
+		var pr int
+		switch {
+		case epicBranchPR > 0:
+			kind, pr = "epic-branch", epicBranchPR
+		default:
+			ev, err := issueSvc.ShipEvidence(ctx, siOwner, siRepo, si.Number)
+			shipped, ok := ShippedBy(ev, epicCloserPR)
+			switch {
+			case err != nil:
+				act.Detail = fmt.Sprintf("could not read whether its work shipped: %v", err)
+			case ok:
+				kind, pr = "pr", shipped
+			case epicBranchErr != nil:
+				act.Detail = fmt.Sprintf("no merged PR references it, and how epic #%d was closed could not be read", epicNumber)
+			default:
+				act.Detail = fmt.Sprintf("no merged PR references it, and epic #%d was not closed by merging its epic branch", epicNumber)
+			}
+		}
+		if kind == "" {
+			act.Action = "flagged"
+			res.Flagged++
+			res.Subs = append(res.Subs, act)
+			fmt.Fprintf(os.Stderr, "Reconcile: left orphan sub #%d open (epic #%d): %s\n", si.Number, epicNumber, act.Detail)
+			continue
+		}
+		act.Evidence = fmt.Sprintf("%s:#%d", kind, pr)
 
 		if err := issueSvc.CloseIssue(ctx, si.NodeID); err != nil {
 			act.Action = "error"
@@ -133,14 +186,10 @@ func (e *EpicService) CloseOrphanSubs(ctx context.Context, owner, repo string, e
 			fmt.Fprintf(os.Stderr, "Warning: reconcile: failed to close orphan sub #%d (epic #%d): %v\n", si.Number, epicNumber, err)
 			continue
 		}
-		if err := issueSvc.AddComment(ctx, si.NodeID, comment); err != nil {
+		if err := issueSvc.AddComment(ctx, si.NodeID, orphanCloseComment(epicNumber, kind, pr)); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: reconcile: failed to comment on orphan sub #%d: %v\n", si.Number, err)
 		}
 		if projSvc != nil {
-			siOwner, siRepo := owner, repo
-			if si.Repo != "" {
-				siOwner, siRepo = splitOwnerRepo(si.Repo)
-			}
 			if err := projSvc.SyncStatus(ctx, siOwner, siRepo, si.Number, "Done"); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: reconcile: failed to move orphan sub #%d to Done: %v\n", si.Number, err)
 			}
@@ -149,10 +198,28 @@ func (e *EpicService) CloseOrphanSubs(ctx context.Context, owner, repo string, e
 		act.Action = "closed"
 		res.Closed++
 		res.Subs = append(res.Subs, act)
-		fmt.Fprintf(os.Stderr, "Reconcile: closed orphan sub #%d (epic #%d completed)\n", si.Number, epicNumber)
+		fmt.Fprintf(os.Stderr, "Reconcile: closed orphan sub #%d (epic #%d, evidence %s)\n", si.Number, epicNumber, act.Evidence)
 	}
 
+	res.Guard = "completed"
+	if res.Closed == 0 && res.Flagged > 0 {
+		res.Guard = "no_evidence"
+	}
 	return res, nil
+}
+
+// orphanCloseComment is the comment on a sub-issue the orphan closer closed,
+// naming the evidence and carrying the marker the epic rollup reads.
+func orphanCloseComment(epicNumber int, kind string, pr int) string {
+	var why string
+	if kind == "epic-branch" {
+		why = fmt.Sprintf("as part of epic #%d, whose epic branch merged in #%d", epicNumber, pr)
+	} else {
+		why = fmt.Sprintf("in #%d, which merged and references this sub-issue (epic #%d is closed)", pr, epicNumber)
+	}
+	return orphanCloseCommentPrefix + " " + why + ". " +
+		"Closing the orphaned sub-issue so the autonomous picker does not re-spawn conflicting work. " +
+		"Reopen if scope remains.\n\n" + orphanCloseMarker(kind, pr)
 }
 
 // ReconcileAction is a single state change the board reconciler made (or
@@ -172,6 +239,7 @@ type ReconcileResult struct {
 	IssuesSyncedToDone int               `json:"issuesSyncedToDone"`
 	EpicsClosed        int               `json:"epicsClosed"`
 	OrphanSubsClosed   int               `json:"orphanSubsClosed"`
+	OrphanSubsFlagged  int               `json:"orphanSubsFlagged"`
 	Actions            []ReconcileAction `json:"actions,omitempty"`
 	Warnings           []string          `json:"warnings,omitempty"`
 }
@@ -223,13 +291,22 @@ func (e *EpicService) ReconcileBoard(ctx context.Context, owner string, projectN
 				res.EpicsClosed++
 				res.Actions = append(res.Actions, ReconcileAction{Kind: "epic_closed", Number: it.Number, Repo: it.Repo, Detail: reason})
 				continue
+			} else if reason == reasonOrphanClosedWithoutEvidence {
+				// A human reopened an epic whose sub-issues the pre-#2602
+				// orphan closer closed on the epic's state alone (#2602).
+				res.Warnings = append(res.Warnings, fmt.Sprintf("epic #%d: left open, a sub-issue was orphan-closed without evidence its work shipped", it.Number))
+				res.Actions = append(res.Actions, ReconcileAction{
+					Kind: "orphan_sub_flagged", Number: it.Number, Repo: it.Repo,
+					Detail: "a sub-issue was auto-closed without evidence its work shipped; reopen it or close the epic by hand",
+				})
 			} else if strings.HasPrefix(reason, "integration_") {
 				res.Warnings = append(res.Warnings, fmt.Sprintf("epic #%d: left open, epic branch not on main (%s)", it.Number, reason))
 			}
 		}
 
 		// R3 (#3979): closed epic with open sub-issues → close the orphans
-		// (CloseOrphanSubs enforces the stateReason==COMPLETED guard).
+		// whose work shipped and flag the rest (CloseOrphanSubs enforces the
+		// stateReason==COMPLETED guard and the ship-evidence check, #2602).
 		if it.IsEpic && closed && anySubOpen(it.SubIssues) {
 			oc, oerr := e.CloseOrphanSubs(ctx, iOwner, iRepo, it.Number, projectNumber, ownerType...)
 			if oerr != nil {
@@ -239,7 +316,10 @@ func (e *EpicService) ReconcileBoard(ctx context.Context, owner string, projectN
 					switch s.Action {
 					case "closed":
 						res.OrphanSubsClosed++
-						res.Actions = append(res.Actions, ReconcileAction{Kind: "orphan_sub_closed", Number: s.SubNumber, Repo: s.Repo, Epic: it.Number})
+						res.Actions = append(res.Actions, ReconcileAction{Kind: "orphan_sub_closed", Number: s.SubNumber, Repo: s.Repo, Epic: it.Number, Detail: s.Evidence})
+					case "flagged":
+						res.OrphanSubsFlagged++
+						res.Actions = append(res.Actions, ReconcileAction{Kind: "orphan_sub_flagged", Number: s.SubNumber, Repo: s.Repo, Epic: it.Number, Detail: s.Detail})
 					case "error":
 						res.Warnings = append(res.Warnings, fmt.Sprintf("orphan sub #%d (epic #%d): %s", s.SubNumber, it.Number, s.Error))
 					}

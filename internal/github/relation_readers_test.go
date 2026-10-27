@@ -25,7 +25,8 @@ import (
 //     labels to sync to board fields, blocks 7 issues.
 //   - #500 is an epic whose 3 sub-issues are closed; it blocks 7 issues, and
 //     so does its sub-issue #501.
-//   - #510 is an epic closed as completed with one open sub-issue; it blocks 7.
+//   - #510 is an epic closed as completed with one open sub-issue, whose work
+//     a merged pull request shipped; it blocks 7.
 func TestReadersFollowOnlyTheListsTheyUse(t *testing.T) {
 	issues := map[int]githubtest.Issue{
 		300: {
@@ -42,7 +43,7 @@ func TestReadersFollowOnlyTheListsTheyUse(t *testing.T) {
 			State: "CLOSED", StateReason: "COMPLETED",
 			SubIssues: []int{511, 512}, Blocking: githubtest.Numbers(621, 7),
 		},
-		511: {State: "OPEN"},
+		511: {State: "OPEN", ShippedBy: 900},
 		512: {State: "CLOSED"},
 	}
 	const owner, repo = githubtest.Owner, githubtest.Repo

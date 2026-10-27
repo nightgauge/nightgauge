@@ -453,11 +453,12 @@ func TestCloseOneEpicEventualConsistencyRetry(t *testing.T) {
 
 	var callCount int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := int(atomic.AddInt32(&callCount, 1))
 		w.Header().Set("Content-Type", "application/json")
 		body, _ := io.ReadAll(r.Body)
-		reqStr := string(body)
-		_ = reqStr
+		if serveEmptyShipEvidence(w, body) {
+			return
+		}
+		n := int(atomic.AddInt32(&callCount, 1))
 
 		switch n {
 		case 1:
@@ -504,8 +505,12 @@ func TestCloseOneEpicNoRetryWhenComplete(t *testing.T) {
 
 	var callCount int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := int(atomic.AddInt32(&callCount, 1))
 		w.Header().Set("Content-Type", "application/json")
+		body, _ := io.ReadAll(r.Body)
+		if serveEmptyShipEvidence(w, body) {
+			return
+		}
+		n := int(atomic.AddInt32(&callCount, 1))
 		switch n {
 		case 1:
 			fmt.Fprint(w, listResp)
@@ -549,6 +554,9 @@ func TestCloseOneEpic_ConflictingEpicBranchStaysOpen(t *testing.T) {
 			atomic.AddInt32(&closed, 1)
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if serveEmptyShipEvidence(w, body) {
+			return
+		}
 		switch atomic.AddInt32(&calls, 1) {
 		case 1:
 			fmt.Fprint(w, epicListResponse(100))

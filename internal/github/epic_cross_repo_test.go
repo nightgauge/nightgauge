@@ -94,6 +94,7 @@ func (f *fakeForge) handler(t *testing.T) http.HandlerFunc {
 		name, _ := req.Variables["name"].(string)
 
 		switch {
+		case serveEmptyShipEvidence(w, raw):
 		case strings.Contains(req.Query, "issue(number:"):
 			num := 0
 			if n, ok := req.Variables["number"].(float64); ok {

@@ -57,6 +57,15 @@ type Issue struct {
 	// Status is the issue's Status on the organization's project board. An
 	// issue with no Status is not on the board.
 	Status string
+	// ShippedBy is a merged pull request that names the issue as closing, 0
+	// for none. It is served by the ship-evidence read (#2602).
+	ShippedBy int
+	// ClosedByHead, when set, is the head branch of the merged pull request
+	// (numbered ClosedByPR) that most recently closed the issue.
+	ClosedByHead string
+	ClosedByPR   int
+	// Comments are the bodies of the issue's comments, oldest first.
+	Comments []string
 }
 
 // Numbers returns n consecutive issue numbers starting at from, for building a
@@ -193,6 +202,9 @@ func (f *Forge) serve(w http.ResponseWriter, r *http.Request) {
 			repo["i"+m[1]] = f.issueFields(q, n)
 		}
 		data = map[string]interface{}{"repository": repo}
+	case strings.Contains(q, "timelineItems("):
+		n, _ := req.Variables["number"].(float64)
+		data = map[string]interface{}{"repository": map[string]interface{}{"issue": f.shipEvidence(int(n))}}
 	case strings.Contains(q, "issue(number: $number)") && !strings.Contains(q, "projectItems("):
 		n, _ := req.Variables["number"].(float64)
 		if f.unreadable(int(n)) {
@@ -212,6 +224,42 @@ func (f *Forge) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// shipEvidence renders issue n's ship-evidence timeline: its comments, then
+// the pull request close ClosedByHead describes, and the closing reference
+// ShippedBy names.
+func (f *Forge) shipEvidence(n int) interface{} {
+	iss, ok := f.issues[n]
+	if !ok {
+		f.t.Errorf("githubtest: no issue #%d", n)
+		return nil
+	}
+	nodes := []interface{}{}
+	for _, c := range iss.Comments {
+		nodes = append(nodes, map[string]interface{}{"__typename": "IssueComment", "body": c})
+	}
+	if iss.ClosedByHead != "" {
+		nodes = append(nodes, map[string]interface{}{
+			"__typename": "ClosedEvent",
+			"closer":     pullRequest(iss.ClosedByPR, iss.ClosedByHead),
+		})
+	}
+	closing := []interface{}{}
+	if iss.ShippedBy != 0 {
+		pr := pullRequest(iss.ShippedBy, fmt.Sprintf("feat/%d", n))
+		delete(pr, "__typename") // the connection's type is fixed; it is not selected
+		closing = append(closing, pr)
+	}
+	return map[string]interface{}{
+		"timelineItems":                  map[string]interface{}{"nodes": nodes},
+		"closedByPullRequestsReferences": map[string]interface{}{"nodes": closing},
+	}
+}
+
+// pullRequest renders merged pull request number from branch head.
+func pullRequest(number int, head string) map[string]interface{} {
+	return map[string]interface{}{"__typename": "PullRequest", "number": number, "merged": true, "headRefName": head}
 }
 
 // unreadable reports whether n is one of f.Unreadable.
