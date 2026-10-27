@@ -168,6 +168,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Reconcile no longer closes unstarted sub-issues of an epic that a partial
+  PR closed (#2602).** The orphan-sub closer used to close every open
+  sub-issue of an epic closed as completed. It now closes one only when the
+  epic was closed by merging its own `epic/<N>-` branch, or a merged PR names
+  that sub-issue as closing or otherwise references it. A mention by the slice
+  PR that closed the epic does not count. Every other open sub-issue stays
+  open and is reported as `orphan_sub_flagged`; `project reconcile` and the
+  post-merge hook now print a flagged count (`orphanSubsFlagged`). The epic
+  rollup also no longer re-closes a reopened epic while a sub-issue still
+  carries the old closer's comment and no PR has closed it since. Reopen that
+  sub-issue or close the epic by hand to release it.
 - **A PR that meets only some acceptance criteria no longer closes its issue
   (#2595).** feature-validate records a `met`, `unmet` or `not_verifiable`
   verdict per acceptance criterion, and pr-create combines it with a

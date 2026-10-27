@@ -144,11 +144,11 @@ func TestEvaluatePostMerge_EpicStepsReadOnlyTheSubIssueList(t *testing.T) {
 
 	t.Run("umbrella merge closes orphaned sub-issues", func(t *testing.T) {
 		// Epic #10 merged through one pull request and closed as completed,
-		// leaving #12 open.
+		// leaving #12 open though a merged pull request shipped it.
 		forge := githubtest.New(t, map[int]githubtest.Issue{
 			10: {State: "CLOSED", StateReason: "COMPLETED", SubIssues: []int{11, 12}, Blocking: githubtest.Numbers(2000, 7)},
 			11: {State: "CLOSED"},
-			12: {State: "OPEN"},
+			12: {State: "OPEN", ShippedBy: 900},
 		})
 		c := forge.Client()
 

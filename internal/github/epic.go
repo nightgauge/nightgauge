@@ -921,6 +921,18 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 		return "skipped", "already_closed", nil, nil
 	}
 
+	// Never lock in a pre-#2602 orphan close (#2602). An open epic whose
+	// sub-issues the old closer closed on the epic's state alone is open
+	// because a human reopened it; closing it again would re-assert work that
+	// may never have shipped. The rollup holds until those sub-issues are
+	// reopened or the epic is closed by hand.
+	if blocking, err := e.orphanClosedSub(ctx, owner, repo, completion.SubIssues); err != nil {
+		return "", "evidence_check_failed", nil, err
+	} else if blocking != "" {
+		fmt.Fprintf(os.Stderr, "Not closing %s: sub-issue %s was auto-closed without evidence its work shipped\n", ref, blocking)
+		return "skipped", reasonOrphanClosedWithoutEvidence, nil, nil
+	}
+
 	// Integrate before closing (#2560): an epic whose branch holds commits
 	// not on main is never closed. #2085 was closed with its sub-issues' code
 	// stranded on the epic branch.
@@ -965,6 +977,35 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 	}
 
 	return "closed", "all_closed", &integration, nil
+}
+
+// reasonOrphanClosedWithoutEvidence is closeOneEpic's skip reason when a
+// sub-issue was closed by the pre-#2602 orphan closer (#2602).
+const reasonOrphanClosedWithoutEvidence = "orphan_closed_without_evidence"
+
+// orphanClosedSub returns the first closed sub-issue, as "owner/repo#N", that
+// the orphan closer closed without evidence its work shipped and that no pull
+// request has closed since; "" when there is none. A read error is returned,
+// so the caller holds the epic open instead of guessing.
+func (e *EpicService) orphanClosedSub(ctx context.Context, owner, repo string, subs []types.SubIssueRef) (string, error) {
+	issueSvc := NewIssueService(e.client)
+	for _, si := range subs {
+		if !strings.EqualFold(si.State, "CLOSED") {
+			continue
+		}
+		siOwner, siRepo := owner, repo
+		if si.Repo != "" {
+			siOwner, siRepo = splitOwnerRepo(si.Repo)
+		}
+		ev, err := issueSvc.ShipEvidence(ctx, siOwner, siRepo, si.Number)
+		if err != nil {
+			return "", err
+		}
+		if ev.OrphanClosedWithoutEvidence && ev.Closer == nil {
+			return fmt.Sprintf("%s/%s#%d", siOwner, siRepo, si.Number), nil
+		}
+	}
+	return "", nil
 }
 
 // moveToProjectDone moves an epic to "Done" status on the project board.

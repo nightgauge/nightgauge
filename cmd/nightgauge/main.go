@@ -4190,8 +4190,8 @@ common case at merge time.`,
 				return printJSON(res)
 			}
 
-			fmt.Printf("Reconciled %d board items: %d synced to Done, %d epic(s) auto-closed, %d orphan sub(s) closed.\n",
-				res.Checked, res.IssuesSyncedToDone, res.EpicsClosed, res.OrphanSubsClosed)
+			fmt.Printf("Reconciled %d board items: %d synced to Done, %d epic(s) auto-closed, %d orphan sub(s) closed, %d flagged.\n",
+				res.Checked, res.IssuesSyncedToDone, res.EpicsClosed, res.OrphanSubsClosed, res.OrphanSubsFlagged)
 			for _, a := range res.Actions {
 				switch a.Kind {
 				case "issue_done":
@@ -4201,7 +4201,11 @@ common case at merge time.`,
 				case "orphan_sub_closed":
 					fmt.Printf("  orphan closed #%-5d %-28s (epic #%d)\n", a.Number, a.Repo, a.Epic)
 				case "orphan_sub_flagged":
-					fmt.Printf("  FLAGGED epic  #%-5d %-28s %s\n", a.Number, a.Repo, a.Detail)
+					if a.Epic != 0 {
+						fmt.Printf("  FLAGGED sub   #%-5d %-28s (epic #%d) %s\n", a.Number, a.Repo, a.Epic, a.Detail)
+					} else {
+						fmt.Printf("  FLAGGED epic  #%-5d %-28s %s\n", a.Number, a.Repo, a.Detail)
+					}
 				}
 			}
 			for _, w := range res.Warnings {
