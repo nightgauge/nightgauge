@@ -771,3 +771,36 @@ func TestGitHubFindings(t *testing.T) {
 }
 
 func first(fs []Finding, _ string) []Finding { return fs }
+
+func TestSameBuild(t *testing.T) {
+	describe := "nightgauge v0.7.2-70-g0a198e35"
+	pseudo := "nightgauge 0.7.3-0.20261027102022-0a198e354e6e"
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{describe, pseudo, true},
+		{describe + "-dirty", pseudo, true},
+		{"nightgauge v0.7.2-70-g1111111a", pseudo, false},
+		{describe, "nightgauge 0.7.3-0.20261027102022-1111111a2222", false},
+		{"nightgauge v0.1.0", "nightgauge v0.2.0", false},
+		{"nightgauge v0.1.0", "nightgauge v0.1.0", true},
+		{describe, "nightgauge v0.7.2", false},
+		{"nightgauge dev+abc1234", describe, false},
+	}
+	for _, c := range cases {
+		if got := sameBuild(c.a, c.b); got != c.want {
+			t.Errorf("sameBuild(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+	for line, want := range map[string]string{
+		describe:              "0a198e35",
+		pseudo:                "0a198e354e6e",
+		"nightgauge v0.7.2":   "",
+		"nightgauge dev+abc1": "",
+	} {
+		if got := buildCommit(line); got != want {
+			t.Errorf("buildCommit(%q) = %q, want %q", line, got, want)
+		}
+	}
+}
