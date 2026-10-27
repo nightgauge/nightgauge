@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,6 +250,11 @@ type EpicCompletionResult struct {
 	// so they cannot disagree the way they did when the hook looked the epic up
 	// in the wrong repository.
 	SubIssues []types.SubIssueRef `json:"subIssues,omitempty"`
+	// PendingTasks lists the epic body's unchecked task-list items that no
+	// closed sub-issue satisfies (#1581). A filed child being closed does not
+	// make an epic complete while planned-but-unfiled work or unticked
+	// acceptance criteria remain in its body.
+	PendingTasks []string `json:"pendingTasks,omitempty"`
 }
 
 // HasSubIssue reports whether the epic lists owner/repo#number among its
@@ -301,8 +307,79 @@ func (e *EpicService) CheckCompletion(ctx context.Context, owner, repo string, e
 		}
 	}
 
-	result.Complete = result.Open == 0 && result.Total > 0
+	result.PendingTasks = pendingBodyTasks(issue.Body, issue.Repo, issue.SubIssues)
+	result.Complete = result.Open == 0 && result.Total > 0 && len(result.PendingTasks) == 0
 	return result, nil
+}
+
+// reasonUnfinishedDecomposition is closeOneEpic's skip reason when every filed
+// sub-issue is closed but the epic body still carries pending task-list items
+// (#1581).
+const reasonUnfinishedDecomposition = "unfinished_decomposition"
+
+var (
+	taskListItemRe = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s+(.*)$`)
+	issueRefRe     = regexp.MustCompile(`(?:^|[^\w/])(?:([\w.-]+/[\w.-]+))?#(\d+)\b`)
+	fenceRe        = regexp.MustCompile("^\\s*(```|~~~)")
+)
+
+// pendingBodyTasks returns the text of every unchecked task-list item in an
+// epic body that is not satisfied by a closed sub-issue (#1581). An unchecked
+// item referencing issues is satisfied when each referenced issue is a CLOSED
+// sub-issue (GitHub never ticks body boxes itself); any other unchecked item
+// is outstanding work. Checked items and lines inside fenced code blocks are
+// ignored. epicRepo ("owner/repo") resolves bare #N references.
+func pendingBodyTasks(body, epicRepo string, subs []types.SubIssueRef) []string {
+	var pending []string
+	inFence := false
+	for _, line := range strings.Split(body, "\n") {
+		if fenceRe.MatchString(line) {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		m := taskListItemRe.FindStringSubmatch(line)
+		if m == nil || m[1] != " " {
+			continue
+		}
+		text := strings.TrimSpace(m[2])
+		refs := issueRefRe.FindAllStringSubmatch(text, -1)
+		if len(refs) > 0 && allRefsClosedSubs(refs, epicRepo, subs) {
+			continue
+		}
+		pending = append(pending, text)
+	}
+	return pending
+}
+
+func allRefsClosedSubs(refs [][]string, epicRepo string, subs []types.SubIssueRef) bool {
+	for _, ref := range refs {
+		repo := ref[1]
+		if repo == "" {
+			repo = epicRepo
+		}
+		n, err := strconv.Atoi(ref[2])
+		if err != nil {
+			return false
+		}
+		found := false
+		for _, si := range subs {
+			siRepo := si.Repo
+			if siRepo == "" {
+				siRepo = epicRepo
+			}
+			if si.Number == n && strings.EqualFold(siRepo, repo) && strings.EqualFold(si.State, "CLOSED") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // SweepEpics checks completion for all open epics in a repo concurrently.
@@ -723,6 +800,9 @@ type AutoCloseSummaryItem struct {
 	Reason      string           `json:"reason,omitempty"`
 	Error       string           `json:"error,omitempty"`
 	Integration *EpicIntegration `json:"integration,omitempty"`
+	// PendingTasks lists the body items holding an unfinished_decomposition
+	// epic open (#1581).
+	PendingTasks []string `json:"pendingTasks,omitempty"`
 }
 
 // AutoClose checks all open epics, closes completed ones, and moves them to Done.
@@ -751,6 +831,7 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 		reason      string
 		err         error
 		integration *EpicIntegration
+		pending     []string
 	}
 
 	ch := make(chan closeResult, len(issues))
@@ -760,12 +841,12 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 		wg.Add(1)
 		go func(i int, epicNumber int) {
 			defer wg.Done()
-			status, reason, integ, cerr := e.closeOneEpic(ctx, EpicRef{
+			status, reason, integ, pending, cerr := e.closeOneEpic(ctx, EpicRef{
 				Owner:  owner,
 				Repo:   repo,
 				Number: epicNumber,
 			}, projectNumber)
-			ch <- closeResult{i, status, reason, cerr, integ}
+			ch <- closeResult{i, status, reason, cerr, integ, pending}
 		}(idx, epic.Number)
 	}
 
@@ -779,6 +860,7 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 		Reason      string
 		Error       string
 		Integration *EpicIntegration
+		Pending     []string
 	}
 	summaryByIndex := make(map[int]summaryItem)
 
@@ -789,6 +871,7 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 			Status:      res.status,
 			Reason:      res.reason,
 			Integration: res.integration,
+			Pending:     res.pending,
 		}
 		if res.err != nil {
 			item.Status = "error"
@@ -803,7 +886,7 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 
 	for i := 0; i < len(issues); i++ {
 		item := summaryByIndex[i]
-		result.Summary = append(result.Summary, AutoCloseSummaryItem{item.EpicNumber, item.Title, item.Status, item.Reason, item.Error, item.Integration})
+		result.Summary = append(result.Summary, AutoCloseSummaryItem{item.EpicNumber, item.Title, item.Status, item.Reason, item.Error, item.Integration, item.Pending})
 	}
 
 	return result, nil
@@ -858,15 +941,18 @@ func (r EpicRef) String() string {
 // this is likely a GitHub eventual-consistency window after the final sub-issue
 // merge. We retry up to 3 times with exponential backoff (2s, 4s, 8s) to let
 // the API catch up before giving up.
-func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumber int) (string, string, *EpicIntegration, error) {
+//
+// pending carries the epic body's outstanding task-list items when the close
+// is declined as unfinished_decomposition (#1581); nil otherwise.
+func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumber int) (status, reason string, integ *EpicIntegration, pending []string, err error) {
 	if ref.Owner == "" || ref.Repo == "" {
-		return "", "epic_repo_missing", nil, fmt.Errorf("epic #%d: no repository given; an epic number without its repository is not a coordinate", ref.Number)
+		return "", "epic_repo_missing", nil, nil, fmt.Errorf("epic #%d: no repository given; an epic number without its repository is not a coordinate", ref.Number)
 	}
 	owner, repo, epicNumber := ref.Owner, ref.Repo, ref.Number
 
 	completion, err := e.CheckCompletion(ctx, owner, repo, epicNumber)
 	if err != nil {
-		return "", "check_failed", nil, err
+		return "", "check_failed", nil, nil, err
 	}
 
 	// Identity guard (#1181). The caller told us a sub-issue that belongs to
@@ -880,13 +966,13 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 		if ref.ExpectSubIssueRepo != "" {
 			expected = fmt.Sprintf("%s#%d", ref.ExpectSubIssueRepo, ref.ExpectSubIssueNumber)
 		}
-		return "", "wrong_epic", nil, fmt.Errorf(
+		return "", "wrong_epic", nil, nil, fmt.Errorf(
 			"epic %s does not list %s among its %d sub-issue(s): the epic number resolved to the wrong issue",
 			ref, expected, completion.Total)
 	}
 
 	if completion.Total == 0 {
-		return "skipped", "no_subs", nil, nil
+		return "skipped", "no_subs", nil, nil, nil
 	}
 
 	// Retry on eventual-consistency: GitHub may not have propagated the final
@@ -896,17 +982,20 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 	for attempt := 1; attempt <= maxRetries && !completion.Complete && completion.Open > 0; attempt++ {
 		select {
 		case <-ctx.Done():
-			return "", "check_failed", nil, ctx.Err()
+			return "", "check_failed", nil, nil, ctx.Err()
 		case <-time.After(baseDelay * time.Duration(1<<uint(attempt-1))):
 		}
 		completion, err = e.CheckCompletion(ctx, owner, repo, epicNumber)
 		if err != nil {
-			return "", "check_failed", nil, err
+			return "", "check_failed", nil, nil, err
 		}
 	}
 
+	if !completion.Complete && completion.Open == 0 && len(completion.PendingTasks) > 0 {
+		return "skipped", reasonUnfinishedDecomposition, nil, completion.PendingTasks, nil
+	}
 	if !completion.Complete {
-		return "skipped", "has_open", nil, nil
+		return "skipped", "has_open", nil, nil, nil
 	}
 
 	// Only the epic's state and node id are used here; completion already
@@ -914,11 +1003,11 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 	issueSvc := NewIssueService(e.client)
 	epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, NoRelations)
 	if err != nil {
-		return "", "fetch_failed", nil, err
+		return "", "fetch_failed", nil, nil, err
 	}
 
 	if strings.EqualFold(epicIssue.State, "CLOSED") {
-		return "skipped", "already_closed", nil, nil
+		return "skipped", "already_closed", nil, nil, nil
 	}
 
 	// Never lock in a pre-#2602 orphan close (#2602). An open epic whose
@@ -927,10 +1016,10 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 	// may never have shipped. The rollup holds until those sub-issues are
 	// reopened or the epic is closed by hand.
 	if blocking, err := e.orphanClosedSub(ctx, owner, repo, completion.SubIssues); err != nil {
-		return "", "evidence_check_failed", nil, err
+		return "", "evidence_check_failed", nil, nil, err
 	} else if blocking != "" {
 		fmt.Fprintf(os.Stderr, "Not closing %s: sub-issue %s was auto-closed without evidence its work shipped\n", ref, blocking)
-		return "skipped", reasonOrphanClosedWithoutEvidence, nil, nil
+		return "skipped", reasonOrphanClosedWithoutEvidence, nil, nil, nil
 	}
 
 	// Integrate before closing (#2560): an epic whose branch holds commits
@@ -958,11 +1047,11 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 		if integration.Outcome == IntegrationPending {
 			status = "skipped"
 		}
-		return status, "integration_" + integration.Outcome, &integration, nil
+		return status, "integration_" + integration.Outcome, &integration, nil, nil
 	}
 
 	if err := issueSvc.CloseIssue(ctx, epicIssue.NodeID); err != nil {
-		return "", "close_failed", &integration, fmt.Errorf("close issue: %w", err)
+		return "", "close_failed", &integration, nil, fmt.Errorf("close issue: %w", err)
 	}
 
 	commentBody := fmt.Sprintf("Auto-closed: all %d sub-issues are complete (epic branch: %s).", completion.Total, integration.Outcome)
@@ -976,7 +1065,7 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 		}
 	}
 
-	return "closed", "all_closed", &integration, nil
+	return "closed", "all_closed", &integration, nil, nil
 }
 
 // reasonOrphanClosedWithoutEvidence is closeOneEpic's skip reason when a
@@ -1027,6 +1116,9 @@ type AutoCloseSingleResult struct {
 	// Integration reports how the epic branch was brought onto main before
 	// the close, or why the epic stayed open (#2560).
 	Integration *EpicIntegration `json:"integration,omitempty"`
+	// PendingTasks lists the epic body's outstanding task-list items when the
+	// close was declined as unfinished_decomposition (#1581).
+	PendingTasks []string `json:"pendingTasks,omitempty"`
 }
 
 // AutoCloseSingle checks and closes a single epic if all its sub-issues are closed.
@@ -1038,17 +1130,18 @@ type AutoCloseSingleResult struct {
 // mis-resolved epic is rejected rather than silently reported as having no
 // sub-issues (#1181).
 func (e *EpicService) AutoCloseSingle(ctx context.Context, ref EpicRef, projectNumber int) (*AutoCloseSingleResult, error) {
-	status, reason, integration, err := e.closeOneEpic(ctx, ref, projectNumber)
+	status, reason, integration, pending, err := e.closeOneEpic(ctx, ref, projectNumber)
 	epicRepo := ""
 	if ref.Owner != "" && ref.Repo != "" {
 		epicRepo = ref.Owner + "/" + ref.Repo
 	}
 	result := &AutoCloseSingleResult{
-		EpicNumber:  ref.Number,
-		EpicRepo:    epicRepo,
-		Status:      status,
-		Reason:      reason,
-		Integration: integration,
+		EpicNumber:   ref.Number,
+		EpicRepo:     epicRepo,
+		Status:       status,
+		Reason:       reason,
+		Integration:  integration,
+		PendingTasks: pending,
 	}
 	if err != nil {
 		result.Status = "error"

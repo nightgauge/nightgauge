@@ -181,6 +181,14 @@ changelog, and the release workflow refuses a tag that does not.
   same branch, and a stale one re-enqueues. Failed merge-group checks and
   closed PRs are reported as before.
 
+- **An epic no longer auto-closes while its decomposition is unfinished
+  (#1581).** Closing its only filed sub-issue used to close the epic even with
+  planned items and acceptance criteria still unticked in its body. An
+  unchecked task-list item now holds the epic open unless every issue it
+  references is a closed sub-issue, and `nightgauge hook post-merge` reports
+  which epic it closed, or that it declined as `unfinished_decomposition` and
+  the items still pending.
+
 - **Action Center bands now rank the way they read (#1583).** The tree shows
   one band per severity, most urgent first: "Blocking the fleet", "Blocking a
   run", "FYI". The lowest band no longer reads "Needs a human", and a red

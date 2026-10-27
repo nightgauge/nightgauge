@@ -2209,7 +2209,10 @@ work, not tracking issues.
 
 ### Automatic Epic Completion
 
-Epics are auto-closed when all sub-issues are complete. This happens via two
+Epics are auto-closed when all sub-issues are complete and the decomposition is
+finished: the epic body has no unchecked task-list item that a closed
+sub-issue does not satisfy (#1581). Otherwise the close is declined as
+`unfinished_decomposition`, naming the pending items. This happens via two
 independent triggers:
 
 **Trigger 1 — Epic Pickup**: When a user picks up an epic directly,
