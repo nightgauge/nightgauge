@@ -11089,6 +11089,19 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 	if _, _, prNum, parseErr := parsePRURL(snap.PrUrl); parseErr == nil {
 		mergedPRNumber = prNum
 	}
+	s.runPostMerge(ctx, item, runtime, mergedPRNumber)
+	return false
+}
+
+// runPostMerge is the post-merge path for a PR already confirmed MERGED: the
+// issue close and epic rollup, the main-check verdict and validation marker
+// (checkEpicCompletion), the run-record breadcrumb, the survival record, and
+// the main-check Action Center card. verifyPRMergeForStage calls it for a run
+// that reached its merge stage; the autonomous PR-recheck sweep calls it for a
+// run a transient failure killed before it saw its PR merge (#2607), with a nil
+// runtime because that run's record has already ended — so the breadcrumb is
+// skipped and everything else runs exactly as it does for a live run.
+func (s *Scheduler) runPostMerge(ctx context.Context, item types.BoardItem, runtime *state.RuntimeState, mergedPRNumber int) hooks.PostMergeResult {
 	pmResult := s.checkEpicCompletion(ctx, item, mergedPRNumber)
 
 	// (#4133) Persist the post-merge ground-truth breadcrumb onto runtime state
@@ -11113,7 +11126,7 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 	// repo, and an empty root would make filepath.Join yield the cwd-relative
 	// ".nightgauge/pipeline" — writing a run's state into whatever directory the
 	// process happens to be in. Skip the breadcrumb instead.
-	if pmResult.MergedCommitSha != "" || pmResult.MergedAt != "" {
+	if runtime != nil && (pmResult.MergedCommitSha != "" || pmResult.MergedAt != "") {
 		runtime.SetMergeOutcome(pmResult.MergedCommitSha, pmResult.MergedAt)
 		// (#1249) The run record carries what main did with the merge, next to
 		// the breadcrumb that names the commit it did it to.
@@ -11169,7 +11182,7 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 			log.Printf("#%d: post-merge: %s", item.Number, note)
 		}
 	}
-	return false
+	return pmResult
 }
 
 // survivalShortSHA abbreviates a commit SHA for log lines.

@@ -179,6 +179,17 @@ changelog, and the release workflow refuses a tag that does not.
   records which issue attributed each path, and only a retry of that issue
   re-attributes it. Other issues treat the path as pre-existing operator work.
   A ledger in the old, unowned shape is ignored and rewritten.
+
+- **A run killed by a network outage now gets its post-merge path once its PR
+  merges (#2607).** The autonomous scheduler records the PR of a run that ended
+  on a transient failure. It re-checks that PR on each scan until the forge
+  answers. A merged PR runs the post-merge path once: validation marker,
+  main-check verdict, epic rollup and Done on every board. An open PR returns
+  the issue to Ready, and the next run resumes on that PR. `revert-status` no
+  longer asks a human to move the issue when the forge was unreachable; it
+  queues a retry. See
+  [PR Recheck After a Transient Failure](docs/AUTONOMOUS_ORCHESTRATOR.md#pr-recheck-after-a-transient-failure--2607).
+
 - **Reconcile no longer closes unstarted sub-issues of an epic that a partial
   PR closed (#2602).** The orphan-sub closer used to close every open
   sub-issue of an epic closed as completed. It now closes one only when the

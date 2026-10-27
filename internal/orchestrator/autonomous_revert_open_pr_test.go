@@ -14,6 +14,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // The failed-run revert must never put an issue in Ready on top of its own
@@ -416,5 +417,91 @@ func TestOnPipelineComplete_TransientFailureAfterPRCreate_RevertsToReady(t *test
 				t.Errorf("transient %s charged %d lifetime failure(s), want 0", kind, lifetime)
 			}
 		})
+	}
+}
+
+// #2607: an unread open-PR list queues the issue for the PR-recheck sweep and
+// asks no human to move it by hand; the sweep retries once the forge answers.
+func TestRevertFailedIssueStatus_PRQueryFailureQueuesARecheck(t *testing.T) {
+	buf := withCapturedLog(t)
+	as, _, _ := revertFixture(t)
+
+	if answered := as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1, TerminalKindApiConnectionLost); answered {
+		t.Error("revert reported an answer although the open-PR list was never read")
+	}
+
+	if e, ok := pendingRecheck(as, "O/a", 1); !ok || e.Kind != TerminalKindApiConnectionLost {
+		t.Errorf("pending rechecks = %+v, want O/a#1 with the run's kind", as.state.PendingPRRechecks)
+	}
+	if got := buf.String(); strings.Contains(got, "by hand") || !strings.Contains(got, "will re-check once the forge answers") {
+		t.Errorf("want the re-check log and no human instruction; got %q", got)
+	}
+}
+
+func TestRecoverOrphanedRunningItems_PRQueryFailureQueuesARecheck(t *testing.T) {
+	buf := withCapturedLog(t)
+	as, _, _ := revertFixture(t)
+
+	as.recoverOrphanedRunningItems(context.Background(), []RunningItem{{Repo: "O/a", Number: 1}})
+
+	if _, ok := pendingRecheck(as, "O/a", 1); !ok {
+		t.Error("an orphan whose open-PR list was unread was not queued for a recheck")
+	}
+	if strings.Contains(buf.String(), "by hand") {
+		t.Errorf("recovery still asks a human to move the issue: %q", buf.String())
+	}
+}
+
+// A transient kill after pr-create records the run's PR; any other kind, or a
+// run with no PR, records nothing.
+func TestRecordTransientRunPR(t *testing.T) {
+	cases := []struct {
+		name   string
+		kind   string
+		prURL  string
+		wantPR int
+	}{
+		{"transient with a PR", TerminalKindApiConnectionLost, "https://github.com/O/a/pull/42", 42},
+		{"transient without a PR", TerminalKindApiConnectionLost, "", 0},
+		{"non-transient with a PR", TerminalKindOperatorStop, "https://github.com/O/a/pull/42", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			as, _, _ := revertFixture(t)
+			rt := state.NewRuntimeState("O/a", 1, "item-1", testRunID())
+			if tc.prURL != "" {
+				rt.SetPrUrl(tc.prURL)
+			}
+
+			as.recordTransientRunPR("O/a", 1, rt, tc.kind)
+
+			e, ok := pendingRecheck(as, "O/a", 1)
+			if tc.wantPR == 0 {
+				if ok {
+					t.Errorf("queued %+v, want nothing", e)
+				}
+				return
+			}
+			if !ok || e.PRNumber != tc.wantPR {
+				t.Errorf("pending recheck = %+v (found %v), want PR #%d", e, ok, tc.wantPR)
+			}
+		})
+	}
+}
+
+// The merged PR closes the issue and it leaves the board graph; its Failed
+// entry must outlive that while the recheck is pending, and only then.
+func TestReconcileStateAgainstGraph_KeepsAFailureWithAPendingRecheck(t *testing.T) {
+	as, _, _ := revertFixture(t)
+	as.state.Failed = []FailedItem{
+		{Repo: "O/a", Number: 1, Kind: TerminalKindApiConnectionLost},
+		{Repo: "O/a", Number: 2, Kind: TerminalKindApiConnectionLost},
+	}
+	as.enqueuePRRecheck("O/a", 1, 42, TerminalKindApiConnectionLost)
+
+	as.reconcileStateAgainstGraph(depgraph.NewGraph())
+
+	if len(as.state.Failed) != 1 || as.state.Failed[0].Number != 1 {
+		t.Errorf("Failed = %+v, want only O/a#1, whose recheck is pending", as.state.Failed)
 	}
 }
