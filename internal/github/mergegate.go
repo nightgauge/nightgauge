@@ -346,10 +346,10 @@ func identityOf(c CheckDetail, suites map[int64]int64) (checkIdentity, bool) {
 // supersedes nothing and is never superseded.
 //
 // Deliberately narrow, so genuine red is never weakened:
-//   - only CANCELLED is superseded; a FAILURE or TIMED_OUT next to a success
-//     (a re-run that went green) stays red, because a failed run is a real
-//     failure signal and the contract is "never re-run hoping for a better
-//     answer";
+//   - only CANCELLED is superseded here; a FAILURE or TIMED_OUT re-run is
+//     decided by LatestCheckRuns (#2603), where the latest run counts, as in
+//     GitHub's ruleset. This rule also covers a cancelled duplicate that
+//     started after its successful twin, which latest-run alone reads as red;
 //   - only a SUCCESS supersedes; skipped or neutral siblings do not;
 //   - a cancelled check with no successful sibling is still red.
 //

@@ -20,7 +20,8 @@ func TestGetIndividualCheckRuns_CarriesTimingURLAndCommit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"check_runs":[
-			{"name":"build","status":"completed","conclusion":"failure",
+			{"id":7,"name":"build","status":"completed","conclusion":"failure",
+			 "started_at":"2026-07-25T09:55:00Z",
 			 "completed_at":"2026-07-25T10:00:00Z",
 			 "html_url":"https://github.com/o/r/runs/1",
 			 "details_url":"https://ci.example/1",
@@ -48,6 +49,9 @@ func TestGetIndividualCheckRuns_CarriesTimingURLAndCommit(t *testing.T) {
 	}
 	if runs[0].App != "github-actions" || runs[0].CheckSuiteID != 42 {
 		t.Errorf("App, CheckSuiteID = %q, %d, want github-actions, 42 (#2430 check identity)", runs[0].App, runs[0].CheckSuiteID)
+	}
+	if runs[0].ID != 7 || runs[0].StartedAt != "2026-07-25T09:55:00Z" {
+		t.Errorf("ID, StartedAt = %d, %q, want 7, the start time (#2603 latest-run order)", runs[0].ID, runs[0].StartedAt)
 	}
 	if runs[0].HeadSHA != "abcdef1234567890" {
 		t.Errorf("HeadSHA = %q, want the commit the check ran against", runs[0].HeadSHA)

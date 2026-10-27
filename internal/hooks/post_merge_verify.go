@@ -331,7 +331,7 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 		}
 		// cache-warm is informational (#2055): it never counts, fails or
 		// holds the wait.
-		runs = gh.DecidingChecks(runs)
+		runs = gh.LatestCheckRuns(gh.DecidingChecks(runs))
 		total, pending, bad := threeNumbers(runs)
 		res.Total, res.Pending, res.Bad = total, pending, bad
 
