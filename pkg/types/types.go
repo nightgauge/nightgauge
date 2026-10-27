@@ -231,6 +231,9 @@ type PullRequest struct {
 	// MergedAt is GitHub's ISO-8601 merge timestamp, populated only once the PR
 	// is MERGED (empty otherwise) (#4133).
 	MergedAt string `json:"mergedAt"`
+	// MergedBy is the login of the actor who merged the PR, populated only once
+	// the PR is MERGED (empty otherwise) (#1283).
+	MergedBy string `json:"mergedBy"`
 }
 
 // ReviewDecision represents PR review states.

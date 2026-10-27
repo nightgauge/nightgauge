@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -332,5 +333,55 @@ func TestDirOutsideGitRepositoryIsAnError(t *testing.T) {
 	}
 	if w := NewWriter(root, "01890a5d-ac96-774b-bcce-b302099a8057", "o/r", 1); w != nil {
 		t.Error("NewWriter outside a repository must be disabled (nil)")
+	}
+}
+
+// writeRawRun writes a trace file whose events carry the given timestamps, so
+// tests control first-event time independently of file mtime.
+func writeRawRun(t *testing.T, root, runID, repo string, issue int, ts ...string) {
+	t.Helper()
+	path, err := FilePath(root, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var buf []byte
+	for i, s := range ts {
+		line, _ := json.Marshal(Event{SchemaVersion: SchemaVersion, RunID: runID, Repo: repo, Issue: issue,
+			Seq: int64(i + 1), Ts: s, Kind: KindStageStart, Producer: ProducerGo})
+		buf = append(append(buf, line...), '\n')
+	}
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFindAllRunIDsForIssueOrdersByFirstEventNotMtime(t *testing.T) {
+	root := layouttest.Repo(t)
+	oldRun := "01890a5d-ac96-774b-bcce-b30209900011"
+	newRun := "01890a5d-ac96-774b-bcce-b30209900012"
+	writeRawRun(t, root, newRun, "o/r", 42, "2026-07-02T10:00:00.000Z")
+	writeRawRun(t, root, oldRun, "o/r", 42, "2026-07-01T10:00:00.000Z")
+	writeRawRun(t, root, "01890a5d-ac96-774b-bcce-b30209900013", "o/r", 99, "2026-06-30T10:00:00.000Z")
+	// The old run was appended to later: its mtime is the newest.
+	oldPath, _ := FilePath(root, oldRun)
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(oldPath, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := FindAllRunIDsForIssue(root, 42)
+	if err != nil {
+		t.Fatalf("FindAllRunIDsForIssue: %v", err)
+	}
+	if len(got) != 2 || got[0] != oldRun || got[1] != newRun {
+		t.Errorf("got %v, want [%s %s] (oldest first by first event)", got, oldRun, newRun)
+	}
+
+	none, err := FindAllRunIDsForIssue(root, 7)
+	if err != nil || len(none) != 0 {
+		t.Errorf("issue with no trace = %v, %v; want empty", none, err)
 	}
 }

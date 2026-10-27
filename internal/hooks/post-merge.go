@@ -139,6 +139,9 @@ type PostMergeResult struct {
 	MergedAt        string `json:"mergedAt,omitempty"`
 	// BaseRef is the branch the merge landed on, from the same breadcrumb.
 	BaseRef string `json:"baseRef,omitempty"`
+	// MergedBy is the forge login that merged the PR, from the same
+	// breadcrumb (#1283). Empty when the forge returned no actor.
+	MergedBy string `json:"mergedBy,omitempty"`
 	// MainChecks is the post-merge verification of the base branch (#1249,
 	// #2055, github.EvaluateMergedCommit), polled to completion within
 	// input.MainCheckWait. Nil when the hook refused before the merge was
@@ -371,7 +374,7 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	}
 	issueClosed := closedByUs || alreadyClosed
 
-	out = PostMergeResult{IssueClosed: issueClosed, MergedCommitSha: mergedSha, MergedAt: mergedAt, BaseRef: merge.BaseRef}
+	out = PostMergeResult{IssueClosed: issueClosed, MergedCommitSha: mergedSha, MergedAt: mergedAt, BaseRef: merge.BaseRef, MergedBy: merge.MergedBy}
 	// (#1249) Observe the base branch AFTER the fast reconciliation below has
 	// run, not before: the poll can take minutes, and the issue close, board
 	// sync and epic rollup must not wait on CI. Every return path past this

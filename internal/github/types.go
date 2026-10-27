@@ -507,6 +507,11 @@ type pullRequestQuery struct {
 			MergeCommit *struct {
 				OID graphql.String
 			}
+			// MergedBy is the actor who merged the PR (#1283); null on an
+			// un-merged PR or a deleted account.
+			MergedBy *struct {
+				Login graphql.String
+			}
 			Labels struct {
 				Nodes []labelNode
 			} `graphql:"labels(first: 20)"`

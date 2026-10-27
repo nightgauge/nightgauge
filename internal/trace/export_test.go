@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -110,5 +111,82 @@ func TestExportWithoutJoinTargets(t *testing.T) {
 func TestExportMissingTraceErrors(t *testing.T) {
 	if _, err := Export(layouttest.Repo(t), "01890a5d-ac96-774b-bcce-b302099a8057"); err == nil {
 		t.Fatal("Export on a run with no trace should error")
+	}
+}
+
+const joinRun = "01890a5d-ac96-774b-bcce-b30209900021"
+
+func writeJoinRun(t *testing.T, root string) {
+	t.Helper()
+	writeRawRun(t, root, joinRun, "o/r", 1283, "2026-07-01T10:00:00.000Z", "2026-07-01T11:00:00.000Z")
+}
+
+func appendSurvival(t *testing.T, root string, rec survival.Record) {
+	t.Helper()
+	if _, err := survival.NewStore(root).Append(rec); err != nil {
+		t.Fatalf("append survival: %v", err)
+	}
+}
+
+func TestExportJoinsMergeAndSurvival(t *testing.T) {
+	root := layouttest.Repo(t)
+	writeJoinRun(t, root)
+	// Outside the window (before the run), another issue, another repo: none join.
+	appendSurvival(t, root, survival.NewPending("o/r", 1283, 1, "sha-before", "2026-07-01T09:00:00Z", "main"))
+	appendSurvival(t, root, survival.NewPending("o/r", 9999, 2, "sha-other-issue", "2026-07-01T11:05:00Z", "main"))
+	appendSurvival(t, root, survival.NewPending("x/y", 1283, 3, "sha-other-repo", "2026-07-01T11:05:00Z", "main"))
+	rec := survival.NewPending("o/r", 1283, 42, "sha-match", "2026-07-01T11:20:00Z", "main")
+	rec.MergedBy = "octo-maintainer"
+	appendSurvival(t, root, rec)
+
+	doc, err := Export(root, joinRun)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	m := doc.Merge
+	if m.Status != JoinJoined || m.MergeCommitSHA != "sha-match" || m.PRNumber != 42 {
+		t.Fatalf("merge = %+v, want joined sha-match PR 42", m)
+	}
+	if m.MergedBy != "octo-maintainer" || m.MergedByStatus != JoinJoined {
+		t.Errorf("merged_by = %q (%s), want octo-maintainer joined", m.MergedBy, m.MergedByStatus)
+	}
+	if doc.Survival.Status != JoinJoined || doc.Survival.Verdict != "pending" || doc.Survival.Reason == "" {
+		t.Errorf("survival = %+v, want joined pending with a not-finalized reason", doc.Survival)
+	}
+	if doc.IssueRuns.Status != JoinJoined || len(doc.IssueRuns.RunIDs) != 1 || doc.IssueRuns.RunIDs[0] != joinRun {
+		t.Errorf("issue_runs = %+v, want [%s]", doc.IssueRuns, joinRun)
+	}
+}
+
+func TestExportMergeActorNotCapturedIsUnavailable(t *testing.T) {
+	root := layouttest.Repo(t)
+	writeJoinRun(t, root)
+	appendSurvival(t, root, survival.NewPending("o/r", 1283, 42, "sha-old", "2026-07-01T10:30:00Z", "main"))
+
+	doc, err := Export(root, joinRun)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if doc.Merge.Status != JoinJoined {
+		t.Fatalf("merge status = %s, want joined", doc.Merge.Status)
+	}
+	if doc.Merge.MergedBy != "" || doc.Merge.MergedByStatus != JoinUnavailable || doc.Merge.MergedByReason == "" {
+		t.Errorf("merge = %+v, want merged_by unavailable with a reason, never invented", doc.Merge)
+	}
+}
+
+func TestExportWithoutMergeSaysUnavailable(t *testing.T) {
+	root := layouttest.Repo(t)
+	writeJoinRun(t, root)
+	// A merge past the 30m grace window does not join.
+	appendSurvival(t, root, survival.NewPending("o/r", 1283, 42, "sha-late", "2026-07-01T11:45:00Z", "main"))
+
+	doc, err := Export(root, joinRun)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if doc.Merge.Status != JoinUnavailable || doc.Merge.Reason == "" ||
+		doc.Survival.Status != JoinUnavailable || doc.Survival.Reason == "" {
+		t.Errorf("merge=%+v survival=%+v, want both unavailable with reasons", doc.Merge, doc.Survival)
 	}
 }

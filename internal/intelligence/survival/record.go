@@ -60,16 +60,20 @@ const Kind = "survival"
 // SHA (the stable join key from #4133, independent of branch deletion / PR
 // renumbering). Persisted as one JSON object per line in the append-only store.
 type Record struct {
-	Kind           string  `json:"kind"`             // always Kind ("survival")
-	MergeCommitSHA string  `json:"merge_commit_sha"` // join key (#4133)
-	IssueNumber    int     `json:"issue_number"`
-	PRNumber       int     `json:"pr_number"`
-	Repo           string  `json:"repo"`      // "owner/name"
-	BaseRef        string  `json:"base_ref"`  // base branch the merge landed on (default "main")
-	MergedAt       string  `json:"merged_at"` // ISO-8601 (#4133)
-	Verdict        Verdict `json:"verdict"`
-	ObservedAt     string  `json:"observed_at,omitempty"` // when finalized (RFC3339)
-	Evidence       string  `json:"evidence,omitempty"`    // one of the Evidence* constants
+	Kind           string `json:"kind"`             // always Kind ("survival")
+	MergeCommitSHA string `json:"merge_commit_sha"` // join key (#4133)
+	IssueNumber    int    `json:"issue_number"`
+	PRNumber       int    `json:"pr_number"`
+	Repo           string `json:"repo"`      // "owner/name"
+	BaseRef        string `json:"base_ref"`  // base branch the merge landed on (default "main")
+	MergedAt       string `json:"merged_at"` // ISO-8601 (#4133)
+	// MergedBy is the forge login that merged the PR, captured at post-merge
+	// (#1283). Empty on records written before capture or when the forge
+	// returned no actor — never inferred.
+	MergedBy   string  `json:"merged_by,omitempty"`
+	Verdict    Verdict `json:"verdict"`
+	ObservedAt string  `json:"observed_at,omitempty"` // when finalized (RFC3339)
+	Evidence   string  `json:"evidence,omitempty"`    // one of the Evidence* constants
 	// MainCheckVerdict + MainCheckFailing are the IMMEDIATE post-merge
 	// verification (#1249, #2055): whether the merge was green — its tree is
 	// the merged PR head's, the head's required checks passed, and what still
