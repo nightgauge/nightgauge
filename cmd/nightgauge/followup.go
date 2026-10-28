@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,9 @@ import (
 // exitCapRefused is the exit code of a filer whose per-run cap refused
 // records (#480, Rule 5): loud, and distinct from a failure to run.
 const exitCapRefused = 3
+
+// followupEmptyCaptureReason is the Result.Reason of a run with no records.
+const followupEmptyCaptureReason = "empty capture: no discovered-work records"
 
 // followupCmd is the "followup" command family (#480).
 func followupCmd() *cobra.Command {
@@ -53,7 +57,7 @@ per-run cap, untrusted-author check). Records already filed are skipped;
 records matching an open issue's title become a provenance comment instead.
 Filed, deduped and reported records are removed from the capture file.
 
-Exit 0: done (including a silent no-op on zero records). Exit 3: the per-run
+Exit 0: done (including zero records, reported as an empty capture). Exit 3: the per-run
 cap refused records; they stay in the capture file. Exit 1: error.`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
@@ -78,7 +82,19 @@ cap refused records; they stay in the capture file. Exit 1: error.`,
 				return err
 			}
 			if capture == nil || len(capture.Records) == 0 {
-				return nil // zero records: a silent no-op
+				// Say so explicitly (#2638): a silent no-op cannot be told
+				// apart from a materializer that never ran.
+				empty := &followup.Result{Issue: number, Reason: followupEmptyCaptureReason, Items: []followup.Item{}}
+				if outputJSON {
+					data, err := json.MarshalIndent(empty, "", "  ")
+					if err != nil {
+						return err
+					}
+					fmt.Fprintln(cmd.OutOrStdout(), string(data))
+					return nil
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "#%d: no discovered-work records — nothing to file\n", number)
+				return nil
 			}
 
 			gate := filing.ResolveGate(workdir)

@@ -76,7 +76,8 @@ func discoveredWorkOrphanFindings(dir string, now time.Time) ([]Finding, string)
 			manualRemedy("materialize", "File the recorded follow-ups, then let the materializer remove the file", check,
 				"Not offered as a fix: deleting the file would discard the follow-up work it records",
 				"Inspect it: nightgauge discovered-work list --issue "+n,
-				"Run the discovered-work materializer (#480) for #"+n+"; it is the only deleter")))
+				"Run the materializer from the main checkout (it is the only deleter): "+
+					"nightgauge followup materialize "+n+" --workdir <main checkout>")))
 	}
 	return out, fmt.Sprintf("%d orphaned discovered-work file(s)", len(orphans))
 }

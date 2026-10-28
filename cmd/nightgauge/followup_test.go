@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,10 +31,27 @@ func TestFollowupMaterialize_RejectsBadIssueNumber(t *testing.T) {
 	}
 }
 
-func TestFollowupMaterialize_ZeroRecordsIsSilent(t *testing.T) {
+// An empty capture is reported, not silent (#2638): a silent exit 0 cannot be
+// told apart from a materializer that never ran.
+func TestFollowupMaterialize_ZeroRecordsIsReported(t *testing.T) {
 	out, err := runFollowup(t, "42", "--run-dir", t.TempDir(), "--workdir", t.TempDir())
-	if err != nil || out != "" {
+	if err != nil || !strings.Contains(out, "#42: no discovered-work records") {
 		t.Fatalf("err=%v out=%q", err, out)
+	}
+	out, err = runFollowup(t, "42", "--run-dir", t.TempDir(), "--workdir", t.TempDir(), "--json")
+	if err != nil {
+		t.Fatalf("err=%v out=%q", err, out)
+	}
+	var res struct {
+		Issue  int               `json:"issue"`
+		Reason string            `json:"reason"`
+		Items  []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("not JSON: %v: %q", err, out)
+	}
+	if res.Issue != 42 || res.Reason != followupEmptyCaptureReason || res.Items == nil {
+		t.Fatalf("result = %+v", res)
 	}
 }
 

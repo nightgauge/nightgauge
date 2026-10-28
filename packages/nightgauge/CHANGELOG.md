@@ -9,6 +9,11 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Follow-up work a run discovers is now filed as issues after the PR merges,
+  instead of being left in the run's capture file (#2638).
+
 ### Added
 
 - **Agentic stages report their phases from evidence, not narration (#1887).**

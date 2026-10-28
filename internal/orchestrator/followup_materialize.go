@@ -9,6 +9,7 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/trace"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -47,4 +48,24 @@ func followupCaptureHasRecords(workspace string, issue int) bool {
 		return true
 	}
 	return c != nil && len(c.Records) > 0
+}
+
+// followupEmptyCaptureReason names the deterministic skip in the log and the
+// trace, so "skipped: nothing recorded" is distinguishable from "never
+// reached" (#2638).
+const followupEmptyCaptureReason = "discovered-work capture is empty"
+
+// stageSkipEmitter is the slice of *trace.Writer the skip record needs.
+type stageSkipEmitter interface {
+	Emit(kind trace.Kind, stage string, payload any)
+}
+
+// recordFollowupSkip logs and traces the empty-capture skip of
+// followup-materialize (#2638); before it the skip left no evidence.
+func recordFollowupSkip(tracer stageSkipEmitter, issue int) {
+	log.Printf("#%d: followup-materialize skipped — %s", issue, followupEmptyCaptureReason)
+	tracer.Emit(trace.KindStageSkip, string(state.StageFollowupMaterialize), trace.StageSkipPayload{
+		Source: "followup-capture",
+		Reason: followupEmptyCaptureReason,
+	})
 }
