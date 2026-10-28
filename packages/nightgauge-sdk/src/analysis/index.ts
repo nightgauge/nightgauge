@@ -255,6 +255,10 @@ export type {
   HealthScoreEntry,
   LearningOutcomeEntry,
   LearningSignals,
+  ChangeSignals,
+  SurvivalVerdictEntry,
+  BacktrackEntry,
+  PlanComparisonEntry,
 } from "./health/index.js";
 
 // Finding-to-Issue Engine (Issue #1102)

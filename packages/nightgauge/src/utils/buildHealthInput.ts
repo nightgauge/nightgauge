@@ -64,5 +64,6 @@ export function buildHealthInput(dataset: AggregatedDataset): HealthAnalysisInpu
     healthScores,
     learningSignals: dataset.learningSignals ?? undefined,
     skillEffectiveness,
+    changeSignals: dataset.changeSignals ?? undefined,
   };
 }

@@ -374,6 +374,10 @@ Bias-safe rule (mirrors the existing asymmetric `CONFIDENCE_BOOST` /
   pending/unproven survival record (censored data must never read as proof).
 - **`pending` / `unobserved`** → no signal, ignored entirely.
 
+The same finalized verdicts feed the unscored change failure rate in the health
+`reliability` dimension; see
+[HEALTH_MONITORING.md § Reliability](HEALTH_MONITORING.md#5-reliability-reliability).
+
 Implementation is parallel in both languages, sharing the same
 `complexity-model.yaml`:
 

@@ -1584,3 +1584,45 @@ describe("analyzeStageEffectiveness — shared makeDataset fixture", () => {
     expect(result.dimension).toBe("stage-effectiveness");
   });
 });
+
+describe("per-change outcome metrics (#1284)", () => {
+  const history = [1, 2, 3, 4, 5, 6].flatMap((n) => [
+    makeExecutionRecord({ issueNumber: n, stage: "feature-dev", retries: n === 1 ? 1 : 0 }),
+    makeExecutionRecord({ issueNumber: n, stage: "pr-merge" }),
+  ]);
+  const planComparisons = [1, 2, 3, 4, 5, 6].map((n) => ({
+    issueNumber: n,
+    plannedFiles: n <= 4 ? ["x.ts"] : ["a.ts"],
+    mergedFiles: ["a.ts"],
+  }));
+
+  it("omits the keys when changeSignals is absent", () => {
+    const r = analyzeStageEffectiveness(
+      makeDataset({ executionHistory: history }),
+      DEFAULT_HEALTH_CONFIG
+    );
+    expect(r.metrics).not.toHaveProperty("perChangeFirstPassMergeRate");
+    expect(r.metrics).not.toHaveProperty("planFidelityMean");
+  });
+
+  it("reports the metrics and an info finding without changing the score", () => {
+    const base = analyzeStageEffectiveness(
+      makeDataset({ executionHistory: history }),
+      DEFAULT_HEALTH_CONFIG
+    );
+    const r = analyzeStageEffectiveness(
+      makeDataset({
+        executionHistory: history,
+        changeSignals: { survival: [], backtracks: [], planComparisons },
+      }),
+      DEFAULT_HEALTH_CONFIG
+    );
+    expect(r.score).toBe(base.score);
+    expect(r.metrics["perChangeMergedCount"]).toBe(6);
+    expect(r.metrics["perChangeFirstPassMergeRate"]).toBeCloseTo(5 / 6);
+    expect(r.metrics["planFidelityScored"]).toBe(6);
+    expect(r.metrics["planFidelityLowShare"]).toBeCloseTo(4 / 6);
+    const finding = r.findings.find((f) => f.title === "Most changes depart from their plan");
+    expect(finding?.severity).toBe("info");
+  });
+});

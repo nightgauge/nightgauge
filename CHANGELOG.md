@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Health reports per-change outcomes.** `stage-effectiveness` now reports the
+  share of merged issues that reached merge with no retry, re-run or backtrack,
+  and how closely each merge's files matched its plan; `reliability` reports
+  the change failure rate over finalized survival verdicts, excluding and
+  counting changes still inside their observation window. The values are
+  unscored metrics: no dimension or overall score changes. See
+  `docs/HEALTH_MONITORING.md`.
+
 - **Pin or cap one issue's model with a label.** `model:pin-<band>` runs the
   pipeline-chosen stages on that band; `model:max-<band>` keeps every routed
   stage, retries included, at or below it. Explicit per-stage config, the
