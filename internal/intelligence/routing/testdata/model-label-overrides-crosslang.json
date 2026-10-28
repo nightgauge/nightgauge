@@ -1,0 +1,170 @@
+{
+  "_comment": "Shared by label_override_test.go and packages/nightgauge/tests/utils/skillRunner.labelPin.test.ts (#8). want_model = cap(pin(base)).",
+  "cases": [
+    {
+      "name": "no labels",
+      "labels": [],
+      "base": "opus",
+      "want_pin": "",
+      "want_max": "",
+      "want_label": "",
+      "want_source": "",
+      "want_warnings": 0,
+      "want_model": "opus"
+    },
+    {
+      "name": "unrelated labels",
+      "labels": ["type:bug", "size:M"],
+      "base": "sonnet",
+      "want_pin": "",
+      "want_max": "",
+      "want_label": "",
+      "want_source": "",
+      "want_warnings": 0,
+      "want_model": "sonnet"
+    },
+    {
+      "name": "pin",
+      "labels": ["model:pin-haiku"],
+      "base": "opus",
+      "want_pin": "haiku",
+      "want_max": "",
+      "want_label": "model:pin-haiku",
+      "want_source": "label",
+      "want_warnings": 0,
+      "want_model": "haiku"
+    },
+    {
+      "name": "pin raises base",
+      "labels": ["model:pin-opus"],
+      "base": "haiku",
+      "want_pin": "opus",
+      "want_max": "",
+      "want_label": "model:pin-opus",
+      "want_source": "label",
+      "want_warnings": 0,
+      "want_model": "opus"
+    },
+    {
+      "name": "cap below base",
+      "labels": ["model:max-sonnet"],
+      "base": "opus",
+      "want_pin": "",
+      "want_max": "sonnet",
+      "want_label": "model:max-sonnet",
+      "want_source": "label",
+      "want_warnings": 0,
+      "want_model": "sonnet"
+    },
+    {
+      "name": "cap above base never raises",
+      "labels": ["model:max-opus"],
+      "base": "haiku",
+      "want_pin": "",
+      "want_max": "opus",
+      "want_label": "model:max-opus",
+      "want_source": "label",
+      "want_warnings": 0,
+      "want_model": "haiku"
+    },
+    {
+      "name": "cap leaves unknown model",
+      "labels": ["model:max-haiku"],
+      "base": "my-local-model",
+      "want_pin": "",
+      "want_max": "haiku",
+      "want_label": "model:max-haiku",
+      "want_source": "label",
+      "want_warnings": 0,
+      "want_model": "my-local-model"
+    },
+    {
+      "name": "pin above cap: cap wins",
+      "labels": ["model:pin-opus", "model:max-sonnet"],
+      "base": "haiku",
+      "want_pin": "sonnet",
+      "want_max": "sonnet",
+      "want_label": "model:max-sonnet,model:pin-opus",
+      "want_source": "label",
+      "want_warnings": 1,
+      "want_model": "sonnet"
+    },
+    {
+      "name": "pin within cap",
+      "labels": ["model:pin-haiku", "model:max-sonnet"],
+      "base": "opus",
+      "want_pin": "haiku",
+      "want_max": "sonnet",
+      "want_label": "model:max-sonnet,model:pin-haiku",
+      "want_source": "label",
+      "want_warnings": 0,
+      "want_model": "haiku"
+    },
+    {
+      "name": "conflicting pins ignored",
+      "labels": ["model:pin-haiku", "model:pin-opus"],
+      "base": "sonnet",
+      "want_pin": "",
+      "want_max": "",
+      "want_label": "",
+      "want_source": "",
+      "want_warnings": 1,
+      "want_model": "sonnet"
+    },
+    {
+      "name": "duplicate pin is one pin",
+      "labels": ["model:pin-opus", "MODEL:PIN-OPUS"],
+      "base": "sonnet",
+      "want_pin": "opus",
+      "want_max": "",
+      "want_label": "model:pin-opus",
+      "want_source": "label",
+      "want_warnings": 0,
+      "want_model": "opus"
+    },
+    {
+      "name": "lowest cap wins",
+      "labels": ["model:max-opus", "model:max-haiku"],
+      "base": "fable",
+      "want_pin": "",
+      "want_max": "haiku",
+      "want_label": "model:max-haiku",
+      "want_source": "label",
+      "want_warnings": 0,
+      "want_model": "haiku"
+    },
+    {
+      "name": "unknown band warns",
+      "labels": ["model:pin-gpt5"],
+      "base": "sonnet",
+      "want_pin": "",
+      "want_max": "",
+      "want_label": "",
+      "want_source": "",
+      "want_warnings": 1,
+      "want_model": "sonnet"
+    },
+    {
+      "name": "shorthand warns",
+      "labels": ["model:opus"],
+      "base": "sonnet",
+      "want_pin": "",
+      "want_max": "",
+      "want_label": "",
+      "want_source": "",
+      "want_warnings": 1,
+      "want_model": "sonnet"
+    },
+    {
+      "name": "case and whitespace",
+      "labels": ["  Model:Pin-Sonnet "],
+      "base": "opus",
+      "want_pin": "sonnet",
+      "want_max": "",
+      "want_label": "model:pin-sonnet",
+      "want_source": "label",
+      "want_warnings": 0,
+      "want_model": "sonnet"
+    }
+  ]
+}

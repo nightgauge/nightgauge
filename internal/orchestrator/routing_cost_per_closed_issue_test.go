@@ -65,24 +65,24 @@ func TestResolveDispatchModel_ImplementationBandInsideEnvelope(t *testing.T) {
 
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
-	if got := s.resolveDispatchModel(dev, 1, dir, "", sizedM, nil, ""); got != "opus" {
+	if got := s.resolveDispatchModel(dev, 1, dir, "", sizedM, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Errorf("elevated, sized M feature-dev = %q, want opus", got)
 	}
-	if got := s.resolveDispatchModel(dev, 1, dir, "", unsized, nil, ""); got != "opus" {
+	if got := s.resolveDispatchModel(dev, 1, dir, "", unsized, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Errorf("elevated, unsized feature-dev = %q, want the opus stage default (#2512)", got)
 	}
-	if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "", sizedM, nil, ""); got != "opus" {
+	if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "", sizedM, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Errorf("elevated, sized M feature-validate = %q, want the opus stage default (#2512)", got)
 	}
 
 	eff := isolatedWorkspace(t)
 	makePerfModeFile(t, eff, "efficiency")
-	if got := s.resolveDispatchModel(dev, 1, eff, "", sizedM, nil, ""); got != "sonnet" {
+	if got := s.resolveDispatchModel(dev, 1, eff, "", sizedM, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 		t.Errorf("efficiency, sized M feature-dev = %q, want sonnet (the envelope caps it)", got)
 	}
 
 	manual := routedWorkspace(t, "model_routing:\n  mode: manual\npipeline:\n  stage_models:\n    feature-dev: sonnet\n")
-	if got := s.resolveDispatchModel(dev, 1, manual, "", sizedM, nil, ""); got != "sonnet" {
+	if got := s.resolveDispatchModel(dev, 1, manual, "", sizedM, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 		t.Errorf("explicit feature-dev: sonnet = %q, want the operator's sonnet", got)
 	}
 }
@@ -109,21 +109,21 @@ func TestRiskFloors_DispatchAndEnvelope(t *testing.T) {
 	s := testScheduler(t)
 	dir := isolatedWorkspace(t)
 	for _, stage := range []state.PipelineStage{state.StageFeatureDev, state.StageFeatureValidate} {
-		if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", routing.Decision{}, floors, ""); got != "opus" {
+		if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "opus" {
 			t.Errorf("elevated, high-risk %s = %q, want opus", stage, got)
 		}
-		if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", routing.Decision{}, raiseRiskFloors(nil, plain), ""); got != "opus" {
+		if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", routing.Decision{}, raiseRiskFloors(nil, plain), "", routing.ModelLabelOverride{}); got != "opus" {
 			t.Errorf("elevated, not high-risk %s = %q, want the opus stage default (#2512)", stage, got)
 		}
 	}
-	if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "sonnet", routing.Decision{}, floors, ""); got != "haiku" {
+	if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "sonnet", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "haiku" {
 		t.Errorf("high-risk pr-create = %q, want haiku (no floor)", got)
 	}
 
 	eff := isolatedWorkspace(t)
 	makePerfModeFile(t, eff, "efficiency")
 	for _, stage := range []state.PipelineStage{state.StageFeatureDev, state.StageFeatureValidate} {
-		if got := s.resolveDispatchModel(stage, 1, eff, "sonnet", routing.Decision{}, floors, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(stage, 1, eff, "sonnet", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("efficiency, high-risk %s = %q, want sonnet (capped)", stage, got)
 		}
 	}
@@ -359,7 +359,7 @@ func TestReRouteContext_SizeRuleStaysOnFeatureDev(t *testing.T) {
 		state.StagePRMerge:         "opus",
 	}
 	for stage, w := range want {
-		if got := s.resolveDispatchModel(stage, 1909, dir, devModel, sizedL, nil, ""); got != w {
+		if got := s.resolveDispatchModel(stage, 1909, dir, devModel, sizedL, nil, "", routing.ModelLabelOverride{}); got != w {
 			t.Errorf("L issue, elevated, via reRouteContext: %s = %q, want %q", stage, got, w)
 		}
 	}

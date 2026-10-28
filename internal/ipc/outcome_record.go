@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
+	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -97,6 +98,9 @@ func learningOutcomeFor(
 	// Post-#266 ground truth: the record's outcome is authoritative (a run whose
 	// PR merged is "complete" even if a late per-stage kill reported failure).
 	success := record.Outcome == "complete"
+	// The issue's model:* labels (#8), parsed by the same rule the resolvers
+	// apply, so a forced row is attributed on this writer too.
+	labels, _ := routing.ParseModelLabels(cls.Labels)
 
 	return learning.Outcome{
 		IssueNumber: record.IssueNumber,
@@ -120,19 +124,21 @@ func learningOutcomeFor(
 		// never the board field. Resolving it here instead of accepting the
 		// caller's resolution is how the two writers ended up keying one corpus
 		// field's presence on two different sources.
-		PredictedSize:   orchestrator.OutcomePredictedSize(sizeRes, cls.ComplexityScore),
-		SizeSource:      orchestrator.OutcomeSizeSource(sizeRes, cls.ComplexityScore),
-		ActualSize:      measuredActualSize(record),
-		PredictedModel:  orchestrator.OutcomeModelBand(cls.PredictedModel),
-		ActualModel:     servedDevModel(record, snap, cls.PredictedModel),
-		Success:         success,
-		DurationMs:      record.TotalDuration,
-		InputTokens:     record.Tokens.TotalInput,
-		OutputTokens:    record.Tokens.TotalOutput,
-		CostUSD:         record.Tokens.EstimatedCostUSD,
-		ComplexityScore: record.Routing.ComplexityScore,
-		FailedStage:     failedStageFor(record, snap, success),
-		CompletedAt:     completedAtFor(record, now),
+		PredictedSize:       orchestrator.OutcomePredictedSize(sizeRes, cls.ComplexityScore),
+		SizeSource:          orchestrator.OutcomeSizeSource(sizeRes, cls.ComplexityScore),
+		ActualSize:          measuredActualSize(record),
+		PredictedModel:      orchestrator.OutcomeModelBand(cls.PredictedModel),
+		ActualModel:         servedDevModel(record, snap, cls.PredictedModel),
+		ModelOverrideSource: labels.Source(),
+		ModelOverrideLabel:  labels.Label,
+		Success:             success,
+		DurationMs:          record.TotalDuration,
+		InputTokens:         record.Tokens.TotalInput,
+		OutputTokens:        record.Tokens.TotalOutput,
+		CostUSD:             record.Tokens.EstimatedCostUSD,
+		ComplexityScore:     record.Routing.ComplexityScore,
+		FailedStage:         failedStageFor(record, snap, success),
+		CompletedAt:         completedAtFor(record, now),
 	}, outcomeRecord
 }
 
@@ -148,10 +154,12 @@ func measuredActualSize(record state.V2RunRecord) string {
 // recordV2History. One derivation, both sinks.
 func outcomePredictionFrom(o learning.Outcome) *state.OutcomePrediction {
 	return &state.OutcomePrediction{
-		PredictedSize:  o.PredictedSize,
-		ActualSize:     o.ActualSize,
-		PredictedModel: o.PredictedModel,
-		ActualModel:    o.ActualModel,
+		PredictedSize:       o.PredictedSize,
+		ActualSize:          o.ActualSize,
+		PredictedModel:      o.PredictedModel,
+		ActualModel:         o.ActualModel,
+		ModelOverrideSource: o.ModelOverrideSource,
+		ModelOverrideLabel:  o.ModelOverrideLabel,
 	}
 }
 

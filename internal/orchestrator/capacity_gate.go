@@ -81,6 +81,7 @@ type capacityDispatch struct {
 	predictedModel string
 	modelFloors    map[string]string
 	jobClass       string
+	modelLabels    routing.ModelLabelOverride
 	// pinnedModel is a remote run request's model while it is in force
 	// (#1656). Every stage then runs it, so the windows ahead are the pinned
 	// model's, and a soft-route to another model is refused instead.
@@ -166,7 +167,8 @@ func (s *Scheduler) enforceIssueCapacity(ctx context.Context, d capacityDispatch
 		adapter := d.adapterName
 		if model == "" {
 			model = s.resolveDispatchModel(st, d.item.Number, d.workspaceRoot,
-				d.predictedModel, d.decision, d.modelFloors, d.jobClass)
+				d.predictedModel, d.decision, d.modelFloors, d.jobClass, d.modelLabels)
+
 			adapter = capacityStageAdapter(d.workspaceRoot, st, d.adapterName)
 		}
 		consider(st, model, DispatchContextWindow(ctx, d.workspaceRoot, adapter, model))

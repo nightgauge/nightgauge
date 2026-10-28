@@ -1044,3 +1044,21 @@ func TestOutcomeDiagnosticsAreSharedWithTheSchedulerWriter(t *testing.T) {
 func sizeResFor(cls issueClassification) orchestrator.SizeResolution {
 	return orchestrator.ResolveRunSize("", cls.Labels, "", "")
 }
+
+// The extension writer attributes a label-forced run like the scheduler (#8).
+func TestLearningOutcomeFor_RecordsModelLabelOverride(t *testing.T) {
+	base := loadCapturedRunRecord(t, "run-record.json")
+	cls := capturedClassification(t, base.IssueNumber)
+	plain, _ := learningOutcomeFor(base, cls, sizeResFor(cls), nil, "acme/widget", time.Now())
+	if plain.ModelOverrideSource != "" || plain.ModelOverrideLabel != "" {
+		t.Errorf("unlabelled run recorded override %q/%q", plain.ModelOverrideSource, plain.ModelOverrideLabel)
+	}
+	cls.Labels = append(append([]string{}, cls.Labels...), "model:pin-sonnet")
+	forced, _ := learningOutcomeFor(base, cls, sizeResFor(cls), nil, "acme/widget", time.Now())
+	if forced.ModelOverrideSource != "label" || forced.ModelOverrideLabel != "model:pin-sonnet" {
+		t.Errorf("override = %q/%q, want label/model:pin-sonnet", forced.ModelOverrideSource, forced.ModelOverrideLabel)
+	}
+	if p := outcomePredictionFrom(forced); p.ModelOverrideSource != "label" || p.ModelOverrideLabel != "model:pin-sonnet" {
+		t.Errorf("run-record projection dropped the override: %+v", p)
+	}
+}

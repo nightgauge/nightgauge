@@ -27,13 +27,13 @@ func TestResolveDispatchModelUsesPredictedByDefault(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
 	// spike-materialize has no built-in default, so the prediction decides.
-	got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "sonnet", routing.Decision{}, nil, "")
+	got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "sonnet", routing.Decision{}, nil, "", routing.ModelLabelOverride{})
 	if got != "sonnet" {
 		t.Errorf("model = %q, want the predicted model", got)
 	}
 	// A reasoning stage starts from its opus default (#2512): a lower
 	// prediction cannot pull it down.
-	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", routing.Decision{}, nil, ""); got != "opus" {
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Errorf("feature-dev model = %q, want the opus stage default", got)
 	}
 }
@@ -50,7 +50,7 @@ func TestResolveDispatchModelDefaultsAnUnroutedStage(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
 	// spike-materialize: the one dispatch stage with no built-in default.
-	if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, ""); got != "sonnet" {
+	if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 		t.Errorf("model = %q, want the general-purpose default for an unrouted stage", got)
 	}
 
@@ -58,7 +58,7 @@ func TestResolveDispatchModelDefaultsAnUnroutedStage(t *testing.T) {
 	// assertion: with "" the floor is silently skipped and a stage the operator
 	// floored to opus runs the provider default, with no log line.
 	floors := map[string]string{string(state.StageSpikeMaterialize): "opus"}
-	if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, floors, ""); got != "opus" {
+	if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Errorf("floored model = %q, want opus — the minimum_model floor must apply to an unrouted stage", got)
 	}
 
@@ -66,7 +66,7 @@ func TestResolveDispatchModelDefaultsAnUnroutedStage(t *testing.T) {
 	// reroute the unrouted stage too, or the run re-fails identically.
 	down := testScheduler(t)
 	down.retryEngine.RecordDowngrade("sonnet", DowngradeDecision{NewTier: "haiku"})
-	if got := down.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, ""); got != "haiku" {
+	if got := down.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "haiku" {
 		t.Errorf("downgraded model = %q, want haiku", got)
 	}
 }
@@ -96,7 +96,7 @@ func TestResolveDispatchModelPrefersEscalationOverPrediction(t *testing.T) {
 	s := testScheduler(t)
 	s.retryEngine.RecordEscalation(string(state.StageFeatureDev), "opus")
 
-	got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", routing.Decision{}, nil, "")
+	got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", routing.Decision{}, nil, "", routing.ModelLabelOverride{})
 	if got != "opus" {
 		t.Errorf("model = %q, want the escalated model", got)
 	}
@@ -105,7 +105,7 @@ func TestResolveDispatchModelPrefersEscalationOverPrediction(t *testing.T) {
 	// overlays without having escalated. feature-validate is the control
 	// because it has no lightweight base of its own (#340) — pr-create does,
 	// so it would read "un-escalated" even if escalation had leaked.
-	if other := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "sonnet", routing.Decision{}, nil, ""); other != "sonnet" {
+	if other := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "sonnet", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); other != "sonnet" {
 		t.Errorf("spike-materialize model = %q, want the un-escalated prediction", other)
 	}
 }
@@ -120,7 +120,7 @@ func TestResolveDispatchModelAppliesFloorThenDowngrade(t *testing.T) {
 	s.retryEngine.RecordDowngrade("sonnet", DowngradeDecision{NewTier: "haiku"})
 
 	floors := map[string]string{string(state.StageSpikeMaterialize): "sonnet"}
-	got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "haiku", routing.Decision{}, floors, "")
+	got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "haiku", routing.Decision{}, floors, "", routing.ModelLabelOverride{})
 	if got != "haiku" {
 		t.Errorf("model = %q, want the downgrade to win over the floor", got)
 	}
@@ -129,7 +129,7 @@ func TestResolveDispatchModelAppliesFloorThenDowngrade(t *testing.T) {
 	// which is what proves the downgrade above did the work, not the floor
 	// simply failing to apply.
 	fresh := testScheduler(t)
-	if got := fresh.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "haiku", routing.Decision{}, floors, ""); got != "sonnet" {
+	if got := fresh.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "haiku", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "sonnet" {
 		t.Errorf("model = %q, want the floor to raise haiku to sonnet", got)
 	}
 }
@@ -141,13 +141,13 @@ func TestResolveDispatchModelFloorsHaikuOnPRMerge(t *testing.T) {
 	s := testScheduler(t)
 	// The opus stage default (#2512) already sits above the haiku guard, so a
 	// haiku prediction never reaches pr-merge.
-	got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "haiku", routing.Decision{}, nil, "")
+	got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "haiku", routing.Decision{}, nil, "", routing.ModelLabelOverride{})
 	if got != "opus" {
 		t.Errorf("pr-merge model = %q, want %q", got, "opus")
 	}
 
 	// A non-haiku tier passes through untouched — the guard is a floor, not a pin.
-	if got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "opus", routing.Decision{}, nil, ""); got != "opus" {
+	if got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "opus", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Errorf("pr-merge model = %q, want opus preserved", got)
 	}
 }
@@ -158,7 +158,7 @@ func TestResolveDispatchModelDisablesHaikuOnUnverifiedFeatureValidate(t *testing
 	// no dev context, which is the unverified case.
 	s := testScheduler(t)
 	// The opus stage default (#2512) keeps a haiku prediction off it entirely.
-	got := s.resolveDispatchModel(state.StageFeatureValidate, 1, isolatedWorkspace(t), "haiku", routing.Decision{}, nil, "")
+	got := s.resolveDispatchModel(state.StageFeatureValidate, 1, isolatedWorkspace(t), "haiku", routing.Decision{}, nil, "", routing.ModelLabelOverride{})
 	if got != "opus" {
 		t.Errorf("feature-validate model = %q, want %q", got, "opus")
 	}
@@ -286,7 +286,90 @@ func TestResolveDispatchModelForcedTierBeatsTheLightweightDefault(t *testing.T) 
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
 	floors := raiseStageFloors(nil, "opus")
-	if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "opus", routing.Decision{}, floors, ""); got != "opus" {
+	if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "opus", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Errorf("pr-create model = %q, want the forced opus tier", got)
+	}
+}
+
+// TestResolveDispatchModel_LabelPin pins the issue-label precedence (#8):
+// explicit stage config > label; the pin replaces the pipeline-chosen base;
+// the cap binds escalation; the minimum_model floor and the mode ceiling still
+// bind the label.
+func TestResolveDispatchModel_LabelPin(t *testing.T) {
+	parse := func(labels ...string) routing.ModelLabelOverride {
+		o, _ := routing.ParseModelLabels(labels)
+		return o
+	}
+	cases := []struct {
+		name   string
+		mode   string
+		config string
+		env    string
+		floor  string
+		esc    string
+		labels routing.ModelLabelOverride
+		want   string
+	}{
+		{name: "pin below the routed tier is honoured", labels: parse("model:pin-haiku"), want: "haiku"},
+		{name: "pin above the ceiling is clamped", mode: "efficiency", labels: parse("model:pin-opus"), want: "sonnet"},
+		{name: "cap below the routed tier", labels: parse("model:max-sonnet"), want: "sonnet"},
+		{name: "cap above the routed tier changes nothing", labels: parse("model:max-fable"), want: "opus"},
+		{name: "conflict: the cap wins", labels: parse("model:pin-opus", "model:max-haiku"), want: "haiku"},
+		{name: "cap binds retry escalation", esc: "opus", labels: parse("model:pin-haiku", "model:max-sonnet"), want: "sonnet"},
+		{name: "explicit stage_models beats the label",
+			config: "model_routing:\n  mode: manual\npipeline:\n  stage_models:\n    feature-dev: sonnet\n", labels: parse("model:pin-haiku"), want: "sonnet"},
+		{name: "explicit env override beats the label", env: "sonnet", labels: parse("model:max-haiku"), want: "sonnet"},
+		{name: "minimum_model floor beats the cap", floor: "opus", labels: parse("model:max-haiku"), want: "opus"},
+		{name: "pin-haiku under maximum dispatches haiku", mode: "maximum", labels: parse("model:pin-haiku"), want: "haiku"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := isolatedWorkspace(t)
+			if tc.config != "" {
+				dir = routedWorkspace(t, tc.config)
+			}
+			if tc.mode != "" {
+				t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", tc.mode)
+			}
+			if tc.env != "" {
+				t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", tc.env)
+			}
+			var floors map[string]string
+			if tc.floor != "" {
+				floors = map[string]string{string(state.StageFeatureDev): tc.floor}
+			}
+			s := testScheduler(t)
+			if tc.esc != "" {
+				s.retryEngine.RecordEscalation("feature-dev", tc.esc)
+			}
+			got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", routing.Decision{}, floors, "", tc.labels)
+			if got != tc.want {
+				t.Errorf("feature-dev = %q, want %q", got, tc.want)
+			}
+			if tc.esc == "" {
+				if planned := PlannedStageModel(dir, state.StageFeatureDev, "opus", routing.Decision{}, floors, "", tc.labels); planned != got {
+					t.Errorf("PlannedStageModel = %q, dispatch = %q: prediction must equal dispatch (#2537)", planned, got)
+				}
+			}
+		})
+	}
+}
+
+// TestResolveDispatchModel_NoLabelIsIdentity: the zero override and an issue
+// with no model:* labels resolve every stage exactly as before (#8).
+func TestResolveDispatchModel_NoLabelIsIdentity(t *testing.T) {
+	dir := isolatedWorkspace(t)
+	unrelated, _ := routing.ParseModelLabels([]string{"type:bug", "size:M"})
+	for _, stage := range []state.PipelineStage{
+		state.StageIssuePickup, state.StageFeaturePlanning, state.StageFeatureDev,
+		state.StageFeatureValidate, state.StagePRCreate, state.StagePRMerge, state.StageSpikeMaterialize,
+	} {
+		for _, predicted := range []string{"", "haiku", "sonnet", "opus", "fable"} {
+			s := testScheduler(t)
+			want := s.resolveDispatchModel(stage, 1, dir, predicted, routing.Decision{}, nil, "", routing.ModelLabelOverride{})
+			if got := s.resolveDispatchModel(stage, 1, dir, predicted, routing.Decision{}, nil, "", unrelated); got != want {
+				t.Errorf("%s/%q: unrelated labels changed %q to %q", stage, predicted, want, got)
+			}
+		}
 	}
 }

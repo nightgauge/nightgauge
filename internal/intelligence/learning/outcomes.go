@@ -106,16 +106,23 @@ type Outcome struct {
 	// consumer's denominator: the stage never ran, it reported no model, or the
 	// served id has no registry band at all. Never a copy of PredictedModel:
 	// that made every row of this writer's history a tautological routing HIT.
-	ActualModel     string    `json:"actualModel"`
-	Success         bool      `json:"success"`
-	DurationMs      int64     `json:"durationMs"`
-	InputTokens     int       `json:"inputTokens"`
-	OutputTokens    int       `json:"outputTokens"`
-	CostUSD         float64   `json:"costUsd"`
-	ComplexityScore int       `json:"complexityScore"`
-	Retries         int       `json:"retries"`
-	FailedStage     string    `json:"failedStage,omitempty"`
-	CompletedAt     time.Time `json:"completedAt"`
+	ActualModel string `json:"actualModel"`
+	// ModelOverrideSource is "label" when the issue's model:pin-/model:max-
+	// labels forced or capped the model (#8), "" otherwise. A forced row
+	// measures the operator, not the router, so Calibrate excludes it from
+	// ModelSamples (ModelSamplesExcludedOverride).
+	ModelOverrideSource string `json:"modelOverrideSource,omitempty"`
+	// ModelOverrideLabel is the comma-joined labels that took effect.
+	ModelOverrideLabel string    `json:"modelOverrideLabel,omitempty"`
+	Success            bool      `json:"success"`
+	DurationMs         int64     `json:"durationMs"`
+	InputTokens        int       `json:"inputTokens"`
+	OutputTokens       int       `json:"outputTokens"`
+	CostUSD            float64   `json:"costUsd"`
+	ComplexityScore    int       `json:"complexityScore"`
+	Retries            int       `json:"retries"`
+	FailedStage        string    `json:"failedStage,omitempty"`
+	CompletedAt        time.Time `json:"completedAt"`
 }
 
 // Recorder persists outcomes to a JSONL file for calibration.
@@ -290,10 +297,15 @@ type CalibrationReport struct {
 	// misses rather than toward inflated ones (issue #1002). This counter
 	// exists so the sample loss is visible instead of silently shrinking
 	// ModelSamples with no explanation.
-	ModelSamplesExcludedRetry int     `json:"modelSamplesExcludedRetry"`
-	AvgCostPerRun             float64 `json:"avgCostPerRun"`
-	SuccessRate               float64 `json:"successRate"`
-	TrendImproving            bool    `json:"trendImproving"`
+	ModelSamplesExcludedRetry int `json:"modelSamplesExcludedRetry"`
+	// ModelSamplesExcludedOverride counts measurable model pairs EXCLUDED from
+	// ModelSamples because an issue label forced or capped the model (#8):
+	// the router did not choose that model, so the pair scores nothing about
+	// it. A row that is both retried and forced counts here.
+	ModelSamplesExcludedOverride int     `json:"modelSamplesExcludedOverride"`
+	AvgCostPerRun                float64 `json:"avgCostPerRun"`
+	SuccessRate                  float64 `json:"successRate"`
+	TrendImproving               bool    `json:"trendImproving"`
 }
 
 // Calibrate analyzes recorded outcomes and produces a calibration report.
@@ -326,7 +338,7 @@ func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 		return &CalibrationReport{}, nil
 	}
 
-	var sizeMatches, sizeSamples, modelMatches, modelSamples, excludedRetry, successes int
+	var sizeMatches, sizeSamples, modelMatches, modelSamples, excludedRetry, excludedOverride, successes int
 	var totalCost float64
 
 	for _, o := range outcomes {
@@ -337,7 +349,9 @@ func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 			}
 		}
 		if o.PredictedModel != "" && o.ActualModel != "" {
-			if o.Retries > 0 {
+			if o.ModelOverrideSource != "" {
+				excludedOverride++
+			} else if o.Retries > 0 {
 				excludedRetry++
 			} else {
 				modelSamples++
@@ -354,15 +368,16 @@ func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 
 	n := len(outcomes)
 	report := &CalibrationReport{
-		TotalRuns:                 n,
-		SizeSamples:               sizeSamples,
-		SizeAccuracy:              ratio(sizeMatches, sizeSamples),
-		ModelSamples:              modelSamples,
-		ModelMatches:              modelMatches,
-		ModelAccuracy:             ratio(modelMatches, modelSamples),
-		ModelSamplesExcludedRetry: excludedRetry,
-		AvgCostPerRun:             totalCost / float64(n),
-		SuccessRate:               float64(successes) / float64(n),
+		TotalRuns:                    n,
+		SizeSamples:                  sizeSamples,
+		SizeAccuracy:                 ratio(sizeMatches, sizeSamples),
+		ModelSamples:                 modelSamples,
+		ModelMatches:                 modelMatches,
+		ModelAccuracy:                ratio(modelMatches, modelSamples),
+		ModelSamplesExcludedRetry:    excludedRetry,
+		ModelSamplesExcludedOverride: excludedOverride,
+		AvgCostPerRun:                totalCost / float64(n),
+		SuccessRate:                  float64(successes) / float64(n),
 	}
 
 	// Check trend: compare recent 10 vs previous 10
