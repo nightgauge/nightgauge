@@ -1506,6 +1506,18 @@ Three rules follow, and each is enforced by a regression test:
    rendered `Sync Project Status` — index 15 of 18 — fourth, making the rows
    beneath it look like they were skipped after it.
 
+**Agentic stages are reconciled from evidence after their gate (#1887).** Once
+`feature-planning`, `feature-dev` or `feature-validate` exits 0 and its gate
+passes, `ReconcileAgenticPhases` (`internal/orchestrator/agentic_phases.go`)
+maps each registry phase to the artifact that proves it. Each proven outcome
+replaces only an `unreported` record (`RuntimeState.ObservePhase`). Markers and
+inference keep theirs. Both routes run the same Go rules. The scheduler calls
+them in-process. `HeadlessOrchestrator.runPipeline` runs
+`nightgauge phase reconcile` and replays the verdicts through
+`PipelineStateService.observePhase` → IPC `eventType: "observed"`. A route
+without a positive gate verdict passes `--gate-passed=false` and claims
+nothing.
+
 ### Phase Inference and Toolchain Coverage
 
 Because markers are unreliable, `phaseInference.ts` reconstructs progress from

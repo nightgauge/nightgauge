@@ -1984,6 +1984,44 @@ export class PipelineStateService implements vscode.Disposable {
   }
 
   /**
+   * Record an outcome the runner PROVED from the stage's artifacts after it
+   * exited (#1887) — the `nightgauge phase reconcile` verdicts. Returns
+   * whether it wrote anything.
+   *
+   * Mirrors Go's `RuntimeState.ObservePhase`. Every record that carries
+   * evidence keeps its outcome: a marker, an inference result, a skip, a pass,
+   * a fail. The one record it replaces is `unreported`, because the
+   * end-of-stage back-fill writes that before the stage gate has ruled, and so
+   * before any proof exists. Leaving it would discard the proof.
+   */
+  async observePhase(
+    stage: string,
+    phaseName: string,
+    total: number,
+    registryIndex: number,
+    status: "complete" | "skipped"
+  ): Promise<boolean> {
+    if (!this._lastState) return false;
+    const stageState = this._lastState.stages[stage];
+    if (!stageState) return false;
+    const phases = stageState.phases ?? [];
+    const existing = phases.find((p) => p.name === phaseName);
+    if (existing && existing.status !== "unreported") return false;
+    const now = new Date().toISOString();
+    if (existing) {
+      existing.status = status;
+      existing.completed_at = now;
+    } else {
+      phases.push({ name: phaseName, index: registryIndex, total, status, completed_at: now });
+    }
+    stageState.phases = phases;
+    stageState.total_phases = total;
+    this._onStateChanged.fire(this._lastState);
+    this.notifyPhaseTransition(stage, phaseName, registryIndex, total, "observed", status);
+    return true;
+  }
+
+  /**
    * Shared body for the terminal, append-only phase outcomes (skip /
    * unreported / passed). Idempotent on name: a phase that already carries ANY status
    * wins, because it carries evidence this back-fill does not.
@@ -2061,7 +2099,8 @@ export class PipelineStateService implements vscode.Disposable {
     phaseName: string,
     index: number,
     total: number,
-    eventType: "skip" | "unreported" | "fail" | "passed"
+    eventType: "skip" | "unreported" | "fail" | "passed" | "observed",
+    status?: "complete" | "skipped"
   ): void {
     const runId = this.wireIdentityOrSkip("pipeline.notifyPhaseTransition", stage);
     if (runId === null) return;
@@ -2074,6 +2113,7 @@ export class PipelineStateService implements vscode.Disposable {
         index,
         total,
         eventType,
+        ...(status !== undefined ? { status } : {}),
         runId,
       } satisfies NotifyPhaseTransitionParams)
       .catch((err: unknown) => {

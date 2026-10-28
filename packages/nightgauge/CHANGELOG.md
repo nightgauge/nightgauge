@@ -11,6 +11,16 @@ and this project adheres to
 
 ### Added
 
+- **Agentic stages report their phases from evidence, not narration (#1887).**
+  After `feature-planning`, `feature-dev` or `feature-validate` exits 0 and
+  passes its gate, the scheduler maps each registry phase to the artifact that
+  proves it (the handoff file, the plan, the pushed commit, and so on). A phase
+  with that proof is recorded `complete`. A phase with no proof stays
+  `unreported` and is never counted as observed. Markers and inference keep
+  their outcomes. Pipelines the extension runs itself, outside the scheduler,
+  now get the same evidence-based phases: after each agentic stage's gate, the
+  extension runs `nightgauge phase reconcile` and records its verdicts.
+
 - **`model_routing.excluded_models` and `excluded_efforts` keep automatic
   routing off specific models and effort levels (#2063).** Every automatic
   path (stage defaults, eval advice, escalation, the `minimum_model` floor, a

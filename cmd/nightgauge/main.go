@@ -1079,6 +1079,7 @@ func rootCmd() *cobra.Command {
 		gateCmd(),
 		triageCmd(),
 		prStageCmd(),
+		phaseCmd(),
 		groundCmd(),
 		approvalGateCmd(),
 		disciplineScoreCmd(),

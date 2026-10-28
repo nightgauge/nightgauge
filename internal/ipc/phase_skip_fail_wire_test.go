@@ -177,3 +177,61 @@ func TestPhaseTransition_UnreportedReachesTheRecord(t *testing.T) {
 			byName["e2e-testing"])
 	}
 }
+
+// TestPhaseTransition_ObservedUpgradesOnlyUnreported pins the wire half of
+// #1887's extension route. The legacy pipeline back-fills silence as
+// `unreported` at stage exit, before its gate runs, so the reconciler's
+// verdicts arrive after the back-fill. "observed" must upgrade that absence of
+// evidence and must leave a marker-recorded outcome alone, or the replay either
+// does nothing (the 4/14 the issue reports) or overwrites real evidence.
+func TestPhaseTransition_ObservedUpgradesOnlyUnreported(t *testing.T) {
+	root := t.TempDir()
+	s := NewServer(nil, WithWorkspaceRoot(root))
+
+	const (
+		repo  = "acme/platform"
+		issue = 1887
+	)
+	runID := newTestRunID()
+	mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running", RunID: runID,
+	})
+
+	send := func(name, eventType, status string, index int) {
+		mustCall(t, s, "pipeline.notifyPhaseTransition", PipelineNotifyPhaseTransitionParams{
+			Repo: repo, IssueNumber: issue, Stage: "feature-dev", Name: name,
+			Index: index, Total: 18, EventType: eventType, Status: status, RunID: runID,
+		})
+	}
+	send("testing", "unreported", "", 8)
+	send("e2e-testing", "skip", "", 9)
+	send("testing", "observed", "complete", 8)
+	send("e2e-testing", "observed", "complete", 9)
+	send("write-dev-context", "observed", "complete", 13)
+
+	rt, _ := s.currentRunForIssue(repo, issue)
+	if rt == nil {
+		t.Fatal("no runtime registered for the run")
+	}
+	byName := map[string]string{}
+	for _, p := range rt.rs.PhaseHistory {
+		byName[p.Name] = p.Status
+	}
+	if byName["testing"] != "complete" {
+		t.Errorf("testing = %q, want complete — proof must replace an unreported back-fill", byName["testing"])
+	}
+	if byName["e2e-testing"] != "skipped" {
+		t.Errorf("e2e-testing = %q, want skipped — a recorded outcome keeps it", byName["e2e-testing"])
+	}
+	if byName["write-dev-context"] != "complete" {
+		t.Errorf("write-dev-context = %q, want complete — a phase with no record is appended", byName["write-dev-context"])
+	}
+
+	err := callRunVerb(t, s, "pipeline.notifyPhaseTransition", PipelineNotifyPhaseTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Name: "testing",
+		Index: 8, Total: 18, EventType: "observed", Status: "running", RunID: runID,
+	})
+	if err == nil || !strings.Contains(err.Error(), "observed needs status") {
+		t.Errorf("observed with status running: err = %v, want a refusal", err)
+	}
+}

@@ -7223,6 +7223,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				gateRes = gate.Verify(gateCtx, item.Number, stageWorkspace(runtime, workspaceRoot))
 				gateRan = true
 				runtime.AppendStageGateResult(stage, gateRes.ToStageGateResult())
+				if gateRes.Passed {
+					s.reconcileAgenticPhases(runtime, item.Repo, item.Number, stage,
+						stageWorkspace(runtime, workspaceRoot), stageStartedAt)
+				}
 				tracer.Emit(trace.KindGateResult, string(stage), trace.GateResultPayload{
 					GateName:   gateRes.GateName,
 					Source:     "stage_gate",

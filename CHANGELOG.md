@@ -26,6 +26,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Agentic stages report their phases from evidence, not narration (#1887).**
+  After `feature-planning`, `feature-dev` or `feature-validate` exits 0 and
+  passes its gate, the scheduler maps each registry phase to the artifact that
+  proves it (the handoff file, the plan, the pushed commit, and so on). A phase
+  with that proof is recorded `complete`. A phase with no proof stays
+  `unreported` and is never counted as observed. Markers and inference keep
+  their outcomes. `nightgauge phase reconcile` prints the same verdicts as JSON,
+  and the extension's non-scheduler pipeline route replays them after each
+  agentic stage's gate, so both routes report from the same evidence.
+
 - **`model_routing.excluded_models` and `excluded_efforts` keep automatic
   routing off specific models and effort levels (#2063).** Every automatic
   path (stage defaults, eval advice, escalation, the `minimum_model` floor, a

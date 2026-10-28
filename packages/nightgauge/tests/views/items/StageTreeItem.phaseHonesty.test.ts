@@ -155,6 +155,24 @@ describe("StageTreeItem phase counting (#1246)", () => {
     expect(label).not.toContain("2/2");
   });
 
+  // AC5 (#1887): a deterministic stage that reports every phase keeps its
+  // completion fraction — the coverage sentence is only for partial silence.
+  it("renders a fully-reported deterministic stage unchanged", () => {
+    const item = new StageTreeItem("pr-merge" as PipelineStage, "pending");
+    item.setStatus("complete");
+    const names = ["load-context", "wait-ci", "merge", "post-merge"];
+    item.setPhases(
+      names.map((n) => phase(n, "complete")),
+      undefined,
+      names.length
+    );
+
+    const label = String(item.description ?? "");
+    expect(label).toContain("4/4 phases");
+    expect(label).not.toContain("observed");
+    expect(label).not.toContain("not reported");
+  });
+
   it("omits the unreported clause when nothing is unreported", () => {
     const item = new StageTreeItem(STAGE, "pending");
     item.setStatus("complete");

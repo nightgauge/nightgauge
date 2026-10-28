@@ -41,6 +41,7 @@ import { BinaryResolver } from "./BinaryResolver";
 import { moveToInReviewIfPRBacked } from "../utils/inReviewGuard";
 import { IpcClient } from "./IpcClient";
 import { runWithPhaseStream, type PrStagePhaseTransition } from "./prStagePhaseStream";
+import { isAgenticReconcileStage, reconcileAgenticStagePhases } from "./agenticPhaseReconcile";
 import type { AttentionRaiseCheck } from "./IpcClientBase";
 import {
   isGithubRateLimitError,
@@ -1286,6 +1287,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     string,
     { path: "deterministic" | "llm"; puntReason?: string }
   >();
+
+  /**
+   * Stages whose post-condition gate POSITIVELY passed on this attempt (#1887).
+   * The gate helpers return null for both "passed" and "could not run", and
+   * the phase reconciler may claim evidence only on the first, so the pass is
+   * recorded where the verdict is parsed.
+   */
+  private gatePassedStages = new Set<PipelineStage>();
 
   /** Tracks whether pr-create validation retry has been attempted per issue (Issue #1139) */
   private prCreateRetryAttempted: Set<number> = new Set();
@@ -3099,13 +3108,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * something it cannot demonstrate.
    */
   private async deriveUnexercisedDeliverable(issueNumber: number): Promise<void> {
+    this.gatePassedStages.delete("feature-validate");
     try {
       const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
       const binary = await BinaryResolver.fromVSCode().resolve();
       if (!binary) {
         return;
       }
-      await execFileAsync(
+      const { stdout } = await execFileAsync(
         binary,
         [
           "gate",
@@ -3131,6 +3141,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         ],
         { encoding: "utf-8", cwd, timeout: 90_000 }
       );
+      // #1887: the halt decision stays with verifyPostValidateState, but the
+      // phase reconciler needs the gate's positive verdict, as the scheduler
+      // reconciles only after `gateRes.Passed`.
+      if ((JSON.parse(stdout) as { passed?: unknown })?.passed === true) {
+        this.gatePassedStages.add("feature-validate");
+      }
     } catch {
       // See the doc comment: silence is the conservative direction here.
     }
@@ -3521,6 +3537,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     stage: PipelineStage,
     issueNumber: number
   ): Promise<{ error: Error; terminalKind?: string } | null> {
+    this.gatePassedStages.delete(stage);
     try {
       const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
 
@@ -3607,6 +3624,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
 
       if (gateResult.passed) {
+        this.gatePassedStages.add(stage);
         this.logger.info("Post-condition gate passed", {
           issueNumber,
           stage,
@@ -4647,6 +4665,39 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         err,
       });
     }
+  }
+
+  /**
+   * Upgrade an agentic stage's `unreported` back-fill with the outcomes its
+   * artifacts prove (#1887), through `nightgauge phase reconcile`.
+   *
+   * Reached only once the stage exited 0 and every gate this route applies
+   * passed or could not run. The verb is told which, via `--gate-passed`, and
+   * claims nothing on an unverified gate. Best-effort: a reconcile failure
+   * leaves the phases exactly as the stage reported them.
+   */
+  private async reconcileAgenticPhasesFromEvidence(
+    stage: PipelineStage,
+    issueNumber: number,
+    stageStartTime: number
+  ): Promise<void> {
+    const stateService = this.stateService;
+    if (!stateService) return;
+    await reconcileAgenticStagePhases(
+      {
+        stage,
+        issueNumber,
+        since: new Date(stageStartTime),
+        exitCode: 0,
+        gatePassed: this.gatePassedStages.has(stage),
+        workdir: this.pinnedWorkspaceRoot ?? this.getWorkingDirectory(),
+      },
+      {
+        resolveBinary: () => BinaryResolver.fromVSCode().resolve(),
+        observe: (t) => stateService.observePhase(t.stage, t.name, t.total, t.index, t.status),
+        warn: (message, meta) => this.logger.warn(message, meta),
+      }
+    );
   }
 
   /**
@@ -10423,6 +10474,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.completedStageSet.clear(); // Reset duplicate-prevention tracker (#698)
     this.cachedIssueMetadata = null; // Clear stale metadata from previous run (#732)
     this.stageExecutionPaths.clear(); // Reset execution-path decision tracker (#297)
+    this.gatePassedStages.clear(); // Reset positive gate verdicts (#1887)
 
     // Sync contextAssembler per-run state (Issue #2770 — Part 3)
     this.contextAssembler.clearSessionState();
@@ -12984,6 +13036,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             continue;
           }
           // If blocked, continue forward (signal surfaced via callback)
+        }
+
+        // #1887: every gate this route applies has ruled by here, so this is
+        // the legacy route's mirror of the scheduler's post-gate reconcile.
+        // The scheduler (IPC) route never enters this loop and reconciles in
+        // Go; running it here too would only find records already upgraded.
+        if (isAgenticReconcileStage(stage)) {
+          await this.reconcileAgenticPhasesFromEvidence(stage, issueNumber, stageStartTime);
         }
 
         completedStages.push(stage);
