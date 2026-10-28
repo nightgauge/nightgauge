@@ -91,9 +91,9 @@ export class CopilotCliAdapter implements ICliAdapter {
   }
 
   getDefaultArgs(): string[] {
-    // `--allow-all-tools` grants unrestricted tool access for autonomous stage
-    // execution — the documented Copilot CLI flag (the prior `--allow-all` was
-    // not the tool-permission flag). `-s` is intentionally omitted so the stats
+    // `--allow-all-tools` is the autonomous default for a stage that declares
+    // no allowed tools; with an allow list, createCliQueryFn replaces it with
+    // per-tool `--allow-tool` / URL flags (withCopilotToolPolicy, #1). `-s` is intentionally omitted so the stats
     // footer (premium-request count) is available for cost accounting (#52).
     return ["--allow-all-tools"];
   }

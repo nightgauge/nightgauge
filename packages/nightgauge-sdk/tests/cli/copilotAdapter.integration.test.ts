@@ -294,4 +294,21 @@ Usage: Total usage est: 1 Premium requests`;
     const spawnArgs = spawnMock.mock.calls[0][1] as string[];
     expect(spawnArgs).not.toContain("--model");
   });
+
+  it("passes the stage tool policy instead of --allow-all-tools (#1)", async () => {
+    process.env.GH_TOKEN = "ghp_test-token";
+    spawnMock.mockReturnValue(createMockProcess({ exitCode: 0, stdout: "done" }));
+
+    const queryFn = await adapter.createQueryFunction();
+    for await (const _ of queryFn({
+      prompt: "Run stage",
+      options: { allowedTools: ["Read", "Edit", "Bash(git:*)"] },
+    } as Parameters<typeof queryFn>[0])) {
+      // drain
+    }
+
+    const spawnArgs = spawnMock.mock.calls[0][1] as string[];
+    expect(spawnArgs).not.toContain("--allow-all-tools");
+    expect(spawnArgs).toEqual(expect.arrayContaining(["--allow-tool", "write", "shell(git)"]));
+  });
 });

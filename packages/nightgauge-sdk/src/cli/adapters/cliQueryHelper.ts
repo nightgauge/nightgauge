@@ -38,6 +38,7 @@ import {
   curateOpenCodeChildEnv,
 } from "./childEnv.js";
 import { AdapterError } from "./errors.js";
+import { withCopilotToolPolicy } from "./copilotTools.js";
 import { openCodeEnvWithholdHas, openCodeProviderEnv } from "./opencodeCatalog.js";
 import { classifyOpenCodeRun, openCodeRedactor, type OpenCodeHelper } from "./opencodeStream.js";
 import { OpenCodeHandshakeWatch, openCodeHandshakeFromEnv } from "./opencodeHandshake.js";
@@ -281,13 +282,16 @@ export function createCliQueryFn(options: {
       // absent. The resume branch above scopes the same mode its own way, since
       // `exec resume` takes the sandbox as config rather than `--sandbox`.
       // claude-headless takes the stage's tools as `--allowedTools`, as the Go
-      // ClaudeAdapter passes them (#2358).
+      // ClaudeAdapter passes them (#2358). copilot swaps --allow-all-tools for
+      // per-tool flags when the stage declares tools (#1).
       const effectiveBaseArgs =
         options.adapter === "codex"
           ? applyCodexSandboxProfile(baseArgs, queryOptions.options?.allowedTools, cwd)
           : options.adapter === "claude-headless"
             ? withClaudeAllowedTools(baseArgs, queryOptions.options?.allowedTools)
-            : baseArgs;
+            : options.adapter === "copilot"
+              ? withCopilotToolPolicy(baseArgs, queryOptions.options?.allowedTools)
+              : baseArgs;
       if (delivery === "positional") {
         finalArgs = [queryOptions.prompt, ...effectiveBaseArgs];
         stdinPrompt = "";

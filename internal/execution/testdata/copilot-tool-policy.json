@@ -1,0 +1,86 @@
+{
+  "cases": [
+    {
+      "name": "empty keeps the autonomous default",
+      "allowed_tools": [],
+      "want_args": ["--allow-all-tools"],
+      "want_dropped": []
+    },
+    {
+      "name": "read-only needs no flag",
+      "allowed_tools": ["Read", "Grep", "Glob"],
+      "want_args": [],
+      "want_dropped": []
+    },
+    {
+      "name": "read and shell",
+      "allowed_tools": ["Read", "Bash"],
+      "want_args": ["--allow-tool", "shell"],
+      "want_dropped": []
+    },
+    {
+      "name": "edit tools dedupe to write",
+      "allowed_tools": ["Read", "Edit", "Write"],
+      "want_args": ["--allow-tool", "write"],
+      "want_dropped": []
+    },
+    {
+      "name": "scoped shell",
+      "allowed_tools": ["Bash(git:*)", "Bash(gh *)", "Bash(git:*)"],
+      "want_args": ["--allow-tool", "shell(git)", "--allow-tool", "shell(gh)"],
+      "want_dropped": []
+    },
+    {
+      "name": "mcp tool",
+      "allowed_tools": ["mcp__github__create_issue"],
+      "want_args": ["--allow-tool", "github(create_issue)"],
+      "want_dropped": []
+    },
+    {
+      "name": "scoped web fetch",
+      "allowed_tools": ["WebFetch(domain:docs.github.com)"],
+      "want_args": ["--allow-url", "docs.github.com"],
+      "want_dropped": []
+    },
+    {
+      "name": "unscoped web fetch",
+      "allowed_tools": ["WebFetch(domain:docs.github.com)", "WebSearch"],
+      "want_args": ["--allow-all-urls"],
+      "want_dropped": []
+    },
+    {
+      "name": "unmapped only is denied",
+      "allowed_tools": ["Task"],
+      "want_args": [],
+      "want_dropped": ["Task"]
+    },
+    {
+      "name": "every tool",
+      "allowed_tools": [
+        "Bash",
+        "Task",
+        "WebFetch",
+        "WebSearch",
+        "mcp__github__create_issue",
+        "Read",
+        "Edit",
+        "Write",
+        "MultiEdit",
+        "NotebookEdit",
+        "Grep",
+        "Glob",
+        "TodoWrite"
+      ],
+      "want_args": [
+        "--allow-tool",
+        "shell",
+        "--allow-tool",
+        "github(create_issue)",
+        "--allow-tool",
+        "write",
+        "--allow-all-urls"
+      ],
+      "want_dropped": ["Task", "TodoWrite"]
+    }
+  ]
+}
