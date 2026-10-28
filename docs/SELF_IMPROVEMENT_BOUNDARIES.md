@@ -162,19 +162,16 @@ design defect, not a configuration choice.
    skill matches on the `continuous-improvement` label plus a title prefix.
 3. **A bounded per-run volume that refuses loudly.** Truncating silently at a
    cap is as bad as no cap: the operator cannot tell "nothing found" from
-   "twelve found, two filed". Today the only volume bound anywhere is
-   release-watch's `score_threshold`, which routes sub-threshold changes to
-   this checkout's `release-watch/backlog.json` instead of dropping them. **No
-   mechanism currently enforces a per-run count cap** — a new filer must ship
-   one.
+   "twelve found, two filed". Release-watch's `score_threshold` routes
+   sub-threshold changes to this checkout's `release-watch/backlog.json`
+   instead of dropping them. Both materializers enforce
+   `follow_up_filing.max_per_run` and report `refused: K of T`.
 4. **A kill switch that fails closed.** `autonomous_discovery.kill_switch`
    defaults to _on_, and `scripts/discovery-config-gate.py` resolves a missing,
    unreadable or unparseable config to "disabled" rather than to defaults: a
-   loop that cannot find its own off switch must not file. Spike materialization
-   has no such switch — its only gate is that the `spike-materialize` stage runs
-   solely for `type:spike` issues, after merge. That is a narrower blast radius,
-   not an equivalent control, and it does not generalize to a filer that any run
-   can reach.
+   loop that cannot find its own off switch must not file. The materializers
+   follow the same rule through `follow_up_filing.enabled` and
+   `internal/filing.ResolveGate`.
 5. **Report-only outside the dogfood repo.** Filing is opt-in for anyone who is
    not us. `--create-issues` defaults to `false` (`--dry-run` is the default) on
    the continuous-improvement skill, and its customer mode additionally refuses
@@ -186,19 +183,26 @@ design defect, not a configuration choice.
 
 | Filer                  | Trigger                                             | Gate                                                | Dedup key                  |
 | ---------------------- | --------------------------------------------------- | --------------------------------------------------- | -------------------------- |
-| Spike materialization  | `spike-materialize` stage, post-merge, `type:spike` | None (stage runs whenever a spike merges)           | Recommendation `id` marker |
+| Spike materialization  | `spike-materialize` stage, post-merge, `type:spike` | `follow_up_filing` (mode, kill switch, cap)         | Recommendation `id` marker |
+| Follow-up materialize  | `followup-materialize` stage, post-merge, every run | `follow_up_filing` + author trust gate              | Record `id` marker, title  |
 | Release-watch          | `release-watchdog.yml`, daily                       | `autonomous_discovery` + `kill_switch` + threshold  | Per-provider `last-seen`   |
 | Continuous improvement | `continuous-improvement.yml`, weekly                | Same gate, plus `--create-issues` (default `false`) | Label + title prefix       |
 | Skill drift synthesis  | Retro synthesis                                     | `--create-issues` + threshold config                | `skill-drift` label        |
 
-`nightgauge spike materialize` is also runnable by hand; a hand-run is a human
-in the loop and is not governed by this rule.
+`nightgauge spike materialize` and `nightgauge followup materialize` are also
+runnable by hand; a hand-run is a human in the loop and is not governed by this
+rule.
 
-Two of those four do not meet the bar yet, and the gaps are recorded here rather
-than left to be rediscovered:
+Both materializers share `internal/filing` (#480): closed type, priority and
+size enums; the `follow_up_filing` gate, which resolves a missing, unreadable or
+unparseable config to report-only and defaults to `mode: report`; a per-run cap
+(`max_per_run`, default 10) that refuses the excess with exit 3 and keeps the
+refused records; and a `Discovered in #N (run R, stage S)` provenance line on
+every follow-up. See [CONFIGURATION.md](CONFIGURATION.md#follow-up-filing).
 
-- **Spike materialization has no kill switch and no per-run cap.** A merged
-  spike files however many recommendations its artifact carries.
+One filer does not meet the bar yet, and the gap is recorded here rather than
+left to be rediscovered:
+
 - **Skill drift synthesis does not set Size at creation.** The retro path
   creates with `--label "skill-drift,priority:medium"`
   (`skills/nightgauge-retro/SKILL.md`) and never touches the board, so those
@@ -230,14 +234,12 @@ are different surfaces and the distinction is deliberate.
 
 The same constraints bind the **in-run** counterpart: a pipeline stage that
 notices real-but-out-of-scope work mid-run and wants it recorded rather than
-absorbed or dropped. That mechanism does not exist yet — it is tracked as epic
-#477, and until it lands the only routes for a mid-run discovery are the
-`SCOPE_DISCOVERED` backtrack (which widens the current run, so it is correct
-only when the discovery blocks the run's own acceptance criteria) and a human
-filing the issue. When it does land, it is a filer under
-[Rule 5](#rule-5-autonomous-issue-filing-is-governed) like any other: dogfood
-repos may file, and customer-mode default is report-only with explicit opt-in
-required before anything is created.
+absorbed or dropped. Stages record such work to the discovered-work capture
+(ADR 027), and the `followup-materialize` stage files it after merge (#480). It
+is a filer under [Rule 5](#rule-5-autonomous-issue-filing-is-governed) like any
+other: dogfood repos may file, and the built-in default is report-only with
+explicit opt-in (`follow_up_filing.mode: file`) required before anything is
+created.
 
 ## Related Documentation
 

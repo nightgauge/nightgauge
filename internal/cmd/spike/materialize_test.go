@@ -2,9 +2,12 @@ package spike
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/filing"
 )
 
 func TestParse_ValidYAMLBlock_ProducesNRecommendations(t *testing.T) {
@@ -345,5 +348,65 @@ func validRec(id string) Recommendation {
 		Type:     "feature",
 		Priority: "high",
 		Size:     "M",
+	}
+}
+
+func gatedArtifact() *SpikeArtifact {
+	b := validRec("bravo")
+	b.DependsOn = []string{"alpha"}
+	return &SpikeArtifact{Spike: 7, Recommendations: []Recommendation{validRec("alpha"), b, validRec("charlie")}}
+}
+
+func TestMaterialize_KillSwitchOff_FilesNothing(t *testing.T) {
+	f := newFake()
+	gate := filing.Gate{Mode: filing.ModeReport, Reason: "kill switch", Cap: 10}
+	res, err := MaterializeGated(context.Background(), gatedArtifact(), "o/r", f, false, gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.created) != 0 || len(f.blockedByEdges) != 0 {
+		t.Fatalf("report mode mutated: created=%d edges=%d", len(f.created), len(f.blockedByEdges))
+	}
+	if !res.ReportOnly || res.Reason != "kill switch" || len(res.Issues) != 3 {
+		t.Fatalf("result = %+v, want report-only would-file list of 3", res)
+	}
+}
+
+func TestMaterialize_PerRunCap_RefusesLoudly(t *testing.T) {
+	f := newFake()
+	gate := filing.Gate{Mode: filing.ModeFile, Cap: 2}
+	res, err := MaterializeGated(context.Background(), gatedArtifact(), "o/r", f, false, gate)
+	var ce *filing.CapError
+	if !errors.As(err, &ce) || ce.Refused != 1 || ce.Total != 3 {
+		t.Fatalf("err = %v, want refused 1 of 3", err)
+	}
+	if len(f.created) != 2 || res.Refused != 1 {
+		t.Fatalf("created %d refused %d, want 2 and 1", len(f.created), res.Refused)
+	}
+	refused := 0
+	for _, mi := range res.Issues {
+		if mi.Refused {
+			refused++
+		}
+	}
+	if refused != 1 {
+		t.Fatalf("refused entries = %d", refused)
+	}
+}
+
+func TestMaterialize_InCapFileMode_OutputUnchanged(t *testing.T) {
+	plain, err := Materialize(context.Background(), gatedArtifact(), "o/r", newFake(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gated, err := MaterializeGated(context.Background(), gatedArtifact(), "o/r", newFake(), false,
+		filing.Gate{Mode: filing.ModeFile, Cap: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := json.Marshal(plain)
+	b, _ := json.Marshal(gated)
+	if string(a) != string(b) {
+		t.Fatalf("gated output drifted:\n%s\n%s", a, b)
 	}
 }

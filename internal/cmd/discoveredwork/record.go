@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/atomicfile"
+	"github.com/nightgauge/nightgauge/internal/filing"
 	"github.com/nightgauge/nightgauge/internal/flock"
 )
 
@@ -62,16 +63,16 @@ type Capture struct {
 	Records       []Record `json:"records"`
 }
 
-// Closed vocabularies. Type, priority and size match spike.ValidateSchema so
-// the #480 materializer shares one table with the spike path (ADR 027).
+// Closed vocabularies. Type, priority and size are internal/filing's tables,
+// shared with the spike path and the #480 materializer (ADR 027).
 var (
 	allowedStages = map[string]bool{
 		"issue-pickup": true, "feature-planning": true, "feature-dev": true,
 		"feature-validate": true, "pr-create": true, "pr-merge": true,
 	}
-	allowedTypes      = map[string]bool{"feature": true, "bug": true, "docs": true, "chore": true, "spike": true}
-	allowedPriorities = map[string]bool{"critical": true, "high": true, "medium": true, "low": true}
-	allowedSizes      = map[string]bool{"XS": true, "S": true, "M": true, "L": true, "XL": true}
+	allowedTypes      = filing.AllowedTypes
+	allowedPriorities = filing.AllowedPriorities
+	allowedSizes      = filing.AllowedSizes
 	producerRe        = regexp.MustCompile(`^producer:[a-z0-9]+(-[a-z0-9]+)*$`)
 	idRe              = regexp.MustCompile(`^dw-[0-9a-f]{12}$`)
 	captureNameRe     = regexp.MustCompile(`^discovered-work-([0-9]+)\.json$`)
@@ -373,6 +374,53 @@ func Append(runDir string, rec Record, now time.Time) (Record, bool, error) {
 		return rec, false, fmt.Errorf("write %s: %w", p, err)
 	}
 	return rec, true, nil
+}
+
+// Consume rewrites the capture file for issue keeping only the records for
+// which keep returns true, under the same lock and atomic replace as Append.
+// When nothing is kept the file is deleted. The #480 materializer is the only
+// caller: it is the capture's only deleter (ADR 027 §Lifecycle). A missing
+// file is a no-op.
+func Consume(runDir string, issue int, keep func(Record) bool) error {
+	p, err := CapturePath(runDir, issue)
+	if err != nil {
+		return err
+	}
+	lf, err := os.OpenFile(p+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("open lock: %w", err)
+	}
+	defer lf.Close()
+	if err := flock.Exclusive(lf, lockTimeout); err != nil && !errors.Is(err, flock.ErrUnsupported) {
+		return fmt.Errorf("lock %s: %w", p, err)
+	}
+	defer flock.Unlock(lf) //nolint:errcheck // closing the file releases it too
+
+	c, err := loadPath(p, issue)
+	if err != nil || c == nil {
+		return err
+	}
+	kept := []Record{}
+	for _, r := range c.Records {
+		if keep != nil && keep(r) {
+			kept = append(kept, r)
+		}
+	}
+	if len(kept) == 0 {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", p, err)
+		}
+		return nil
+	}
+	c.Records = kept
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	if err := atomicfile.Write(p, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", p, err)
+	}
+	return nil
 }
 
 // Orphan is a capture file no run is going to materialize.

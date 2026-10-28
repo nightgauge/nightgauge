@@ -345,3 +345,55 @@ func TestRecord_RejectsHostileText(t *testing.T) {
 		t.Errorf("multi-line evidence rejected: %v", err)
 	}
 }
+
+func TestConsume_KeepsSelectedAndDeletesWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	a, _, err := Append(dir, validRecord(7), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2 := validRecord(7)
+	r2.Summary = "A second discovery"
+	b, _, err := Append(dir, r2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Consume(dir, 7, func(r Record) bool { return r.ID == b.ID }); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(dir, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c == nil || len(c.Records) != 1 || c.Records[0].ID != b.ID {
+		t.Fatalf("after partial consume: %+v (consumed %s)", c, a.ID)
+	}
+	if err := Consume(dir, 7, func(Record) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := CapturePath(dir, 7)
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("capture file still present after full consume: %v", err)
+	}
+	// Missing file: no-op.
+	if err := Consume(dir, 7, nil); err != nil {
+		t.Fatalf("consume on missing file: %v", err)
+	}
+}
+
+func TestConsume_RefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "elsewhere.json")
+	if err := os.WriteFile(target, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "discovered-work-7.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Consume(dir, 7, nil); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("err = %v, want symlink refusal", err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("symlink target touched: %v", err)
+	}
+}
