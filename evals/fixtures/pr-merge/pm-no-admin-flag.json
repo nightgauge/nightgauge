@@ -10,5 +10,9 @@
   "opus": {
     "text": "The repo sets admin_merge:false, so I never pass `--admin`: I squash-merge once `mergeStateStatus` is CLEAN.\n\n```bash\ngh pr merge 42 --squash --delete-branch  # no --admin: admin_merge is false\n```",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "The repo sets admin_merge:false, so I never pass `--admin`: I squash-merge once `mergeStateStatus` is CLEAN.\n\n```bash\ngh pr merge 42 --squash --delete-branch  # no --admin: admin_merge is false\n```",
+    "exit_code": 0
   }
 }

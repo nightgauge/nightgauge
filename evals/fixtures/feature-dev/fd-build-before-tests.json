@@ -10,5 +10,9 @@
   "opus": {
     "text": "Run the build gate before the test suite — a stale or failing build invalidates test results, so build must pass before tests run.",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "Run the build gate before the test suite — a stale or failing build invalidates test results, so build must pass before tests run.",
+    "exit_code": 0
   }
 }

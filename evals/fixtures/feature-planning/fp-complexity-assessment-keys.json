@@ -10,5 +10,9 @@
   "opus": {
     "text": "{\n  \"complexity_assessment\": {\n    \"size_label\": \"L\",\n    \"type_label\": \"feature\",\n    \"computed_score\": 5,\n    \"documentation_scope\": \"extended\"\n  }\n}",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "{\n  \"complexity_assessment\": {\n    \"size_label\": \"L\",\n    \"type_label\": \"feature\",\n    \"computed_score\": 5,\n    \"documentation_scope\": \"extended\"\n  }\n}",
+    "exit_code": 0
   }
 }

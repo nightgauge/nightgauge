@@ -10,5 +10,9 @@
   "opus": {
     "text": "{\n  \"approach\": \"verify-and-close\",\n  \"focus_acs\": [1, 2],\n  \"rationale\": \"ACs already satisfied by existing code; route to verify-and-close per #708.\"\n}",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "{\n  \"approach\": \"verify-and-close\",\n  \"focus_acs\": [1, 2],\n  \"rationale\": \"ACs already satisfied by existing code; route to verify-and-close per #708.\"\n}",
+    "exit_code": 0
   }
 }

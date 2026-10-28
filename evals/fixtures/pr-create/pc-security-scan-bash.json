@@ -10,5 +10,9 @@
   "opus": {
     "text": "Run the file-list collection inside an explicit `bash` heredoc — `mapfile -d ''` is empty under zsh and would silently scan 0 files (a false pass). Force bash for the scan block.",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "Run the file-list collection inside an explicit `bash` heredoc — `mapfile -d ''` is empty under zsh and would silently scan 0 files (a false pass). Force bash for the scan block.",
+    "exit_code": 0
   }
 }

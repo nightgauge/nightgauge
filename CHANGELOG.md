@@ -25,6 +25,9 @@ changelog, and the release workflow refuses a tag that does not.
   the skip, and the CLI prints an explicit empty result (also under `--json`).
   The NGD050 remedy names the exact command to file an orphaned capture (#2638).
 
+- **`evaluate-skills --models fable` now runs green in mock mode.** Every
+  skill-eval scenario ships a `fable` fixture, so the fable column no longer
+  errors with a missing-fixture cell (#383).
 - **A feature-dev retry is no longer failed on the previous attempt's dev
   context (#2637).** When a retry wrote no `dev-N.json`, the gate judged the
   one the earlier attempt left and booked its failing tests as

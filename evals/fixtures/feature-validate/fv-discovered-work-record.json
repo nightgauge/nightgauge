@@ -10,5 +10,9 @@
   "opus": {
     "text": "It is a pre-existing failure, so I neither fix it here nor block on it, and I do not drop it silently: I log it and run `nightgauge discovered-work record --source-stage feature-validate --suggested-type bug`.\n\n```json\n{\"action\": \"record_and_skip\", \"source_stage\": \"feature-validate\", \"suggested_type\": \"bug\"}\n```",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "It is a pre-existing failure, so I neither fix it here nor block on it, and I do not drop it silently: I log it and run `nightgauge discovered-work record --source-stage feature-validate --suggested-type bug`.\n\n```json\n{\"action\": \"record_and_skip\", \"source_stage\": \"feature-validate\", \"suggested_type\": \"bug\"}\n```",
+    "exit_code": 0
   }
 }

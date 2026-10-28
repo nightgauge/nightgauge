@@ -10,5 +10,9 @@
   "opus": {
     "text": "It is not a case of 'the visual assertion passed so it's fine': a new console error at step 3 is a hard failure. In strict mode validation_status is failed with errorCategory verify-ui-gate-failed, so no PR is created.\n\n```json\n{\"flow_status\": \"failed\", \"validation_status\": \"failed\", \"pr_created\": false}\n```",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "It is not a case of 'the visual assertion passed so it's fine': a new console error at step 3 is a hard failure. In strict mode validation_status is failed with errorCategory verify-ui-gate-failed, so no PR is created.\n\n```json\n{\"flow_status\": \"failed\", \"validation_status\": \"failed\", \"pr_created\": false}\n```",
+    "exit_code": 0
   }
 }

@@ -210,7 +210,7 @@ Two limits are known and accepted:
 Two tiers, mirroring the `PLATFORM_TEST_URL` pattern from #2092:
 
 - **mock** (default) — each cell's output comes from a fixture file
-  `evals/fixtures/<skill>/<scenarioId>.json` with a `{ haiku, sonnet, opus }`
+  `evals/fixtures/<skill>/<scenarioId>.json` with a `{ haiku, sonnet, opus, fable }`
   shape (any subset). Deterministic, zero API cost. The only mode CI runs and
   what the harness's unit tests use. The shipped fixtures are authored so every
   scenario passes on every tier — the mock matrix is an all-green **baseline**;
