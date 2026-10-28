@@ -359,6 +359,9 @@ path, the resolving step and the binary's version.
   `make build-cli`; elsewhere, manual `reinstall`. An unversioned build (`dev`)
   cannot be compared and is only noted; so is a mismatch while
   `NIGHTGAUGE_BINARY_ISOLATED=1` declares the PATH binary deliberately isolated.
+  Versions that carry a commit hash (git describe `-g<hash>` or a Go
+  pseudo-version) are compared by commit, so one commit in both forms is not
+  stale.
 
 Which bundle counts as installed is VS Code's own record, not the highest version
 number: see [GO_BINARY.md](GO_BINARY.md#which-bundle-the-hooks-run--vscodes-record-not-the-biggest-number).

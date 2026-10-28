@@ -4308,6 +4308,8 @@ var stagePrerequisites = map[state.PipelineStage]struct {
 	// is terminal (no output context), so the prerequisite is pr-create's
 	// "pr" context — same as pr-merge itself.
 	state.StageSpikeMaterialize: {state.StagePRCreate, "pr"},
+	// followup-materialize (#480) runs last on every issue; same reasoning.
+	state.StageFollowupMaterialize: {state.StagePRCreate, "pr"},
 }
 
 // stageOutputContextType maps stages to their output context file prefix.
@@ -5800,14 +5802,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// the function.
 	stages = applyDependabotFastTrack(item, stages, runtime, tracer)
 
-	// Spike issues append a spike-materialize stage after pr-merge that creates
-	// follow-up issues from the artifact's YAML recommendations block. See
-	// docs/SPIKE_CONTRACT.md and #3054.
-	if gh.IsSpikeIssue(item.Labels) {
-		log.Printf("#%d: spike issue detected — appending spike-materialize stage after pr-merge",
-			item.Number)
-		stages = append(stages, state.StageSpikeMaterialize)
-	}
+	// Post-merge filers: spike-materialize on spikes, then followup-materialize
+	// on every issue (#3054, #480).
+	stages = appendPostMergeStages(item, stages)
 
 	// Routing fast-track (#4126): honor the deterministic routing Decision and
 	// skip the stages it marks skippable, on top of any Dependabot/spike
@@ -5973,6 +5970,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		case <-ctx.Done():
 			return
 		default:
+		}
+
+		// followup-materialize (#480) runs on every issue, so it must not
+		// spend a dispatch to find an empty capture: skip it deterministically
+		// when the run recorded no discoveries.
+		if stage == state.StageFollowupMaterialize && !followupCaptureHasRecords(stageWorkspace(runtime, workspaceRoot), item.Number) {
+			runtime.SkipStage(stage)
+			stageIdx++
+			continue
 		}
 
 		lifecycle.stage(stage, runtime.FeatureBranch())
@@ -9109,18 +9115,51 @@ type TrustedCommentReader interface {
 	TrustedComments(ctx context.Context, owner, repo string, number int) ([]trust.Comment, error)
 }
 
+// ClosingMergeReader reads the latest merge of a pull request that closes an
+// issue (#2629); gh.IssueService implements it.
+type ClosingMergeReader interface {
+	LatestClosingMerge(ctx context.Context, owner, repo string, number int) (*gh.ClosingMerge, error)
+}
+
+// MarkerValidates reports whether a closed issue's trusted comments validate
+// its latest closing merge (#2629). Only the newest marker by comment time
+// counts. It validates when no merged closing PR is known, when it names the
+// latest merge's SHA, or when it was written no earlier than that merge (a
+// legacy marker, or a merge the closing-PR list does not show). A reopened
+// issue closed again by a newer merge stays unvalidated until a marker for
+// that merge exists.
+func MarkerValidates(cs []trust.Comment, latest *gh.ClosingMerge) bool {
+	var newest *trust.Comment
+	for i := range cs {
+		if !forge.HasValidationMarker(cs[i].Body) {
+			continue
+		}
+		if newest == nil || cs[i].CreatedAt.After(newest.CreatedAt) {
+			newest = &cs[i]
+		}
+	}
+	if newest == nil {
+		return false
+	}
+	if latest == nil || forge.HasValidationMarkerFor(newest.Body, latest.SHA) {
+		return true
+	}
+	return !latest.MergedAt.After(newest.CreatedAt)
+}
+
 // ResolveValidationByKey resolves the validation state of closed dependency
 // keys ("owner/repo#N"). known maps a key to labels the caller already holds
 // (an on-board node); keys in unknown have their labels read, batched per
 // repository like ResolveIssueStatesByKey. A key whose labels name no program
 // is {Program: false} with no further read; a program member's trusted
-// comments are read for the marker.
+// comments and latest closing merge are read and judged by MarkerValidates.
 //
-// A key the resolver could not decide — a failed label or comment read, an
-// issue absent from the batch, no comment reader — is left OUT of the map, and
+// A key the resolver could not decide — a failed label, comment or closing-
+// merge read, an issue absent from the batch, no comment or merge reader — is
+// left OUT of the map, and
 // callers fail closed on it. The marker is only ever read from trusted
 // comments, so a marker pasted by anyone else never releases a dependent.
-func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments TrustedCommentReader, known map[string][]string, unknown []string) map[string]ValidationState {
+func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments TrustedCommentReader, merges ClosingMergeReader, known map[string][]string, unknown []string) map[string]ValidationState {
 	labels := make(map[string][]string, len(known))
 	for k, l := range known {
 		labels[k] = l
@@ -9153,7 +9192,7 @@ func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments 
 			out[key] = ValidationState{}
 			continue
 		}
-		if comments == nil {
+		if comments == nil || merges == nil {
 			continue
 		}
 		repo, num, ok := splitNodeKey(key)
@@ -9166,14 +9205,12 @@ func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments 
 			log.Printf("WARN: ResolveValidationByKey: comment read failed for %s: %v", key, err)
 			continue
 		}
-		st := ValidationState{Program: true}
-		for _, c := range cs {
-			if forge.HasValidationMarker(c.Body) {
-				st.Validated = true
-				break
-			}
+		latest, err := merges.LatestClosingMerge(ctx, owner, name, num)
+		if err != nil {
+			log.Printf("WARN: ResolveValidationByKey: closing-merge read failed for %s: %v", key, err)
+			continue
 		}
-		out[key] = st
+		out[key] = ValidationState{Program: true, Validated: MarkerValidates(cs, latest)}
 	}
 	return out
 }
@@ -11093,6 +11130,19 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 	if _, _, prNum, parseErr := parsePRURL(snap.PrUrl); parseErr == nil {
 		mergedPRNumber = prNum
 	}
+	s.runPostMerge(ctx, item, runtime, mergedPRNumber)
+	return false
+}
+
+// runPostMerge is the post-merge path for a PR already confirmed MERGED: the
+// issue close and epic rollup, the main-check verdict and validation marker
+// (checkEpicCompletion), the run-record breadcrumb, the survival record, and
+// the main-check Action Center card. verifyPRMergeForStage calls it for a run
+// that reached its merge stage; the autonomous PR-recheck sweep calls it for a
+// run a transient failure killed before it saw its PR merge (#2607), with a nil
+// runtime because that run's record has already ended — so the breadcrumb is
+// skipped and everything else runs exactly as it does for a live run.
+func (s *Scheduler) runPostMerge(ctx context.Context, item types.BoardItem, runtime *state.RuntimeState, mergedPRNumber int) hooks.PostMergeResult {
 	pmResult := s.checkEpicCompletion(ctx, item, mergedPRNumber)
 
 	// (#4133) Persist the post-merge ground-truth breadcrumb onto runtime state
@@ -11117,7 +11167,7 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 	// repo, and an empty root would make filepath.Join yield the cwd-relative
 	// ".nightgauge/pipeline" — writing a run's state into whatever directory the
 	// process happens to be in. Skip the breadcrumb instead.
-	if pmResult.MergedCommitSha != "" || pmResult.MergedAt != "" {
+	if runtime != nil && (pmResult.MergedCommitSha != "" || pmResult.MergedAt != "") {
 		runtime.SetMergeOutcome(pmResult.MergedCommitSha, pmResult.MergedAt)
 		// (#1249) The run record carries what main did with the merge, next to
 		// the breadcrumb that names the commit it did it to.
@@ -11173,7 +11223,7 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 			log.Printf("#%d: post-merge: %s", item.Number, note)
 		}
 	}
-	return false
+	return pmResult
 }
 
 // survivalShortSHA abbreviates a commit SHA for log lines.

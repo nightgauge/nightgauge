@@ -8218,6 +8218,40 @@ workflow would be actively misleading.
 
 ---
 
+## Follow-up Filing
+
+### `follow_up_filing`
+
+Controls the two post-merge issue filers, `spike-materialize` and
+`followup-materialize` (#480), under
+[SELF_IMPROVEMENT_BOUNDARIES.md Rule 5](SELF_IMPROVEMENT_BOUNDARIES.md#rule-5-autonomous-issue-filing-is-governed).
+
+```yaml
+follow_up_filing:
+  enabled: true # kill switch; false forces report-only
+  mode: report # report | file
+  max_per_run: 10 # creates beyond this are refused loudly (exit 3)
+  allow_untrusted_authors: false
+```
+
+| Key                       | Default  | Meaning                                                             |
+| ------------------------- | -------- | ------------------------------------------------------------------- |
+| `enabled`                 | `true`   | `false` files nothing and emits the would-file list                 |
+| `mode`                    | `report` | `file` creates issues; `report` only lists them                     |
+| `max_per_run`             | `10`     | Per-run create cap; refused records stay in the capture for a rerun |
+| `allow_untrusted_authors` | `false`  | File for an issue whose author the trust gate rejects               |
+
+**Fail closed.** A missing, unreadable or unparseable `.nightgauge/config.yaml`,
+an unknown `mode` or a negative `max_per_run` resolves to report-only with a
+reason. An absent `follow_up_filing` key in a valid config takes the defaults
+above, so filing is opt-in. The Nightgauge repository sets `mode: file`.
+
+The scheduler appends `followup-materialize` after pr-merge on every issue and
+skips it without a dispatch when the run's discovered-work capture holds no
+records.
+
+---
+
 ## Forge Configuration (`schema_version: 2`)
 
 > **Design context** — for the _why_ behind the abstraction (interface

@@ -1,0 +1,36 @@
+{
+  "models": [
+    {
+      "id": "claude-opus-4-8",
+      "provider": "anthropic",
+      "tiers": ["opus"],
+      "display_name": "Claude Opus 4.8",
+      "concrete_version": "claude-opus-4-8",
+      "rates": { "input": 5, "output": 25 },
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
+      "context_window": 1000000
+    },
+    {
+      "id": "claude-opus-4-1",
+      "provider": "anthropic",
+      "tiers": ["opus"],
+      "display_name": "Claude Opus 4.1",
+      "concrete_version": "claude-opus-4-1",
+      "rates": { "input": 15, "output": 75 },
+      "supported_efforts": ["low", "medium", "high"],
+      "context_window": 200000,
+      "deprecated": true,
+      "replacement": "claude-opus-4-8"
+    },
+    {
+      "id": "claude-sonnet-4-8",
+      "provider": "anthropic",
+      "tiers": ["sonnet"],
+      "display_name": "Claude Sonnet 4.8",
+      "concrete_version": "claude-sonnet-4-8",
+      "rates": { "input": 3, "output": 15 },
+      "supported_efforts": ["low", "medium", "high"],
+      "context_window": 1000000
+    }
+  ]
+}

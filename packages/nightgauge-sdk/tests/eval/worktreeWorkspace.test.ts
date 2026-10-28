@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -221,5 +221,78 @@ describe("WorktreeWorkspaceProvider", () => {
     });
     await provider.acquire(task("base-commit", "e".repeat(40)), CELL);
     expect(calls.some((c) => c.args[0] === "clone")).toBe(false);
+  });
+});
+
+describe("WorktreeWorkspaceProvider isolation: clone (#2118)", () => {
+  let root: string;
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  async function git(args: string[], cwd: string): Promise<ExecResult> {
+    const { defaultExec } = await import("../../src/eval/worktreeWorkspace.js");
+    return defaultExec("git", args, { cwd });
+  }
+
+  /** A bare source repo with one commit on main; returns [bareDir, sha]. */
+  async function seed(): Promise<[string, string]> {
+    root = await mkdtemp(join(tmpdir(), "ng-clone-"));
+    const work = join(root, "work");
+    const bare = join(root, "src.git");
+    const id = ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"];
+    await git(["init", "-q", "-b", "main", work], root);
+    await git([...id, "commit", "-q", "--allow-empty", "-m", "seed"], work);
+    await git(["clone", "-q", "--bare", work, bare], root);
+    const sha = (await git(["rev-parse", "HEAD"], work)).stdout.trim();
+    return [bare, sha];
+  }
+
+  it("gives each cell its own clone, branch and git dir, refuses pushes to main, and disposes", async () => {
+    const [bare, sha] = await seed();
+    const provider = new WorktreeWorkspaceProvider({
+      repoRoot: bare,
+      workspacesDir: join(root, "cells"),
+      isolation: "clone",
+      runId: "r1",
+    });
+    const t = task("base-commit", sha);
+    const a = await provider.acquire(t, { ...CELL, effort: "low" });
+    const b = await provider.acquire(t, { ...CELL, effort: "high" });
+    expect(a.dir).not.toBe(b.dir);
+    const branchA = (await git(["branch", "--show-current"], a.dir)).stdout.trim();
+    const branchB = (await git(["branch", "--show-current"], b.dir)).stdout.trim();
+    expect([branchA, branchB]).toEqual(["eval/sweep/r1/low", "eval/sweep/r1/high"]);
+    const gitDirA = (await git(["rev-parse", "--absolute-git-dir"], a.dir)).stdout.trim();
+    const gitDirB = (await git(["rev-parse", "--absolute-git-dir"], b.dir)).stdout.trim();
+    expect(gitDirA).not.toBe(gitDirB);
+    expect(gitDirA.startsWith(await realpath(a.dir))).toBe(true);
+
+    await git(
+      [
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "cell work",
+      ],
+      a.dir
+    );
+    const push = await git(["push", "origin", "HEAD:refs/heads/main"], a.dir);
+    expect(push.code).not.toBe(0);
+    expect(push.stderr).toContain("refusing to push to refs/heads/main");
+    // The cell's own branch may be pushed.
+    expect((await git(["push", "origin"], a.dir)).code).toBe(0);
+
+    await a.dispose();
+    await b.dispose();
+    await expect(stat(a.dir)).rejects.toThrow();
+    await expect(stat(b.dir)).rejects.toThrow();
   });
 });

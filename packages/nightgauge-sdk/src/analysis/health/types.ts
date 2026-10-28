@@ -9,6 +9,7 @@
  */
 
 import type { ExecutionHistoryRecord } from "../types.js";
+import type { ControlBandResult } from "./controlBands.js";
 import type { SkillEffectivenessEntry } from "../skill-effectiveness-types.js";
 
 // ── Dimension Identifiers ─────────────────────────────────────────
@@ -88,6 +89,8 @@ export interface DimensionResult {
   /** Why hasEnoughData is false (named in the series' excluded_dimensions, #1900). */
   insufficientDataReason?: string;
   periodComparison?: PeriodComparison;
+  /** Control-band outcome for the latest run (cost-health only, #1286). */
+  controlBand?: ControlBandResult;
 }
 
 // ── Cross-Reference ───────────────────────────────────────────────

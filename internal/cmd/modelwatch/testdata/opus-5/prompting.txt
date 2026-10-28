@@ -1,0 +1,3 @@
+Claude Opus 5 verifies its own work more readily than earlier models, so explicit verification instructions are often redundant.
+Opus 5 delegates to subagents more readily; state when work should stay in the main session.
+Opus 5 narrates its progress less between tool calls.

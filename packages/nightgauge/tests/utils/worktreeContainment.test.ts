@@ -440,6 +440,7 @@ describe("retry — a rewrite of the same paths is still the stage's (#129)", ()
     const first = await captureContainmentBaseline({
       stageCwd: worktree,
       repoPaths: [primary, sibling],
+      issueNumber: 129,
     });
     stageWritesIntoSibling();
     const firstReport = await detectContainmentBreach({
@@ -453,6 +454,7 @@ describe("retry — a rewrite of the same paths is still the stage's (#129)", ()
     const second = await captureContainmentBaseline({
       stageCwd: worktree,
       repoPaths: [primary, sibling],
+      issueNumber: 129,
     });
     fs.writeFileSync(
       path.join(sibling, "src", "handlers.ts"),
@@ -761,5 +763,106 @@ describe("a pipeline worktree outside the repo root (#2038, ADR-024 § 9)", () =
     expect(report.breaches[0].paths).toEqual(["src/router.ts"]);
     // Artifacts go to the main checkout, which outlives the worktree.
     expect(report.artifactDir?.startsWith(containmentDir(primary))).toBe(true);
+  });
+});
+
+describe("the retry ledger is scoped to the issue that recorded it (#2608)", () => {
+  function ledgerFile(): string {
+    return path.join(containmentDir(primary), "attributed.json");
+  }
+
+  async function attributeToIssue129(): Promise<void> {
+    const first = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+      issueNumber: 129,
+    });
+    stageWritesIntoSibling();
+    const report = await detectContainmentBreach({
+      baseline: first,
+      stage: "feature-dev",
+      issueNumber: 129,
+    });
+    expect(report.breaches).toHaveLength(1);
+  }
+
+  it("does not blame another issue for a path attributed to issue 129 and left untouched", async () => {
+    await attributeToIssue129();
+
+    const other = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+      issueNumber: 2608,
+    });
+    const report = await detectContainmentBreach({
+      baseline: other,
+      stage: "feature-dev",
+      issueNumber: 2608,
+    });
+    expect(report.breaches).toEqual([]);
+    expect(report.warnings).toEqual([]);
+
+    // The entry survives for its owner: a retry of 129 that rewrites it breaches.
+    const retry = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+      issueNumber: 129,
+    });
+    fs.writeFileSync(path.join(sibling, "src", "handlers.ts"), "// retry of 129\n");
+    const retryReport = await detectContainmentBreach({
+      baseline: retry,
+      stage: "feature-dev",
+      issueNumber: 129,
+    });
+    expect(retryReport.breaches).toHaveLength(1);
+    expect(retryReport.breaches[0].paths).toContain("src/handlers.ts");
+  });
+
+  it("reports another issue's change to that path as ambiguous, never as a breach", async () => {
+    await attributeToIssue129();
+
+    const other = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+      issueNumber: 2608,
+    });
+    fs.writeFileSync(path.join(sibling, "src", "handlers.ts"), "// issue 2608 edit\n");
+    const report = await detectContainmentBreach({
+      baseline: other,
+      stage: "feature-dev",
+      issueNumber: 2608,
+    });
+    expect(report.breaches).toEqual([]);
+    expect(report.warnings).toHaveLength(1);
+    expect(report.warnings[0].ambiguousPaths).toContain("src/handlers.ts");
+  });
+
+  it("ignores and rewrites a legacy unowned ledger", async () => {
+    await attributeToIssue129();
+    // Rewrite the ledger in the pre-#2608 shape with fingerprints that match.
+    const v2 = JSON.parse(fs.readFileSync(ledgerFile(), "utf-8"));
+    const legacy: Record<string, Record<string, string>> = {};
+    for (const [repo, files] of Object.entries(v2.repos as Record<string, object>)) {
+      legacy[repo] = {};
+      for (const [file, entry] of Object.entries(
+        files as Record<string, { fingerprint: string }>
+      )) {
+        legacy[repo][file] = entry.fingerprint;
+      }
+    }
+    fs.writeFileSync(ledgerFile(), JSON.stringify(legacy));
+
+    const baseline = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+      issueNumber: 129,
+    });
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 129,
+    });
+    expect(report.breaches).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(ledgerFile(), "utf-8"))).toEqual({ version: 2, repos: {} });
   });
 });

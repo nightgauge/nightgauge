@@ -65,6 +65,8 @@ var stageBaseTokens = map[string]int{
 	"pr-merge":          21700,
 	"spike-materialize": 1561,
 	"issue-refine":      6556,
+	// followup-materialize (#480): 3336 bytes -> 834, measured the same way.
+	"followup-materialize": 834,
 }
 
 // maxStageBaseTokens is the normalization denominator: the heaviest measured

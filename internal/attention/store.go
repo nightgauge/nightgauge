@@ -750,6 +750,7 @@ func (s *Store) applyRaiseDefaults(req *DecisionRequest) {
 	if req.CreatedAt == "" {
 		req.CreatedAt = now.Format(tsLayout)
 	}
+	req.OnsetAt = normalizeOnset(req.OnsetAt, req.CreatedAt)
 	if req.ExpiresAt == "" {
 		// A raise without an explicit expiry gets a conservative 24h default so
 		// nothing lingers forever (ADR-015 §C). Producers always set this
@@ -838,14 +839,32 @@ func severityRank(s Severity) int {
 	}
 }
 
+// normalizeOnset returns onset in the store's UTC layout, or "" when it cannot
+// be parsed or falls after createdAt. A condition cannot begin after it was
+// noticed; showing such an onset would be a confident lie (clock skew).
+func normalizeOnset(onset, createdAt string) string {
+	if onset == "" {
+		return ""
+	}
+	ts, err := time.Parse(time.RFC3339Nano, onset)
+	if err != nil {
+		return ""
+	}
+	if created, err := time.Parse(time.RFC3339Nano, createdAt); err == nil && ts.After(created) {
+		return ""
+	}
+	return ts.UTC().Format(tsLayout)
+}
+
 func sortInbox(reqs []DecisionRequest) {
 	sort.SliceStable(reqs, func(i, j int) bool {
 		ri, rj := severityRank(reqs[i].Severity), severityRank(reqs[j].Severity)
 		if ri != rj {
 			return ri < rj
 		}
-		// Newest first within a severity band.
-		return reqs[i].CreatedAt > reqs[j].CreatedAt
+		// Newest condition first within a severity band — the same instant
+		// the row's age is measured from (#1582).
+		return reqs[i].ConditionSince() > reqs[j].ConditionSince()
 	})
 }
 

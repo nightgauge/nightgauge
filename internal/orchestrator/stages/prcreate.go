@@ -151,6 +151,9 @@ type PRCreateSnapshot struct {
 	// (#2595), built by ResolveACVerdicts. Any unmet verdict renders the
 	// body with `Refs #N` instead of `Closes #N`.
 	ACVerdicts []ACVerdict
+	// ACFingerprint is ac-reconcile's fingerprint of the criteria the run
+	// planned against (#2623), recorded in pr-{N}.json for the resume gate.
+	ACFingerprint string
 
 	// Planning / knowledge
 	KnowledgePath    string
@@ -666,6 +669,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 			KnowledgePath: snap.KnowledgePath,
 			ClosesIssue:   !HasUnmet(snap.ACVerdicts),
 			ACVerdicts:    snap.ACVerdicts,
+			ACFingerprint: snap.ACFingerprint,
 		})
 		ph.complete("write-context")
 		ph.skipOffPath()
@@ -732,6 +736,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		KnowledgePath: snap.KnowledgePath,
 		ClosesIssue:   !HasUnmet(snap.ACVerdicts),
 		ACVerdicts:    snap.ACVerdicts,
+		ACFingerprint: snap.ACFingerprint,
 	}); writeErr != nil {
 		// The PR exists, so the stage still succeeded deterministically — but
 		// pr-{N}.json did not land, so write-context failed and says so.
@@ -807,7 +812,11 @@ type prContextPayload struct {
 	// close or mark Done an issue whose PR did not close it.
 	ClosesIssue bool `json:"closes_issue"`
 	// ACVerdicts records the per-criterion verdict the body was rendered from.
-	ACVerdicts       []ACVerdict       `json:"acceptance_criteria"`
+	ACVerdicts []ACVerdict `json:"acceptance_criteria"`
+	// ACFingerprint is the fingerprint of the criteria this PR was built
+	// against (#2623). A resumed run fast-forwards to pr-merge only while the
+	// issue's current criteria still produce it.
+	ACFingerprint    string            `json:"ac_fingerprint,omitempty"`
 	PreflightResults map[string]string `json:"preflight_results"`
 	CIMonitoring     map[string]any    `json:"ci_monitoring"`
 	CreatedAt        string            `json:"created_at"`
@@ -1030,6 +1039,7 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 			det = preflight.ReconcileACs(workdir, issueNumber, acCheckboxBody(criteria))
 		}
 		snap.ACVerdicts = ResolveACVerdicts(criteria, validateVerdicts, det)
+		snap.ACFingerprint = rec.ACFingerprint
 	}
 
 	// planning-{N}.json — picks up knowledge_path when not already set.

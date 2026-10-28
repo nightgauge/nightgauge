@@ -19,6 +19,9 @@ and this project adheres to
   `unreported` and is never counted as observed. Markers and inference keep
   their outcomes. `nightgauge phase reconcile` prints the same verdicts as JSON.
 
+- **Each run's health record also logs cost control-band excursions
+  (#1286).** Excursions are appended to `health/control-bands.jsonl` beside the
+  health series. The band ships disabled until its baseline is proven stable.
 - **CLI-started runs show phase progress and their output (#586).** A run
   started with `nightgauge run` in a terminal now shows live phase progress on
   its tree node. The node's tooltip names the run's session log, and the new
@@ -30,6 +33,18 @@ and this project adheres to
   never-reachable `batch-detection` / `batch-plan-detection` phase.
 
 ### Fixed
+
+- **Action Center cards are aged from when the condition began (#1582).** A
+  `main` red for ten hours, or a PR waiting a day for review, no longer reads
+  "just now" because a sweep only just stored it. Decision requests carry an
+  optional `onset_at`, which the human-gate and default-branch-health producers
+  fill from forge data. The row's age and the order within a severity band
+  both use it. Where onset is unknown, the row reads "observed …".
+
+- **Action Center bands now rank the way they read (#1583).** The tree shows
+  one band per severity, most urgent first: "Blocking the fleet", "Blocking a
+  run", "FYI". The lowest band no longer reads "Needs a human", and a red
+  default branch sits above green dependency-update PRs.
 
 - **An interactive Codex stage stays alive while you work in its terminal
   (#431).** The TUI launch, each message relayed from the Output panel, and

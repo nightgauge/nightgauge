@@ -863,6 +863,28 @@ func TestEvaluatePostMerge_ValidationMarkerIsIdempotent(t *testing.T) {
 	}
 }
 
+// A reopened issue's marker for an earlier merge does not suppress the marker
+// for this merge; a marker for this merge does (#2629).
+func TestEvaluatePostMerge_ValidationMarkerIsSHAAware(t *testing.T) {
+	green := func() MainCheckReader {
+		return &scriptedChecks{frames: [][]forgetypes.CheckDetail{{run("test", "COMPLETED", "SUCCESS")}}, required: []string{"test"}}
+	}
+	other := &fakeMarks{comments: []trust.Comment{{Author: "bot", Body: forge.ValidationMarkerComment("main", "dadc5798")}}}
+	if got := runHookWithMarks(t, green(), other).ValidationMarker; got != ValidationMarkerWritten {
+		t.Fatalf("marker for another SHA: outcome = %q, want written", got)
+	}
+	if len(other.writes) != 1 || !forge.HasValidationMarkerFor(other.writes[0], "cafe1234") {
+		t.Fatalf("writes = %q, want one marker for cafe1234", other.writes)
+	}
+	same := &fakeMarks{comments: []trust.Comment{{Author: "bot", Body: forge.ValidationMarkerComment("main", "cafe1234")}}}
+	if got := runHookWithMarks(t, green(), same).ValidationMarker; got != ValidationMarkerPresent {
+		t.Fatalf("marker for the same SHA: outcome = %q, want present", got)
+	}
+	if len(same.writes) != 0 {
+		t.Fatalf("writes = %d, want 0", len(same.writes))
+	}
+}
+
 // A failed comment read posts nothing (it cannot rule out a duplicate) and a
 // failed write is reported; both set Failed, since the program dependents stay
 // held until the marker exists. No writer is reported as not wired.

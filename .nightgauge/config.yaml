@@ -78,6 +78,14 @@ automations:
   dry_run: true
   triggers: []
 
+# Follow-up filing (#480, SELF_IMPROVEMENT_BOUNDARIES Rule 5). The dogfood repo
+# files; the built-in default is report-only.
+follow_up_filing:
+  enabled: true
+  mode: file
+  max_per_run: 10
+  allow_untrusted_authors: false
+
 autonomous_discovery:
   enabled: false
   kill_switch: true

@@ -6,6 +6,8 @@
 import { describe, it, expect } from "vitest";
 import {
   ModelEvalRunner,
+  CellExecutionError,
+  resolveSweepEfforts,
   cellSkipReason,
   mapWithConcurrency,
   type EvalCellExecutor,
@@ -410,5 +412,110 @@ describe("mapWithConcurrency", () => {
     });
     expect(out).toEqual([10, 20, 30, 40, 50, 60]);
     expect(maxInFlight).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("ModelEvalRunner.sweep (#2118)", () => {
+  const MODEL = "claude-opus-4-8";
+  const SWEEP = {
+    suite: "effort-sweep",
+    runId: "r1",
+    timestamp: "2026-10-27T00:00:00Z",
+    mode: "mock" as const,
+    task: TASK("control"),
+    modelId: MODEL,
+    controlHash: "abc",
+    models: MODELS,
+    estimateCellUsd: () => 1,
+  };
+
+  /** Executor that reports the cell's own effort back, with a per-effort cost. */
+  const effortEcho = (fail?: string, timeout?: string): EvalCellExecutor => ({
+    async execute(_task, cell) {
+      if (cell.effort === timeout) {
+        throw new CellExecutionError("timed out", {
+          cost_usd: 2.5,
+          latency_ms: 9000,
+          sweep: { wall_clock_seconds: 9, timed_out: true, objective_passed: false },
+        });
+      }
+      const ok = cell.effort !== fail;
+      return {
+        verdict: ok ? "pass" : "fail",
+        tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0 },
+        cost_usd: 1.25,
+        latency_ms: 5000,
+        attempts_to_green: 2,
+        gate_results: [],
+        model_version_label: cell.model_id,
+        sweep: {
+          wall_clock_seconds: 5,
+          objective_passed: ok,
+          stage_efforts: { "feature-dev": cell.effort },
+        },
+      };
+    },
+  });
+
+  it("resolveSweepEfforts returns the ladder, a subset, and rejects off-ladder efforts", () => {
+    const ladder = resolveSweepEfforts(MODEL);
+    expect(ladder.length).toBeGreaterThanOrEqual(3);
+    expect(resolveSweepEfforts(MODEL, [ladder[2], ladder[0]])).toEqual([ladder[0], ladder[2]]);
+    expect(() => resolveSweepEfforts(MODEL, ["bogus"])).toThrow(/not supported/);
+    expect(() => resolveSweepEfforts("no-such-model")).toThrow(/no registry descriptor/);
+  });
+
+  it("runs one cell per effort, each recorded at its own effort", async () => {
+    const efforts = resolveSweepEfforts(MODEL).slice(0, 3);
+    const { provider } = trackingProvider();
+    const run = await new ModelEvalRunner(effortEcho(), provider).sweep({ ...SWEEP, efforts });
+    expect(run.cells.map((c) => c.cell.effort)).toEqual(efforts);
+    expect(run.cells.map((c) => c.stage_efforts?.["feature-dev"])).toEqual(efforts);
+    for (const c of run.cells) {
+      expect(c.cost_usd).toBe(1.25);
+      expect(c.control_hash).toBe("abc");
+      expect(c.objective_passed).toBe(true);
+    }
+    expect(run.summary.cap_reached).toBeUndefined();
+  });
+
+  it("records a failing cell with its cost and a timed-out cell with partial cost", async () => {
+    const [a, b, c] = resolveSweepEfforts(MODEL);
+    const { provider } = trackingProvider();
+    const run = await new ModelEvalRunner(effortEcho(a, b), provider).sweep({
+      ...SWEEP,
+      efforts: [a, b, c],
+    });
+    const [fail, timedOut, pass] = run.cells;
+    expect(fail).toMatchObject({ verdict: "fail", objective_passed: false, cost_usd: 1.25 });
+    expect(timedOut).toMatchObject({
+      verdict: "error",
+      timed_out: true,
+      cost_usd: 2.5,
+      latency_ms: 9000,
+    });
+    expect(pass.verdict).toBe("pass");
+    expect(run.summary.total_cost_usd).toBe(5);
+  });
+
+  it("stops before any cell when the projected spend exceeds the cap", async () => {
+    const { provider, acquired } = trackingProvider();
+    const run = await new ModelEvalRunner(effortEcho(), provider).sweep({ ...SWEEP, maxUsd: 0.01 });
+    expect(run.cells).toHaveLength(0);
+    expect(acquired).toHaveLength(0);
+    expect(run.summary.cap_reached).toMatchObject({
+      max_usd: 0.01,
+      spent_usd: 0,
+      projected_usd: 1,
+      skipped_efforts: resolveSweepEfforts(MODEL),
+    });
+  });
+
+  it("projects from the costliest completed cell when it exceeds the estimate", async () => {
+    const { provider } = trackingProvider();
+    // estimate 1, each cell costs 1.25: after one cell, 1.25 + 1.25 = 2.5 > 2.
+    const run = await new ModelEvalRunner(effortEcho(), provider).sweep({ ...SWEEP, maxUsd: 2 });
+    expect(run.cells).toHaveLength(1);
+    expect(run.summary.cap_reached?.projected_usd).toBe(2.5);
   });
 });

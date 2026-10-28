@@ -2,9 +2,9 @@
  * attentionTreeItems — the vscode.TreeItem rendering for the Action Center
  * (ADR 015 §E, VSCode tree-section mockup).
  *
- * Root children are severity-band group headers ("Blocking" for
- * `blocking_fleet`/`blocking_run`, "Needs a human" for `fyi`), each containing
- * one card per open {@link AttentionRequestView}. Rendering decisions (icon
+ * Root children are severity-band group headers, one per severity in rank
+ * order ({@link SEVERITY_BANDS}), each containing one card per open
+ * {@link AttentionRequestView}. Rendering decisions (icon
  * per `kind`, severity color, the one-line context string, relative age, and
  * the option-consequence text used by the quick-pick) live here so the
  * provider stays a thin fetch-then-render shell.
@@ -96,6 +96,24 @@ export function formatRelativeAge(iso: string): string {
   return `${diffDays}d ago`;
 }
 
+/**
+ * The instant a card is aged and ordered by (#1582): the condition's onset when
+ * the producer supplied a usable one, otherwise when it was first observed —
+ * flagged, so the row can say so rather than pass a sweep time off as onset.
+ * An onset after `created_at` is impossible (clock skew) and is ignored.
+ */
+export function conditionTime(request: AttentionRequestView): {
+  iso: string;
+  observed: boolean;
+} {
+  const onset = request.onset_at ? new Date(request.onset_at).getTime() : NaN;
+  const created = new Date(request.created_at).getTime();
+  if (!Number.isNaN(onset) && (Number.isNaN(created) || onset <= created)) {
+    return { iso: request.onset_at as string, observed: false };
+  }
+  return { iso: request.created_at, observed: true };
+}
+
 /** Full one-line description: context line + relative age + suppression state.
  *
  * "muted" and "seen" are rendered rather than hidden. A muted card is silenced,
@@ -103,7 +121,12 @@ export function formatRelativeAge(iso: string): string {
  * scanning the list has to be able to tell which entries have already been
  * spoken for without opening each one. */
 export function formatDescription(request: AttentionRequestView): string {
-  const parts = [formatContextLine(request.context), formatRelativeAge(request.created_at)];
+  const since = conditionTime(request);
+  const age = formatRelativeAge(since.iso);
+  const parts = [
+    formatContextLine(request.context),
+    since.observed && age ? `observed ${age}` : age,
+  ];
   if (request.lifecycle.muted) {
     parts.push("muted");
   } else if (request.lifecycle.state === "acknowledged") {
@@ -213,24 +236,34 @@ export function describeAttentionOption(
   }
 }
 
-/** Rank used to order the "Blocking" band: fleet-wide stops surface first. */
-function severityRank(severity: AttentionRequestView["severity"]): number {
-  switch (severity) {
-    case "blocking_fleet":
-      return 0;
-    case "blocking_run":
-      return 1;
-    case "fyi":
-    default:
-      return 2;
-  }
+/**
+ * The tree's severity bands, most urgent first: one band per severity value,
+ * labelled with what that severity means (internal/attention/schema.go), so no
+ * band reads as more urgent than one ranked above it (ADR-009 Decision 5,
+ * #1583). A band's index is its severity's rank, so ordering and labelling
+ * cannot drift apart.
+ */
+export const SEVERITY_BANDS: ReadonlyArray<{
+  severity: AttentionRequestView["severity"];
+  label: string;
+}> = [
+  { severity: "blocking_fleet", label: "Blocking the fleet" },
+  { severity: "blocking_run", label: "Blocking a run" },
+  { severity: "fyi", label: "FYI" },
+];
+
+/** Index into {@link SEVERITY_BANDS}; an unknown severity ranks with `fyi`, last. */
+export function severityRank(severity: AttentionRequestView["severity"]): number {
+  const rank = SEVERITY_BANDS.findIndex((band) => band.severity === severity);
+  return rank === -1 ? SEVERITY_BANDS.length - 1 : rank;
 }
 
-/** Severity-desc, then newest-first — matches the store's own list ordering. */
+/** Severity-desc, then newest condition first — the same instant the row's age
+ * shows, and the store's own list ordering. */
 export function compareRequests(a: AttentionRequestView, b: AttentionRequestView): number {
   const rankDiff = severityRank(a.severity) - severityRank(b.severity);
   if (rankDiff !== 0) return rankDiff;
-  return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  return new Date(conditionTime(b).iso).getTime() - new Date(conditionTime(a).iso).getTime();
 }
 
 /** One DecisionRequest card. Clicking it (or its inline icon) opens the resolve quick-pick. */
@@ -268,12 +301,21 @@ export class AttentionRequestTreeItem extends AttentionTreeItem {
         `_Muted by ${lifecycle.muted.actor || "an operator"} — re-alerts if the condition changes._\n\n`
       );
     }
+    const since = conditionTime(this.request);
+    const observedAge = formatRelativeAge(this.request.created_at);
+    if (!since.observed) {
+      md.appendMarkdown(
+        `_Began ${formatRelativeAge(since.iso)} · first observed ${observedAge}_\n\n`
+      );
+    } else if (observedAge) {
+      md.appendMarkdown(`_First observed ${observedAge} — condition onset unknown_\n\n`);
+    }
     md.appendMarkdown(`_Producer: ${producer}_`);
     return md;
   }
 }
 
-/** Severity-band group header ("Blocking" / "Needs a human") from the mockup. */
+/** Severity-band group header, one per {@link SEVERITY_BANDS} entry. */
 export class AttentionGroupTreeItem extends AttentionTreeItem {
   constructor(
     label: string,

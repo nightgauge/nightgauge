@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/workorder"
@@ -96,7 +95,7 @@ participates.`,
 				return err
 			}
 
-			marked, err := readValidationMarks(cmd.Context(), markerTrustGate(client, scope.workdir), issues)
+			marked, err := readValidationMarks(cmd.Context(), markerTrustGate(client, scope.workdir), gh.NewIssueService(client), issues)
 			if err != nil {
 				return err
 			}
@@ -156,11 +155,12 @@ func listProgramIssues(ctx context.Context, lister labeledIssueLister, f *workor
 	return out, nil
 }
 
-// readValidationMarks reads each closed issue's trusted comments and returns
-// the keys (workorder.IssueKey) of those carrying the post-merge validation
-// marker (#2574). A comment read that fails fails the report, as an unreadable
+// readValidationMarks reads each closed issue's trusted comments and latest
+// closing merge and returns the keys (workorder.IssueKey) of those whose
+// marker validates that merge (#2574, #2629: orchestrator.MarkerValidates,
+// the rule dispatch applies). A comment or merge read that fails fails the report, as an unreadable
 // repository does: a validated count missing an issue would misstate progress.
-func readValidationMarks(ctx context.Context, comments orchestrator.TrustedCommentReader, issues []pkgtypes.Issue) (map[string]bool, error) {
+func readValidationMarks(ctx context.Context, comments orchestrator.TrustedCommentReader, merges orchestrator.ClosingMergeReader, issues []pkgtypes.Issue) (map[string]bool, error) {
 	marked := map[string]bool{}
 	seen := map[string]bool{}
 	for _, is := range issues {
@@ -177,11 +177,12 @@ func readValidationMarks(ctx context.Context, comments orchestrator.TrustedComme
 		if err != nil {
 			return nil, fmt.Errorf("validation marker of %s#%d: %w", is.Repo, is.Number, err)
 		}
-		for _, c := range cs {
-			if forge.HasValidationMarker(c.Body) {
-				marked[key] = true
-				break
-			}
+		latest, err := merges.LatestClosingMerge(ctx, o, r, is.Number)
+		if err != nil {
+			return nil, fmt.Errorf("closing merge of %s#%d: %w", is.Repo, is.Number, err)
+		}
+		if orchestrator.MarkerValidates(cs, latest) {
+			marked[key] = true
 		}
 	}
 	return marked, nil

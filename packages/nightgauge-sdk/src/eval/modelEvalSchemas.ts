@@ -672,6 +672,22 @@ export const ModelEvalCellResultSchema = z
     score: EvalScoreSchema.optional(),
     /** Free-form error when verdict === "error". */
     error: z.string().optional(),
+    /**
+     * Whole-pipeline effort sweep fields (#2118). Set only by
+     * `ModelEvalRunner.sweep()`; absent on matrix-run cells.
+     */
+    /** The control content hash the cell ran against (#2117). */
+    control_hash: z.string().min(1).optional(),
+    /** End-to-end wall time of the pipeline run, seconds. */
+    wall_clock_seconds: z.number().nonnegative().optional(),
+    /** Agent turns across all stages, when the run telemetry reports them. */
+    turns: z.number().int().nonnegative().optional(),
+    /** The control task's `pass_criteria` outcome (tests pass, files changed). */
+    objective_passed: z.boolean().optional(),
+    /** The cell hit its wall-clock timeout; cost is what was spent until then. */
+    timed_out: z.boolean().optional(),
+    /** Effort each stage was actually dispatched at, read from run telemetry. */
+    stage_efforts: z.partialRecord(z.enum(PIPELINE_SKILLS), EffortLevelSchema).optional(),
   })
   .strict();
 export type ModelEvalCellResult = z.infer<typeof ModelEvalCellResultSchema>;
@@ -686,6 +702,19 @@ export const EvalRunSummarySchema = z
     /** Cells the registry interlock excluded before spawn (#571) — never run. */
     skipped: z.number().int().nonnegative(),
     total_cost_usd: z.number().nonnegative(),
+    /**
+     * Set when a sweep stopped before a cell because its projected spend
+     * exceeded `--max-usd` (#2118). The skipped efforts never started.
+     */
+    cap_reached: z
+      .object({
+        max_usd: z.number().nonnegative(),
+        spent_usd: z.number().nonnegative(),
+        projected_usd: z.number().nonnegative(),
+        skipped_efforts: z.array(EffortLevelSchema),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type EvalRunSummary = z.infer<typeof EvalRunSummarySchema>;

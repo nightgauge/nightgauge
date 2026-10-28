@@ -198,7 +198,7 @@ func rankWorkOrder(ctx context.Context, client *gh.Client, programs *workorder.F
 	// (#2574) A closed program blocker releases only with the validation
 	// marker, read through the trust gate as dispatch reads it.
 	known, unknown := workorder.ValidationCandidates(graph, resolved)
-	validation := orchestrator.ResolveValidationByKey(ctx, issueSvc, markerTrustGate(client, scope.workdir), known, unknown)
+	validation := orchestrator.ResolveValidationByKey(ctx, issueSvc, markerTrustGate(client, scope.workdir), issueSvc, known, unknown)
 	return workorder.Rank(programs, graph, resolved, validation), nil
 }
 

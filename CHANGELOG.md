@@ -24,6 +24,54 @@ changelog, and the release workflow refuses a tag that does not.
   `unreported` and is never counted as observed. Markers and inference keep
   their outcomes. `nightgauge phase reconcile` prints the same verdicts as JSON.
 
+- **`nightgauge eval report` turns effort-sweep records into an
+  `effort_default` recommendation (#2119).** It prints a per-effort table (n,
+  pass, objective, quality, variance, cost, wall time, attempts) for one model
+  on one control hash, compares other models swept on that hash, and applies a
+  documented rule: the cheapest, then fastest, effort within a quality
+  tolerance of the best that met the objective criteria in every run. Ties and
+  under-sampled data are reported as such, never recommended. `--json` emits
+  the report as JSON, and `--emit-patch` writes a diff of
+  `behavior.effort_default` for both registry copies for you to apply in a
+  pull request.
+
+- **Discovered work is now filed after every merge, under one set of filing
+  controls (#480).** A new `followup-materialize` stage runs after pr-merge on
+  every issue and turns the run's `discovered-work-{N}.json` records into
+  issues with a type label, Priority, Size, Status=Backlog and a
+  `Discovered in #N (run R, stage S)` line, through
+  `nightgauge followup materialize <N>`. It skips records already filed,
+  comments on an open issue with the same title instead of duplicating it, and
+  consumes the capture. The scheduler skips the stage without a dispatch when
+  nothing was recorded. A new `follow_up_filing` config key (`enabled`, `mode`,
+  `max_per_run`, `allow_untrusted_authors`) governs it and `spike materialize`:
+  the default is report-only, a missing or broken config fails closed to
+  report-only, and records beyond the per-run cap are refused with exit 3
+  instead of truncated. Spike materialization therefore gains a kill switch and
+  a cap; an in-cap run in file mode is unchanged.
+
+- **`nightgauge eval sweep` runs the control issue once per effort of one model
+  (#2118).** Each cell records cost, wall time, attempts, an objective pass/fail
+  and a quality score. Cells run one at a time in separate clones that refuse
+  pushes to `main`. `--max-usd` stops the sweep before a cell that would exceed
+  it and exits 1. Live mode is not available yet: `nightgauge run` cannot stop
+  before pr-merge. See
+  [Whole-pipeline effort sweep](docs/MODEL_EVALUATION.md#whole-pipeline-effort-sweep).
+
+- **`nightgauge-model-watch` turns a model release into reviewable work (#83).**
+  `nightgauge model-watch classify --input <dir>` reads a provider's fetched
+  release pages and proposes a registry patch: the new descriptor and the
+  demotion of the model it displaces. It also reports new effort levels,
+  thinking/effort 400 defects, and overlay proposals with issue drafts. It works
+  for any provider from a manifest, screens vendor quotes for prompt injection,
+  and never writes the registry. See
+  [Adding a model](docs/MODEL_ADAPTATION.md#6-adding-a-model).
+- **Health has tiered control bands over per-run cost (#1286).** A run whose
+  cloud cost is 1σ, 2σ or 3σ above a stable rolling baseline is recorded,
+  diagnosed, or raised as a cost-health finding, as defined in a
+  version-controlled tier file. The band stays dormant until the baseline is
+  proven stable; current history does not pass, so it ships disabled. See
+  [Control Bands](docs/HEALTH_MONITORING.md#control-bands).
 - **Program items validated by the retired bypass keep releasing dependents
   (#2575).** A trusted `<!-- opencode-program:validated -->` comment now counts
   as the post-merge validation marker; an untrusted copy is still ignored, and
@@ -176,6 +224,71 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A reopened issue's old validation marker no longer stands in for its next
+  merge (#2629).** The post-merge hook now skips writing the marker only when
+  one already names this merge commit, and the program dependency gate,
+  `nightgauge next` and `program status` judge the newest marker against the
+  issue's latest closing merge: a marker older than a newer merge for another
+  SHA leaves the issue unvalidated until that merge is marked.
+
+- **Action Center cards are aged from when the condition began (#1582).** A
+  `main` red for ten hours, or a PR waiting a day for review, no longer reads
+  "just now" because a sweep only just stored it. Decision requests carry an
+  optional `onset_at`, which the human-gate and default-branch-health producers
+  fill from forge data. The row's age and the order within a severity band
+  both use it. Where onset is unknown, the row reads "observed …".
+
+- **A resumed run no longer merges past acceptance criteria added after its PR
+  opened (#2623).** Resuming at pr-merge now requires the issue's current
+  criteria to match the fingerprint recorded when the PR was created; otherwise
+  the run re-plans and reuses the open PR. As a backstop, pr-merge changes
+  `Closes #N` to `Refs #N` and lists any unchecked criterion the run never
+  reconciled, so the merge leaves the issue open.
+
+- **A PR that picks up a conflict in the merge queue is sent back to be
+  resolved, not failed** (#2611). pr-merge now names the conflict
+  (`merge-queue-failed: merge conflict with main: …`), and conflict recovery
+  rebases the branch: a real conflict rewinds the run to `feature-dev` on the
+  same branch, and a stale one re-enqueues. Failed merge-group checks and
+  closed PRs are reported as before. A queue entry marked unmergeable only
+  because an entry ahead of it conflicts is now waited out, and re-enqueued if
+  GitHub removes it while the PR is still mergeable, instead of failing.
+
+- **An epic no longer auto-closes while its decomposition is unfinished
+  (#1581).** Closing its only filed sub-issue used to close the epic even with
+  planned items and acceptance criteria still unticked in its body. An
+  unchecked task-list item now holds the epic open unless every issue it
+  references is a closed sub-issue, and `nightgauge hook post-merge` reports
+  which epic it closed, or that it declined as `unfinished_decomposition` and
+  the items still pending.
+
+- **Action Center bands now rank the way they read (#1583).** The tree shows
+  one band per severity, most urgent first: "Blocking the fleet", "Blocking a
+  run", "FYI". The lowest band no longer reads "Needs a human", and a red
+  default branch sits above green dependency-update PRs.
+
+- **Doctor no longer reports a stale binary for the same commit (#2612).**
+  NGD001 compared version strings verbatim, so a `make build-cli` binary
+  (`v0.7.2-70-g0a198e35`) and a packaged one (`0.7.3-0.20261027102022-0a198e354e6e`)
+  built from one commit were flagged stale. Versions carrying a commit hash are
+  now compared by commit.
+
+- **Worktree containment no longer fails one issue for another issue's
+  leftovers (#2608).** The retry ledger in `containment/attributed.json` now
+  records which issue attributed each path, and only a retry of that issue
+  re-attributes it. Other issues treat the path as pre-existing operator work.
+  A ledger in the old, unowned shape is ignored and rewritten.
+
+- **A run killed by a network outage now gets its post-merge path once its PR
+  merges (#2607).** The autonomous scheduler records the PR of a run that ended
+  on a transient failure. It re-checks that PR on each scan until the forge
+  answers. A merged PR runs the post-merge path once: validation marker,
+  main-check verdict, epic rollup and Done on every board. An open PR returns
+  the issue to Ready, and the next run resumes on that PR. `revert-status` no
+  longer asks a human to move the issue when the forge was unreachable; it
+  queues a retry. See
+  [PR Recheck After a Transient Failure](docs/AUTONOMOUS_ORCHESTRATOR.md#pr-recheck-after-a-transient-failure--2607).
+
 - **Reconcile no longer closes unstarted sub-issues of an epic that a partial
   PR closed (#2602).** The orphan-sub closer used to close every open
   sub-issue of an epic closed as completed. It now closes one only when the
@@ -190,7 +303,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 - **A required check that failed and then passed on re-run is green (#2603).**
   Among check runs with the same name, app and commit, only the latest run
-  counts, as in GitHub's ruleset. `nightgauge ci checks-complete`, the
+  counts, as in GitHub's ruleset, even when the re-run ran as a new workflow
+  run in a new check suite. `nightgauge ci checks-complete`, the
   post-merge hook and `scripts/post-merge-check.sh` used to report such a merge
   RED, so the validation marker was never posted. A success followed by a
   failure is still RED, and a commit status never masks a check run of the same

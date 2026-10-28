@@ -410,6 +410,7 @@ func (p *DefaultBranchHealth) blockingRequest(repo, branch string, failing []fai
 		// red; another run of an already-failing check is not news either. A
 		// second check starting to fail is a genuine change, and does alert.
 		Fingerprint: "checks:" + strings.Join(names, ","),
+		OnsetAt:     redSince(failing),
 		Context: attention.Context{
 			Repo:    repo,
 			Branch:  branch,
@@ -419,6 +420,23 @@ func (p *DefaultBranchHealth) blockingRequest(repo, branch string, failing []fai
 		Options:       dismissOnly(),
 		DefaultAction: attention.ExpireNoop,
 	}
+}
+
+// redSince is the completion time of the earliest failure in the current red
+// episode — when the branch went red, not when a sweep noticed (#1582). The
+// episode filter has already dropped failures the check recovered from. ""
+// when no failure carries a time.
+func redSince(failing []failedCheck) string {
+	var earliest time.Time
+	for _, f := range failing {
+		if f.hasTime && (earliest.IsZero() || f.completedAt.Before(earliest)) {
+			earliest = f.completedAt
+		}
+	}
+	if earliest.IsZero() {
+		return ""
+	}
+	return earliest.UTC().Format(time.RFC3339)
 }
 
 // advisoryRequest builds the standing observation for a default branch that is
@@ -445,6 +463,7 @@ func (p *DefaultBranchHealth) advisoryRequest(repo, branch string, failing []fai
 		// The sorted SET of failing names, as for the blocking card — never a
 		// run count, a commit, or a timestamp. See blockingRequest.
 		Fingerprint: "advisory-checks:" + strings.Join(names, ","),
+		OnsetAt:     redSince(failing),
 		Context: attention.Context{
 			Repo:    repo,
 			Branch:  branch,

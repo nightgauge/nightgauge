@@ -54,3 +54,39 @@ func TestValidationMarker_NeverWritesLegacy(t *testing.T) {
 		}
 	}
 }
+
+func TestValidationMarkerSHA(t *testing.T) {
+	tests := []struct {
+		name, body, sha string
+		ok              bool
+	}{
+		{"current", "x\n" + ValidationMarkerComment("main", "abc123") + "\ny", "abc123", true},
+		{"legacy", "<!-- opencode-program:validated -->", "", true},
+		{"none", "nothing here", "", false},
+	}
+	for _, tc := range tests {
+		sha, ok := ValidationMarkerSHA(tc.body)
+		if sha != tc.sha || ok != tc.ok {
+			t.Errorf("%s: got (%q, %v), want (%q, %v)", tc.name, sha, ok, tc.sha, tc.ok)
+		}
+	}
+}
+
+func TestHasValidationMarkerFor(t *testing.T) {
+	body := ValidationMarker("ABC123")
+	tests := []struct {
+		name, body, sha string
+		want            bool
+	}{
+		{"same sha", body, "ABC123", true},
+		{"case and whitespace", body, " abc123 ", true},
+		{"other sha", body, "def456", false},
+		{"legacy never matches", "<!-- opencode-program:validated -->", "abc123", false},
+		{"no marker", "plain", "abc123", false},
+	}
+	for _, tc := range tests {
+		if got := HasValidationMarkerFor(tc.body, tc.sha); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

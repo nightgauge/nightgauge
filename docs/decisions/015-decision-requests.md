@@ -105,23 +105,24 @@ One JSON object per request. The envelope mirrors ADR-013 conventions
 (`schema_version`, additive payloads, `(producer, idempotency)` identity) so
 readers tolerate unknown fields and new kinds without a version bump.
 
-| Field             | Type   | Req | Semantics                                                                          |
-| ----------------- | ------ | --- | ---------------------------------------------------------------------------------- |
-| `schema_version`  | int    | yes | Envelope version, currently `1`. Payloads evolve additively.                       |
-| `id`              | string | yes | `dr_<uuidv7>` — stable identity and the resolution idempotency key.                |
-| `idempotency_key` | string | yes | `<producer>:<scope>` — at most **one open** request per key (Decision D).          |
-| `kind`            | enum   | yes | `unblock \| approve \| choose \| provide_input \| handoff \| resume` (closed set). |
-| `severity`        | enum   | yes | `fyi \| blocking_run \| blocking_fleet` — drives alerting and SLA (Decision I).    |
-| `title`           | string | yes | Human-facing _what_ (e.g. "Fleet idle — 4 Backlog items promotable").              |
-| `body`            | string | yes | Human-facing _why_: the precise blocker, and any checklist (handoff).              |
-| `context`         | object | yes | See below — repo/issue/run/stage/cost + the ADR-013 trace ref.                     |
-| `producer`        | string | yes | Registered producer name (Decision F).                                             |
-| `options`         | array  | yes | Machine-actionable choices, each bound to a registry verb (Decision B).            |
-| `steer`           | object | no  | `{ enabled, hint }` — free-text steering (Decision G). Absent ⇒ no steer box.      |
-| `created_at`      | string | yes | RFC3339Nano UTC.                                                                   |
-| `expires_at`      | string | yes | RFC3339Nano UTC; the sweep resolves-as-expired past this (Decision D).             |
-| `default_action`  | string | yes | Option `id` applied on expiry, or `expire_noop` (a declared, safe default).        |
-| `lifecycle`       | object | yes | State machine + audit (below).                                                     |
+| Field             | Type   | Req | Semantics                                                                                 |
+| ----------------- | ------ | --- | ----------------------------------------------------------------------------------------- |
+| `schema_version`  | int    | yes | Envelope version, currently `1`. Payloads evolve additively.                              |
+| `id`              | string | yes | `dr_<uuidv7>` — stable identity and the resolution idempotency key.                       |
+| `idempotency_key` | string | yes | `<producer>:<scope>` — at most **one open** request per key (Decision D).                 |
+| `kind`            | enum   | yes | `unblock \| approve \| choose \| provide_input \| handoff \| resume` (closed set).        |
+| `severity`        | enum   | yes | `fyi \| blocking_run \| blocking_fleet` — drives alerting and SLA (Decision I).           |
+| `title`           | string | yes | Human-facing _what_ (e.g. "Fleet idle — 4 Backlog items promotable").                     |
+| `body`            | string | yes | Human-facing _why_: the precise blocker, and any checklist (handoff).                     |
+| `context`         | object | yes | See below — repo/issue/run/stage/cost + the ADR-013 trace ref.                            |
+| `producer`        | string | yes | Registered producer name (Decision F).                                                    |
+| `options`         | array  | yes | Machine-actionable choices, each bound to a registry verb (Decision B).                   |
+| `steer`           | object | no  | `{ enabled, hint }` — free-text steering (Decision G). Absent ⇒ no steer box.             |
+| `created_at`      | string | yes | RFC3339Nano UTC.                                                                          |
+| `onset_at`        | string | no  | When the condition began (RFC3339Nano UTC); dropped if unparseable or after `created_at`. |
+| `expires_at`      | string | yes | RFC3339Nano UTC; the sweep resolves-as-expired past this (Decision D).                    |
+| `default_action`  | string | yes | Option `id` applied on expiry, or `expire_noop` (a declared, safe default).               |
+| `lifecycle`       | object | yes | State machine + audit (below).                                                            |
 
 **`context`** carries everything a card needs without a join, plus the trace
 back-reference:
@@ -608,14 +609,18 @@ the view container, quick-pick on click:
 
 ```
   NIGHTGAUGE: ATTENTION                                    3 ⬤
-  ▾ Blocking (2)
+  ▾ Blocking the fleet (1)
       ⛔ Fleet stopped — cascade breaker tripped        acme-web
+  ▾ Blocking a run (1)
       ⚠  Budget ceiling hit — $12.00                    acme-api
-  ▾ Needs a human (1)
+  ▾ FYI (1)
       ●  owner-action: Cloudflare DNS checklist         acme-web
   ─────────────────────────────────────────────────────────────
   ✓ all clear when empty
 ```
+
+One band per severity, most urgent first, labelled by meaning (ADR-009
+Decision 5, #1583); an empty band is hidden.
 
 Beauty is a requirement, not decoration: the severity rail gives instant
 triage, the empty state is the reward, and the same three primitives (badge,

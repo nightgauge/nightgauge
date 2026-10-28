@@ -198,7 +198,7 @@ func TestReadCreateContext_ResolvesACVerdicts(t *testing.T) {
 		{"index": 0, "text": "File present.md exists"},
 		{"index": 1, "text": "File missing.md exists"},
 		{"index": 2, "text": "The widget behaves"},
-	}})
+	}, "ac_fingerprint": "sha256:abc"})
 	write("validate-42.json", map[string]any{
 		"validation_status": "passed",
 		"acceptance_criteria_verdicts": []map[string]any{
@@ -219,5 +219,32 @@ func TestReadCreateContext_ResolvesACVerdicts(t *testing.T) {
 	want := []string{"met/deterministic", "unmet/deterministic", "met/feature-validate"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("verdicts = %v, want %v", got, want)
+	}
+	if snap.ACFingerprint != "sha256:abc" {
+		t.Errorf("ACFingerprint = %q, want the ac-reconcile value (#2623)", snap.ACFingerprint)
+	}
+}
+
+// pr-{N}.json carries the fingerprint when one was recorded and omits the
+// key otherwise, so the resume gate reads "absent" rather than "".
+func TestWritePRContext_ACFingerprint(t *testing.T) {
+	for _, fp := range []string{"sha256:abc", ""} {
+		dir := initRepo(t)
+		if err := defaultWritePRContext(dir, prContextPayload{IssueNumber: 5, PRNumber: 6, ACFingerprint: fp}); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(pipelineContextPath(dir, "pr-5.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		_ = json.Unmarshal(data, &doc)
+		got, ok := doc["ac_fingerprint"]
+		if fp == "" && ok {
+			t.Errorf("empty fingerprint must be omitted, got %v", got)
+		}
+		if fp != "" && got != fp {
+			t.Errorf("ac_fingerprint = %v, want %s", got, fp)
+		}
 	}
 }

@@ -11,6 +11,7 @@ export {
   iconForRequest,
   formatContextLine,
   formatRelativeAge,
+  conditionTime,
   formatDescription,
   describeAttentionOption,
   compareRequests,

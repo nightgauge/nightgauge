@@ -1,0 +1,13 @@
+{
+  "provider": "openai",
+  "tiers": ["opus", "fable"],
+  "model_id": "gpt-5.7",
+  "display_name": "GPT-5.7",
+  "sources": [
+    {
+      "file": "release-notes.txt",
+      "url": "https://platform.example.com/docs/models/gpt-5.7",
+      "kind": "release-notes"
+    }
+  ]
+}

@@ -491,8 +491,12 @@ expect_head "PR head: a success followed by a failure is RED" 1 "build" \
   "$(head_attempt success 11 2026-10-27T10:00:00Z)" "$(head_attempt failure 12 2026-10-27T10:05:00Z)"
 expect_head "PR head: same start time, the higher id decides: RED" 1 "build" \
   "$(head_attempt failure 19 2026-10-27T10:00:00Z)" "$(head_attempt success 12 2026-10-27T10:00:00Z)"
-expect_head "PR head: another workflow's same-named job re-run green does not mask a failure: RED" 1 "build" \
-  "$(head_attempt failure 11 2026-10-27T10:00:00Z 3)" "$(head_attempt success 12 2026-10-27T10:05:00Z 1)"
+# A re-triggered workflow is a new workflow run, so its re-run is in a new
+# suite (platform #1673: suites 109696211095 then 109698233917).
+expect_head "PR head: a re-run green in a new check suite is GREEN" 0 "same tree as PR #42 head" \
+  "$(head_attempt failure 11 2026-10-27T08:31:00Z 3)" "$(head_attempt success 12 2026-10-27T08:34:21Z 1)"
+expect_head "PR head: a success followed by a failure in a new check suite is RED" 1 "build" \
+  "$(head_attempt success 11 2026-10-27T08:31:00Z 3)" "$(head_attempt failure 12 2026-10-27T08:34:21Z 1)"
 expect_head "PR head: a failure and a success that cannot be ordered stay RED" 1 "build" \
   "$(head_run build failure 1)" "$(head_run build success 2)"
 # A same-name commit status failure is another surface: a re-run-green check

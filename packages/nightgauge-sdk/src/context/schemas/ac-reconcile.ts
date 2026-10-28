@@ -38,6 +38,8 @@ export const ACReconcileContextSchema = z.object({
     focus_acs: z.array(z.number().int().min(0)).default([]),
     rationale: z.string(),
   }),
+  /** Fingerprint of the ordered criteria texts (Issue #2623). */
+  ac_fingerprint: z.string().optional(),
 });
 
 export type ACReconcileContext = z.infer<typeof ACReconcileContextSchema>;

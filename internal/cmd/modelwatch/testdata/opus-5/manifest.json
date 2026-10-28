@@ -1,0 +1,17 @@
+{
+  "provider": "anthropic",
+  "tiers": ["opus"],
+  "display_name": "Claude Opus 5",
+  "sources": [
+    {
+      "file": "whats-new.txt",
+      "url": "https://docs.example.com/models/whats-new-opus-5",
+      "kind": "release-notes"
+    },
+    {
+      "file": "prompting.txt",
+      "url": "https://docs.example.com/prompting/opus-5",
+      "kind": "prompting-guide"
+    }
+  ]
+}

@@ -3621,6 +3621,24 @@ export const OpenCodeConfigSchema = z
   .passthrough();
 export type OpenCodeConfig = z.infer<typeof OpenCodeConfigSchema>;
 
+/**
+ * Follow-up filing controls shared by spike-materialize and
+ * followup-materialize (Issue #480, SELF_IMPROVEMENT_BOUNDARIES Rule 5).
+ * The Go side (internal/filing) fails closed to report-only when the config
+ * is missing or unparseable; an absent key takes these defaults.
+ */
+export const FollowUpFilingConfigSchema = z.object({
+  /** Kill switch. false forces report-only; detection continues. Default true. */
+  enabled: z.boolean().optional(),
+  /** "file" creates issues; "report" only lists them. Default "report". */
+  mode: z.enum(["file", "report"]).optional(),
+  /** Per-run create cap; records beyond it are refused loudly. Default 10. */
+  max_per_run: z.number().int().min(0).optional(),
+  /** File for issues whose author the trust gate rejects. Default false. */
+  allow_untrusted_authors: z.boolean().optional(),
+});
+export type FollowUpFilingConfig = z.infer<typeof FollowUpFilingConfigSchema>;
+
 export const NightgaugeConfigSchema = z.object({
   // Config file format version ("1" or "2"). Missing version implies v1.
   schema_version: z.string().optional(),
@@ -3697,6 +3715,9 @@ export const NightgaugeConfigSchema = z.object({
 
   // Knowledge scaffolding settings (Issue #1680)
   knowledge: KnowledgeConfigSchema.optional(),
+
+  // Follow-up filing gate (Issue #480)
+  follow_up_filing: FollowUpFilingConfigSchema.optional(),
 
   // Platform cloud API configuration (Issue #1458)
   platform: PlatformConfigSchema.optional(),

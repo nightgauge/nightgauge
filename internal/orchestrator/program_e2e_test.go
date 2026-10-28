@@ -139,7 +139,7 @@ func TestIntegration_Program_TwoRepos_ValidationGated(t *testing.T) {
 	// The production resolver (autonomous.go), minus the GitHub client: both
 	// program members are on the board, so only trusted comments are read.
 	as.resolveValidationFn = func(ctx context.Context, known map[string][]string, unknown []string) map[string]ValidationState {
-		return ResolveValidationByKey(ctx, nil, gate, known, unknown)
+		return ResolveValidationByKey(ctx, nil, gate, &closingMerges{}, known, unknown)
 	}
 
 	// runOneCycle marks the harness "complete" when a cycle leaves nothing
@@ -246,7 +246,7 @@ func TestResolveValidationByKey_LegacyMarkerTrustGated(t *testing.T) {
 		}
 		store.post(key, author, "<!-- opencode-program:validated -->")
 		gate := trust.NewGate(store, nil)
-		return ResolveValidationByKey(context.Background(), nil, gate, map[string][]string{key: program}, nil)[key]
+		return ResolveValidationByKey(context.Background(), nil, gate, &closingMerges{}, map[string][]string{key: program}, nil)[key]
 	}
 	if got := resolve("maintainer"); !got.Program || !got.Validated {
 		t.Errorf("trusted legacy marker = %+v, want program and validated", got)

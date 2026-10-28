@@ -13,6 +13,24 @@ export {
 } from "./HealthAnalysisEngine.js";
 export { HealthTrendsWriter } from "./HealthTrendsWriter.js";
 export {
+  CONTROL_BAND_DEFINITION,
+  ControlBandDefinitionSchema,
+  assessBaselineStability,
+  evaluateControlBand,
+  diagnoseCostExcursion,
+  buildControlBandFinding,
+  tierOrdinal,
+  type ControlBandDefinition,
+  type ControlBandTier,
+  type ControlBandTierName,
+  type ControlBandEvaluation,
+  type ControlBandResult,
+  type BaselineStability,
+  type CostExcursionDiagnosis,
+  type StageCostDiagnosis,
+} from "./controlBands.js";
+export { ControlBandLogWriter, type ControlBandLogEntry } from "./ControlBandLogWriter.js";
+export {
   buildHealthTrendEntry,
   recordHealthTrend,
   type HealthTrendRunMeta,

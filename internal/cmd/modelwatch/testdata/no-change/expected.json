@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "provider": "anthropic",
+  "model_id": "",
+  "patch": {
+    "demote": [],
+    "target_files": []
+  },
+  "overlays": [],
+  "defects": [],
+  "capabilities": [],
+  "dropped": []
+}

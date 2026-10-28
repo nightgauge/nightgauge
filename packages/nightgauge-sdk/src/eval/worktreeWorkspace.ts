@@ -26,7 +26,7 @@
  * @see docs/decisions/011-model-eval-system.md
  */
 
-import { mkdir, rm, cp } from "node:fs/promises";
+import { mkdir, rm, cp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import type { EvalMatrixCell, EvalTask } from "./modelEvalSchemas.js";
@@ -53,7 +53,40 @@ export interface WorktreeWorkspaceOptions {
   workspacesDir?: string;
   /** Shell/git boundary (default: node:child_process). */
   exec?: ExecFn;
+  /**
+   * How a `base-commit` cell is isolated. `worktree` (default) adds a detached
+   * worktree, sharing one git directory across cells. `clone` (#2118) gives
+   * each cell its own `git clone --no-hardlinks` with its own `.git` — so the
+   * pipeline state directory, branches and caches are per cell — on a unique
+   * branch `eval/sweep/<runId>/<effort>`, with pushes to `main` refused.
+   */
+  isolation?: "worktree" | "clone";
+  /** Sweep run id, used in the clone-mode branch name. */
+  runId?: string;
 }
+
+/** Branch a clone-mode cell works on. */
+export function sweepBranchName(runId: string, effort: string): string {
+  return `eval/sweep/${sanitize(runId)}/${effort}`;
+}
+
+/**
+ * Installed as the cell clone's `pre-push` hook: refuses any push that updates
+ * `refs/heads/main` or `refs/heads/master`. git feeds one
+ * `<local ref> <local sha> <remote ref> <remote sha>` line per ref on stdin.
+ */
+export const PRE_PUSH_GUARD = `#!/bin/sh
+# nightgauge eval sweep (#2118): a sweep cell never pushes to the default branch.
+while read -r _lref _lsha rref _rsha; do
+  case "$rref" in
+    refs/heads/main|refs/heads/master)
+      echo "eval sweep cell: refusing to push to $rref" >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0
+`;
 
 /**
  * WorkspaceProvider that gives each cell a fresh isolated directory seeded to the
@@ -65,6 +98,8 @@ export class WorktreeWorkspaceProvider implements WorkspaceProvider {
   private readonly repoRoot: string;
   private readonly workspacesDir: string;
   private readonly exec: ExecFn;
+  private readonly isolation: "worktree" | "clone";
+  private readonly runId: string;
   private counter = 0;
   private readonly repoCaches = new Map<string, Promise<string>>();
 
@@ -74,6 +109,8 @@ export class WorktreeWorkspaceProvider implements WorkspaceProvider {
     // absolute override as-is and resolves a relative one against repoRoot.
     this.workspacesDir = options.workspacesDir ?? join(tmpdir(), "nightgauge-eval-workspaces");
     this.exec = options.exec ?? defaultExec;
+    this.isolation = options.isolation ?? "worktree";
+    this.runId = options.runId ?? "run";
   }
 
   async acquire(task: EvalTask, cell: EvalMatrixCell): Promise<EvalWorkspace> {
@@ -89,6 +126,7 @@ export class WorktreeWorkspaceProvider implements WorkspaceProvider {
       const gitDir = task.fixture.repo
         ? await this.ensureRepoCache(task.fixture.repo, ref)
         : this.repoRoot;
+      if (this.isolation === "clone") return this.acquireClone(gitDir, dir, ref, cell, task);
       await this.run("git", ["worktree", "add", "--detach", dir, ref], gitDir);
       return {
         dir,
@@ -109,6 +147,52 @@ export class WorktreeWorkspaceProvider implements WorkspaceProvider {
     }
     // Contain any git the model runs to this throwaway repo (see class doc).
     await this.initFixtureGit(dir);
+    return {
+      dir,
+      dispose: async () => {
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+      },
+    };
+  }
+
+  /**
+   * Clone-mode cell (#2118): a full local clone of the cache at `sha`, on its
+   * own branch, whose `origin` is the fixture's real remote (so the pipeline can
+   * open a PR) but whose pushes to `main` are refused by a `pre-push` hook and
+   * whose default push refspec is the cell branch only.
+   */
+  private async acquireClone(
+    source: string,
+    dir: string,
+    sha: string,
+    cell: EvalMatrixCell,
+    task: EvalTask
+  ): Promise<EvalWorkspace> {
+    const branch = sweepBranchName(this.runId, cell.effort);
+    await mkdir(resolve(dir, ".."), { recursive: true });
+    await this.run(
+      "git",
+      ["clone", "--no-hardlinks", "--no-checkout", source, dir],
+      resolve(dir, "..")
+    );
+    await this.run("git", ["checkout", "-q", "-b", branch, sha], dir);
+    if (task.fixture.repo) {
+      await this.run(
+        "git",
+        ["remote", "set-url", "origin", `https://github.com/${task.fixture.repo}.git`],
+        dir
+      );
+    }
+    await this.run(
+      "git",
+      ["config", "remote.origin.push", `refs/heads/${branch}:refs/heads/${branch}`],
+      dir
+    );
+    const hooks = join(dir, ".git", "hooks");
+    await mkdir(hooks, { recursive: true });
+    await writeFile(join(hooks, "pre-push"), PRE_PUSH_GUARD, { mode: 0o755 });
+    // The hook must run even when the host sets a global core.hooksPath.
+    await this.run("git", ["config", "core.hooksPath", hooks], dir);
     return {
       dir,
       dispose: async () => {

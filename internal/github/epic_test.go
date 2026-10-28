@@ -13,6 +13,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/git"
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 func TestNewEpicService(t *testing.T) {
@@ -585,5 +586,119 @@ func TestCloseOneEpic_ConflictingEpicBranchStaysOpen(t *testing.T) {
 	if item.Status != "error" || item.Reason != "integration_conflict" || item.Integration == nil ||
 		len(item.Integration.ConflictFiles) != 2 {
 		t.Errorf("summary = %+v integration=%+v", item, item.Integration)
+	}
+}
+
+func TestPendingBodyTasks(t *testing.T) {
+	subs := []types.SubIssueRef{
+		{Number: 1575, State: "CLOSED", Repo: "o/r"},
+		{Number: 1576, State: "OPEN", Repo: "o/r"},
+		{Number: 9, State: "CLOSED", Repo: "x/y"},
+	}
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"no task list", "Plan:\n1. Do a\n2. Do b", 0},
+		{"all checked", "- [x] first\n- [X] second", 0},
+		{"unfiled item", "- [ ] Phase 2: wire it up", 1},
+		{"closed sub ref satisfied", "- [ ] #1575 first phase", 0},
+		{"open sub ref pending", "- [ ] #1576", 1},
+		{"not a sub pending", "- [ ] #4242", 1},
+		{"mixed refs pending", "- [ ] #1575 and #1576", 1},
+		{"cross-repo closed sub", "- [ ] x/y#9", 0},
+		{"cross-repo number mismatch", "- [ ] other/repo#1575", 1},
+		{"fenced block ignored", "```md\n- [ ] example\n```\n- [x] done", 0},
+		{"star bullet", "* [ ] AC: tests pass", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pendingBodyTasks(tt.body, "o/r", subs)
+			if len(got) != tt.want {
+				t.Errorf("pendingBodyTasks = %q, want %d item(s)", got, tt.want)
+			}
+		})
+	}
+}
+
+// epicWithOneClosedSub mirrors #1574: one filed, closed child and a body.
+func epicWithOneClosedSub(epicNumber int, body string) string {
+	b, _ := json.Marshal(body)
+	return fmt.Sprintf(`{"data":{"repository":{"issue":{
+		"id":"I_%d","number":%d,"title":"Epic %d","body":%s,"state":"OPEN","url":"",
+		"parent":{"id":"","number":0,"title":""},
+		"labels":{"nodes":[{"name":"type:epic"}]},
+		"assignees":{"nodes":[]},
+		"subIssues":{"nodes":[
+			{"id":"SUB_1","number":1575,"title":"Sub","state":"CLOSED","repository":{"nameWithOwner":"o/r"}}
+		]},
+		"blockedBy":{"nodes":[]},
+		"blocking":{"nodes":[]}
+	}}}}`, epicNumber, epicNumber, epicNumber, b)
+}
+
+func runAutoCloseSingleEpic(t *testing.T, body string) (*AutoCloseSingleResult, int32) {
+	t.Helper()
+	var calls, closed int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqBody, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(reqBody), "closeIssue") {
+			atomic.AddInt32(&closed, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if serveEmptyShipEvidence(w, reqBody) {
+			return
+		}
+		switch atomic.AddInt32(&calls, 1) {
+		case 1:
+			fmt.Fprint(w, epicWithOneClosedSub(1574, body))
+		case 2:
+			fmt.Fprint(w, epicIssueOpenState(1574))
+		default:
+			fmt.Fprint(w, `{"data":{}}`)
+		}
+	}))
+	defer srv.Close()
+
+	svc := NewEpicService(NewClientWithURL("test-token", srv.URL))
+	svc.checkout = noEpicBranchCheckout(t)
+	res, err := svc.AutoCloseSingle(context.Background(), EpicRef{
+		Owner: "o", Repo: "r", Number: 1574, ExpectSubIssueNumber: 1575, ExpectSubIssueRepo: "o/r",
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res, atomic.LoadInt32(&closed)
+}
+
+// TestAutoCloseSingle_OneChildOfIncompleteDecompositionStaysOpen is #1581:
+// the only filed child is closed, but planned items and acceptance criteria
+// in the epic body are unticked, so the epic must not close.
+func TestAutoCloseSingle_OneChildOfIncompleteDecompositionStaysOpen(t *testing.T) {
+	body := "## Plan\n- [ ] #1575 phase 1\n- [ ] Phase 2: pipeline wiring\n- [ ] Phase 3: docs\n\n" +
+		"## Acceptance criteria\n- [ ] Operators see the result\n"
+	res, closed := runAutoCloseSingleEpic(t, body)
+	if res.Status != "skipped" || res.Reason != reasonUnfinishedDecomposition {
+		t.Fatalf("result = %+v, want skipped/%s", res, reasonUnfinishedDecomposition)
+	}
+	if closed != 0 {
+		t.Fatalf("closeIssue issued %d time(s) for an incomplete epic", closed)
+	}
+	if len(res.PendingTasks) != 3 || res.PendingTasks[0] != "Phase 2: pipeline wiring" {
+		t.Errorf("PendingTasks = %q", res.PendingTasks)
+	}
+}
+
+// TestAutoCloseSingle_CompleteDecompositionCloses: the same single closed
+// child with every body box ticked still auto-closes (#1581 AC 2).
+func TestAutoCloseSingle_CompleteDecompositionCloses(t *testing.T) {
+	body := "## Plan\n- [ ] #1575 phase 1\n\n## Acceptance criteria\n- [x] Operators see the result\n"
+	res, closed := runAutoCloseSingleEpic(t, body)
+	if res.Status != "closed" || closed != 1 {
+		t.Fatalf("result = %+v closeIssue=%d, want closed", res, closed)
+	}
+	if len(res.PendingTasks) != 0 {
+		t.Errorf("PendingTasks = %q, want none", res.PendingTasks)
 	}
 }

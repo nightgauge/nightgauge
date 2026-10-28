@@ -5318,13 +5318,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
     let prNumber = 0;
     let prStatus = "";
+    let recordedFingerprint = "";
     try {
       const parsed = JSON.parse(fs.readFileSync(prContextPath, "utf-8")) as {
         pr_number?: unknown;
         status?: unknown;
+        ac_fingerprint?: unknown;
       };
       if (typeof parsed.pr_number === "number") prNumber = parsed.pr_number;
       if (typeof parsed.status === "string") prStatus = parsed.status.toLowerCase();
+      if (typeof parsed.ac_fingerprint === "string") recordedFingerprint = parsed.ac_fingerprint;
     } catch {
       // An unreadable context file is no evidence at all — fail toward the
       // normal pipeline rather than skipping stages on a guess.
@@ -5345,6 +5348,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         dispatched: this.dispatchedOpenPrNumber,
       });
       fs.rmSync(prContextPath, { force: true });
+      return false;
+    }
+
+    // An open PR proves delivery only of the criteria it was built against
+    // (#2623). When the issue's criteria changed since, re-plan: pr-create
+    // then reuses the open PR and records the new fingerprint.
+    let fingerprintProblem = "";
+    if (!recordedFingerprint) {
+      fingerprintProblem = "no fingerprint recorded";
+    } else {
+      const current = await this.currentAcFingerprint(issueNumber);
+      if (current === null) fingerprintProblem = "fingerprint unavailable";
+      else if (current !== recordedFingerprint) fingerprintProblem = "fingerprint mismatch";
+    }
+    if (fingerprintProblem) {
+      this.logger.info(
+        `Resume-at-pr-merge: acceptance criteria changed since PR #${prNumber} was opened — re-planning (${fingerprintProblem})`,
+        { issueNumber, prNumber }
+      );
       return false;
     }
 
@@ -5384,6 +5406,34 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Fingerprint of the issue's current acceptance criteria, from
+   * `nightgauge preflight ac-fingerprint` so the parser is the one
+   * ac-reconcile used (#2623). Null when it cannot be computed.
+   */
+  private async currentAcFingerprint(issueNumber: number): Promise<string | null> {
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) return null;
+      const args = ["preflight", "ac-fingerprint", String(issueNumber), "--json"];
+      const repoSlug = await this.resolveRunRepoSlug();
+      if (repoSlug.includes("/")) args.push("--repo", repoSlug);
+      const { stdout } = await execFileAsync(binary, args, {
+        encoding: "utf-8",
+        cwd: this.getWorkingDirectory(),
+        timeout: 60_000,
+      });
+      const parsed = JSON.parse(stdout) as { ac_fingerprint?: unknown };
+      return typeof parsed.ac_fingerprint === "string" ? parsed.ac_fingerprint : null;
+    } catch (err) {
+      this.logger.warn("Resume-at-pr-merge: could not fingerprint acceptance criteria", {
+        issueNumber,
+        err,
+      });
+      return null;
+    }
+  }
+
+  /**
    * Detect an existing open PR for this issue's branch from a previous failed
    * pipeline run. If found, generates synthetic context files so the resume
    * logic can skip directly to pr-merge instead of re-running all stages.
@@ -5418,7 +5468,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // 16 minutes on platform#1431 to rediscover PR #1447.
     //
     // An open PR recorded on disk is proof the work shipped, whatever state
-    // remembers. Skip forward to pr-merge on that evidence alone. This is a
+    // remembers — as long as the issue's acceptance criteria are unchanged
+    // since it opened (#2623). Skip forward to pr-merge on that evidence alone. This is a
     // purely local decision on purpose — a speculative forge query on every
     // pipeline start would spend API budget on the overwhelmingly common
     // case of a brand-new issue with no PR (#1428).

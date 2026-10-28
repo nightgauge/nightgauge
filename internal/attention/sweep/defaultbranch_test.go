@@ -1081,3 +1081,51 @@ func TestDefaultBranch_DeferralSkipsTheCheckRunReads(t *testing.T) {
 		t.Errorf("the producer read required checks for %q after deciding to defer", ci.sawBranch)
 	}
 }
+
+// #1582: the card is aged from when the branch went red — the earliest failure
+// in the current episode — not from the sweep that noticed it. Onset is not
+// material state, so it never enters the fingerprint.
+func TestDefaultBranch_OnsetIsTheEarliestFailure(t *testing.T) {
+	eval := func(first, second time.Duration) attention.DecisionRequest {
+		t.Helper()
+		got, err := newDefaultBranchProducer().Evaluate(context.Background(), branchInput(
+			&repoSvc{defaultBranch: "main"},
+			&branchCI{
+				required: []string{"build", "lint"},
+				runs: []forgetypes.CheckDetail{
+					{Name: "build", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(first)},
+					{Name: "lint", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(second)},
+				},
+			},
+		))
+		if err != nil || len(got) != 1 {
+			t.Fatalf("Evaluate = %d, %v; want 1 observation", len(got), err)
+		}
+		return got[0]
+	}
+	req := eval(2*time.Hour, 10*time.Hour)
+	if want := ago(10 * time.Hour); req.OnsetAt != want {
+		t.Errorf("onset_at = %q, want %q (the earliest failure)", req.OnsetAt, want)
+	}
+	if later := eval(3*time.Hour, 11*time.Hour); later.Fingerprint != req.Fingerprint {
+		t.Errorf("fingerprint moved with time alone: %q -> %q", req.Fingerprint, later.Fingerprint)
+	}
+}
+
+func TestDefaultBranch_OnsetUnknownWhenNoFailureCarriesATime(t *testing.T) {
+	got, err := newDefaultBranchProducer().Evaluate(context.Background(), branchInput(
+		&repoSvc{defaultBranch: "main"},
+		&branchCI{
+			required: []string{"build"},
+			runs: []forgetypes.CheckDetail{
+				{Name: "build", Status: "COMPLETED", Conclusion: "FAILURE"},
+			},
+		},
+	))
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Evaluate = %d, %v; want 1 observation", len(got), err)
+	}
+	if got[0].OnsetAt != "" {
+		t.Errorf("onset_at = %q, want empty — an unknown onset must not be invented", got[0].OnsetAt)
+	}
+}

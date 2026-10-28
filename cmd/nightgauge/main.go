@@ -1014,6 +1014,7 @@ func rootCmd() *cobra.Command {
 		ciCmd(),
 		gitCmd(),
 		runCmd(),
+		evalCmd(),
 		queueCmd(),
 		statusCmd(),
 		versionCmd(),
@@ -1049,6 +1050,7 @@ func rootCmd() *cobra.Command {
 		versionDowngradeCmd(),
 		knowledgeCmd(),
 		spikeCmd(),
+		followupCmd(),
 		discoveredWorkCmd(),
 		findingCmd(),
 		cleanupCmd(),
@@ -1083,6 +1085,7 @@ func rootCmd() *cobra.Command {
 		disciplineScoreCmd(),
 		integrationCmd(),
 		releaseCmd(),
+		modelWatchCmd(),
 		testCmd(),
 		modernizeCmd(),
 	)
@@ -7141,6 +7144,10 @@ cause the command to exit non-zero.`,
 				// "skipped" itself, so this line used to read "Epic #N skipped:
 				// skipped" and told the operator nothing (#1025).
 				fmt.Printf("Epic #%d skipped: %s\n", result.EpicNumber, result.EpicReason)
+				// Name the body items holding the epic open (#1581).
+				for _, task := range result.EpicPendingTasks {
+					fmt.Printf("  - %s\n", task)
+				}
 			case "partial_delivery":
 				fmt.Printf("PR #%d does not close issue #%d (Refs, not Closes) — left open and returned to Ready; %d unmet criteria named.\n",
 					prNumber, issueNumber, len(result.UnmetCriteria))
