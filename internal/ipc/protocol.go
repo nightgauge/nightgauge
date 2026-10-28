@@ -1478,7 +1478,13 @@ type PipelineNotifyPhaseTransitionParams struct {
 	// "passed" (#1924) is the ordering-derived arm: phases the run demonstrably
 	// moved beyond without ever announcing them, settled live rather than at the
 	// end-of-stage back-fill.
-	EventType string `json:"eventType"` // "start" | "complete" | "passed" | "skip" | "unreported" | "fail"
+	// "observed" (#1887) is the post-exit evidence arm: an outcome
+	// `nightgauge phase reconcile` proved from the stage's artifacts. It
+	// upgrades only an `unreported` record and carries its outcome in Status.
+	EventType string `json:"eventType"` // "start" | "complete" | "passed" | "skip" | "unreported" | "observed" | "fail"
+	// Status is the proven outcome for EventType "observed": "complete" or
+	// "skipped". Ignored by every other event type.
+	Status string `json:"status,omitempty"`
 	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
 	// 1). REQUIRED: absent is run_id_required, non-canonical is
 	// run_id_invalid. RUN-PROGRESS class (Decision 3). A scheduler-owned run is

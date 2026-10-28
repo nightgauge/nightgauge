@@ -17,7 +17,9 @@ and this project adheres to
   proves it (the handoff file, the plan, the pushed commit, and so on). A phase
   with that proof is recorded `complete`. A phase with no proof stays
   `unreported` and is never counted as observed. Markers and inference keep
-  their outcomes. `nightgauge phase reconcile` prints the same verdicts as JSON.
+  their outcomes. Pipelines the extension runs itself, outside the scheduler,
+  now get the same evidence-based phases: after each agentic stage's gate, the
+  extension runs `nightgauge phase reconcile` and records its verdicts.
 
 - **`model_routing.excluded_models` and `excluded_efforts` keep automatic
   routing off specific models and effort levels (#2063).** Every automatic

@@ -141,8 +141,10 @@ export interface NotifyPhaseTransitionParams {
   name: string;
   index: number;
   total: number;
-  /** "start" | "complete" */
+  /** "start" | "complete" | "passed" | "skip" | "unreported" | "observed" | "fail" */
   eventType: string;
+  /** The proven outcome for eventType "observed" (#1887): "complete" | "skipped". */
+  status?: string;
   /** The run this phase belongs to. Accepted and ignored until step 4. */
   runId: string;
 }

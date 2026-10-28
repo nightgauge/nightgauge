@@ -22,9 +22,11 @@ func phaseCmd() *cobra.Command {
 }
 
 // phaseReconcileCmd runs the agentic-stage evidence reconciler (#1887) out of
-// process. The extension's skillRunner reaches the agentic stages without the
-// Go scheduler, so it calls this and replays the transitions — one Go
-// implementation, no TypeScript copy (#1397's dual-path drift).
+// process. The extension's HeadlessOrchestrator.runPipeline reaches the
+// agentic stages without the Go scheduler, so after each stage's gate it calls
+// this (services/agenticPhaseReconcile.ts) and replays the transitions as
+// "observed" phase events — one Go implementation, no TypeScript copy (#1397's
+// dual-path drift).
 //
 // stdout is a JSON array in the `pr-stage --json` phases wire shape.
 func phaseReconcileCmd() *cobra.Command {

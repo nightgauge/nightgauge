@@ -4575,6 +4575,31 @@ func (s *Server) registerMethods() {
 				"index":       p.Index,
 				"total":       p.Total,
 			})
+		case "observed":
+			// #1887: the post-exit evidence arm. The extension's legacy route
+			// runs `nightgauge phase reconcile` after an agentic stage passes its
+			// gate and replays the verdicts here. ObservePhase upgrades only an
+			// `unreported` back-fill, so a marker or inference result keeps its
+			// outcome and a replay of the same verdict writes nothing twice.
+			if p.Status != "complete" && p.Status != "skipped" {
+				return nil, fmt.Errorf("pipeline.notifyPhaseTransition: observed needs status complete|skipped, got %q", p.Status)
+			}
+			if !rt.ObservePhase(stage, p.Name, p.Index, p.Total, p.Status) {
+				break
+			}
+			event := "phase.complete"
+			if p.Status == "skipped" {
+				event = "phase.skip"
+			}
+			s.Emit(event, map[string]interface{}{
+				"repo":        p.Repo,
+				"issueNumber": p.IssueNumber,
+				"runId":       runID,
+				"stage":       p.Stage,
+				"name":        p.Name,
+				"index":       p.Index,
+				"total":       p.Total,
+			})
 		case "fail":
 			rt.FailPhase(stage, p.Name, p.Index, p.Total)
 			s.Emit("phase.fail", map[string]interface{}{
@@ -4592,7 +4617,7 @@ func (s *Server) registerMethods() {
 			// caller could not tell "recorded" from "silently discarded" — and
 			// that is exactly how a whole vocabulary went missing without any
 			// surface reporting a problem. Say so rather than answering ok.
-			return nil, fmt.Errorf("pipeline.notifyPhaseTransition: unknown eventType %q (want start|complete|skip|unreported|fail)", p.EventType)
+			return nil, fmt.Errorf("pipeline.notifyPhaseTransition: unknown eventType %q (want start|complete|passed|skip|unreported|observed|fail)", p.EventType)
 		}
 
 		return map[string]string{"status": "ok"}, nil
