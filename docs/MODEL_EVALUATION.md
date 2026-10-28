@@ -23,6 +23,42 @@ execution invokes the locally configured provider and may incur provider
 charges. Nightgauge never starts a live evaluation merely because mock
 evaluation succeeded; the operator must choose the live path.
 
+## Whole-pipeline effort sweep
+
+`nightgauge eval sweep --model <id> --control` runs the pinned control task
+(`evals/tasks/README.md` § Control task) once for each effort the model
+supports, through the whole pipeline. Each cell records cost, wall time,
+attempts, the effort each stage was dispatched at, an objective pass/fail from
+the control's `pass_criteria`, and the quality score. Records go to the
+model-eval records store as JSONL.
+
+```bash
+nightgauge eval sweep --model claude-opus-4-8 --control --efforts low,high --max-usd 40
+```
+
+- **Cells run one at a time.** They share one GitHub control issue.
+- **`--max-usd` is checked before each cell.** The projected spend is what has
+  been spent plus the larger of `--estimate-usd` and the costliest completed
+  cell. A cell that would exceed the cap does not start; the sweep exits 1 and
+  names how many cells ran.
+- **Failed and timed-out cells keep their cost.** They are recorded with the
+  spend read from the run's history, never as zero.
+- **Each cell is a separate clone.** It has its own `.git`, so pipeline state,
+  branches and caches are per cell. It works on `eval/sweep/<run-id>/<effort>`,
+  and a `pre-push` hook refuses pushes to `main`. The model and effort pin is an
+  uncommitted `.nightgauge/config.local.yaml`, so the base commit and control
+  hash do not change.
+- **The pin is verified, not assumed.** A cell fails when any stage that
+  dispatched a model recorded a different effort or none.
+
+`--mode stub` (the default) exercises the loop, cap and record format without a
+model. `--mode live` spends real money and is not yet available:
+
+- `nightgauge run` has no way to stop before pr-merge, so a live cell would
+  merge into the fixture repository. Live cells refuse to start until it does.
+- Effort is not recorded on the `claude` adapter (see Safe interpretation), so
+  a Claude cell fails its pin check. Sweep an adapter that reports effort.
+
 ## Evidence and privacy
 
 Tracked evaluation evidence may contain task identifiers, route identifiers,
