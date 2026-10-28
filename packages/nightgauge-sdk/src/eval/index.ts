@@ -349,8 +349,12 @@ export {
   candidateLadder,
   resolveBandEnvelope,
   escalationLadder,
+  eligibleBand,
+  applyExclusions,
+  NO_EXCLUSIONS,
   ESCALATION_CEILING_BAND,
   type EnvelopeRung,
+  type Exclusions,
 } from "./selectionQuery.js";
 
 // Routing-advice data file — the advisor→resolver handoff (#581, spike §4.2).

@@ -9,7 +9,9 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  applyExclusions,
   candidateLadder,
+  eligibleBand,
   escalationLadder,
   resolveBandEnvelope,
   ESCALATION_CEILING_BAND,
@@ -182,5 +184,42 @@ describe("escalationLadder — membership from the registry, ceiling from policy
 
   it("drops bands the provider has no live model for", () => {
     expect(escalationLadder("ollama")).toEqual([]);
+  });
+});
+
+describe("exclusions (#2063)", () => {
+  it("drops an excluded model; the strongest remaining rung is Opus 5.5", () => {
+    const rungs = candidateLadder("anthropic", undefined, {
+      models: ["claude-fable-5-1"],
+      efforts: [],
+    });
+    expect(rungs[0].modelId).toBe("claude-opus-5-5");
+    expect(rungs.some((r) => r.modelId === "claude-fable-5-1")).toBe(false);
+  });
+
+  it("descends past excluded efforts; every effort excluded empties xai", () => {
+    expect(
+      candidateLadder("xai", undefined, { models: [], efforts: ["xhigh", "max"] })[0].effort
+    ).toBe("high");
+    const all = { models: [], efforts: ["low", "medium", "high", "xhigh", "max"] };
+    expect(candidateLadder("xai", undefined, all)).toEqual([]);
+    expect(eligibleBand("xai", "opus", all)).toBeUndefined();
+  });
+
+  it("eligibleBand never widens and is a no-op without exclusions", () => {
+    const ex = { models: ["claude-fable-5-1"], efforts: [] };
+    expect(eligibleBand("anthropic", "fable", ex)).toBe("opus");
+    expect(eligibleBand("anthropic", "sonnet", ex)).toBe("sonnet");
+    expect(eligibleBand("anthropic", "fable")).toBe("fable");
+    expect(applyExclusions({ floor: "fable", ceiling: "fable" }, "anthropic", ex)).toEqual({
+      floor: "opus",
+      ceiling: "opus",
+    });
+  });
+
+  it("escalationLadder drops an excluded band", () => {
+    expect(
+      escalationLadder("anthropic", { models: ["claude-opus-5-5"], efforts: [] })
+    ).not.toContain("opus");
   });
 });

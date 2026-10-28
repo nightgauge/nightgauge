@@ -24,6 +24,10 @@ type RetryConfig struct {
 	// COUNT limit instead of the open-ended oscillation block + global
 	// MaxBacktracks, which would otherwise cap it at a single re-dispatch.
 	MaxConflictRedispatch int // default: 2
+	// Exclusions are the workspace's model_routing.excluded_models /
+	// excluded_efforts (#2063): an excluded rung is neither an escalation nor
+	// a downgrade target. The zero value excludes nothing.
+	Exclusions routing.Exclusions
 }
 
 // DefaultRetryConfig returns safe default retry configuration.
@@ -303,8 +307,8 @@ func (r *RetryEngine) EvaluateDowngrade(rejectedModel string) DowngradeDecision 
 // candidate ladder is served by one model id — the precondition for treating
 // same-model effort rungs as downgrade targets (#606). An empty ladder
 // (local providers) is not "collapsed": there is nothing to descend through.
-func providerFullyCollapsed(provider string) bool {
-	rungs := routing.CandidateLadder(provider, "")
+func providerFullyCollapsed(provider string, ex routing.Exclusions) bool {
+	rungs := routing.CandidateLadderExcluding(provider, "", ex)
 	if len(rungs) == 0 {
 		return false
 	}
@@ -348,7 +352,7 @@ func (r *RetryEngine) EvaluateDowngradeForProvider(rejectedModel, provider strin
 		if _, rejected := r.downgrades[tier]; rejected {
 			continue // this tier was itself rejected earlier in the run
 		}
-		rung, ok := routing.ResolveBandEnvelope(provider, tier, "")
+		rung, ok := routing.ResolveBandEnvelopeExcluding(provider, tier, "", r.config.Exclusions)
 		if !ok {
 			// No rung: either no live model serves the band for this
 			// provider, or the band's multi-band model cannot descend to a
@@ -360,7 +364,7 @@ func (r *RetryEngine) EvaluateDowngradeForProvider(rejectedModel, provider strin
 			// Same model serves this rung — see SAME-MODEL RUNGS above.
 			// Fully-collapsed provider with a real (distinct, declared)
 			// effort on the rung: this IS the provider's downgrade ladder.
-			if !providerFullyCollapsed(provider) || rung.Effort == "" {
+			if !providerFullyCollapsed(provider, r.config.Exclusions) || rung.Effort == "" {
 				continue // partially-collapsed keeps the skip (pinned decision, #606)
 			}
 			return DowngradeDecision{

@@ -1486,6 +1486,8 @@ func descentProviderForDispatch(rt *state.RuntimeState, stage state.PipelineStag
 func retryConfigForWorkspace(workspaceRoot string) RetryConfig {
 	cfg := DefaultRetryConfig()
 	cfg.MaxConflictRedispatch = recovery.GetConflictMaxDevRedispatch(workspaceRoot)
+	cfg.Exclusions = routing.ResolveExclusions(workspaceRoot)
+	cfg.ModelLadder = routing.EscalationLadderExcluding(routing.BandWireProvider, cfg.Exclusions)
 	return cfg
 }
 
@@ -6256,6 +6258,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// IPC arm is evidence rather than a re-derivation of the extension's
 		// adapter resolution.
 		descentProvider := descentProviderForDispatch(runtime, stage, adapterName)
+		// model_routing.excluded_models / excluded_efforts (#2063): the
+		// automatic selection above may not land on an excluded rung. A pinned
+		// (requested or opencode-configured) model is explicit and passes.
+		if pinnedModel == "" {
+			eligible, exErr := eligibleDispatchModel(workspaceRoot, stage, model, descentProvider)
+			if exErr != nil {
+				terminalFailureKind, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
+					"no-eligible-rung", exErr.Error())
+				return
+			}
+			if eligible != model {
+				log.Printf("#%d: stage %s — model_routing exclusions moved %s → %s", item.Number, stage, model, eligible)
+				model = eligible
+			}
+		}
 		skillData, err := skillrender.Render(skillrender.Options{
 			Stage:       string(stage),
 			Model:       model,
@@ -6573,6 +6590,16 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if !grokEnvEffortSet {
 				wireEffort = resolveWireEffort(workspaceRoot, stage, routingDecision.ComplexityScore)
 			}
+		}
+		// Excluded efforts (#2063) descend to the next lower allowed rung of
+		// the dispatched model — the same descent the candidate ladder applies.
+		if wireEffort != "" {
+			effortProvider := descentProvider
+			if effortProvider == "" {
+				effortProvider = routing.BandWireProvider
+			}
+			wireEffort = routing.EligibleEffort(effortProvider, routing.TierBand(model), wireEffort,
+				routing.ResolveExclusions(workspaceRoot))
 		}
 		// Sticky effort substitution (#606): a same-model effort descent
 		// recorded by the RetryEngine overrides the resolved wire effort,

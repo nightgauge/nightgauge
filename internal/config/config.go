@@ -791,6 +791,20 @@ type ModelRoutingConfig struct {
 	// that is the operator naming a tier, not the pipeline choosing one.
 	MaxModel string `json:"maxModel,omitempty" yaml:"max_model,omitempty"`
 
+	// ExcludedModels are registry model ids (any provider) AUTOMATIC routing
+	// must never select (#2063): the candidate ladder drops them, so every
+	// automatic path — stage defaults, eval advice, escalation, the
+	// minimum_model floor, a forced retry tier — lands on the strongest
+	// remaining rung. Validated at load; an explicit pin naming one is an
+	// error. Empty excludes nothing.
+	ExcludedModels []string `json:"excludedModels,omitempty" yaml:"excluded_models,omitempty"`
+
+	// ExcludedEfforts are effort levels (low|medium|high|xhigh|max) automatic
+	// routing must never dispatch (#2063): a model descends to its next lower
+	// allowed effort, and a model with none left is excluded. Validated at
+	// load; a stage_efforts pin naming one is an error.
+	ExcludedEfforts []string `json:"excludedEfforts,omitempty" yaml:"excluded_efforts,omitempty"`
+
 	// Mode selects how a stage's BASE model is chosen: "manual" (explicit
 	// pipeline.stage_models, falling back to the built-in per-stage table),
 	// "automatic" (defer every stage to the complexity router — the default),
@@ -2252,6 +2266,9 @@ func Load(workspaceRoot string) (*Config, error) {
 			return nil, rerr
 		}
 		if rerr := ValidateNoRemovedTrustKeys(cfg); rerr != nil {
+			return nil, rerr
+		}
+		if rerr := validateModelRoutingExclusionsFromEnv(cfg); rerr != nil {
 			return nil, rerr
 		}
 		if cfg.Preflight != nil {

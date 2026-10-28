@@ -22,7 +22,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { PipelineStage } from "@nightgauge/sdk";
+import {
+  applyExclusions,
+  candidateLadder,
+  eligibleBand,
+  type PipelineStage,
+} from "@nightgauge/sdk";
 
 vi.mock("vscode", () => ({
   workspace: { workspaceFolders: [{ uri: { fsPath: "/test/workspace" } }] },
@@ -118,7 +123,57 @@ function computeGolden(): Golden {
       }
     }
   }
+  // #2063 end to end: frontier routes feature-dev at XL to Fable, and
+  // excluding claude-fable-5-1 lands it on the strongest remaining rung.
+  process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
+  configText = "model_routing:\n  excluded_models: [claude-fable-5-1]\n";
+  for (const stage of ["feature-planning", "feature-dev"] as PipelineStage[]) {
+    const routed = resolveModel(stage, "/test/workspace", {
+      labels: ["size:XL"],
+      title: `compat ${stage} XL`,
+    });
+    golden[`${stage}|frontier|XL|ex=claude-fable-5-1`] =
+      `${routed.model}|${routed.source}|${routed.effort ?? ""}`;
+  }
+  configText = "";
+  // Shared rows, prefixed — this fixture is a flat record.
+  for (const [k, v] of Object.entries(computeExclusionCompat())) golden[`exclusions|${k}`] = v;
   return golden;
+}
+
+/**
+ * The #2063 exclusions section, SHARED byte-for-byte with the Go fixture's
+ * "exclusions" key (internal/orchestrator/selection_compat_test.go,
+ * computeExclusionCompat): ladder, eligible-band and frontier-envelope rows.
+ */
+const EXCLUSION_SETS = [
+  "claude-fable-5-1|",
+  "|xhigh,max",
+  "|low,medium,high,xhigh,max",
+  "claude-opus-5-5,claude-fable-5-1|max",
+];
+const NO_ELIGIBLE_RUNG = "error:no-eligible-rung";
+
+function computeExclusionCompat(): Record<string, string> {
+  const out: Record<string, string> = {};
+  const csv = (s: string): string[] => (s === "" ? [] : s.split(","));
+  for (const set of EXCLUSION_SETS) {
+    const [m, e] = set.split("|");
+    const ex = { models: csv(m), efforts: csv(e) };
+    for (const provider of ["anthropic", "xai"] as const) {
+      const ladder = candidateLadder(provider, undefined, ex)
+        .map((r) => `${r.band}:${r.modelId}@${r.effort ?? ""}`)
+        .join(",");
+      out[`ladder|${provider}|${set}`] = ladder === "" ? NO_ELIGIBLE_RUNG : ladder;
+      for (const band of ["fable", "opus", "sonnet", "haiku"] as const) {
+        out[`eligible|${provider}|${band}|${set}`] =
+          eligibleBand(provider, band, ex) ?? NO_ELIGIBLE_RUNG;
+      }
+    }
+    const env = applyExclusions({ floor: "haiku", ceiling: "fable" } as const, "anthropic", ex);
+    out[`envelope|frontier|${set}`] = `${env.floor}-${env.ceiling}`;
+  }
+  return out;
 }
 
 describe("selection-query cutover compatibility (#581)", () => {

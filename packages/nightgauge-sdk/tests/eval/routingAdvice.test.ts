@@ -128,6 +128,11 @@ describe("pickAdvice — the shared consumption-side selection", () => {
     expect(pickAdvice(advice, "bugfix", "maximum")?.model_id).toBe("claude-opus-4-8");
   });
 
+  it("never picks an excluded model, even the top-quality entry (#2063)", () => {
+    const picked = pickAdvice(advice, "bugfix", "maximum", undefined, ["claude-opus-4-8"]);
+    expect(picked?.model_id).not.toBe("claude-opus-4-8");
+  });
+
   it("returns the full envelope of the winning entry", () => {
     const e = pickAdvice(advice, "bugfix", "efficiency");
     expect(e?.effort).toBe("low");

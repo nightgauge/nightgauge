@@ -28,6 +28,7 @@ import {
   type ModelEnvelope,
 } from "../../src/analysis/AutoModelSelector.js";
 import { resolveModelForAdapter } from "../../src/eval/modelRegistry.js";
+import { applyExclusions, candidateLadder, eligibleBand } from "../../src/eval/selectionQuery.js";
 
 const GOLDEN_PATH = join(__dirname, "__fixtures__", "selection-compat-golden.json");
 const REGEN = process.env.NIGHTGAUGE_REGEN_SELECTION_COMPAT === "1";
@@ -37,6 +38,8 @@ interface Golden {
   selector: Record<string, string>;
   /** "adapter|band" → concrete model id ("" = no registry model) */
   adapterBands: Record<string, string>;
+  /** #2063 rows shared with the Go fixture's "exclusions" key */
+  exclusions: Record<string, string>;
 }
 
 const STAGES = [
@@ -62,7 +65,7 @@ const ADAPTERS = ["claude", "claude-headless", "codex", "gemini", "grok", "copil
 const BANDS = ["haiku", "sonnet", "opus", "fable"];
 
 function computeGolden(): Golden {
-  const golden: Golden = { selector: {}, adapterBands: {} };
+  const golden: Golden = { selector: {}, adapterBands: {}, exclusions: computeExclusionCompat() };
   const selector = new AutoModelSelector();
   for (const stage of STAGES) {
     for (const size of SIZES) {
@@ -86,6 +89,41 @@ function computeGolden(): Golden {
   return golden;
 }
 
+/**
+ * The #2063 exclusions section, SHARED byte-for-byte with the Go fixture's
+ * "exclusions" key (internal/orchestrator/selection_compat_test.go,
+ * computeExclusionCompat): ladder, eligible-band and frontier-envelope rows.
+ */
+const EXCLUSION_SETS = [
+  "claude-fable-5-1|",
+  "|xhigh,max",
+  "|low,medium,high,xhigh,max",
+  "claude-opus-5-5,claude-fable-5-1|max",
+];
+const NO_ELIGIBLE_RUNG = "error:no-eligible-rung";
+
+function computeExclusionCompat(): Record<string, string> {
+  const out: Record<string, string> = {};
+  const csv = (s: string): string[] => (s === "" ? [] : s.split(","));
+  for (const set of EXCLUSION_SETS) {
+    const [m, e] = set.split("|");
+    const ex = { models: csv(m), efforts: csv(e) };
+    for (const provider of ["anthropic", "xai"] as const) {
+      const ladder = candidateLadder(provider, undefined, ex)
+        .map((r) => `${r.band}:${r.modelId}@${r.effort ?? ""}`)
+        .join(",");
+      out[`ladder|${provider}|${set}`] = ladder === "" ? NO_ELIGIBLE_RUNG : ladder;
+      for (const band of ["fable", "opus", "sonnet", "haiku"] as const) {
+        out[`eligible|${provider}|${band}|${set}`] =
+          eligibleBand(provider, band, ex) ?? NO_ELIGIBLE_RUNG;
+      }
+    }
+    const env = applyExclusions({ floor: "haiku", ceiling: "fable" } as const, "anthropic", ex);
+    out[`envelope|frontier|${set}`] = `${env.floor}-${env.ceiling}`;
+  }
+  return out;
+}
+
 describe("selection-query cutover compatibility (#581)", () => {
   it("resolves every (stage × size × envelope) and (adapter × band) cell exactly as before the cutover", () => {
     const got = computeGolden();
@@ -104,5 +142,6 @@ describe("selection-query cutover compatibility (#581)", () => {
 
     expect(got.selector).toEqual(want.selector);
     expect(got.adapterBands).toEqual(want.adapterBands);
+    expect(got.exclusions).toEqual(want.exclusions);
   });
 });

@@ -160,14 +160,25 @@ func containsString(list []string, v string) bool {
 // Local providers (ollama/lm-studio) have no registry entries by design, so
 // their ladder is empty and callers keep the configured local model.
 func CandidateLadder(provider, transport string) []EnvelopeRung {
+	return CandidateLadderExcluding(provider, transport, Exclusions{})
+}
+
+// CandidateLadderExcluding is CandidateLadder with the workspace's exclusions
+// applied (#2063) — the one eligibility source. An excluded model id yields no
+// rung; excluded efforts are removed from the model's declared rungs before
+// the derivation above runs, so a single-band model whose declared default is
+// excluded descends to its next lower allowed effort, and a model with no
+// allowed effort left yields no rung. A model with no effort axis is
+// untouched by excluded efforts. The zero Exclusions is CandidateLadder.
+func CandidateLadderExcluding(provider, transport string, ex Exclusions) []EnvelopeRung {
 	rungs := make([]EnvelopeRung, 0, len(TierBandsStrongestFirst))
 	// Last emitted effort per model id (multi-band descent). A model can
 	// legitimately rung with effort "" — track emission separately.
 	lastEffort := map[string]string{}
 
 	for _, band := range TierBandsStrongestFirst {
-		desc, ok := models.Resolve(provider, band)
-		if !ok || desc.Provider != provider {
+		desc, ok := resolveProviderModel(provider, band)
+		if !ok || ex.ExcludesModel(desc.ID) {
 			continue
 		}
 		if transport != "" {
@@ -175,18 +186,28 @@ func CandidateLadder(provider, transport string) []EnvelopeRung {
 				continue
 			}
 		}
+		allowed := ex.allowedEfforts(desc.SupportedEfforts)
+		if len(desc.SupportedEfforts) > 0 && len(allowed) == 0 {
+			continue // every declared effort excluded — no rung
+		}
 
 		var effort string
 		if prev, seen := lastEffort[desc.ID]; seen {
-			lower := nextLowerSupportedEffort(desc.SupportedEfforts, prev)
+			lower := nextLowerSupportedEffort(allowed, prev)
 			if lower == "" {
 				continue // cannot descend further — no rung
 			}
 			effort = lower
 		} else if len(desc.Tiers) > 1 {
-			effort = topSupportedEffort(desc.SupportedEfforts)
+			effort = topSupportedEffort(allowed)
 		} else {
 			effort = desc.EffortDefault()
+			if ex.ExcludesEffort(effort) {
+				effort = nextLowerSupportedEffort(allowed, effort)
+				if effort == "" {
+					continue // nothing allowed at or below the default — no rung
+				}
+			}
 		}
 		lastEffort[desc.ID] = effort
 		rungs = append(rungs, EnvelopeRung{
@@ -199,11 +220,26 @@ func CandidateLadder(provider, transport string) []EnvelopeRung {
 	return rungs
 }
 
+// resolveProviderModel is the provider's own model serving band.
+func resolveProviderModel(provider, band string) (models.ModelDescriptor, bool) {
+	desc, ok := models.Resolve(provider, band)
+	if !ok || desc.Provider != provider {
+		return models.ModelDescriptor{}, false
+	}
+	return desc, true
+}
+
 // ResolveBandEnvelope resolves one band input to its dispatch envelope for a
 // provider — the query that replaces "band → hardcoded ladder position".
 // ok=false when the provider has no (reachable) model for the band.
 func ResolveBandEnvelope(provider, band, transport string) (EnvelopeRung, bool) {
-	for _, rung := range CandidateLadder(provider, transport) {
+	return ResolveBandEnvelopeExcluding(provider, band, transport, Exclusions{})
+}
+
+// ResolveBandEnvelopeExcluding is ResolveBandEnvelope over the
+// exclusion-filtered ladder (#2063).
+func ResolveBandEnvelopeExcluding(provider, band, transport string, ex Exclusions) (EnvelopeRung, bool) {
+	for _, rung := range CandidateLadderExcluding(provider, transport, ex) {
 		if rung.Band == band {
 			return rung, true
 		}
@@ -225,13 +261,23 @@ const EscalationCeilingBand = TierOpus
 // the band ladder, ceiling from EscalationCeilingBand. Replaces the
 // hand-inlined ["haiku", "sonnet", "opus"] escalation ladders (#581).
 func EscalationLadder(provider string) []string {
+	return EscalationLadderExcluding(provider, Exclusions{})
+}
+
+// EscalationLadderExcluding is EscalationLadder over the exclusion-filtered
+// candidate ladder (#2063): an ineligible band is no escalation target.
+func EscalationLadderExcluding(provider string, ex Exclusions) []string {
 	ceiling := tierRank(EscalationCeilingBand)
+	eligible := CandidateLadderExcluding(provider, "", ex)
 	out := []string{}
 	for _, band := range TierBandsAscending() {
 		if tierRank(band) > ceiling {
 			continue
 		}
-		if desc, ok := models.Resolve(provider, band); ok && desc.Provider == provider {
+		if _, ok := resolveProviderModel(provider, band); !ok {
+			continue
+		}
+		if ex.IsZero() || ladderHasBand(eligible, band) {
 			out = append(out, band)
 		}
 	}

@@ -109,6 +109,12 @@ export interface AdvisorOptions {
   minSamples?: number;
   /** Confidence required before advise() overrides the base pick (default "medium"). */
   minConfidenceToApply?: Confidence;
+  /**
+   * `model_routing.excluded_models` (#2063): combinations on these model ids
+   * are dropped BEFORE pickForMode, so an excluded top-quality entry can never
+   * win. Go pair: routing.AdviseBand's exclusion filter.
+   */
+  excludedModels?: readonly string[];
 }
 
 const CONFIDENCE_RANK: Record<Confidence, number> = { low: 0, medium: 1, high: 2 };
@@ -175,8 +181,10 @@ export class EvalRoutingAdvisor {
   private readonly qualityFloor: number;
   private readonly minSamplesPerCombination: number;
   private readonly minConfidenceToApply: Confidence;
+  private readonly excludedModels: readonly string[];
 
   constructor(records: ModelEvalRecord[], options: AdvisorOptions = {}) {
+    this.excludedModels = options.excludedModels ?? [];
     this.qualityFloor = options.qualityFloor ?? 70;
     this.minSamplesPerCombination = options.minSamples ?? 5;
     this.minConfidenceToApply = options.minConfidenceToApply ?? "medium";
@@ -218,8 +226,10 @@ export class EvalRoutingAdvisor {
    * backoff level).
    */
   recommend(jobClass: JobClass, mode: RoutingMode): Recommendation | undefined {
-    const combos = this.stats.get(jobClass);
-    if (!combos || combos.length === 0) return undefined;
+    const combos = (this.stats.get(jobClass) ?? []).filter(
+      (c) => !this.excludedModels.includes(c.modelId)
+    );
+    if (combos.length === 0) return undefined;
 
     const floor = this.minSamplesPerCombination;
 

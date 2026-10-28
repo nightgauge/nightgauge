@@ -632,3 +632,63 @@ func TestStageDefaultModelsEveryMode(t *testing.T) {
 		}
 	})
 }
+
+func writeExclusionsConfig(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".nightgauge", "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDispatchModelHonoursExcludedModels pins #2063's headline case: frontier
+// routes feature-dev at L/XL to Fable, and excluding claude-fable-5-1 lands it
+// on the strongest remaining rung (opus → claude-opus-5-5) instead.
+func TestDispatchModelHonoursExcludedModels(t *testing.T) {
+	plain := isolatedWorkspace(t)
+	dir := t.TempDir()
+	t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
+	s := testScheduler(t)
+
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, plain, "fable", routing.Decision{}, nil, ""); got != "fable" {
+		t.Fatalf("frontier feature-dev without exclusions = %q, want fable", got)
+	}
+
+	writeExclusionsConfig(t, dir, "model_routing:\n  excluded_models: [claude-fable-5-1]\n")
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "fable", routing.Decision{}, nil, ""); got != "opus" {
+		t.Fatalf("frontier feature-dev with Fable excluded = %q, want opus", got)
+	}
+	// A minimum_model: fable floor and a forced fable tier land on opus too.
+	floors := map[string]string{"feature-dev": "fable"}
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", routing.Decision{}, floors, ""); got != "opus" {
+		t.Fatalf("fable floor with Fable excluded = %q, want opus", got)
+	}
+	if got := PlannedStageModel(dir, state.StageFeatureDev, "fable", routing.Decision{}, nil, ""); got != "opus" {
+		t.Fatalf("PlannedStageModel with Fable excluded = %q, want opus", got)
+	}
+	// The dispatch gate lowers a mid-envelope excluded band too.
+	writeExclusionsConfig(t, dir, "model_routing:\n  excluded_models: [claude-opus-5-5]\n")
+	if got, err := eligibleDispatchModel(dir, state.StageFeatureValidate, "opus", ""); err != nil || got != "sonnet" {
+		t.Fatalf("eligibleDispatchModel(opus excluded) = %q, %v; want sonnet", got, err)
+	}
+}
+
+func TestDispatchModelNoEligibleRungNamesStageProviderAndLists(t *testing.T) {
+	dir := isolatedWorkspace(t)
+	writeExclusionsConfig(t, dir,
+		"model_routing:\n  excluded_efforts: [low, medium, high, xhigh, max]\n")
+	_, err := eligibleDispatchModel(dir, state.StageFeatureDev, "opus", "xai")
+	if err == nil {
+		t.Fatal("every effort excluded on xai must refuse the dispatch")
+	}
+	for _, want := range []string{"feature-dev", "xai", "low, medium, high, xhigh, max"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not name %q", err, want)
+		}
+	}
+	if got, err := eligibleDispatchModel(isolatedWorkspace(t), state.StageFeatureDev, "opus", "xai"); err != nil || got != "opus" {
+		t.Fatalf("no exclusions must be a no-op, got %q, %v", got, err)
+	}
+}

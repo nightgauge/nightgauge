@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
@@ -40,6 +41,10 @@ type selectionCompatGolden struct {
 	// Downgrades maps a rejected model → EvaluateDowngrade's
 	// "shouldDowngrade|fromTier|newTier|reason".
 	Downgrades map[string]string `json:"downgrades"`
+	// Exclusions is the #2063 section SHARED byte-for-byte with both TS
+	// fixtures (the "exclusions" key in each): ladder, eligible-band and
+	// envelope rows under model_routing.excluded_models / excluded_efforts.
+	Exclusions map[string]string `json:"exclusions"`
 }
 
 const selectionCompatGoldenPath = "testdata/selection_compat_golden.json"
@@ -65,6 +70,7 @@ func computeSelectionCompat(t *testing.T) selectionCompatGolden {
 		ProviderBands:  map[string]string{},
 		EscalationNext: map[string]string{},
 		Downgrades:     map[string]string{},
+		Exclusions:     computeExclusionCompat(),
 	}
 
 	modes := []routing.PerformanceMode{
@@ -108,6 +114,55 @@ func computeSelectionCompat(t *testing.T) selectionCompatGolden {
 	}
 
 	return g
+}
+
+// exclusionCompatSets are the shared exclusion cases, "models|efforts".
+var exclusionCompatSets = []string{
+	"claude-fable-5-1|",
+	"|xhigh,max",
+	"|low,medium,high,xhigh,max",
+	"claude-opus-5-5,claude-fable-5-1|max",
+}
+
+const noEligibleRung = "error:no-eligible-rung"
+
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
+}
+
+// computeExclusionCompat is the Go side of the shared exclusions section; the
+// TS mirror is computeExclusionCompat in both selectionCompat.test.ts files.
+func computeExclusionCompat() map[string]string {
+	out := map[string]string{}
+	for _, set := range exclusionCompatSets {
+		m, e, _ := strings.Cut(set, "|")
+		ex := routing.Exclusions{Models: splitCSV(m), Efforts: splitCSV(e)}
+		for _, provider := range []string{"anthropic", "xai"} {
+			rungs := routing.CandidateLadderExcluding(provider, "", ex)
+			parts := make([]string, len(rungs))
+			for i, r := range rungs {
+				parts[i] = r.Band + ":" + r.ModelID + "@" + r.Effort
+			}
+			ladder := strings.Join(parts, ",")
+			if ladder == "" {
+				ladder = noEligibleRung
+			}
+			out["ladder|"+provider+"|"+set] = ladder
+			for _, band := range routing.TierBandsStrongestFirst {
+				got, ok := routing.EligibleBand(provider, band, ex)
+				if !ok {
+					got = noEligibleRung
+				}
+				out["eligible|"+provider+"|"+band+"|"+set] = got
+			}
+		}
+		env := routing.ApplyExclusions(routing.Envelope(routing.ModeFrontier), "anthropic", ex)
+		out["envelope|frontier|"+set] = env.Floor + "-" + env.Ceiling
+	}
+	return out
 }
 
 func envStageKey(stage string) string {
@@ -157,6 +212,7 @@ func TestSelectionCompatGolden(t *testing.T) {
 	compareCompatMap(t, "provider_bands", want.ProviderBands, got.ProviderBands)
 	compareCompatMap(t, "escalation_next", want.EscalationNext, got.EscalationNext)
 	compareCompatMap(t, "downgrades", want.Downgrades, got.Downgrades)
+	compareCompatMap(t, "exclusions", want.Exclusions, got.Exclusions)
 }
 
 func compareCompatMap(t *testing.T, name string, want, got map[string]string) {
