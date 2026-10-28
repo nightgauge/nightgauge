@@ -118,3 +118,25 @@ func mustHost(t *testing.T, raw string) string {
 	}
 	return u.Hostname()
 }
+
+func TestFetchRefusesRedirectOffAllowlistBeforeSending(t *testing.T) {
+	var offHits int64
+	off := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&offHits, 1)
+	}))
+	t.Cleanup(off.Close)
+	on := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, off.URL+"/internal", http.StatusFound)
+	}))
+	t.Cleanup(on.Close)
+	f := &Fetcher{Client: on.Client(), AllowedHosts: []string{mustHost(t, on.URL)}}
+	if _, err := f.Fetch(context.Background(), on.URL+"/s"); err == nil {
+		t.Fatal("redirect off the allowlist was followed")
+	}
+	if offHits != 0 {
+		t.Fatalf("off-allowlist target received %d request(s)", offHits)
+	}
+	if on.Client().CheckRedirect != nil {
+		t.Fatal("caller's client was mutated")
+	}
+}

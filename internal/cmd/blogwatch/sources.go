@@ -15,6 +15,9 @@ import (
 // MaxFetchBytes bounds any single fetched document.
 const MaxFetchBytes = 8 << 20
 
+// MaxRedirects bounds the redirect hops a single fetch may follow.
+const MaxRedirects = 5
+
 // CheckAllowed reports why raw may not be fetched, or nil. The scheme must be
 // https and the host an exact, case-insensitive member of allowedHosts.
 func CheckAllowed(raw string, allowedHosts []string) error {
@@ -46,9 +49,21 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (string, error) {
 	if err := CheckAllowed(raw, f.AllowedHosts); err != nil {
 		return "", err
 	}
-	client := f.Client
-	if client == nil {
-		client = http.DefaultClient
+	// Copy the client so the allowlist is enforced on every redirect hop
+	// before that hop's request is sent, without mutating the caller's client.
+	client := &http.Client{}
+	if f.Client != nil {
+		c := *f.Client
+		client = &c
+	}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= MaxRedirects {
+			return fmt.Errorf("stopped after %d redirects", MaxRedirects)
+		}
+		if err := CheckAllowed(req.URL.String(), f.AllowedHosts); err != nil {
+			return fmt.Errorf("redirected: %w", err)
+		}
+		return nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
@@ -60,10 +75,6 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	// A redirect off the allowlist is refused too.
-	if err := CheckAllowed(resp.Request.URL.String(), f.AllowedHosts); err != nil {
-		return "", fmt.Errorf("redirected: %w", err)
-	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("GET %s: HTTP %d", raw, resp.StatusCode)
 	}
