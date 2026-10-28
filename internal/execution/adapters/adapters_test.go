@@ -1218,3 +1218,22 @@ func TestCodexAdapterWorkspaceWriteAddsCloneRoot(t *testing.T) {
 		}
 	}
 }
+
+// TestCopilotBuildCommand_ToolPolicy pins that a stage allow list replaces
+// --allow-all-tools with per-tool flags, and an empty list keeps it (#1).
+func TestCopilotBuildCommand_ToolPolicy(t *testing.T) {
+	a := &CopilotAdapter{}
+	_, args, _ := a.BuildCommand(RunOptions{AllowedTools: []string{"Read", "Bash"}, Model: "sonnet"})
+	for _, f := range args {
+		if f == "--allow-all-tools" {
+			t.Fatalf("allow list must not emit --allow-all-tools: %q", args)
+		}
+	}
+	if len(args) < 2 || args[0] != "--allow-tool" || args[1] != "shell" {
+		t.Errorf("args = %q, want leading --allow-tool shell", args)
+	}
+	_, args, _ = a.BuildCommand(RunOptions{})
+	if len(args) != 1 || args[0] != "--allow-all-tools" {
+		t.Errorf("empty allow list args = %q, want [--allow-all-tools]", args)
+	}
+}

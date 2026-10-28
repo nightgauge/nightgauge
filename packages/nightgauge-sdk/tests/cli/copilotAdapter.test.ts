@@ -7,6 +7,10 @@ import {
   COPILOT_PREMIUM_REQUEST_COST_USD,
 } from "../../src/cli/adapterQuery.js";
 import { TokenTracker } from "../../src/tracking/TokenTracker.js";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { copilotToolPolicy, withCopilotToolPolicy } from "../../src/cli/adapters/copilotTools.js";
 
 function createRunner(
   responses: Record<string, { code: number; stdout?: string; stderr?: string }>
@@ -366,5 +370,56 @@ describe("TokenTracker with Copilot data", () => {
 
     const summary = tracker.formatSummary();
     expect(summary).not.toContain("premium req");
+  });
+});
+
+// Shared Go/SDK parity fixture for the Copilot tool policy (#1).
+const COPILOT_TOOL_FIXTURE = join(
+  resolve(dirname(fileURLToPath(import.meta.url)), "../../../.."),
+  "internal/execution/testdata/copilot-tool-policy.json"
+);
+
+describe("copilotToolPolicy (shared fixture)", () => {
+  const fixture = JSON.parse(readFileSync(COPILOT_TOOL_FIXTURE, "utf8")) as {
+    cases: Array<{
+      name: string;
+      allowed_tools: string[];
+      want_args: string[];
+      want_dropped: string[];
+    }>;
+  };
+
+  it("has cases", () => {
+    expect(fixture.cases.length).toBeGreaterThan(0);
+  });
+
+  for (const c of fixture.cases) {
+    it(c.name, () => {
+      const got = copilotToolPolicy(c.allowed_tools);
+      expect(got.args).toEqual(c.want_args);
+      expect(got.dropped).toEqual(c.want_dropped);
+    });
+  }
+});
+
+describe("withCopilotToolPolicy", () => {
+  it("replaces --allow-all-tools with per-tool flags when tools are declared", () => {
+    expect(
+      withCopilotToolPolicy(["--allow-all-tools", "--model", "gpt-5"], ["Read", "Bash"])
+    ).toEqual(["--allow-tool", "shell", "--model", "gpt-5"]);
+  });
+
+  it("keeps args unchanged without an allow list", () => {
+    expect(withCopilotToolPolicy(["--allow-all-tools"], [])).toEqual(["--allow-all-tools"]);
+    expect(withCopilotToolPolicy(["--allow-all-tools"])).toEqual(["--allow-all-tools"]);
+  });
+
+  it("keeps operator-supplied --allow-tool flags as given", () => {
+    const args = ["--allow-tool", "shell(ls)"];
+    expect(withCopilotToolPolicy(args, ["Bash"])).toEqual(args);
+  });
+
+  it("drops an unmapped-only list to no grant at all", () => {
+    expect(withCopilotToolPolicy(["--allow-all-tools"], ["Task"])).toEqual([]);
   });
 });

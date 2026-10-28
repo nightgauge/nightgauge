@@ -24,6 +24,11 @@ changelog, and the release workflow refuses a tag that does not.
   unscored metrics: no dimension or overall score changes. See
   `docs/HEALTH_MONITORING.md`.
 
+- **Copilot honours the stage's allowed tools.** A stage that declares allowed
+  tools now runs Copilot with matching `--allow-tool` / `--allow-url` flags
+  instead of `--allow-all-tools`, on both the Go and SDK paths. Tools with no
+  Copilot equivalent (such as `Task`) are denied and logged as a warning. Stages
+  that declare no tools keep `--allow-all-tools`.
 - **Pin or cap one issue's model with a label.** `model:pin-<band>` runs the
   pipeline-chosen stages on that band; `model:max-<band>` keeps every routed
   stage, retries included, at or below it. Explicit per-stage config, the
