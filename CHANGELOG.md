@@ -31,6 +31,14 @@ changelog, and the release workflow refuses a tag that does not.
   instead of truncated. Spike materialization therefore gains a kill switch and
   a cap; an in-cap run in file mode is unchanged.
 
+- **`nightgauge eval sweep` runs the control issue once per effort of one model
+  (#2118).** Each cell records cost, wall time, attempts, an objective pass/fail
+  and a quality score. Cells run one at a time in separate clones that refuse
+  pushes to `main`. `--max-usd` stops the sweep before a cell that would exceed
+  it and exits 1. Live mode is not available yet: `nightgauge run` cannot stop
+  before pr-merge. See
+  [Whole-pipeline effort sweep](docs/MODEL_EVALUATION.md#whole-pipeline-effort-sweep).
+
 - **`nightgauge-model-watch` turns a model release into reviewable work (#83).**
   `nightgauge model-watch classify --input <dir>` reads a provider's fetched
   release pages and proposes a registry patch: the new descriptor and the

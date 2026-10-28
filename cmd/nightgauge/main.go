@@ -1014,6 +1014,7 @@ func rootCmd() *cobra.Command {
 		ciCmd(),
 		gitCmd(),
 		runCmd(),
+		evalCmd(),
 		queueCmd(),
 		statusCmd(),
 		versionCmd(),

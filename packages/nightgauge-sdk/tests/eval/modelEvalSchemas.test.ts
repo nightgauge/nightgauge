@@ -20,6 +20,7 @@ import {
   EvalScoreSchema,
   EvalMatrixCellSchema,
   ModelEvalCellResultSchema,
+  EvalRunSummarySchema,
   ModelEvalVerdictSchema,
   EvalRunSchema,
   ModelEvalRecordSchema,
@@ -464,5 +465,47 @@ describe("EvalTaskSchema control task (#2117)", () => {
 
   it("leaves non-control tasks unaffected", () => {
     expect(EvalTaskSchema.safeParse(TASK).success).toBe(true);
+  });
+});
+
+describe("effort sweep fields (#2118)", () => {
+  const cell = {
+    task_id: "control",
+    job_class: "backend-logic",
+    cell: { model_id: "m", effort: "high", reasoning: "none", prompt_variant: "baseline" },
+    model_id: "m",
+    model_version_label: "m",
+    verdict: "error",
+    tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0 },
+    cost_usd: 2.5,
+    latency_ms: 9000,
+    attempts_to_green: 0,
+    gate_results: [],
+    control_hash: "abc",
+    wall_clock_seconds: 9,
+    turns: 40,
+    objective_passed: false,
+    timed_out: true,
+    stage_efforts: { "feature-dev": "high", "pr-create": "high" },
+  };
+
+  it("round-trips a sweep cell and rejects an off-ladder stage effort", () => {
+    expect(ModelEvalCellResultSchema.parse(cell)).toEqual(cell);
+    expect(() =>
+      ModelEvalCellResultSchema.parse({ ...cell, stage_efforts: { "feature-dev": "turbo" } })
+    ).toThrow();
+  });
+
+  it("accepts cap_reached on the run summary", () => {
+    const summary = {
+      total: 0,
+      passed: 0,
+      failed: 0,
+      errored: 0,
+      skipped: 0,
+      total_cost_usd: 0,
+      cap_reached: { max_usd: 0.01, spent_usd: 0, projected_usd: 1, skipped_efforts: ["low"] },
+    };
+    expect(EvalRunSummarySchema.parse(summary)).toEqual(summary);
   });
 });

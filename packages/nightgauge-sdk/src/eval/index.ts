@@ -198,13 +198,32 @@ export {
 
 export {
   ModelEvalRunner,
+  CellExecutionError,
+  resolveSweepEfforts,
   mapWithConcurrency,
+  type CellSweepTelemetry,
+  type SweepOptions,
   type EvalWorkspace,
   type WorkspaceProvider,
   type CellExecution,
   type EvalCellExecutor,
   type ModelEvalRunOptions,
 } from "./modelEvalRunner.js";
+
+export {
+  PipelineCellExecutor,
+  refusePipelineRun,
+  cellConfigYaml,
+  telemetryFromRecord,
+  historyRunRecordReader,
+  latestRunRecord,
+  type PipelineRunFn,
+  type PipelineRunResult,
+  type PipelineRunRecord,
+  type RunRecordReader,
+  type RunTelemetry,
+  type PipelineCellExecutorOptions,
+} from "./pipelineCellExecutor.js";
 
 export {
   scoreCell,
@@ -225,6 +244,8 @@ export {
 
 export {
   WorktreeWorkspaceProvider,
+  PRE_PUSH_GUARD,
+  sweepBranchName,
   defaultExec,
   type ExecFn,
   type ExecResult,
