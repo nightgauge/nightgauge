@@ -243,6 +243,26 @@ export {
 } from "./qualityScorer.js";
 
 export {
+  StageMatrixRowSchema,
+  StageMatrixSkipReasonSchema,
+  redactSecrets,
+  supportedControlsFor,
+  planAdapterCells,
+  rowsFromRecord,
+  runStageMatrix,
+  toJsonl,
+  renderMarkdownTable,
+  type StageMatrixRow,
+  type StageMatrixSkipReason,
+  type AdapterProbe,
+  type AdapterProbeResult,
+  type AdapterCellPlan,
+  type StageMatrixRunFn,
+  type StageMatrixRecordReader,
+  type StageMatrixOptions,
+} from "./stageMatrix.js";
+
+export {
   WorktreeWorkspaceProvider,
   PRE_PUSH_GUARD,
   sweepBranchName,
@@ -290,6 +310,8 @@ export {
   resolveEvalAdapterProfileForAdapter,
   claudeEvalProfile,
   codexEvalProfile,
+  geminiEvalProfile,
+  copilotEvalProfile,
   lmStudioEvalProfile,
   type EvalAdapterProfile,
   type SpawnTelemetry,

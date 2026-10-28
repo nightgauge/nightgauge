@@ -20,13 +20,16 @@
  *      unsupported instead of running mislabeled;
  *   3. how the CLI's stdout is normalized to {usage, durationMs, isError}.
  *
- * Only two adapters spawn a headless local CLI this way today — `claude`
- * (anthropic) and `codex` (openai). `lm-studio` resolves to a profile too
- * (#1622, ADR-022's `opencode` + local-model case), but it is an HTTP
+ * Four adapters spawn a headless local CLI this way — `claude` (anthropic),
+ * `codex` (openai), `gemini` (google) and `copilot` (copilot, #2). Gemini and
+ * Copilot have a model flag but no effort or thinking knob, so any effort cell
+ * on them fails as unsupported; their profiles still serve command
+ * resolution, output parsing and the adapter × stage matrix's control facts.
+ * `lm-studio` resolves to a profile too (#1622, ADR-022's `opencode` + local-model case), but it is an HTTP
  * adapter, not a spawned CLI — its spawn/parse methods throw until the live
  * spawn leg is wired (#1658). The **measurement** half of #107 (rerun the
  * preamble A/B on codex) is a separate follow-up that consumes this spawn.
- * Adding gemini/copilot/etc. is a new profile entry here, not an executor edit.
+ * Adding another adapter is a new profile entry here, not an executor edit.
  *
  * @see docs/spikes/77-measure-the-behavioral-preamble-hypothesis-on-the-eval-axis.md
  * @see packages/nightgauge-sdk/src/cli/adapterQuery.ts — summarizeCodexJsonOutput (reused)
@@ -40,7 +43,11 @@ import {
   type TokenUsage,
 } from "./modelEvalSchemas.js";
 import { providerFor } from "./modelRegistry.js";
-import { summarizeCodexJsonOutput } from "../cli/adapterQuery.js";
+import {
+  summarizeCodexJsonOutput,
+  summarizeCopilotOutput,
+  summarizeGeminiStreamJsonOutput,
+} from "../cli/adapterQuery.js";
 
 /** Token usage reported by the Claude CLI `result` object. */
 export interface ClaudeJsonUsage {
@@ -367,6 +374,89 @@ export const codexEvalProfile: EvalAdapterProfile = {
 };
 
 // ---------------------------------------------------------------------------
+// Gemini (google) and Copilot (copilot) profiles — model flag only (#2).
+// ---------------------------------------------------------------------------
+
+/**
+ * Throw for the effort/reasoning axes on a CLI with neither knob. The eval
+ * schema has no "no effort" value, so every cell carries one; running it would
+ * record an effort the spawn never applied (#571).
+ */
+function refuseEffortAxes(adapter: string, model: string, effort: EffortLevel): never {
+  throw new UnsupportedCellError(
+    `${adapter} CLI has no effort or thinking knob — effort '${effort}' cannot be applied for ` +
+      `model '${model}'. Only the model axis is controllable on ${adapter}.`
+  );
+}
+
+/**
+ * Gemini CLI: `gemini --output-format stream-json --model <id>`, prompt on
+ * stdin, mirroring internal/execution/adapters/gemini.go (which passes the
+ * prompt positionally; the CLI reads stdin when it is not a TTY).
+ */
+export const geminiEvalProfile: EvalAdapterProfile = {
+  adapter: "gemini",
+  provider: "google",
+  hasSeparateThinkingKnob: false,
+  defaultCommand: "gemini",
+  commandEnvVar: "NIGHTGAUGE_GEMINI_CLI_COMMAND",
+
+  resolveCommand(override) {
+    return override ?? process.env[this.commandEnvVar] ?? this.defaultCommand;
+  },
+
+  buildSpawnPlan(model, effort, _reasoning) {
+    return refuseEffortAxes("gemini", model, effort);
+  },
+
+  parseResult(stdout) {
+    if (!stdout.trim()) return null;
+    const summary = summarizeGeminiStreamJsonOutput(stdout);
+    return {
+      usage: {
+        input: summary.usage?.input_tokens ?? 0,
+        output: summary.usage?.output_tokens ?? 0,
+        cache_read: summary.usage?.cache_read_input_tokens ?? 0,
+        cache_creation: summary.usage?.cache_creation_input_tokens ?? 0,
+      },
+      durationMs: 0,
+      isError: summary.hasExplicitFailure,
+    };
+  },
+};
+
+/**
+ * Copilot CLI: `copilot --allow-all-tools --model <id>`, prompt on stdin,
+ * mirroring internal/execution/adapters/copilot.go. The CLI reports premium
+ * requests, never tokens, so parsed usage is always zero tokens.
+ */
+export const copilotEvalProfile: EvalAdapterProfile = {
+  adapter: "copilot",
+  provider: "copilot",
+  hasSeparateThinkingKnob: false,
+  defaultCommand: "copilot",
+  commandEnvVar: "NIGHTGAUGE_COPILOT_CLI_COMMAND",
+
+  resolveCommand(override) {
+    return override ?? process.env[this.commandEnvVar] ?? this.defaultCommand;
+  },
+
+  buildSpawnPlan(model, effort, _reasoning) {
+    return refuseEffortAxes("copilot", model, effort);
+  },
+
+  parseResult(stdout) {
+    if (!stdout.trim()) return null;
+    const summary = summarizeCopilotOutput(stdout);
+    return {
+      usage: { input: 0, output: 0, cache_read: 0, cache_creation: 0 },
+      durationMs: 0,
+      isError: summary.hasExplicitFailure,
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
 // LM Studio (lm-studio) profile — resolution-only; the live spawn leg is #1658.
 // ---------------------------------------------------------------------------
 
@@ -416,6 +506,8 @@ export const lmStudioEvalProfile: EvalAdapterProfile = {
 const PROFILES_BY_PROVIDER: Partial<Record<Provider, EvalAdapterProfile>> = {
   anthropic: claudeEvalProfile,
   openai: codexEvalProfile,
+  google: geminiEvalProfile,
+  copilot: copilotEvalProfile,
   "lm-studio": lmStudioEvalProfile,
 };
 
@@ -432,7 +524,7 @@ export function maybeResolveEvalAdapterProfile(provider: Provider): EvalAdapterP
 
 /**
  * The spawn profile for a registry `provider`. Throws for a provider with no
- * profile entry at all (gemini/copilot/ollama/other) — an honest, actionable
+ * profile entry at all (ollama/other) — an honest, actionable
  * error instead of silently spawning the wrong CLI. `lm-studio` resolves to
  * {@link lmStudioEvalProfile}, whose spawn/parse methods throw separately
  * because its live spawn leg is not wired yet (#1658).

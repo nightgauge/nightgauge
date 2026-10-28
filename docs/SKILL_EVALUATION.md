@@ -441,3 +441,72 @@ because only one can run deterministically in CI:
 
 See [SKILL_PORTABILITY.md](SKILL_PORTABILITY.md) for the full portability
 contract (binary discovery, model tiers, phase markers, tool directives).
+
+## Cross-provider adapter × stage matrix
+
+`scripts/evaluate-adapter-matrix.ts` (#2) drives one representative issue
+through the six pipeline stages once per adapter and records one row per
+adapter × stage. Logic lives in `packages/nightgauge-sdk/src/eval/stageMatrix.ts`
+and is covered offline by `tests/eval/stageMatrix.test.ts`; the default
+`vitest run` never spawns an adapter.
+
+### Gate and cost
+
+The script exits 1 before any probe or spawn unless
+`NIGHTGAUGE_SKILL_EVAL_LIVE=1` is set. Each runnable adapter costs one full
+pipeline run on that provider. `nightgauge run` ends in `pr-merge`, so `--repo`
+must be a disposable fixture repository: each adapter merges a PR into it.
+
+### Setup
+
+Install and authenticate each CLI with its own login flow; the runner only
+checks that the command is on `PATH` and never reads or prints credentials.
+
+| Adapter | CLI       | Command override env var         |
+| ------- | --------- | -------------------------------- |
+| codex   | `codex`   | `NIGHTGAUGE_CODEX_CLI_COMMAND`   |
+| gemini  | `gemini`  | `NIGHTGAUGE_GEMINI_CLI_COMMAND`  |
+| copilot | `copilot` | `NIGHTGAUGE_COPILOT_CLI_COMMAND` |
+
+### Running
+
+```bash
+NIGHTGAUGE_SKILL_EVAL_LIVE=1 npx tsx scripts/evaluate-adapter-matrix.ts \
+  --issue <N> --repo <owner>/<fixture> --fixture-dir <clone of the fixture> \
+  --adapters codex,gemini,copilot,ollama,lm-studio \
+  --out /tmp/adapter-matrix.jsonl --timeout-minutes 90
+```
+
+Each adapter runs `nightgauge run <N> --adapter <name>` in its own
+`git clone --no-hardlinks` of `--fixture-dir`. The markdown table goes to
+stdout; the JSONL defaults to `adapter-matrix-<N>.jsonl` in the pipeline state
+directory. The exit code is 1 when any row is `fail`.
+
+### Row schema
+
+| Field                | Meaning                                                            |
+| -------------------- | ------------------------------------------------------------------ |
+| `adapter`, `stage`   | The cell                                                           |
+| `status`             | `pass`, `fail` or `skipped`                                        |
+| `skip_reason`        | `agentic-gate`, `adapter-unavailable` or `routed`                  |
+| `reason`             | Failure or skip detail, with credentials redacted                  |
+| `model_identity`     | Model the stage dispatched, from the run record                    |
+| `tokens_available`   | Whether the run record has non-zero tokens for the stage           |
+| `supported_controls` | `model`, `effort`, `reasoning`: knobs the adapter's profile has    |
+| `evidence`           | `run_id`, `branch`, `duration_ms`, `input_tokens`, `output_tokens` |
+| `recorded_at`        | ISO timestamp                                                      |
+
+- `agentic-gate`: `isAgenticAdapter()` rejects the adapter (Ollama, LM Studio).
+  Nothing is probed or spawned.
+- `adapter-unavailable`: the CLI is not on `PATH`.
+- `routed`: the run record shows routing skipped the stage.
+
+Gemini and Copilot have a model flag but no effort or thinking knob, so their
+`supported_controls.effort` and `.reasoning` are `false`. Every string field
+passes `redactSecrets()` before it is written.
+
+### Recording results
+
+Paste the table into the eligibility table in
+[ADAPTER_MATRIX.md](ADAPTER_MATRIX.md#pipeline-eligibility-and-release-status)
+with the report date. Never edit a "pending" cell without a real report.
