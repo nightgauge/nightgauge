@@ -2300,6 +2300,7 @@ func TestGateTerminalKindConstantsMirrorOrchestrator(t *testing.T) {
 		"DevTestsFailed":              {gates.TerminalKindDevTestsFailed, TerminalKindDevTestsFailed},
 		"PrMergeLookupFailed":         {gates.TerminalKindPrMergeLookupFailed, TerminalKindPrMergeLookupFailed},
 		"NotPipelineActionable":       {gates.TerminalKindNotPipelineActionable, TerminalKindNotPipelineActionable},
+		"DevContextStale":             {gates.TerminalKindDevContextStale, TerminalKindDevContextStale},
 	}
 	for name, p := range pairs {
 		if p[0] != p[1] {

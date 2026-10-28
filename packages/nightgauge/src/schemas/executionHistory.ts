@@ -516,6 +516,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `stage_context_unreadable` — a gate could not read a file the stage's contract says it wrote (context, plan_file, gate-metrics.jsonl) for a reason other than absence; filesystem fault (#1237)
  *  - `dev_build_verification_missing` — feature-dev's context has no build_verification object; the skill skipped its verification step (#1237)
  *  - `dev_build_verification_failed` — feature-dev ran its build and recorded status=failed; organic (#1237)
+ *  - `dev_context_stale` — feature-dev's gate found a prior attempt's dev context; parked (#2637)
  *  - `dev_tests_failed` — feature-dev's own test run recorded failures; organic (#1237)
  *  - `pr_merge_lookup_failed` — pr-merge's gate could not establish the PR's state; infrastructure (#1237)
  *  - `context_window_exceeded` — the prompt outgrew the model server's loaded context; parked, never retried on the same model and adapter (#1631)
@@ -577,6 +578,7 @@ export const TerminalFailureKindSchema = z.enum([
   "stage_context_unreadable", // Issue #1237 — a gate could not read a file the stage's contract says it wrote, for a reason other than absence; filesystem fault
   "dev_build_verification_missing", // Issue #1237 — feature-dev's context has no build_verification object; the skill skipped its verification step
   "dev_build_verification_failed", // Issue #1237 — feature-dev ran its build and recorded status=failed; organic
+  "dev_context_stale", // Issue #2637 — feature-dev's gate found a prior attempt's dev context; parked, not judged on it
   "dev_tests_failed", // Issue #1237 — feature-dev's own test run recorded failures; organic
   "pr_merge_lookup_failed", // Issue #1237 — pr-merge's gate could not establish the PR's state (gh failed on every attempt, local git found no merge commit); infrastructure
   // Parked kinds (#1631) — the next attempt on the same model and adapter

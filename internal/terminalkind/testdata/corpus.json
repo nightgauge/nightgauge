@@ -1450,6 +1450,15 @@
       "rationale": "The stage's build broke (#1237) — organic, like validation_failed, and the record must say so or the failure weighting charges an infrastructure crash to the reliability score."
     },
     {
+      "id": "dev-context-stale",
+      "input": "stage gate failed: [dev-context-stale] dev context is from a prior attempt — not judged on its contents",
+      "expected": "dev_context_stale",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "gates.FeatureDevGate freshness guard (#2637), wrapped by the scheduler",
+      "rationale": "A retry that inherited a prior attempt's dev-N.json (#2637). It must not reach dev_tests_failed, whose evidence would be the earlier attempt's."
+    },
+    {
       "id": "dev-tests-failed",
       "input": "stage gate failed: dev context records failing tests",
       "expected": "dev_tests_failed",

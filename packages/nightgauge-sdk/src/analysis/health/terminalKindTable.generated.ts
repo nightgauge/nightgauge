@@ -1038,6 +1038,20 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "feature-dev ran its build and recorded status=failed (#1237). An organic implementation failure caught by the pipeline's own gate, in the same family as validation_failed; recording it as subagent_crash sent auto-triage down a crash-recovery path for a fault that never happened."
     },
     {
+      "id": "dev-context-stale",
+      "kind": "dev_context_stale",
+      "signal": false,
+      "clauses": [
+        [
+          "[dev-context-stale]"
+        ],
+        [
+          "dev_context_stale"
+        ]
+      ],
+      "why": "feature-dev's gate found a dev-N.json older than the stage it was judging (#2637): the retry wrote no handoff and inherited the prior attempt's. Parked and not judged on the old contents, so a stale tests_status is never booked as dev_tests_failed. Placed before dev-tests-failed for that reason."
+    },
+    {
       "id": "dev-tests-failed",
       "kind": "dev_tests_failed",
       "signal": false,

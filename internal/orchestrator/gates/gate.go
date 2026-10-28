@@ -96,6 +96,9 @@ const (
 	// TerminalKindNotPipelineActionable: FeaturePlanningGate's publication
 	// boundary backstop (#2562) — the deliverable needs an owner decision.
 	TerminalKindNotPipelineActionable = "not_pipeline_actionable"
+	// TerminalKindDevContextStale: FeatureDevGate found a dev-N.json that
+	// predates the stage it is judging (#2637) — a prior attempt's handoff.
+	TerminalKindDevContextStale = "dev_context_stale"
 )
 
 // GateResult is the in-process value returned by a StageGate.Verify call.

@@ -20,6 +20,7 @@ var parkedKinds = []string{
 	TerminalKindAdapterPermissionRejected,
 	TerminalKindAdapterIncompatible,
 	TerminalKindEnvironmentHalt, // #101: a broken local environment
+	TerminalKindDevContextStale, // #2637: a retry judged on a prior attempt's handoff
 }
 
 // TestParkedKinds_NoRetryNoLifetimeIncrementNoCascade drives each parked kind
