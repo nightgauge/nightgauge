@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Blog watch: a verdict for every vendor post.** The new
+  `nightgauge-blog-watch` skill and `nightgauge blog-watch
+{detect,screen,record,adopt}` find new posts on allowlisted https sources
+  (`blog_watch` in config; Anthropic engineering by default), screen their text
+  in block mode, and record exactly one of `Adopted`, `Already covered`,
+  `Already filed`, `Declined` or `Deferred` per post in an append-only log. A
+  re-run never re-evaluates a recorded post. Only `Adopted` files an issue,
+  labelled `type:feature` + `area:blog-watch` and parked in Backlog (#185).
 - **Health reports per-change outcomes.** `stage-effectiveness` now reports the
   share of merged issues that reached merge with no retry, re-run or backtrack,
   and how closely each merge's files matched its plan; `reliability` reports

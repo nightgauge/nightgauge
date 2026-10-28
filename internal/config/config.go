@@ -76,6 +76,43 @@ type SanitizationConfig struct {
 	Mode SanitizationMode `json:"mode,omitempty" yaml:"mode,omitempty"`
 }
 
+// BlogWatchSource is one blog-watch index (#185).
+type BlogWatchSource struct {
+	Name          string `json:"name" yaml:"name"`
+	IndexURL      string `json:"index_url" yaml:"index_url"`
+	PostURLPrefix string `json:"post_url_prefix" yaml:"post_url_prefix"`
+}
+
+// BlogWatchConfig is the blog_watch block: the https host allowlist and the
+// sources to watch. A source whose index host is off the allowlist is
+// reported by the verb and never fetched.
+type BlogWatchConfig struct {
+	AllowedHosts []string          `json:"allowed_hosts,omitempty" yaml:"allowed_hosts,omitempty"`
+	Sources      []BlogWatchSource `json:"sources,omitempty" yaml:"sources,omitempty"`
+}
+
+// Shipped blog_watch defaults: Anthropic engineering posts.
+const (
+	DefaultBlogWatchHost   = "www.anthropic.com"
+	DefaultBlogWatchIndex  = "https://www.anthropic.com/sitemap.xml"
+	DefaultBlogWatchPrefix = "https://www.anthropic.com/engineering/"
+)
+
+// ResolveBlogWatch applies the shipped defaults to each unset list.
+func ResolveBlogWatch(cfg *Config) BlogWatchConfig {
+	var out BlogWatchConfig
+	if cfg != nil && cfg.BlogWatch != nil {
+		out = *cfg.BlogWatch
+	}
+	if len(out.AllowedHosts) == 0 {
+		out.AllowedHosts = []string{DefaultBlogWatchHost}
+	}
+	if len(out.Sources) == 0 {
+		out.Sources = []BlogWatchSource{{Name: "anthropic-engineering", IndexURL: DefaultBlogWatchIndex, PostURLPrefix: DefaultBlogWatchPrefix}}
+	}
+	return out
+}
+
 // DefaultSanitizationMode is the shipped firewall mode: BLOCK (ADR-021).
 //
 // A security control that logs and proceeds is not a control. `warn` remains
@@ -902,6 +939,9 @@ type Config struct {
 
 	// Hooks settings (hooks.push_gate, #2124)
 	Hooks *HooksConfig `json:"hooks,omitempty" yaml:"hooks,omitempty"`
+
+	// BlogWatch configures the nightgauge-blog-watch sources (#185).
+	BlogWatch *BlogWatchConfig `json:"blog_watch,omitempty" yaml:"blog_watch,omitempty"`
 
 	// Feedback loop / health monitoring settings
 	FeedbackLoop *FeedbackLoopConfig `json:"feedbackLoop,omitempty" yaml:"feedback_loop,omitempty"`
@@ -2158,6 +2198,7 @@ type yamlConfigNested struct {
 	LogLevel     string              `yaml:"logLevel"`
 	Sanitization *SanitizationConfig `yaml:"sanitization,omitempty"`
 	Hooks        *HooksConfig        `yaml:"hooks,omitempty"`
+	BlogWatch    *BlogWatchConfig    `yaml:"blog_watch,omitempty"`
 	FeedbackLoop *FeedbackLoopConfig `yaml:"feedback_loop,omitempty"`
 	Platform     struct {
 		// APIURL / LicenseKey mirror the VSCode extension's PlatformConfigSchema
@@ -2211,6 +2252,7 @@ type yamlConfigFlat struct {
 	LogLevel         string                       `yaml:"logLevel"`
 	Sanitization     *SanitizationConfig          `yaml:"sanitization,omitempty"`
 	Hooks            *HooksConfig                 `yaml:"hooks,omitempty"`
+	BlogWatch        *BlogWatchConfig             `yaml:"blog_watch,omitempty"`
 	FeedbackLoop     *FeedbackLoopConfig          `yaml:"feedback_loop,omitempty"`
 	Telemetry        *TelemetryConfig             `yaml:"telemetry,omitempty"`
 	AgentTeams       *AgentTeamsConfig            `yaml:"agent_teams,omitempty"`
@@ -2432,6 +2474,7 @@ func parseYAMLNested(data []byte) (*Config, error) {
 		cfg.GitHubAPILedger = nested.GitHub.APILedger
 	}
 	cfg.Sanitization = nested.Sanitization
+	cfg.BlogWatch = nested.BlogWatch
 	cfg.Hooks = nested.Hooks
 	cfg.FeedbackLoop = nested.FeedbackLoop
 	cfg.Telemetry = nested.Platform.Telemetry
@@ -2546,6 +2589,7 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 	cfg.GitHubUser = flat.GitHubUser
 	cfg.GitHubAuth = flat.GitHubAuth
 	cfg.Sanitization = flat.Sanitization
+	cfg.BlogWatch = flat.BlogWatch
 	cfg.Hooks = flat.Hooks
 	cfg.FeedbackLoop = flat.FeedbackLoop
 	cfg.Telemetry = flat.Telemetry

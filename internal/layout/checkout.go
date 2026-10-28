@@ -62,6 +62,9 @@ const (
 	CheckoutScopeDriftStats = "scope-drift-stats.json"
 	CheckoutDocSnapshots    = "doc-snapshots"
 	CheckoutReleaseWatch    = "release-watch"
+	// CheckoutBlogWatch holds the blog-watch decision log (#185). It has no
+	// pre-ADR-024 location, so it is not in CheckoutEntries.
+	CheckoutBlogWatch       = "blog-watch"
 	CheckoutImprovementRuns = "improvement-runs"
 	CheckoutAnalysis        = "analysis"
 	// CheckoutBrownfieldHistory holds the brownfield assessment snapshots
