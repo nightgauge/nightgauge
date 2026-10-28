@@ -1037,8 +1037,12 @@ export {
   candidateLadder,
   resolveBandEnvelope,
   escalationLadder,
+  eligibleBand,
+  applyExclusions,
+  NO_EXCLUSIONS,
   ESCALATION_CEILING_BAND,
   type EnvelopeRung,
+  type Exclusions,
   // Routing-advice data file (#581)
   ROUTING_ADVICE_SCHEMA_VERSION,
   ROUTING_ADVICE_RELATIVE_PATH,

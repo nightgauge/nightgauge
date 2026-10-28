@@ -1869,6 +1869,42 @@ Both dispatch paths honour it — the Go scheduler resolves every envelope
 through `routing.RoutedTierEnvelopeForWorkspace`, and the extension through
 `getRoutedTierEnvelope`.
 
+### Excluding models and efforts from automatic routing
+
+`max_model` caps by band. To rule out one specific model, or an effort level,
+whatever band it serves, list it:
+
+```yaml
+model_routing:
+  excluded_models: [claude-fable-5-1] # registry ids, any provider
+  excluded_efforts: [max] # low | medium | high | xhigh | max
+```
+
+Under `frontier`, `feature-planning` and `feature-dev` at `L`/`XL` then run on
+`claude-opus-5-5` instead of Fable, while the rest of the mode is unchanged.
+
+- **The candidate ladder is the one place exclusions apply.** An excluded model
+  has no rung; excluded efforts are removed from each model's declared rungs,
+  so a model descends to its next lower allowed effort, and a model left with
+  no allowed effort has no rung. A model with no effort axis is unaffected by
+  `excluded_efforts`.
+- **Every automatic path picks the strongest remaining rung at or below what
+  it chose:** stage defaults, eval advice, post-failure escalation, the
+  `minimum_model` floor (a `fable` floor with Fable excluded resolves to
+  `opus`) and a `run.retryWithEscalation` forced tier. Exclusions never raise
+  a stage to a stronger band.
+- **Explicit pins are not rewritten.** A `pipeline.stage_models` entry (or its
+  `NIGHTGAUGE_PIPELINE_STAGE_MODEL_<STAGE>` override) that resolves to an
+  excluded id, or a `stage_efforts` entry naming an excluded effort, is a
+  config error naming the key. So is an unknown id or effort; the error lists
+  the valid values.
+- **Nothing eligible fails the stage.** When the exclusions leave a stage no
+  rung at or below its routed band, dispatch refuses it with an error naming
+  the stage, the provider and both lists. Band pins are resolved on the
+  `anthropic` band wire unless the executing provider is known.
+
+Empty lists, the default, change nothing.
+
 `frontier` is the premium opt-in tier: it widens the routing ceiling to
 **Fable 5.1** (`claude-fable-5-1`, ~2× Opus). It **pins nothing** — the router
 reaches Fable only on a heavy reasoning stage (`feature-planning`,
@@ -4095,6 +4131,8 @@ is a cross-cutting concern placed at the top level (alongside `pipeline`,
 | `complexity_thresholds`    | object | -                                                           | Score boundaries for auto model tier selection                                                                                                                                                   |
 | `minimum_model`            | object | -                                                           | Per-stage model floor (auto cannot go below)                                                                                                                                                     |
 | `max_model`                | enum   | -                                                           | Cap on the strongest tier automatic routing may reach, below the performance mode's ceiling (see below). Never raises; does not cap an explicit stage model.                                     |
+| `excluded_models`          | list   | `[]`                                                        | Registry model ids automatic routing never selects (see "Excluding models and efforts from automatic routing"). A pin naming one is a config error.                                              |
+| `excluded_efforts`         | list   | `[]`                                                        | Effort levels automatic routing never dispatches; a model descends to its next lower allowed effort. A `stage_efforts` pin naming one is a config error.                                         |
 | `confidence_threshold`     | number | `0.7`                                                       | Min confidence for auto-selection (0.0-1.0)                                                                                                                                                      |
 | `stage_efforts`            | object | planning: medium, dev: low, validate: low, pr-merge: medium | Per-stage Claude effort (`low\|medium\|high\|xhigh\|max`)                                                                                                                                        |
 | `effort_auto`              | bool   | `true`                                                      | Raise feature-dev effort by complexity, every mode (env: `NIGHTGAUGE_MODEL_ROUTING_EFFORT_AUTO`)                                                                                                 |

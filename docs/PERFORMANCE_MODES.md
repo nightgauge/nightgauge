@@ -51,7 +51,11 @@ explicit `pipeline.stage_models` entry overrides the envelope for its stage,
 but not a pin: under `maximum` the pin wins on every stage it pins.
 `model_routing.max_model` lowers a mode's ceiling without ever raising it. See
 [CONFIGURATION.md](CONFIGURATION.md#capping-automatic-routing-with-max_model)
-for how these interact with the envelope.
+for how these interact with the envelope. `model_routing.excluded_models` and
+`excluded_efforts` remove specific models or effort levels from every mode:
+`excluded_models: [claude-fable-5-1]` keeps `frontier` but runs its L/XL
+reasoning stages on `claude-opus-5-5`. See
+[CONFIGURATION.md](CONFIGURATION.md#excluding-models-and-efforts-from-automatic-routing).
 
 ## How the Active Mode Is Resolved
 

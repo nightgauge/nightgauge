@@ -133,22 +133,33 @@ func readPerformanceModeFile(path string) PerformanceMode {
 // registry has no band for. A cap that cannot be read must not reroute
 // anything, and failing open here matches the mode resolution directly above.
 func resolveMaxModel(workspaceRoot string) string {
+	return strings.TrimSpace(readModelRouting(workspaceRoot).MaxModel)
+}
+
+// modelRoutingKeys is the narrow view of `model_routing` this package reads.
+type modelRoutingKeys struct {
+	MaxModel        string   `yaml:"max_model"`
+	ExcludedModels  []string `yaml:"excluded_models"`
+	ExcludedEfforts []string `yaml:"excluded_efforts"`
+}
+
+// readModelRouting reads the workspace's `model_routing` keys; the zero value
+// on any failure.
+func readModelRouting(workspaceRoot string) modelRoutingKeys {
 	if workspaceRoot == "" {
-		return ""
+		return modelRoutingKeys{}
 	}
 	data, err := os.ReadFile(filepath.Join(workspaceRoot, ".nightgauge", "config.yaml"))
 	if err != nil {
-		return ""
+		return modelRoutingKeys{}
 	}
 	var c struct {
-		ModelRouting struct {
-			MaxModel string `yaml:"max_model"`
-		} `yaml:"model_routing"`
+		ModelRouting modelRoutingKeys `yaml:"model_routing"`
 	}
 	if err := yaml.Unmarshal(data, &c); err != nil {
-		return ""
+		return modelRoutingKeys{}
 	}
-	return strings.TrimSpace(c.ModelRouting.MaxModel)
+	return c.ModelRouting
 }
 
 func parseMode(s string) PerformanceMode {
@@ -423,15 +434,22 @@ func RoutedTierEnvelope(mode PerformanceMode, stage string) ModeEnvelope {
 }
 
 // RoutedTierEnvelopeForWorkspace is RoutedTierEnvelope with the workspace's
-// `model_routing.max_model` cap applied (#1201).
+// `model_routing.max_model` cap applied (#1201), then its exclusions (#2063):
+// cap first, then eligibility, on the band wire's provider.
 //
 // Every Go dispatch site resolves its envelope through THIS function rather
 // than calling RoutedTierEnvelope and remembering to apply the cap — a cap that
 // each caller has to opt into is a cap the next caller forgets, which is the
 // shape of every dual-path drift this repo has had to fix.
 func RoutedTierEnvelopeForWorkspace(workspaceRoot string, mode PerformanceMode, stage string) ModeEnvelope {
-	return ApplyMaxModel(RoutedTierEnvelope(mode, stage), resolveMaxModel(workspaceRoot))
+	env := ApplyMaxModel(RoutedTierEnvelope(mode, stage), resolveMaxModel(workspaceRoot))
+	return ApplyExclusions(env, BandWireProvider, ResolveExclusions(workspaceRoot))
 }
+
+// BandWireProvider is the provider the Go dispatch band wire is resolved
+// against where the executing provider is not yet known — the same anthropic
+// inference resolveWireThinking and the retry engine's default ladder make.
+const BandWireProvider = "anthropic"
 
 // ApplyMaxModel lowers an envelope's ceiling to maxModel, and never raises it.
 //

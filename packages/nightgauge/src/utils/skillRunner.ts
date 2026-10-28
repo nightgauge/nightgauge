@@ -65,6 +65,10 @@ import {
   TIER_BANDS_STRONGEST_FIRST as SDK_TIER_BANDS_STRONGEST_FIRST,
   readRoutingAdvice,
   pickAdvice,
+  eligibleBand,
+  isTierBand,
+  resolveBandEnvelope,
+  type Exclusions,
   skillAllowedTools,
   skillFrontmatterTools,
   filterHeadlessTools,
@@ -144,6 +148,7 @@ import {
   getConfidenceThreshold,
   getMinimumModel,
   getMaxModel,
+  getModelRoutingExclusions,
   getModelRoutingMode,
   isEvalRecommendationsEnabled,
   getStageEffort,
@@ -1389,7 +1394,13 @@ function consultEvalAdvice(
   if (!jobClass) return undefined;
   const advice = readRoutingAdvice(workspaceRoot);
   if (!advice) return undefined;
-  const entry = pickAdvice(advice, jobClass, ROUTING_MODE_FOR_PERFORMANCE[performanceMode]);
+  const entry = pickAdvice(
+    advice,
+    jobClass,
+    ROUTING_MODE_FOR_PERFORMANCE[performanceMode],
+    undefined,
+    getModelRoutingExclusions(workspaceRoot).models
+  );
   if (!entry) return undefined;
   const band = modelTierBand(entry.model_id);
   if (!band) return undefined;
@@ -1404,6 +1415,48 @@ function consultEvalAdvice(
 }
 
 export function resolveModel(
+  stage: PipelineStage,
+  workspaceRoot: string,
+  issueMetadata?: IssueMetadata,
+  issueNumber?: number
+): ModelDecision {
+  return applyRoutingExclusions(
+    resolveModelUnexcluded(stage, workspaceRoot, issueMetadata, issueNumber),
+    getModelRoutingExclusions(workspaceRoot)
+  );
+}
+
+/**
+ * The `model_routing.excluded_models` / `excluded_efforts` gate (#2063) over a
+ * resolved decision — Go's `eligibleDispatchModel` plus the wire-effort
+ * descent. Every automatic branch (stage default, selector, advice, floor,
+ * escalation) has chosen a band by now, so this ONE check lowers it to the
+ * strongest eligible band at or below it, and an excluded effort to the next
+ * lower allowed rung. An explicit pin (`env`/`config`) passes: config
+ * validation already rejects a pin that names an excluded value. A band with
+ * nothing eligible below it is left for dispatch to refuse, as Go does.
+ */
+export function applyRoutingExclusions(
+  decision: ModelDecision,
+  exclusions: Exclusions
+): ModelDecision {
+  if (exclusions.models.length === 0 && exclusions.efforts.length === 0) return decision;
+  if (decision.source === "env" || decision.source === "config") return decision;
+  if (!isTierBand(decision.model)) return decision;
+  const band = eligibleBand("anthropic", decision.model, exclusions) ?? decision.model;
+  let effort = decision.effort;
+  if (effort !== undefined && exclusions.efforts.includes(effort)) {
+    const rung = resolveBandEnvelope("anthropic", band, undefined, exclusions);
+    const supported = getModelDescriptor(band, "anthropic")?.supported_efforts ?? [];
+    const lower = EFFORT_LEVELS.slice(0, EFFORT_LEVELS.indexOf(effort))
+      .reverse()
+      .find((e) => supported.includes(e) && !exclusions.efforts.includes(e));
+    effort = (lower ?? rung?.effort) as ClaudeEffort | undefined;
+  }
+  return { ...decision, model: band, effort };
+}
+
+function resolveModelUnexcluded(
   stage: PipelineStage,
   workspaceRoot: string,
   issueMetadata?: IssueMetadata,
@@ -1463,7 +1516,12 @@ export function resolveModel(
   // fallback (4). Step 1 — the env override, `pipeline.stage_models`, the
   // manual-mode table — is the operator overriding the mode for one stage, and
   // is returned unclamped on both resolvers.
-  const modelEnvelope = getRoutedTierEnvelope(performanceMode, stage, getMaxModel(workspaceRoot));
+  const modelEnvelope = getRoutedTierEnvelope(
+    performanceMode,
+    stage,
+    getMaxModel(workspaceRoot),
+    getModelRoutingExclusions(workspaceRoot)
+  );
 
   // The `model_routing.minimum_model` floor applies to EVERY tier the pipeline
   // chose, not just the selector's pick (#340). Before this it was reachable

@@ -244,7 +244,7 @@ func stageBaseModel(
 		// table pins.
 		if useEvalRecommendations(workspaceRoot) {
 			if advice, ok := routing.LoadRoutingAdvice(workspaceRoot); ok {
-				if band := routing.AdviseBand(advice, jobClass, mode, envelope); band != "" {
+				if band := routing.AdviseBand(advice, jobClass, mode, envelope, routing.ResolveExclusions(workspaceRoot)); band != "" {
 					return routing.ClampToEnvelope(enforceMinimumModel(band, def), envelope), false
 				}
 			}
@@ -281,7 +281,41 @@ func PlannedStageModel(
 	jobClass string,
 ) string {
 	_, envelope, base, explicit := plannedStageBase(workspaceRoot, stage, predicted, d, jobClass)
-	return normalizeDispatchTier(floorAndCeil(stage, base, base, explicit, floors, envelope))
+	model := normalizeDispatchTier(floorAndCeil(stage, base, base, explicit, floors, envelope))
+	if eligible, err := eligibleDispatchModel(workspaceRoot, stage, model, ""); err == nil {
+		return eligible
+	}
+	return model
+}
+
+// eligibleDispatchModel is the dispatch-time exclusion gate (#2063): every
+// automatic mechanism (stage default, advice, escalation, the minimum_model
+// floor, the run.retryWithEscalation forced tier) has already chosen a band
+// by the time a stage dispatches, so this ONE check lowers that band to the
+// strongest eligible band at or below it on the dispatch provider, or fails
+// with NoEligibleRungError naming the stage, provider and both lists.
+// provider "" is the band wire's anthropic inference. A model outside the
+// band vocabulary passes through untouched.
+func eligibleDispatchModel(workspaceRoot string, stage state.PipelineStage, model, provider string) (string, error) {
+	if provider == "" {
+		provider = routing.BandWireProvider
+	}
+	band := routing.TierBand(model)
+	if band == "" {
+		return model, nil
+	}
+	ex := routing.ResolveExclusions(workspaceRoot)
+	eligible, ok := routing.EligibleBand(provider, band, ex)
+	if !ok {
+		return "", &routing.NoEligibleRungError{
+			Stage: string(stage), Provider: provider,
+			ExcludedModels: ex.Models, ExcludedEfforts: ex.Efforts,
+		}
+	}
+	if eligible == band {
+		return model, nil
+	}
+	return eligible, nil
 }
 
 // plannedStageBase resolves the mode, the stage's routed-tier envelope and the

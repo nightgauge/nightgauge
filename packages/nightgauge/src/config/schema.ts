@@ -16,6 +16,8 @@ import { z } from "zod";
 import {
   CODEX_DEFAULT_BASE_MODEL,
   EFFORT_LEVELS,
+  MODEL_REGISTRY,
+  getModelDescriptor,
   REASONING_EFFORT_LEVELS,
   TIER_BANDS,
   retiredAdapterMessage,
@@ -2113,6 +2115,20 @@ export const ExperimentConfigSchema = z.object({
 });
 export type ExperimentConfig = z.infer<typeof ExperimentConfigSchema>;
 
+const REGISTRY_MODEL_IDS = MODEL_REGISTRY.map((m) => m.id);
+
+/** A registry model id; the error lists every valid id (#2063). */
+const RegistryModelIdSchema = z.string().refine((id) => REGISTRY_MODEL_IDS.includes(id), {
+  message: `Unknown model id. Valid: ${[...REGISTRY_MODEL_IDS].sort().join(", ")}`,
+});
+
+/** An effort level; the error lists the ladder (#2063). */
+const ExcludedEffortSchema = z
+  .string()
+  .refine((e) => (EFFORT_LEVELS as readonly string[]).includes(e), {
+    message: `Unknown effort. Valid: ${EFFORT_LEVELS.join(", ")}`,
+  });
+
 export const ModelRoutingConfigSchema = z.object({
   mode: ModelRoutingModeSchema.optional(),
   complexity_thresholds: ComplexityThresholdsSchema.optional(),
@@ -2217,6 +2233,24 @@ export const ModelRoutingConfigSchema = z.object({
    * @see Issue #1201
    */
   max_model: DefaultModelSchema.optional(),
+  /**
+   * Registry model ids (any provider) AUTOMATIC routing must never select
+   * (#2063). The candidate ladder drops them, so stage defaults, eval advice,
+   * escalation, the `minimum_model` floor and a forced retry tier all land on
+   * the strongest remaining rung. An explicit `pipeline.stage_models` pin
+   * naming one is a config error. Empty excludes nothing.
+   *
+   * Go pair: `ModelRoutingConfig.ExcludedModels` / `routing.Exclusions`.
+   */
+  excluded_models: z.array(RegistryModelIdSchema).optional(),
+  /**
+   * Effort levels AUTOMATIC routing must never dispatch (#2063): a model
+   * descends to its next lower allowed effort, and a model with none left is
+   * excluded. A `stage_efforts` pin naming one is a config error.
+   *
+   * Go pair: `ModelRoutingConfig.ExcludedEfforts`.
+   */
+  excluded_efforts: z.array(ExcludedEffortSchema).optional(),
   /**
    * Per-stage × per-size model routing matrix.
    *
@@ -4179,64 +4213,107 @@ function warnIfPresent(
  * Used internally by `validateConfig()` so the exported ZodObject schema
  * type is unchanged for callers that rely on `.shape`, `.partial()`, etc.
  */
-const NightgaugeConfigWithDeprecationsSchema = NightgaugeConfigSchema.superRefine(
-  warnIfPresent(
-    "github_user",
-    "github_user is deprecated (Phase 5 / #3338). Migrate to the machine tier: ~/.nightgauge/config.yaml"
+/**
+ * An explicit pin naming a value `model_routing.excluded_models` /
+ * `excluded_efforts` excludes is a config error naming the key (#2063). Band
+ * pins resolve on the band wire's provider (anthropic). Go pair:
+ * `config.ValidateModelRoutingExclusions`.
+ */
+export function exclusionPinConflicts(obj: {
+  pipeline?: { stage_models?: Record<string, string> };
+  model_routing?: {
+    excluded_models?: string[];
+    excluded_efforts?: string[];
+    stage_efforts?: Record<string, string>;
+  };
+}): Array<{ path: (string | number)[]; message: string }> {
+  const out: Array<{ path: (string | number)[]; message: string }> = [];
+  const excludedModels = obj.model_routing?.excluded_models ?? [];
+  const excludedEfforts = obj.model_routing?.excluded_efforts ?? [];
+  for (const [stage, value] of Object.entries(obj.pipeline?.stage_models ?? {})) {
+    const id = getModelDescriptor(value.trim(), "anthropic")?.id;
+    if (id && excludedModels.includes(id)) {
+      out.push({
+        path: ["pipeline", "stage_models", stage],
+        message: `pipeline.stage_models.${stage}: "${value}" resolves to ${id}, which model_routing.excluded_models excludes`,
+      });
+    }
+  }
+  for (const [stage, effort] of Object.entries(obj.model_routing?.stage_efforts ?? {})) {
+    if (excludedEfforts.includes(effort)) {
+      out.push({
+        path: ["model_routing", "stage_efforts", stage],
+        message: `model_routing.stage_efforts.${stage}: "${effort}" is excluded by model_routing.excluded_efforts`,
+      });
+    }
+  }
+  return out;
+}
+
+const NightgaugeConfigWithDeprecationsSchema = NightgaugeConfigSchema.superRefine((obj, ctx) => {
+  for (const { path, message } of exclusionPinConflicts(obj)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message, path });
+  }
+})
+  .superRefine(
+    warnIfPresent(
+      "github_user",
+      "github_user is deprecated (Phase 5 / #3338). Migrate to the machine tier: ~/.nightgauge/config.yaml"
+    )
   )
-).superRefine((obj, ctx) => {
-  const autonomous = obj.autonomous as Record<string, unknown> | undefined;
-  if (!autonomous) return;
+  .superRefine((obj, ctx) => {
+    const autonomous = obj.autonomous as Record<string, unknown> | undefined;
+    if (!autonomous) return;
 
-  if (autonomous.enabled_repos !== undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message:
-        "autonomous.enabled_repos is deprecated (reclassified to Machine tier in #3643). " +
-        "Use the runtime tier instead: nightgauge.runtime.autonomous.enabled_repos",
-      path: ["autonomous", "enabled_repos"],
-      params: { severity: "warning" },
-    });
-  }
-
-  if (autonomous.max_concurrent !== undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message:
-        "autonomous.max_concurrent is deprecated (#3195). Use pipeline.max_concurrent instead.",
-      path: ["autonomous", "max_concurrent"],
-      params: { severity: "warning" },
-    });
-  }
-
-  const repositories = autonomous.repositories as
-    Record<string, Record<string, unknown>> | undefined;
-  if (!repositories) return;
-
-  for (const [repoKey, repoVal] of Object.entries(repositories)) {
-    if (typeof repoVal !== "object" || repoVal === null) continue;
-    if (repoVal.sequential !== undefined) {
+    if (autonomous.enabled_repos !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          `autonomous.repositories.${repoKey}.sequential is deprecated (reclassified to Machine tier in #3643). ` +
-          "Configure per-repo overrides in the machine tier config.",
-        path: ["autonomous", "repositories", repoKey, "sequential"],
+          "autonomous.enabled_repos is deprecated (reclassified to Machine tier in #3643). " +
+          "Use the runtime tier instead: nightgauge.runtime.autonomous.enabled_repos",
+        path: ["autonomous", "enabled_repos"],
         params: { severity: "warning" },
       });
     }
-    if (repoVal.max_concurrent !== undefined) {
+
+    if (autonomous.max_concurrent !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          `autonomous.repositories.${repoKey}.max_concurrent is deprecated (reclassified to Machine tier in #3643). ` +
-          "Configure per-repo overrides in the machine tier config.",
-        path: ["autonomous", "repositories", repoKey, "max_concurrent"],
+          "autonomous.max_concurrent is deprecated (#3195). Use pipeline.max_concurrent instead.",
+        path: ["autonomous", "max_concurrent"],
         params: { severity: "warning" },
       });
     }
-  }
-});
+
+    const repositories = autonomous.repositories as
+      Record<string, Record<string, unknown>> | undefined;
+    if (!repositories) return;
+
+    for (const [repoKey, repoVal] of Object.entries(repositories)) {
+      if (typeof repoVal !== "object" || repoVal === null) continue;
+      if (repoVal.sequential !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `autonomous.repositories.${repoKey}.sequential is deprecated (reclassified to Machine tier in #3643). ` +
+            "Configure per-repo overrides in the machine tier config.",
+          path: ["autonomous", "repositories", repoKey, "sequential"],
+          params: { severity: "warning" },
+        });
+      }
+      if (repoVal.max_concurrent !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `autonomous.repositories.${repoKey}.max_concurrent is deprecated (reclassified to Machine tier in #3643). ` +
+            "Configure per-repo overrides in the machine tier config.",
+          path: ["autonomous", "repositories", repoKey, "max_concurrent"],
+          params: { severity: "warning" },
+        });
+      }
+    }
+  });
 
 // ============================================================================
 // Validation Functions

@@ -33,8 +33,11 @@
  */
 import type { ModelEnvelope, PipelineStage } from "@nightgauge/sdk";
 import {
+  applyExclusions,
   dispatchModelFor,
   isLocalProvider,
+  NO_EXCLUSIONS,
+  type Exclusions,
   parseOpenCodeModel,
   resolveModelForAdapter,
   TIER_BANDS_STRONGEST_FIRST,
@@ -223,14 +226,17 @@ function isFrontierReasoningStage(stage: PipelineStage): boolean {
 export function getRoutedTierEnvelope(
   mode: PerformanceMode,
   stage: PipelineStage,
-  maxModel?: DefaultModel
+  maxModel?: DefaultModel,
+  exclusions: Exclusions = NO_EXCLUSIONS
 ): ModeEnvelope {
   const base = getModeEnvelope(mode);
   const envelope =
     base.ceiling === "fable" && !isFrontierReasoningStage(stage)
       ? { ...base, ceiling: "opus" as const }
       : base;
-  return applyMaxModel(envelope, maxModel);
+  // Cap first, then `model_routing` exclusions (#2063) on the band wire's
+  // provider — Go: routing.RoutedTierEnvelopeForWorkspace.
+  return applyExclusions(applyMaxModel(envelope, maxModel), "anthropic", exclusions);
 }
 
 /**

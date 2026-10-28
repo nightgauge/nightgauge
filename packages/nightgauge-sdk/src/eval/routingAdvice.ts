@@ -159,10 +159,15 @@ export function pickAdvice(
   advice: RoutingAdviceFile,
   jobClass: JobClass,
   mode: RoutingMode,
-  qualityFloor?: number
+  qualityFloor?: number,
+  excludedModels: readonly string[] = []
 ): RoutingAdviceEntry | undefined {
   const floor = qualityFloor ?? advice.quality_floor;
-  const forClass = advice.entries.filter((e) => e.job_class === jobClass && e.advisable);
+  // `model_routing.excluded_models` (#2063) drop BEFORE the pick, so an
+  // excluded top-quality entry never wins — Go AdviseBand's filter.
+  const forClass = advice.entries.filter(
+    (e) => e.job_class === jobClass && e.advisable && !excludedModels.includes(e.model_id)
+  );
   if (forClass.length === 0) return undefined;
   const exact = forClass.filter((e) => e.backoff === "exact");
   const pool = exact.length > 0 ? exact : forClass;
