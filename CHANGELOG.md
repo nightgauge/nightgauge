@@ -14,6 +14,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A feature-dev retry is no longer failed on the previous attempt's dev
+  context (#2637).** When a retry wrote no `dev-N.json`, the gate judged the
+  one the earlier attempt left and booked its failing tests as
+  `dev_tests_failed`, charging the lifetime cap and feeding the cascade
+  breaker. The gate now receives the stage start, and a handoff whose mtime
+  (and `created_at`, when it parses) predates it fails as the new parked kind
+  `dev_context_stale`: not judged, not charged, held for an operator.
+
 ### Added
 
 - **`model_routing.excluded_models` and `excluded_efforts` keep automatic

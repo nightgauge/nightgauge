@@ -139,6 +139,12 @@ const SKIP_CASES: { text: string; kind: string; branch: string }[] = [
     kind: "environment_halt",
     branch: "parked",
   },
+  // #2637 — feature-dev's gate found a handoff older than the stage it judged.
+  {
+    text: "exit 1: [dev-context-stale] dev-2637.json predates the stage",
+    kind: "dev_context_stale",
+    branch: "parked",
+  },
 ];
 
 /** Failures that MUST reach the halt — the bugs the halt exists to surface. */
@@ -207,6 +213,7 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
         "adapter_incompatible",
         "adapter_permission_rejected",
         "context_window_exceeded",
+        "dev_context_stale",
         "environment_halt",
       ].sort()
     );

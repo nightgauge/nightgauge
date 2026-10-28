@@ -65,13 +65,65 @@ func handoffSourceOrAuthored(source string) string {
 	return source
 }
 
+// devContextStaleSlack absorbs filesystem mtime granularity, so a handoff
+// written in the stage's first second is never read as older than the stage.
+const devContextStaleSlack = time.Second
+
+// devContextStale reports whether the dev context at path predates the stage
+// that started at start (#2637). A missing or unstattable file is not stale —
+// the existing no-op and unreadable paths own it. Stale requires the mtime to
+// predate start-slack AND, when created_at parses as RFC3339, created_at to
+// predate start too: a file this attempt rewrote has a fresh mtime even when
+// the model copied a placeholder created_at, and must still be judged. With
+// no parseable created_at, mtime alone decides.
+func devContextStale(path string, start time.Time) ([]string, bool) {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return nil, false
+	}
+	mtime := info.ModTime()
+	if !mtime.Before(start.Add(-devContextStaleSlack)) {
+		return nil, false
+	}
+	createdAt := "absent"
+	if data, err := os.ReadFile(path); err == nil {
+		var doc struct {
+			CreatedAt string `json:"created_at"`
+		}
+		if json.Unmarshal(data, &doc) == nil && doc.CreatedAt != "" {
+			createdAt = doc.CreatedAt
+			if t, err := time.Parse(time.RFC3339, doc.CreatedAt); err == nil && !t.Before(start) {
+				return nil, false
+			}
+		}
+	}
+	return []string{
+		fmt.Sprintf("file: %s", path),
+		fmt.Sprintf("created_at: %s", createdAt),
+		fmt.Sprintf("mtime: %s", mtime.UTC().Format(time.RFC3339)),
+		fmt.Sprintf("stage started: %s", start.UTC().Format(time.RFC3339)),
+	}, true
+}
+
 // Name implements StageGate.
 func (FeatureDevGate) Name() string { return "feature-dev" }
 
 // Verify implements StageGate.
-func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace string) GateResult {
+func (FeatureDevGate) Verify(ctx context.Context, issueNumber int, workspace string) GateResult {
 	return timedFull("feature-dev", func() (bool, string, []string, Kind, string, []string, int) {
 		ctxPath := contextFilePath(workspace, "dev", issueNumber)
+
+		// #2637: judge only a handoff THIS attempt wrote. A retry whose
+		// feature-dev wrote nothing inherits the prior attempt's dev-N.json,
+		// and judging its tests_status convicted the retry on evidence it
+		// never produced (flutter#592). Checked before ensureDevHandoff and
+		// every content check, so a stale file is never read for a verdict.
+		if start, ok := StageStart(ctx); ok {
+			if evidence, stale := devContextStale(ctxPath, start); stale {
+				return false, "[dev-context-stale] dev context is from a prior attempt — not judged on its contents",
+					evidence, KindFail, TerminalKindDevContextStale, nil, 0
+			}
+		}
 
 		// #1076: guarantee the handoff EXISTS before judging what it says.
 		// A stage that did the work and stopped advancing phases before

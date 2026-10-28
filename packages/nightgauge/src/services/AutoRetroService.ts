@@ -552,6 +552,9 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // stage's contract says it wrote is absent, empty, or unreadable.
   orchestrator_crash: "state-management",
   stage_context_unreadable: "state-management",
+  // #2637: the dev context on disk is a prior attempt's; the pipeline let a
+  // stale handoff survive into a retry.
+  dev_context_stale: "state-management",
   // #1651: git could not read the worktree to fingerprint a feature-dev
   // step. A filesystem/worktree fault, like an unreadable stage context.
   dev_step_progress_unproven: "state-management",

@@ -252,6 +252,7 @@ record may carry both fields, neither, or only one.
 | `context_window_exceeded`        | The prompt outgrew the context the model server has the model loaded with (Issue #1631) — read only from the adapter's own failed-request line, never from model text; parked, never retried on the same model and adapter                                                                                                                                                                                                           |
 | `adapter_permission_rejected`    | The adapter rejected a call to a tool the stage's allowed tools grant, #1624's `[adapter-permission-rejected]` marker (Issue #1631) — usually a `deny` in the generated permission map (#1638), such as its `.env` read backstop, else an `ask` rule in a repository's or the user's OpenCode config; parked whatever tool it names, not retried, not charged to the issue                                                           |
 | `adapter_incompatible`           | The adapter's binary cannot serve the dispatch: below the compat floor or unreadable (Issues #1627, #1631; a newer version is never refused) — parked; install a build at or above the floor                                                                                                                                                                                                                                         |
+| `dev_context_stale`              | feature-dev's gate found a `dev-N.json` older than the stage it judged, the `[dev-context-stale]` reason (Issue #2637) — a prior attempt's handoff; parked, never judged on its contents, not charged to the issue                                                                                                                                                                                                                   |
 | `environment_halt`               | A project-declared `preflight.environment` check failed in Phase 0, the `[environment-halt]` marker (Issue #101) — the operator's environment, not the code; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                      |
 
 A rejected tool call the session recovered from (a later call completed and its step finished) is a warning, not `adapter_permission_rejected`: only a rejection still open when the session ends classifies it. A non-zero OpenCode exit whose only errors were recovered is handed to the stage's post-condition gate, which decides (Issue #2168).
@@ -300,6 +301,7 @@ from the captures in `internal/terminalkind/testdata/opencode/`.
 | The adapter rejected an allowed tool     | `adapter_permission_rejected` | Parked                                                  |
 | The `.env` read guard rejected a `read`  | `adapter_permission_rejected` | Parked                                                  |
 | The binary cannot serve the dispatch     | `adapter_incompatible`        | Parked                                                  |
+| A retry inherited a prior dev context    | `dev_context_stale`           | Parked                                                  |
 | The model server is not listening        | `network_unavailable`         | Generic backoff; outcome recording skipped              |
 | `ProviderModelNotFoundError`             | `model_unavailable`           | Cap recovery (below)                                    |
 | An Ollama model that is not pulled       | `model_unavailable`           | Cap recovery (below)                                    |
@@ -349,6 +351,12 @@ cannot drift (#1753).
   should have the tool, and never loosen a rule that guards secret files. It
   sits above `permission_denied` (#289), the harness refusing a tool the stage
   was not allowed, which retries with a short backoff.
+- `dev_context_stale` (#2637): the feature-dev retry wrote no handoff and the
+  gate found the prior attempt's `dev-N.json` (mtime, and `created_at` when it
+  parses, older than the stage start). It is a pipeline defect, so file a
+  `pipeline-gap` issue, delete or regenerate the stale file, and clear the
+  issue's failures. Parked rather than retried: an uncharged retry of a stage
+  that keeps writing nothing would loop with no cap to stop it.
 - `adapter_incompatible`: install a build at or above the floor (the refusal
   names the tested one) and pin the adapter's binary to it. The refusal stamps the kind itself
   (`*OpenCodeIncompatibleError`), before anything is spawned.
@@ -548,6 +556,7 @@ kinds that halt on purpose and say so, and the three parked kinds (#1631):
 | `context_window_exceeded`        | A larger context, another model, or a split          | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `adapter_permission_rejected`    | A changed permission rule or issue text              | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `adapter_incompatible`           | A binary at or above the floor, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `dev_context_stale`              | A filed pipeline-gap and the stale handoff removed   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `environment_halt`               | The check's remedy, applied to the environment       | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 
 The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
@@ -677,6 +686,7 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `dev_build_verification_missing` | `agent` — the skill skipped a contract step and produced nothing, not the issue             |
 | `dev_build_verification_failed`  | `organic` — the stage's own build broke                                                     |
 | `dev_tests_failed`               | `organic` — the stage's own tests failed                                                    |
+| `dev_context_stale`              | `infrastructure` — a prior attempt's handoff survived into a retry, not the issue           |
 | `pr_merge_lookup_failed`         | `infrastructure` — gh / local git could not answer, not the issue                           |
 | `context_window_exceeded`        | parked — the loaded model's limit, not the issue; no lifetime-cap increment, no cascade     |
 | `adapter_permission_rejected`    | parked — a `deny` or `ask` rule on an allowed tool; no lifetime-cap increment, no cascade   |

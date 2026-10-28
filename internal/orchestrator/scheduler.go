@@ -7212,9 +7212,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// config can relax the retry/sleep overhead when the AUTHORITATIVE
 				// post-dev diff classifies as a configured trivial class. Drift-safe:
 				// the classification runs on the real changed files.
-				gateCtx := ctx
+				// #2637: gates judging a context file need to know whether this
+				// attempt wrote it.
+				gateCtx := gates.WithStageStart(ctx, stageStartedAt)
 				if stage == state.StagePRCreate || stage == state.StagePRMerge {
-					gateCtx = s.gateRelaxContext(ctx, stage, workspaceRoot, item, runtime)
+					gateCtx = s.gateRelaxContext(gateCtx, stage, workspaceRoot, item, runtime)
 				}
 				// Gates inspect the stage's output (context files), which live in
 				// the worktree on isolated runs — check there, not the main root.
@@ -7345,7 +7347,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// error instead of failing, paging, and retrying completed work.
 		if (err != nil || exitCode != 0) && !gateRan && isTerminalStage(stage) {
 			if gate, ok := s.stageGates[stage]; ok && gate != nil {
-				recon := gate.Verify(ctx, item.Number, stageWorkspace(runtime, workspaceRoot))
+				recon := gate.Verify(gates.WithStageStart(ctx, stageStartedAt), item.Number, stageWorkspace(runtime, workspaceRoot))
 				gateRan = true
 				gateRes = recon
 				runtime.AppendStageGateResult(stage, recon.ToStageGateResult())

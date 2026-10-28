@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
@@ -156,5 +157,73 @@ func TestFeatureDevGate_Fail_FailingTests(t *testing.T) {
 	}
 	if gr.Kind != KindFail {
 		t.Errorf("Kind = %q, want %q", gr.Kind, KindFail)
+	}
+}
+
+// writeFailingDevContext writes the #592 specimen: a dev-42.json whose
+// tests_status records two failures, stamped createdAt and with mtime set.
+func writeFailingDevContext(t *testing.T, ws, createdAt string, mtime time.Time) string {
+	t.Helper()
+	path := filepath.Join(layouttest.PipelineDir(t, ws), "dev-42.json")
+	doc := map[string]any{
+		"files_changed": map[string]any{
+			"created": []string{"foo.go"}, "modified": []string{}, "deleted": []string{},
+		},
+		"build_verification": map[string]any{"ran": true, "status": "passed"},
+		"tests_status":       map[string]any{"passed": 10, "failed": 2},
+	}
+	if createdAt != "" {
+		doc["created_at"] = createdAt
+	}
+	writeJSON(t, path, doc)
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestFeatureDevGate_StaleContext_NotJudged is the flutter#592 regression
+// (#2637): attempt 1 recorded failing tests, attempt 2 wrote nothing. The
+// retry must fail as dev_context_stale, never on attempt 1's dev_tests_failed.
+func TestFeatureDevGate_StaleContext_NotJudged(t *testing.T) {
+	start := time.Now()
+	old := start.Add(-time.Hour)
+	for name, createdAt := range map[string]string{
+		"created_at old":    old.UTC().Format(time.RFC3339),
+		"created_at absent": "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			ws := t.TempDir()
+			writeFailingDevContext(t, ws, createdAt, old)
+			gr := FeatureDevGate{}.Verify(WithStageStart(context.Background(), start), 42, ws)
+			if gr.Passed {
+				t.Fatal("stale dev context passed the gate")
+			}
+			if gr.TerminalKind != TerminalKindDevContextStale {
+				t.Fatalf("TerminalKind = %q, want %q (reason %q)", gr.TerminalKind, TerminalKindDevContextStale, gr.Reason)
+			}
+		})
+	}
+}
+
+// A file this attempt rewrote carries a fresh mtime even with a copied
+// placeholder created_at; it is judged on its contents.
+func TestFeatureDevGate_FreshMtimeOldCreatedAt_Judged(t *testing.T) {
+	start := time.Now()
+	ws := t.TempDir()
+	writeFailingDevContext(t, ws, "2026-01-01T00:00:00Z", start)
+	gr := FeatureDevGate{}.Verify(WithStageStart(context.Background(), start), 42, ws)
+	if gr.TerminalKind != TerminalKindDevTestsFailed {
+		t.Fatalf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindDevTestsFailed)
+	}
+}
+
+// Without a stage start (the `gate verify` CLI) the guard is skipped.
+func TestFeatureDevGate_NoStageStart_Unchanged(t *testing.T) {
+	ws := t.TempDir()
+	writeFailingDevContext(t, ws, "", time.Now().Add(-time.Hour))
+	gr := FeatureDevGate{}.Verify(context.Background(), 42, ws)
+	if gr.TerminalKind != TerminalKindDevTestsFailed {
+		t.Fatalf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindDevTestsFailed)
 	}
 }

@@ -112,6 +112,7 @@ const HALT_SKIP_PARKED: ReadonlySet<string> = new Set([
   "adapter_permission_rejected",
   "adapter_incompatible",
   "environment_halt",
+  "dev_context_stale",
 ]);
 
 /**

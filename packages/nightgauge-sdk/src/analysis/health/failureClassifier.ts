@@ -261,6 +261,7 @@ export type TerminalFailureKind =
   | "stage_context_unreadable" // Issue #1237 — a gate could not read a file the stage's contract says it wrote (context, plan_file, gate-metrics.jsonl) for a reason other than absence; filesystem fault, not the work
   | "dev_build_verification_missing" // Issue #1237 — feature-dev's context has no build_verification object: the skill skipped the verification step the completion contract requires (#55)
   | "dev_build_verification_failed" // Issue #1237 — feature-dev ran its build and recorded status=failed; organic implementation failure
+  | "dev_context_stale" // Issue #2637 — feature-dev's gate found a prior attempt's dev context; parked, not judged on it
   | "dev_tests_failed" // Issue #1237 — feature-dev's own test run recorded failures; organic implementation failure
   | "pr_merge_lookup_failed" // Issue #1237 — pr-merge's gate could not establish the PR's state (gh failed on every attempt and local git found no merge commit); infrastructure
   // Parked kinds (#1631): the next attempt on the same model and adapter
@@ -320,6 +321,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "stage_context_unreadable",
   "dev_build_verification_missing",
   "dev_build_verification_failed",
+  "dev_context_stale",
   "dev_tests_failed",
   "pr_merge_lookup_failed",
   "context_window_exceeded",

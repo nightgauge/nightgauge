@@ -634,6 +634,15 @@ const (
 	// ADR-022 § 20; a newer version is never refused). Mirrors
 	// adapters.OpenCodeIncompatible, the kind the refusal itself carries.
 	TerminalKindAdapterIncompatible = "adapter_incompatible"
+	// TerminalKindDevContextStale: FeatureDevGate found a dev-N.json older
+	// than the feature-dev stage it was judging (#2637) — the retry wrote no
+	// handoff and inherited the prior attempt's. Its contents are not this
+	// attempt's evidence, so it is never judged on them. It PARKS: the fault
+	// is the pipeline's (a stale handoff survived into a retry), not the
+	// issue's, so nothing is charged to the lifetime cap or the cascade
+	// breaker; and an uncharged retry of a stage that keeps writing nothing
+	// would loop with no cap to stop it.
+	TerminalKindDevContextStale = "dev_context_stale"
 )
 
 // TerminalKindParks reports whether the scheduler parks a failure of this
@@ -644,7 +653,7 @@ const (
 func TerminalKindParks(kind string) bool {
 	switch kind {
 	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible,
-		TerminalKindEnvironmentHalt:
+		TerminalKindEnvironmentHalt, TerminalKindDevContextStale:
 		return true
 	}
 	return false
@@ -677,6 +686,10 @@ func TerminalKindRemediation(kind string) string {
 			"for `tool=read`, check whether the issue text asks the stage to read secret files and remove that " +
 			"ask. Change a rule only if the stage should have that tool, never by loosening a rule that guards " +
 			"secret files, " + parkedReleaseStep
+	case TerminalKindDevContextStale:
+		return "feature-dev's gate found only a prior attempt's dev-N.json, so this attempt wrote no handoff and was " +
+			"not judged on the old one; file a pipeline-gap issue with the run's evidence, delete or regenerate the " +
+			"stale dev-N.json in the pipeline state directory, " + parkedReleaseStep
 	case TerminalKindAdapterIncompatible:
 		return "the adapter's binary cannot serve this dispatch; install a version at or above the floor the refusal names " +
 			"or pin the adapter's binary to it, " + parkedReleaseStep
