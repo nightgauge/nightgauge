@@ -385,3 +385,23 @@ export {
   type GenerationStatus,
   type GenerationReport,
 } from "./scenarioFromDiagnosis.js";
+
+// Effort report and effort_default recommendation over control sweeps (#2119).
+export {
+  EFFORT_SWEEP_SUITE,
+  DEFAULT_EFFORT_TOLERANCE,
+  DEFAULT_EFFORT_MIN_SAMPLES,
+  parseSweepRecords,
+  aggregateEffortCells,
+  recommendEffort,
+  buildEffortReport,
+  formatEffortReport,
+  buildEffortDefaultPatch,
+  type EffortCell,
+  type EffortRecommendation,
+  type EffortRecommendationStatus,
+  type EffortRecommendationOptions,
+  type ModelComparison,
+  type EffortReport,
+  type BuildEffortReportOptions,
+} from "./effortReport.js";

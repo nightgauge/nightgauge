@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge eval report` turns effort-sweep records into an
+  `effort_default` recommendation (#2119).** It prints a per-effort table (n,
+  pass, objective, quality, variance, cost, wall time, attempts) for one model
+  on one control hash, compares other models swept on that hash, and applies a
+  documented rule: the cheapest, then fastest, effort within a quality
+  tolerance of the best that met the objective criteria in every run. Ties and
+  under-sampled data are reported as such, never recommended. `--json` emits
+  the report as JSON, and `--emit-patch` writes a diff of
+  `behavior.effort_default` for both registry copies for you to apply in a
+  pull request.
+
 - **Discovered work is now filed after every merge, under one set of filing
   controls (#480).** A new `followup-materialize` stage runs after pr-merge on
   every issue and turns the run's `discovered-work-{N}.json` records into

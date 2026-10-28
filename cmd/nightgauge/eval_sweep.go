@@ -39,7 +39,7 @@ func evalCmd() *cobra.Command {
 		Use:   "eval",
 		Short: "Model evaluation over the pinned control issue",
 	}
-	cmd.AddCommand(evalSweepCmd())
+	cmd.AddCommand(evalSweepCmd(), evalReportCmd())
 	return cmd
 }
 
