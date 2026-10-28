@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   describeToolCallCorrelationGap,
+  INDEXED_NEVER_JOINED_MIN_CALLS,
   ToolCallLog,
   TOOL_CALL_LOG_MAX_ENTRIES,
 } from "../../src/utils/skillRunner";
@@ -449,5 +450,61 @@ describe("describeToolCallCorrelationGap — the tool-call log's self-check (#40
     log.observeToolResult("toolu_01", false, "ok");
 
     expect(check(log, 12)).toBeUndefined();
+  });
+});
+
+describe("describeToolCallCorrelationGap — third arm, indexed but never joined (#457)", () => {
+  const use = (log: ToolCallLog, file: string, id?: string) =>
+    log.observeToolUse("Read", { file_path: file }, id);
+
+  const check = (log: ToolCallLog, parsedToolEventCount: number) =>
+    describeToolCallCorrelationGap({
+      stage: "feature-dev",
+      parsedToolEventCount,
+      retainedCalls: log.size,
+      retainedIndexedCalls: log.retainedIndexedCount,
+      capturedTotal: log.capturedTotal,
+      correlatedResults: log.correlatedResults,
+    });
+
+  const fill = (n: number) => {
+    const log = new ToolCallLog();
+    for (let i = 0; i < n; i++) use(log, `src/f${i}.ts`, `toolu_${i}`);
+    return log;
+  };
+
+  it("third arm fires at retainedIndexedCalls >= K with zero joins", () => {
+    const log = fill(INDEXED_NEVER_JOINED_MIN_CALLS);
+    expect(log.retainedIndexedCount).toBe(INDEXED_NEVER_JOINED_MIN_CALLS);
+    expect(log.correlatedResults).toBe(0);
+
+    const warning = check(log, INDEXED_NEVER_JOINED_MIN_CALLS);
+    expect(warning).toMatch(/^\[forensic-capture-gap\] Stage feature-dev /);
+    expect(warning).toContain(`retained ${INDEXED_NEVER_JOINED_MIN_CALLS} indexed tool call(s)`);
+    expect(warning).toContain("(Issue #457)");
+  });
+
+  it("third arm is silent at K-1", () => {
+    const log = fill(INDEXED_NEVER_JOINED_MIN_CALLS - 1);
+    expect(check(log, INDEXED_NEVER_JOINED_MIN_CALLS)).toBeUndefined();
+  });
+
+  it("third arm is silent when correlatedResults >= 1", () => {
+    const log = fill(INDEXED_NEVER_JOINED_MIN_CALLS);
+    log.observeToolResult("toolu_0", false, "ok");
+    expect(log.correlatedResults).toBe(1);
+    expect(check(log, INDEXED_NEVER_JOINED_MIN_CALLS)).toBeUndefined();
+  });
+
+  it('third-arm message contains neither "error" nor "failed"', () => {
+    // Load-bearing: the line reaches callbacks.onStderr, and the severity
+    // classifiers grade by exactly these substrings.
+    const warning = check(fill(INDEXED_NEVER_JOINED_MIN_CALLS), INDEXED_NEVER_JOINED_MIN_CALLS);
+    expect(warning).toBeDefined();
+    expect(warning).not.toMatch(/error|failed/i);
+  });
+
+  it("K is the log's retention, which exceeds any in-flight concurrency", () => {
+    expect(INDEXED_NEVER_JOINED_MIN_CALLS).toBe(TOOL_CALL_LOG_MAX_ENTRIES);
   });
 });

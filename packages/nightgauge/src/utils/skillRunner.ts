@@ -2097,6 +2097,18 @@ export function extractBashCommand(toolName: string, toolInput: unknown): string
 /** How many Bash commands the stage-exit record retains. */
 export const RECENT_BASH_MAX_ENTRIES = 10;
 
+/**
+ * K for the Bash ring's third self-check arm (#457): deliberately Infinity, so
+ * the arm never fires. The tool-call log's arm 3 is sound only because K
+ * exceeds how many calls can be in flight at once. That does not hold here: one
+ * parallel-tool turn can issue {@link RECENT_BASH_MAX_ENTRIES} or more Bash
+ * calls, so "full indexed window, zero exits joined" is also exactly what a
+ * healthy stage killed mid-batch looks like. Raise this only alongside a ring
+ * larger than any plausible batch; the tool-call log's arm 3 already watches
+ * the same tool_result join path for every tool, Bash included.
+ */
+export const BASH_INDEXED_NEVER_JOINED_MIN_COMMANDS = Infinity;
+
 /** One retained Bash command and the exit code of its tool_result. */
 export interface RecentBashEntry {
   /** The command, truncated per {@link LAST_BASH_COMMAND_MAX_CHARS}. */
@@ -2284,7 +2296,7 @@ export class RecentBashRing {
  * cheaply, so the condition would otherwise be untestable — and an untestable
  * detector is how #147 stayed silent through 2,533 records.
  *
- * Two arms, one class of defect. In both, the stream parser and the CLI's
+ * Three arms, one class of defect. In each, the stream parser and the CLI's
  * event shape have diverged and the exit record under-reports while looking
  * healthy and terse, because both `last_bash_command` and `last_bash_exit` are
  * `omitempty`:
@@ -2295,6 +2307,11 @@ export class RecentBashRing {
  *    have found them. `size > 0` suppressed arm 1, `recent_bash` is populated,
  *    and every entry's exit code is missing by construction: the stage reads
  *    as "ran ten commands, none of which are known to have failed" (#302).
+ * 3. Retained commands indexed, at least
+ *    {@link BASH_INDEXED_NEVER_JOINED_MIN_COMMANDS} of them, and zero exits
+ *    joined over the stage. Structural mirror of the tool-call log's arm 3,
+ *    disabled by K = Infinity because the ring is too small to tell a diverged
+ *    join path from a kill mid-batch (#457).
  *
  * Arm 2 asks about *indexed-ness of the retained window*, not about lifetime
  * correlation, because those two answer different questions and only the first
@@ -2354,11 +2371,28 @@ export function describeForensicCaptureGap(args: {
       `(Issue #302)\n`
     );
   }
+  if (retainedIndexedCommands >= BASH_INDEXED_NEVER_JOINED_MIN_COMMANDS && correlatedExits === 0) {
+    return (
+      `[forensic-capture-gap] Stage ${stage} retained ${retainedIndexedCommands} ` +
+      `indexed Bash command(s) and joined 0 exit code(s) over the stage. The ` +
+      `tool_result join path has likely diverged, so every retained command reads ` +
+      `as one that quietly succeeded. (Issue #457)\n`
+    );
+  }
   return undefined;
 }
 
 /** How many tool calls the per-stage all-tools log retains (Issue #144). */
 export const TOOL_CALL_LOG_MAX_ENTRIES = 200;
+
+/**
+ * K for the tool-call log's third self-check arm (#457). K must exceed how many
+ * calls a stage can have in flight at once, or a stage killed mid-turn would
+ * trip the arm. A turn has at most a handful of calls in flight, never
+ * {@link TOOL_CALL_LOG_MAX_ENTRIES}, so a full window of indexed calls with zero
+ * results joined cannot be a race with the kill.
+ */
+export const INDEXED_NEVER_JOINED_MIN_CALLS = TOOL_CALL_LOG_MAX_ENTRIES;
 
 /**
  * One observed tool_use/tool_result pair, in the wire shape the
@@ -2553,7 +2587,7 @@ export class ToolCallLog {
  *
  * Sibling to {@link describeForensicCaptureGap} — same `[forensic-capture-gap]`
  * prefix so existing log greps and #147/#302 triage keep working, same guard,
- * same two-arm structure, same retained-window predicate. Separate function
+ * same three-arm structure, same retained-window predicate. Separate function
  * rather than a shared body because the two report different records, count
  * different things, and name different issues; only the shape is common.
  *
@@ -2568,6 +2602,10 @@ export class ToolCallLog {
  *    have found them. Every retained row is missing its result, its error and
  *    its `duration_ms` by construction, and the Dashboard renders that exactly
  *    like a stage where every call succeeded quietly.
+ * 3. At least {@link INDEXED_NEVER_JOINED_MIN_CALLS} retained calls indexed,
+ *    and zero results joined over the stage. Ids are present, so arm 2 is
+ *    silent, yet nothing ever joined: the tool_result join path has diverged
+ *    and the record reads as "quietly succeeded" (#457).
  *
  * Read the diagnosis, not the magnitudes: id-less calls cannot be deduped
  * across delivery shapes (#156 keeps both), so in exactly the id-less scenario
@@ -2619,6 +2657,15 @@ export function describeToolCallCorrelationGap(args: {
       `call carries neither result nor failure detail nor duration_ms, and renders as a ` +
       `call that quietly succeeded. The stage's tool_use ids and the parser have ` +
       `likely diverged. (Issue #402)\n`
+    );
+  }
+  if (retainedIndexedCalls >= INDEXED_NEVER_JOINED_MIN_CALLS && correlatedResults === 0) {
+    return (
+      `[forensic-capture-gap] Stage ${stage} retained ${retainedIndexedCalls} ` +
+      `indexed tool call(s) and joined 0 result(s) over the stage. More calls carry ` +
+      `ids than could ever be in flight at once, so this is not a race with the ` +
+      `kill: the tool_result join path has likely diverged, and every retained ` +
+      `call renders as one that quietly succeeded. (Issue #457)\n`
     );
   }
   return undefined;

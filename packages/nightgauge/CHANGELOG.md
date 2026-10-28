@@ -18,6 +18,8 @@ and this project adheres to
   or malformed labels warn and are ignored. Labelled runs are recorded as
   forced and left out of model-routing accuracy. See
   [CONFIGURATION.md § Issue-label model overrides](../../docs/CONFIGURATION.md#issue-label-model-overrides).
+- The output channel now shows an advisory `[forensic-capture-gap]` line when a
+  stage kept a full window of tool calls and none of their results joined (#457).
 
 ### Fixed
 

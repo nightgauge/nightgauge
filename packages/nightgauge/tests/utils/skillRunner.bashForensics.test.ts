@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BASH_INDEXED_NEVER_JOINED_MIN_COMMANDS,
   LAST_BASH_COMMAND_MAX_CHARS,
   RECENT_BASH_MAX_ENTRIES,
   RecentBashRing,
@@ -487,5 +488,62 @@ describe("describeForensicCaptureGap — the stage's self-check (#147/#302)", ()
     ring.observeToolResult("t1", false);
 
     expect(check(ring, 40)).toBeUndefined();
+  });
+});
+
+describe("describeForensicCaptureGap — third arm, disabled by K = Infinity (#457)", () => {
+  const use = (ring: RecentBashRing, command: string, id?: string) =>
+    ring.observeToolUse("Bash", { command }, id);
+
+  const check = (ring: RecentBashRing, parsedToolEventCount: number) =>
+    describeForensicCaptureGap({
+      stage: "feature-validate",
+      parsedToolEventCount,
+      retainedCommands: ring.size,
+      retainedIndexedCommands: ring.retainedIndexedCount,
+      capturedTotal: ring.capturedTotal,
+      correlatedExits: ring.correlatedExits,
+    });
+
+  const fill = (n: number) => {
+    const ring = new RecentBashRing();
+    for (let i = 0; i < n; i++) use(ring, `echo ${i}`, `t${i}`);
+    return ring;
+  };
+
+  it("third arm is disabled: K is Infinity, so a full indexed ring with zero exits is silent", () => {
+    // The asymmetry pin. One parallel-tool turn can put the whole 10-entry
+    // window in flight, so this shape is also a healthy stage killed mid-batch.
+    expect(BASH_INDEXED_NEVER_JOINED_MIN_COMMANDS).toBe(Infinity);
+    const ring = fill(RECENT_BASH_MAX_ENTRIES);
+    expect(ring.retainedIndexedCount).toBe(RECENT_BASH_MAX_ENTRIES);
+    expect(ring.correlatedExits).toBe(0);
+    expect(check(ring, RECENT_BASH_MAX_ENTRIES)).toBeUndefined();
+  });
+
+  it("third arm is silent at a full window minus one", () => {
+    expect(check(fill(RECENT_BASH_MAX_ENTRIES - 1), RECENT_BASH_MAX_ENTRIES)).toBeUndefined();
+  });
+
+  it("third arm is silent when correlatedExits >= 1", () => {
+    const ring = fill(RECENT_BASH_MAX_ENTRIES);
+    ring.observeToolResult("t0", false);
+    expect(ring.correlatedExits).toBe(1);
+    expect(check(ring, RECENT_BASH_MAX_ENTRIES)).toBeUndefined();
+  });
+
+  it('third-arm message contains neither "error" nor "failed"', () => {
+    // Only a count of K itself reaches the arm; the text still goes through
+    // callbacks.onStderr if K is ever lowered, so pin its hygiene now.
+    const warning = describeForensicCaptureGap({
+      stage: "feature-validate",
+      parsedToolEventCount: 10,
+      retainedCommands: 10,
+      retainedIndexedCommands: BASH_INDEXED_NEVER_JOINED_MIN_COMMANDS,
+      capturedTotal: 10,
+      correlatedExits: 0,
+    });
+    expect(warning).toContain("(Issue #457)");
+    expect(warning).not.toMatch(/error|failed/i);
   });
 });
