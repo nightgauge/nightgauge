@@ -250,6 +250,24 @@ const PR_MERGE_DIAGNOSIS_TIMEOUT_MS = 120 * 1000;
  * and epic-rollup calls around it. Killing the hook mid-poll records nothing.
  */
 const POST_MERGE_HOOK_TIMEOUT_MS = 25 * 60 * 1000;
+/** Bound on `nightgauge followup materialize` (#2638): a few forge calls per record. */
+const FOLLOWUP_MATERIALIZE_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** The subset of the Go `followup.Result` JSON this orchestrator logs (#2638). */
+interface FollowupMaterializeResult {
+  report_only?: boolean;
+  reason?: string;
+  items?: Array<{ outcome?: string }>;
+}
+
+function parseFollowupResult(stdout: string): FollowupMaterializeResult | undefined {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    return parsed && typeof parsed === "object" ? (parsed as FollowupMaterializeResult) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 /**
  * Upper bound on a `git push` (#2365). A push runs the repository's pre-push
  * hook first, and a hook may scan what it is about to send: nightgauge's
@@ -3872,6 +3890,105 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
     } catch (err) {
       this.logger.warn("Post-merge hook failed (non-blocking)", {
+        issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * File the run's discovered-work records as follow-up issues (#2638).
+   *
+   * The Go scheduler appends a `followup-materialize` stage after pr-merge
+   * (#480), but concurrent slots run this orchestrator, whose stage list ends at
+   * pr-merge — so on this path the capture was never filed. This runs the same
+   * deterministic verb the stage's skill wraps, rooted at the launch root (the
+   * slot worktree is removed by post-merge cleanup). Non-blocking: every outcome
+   * is logged and written as a `followup-materialize` exit record, and a
+   * failure never fails the run. Exit 3 is the per-run cap refusing records;
+   * they stay in the capture file.
+   */
+  private async invokeFollowupMaterialize(issueNumber: number): Promise<void> {
+    const stage = "followup-materialize";
+    const startedAt = Date.now();
+    let success = true;
+    let errorText = "";
+    let exitCode: number | undefined;
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        this.logger.warn("followup-materialize: binary unresolved — capture left for NGD050", {
+          issueNumber,
+        });
+        return;
+      }
+      const { owner, repo } = await this.resolvePostMergeNwo(issueNumber);
+      if (!owner || !repo) {
+        return;
+      }
+      const args = [
+        "followup",
+        "materialize",
+        String(issueNumber),
+        "--owner",
+        owner,
+        "--repo",
+        repo,
+        "--workdir",
+        this.getPersistentRoot(),
+        "--json",
+      ];
+      const { stdout } = await execFileAsync(binary, args, {
+        cwd: this.getPersistentRoot(),
+        encoding: "utf-8",
+        timeout: FOLLOWUP_MATERIALIZE_TIMEOUT_MS,
+      });
+      exitCode = 0;
+      const result = parseFollowupResult(stdout);
+      const items = result?.items ?? [];
+      if (items.length === 0) {
+        this.logger.info("followup-materialize skipped: capture empty", {
+          issueNumber,
+          reason: result?.reason ?? "",
+        });
+      } else {
+        this.logger.info("followup-materialize completed", {
+          issueNumber,
+          reportOnly: result?.report_only ?? false,
+          reason: result?.reason ?? "",
+          filed: items.filter((it) => it.outcome === "filed").length,
+          records: items.length,
+        });
+      }
+    } catch (err) {
+      success = false;
+      const e = err as { code?: unknown; stderr?: unknown; message?: string };
+      exitCode = typeof e.code === "number" ? e.code : undefined;
+      const stderr = typeof e.stderr === "string" ? e.stderr.trim() : "";
+      errorText = stderr || (err instanceof Error ? err.message : String(err));
+      this.logger.warn(
+        exitCode === 3
+          ? "followup-materialize: per-run cap refused records (kept in the capture)"
+          : "followup-materialize failed (non-blocking)",
+        { issueNumber, exitCode, error: errorText }
+      );
+    }
+    try {
+      await IpcClient.getInstance().diagnosticsRecordStageExit(
+        this.repoOverride ?? "",
+        issueNumber,
+        stage,
+        success,
+        this.stateService?.getRunId() ?? undefined,
+        new Date(startedAt).toISOString(),
+        undefined,
+        exitCode,
+        undefined,
+        errorText || undefined,
+        Date.now() - startedAt
+      );
+    } catch (err) {
+      this.logger.debug("followup-materialize: exit record not written", {
         issueNumber,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -12498,6 +12615,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 });
                 // Auto-close parent epic if all sub-issues now closed (non-blocking).
                 await this.invokePostMergeHook(issueNumber);
+                // File the run's discovered work (#2638; non-blocking).
+                await this.invokeFollowupMaterialize(issueNumber);
                 // Skip the normal onStageComplete below since we already fired it
                 continue;
               } else {
@@ -12515,6 +12634,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // Initial verification passed — auto-close parent epic if all
           // sub-issues are now closed. Non-blocking; never aborts the loop.
           await this.invokePostMergeHook(issueNumber);
+          // File the run's discovered work (#2638; non-blocking).
+          await this.invokeFollowupMaterialize(issueNumber);
         }
 
         // ===================================================================

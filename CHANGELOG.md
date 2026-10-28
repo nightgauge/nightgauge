@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Discovered follow-up work is now filed on extension-run pipelines.**
+  Concurrent slots run the extension's orchestrator, which never reached the
+  `followup-materialize` stage, so every run's discovered-work capture was left
+  behind. After a verified merge the extension now runs
+  `nightgauge followup materialize <N>` and writes a `followup-materialize` exit
+  record. An empty capture is no longer silent: the scheduler logs and traces
+  the skip, and the CLI prints an explicit empty result (also under `--json`).
+  The NGD050 remedy names the exact command to file an orphaned capture (#2638).
+
 - **A feature-dev retry is no longer failed on the previous attempt's dev
   context (#2637).** When a retry wrote no `dev-N.json`, the gate judged the
   one the earlier attempt left and booked its failing tests as

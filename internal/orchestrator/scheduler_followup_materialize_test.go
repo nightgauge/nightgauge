@@ -9,6 +9,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/trace"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -52,3 +53,30 @@ func TestFollowupCaptureHasRecords_SkipsEmptyCapture(t *testing.T) {
 }
 
 func mkdirAll(dir string) error { return os.MkdirAll(dir, 0o755) }
+
+type capturedEmit struct {
+	kind    trace.Kind
+	stage   string
+	payload any
+}
+
+type captureEmitter struct{ got []capturedEmit }
+
+func (c *captureEmitter) Emit(kind trace.Kind, stage string, payload any) {
+	c.got = append(c.got, capturedEmit{kind, stage, payload})
+}
+
+// The empty-capture skip leaves a trace (#2638); it used to leave nothing.
+func TestRecordFollowupSkip_EmitsStageSkipTrace(t *testing.T) {
+	var em captureEmitter
+	recordFollowupSkip(&em, 9)
+	if len(em.got) != 1 {
+		t.Fatalf("emits = %d, want 1", len(em.got))
+	}
+	e := em.got[0]
+	p, ok := e.payload.(trace.StageSkipPayload)
+	if e.kind != trace.KindStageSkip || e.stage != string(state.StageFollowupMaterialize) || !ok ||
+		p.Source != "followup-capture" || p.Reason != followupEmptyCaptureReason {
+		t.Fatalf("emit = %+v", e)
+	}
+}

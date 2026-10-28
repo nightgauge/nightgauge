@@ -5979,6 +5979,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// when the run recorded no discoveries.
 		if stage == state.StageFollowupMaterialize && !followupCaptureHasRecords(stageWorkspace(runtime, workspaceRoot), item.Number) {
 			runtime.SkipStage(stage)
+			recordFollowupSkip(tracer, item.Number)
 			stageIdx++
 			continue
 		}
