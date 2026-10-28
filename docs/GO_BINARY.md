@@ -3190,6 +3190,9 @@ nightgauge cost --complexity <1-10>
 
 # Recorded cost/duration grouped by change_class
 nightgauge cost by-class [--days N] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
+
+# List-price routing cost against realized cost per successful run
+nightgauge cost realized [--days N] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
 ```
 
 When the Nightgauge VS Code extension is open, a pipeline started directly with
@@ -3330,6 +3333,29 @@ What that leaves, and it is deliberate:
   to the new-scheme regex" describes the plan, not the tree.
 - **The race the ADR worried about cannot occur**, because the second sweep was
   never built. Nothing orders two sweeps when there is one.
+
+#### `cost realized`
+
+Compares what routing assumes a run costs with what it cost (#55), in total
+and per successful run:
+
+- **List price** prices every stage's input (fresh, cache read and cache
+  write) at the routed model's full input rate, plus output, for the first
+  attempt only, with no handoff cost.
+- **Realized** is the recorded cost (cache tokens at their own rates, every
+  attempt) plus the `estimated_cold_start_usd` of each session-lineage
+  handoff, which is also broken down by reason.
+
+Failed runs count toward the totals but not the per-success denominator. A
+stage the registry cannot price is counted in `unpriced_stages`, which makes
+the list total a floor.
+
+```bash
+nightgauge cost realized
+nightgauge cost realized --days 90 --json
+```
+
+Flags are those of `cost by-class`.
 
 #### `cost by-class`
 

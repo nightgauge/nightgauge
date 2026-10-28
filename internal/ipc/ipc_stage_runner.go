@@ -125,7 +125,8 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		// The run identity the scheduler minted and stamped on this dispatch
 		// (#228, ADR-017). Read from params.RunID and never re-derived from
 		// params.Runtime: one authority per value, so the two cannot disagree.
-		RunID: params.RunID,
+		RunID:     params.RunID,
+		LineageID: params.LineageID,
 	}
 
 	// Emit event to TypeScript

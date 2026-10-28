@@ -31,5 +31,11 @@
   ],
   "config_schema_sha256": "",
   "plugin_api_version": "",
-  "experimental_hooks": []
+  "experimental_hooks": [],
+  "cache": {
+    "implicit_prefix_cache": false,
+    "compatible_model_transitions": "none",
+    "expiry_seconds": 0,
+    "expiry_reason": "Unverified for this CLI; declared no implicit cache, which fails closed."
+  }
 }

@@ -112,6 +112,12 @@ func validManifest() map[string]any {
 		"config_schema_sha256": "",
 		"plugin_api_version":   "",
 		"experimental_hooks":   []any{},
+		"cache": map[string]any{
+			"implicit_prefix_cache":        true,
+			"compatible_model_transitions": "none",
+			"expiry_seconds":               300,
+			"expiry_reason":                "cited",
+		},
 	}
 }
 
@@ -176,6 +182,16 @@ func TestLoadDir_RefusesWithAdapterAndField(t *testing.T) {
 		{"missing fixture", func(m map[string]any) {
 			m["fixtures"] = []any{"internal/execution/testdata/missing.jsonl"}
 		}, "fixtures[0]"},
+		{"missing cache", func(m map[string]any) { delete(m, "cache") }, "cache"},
+		{"unknown cache transitions", func(m map[string]any) {
+			m["cache"] = map[string]any{"implicit_prefix_cache": false, "compatible_model_transitions": "any", "expiry_seconds": 0}
+		}, "cache.compatible_model_transitions"},
+		{"negative cache expiry", func(m map[string]any) {
+			m["cache"] = map[string]any{"implicit_prefix_cache": false, "compatible_model_transitions": "none", "expiry_seconds": -1}
+		}, "cache.expiry_seconds"},
+		{"uncited implicit cache", func(m map[string]any) {
+			m["cache"] = map[string]any{"implicit_prefix_cache": true, "compatible_model_transitions": "none", "expiry_seconds": 300}
+		}, "cache.expiry_reason"},
 		{"directory as fixture", func(m map[string]any) { m["fixtures"] = []any{"internal/execution/testdata"} }, "fixtures[0]"},
 	}
 	for _, c := range cases {
@@ -404,5 +420,20 @@ func TestPackageStartsNoProcess(t *testing.T) {
 				t.Errorf("%s imports %q, which is not on the allowlist", file, p)
 			}
 		}
+	}
+}
+
+func TestCacheFor_ShippedManifestsAndUnknownAdapter(t *testing.T) {
+	for _, a := range cliAdapters {
+		m, ok := Get(a)
+		if !ok || m.Cache == nil {
+			t.Fatalf("%s: shipped manifest declares no cache block", a)
+		}
+	}
+	if !CacheFor("claude-headless").ImplicitPrefixCache {
+		t.Error("claude-headless: want implicit_prefix_cache true")
+	}
+	if got := CacheFor("no-such-adapter"); got.ImplicitPrefixCache {
+		t.Errorf("unknown adapter: CacheFor = %+v, want no cache (fail closed)", got)
 	}
 }

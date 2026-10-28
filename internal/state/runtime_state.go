@@ -355,6 +355,13 @@ type RuntimeState struct {
 	// not know — never a registry-default guess.
 	StageEfforts map[string]string `json:"stageEfforts,omitempty"`
 
+	// Session lineage (#55, lineage_state.go). LastLineageState holds the
+	// salted account hash and never reaches history; StageLineages and
+	// HandoffEvents do.
+	LastLineageState *LineageState                 `json:"lastLineage,omitempty"`
+	StageLineages    map[string]StageLineageRecord `json:"stageLineages,omitempty"`
+	HandoffEvents    []HandoffEvent                `json:"handoffEvents,omitempty"`
+
 	// StageThinking captures the "on"/"off" reasoning state resolved for each
 	// stage's dispatch (Issue #580, spike #568 §3's canonical binary thinking
 	// axis), derived from the resolved model's registry
@@ -3304,6 +3311,17 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 			snap.StageContexts[k] = v
 		}
 	}
+	if rs.LastLineageState != nil {
+		ll := *rs.LastLineageState
+		snap.LastLineageState = &ll
+	}
+	if len(rs.StageLineages) > 0 {
+		snap.StageLineages = make(map[string]StageLineageRecord, len(rs.StageLineages))
+		for k, v := range rs.StageLineages {
+			snap.StageLineages[k] = v
+		}
+	}
+	snap.HandoffEvents = append([]HandoffEvent(nil), rs.HandoffEvents...)
 	if len(rs.StageEfforts) > 0 {
 		snap.StageEfforts = make(map[string]string, len(rs.StageEfforts))
 		for k, v := range rs.StageEfforts {
