@@ -23,6 +23,12 @@ changelog, and the release workflow refuses a tag that does not.
   or malformed labels warn and are ignored. Labelled runs are recorded as
   forced and left out of model-routing accuracy. See
   [CONFIGURATION.md § Issue-label model overrides](docs/CONFIGURATION.md#issue-label-model-overrides).
+- **A stage whose tool results never join now says so at exit.** When every one
+  of the 200 tool calls kept in a stage's exit record carries an id but no
+  result ever joined, the `[forensic-capture-gap]` self-check now reports that
+  the result join path has diverged, instead of the record reading as calls that
+  quietly succeeded. The Bash ring keeps the same check disabled on purpose: its
+  10 entries can all be in flight in one parallel turn (#457).
 
 ### Fixed
 
