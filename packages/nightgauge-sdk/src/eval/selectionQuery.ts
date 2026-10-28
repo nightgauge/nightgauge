@@ -123,32 +123,38 @@ function nextLowerSupportedEffort(
  * Local providers (ollama / lm-studio) have no registry entries by design, so
  * their ladder is empty and callers keep the configured local model.
  */
-export function candidateLadder(provider: Provider, transport?: Transport): EnvelopeRung[] {
+export function candidateLadder(
+  provider: Provider,
+  transport?: Transport,
+  exclusions: Exclusions = NO_EXCLUSIONS
+): EnvelopeRung[] {
   const rungs: EnvelopeRung[] = [];
-  // Last emitted effort per model id, so a model serving several bands
-  // descends one declared rung per band (keyed by model, not by adjacency —
-  // band uniqueness makes same-model bands contiguous today, but the query
-  // must not depend on that accident).
   const lastEffort = new Map<string, EffortLevel | undefined>();
 
   for (const band of TIER_BANDS_STRONGEST_FIRST) {
     const model = getModelDescriptor(band, provider);
     if (!model || model.provider !== provider) continue;
+    if (exclusions.models.includes(model.id)) continue;
     if (transport) {
       const facts = model.transports?.[transport];
       if (facts && facts.served === false) continue;
     }
+    const allowed = allowedEfforts(model.supported_efforts, exclusions);
+    if (model.supported_efforts.length > 0 && allowed.length === 0) continue; // every effort excluded
 
     let effort: EffortLevel | undefined;
     if (lastEffort.has(model.id)) {
-      const lower = nextLowerSupportedEffort(model.supported_efforts, lastEffort.get(model.id));
+      const lower = nextLowerSupportedEffort(allowed, lastEffort.get(model.id));
       if (lower === undefined) continue; // cannot descend further — no rung
       effort = lower;
+    } else if ((model.tiers ?? []).length > 1) {
+      effort = topSupportedEffort(allowed);
     } else {
-      const spansMultipleBands = (model.tiers ?? []).length > 1;
-      effort = spansMultipleBands
-        ? topSupportedEffort(model.supported_efforts)
-        : (model.behavior?.effort_default as EffortLevel | undefined);
+      effort = model.behavior?.effort_default as EffortLevel | undefined;
+      if (effort !== undefined && exclusions.efforts.includes(effort)) {
+        effort = nextLowerSupportedEffort(allowed, effort);
+        if (effort === undefined) continue; // nothing allowed at or below the default
+      }
     }
     lastEffort.set(model.id, effort);
     rungs.push({
@@ -163,6 +169,63 @@ export function candidateLadder(provider: Provider, transport?: Transport): Enve
 }
 
 /**
+ * `model_routing.excluded_models` / `excluded_efforts` (#2063). The empty
+ * value excludes nothing and is the no-op path. Go pair: routing.Exclusions.
+ */
+export interface Exclusions {
+  models: readonly string[];
+  efforts: readonly string[];
+}
+
+export const NO_EXCLUSIONS: Exclusions = { models: [], efforts: [] };
+
+function allowedEfforts(supported: readonly string[], ex: Exclusions): string[] {
+  return supported.filter((e) => !ex.efforts.includes(e));
+}
+
+function isNoExclusions(ex: Exclusions): boolean {
+  return ex.models.length === 0 && ex.efforts.length === 0;
+}
+
+/**
+ * `band` when the exclusion-filtered ladder has a rung for it, else the
+ * strongest eligible band BELOW it — never above. `undefined` when nothing is
+ * eligible at or below `band`. A band the provider does not serve at all is
+ * returned unchanged. Go pair: routing.EligibleBand.
+ */
+export function eligibleBand(
+  provider: Provider,
+  band: TierBand,
+  exclusions: Exclusions = NO_EXCLUSIONS
+): TierBand | undefined {
+  if (isNoExclusions(exclusions) || !candidateLadder(provider).some((r) => r.band === band)) {
+    return band;
+  }
+  const eligible = candidateLadder(provider, undefined, exclusions);
+  const rank = TIER_BANDS.indexOf(band);
+  return TIER_BANDS_STRONGEST_FIRST.find(
+    (b) => TIER_BANDS.indexOf(b) <= rank && eligible.some((r) => r.band === b)
+  );
+}
+
+/**
+ * Lowers an envelope's floor and ceiling to the strongest eligible band at or
+ * below each; a bound with nothing eligible is left alone (dispatch refuses
+ * it). Go pair: routing.ApplyExclusions.
+ */
+export function applyExclusions<E extends { floor: TierBand; ceiling: TierBand }>(
+  envelope: E,
+  provider: Provider,
+  exclusions: Exclusions = NO_EXCLUSIONS
+): E {
+  return {
+    ...envelope,
+    floor: eligibleBand(provider, envelope.floor, exclusions) ?? envelope.floor,
+    ceiling: eligibleBand(provider, envelope.ceiling, exclusions) ?? envelope.ceiling,
+  };
+}
+
+/**
  * Resolve one band input to its dispatch envelope for a provider — the query
  * that replaces "band → hardcoded ladder position". Returns `undefined` when
  * the provider has no (reachable) model for the band.
@@ -170,9 +233,10 @@ export function candidateLadder(provider: Provider, transport?: Transport): Enve
 export function resolveBandEnvelope(
   provider: Provider,
   band: TierBand,
-  transport?: Transport
+  transport?: Transport,
+  exclusions: Exclusions = NO_EXCLUSIONS
 ): EnvelopeRung | undefined {
-  return candidateLadder(provider, transport).find((r) => r.band === band);
+  return candidateLadder(provider, transport, exclusions).find((r) => r.band === band);
 }
 
 /**
@@ -191,11 +255,16 @@ export const ESCALATION_CEILING_BAND: TierBand = "opus";
  * from {@link ESCALATION_CEILING_BAND}. Replaces the hand-inlined
  * `["haiku", "sonnet", "opus"]` escalation ladders.
  */
-export function escalationLadder(provider: Provider = "anthropic"): TierBand[] {
+export function escalationLadder(
+  provider: Provider = "anthropic",
+  exclusions: Exclusions = NO_EXCLUSIONS
+): TierBand[] {
   const ceiling = TIER_BANDS.indexOf(ESCALATION_CEILING_BAND);
+  const eligible = candidateLadder(provider, undefined, exclusions);
   return TIER_BANDS.filter((band, i) => {
     if (i > ceiling) return false;
     const m = getModelDescriptor(band, provider);
-    return m !== undefined && m.provider === provider;
+    if (m === undefined || m.provider !== provider) return false;
+    return isNoExclusions(exclusions) || eligible.some((r) => r.band === band);
   });
 }

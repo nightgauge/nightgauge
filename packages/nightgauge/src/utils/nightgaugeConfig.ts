@@ -89,6 +89,7 @@ export {
   getComplexityThresholds,
   getMinimumModel,
   getMaxModel,
+  getModelRoutingExclusions,
   getConfidenceThreshold,
   getEscalatedModel,
   getEscalatedModelWithin,

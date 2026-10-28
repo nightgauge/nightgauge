@@ -170,15 +170,17 @@ func pickForMode(pool []RoutingAdviceEntry, mode PerformanceMode) RoutingAdviceE
 //   - the winning model must map onto a registry band (TierBand) and that
 //     band must already sit INSIDE the caller's envelope — advice re-picks
 //     within the clamps, never outside them;
+//   - an entry whose model is in `model_routing.excluded_models` (#2063) is
+//     dropped BEFORE the pick, so an excluded top-quality entry never wins;
 //   - an empty result means the axis query alone decides, which reproduces
 //     pre-advice behavior exactly.
-func AdviseBand(advice RoutingAdvice, jobClass string, mode PerformanceMode, envelope ModeEnvelope) string {
+func AdviseBand(advice RoutingAdvice, jobClass string, mode PerformanceMode, envelope ModeEnvelope, ex Exclusions) string {
 	if jobClass == "" {
 		return ""
 	}
 	forClass := make([]RoutingAdviceEntry, 0, len(advice.Entries))
 	for _, e := range advice.Entries {
-		if e.Advisable && e.JobClass == jobClass {
+		if e.Advisable && e.JobClass == jobClass && !ex.ExcludesModel(e.ModelID) {
 			forClass = append(forClass, e)
 		}
 	}

@@ -165,6 +165,7 @@ import {
   getMaxEscalationsPerStage,
   getEscalatedModelWithin,
   getMaxModel,
+  getModelRoutingExclusions,
   getPerformanceMode,
   getAuditConfig,
   getContextSchemaRepairConfig,
@@ -9141,8 +9142,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     current: import("../utils/nightgaugeConfig").DefaultModel
   ): import("../utils/nightgaugeConfig").DefaultModel | null {
     const root = this.getWorkingDirectory();
-    const { ceiling } = getRoutedTierEnvelope(getPerformanceMode(root), stage, getMaxModel(root));
-    return getEscalatedModelWithin(current, ceiling);
+    const exclusions = getModelRoutingExclusions(root);
+    const { ceiling } = getRoutedTierEnvelope(
+      getPerformanceMode(root),
+      stage,
+      getMaxModel(root),
+      exclusions
+    );
+    return getEscalatedModelWithin(current, ceiling, exclusions);
   }
 
   /**

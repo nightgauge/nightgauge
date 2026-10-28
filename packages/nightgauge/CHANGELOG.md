@@ -19,6 +19,14 @@ and this project adheres to
   `unreported` and is never counted as observed. Markers and inference keep
   their outcomes. `nightgauge phase reconcile` prints the same verdicts as JSON.
 
+- **`model_routing.excluded_models` and `excluded_efforts` keep automatic
+  routing off specific models and effort levels (#2063).** Every automatic
+  path (stage defaults, eval advice, escalation, the `minimum_model` floor, a
+  forced retry tier) lands on the strongest remaining model and effort; for
+  example `excluded_models: [claude-fable-5-1]` runs `frontier`'s L/XL
+  reasoning stages on Opus 5.5. Unknown values, and explicit pins naming an
+  excluded value, are config errors.
+
 - **Each run's health record also logs cost control-band excursions
   (#1286).** Excursions are appended to `health/control-bands.jsonl` beside the
   health series. The band ships disabled until its baseline is proven stable.

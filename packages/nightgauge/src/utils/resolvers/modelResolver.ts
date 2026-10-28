@@ -21,6 +21,8 @@ import {
   TIER_BANDS,
   escalationLadder,
   isTierBand,
+  NO_EXCLUSIONS,
+  type Exclusions,
   retiredAdapterMessage,
   type TierBand,
 } from "@nightgauge/sdk";
@@ -1824,9 +1826,46 @@ export function getEscalatedModel(currentModel: DefaultModel): DefaultModel | nu
  */
 export function getEscalatedModelWithin(
   currentModel: DefaultModel,
-  ceiling: DefaultModel
+  ceiling: DefaultModel,
+  exclusions: Exclusions = NO_EXCLUSIONS
 ): DefaultModel | null {
-  const next = getEscalatedModel(currentModel);
-  if (!next) return null;
+  // An excluded band (#2063) is no escalation target: walk the
+  // exclusion-filtered ladder. Go: RetryConfig.ModelLadder built from
+  // routing.EscalationLadderExcluding.
+  const path = escalationLadder("anthropic", exclusions);
+  const idx = path.indexOf(currentModel);
+  const next = idx === -1 ? getEscalatedModel(currentModel) : (path[idx + 1] ?? null);
+  if (!next || !path.includes(next)) return null;
   return TIER_BANDS.indexOf(next) > TIER_BANDS.indexOf(ceiling) ? null : next;
+}
+
+/**
+ * Read `model_routing.excluded_models` / `excluded_efforts` (#2063) — the
+ * models and effort levels AUTOMATIC routing must never select. Empty lists
+ * (the default) exclude nothing. Values are validated by the config schema;
+ * this reader keeps only strings, and fails open like `getMaxModel` — an
+ * unreadable list must not silently reroute anything.
+ *
+ * Go pair: `routing.ResolveExclusions`.
+ */
+export function getModelRoutingExclusions(workspaceRoot?: string): Exclusions {
+  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) {
+    return NO_EXCLUSIONS;
+  }
+  try {
+    const pathResult = resolveConfigPathSync(root);
+    if (!pathResult.exists) {
+      return NO_EXCLUSIONS;
+    }
+    const parsed: unknown = parseYaml(readEffectiveConfigTextSync(pathResult));
+    const mr = (parsed as { model_routing?: Record<string, unknown> } | null)?.model_routing;
+    const strings = (v: unknown): string[] =>
+      Array.isArray(v)
+        ? v.filter((x): x is string => typeof x === "string").map((x) => x.trim())
+        : [];
+    return { models: strings(mr?.excluded_models), efforts: strings(mr?.excluded_efforts) };
+  } catch {
+    return NO_EXCLUSIONS;
+  }
 }

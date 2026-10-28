@@ -24,6 +24,14 @@ changelog, and the release workflow refuses a tag that does not.
   `unreported` and is never counted as observed. Markers and inference keep
   their outcomes. `nightgauge phase reconcile` prints the same verdicts as JSON.
 
+- **`model_routing.excluded_models` and `excluded_efforts` keep automatic
+  routing off specific models and effort levels (#2063).** Every automatic
+  path (stage defaults, eval advice, escalation, the `minimum_model` floor, a
+  forced retry tier) lands on the strongest remaining model and effort; for
+  example `excluded_models: [claude-fable-5-1]` runs `frontier`'s L/XL
+  reasoning stages on Opus 5.5. Unknown values, and explicit pins naming an
+  excluded value, are config errors.
+
 - **`nightgauge eval report` turns effort-sweep records into an
   `effort_default` recommendation (#2119).** It prints a per-effort table (n,
   pass, objective, quality, variance, cost, wall time, attempts) for one model

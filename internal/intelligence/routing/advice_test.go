@@ -78,11 +78,11 @@ func TestAdviseBandPicksPerModeWithinEnvelope(t *testing.T) {
 
 	elevated := Envelope(ModeElevated)
 	// Maximum-style quality pick: opus wins on quality.
-	if band := AdviseBand(advice, "bugfix", ModeMaximum, elevated); band != TierOpus {
+	if band := AdviseBand(advice, "bugfix", ModeMaximum, elevated, Exclusions{}); band != TierOpus {
 		t.Fatalf("AdviseBand(maximum) = %q, want opus", band)
 	}
 	// Efficiency: cheapest above the quality floor — sonnet.
-	if band := AdviseBand(advice, "bugfix", ModeEfficiency, Envelope(ModeEfficiency)); band != TierSonnet {
+	if band := AdviseBand(advice, "bugfix", ModeEfficiency, Envelope(ModeEfficiency), Exclusions{}); band != TierSonnet {
 		t.Fatalf("AdviseBand(efficiency) = %q, want sonnet", band)
 	}
 }
@@ -94,7 +94,7 @@ func TestAdviseBandNeverEscapesTheEnvelope(t *testing.T) {
 
 	// Efficiency envelope caps at sonnet; a quality-driven opus pick must be
 	// rejected, not clamped — advice re-picks within the clamps or not at all.
-	if band := AdviseBand(advice, "bugfix", ModeMaximum, Envelope(ModeEfficiency)); band != "" {
+	if band := AdviseBand(advice, "bugfix", ModeMaximum, Envelope(ModeEfficiency), Exclusions{}); band != "" {
 		t.Fatalf("AdviseBand outside envelope = %q, want \"\"", band)
 	}
 }
@@ -110,7 +110,7 @@ func TestAdviseBandIgnoresSparseEntries(t *testing.T) {
 				Backoff: "exact", Samples: 2, MeanQuality: 99, MeanCostUsd: 1.5, Advisable: false},
 		},
 	}
-	if band := AdviseBand(advice, "refactor", ModeFrontier, Envelope(ModeFrontier)); band != "" {
+	if band := AdviseBand(advice, "refactor", ModeFrontier, Envelope(ModeFrontier), Exclusions{}); band != "" {
 		t.Fatalf("AdviseBand(sparse only) = %q, want \"\"", band)
 	}
 }
@@ -125,7 +125,7 @@ func TestAdviseBandUnknownModelYieldsNoAdvice(t *testing.T) {
 	}
 	// A model outside the band vocabulary cannot be dispatched on the band
 	// wire — no advice, no invented band.
-	if band := AdviseBand(advice, "bugfix", ModeMaximum, Envelope(ModeElevated)); band != "" {
+	if band := AdviseBand(advice, "bugfix", ModeMaximum, Envelope(ModeElevated), Exclusions{}); band != "" {
 		t.Fatalf("AdviseBand(unknown model) = %q, want \"\"", band)
 	}
 }
@@ -177,7 +177,7 @@ func TestAdviseBandRequiresAJobClass(t *testing.T) {
 	advice, _ := LoadRoutingAdvice(root)
 	// No job class ⇒ no advice — mirroring the TS resolver, which consults
 	// pickAdvice only for issues whose type label directly names a job class.
-	if band := AdviseBand(advice, "", ModeMaximum, Envelope(ModeElevated)); band != "" {
+	if band := AdviseBand(advice, "", ModeMaximum, Envelope(ModeElevated), Exclusions{}); band != "" {
 		t.Fatalf("AdviseBand without a job class = %q, want \"\"", band)
 	}
 }
@@ -189,7 +189,7 @@ func TestAdviseBandKeysOnExactJobClass(t *testing.T) {
 	// The file's only advisable entries are bugfix; docs evidence does not
 	// exist, and bugfix measurements must not answer for docs work — the
 	// exact-key discipline that replaces the retired (model, *, *) pooling.
-	if band := AdviseBand(advice, "docs", ModeMaximum, Envelope(ModeElevated)); band != "" {
+	if band := AdviseBand(advice, "docs", ModeMaximum, Envelope(ModeElevated), Exclusions{}); band != "" {
 		t.Fatalf("AdviseBand(docs) pooled foreign job-class evidence: %q", band)
 	}
 }
@@ -208,7 +208,7 @@ func TestAdviseBandPrefersExactBackoffOverModelAggregates(t *testing.T) {
 				QualityPerDollar: 1700, Advisable: true},
 		},
 	}
-	if band := AdviseBand(advice, "bugfix", ModeMaximum, Envelope(ModeElevated)); band != TierSonnet {
+	if band := AdviseBand(advice, "bugfix", ModeMaximum, Envelope(ModeElevated), Exclusions{}); band != TierSonnet {
 		t.Fatalf("exact backoff must be preferred over model aggregates, got %q", band)
 	}
 }
