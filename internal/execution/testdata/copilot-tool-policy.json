@@ -49,6 +49,12 @@
       "want_dropped": []
     },
     {
+      "name": "non-domain web scope is denied, not widened",
+      "allowed_tools": ["WebFetch(https://example.com/*)"],
+      "want_args": [],
+      "want_dropped": ["WebFetch(https://example.com/*)"]
+    },
+    {
       "name": "unmapped only is denied",
       "allowed_tools": ["Task"],
       "want_args": [],

@@ -66,8 +66,12 @@ func copilotToolPolicy(allowed []string) (args []string, dropped []string) {
 		case name == "WebFetch" || name == "WebSearch":
 			if d, ok := strings.CutPrefix(scope, "domain:"); ok && d != "" {
 				addURL(d)
-			} else {
+			} else if scope == "" {
 				allURLs = true
+			} else {
+				// A scope that is not a domain cannot be expressed: deny it rather
+				// than widen it to every URL.
+				dropped = append(dropped, entry)
 			}
 		case strings.HasPrefix(name, "mcp__"):
 			parts := strings.SplitN(strings.TrimPrefix(name, "mcp__"), "__", 2)

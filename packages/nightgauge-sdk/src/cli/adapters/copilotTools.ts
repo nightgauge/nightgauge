@@ -59,7 +59,9 @@ export function copilotToolPolicy(allowed?: readonly string[]): CopilotToolPolic
     } else if (name === "WebFetch" || name === "WebSearch") {
       const domain = scope.startsWith("domain:") ? scope.slice("domain:".length) : "";
       if (domain !== "") addUnique(urls, domain);
-      else allUrls = true;
+      else if (scope === "") allUrls = true;
+      // A scope that is not a domain cannot be expressed: deny, never widen.
+      else dropped.push(entry);
     } else if (name.startsWith("mcp__")) {
       const rest = name.slice("mcp__".length);
       const sep = rest.indexOf("__");
