@@ -1490,7 +1490,8 @@ func NewAutonomousScheduler(
 		if s := as.eligibility(); s != nil && s.trustGate != nil {
 			comments = s.trustGate
 		}
-		return ResolveValidationByKey(ctx, gh.NewIssueService(as.ghClient), comments, known, unknown)
+		issueSvc := gh.NewIssueService(as.ghClient)
+		return ResolveValidationByKey(ctx, issueSvc, comments, issueSvc, known, unknown)
 	}
 
 	// Wire the board-wide post-merge backstop (#656). This is the SAME

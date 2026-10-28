@@ -205,6 +205,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A reopened issue's old validation marker no longer stands in for its next
+  merge (#2629).** The post-merge hook now skips writing the marker only when
+  one already names this merge commit, and the program dependency gate,
+  `nightgauge next` and `program status` judge the newest marker against the
+  issue's latest closing merge: a marker older than a newer merge for another
+  SHA leaves the issue unvalidated until that merge is marked.
+
 - **Action Center cards are aged from when the condition began (#1582).** A
   `main` red for ten hours, or a PR waiting a day for review, no longer reads
   "just now" because a sweep only just stored it. Decision requests carry an
