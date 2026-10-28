@@ -9111,18 +9111,51 @@ type TrustedCommentReader interface {
 	TrustedComments(ctx context.Context, owner, repo string, number int) ([]trust.Comment, error)
 }
 
+// ClosingMergeReader reads the latest merge of a pull request that closes an
+// issue (#2629); gh.IssueService implements it.
+type ClosingMergeReader interface {
+	LatestClosingMerge(ctx context.Context, owner, repo string, number int) (*gh.ClosingMerge, error)
+}
+
+// MarkerValidates reports whether a closed issue's trusted comments validate
+// its latest closing merge (#2629). Only the newest marker by comment time
+// counts. It validates when no merged closing PR is known, when it names the
+// latest merge's SHA, or when it was written no earlier than that merge (a
+// legacy marker, or a merge the closing-PR list does not show). A reopened
+// issue closed again by a newer merge stays unvalidated until a marker for
+// that merge exists.
+func MarkerValidates(cs []trust.Comment, latest *gh.ClosingMerge) bool {
+	var newest *trust.Comment
+	for i := range cs {
+		if !forge.HasValidationMarker(cs[i].Body) {
+			continue
+		}
+		if newest == nil || cs[i].CreatedAt.After(newest.CreatedAt) {
+			newest = &cs[i]
+		}
+	}
+	if newest == nil {
+		return false
+	}
+	if latest == nil || forge.HasValidationMarkerFor(newest.Body, latest.SHA) {
+		return true
+	}
+	return !latest.MergedAt.After(newest.CreatedAt)
+}
+
 // ResolveValidationByKey resolves the validation state of closed dependency
 // keys ("owner/repo#N"). known maps a key to labels the caller already holds
 // (an on-board node); keys in unknown have their labels read, batched per
 // repository like ResolveIssueStatesByKey. A key whose labels name no program
 // is {Program: false} with no further read; a program member's trusted
-// comments are read for the marker.
+// comments and latest closing merge are read and judged by MarkerValidates.
 //
-// A key the resolver could not decide — a failed label or comment read, an
-// issue absent from the batch, no comment reader — is left OUT of the map, and
+// A key the resolver could not decide — a failed label, comment or closing-
+// merge read, an issue absent from the batch, no comment or merge reader — is
+// left OUT of the map, and
 // callers fail closed on it. The marker is only ever read from trusted
 // comments, so a marker pasted by anyone else never releases a dependent.
-func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments TrustedCommentReader, known map[string][]string, unknown []string) map[string]ValidationState {
+func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments TrustedCommentReader, merges ClosingMergeReader, known map[string][]string, unknown []string) map[string]ValidationState {
 	labels := make(map[string][]string, len(known))
 	for k, l := range known {
 		labels[k] = l
@@ -9155,7 +9188,7 @@ func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments 
 			out[key] = ValidationState{}
 			continue
 		}
-		if comments == nil {
+		if comments == nil || merges == nil {
 			continue
 		}
 		repo, num, ok := splitNodeKey(key)
@@ -9168,14 +9201,12 @@ func ResolveValidationByKey(ctx context.Context, issueSvc issueGetter, comments 
 			log.Printf("WARN: ResolveValidationByKey: comment read failed for %s: %v", key, err)
 			continue
 		}
-		st := ValidationState{Program: true}
-		for _, c := range cs {
-			if forge.HasValidationMarker(c.Body) {
-				st.Validated = true
-				break
-			}
+		latest, err := merges.LatestClosingMerge(ctx, owner, name, num)
+		if err != nil {
+			log.Printf("WARN: ResolveValidationByKey: closing-merge read failed for %s: %v", key, err)
+			continue
 		}
-		out[key] = st
+		out[key] = ValidationState{Program: true, Validated: MarkerValidates(cs, latest)}
 	}
 	return out
 }

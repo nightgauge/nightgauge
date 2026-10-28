@@ -49,3 +49,25 @@ func HasValidationMarker(body string) bool {
 	return strings.Contains(body, ValidationMarkerPrefix) ||
 		strings.Contains(body, LegacyValidationMarker)
 }
+
+// ValidationMarkerSHA returns the sha= value of the first current-format
+// marker in body (#2629). A legacy marker is present but names no SHA, so it
+// returns ("", true); a body with no marker returns ("", false).
+func ValidationMarkerSHA(body string) (string, bool) {
+	if i := strings.Index(body, ValidationMarkerPrefix); i >= 0 {
+		rest := strings.TrimPrefix(body[i+len(ValidationMarkerPrefix):], "sha=")
+		if j := strings.Index(rest, "-->"); j >= 0 {
+			rest = rest[:j]
+		}
+		return strings.TrimSpace(rest), true
+	}
+	return "", strings.Contains(body, LegacyValidationMarker)
+}
+
+// HasValidationMarkerFor reports whether body carries a current-format marker
+// naming merge commit sha (#2629). A marker for another SHA, or a legacy
+// marker, does not match.
+func HasValidationMarkerFor(body, sha string) bool {
+	got, ok := ValidationMarkerSHA(body)
+	return ok && got != "" && strings.EqualFold(got, markerValue(sha))
+}

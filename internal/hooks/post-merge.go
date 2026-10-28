@@ -615,8 +615,9 @@ func verifyMain(ctx context.Context, input PostMergeInput, out PostMergeResult) 
 
 // writeValidationMarker posts the #2574 validation marker on the merged issue
 // when main verified green. It reads the issue's trusted comments first and
-// posts nothing when one already carries a marker, so a re-run never
-// duplicates it; a failed read posts nothing either.
+// posts nothing when one already carries the marker for this merge commit, so
+// a re-run never duplicates it; a marker for an earlier merge of a reopened
+// issue does not suppress it (#2629). A failed read posts nothing either.
 func writeValidationMarker(ctx context.Context, input PostMergeInput, issueNodeID string, out PostMergeResult) ValidationMarkerOutcome {
 	if out.MainChecks == nil || out.MainChecks.Verdict != MainChecksGreen {
 		return ValidationMarkerNotGreen
@@ -631,8 +632,8 @@ func writeValidationMarker(ctx context.Context, input PostMergeInput, issueNodeI
 		return ValidationMarkerError
 	}
 	for _, c := range comments {
-		if forge.HasValidationMarker(c.Body) {
-			fmt.Fprintf(os.Stderr, "Post-merge: #%d already carries the validation marker\n", num)
+		if forge.HasValidationMarkerFor(c.Body, out.MergedCommitSha) {
+			fmt.Fprintf(os.Stderr, "Post-merge: #%d already carries the validation marker for %s\n", num, shortSHA(out.MergedCommitSha))
 			return ValidationMarkerPresent
 		}
 	}

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/internal/workorder"
 	pkgtypes "github.com/nightgauge/nightgauge/pkg/types"
@@ -114,6 +116,16 @@ func (f *fakeMarkerComments) TrustedComments(_ context.Context, owner, repo stri
 	return f.byKey[key], f.err
 }
 
+// fakeClosingMerges answers LatestClosingMerge by "owner/repo#N".
+type fakeClosingMerges struct {
+	byKey map[string]*gh.ClosingMerge
+	err   error
+}
+
+func (f *fakeClosingMerges) LatestClosingMerge(_ context.Context, owner, repo string, number int) (*gh.ClosingMerge, error) {
+	return f.byKey[fmt.Sprintf("%s/%s#%d", owner, repo, number)], f.err
+}
+
 // Validated reads the marker from closed issues only, once each, and a failed
 // read fails the report rather than undercounting (#2574).
 func TestReadValidationMarks(t *testing.T) {
@@ -127,7 +139,7 @@ func TestReadValidationMarks(t *testing.T) {
 		"o/api#1": {{Body: forge.ValidationMarkerComment("main", "abc")}},
 		"o/api#2": {{Body: "looks good"}},
 	}}
-	marked, err := readValidationMarks(context.Background(), src, issues)
+	marked, err := readValidationMarks(context.Background(), src, &fakeClosingMerges{}, issues)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +149,19 @@ func TestReadValidationMarks(t *testing.T) {
 	if strings.Join(src.reads, ",") != "o/api#1,o/api#2" {
 		t.Errorf("reads = %v, want each closed issue once", src.reads)
 	}
-	if _, err := readValidationMarks(context.Background(), &fakeMarkerComments{err: errors.New("REST 502")}, issues); err == nil {
+	if _, err := readValidationMarks(context.Background(), &fakeMarkerComments{err: errors.New("REST 502")}, &fakeClosingMerges{}, issues); err == nil {
 		t.Error("a failed comment read did not fail the report")
+	}
+	if _, err := readValidationMarks(context.Background(), src, &fakeClosingMerges{err: errors.New("GraphQL 502")}, issues); err == nil {
+		t.Error("a failed closing-merge read did not fail the report")
+	}
+	// (#2629) A marker older than a newer closing merge for another SHA is
+	// stale: o/api#1 is not counted validated.
+	stale := &fakeClosingMerges{byKey: map[string]*gh.ClosingMerge{
+		"o/api#1": {Number: 9, SHA: "def", MergedAt: time.Now()},
+	}}
+	marked, err = readValidationMarks(context.Background(), src, stale, issues)
+	if err != nil || len(marked) != 0 {
+		t.Errorf("stale marker: marked = %v, err = %v; want none", marked, err)
 	}
 }

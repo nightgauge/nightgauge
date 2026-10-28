@@ -172,7 +172,7 @@ func TestResolveValidationByKey(t *testing.T) {
 	comments := &markerComments{byKey: map[string][]trust.Comment{
 		"o/a#1": {{Body: forge.ValidationMarkerComment("main", "abc")}},
 	}}
-	got := ResolveValidationByKey(context.Background(), mock, comments,
+	got := ResolveValidationByKey(context.Background(), mock, comments, &closingMerges{},
 		map[string][]string{"o/a#1": {"program:x"}, "o/a#2": {"program:x"}, "o/a#3": {"type:feature"}},
 		[]string{"o/b#5", "o/b#6"})
 
@@ -195,7 +195,7 @@ func TestResolveValidationByKey(t *testing.T) {
 	}
 
 	failing := &markerComments{err: errors.New("REST 502")}
-	got = ResolveValidationByKey(context.Background(), mock, failing, map[string][]string{"o/a#1": {"program:x"}}, nil)
+	got = ResolveValidationByKey(context.Background(), mock, failing, &closingMerges{}, map[string][]string{"o/a#1": {"program:x"}}, nil)
 	if _, ok := got["o/a#1"]; ok {
 		t.Errorf("a failed comment read resolved o/a#1 = %+v; it must be left out (fail closed)", got["o/a#1"])
 	}
