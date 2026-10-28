@@ -719,6 +719,11 @@ type OutcomePrediction struct {
 	// model.
 	PredictedModel string `json:"predicted_model"`
 	ActualModel    string `json:"actual_model,omitempty"`
+	// ModelOverrideSource is "label" when the issue's model:pin-/model:max-
+	// labels forced or capped the model (#8); ModelOverrideLabel names the
+	// labels that took effect. Mirrors learning.Outcome.
+	ModelOverrideSource string `json:"model_override_source,omitempty"`
+	ModelOverrideLabel  string `json:"model_override_label,omitempty"`
 }
 
 // V2IndexEntry matches the TypeScript HistoryIndexEntry interface.

@@ -9,6 +9,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Pin or cap one issue's model with a label.** `model:pin-<band>` runs the
+  pipeline-chosen stages on that band; `model:max-<band>` keeps every routed
+  stage, retries included, at or below it. Explicit per-stage config, the
+  `minimum_model` floor and the performance-mode ceiling still win. Conflicting
+  or malformed labels warn and are ignored. Labelled runs are recorded as
+  forced and left out of model-routing accuracy. See
+  [CONFIGURATION.md § Issue-label model overrides](../../docs/CONFIGURATION.md#issue-label-model-overrides).
+
 ### Fixed
 
 - Follow-up work a run discovers is now filed as issues after the PR merges,

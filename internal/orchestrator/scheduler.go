@@ -5239,6 +5239,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// alone decides.
 	issueJobClass := routing.JobClassForLabels(item.Labels)
 
+	// Issue-label model pin / cap (#8), parsed once per run so a malformed or
+	// conflicting label warns once rather than on every stage. Both resolvers
+	// apply it inside plannedStageBase / resolveDispatchModel.
+	modelLabels, modelLabelWarnings := routing.ParseModelLabels(item.Labels)
+	for _, w := range modelLabelWarnings {
+		log.Printf("#%d: model label: %s", item.Number, w)
+	}
+
 	// Per-stage model_routing.minimum_model floors (#366), loaded once for the
 	// run. Applied at dispatch below so an autonomous run honors a configured
 	// minimum tier — parity with the TS SkillRunner's enforceMinimumModel.
@@ -6155,14 +6163,16 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// size can put implementation on Opus (routedStageModel), while every
 		// other stage keeps the run-wide prediction.
 		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot,
-			predictedModel, routingDecision, modelFloors, issueJobClass)
+			predictedModel, routingDecision, modelFloors, issueJobClass, modelLabels)
+
 		// Record the corpus's routing PREDICTION from the selection dispatch
 		// just used (#2537): PlannedStageModel over the very inputs above, so
 		// a pickup, a perf-mode re-route and a planner re-derivation are all
 		// reflected, and prediction and dispatch cannot run different
 		// selectors. Non-fatal: a missing context only loses the prediction.
 		if stage == state.StageFeatureDev {
-			planned := PlannedStageModel(workspaceRoot, stage, predictedModel, routingDecision, modelFloors, issueJobClass)
+			planned := PlannedStageModel(workspaceRoot, stage, predictedModel,
+				routingDecision, modelFloors, issueJobClass, modelLabels)
 			if err := stampDispatchDevModel(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item.Repo, item.Number, planned); err != nil {
 				log.Printf("#%d: could not record dispatch_dev_model %q: %v", item.Number, planned, err)
 			}
@@ -6330,6 +6340,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			remaining: stages[stageIdx+1:], tracer: tracer, adapterName: windowAdapter,
 			model: model, skillData: skillData, decision: routingDecision,
 			predictedModel: predictedModel, modelFloors: modelFloors, jobClass: issueJobClass,
+			modelLabels: modelLabels,
 			pinnedModel: pinnedModel,
 		})
 		if capacity.refused {
@@ -10322,21 +10333,25 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 	// label — so the corpus recorded "" for the size prediction on nearly every
 	// run while the run's OWN plan had assessed a size and written it down.
 	sizeRes := s.runSizeResolution(item, snap, runRoot)
+	// The run's model:* labels (#8); warnings were already logged at pickup.
+	modelLabels, _ := routing.ParseModelLabels(item.Labels)
 	outcome := learning.Outcome{
-		IssueNumber:     item.Number,
-		Repo:            item.Repo,
-		PredictedSize:   OutcomePredictedSize(sizeRes, complexityScore),
-		SizeSource:      OutcomeSizeSource(sizeRes, complexityScore),
-		PredictedModel:  OutcomeModelBand(predictedModel),
-		ActualModel:     OutcomeActualBand(OutcomeServedDevModel(snap), predictedModel),
-		Success:         success,
-		DurationMs:      snap.TotalDuration().Milliseconds(),
-		InputTokens:     snap.InputTokens,
-		OutputTokens:    snap.OutputTokens,
-		CostUSD:         snap.TotalCostUSD,
-		ComplexityScore: complexityScore,
-		FailedStage:     failedStage,
-		CompletedAt:     time.Now(),
+		IssueNumber:         item.Number,
+		Repo:                item.Repo,
+		PredictedSize:       OutcomePredictedSize(sizeRes, complexityScore),
+		SizeSource:          OutcomeSizeSource(sizeRes, complexityScore),
+		PredictedModel:      OutcomeModelBand(predictedModel),
+		ActualModel:         OutcomeActualBand(OutcomeServedDevModel(snap), predictedModel),
+		ModelOverrideSource: modelLabels.Source(),
+		ModelOverrideLabel:  modelLabels.Label,
+		Success:             success,
+		DurationMs:          snap.TotalDuration().Milliseconds(),
+		InputTokens:         snap.InputTokens,
+		OutputTokens:        snap.OutputTokens,
+		CostUSD:             snap.TotalCostUSD,
+		ComplexityScore:     complexityScore,
+		FailedStage:         failedStage,
+		CompletedAt:         time.Now(),
 	}
 	// Loud on every unattributed field, matching the extension writer
 	// (internal/ipc/server.go). An empty value is recoverable — every consumer
@@ -10375,10 +10390,12 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 	// sparse/wrong records to the platform (#261). Return the prediction so
 	// the caller can thread it into that single record.
 	return &state.OutcomePrediction{
-		PredictedSize:  outcome.PredictedSize,
-		ActualSize:     outcome.ActualSize,
-		PredictedModel: outcome.PredictedModel,
-		ActualModel:    outcome.ActualModel,
+		PredictedSize:       outcome.PredictedSize,
+		ActualSize:          outcome.ActualSize,
+		PredictedModel:      outcome.PredictedModel,
+		ActualModel:         outcome.ActualModel,
+		ModelOverrideSource: outcome.ModelOverrideSource,
+		ModelOverrideLabel:  outcome.ModelOverrideLabel,
 	}
 }
 
@@ -10629,6 +10646,7 @@ func (s *Scheduler) resolveDispatchModel(
 	decision routing.Decision,
 	modelFloors map[string]string,
 	jobClass string,
+	labels routing.ModelLabelOverride,
 ) string {
 	// Per-stage base routing. An unrouted run still ends on the general-purpose
 	// default tier, and that default lives in stageBaseModel's last branch and
@@ -10647,11 +10665,18 @@ func (s *Scheduler) resolveDispatchModel(
 	// retry escalation slotted between base and floor, the one runtime input
 	// the prediction cannot know.
 	mode, envelope, baseModel, explicitBase := plannedStageBase(
-		workspaceRoot, stage, predictedModel, decision, jobClass)
+		workspaceRoot, stage, predictedModel, decision, jobClass, labels)
 	model := baseModel
 	// Escalation override if set, otherwise the base.
 	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {
 		model = override
+	}
+	// An issue's model:max-<band> label (#8) caps what the pipeline chose,
+	// escalation included — a cap any later raise can escape caps nothing.
+	// The minimum_model floor and the mode ceiling below still bind it, and an
+	// explicit per-stage model ignores the label entirely.
+	if !explicitBase {
+		model = labels.ApplyModelLabelCap(model)
 	}
 	// Per-stage model_routing.minimum_model floor (#366) so an autonomous run
 	// honors a configured minimum tier — parity with the TS SkillRunner's

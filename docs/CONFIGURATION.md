@@ -1905,6 +1905,50 @@ Under `frontier`, `feature-planning` and `feature-dev` at `L`/`XL` then run on
 
 Empty lists, the default, change nothing.
 
+### Issue-label model overrides
+
+To pin or cap the model for one issue without editing config, label it:
+
+| Label              | Effect                                                          |
+| ------------------ | --------------------------------------------------------------- |
+| `model:pin-<band>` | every stage whose model the pipeline chose runs on `<band>`     |
+| `model:max-<band>` | no stage the pipeline routes runs above `<band>`, after retries |
+
+`<band>` is `haiku`, `sonnet`, `opus` or `fable`. Matching ignores case and
+surrounding whitespace. An issue with no `model:*` label routes exactly as
+before. Both resolvers (`resolveDispatchModel` in Go, `resolveModel` in the
+extension) apply one rule, in this order:
+
+1. An explicit per-stage model (`pipeline.stage_models`,
+   `NIGHTGAUGE_PIPELINE_STAGE_MODEL_<STAGE>`, the manual-mode table) ignores
+   the label. Config beats a label.
+2. The pin replaces the base the pipeline chose: routed tier, stage default,
+   the `maximum` mode's stage pin, or the workspace default.
+3. Post-failure escalation may raise it (Go path).
+4. The cap lowers the result. It never raises.
+5. The `model_routing.minimum_model` floor raises it. A config floor beats a
+   label cap.
+6. The performance mode's routed-tier ceiling clamps it. A label never lifts a
+   stage above its mode ceiling or `max_model`.
+
+The stage gates after that (pr-create large diff, the feature-validate and
+pr-merge haiku floors) are unchanged.
+
+Malformed and conflicting labels warn once per run and never fail it. An
+unknown band or the `model:<band>` shorthand is ignored. Two different pins
+are both ignored. Two caps resolve to the lower one. A pin above the cap is
+lowered to the cap.
+
+**Unavailable tiers.** A label names a band, not a provider model. The band
+reaches the dispatch provider's model through the registry, exactly as a
+pipeline-chosen band does, so non-Claude adapters translate it the usual way.
+If `excluded_models` rules the band out, it steps down to the strongest
+eligible band at or below it, like every other automatic choice.
+
+Outcomes of a labelled run record `model_override_source: "label"` and the
+labels that took effect (`model_override_label`). Calibration leaves those rows
+out of model accuracy and counts them in `modelSamplesExcludedOverride`.
+
 `frontier` is the premium opt-in tier: it widens the routing ceiling to
 **Fable 5.1** (`claude-fable-5-1`, ~2× Opus). It **pins nothing** — the router
 reaches Fable only on a heavy reasoning stage (`feature-planning`,

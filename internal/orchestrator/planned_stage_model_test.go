@@ -51,8 +51,8 @@ func TestPlannedStageModel_EqualsDispatch(t *testing.T) {
 							for _, stage := range []state.PipelineStage{
 								state.StageFeatureDev, state.StageFeaturePlanning, state.StageSpikeMaterialize,
 							} {
-								planned := PlannedStageModel(dir, stage, tier, d, floors, "")
-								served := testScheduler(t).resolveDispatchModel(stage, 1, dir, tier, d, floors, "")
+								planned := PlannedStageModel(dir, stage, tier, d, floors, "", routing.ModelLabelOverride{})
+								served := testScheduler(t).resolveDispatchModel(stage, 1, dir, tier, d, floors, "", routing.ModelLabelOverride{})
 								if planned != served {
 									t.Errorf("%s: PlannedStageModel = %q, dispatch = %q — prediction and dispatch diverged",
 										stage, planned, served)
@@ -73,7 +73,7 @@ func TestPlannedStageModel_EqualsDispatch(t *testing.T) {
 func TestPlannedStageModel_ElevatedSonnetPredictsOpus(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "elevated")
-	if got := PlannedStageModel(dir, state.StageFeatureDev, "sonnet", decisionFor("type:bug", "size:S"), nil, ""); got != "opus" {
+	if got := PlannedStageModel(dir, state.StageFeatureDev, "sonnet", decisionFor("type:bug", "size:S"), nil, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Errorf("planned feature-dev = %q, want opus — the stage default dispatch actually serves", got)
 	}
 }

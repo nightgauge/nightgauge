@@ -279,9 +279,14 @@ func PlannedStageModel(
 	d routing.Decision,
 	floors map[string]string,
 	jobClass string,
+	labels routing.ModelLabelOverride,
 ) string {
-	_, envelope, base, explicit := plannedStageBase(workspaceRoot, stage, predicted, d, jobClass)
-	model := normalizeDispatchTier(floorAndCeil(stage, base, base, explicit, floors, envelope))
+	_, envelope, base, explicit := plannedStageBase(workspaceRoot, stage, predicted, d, jobClass, labels)
+	model := base
+	if !explicit {
+		model = labels.ApplyModelLabelCap(model)
+	}
+	model = normalizeDispatchTier(floorAndCeil(stage, model, base, explicit, floors, envelope))
 	if eligible, err := eligibleDispatchModel(workspaceRoot, stage, model, ""); err == nil {
 		return eligible
 	}
@@ -321,15 +326,25 @@ func eligibleDispatchModel(workspaceRoot string, stage state.PipelineStage, mode
 // plannedStageBase resolves the mode, the stage's routed-tier envelope and the
 // per-stage base model — the inputs both PlannedStageModel and
 // resolveDispatchModel build on.
+//
+// An issue's model:pin-<band> label (#8) replaces a base the PIPELINE chose —
+// routed tier, stage default, Maximum-mode pin or workspace default — here, so
+// the prediction and the dispatch see the same pin (#2537). An explicit
+// per-stage model ignores the label: config beats a label. The pin is not
+// clamped here; floorAndCeil's ceiling binds it like every other choice.
 func plannedStageBase(
 	workspaceRoot string,
 	stage state.PipelineStage,
 	predicted string,
 	d routing.Decision,
 	jobClass string,
+	labels routing.ModelLabelOverride,
 ) (routing.PerformanceMode, routing.ModeEnvelope, string, bool) {
 	mode := routing.ResolvePerformanceMode(workspaceRoot)
 	base, explicit := stageBaseModel(workspaceRoot, mode, stage, routedStageModel(stage, predicted, d), jobClass)
+	if !explicit {
+		base = labels.ApplyModelLabelPin(base)
+	}
 	envelope := routing.RoutedTierEnvelopeForWorkspace(workspaceRoot, mode, string(stage))
 	return mode, envelope, base, explicit
 }

@@ -397,3 +397,29 @@ func TestRecorderOutsideGitRepository(t *testing.T) {
 		t.Errorf("Record wrote into a non-repository: %v", entries)
 	}
 }
+
+// A label-forced row (#8) measures the operator, not the router: it leaves the
+// model denominator and is counted in ModelSamplesExcludedOverride.
+func TestCalibrate_LabelForcedRowIsExcludedFromModelAccuracy(t *testing.T) {
+	dir := t.TempDir()
+	r := &Recorder{filePath: filepath.Join(dir, "outcomes.jsonl")}
+	for _, o := range []Outcome{
+		{IssueNumber: 1, PredictedModel: "haiku", ActualModel: "haiku",
+			ModelOverrideSource: "label", ModelOverrideLabel: "model:pin-haiku", CompletedAt: time.Now()},
+		{IssueNumber: 2, PredictedModel: "sonnet", ActualModel: "sonnet", CompletedAt: time.Now()},
+	} {
+		if err := r.Record(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report, err := r.Calibrate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ModelSamples != 1 || report.ModelMatches != 1 {
+		t.Errorf("ModelSamples/Matches = %d/%d, want 1/1 — the forced row must not be scored", report.ModelSamples, report.ModelMatches)
+	}
+	if report.ModelSamplesExcludedOverride != 1 {
+		t.Errorf("ModelSamplesExcludedOverride = %d, want 1", report.ModelSamplesExcludedOverride)
+	}
+}

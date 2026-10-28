@@ -144,7 +144,7 @@ func TestDispatchModelModeKnobMatrix(t *testing.T) {
 				t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", tc.env)
 			}
 			s := testScheduler(t)
-			got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, routedTier, routing.Decision{}, nil, "")
+			got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, routedTier, routing.Decision{}, nil, "", routing.ModelLabelOverride{})
 			if got != tc.want {
 				t.Errorf("feature-dev = %q, want %q — %s", got, tc.want, tc.why)
 			}
@@ -168,15 +168,15 @@ func TestDispatchModelFrontierNeverCarriesFableOffTheReasoningStages(t *testing.
 
 	// The router escalated this run's implementation tier to Fable.
 	for _, stage := range []state.PipelineStage{state.StageFeaturePlanning, state.StageFeatureDev} {
-		if got := s.resolveDispatchModel(stage, 1, dir, "fable", routing.Decision{}, nil, ""); got != "fable" {
+		if got := s.resolveDispatchModel(stage, 1, dir, "fable", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "fable" {
 			t.Errorf("%s = %q, want fable — the reasoning stages are what the frontier ceiling is for", stage, got)
 		}
 	}
-	if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "fable", routing.Decision{}, nil, ""); got != "opus" {
+	if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "fable", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Errorf("feature-validate = %q, want opus — MODE_PROFILES.frontier caps this stage at Opus", got)
 	}
 	// Plumbing keeps its lightweight base rather than riding the run tier.
-	if got := s.resolveDispatchModel(state.StageIssuePickup, 1, dir, "fable", routing.Decision{}, nil, ""); got != "haiku" {
+	if got := s.resolveDispatchModel(state.StageIssuePickup, 1, dir, "fable", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "haiku" {
 		t.Errorf("issue-pickup = %q, want haiku — frontier rates are not paid for git plumbing", got)
 	}
 }
@@ -220,7 +220,7 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 				t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
 				s := testScheduler(t)
 				floors := map[string]string{string(state.StageFeatureDev): "opus"}
-				if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, floors, ""); got != "sonnet" {
+				if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "sonnet" {
 					t.Errorf("floored feature-dev = %q, want sonnet — Efficiency's ceiling binds the floor", got)
 				}
 			})
@@ -230,7 +230,7 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 				t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
 				s := testScheduler(t)
 				s.retryEngine.RecordEscalation("feature-dev", "opus")
-				if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, nil, ""); got != "sonnet" {
+				if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 					t.Errorf("escalated feature-dev = %q, want sonnet — Efficiency's ceiling binds the escalation ladder", got)
 				}
 			})
@@ -240,8 +240,7 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 				t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
 				s := testScheduler(t)
 				if got := s.resolveDispatchModel(
-					state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, raiseStageFloors(nil, "opus"), "",
-				); got != "sonnet" {
+					state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, raiseStageFloors(nil, "opus"), "", routing.ModelLabelOverride{}); got != "sonnet" {
 					t.Errorf("forced feature-dev = %q, want sonnet — an operator forcing a tier gets it inside the band they selected", got)
 				}
 			})
@@ -253,7 +252,7 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
 		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "opus")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, nil, ""); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 			t.Errorf("feature-dev = %q, want opus — an explicit per-stage model overrides the mode, exactly as in resolveModel Step 1", got)
 		}
 	})
@@ -268,7 +267,7 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "opus")
 		s := testScheduler(t)
 		floors := map[string]string{string(state.StageFeatureDev): "fable"}
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, floors, ""); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "opus" {
 			t.Errorf("feature-dev = %q, want opus — the ceiling discards the raise, not the operator's own model", got)
 		}
 	})
@@ -283,7 +282,7 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "haiku")
 		s := testScheduler(t)
 		floors := map[string]string{string(state.StageFeatureDev): "sonnet"}
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, floors, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("feature-dev = %q, want sonnet — the floored value is capped, not re-raised by maximum's [opus, opus] floor", got)
 		}
 	})
@@ -296,7 +295,7 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 		// opus], so a floor half applied after the downgrade would put the run
 		// straight back onto the rejected tier.
 		s.retryEngine.RecordDowngrade("opus", DowngradeDecision{NewTier: "sonnet"})
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", routing.Decision{}, nil, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("feature-dev = %q, want sonnet — the #42 downgrade must survive the mode envelope", got)
 		}
 	})
@@ -323,7 +322,7 @@ func TestDispatchModelFrontierCeilingIsPerStageForFloorsToo(t *testing.T) {
 			t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
 			s := testScheduler(t)
 			floors := map[string]string{string(stage): "fable"}
-			if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", routing.Decision{}, floors, ""); got != "opus" {
+			if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "opus" {
 				t.Errorf("%s = %q, want opus — the frontier ceiling is offered to feature-planning/feature-dev only", stage, got)
 			}
 		})
@@ -335,7 +334,7 @@ func TestDispatchModelFrontierCeilingIsPerStageForFloorsToo(t *testing.T) {
 			t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
 			s := testScheduler(t)
 			floors := map[string]string{string(stage): "fable"}
-			if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", routing.Decision{}, floors, ""); got != "fable" {
+			if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "fable" {
 				t.Errorf("%s = %q, want fable — the heavy reasoning stages are what the frontier ceiling is for", stage, got)
 			}
 		})
@@ -346,10 +345,10 @@ func TestDispatchModelFrontierCeilingIsPerStageForFloorsToo(t *testing.T) {
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
 		s := testScheduler(t)
 		floors := raiseStageFloors(nil, "fable")
-		if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "sonnet", routing.Decision{}, floors, ""); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "sonnet", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "opus" {
 			t.Errorf("feature-validate = %q, want opus", got)
 		}
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", routing.Decision{}, floors, ""); got != "fable" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "fable" {
 			t.Errorf("feature-dev = %q, want fable", got)
 		}
 	})
@@ -366,7 +365,7 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 	t.Run("ui.core.default_model answers an unrouted stage", func(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: opus\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, ""); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 			t.Errorf("spike-materialize = %q, want opus — ui.core.default_model is Step 3", got)
 		}
 	})
@@ -375,7 +374,7 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: haiku\n")
 		t.Setenv("NIGHTGAUGE_UI_CORE_DEFAULT_MODEL", "opus")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, ""); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 			t.Errorf("spike-materialize = %q, want opus", got)
 		}
 	})
@@ -383,7 +382,7 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 	t.Run("the routed tier still wins over it", func(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: opus\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "haiku", routing.Decision{}, nil, ""); got != "haiku" {
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "haiku", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "haiku" {
 			t.Errorf("spike-materialize = %q, want the routed haiku — Step 2 precedes Step 3", got)
 		}
 	})
@@ -392,7 +391,7 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: opus\n")
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("spike-materialize = %q, want sonnet", got)
 		}
 	})
@@ -400,7 +399,7 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 	t.Run("a non-band value is ignored, as in getDefaultModel's validModels guard", func(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: gpt-5.6-sol\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("spike-materialize = %q, want the hardcoded sonnet fallback", got)
 		}
 	})
@@ -419,7 +418,7 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 		s := testScheduler(t)
 		// spike-materialize's routed envelope tops out at opus even under
 		// frontier; a rejected value would have fallen to the sonnet fallback.
-		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, ""); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 			t.Errorf("spike-materialize = %q, want opus (fable accepted, then clamped) — DefaultModelSchema permits it and validStageModel accepts it", got)
 		}
 	})
@@ -427,7 +426,7 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 	t.Run("a fable default is still clamped into the mode envelope", func(t *testing.T) {
 		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: fable\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, ""); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 			t.Errorf("spike-materialize = %q, want opus — elevated tops out there; accepting the band does not exempt it from the ceiling", got)
 		}
 	})
@@ -492,7 +491,7 @@ func TestDispatchModelPRCreateLargeDiffSparesAnExplicitBase(t *testing.T) {
 	t.Run("a pipeline-chosen lightweight base still escalates", func(t *testing.T) {
 		dir := gitWorkspaceWithLargeDiff(t, "model_routing:\n  mode: automatic\n", bigDiff)
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("pr-create = %q, want sonnet — the haiku stage default is the pipeline's own choice, and haiku stalls on a big changeset", got)
 		}
 	})
@@ -502,7 +501,7 @@ func TestDispatchModelPRCreateLargeDiffSparesAnExplicitBase(t *testing.T) {
 		s := testScheduler(t)
 		// #2512: the built-in stage defaults are no longer an explicit manual
 		// answer, so the escalation applies in every mode.
-		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("pr-create = %q, want sonnet — the built-in haiku default is not an operator choice", got)
 		}
 	})
@@ -511,7 +510,7 @@ func TestDispatchModelPRCreateLargeDiffSparesAnExplicitBase(t *testing.T) {
 		dir := gitWorkspaceWithLargeDiff(t,
 			"model_routing:\n  mode: manual\npipeline:\n  stage_models:\n    pr-create: haiku\n", bigDiff)
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, ""); got != "haiku" {
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "haiku" {
 			t.Errorf("pr-create = %q, want haiku — the operator named the tier for this stage", got)
 		}
 	})
@@ -520,7 +519,7 @@ func TestDispatchModelPRCreateLargeDiffSparesAnExplicitBase(t *testing.T) {
 		dir := gitWorkspaceWithLargeDiff(t, "model_routing:\n  mode: automatic\n", bigDiff)
 		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_PR_CREATE", "haiku")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, ""); got != "haiku" {
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "haiku" {
 			t.Errorf("pr-create = %q, want haiku — the env override wins in every mode, on both resolvers", got)
 		}
 	})
@@ -528,7 +527,7 @@ func TestDispatchModelPRCreateLargeDiffSparesAnExplicitBase(t *testing.T) {
 	t.Run("a small diff escalates nothing", func(t *testing.T) {
 		dir := gitWorkspaceWithLargeDiff(t, "model_routing:\n  mode: automatic\n", 3)
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, ""); got != "haiku" {
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "haiku" {
 			t.Errorf("pr-create = %q, want haiku — the diff is below the threshold", got)
 		}
 	})
@@ -542,7 +541,7 @@ func TestStageEnvModelValidatesLikeItsTypeScriptPair(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "gpt-5.6-sol")
 	s := testScheduler(t)
-	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, routedTier, routing.Decision{}, nil, ""); got != routedTier {
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, routedTier, routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != routedTier {
 		t.Errorf("feature-dev = %q, want the routed %q — a non-band env value is ignored, as in getStageModel", got, routedTier)
 	}
 }
@@ -580,12 +579,12 @@ func TestStageDefaultModelsEveryMode(t *testing.T) {
 			dir := routedWorkspace(t, "model_routing:\n  mode: "+mode+"\n")
 			s := testScheduler(t)
 			for stage, w := range want {
-				if got := s.resolveDispatchModel(stage, 1, dir, "", routing.Decision{}, nil, ""); got != w {
+				if got := s.resolveDispatchModel(stage, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != w {
 					t.Errorf("%s = %q, want %q", stage, got, w)
 				}
 				// A lower routed tier never lowers an opus stage; a haiku
 				// stage ignores the routed tier entirely.
-				if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", routing.Decision{}, nil, ""); got != w {
+				if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != w {
 					t.Errorf("%s with routed sonnet = %q, want %q", stage, got, w)
 				}
 			}
@@ -598,36 +597,36 @@ func TestStageDefaultModelsEveryMode(t *testing.T) {
 	t.Run("efficiency caps opus at sonnet", func(t *testing.T) {
 		dir := isolatedWorkspace(t)
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
-		if got := testScheduler(t).resolveDispatchModel(state.StageFeatureDev, 1, dir, "", routing.Decision{}, nil, ""); got != "sonnet" {
+		if got := testScheduler(t).resolveDispatchModel(state.StageFeatureDev, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("efficiency feature-dev = %q, want sonnet", got)
 		}
 	})
 	t.Run("maximum pins opus", func(t *testing.T) {
 		dir := isolatedWorkspace(t)
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "maximum")
-		if got := testScheduler(t).resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, ""); got != "opus" {
+		if got := testScheduler(t).resolveDispatchModel(state.StagePRCreate, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 			t.Errorf("maximum pr-create = %q, want opus", got)
 		}
 	})
 	t.Run("operator overrides win", func(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  mode: hybrid\npipeline:\n  stage_models:\n    feature-planning: sonnet\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeaturePlanning, 1, dir, "", routing.Decision{}, nil, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageFeaturePlanning, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("stage_models feature-planning = %q, want sonnet", got)
 		}
 		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "sonnet")
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", routing.Decision{}, nil, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("env feature-dev = %q, want sonnet", got)
 		}
 		floors := map[string]string{string(state.StageIssuePickup): "sonnet"}
-		if got := s.resolveDispatchModel(state.StageIssuePickup, 1, dir, "", routing.Decision{}, floors, ""); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageIssuePickup, 1, dir, "", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "sonnet" {
 			t.Errorf("minimum_model issue-pickup = %q, want sonnet", got)
 		}
 	})
 	t.Run("the router still raises an opus stage under frontier", func(t *testing.T) {
 		dir := isolatedWorkspace(t)
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
-		if got := testScheduler(t).resolveDispatchModel(state.StageFeatureDev, 1, dir, "fable", routing.Decision{}, nil, ""); got != "fable" {
+		if got := testScheduler(t).resolveDispatchModel(state.StageFeatureDev, 1, dir, "fable", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "fable" {
 			t.Errorf("frontier feature-dev routed fable = %q, want fable", got)
 		}
 	})
@@ -652,20 +651,20 @@ func TestDispatchModelHonoursExcludedModels(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
 	s := testScheduler(t)
 
-	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, plain, "fable", routing.Decision{}, nil, ""); got != "fable" {
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, plain, "fable", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "fable" {
 		t.Fatalf("frontier feature-dev without exclusions = %q, want fable", got)
 	}
 
 	writeExclusionsConfig(t, dir, "model_routing:\n  excluded_models: [claude-fable-5-1]\n")
-	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "fable", routing.Decision{}, nil, ""); got != "opus" {
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "fable", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Fatalf("frontier feature-dev with Fable excluded = %q, want opus", got)
 	}
 	// A minimum_model: fable floor and a forced fable tier land on opus too.
 	floors := map[string]string{"feature-dev": "fable"}
-	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", routing.Decision{}, floors, ""); got != "opus" {
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", routing.Decision{}, floors, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Fatalf("fable floor with Fable excluded = %q, want opus", got)
 	}
-	if got := PlannedStageModel(dir, state.StageFeatureDev, "fable", routing.Decision{}, nil, ""); got != "opus" {
+	if got := PlannedStageModel(dir, state.StageFeatureDev, "fable", routing.Decision{}, nil, "", routing.ModelLabelOverride{}); got != "opus" {
 		t.Fatalf("PlannedStageModel with Fable excluded = %q, want opus", got)
 	}
 	// The dispatch gate lowers a mid-envelope excluded band too.

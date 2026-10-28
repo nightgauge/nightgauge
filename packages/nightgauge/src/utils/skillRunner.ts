@@ -1375,6 +1375,113 @@ function jobClassForIssue(metadata: IssueMetadata | undefined): JobClass | undef
 }
 
 /**
+ * An issue's parsed `model:pin-<band>` / `model:max-<band>` labels (#8). Go
+ * pair: `routing.ModelLabelOverride` (internal/intelligence/routing/
+ * label_override.go); both suites drive
+ * `internal/intelligence/routing/testdata/model-label-overrides-crosslang.json`.
+ */
+export interface ModelLabelOverride {
+  pin?: DefaultModel;
+  max?: DefaultModel;
+  /** Comma-joined, sorted labels that took effect; "" when none did. */
+  label: string;
+  /** "label" when the override changes anything, "" otherwise. */
+  source: "" | "label";
+}
+
+const MODEL_LABEL_PREFIX = "model:";
+const MODEL_LABEL_PIN_PREFIX = "model:pin-";
+const MODEL_LABEL_MAX_PREFIX = "model:max-";
+
+/**
+ * Parse an issue's `model:*` labels. Go pair: `routing.ParseModelLabels`, same
+ * rules in the same order: case-insensitive after trimming; any other `model:*`
+ * label warns and is ignored; two or more distinct pins are all ignored with a
+ * warning; distinct caps resolve to the lowest; a pin above the cap is lowered
+ * to the cap with a warning.
+ */
+export function parseModelLabels(labels: readonly string[]): {
+  override: ModelLabelOverride;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const pins = new Map<DefaultModel, string>();
+  const caps = new Map<DefaultModel, string>();
+  for (const raw of labels) {
+    const label = raw.trim().toLowerCase();
+    if (!label.startsWith(MODEL_LABEL_PREFIX)) continue;
+    const pin = label.slice(MODEL_LABEL_PIN_PREFIX.length);
+    const max = label.slice(MODEL_LABEL_MAX_PREFIX.length);
+    if (label.startsWith(MODEL_LABEL_PIN_PREFIX) && isTierBand(pin)) {
+      pins.set(pin as DefaultModel, label);
+    } else if (label.startsWith(MODEL_LABEL_MAX_PREFIX) && isTierBand(max)) {
+      caps.set(max as DefaultModel, label);
+    } else {
+      warnings.push(
+        `ignoring label "${label}": model labels are model:pin-<band> or model:max-<band> with band one of ${[...SDK_TIER_BANDS_STRONGEST_FIRST].reverse().join(", ")}`
+      );
+    }
+  }
+
+  const override: ModelLabelOverride = { label: "", source: "" };
+  const applied: string[] = [];
+  for (const band of caps.keys()) {
+    if (override.max === undefined || TIER_ORDER[band] < TIER_ORDER[override.max]) {
+      override.max = band;
+    }
+  }
+  if (override.max !== undefined) applied.push(caps.get(override.max)!);
+  if (pins.size > 1) {
+    warnings.push(
+      `ignoring conflicting model pins ${[...pins.values()].sort().join(", ")}: an issue carries at most one model:pin-<band>`
+    );
+  } else if (pins.size === 1) {
+    const [[band, label]] = [...pins];
+    override.pin = band;
+    applied.push(label);
+    if (override.max !== undefined && TIER_ORDER[band] > TIER_ORDER[override.max]) {
+      warnings.push(
+        `label ${label} exceeds ${caps.get(override.max)}: the cap wins, pinning ${override.max}`
+      );
+      override.pin = override.max;
+    }
+  }
+  override.label = applied.sort().join(",");
+  override.source = override.pin || override.max ? "label" : "";
+  return { override, warnings };
+}
+
+/** Go pair: `ModelLabelOverride.ApplyModelLabelPin`. */
+export function applyModelLabelPin(o: ModelLabelOverride, base: DefaultModel): DefaultModel {
+  return o.pin ?? base;
+}
+
+/**
+ * Go pair: `ModelLabelOverride.ApplyModelLabelCap` — lowers, never raises; a
+ * model with no band passes through.
+ */
+export function applyModelLabelCap(o: ModelLabelOverride, model: DefaultModel): DefaultModel {
+  if (!o.max || !isTierBand(model)) return model;
+  return TIER_ORDER[model] > TIER_ORDER[o.max] ? o.max : model;
+}
+
+/** (issue, label set) pairs whose label warnings were already logged. */
+const warnedModelLabels = new Set<string>();
+
+function modelLabelsForIssue(
+  metadata: IssueMetadata | undefined,
+  issueNumber: number | undefined
+): ModelLabelOverride {
+  const { override, warnings } = parseModelLabels(metadata?.labels ?? []);
+  const key = `${issueNumber ?? ""}:${(metadata?.labels ?? []).join(",")}`;
+  if (warnings.length > 0 && !warnedModelLabels.has(key)) {
+    warnedModelLabels.add(key);
+    for (const w of warnings) warnStageDiagnostic(`#${issueNumber ?? "?"}: model label: ${w}`);
+  }
+  return override;
+}
+
+/**
  * Consult the materialized routing-advice file (#581, spike §4.2) for the
  * selector branch. Returns an advisory only when EVERY gate passes: a job
  * class the issue directly names, an advisable (sample-floor-passing) entry
@@ -1486,12 +1593,30 @@ function resolveModelUnexcluded(
   const performanceMode = getPerformanceMode(workspaceRoot);
   const envelope = getModeEnvelope(performanceMode);
   const stageEnvModel = getStageEnvModel(stage);
+  // The issue's model:* labels (#8). A pin replaces every base the PIPELINE
+  // chose — the Maximum pin here and every `withFloor` branch below — and a cap
+  // lowers it, both before the minimum_model floor and the routed-tier ceiling.
+  // Step 1 (explicit per-stage config) ignores them. Go pair: plannedStageBase
+  // and resolveDispatchModel.
+  const modelLabels = modelLabelsForIssue(issueMetadata, issueNumber);
+  const labelled = (chosen: DefaultModel): DefaultModel =>
+    applyModelLabelCap(modelLabels, applyModelLabelPin(modelLabels, chosen));
   if (performanceMode !== "elevated" && !stageEnvModel) {
     const profile = getModeStageProfile(performanceMode, stage);
     if (profile?.model) {
       const routingModeForPerformance = getModelRoutingMode(workspaceRoot);
       return {
-        model: profile.model,
+        model: modelLabels.source
+          ? clampModelToCeiling(
+              enforceMinimumModel(labelled(profile.model), getMinimumModel(stage, workspaceRoot)),
+              getRoutedTierEnvelope(
+                performanceMode,
+                stage,
+                getMaxModel(workspaceRoot),
+                getModelRoutingExclusions(workspaceRoot)
+              )
+            )
+          : profile.model,
         source: "performance-mode",
         mode: routingModeForPerformance,
         effort: profile.effort ?? clampEffortToEnvelope(stageEffort, envelope),
@@ -1535,7 +1660,7 @@ function resolveModelUnexcluded(
   // deliberately not re-applied (see `clampModelToCeiling`).
   const minModel = getMinimumModel(stage, workspaceRoot);
   const withFloor = (chosen: DefaultModel): DefaultModel =>
-    clampModelToCeiling(enforceMinimumModel(chosen, minModel), modelEnvelope);
+    clampModelToCeiling(enforceMinimumModel(labelled(chosen), minModel), modelEnvelope);
 
   // Step 1: Check stage-level config (env var > config > defaults based on mode)
   const routingMode = getModelRoutingMode(workspaceRoot);
