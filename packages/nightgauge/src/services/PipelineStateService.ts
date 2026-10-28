@@ -173,6 +173,8 @@ export interface ModelEscalationRecord {
 /** Event payload emitted when a tool call is recorded during pipeline execution. */
 export interface ToolCallRecordedEvent {
   tool: string;
+  /** Stage the call ran in, when known (#1897). */
+  stage?: string;
   target: string;
   timestamp: Date;
   durationMs?: number;
@@ -336,6 +338,22 @@ interface BookedStageUsage {
   costUsd: number;
 }
 
+/** Go `StageGateResult` (internal/state/history.go). */
+export interface StageGateResultRecord {
+  gate_name: string;
+  passed: boolean;
+  reason: string;
+  timestamp: string;
+}
+
+/** Go `RecoveryAttempt` (internal/state/history.go). */
+export interface StageRecoveryAttemptRecord {
+  action: string;
+  recovered: boolean;
+  reason?: string;
+  at: string;
+}
+
 export interface PipelineState {
   issue_number: number;
   title: string;
@@ -368,8 +386,13 @@ export interface PipelineState {
     fromModel: string;
     toModel: string;
     reason: string;
+    at?: string;
   }>;
   ralph_iterations?: Record<string, number>;
+  /** Post-condition gate outcomes per stage, from Go `stageGateResults` (#1897). */
+  stage_gate_results?: Record<string, StageGateResultRecord[]>;
+  /** FailureRecovery outcomes per stage, from Go `stageRecoveryAttempts` (#1897). */
+  stage_recovery_attempts?: Record<string, StageRecoveryAttemptRecord[]>;
   gate_results?: Array<{
     gate_name: string;
     result: string;
@@ -494,8 +517,11 @@ export interface GoRuntimeState {
     fromModel: string;
     toModel: string;
     reason: string;
+    at?: string;
   }>;
   ralphIterations?: Record<string, number>;
+  stageGateResults?: Record<string, StageGateResultRecord[]>;
+  stageRecoveryAttempts?: Record<string, StageRecoveryAttemptRecord[]>;
   gateResults?: Array<{
     gate_name: string;
     result: string;
@@ -843,6 +869,8 @@ export class PipelineStateService implements vscode.Disposable {
       retry_count: goState.retryCount,
       escalation_history: goState.escalationHistory,
       ralph_iterations: goState.ralphIterations,
+      stage_gate_results: goState.stageGateResults,
+      stage_recovery_attempts: goState.stageRecoveryAttempts,
       gate_results: goState.gateResults,
       pr_url: goState.prUrl,
       current_stage: goState.stage,
@@ -2339,12 +2367,14 @@ export class PipelineStateService implements vscode.Disposable {
   // calibration is written by PostPipelineAnalyzer. Do not add a TS-side
   // outcome writer back here.
   async setLabels(_labels: string[]): Promise<void> {}
-  recordToolCall(
-    _stageOrRecord: string | ToolCallRecordedEvent,
-    _toolName?: string,
-    _success?: boolean,
-    _durationMs?: number
-  ): void {}
+  /**
+   * Publish a tool call (with its result, when known) to `onToolCallRecorded`.
+   * The pipeline tree reads fix commits and failing checks from these results
+   * (#1897). This was a no-op stub, so the event never fired.
+   */
+  recordToolCall(event: ToolCallRecordedEvent): void {
+    this._onToolCallRecorded.fire(event);
+  }
 
   async clearRetrying(stage: string): Promise<void> {
     if (this._lastState?.stages[stage]) {
@@ -2690,6 +2720,9 @@ export class PipelineStateService implements vscode.Disposable {
               ? goState.escalationHistory
               : this._lastState?.escalation_history,
           ralph_iterations: goState.ralphIterations ?? this._lastState?.ralph_iterations,
+          stage_gate_results: goState.stageGateResults ?? this._lastState?.stage_gate_results,
+          stage_recovery_attempts:
+            goState.stageRecoveryAttempts ?? this._lastState?.stage_recovery_attempts,
           gate_results:
             Array.isArray(goState.gateResults) && goState.gateResults.length > 0
               ? goState.gateResults.map(

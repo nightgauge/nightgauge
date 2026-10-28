@@ -14,6 +14,19 @@ import { PhaseTreeItem, type PhaseStatus } from "./PhaseTreeItem";
 import { SkippedPhasesTreeItem } from "./SkippedPhasesTreeItem";
 import type { StageExecutionMode } from "../../services/PipelineStateService";
 import type { StagePhase } from "../../schemas/pipelineState";
+import { StageActivityTreeItem } from "./StageActivityTreeItem";
+import { DEFAULT_IDLE_INDICATOR_SECONDS } from "../../utils/resolvers/monitoringResolver";
+import {
+  formatDuration,
+  formatStageActivityLabel,
+  mergeEvents,
+  parseToolCall,
+  summarize,
+  type StageActivityEvent,
+  type StageActivitySummary,
+  type StageDisplayState,
+  type ToolCallLike,
+} from "./stageActivity";
 
 /**
  * Stage status types
@@ -48,6 +61,17 @@ const STATUS_CONFIG: Record<StageStatus, StageDisplayConfig> = {
   failed: { icon: "error", iconColor: "testing.iconFailed" },
   skipped: { icon: "debug-step-over" },
   deferred: { icon: "watch", iconColor: "editorWarning.foreground" },
+};
+
+/**
+ * Icon and colour per running display state (#1897). `working` keeps the
+ * status icon.
+ */
+const ACTIVITY_ICON: Record<Exclude<StageDisplayState, "working">, StageDisplayConfig> = {
+  remediating: { icon: "tools", iconColor: "charts.orange" },
+  "retrying-after-gate": { icon: "debug-restart", iconColor: "charts.yellow" },
+  escalated: { icon: "arrow-circle-up", iconColor: "charts.purple" },
+  idle: { icon: "watch", iconColor: "list.warningForeground" },
 };
 
 /**
@@ -149,6 +173,16 @@ export class StageTreeItem extends BaseTreeItem {
    */
   private phaseRows: PhaseTreeItem[] = [];
 
+  /** Activity parsed from tool-call results (heuristic, #1897). */
+  private toolEvents: StageActivityEvent[] = [];
+  /** Activity from Go runtime state: gates, recoveries, escalations. */
+  private runtimeEvents: StageActivityEvent[] = [];
+  private stageStartedAt: string | null = null;
+  private lastSignalAt: string | null = null;
+  private idleThresholdMs = DEFAULT_IDLE_INDICATOR_SECONDS * 1000;
+  private activity: StageActivitySummary | null = null;
+  private activityChildren: StageActivityTreeItem[] = [];
+
   constructor(stage: PipelineStage, status: StageStatus = "pending") {
     super(STAGE_LABELS[stage], vscode.TreeItemCollapsibleState.None);
 
@@ -180,6 +214,7 @@ export class StageTreeItem extends BaseTreeItem {
    * Update the visual display based on current state
    */
   private updateDisplay(): void {
+    this.activity = this.computeActivity();
     this.collapsibleState = this.computeCollapsibleState();
     const config = STATUS_CONFIG[this.status];
 
@@ -191,6 +226,9 @@ export class StageTreeItem extends BaseTreeItem {
     // Set icon - bookend stages use custom icons when complete
     if (isBookend && this.status === "complete") {
       this.setIconWithColor(bookendIcon, new vscode.ThemeColor("testing.iconPassed"));
+    } else if (this.status === "running" && this.activity && this.activity.state !== "working") {
+      const a = ACTIVITY_ICON[this.activity.state];
+      this.setIconWithColor(a.icon, new vscode.ThemeColor(a.iconColor ?? ""));
     } else if (config.iconColor) {
       this.setIconWithColor(config.icon, new vscode.ThemeColor(config.iconColor));
     } else {
@@ -235,6 +273,37 @@ export class StageTreeItem extends BaseTreeItem {
     }
 
     if (this.status === "running") {
+      return this.formatRunningDescription();
+    }
+    return this.formatSettledDescription();
+  }
+
+  /**
+   * Running description: `{state label} · {elapsed} · ${cost} · last {ago}`.
+   * The state label is the phase label while the stage is simply working.
+   */
+  private formatRunningDescription(): string {
+    const activityLabel = this.activity ? formatStageActivityLabel(this.activity) : "";
+    const parts = [activityLabel || this.runningPhaseDescription()];
+    if (this.stageStartedAt) {
+      const started = Date.parse(this.stageStartedAt);
+      if (!Number.isNaN(started)) parts.push(formatDuration(Date.now() - started));
+    }
+    if (this.tokenInfo && this.tokenInfo.costUsd > 0) {
+      parts.push(`$${this.tokenInfo.costUsd.toFixed(2)}`);
+    }
+    if (
+      this.activity?.state !== "idle" &&
+      this.activity?.idleMs !== undefined &&
+      this.activity.events.length > 0
+    ) {
+      parts.push(`last ${formatDuration(this.activity.idleMs)} ago`);
+    }
+    return parts.join(" · ");
+  }
+
+  private runningPhaseDescription(): string {
+    {
       const registryPhases = PHASE_REGISTRY[this.stage as keyof typeof PHASE_REGISTRY];
       const applicable = this.applicablePhaseCount();
       // Clamp: observed count must never exceed the applicable total
@@ -257,7 +326,9 @@ export class StageTreeItem extends BaseTreeItem {
       // the stage is working normally and nobody is narrating it (#1558).
       return "running · no phase markers yet";
     }
+  }
 
+  private formatSettledDescription(): string {
     if (this.status === "pending") {
       return "pending";
     }
@@ -422,6 +493,10 @@ export class StageTreeItem extends BaseTreeItem {
       md.appendMarkdown(`\nDuration: ${(this.durationMs / 1000).toFixed(1)}s\n`);
     }
 
+    if (this.activity && (this.status === "running" || this.activity.events.length > 0)) {
+      md.appendMarkdown(this.activityTooltip(this.activity));
+    }
+
     if (this.errorMessage) {
       md.appendMarkdown(`\n---\n\n`);
       md.appendMarkdown(`**Error:**\n\n`);
@@ -429,6 +504,35 @@ export class StageTreeItem extends BaseTreeItem {
     }
 
     return md;
+  }
+
+  private activityTooltip(a: StageActivitySummary): string {
+    const rows: Array<[string, string]> = [["State", a.state]];
+    if (a.round > 0) rows.push(["Round", String(a.round)]);
+    if (a.failingChecks.length > 0) rows.push(["Failing checks", a.failingChecks.join(", ")]);
+    if (this.stageStartedAt) {
+      const started = Date.parse(this.stageStartedAt);
+      if (!Number.isNaN(started)) rows.push(["Elapsed", formatDuration(Date.now() - started)]);
+    }
+    if (this.tokenInfo) rows.push(["Cost", `$${this.tokenInfo.costUsd.toFixed(2)}`]);
+    if (a.lastActivityAt) {
+      rows.push(["Last activity", `${formatDuration(a.idleMs ?? 0)} ago`]);
+    }
+    const escalations = a.events.filter((e) => e.kind === "escalation");
+    if (escalations.length > 0) {
+      rows.push([
+        "Escalations",
+        escalations
+          .map((e) => (e.kind === "escalation" ? `${e.from} → ${e.to} (${e.reason})` : ""))
+          .join("; "),
+      ]);
+    }
+    const esc = (v: string) => v.replace(/\|/g, "\\|");
+    return (
+      `\n---\n\n**Activity:**\n\n| | |\n| --- | --- |\n` +
+      rows.map(([k, v]) => `| ${k} | ${esc(v)} |`).join("\n") +
+      "\n"
+    );
   }
 
   /**
@@ -601,6 +705,11 @@ export class StageTreeItem extends BaseTreeItem {
     this.durationMs = null;
     this.errorMessage = null;
     this.executionMode = null;
+    this.toolEvents = [];
+    this.runtimeEvents = [];
+    this.activityChildren = [];
+    this.stageStartedAt = null;
+    this.lastSignalAt = null;
     this.clearPhases();
   }
 
@@ -703,6 +812,9 @@ export class StageTreeItem extends BaseTreeItem {
    */
   private rebuildPhaseChildren(): void {
     this.clearChildren();
+    for (const item of this.activityChildren) {
+      this.addChild(item);
+    }
     const skipped = this.phaseRows.filter((p) => p.getStatus() === "skipped");
     const groupSkips = skipped.length >= SKIPPED_PHASE_GROUP_THRESHOLD;
 
@@ -813,11 +925,88 @@ export class StageTreeItem extends BaseTreeItem {
    * Clear all phase children and reset phase tracking.
    */
   clearPhases(): void {
-    this.clearChildren();
     this.phaseRows = [];
     this.currentPhaseName = null;
     this.totalPhaseCount = 0;
+    this.rebuildPhaseChildren();
     this.updateDisplay();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Activity (#1897)
+  // ---------------------------------------------------------------------------
+
+  private computeActivity(): StageActivitySummary {
+    return summarize(mergeEvents(this.runtimeEvents, this.toolEvents), {
+      now: Date.now(),
+      stageStartedAt: this.stageStartedAt ?? undefined,
+      lastSignalAt: this.lastSignalAt ?? undefined,
+      idleThresholdMs: this.idleThresholdMs,
+    });
+  }
+
+  private rebuildActivityChildren(): void {
+    const events = mergeEvents(this.runtimeEvents, this.toolEvents);
+    this.activityChildren = events.map((e) => new StageActivityTreeItem(e));
+    this.rebuildPhaseChildren();
+    this.updateDisplay();
+  }
+
+  /**
+   * Fold one tool-call result into the stage's activity. Returns true when
+   * it carried an event (a fix commit or failing checks). Any tool call also
+   * counts as activity for the idle indicator.
+   */
+  recordToolCall(event: ToolCallLike): boolean {
+    this.noteActivity(event.timestamp);
+    const parsed = parseToolCall(event);
+    if (parsed.length === 0) {
+      this.updateDisplay();
+      return false;
+    }
+    this.toolEvents = mergeEvents(this.toolEvents, parsed);
+    this.rebuildActivityChildren();
+    return true;
+  }
+
+  /** Replace the runtime-state events (gate failures, recoveries, escalations). */
+  setRuntimeActivity(events: StageActivityEvent[]): void {
+    const key = (l: StageActivityEvent[]) => JSON.stringify(l);
+    if (key(events) === key(this.runtimeEvents)) return;
+    this.runtimeEvents = [...events];
+    this.rebuildActivityChildren();
+  }
+
+  /** The stage's start time, for elapsed display and the idle baseline. */
+  setStageStartedAt(at: string | null | undefined): void {
+    this.stageStartedAt = at ?? null;
+    this.updateDisplay();
+  }
+
+  /** Stamp a non-event signal (phase, token, tool call) as the latest activity. */
+  noteActivity(at: Date | string = new Date()): void {
+    const iso = typeof at === "string" ? at : at.toISOString();
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) return;
+    if (!this.lastSignalAt || t > Date.parse(this.lastSignalAt)) {
+      this.lastSignalAt = iso;
+    }
+    this.updateDisplay();
+  }
+
+  /** No-activity interval after which a running stage reads as idle. */
+  setIdleThreshold(seconds: number): void {
+    this.idleThresholdMs = Math.max(0, seconds) * 1000;
+    this.updateDisplay();
+  }
+
+  /** Re-render time-dependent fields (elapsed, idle). Called by the ticker. */
+  tick(): void {
+    this.updateDisplay();
+  }
+
+  getActivitySummary(): StageActivitySummary | null {
+    return this.activity;
   }
 
   /**

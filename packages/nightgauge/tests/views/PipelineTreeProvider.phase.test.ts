@@ -48,6 +48,7 @@ const createMockStateService = () => {
       callbacks["stateChanged"] = cb;
       return { dispose: vi.fn() };
     }),
+    onToolCallRecorded: () => ({ dispose: () => {} }),
     onTokenUsageUpdated: vi.fn((cb: Function) => {
       callbacks["tokenUsageUpdated"] = cb;
       return { dispose: vi.fn() };
@@ -393,6 +394,7 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
           callbacks["stateChanged"] = cb;
           return { dispose: vi.fn() };
         }),
+        onToolCallRecorded: () => ({ dispose: () => {} }),
         onTokenUsageUpdated: vi.fn((cb: Function) => {
           callbacks["tokenUsageUpdated"] = cb;
           return { dispose: vi.fn() };
@@ -435,6 +437,7 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
           callbacks["stateChanged"] = cb;
           return { dispose: vi.fn() };
         }),
+        onToolCallRecorded: () => ({ dispose: () => {} }),
         onTokenUsageUpdated: vi.fn((cb: Function) => {
           callbacks["tokenUsageUpdated"] = cb;
           return { dispose: vi.fn() };
@@ -481,6 +484,7 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
           callbacks["stateChanged"] = cb;
           return { dispose: vi.fn() };
         }),
+        onToolCallRecorded: () => ({ dispose: () => {} }),
         onTokenUsageUpdated: vi.fn((cb: Function) => {
           callbacks["tokenUsageUpdated"] = cb;
           return { dispose: vi.fn() };
@@ -518,6 +522,7 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
           callbacks["stateChanged"] = cb;
           return { dispose: vi.fn() };
         }),
+        onToolCallRecorded: () => ({ dispose: () => {} }),
         onTokenUsageUpdated: vi.fn((cb: Function) => {
           callbacks["tokenUsageUpdated"] = cb;
           return { dispose: vi.fn() };

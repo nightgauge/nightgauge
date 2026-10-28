@@ -28,6 +28,7 @@ const createMockStateService = () => {
       fire = cb;
       return { dispose: vi.fn() };
     }),
+    onToolCallRecorded: () => ({ dispose: () => {} }),
     onTokenUsageUpdated: vi.fn(() => ({ dispose: vi.fn() })),
     onPhaseStart: vi.fn(() => ({ dispose: vi.fn() })),
     onPhaseComplete: vi.fn(() => ({ dispose: vi.fn() })),

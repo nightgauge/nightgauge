@@ -7,6 +7,7 @@
  * @see docs/ARCHITECTURE.md for architectural overview
  */
 
+import { getIdleIndicatorSeconds } from "../utils/resolvers/monitoringResolver";
 import {
   isUsableWorkspaceRoot,
   listCloneFiles,
@@ -2304,6 +2305,7 @@ export async function initializeServices(
 
   // Initialize pipeline tree view
   treeProvider = new PipelineTreeProvider();
+  treeProvider.setIdleIndicatorSeconds(getIdleIndicatorSeconds(nightgaugeRoot ?? undefined));
   treeProvider.dragAndDropController = dragController;
 
   // Connect TreeProvider to PipelineStateService for unified state management
@@ -3418,6 +3420,26 @@ export async function initializeServices(
                 }
               } else if (parsed.type === "content_block_delta" && parsed.delta?.text) {
                 outputWindow.appendLine(parsed.delta.text, "info", stage);
+              } else if (parsed.type === "user" && Array.isArray(parsed.message?.content)) {
+                // Tool results feed the pipeline tree's activity model: fix
+                // commits and failing checks are parsed from them (#1897).
+                for (const block of parsed.message.content) {
+                  if (block?.type !== "tool_result") continue;
+                  const result = Array.isArray(block.content)
+                    ? block.content
+                        .map((c: { text?: unknown }) => (typeof c?.text === "string" ? c.text : ""))
+                        .join("\n")
+                    : typeof block.content === "string"
+                      ? block.content
+                      : "";
+                  pipelineStateService?.recordToolCall({
+                    tool: "tool_result",
+                    stage,
+                    target: stage,
+                    timestamp: new Date(),
+                    result,
+                  });
+                }
               }
               // Note: Token usage is now handled by onTokenUsage callback
             } catch {

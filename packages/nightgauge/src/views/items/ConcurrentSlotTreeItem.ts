@@ -16,6 +16,10 @@ import { PHASE_REGISTRY, type ExecutionStage } from "@nightgauge/sdk";
 import type { PipelineStateService, PipelineState } from "../../services/PipelineStateService";
 import type { StagePhase } from "../../schemas/pipelineState";
 import { formatEpicRef, slotKey } from "../../utils/epicRef";
+import { fromRuntimeState } from "./stageActivity";
+
+/** How often running stages re-render elapsed and idle with no event (#1897). */
+const ACTIVITY_TICK_MS = 30_000;
 
 /**
  * Order phases by their registry index — the stage's real execution order —
@@ -125,6 +129,8 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
   private baseDescription = "";
   private stages: Map<PipelineStage, StageTreeItem> = new Map();
   private disposables: vscode.Disposable[] = [];
+  /** Re-renders running stages so elapsed/idle advance (#1897). */
+  private activityTicker: ReturnType<typeof setInterval> | undefined;
   private onChange: (() => void) | null = null;
   /**
    * The session log a CLI-started run writes (#586), once known. The tooltip
@@ -223,6 +229,7 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
         }
         const totalPhases = event.totalPhases ?? event.total;
         const phases = buildSyntheticPhases(event.stage, event.phase, event.index, totalPhases);
+        stageItem.noteActivity();
         stageItem.setPhases(phases, event.phase, totalPhases);
         this.onChange?.();
       }
@@ -241,6 +248,7 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
           totalPhases,
           true
         );
+        stageItem.noteActivity();
         stageItem.setPhases(phases, undefined, totalPhases);
         this.onChange?.();
       }
@@ -255,6 +263,7 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
         const stageItem = this.stages.get(tokenUpdate.stage as PipelineStage);
         if (stageItem) {
           const current = stageItem.getTokenInfo();
+          stageItem.noteActivity();
           stageItem.setTokenUsage({
             inputTokens: (current?.inputTokens ?? 0) + tokenUpdate.inputTokens,
             outputTokens: (current?.outputTokens ?? 0) + tokenUpdate.outputTokens,
@@ -265,6 +274,40 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
       this.onChange?.();
     });
     this.disposables.push(tokenDisposable);
+
+    // Tool-call results carry fix commits and failing checks (#1897).
+    const toolCallDisposable = stateService.onToolCallRecorded((event) => {
+      const stageItem = event.stage ? this.stages.get(event.stage as PipelineStage) : undefined;
+      if (stageItem && stageItem.getStatus() === "running") {
+        stageItem.recordToolCall(event);
+        this.onChange?.();
+      }
+    });
+    this.disposables.push(toolCallDisposable);
+  }
+
+  /** Set the no-activity interval before a running stage reads as idle (#1897). */
+  setIdleIndicatorSeconds(seconds: number): void {
+    for (const stageItem of this.stages.values()) {
+      stageItem.setIdleThreshold(seconds);
+    }
+  }
+
+  /** Run the activity ticker only while one of this slot's stages runs (#1897). */
+  private updateActivityTicker(): void {
+    const running = [...this.stages.values()].some((s) => s.getStatus() === "running");
+    if (running && !this.activityTicker) {
+      this.activityTicker = setInterval(() => {
+        for (const stageItem of this.stages.values()) {
+          if (stageItem.getStatus() === "running") stageItem.tick();
+        }
+        this.onChange?.();
+        this.updateActivityTicker();
+      }, ACTIVITY_TICK_MS);
+    } else if (!running && this.activityTicker) {
+      clearInterval(this.activityTicker);
+      this.activityTicker = undefined;
+    }
   }
 
   /** Identity-safe ownership check used by out-of-process reconciliation. */
@@ -379,6 +422,14 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
       };
       stageItem.setStatus(statusMap[stageState.status] || "pending");
 
+      // Activity from Go runtime state: gates, recoveries, escalations (#1897)
+      stageItem.setStageStartedAt(stageState.started_at);
+      stageItem.setRuntimeActivity(fromRuntimeState(stageName, state));
+      for (const phase of stageState.phases ?? []) {
+        const t = phase.completed_at ?? phase.started_at;
+        if (t) stageItem.noteActivity(t);
+      }
+
       if (stageState.duration_ms) {
         stageItem.setDuration(stageState.duration_ms);
       }
@@ -447,6 +498,8 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
       }
     }
 
+    this.updateActivityTicker();
+
     // Update token usage
     if (state.tokens?.per_stage) {
       for (const [stageName, stageTokens] of Object.entries(state.tokens.per_stage)) {
@@ -507,6 +560,10 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
   }
 
   dispose(): void {
+    if (this.activityTicker) {
+      clearInterval(this.activityTicker);
+      this.activityTicker = undefined;
+    }
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
