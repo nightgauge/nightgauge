@@ -14,6 +14,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **Agents never read shell history or dump the environment.** A new workspace
+  rule in `AGENTS.md` forbids opening shell history files and printing
+  environment variables wholesale, since both can hold credentials.
+
 ### Added
 
 - **Cache affinity and session lineage.** When the previous stage warmed a

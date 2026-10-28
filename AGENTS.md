@@ -39,6 +39,11 @@ the SHA-256 of the lines between the markers.
   That form stays correct for actions the maintainer owns (merges, their
   comments). Pipeline traffic authenticates as the GitHub App installation
   when `github_auth.app` is configured, on the installation's own quota.
+- **Never read shell history or dump the environment.** Do not open shell
+  history files (`~/.bash_history`, `~/.zsh_history`, `history`) or print
+  environment variables wholesale (`env`, `printenv`, `set`, `export -p`):
+  both can hold credentials the operator typed or exported. Test a variable
+  you need by name (`[ -n "${VAR:-}" ]`); never echo its value.
 - Use a feature branch and a pull request; never push to `main`. Run this
   repository's complete local gate, defined in this file, once before pushing.
 - **Merge** with `nightgauge pr merge N` once every check is green, required
@@ -93,7 +98,7 @@ the SHA-256 of the lines between the markers.
 - Instruction files are regular files. Never symlink them and never import
   across repositories.
 
-<!-- nightgauge-workspace-rules:end sha256=0d8fd44a39bc68315361bb732bdef90530eb8da91e696c4d94db9d169ef21be0 -->
+<!-- nightgauge-workspace-rules:end sha256=88bacb7231ec5805105536d5d58906d44d98259f8975e1cc980dc7e434f1e865 -->
 
 ## Repository operating contract
 
