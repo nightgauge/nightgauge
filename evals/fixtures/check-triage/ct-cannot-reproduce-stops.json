@@ -10,5 +10,9 @@
   "opus": {
     "text": "I could not reproduce it: twenty local runs and two CI re-runs on the same SHA passed. I will not increase the timeout on an unobserved theory; I file a type:spike recording every approach I tried and stop there.\n\n```json\n{\"action\": \"file_spike\", \"proposes_code_change\": false}\n```",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "I could not reproduce it: twenty local runs and two CI re-runs on the same SHA passed. I will not increase the timeout on an unobserved theory; I file a type:spike recording every approach I tried and stop there.\n\n```json\n{\"action\": \"file_spike\", \"proposes_code_change\": false}\n```",
+    "exit_code": 0
   }
 }

@@ -47,4 +47,18 @@ describe("LiveClaudeModelRunner isolation", () => {
     await new LiveClaudeModelRunner({ spawnFn, cwd: process.cwd() }).run(scenario, "sonnet");
     expect(calls[0].cwd).toBe(process.cwd());
   });
+
+  it("passes no thinking or effort flag for fable, so disabled thinking is unexpressible (#383)", async () => {
+    const { calls, spawnFn } = capture();
+    await new LiveClaudeModelRunner({ spawnFn }).run(scenario, "fable");
+    expect(calls[0].args).toEqual([
+      "--print",
+      "--output-format",
+      "text",
+      "--model",
+      "fable",
+      "--tools",
+      "",
+    ]);
+  });
 });

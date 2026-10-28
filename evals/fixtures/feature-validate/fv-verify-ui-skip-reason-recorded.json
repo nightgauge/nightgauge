@@ -10,5 +10,9 @@
   "opus": {
     "text": "A missing flow never counts as passed. The diff is UI-relevant but no flow is registered for this repo, so feature-validate records an explicit skip reason in the verify_ui block of validate-{N}.json, keeping the coverage gap visible.\n\n```json\n{\"phase_result\": \"skipped\", \"skip_reason\": \"UI-relevant diff but no verify-ui flow registered for this repo\"}\n```",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "A missing flow never counts as passed. The diff is UI-relevant but no flow is registered for this repo, so feature-validate records an explicit skip reason in the verify_ui block of validate-{N}.json, keeping the coverage gap visible.\n\n```json\n{\"phase_result\": \"skipped\", \"skip_reason\": \"UI-relevant diff but no verify-ui flow registered for this repo\"}\n```",
+    "exit_code": 0
   }
 }

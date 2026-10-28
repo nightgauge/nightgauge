@@ -10,5 +10,9 @@
   "opus": {
     "text": "The Go binary has no `--body-file` flag, so I never pass `--body-file`; I read the temp file into the supported `--body` flag instead.\n\n```bash\n\"$BINARY\" pr create --title \"fix: handle empty config\" --body \"$(cat /tmp/pr-body.md)\"\n```",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "The Go binary has no `--body-file` flag, so I never pass `--body-file`; I read the temp file into the supported `--body` flag instead.\n\n```bash\n\"$BINARY\" pr create --title \"fix: handle empty config\" --body \"$(cat /tmp/pr-body.md)\"\n```",
+    "exit_code": 0
   }
 }

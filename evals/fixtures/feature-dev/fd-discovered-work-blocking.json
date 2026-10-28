@@ -10,5 +10,9 @@
   "opus": {
     "text": "The acceptance criterion cannot hold without these three files, so this is not deferrable: I do not record it as discovered work. I emit SCOPE_DISCOVERED and backtrack to feature-planning.\n\n```json\n{\"action\": \"emit_scope_discovered\", \"record_discovered_work\": false}\n```",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "The acceptance criterion cannot hold without these three files, so this is not deferrable: I do not record it as discovered work. I emit SCOPE_DISCOVERED and backtrack to feature-planning.\n\n```json\n{\"action\": \"emit_scope_discovered\", \"record_discovered_work\": false}\n```",
+    "exit_code": 0
   }
 }

@@ -343,8 +343,9 @@ describe("registry interlock — invalid cells are skipped before spawn (#571)",
   });
 
   it("skips reasoning 'none' at EVERY effort for a never-disable model (fable)", async () => {
-    const { provider } = trackingProvider();
-    const runner = new ModelEvalRunner(okExecutor, provider);
+    const { provider, acquired } = trackingProvider();
+    const { executor, executions } = explodingExecutor();
+    const runner = new ModelEvalRunner(executor, provider);
     const run = await runner.run({
       suite: "s",
       runId: "r",
@@ -358,6 +359,9 @@ describe("registry interlock — invalid cells are skipped before spawn (#571)",
     // The "never" ceiling must not be rendered as "lower the effort".
     expect(run.cells[0].skip_reason).toMatch(/at every effort/);
     expect(run.cells[0].skip_reason).not.toMatch(/above effort/);
+    // Rejected before any process is spawned: no workspace, no executor call.
+    expect(executions()).toBe(0);
+    expect(acquired).toEqual([]);
   });
 
   it("skips a codex cell requesting a separate reasoning budget BEFORE workspace acquisition", async () => {

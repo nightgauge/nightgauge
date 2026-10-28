@@ -10,5 +10,9 @@
   "opus": {
     "text": "A is a boundary statement, so I do not record it. B is concrete follow-up work: I record it with `nightgauge discovered-work record --source-stage feature-planning` and append the printed dw- id to the plan entry.\n\n```json\n{\"record_entry_a\": false, \"record_entry_b\": true, \"source_stage\": \"feature-planning\", \"cite_dw_id_in_plan\": true}\n```",
     "exit_code": 0
+  },
+  "fable": {
+    "text": "A is a boundary statement, so I do not record it. B is concrete follow-up work: I record it with `nightgauge discovered-work record --source-stage feature-planning` and append the printed dw- id to the plan entry.\n\n```json\n{\"record_entry_a\": false, \"record_entry_b\": true, \"source_stage\": \"feature-planning\", \"cite_dw_id_in_plan\": true}\n```",
+    "exit_code": 0
   }
 }
