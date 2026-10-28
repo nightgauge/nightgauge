@@ -538,6 +538,9 @@ has no Copilot equivalent: it is denied and logged at warn level. With an
 allow list `--allow-all-tools` is never passed; without one it remains the
 autonomous default. Limitation: the syntax comes from the GitHub docs ("Allowed
 tools", read 2026-10-28), not a live `copilot` CLI, so it is not live-verified.
+A live refusal case in `copilotAdapter.integration.test.ts` (an allow list of
+`Read` must not run a shell command) runs only when `copilot` is on `PATH`; no
+recorded run has had one, so it has been skipped everywhere so far.
 
 **Stage turn budget (#1652, #1668):** copilot has no turn boundary to count.
 It prints plain text (no `--output-format`

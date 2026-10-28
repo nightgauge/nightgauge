@@ -13,6 +13,9 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CopilotCliAdapter } from "../../src/cli/adapters/CopilotCliAdapter.js";
 import { COPILOT_PREMIUM_REQUEST_COST_USD } from "../../src/cli/adapterQuery.js";
 
@@ -25,6 +28,20 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { spawn } from "node:child_process";
+
+// The live case below needs the real module; the file-wide mock replaces it.
+const actualChildProcess =
+  await vi.importActual<typeof import("node:child_process")>("node:child_process");
+
+/** True when a real `copilot` binary is on PATH (gates the live refusal case). */
+const copilotOnPath = (() => {
+  try {
+    actualChildProcess.execFileSync("sh", ["-c", "command -v copilot"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -311,4 +328,44 @@ Usage: Total usage est: 1 Premium requests`;
     expect(spawnArgs).not.toContain("--allow-all-tools");
     expect(spawnArgs).toEqual(expect.arrayContaining(["--allow-tool", "write", "shell(git)"]));
   });
+});
+
+// ---------------------------------------------------------------------------
+// Live contract: the real CLI refuses a tool outside the stage allow list (#1)
+// ---------------------------------------------------------------------------
+
+describe("CopilotCliAdapter — live tool-policy refusal (real copilot binary)", () => {
+  const adapter = new CopilotCliAdapter();
+  const spawnMock = vi.mocked(spawn);
+
+  afterEach(() => {
+    // Restore the mocked spawn for any case that runs after this one.
+    spawnMock.mockReset();
+  });
+
+  it.skipIf(!copilotOnPath)(
+    "does not run a shell command when the allow list grants only Read",
+    { timeout: 180_000 },
+    async () => {
+      spawnMock.mockImplementation(actualChildProcess.spawn);
+      const dir = mkdtempSync(join(tmpdir(), "copilot-tool-policy-"));
+      const sideEffect = join(dir, "denied.txt");
+      try {
+        const queryFn = await adapter.createQueryFunction();
+        // A startup or auth failure throws here, so the case cannot pass
+        // without the CLI having actually run the prompt.
+        for await (const _ of queryFn({
+          prompt: `Run this exact shell command and nothing else: touch ${sideEffect}`,
+          options: { allowedTools: ["Read"], cwd: dir },
+        } as Parameters<typeof queryFn>[0])) {
+          // drain
+        }
+        const args = spawnMock.mock.calls[0][1] as string[];
+        expect(args).not.toContain("--allow-all-tools");
+        expect(existsSync(sideEffect)).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  );
 });
