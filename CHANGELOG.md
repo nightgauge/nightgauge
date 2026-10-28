@@ -16,6 +16,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Health reports per-change outcomes.** `stage-effectiveness` now reports the
+  share of merged issues that reached merge with no retry, re-run or backtrack,
+  and how closely each merge's files matched its plan; `reliability` reports
+  the change failure rate over finalized survival verdicts, excluding and
+  counting changes still inside their observation window. The values are
+  unscored metrics: no dimension or overall score changes. See
+  `docs/HEALTH_MONITORING.md`.
+
+- **Copilot honours the stage's allowed tools.** A stage that declares allowed
+  tools now runs Copilot with matching `--allow-tool` / `--allow-url` flags
+  instead of `--allow-all-tools`, on both the Go and SDK paths. Tools with no
+  Copilot equivalent (such as `Task`) are denied and logged as a warning. Stages
+  that declare no tools keep `--allow-all-tools`.
+
 - `scripts/evaluate-adapter-matrix.ts` runs one issue through all six pipeline
   stages per adapter and writes a JSONL adapter × stage report with model,
   token and control evidence. It is opt-in behind `NIGHTGAUGE_SKILL_EVAL_LIVE=1`.

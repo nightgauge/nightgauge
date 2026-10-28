@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -69,9 +70,11 @@ func resolveCopilotModel(model string) string {
 // Contract (verified against the GitHub Copilot CLI command reference,
 // https://docs.github.com/en/copilot/reference/copilot-cli-reference):
 //   - prompt delivered via stdin (UsesStdin() == true)
-//   - `--allow-all-tools` grants unrestricted tool access for autonomous
-//     pipeline stage execution (the documented flag; the prior `--allow-all`
-//     was not the tool-permission flag). Mirrors codex's bypass-sandbox default.
+//   - tool permissions come from copilotToolPolicy: with no allowed-tools
+//     list, `--allow-all-tools` (the autonomous default, mirroring codex's
+//     bypass-sandbox default); with a list, per-tool `--allow-tool` / URL
+//     flags only, and entries with no Copilot equivalent are denied and
+//     warn-logged (#1).
 //   - `--model <id>` selects the AI model; Claude-style tiers/ids from the
 //     scheduler are translated to a concrete copilot model id by
 //     resolveCopilotModel. Omitted when no model override is set (CLI default).
@@ -81,8 +84,10 @@ func resolveCopilotModel(model string) string {
 func (a *CopilotAdapter) BuildCommand(opts RunOptions) (string, []string, map[string]string) {
 	cmd := "copilot"
 
-	args := []string{
-		"--allow-all-tools", // Grant full tool permissions for pipeline execution
+	args, dropped := copilotToolPolicy(opts.AllowedTools)
+	if len(dropped) > 0 {
+		slog.Warn("copilot: allowed-tools entries have no Copilot equivalent and are denied",
+			"stage", opts.Stage, "dropped", dropped)
 	}
 
 	// Inject model routing — the scheduler emits Claude tiers/ids that copilot

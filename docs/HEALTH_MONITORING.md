@@ -153,12 +153,13 @@ pipeline telemetry. Callers map their `AggregatedDataset` →
 `HealthAnalysisInput` to avoid circular dependencies between the SDK and VSCode
 packages.
 
-| Field                | Type                        | Source                                              |
-| -------------------- | --------------------------- | --------------------------------------------------- |
-| `executionHistory`   | `ExecutionHistoryRecord[]`  | Per-stage execution records (stage, success, cost…) |
-| `healthScores`       | `HealthScoreEntry[]`        | Scored points of the health series (nulls dropped)  |
-| `learningSignals`    | `LearningSignals`           | Optional — `outcomes.jsonl` pairs + calibration age |
-| `skillEffectiveness` | `SkillEffectivenessEntry[]` | Optional — latest record per skill change in period |
+| Field                | Type                        | Source                                                             |
+| -------------------- | --------------------------- | ------------------------------------------------------------------ |
+| `executionHistory`   | `ExecutionHistoryRecord[]`  | Per-stage execution records (stage, success, cost…)                |
+| `healthScores`       | `HealthScoreEntry[]`        | Scored points of the health series (nulls dropped)                 |
+| `learningSignals`    | `LearningSignals`           | Optional — `outcomes.jsonl` pairs + calibration age                |
+| `skillEffectiveness` | `SkillEffectivenessEntry[]` | Optional — latest record per skill change in period                |
+| `changeSignals`      | `ChangeSignals`             | Optional — survival verdicts, backtracks, plan/merge files (#1284) |
 
 An optional input that is absent means its file does not exist; the dimension
 that reads it reports `hasEnoughData: false` and names the missing file. It is
@@ -385,6 +386,26 @@ mean across all stages.
 - Bottleneck stages (by success rate or duration)
 - High retry rate (overall avg retries > 0.5)
 - Duration drift (global trend > 50ms/record)
+- Most changes depart from their plan (`info`; see below)
+
+**Per-change metrics** (#1284, unscored): present only when `changeSignals` is
+given, and a rate with no denominator omits its key instead of reading 0. They
+never change the score.
+
+| Metric                        | Description                                                                        |
+| ----------------------------- | ---------------------------------------------------------------------------------- |
+| `perChangeFirstPassMergeRate` | Merged issues with no retry, no repeated stage and no `backtrack` trace event      |
+| `perChangeMergedCount`        | Issues with a successful `pr-merge` record                                         |
+| `planFidelityMean`            | Mean Jaccard overlap of `planning-{N}.json` files against the merge commit's files |
+| `planFidelityLowShare`        | Share of scored changes with fidelity below 0.5                                    |
+| `planFidelityScored`          | Changes with a readable plan and merge file list                                   |
+| `planFidelityNoPlan`          | Changes excluded because the plan or merge file list was unreadable                |
+
+Backtracks come from trace events because the run record collapses a
+backtracked stage into one entry. A change whose planning context was pruned
+is excluded and counted, never scored as low fidelity. When more than half of
+at least `minimumSampleSizes.basic` scored changes fall below 0.5, the
+dimension raises one `info` finding. Plan fidelity is a signal, not a gate.
 
 ---
 
@@ -459,6 +480,15 @@ high-failure stages.
 - Failure rate worsening over time
 - Low MTBF (< 24 hours)
 - High failure concentration in specific stages (> 30%)
+
+**Change failure rate** (#1284, unscored): with `changeSignals`, `metrics`
+gains `changeFailureRate = (reverted + broke) / (survived + reverted + broke)`
+over [survival verdicts](OUTCOME_RECORDING.md#survival-calibration-issues-41524153)
+merged in the period, plus `changeFailureFinalized`, `changeFailureCount`,
+`changeFailureExcludedPending` and `changeFailureExcludedUnobserved`. Records
+still `pending` are inside their observation window and `unobserved` proves
+nothing, so both are excluded from the denominator and counted. The rate is
+omitted when nothing is finalized.
 
 ---
 

@@ -211,6 +211,45 @@ export interface HealthAnalysisInput {
    * restricted to changes inside the analysis period. Absent → excluded.
    */
   skillEffectiveness?: SkillEffectivenessEntry[];
+  /**
+   * Per-change outcome inputs (#1284): survival verdicts, backtrack trace
+   * events and plan-versus-merge file lists. Absent → the per-change metrics
+   * are omitted, never reported as 0. They are unscored.
+   */
+  changeSignals?: ChangeSignals;
+}
+
+/** One folded row of `survival-records.jsonl` (Go `survival.Record`). */
+export interface SurvivalVerdictEntry {
+  issueNumber: number;
+  prNumber: number;
+  mergeCommitSha: string;
+  mergedAt: string;
+  verdict: "pending" | "survived" | "reverted" | "broke" | "unobserved";
+}
+
+/** One `kind: "backtrack"` trace event (ADR 013). */
+export interface BacktrackEntry {
+  issueNumber: number;
+  runId: string;
+  ts: string;
+}
+
+/**
+ * Files a change's plan named (`planning-{N}.json` `files_to_create` +
+ * `files_to_modify`; null when no planning context is readable) against the
+ * files its merge commit touched.
+ */
+export interface PlanComparisonEntry {
+  issueNumber: number;
+  plannedFiles: string[] | null;
+  mergedFiles: string[];
+}
+
+export interface ChangeSignals {
+  survival: SurvivalVerdictEntry[];
+  backtracks: BacktrackEntry[];
+  planComparisons: PlanComparisonEntry[];
 }
 
 /**

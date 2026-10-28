@@ -18,6 +18,7 @@ import type {
 import { getHealthStatus } from "../types.js";
 import { FAILURE_CATEGORY_WEIGHTS, classifyFailureCategory } from "../failureClassifier.js";
 import { computeTrend, mean, clamp, hasEnoughData, buildPeriodComparison } from "../statistics.js";
+import { computeChangeFailureRate } from "../changeOutcomes.js";
 
 // ── Internal helpers ──────────────────────────────────────────────
 
@@ -358,6 +359,18 @@ export function analyzeReliability(
 
   if (mtbfHours !== undefined) {
     metrics["mtbfHours"] = mtbfHours;
+  }
+
+  // Change failure rate (#1284): unscored; a null rate omits its key.
+  if (dataset.changeSignals) {
+    const cfr = computeChangeFailureRate(dataset.changeSignals.survival);
+    metrics["changeFailureFinalized"] = cfr.finalized;
+    metrics["changeFailureCount"] = cfr.failures;
+    metrics["changeFailureExcludedPending"] = cfr.excludedPending;
+    metrics["changeFailureExcludedUnobserved"] = cfr.excludedUnobserved;
+    if (cfr.rate !== null) {
+      metrics["changeFailureRate"] = cfr.rate;
+    }
   }
 
   return {

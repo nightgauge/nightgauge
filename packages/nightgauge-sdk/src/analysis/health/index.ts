@@ -98,6 +98,15 @@ export { analyzeLearningEffectiveness } from "./dimensions/learningEffectiveness
 export { analyzePipelineVelocity } from "./dimensions/pipelineVelocity.js";
 export { analyzeSkillDrift } from "./dimensions/skillDrift.js";
 
+// Per-change outcome metrics (#1284) — unscored signals
+export {
+  computePerChangeFirstPass,
+  computePlanFidelity,
+  computeChangeFailureRate,
+  LOW_PLAN_FIDELITY,
+} from "./changeOutcomes.js";
+export type { PerChangeFirstPass, PlanFidelity, ChangeFailureRate } from "./changeOutcomes.js";
+
 // Execution-history feeder — the one JSONL-run-record → per-stage mapper (#461)
 export { flattenRunRecords } from "./executionHistoryFeeder.js";
 export type {
@@ -126,6 +135,10 @@ export type {
   HealthScoreEntry,
   LearningOutcomeEntry,
   LearningSignals,
+  ChangeSignals,
+  SurvivalVerdictEntry,
+  BacktrackEntry,
+  PlanComparisonEntry,
   FindingToIssueConfig,
   GeneratedIssue,
   EpicGroup,

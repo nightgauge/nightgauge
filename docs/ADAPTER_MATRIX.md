@@ -501,14 +501,15 @@ error. See [DEPRECATIONS.md](DEPRECATIONS.md#lm-studio-and-ollama-adapters--open
 **Release status:** Experimental. The agentic pipeline contract exists, but a
 live representative six-stage run has not yet been recorded.
 
-| Property               | Value                                                                                      |
-| ---------------------- | ------------------------------------------------------------------------------------------ |
-| CLI command            | `copilot`                                                                                  |
-| Auth method            | Cascade: `GH_TOKEN`/`GITHUB_TOKEN`/`COPILOT_GITHUB_TOKEN` env vars → `copilot auth status` |
-| Prompt delivery        | stdin                                                                                      |
-| Default args           | `--allow-all-tools`                                                                        |
-| Min version            | Not documented                                                                             |
-| `requiresDirectApiKey` | `false`                                                                                    |
+| Property               | Value                                                                                        |
+| ---------------------- | -------------------------------------------------------------------------------------------- |
+| CLI command            | `copilot`                                                                                    |
+| Auth method            | Cascade: `GH_TOKEN`/`GITHUB_TOKEN`/`COPILOT_GITHUB_TOKEN` env vars → `copilot auth status`   |
+| Prompt delivery        | stdin                                                                                        |
+| Default args           | `--allow-all-tools` (only when the stage declares no allowed tools)                          |
+| Tool policy            | Allowed tools → `--allow-tool` / `--allow-url` / `--allow-all-urls`; unmapped entries denied |
+| Min version            | Not documented                                                                               |
+| `requiresDirectApiKey` | `false`                                                                                      |
 
 **Auth validation quality:** Good design — checks cheapest methods first:
 
@@ -534,8 +535,24 @@ fabricating a count. See [Gap #2](#gap-2-copilot-stream-parsing-model-control-an
 for what remains: a live confirmation of the footer wording, not the token
 question.
 
+**Tool policy (#1).** A stage's allowed tools are translated, never widened, by
+`copilotToolPolicy` (Go, `internal/execution/adapters/copilot_tools.go`) and
+`withCopilotToolPolicy` (SDK, `copilotTools.ts`), pinned by one shared fixture
+(`internal/execution/testdata/copilot-tool-policy.json`). `Bash` → `shell`,
+`Bash(git:*)` → `shell(git)`, `Write`/`Edit`/`MultiEdit`/`NotebookEdit` →
+`write`, `mcp__<server>__<tool>` → `<server>(<tool>)`, `WebFetch(domain:x)` →
+`--allow-url x`, unscoped `WebFetch`/`WebSearch` → `--allow-all-urls`. `Read`,
+`Grep`, `Glob` and `LS` need no flag. Any other entry (`Task`, `TodoWrite`, …)
+has no Copilot equivalent: it is denied and logged at warn level. With an
+allow list `--allow-all-tools` is never passed; without one it remains the
+autonomous default. Limitation: the syntax comes from the GitHub docs ("Allowed
+tools", read 2026-10-28), not a live `copilot` CLI, so it is not live-verified.
+A live refusal case in `copilotAdapter.integration.test.ts` (an allow list of
+`Read` must not run a shell command) runs only when `copilot` is on `PATH`; no
+recorded run has had one, so it has been skipped everywhere so far.
+
 **Stage turn budget (#1652, #1668):** copilot has no turn boundary to count.
-It runs with `--allow-all-tools` and prints plain text (no `--output-format`
+It prints plain text (no `--output-format`
 JSON mode is passed), and the only structure in that text is the stats footer
 printed once at exit, which `summarizeCopilotOutput()` reads after the process
 ends. Neither the Go executor (`countTurn` in

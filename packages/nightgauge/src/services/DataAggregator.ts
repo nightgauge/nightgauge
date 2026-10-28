@@ -25,6 +25,7 @@ import {
 
 import { ExecutionHistoryReader } from "../utils/executionHistoryReader";
 import { readLearningSignals, readSkillEffectiveness } from "../utils/healthLearningInputs";
+import { readChangeSignals } from "../utils/healthChangeInputs";
 import type { ExecutionHistoryRecord } from "../schemas/executionHistory";
 import type {
   DateRangeFilter,
@@ -133,9 +134,11 @@ export class DataAggregator {
 
     // Learning-effectiveness and skill-drift inputs (#1900). Read separately:
     // `null` means the file is absent, which the dimension reports by name.
-    const [learningSignals, skillEffectiveness] = await Promise.all([
+    // Per-change inputs (#1284): `null` when the survival journal is absent.
+    const [learningSignals, skillEffectiveness, changeSignals] = await Promise.all([
       readLearningSignals(workspaceRoot, filter).catch(() => null),
       readSkillEffectiveness(workspaceRoot, filter).catch(() => null),
+      readChangeSignals(workspaceRoot, filter).catch(() => null),
     ]);
 
     const summary = this.computeSummary(executionHistory);
@@ -160,6 +163,7 @@ export class DataAggregator {
       healthReports,
       learningSignals,
       skillEffectiveness,
+      changeSignals,
       summary,
       quality,
     };
