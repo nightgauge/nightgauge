@@ -113,6 +113,18 @@ describe("StageTreeItem activity", () => {
     expect(tooltip).toContain("sonnet → opus (gate_failed)");
   });
 
+  it("tooltip escapes backslashes, pipes and newlines in table cells", () => {
+    item.setRuntimeActivity(
+      fromRuntimeState("pr-merge", {
+        escalation_history: [
+          { stage: "pr-merge", fromModel: "a", toModel: "b", reason: "x\\|y\nz", at: at(4) },
+        ],
+      })
+    );
+    const tooltip = (item.tooltip as vscode.MarkdownString).value;
+    expect(tooltip).toContain("| Escalations | a → b (x\\\\\\|y z) |");
+  });
+
   it("idle: flips on tick past the threshold with no event, distinct icon", () => {
     item.setIdleThreshold(600);
     vi.setSystemTime(T0 + 30 * 60_000);

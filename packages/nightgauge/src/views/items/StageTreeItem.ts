@@ -527,7 +527,10 @@ export class StageTreeItem extends BaseTreeItem {
           .join("; "),
       ]);
     }
-    const esc = (v: string) => v.replace(/\|/g, "\\|");
+    // Backslashes first, so an escaped pipe cannot be un-escaped by the input;
+    // newlines would end the table row.
+    const esc = (v: string) =>
+      v.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
     return (
       `\n---\n\n**Activity:**\n\n| | |\n| --- | --- |\n` +
       rows.map(([k, v]) => `| ${k} | ${esc(v)} |`).join("\n") +
