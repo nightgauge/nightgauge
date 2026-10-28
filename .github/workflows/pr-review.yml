@@ -91,6 +91,15 @@ jobs:
       - name: Decide
         id: gate
         run: |
+          # The base predates this workflow's script (the pull request that
+          # introduces it): there is no trusted code to run, so skip.
+          if [ ! -f scripts/pr-review.mjs ]; then
+            {
+              echo "run=false"
+              echo "reason=base-lacks-review-script"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           node scripts/pr-review.mjs gate \
             --pr-json "$RUNNER_TEMP/pr.json" \
             --event "$EVENT_NAME" \

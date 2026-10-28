@@ -100,8 +100,10 @@ The comment is posted with the workflow's `GITHUB_TOKEN`, as
 the reviewer login equals the author login, so the reviewer is never the
 author.
 
-Also skipped: `dependabot[bot]`, draft pull requests, and runs without an
-`ANTHROPIC_API_KEY` secret. A skip is explained in the job summary.
+Also skipped: `dependabot[bot]`, draft pull requests, runs without an
+`ANTHROPIC_API_KEY` secret, and runs whose base commit has no
+`scripts/pr-review.mjs` (the pull request that introduces it). A skip is
+explained in the job summary.
 
 ## Not a merge gate
 
