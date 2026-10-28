@@ -507,6 +507,49 @@ up-front attribution (#367) is deliberately **not** wired on the IPC path: that
 handler keys `activeRuntimes` by issue number for HeadlessOrchestrator-initiated
 runs and would mint a second, competing runtime for a Go-scheduled one.
 
+### Cache affinity and session lineage (Issue #55)
+
+A stage that switches model or provider re-reads its prompt prefix into a cold
+cache. `resolveDispatchModelWithAffinity` prices that: after the `model:max-*`
+label cap and before `floorAndCeil`, `ApplyCacheAffinity` keeps the previous
+stage's model when the cold-start penalty (warm prefix × the candidate's
+5-minute cache-write rate minus its cache-read rate) exceeds what the cheaper
+candidate saves on the same prefix. It applies only when all of these hold:
+
+- the base is the pipeline's own choice: no env or `pipeline.stage_models`
+  override, manual-mode table, performance-mode pin, `model:pin-*` label,
+  retry escalation or remote-request pin;
+- the provider is unchanged and the adapter's manifest declares
+  `cache.implicit_prefix_cache`, with the previous stage within
+  `cache.expiry_seconds`;
+- the stage is not `issue-pickup`, `pr-create` or `pr-merge`;
+- the kept model survives the label cap and `floorAndCeil` unchanged, so it
+  never exceeds the mode ceiling. The stage safety floors still run after it.
+
+Affinity never moves the adapter. `PlannedStageModel` does not include it,
+because it depends on runtime state, like retry escalation. The TS
+`applyCacheAffinity` mirrors the decision, and both run
+`internal/orchestrator/testdata/cache_affinity_cases.json`.
+
+Each dispatch also gets a **lineage id** (`lineage.go`). It stays the same
+while account, repository, issue, provider, model family (or a transition the
+manifest declares `same_family`) and effort class (`light`: low, medium;
+`deep`: high, xhigh, max) are unchanged and the cache has not expired. The
+first field that changes, in that order, is the handoff reason:
+`account_change`, `repo_change`, `issue_change`, `provider_change`,
+`model_family_change`, `effort_class_change` or `expired`. A handoff is logged
+and appended to the run record's `handoff_events` with its
+`estimated_cold_start_usd`. Each stage's `model_selection` carries
+`lineage_id`, `resume_attempted` and `resume_accepted`. A same-stage session
+resume additionally requires `ResumeAllowed`, which fails closed on any
+account, repository, issue, run or provider change.
+
+The account is a salted HMAC of the adapter, auth mode and credential-home
+path, never of a credential. The 32-byte salt lives in the clone's local state
+directory with mode 0600. Neither the hash nor a session id reaches history,
+telemetry or the IPC message, which carries only `lineageId`. Cross-stage
+session reuse is out of scope. `nightgauge cost realized` reports the result.
+
 ---
 
 ## Spawn Environment Inheritance (Issue #91)

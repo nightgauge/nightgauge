@@ -108,6 +108,11 @@ interface IpcRunStageParams {
    * pipeline.runStage event that omits it.
    */
   runId: string;
+  /**
+   * The stage's session lineage (#55), so the extension records the id the
+   * Go history does. Absent when the scheduler computed none.
+   */
+  lineageId?: string;
 }
 
 /**

@@ -149,10 +149,13 @@ type V2RunRecord struct {
 	Type        *string                  `json:"type"`
 	Priority    *string                  `json:"priority,omitempty"`
 	Stages      map[string]V2StageDetail `json:"stages"`
-	Tokens      V2Tokens                 `json:"tokens"`
-	OutcomeType string                   `json:"outcome_type,omitempty"`
-	Files       V2Files                  `json:"files"`
-	Routing     V2Routing                `json:"routing"`
+	// HandoffEvents lists every dispatch that started a new session lineage
+	// and so paid a cold prompt cache (#55), with its estimated cost.
+	HandoffEvents []HandoffEvent `json:"handoff_events,omitempty"`
+	Tokens        V2Tokens       `json:"tokens"`
+	OutcomeType   string         `json:"outcome_type,omitempty"`
+	Files         V2Files        `json:"files"`
+	Routing       V2Routing      `json:"routing"`
 	// BudgetEstimate is the pre-flight projection this run was dispatched
 	// against, persisted so accuracy can be measured from the corpus (#1213).
 	//
@@ -488,6 +491,14 @@ type V2ModelSelect struct {
 	ModelProvider string `json:"model_provider,omitempty"`
 	UpstreamModel string `json:"upstream_model,omitempty"`
 	Endpoint      string `json:"endpoint,omitempty"`
+	// LineageID is the stage's session lineage (#55): equal across stages
+	// that share a warm prompt cache, new on a provider, model-family,
+	// effort-class or expiry handoff. A hash of non-secret fields plus a
+	// salted workspace hash. ResumeAttempted/ResumeAccepted record whether a
+	// same-stage session resume was looked for and whether it was used.
+	LineageID       string `json:"lineage_id,omitempty"`
+	ResumeAttempted bool   `json:"resume_attempted,omitempty"`
+	ResumeAccepted  bool   `json:"resume_accepted,omitempty"`
 }
 
 // V2Tokens matches TokensSchema.
@@ -1460,6 +1471,10 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 				ModelProvider: snap.StageModelIdentities[stageName].Provider,
 				UpstreamModel: snap.StageModelIdentities[stageName].Upstream,
 				Endpoint:      snap.StageModelIdentities[stageName].Endpoint,
+				// #55 session lineage attribution.
+				LineageID:       snap.StageLineages[stageName].LineageID,
+				ResumeAttempted: snap.StageLineages[stageName].ResumeAttempted,
+				ResumeAccepted:  snap.StageLineages[stageName].ResumeAccepted,
 			}
 		}
 
@@ -1742,13 +1757,14 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		// case a caller (e.g. the IPC path reading a runtime state the extension
 		// populated) supplies an unbounded value; the pickup capture already caps
 		// it. 8192 matches the platform issueBody .max(8192) telemetry bound.
-		Body:        clipHistoryRunes(input.Body, v2RunBodyMax),
-		Labels:      input.Labels,
-		Size:        sizePtr,
-		SizeSource:  sizeSource,
-		PlannerSize: input.PlannerSize,
-		Type:        typePtr,
-		Stages:      stages,
+		Body:          clipHistoryRunes(input.Body, v2RunBodyMax),
+		Labels:        input.Labels,
+		Size:          sizePtr,
+		SizeSource:    sizeSource,
+		PlannerSize:   input.PlannerSize,
+		Type:          typePtr,
+		Stages:        stages,
+		HandoffEvents: snap.HandoffEvents,
 		Tokens: V2Tokens{
 			TotalInput:         accInput,
 			TotalOutput:        accOutput,

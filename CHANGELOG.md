@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Cache affinity and session lineage.** When the previous stage warmed a
+  prompt cache on the same provider, routing keeps its model when a switch
+  would cost more in cache writes than the cheaper model saves. It does this
+  only over the pipeline's own choice and never above the mode ceiling. Each
+  stage's history record now carries a `lineage_id` and whether a session
+  resume was attempted and accepted. Every provider, model-family,
+  effort-class or expiry handoff is logged and recorded with its estimated
+  cold-start cost. Adapter manifests declare their cache behaviour, and
+  `nightgauge cost realized` compares list-price routing cost with realized
+  cost per successful run (#55).
+
 - **Blog watch: a verdict for every vendor post.** The new
   `nightgauge-blog-watch` skill and `nightgauge blog-watch
 {detect,screen,record,adopt}` find new posts on allowlisted https sources

@@ -158,6 +158,9 @@ type StageRunParams struct {
 	// (resolveResumeSessionID). Empty on every ordinary dispatch and every
 	// adapter/model/worktree hop.
 	ResumeSessionID string
+	// LineageID is the dispatch's session lineage (#55), carried on the IPC
+	// dispatch so the extension records the same id the history does.
+	LineageID string
 }
 
 // openCodeCompactionCount reports how many "compaction" events the run's
@@ -6162,8 +6165,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// The run's routed tier is per stage for feature-dev: the Decision's
 		// size can put implementation on Opus (routedStageModel), while every
 		// other stage keeps the run-wide prediction.
-		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot,
-			predictedModel, routingDecision, modelFloors, issueJobClass, modelLabels)
+		// Cache affinity (#55) reads what the previous dispatch left warm; a
+		// requested model is dispatched as requested, so it gets no prior.
+		var prior *affinityPrior
+		if !(requestedModel != "" && capPin == "") {
+			prior = dispatchAffinityPrior(runtime, s.currentAdapterName(), time.Now())
+		}
+		model, affinity := s.resolveDispatchModelWithAffinity(stage, item.Number, workspaceRoot,
+			predictedModel, routingDecision, modelFloors, issueJobClass, modelLabels, prior)
 
 		// Record the corpus's routing PREDICTION from the selection dispatch
 		// just used (#2537): PlannedStageModel over the very inputs above, so
@@ -6848,7 +6857,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// session only when THIS dispatch's adapter, model and worktree all
 		// match the attempt that recorded it — any hop (a cap-hop, a tier
 		// descent, a different worktree) starts a fresh session instead.
-		resumeSessionID := resolveResumeSessionID(runtime, stage, adapterName, model, workspaceRoot)
+		// The session lineage (#55) gates the resume as well: a session is
+		// never resumed across an account, repo, issue, run or provider change.
+		dispatchNow := time.Now()
+		lineage := computeDispatchLineage(runtime, workspaceRoot, item.Repo, item.Number,
+			adapterName, model, effortAttr, dispatchNow)
+		resumeSessionID, resumeAttempted, resumeAccepted := resolveResumeSessionID(
+			runtime, stage, adapterName, model, workspaceRoot, lineage.resumeAllowed())
+		lineage.record(runtime, stage, item.Number, adapterName, model, affinity,
+			resumeAttempted, resumeAccepted, dispatchNow)
 
 		// Run the stage via StageRunner interface
 		stageParams := StageRunParams{
@@ -6897,6 +6914,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			RetroFindings:     retroFindings,
 			IsEscalatedRetry:  isEscalated,
 			ResumeSessionID:   resumeSessionID,
+			LineageID:         runtime.StageLineage(stage).LineageID,
 		}
 
 		// stageStartedAt anchors the diagnostic record's ElapsedMs fallback
@@ -10648,6 +10666,34 @@ func (s *Scheduler) resolveDispatchModel(
 	jobClass string,
 	labels routing.ModelLabelOverride,
 ) string {
+	model, _ := s.resolveDispatchModelWithAffinity(stage, issueNumber, workspaceRoot,
+		predictedModel, decision, modelFloors, jobClass, labels, nil)
+	return model
+}
+
+// resolveDispatchModelWithAffinity is resolveDispatchModel with the
+// cache-affinity slot (#55) fed by prior, the previous dispatch's warm cache;
+// nil leaves it out. The decision is returned whether or not it kept the
+// previous model, because its PenaltyUSD prices a lineage handoff.
+//
+// The slot sits after the label cap and before the floor and ceiling, and it
+// applies only to a base the PIPELINE chose: an explicit per-stage model, a
+// performance-mode pin, a model:pin label, and a retry escalation all bypass
+// it (a requested pin is handled by the caller, which passes nil). A kept
+// model is accepted only when the label cap and floorAndCeil leave it
+// unchanged, so affinity can never exceed the mode ceiling, and the
+// stage-specific safety floors below still run after it.
+func (s *Scheduler) resolveDispatchModelWithAffinity(
+	stage state.PipelineStage,
+	issueNumber int,
+	workspaceRoot string,
+	predictedModel string,
+	decision routing.Decision,
+	modelFloors map[string]string,
+	jobClass string,
+	labels routing.ModelLabelOverride,
+	prior *affinityPrior,
+) (string, AffinityDecision) {
 	// Per-stage base routing. An unrouted run still ends on the general-purpose
 	// default tier, and that default lives in stageBaseModel's last branch and
 	// nowhere else (#304): it used to live in loadIssueContext, where the same
@@ -10677,6 +10723,24 @@ func (s *Scheduler) resolveDispatchModel(
 	// explicit per-stage model ignores the label entirely.
 	if !explicitBase {
 		model = labels.ApplyModelLabelCap(model)
+	}
+	var affinity AffinityDecision
+	if prior != nil {
+		affinity = ApplyCacheAffinity(prior.input(string(stage), model))
+		pipelineChosen := !explicitBase && labels.Pin == "" &&
+			routing.ModeStagePin(mode, string(stage)) == "" &&
+			s.retryEngine.CurrentModel(string(stage)) == ""
+		if affinity.Kept {
+			kept := affinity.Model
+			if pipelineChosen && labels.ApplyModelLabelCap(kept) == kept &&
+				floorAndCeil(stage, kept, baseModel, explicitBase, modelFloors, envelope) == kept {
+				log.Printf("#%d: stage %s — cache affinity keeps %s over %s (cold start $%.4f > saving $%.4f)",
+					issueNumber, stage, kept, model, affinity.PenaltyUSD, affinity.SavingUSD)
+				model = kept
+			} else {
+				affinity.Kept, affinity.Model, affinity.Reason = false, model, AffinityBounded
+			}
+		}
 	}
 	// Per-stage model_routing.minimum_model floor (#366) so an autonomous run
 	// honors a configured minimum tier — parity with the TS SkillRunner's
@@ -10778,7 +10842,7 @@ func (s *Scheduler) resolveDispatchModel(
 		model = tierSonnet
 	}
 
-	return normalizeDispatchTier(model)
+	return normalizeDispatchTier(model), affinity
 }
 
 // devContextBuildPassed reads dev-{N}.json and returns true when

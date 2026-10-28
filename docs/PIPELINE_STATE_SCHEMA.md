@@ -195,6 +195,14 @@ the discovery regex and the atomic-write contract. This section documents the
 | Progress       | `completedStages`, `supersededStages`, `skippedStages`, `phaseHistory`, `supersededPhaseHistory`, `stageErrors`, `retryCount`, `escalationHistory`, `ralphIterations`                                                                                                                                                                                                                                                           |
 | Per-stage maps | `stageModes`, `stageAdapters`, `stageModels`, `stageServedModels`, `stageOpenCodeSessions`, `stageModelIdentities`, `stageEndpointFailovers`, `stageContexts`, `stageEfforts`, `stageThinking`, `stageServedEfforts`, `stageServedThinking`, `stageModelSelectionModes`, `stageExecutionPaths`, `stagePuntReasons`, `stageGateResults`, `stageAnomalies`, `stageRecoveryAttempts`, `stageOutputTails`, `terminatingStageTokens` |
 | Outcome        | `gateResults`, `prUrl`, `mergedCommitSha`, `mergedAt`, `mainCheckVerdict`, `mainCheckFailing`, `license`, `licenseExpiredMidRun`, `toolCalls`, `modelRefusalFallbacks`                                                                                                                                                                                                                                                          |
+| Lineage        | `lastLineage`, `stageLineages`, `handoffEvents`                                                                                                                                                                                                                                                                                                                                                                                 |
+
+`lastLineage`, `stageLineages` and `handoffEvents` are the session lineage
+(#55, `internal/state/lineage_state.go`). `lastLineage` is the previous
+dispatch's lineage key and holds the salted account hash, so it stays in this
+local snapshot. History receives only `stageLineages` (as
+`model_selection.lineage_id`, `resume_attempted` and `resume_accepted`) and
+`handoffEvents` (as `handoff_events`).
 
 `requestedAdapter` / `requestedModel` are a remote run request's pin (#1656,
 ADR-022 § 2): the adapter and model a dashboard or mobile trigger asked the run

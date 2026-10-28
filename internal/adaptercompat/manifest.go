@@ -100,6 +100,42 @@ type Manifest struct {
 	ConfigSchemaSHA256 string   `json:"config_schema_sha256"`
 	PluginAPIVersion   string   `json:"plugin_api_version"`
 	ExperimentalHooks  []string `json:"experimental_hooks"`
+
+	// Cache declares the CLI's prompt-cache behaviour, which cache-affinity
+	// routing and session lineage read (#55). Required: a manifest that does
+	// not know says implicit_prefix_cache false, which fails closed.
+	Cache *CacheCaps `json:"cache"`
+}
+
+// Model-transition values for CacheCaps.CompatibleModelTransitions.
+const (
+	// TransitionsNone: any model change starts a cold cache.
+	TransitionsNone = "none"
+	// TransitionsSameFamily: a change within one model family keeps it warm.
+	TransitionsSameFamily = "same_family"
+)
+
+// CacheCaps is a CLI's declared prompt-cache behaviour.
+type CacheCaps struct {
+	// ImplicitPrefixCache is true when the provider caches a repeated prompt
+	// prefix without the caller asking.
+	ImplicitPrefixCache bool `json:"implicit_prefix_cache"`
+	// CompatibleModelTransitions is TransitionsNone or TransitionsSameFamily.
+	CompatibleModelTransitions string `json:"compatible_model_transitions"`
+	// ExpirySeconds is how long a cached prefix stays warm; 0 means unknown.
+	ExpirySeconds int `json:"expiry_seconds"`
+	// ExpiryReason cites the documented behaviour the values come from.
+	ExpiryReason string `json:"expiry_reason,omitempty"`
+}
+
+// CacheFor returns adapter's declared cache capabilities. An adapter with no
+// manifest gets the zero value: no implicit cache, which fails closed.
+func CacheFor(adapter string) CacheCaps {
+	m, ok := Get(adapter)
+	if !ok || m.Cache == nil {
+		return CacheCaps{CompatibleModelTransitions: TransitionsNone}
+	}
+	return *m.Cache
 }
 
 // Feed names one upstream that announces releases.
@@ -460,6 +496,21 @@ func (m Manifest) validate(file string, tree fs.FS) error {
 
 	if m.ConfigSchemaSHA256 != "" && !sha256Re.MatchString(m.ConfigSchemaSHA256) {
 		return fail("config_schema_sha256", "%q is not a lowercase hex SHA-256", m.ConfigSchemaSHA256)
+	}
+	return checkCache(m.Cache, fail)
+}
+
+func checkCache(c *CacheCaps, fail failFunc) error {
+	switch {
+	case c == nil:
+		return fail("cache", "is missing; declare implicit_prefix_cache false when the behaviour is unverified")
+	case c.CompatibleModelTransitions != TransitionsNone && c.CompatibleModelTransitions != TransitionsSameFamily:
+		return fail("cache.compatible_model_transitions", "%q is not %q or %q",
+			c.CompatibleModelTransitions, TransitionsNone, TransitionsSameFamily)
+	case c.ExpirySeconds < 0:
+		return fail("cache.expiry_seconds", "%d is negative", c.ExpirySeconds)
+	case c.ImplicitPrefixCache && strings.TrimSpace(c.ExpiryReason) == "":
+		return fail("cache.expiry_reason", "is empty; an implicit_prefix_cache claim must cite its source")
 	}
 	return nil
 }

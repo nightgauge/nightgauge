@@ -1533,6 +1533,79 @@ export function resolveModel(
   );
 }
 
+/** A model's USD per 1M token rates, as cache affinity reads them (#55). */
+export interface AffinityRates {
+  input: number;
+  cache_read: number;
+  cache_creation_5m: number;
+}
+
+/** Input to {@link applyCacheAffinity}; Go pair: `AffinityInput`. */
+export interface AffinityInput {
+  stage: string;
+  candidate: string;
+  previous: string;
+  same_provider: boolean;
+  prev_within_expiry: boolean;
+  implicit_cache: boolean;
+  warm_prefix_tokens: number;
+  rates: (model: string) => AffinityRates | undefined;
+}
+
+/** Output of {@link applyCacheAffinity}; Go pair: `AffinityDecision`. */
+export interface AffinityDecision {
+  model: string;
+  kept: boolean;
+  penalty_usd: number;
+  saving_usd: number;
+  reason: string;
+}
+
+const AFFINITY_EXEMPT_STAGES = new Set(["issue-pickup", "pr-create", "pr-merge"]);
+
+/**
+ * Cache-affinity decision (#55), the mirror of Go's `ApplyCacheAffinity`
+ * (internal/orchestrator/cache_affinity.go). Both are driven by
+ * internal/orchestrator/testdata/cache_affinity_cases.json. The previous model
+ * is kept only when starting the candidate's cache cold costs more than the
+ * cheaper candidate saves on the warm prefix, on the same provider.
+ *
+ * The scheduler is the only router on both dispatch paths (#340) and the one
+ * that holds the previous stage's tokens, so it applies the decision; this
+ * mirror keeps the extension's reading of the rule identical to Go's.
+ */
+export function applyCacheAffinity(input: AffinityInput): AffinityDecision {
+  const d: AffinityDecision = {
+    model: input.candidate,
+    kept: false,
+    penalty_usd: 0,
+    saving_usd: 0,
+    reason: "",
+  };
+  if (input.previous === "" || input.warm_prefix_tokens <= 0) {
+    return { ...d, reason: "no_previous" };
+  }
+  if (input.previous === input.candidate && input.same_provider) {
+    return { ...d, reason: "same_model" };
+  }
+  if (!input.implicit_cache) return { ...d, reason: "no_implicit_cache" };
+  if (!input.prev_within_expiry) return { ...d, reason: "expired" };
+  const cand = input.rates(input.candidate);
+  if (!cand) return { ...d, reason: "unknown_rates" };
+  const warm = input.warm_prefix_tokens / 1e6;
+  d.penalty_usd = warm * (cand.cache_creation_5m - cand.cache_read);
+  if (!input.same_provider) return { ...d, reason: "provider_change" };
+  if (AFFINITY_EXEMPT_STAGES.has(input.stage)) return { ...d, reason: "mechanical_stage" };
+  const prev = input.rates(input.previous);
+  if (!prev) return { ...d, reason: "unknown_rates" };
+  d.saving_usd = warm * (prev.input - cand.input);
+  if (d.saving_usd <= 0) return { ...d, reason: "candidate_not_cheaper" };
+  if (d.penalty_usd > d.saving_usd) {
+    return { ...d, model: input.previous, kept: true, reason: "kept_warm" };
+  }
+  return { ...d, reason: "switch_saves" };
+}
+
 /**
  * The `model_routing.excluded_models` / `excluded_efforts` gate (#2063) over a
  * resolved decision — Go's `eligibleDispatchModel` plus the wire-effort

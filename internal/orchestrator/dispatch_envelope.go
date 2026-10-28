@@ -112,24 +112,26 @@ func resolveDispatchThinking(adapterName, model string) string {
 // Only opencode ever has a recorded session (RecordStageOpenCodeSession is
 // only ever called after an opencode dispatch), so this returns "" for every
 // other adapter without consulting runtime at all.
-func resolveResumeSessionID(runtime *state.RuntimeState, stage state.PipelineStage, adapterName, model, worktreeDir string) string {
+//
+// lineageAllowed is ResumeAllowed for this dispatch (#55): false refuses the
+// resume on an account, repo, issue, run or provider change. attempted reports
+// that a recorded session was looked at; accepted that it is being resumed.
+func resolveResumeSessionID(runtime *state.RuntimeState, stage state.PipelineStage, adapterName, model, worktreeDir string, lineageAllowed bool) (sessionID string, attempted, accepted bool) {
 	if runtime == nil || adapterName != "opencode" {
-		return ""
+		return "", false, false
 	}
-	sessionID := runtime.StageOpenCodeSession(stage)
+	sessionID = runtime.StageOpenCodeSession(stage)
 	if sessionID == "" {
-		return ""
+		return "", false, false
 	}
-	if runtime.StageAdapter(stage) != adapterName {
-		return ""
+	switch {
+	case !lineageAllowed,
+		runtime.StageAdapter(stage) != adapterName,
+		runtime.StageModel(stage) != model,
+		worktreeDir != "" && runtime.WorktreeDir != "" && runtime.WorktreeDir != worktreeDir:
+		return "", true, false
 	}
-	if runtime.StageModel(stage) != model {
-		return ""
-	}
-	if worktreeDir != "" && runtime.WorktreeDir != "" && runtime.WorktreeDir != worktreeDir {
-		return ""
-	}
-	return sessionID
+	return sessionID, true, true
 }
 
 // latestOpenCodeSessionID reads back the OpenCode session id session.js's

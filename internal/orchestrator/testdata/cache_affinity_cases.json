@@ -1,0 +1,200 @@
+{
+  "$note": "Shared by ApplyCacheAffinity (cache_affinity_test.go) and applyCacheAffinity (packages/nightgauge/tests/utils/skillRunner.cacheAffinity.test.ts). A case added here runs on both sides (#55). Rates are USD per 1M tokens.",
+  "rates": {
+    "haiku": { "input": 1, "cache_read": 0.1, "cache_creation_5m": 1.25 },
+    "sonnet": { "input": 3, "cache_read": 0.3, "cache_creation_5m": 3.75 },
+    "opus": { "input": 5, "cache_read": 0.5, "cache_creation_5m": 6.25 }
+  },
+  "cases": [
+    {
+      "name": "same provider and model: no penalty",
+      "input": {
+        "stage": "feature-dev",
+        "candidate": "sonnet",
+        "previous": "sonnet",
+        "same_provider": true,
+        "prev_within_expiry": true,
+        "implicit_cache": true,
+        "warm_prefix_tokens": 200000
+      },
+      "want": {
+        "model": "sonnet",
+        "kept": false,
+        "penalty_usd": 0,
+        "saving_usd": 0,
+        "reason": "same_model"
+      }
+    },
+    {
+      "name": "penalty exceeds saving: previous model kept",
+      "input": {
+        "stage": "feature-validate",
+        "candidate": "sonnet",
+        "previous": "opus",
+        "same_provider": true,
+        "prev_within_expiry": true,
+        "implicit_cache": true,
+        "warm_prefix_tokens": 1000000
+      },
+      "want": {
+        "model": "opus",
+        "kept": true,
+        "penalty_usd": 3.45,
+        "saving_usd": 2,
+        "reason": "kept_warm"
+      }
+    },
+    {
+      "name": "saving exceeds penalty: switch",
+      "input": {
+        "stage": "feature-validate",
+        "candidate": "haiku",
+        "previous": "sonnet",
+        "same_provider": true,
+        "prev_within_expiry": true,
+        "implicit_cache": true,
+        "warm_prefix_tokens": 1000000
+      },
+      "want": {
+        "model": "haiku",
+        "kept": false,
+        "penalty_usd": 1.15,
+        "saving_usd": 2,
+        "reason": "switch_saves"
+      }
+    },
+    {
+      "name": "provider change: no keep, penalty reported",
+      "input": {
+        "stage": "feature-validate",
+        "candidate": "sonnet",
+        "previous": "opus",
+        "same_provider": false,
+        "prev_within_expiry": true,
+        "implicit_cache": true,
+        "warm_prefix_tokens": 1000000
+      },
+      "want": {
+        "model": "sonnet",
+        "kept": false,
+        "penalty_usd": 3.45,
+        "saving_usd": 0,
+        "reason": "provider_change"
+      }
+    },
+    {
+      "name": "expired: no keep",
+      "input": {
+        "stage": "feature-validate",
+        "candidate": "sonnet",
+        "previous": "opus",
+        "same_provider": true,
+        "prev_within_expiry": false,
+        "implicit_cache": true,
+        "warm_prefix_tokens": 1000000
+      },
+      "want": {
+        "model": "sonnet",
+        "kept": false,
+        "penalty_usd": 0,
+        "saving_usd": 0,
+        "reason": "expired"
+      }
+    },
+    {
+      "name": "mechanical stage: no keep",
+      "input": {
+        "stage": "pr-create",
+        "candidate": "sonnet",
+        "previous": "opus",
+        "same_provider": true,
+        "prev_within_expiry": true,
+        "implicit_cache": true,
+        "warm_prefix_tokens": 1000000
+      },
+      "want": {
+        "model": "sonnet",
+        "kept": false,
+        "penalty_usd": 3.45,
+        "saving_usd": 0,
+        "reason": "mechanical_stage"
+      }
+    },
+    {
+      "name": "no implicit cache: no keep",
+      "input": {
+        "stage": "feature-validate",
+        "candidate": "sonnet",
+        "previous": "opus",
+        "same_provider": true,
+        "prev_within_expiry": true,
+        "implicit_cache": false,
+        "warm_prefix_tokens": 1000000
+      },
+      "want": {
+        "model": "sonnet",
+        "kept": false,
+        "penalty_usd": 0,
+        "saving_usd": 0,
+        "reason": "no_implicit_cache"
+      }
+    },
+    {
+      "name": "stronger candidate is never held back",
+      "input": {
+        "stage": "feature-dev",
+        "candidate": "opus",
+        "previous": "sonnet",
+        "same_provider": true,
+        "prev_within_expiry": true,
+        "implicit_cache": true,
+        "warm_prefix_tokens": 1000000
+      },
+      "want": {
+        "model": "opus",
+        "kept": false,
+        "penalty_usd": 5.75,
+        "saving_usd": -2,
+        "reason": "candidate_not_cheaper"
+      }
+    },
+    {
+      "name": "unknown rates: no change",
+      "input": {
+        "stage": "feature-validate",
+        "candidate": "mystery",
+        "previous": "opus",
+        "same_provider": true,
+        "prev_within_expiry": true,
+        "implicit_cache": true,
+        "warm_prefix_tokens": 1000000
+      },
+      "want": {
+        "model": "mystery",
+        "kept": false,
+        "penalty_usd": 0,
+        "saving_usd": 0,
+        "reason": "unknown_rates"
+      }
+    },
+    {
+      "name": "no warm prefix: no change",
+      "input": {
+        "stage": "feature-validate",
+        "candidate": "sonnet",
+        "previous": "opus",
+        "same_provider": true,
+        "prev_within_expiry": true,
+        "implicit_cache": true,
+        "warm_prefix_tokens": 0
+      },
+      "want": {
+        "model": "sonnet",
+        "kept": false,
+        "penalty_usd": 0,
+        "saving_usd": 0,
+        "reason": "no_previous"
+      }
+    }
+  ]
+}

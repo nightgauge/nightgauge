@@ -373,3 +373,61 @@ func TestResolveDispatchModel_NoLabelIsIdentity(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveDispatchModel_CacheAffinity pins the #55 slot: a warm opus cache
+// keeps spike-materialize on opus over a cheaper sonnet base, but never over
+// an explicit selection, a label pin, an escalation or the mode ceiling.
+func TestResolveDispatchModel_CacheAffinity(t *testing.T) {
+	warmOpus := func() *affinityPrior {
+		return &affinityPrior{previousModel: "opus", previousProvider: "anthropic",
+			adapter: "claude-headless", warmPrefixTokens: 1_000_000}
+	}
+	parse := func(labels ...string) routing.ModelLabelOverride {
+		o, _ := routing.ParseModelLabels(labels)
+		return o
+	}
+	cases := []struct {
+		name   string
+		mode   string
+		env    string
+		esc    string
+		labels routing.ModelLabelOverride
+		prior  *affinityPrior
+		want   string
+		kept   bool
+	}{
+		{name: "warm cache keeps the previous model", prior: warmOpus(), want: "opus", kept: true},
+		{name: "no prior leaves the base", want: "sonnet"},
+		{name: "mode ceiling binds the keep", mode: "efficiency", prior: warmOpus(), want: "sonnet"},
+		{name: "explicit env stage model bypasses", env: "sonnet", prior: warmOpus(), want: "sonnet"},
+		{name: "retry escalation bypasses", esc: "sonnet", prior: warmOpus(), want: "sonnet"},
+		{name: "label pin bypasses", labels: parse("model:pin-sonnet"), prior: warmOpus(), want: "sonnet"},
+		{name: "label cap binds the keep", labels: parse("model:max-sonnet"), prior: warmOpus(), want: "sonnet"},
+		{name: "provider change never keeps", prior: &affinityPrior{previousModel: "opus", previousProvider: "openai",
+			adapter: "claude-headless", warmPrefixTokens: 1_000_000}, want: "sonnet"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := isolatedWorkspace(t)
+			if tc.mode != "" {
+				t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", tc.mode)
+			}
+			if tc.env != "" {
+				t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_SPIKE_MATERIALIZE", tc.env)
+			}
+			s := testScheduler(t)
+			if tc.esc != "" {
+				s.retryEngine.RecordEscalation(string(state.StageSpikeMaterialize), tc.esc)
+			}
+			got, d := s.resolveDispatchModelWithAffinity(state.StageSpikeMaterialize, 1, dir, "sonnet",
+				routing.Decision{}, nil, "", tc.labels, tc.prior)
+			if got != tc.want || d.Kept != tc.kept {
+				t.Errorf("model = %q kept=%v (%+v), want %q kept=%v", got, d.Kept, d, tc.want, tc.kept)
+			}
+			if plain := s.resolveDispatchModel(state.StageSpikeMaterialize, 1, dir, "sonnet",
+				routing.Decision{}, nil, "", tc.labels); tc.prior == nil && plain != got {
+				t.Errorf("nil prior %q differs from resolveDispatchModel %q", got, plain)
+			}
+		})
+	}
+}

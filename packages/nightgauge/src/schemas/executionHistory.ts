@@ -43,6 +43,20 @@ export {
 /**
  * Per-stage token usage in history records
  */
+/**
+ * One dispatch that started a new session lineage and so paid a cold prompt
+ * cache (#55). Go pair: state.HandoffEvent. Carries no account hash and no
+ * session id.
+ */
+export const HistoryHandoffEventSchema = z.object({
+  from_stage: z.string(),
+  to_stage: z.string(),
+  reason: z.string(),
+  from_lineage: z.string(),
+  to_lineage: z.string(),
+  estimated_cold_start_usd: z.number(),
+});
+
 export const HistoryStageTokenUsageSchema = z.object({
   input: z.number().int().min(0),
   output: z.number().int().min(0),
@@ -346,6 +360,15 @@ export const HistoryStageDetailSchema = z.object({
       model_provider: z.string().optional(),
       upstream_model: z.string().optional(),
       endpoint: z.string().optional(),
+      /**
+       * Session lineage (#55): equal across stages that share a warm prompt
+       * cache, new on a provider, model-family, effort-class or expiry
+       * handoff. `resume_attempted`/`resume_accepted` record a same-stage
+       * session resume. Go pair: V2ModelSelect.
+       */
+      lineage_id: z.string().optional(),
+      resume_attempted: z.boolean().optional(),
+      resume_accepted: z.boolean().optional(),
     })
     .optional(),
   /**
@@ -715,6 +738,8 @@ export const ExecutionHistoryRunRecordSchema = z.object({
   priority: z.string().nullable().optional(),
 
   stages: z.record(z.string(), HistoryStageDetailSchema),
+  /** Session-lineage handoffs of the run (#55). */
+  handoff_events: z.array(HistoryHandoffEventSchema).optional(),
   tokens: TokensSchema,
 
   files: z
@@ -790,6 +815,8 @@ export const ExecutionHistoryRunRecordV2Schema = z.object({
   priority: z.string().nullable().optional(),
 
   stages: z.record(z.string(), HistoryStageDetailSchema),
+  /** Session-lineage handoffs of the run (#55). */
+  handoff_events: z.array(HistoryHandoffEventSchema).optional(),
   tokens: TokensSchema,
 
   /** Outcome classification for analytics (Issue #1005, #1047, #3267) */

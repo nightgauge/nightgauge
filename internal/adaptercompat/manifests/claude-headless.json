@@ -36,5 +36,11 @@
   ],
   "config_schema_sha256": "",
   "plugin_api_version": "",
-  "experimental_hooks": []
+  "experimental_hooks": [],
+  "cache": {
+    "implicit_prefix_cache": true,
+    "compatible_model_transitions": "none",
+    "expiry_seconds": 300,
+    "expiry_reason": "Anthropic prompt caching: the default cache entry lives 5 minutes and is refreshed on each hit (docs.anthropic.com prompt-caching)."
+  }
 }

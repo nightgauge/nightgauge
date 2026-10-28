@@ -6241,7 +6241,7 @@ func costCmd() *cobra.Command {
 		Use:   "cost",
 		Short: "Pipeline cost reporting (accuracy, by-class)",
 	}
-	cmd.AddCommand(costAccuracyCmd(), costByClassCmd())
+	cmd.AddCommand(costAccuracyCmd(), costByClassCmd(), costRealizedCmd())
 	return cmd
 }
 
@@ -6426,6 +6426,65 @@ func percentileOf(sorted []float64, p float64) float64 {
 	}
 	frac := rank - float64(lo)
 	return sorted[lo] + frac*(sorted[hi]-sorted[lo])
+}
+
+// costRealizedCmd implements `nightgauge cost realized [--days N] [--json]`
+// (#55): list-price routing cost against realized cost per successful run,
+// with the cold-start cost of every session-lineage handoff.
+func costRealizedCmd() *cobra.Command {
+	var (
+		outputJSON bool
+		workdir    string
+		days       int
+		since      string
+		until      string
+	)
+	cmd := &cobra.Command{
+		Use:          "realized",
+		Short:        "Compare list-price routing cost with realized cost per successful run",
+		SilenceUsage: true,
+		Example: `  nightgauge cost realized
+  nightgauge cost realized --days 90 --json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if workdir == "" {
+				wd, err := os.Getwd()
+				if err != nil {
+					return fmt.Errorf("get working directory: %w", err)
+				}
+				workdir = wd
+			}
+			records, err := pipeline.LoadHistory(workdir, since, until, days)
+			if err != nil {
+				return fmt.Errorf("load run history: %w", err)
+			}
+			res := pipeline.AggregateRealizedCost(records)
+			if outputJSON {
+				return printJSON(res)
+			}
+			if res.RunsAnalyzed == 0 {
+				fmt.Println("No pipeline run history found. Run a pipeline (or widen --days) and retry.")
+				return nil
+			}
+			fmt.Printf("Realized cost — %d run(s), %d successful\n", res.RunsAnalyzed, res.SuccessfulRuns)
+			fmt.Printf("%-22s %12s %14s\n", "", "total", "per success")
+			fmt.Printf("%-22s %11.4f$ %13.4f$\n", "list price (routing)", res.ListPriceUSD, res.ListPerSuccessUSD)
+			fmt.Printf("%-22s %11.4f$ %13.4f$\n", "realized", res.RealizedUSD, res.RealizedPerSuccessUSD)
+			fmt.Printf("\nlineage handoffs: %d, estimated cold start %.4f$\n", res.HandoffEvents, res.HandoffColdStartUSD)
+			for _, r := range res.HandoffReasons {
+				fmt.Printf("  %-22s %d\n", r.Reason, r.Count)
+			}
+			if res.UnpricedStages > 0 {
+				fmt.Printf("\n%d stage(s) could not be list-priced; the list total is a floor.\n", res.UnpricedStages)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
+	cmd.Flags().IntVar(&days, "days", 30, "Look back this many days of run history")
+	cmd.Flags().StringVar(&since, "since", "", "Start date (YYYY-MM-DD); overrides --days when set")
+	cmd.Flags().StringVar(&until, "until", "", "End date (YYYY-MM-DD)")
+	return cmd
 }
 
 // costByClassCmd implements `nightgauge cost by-class [--days N] [--json]`.

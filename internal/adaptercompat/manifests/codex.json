@@ -27,5 +27,11 @@
   ],
   "config_schema_sha256": "",
   "plugin_api_version": "",
-  "experimental_hooks": []
+  "experimental_hooks": [],
+  "cache": {
+    "implicit_prefix_cache": true,
+    "compatible_model_transitions": "none",
+    "expiry_seconds": 300,
+    "expiry_reason": "OpenAI automatic prompt caching (reported as cached_input_tokens) keeps a prefix 5-10 minutes of inactivity; the lower bound is declared."
+  }
 }

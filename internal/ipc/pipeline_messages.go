@@ -108,6 +108,10 @@ type RunStageParams struct {
 	// run that legitimately carries an id. Everything the stage reports (phase
 	// transitions, live progress, its result) is booked under this value.
 	RunID string `json:"runId"`
+	// LineageID is the stage's session lineage (#55): a hash of non-secret
+	// fields, equal across stages sharing a warm prompt cache. No account
+	// hash and no session id ever travel here.
+	LineageID string `json:"lineageId,omitempty"`
 }
 
 // StageResultParams is the payload for the "pipeline.stageResult" request (TS→Go).
