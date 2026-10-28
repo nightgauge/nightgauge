@@ -511,12 +511,23 @@ describe("LiveCellExecutor — adapter parameterization (#107)", () => {
   it("throws an actionable error for a provider whose live CLI is not wired", async () => {
     const { spawn } = scriptedSpawn([{ stdout: "", stderr: "", code: 0 }]);
     const { exec } = scriptedExec({ checkCodes: [0] });
-    // adapter:"gemini" → google provider, which has no eval spawn profile yet.
+    // adapter:"grok" → xai provider, which has no eval spawn profile yet.
+    const exe = new LiveCellExecutor({ spawn, exec, adapter: "grok" });
+
+    await expect(exe.execute(task(), CELL(), WORKSPACE)).rejects.toThrow(
+      /not implemented for provider 'xai'/
+    );
+  });
+
+  it("fails a gemini cell as unsupported: the gemini CLI has no effort knob (#2)", async () => {
+    const { spawn, calls } = scriptedSpawn([{ stdout: "", stderr: "", code: 0 }]);
+    const { exec } = scriptedExec({ checkCodes: [0] });
     const exe = new LiveCellExecutor({ spawn, exec, adapter: "gemini" });
 
     await expect(exe.execute(task(), CELL(), WORKSPACE)).rejects.toThrow(
-      /not implemented for provider 'google'/
+      /no effort or thinking knob/
     );
+    expect(calls).toHaveLength(0);
   });
 
   it("reports 'codex invocation failed' when the codex CLI exits non-zero", async () => {

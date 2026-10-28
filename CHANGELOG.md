@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- `scripts/evaluate-adapter-matrix.ts` runs one issue through all six pipeline
+  stages per adapter and writes a JSONL adapter × stage report with model,
+  token and control evidence. It is opt-in behind `NIGHTGAUGE_SKILL_EVAL_LIVE=1`.
+  Ollama and LM Studio rows are skipped by the agentic gate, and missing CLIs
+  are recorded as unavailable. Gemini and Copilot now have eval spawn profiles.
+  (#2)
+
 - **Pin or cap one issue's model with a label.** `model:pin-<band>` runs the
   pipeline-chosen stages on that band; `model:max-<band>` keeps every routed
   stage, retries included, at or below it. Explicit per-stage config, the

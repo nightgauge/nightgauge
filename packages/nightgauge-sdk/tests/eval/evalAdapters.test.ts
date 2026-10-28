@@ -13,6 +13,8 @@ import {
   UnsupportedCellError,
   claudeEvalProfile,
   codexEvalProfile,
+  copilotEvalProfile,
+  geminiEvalProfile,
   lmStudioEvalProfile,
   maybeResolveEvalAdapterProfile,
   parseClaudeResult,
@@ -36,9 +38,7 @@ describe("resolveEvalAdapterProfile", () => {
   });
 
   it("throws an actionable error for an unwired provider", () => {
-    expect(() => resolveEvalAdapterProfile("google")).toThrow(
-      /not implemented for provider 'google'/
-    );
+    expect(() => resolveEvalAdapterProfile("xai")).toThrow(/not implemented for provider 'xai'/);
     // The error names the adapters that ARE wired, so it is self-remediating.
     expect(() => resolveEvalAdapterProfile("ollama")).toThrow(/claude, codex/);
   });
@@ -70,7 +70,7 @@ describe("resolveEvalAdapterProfile", () => {
   it("maybeResolveEvalAdapterProfile is total: undefined for unwired providers, never a throw", () => {
     expect(maybeResolveEvalAdapterProfile("anthropic")).toBe(claudeEvalProfile);
     expect(maybeResolveEvalAdapterProfile("openai")).toBe(codexEvalProfile);
-    expect(maybeResolveEvalAdapterProfile("google")).toBeUndefined();
+    expect(maybeResolveEvalAdapterProfile("xai")).toBeUndefined();
   });
 
   it("declares the thinking-knob fact the runner interlock reads (#571)", () => {
@@ -229,5 +229,72 @@ describe("parseClaudeResult", () => {
   it("recovers the result object from trailing noise", () => {
     const out = `diagnostic\n${JSON.stringify({ type: "result", usage: { output_tokens: 9 } })}`;
     expect(parseClaudeResult(out)?.usage?.output_tokens).toBe(9);
+  });
+});
+
+describe("gemini and copilot profiles (#2)", () => {
+  afterEach(() => {
+    delete process.env.NIGHTGAUGE_GEMINI_CLI_COMMAND;
+    delete process.env.NIGHTGAUGE_COPILOT_CLI_COMMAND;
+  });
+
+  it("resolve by provider and by adapter name", () => {
+    expect(resolveEvalAdapterProfile("google")).toBe(geminiEvalProfile);
+    expect(resolveEvalAdapterProfile("copilot")).toBe(copilotEvalProfile);
+    expect(resolveEvalAdapterProfileForAdapter("gemini", "gemini-2.5-pro")).toBe(geminiEvalProfile);
+    expect(resolveEvalAdapterProfileForAdapter("copilot", "gpt-5")).toBe(copilotEvalProfile);
+  });
+
+  it("resolve the command from override, env var, then default", () => {
+    expect(geminiEvalProfile.resolveCommand()).toBe("gemini");
+    process.env.NIGHTGAUGE_GEMINI_CLI_COMMAND = "/opt/gemini";
+    expect(geminiEvalProfile.resolveCommand()).toBe("/opt/gemini");
+    expect(geminiEvalProfile.resolveCommand("x")).toBe("x");
+    expect(copilotEvalProfile.resolveCommand()).toBe("copilot");
+    process.env.NIGHTGAUGE_COPILOT_CLI_COMMAND = "/opt/copilot";
+    expect(copilotEvalProfile.resolveCommand()).toBe("/opt/copilot");
+  });
+
+  it("refuse every effort cell: neither CLI has an effort or thinking knob (#571)", () => {
+    for (const p of [geminiEvalProfile, copilotEvalProfile]) {
+      expect(p.hasSeparateThinkingKnob).toBe(false);
+      for (const e of EFFORT_LEVELS) {
+        expect(() => p.buildSpawnPlan("m", e, "none")).toThrow(UnsupportedCellError);
+      }
+    }
+  });
+
+  it("gemini parses stream-json usage, and empty stdout is unparseable", () => {
+    const stdout = [
+      JSON.stringify({ type: "init", session_id: "s", model: "gemini-2.5-pro" }),
+      JSON.stringify({ type: "message", role: "assistant", content: "done" }),
+      JSON.stringify({
+        type: "result",
+        status: "success",
+        stats: { input_tokens: 120, output_tokens: 30, total_tokens: 150 },
+      }),
+    ].join("\n");
+    const t = geminiEvalProfile.parseResult(stdout);
+    expect(t?.isError).toBe(false);
+    expect(t?.usage.input).toBe(120);
+    expect(t?.usage.output).toBe(30);
+    expect(geminiEvalProfile.parseResult("")).toBeNull();
+    const noUsage = geminiEvalProfile.parseResult(
+      JSON.stringify({ type: "message", role: "assistant", content: "hi" })
+    );
+    expect(noUsage?.usage).toEqual({ input: 0, output: 0, cache_read: 0, cache_creation: 0 });
+  });
+
+  it("copilot reports zero tokens with or without a footer", () => {
+    const t = copilotEvalProfile.parseResult(
+      "All done.\n\nSession ID: abc\nUsage: Total usage est: 3 Premium requests\n"
+    );
+    expect(t).toEqual({
+      usage: { input: 0, output: 0, cache_read: 0, cache_creation: 0 },
+      durationMs: 0,
+      isError: false,
+    });
+    expect(copilotEvalProfile.parseResult("plain")?.isError).toBe(false);
+    expect(copilotEvalProfile.parseResult("  ")).toBeNull();
   });
 });

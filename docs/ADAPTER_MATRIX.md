@@ -40,6 +40,15 @@ The runtime's `isAgenticAdapter()` check is authoritative. Chat-only adapters
 remain supported for evaluation, judging, and summarization but are rejected at
 pipeline dispatch.
 
+### Adapter × stage matrix runner
+
+`scripts/evaluate-adapter-matrix.ts` (opt-in, `NIGHTGAUGE_SKILL_EVAL_LIVE=1`)
+runs one issue through all six stages per adapter and writes one JSONL row per
+adapter × stage. Ollama and LM Studio are providers, not pipeline adapters, so
+their rows are `skipped: agentic-gate`. The "pending" cells above change only
+from a real report. See
+[SKILL_EVALUATION.md](SKILL_EVALUATION.md#cross-provider-adapter--stage-matrix).
+
 ---
 
 ## Full Capability Matrix
