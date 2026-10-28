@@ -9,7 +9,7 @@
 
 import type { ExecutionHistoryRecord } from "../schemas/executionHistory";
 import type { HealthScoreEntry } from "@nightgauge/sdk";
-import type { ExperimentOutcome, LearningSignals } from "@nightgauge/sdk";
+import type { ChangeSignals, ExperimentOutcome, LearningSignals } from "@nightgauge/sdk";
 import type { SkillEffectivenessRecord } from "../schemas/skillEffectiveness";
 
 /** Date range filter for aggregation queries */
@@ -107,6 +107,11 @@ export interface AggregatedDataset {
    * skill change in the period. `null` when the file is absent.
    */
   skillEffectiveness?: SkillEffectivenessRecord[] | null;
+  /**
+   * Per-change outcome input (#1284): survival verdicts, backtrack trace
+   * events and plan/merge file lists. `null` when the survival journal is absent.
+   */
+  changeSignals?: ChangeSignals | null;
   summary: AggregatedSummary;
   quality: DataQualityMetrics;
 }

@@ -18,6 +18,11 @@ import {
   getHealthStatus,
 } from "../types.js";
 import { computeTrend, mean, clamp, hasEnoughData, buildPeriodComparison } from "../statistics.js";
+import {
+  computePerChangeFirstPass,
+  computePlanFidelity,
+  LOW_PLAN_FIDELITY,
+} from "../changeOutcomes.js";
 
 // ── Internal Types ─────────────────────────────────────────────────
 
@@ -404,6 +409,48 @@ export function analyzeStageEffectiveness(
   const driftFinding = buildDurationDriftFinding(stageMetricsList, nextId);
   if (driftFinding) {
     findings.push(driftFinding);
+    nextId++;
+  }
+
+  // 5. Per-change outcomes (#1284): unscored metrics, at most an info finding.
+  const changeMetrics: Record<string, number> = {};
+  if (dataset.changeSignals) {
+    const firstPass = computePerChangeFirstPass(records, dataset.changeSignals.backtracks);
+    changeMetrics["perChangeMergedCount"] = firstPass.mergedChanges;
+    if (firstPass.rate !== null) {
+      changeMetrics["perChangeFirstPassMergeRate"] = firstPass.rate;
+    }
+
+    const fidelity = computePlanFidelity(dataset.changeSignals.planComparisons);
+    changeMetrics["planFidelityScored"] = fidelity.scored;
+    changeMetrics["planFidelityNoPlan"] = fidelity.noPlan;
+    if (fidelity.meanFidelity !== null && fidelity.lowFidelityShare !== null) {
+      changeMetrics["planFidelityMean"] = fidelity.meanFidelity;
+      changeMetrics["planFidelityLowShare"] = fidelity.lowFidelityShare;
+      if (
+        fidelity.lowFidelityShare > 0.5 &&
+        hasEnoughData(fidelity.scored, config.minimumSampleSizes.basic)
+      ) {
+        findings.push({
+          id: `se-${nextId}`,
+          dimension: "stage-effectiveness",
+          severity: "info",
+          title: "Most changes depart from their plan",
+          description: `${(fidelity.lowFidelityShare * 100).toFixed(1)}% of ${fidelity.scored} merged changes touched a file set overlapping their plan by less than ${LOW_PLAN_FIDELITY * 100}% (mean fidelity ${(fidelity.meanFidelity * 100).toFixed(1)}%).`,
+          impact:
+            "Plans that name the wrong files give implementation and review a weaker brief. This is a signal, not a gate.",
+          recommendation:
+            "Compare a few low-fidelity plans with their merges to see whether planning under-explores the code or implementation drifts from scope.",
+          evidence: {
+            planFidelityMean: fidelity.meanFidelity,
+            planFidelityLowShare: fidelity.lowFidelityShare,
+            scored: fidelity.scored,
+            noPlan: fidelity.noPlan,
+          },
+          confidence: fidelity.scored >= config.minimumSampleSizes.trend ? "medium" : "low",
+        });
+      }
+    }
   }
 
   // ── Period Comparison ────────────────────────────────────────────
@@ -453,6 +500,7 @@ export function analyzeStageEffectiveness(
     ...perStageSucessRates,
     ...perStageAvgRetries,
     ...perStageAvgDuration,
+    ...changeMetrics,
   };
 
   return {

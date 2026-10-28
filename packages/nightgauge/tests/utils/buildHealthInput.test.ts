@@ -305,4 +305,27 @@ describe("buildHealthInput", () => {
       expect(input.skillEffectiveness).toBeUndefined();
     });
   });
+
+  describe("per-change inputs (#1284)", () => {
+    it("passes changeSignals through", () => {
+      const changeSignals = {
+        survival: [
+          {
+            issueNumber: 1,
+            prNumber: 2,
+            mergeCommitSha: "abc1234",
+            mergedAt: "2026-03-01T00:00:00Z",
+            verdict: "survived" as const,
+          },
+        ],
+        backtracks: [],
+        planComparisons: [],
+      };
+      expect(buildHealthInput(makeDataset({ changeSignals })).changeSignals).toEqual(changeSignals);
+    });
+
+    it("an absent journal stays absent (null → undefined)", () => {
+      expect(buildHealthInput(makeDataset({ changeSignals: null })).changeSignals).toBeUndefined();
+    });
+  });
 });

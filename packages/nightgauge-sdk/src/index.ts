@@ -763,6 +763,10 @@ export {
   type HealthScoreEntry,
   type LearningOutcomeEntry,
   type LearningSignals,
+  type ChangeSignals,
+  type SurvivalVerdictEntry,
+  type BacktrackEntry,
+  type PlanComparisonEntry,
   // Recommendation Tracking (Issue #1103)
   RecommendationTracker,
   type RecommendationHistoryEntry,

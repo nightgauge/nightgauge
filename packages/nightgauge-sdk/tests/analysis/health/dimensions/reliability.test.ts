@@ -1555,3 +1555,50 @@ describe("analyzeReliability — metrics record", () => {
     expect(result.metrics.retriedCount).toBe(3);
   });
 });
+
+describe("change failure rate (#1284)", () => {
+  const records = [makeExecutionRecord(), makeExecutionRecord({ success: false })];
+  const sv = (verdict: "pending" | "survived" | "reverted" | "broke" | "unobserved") => ({
+    issueNumber: 1,
+    prNumber: 1,
+    mergeCommitSha: "abc1234",
+    mergedAt: "2026-01-01T00:00:00Z",
+    verdict,
+  });
+
+  it("omits the keys when changeSignals is absent", () => {
+    const r = analyzeReliability(wrapRecords(records), DEFAULT_HEALTH_CONFIG);
+    expect(r.metrics).not.toHaveProperty("changeFailureRate");
+  });
+
+  it("reports the rate over finalized verdicts without changing the score", () => {
+    const base = analyzeReliability(wrapRecords(records), DEFAULT_HEALTH_CONFIG);
+    const r = analyzeReliability(
+      makeDataset({
+        executionHistory: records,
+        changeSignals: {
+          survival: [sv("survived"), sv("reverted"), sv("pending"), sv("unobserved")],
+          backtracks: [],
+          planComparisons: [],
+        },
+      }),
+      DEFAULT_HEALTH_CONFIG
+    );
+    expect(r.score).toBe(base.score);
+    expect(r.metrics["changeFailureRate"]).toBe(0.5);
+    expect(r.metrics["changeFailureExcludedPending"]).toBe(1);
+    expect(r.metrics["changeFailureExcludedUnobserved"]).toBe(1);
+  });
+
+  it("all pending omits the rate but reports the exclusion", () => {
+    const r = analyzeReliability(
+      makeDataset({
+        executionHistory: records,
+        changeSignals: { survival: [sv("pending")], backtracks: [], planComparisons: [] },
+      }),
+      DEFAULT_HEALTH_CONFIG
+    );
+    expect(r.metrics).not.toHaveProperty("changeFailureRate");
+    expect(r.metrics["changeFailureExcludedPending"]).toBe(1);
+  });
+});
