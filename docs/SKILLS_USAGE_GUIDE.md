@@ -1231,6 +1231,39 @@ See [full specification](../skills/nightgauge-doc-gen/SKILL.md)
 
 ---
 
+### `/nightgauge:blog-watch`
+
+**Version:** 1.0.0 | **Purpose:** Give every new vendor blog post one recorded verdict
+
+**Description:**
+Detects new posts on the `blog_watch` sources (Anthropic engineering by default; any allowlisted https host), screens each through the block-mode sanitization firewall, matches its concepts against our docs and open issues, and appends exactly one verdict — `Adopted`, `Already covered`, `Already filed`, `Declined` or `Deferred` — to an append-only decision log. Only `Adopted` files an issue, labelled `type:feature` + `area:blog-watch` and parked in Backlog.
+
+**When to Use:**
+
+- On a weekly cadence
+- When a vendor publishes new engineering guidance
+
+**Invocation:**
+
+| Tool        | Command                            |
+| ----------- | ---------------------------------- |
+| Claude Code | `/nightgauge:blog-watch [options]` |
+| Copilot     | Invoke via Agent Skills            |
+| Cursor      | Agent Skills or direct SKILL.md    |
+
+**Arguments:**
+
+- `--baseline` — First run only: record every existing post as `Deferred`
+- `--dry-run` — Report verdicts without recording or filing
+
+**Decision log:** the canonical log is the checkout's `blog-watch/decisions.jsonl` (`nightgauge layout path checkout blog-watch/decisions.jsonl`), holding URL, verdict and reason only. A hand-maintained private log is private-only: it covers posts whose evaluation touches unreleased strategy and is never fed to the watcher.
+
+**Output:** One verdict per post + optional Adopted issues
+
+See [full specification](../skills/nightgauge-blog-watch/SKILL.md)
+
+---
+
 ### `/nightgauge:docs-watch`
 
 **Version:** 1.0.0 | **Purpose:** Monitor Claude Code documentation changes

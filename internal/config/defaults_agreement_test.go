@@ -122,6 +122,23 @@ func defaultCases() []defaultCase {
 			examplePath: "knowledge.auto_prune_on_merge",
 		},
 		{
+			// blog_watch (#185). schema.ts carries the same lists; the TS
+			// reader here resolves scalars only, so those rows check Go + docs.
+			key: "blog_watch.allowed_hosts", ship: "[www.anthropic.com]",
+			goVal:      func() string { return fmt.Sprint(ResolveBlogWatch(nil).AllowedHosts) },
+			docsAnchor: "### blog_watch", docsRow: "allowed_hosts",
+		},
+		{
+			key: "blog_watch.sources[].index_url", ship: "https://www.anthropic.com/sitemap.xml",
+			goVal:      func() string { return ResolveBlogWatch(nil).Sources[0].IndexURL },
+			docsAnchor: "### blog_watch", docsRow: "sources[].index_url",
+		},
+		{
+			key: "blog_watch.sources[].post_url_prefix", ship: "https://www.anthropic.com/engineering/",
+			goVal:      func() string { return ResolveBlogWatch(nil).Sources[0].PostURLPrefix },
+			docsAnchor: "### blog_watch", docsRow: "sources[].post_url_prefix",
+		},
+		{
 			key: "platform.enabled", ship: "false",
 			ts:         "platform.enabled",
 			docsAnchor: "## Platform Configuration", docsRow: "enabled",

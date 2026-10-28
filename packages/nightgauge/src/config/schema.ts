@@ -1743,6 +1743,24 @@ export const SanitizationConfigSchema = z.object({
 export type SanitizationConfig = z.infer<typeof SanitizationConfigSchema>;
 
 /**
+ * nightgauge-blog-watch sources and their https host allowlist (#185).
+ * A source whose index host is off the allowlist is never fetched.
+ */
+export const BlogWatchConfigSchema = z.object({
+  allowed_hosts: z.array(z.string()).optional(),
+  sources: z
+    .array(
+      z.object({
+        name: z.string(),
+        index_url: z.string(),
+        post_url_prefix: z.string(),
+      })
+    )
+    .optional(),
+});
+export type BlogWatchConfig = z.infer<typeof BlogWatchConfigSchema>;
+
+/**
  * Resolve the effective sanitization mode from config.
  * Returns the `mode` field when set, otherwise the default ("warn").
  */
@@ -3728,6 +3746,7 @@ export const NightgaugeConfigSchema = z.object({
 
   // Sanitization settings
   sanitization: SanitizationConfigSchema.optional(),
+  blog_watch: BlogWatchConfigSchema.optional(),
 
   // Human-in-the-loop settings
   human_in_the_loop: HumanInTheLoopConfigSchema.optional(),
@@ -3982,6 +4001,16 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     // ADR-021: block. A security control that logs and proceeds is not a
     // control; `warn` is the documented opt-out for a repo still calibrating.
     mode: "block",
+  },
+  blog_watch: {
+    allowed_hosts: ["www.anthropic.com"],
+    sources: [
+      {
+        name: "anthropic-engineering",
+        index_url: "https://www.anthropic.com/sitemap.xml",
+        post_url_prefix: "https://www.anthropic.com/engineering/",
+      },
+    ],
   },
   human_in_the_loop: {
     // #1050: FALSE, matching the runtime resolvers and `nightgauge init`.

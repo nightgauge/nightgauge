@@ -5243,6 +5243,36 @@ export NIGHTGAUGE_VALIDATION_VERIFY_UI_TESTS="strict"
 
 ---
 
+### blog_watch
+
+Sources for the `nightgauge-blog-watch` skill (#185) and the https host
+allowlist that gates every fetch. A source or post URL whose scheme is not
+`https`, or whose host is not an exact member of `allowed_hosts`, is reported by
+`nightgauge blog-watch detect` and never fetched.
+
+| Option                      | Type     | Default                                  | Description                                          |
+| --------------------------- | -------- | ---------------------------------------- | ---------------------------------------------------- |
+| `allowed_hosts`             | string[] | `[www.anthropic.com]`                    | Exact hosts the watcher may fetch                    |
+| `sources[].name`            | string   | `anthropic-engineering`                  | Source name recorded on each decision-log row        |
+| `sources[].index_url`       | string   | `https://www.anthropic.com/sitemap.xml`  | Sitemap, feed or listing page to read post URLs from |
+| `sources[].post_url_prefix` | string   | `https://www.anthropic.com/engineering/` | Only URLs under this prefix count as posts           |
+
+**Example:**
+
+```yaml
+blog_watch:
+  allowed_hosts: [www.anthropic.com, openai.com]
+  sources:
+    - name: anthropic-engineering
+      index_url: https://www.anthropic.com/sitemap.xml
+      post_url_prefix: https://www.anthropic.com/engineering/
+    - name: openai-research
+      index_url: https://openai.com/sitemap.xml
+      post_url_prefix: https://openai.com/index/
+```
+
+---
+
 ### sanitization
 
 Prompt-injection sanitization for the PreToolUse workflow gate. A single

@@ -1085,6 +1085,7 @@ func rootCmd() *cobra.Command {
 		disciplineScoreCmd(),
 		integrationCmd(),
 		releaseCmd(),
+		blogWatchCmd(),
 		modelWatchCmd(),
 		testCmd(),
 		modernizeCmd(),
