@@ -63,7 +63,7 @@ type ACReconcileResult struct {
 	ACFingerprint string `json:"ac_fingerprint,omitempty"`
 }
 
-// ReconciledCriterion is one checkbox AC with its deterministic verdict.
+// ReconciledCriterion is one acceptance criterion with its deterministic verdict.
 type ReconciledCriterion struct {
 	Index          int      `json:"index"`
 	Text           string   `json:"text"`
@@ -81,7 +81,8 @@ type SuggestedRoute struct {
 	Rationale string `json:"rationale"`
 }
 
-// acCheckbox is a parsed Markdown checkbox before rule evaluation.
+// acCheckbox is a parsed acceptance criterion (checkbox or numbered item)
+// before rule evaluation.
 type acCheckbox struct {
 	index int
 	text  string
@@ -92,21 +93,63 @@ type acCheckbox struct {
 // `[ ]` / `[x]` / `[X]` states. The SDK bounds the text capture at 4096
 // chars defensively; RE2 caps repeat counts at 1000 and guarantees linear
 // time regardless, so the Go port bounds in code instead (see parseACs).
-var checkboxRE = regexp.MustCompile(`(?m)^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+(.+?)[ \t]*$`)
+var checkboxRE = regexp.MustCompile(`^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+(.+?)[ \t]*$`)
+
+// numberedRE matches a numbered list item (`1.` or `1)`). Numbered items
+// count as criteria only inside an acceptance-criteria section (#2672).
+var numberedRE = regexp.MustCompile(`^[ \t]*\d{1,3}[.)][ \t]+(.+?)[ \t]*$`)
+
+// leadingBoxRE matches an optional `[ ]` / `[x]` at the start of a
+// numbered item's text.
+var leadingBoxRE = regexp.MustCompile(`^\[([ xX])\][ \t]+(.+)$`)
+
+// headingRE matches an ATX Markdown heading and captures its level marks
+// and text.
+var headingRE = regexp.MustCompile(`^[ ]{0,3}(#{1,6})[ \t]+(.*?)[ \t#]*$`)
 
 // detailsBlockRE matches collapsed <details> blocks, where issue refinement
 // archives the original body; their checkboxes are not live criteria (#2655).
-var detailsBlockRE = regexp.MustCompile(`(?is)<details\b.*?</details>`)
+// The opening tag must start a line, so a criterion that mentions
+// `<details>` inline does not swallow the criteria after it (#2672).
+var detailsBlockRE = regexp.MustCompile(`(?ims)^[ \t]*<details\b.*?</details>`)
 
-// parseACs extracts checkbox acceptance criteria from an issue body in
-// order, ignoring <details> blocks and repeated criteria. Checkbox state is
-// informational — satisfaction is verified against the working tree, not
-// the box.
+// parseACs extracts acceptance criteria from an issue body in document
+// order: checkbox bullets anywhere, plus numbered items inside an
+// "Acceptance Criteria" heading section. It ignores <details> blocks and
+// repeated criteria. State is informational — satisfaction is verified
+// against the working tree, not the box; a numbered item without a box is
+// unchecked.
 func parseACs(body string) []acCheckbox {
 	var out []acCheckbox
 	seen := map[string]bool{}
-	for _, m := range checkboxRE.FindAllStringSubmatch(detailsBlockRE.ReplaceAllString(body, ""), -1) {
-		text := strings.TrimSpace(m[2])
+	sectionLevel := 0 // heading level of the open AC section; 0 = none
+	for _, line := range strings.Split(detailsBlockRE.ReplaceAllString(body, ""), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if h := headingRE.FindStringSubmatch(line); h != nil {
+			level := len(h[1])
+			if strings.Contains(strings.ToLower(h[2]), "acceptance criteria") {
+				sectionLevel = level
+			} else if sectionLevel > 0 && level <= sectionLevel {
+				sectionLevel = 0
+			}
+			continue
+		}
+		var text, box string
+		if m := checkboxRE.FindStringSubmatch(line); m != nil {
+			box, text = m[1], m[2]
+		} else if sectionLevel > 0 {
+			m := numberedRE.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			box, text = " ", m[1]
+			if b := leadingBoxRE.FindStringSubmatch(text); b != nil {
+				box, text = b[1], b[2]
+			}
+		} else {
+			continue
+		}
+		text = strings.TrimSpace(text)
 		if text == "" {
 			continue
 		}
@@ -120,7 +163,7 @@ func parseACs(body string) []acCheckbox {
 		}
 		seen[key] = true
 		state := "unchecked"
-		if m[1] != " " {
+		if box != " " {
 			state = "checked"
 		}
 		out = append(out, acCheckbox{index: len(out), text: text, state: state})

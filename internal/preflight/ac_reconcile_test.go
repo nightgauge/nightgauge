@@ -253,3 +253,54 @@ func TestParseACs_IgnoresDetailsAndDuplicates(t *testing.T) {
 		t.Error("fingerprint must ignore the archived block")
 	}
 }
+
+func TestParseACs_Forms(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{"numbered dot", "## Acceptance Criteria\n\n1. first\n2. second\n", []string{"first", "second"}},
+		{"numbered paren", "## Acceptance Criteria\n1) first\n2) second\n", []string{"first", "second"}},
+		{"bold prefixed", "## Acceptance criteria\n1. **AC1:** does x\n2. **AC2:** does y\n",
+			[]string{"**AC1:** does x", "**AC2:** does y"}},
+		{"mixed in order", "## Acceptance Criteria\n- [ ] box one\n1. num one\n* [x] box two\n",
+			[]string{"box one", "num one", "box two"}},
+		{"numbered outside section ignored", "## Reproduction steps\n1. run it\n2. see it\n", nil},
+		{"section ends at next heading", "## Acceptance Criteria\n1. in\n## Notes\n1. out\n", []string{"in"}},
+		{"sub-heading section", "## Spec\n### Acceptance Criteria (v2)\n1. in\n#### detail\n2. still in\n## Next\n3. out\n",
+			[]string{"in", "still in"}},
+		{"inline details mention", "## Acceptance Criteria\n- [ ] keeps the `<details>` exclusion\n- [ ] later\n" +
+			"\n<details>\n<summary>old</summary>\n\n- [ ] archived\n</details>\n",
+			[]string{"keeps the `<details>` exclusion", "later"}},
+		{"numbered with box", "## Acceptance Criteria\n1. [x] done\n2. [ ] todo\n", []string{"done", "todo"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseACs(tc.body)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d criteria %+v, want %v", len(got), got, tc.want)
+			}
+			for i, ac := range got {
+				if ac.text != tc.want[i] || ac.index != i {
+					t.Errorf("ac[%d] = %+v, want text %q", i, ac, tc.want[i])
+				}
+			}
+		})
+	}
+	if got := parseACs("## Acceptance Criteria\n1. [x] done\n2. plain\n"); got[0].state != "checked" || got[1].state != "unchecked" {
+		t.Errorf("states = %+v", got)
+	}
+}
+
+func TestParseACs_Issue2665Body(t *testing.T) {
+	body := "## Problem\n\nSomething.\n\n## Acceptance Criteria\n\n" +
+		"1. **AC1:** pr-create verifies diff-checkable criteria against the branch diff.\n" +
+		"2. **AC2:** a criterion naming a file the diff adds is verified.\n" +
+		"3. **AC3:** a criterion naming a symbol the diff adds is verified.\n" +
+		"4. **AC4:** runtime criteria stay not verifiable.\n" +
+		"5. **AC5:** CHANGELOG entry under Unreleased.\n\n## Notes\n\n1. not a criterion\n"
+	if got := parseACs(body); len(got) != 5 {
+		t.Fatalf("got %d criteria, want 5: %+v", len(got), got)
+	}
+}

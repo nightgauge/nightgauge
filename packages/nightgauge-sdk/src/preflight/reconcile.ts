@@ -36,7 +36,7 @@ function deriveAggregate(criteria: ReconciledCriterion[]): {
       route: {
         approach: "standard",
         focus_acs: [],
-        rationale: "No acceptance-criterion checkboxes detected in issue body",
+        rationale: "No acceptance criteria detected in issue body",
       },
     };
   }
