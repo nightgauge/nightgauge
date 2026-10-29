@@ -433,7 +433,9 @@ func RenderBody(snap PRCreateSnapshot) string {
 			for _, v := range open {
 				b.WriteString(fmt.Sprintf("- %s\n", v.Text))
 				b.WriteString(fmt.Sprintf("  _%s", acStatusLabel(v.Status)))
-				if v.Evidence != "" {
+				if v.Status == ACNotVerifiable && v.Step != "" {
+					b.WriteString(" — needs: " + v.Step)
+				} else if v.Evidence != "" {
 					b.WriteString(fmt.Sprintf(" — %s: %s", v.Source, v.Evidence))
 				}
 				b.WriteString("_\n")
@@ -494,6 +496,21 @@ func unitTestsLabel(snap PRCreateSnapshot) string {
 	default:
 		return fmt.Sprintf("feature-dev reported %d passed, %d failed; not confirmed by feature-validate", p, f)
 	}
+}
+
+// acTestState is the test run a test-named criterion is checked against:
+// feature-validate's unit-test verdict, else feature-dev's counts when they
+// show a clean run.
+func acTestState(snap PRCreateSnapshot) ACTestState {
+	switch {
+	case snap.UnitTestsPassed:
+		return ACTestState{Passed: true, Source: "feature-validate unit tests"}
+	case snap.TestsFailed == 0 && snap.TestsPassed > 0:
+		return ACTestState{Passed: true, Source: fmt.Sprintf("feature-dev tests (%d passed, 0 failed)", snap.TestsPassed)}
+	case snap.HasValidate:
+		return ACTestState{Source: "feature-validate unit tests"}
+	}
+	return ACTestState{}
 }
 
 // closingKeyword is "Closes" only when every acceptance criterion is met.
@@ -1038,21 +1055,36 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 	// Acceptance criteria (#2595): the list comes from ac-reconcile-{N}.json,
 	// which planning's preflight wrote from the issue body. Re-run the
 	// deterministic rules on the branch tree so a mechanical result reflects
-	// this branch rather than main at planning time.
+	// this branch rather than main at planning time, and check each criterion
+	// against the branch diff (#2665).
 	if data, err := readFile(pipelineContextPath(workdir, fmt.Sprintf("ac-reconcile-%d.json", issueNumber))); err == nil {
 		var rec preflight.ACReconcileResult
 		if jsonErr := json.Unmarshal(data, &rec); jsonErr != nil {
 			return snap, fmt.Errorf("parse ac-reconcile context: %w", jsonErr)
 		}
+		// Dedupe as parseACs does (#2655 ADR-002): a list stored before that
+		// fix must still render each criterion once (#2665).
 		criteria := make([]string, 0, len(rec.AcceptanceCriteria))
+		seen := map[string]bool{}
 		for _, c := range rec.AcceptanceCriteria {
+			key := preflight.NormalizeACText(c.Text)
+			if key == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
 			criteria = append(criteria, c.Text)
 		}
 		var det *preflight.ACReconcileResult
+		var diffCheck ACDiffChecker
 		if len(criteria) > 0 && workdir != "" {
 			det = preflight.ReconcileACs(workdir, issueNumber, acCheckboxBody(criteria))
+			// A diff that cannot be collected (no base ref, shallow clone)
+			// leaves the diff verifier out; the other sources still answer.
+			if d, diffErr := CollectACDiff(context.Background(), workdir, snap.BaseBranch); diffErr == nil {
+				diffCheck = d.Checker(acTestState(snap))
+			}
 		}
-		snap.ACVerdicts = ResolveACVerdicts(criteria, validateVerdicts, det)
+		snap.ACVerdicts = ResolveACVerdicts(criteria, validateVerdicts, det, diffCheck)
 		snap.ACFingerprint = rec.ACFingerprint
 	}
 

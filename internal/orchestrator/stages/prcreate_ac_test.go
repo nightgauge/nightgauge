@@ -31,11 +31,11 @@ func TestResolveACVerdicts(t *testing.T) {
 		want     []string // status/source per criterion
 	}{
 		{
-			name:     "deterministic overrides validate",
+			name:     "an unmet from any source wins",
 			criteria: criteria,
 			validate: []ACVerdict{{Index: 0, Status: "met"}, {Index: 1, Status: "unmet"}, {Index: 2, Status: "met"}},
 			det:      det(preflight.ACUnsatisfied, preflight.ACSatisfied, preflight.ACUndetectable),
-			want:     []string{"unmet/deterministic", "met/deterministic", "met/feature-validate"},
+			want:     []string{"unmet/deterministic", "unmet/feature-validate", "met/feature-validate"},
 		},
 		{
 			name:     "validate only",
@@ -63,7 +63,7 @@ func TestResolveACVerdicts(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := ResolveACVerdicts(c.criteria, c.validate, c.det)
+			got := ResolveACVerdicts(c.criteria, c.validate, c.det, nil)
 			var flat []string
 			for i, v := range got {
 				if v.Index != i || v.Text != c.criteria[i] {
@@ -93,7 +93,7 @@ func TestRenderBody_PartialDeliveryRefsNotCloses(t *testing.T) {
 			{Index: 0, Status: "met", Evidence: "widget.go:12"},
 			{Index: 1, Status: "unmet", Evidence: "no docs change"},
 			{Index: 2, Status: "unmet"},
-		}, nil)
+		}, nil, nil)
 	body := RenderBody(s)
 
 	if !strings.Contains(body, "Refs #42\n") {
@@ -124,7 +124,7 @@ func TestRenderBody_PartialDeliveryRefsNotCloses(t *testing.T) {
 
 func TestRenderBody_AllMetCloses(t *testing.T) {
 	s := richSnap()
-	s.ACVerdicts = ResolveACVerdicts([]string{"a", "b"}, []ACVerdict{{Index: 0, Status: "met"}, {Index: 1, Status: "met"}}, nil)
+	s.ACVerdicts = ResolveACVerdicts([]string{"a", "b"}, []ACVerdict{{Index: 0, Status: "met"}, {Index: 1, Status: "met"}}, nil, nil)
 	body := RenderBody(s)
 	if !strings.Contains(body, "Closes #42\n") || strings.Contains(body, UnmetACHeading) {
 		t.Errorf("all-met body must close with no unmet section:\n%s", body)
@@ -160,14 +160,14 @@ func TestNormalizeACStatus_NegativeSynonyms(t *testing.T) {
 }
 
 func TestResolveACVerdicts_NegativeEvidenceFolds(t *testing.T) {
-	got := ResolveACVerdicts([]string{"a"}, []ACVerdict{{Index: 0, Status: "not_verifiable", Evidence: "criterion 2 is not met"}}, nil)
+	got := ResolveACVerdicts([]string{"a"}, []ACVerdict{{Index: 0, Status: "not_verifiable", Evidence: "criterion 2 is not met"}}, nil, nil)
 	if got[0].Status != ACUnmet {
 		t.Errorf("negative evidence must resolve unmet, got %q", got[0].Status)
 	}
 	det := &preflight.ACReconcileResult{AcceptanceCriteria: []preflight.ReconciledCriterion{{Index: 0, Classification: preflight.ACSatisfied, Reason: "found"}}}
-	got = ResolveACVerdicts([]string{"a"}, []ACVerdict{{Index: 0, Status: "not_verifiable", Evidence: "not met"}}, det)
-	if got[0].Status != ACMet || got[0].Source != ACSourceDeterministic {
-		t.Errorf("deterministic satisfied must win, got %+v", got[0])
+	got = ResolveACVerdicts([]string{"a"}, []ACVerdict{{Index: 0, Status: "not_verifiable", Evidence: "not met"}}, det, nil)
+	if got[0].Status != ACUnmet || got[0].Source != ACSourceValidate {
+		t.Errorf("folded unmet must win over deterministic satisfied (#2665), got %+v", got[0])
 	}
 }
 
@@ -192,7 +192,7 @@ func openBullets(body string) []string {
 
 func TestRenderBody_NotVerifiableRefsAndListsOnce(t *testing.T) {
 	s := richSnap()
-	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, nil, nil)
+	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, nil, nil, nil)
 	body := RenderBody(s)
 	if !strings.Contains(body, "Refs #42\n") || BodyClosesIssue(body, 42) {
 		t.Errorf("all-not-verifiable must say Refs:\n%s", body)
@@ -212,7 +212,7 @@ func TestRenderBody_NotVerifiableRefsAndListsOnce(t *testing.T) {
 
 func TestRenderBody_MixedRefsEachOnce(t *testing.T) {
 	s := richSnap()
-	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, []ACVerdict{{Index: 0, Status: "met"}}, nil)
+	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, []ACVerdict{{Index: 0, Status: "met"}}, nil, nil)
 	body := RenderBody(s)
 	if !strings.Contains(body, "Refs #42\n") || !strings.Contains(body, "- ✅ met: alpha crit\n") {
 		t.Errorf("mixed body wrong:\n%s", body)
@@ -307,7 +307,7 @@ func TestReadCreateContext_ResolvesACVerdicts(t *testing.T) {
 	for _, v := range snap.ACVerdicts {
 		got = append(got, v.Status+"/"+v.Source)
 	}
-	want := []string{"met/deterministic", "unmet/deterministic", "met/feature-validate"}
+	want := []string{"unmet/feature-validate", "unmet/deterministic", "met/feature-validate"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("verdicts = %v, want %v", got, want)
 	}
@@ -336,6 +336,107 @@ func TestWritePRContext_ACFingerprint(t *testing.T) {
 		}
 		if fp != "" && got != fp {
 			t.Errorf("ac_fingerprint = %v, want %s", got, fp)
+		}
+	}
+}
+
+func TestResolveACVerdicts_DiffAndTextMatching(t *testing.T) {
+	criteria := []string{"first crit", "second crit", "third crit"}
+	diff := func(results map[string]ACCheck) ACDiffChecker {
+		return func(text string) (ACCheck, bool) {
+			r, ok := results[text]
+			return r, ok
+		}
+	}
+	// A 1-based validate list that carries text lands on the right criterion.
+	got := ResolveACVerdicts(criteria, []ACVerdict{
+		{Index: 1, Text: "first  crit", Status: "unmet"},
+		{Index: 2, Text: "second crit", Status: "met"},
+		{Index: 3, Text: "third crit", Status: "met"},
+	}, nil, nil)
+	if got[0].Status != ACUnmet || got[1].Status != ACMet || got[2].Status != ACMet {
+		t.Errorf("text matching: %+v", got)
+	}
+
+	got = ResolveACVerdicts(criteria,
+		[]ACVerdict{{Index: 0, Status: "met"}, {Index: 1, Status: "not_verifiable"}},
+		nil,
+		diff(map[string]ACCheck{
+			"first crit":  {Status: ACUnmet, Evidence: "`a.md` adds no line under ## X"},
+			"second crit": {Status: ACMet, Evidence: "`a.md:3` adds 1 line(s)"},
+			"third crit":  {Status: ACNotVerifiable, Step: "a physical device"},
+		}))
+	want := []string{"unmet/diff", "met/diff", "not_verifiable/diff"}
+	for i, v := range got {
+		if v.Status+"/"+v.Source != want[i] {
+			t.Errorf("criterion %d = %s/%s, want %s", i, v.Status, v.Source, want[i])
+		}
+	}
+	if got[2].Step != "a physical device" {
+		t.Errorf("runtime step lost: %+v", got[2])
+	}
+
+	s := richSnap()
+	s.ACVerdicts = got
+	body := RenderBody(s)
+	if !strings.Contains(body, "_❔ not verifiable — needs: a physical device_") {
+		t.Errorf("not-verifiable row must name its step:\n%s", body)
+	}
+}
+
+// End to end (#2665): the #2661 artifacts as they were written — a stored
+// criteria list doubled by a pre-#2655 parser and validate verdicts in the
+// drifted shape pr-create does not read — still give five met rows, each
+// once, and Closes #2661.
+func TestReadCreateContext_Issue2661ClosesFromDiff(t *testing.T) {
+	dir := changelogRepo(t)
+	addBullet2656(t, dir)
+	gitOut(t, dir, "commit", "-qam", "docs(#2661): add the #2656 fix")
+	write := func(name string, v any) {
+		t.Helper()
+		p := pipelineContextPath(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(v)
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stored []map[string]any
+	for i, ac := range append(append([]string{}, issue2661ACs...), issue2661ACs...) {
+		stored = append(stored, map[string]any{"index": i, "text": ac})
+	}
+	write("ac-reconcile-2661.json", map[string]any{"acceptance_criteria": stored})
+	write("issue-2661.json", map[string]any{"issue_number": 2661, "branch": "docs/2661-changelog", "base_branch": "main"})
+	write("validate-2661.json", map[string]any{
+		"validation_status":   "passed",
+		"acceptance_criteria": []map[string]any{{"index": 1, "verdict": "met"}},
+	})
+
+	snap, err := defaultReadCreateContext(dir, 2661)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.IssueNumber = 2661
+	if len(snap.ACVerdicts) != 5 {
+		t.Fatalf("got %d verdicts, want 5: %+v", len(snap.ACVerdicts), snap.ACVerdicts)
+	}
+	for i, v := range snap.ACVerdicts {
+		if v.Status != ACMet {
+			t.Errorf("AC%d = %+v, want met", i+1, v)
+		}
+	}
+	body := RenderBody(snap)
+	if !strings.Contains(body, "Closes #2661\n") || strings.Contains(body, UnmetACHeading) {
+		t.Errorf("all five met must close the issue:\n%s", body)
+	}
+	if n := strings.Count(body, "- ✅ met: "); n != 5 {
+		t.Errorf("%d met rows, want 5:\n%s", n, body)
+	}
+	for _, ac := range issue2661ACs {
+		if n := strings.Count(body, ac); n != 1 {
+			t.Errorf("criterion rendered %d times: %q", n, ac)
 		}
 	}
 }

@@ -10,6 +10,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Criteria the diff answers are checked against the diff (#2665).** The
+  deterministic runner resolves each acceptance criterion from the branch diff
+  as well as the tree re-run and the validate verdict, so a diff-checkable
+  criterion is `met` or `unmet` rather than `not verifiable`, and an `unmet`
+  from any source wins. A `not verifiable` row names the runtime step it needs.
+  Skill version 1.25.0.
+
 - **`Closes #N` only when every acceptance criterion is met (#2655).** A
   `not_verifiable` criterion, or an issue with no criteria, now gives `Refs #N`
   too, and each criterion is listed exactly once. Skill version 1.24.0.

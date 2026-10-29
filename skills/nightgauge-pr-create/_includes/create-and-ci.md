@@ -111,11 +111,15 @@ Closes #N
 For standalone issues (no epic parent), omit the `Part of` line. For epic
 sub-issues, include BOTH lines so the sub-issue auto-closes on merge.
 
-**Partial delivery (#2595, #2655).** Unless every `acceptance_criteria_verdicts`
-entry in `validate-{N}.json` is `met` — any `unmet` or `not_verifiable`, or no
-criteria at all — replace `Closes #N` with `Refs #N` and add, above the closing
-lines, each open criterion exactly once (met ones go under
-`## Acceptance criteria`):
+**Partial delivery (#2595, #2655).** The deterministic runner checks each
+criterion against the branch diff before any verdict is read (#2665): a
+criterion the diff answers is `met` or `unmet` from the diff, and
+`not verifiable` is left for criteria needing a runtime or operator step,
+rendered as `needs: <step>`. When `pr-{N}.json` holds its
+`acceptance_criteria`, use those verdicts. Unless every criterion is `met` —
+any `unmet` or `not_verifiable`, or no criteria at all — replace `Closes #N`
+with `Refs #N` and add, above the closing lines, each open criterion exactly
+once (met ones go under `## Acceptance criteria`):
 
 ```markdown
 ## ⚠️ Unmet acceptance criteria
