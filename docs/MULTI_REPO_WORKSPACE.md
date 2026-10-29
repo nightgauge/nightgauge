@@ -1104,14 +1104,29 @@ It is now a boundary the pipeline enforces.
 Every stage dispatch snapshots `git status --porcelain` for each configured
 workspace repo it does not own, and compares after the stage closes:
 
-| Transition during the stage        | Verdict                                            |
-| ---------------------------------- | -------------------------------------------------- |
-| clean → dirty                      | **Stage failure.** Attributed, captured, reported. |
-| dirty → dirty, fingerprint changed | Warning only. Never attributed, never captured.    |
-| dirty at baseline, unchanged       | Ignored — the operator's standing work.            |
-| anything under `.nightgauge/`      | Ignored — the pipeline mirrors artifacts there.    |
-| explained by a HEAD move           | Subtracted, warned about. Never attributed.        |
-| a repo another running slot owns   | Warning only. Never a failure.                     |
+| Transition during the stage                 | Verdict                                                |
+| ------------------------------------------- | ------------------------------------------------------ |
+| clean → dirty, named by the write record    | **Stage failure.** Attributed, captured, reported.     |
+| clean → dirty, not named by the record      | Warning only. A concurrent edit; never attributed.     |
+| clean → dirty, no write record              | **Stage failure**, flagged "filesystem diff only".     |
+| clean → dirty, in this issue's retry ledger | **Stage failure**, whether or not the record names it. |
+| dirty → dirty, fingerprint changed          | Warning only. Never attributed, never captured.        |
+| dirty at baseline, unchanged                | Ignored — the operator's standing work.                |
+| anything under `.nightgauge/`               | Ignored — the pipeline mirrors artifacts there.        |
+| explained by a HEAD move                    | Subtracted, warned about. Never attributed.            |
+| a repo another running slot owns            | Warning only. Never a failure.                         |
+
+The **write record** (#2656) is what the stage's own tool calls wrote or ran: a
+write tool's file path (Write, Edit, MultiEdit, NotebookEdit and adapter
+equivalents), or a shell or patch command that names the path — either its
+absolute path, or the repo directory together with the repo-relative path.
+Read-only tools never count. The filesystem diff cannot tell a stage write from
+an operator or supervising session editing a clean file at the same time; the
+record can. A write the record cannot see — a generator run after `cd` into the
+sibling that names no path — is a warning, not a failure. When the adapter's
+stream carried no tool calls at all there is no record, and every clean → dirty
+path still fails the stage, with a line saying the attribution was by
+filesystem diff only.
 
 The asymmetry is deliberate. A sibling repo is very often dirty because the
 **operator** is working in it, and an operator's edit is indistinguishable from

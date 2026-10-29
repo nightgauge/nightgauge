@@ -195,6 +195,16 @@ async function runStage(): Promise<{
   return { proc, completed, stderr };
 }
 
+let toolUseSeq = 0;
+/** Emit a stream-json `tool_use` on the mocked CLI's stdout — the stage's write record. */
+function emitToolUse(proc: ChildProcess, name: string, input: unknown): void {
+  const message = JSON.stringify({
+    type: "content_block_start",
+    content_block: { type: "tool_use", id: `toolu_2656_${++toolUseSeq}`, name, input },
+  });
+  proc.stdout!.emit("data", Buffer.from(message + "\n"));
+}
+
 describe("runStageSkillHeadless — worktree write containment (#129)", () => {
   it("establishes the containment boundary before the stage can write", async () => {
     const proc = createMockChildProcess();
@@ -245,6 +255,8 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
     expect(result.error?.message).toContain("sibling");
     expect(result.error?.message).toContain("src/handlers.ts");
     expect(result.error?.message).toContain("src/api/things.ts");
+    // No tool events reached the stream, so there is no write record (#2656).
+    expect(result.error?.message).toContain("Attribution was by filesystem diff only");
     expect(stderr.join("")).toContain(CONTAINMENT_ERROR_MARKER);
   });
 
@@ -328,5 +340,57 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.message).not.toContain(CONTAINMENT_ERROR_MARKER);
+  });
+
+  it("does not fail a stage when someone else dirties a clean sibling file while it runs (#2656)", async () => {
+    const { proc, completed, stderr } = await runStage();
+    // The stage writes only in its worktree, and its tool calls say so...
+    const own = path.join(worktree, "src", "handlers.ts");
+    emitToolUse(proc, "Write", { file_path: own, content: "// stage work\n" });
+    fs.writeFileSync(own, "// stage work\n");
+    // ...while a supervising session edits a clean file in the sibling repo.
+    fs.writeFileSync(path.join(sibling, "src", "router.ts"), "// concurrent edit\n");
+
+    proc.emit("close", 0);
+    const result = await completed;
+
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+    const out = stderr.join("");
+    expect(out).toContain("[containment-ambiguous]");
+    expect(out).toContain("sibling: src/router.ts");
+    expect(out).not.toContain(CONTAINMENT_ERROR_MARKER);
+    expect(fs.readFileSync(path.join(sibling, "src", "router.ts"), "utf-8")).toBe(
+      "// concurrent edit\n"
+    );
+  });
+
+  it("still fails and preserves a sibling write the stage's tool calls name (#2656)", async () => {
+    const { proc, completed } = await runStage();
+    const target = path.join(sibling, "src", "handlers.ts");
+    emitToolUse(proc, "Write", { file_path: target, content: "x" });
+    fs.writeFileSync(target, "export function handle() { /* impl */ }\n");
+    const beforeStatus = git(["status", "--porcelain", "-uall"], sibling);
+
+    proc.emit("close", 0);
+    const result = await completed;
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain(CONTAINMENT_ERROR_MARKER);
+    expect(result.error?.message).toContain("src/handlers.ts");
+    expect(result.error?.message).not.toContain("filesystem diff only");
+    const containmentRoot = containmentDir(primary);
+    const patches = fs
+      .readdirSync(containmentRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .flatMap((e) =>
+        fs
+          .readdirSync(path.join(containmentRoot, e.name))
+          .filter((f) => f.endsWith(".patch"))
+          .map((f) => path.join(containmentRoot, e.name, f))
+      );
+    expect(patches).toHaveLength(1);
+    expect(fs.readFileSync(patches[0], "utf-8")).toContain("/* impl */");
+    expect(git(["status", "--porcelain", "-uall"], sibling)).toBe(beforeStatus);
   });
 });

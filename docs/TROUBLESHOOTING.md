@@ -950,7 +950,17 @@ was ALREADY dirty before the stage started changed while it ran. An operator
 saving their own in-progress file is indistinguishable from a stage write and is
 the likelier explanation, so those paths are never attributed to the stage,
 never captured, and never fail the run — they are only named so you can check
-them. Only paths that went **clean → dirty** during the stage are attributed.
+them. A path that went **clean → dirty** but that the stage's write record (its
+own tool calls) never names is reported the same way: a concurrent edit by an
+operator or another session, not the stage's (#2656). Only clean → dirty paths
+the record names are attributed.
+
+**"Attribution was by filesystem diff only"** on a containment failure means the
+stage's adapter supplied no write record (no tool calls reached the stream), so
+every clean → dirty path was attributed, as before #2656. A concurrent edit by
+someone else would be listed too — check the paths before acting on them. A
+failure that also lists paths as **"not attributed"** names the clean → dirty
+paths the record did not cover; they are not in the patch.
 
 **The retry ledger is scoped per issue (#2608).** Attributed paths are recorded
 in `containment/attributed.json` with the fingerprint, issue and stage that left

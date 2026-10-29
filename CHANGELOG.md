@@ -100,6 +100,16 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
 
 ### Fixed
 
+- **A concurrent edit to a clean file in a sibling repo no longer fails the
+  running stage (#2656).** Worktree containment used to attribute every sibling
+  path that went clean → dirty during a stage to that stage, so an operator or
+  supervising session editing a sibling file failed the run and halted the
+  repository's dispatch. A clean → dirty path is now the stage's only when its
+  own tool calls name it — a write tool's file path, or a shell or patch command
+  naming the path. Every other such path is a `[containment-ambiguous]`
+  warning. When the adapter supplies no tool calls, the stage still fails, and
+  the message says the attribution was by filesystem diff only.
+
 - **issue-pickup no longer fails a run whose branch already exists (#1919).**
   The fix for the lost `BRANCH_NAME` variable (#1930) did not close the gap.
   When the deterministic runner punts to the skill, the model still owned the

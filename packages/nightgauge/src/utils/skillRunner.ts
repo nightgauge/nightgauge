@@ -235,6 +235,7 @@ import {
   formatContainmentRefMoveWarning,
   formatContainmentFailure,
   formatContainmentWarning,
+  StageWriteRecord,
   type ContainmentBaseline,
 } from "./worktreeContainment";
 import {
@@ -5587,6 +5588,10 @@ function runStageSkillHeadlessImpl(
           ...(issueNumber != null ? { issueNumber } : {}),
         })
       : null;
+  // What the stage's own tool calls wrote or ran (#2656). Only a clean → dirty
+  // sibling path this names is the stage's; the rest is a concurrent edit.
+  const stageWriteRecord =
+    containmentBaseline && workspaceRoot ? new StageWriteRecord(workspaceRoot) : undefined;
 
   // Composed as a named object rather than inline in the spawn call because the
   // run-identity reconcile below is a DELETION, and a spread cannot express one
@@ -7458,6 +7463,8 @@ function runStageSkillHeadlessImpl(
     recentBashRing.observeToolUse(name, input, id);
     // All-tools call log (Issue #144) — every tool, not just Bash.
     toolCallLog.observeToolUse(name, input, id);
+    // Containment attribution (#2656): the stage's write record.
+    stageWriteRecord?.observeToolUse(name, input);
     // Wedge diagnostics (#1118): the only point at which a call's declared
     // timeout, and the task it is polling, are visible. Heartbeats arrive
     // later carrying nothing but a tool_use id.
@@ -8209,6 +8216,7 @@ function runStageSkillHeadlessImpl(
           baseline: await containmentBaseline,
           stage,
           ...(issueNumber != null ? { issueNumber } : {}),
+          ...(stageWriteRecord ? { writeRecord: stageWriteRecord } : {}),
         });
         if (report.refMoves.length > 0) {
           // Before the breach line: when both fire, the ref move is the
