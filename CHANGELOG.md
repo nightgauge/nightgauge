@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **pr-create's acceptance-criteria verifier is stricter about what counts as
+  met (#2669).** A validate verdict matched only by position can hold an issue
+  open but never close it. Negative evidence counts only for the criterion it
+  names, and no longer overturns a deterministic met. A criterion naming no
+  file inherits the file the previous criterion named, instead of matching any
+  added line. "human-readable", "manual page" and "log rotation" are no longer
+  read as operator or credential steps. A section check tries every named
+  file before reporting unmet. Reads are size-bounded, the diff collection
+  honours the stage's cancellation, and a verdict resting on uncommitted files
+  records them as `uncommitted_paths`.
+
 - **A follow-up PR opened after its issue closed is no longer stranded
   (#2684).** The scheduler dispatches only open issues, so a review follow-up
   pushed after its parent PR merged had no owner and sat open. A new
