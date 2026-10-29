@@ -11,6 +11,11 @@ and this project adheres to
 
 ### Fixed
 
+- **A `Refs #N` merge no longer closes the issue after the pipeline (#2689).** Post-pipeline
+  verification now closes an open issue only when a merged PR body or a commit on main carries a
+  closing keyword (`Closes #N`, `owner/repo#N`, or the issue URL). A merge that only references
+  the issue leaves it open by design and no longer marks the run as a failed pr-merge.
+
 - **A blocked pr-create no longer gets a safety-net PR (#2677).** When the
   secret scan or strict scope drift stopped pr-create, the fallback opened the
   PR anyway. The stage now fails with that gate's reason. The safety-net PR
