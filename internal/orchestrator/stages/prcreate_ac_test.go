@@ -131,15 +131,106 @@ func TestRenderBody_AllMetCloses(t *testing.T) {
 	}
 }
 
-func TestRenderBody_NotVerifiableKeepsClosesButLists(t *testing.T) {
-	s := richSnap()
-	s.ACVerdicts = ResolveACVerdicts([]string{"a", "b"}, []ACVerdict{{Index: 0, Status: "met"}}, nil)
-	body := RenderBody(s)
-	if !strings.Contains(body, "Closes #42\n") {
-		t.Errorf("not_verifiable must keep Closes:\n%s", body)
+func TestIssueClosedBy(t *testing.T) {
+	met := ACVerdict{Status: ACMet}
+	nv := ACVerdict{Status: ACNotVerifiable}
+	un := ACVerdict{Status: ACUnmet}
+	for name, tc := range map[string]struct {
+		in   []ACVerdict
+		want bool
+	}{
+		"nil":                {nil, false},
+		"all met":            {[]ACVerdict{met, met}, true},
+		"all not verifiable": {[]ACVerdict{nv, nv}, false},
+		"met and nv":         {[]ACVerdict{met, nv}, false},
+		"any unmet":          {[]ACVerdict{met, un}, false},
+	} {
+		if got := IssueClosedBy(tc.in); got != tc.want {
+			t.Errorf("%s: IssueClosedBy = %v, want %v", name, got, tc.want)
+		}
 	}
-	if !strings.Contains(body, "- ❔ not verifiable: b\n") {
-		t.Errorf("not_verifiable AC must be listed:\n%s", body)
+}
+
+func TestNormalizeACStatus_NegativeSynonyms(t *testing.T) {
+	for _, s := range []string{"not met", "Not-Met", "partial", "partially met", "partially_met", "partially-met", "missing"} {
+		if got := NormalizeACStatus(s); got != ACUnmet {
+			t.Errorf("NormalizeACStatus(%q) = %q, want unmet", s, got)
+		}
+	}
+}
+
+func TestResolveACVerdicts_NegativeEvidenceFolds(t *testing.T) {
+	got := ResolveACVerdicts([]string{"a"}, []ACVerdict{{Index: 0, Status: "not_verifiable", Evidence: "criterion 2 is not met"}}, nil)
+	if got[0].Status != ACUnmet {
+		t.Errorf("negative evidence must resolve unmet, got %q", got[0].Status)
+	}
+	det := &preflight.ACReconcileResult{AcceptanceCriteria: []preflight.ReconciledCriterion{{Index: 0, Classification: preflight.ACSatisfied, Reason: "found"}}}
+	got = ResolveACVerdicts([]string{"a"}, []ACVerdict{{Index: 0, Status: "not_verifiable", Evidence: "not met"}}, det)
+	if got[0].Status != ACMet || got[0].Source != ACSourceDeterministic {
+		t.Errorf("deterministic satisfied must win, got %+v", got[0])
+	}
+}
+
+// openBullets mirrors hooks.UnmetCriteria: bullet lines under the heading.
+func openBullets(body string) []string {
+	i := strings.Index(body, UnmetACHeading)
+	if i < 0 {
+		return nil
+	}
+	sec := body[i+len(UnmetACHeading):]
+	if j := strings.Index(sec, "\n## "); j >= 0 {
+		sec = sec[:j]
+	}
+	var out []string
+	for _, l := range strings.Split(sec, "\n") {
+		if t := strings.TrimSpace(l); strings.HasPrefix(t, "- ") && !strings.HasPrefix(l, " ") {
+			out = append(out, strings.TrimPrefix(t, "- "))
+		}
+	}
+	return out
+}
+
+func TestRenderBody_NotVerifiableRefsAndListsOnce(t *testing.T) {
+	s := richSnap()
+	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, nil, nil)
+	body := RenderBody(s)
+	if !strings.Contains(body, "Refs #42\n") || BodyClosesIssue(body, 42) {
+		t.Errorf("all-not-verifiable must say Refs:\n%s", body)
+	}
+	if strings.Contains(body, "## Acceptance criteria") {
+		t.Errorf("no met AC must render no met section:\n%s", body)
+	}
+	for _, c := range []string{"alpha crit", "beta crit"} {
+		if n := strings.Count(body, c); n != 1 {
+			t.Errorf("%q rendered %d times:\n%s", c, n, body)
+		}
+	}
+	if got := openBullets(body); len(got) != 2 || got[0] != "alpha crit" || got[1] != "beta crit" {
+		t.Errorf("open bullets = %q", got)
+	}
+}
+
+func TestRenderBody_MixedRefsEachOnce(t *testing.T) {
+	s := richSnap()
+	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, []ACVerdict{{Index: 0, Status: "met"}}, nil)
+	body := RenderBody(s)
+	if !strings.Contains(body, "Refs #42\n") || !strings.Contains(body, "- ✅ met: alpha crit\n") {
+		t.Errorf("mixed body wrong:\n%s", body)
+	}
+	for _, c := range []string{"alpha crit", "beta crit"} {
+		if n := strings.Count(body, c); n != 1 {
+			t.Errorf("%q rendered %d times", c, n)
+		}
+	}
+	if got := openBullets(body); len(got) != 1 || got[0] != "beta crit" {
+		t.Errorf("open bullets = %q", got)
+	}
+}
+
+func TestRenderBody_ZeroACsRefs(t *testing.T) {
+	body := RenderBody(richSnap())
+	if !strings.Contains(body, "Refs #42\n") || !strings.Contains(body, "no acceptance criteria were found") {
+		t.Errorf("zero-AC body must say Refs:\n%s", body)
 	}
 }
 

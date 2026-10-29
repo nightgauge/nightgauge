@@ -224,15 +224,22 @@ func TestRenderBody_SortsFileLists(t *testing.T) {
 	}
 }
 
+// closingSnap is richSnap with one met criterion, so the body closes #42.
+func closingSnap() PRCreateSnapshot {
+	s := richSnap()
+	s.ACVerdicts = []ACVerdict{{Index: 0, Text: "a", Status: ACMet, Source: ACSourceValidate}}
+	return s
+}
+
 func TestRenderBody_ClosesIssue(t *testing.T) {
-	body := RenderBody(richSnap())
+	body := RenderBody(closingSnap())
 	if !strings.Contains(body, "Closes #42") {
 		t.Errorf("body must include Closes #42, got %q", body)
 	}
 }
 
 func TestRenderBody_PartOfWhenParent(t *testing.T) {
-	s := richSnap()
+	s := closingSnap()
 	s.NativeParent = 100
 	body := RenderBody(s)
 	if !strings.Contains(body, "Part of #100") {
@@ -245,7 +252,7 @@ func TestRenderBody_PartOfWhenParent(t *testing.T) {
 
 // #1479: every pipeline body ends with the deterministic stamp footer.
 func TestRenderBody_PipelineStampFooter(t *testing.T) {
-	s := richSnap()
+	s := closingSnap()
 	s.RunID = "run-123"
 	body := RenderBody(s)
 	want := "Closes #42\n\n<!-- nightgauge:pipeline stage=pr-create issue=42 run=run-123 -->\n"
@@ -668,5 +675,27 @@ func TestRenderBody_AnnotatesUnverifiedDeliverable(t *testing.T) {
 func TestRenderBody_CleanRunIsUnannotated(t *testing.T) {
 	if strings.Contains(RenderBody(richSnap()), "Unverified deliverable") {
 		t.Fatal("clean run must not carry the annotation")
+	}
+}
+
+// #2655: pr-{N}.json closes_issue must agree with the keyword the body
+// carries, on both the created and already-exists paths.
+func TestRunner_ClosesIssueMatchesBody(t *testing.T) {
+	for _, snap := range []PRCreateSnapshot{richSnap(), closingSnap()} {
+		for _, prc := range []*fakePRClient{
+			{createdPR: &CreatedPR{Number: 99, URL: "u"}},
+			{listResults: []CreatedPR{{Number: 50, URL: "u"}}},
+		} {
+			r := newTestRunner(snap, prc, &fakeGit{})
+			var got prContextPayload
+			r.writeContext = func(_ string, p prContextPayload) error { got = p; return nil }
+			res, err := r.Run(context.Background(), 42, "owner/repo", "/tmp")
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if want := BodyClosesIssue(RenderBody(snap), 42); got.ClosesIssue != want {
+				t.Errorf("closes_issue = %v, body closes = %v (reason %q)", got.ClosesIssue, want, res.Reason)
+			}
+		}
 	}
 }

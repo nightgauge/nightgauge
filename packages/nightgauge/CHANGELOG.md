@@ -9,6 +9,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **The safety-net PR no longer closes its issue (#2655).** When pr-create
+  exits without a PR, the fallback PR now says `Refs #N`, so merging it leaves
+  the issue open: it carries no verified acceptance criteria.
+
 ### Added
 
 - **The pipeline tree shows what a running stage is doing.** A stage node now

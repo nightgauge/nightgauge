@@ -9,11 +9,10 @@ import (
 	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
-// Acceptance-criterion verdicts (#2595). Only ACUnmet changes how the PR
-// refers to its issue: a PR with any unmet criterion says `Refs #N`, so
-// merging it leaves the issue open. ACNotVerifiable is listed in the body but
-// keeps `Closes #N`, because most criteria cannot be checked mechanically and
-// treating that as failure would leave nearly every issue open.
+// Acceptance-criterion verdicts (#2595, #2655). A PR says `Closes #N` only
+// when every criterion is ACMet (IssueClosedBy). Any ACUnmet or
+// ACNotVerifiable criterion, or no criteria at all, gives `Refs #N`, so
+// merging the PR leaves the issue open with the remainder named.
 const (
 	ACMet           = "met"
 	ACUnmet         = "unmet"
@@ -44,7 +43,8 @@ func NormalizeACStatus(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "met", "satisfied", "pass", "passed":
 		return ACMet
-	case "unmet", "unsatisfied", "not_met", "fail", "failed":
+	case "unmet", "unsatisfied", "not_met", "not met", "not-met", "fail", "failed",
+		"partial", "partially met", "partially_met", "partially-met", "missing":
 		return ACUnmet
 	default:
 		return ACNotVerifiable
@@ -86,20 +86,42 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 			v.Status = NormalizeACStatus(val.Status)
 			v.Source = ACSourceValidate
 			v.Evidence = strings.TrimSpace(val.Evidence)
+			if v.Status == ACNotVerifiable && negativeEvidenceRE.MatchString(v.Evidence) {
+				v.Status = ACUnmet
+			}
 		}
 		out = append(out, v)
 	}
 	return out
 }
 
-// HasUnmet reports whether any verdict is unmet.
-func HasUnmet(verdicts []ACVerdict) bool {
+// negativeEvidenceRE matches validate evidence that says the criterion is
+// not met even though its status did not (#2655).
+var negativeEvidenceRE = regexp.MustCompile(`(?i)\b(?:not met|unmet|not satisfied|unsatisfied|not implemented)\b`)
+
+// IssueClosedBy reports whether a PR with these verdicts closes its issue:
+// only when there is at least one criterion and every one is met.
+func IssueClosedBy(verdicts []ACVerdict) bool {
+	if len(verdicts) == 0 {
+		return false
+	}
 	for _, v := range verdicts {
-		if v.Status == ACUnmet {
-			return true
+		if v.Status != ACMet {
+			return false
 		}
 	}
-	return false
+	return true
+}
+
+// OpenACs returns every verdict that is not met, in order.
+func OpenACs(verdicts []ACVerdict) []ACVerdict {
+	var out []ACVerdict
+	for _, v := range verdicts {
+		if v.Status != ACMet {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // UnmetACHeading is the PR-body heading that lists unmet criteria. The

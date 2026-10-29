@@ -146,6 +146,17 @@ func TestUnmetCriteriaStopsAtNextHeading(t *testing.T) {
 	}
 }
 
+// RenderBody (#2655) writes each open criterion once, with its status on an
+// indented line. That line must not be read as a criterion.
+func TestUnmetCriteriaIgnoresIndentedStatusLine(t *testing.T) {
+	body := unmetCriteriaHeading + "\n\nThis PR leaves #7 open.\n\n" +
+		"- a\n  _❔ not verifiable — validate: no evidence_\n" +
+		"- b\n  _❌ unmet — validate: not met_\n\nRefs #7\n"
+	if got := strings.Join(UnmetCriteria(body), "|"); got != "a|b" {
+		t.Errorf("UnmetCriteria = %q, want a|b", got)
+	}
+}
+
 func TestRemainderCommentCannotCarryValidationMarker(t *testing.T) {
 	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")})
 	if forge.HasValidationMarker(body) {

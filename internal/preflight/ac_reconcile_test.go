@@ -236,3 +236,20 @@ func TestWriteACReconcile(t *testing.T) {
 		}
 	}
 }
+
+func TestParseACs_IgnoresDetailsAndDuplicates(t *testing.T) {
+	live := "- [ ] One\n- [ ] Two\n- [x] Three\n- [ ] Four\n"
+	archive := "\n<details><summary>Original Issue (before refinement)</summary>\n\n- [ ] One\n- [ ] Two\n- [ ] Only archived\n</DETAILS>\n"
+	got := parseACs(live + archive + "- [ ] One\n")
+	if len(got) != 4 {
+		t.Fatalf("got %d criteria, want 4: %+v", len(got), got)
+	}
+	for i, c := range got {
+		if c.index != i || c.text == "Only archived" {
+			t.Errorf("criterion %d = %+v", i, c)
+		}
+	}
+	if ACFingerprint(live) != ACFingerprint(live+archive) {
+		t.Error("fingerprint must ignore the archived block")
+	}
+}

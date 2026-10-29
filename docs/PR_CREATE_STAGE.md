@@ -173,22 +173,23 @@ Deleted:
 - Security scan: <result>                (only when not skipped)
 - Scope drift:  <result>                 (only when not skipped)
 
-## Acceptance criteria                    (only when the issue has `- [ ]` ACs)
+## Acceptance criteria                    (only when at least one AC is met)
 
-- <✅ met | ❌ unmet | ❔ not verifiable>: <text> (<source>: <evidence>)
+- ✅ met: <text> (<source>: <evidence>)
 
-## ⚠️ Unmet acceptance criteria           (only when any AC is unmet)
+## ⚠️ Unmet acceptance criteria           (when any AC is not met, or there are none)
 
-This PR leaves #<N> open. These criteria remain:
+This PR leaves #<N> open. These criteria are unmet or could not be verified:
 
 - <text>
+  _<❌ unmet | ❔ not verifiable> — <source>: <evidence>_
 
 ## Knowledge                              (only when knowledge dir is populated)
 
 <rendered knowledge bullets — same Go renderer the skill calls>
 
 Part of #<PARENT>                         (only when issue.native_parent > 0)
-Closes #<N>                               (Refs #<N> when any AC is unmet)
+Closes #<N>                               (Refs #<N> unless every AC is met)
 
 <!-- nightgauge:pipeline stage=pr-create issue=<N> run=<run-id> -->
 ```
@@ -199,7 +200,7 @@ The deterministic-property test calls each function 100× and asserts
 byte-equal output across calls. (The run id is read from
 `NIGHTGAUGE_RUN_ID` by the context loader, not by `RenderBody`.)
 
-### Acceptance criteria and partial delivery (#2595)
+### Acceptance criteria and partial delivery (#2595, #2655)
 
 The criteria come from `ac-reconcile-{N}.json`, which planning's preflight
 wrote from the issue body. `ResolveACVerdicts` (`prcreate_ac.go`) gives each
@@ -209,12 +210,17 @@ one a status:
    re-run on the branch tree, wins.
 2. Otherwise, the verdict feature-validate wrote in `validate-{N}.json`
    `acceptance_criteria_verdicts` decides.
+   Evidence that says the criterion is not met resolves `unmet`.
 3. With neither, the criterion is `not_verifiable`.
 
-Only `unmet` switches `Closes #<N>` to `Refs #<N>`. A `not_verifiable`
-criterion is listed but keeps `Closes`, because most criteria cannot be checked
-mechanically. `pr-{N}.json` records the verdicts as `acceptance_criteria` and the
-outcome as `closes_issue`.
+`IssueClosedBy` writes `Closes #<N>` only when there is at least one criterion
+and every one is `met`. Any `unmet` or `not_verifiable` criterion, or no
+criteria at all, gives `Refs #<N>`. Met criteria render under
+`## Acceptance criteria`; every other one renders once under
+`## ⚠️ Unmet acceptance criteria`, with its status on an indented line.
+`pr-{N}.json` records the verdicts as `acceptance_criteria` and the same
+outcome as `closes_issue`. The ac-reconcile parser ignores criteria inside
+`<details>` archives and duplicate criteria.
 
 The post-merge hook reads the merged PR body. When it has no closing keyword
 for the issue, the hook skips the close, the Done sync, the epic rollup, the

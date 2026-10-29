@@ -111,14 +111,16 @@ Closes #N
 For standalone issues (no epic parent), omit the `Part of` line. For epic
 sub-issues, include BOTH lines so the sub-issue auto-closes on merge.
 
-**Partial delivery (#2595).** If any `acceptance_criteria_verdicts` entry in
-`validate-{N}.json` is `unmet`, replace `Closes #N` with `Refs #N` and add, above
-the closing lines:
+**Partial delivery (#2595, #2655).** Unless every `acceptance_criteria_verdicts`
+entry in `validate-{N}.json` is `met` — any `unmet` or `not_verifiable`, or no
+criteria at all — replace `Closes #N` with `Refs #N` and add, above the closing
+lines, each open criterion exactly once (met ones go under
+`## Acceptance criteria`):
 
 ```markdown
 ## ⚠️ Unmet acceptance criteria
 
-This PR leaves #N open. These criteria remain:
+This PR leaves #N open. These criteria are unmet or could not be verified:
 
 - <criterion text>
 ```

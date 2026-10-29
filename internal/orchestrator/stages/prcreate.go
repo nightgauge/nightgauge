@@ -148,8 +148,8 @@ type PRCreateSnapshot struct {
 	ManualChecklistOpen   bool   // true when any manual_checklist entry has verified == false
 
 	// ACVerdicts is one resolved verdict per issue acceptance criterion
-	// (#2595), built by ResolveACVerdicts. Any unmet verdict renders the
-	// body with `Refs #N` instead of `Closes #N`.
+	// (#2595), built by ResolveACVerdicts. Unless every verdict is met
+	// (IssueClosedBy, #2655) the body says `Refs #N` instead of `Closes #N`.
 	ACVerdicts []ACVerdict
 	// ACFingerprint is ac-reconcile's fingerprint of the criteria the run
 	// planned against (#2623), recorded in pr-{N}.json for the resume gate.
@@ -319,10 +319,10 @@ func stripTitlePrefix(title string) string {
 //	## Summary       (always)
 //	## Changes       (always; sorted file lists)
 //	## Validation    (always)
-//	## Acceptance criteria (only when the issue has checkbox ACs)
-//	## ⚠️ Unmet acceptance criteria (only when any AC is unmet)
+//	## Acceptance criteria (only the met ACs; omitted when none is met)
+//	## ⚠️ Unmet acceptance criteria (every AC not met, or no ACs at all)
 //	## Knowledge     (only when KnowledgeSection is non-empty)
-//	closing keywords (Closes #N, or Refs #N when any AC is unmet;
+//	closing keywords (Closes #N only when every AC is met, else Refs #N;
 //	                  "Part of #PARENT" when NativeParent > 0)
 //	pipeline stamp   (always; forge.PipelineMarker, see docs/PR_CREATE_STAGE.md)
 //
@@ -403,12 +403,18 @@ func RenderBody(snap PRCreateSnapshot) string {
 		b.WriteString("Validation reported `passed` for everything that did run; that verdict was superseded because it would otherwise read as though this code had been exercised.\n\n")
 	}
 
-	// Acceptance criteria (#2595): every criterion with its verdict, then the
-	// unmet ones again under their own heading, which the post-merge hook
-	// reads to name the remainder on the issue.
-	if len(snap.ACVerdicts) > 0 {
+	// Acceptance criteria (#2595, #2655): each criterion renders exactly
+	// once — met ones here, the rest under UnmetACHeading, which the
+	// post-merge hook reads (bullet lines only) to name the remainder.
+	var met []ACVerdict
+	for _, v := range snap.ACVerdicts {
+		if v.Status == ACMet {
+			met = append(met, v)
+		}
+	}
+	if len(met) > 0 {
 		b.WriteString("## Acceptance criteria\n\n")
-		for _, v := range snap.ACVerdicts {
+		for _, v := range met {
 			b.WriteString(fmt.Sprintf("- %s: %s", acStatusLabel(v.Status), v.Text))
 			if v.Evidence != "" {
 				b.WriteString(fmt.Sprintf(" (%s: %s)", v.Source, v.Evidence))
@@ -417,15 +423,23 @@ func RenderBody(snap PRCreateSnapshot) string {
 		}
 		b.WriteString("\n")
 	}
-	if HasUnmet(snap.ACVerdicts) {
+	if !IssueClosedBy(snap.ACVerdicts) {
 		b.WriteString(UnmetACHeading + "\n\n")
-		b.WriteString(fmt.Sprintf("This PR leaves #%d open. These criteria remain:\n\n", snap.IssueNumber))
-		for _, v := range snap.ACVerdicts {
-			if v.Status == ACUnmet {
+		open := OpenACs(snap.ACVerdicts)
+		if len(open) == 0 {
+			b.WriteString(fmt.Sprintf("This PR leaves #%d open: no acceptance criteria were found to verify.\n\n", snap.IssueNumber))
+		} else {
+			b.WriteString(fmt.Sprintf("This PR leaves #%d open. These criteria are unmet or could not be verified:\n\n", snap.IssueNumber))
+			for _, v := range open {
 				b.WriteString(fmt.Sprintf("- %s\n", v.Text))
+				b.WriteString(fmt.Sprintf("  _%s", acStatusLabel(v.Status)))
+				if v.Evidence != "" {
+					b.WriteString(fmt.Sprintf(" — %s: %s", v.Source, v.Evidence))
+				}
+				b.WriteString("_\n")
 			}
+			b.WriteString("\n")
 		}
-		b.WriteString("\n")
 	}
 
 	// Knowledge — caller pre-renders the block (or leaves empty).
@@ -482,12 +496,12 @@ func unitTestsLabel(snap PRCreateSnapshot) string {
 	}
 }
 
-// closingKeyword is "Closes" unless an acceptance criterion is unmet.
+// closingKeyword is "Closes" only when every acceptance criterion is met.
 func closingKeyword(snap PRCreateSnapshot) string {
-	if HasUnmet(snap.ACVerdicts) {
-		return "Refs"
+	if IssueClosedBy(snap.ACVerdicts) {
+		return "Closes"
 	}
-	return "Closes"
+	return "Refs"
 }
 
 func acStatusLabel(status string) string {
@@ -667,7 +681,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 			Title:         title,
 			BaseBranch:    snap.BaseBranch,
 			KnowledgePath: snap.KnowledgePath,
-			ClosesIssue:   !HasUnmet(snap.ACVerdicts),
+			ClosesIssue:   IssueClosedBy(snap.ACVerdicts),
 			ACVerdicts:    snap.ACVerdicts,
 			ACFingerprint: snap.ACFingerprint,
 		})
@@ -734,7 +748,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		Title:         title,
 		BaseBranch:    snap.BaseBranch,
 		KnowledgePath: snap.KnowledgePath,
-		ClosesIssue:   !HasUnmet(snap.ACVerdicts),
+		ClosesIssue:   IssueClosedBy(snap.ACVerdicts),
 		ACVerdicts:    snap.ACVerdicts,
 		ACFingerprint: snap.ACFingerprint,
 	}); writeErr != nil {
@@ -807,8 +821,8 @@ type prContextPayload struct {
 	// `null` and fails `z.array(z.string())`, so it is always emitted as `[]`.
 	Reviewers     []string `json:"reviewers"`
 	KnowledgePath string   `json:"knowledge_path,omitempty"`
-	// ClosesIssue is false when the body says `Refs #N` because an
-	// acceptance criterion is unmet (#2595); merged-PR reconcilers must not
+	// ClosesIssue is false when the body says `Refs #N` because not every
+	// acceptance criterion is met (#2595, #2655); merged-PR reconcilers must not
 	// close or mark Done an issue whose PR did not close it.
 	ClosesIssue bool `json:"closes_issue"`
 	// ACVerdicts records the per-criterion verdict the body was rendered from.
