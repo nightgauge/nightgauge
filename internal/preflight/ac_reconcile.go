@@ -95,11 +95,13 @@ type acCriterion struct {
 // time regardless, so the Go port bounds in code instead (see parseACs).
 var checkboxRE = regexp.MustCompile(`^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+(.+?)[ \t]*$`)
 
-// numberedRE matches a top-level numbered list item (`1.` or `1)`), indented
-// at most three spaces so a nested sub-step is not a criterion of its own.
-// Numbered items count as criteria only inside an acceptance-criteria
-// section (#2672).
-var numberedRE = regexp.MustCompile(`^[ ]{0,3}\d{1,3}[.)][ \t]+(.+?)[ \t]*$`)
+// numberedRE matches a numbered list item (`1.` or `1)`) indented at most
+// three spaces. Group 1 is the marker prefix, whose length is the item's
+// content column; group 2 is the text. Numbered items count as criteria only
+// inside an acceptance-criteria section (#2672), and one at or past the
+// previous item's content column is a nested sub-step, not a criterion
+// (see parseACs, #2684).
+var numberedRE = regexp.MustCompile(`^([ ]{0,3}\d{1,3}[.)][ \t]+)(.+?)[ \t]*$`)
 
 // leadingBoxRE matches an optional `[ ]` / `[x]` at the start of a
 // numbered item's text.
@@ -183,11 +185,18 @@ func stripDetailsBlocks(lines []string) []string {
 // informational — satisfaction is verified against the working tree, not the
 // box; a numbered item without a box is
 // unchecked.
+//
+// A numbered line indented to the content column of the numbered criterion
+// above it (`1. Do X:` then `   1. sub`) continues that item under
+// CommonMark, so it is a sub-step and not a criterion. The column ends at a
+// heading, or at a non-blank line indented less than it that is not a
+// numbered item.
 func parseACs(body string) []acCriterion {
 	var out []acCriterion
 	seen := map[string]bool{}
 	sectionLevel := 0 // heading level of the open AC section; 0 = none
 	inFence := false
+	itemCol := 0 // content column of the open numbered criterion; 0 = none
 	for _, line := range stripDetailsBlocks(strings.Split(body, "\n")) {
 		line = strings.TrimRight(line, "\r")
 		if acFenceRE.MatchString(line) {
@@ -204,17 +213,27 @@ func parseACs(body string) []acCriterion {
 			} else if sectionLevel > 0 && level <= sectionLevel {
 				sectionLevel = 0
 			}
+			itemCol = 0
 			continue
+		}
+		var numbered []string
+		if sectionLevel > 0 {
+			numbered = numberedRE.FindStringSubmatch(line)
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if numbered != nil {
+			if itemCol > 0 && indent >= itemCol {
+				continue // a sub-step of the criterion above
+			}
+			itemCol = len(numbered[1])
+		} else if strings.TrimSpace(line) != "" && indent < itemCol {
+			itemCol = 0
 		}
 		var text, box string
 		if m := checkboxRE.FindStringSubmatch(line); m != nil {
 			box, text = m[1], m[2]
-		} else if sectionLevel > 0 {
-			m := numberedRE.FindStringSubmatch(line)
-			if m == nil {
-				continue
-			}
-			box, text = " ", m[1]
+		} else if numbered != nil {
+			box, text = " ", numbered[2]
 			if b := leadingBoxRE.FindStringSubmatch(text); b != nil {
 				box, text = b[1], b[2]
 			}

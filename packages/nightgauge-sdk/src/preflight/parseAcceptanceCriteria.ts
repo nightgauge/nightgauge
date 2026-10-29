@@ -12,11 +12,13 @@ import type { AcceptanceCriterion } from "./types.js";
 const CHECKBOX_RE = /^[-*][ \t]+\[([ xX])\][ \t]+(.{1,4096})$/;
 
 /**
- * Top-level numbered list item (`1.` or `1)`), indented at most three spaces
- * so a nested sub-step is not a criterion of its own. Matched against the
- * untrimmed line; a criterion only inside an AC section.
+ * Numbered list item (`1.` or `1)`) indented at most three spaces. Group 1 is
+ * the marker prefix, whose length is the item's content column; group 2 is
+ * the text. Matched against the untrimmed line; a criterion only inside an AC
+ * section, and one at or past the previous item's content column is a nested
+ * sub-step, not a criterion (#2684).
  */
-const NUMBERED_RE = /^ {0,3}\d{1,3}[.)][ \t]+(.{1,4096})$/;
+const NUMBERED_RE = /^( {0,3}\d{1,3}[.)][ \t]+)(.{1,4096})$/;
 
 /**
  * Code-fence open/close line. Lines inside a fence are example text: a `#`
@@ -92,7 +94,10 @@ function stripDetailsBlocks(lines: string[]): string[] {
  * `internal/preflight/ac_reconcile.go`): checkbox bullets anywhere, plus
  * numbered items inside an "Acceptance Criteria" heading section, in
  * document order. `<details>` blocks and fenced code blocks are ignored, and
- * repeated criteria (whitespace-collapsed text) are dropped.
+ * repeated criteria (whitespace-collapsed text) are dropped. A numbered line
+ * indented to the content column of the numbered criterion above it is a
+ * sub-step of that item; the column ends at a heading, or at a non-blank line
+ * indented less than it that is not a numbered item.
  *
  * State is informational — the reconciler verifies satisfaction against
  * `main`, not the box state. A numbered item without a box is unchecked.
@@ -106,6 +111,7 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
   const seen = new Set<string>();
   let sectionLevel = 0;
   let inFence = false;
+  let itemCol = 0; // content column of the open numbered criterion; 0 = none
   for (const rawLine of stripDetailsBlocks(body.split(/\r?\n/))) {
     if (FENCE_RE.test(rawLine)) {
       inFence = !inFence;
@@ -120,20 +126,27 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
       } else if (sectionLevel > 0 && level <= sectionLevel) {
         sectionLevel = 0;
       }
+      itemCol = 0;
       continue;
     }
     const line = rawLine.trim();
+    const numbered = sectionLevel > 0 ? NUMBERED_RE.exec(rawLine.trimEnd()) : null;
+    const indent = rawLine.length - rawLine.replace(/^[ \t]+/, "").length;
+    if (numbered) {
+      if (itemCol > 0 && indent >= itemCol) continue; // a sub-step of the criterion above
+      itemCol = numbered[1].length;
+    } else if (line !== "" && indent < itemCol) {
+      itemCol = 0;
+    }
     let box: string;
     let text: string;
     const checkbox = CHECKBOX_RE.exec(line);
     if (checkbox) {
       box = checkbox[1];
       text = checkbox[2];
-    } else if (sectionLevel > 0) {
-      const numbered = NUMBERED_RE.exec(rawLine.trimEnd());
-      if (!numbered) continue;
+    } else if (numbered) {
       box = " ";
-      text = numbered[1];
+      text = numbered[2];
       const lead = LEADING_BOX_RE.exec(text);
       if (lead) {
         box = lead[1];

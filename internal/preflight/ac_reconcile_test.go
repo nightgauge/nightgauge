@@ -287,6 +287,16 @@ func TestParseACs_Forms(t *testing.T) {
 		{"tilde fence skipped", "## Acceptance Criteria\n~~~\n1. phantom\n~~~\n1. real\n", []string{"real"}},
 		{"nested numbered sub-step not a criterion", "## Acceptance Criteria\n1. Do X:\n    1. sub-step\n2. Do Y\n",
 			[]string{"Do X:", "Do Y"}},
+		// The sub-step sits at the parent's content column (#2684).
+		{"3-space sub-step at the content column", "## Acceptance Criteria\n1. Do X:\n   1. sub\n   2. sub two\n2. Do Y\n",
+			[]string{"Do X:", "Do Y"}},
+		{"sub-step after a blank line", "## Acceptance Criteria\n1. Do X:\n\n   1. sub\n", []string{"Do X:"}},
+		{"sibling items", "## Acceptance Criteria\n1. a\n2. b\n", []string{"a", "b"}},
+		{"4-column content keeps a 3-space item a sibling", "## Acceptance Criteria\n10. x\n   1. y\n", []string{"x", "y"}},
+		{"2-space item below the column is a sibling", "## Acceptance Criteria\n1. a\n  2. b\n", []string{"a", "b"}},
+		{"first item at 3 spaces counts", "## Acceptance Criteria\n   1. lone\n", []string{"lone"}},
+		{"unindented line ends the item", "## Acceptance Criteria\n1. a\nNotes:\n   1. b\n", []string{"a", "b"}},
+		{"heading ends the item", "## Acceptance Criteria\n1. a\n### More\n   1. b\n", []string{"a", "b"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
