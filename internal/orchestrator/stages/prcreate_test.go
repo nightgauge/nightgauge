@@ -708,11 +708,12 @@ func TestRenderBody_CriterionClosingKeywordDoesNotClose(t *testing.T) {
 		{Index: 0, Text: "`nightgauge pr merge N` closes #42 on green", Status: ACMet, Source: ACSourceValidate, Evidence: "fixes #42"},
 		{Index: 1, Text: "resolves #42 later", Status: ACNotVerifiable, Source: ACSourceValidate, Evidence: "Closes: #42"},
 		{Index: 2, Text: "it fixes #999 too", Status: ACMet, Source: ACSourceValidate, Evidence: "closes o/r#998"},
+		{Index: 3, Text: "Resolves: https://github.com/o/r/issues/997", Status: ACMet, Source: ACSourceValidate},
 	}
 	body := RenderBody(s)
 	// Criterion text is untrusted: a keyword naming ANOTHER issue must not
 	// close it either.
-	if BodyClosesIssue(body, 999) || BodyClosesIssue(body, 998) {
+	if BodyClosesIssue(body, 999) || BodyClosesIssue(body, 998) || closingKeywordURLRE.MatchString(body) {
 		t.Errorf("criterion text must not close an unrelated issue:\n%s", body)
 	}
 	if got, want := BodyClosesIssue(body, 42), IssueClosedBy(s.ACVerdicts); got != want {

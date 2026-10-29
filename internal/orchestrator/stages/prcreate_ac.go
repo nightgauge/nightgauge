@@ -290,11 +290,18 @@ func RewriteClosesToRefs(body string, n int) string {
 // whatever issue it names. It is for untrusted text — acceptance-criterion
 // text and evidence come from an issue body anyone who can file an issue
 // writes — so no issue closes because a criterion named it.
+//
+// GitHub also honours a keyword followed by an issue URL, which
+// closingKeywordRE does not match, so those are defanged too.
 func RewriteAllClosesToRefs(s string) string {
-	return closingKeywordRE.ReplaceAllStringFunc(s, func(match string) string {
+	s = closingKeywordRE.ReplaceAllStringFunc(s, func(match string) string {
 		return "Refs " + closingKeywordRE.FindStringSubmatch(match)[1]
 	})
+	return closingKeywordURLRE.ReplaceAllString(s, "Refs $1")
 }
+
+// closingKeywordURLRE matches a closing keyword followed by an issue URL.
+var closingKeywordURLRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(https?://\S+/issues/\d+)`)
 
 // AppendUnmetACs adds criteria under UnmetACHeading, creating the section
 // when the body has none, so post-merge names them as the remainder.
