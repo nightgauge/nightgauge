@@ -3112,23 +3112,27 @@ pipeline:
     allowlist_docs:
       - docs/**
       - "*.md"
+      - CHANGELOG.md
+      - packages/*/CHANGELOG.md
       - .github/**
       - README*
     allowlist_chore: # falls back to allowlist_docs when empty
       - docs/**
       - "*.md"
+      - CHANGELOG.md
+      - packages/*/CHANGELOG.md
       - .github/**
       - README*
       - configs/**
 ```
 
-| Field              | Type     | Default                                        | Description                                                                                                                               |
-| ------------------ | -------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`          | boolean  | `true`                                         | Master toggle. When `false`, the gate is skipped and `scope_drift_check` is `"skipped"`.                                                  |
-| `enforcement_mode` | string   | `"warn"`                                       | `"warn"` logs drift and lets the PR proceed (status `passed`). `"strict"` blocks PR creation (status `failed`, exit 1) when drift exists. |
-| `bypass_label`     | string   | `"scope:cross-cutting"`                        | Label that, when present on the issue, bypasses the gate entirely. Useful for cross-cutting docs that legitimately touch code.            |
-| `allowlist_docs`   | string[] | `["docs/**", "*.md", ".github/**", "README*"]` | Glob patterns evaluated for `type:docs` issues. See _Pattern syntax_ below.                                                               |
-| `allowlist_chore`  | string[] | falls back to `allowlist_docs`                 | Glob patterns evaluated for `type:chore` issues. When unset or empty, the docs allowlist is used.                                         |
+| Field              | Type     | Default                                                                                   | Description                                                                                                                               |
+| ------------------ | -------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`          | boolean  | `true`                                                                                    | Master toggle. When `false`, the gate is skipped and `scope_drift_check` is `"skipped"`.                                                  |
+| `enforcement_mode` | string   | `"warn"`                                                                                  | `"warn"` logs drift and lets the PR proceed (status `passed`). `"strict"` blocks PR creation (status `failed`, exit 1) when drift exists. |
+| `bypass_label`     | string   | `"scope:cross-cutting"`                                                                   | Label that, when present on the issue, bypasses the gate entirely. Useful for cross-cutting docs that legitimately touch code.            |
+| `allowlist_docs`   | string[] | `["docs/**", "*.md", "CHANGELOG.md", "packages/*/CHANGELOG.md", ".github/**", "README*"]` | Glob patterns evaluated for `type:docs` issues. See _Pattern syntax_ below.                                                               |
+| `allowlist_chore`  | string[] | falls back to `allowlist_docs`                                                            | Glob patterns evaluated for `type:chore` issues. When unset or empty, the docs allowlist is used.                                         |
 
 **Pattern syntax** (root-anchored, `.gitignore`-style):
 

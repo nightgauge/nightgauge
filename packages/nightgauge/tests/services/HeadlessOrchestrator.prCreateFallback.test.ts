@@ -8,7 +8,10 @@
  * git/gh layer.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { Logger } from "../../src/utils/logger";
 
@@ -22,11 +25,22 @@ vi.mock("../../src/utils/skillRunner", () => ({
   resolveModel: vi.fn().mockReturnValue({ model: "claude-sonnet-4-6", source: "default" }),
 }));
 
+// The pipeline state dir resolves through the binary; point it at a temp dir
+// so the gate-stop record and validate verdicts are real files (#2677).
+vi.mock("../../src/utils/cloneLayout", async () => {
+  const actual = await vi.importActual<typeof import("../../src/utils/cloneLayout")>(
+    "../../src/utils/cloneLayout"
+  );
+  return { ...actual, pipelineStateDir: () => stateDir.value };
+});
+
 vi.mock("../../src/services/BinaryResolver", () => ({
   BinaryResolver: { fromVSCode: () => ({ resolve: async () => binaryPath.value }) },
 }));
 
 const {
+  stateDir,
+  headSha,
   binaryPath,
   branchName,
   preExistingPrs,
@@ -36,6 +50,8 @@ const {
   prCreated,
   calls,
 } = vi.hoisted(() => ({
+  stateDir: { value: "" },
+  headSha: { value: "abc123" },
   binaryPath: { value: "/fake/nightgauge" as string | null },
   branchName: { value: "feat/42-add-thing" },
   preExistingPrs: { value: [] as Array<{ number: number }> },
@@ -58,6 +74,10 @@ vi.mock("child_process", async () => {
     const a = args || [];
     calls.value.push([cmd, ...a]);
 
+    // git rev-parse HEAD → commit sha (gate-stop record comparison, #2677)
+    if (cmd === "git" && a[0] === "rev-parse" && a[1] === "HEAD") {
+      return Promise.resolve({ stdout: `${headSha.value}\n`, stderr: "" });
+    }
     // git rev-parse --abbrev-ref HEAD → feature branch
     if (cmd === "git" && a[0] === "rev-parse") {
       return Promise.resolve({ stdout: `${branchName.value}\n`, stderr: "" });
@@ -308,5 +328,109 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     expect(result.created).toBe(false);
     expect(result.reason).toMatch(/binary unresolved/i);
     expect(countCalls((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create")).toBe(0);
+  });
+});
+
+function resetMocks() {
+  stateDir.value = fs.mkdtempSync(path.join(os.tmpdir(), "pr-create-fallback-"));
+  headSha.value = "abc123";
+  binaryPath.value = "/fake/nightgauge";
+  branchName.value = "feat/42-add-thing";
+  preExistingPrs.value = [];
+  commitsAhead.value = "2";
+  pushFails.value = false;
+  createFails.value = false;
+  prCreated.value = false;
+  calls.value = [];
+}
+
+function writeState(name: string, body: unknown) {
+  fs.writeFileSync(path.join(stateDir.value, name), JSON.stringify(body));
+}
+
+const isPush = (c: string[]) => c[0] === "git" && c[1] === "push";
+const isCreate = (c: string[]) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create";
+
+describe("post-create verification honours a pr-create gate stop (#2677)", () => {
+  beforeEach(resetMocks);
+  afterEach(() => fs.rmSync(stateDir.value, { recursive: true, force: true }));
+
+  const recordName = "pr-create-gate-stop-42.json";
+
+  it("opens no PR and fails with the gate's reason when the stop was recorded at HEAD", async () => {
+    writeState(recordName, {
+      gate: "scope_drift",
+      reason: "1 file outside the docs allowlist: src/x.ts",
+      head_sha: "abc123",
+    });
+    const { verify, paths } = makeOrchestratorForRecovery();
+
+    const err = await verify(42);
+
+    expect(err?.message).toContain("[pr-create-gate-stop]");
+    expect(err?.message).toContain("scope_drift: 1 file outside the docs allowlist: src/x.ts");
+    expect(countCalls(isPush)).toBe(0);
+    expect(countCalls(isCreate)).toBe(0);
+    expect(paths().get("pr-create")?.puntReason).toContain("blocking gate");
+    expect(fs.existsSync(path.join(stateDir.value, recordName))).toBe(false);
+  });
+
+  it("discards a stale record from another HEAD and runs the fallback", async () => {
+    writeState(recordName, { gate: "security_scan", reason: "secret", head_sha: "old999" });
+    const { verify } = makeOrchestratorForRecovery();
+
+    const err = await verify(42);
+
+    expect(err).toBeNull();
+    expect(countCalls(isPush)).toBe(1);
+    expect(countCalls(isCreate)).toBe(1);
+    expect(fs.existsSync(path.join(stateDir.value, recordName))).toBe(false);
+  });
+
+  it("runs the fallback unchanged when no record exists", async () => {
+    const { verify } = makeOrchestratorForRecovery();
+
+    expect(await verify(42)).toBeNull();
+    expect(countCalls(isCreate)).toBe(1);
+  });
+});
+
+describe("fallback closing keyword follows validate verdicts (#2677)", () => {
+  beforeEach(resetMocks);
+  afterEach(() => fs.rmSync(stateDir.value, { recursive: true, force: true }));
+
+  async function fallbackBody(): Promise<string> {
+    await callFallback();
+    const create = calls.value.find(isCreate);
+    expect(create).toBeDefined();
+    return create![create!.indexOf("--body") + 1];
+  }
+
+  it("writes Closes #N when every criterion is met", async () => {
+    writeState("validate-42.json", {
+      acceptance_criteria_verdicts: [
+        { index: 1, status: "met" },
+        { index: 2, status: "met" },
+      ],
+    });
+    const body = await fallbackBody();
+    expect(body.startsWith("Closes #42")).toBe(true);
+    expect(body).not.toMatch(/\bRefs #42\b/);
+  });
+
+  it.each([
+    ["one criterion unmet", [{ status: "met" }, { status: "unmet" }]],
+    ["one criterion not verifiable", [{ status: "met" }, { status: "not_verifiable" }]],
+    ["no criteria", []],
+  ])("writes Refs #N when %s", async (_label, verdicts) => {
+    writeState("validate-42.json", { acceptance_criteria_verdicts: verdicts });
+    const body = await fallbackBody();
+    expect(body.startsWith("Refs #42")).toBe(true);
+    expect(body).not.toMatch(/\bCloses #42\b/);
+  });
+
+  it("writes Refs #N when validate-{N}.json is missing", async () => {
+    const body = await fallbackBody();
+    expect(body.startsWith("Refs #42")).toBe(true);
   });
 });

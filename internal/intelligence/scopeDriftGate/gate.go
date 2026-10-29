@@ -52,12 +52,16 @@ func DefaultGateConfig() GateConfig {
 		AllowlistDocs: []string{
 			"docs/**",
 			"*.md",
+			"CHANGELOG.md",
+			"packages/*/CHANGELOG.md",
 			".github/**",
 			"README*",
 		},
 		AllowlistChore: []string{
 			"docs/**",
 			"*.md",
+			"CHANGELOG.md",
+			"packages/*/CHANGELOG.md",
 			".github/**",
 			"README*",
 		},

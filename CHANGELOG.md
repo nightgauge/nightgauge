@@ -22,6 +22,13 @@ changelog, and the release workflow refuses a tag that does not.
   merges with `Refs #N`. A criterion that mentions `<details>` inline no
   longer hides the criteria after it. Issues with such bodies get a new
   criteria fingerprint, so an open PR on one re-plans on resume.
+- **A blocked pr-create no longer gets a PR anyway (#2677).** When the secret
+  scan or strict scope drift stopped pr-create, the deterministic fallback
+  opened the PR regardless. The skill now records the stop and the fallback
+  fails the stage with that gate's reason instead. The fallback PR now says
+  `Closes #N` when feature-validate met every acceptance criterion, and the
+  default docs and chore scope-drift allowlists accept `CHANGELOG.md` and
+  `packages/*/CHANGELOG.md`.
 - **pr-merge leaves a `Refs #N` issue open (#2674).** The skill closed the
   issue unconditionally after merge, before the post-merge hook could keep a
   partial delivery open. `nightgauge issue close --pr <N>` now applies the
