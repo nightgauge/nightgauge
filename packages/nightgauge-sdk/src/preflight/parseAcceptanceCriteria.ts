@@ -17,8 +17,12 @@ const NUMBERED_RE = /^\d{1,3}[.)][ \t]+(.{1,4096})$/;
 /** Optional `[ ]` / `[x]` at the start of a numbered item's text. */
 const LEADING_BOX_RE = /^\[([ xX])\][ \t]+(.+)$/;
 
-/** ATX Markdown heading: level marks and text. */
-const HEADING_RE = /^ {0,3}(#{1,6})[ \t]+(.*?)[ \t#]*$/;
+/**
+ * ATX Markdown heading: level marks and text. The text capture is greedy and
+ * unanchored at the end so no two quantifiers overlap; a closing `#` run is
+ * irrelevant to the "acceptance criteria" substring test below.
+ */
+const HEADING_RE = /^ {0,3}(#{1,6})[ \t]+(.*)$/;
 
 /**
  * Collapsed `<details>` block whose opening tag starts a line — where issue
