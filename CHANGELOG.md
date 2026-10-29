@@ -59,8 +59,8 @@ changelog, and the release workflow refuses a tag that does not.
   Each criterion appears once in the body: the parser ignores the original
   body that refinement archives in a `<details>` block, and drops duplicates.
   Validate evidence saying "not met" now counts as unmet. The extension's
-  fallback PR also writes `Refs #N`. A closing keyword inside a criterion's
-  text or evidence is rewritten to `Refs`, nested `<details>` archives are
+  fallback PR also writes `Refs #N`. Every closing keyword inside a criterion's
+  text or evidence is rewritten to `Refs`, whatever issue it names, nested `<details>` archives are
   skipped whole, the SDK parser matches the Go one, and a missing
   ac-reconcile-{N}.json is named in the body instead of read as no criteria.
 

@@ -717,8 +717,10 @@ without one, Dependabot's included, is skipped). A PR is stranded when issue
 scheduler dispatches only open issues, so nothing would land it. For each
 stranded PR it files one tracking issue, `fix: land stranded follow-up PR #X
 (for #N)`, labelled `bug` and `pipeline-gap` where those labels exist and
-added to the board. The hidden marker
-`<!-- nightgauge:stranded-follow-up pr=X -->` is the idempotency key, so a
-later sweep finds the issue instead of filing another. The card's key is
-`pr-X` and its fingerprint is the parent and tracking issue numbers. The
-card retracts once the PR merges or closes.
+added to the board. The issue is filed once: a later sweep reads the
+tracking number back from its own open card, by number and in any state, or
+else finds the open issue with that exact title. Every sweep that sees an
+open tracking issue adds it to the board again, so a failed board sync is
+repaired on the next pass. The card's key is `pr-X`, its context names the
+PR and the tracking issue, and its fingerprint is the parent and tracking
+issue numbers. The card retracts once the PR merges or closes.

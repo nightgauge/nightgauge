@@ -286,12 +286,22 @@ func RewriteClosesToRefs(body string, n int) string {
 	})
 }
 
+// RewriteAllClosesToRefs replaces every closing keyword with `Refs`,
+// whatever issue it names. It is for untrusted text — acceptance-criterion
+// text and evidence come from an issue body anyone who can file an issue
+// writes — so no issue closes because a criterion named it.
+func RewriteAllClosesToRefs(s string) string {
+	return closingKeywordRE.ReplaceAllStringFunc(s, func(match string) string {
+		return "Refs " + closingKeywordRE.FindStringSubmatch(match)[1]
+	})
+}
+
 // AppendUnmetACs adds criteria under UnmetACHeading, creating the section
 // when the body has none, so post-merge names them as the remainder.
 func AppendUnmetACs(body string, issueNumber int, criteria []string) string {
 	var items strings.Builder
 	for _, c := range criteria {
-		items.WriteString("- " + RewriteClosesToRefs(c, issueNumber) + "\n")
+		items.WriteString("- " + RewriteAllClosesToRefs(c) + "\n")
 	}
 	if i := strings.Index(body, UnmetACHeading); i >= 0 {
 		// Insert at the end of the existing section (next heading or EOF).

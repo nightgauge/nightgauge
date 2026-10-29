@@ -707,13 +707,22 @@ func TestRenderBody_CriterionClosingKeywordDoesNotClose(t *testing.T) {
 	s.ACVerdicts = []ACVerdict{
 		{Index: 0, Text: "`nightgauge pr merge N` closes #42 on green", Status: ACMet, Source: ACSourceValidate, Evidence: "fixes #42"},
 		{Index: 1, Text: "resolves #42 later", Status: ACNotVerifiable, Source: ACSourceValidate, Evidence: "Closes: #42"},
+		{Index: 2, Text: "it fixes #999 too", Status: ACMet, Source: ACSourceValidate, Evidence: "closes o/r#998"},
 	}
 	body := RenderBody(s)
+	// Criterion text is untrusted: a keyword naming ANOTHER issue must not
+	// close it either.
+	if BodyClosesIssue(body, 999) || BodyClosesIssue(body, 998) {
+		t.Errorf("criterion text must not close an unrelated issue:\n%s", body)
+	}
 	if got, want := BodyClosesIssue(body, 42), IssueClosedBy(s.ACVerdicts); got != want {
 		t.Errorf("body closes = %v, verdicts close = %v\n%s", got, want, body)
 	}
 	if got := AppendUnmetACs("Refs #42\n", 42, []string{"fix #42 here"}); BodyClosesIssue(got, 42) {
 		t.Errorf("AppendUnmetACs must not add a closing keyword: %q", got)
+	}
+	if got := AppendUnmetACs("Refs #42\n", 42, []string{"closes #999"}); BodyClosesIssue(got, 999) {
+		t.Errorf("AppendUnmetACs must not close an unrelated issue: %q", got)
 	}
 }
 

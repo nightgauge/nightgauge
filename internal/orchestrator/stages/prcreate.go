@@ -410,9 +410,9 @@ func RenderBody(snap PRCreateSnapshot) string {
 	// Acceptance criteria (#2595, #2655): each criterion renders exactly
 	// once — met ones here, the rest under UnmetACHeading, which the
 	// post-merge hook reads (bullet lines only) to name the remainder.
-	// Criterion text and evidence are untrusted, so a closing keyword for
-	// this issue inside them is rewritten to `Refs` (#2655).
-	acText := func(s string) string { return RewriteClosesToRefs(s, snap.IssueNumber) }
+	// Criterion text and evidence are untrusted, so every closing keyword
+	// inside them is rewritten to `Refs`, whatever issue it names (#2655).
+	acText := RewriteAllClosesToRefs
 	var met []ACVerdict
 	for _, v := range snap.ACVerdicts {
 		if v.Status == ACMet {
