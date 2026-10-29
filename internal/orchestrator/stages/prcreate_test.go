@@ -713,7 +713,7 @@ func TestRenderBody_CriterionClosingKeywordDoesNotClose(t *testing.T) {
 	body := RenderBody(s)
 	// Criterion text is untrusted: a keyword naming ANOTHER issue must not
 	// close it either.
-	if BodyClosesIssue(body, 999) || BodyClosesIssue(body, 998) || closingKeywordURLRE.MatchString(body) {
+	if BodyClosesIssue(body, 999) || BodyClosesIssue(body, 998) || BodyClosesIssue(body, 997) {
 		t.Errorf("criterion text must not close an unrelated issue:\n%s", body)
 	}
 	if got, want := BodyClosesIssue(body, 42), IssueClosedBy(s.ACVerdicts); got != want {

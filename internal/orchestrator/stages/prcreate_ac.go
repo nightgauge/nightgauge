@@ -3,9 +3,9 @@ package stages
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
@@ -256,52 +256,26 @@ func acCheckboxBody(criteria []string) string {
 	return b.String()
 }
 
-// closingKeywordRE matches GitHub's closing keywords followed by an issue
-// reference, optionally repo-qualified. Twin of hooks.closingKeywordRE, which
-// stages must not import; the two must agree on what closes an issue.
-var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*((?:[\w.-]+/[\w.-]+)?#(\d+))\b`)
-
 // BodyClosesIssue reports whether body carries a closing keyword for issue n.
+// forge owns the one closing-keyword matcher, shared with the post-merge hook.
 func BodyClosesIssue(body string, n int) bool {
-	want := strconv.Itoa(n)
-	for _, m := range closingKeywordRE.FindAllStringSubmatch(body, -1) {
-		if m[2] == want {
-			return true
-		}
-	}
-	return false
+	return forge.ClosesIssue(body, n)
 }
 
 // RewriteClosesToRefs replaces every closing keyword that targets issue n
 // with `Refs`, so merging the PR leaves the issue open (#2623, the #2595
 // rule). References to other issues are untouched.
 func RewriteClosesToRefs(body string, n int) string {
-	want := strconv.Itoa(n)
-	return closingKeywordRE.ReplaceAllStringFunc(body, func(match string) string {
-		m := closingKeywordRE.FindStringSubmatch(match)
-		if m[2] != want {
-			return match
-		}
-		return "Refs " + m[1]
-	})
+	return forge.RewriteClosingRefs(body, func(r forge.ClosingRef) bool { return r.Number == n })
 }
 
 // RewriteAllClosesToRefs replaces every closing keyword with `Refs`,
-// whatever issue it names. It is for untrusted text — acceptance-criterion
-// text and evidence come from an issue body anyone who can file an issue
-// writes — so no issue closes because a criterion named it.
-//
-// GitHub also honours a keyword followed by an issue URL, which
-// closingKeywordRE does not match, so those are defanged too.
+// whatever issue it names, including the issue-URL form. It is for untrusted
+// text — acceptance-criterion text and evidence come from an issue body anyone
+// who can file an issue writes — so no issue closes because a criterion named it.
 func RewriteAllClosesToRefs(s string) string {
-	s = closingKeywordRE.ReplaceAllStringFunc(s, func(match string) string {
-		return "Refs " + closingKeywordRE.FindStringSubmatch(match)[1]
-	})
-	return closingKeywordURLRE.ReplaceAllString(s, "Refs $1")
+	return forge.RewriteClosingRefs(s, func(forge.ClosingRef) bool { return true })
 }
-
-// closingKeywordURLRE matches a closing keyword followed by an issue URL.
-var closingKeywordURLRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(https?://\S+/issues/\d+)`)
 
 // AppendUnmetACs adds criteria under UnmetACHeading, creating the section
 // when the body has none, so post-merge names them as the remainder.

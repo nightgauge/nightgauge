@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -647,10 +645,6 @@ func writeValidationMarker(ctx context.Context, input PostMergeInput, issueNodeI
 	return ValidationMarkerWritten
 }
 
-// closingKeywordRE matches GitHub's closing keywords followed by an issue
-// reference, optionally repo-qualified.
-var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(?:[\w.-]+/[\w.-]+)?#(\d+)\b`)
-
 // IsPartialDelivery reports whether a merged PR's body delivered only part of
 // issue number: the body was read and names no closing keyword for it (Refs
 // #N). An empty body was not read, so it is not a partial delivery. The
@@ -660,15 +654,9 @@ func IsPartialDelivery(body string, number int) bool {
 }
 
 // ClosesIssue reports whether a PR body carries a closing keyword for issue
-// number (#2595).
+// number (#2595), in any form GitHub honours (forge.ClosesIssue, #2687).
 func ClosesIssue(body string, number int) bool {
-	want := strconv.Itoa(number)
-	for _, m := range closingKeywordRE.FindAllStringSubmatch(body, -1) {
-		if m[1] == want {
-			return true
-		}
-	}
-	return false
+	return forge.ClosesIssue(body, number)
 }
 
 // unmetCriteriaHeading must equal stages.UnmetACHeading, which renders the
