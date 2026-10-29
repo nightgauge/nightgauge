@@ -146,6 +146,39 @@ func TestEvaluate_DocsDriftStrictMode(t *testing.T) {
 	}
 }
 
+// TestEvaluate_PackageChangelogsAllowedStrict is the #2677 regression: the
+// extension changelog AGENTS.md requires is not drift for a docs or chore
+// issue, while other files under the same package still are.
+func TestEvaluate_PackageChangelogsAllowedStrict(t *testing.T) {
+	cfg := DefaultGateConfig()
+	cfg.EnforcementMode = EnforcementStrict
+	g := NewGateEvaluator(cfg)
+
+	for _, issueType := range []string{IssueTypeDocs, IssueTypeChore} {
+		res := g.Evaluate(issueType, []string{"type:" + issueType}, []string{
+			"packages/nightgauge/CHANGELOG.md",
+			"CHANGELOG.md",
+		})
+		if !res.Allowed || len(res.DriftedFiles) != 0 {
+			t.Errorf("%s: changelogs must pass strict mode, got Allowed=%v drifted=%v (reason: %q)",
+				issueType, res.Allowed, res.DriftedFiles, res.Reason)
+		}
+
+		res = g.Evaluate(issueType, []string{"type:" + issueType}, []string{
+			"packages/nightgauge/CHANGELOG.md",
+			"packages/nightgauge/src/x.ts",
+			"packages/nightgauge/README-dev.md",
+		})
+		if res.Allowed {
+			t.Errorf("%s: package source must still drift, got Allowed=true", issueType)
+		}
+		want := []string{"packages/nightgauge/src/x.ts", "packages/nightgauge/README-dev.md"}
+		if len(res.DriftedFiles) != len(want) {
+			t.Errorf("%s: drifted = %v, want %v", issueType, res.DriftedFiles, want)
+		}
+	}
+}
+
 func TestEvaluate_BypassLabel(t *testing.T) {
 	cfg := DefaultGateConfig()
 	cfg.EnforcementMode = EnforcementStrict

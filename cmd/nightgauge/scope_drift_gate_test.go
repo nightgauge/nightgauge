@@ -135,6 +135,25 @@ func TestScopeDriftCheck_IssueTypeOverrideStillTargetsConfigRepo(t *testing.T) {
 	assertWellFormedGateSlug(t, rec)
 }
 
+// TestScopeDriftCheck_StrictPassesPackageChangelog is AC1 of #2677: with the
+// shipped strict default, a docs diff of only the extension changelog passes,
+// and a package source file in the same diff still blocks.
+func TestScopeDriftCheck_StrictPassesPackageChangelog(t *testing.T) {
+	dir := sizeGateEnv(t)
+	writeGateConfig(t, dir, productionShapeConfig)
+	stubGateIssueFetch(t, []string{"type:docs"}, nil)
+
+	writeDevContext(t, dir, 1, `{"files_changed":{"created":[],"modified":["packages/nightgauge/CHANGELOG.md"]}}`)
+	if _, err := runGateCheck(t, []string{"scope-drift", "check"}, "--issue", "1", "--issue-type", "docs", "--json"); err != nil {
+		t.Fatalf("strict scope-drift check rejected a changelog-only docs diff: %v", err)
+	}
+
+	writeDevContext(t, dir, 2, `{"files_changed":{"created":[],"modified":["packages/nightgauge/CHANGELOG.md","packages/nightgauge/src/x.ts"]}}`)
+	if _, err := runGateCheck(t, []string{"scope-drift", "check"}, "--issue", "2", "--issue-type", "docs", "--json"); err == nil {
+		t.Fatal("strict scope-drift check passed a docs diff that touches package source")
+	}
+}
+
 // TestScopeDriftCheck_MalformedRepoSlug proves the guard is the shared
 // resolveGateRepo, not a re-implementation: `--repo 'acme/'` is rejected with
 // its message before any fetch is attempted.

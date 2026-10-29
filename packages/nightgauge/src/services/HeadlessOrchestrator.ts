@@ -3469,6 +3469,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // Gate failed → pr-create reported success but no OPEN PR exists.
       const reason = gateResult.reason || "no open PR found for the feature branch";
 
+      // #2677 — a pr-create stage that stopped on a blocking gate (secret scan,
+      // strict scope drift) recorded the stop. Opening the fallback PR then
+      // would route around the very gate that refused it.
+      const gateStop = await this.consumePrCreateGateStop(issueNumber, cwd);
+      if (gateStop) {
+        const stopReason = `${gateStop.gate}: ${gateStop.reason}`;
+        this.stageExecutionPaths.set("pr-create", {
+          path: "llm",
+          puntReason: `pr-create stopped on a blocking gate (${stopReason})`,
+        });
+        this.logger.error("Post-create verification: pr-create stopped on a blocking gate", {
+          issueNumber,
+          gate: gateStop.gate,
+          reason: gateStop.reason,
+        });
+        return new Error(
+          `[pr-create-gate-stop] ${stopReason} — the deterministic fallback did not open a PR`
+        );
+      }
+
       // #3927 — deterministic create fallback. Mirror of the pr-merge fallback
       // (#3259): rather than fail the stage and depend on an LLM retry that may
       // no-op again for the same reason (a dismissed prompt in autonomous mode,
@@ -4183,6 +4203,92 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Read and consume the gate-stop record the pr-create skill writes before a
+   * blocking exit (#2677). Returns the stop when it was recorded at the current
+   * HEAD; a record from another HEAD is stale (the branch moved since, e.g. a
+   * fix was committed) and is discarded. The record is removed either way so a
+   * later retry is judged on its own run.
+   */
+  private async consumePrCreateGateStop(
+    issueNumber: number,
+    cwd: string
+  ): Promise<{ gate: string; reason: string } | null> {
+    const recordPath = path.join(pipelineStateDir(cwd), `pr-create-gate-stop-${issueNumber}.json`);
+    let raw: string;
+    try {
+      raw = fs.readFileSync(recordPath, "utf-8");
+    } catch {
+      return null;
+    }
+    try {
+      fs.rmSync(recordPath, { force: true });
+    } catch (err) {
+      this.logger.warn("Could not remove pr-create gate-stop record", { issueNumber, error: err });
+    }
+    let record: { gate?: unknown; reason?: unknown; head_sha?: unknown };
+    try {
+      record = JSON.parse(raw);
+    } catch (err) {
+      this.logger.warn("Ignoring unparseable pr-create gate-stop record", {
+        issueNumber,
+        error: err,
+      });
+      return null;
+    }
+    const gate = typeof record.gate === "string" && record.gate ? record.gate : "unknown_gate";
+    const reason =
+      typeof record.reason === "string" && record.reason ? record.reason : "gate blocked the PR";
+    const recordedHead = typeof record.head_sha === "string" ? record.head_sha.trim() : "";
+    let head: string;
+    try {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: 15_000,
+      });
+      head = stdout.trim();
+    } catch {
+      // HEAD unresolvable: honour the stop rather than open a PR around a gate.
+      return { gate, reason };
+    }
+    if (recordedHead && recordedHead !== head) {
+      this.logger.info("Discarding stale pr-create gate-stop record", {
+        issueNumber,
+        recordedHead,
+        head,
+      });
+      return null;
+    }
+    return { gate, reason };
+  }
+
+  /**
+   * Closing keyword for the fallback PR body, from feature-validate's verdicts.
+   * Same predicate as IssueClosedBy (internal/orchestrator/stages/prcreate_ac.go,
+   * #2655): `Closes` only when the verdict list is non-empty and every entry is
+   * `met`; anything else, including a missing or unreadable file, is `Refs`.
+   */
+  private fallbackClosingKeyword(issueNumber: number, cwd: string): "Closes" | "Refs" {
+    try {
+      const ctxPath = path.join(pipelineStateDir(cwd), `validate-${issueNumber}.json`);
+      const parsed = JSON.parse(fs.readFileSync(ctxPath, "utf-8")) as {
+        acceptance_criteria_verdicts?: Array<{ status?: unknown }>;
+      };
+      const verdicts = parsed.acceptance_criteria_verdicts;
+      if (
+        Array.isArray(verdicts) &&
+        verdicts.length > 0 &&
+        verdicts.every((v) => v?.status === "met")
+      ) {
+        return "Closes";
+      }
+    } catch {
+      // No readable verdicts: nothing proves the issue is done.
+    }
+    return "Refs";
+  }
+
+  /**
    * Deterministic pr-create fallback (#3927) — the mirror of
    * tryDeterministicMergeFallback (#3259) for the create stage. When the
    * pr-create skill exits 0 but the post-create gate finds no open PR, push
@@ -4192,7 +4298,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * a heredoc PR body).
    *
    * LAST-RESORT safety net: it opens a minimal PR (title from the issue, body
-   * `Refs #N`, so merging it leaves the issue open — #2655) purely to unblock
+   * `Closes #N` only when validate met every criterion, else `Refs #N` so
+   * merging leaves the issue open — #2655, #2677) purely to unblock
    * the pipeline — the rich description is the
    * pr-create stage's job. It runs `gh`/`git` via execFile (no shell, no
    * heredoc), so it cannot trip the destructive-git hook that may have blocked
@@ -4339,10 +4446,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     } catch {
       // keep default title
     }
+    const keyword = this.fallbackClosingKeyword(issueNumber, cwd);
+    const verdictLine =
+      keyword === "Closes"
+        ? `feature-validate met every acceptance criterion, so #${issueNumber} closes on merge.`
+        : `This safety-net PR carries no verified acceptance criteria, so #${issueNumber} ` +
+          `stays open on merge (#2655).`;
     const body =
-      `Refs #${issueNumber}\n\n` +
-      `This safety-net PR carries no verified acceptance criteria, so #${issueNumber} ` +
-      `stays open on merge (#2655).\n\n` +
+      `${keyword} #${issueNumber}\n\n` +
+      `${verdictLine}\n\n` +
       `_Opened by the deterministic pr-create fallback (#3927) after the pr-create stage ` +
       `exited without creating a PR. The full description is normally authored by the ` +
       `pr-create stage; this is a safety-net PR to unblock the pipeline._`;

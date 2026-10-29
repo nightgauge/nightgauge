@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **A blocked pr-create no longer gets a safety-net PR (#2677).** When the
+  secret scan or strict scope drift stopped pr-create, the fallback opened the
+  PR anyway. The stage now fails with that gate's reason. The safety-net PR
+  says `Closes #N` when every acceptance criterion was validated met.
+
 ### Changed
 
 - **The safety-net PR no longer closes its issue (#2655).** When pr-create

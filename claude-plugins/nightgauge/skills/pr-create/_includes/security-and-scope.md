@@ -130,6 +130,8 @@ done
 ### Step 2.5.4: Evaluate findings and set status
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ "$SECURITY_CRITICAL" -gt 0 ]; then
   SECURITY_SCAN_STATUS="failed"
   echo ""
@@ -143,6 +145,12 @@ if [ "$SECURITY_CRITICAL" -gt 0 ]; then
   echo "  4. Use environment variables or a secrets manager instead"
   echo ""
   echo "After fixing: git add -p && git commit --amend"
+  # Record the stop so the orchestrator does not open a fallback PR (#2677).
+  jq -n --arg gate security_scan \
+    --arg reason "$SECURITY_CRITICAL critical secret finding(s) in the changed files" \
+    --arg head_sha "$(git rev-parse HEAD)" --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{gate: $gate, reason: $reason, head_sha: $head_sha, created_at: $created_at}' \
+    | nightgauge layout write pipeline "pr-create-gate-stop-${ISSUE_NUMBER}.json" >/dev/null
   exit 1
 
 elif [ "$SECURITY_WARNINGS" -gt 0 ]; then
@@ -226,6 +234,12 @@ if [ "$ISSUE_TYPE" = "docs" ] || [ "$ISSUE_TYPE" = "chore" ]; then
       SCOPE_DRIFT_STATUS="failed"
       echo "Scope drift gate: BLOCKED (strict mode)" >&2
       printf '%s\n' "$DRIFT_RESULT" | jq . >&2
+      # Record the stop so the orchestrator does not open a fallback PR (#2677).
+      jq -n --arg gate scope_drift \
+        --arg reason "$(printf '%s\n' "$DRIFT_RESULT" | jq -r '.reason // "scope drift detected"')" \
+        --arg head_sha "$(git rev-parse HEAD)" --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{gate: $gate, reason: $reason, head_sha: $head_sha, created_at: $created_at}' \
+        | "$BINARY" layout write pipeline "pr-create-gate-stop-${ISSUE_NUMBER}.json" >/dev/null
       exit 1
     else
       SCOPE_DRIFT_STATUS="skipped"
@@ -236,6 +250,10 @@ else
   echo "Scope drift gate: skipped (issue type: $ISSUE_TYPE)"
 fi
 ```
+
+A blocking exit in either gate writes `pr-create-gate-stop-{N}.json` first. The stage ends
+there: the orchestrator reads that record, fails the stage with the gate's reason, and does
+not open a fallback PR. Do not open the PR another way.
 
 The resulting `$SCOPE_DRIFT_STATUS` flows into `preflight_results.scope_drift_check`
 when `pr-{N}.json` is written in Phase 4.
