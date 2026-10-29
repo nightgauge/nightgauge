@@ -66,4 +66,42 @@ describe("parseAcceptanceCriteria", () => {
     const acs = parseAcceptanceCriteria("- [ ]   has spaces   ");
     expect(acs[0].text).toBe("has spaces");
   });
+
+  it("extracts numbered items inside an Acceptance Criteria section", () => {
+    const body = "## Acceptance Criteria\n1. dot\n2) paren\n3. **AC3:** bold\n";
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual([
+      "dot",
+      "paren",
+      "**AC3:** bold",
+    ]);
+  });
+
+  it("keeps checkbox and numbered items in document order", () => {
+    const body = "## Acceptance Criteria\n- [ ] box\n1. num\n* [x] star\n";
+    const acs = parseAcceptanceCriteria(body);
+    expect(acs.map((a) => [a.index, a.text, a.checkbox_state])).toEqual([
+      [0, "box", "unchecked"],
+      [1, "num", "unchecked"],
+      [2, "star", "checked"],
+    ]);
+  });
+
+  it("ignores numbered items outside an Acceptance Criteria section", () => {
+    const body = "## Steps\n1. run\n## Acceptance Criteria\n1. in\n## Notes\n1. out\n";
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(["in"]);
+  });
+
+  it("does not let an inline `<details>` mention swallow later criteria", () => {
+    const body =
+      "- [ ] keeps the `<details>` exclusion\n- [ ] later\n\n<details>\n- [ ] archived\n</details>\n";
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual([
+      "keeps the `<details>` exclusion",
+      "later",
+    ]);
+  });
+
+  it("drops repeated criteria", () => {
+    const acs = parseAcceptanceCriteria("- [ ] same  text\n- [x] same text\n");
+    expect(acs).toHaveLength(1);
+  });
 });

@@ -11,15 +11,37 @@ import type { AcceptanceCriterion } from "./types.js";
  */
 const CHECKBOX_RE = /^[-*][ \t]+\[([ xX])\][ \t]+(.{1,4096})$/;
 
+/** Numbered list item (`1.` or `1)`); a criterion only inside an AC section. */
+const NUMBERED_RE = /^\d{1,3}[.)][ \t]+(.{1,4096})$/;
+
+/** Optional `[ ]` / `[x]` at the start of a numbered item's text. */
+const LEADING_BOX_RE = /^\[([ xX])\][ \t]+(.+)$/;
+
 /**
- * Extract Markdown acceptance-criterion checkboxes from an issue body.
+ * ATX Markdown heading: level marks and text. The text capture is greedy and
+ * unanchored at the end so no two quantifiers overlap; a closing `#` run is
+ * irrelevant to the "acceptance criteria" substring test below.
+ */
+const HEADING_RE = /^ {0,3}(#{1,6})[ \t]+(.*)$/;
+
+/**
+ * Collapsed `<details>` block whose opening tag starts a line — where issue
+ * refinement archives the original body. An inline `<details>` mention does
+ * not start a block.
+ */
+const DETAILS_BLOCK_RE = /^[ \t]*<details\b[\s\S]*?<\/details>/gim;
+
+/**
+ * Extract acceptance criteria from an issue body.
  *
- * Returns an ordered array preserving the position of each checkbox in
- * the body. The text is trimmed; the state is normalized to
- * `"checked"` (any of `x`, `X`) or `"unchecked"` (a single space).
+ * Mirrors the authoritative Go parser (`parseACs` in
+ * `internal/preflight/ac_reconcile.go`): checkbox bullets anywhere, plus
+ * numbered items inside an "Acceptance Criteria" heading section, in
+ * document order. `<details>` blocks are ignored and repeated criteria
+ * (whitespace-collapsed text) are dropped.
  *
- * Checkbox state is informational — the reconciler verifies satisfaction
- * against `main`, not the box state.
+ * State is informational — the reconciler verifies satisfaction against
+ * `main`, not the box state. A numbered item without a box is unchecked.
  */
 export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
   if (typeof body !== "string" || body.length === 0) {
@@ -27,19 +49,49 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
   }
 
   const out: AcceptanceCriterion[] = [];
-  let index = 0;
-  for (const rawLine of body.split(/\r?\n/)) {
-    const match = CHECKBOX_RE.exec(rawLine.trim());
-    if (!match) continue;
-    const stateChar = match[1];
-    const text = match[2].trim();
+  const seen = new Set<string>();
+  let sectionLevel = 0;
+  for (const rawLine of body.replace(DETAILS_BLOCK_RE, "").split(/\r?\n/)) {
+    const heading = HEADING_RE.exec(rawLine);
+    if (heading) {
+      const level = heading[1].length;
+      if (heading[2].toLowerCase().includes("acceptance criteria")) {
+        sectionLevel = level;
+      } else if (sectionLevel > 0 && level <= sectionLevel) {
+        sectionLevel = 0;
+      }
+      continue;
+    }
+    const line = rawLine.trim();
+    let box: string;
+    let text: string;
+    const checkbox = CHECKBOX_RE.exec(line);
+    if (checkbox) {
+      box = checkbox[1];
+      text = checkbox[2];
+    } else if (sectionLevel > 0) {
+      const numbered = NUMBERED_RE.exec(line);
+      if (!numbered) continue;
+      box = " ";
+      text = numbered[1];
+      const lead = LEADING_BOX_RE.exec(text);
+      if (lead) {
+        box = lead[1];
+        text = lead[2];
+      }
+    } else {
+      continue;
+    }
+    text = text.trim();
     if (text.length === 0) continue;
+    const key = text.split(/\s+/).join(" ");
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push({
-      index,
+      index: out.length,
       text,
-      checkbox_state: stateChar === " " ? "unchecked" : "checked",
+      checkbox_state: box === " " ? "unchecked" : "checked",
     });
-    index += 1;
   }
   return out;
 }
