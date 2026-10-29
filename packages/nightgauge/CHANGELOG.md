@@ -44,6 +44,16 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
 - Follow-up work a run discovers is now filed as issues after the PR merges,
   instead of being left in the run's capture file (#2638).
 
+- **A concurrent edit to a clean file in a sibling repo no longer fails the
+  running stage (#2656).** Worktree containment used to attribute every sibling
+  path that went clean → dirty during a stage to that stage, so an operator or
+  supervising session editing a sibling file failed the run and halted the
+  repository's dispatch. A clean → dirty path is now the stage's only when its
+  own tool calls name it — a write tool's file path, or a shell or patch command
+  naming the path. Every other such path is a `[containment-ambiguous]`
+  warning. When the adapter supplies no tool calls, the stage still fails, and
+  the message says the attribution was by filesystem diff only.
+
 ### Added
 
 - **Agentic stages report their phases from evidence, not narration (#1887).**
