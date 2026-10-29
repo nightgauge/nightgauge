@@ -241,9 +241,10 @@ export interface ParsedStreamMessage {
    */
   toolUseId?: string;
   /**
-   * The `Task`/`Agent` call the singular {@link toolName} call ran under, from
-   * the line's top-level `parent_tool_use_id` (#2660). Carried on the singular
-   * shape too, so a nested call links whichever shape delivers it (#169).
+   * The delegation call this line ran under, from its top-level
+   * `parent_tool_use_id` (#2660). Set on the singular tool shape and on every
+   * sub-agent `assistant` message, with or without tool_use blocks, so a
+   * sub-agent that ran but called no tool still links its delegation.
    */
   parentToolUseId?: string;
   /**
@@ -693,6 +694,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
             type: "assistant",
             content: textParts.length > 0 ? textParts.join("\n") : undefined,
             toolUses: toolUses.length > 0 ? toolUses : undefined,
+            ...(parentToolUseId ? { parentToolUseId } : {}),
             ...(servedModel ? { model: servedModel } : {}),
             ...(incrementalUsage ? { incrementalUsage } : {}),
           };
@@ -700,6 +702,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       }
       return {
         type: "assistant",
+        ...(lineParentToolUseId ? { parentToolUseId: lineParentToolUseId } : {}),
         ...(servedModel ? { model: servedModel } : {}),
         ...(incrementalUsage ? { incrementalUsage } : {}),
       };

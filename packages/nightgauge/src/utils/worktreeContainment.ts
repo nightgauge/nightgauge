@@ -742,7 +742,7 @@ const MAX_RECORDED_TEXT = 64 * 1024;
 const MAX_RECORDED_TEXT_TOTAL = 4 * 1024 * 1024;
 
 /** Tools that delegate to a sub-agent whose own tool calls carry the delegation's id (#2660). */
-const DELEGATION_TOOLS = new Set(["task", "agent"]);
+const DELEGATION_TOOLS = new Set(["task", "agent", "workflow"]);
 
 /**
  * Tools whose path inputs are writes (lower-cased; across adapters). Any tool
@@ -1067,8 +1067,8 @@ export class StageWriteRecord {
     }
     if (silent > 0) {
       return (
-        `write record incomplete: ${silent} sub-agent call(s) (Task/Agent) contributed ` +
-        `no observed tool calls`
+        `write record incomplete: ${silent} sub-agent call(s) (Task/Agent/Workflow) ` +
+        `showed no observed activity`
       );
     }
     if (this.truncated) {

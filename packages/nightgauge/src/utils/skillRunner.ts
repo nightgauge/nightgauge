@@ -7885,6 +7885,11 @@ function runStageSkillHeadlessImpl(
       // Placed after the usage/session handling above so the line that trips
       // the abort is still fully accounted for before the process is killed:
       // an aborting stage must not also lose that line's booked tokens.
+      // A sub-agent message links its delegation even when it calls no tool:
+      // only a delegation with no observed activity at all is silent (#2660).
+      if (parsed?.type === "assistant" && parsed.parentToolUseId) {
+        stageWriteRecord?.observeNestedCall(parsed.parentToolUseId);
+      }
       let aborted = false;
       for (const call of collectToolCalls(parsed)) {
         if (observeToolCall(call)) {

@@ -485,6 +485,31 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
     expect(stderr.join("")).toContain("sibling: src/router.ts");
   });
 
+  it("links a sub-agent that answered in text alone, calling no tool (#2660)", async () => {
+    const { proc, completed, stderr } = await runStage();
+    const task = emitAssistantToolUse(proc, "Task", { prompt: "summarise" });
+    proc.stdout!.emit(
+      "data",
+      Buffer.from(
+        JSON.stringify({
+          type: "assistant",
+          parent_tool_use_id: task,
+          message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+        }) + "\n"
+      )
+    );
+    const own = path.join(worktree, "src", "handlers.ts");
+    emitAssistantToolUse(proc, "Write", { file_path: own, content: "// stage work\n" });
+    fs.writeFileSync(own, "// stage work\n");
+    fs.writeFileSync(path.join(sibling, "src", "router.ts"), "// concurrent edit\n");
+
+    proc.emit("close", 0);
+    const result = await completed;
+
+    expect(result.success).toBe(true);
+    expect(stderr.join("")).toContain("sibling: src/router.ts");
+  });
+
   it("does not let a rejected Task poison the write record (#2660)", async () => {
     const { proc, completed, stderr } = await runStage();
     const ran = emitAssistantToolUse(proc, "Task", { prompt: "look around" });

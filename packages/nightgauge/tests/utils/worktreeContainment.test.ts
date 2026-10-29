@@ -920,6 +920,14 @@ describe("sub-agent calls and an honest write record (#2660)", () => {
     expect(record.available).toBe(true);
   });
 
+  it("is unavailable when a Workflow contributed no nested calls", () => {
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Workflow", { script: "x" }, { id: "wf1" });
+    expect(record.available).toBe(false);
+    record.observeNestedCall("wf1");
+    expect(record.available).toBe(true);
+  });
+
   it("is unavailable when a delegation carries no id", () => {
     const record = new StageWriteRecord(worktree);
     record.observeToolUse("Agent", { prompt: "go" });

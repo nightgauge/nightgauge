@@ -98,6 +98,17 @@ describe("parseStreamJsonLine — parent_tool_use_id propagation (#2660)", () =>
     expect(parsed?.toolUses?.map((t) => t.parentToolUseId)).toEqual(["toolu_task", "toolu_task"]);
   });
 
+  it("carries parent_tool_use_id on a sub-agent message with no tool_use", () => {
+    const parsed = parseStreamJsonLine(
+      JSON.stringify({
+        type: "assistant",
+        parent_tool_use_id: "toolu_task",
+        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+      })
+    );
+    expect(parsed?.parentToolUseId).toBe("toolu_task");
+  });
+
   it("leaves top-level calls without a parent", () => {
     const parsed = parseStreamJsonLine(
       JSON.stringify({
