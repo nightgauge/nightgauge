@@ -34,6 +34,7 @@ import {
   resolveContainmentTargets,
   containmentDir,
   CONTAINMENT_ERROR_MARKER,
+  StageWriteRecord,
 } from "../../src/utils/worktreeContainment";
 
 let tmp: string;
@@ -864,5 +865,178 @@ describe("the retry ledger is scoped to the issue that recorded it (#2608)", () 
     });
     expect(report.breaches).toEqual([]);
     expect(JSON.parse(fs.readFileSync(ledgerFile(), "utf-8"))).toEqual({ version: 2, repos: {} });
+  });
+});
+
+describe("a concurrent edit is not the stage's write (#2656)", () => {
+  /** A record of a stage that wrote only inside its own worktree. */
+  function worktreeOnlyRecord(): StageWriteRecord {
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Write", { file_path: path.join(worktree, "src", "handlers.ts") });
+    record.observeToolUse("Bash", { command: "npx vitest run src/handlers.ts" });
+    return record;
+  }
+
+  async function baselineFor(issueNumber?: number) {
+    return captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+      ...(issueNumber !== undefined ? { issueNumber } : {}),
+    });
+  }
+
+  it("warns, never fails, when a clean sibling file is dirtied by someone else (the #2655 incident)", async () => {
+    const baseline = await baselineFor();
+    // The stage works in its worktree...
+    fs.writeFileSync(path.join(worktree, "src", "handlers.ts"), "// stage work\n");
+    // ...while the supervising session edits a clean file in a sibling repo.
+    fs.writeFileSync(path.join(sibling, "README.md"), "operator edit\n");
+
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 2656,
+      writeRecord: worktreeOnlyRecord(),
+    });
+
+    expect(report.breaches).toEqual([]);
+    expect(report.warnings).toHaveLength(1);
+    expect(report.warnings[0].repoName).toBe("sibling");
+    expect(report.warnings[0].paths).toEqual([]);
+    expect(report.warnings[0].unattributedPaths).toEqual(["README.md"]);
+    expect(report.warnings[0].attribution).toBe("write-record");
+    const warning = formatContainmentWarning("feature-dev", report);
+    expect(warning).toContain("[containment-ambiguous]");
+    expect(warning).toContain("sibling: README.md");
+    expect(warning).toContain("#2656");
+    // Nothing captured, nothing remembered against the stage.
+    expect(fs.existsSync(path.join(containmentDir(primary), "attributed.json"))).toBe(false);
+    expect(fs.readFileSync(path.join(sibling, "README.md"), "utf-8")).toBe("operator edit\n");
+  });
+
+  it("fails and preserves a sibling file a write tool named", async () => {
+    const baseline = await baselineFor();
+    const record = worktreeOnlyRecord();
+    record.observeToolUse("Write", { file_path: path.join(sibling, "src", "handlers.ts") });
+    stageWritesIntoSibling();
+
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 129,
+      writeRecord: record,
+    });
+
+    expect(report.breaches).toHaveLength(1);
+    expect(report.breaches[0].paths).toEqual(["src/handlers.ts"]);
+    expect(report.breaches[0].attribution).toBe("write-record");
+    const patch = fs.readFileSync(report.breaches[0].patchPath!, "utf-8");
+    expect(patch).toContain("/* impl */");
+  });
+
+  it("attributes a shell command that names the repo and the path, not one that names only the path", async () => {
+    const named = new StageWriteRecord(worktree);
+    named.observeToolUse("Bash", { command: "cd ../../../sibling && echo x > src/router.ts" });
+    const roots = [sibling];
+    expect(named.names(roots, "src/router.ts")).toBe(true);
+    expect(named.names(roots, "src/handlers.ts")).toBe(false);
+
+    const absolute = new StageWriteRecord(worktree);
+    absolute.observeToolUse("Bash", { command: `sed -i '' s/a/b/ ${sibling}/src/router.ts` });
+    expect(absolute.names(roots, "src/router.ts")).toBe(true);
+
+    const local = new StageWriteRecord(worktree);
+    local.observeToolUse("Bash", { command: "echo x > src/router.ts" });
+    expect(local.names(roots, "src/router.ts")).toBe(false);
+
+    // A worktree under the repo's main checkout: the absolute CWD contains
+    // the repo root, but that is the stage's own tree, not the repo.
+    const own = new StageWriteRecord(worktree);
+    own.observeToolUse("Bash", { command: `cd ${worktree} && echo x > README.md` });
+    expect(own.names([primary], "README.md")).toBe(false);
+
+    // Reading a sibling file is not writing it.
+    const read = new StageWriteRecord(worktree);
+    read.observeToolUse("Read", { file_path: path.join(sibling, "src", "router.ts") });
+    expect(read.available).toBe(true);
+    expect(read.names(roots, "src/router.ts")).toBe(false);
+  });
+
+  it("splits a mixed repo: the named path fails and is patched, the rest is listed as not attributed", async () => {
+    const baseline = await baselineFor();
+    const record = worktreeOnlyRecord();
+    record.observeToolUse("Edit", { file_path: path.join(sibling, "src", "router.ts") });
+    fs.writeFileSync(path.join(sibling, "src", "router.ts"), "export const routes = [1];\n");
+    fs.writeFileSync(path.join(sibling, "README.md"), "operator edit\n");
+
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 129,
+      writeRecord: record,
+    });
+
+    expect(report.breaches).toHaveLength(1);
+    const breach = report.breaches[0];
+    expect(breach.paths).toEqual(["src/router.ts"]);
+    expect(breach.unattributedPaths).toEqual(["README.md"]);
+    const reason = formatContainmentFailure("feature-dev", report);
+    expect(reason).toContain("never names them; not attributed");
+    expect(reason).toContain("README.md");
+    expect(reason).not.toContain("filesystem diff only");
+    const patch = fs.readFileSync(breach.patchPath!, "utf-8");
+    expect(patch).toContain("src/router.ts");
+    expect(patch).not.toContain("README.md");
+  });
+
+  it.each([
+    ["no write record", undefined],
+    ["a record with no tool calls", "empty"],
+  ])("keeps failing with %s, and says attribution was by filesystem diff only", async (_, kind) => {
+    const baseline = await baselineFor();
+    fs.writeFileSync(path.join(sibling, "README.md"), "edit\n");
+
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 129,
+      ...(kind === "empty" ? { writeRecord: new StageWriteRecord(worktree) } : {}),
+    });
+
+    expect(report.breaches).toHaveLength(1);
+    expect(report.breaches[0].paths).toEqual(["README.md"]);
+    expect(report.breaches[0].attribution).toBe("filesystem-diff");
+    expect(formatContainmentFailure("feature-dev", report)).toContain(
+      "Attribution was by filesystem diff only"
+    );
+  });
+
+  it("keeps this issue's ledger-remembered path attributed on retry even when the record does not name it", async () => {
+    const first = await baselineFor(129);
+    stageWritesIntoSibling();
+    const firstReport = await detectContainmentBreach({
+      baseline: first,
+      stage: "feature-dev",
+      issueNumber: 129,
+    });
+    expect(firstReport.breaches).toHaveLength(1);
+
+    const second = await baselineFor(129);
+    expect(second.snapshots.find((s) => s.repoPath === sibling)?.ledgerPaths).toContain(
+      "src/handlers.ts"
+    );
+    const secondReport = await detectContainmentBreach({
+      baseline: second,
+      stage: "feature-dev",
+      issueNumber: 129,
+      writeRecord: worktreeOnlyRecord(),
+    });
+    expect(secondReport.breaches).toHaveLength(1);
+    expect(secondReport.breaches[0].paths).toEqual([
+      "src/api/things.ts",
+      "src/handlers.ts",
+      "src/router.ts",
+    ]);
+    expect(secondReport.breaches[0].unattributedPaths).toEqual([]);
   });
 });

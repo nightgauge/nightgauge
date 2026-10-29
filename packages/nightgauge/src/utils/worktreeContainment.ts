@@ -32,10 +32,19 @@
  *
  * Attribution rule — deliberately asymmetric:
  *
- *   - **clean → dirty** (a path with no baseline entry) is the stage's. Its
- *     pre-stage content was HEAD-or-absent, so the entire delta belongs to the
- *     stage. This is the FAILING signal, and it covers the whole observed
- *     incident: all 9 escaped paths were new dirt.
+ *   - **clean → dirty** (a path with no baseline entry) is the stage's ONLY
+ *     when the stage's write record names it (#2656). The record is what the
+ *     stage's own tool calls wrote or ran: a write tool's file path, or a
+ *     shell/patch command naming the path. Its pre-stage content was
+ *     HEAD-or-absent, so the entire delta of a named path belongs to the stage.
+ *     This is the FAILING signal, and it covers the whole observed incident:
+ *     all 9 escaped paths were new dirt the stage wrote. A clean → dirty path
+ *     the record never names is a concurrent edit by an operator or another
+ *     session — a WARNING, never a failure: the #2655 run was failed and the
+ *     repo halted for an edit the supervising session made. When the adapter
+ *     supplied no write record at all, every clean → dirty path is still
+ *     attributed, and the failure says the attribution was by filesystem diff
+ *     only. A path THIS issue's ledger remembers stays attributed regardless.
  *   - **dirty → dirty with a changed fingerprint** is AMBIGUOUS. The operator's
  *     own edit and a stage write are indistinguishable from the filesystem, and
  *     the delta is an inseparable mix of both. Reported as a warning so the
@@ -79,6 +88,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs/promises";
+import * as os from "os";
 import * as path from "path";
 import { checkoutPath } from "./cloneLayout";
 
@@ -149,6 +159,12 @@ export interface RepoSnapshot {
   head: string | null;
   /** Short branch name, or null when HEAD is detached. Diagnostics only. */
   branch: string | null;
+  /**
+   * Paths the baseline dropped because THIS issue's ledger remembers them as
+   * an earlier attempt's escape (#2608). They stay attributed whether or not
+   * this attempt's write record names them (#2656): the dirt is the issue's own.
+   */
+  ledgerPaths: string[];
 }
 
 /**
@@ -206,8 +222,24 @@ export interface ContainmentBaseline {
 export interface ContainmentBreach {
   repoPath: string;
   repoName: string;
-  /** Repo-relative paths that went clean → dirty during the stage. */
+  /**
+   * Repo-relative paths attributed to the stage: they went clean → dirty and
+   * the stage's write record names them (or no record exists — see
+   * {@link attribution}).
+   */
   paths: string[];
+  /**
+   * Paths that went clean → dirty but the stage's write record never names
+   * (#2656). A concurrent edit by an operator or another session. Surfaced,
+   * never attributed, captured or failed on.
+   */
+  unattributedPaths: string[];
+  /**
+   * How {@link paths} were attributed: by the stage's write record, or — when
+   * the adapter supplied none — by the filesystem diff alone, which cannot
+   * tell a stage write from anyone else's (#2656).
+   */
+  attribution: "write-record" | "filesystem-diff";
   /**
    * Paths that were already dirty at baseline and changed during the stage.
    * Ambiguous — surfaced for the operator, never attributed or captured.
@@ -365,7 +397,15 @@ async function snapshotRepo(repoPath: string): Promise<RepoSnapshot | null> {
   // racing the snapshot is caught by the post-snapshot comparison rather than
   // being baked invisibly into this one.
   const { head, branch } = await readHead(repoPath);
-  return { repoPath, repoName: path.basename(repoPath), entries, codes, head, branch };
+  return {
+    repoPath,
+    repoName: path.basename(repoPath),
+    entries,
+    codes,
+    head,
+    branch,
+    ledgerPaths: [],
+  };
 }
 
 /**
@@ -627,6 +667,7 @@ export async function captureContainmentBaseline(args: {
             surviving[filePath] = entry;
             if (args.issueNumber !== undefined && entry.issueNumber === args.issueNumber) {
               delete snap.entries[filePath];
+              snap.ledgerPaths.push(filePath);
             }
           }
           // Otherwise it has been recovered, reverted or edited since; the
@@ -685,10 +726,209 @@ async function buildPatch(
   return chunks.filter((c) => c.length > 0).join("");
 }
 
+/** Upper bound on one recorded command or patch, so a huge heredoc cannot balloon memory. */
+const MAX_RECORDED_TEXT = 64 * 1024;
+
+/** Tools whose path inputs are read, never written (lower-cased; across adapters). */
+const READ_ONLY_TOOLS = new Set([
+  "read",
+  "glob",
+  "grep",
+  "ls",
+  "notebookread",
+  "view",
+  "read_file",
+  "list_dir",
+  "list_directory",
+  "search",
+  "webfetch",
+  "websearch",
+]);
+
+/** Characters that may appear inside a path segment; anything else is a boundary. */
+const SEGMENT_CHAR = /[A-Za-z0-9._@+~-]/;
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Every index at which `needle` occurs in `text` bounded on both sides: the
+ * character before is not a segment character (a `/` counts as a boundary),
+ * and the character after is not one either.
+ */
+function boundedIndexes(text: string, needle: string): number[] {
+  const out: number[] = [];
+  if (!needle) return out;
+  for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + 1)) {
+    const before = i === 0 ? "" : text[i - 1];
+    const after = text[i + needle.length] ?? "";
+    if (
+      (before === "" || !SEGMENT_CHAR.test(before)) &&
+      (after === "" || !SEGMENT_CHAR.test(after))
+    ) {
+      out.push(i);
+    }
+  }
+  return out;
+}
+
+/**
+ * What the stage's own tool calls wrote or ran (#2656) — the evidence that
+ * turns a clean → dirty sibling path from "something changed" into "the stage
+ * changed it".
+ *
+ * The filesystem diff cannot tell a stage write from a concurrent edit by the
+ * operator or a supervising session; the tool calls can. Fed from the same
+ * `tool_use` observation point as the tool-call log, but kept separately: that
+ * log is bounded to 200 entries with a 100-character target, which is not
+ * sound evidence for a verdict that fails a stage.
+ *
+ * - A tool whose input carries `file_path`, `notebook_path` or `path` (Write,
+ *   Edit, MultiEdit, NotebookEdit and adapter equivalents) records the path,
+ *   resolved against the stage CWD. Read-only tools (Read, Grep, Glob, …) are
+ *   counted as observed calls but record nothing.
+ * - A tool whose input carries `command`, `cmd`, `patch` or `input` text, or is
+ *   itself a string (Bash, Codex shell / `apply_patch`), records the text,
+ *   capped at 64 KiB per entry.
+ *
+ * Indirect writes — a generator run after `cd ../sibling` that names no path —
+ * are not attributed. The module's rule applies: under-detecting is strictly
+ * preferable to misattributing.
+ */
+export class StageWriteRecord {
+  private readonly stageCwd: string;
+  private readonly filePaths = new Set<string>();
+  private readonly texts: string[] = [];
+  private observed = 0;
+
+  constructor(stageCwd: string) {
+    this.stageCwd = path.resolve(stageCwd);
+  }
+
+  observeToolUse(toolName: string, toolInput: unknown): void {
+    this.observed++;
+    // Reading a sibling file is not writing it; a Read naming the path a
+    // concurrent edit then dirtied would otherwise misattribute it.
+    if (READ_ONLY_TOOLS.has(toolName.toLowerCase())) return;
+    if (typeof toolInput === "string") {
+      this.addText(toolInput);
+      return;
+    }
+    if (!isRecord(toolInput)) return;
+    for (const key of ["file_path", "notebook_path", "path"]) {
+      const v = toolInput[key];
+      if (typeof v === "string" && v.length > 0) {
+        this.filePaths.add(path.resolve(this.stageCwd, expandHome(v)));
+      }
+    }
+    for (const key of ["command", "cmd", "patch", "input"]) {
+      const v = toolInput[key];
+      if (typeof v === "string") this.addText(v);
+      else if (Array.isArray(v)) this.addText(v.filter((x) => typeof x === "string").join(" "));
+    }
+  }
+
+  /**
+   * True once at least one tool call was observed. A stage that wrote anything
+   * did so through a tool call, so zero calls means the adapter's stream
+   * supplied no record — not that the stage wrote nothing.
+   */
+  get available(): boolean {
+    return this.observed > 0;
+  }
+
+  /**
+   * Whether the record names `repoRelative` inside the repo, given every
+   * spelling of the repo's root (`/tmp` vs `/private/tmp` on macOS).
+   */
+  names(repoRoots: readonly string[], repoRelative: string): boolean {
+    const rel = repoRelative.split(path.sep).join("/");
+    const roots = [...new Set(repoRoots.map((r) => path.resolve(r)))];
+    for (const root of roots) {
+      if (this.filePaths.has(path.join(root, rel))) return true;
+    }
+    if (this.texts.length === 0) return false;
+    const spellings = rootSpellings(roots);
+    const repoName = path.basename(roots[0] ?? "");
+    for (const text of this.texts) {
+      // The absolute path, in full.
+      if (spellings.some((r) => boundedIndexes(text, `${r}/${rel}`).length > 0)) return true;
+      // The repo AND the relative path. Requiring the repo is what stops a
+      // worktree-local `cat README.md` from claiming the sibling's README.md.
+      if (boundedIndexes(text, rel).length > 0 && this.mentionsRepo(text, spellings, repoName)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private addText(text: string): void {
+    if (text.length === 0) return;
+    this.texts.push(text.length > MAX_RECORDED_TEXT ? text.slice(0, MAX_RECORDED_TEXT) : text);
+  }
+
+  /**
+   * The text refers to the repo directory: by an absolute spelling of its root
+   * that is not merely the prefix of the stage's own CWD (a worktree inside
+   * the repo's main checkout), or by its name as a relative path such as
+   * `../<name>/` or `<name>/`.
+   */
+  private mentionsRepo(text: string, spellings: readonly string[], repoName: string): boolean {
+    for (const root of spellings) {
+      for (const i of boundedIndexes(text, root)) {
+        const rest = text.slice(i);
+        const intoStage = rootSpellings([this.stageCwd]).some(
+          (cwd) => cwd !== root && boundedIndexes(rest, cwd)[0] === 0
+        );
+        if (!intoStage) return true;
+      }
+    }
+    if (!repoName) return false;
+    const relative = new RegExp(
+      `(?:^|[\\s'"=:;(&|<>])(?:\\.{1,2}/)*${escapeRegExp(repoName)}(?=$|[/\\s'"\\);&|<>])`
+    );
+    return relative.test(text);
+  }
+}
+
+function expandHome(p: string): string {
+  return p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
+/** Each root as written, plus its `~/…` spelling when it lives under the home directory. */
+function rootSpellings(roots: readonly string[]): string[] {
+  const home = os.homedir();
+  const out = new Set<string>();
+  for (const r of roots) {
+    out.add(r);
+    if (home && r.startsWith(`${home}/`)) out.add(`~${r.slice(home.length)}`);
+  }
+  return [...out];
+}
+
+/** The repo path and its realpath, so a record using either spelling matches. */
+async function repoRootSpellings(repoPath: string): Promise<string[]> {
+  const roots = [path.resolve(repoPath)];
+  try {
+    const real = await fs.realpath(repoPath);
+    if (!roots.includes(real)) roots.push(real);
+  } catch {
+    /* the declared path is enough */
+  }
+  return roots;
+}
+
 export interface DetectContainmentArgs {
   baseline: ContainmentBaseline;
   stage: string;
   issueNumber?: number;
+  /**
+   * The stage's observed tool calls (#2656). When present and available, a
+   * clean → dirty path is attributed only if the record names it. Absent or
+   * empty, every clean → dirty path is attributed by the filesystem diff.
+   */
+  writeRecord?: StageWriteRecord;
 }
 
 /**
@@ -700,7 +940,7 @@ export interface DetectContainmentArgs {
 export async function detectContainmentBreach(
   args: DetectContainmentArgs
 ): Promise<ContainmentReport> {
-  const { baseline, stage, issueNumber } = args;
+  const { baseline, stage, issueNumber, writeRecord } = args;
   const report: ContainmentReport = { breaches: [], warnings: [], refMoves: [] };
   if (baseline.snapshots.length === 0) return report;
   const warnOnly = new Set(baseline.warnOnlyRepoPaths ?? []);
@@ -757,13 +997,38 @@ export async function detectContainmentBreach(
       }
     }
 
-    if (attributed.length === 0 && ambiguous.length === 0) continue;
+    // ── Did the stage's own tool calls write it? (#2656) ─────────────────
+    // A clean → dirty path the write record never names is a concurrent edit
+    // by someone else. This issue's ledger-remembered paths stay attributed:
+    // that dirt is the issue's own earlier escape (#2608).
+    let unattributed: string[] = [];
+    let attribution: ContainmentBreach["attribution"] = "filesystem-diff";
+    if (writeRecord?.available) {
+      try {
+        const roots = await repoRootSpellings(before.repoPath);
+        const ledgerPaths = new Set(before.ledgerPaths ?? []);
+        const named: string[] = [];
+        const notNamed: string[] = [];
+        for (const p of attributed) {
+          (ledgerPaths.has(p) || writeRecord.names(roots, p) ? named : notNamed).push(p);
+        }
+        attributed = named;
+        unattributed = notNamed;
+        attribution = "write-record";
+      } catch {
+        // Fail open to today's verdict: the filesystem diff attributes it all.
+      }
+    }
+
+    if (attributed.length === 0 && ambiguous.length === 0 && unattributed.length === 0) continue;
 
     const breach: ContainmentBreach = {
       repoPath: before.repoPath,
       repoName: before.repoName,
       paths: attributed.sort(),
+      unattributedPaths: unattributed.sort(),
       ambiguousPaths: ambiguous.sort(),
+      attribution,
     };
     if (warnOnly.has(before.repoPath)) {
       // Another running pipeline owns this repo. Its worktree lives under this
@@ -835,7 +1100,9 @@ export async function detectContainmentBreach(
             repoName: b.repoName,
             repoPath: b.repoPath,
             paths: b.paths,
+            unattributedPaths: b.unattributedPaths,
             ambiguousPaths: b.ambiguousPaths,
+            attribution: b.attribution,
             patchPath: b.patchPath ?? null,
             patchError: b.patchError ?? null,
           })),
@@ -843,7 +1110,9 @@ export async function detectContainmentBreach(
             repoName: w.repoName,
             repoPath: w.repoPath,
             paths: w.paths,
+            unattributedPaths: w.unattributedPaths,
             ambiguousPaths: w.ambiguousPaths,
+            attribution: w.attribution,
             warnOnlyReason: w.warnOnlyReason ?? null,
           })),
           refMoves: report.refMoves.map((m) => ({
@@ -900,8 +1169,22 @@ export function formatContainmentFailure(stage: string, report: ContainmentRepor
             .join(", ")})`
       );
     }
+    if (breach.unattributedPaths.length > 0) {
+      lines.push(
+        `    (${breach.unattributedPaths.length} path(s) also went clean → dirty but the ` +
+          `stage's write record never names them; not attributed — a concurrent edit by ` +
+          `someone else: ${breach.unattributedPaths.slice(0, 5).join(", ")})`
+      );
+    }
     if (breach.patchPath) lines.push(`    preserved: ${breach.patchPath}`);
     else if (breach.patchError) lines.push(`    NOT preserved: ${breach.patchError}`);
+  }
+  if (report.breaches.some((b) => b.attribution === "filesystem-diff")) {
+    lines.push(
+      `  Attribution was by filesystem diff only — this stage's adapter supplied no write ` +
+        `record, so a concurrent edit by someone else would also be listed here; check these ` +
+        `paths before acting. (Issue #2656)`
+    );
   }
   lines.push(
     `  Nothing in those repositories was modified, staged, committed or reverted — the ` +
@@ -915,19 +1198,21 @@ export function formatContainmentFailure(stage: string, report: ContainmentRepor
 /** Warn-only line for repos where only pre-existing dirty paths changed. */
 export function formatContainmentWarning(stage: string, report: ContainmentReport): string {
   const parts = report.warnings.map((w) => {
-    const shown = (w.warnOnlyReason ? [...w.paths, ...w.ambiguousPaths] : w.ambiguousPaths).slice(
-      0,
-      5
-    );
+    const shown = (
+      w.warnOnlyReason
+        ? [...w.paths, ...w.unattributedPaths, ...w.ambiguousPaths]
+        : [...w.unattributedPaths, ...w.ambiguousPaths]
+    ).slice(0, 5);
     const suffix = w.warnOnlyReason ? ` [${w.warnOnlyReason}]` : "";
     return `${w.repoName}: ${shown.join(", ")}${suffix}`;
   });
   return (
     `[containment-ambiguous] Stage ${stage}: path(s) that were ALREADY dirty before the ` +
-    `stage changed while it ran, or that belong to a repository another running pipeline ` +
-    `owns (${parts.join("; ")}). Not attributed to the stage — an operator editing their own ` +
-    `uncommitted file, or a sibling slot working in its own repo, is indistinguishable from ` +
-    `a stage write and is the likelier explanation. Nothing was touched. (Issues #129, #1499)`
+    `stage changed while it ran, that went clean → dirty but the stage's write record never ` +
+    `names, or that belong to a repository another running pipeline owns ` +
+    `(${parts.join("; ")}). Not attributed to the stage — an operator or another session ` +
+    `editing the file, or a sibling slot working in its own repo, is the likelier ` +
+    `explanation. Nothing was touched. (Issues #129, #1499, #2656)`
   );
 }
 
