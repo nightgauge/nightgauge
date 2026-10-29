@@ -2,8 +2,11 @@ package sweep
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/attention"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
@@ -12,9 +15,11 @@ import (
 // strandedFake is an in-memory repo for StrandedFollowUpPRs: open PRs, issue
 // states, and the tracking issues the producer files.
 type strandedFake struct {
-	prs    []forge.OpenPRSummary
-	issues map[int]string // number -> state
-	filed  []forgetypes.Issue
+	prs      []forge.OpenPRSummary
+	issues   map[int]string // number -> state
+	filed    []forgetypes.Issue
+	boarded  []int
+	boardErr error
 }
 
 func (f *strandedFake) producer() *StrandedFollowUpPRs {
@@ -29,18 +34,32 @@ func (f *strandedFake) producer() *StrandedFollowUpPRs {
 			}
 			return out, nil
 		},
-		FindTracking: func(_ context.Context, _ Input, pr int) (*forgetypes.Issue, error) {
+		// Like the real search: open issues only, matched on title — search
+		// results carry no body.
+		FindTracking: func(_ context.Context, _ Input, title string) (*forgetypes.Issue, error) {
 			for i := range f.filed {
-				if strings.Contains(f.filed[i].Body, StrandedFollowUpMarker(pr)) {
-					return &f.filed[i], nil
+				if f.filed[i].Title == title && f.issues[f.filed[i].Number] != "CLOSED" {
+					return &forgetypes.Issue{Number: f.filed[i].Number, Title: title, State: "OPEN"}, nil
 				}
 			}
 			return nil, nil
 		},
+		// Like the real CreateIssue: the returned issue reports no state.
 		FileTracking: func(_ context.Context, _ Input, title, body string) (*forgetypes.Issue, error) {
-			is := forgetypes.Issue{Number: 9000 + len(f.filed), Title: title, Body: body, State: "OPEN"}
+			is := forgetypes.Issue{Number: 9000 + len(f.filed), Title: title, Body: body}
 			f.filed = append(f.filed, is)
+			if f.issues == nil {
+				f.issues = map[int]string{}
+			}
+			f.issues[is.Number] = "OPEN"
 			return &is, nil
+		},
+		AddToBoard: func(_ context.Context, _ Input, number int) error {
+			if f.boardErr != nil {
+				return f.boardErr
+			}
+			f.boarded = append(f.boarded, number)
+			return nil
 		},
 	}
 }
@@ -119,5 +138,85 @@ func TestStrandedFollowUpPRs_FilesOnceAndResolves(t *testing.T) {
 	reqs, err := p.Evaluate(context.Background(), in)
 	if err != nil || len(reqs) != 0 {
 		t.Fatalf("resolved: reqs = %+v, err = %v", reqs, err)
+	}
+}
+
+// cardsAsExisting turns a pass's requests into the open cards the next pass
+// sees, as the sweeper does.
+func cardsAsExisting(reqs []attention.DecisionRequest) []attention.DecisionRequest {
+	out := make([]attention.DecisionRequest, len(reqs))
+	for i, r := range reqs {
+		r.Producer = ProducerStrandedFollowUpPRs
+		out[i] = r
+	}
+	return out
+}
+
+func TestStrandedFollowUpPRs_CardNamesPRAndTrackingIssue(t *testing.T) {
+	in := Input{Repo: "o/r", Owner: "o", Name: "r"}
+	f := &strandedFake{
+		prs:    []forge.OpenPRSummary{strandedPR(2662, "feat/2655-pr-create", "")},
+		issues: map[int]string{2655: "CLOSED"},
+	}
+	reqs, err := f.producer().Evaluate(context.Background(), in)
+	if err != nil || len(reqs) != 1 {
+		t.Fatalf("reqs = %+v, err = %v", reqs, err)
+	}
+	if c := reqs[0].Context; c.PR != 2662 || c.Issue != 9000 {
+		t.Errorf("context = %+v, want PR 2662 and issue 9000", c)
+	}
+	if len(f.boarded) != 1 || f.boarded[0] != 9000 {
+		t.Errorf("boarded = %v, want [9000]", f.boarded)
+	}
+}
+
+func TestStrandedFollowUpPRs_ClosedTrackingIssueIsNotRefiled(t *testing.T) {
+	in := Input{Repo: "o/r", Owner: "o", Name: "r"}
+	f := &strandedFake{
+		prs:    []forge.OpenPRSummary{strandedPR(2662, "feat/2655-pr-create", "")},
+		issues: map[int]string{2655: "CLOSED"},
+	}
+	p := f.producer()
+	reqs, err := p.Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The tracking issue closes while the stranded PR stays open: the search
+	// cannot see it, but the card's fingerprint still names it.
+	f.issues[9000] = "CLOSED"
+	in.Existing = cardsAsExisting(reqs)
+	f.boarded = nil
+	reqs, err = p.Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.filed) != 1 {
+		t.Fatalf("filed %d tracking issues, want 1", len(f.filed))
+	}
+	if len(reqs) != 1 || reqs[0].Context.Issue != 9000 {
+		t.Fatalf("reqs = %+v", reqs)
+	}
+	if len(f.boarded) != 0 {
+		t.Errorf("a closed tracking issue must not be boarded: %v", f.boarded)
+	}
+}
+
+func TestStrandedFollowUpPRs_BoardFailureIsRetried(t *testing.T) {
+	in := Input{Repo: "o/r", Owner: "o", Name: "r"}
+	f := &strandedFake{
+		prs:      []forge.OpenPRSummary{strandedPR(2662, "feat/2655-pr-create", "")},
+		issues:   map[int]string{2655: "CLOSED"},
+		boardErr: errors.New("board unavailable"),
+	}
+	p := f.producer()
+	if _, err := p.Evaluate(context.Background(), in); err == nil {
+		t.Fatal("a board failure must be an error")
+	}
+	f.boardErr = nil
+	if _, err := p.Evaluate(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.filed) != 1 || len(f.boarded) != 1 || f.boarded[0] != 9000 {
+		t.Fatalf("filed = %d, boarded = %v: the next pass must board the issue it already filed", len(f.filed), f.boarded)
 	}
 }

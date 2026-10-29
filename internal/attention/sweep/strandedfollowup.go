@@ -14,9 +14,14 @@ package sweep
 // OPEN pull request whose head branch encodes an issue number
 // (`<prefix>/<N>-...`) when issue N is CLOSED and the PR body names no open
 // issue with a closing keyword. For each such PR it files one tracking issue
-// (once — a hidden marker in the body is the idempotency key) and adds it to
-// the board, so the scheduler has open, dispatchable work that lands the PR.
-// The card names the PR, the closed issue and the tracking issue.
+// and keeps it on the board, so the scheduler has open, dispatchable work that
+// lands the PR. The card names the PR, the closed issue and the tracking issue.
+//
+// The tracking issue is filed once. The card's fingerprint records its
+// number, so a later pass reads it back by number whatever its state; with no
+// card, an open issue bearing the exact title the producer generates (unique
+// per PR) is the tracking issue. Search results carry no body, so the hidden
+// marker cannot be the lookup key.
 //
 // When no PR is stranded it returns an empty slice, which auto-resolves any
 // card raised earlier.
@@ -72,11 +77,13 @@ type StrandedFollowUpPRs struct {
 	ListOpenPRs func(ctx context.Context, in Input) ([]forge.OpenPRSummary, error)
 	// GetIssues overrides the batched forge issue read (tests).
 	GetIssues func(ctx context.Context, in Input, numbers []int) (map[int]*forgetypes.Issue, error)
-	// FindTracking overrides the marker search (tests). It returns the
-	// tracking issue already filed for pr, or nil.
-	FindTracking func(ctx context.Context, in Input, pr int) (*forgetypes.Issue, error)
-	// FileTracking overrides issue creation and board sync (tests).
+	// FindTracking overrides the title search (tests). It returns the open
+	// tracking issue titled title, or nil.
+	FindTracking func(ctx context.Context, in Input, title string) (*forgetypes.Issue, error)
+	// FileTracking overrides issue creation (tests).
 	FileTracking func(ctx context.Context, in Input, title, body string) (*forgetypes.Issue, error)
+	// AddToBoard overrides the board sync (tests).
+	AddToBoard func(ctx context.Context, in Input, number int) error
 }
 
 func init() { Default.Register(&StrandedFollowUpPRs{}) }
@@ -132,14 +139,29 @@ func (p *StrandedFollowUpPRs) Evaluate(ctx context.Context, in Input) ([]attenti
 		if closesOpenIssue(pr.Body, issue) {
 			continue
 		}
-		tracking, err := p.findTracking(ctx, in, pr.Number)
+		title, body := strandedTrackingIssue(pr, parent)
+		tracking, err := p.trackingFromCard(ctx, in, pr.Number)
 		if err != nil {
-			return nil, fmt.Errorf("%s: search tracking issue for PR #%d: %w", ProducerStrandedFollowUpPRs, pr.Number, err)
+			return nil, fmt.Errorf("%s: read tracking issue for PR #%d: %w", ProducerStrandedFollowUpPRs, pr.Number, err)
 		}
 		if tracking == nil {
-			title, body := strandedTrackingIssue(pr, parent)
+			if tracking, err = p.findTracking(ctx, in, title); err != nil {
+				return nil, fmt.Errorf("%s: search tracking issue for PR #%d: %w", ProducerStrandedFollowUpPRs, pr.Number, err)
+			}
+		}
+		if tracking == nil {
 			if tracking, err = p.fileTracking(ctx, in, title, body); err != nil {
 				return nil, fmt.Errorf("%s: file tracking issue for PR #%d: %w", ProducerStrandedFollowUpPRs, pr.Number, err)
+			}
+		}
+		// A filed issue off the board is invisible to the scheduler, so a board
+		// failure is an error, and the sync runs on every pass an open tracking
+		// issue is seen: a pass that filed the issue but failed to board it is
+		// repaired by the next one. Adding an item already on the board is a
+		// no-op. A just-created issue reports no state, so the test is "not closed".
+		if !strings.EqualFold(tracking.State, "closed") {
+			if err := p.addToBoard(ctx, in, tracking.Number); err != nil {
+				return nil, fmt.Errorf("%s: add tracking issue #%d for PR #%d to the board: %w", ProducerStrandedFollowUpPRs, tracking.Number, pr.Number, err)
 			}
 		}
 		reqs = append(reqs, strandedFollowUpRequest(in.Repo, pr, parent, tracking))
@@ -189,6 +211,8 @@ func strandedFollowUpRequest(repo string, pr forge.OpenPRSummary, parent int, tr
 		Fingerprint: fmt.Sprintf("parent:%d:tracking:%d", parent, trackingNum),
 		Context: attention.Context{
 			Repo:    repo,
+			Issue:   trackingNum,
+			PR:      pr.Number,
 			Blocker: fmt.Sprintf("PR #%d's issue #%d is closed; tracked by #%d", pr.Number, parent, trackingNum),
 			URL:     pr.URL,
 		},
@@ -226,21 +250,47 @@ func (p *StrandedFollowUpPRs) getIssues(ctx context.Context, in Input, numbers [
 	return in.Forge.Issues().GetIssuesByNumbers(ctx, in.Owner, in.Name, numbers)
 }
 
-func (p *StrandedFollowUpPRs) findTracking(ctx context.Context, in Input, pr int) (*forgetypes.Issue, error) {
-	if p.FindTracking != nil {
-		return p.FindTracking(ctx, in, pr)
+// trackingFromCard returns the tracking issue this producer's open card for pr
+// already names, read by number so a closed tracking issue is still found and
+// never re-filed. It returns nil when there is no such card.
+func (p *StrandedFollowUpPRs) trackingFromCard(ctx context.Context, in Input, pr int) (*forgetypes.Issue, error) {
+	card, ok := in.OpenRequestForPR(ProducerStrandedFollowUpPRs, pr)
+	if !ok {
+		return nil, nil
 	}
-	query := fmt.Sprintf("%q in:title is:issue", fmt.Sprintf("land stranded follow-up PR #%d", pr))
-	found, err := in.Forge.Issues().SearchIssues(ctx, in.Owner, in.Name, query, 20)
+	var parent, n int
+	if _, err := fmt.Sscanf(card.Fingerprint, "parent:%d:tracking:%d", &parent, &n); err != nil || n <= 0 {
+		return nil, nil
+	}
+	issues, err := p.getIssues(ctx, in, []int{n})
+	if err != nil {
+		return nil, err
+	}
+	return issues[n], nil
+}
+
+func (p *StrandedFollowUpPRs) findTracking(ctx context.Context, in Input, title string) (*forgetypes.Issue, error) {
+	if p.FindTracking != nil {
+		return p.FindTracking(ctx, in, title)
+	}
+	found, err := in.Forge.Issues().SearchIssues(ctx, in.Owner, in.Name, fmt.Sprintf("%q in:title", title), 20)
 	if err != nil {
 		return nil, err
 	}
 	for i := range found {
-		if strings.Contains(found[i].Body, StrandedFollowUpMarker(pr)) {
+		if found[i].Title == title {
 			return &found[i], nil
 		}
 	}
 	return nil, nil
+}
+
+func (p *StrandedFollowUpPRs) addToBoard(ctx context.Context, in Input, number int) error {
+	if p.AddToBoard != nil {
+		return p.AddToBoard(ctx, in, number)
+	}
+	_, err := in.Forge.Project().AddIssueByNumber(ctx, in.Owner, in.Name, number)
+	return err
 }
 
 func (p *StrandedFollowUpPRs) fileTracking(ctx context.Context, in Input, title, body string) (*forgetypes.Issue, error) {
@@ -261,16 +311,7 @@ func (p *StrandedFollowUpPRs) fileTracking(ctx context.Context, in Input, title,
 			labelIDs = append(labelIDs, id)
 		}
 	}
-	created, err := in.Forge.Issues().CreateIssue(ctx, repoID, title, body, labelIDs)
-	if err != nil {
-		return nil, err
-	}
-	// A filed issue off the board is invisible to the scheduler, so a board
-	// failure is an error, not a tolerated miss.
-	if _, err := in.Forge.Project().AddIssueByNumber(ctx, in.Owner, in.Name, created.Number); err != nil {
-		return created, fmt.Errorf("add tracking issue #%d to the board: %w", created.Number, err)
-	}
-	return created, nil
+	return in.Forge.Issues().CreateIssue(ctx, repoID, title, body, labelIDs)
 }
 
 // strandedRepoID resolves the repository node id CreateIssue needs through
