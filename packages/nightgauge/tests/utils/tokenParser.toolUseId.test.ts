@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseStreamJsonLine } from "../../src/utils/tokenParser";
+import { collectToolCalls, parseStreamJsonLine } from "../../src/utils/tokenParser";
 
 /**
  * `last_bash_exit` is the companion anchor to `last_bash_command`: it answers
@@ -77,5 +77,62 @@ describe("parseStreamJsonLine — tool_use id propagation", () => {
     );
 
     expect(parsed?.toolUses?.[0].id).toBeUndefined();
+  });
+});
+
+describe("parseStreamJsonLine — parent_tool_use_id propagation (#2660)", () => {
+  it("puts a sub-agent message's parent_tool_use_id on each of its tool calls", () => {
+    const parsed = parseStreamJsonLine(
+      JSON.stringify({
+        type: "assistant",
+        parent_tool_use_id: "toolu_task",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "a", name: "Write", input: { file_path: "x" } },
+            { type: "tool_use", id: "b", name: "Bash", input: { command: "ls" } },
+          ],
+        },
+      })
+    );
+    expect(parsed?.toolUses?.map((t) => t.parentToolUseId)).toEqual(["toolu_task", "toolu_task"]);
+  });
+
+  it("carries parent_tool_use_id on a sub-agent message with no tool_use", () => {
+    const parsed = parseStreamJsonLine(
+      JSON.stringify({
+        type: "assistant",
+        parent_tool_use_id: "toolu_task",
+        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+      })
+    );
+    expect(parsed?.parentToolUseId).toBe("toolu_task");
+  });
+
+  it("leaves top-level calls without a parent", () => {
+    const parsed = parseStreamJsonLine(
+      JSON.stringify({
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "a", name: "Task", input: {} }],
+        },
+      })
+    );
+    expect(parsed?.toolUses?.[0]).not.toHaveProperty("parentToolUseId");
+  });
+
+  it("carries parent_tool_use_id on the singular content_block_start shape", () => {
+    const parsed = parseStreamJsonLine(
+      JSON.stringify({
+        type: "content_block_start",
+        parent_tool_use_id: "toolu_task",
+        content_block: { type: "tool_use", id: "a", name: "Write", input: {} },
+      })
+    );
+    expect(collectToolCalls(parsed)).toEqual([
+      { name: "Write", input: {}, id: "a", parentToolUseId: "toolu_task" },
+    ]);
   });
 });

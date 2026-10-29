@@ -7405,7 +7405,7 @@ function runStageSkillHeadlessImpl(
   //
   // Returns true when the caller must abort the stage.
   const seenToolUseIds = new Set<string>();
-  const observeToolCall = ({ name, input, id }: ToolCall): boolean => {
+  const observeToolCall = ({ name, input, id, parentToolUseId }: ToolCall): boolean => {
     // A call delivered in BOTH shapes must be counted once. Without this the
     // AskUserQuestion counter would advance twice per attempt and trip its
     // abort at HALF the intended threshold — a stage killed for a loop it
@@ -7413,7 +7413,12 @@ function runStageSkillHeadlessImpl(
     // processed as they arrive: double-counting an id-less call is a lesser
     // harm than dropping it. Same rule the bash ring already uses (#156).
     if (id !== undefined) {
-      if (seenToolUseIds.has(id)) return false;
+      if (seenToolUseIds.has(id)) {
+        // The first delivery may have lacked the parent id this one carries;
+        // dropping it would count the parent delegation silent (#2660).
+        if (parentToolUseId) stageWriteRecord?.observeNestedCall(parentToolUseId);
+        return false;
+      }
       seenToolUseIds.add(id);
     }
 
@@ -7464,7 +7469,7 @@ function runStageSkillHeadlessImpl(
     // All-tools call log (Issue #144) — every tool, not just Bash.
     toolCallLog.observeToolUse(name, input, id);
     // Containment attribution (#2656): the stage's write record.
-    stageWriteRecord?.observeToolUse(name, input);
+    stageWriteRecord?.observeToolUse(name, input, { id, parentToolUseId });
     // Wedge diagnostics (#1118): the only point at which a call's declared
     // timeout, and the task it is polling, are visible. Heartbeats arrive
     // later carrying nothing but a tool_use id.
@@ -7880,6 +7885,11 @@ function runStageSkillHeadlessImpl(
       // Placed after the usage/session handling above so the line that trips
       // the abort is still fully accounted for before the process is killed:
       // an aborting stage must not also lose that line's booked tokens.
+      // A sub-agent message links its delegation even when it calls no tool:
+      // only a delegation with no observed activity at all is silent (#2660).
+      if (parsed?.type === "assistant" && parsed.parentToolUseId) {
+        stageWriteRecord?.observeNestedCall(parsed.parentToolUseId);
+      }
       let aborted = false;
       for (const call of collectToolCalls(parsed)) {
         if (observeToolCall(call)) {
@@ -7914,6 +7924,8 @@ function runStageSkillHeadlessImpl(
         // what makes a batched envelope safe to iterate: each block finds its
         // own call.
         recentBashRing.observeToolResult(toolResult.toolUseId, toolResult.isError);
+        // Containment attribution (#2660): a rejected delegation wrote nothing.
+        stageWriteRecord?.observeToolResult(toolResult.toolUseId, toolResult.isError);
         // All-tools call log (Issue #144).
         toolCallLog.observeToolResult(
           toolResult.toolUseId,

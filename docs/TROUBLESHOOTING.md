@@ -956,8 +956,10 @@ operator or another session, not the stage's (#2656). Only clean → dirty paths
 the record names are attributed.
 
 **"Attribution was by filesystem diff only"** on a containment failure means the
-stage's adapter supplied no write record (no tool calls reached the stream), so
-every clean → dirty path was attributed, as before #2656. A concurrent edit by
+stage had no usable write record, so every clean → dirty path was attributed,
+as before #2656. The line says why: no tool calls reached the stream, a
+sub-agent call (`Task`/`Agent`) contributed no observed tool calls, the
+recorded text exceeded its cap, or the record could not be consulted (#2660). A concurrent edit by
 someone else would be listed too — check the paths before acting on them. A
 failure that also lists paths as **"not attributed"** names the clean → dirty
 paths the record did not cover; they are not in the patch.

@@ -241,6 +241,11 @@ export interface ContainmentBreach {
    */
   attribution: "write-record" | "filesystem-diff";
   /**
+   * Why a supplied write record could not be used, when {@link attribution} is
+   * `filesystem-diff` despite one (#2660). Unset when no record was supplied.
+   */
+  attributionNote?: string;
+  /**
    * Paths that were already dirty at baseline and changed during the stage.
    * Ambiguous — surfaced for the operator, never attributed or captured.
    */
@@ -730,6 +735,16 @@ async function buildPatch(
 const MAX_RECORDED_TEXT = 64 * 1024;
 
 /**
+ * Upper bound on all recorded text (#2660). Past it the record stops recording
+ * and reports itself unavailable: dropping evidence while still claiming
+ * coverage would misattribute.
+ */
+const MAX_RECORDED_TEXT_TOTAL = 4 * 1024 * 1024;
+
+/** Tools that delegate to a sub-agent whose own tool calls carry the delegation's id (#2660). */
+const DELEGATION_TOOLS = new Set(["task", "agent", "workflow"]);
+
+/**
  * Tools whose path inputs are writes (lower-cased; across adapters). Any tool
  * not listed here or in {@link TEXT_WRITE_TOOLS} is counted as observed but
  * records nothing (#2659): an unlisted read tool carrying `path` must not
@@ -952,17 +967,38 @@ export class StageWriteRecord {
   private readonly filePaths = new Set<string>();
   private readonly texts: string[] = [];
   private observed = 0;
+  private recordedBytes = 0;
+  private truncated = false;
+  /** Delegation call id → whether any nested call carried it as its parent. */
+  private readonly delegations = new Map<string, boolean>();
+  /** Delegation ids whose tool_result was an error. */
+  private readonly erroredDelegations = new Set<string>();
+  /** Delegation calls with no id: their nested calls can never be linked. */
+  private unresolvableDelegations = 0;
 
   constructor(stageCwd: string) {
     this.stageCwd = path.resolve(stageCwd);
   }
 
-  observeToolUse(toolName: string, toolInput: unknown): void {
+  observeToolUse(
+    toolName: string,
+    toolInput: unknown,
+    ids: { id?: string; parentToolUseId?: string } = {}
+  ): void {
     this.observed++;
+    if (ids.parentToolUseId) this.observeNestedCall(ids.parentToolUseId);
     // Only write evidence is recorded (#2659): reading a sibling file is not
     // writing it, and a read naming the path a concurrent edit then dirtied
     // would otherwise misattribute it.
     const name = toolName.toLowerCase();
+    if (DELEGATION_TOOLS.has(name)) {
+      if (ids.id) {
+        if (!this.delegations.has(ids.id)) this.delegations.set(ids.id, false);
+      } else {
+        this.unresolvableDelegations++;
+      }
+      return;
+    }
     if (PATH_WRITE_TOOLS.has(name)) {
       if (!isRecord(toolInput)) return;
       for (const key of ["file_path", "notebook_path", "path"]) {
@@ -989,12 +1025,59 @@ export class StageWriteRecord {
   }
 
   /**
-   * True once at least one tool call was observed. A stage that wrote anything
-   * did so through a tool call, so zero calls means the adapter's stream
-   * supplied no record — not that the stage wrote nothing.
+   * Link a nested call to the `Task`/`Agent` call it ran under. Separate from
+   * {@link observeToolUse} so a call delivered in both stream shapes, and
+   * deduped by the caller, still links when only the later delivery carried
+   * the parent id.
    */
+  observeNestedCall(parentToolUseId: string): void {
+    if (this.delegations.has(parentToolUseId)) this.delegations.set(parentToolUseId, true);
+  }
+
+  /**
+   * Note a delegation whose tool_result is an error. With no nested call linked
+   * to it, the harness most likely rejected it (unknown `subagent_type`, a
+   * denied call) and it wrote nothing. That inference holds only when the
+   * stream has shown it delivers nested calls: on an adapter that never links
+   * them, a sub-agent that ran, wrote and then failed looks identical.
+   */
+  observeToolResult(toolUseId: string, isError: boolean): void {
+    if (isError && this.delegations.has(toolUseId)) this.erroredDelegations.add(toolUseId);
+  }
+
+  /** True when the record can be trusted to name every stage write. */
   get available(): boolean {
-    return this.observed > 0;
+    return this.unavailableReason === undefined;
+  }
+
+  /**
+   * Why the record cannot be trusted, or undefined when it can. Zero calls
+   * means the adapter's stream supplied no record — not that the stage wrote
+   * nothing. A sub-agent call no nested call links back to may have written
+   * anything (#2660).
+   */
+  get unavailableReason(): string | undefined {
+    if (this.observed === 0) return "no tool calls reached the stream";
+    let silent = this.unresolvableDelegations;
+    const streamLinksNestedCalls = [...this.delegations.values()].some(Boolean);
+    for (const [id, contributed] of this.delegations) {
+      if (contributed) continue;
+      if (streamLinksNestedCalls && this.erroredDelegations.has(id)) continue;
+      silent++;
+    }
+    if (silent > 0) {
+      return (
+        `write record incomplete: ${silent} sub-agent call(s) (Task/Agent/Workflow) ` +
+        `showed no observed activity`
+      );
+    }
+    if (this.truncated) {
+      return (
+        `write record incomplete: recorded text exceeded the ` +
+        `${MAX_RECORDED_TEXT_TOTAL / (1024 * 1024)} MiB cap`
+      );
+    }
+    return undefined;
   }
 
   /**
@@ -1023,8 +1106,14 @@ export class StageWriteRecord {
   }
 
   private addText(text: string): void {
-    if (text.length === 0) return;
-    this.texts.push(text.length > MAX_RECORDED_TEXT ? text.slice(0, MAX_RECORDED_TEXT) : text);
+    if (text.length === 0 || this.truncated) return;
+    const entry = text.length > MAX_RECORDED_TEXT ? text.slice(0, MAX_RECORDED_TEXT) : text;
+    if (this.recordedBytes + entry.length > MAX_RECORDED_TEXT_TOTAL) {
+      this.truncated = true;
+      return;
+    }
+    this.recordedBytes += entry.length;
+    this.texts.push(entry);
   }
 
   /**
@@ -1167,7 +1256,10 @@ export async function detectContainmentBreach(
     // that dirt is the issue's own earlier escape (#2608).
     let unattributed: string[] = [];
     let attribution: ContainmentBreach["attribution"] = "filesystem-diff";
-    if (writeRecord?.available) {
+    let attributionNote: string | undefined;
+    if (writeRecord && !writeRecord.available) {
+      attributionNote = writeRecord.unavailableReason;
+    } else if (writeRecord) {
       try {
         const roots = await repoRootSpellings(before.repoPath);
         const ledgerPaths = new Set(before.ledgerPaths ?? []);
@@ -1179,8 +1271,11 @@ export async function detectContainmentBreach(
         attributed = named;
         unattributed = notNamed;
         attribution = "write-record";
-      } catch {
+      } catch (err) {
         // Fail open to today's verdict: the filesystem diff attributes it all.
+        attributionNote = `write record could not be consulted: ${
+          err instanceof Error ? err.message : String(err)
+        }`;
       }
     }
 
@@ -1194,6 +1289,9 @@ export async function detectContainmentBreach(
       ambiguousPaths: ambiguous.sort(),
       attribution,
     };
+    if (attribution === "filesystem-diff" && attributionNote) {
+      breach.attributionNote = attributionNote;
+    }
     if (warnOnly.has(before.repoPath)) {
       // Another running pipeline owns this repo. Its worktree lives under this
       // repo and its pr stages fetch and push here, so movement is expected
@@ -1343,7 +1441,15 @@ export function formatContainmentFailure(stage: string, report: ContainmentRepor
     if (breach.patchPath) lines.push(`    preserved: ${breach.patchPath}`);
     else if (breach.patchError) lines.push(`    NOT preserved: ${breach.patchError}`);
   }
-  if (report.breaches.some((b) => b.attribution === "filesystem-diff")) {
+  const diffOnly = report.breaches.filter((b) => b.attribution === "filesystem-diff");
+  const note = diffOnly.find((b) => b.attributionNote)?.attributionNote;
+  if (note) {
+    lines.push(
+      `  Attribution was by filesystem diff only — ${note}, so a concurrent edit by ` +
+        `someone else would also be listed here; check these paths before acting. ` +
+        `(Issue #2656, #2660)`
+    );
+  } else if (diffOnly.length > 0) {
     lines.push(
       `  Attribution was by filesystem diff only — this stage's adapter supplied no write ` +
         `record, so a concurrent edit by someone else would also be listed here; check these ` +

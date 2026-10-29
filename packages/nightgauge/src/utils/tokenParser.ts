@@ -195,6 +195,11 @@ export interface ToolCall {
   name: string;
   input: unknown;
   id?: string;
+  /**
+   * The `Task`/`Agent` call this one ran under, from the assistant message's
+   * top-level `parent_tool_use_id` (#2660). Unset for top-level calls.
+   */
+  parentToolUseId?: string;
 }
 
 /**
@@ -235,6 +240,13 @@ export interface ParsedStreamMessage {
    * whatever the wire shape was.
    */
   toolUseId?: string;
+  /**
+   * The delegation call this line ran under, from its top-level
+   * `parent_tool_use_id` (#2660). Set on the singular tool shape and on every
+   * sub-agent `assistant` message, with or without tool_use blocks, so a
+   * sub-agent that ran but called no tool still links its delegation.
+   */
+  parentToolUseId?: string;
   /**
    * All tool_use blocks in an assistant message, in document order (Issue #3760).
    * The Claude CLI delivers tool calls inside complete `assistant` messages
@@ -510,6 +522,11 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
 
     // #559: a Grok `tool_call`. Its `tool_call_update` lines carry no toolName
     // and fall through to the generic return below with no tool.
+    const lineParentToolUseId =
+      typeof parsed.parent_tool_use_id === "string" && parsed.parent_tool_use_id
+        ? (parsed.parent_tool_use_id as string)
+        : undefined;
+
     if (parsed.type === "tool_call") {
       const call = grokToolCall(parsed);
       return call
@@ -518,6 +535,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
             toolName: call.name,
             toolInput: call.input,
             ...(call.id !== undefined ? { toolUseId: call.id } : {}),
+            ...(lineParentToolUseId ? { parentToolUseId: lineParentToolUseId } : {}),
           }
         : { type: "tool_call" };
     }
@@ -533,6 +551,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
         ...(typeof parsed.content_block.id === "string"
           ? { toolUseId: parsed.content_block.id }
           : {}),
+        ...(lineParentToolUseId ? { parentToolUseId: lineParentToolUseId } : {}),
       };
     }
 
@@ -641,7 +660,8 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       const contentBlocks = parsed.message?.content;
       if (Array.isArray(contentBlocks)) {
         const textParts: string[] = [];
-        const toolUses: { name: string; input: unknown; id?: string }[] = [];
+        const toolUses: ToolCall[] = [];
+        const parentToolUseId = lineParentToolUseId;
         for (const block of contentBlocks) {
           if (block.type === "text" && typeof block.text === "string") {
             textParts.push(block.text);
@@ -658,6 +678,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
               name: block.name,
               input: block.input,
               ...(typeof block.id === "string" ? { id: block.id } : {}),
+              ...(parentToolUseId ? { parentToolUseId } : {}),
             });
           }
           // Deliberately NOT extracted: phase markers inside Bash tool_use
@@ -673,6 +694,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
             type: "assistant",
             content: textParts.length > 0 ? textParts.join("\n") : undefined,
             toolUses: toolUses.length > 0 ? toolUses : undefined,
+            ...(parentToolUseId ? { parentToolUseId } : {}),
             ...(servedModel ? { model: servedModel } : {}),
             ...(incrementalUsage ? { incrementalUsage } : {}),
           };
@@ -680,6 +702,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       }
       return {
         type: "assistant",
+        ...(lineParentToolUseId ? { parentToolUseId: lineParentToolUseId } : {}),
         ...(servedModel ? { model: servedModel } : {}),
         ...(incrementalUsage ? { incrementalUsage } : {}),
       };
@@ -728,6 +751,7 @@ export function collectToolCalls(parsed: ParsedStreamMessage | null): ToolCall[]
       name: parsed.toolName,
       input: parsed.toolInput,
       ...(parsed.toolUseId !== undefined ? { id: parsed.toolUseId } : {}),
+      ...(parsed.parentToolUseId !== undefined ? { parentToolUseId: parsed.parentToolUseId } : {}),
     });
   }
   for (const t of parsed.toolUses ?? []) {
