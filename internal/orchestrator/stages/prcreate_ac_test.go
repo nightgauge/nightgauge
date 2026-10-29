@@ -80,8 +80,10 @@ func TestResolveACVerdicts(t *testing.T) {
 }
 
 // githubClosingRE is GitHub's closing-keyword grammar for issue 42. A Refs
-// body that matched it would still close the issue at merge.
-var githubClosingRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(?:[\w.-]+/[\w.-]+)?#42\b`)
+// body that matched it would still close the issue at merge. It is written
+// independently of forge's matcher so it can catch that matcher missing a form.
+var githubClosingRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*` +
+	`(?:(?:[\w.-]+/[\w.-]+)?#42|https?://[^\s/]+/[\w.-]+/[\w.-]+/issues/42)\b`)
 
 // Regression fixture (#2595): an issue with three ACs and a diff that meets
 // one must produce Refs, not Closes, and name the two that remain.

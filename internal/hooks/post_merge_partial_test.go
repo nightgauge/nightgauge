@@ -161,6 +161,15 @@ func TestIsPartialDeliveryUnreadBody(t *testing.T) {
 	}
 }
 
+func TestIsPartialDeliveryURLCloser(t *testing.T) {
+	if IsPartialDelivery("Closes https://github.com/o/r/issues/600", 600) {
+		t.Error("a URL-form closer delivers the issue in full")
+	}
+	if !IsPartialDelivery("Refs https://github.com/o/r/issues/600", 600) {
+		t.Error("a URL-form Refs is a partial delivery")
+	}
+}
+
 func TestClosesIssue(t *testing.T) {
 	cases := []struct {
 		body string
@@ -175,6 +184,10 @@ func TestClosesIssue(t *testing.T) {
 		{"Closes #60", false},
 		{"Implements #600\nPart of #600", false},
 		{"Refs #600\nCloses #12", false},
+		{"Closes https://github.com/nightgauge/nightgauge/issues/600", true},
+		{"fixes: http://ghe.example/o/r/issues/600", true},
+		{"Closes https://github.com/o/r/pull/600", false},
+		{"Closes https://github.com/o/r/issues/6000", false},
 	}
 	for _, c := range cases {
 		if got := ClosesIssue(c.body, 600); got != c.want {

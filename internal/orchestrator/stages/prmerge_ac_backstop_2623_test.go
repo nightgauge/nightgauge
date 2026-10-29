@@ -197,10 +197,26 @@ func TestACBackstop_ClientWithoutInterface(t *testing.T) {
 }
 
 func TestRewriteClosesToRefs(t *testing.T) {
-	in := "Closes #7\nfixes o/r#7 and resolves #70\nClose #8"
-	want := "Refs #7\nRefs o/r#7 and resolves #70\nClose #8"
+	in := "Closes #7\nfixes o/r#7 and resolves #70\nClose #8\n" +
+		"Resolves https://github.com/o/r/issues/7\nfixes https://github.com/o/r/issues/8"
+	want := "Refs #7\nRefs o/r#7 and resolves #70\nClose #8\n" +
+		"Refs https://github.com/o/r/issues/7\nfixes https://github.com/o/r/issues/8"
 	if got := RewriteClosesToRefs(in, 7); got != want {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestRewriteAllClosesToRefs(t *testing.T) {
+	in := "Closes #7, fixes o/r#8, resolves https://github.com/o/r/issues/9, Refs #10"
+	want := "Refs #7, Refs o/r#8, Refs https://github.com/o/r/issues/9, Refs #10"
+	got := RewriteAllClosesToRefs(in)
+	if got != want {
+		t.Errorf("got %q", got)
+	}
+	for _, n := range []int{7, 8, 9} {
+		if BodyClosesIssue(got, n) {
+			t.Errorf("rewritten text still closes #%d: %q", n, got)
+		}
 	}
 }
 
