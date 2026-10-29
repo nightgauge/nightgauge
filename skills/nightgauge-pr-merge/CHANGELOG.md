@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `Refs #N` merge no longer closes the issue (#2674).** Step 7.2 passes
+  `--pr` to `nightgauge issue close`, which leaves a partially delivered issue
+  open for the post-merge hook to return to Ready instead of failing with
+  "was not closed after merge".
+
 ### Removed
 
 - **Batch mode removed (#366).** Nothing ever wrote `batch-{E}.json`, so the

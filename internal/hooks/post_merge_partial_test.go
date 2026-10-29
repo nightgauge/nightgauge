@@ -117,6 +117,50 @@ func TestPostMergeZeroPRNumberKeepsClosing(t *testing.T) {
 	}
 }
 
+// TestRefsMergeEndToEndStaysOpen walks a Refs merge through both closers
+// (#2674): the skill's `issue close --pr` consults IsPartialDelivery and skips,
+// then the hook keeps the issue open, moves it to Ready once and comments once.
+func TestRefsMergeEndToEndStaysOpen(t *testing.T) {
+	if !IsPartialDelivery(partialBody, 600) {
+		t.Fatal("the skill-side close must skip a Refs body")
+	}
+	res, closer, _, board, commenter := runPartial(t, partialBody, 77)
+	if closer.called || res.IssueClosed {
+		t.Error("no closer may run for a Refs merge; the issue stays OPEN")
+	}
+	if board.syncs != 1 || board.calledWith.status != "Ready" {
+		t.Errorf("board synced %d time(s) to %q, want once to Ready", board.syncs, board.calledWith.status)
+	}
+	if commenter.calls != 1 {
+		t.Errorf("remainder comments = %d, want 1", commenter.calls)
+	}
+}
+
+// TestClosesMergeEndToEndCloses is the Closes counterpart: the skill closes
+// and the hook moves the board to Done.
+func TestClosesMergeEndToEndCloses(t *testing.T) {
+	body := strings.Replace(partialBody, "Refs #600", "Closes #600", 1)
+	if IsPartialDelivery(body, 600) {
+		t.Fatal("the skill-side close must close a Closes body")
+	}
+	res, closer, _, board, commenter := runPartial(t, body, 77)
+	if !closer.called || !res.IssueClosed {
+		t.Error("a Closes merge must close the issue")
+	}
+	if board.calledWith.status != "Done" {
+		t.Errorf("board status = %q, want Done", board.calledWith.status)
+	}
+	if commenter.calls != 0 {
+		t.Errorf("remainder comments = %d, want 0", commenter.calls)
+	}
+}
+
+func TestIsPartialDeliveryUnreadBody(t *testing.T) {
+	if IsPartialDelivery("", 600) || IsPartialDelivery(" \n\t", 600) {
+		t.Error("an unread body is not a partial delivery")
+	}
+}
+
 func TestClosesIssue(t *testing.T) {
 	cases := []struct {
 		body string

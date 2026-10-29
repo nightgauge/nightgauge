@@ -381,7 +381,7 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// part of the issue: pr-create found an unmet acceptance criterion. Leave
 	// the issue open, return it to Ready and name the remainder. Only a body
 	// we actually read can say this; an unread body keeps the close below.
-	if strings.TrimSpace(merge.Body) != "" && !ClosesIssue(merge.Body, input.IssueNumber) {
+	if IsPartialDelivery(merge.Body, input.IssueNumber) {
 		return partialDelivery(ctx, boardSvc, input, issue.NodeID, merge)
 	}
 
@@ -650,6 +650,14 @@ func writeValidationMarker(ctx context.Context, input PostMergeInput, issueNodeI
 // closingKeywordRE matches GitHub's closing keywords followed by an issue
 // reference, optionally repo-qualified.
 var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(?:[\w.-]+/[\w.-]+)?#(\d+)\b`)
+
+// IsPartialDelivery reports whether a merged PR's body delivered only part of
+// issue number: the body was read and names no closing keyword for it (Refs
+// #N). An empty body was not read, so it is not a partial delivery. The
+// post-merge hook and `issue close --pr` share this one predicate (#2674).
+func IsPartialDelivery(body string, number int) bool {
+	return strings.TrimSpace(body) != "" && !ClosesIssue(body, number)
+}
 
 // ClosesIssue reports whether a PR body carries a closing keyword for issue
 // number (#2595).

@@ -74,22 +74,32 @@ fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
 ISSUE_CLOSED=false
+ISSUE_KEPT_OPEN=false
 if [ -n "$BINARY" ]; then
+  # --pr makes the binary read the merged PR's body: a `Refs #N` PR delivered
+  # only part of the issue, so it stays open and the post-merge hook returns it
+  # to Ready (#2674). Without a PR number the close runs as before.
   CLOSE_RESULT=$("$BINARY" issue close "$ISSUE_NUMBER" \
     --owner "$(echo "$REPO" | cut -d'/' -f1)" \
     --repo "$(echo "$REPO" | cut -d'/' -f2)" \
+    ${PR_NUMBER:+--pr "$PR_NUMBER"} \
     --json 2>/dev/null || echo '{}')
   CLOSE_STATUS=$(printf '%s\n' "$CLOSE_RESULT" | jq -r '.result // empty' 2>/dev/null || echo "")
   if [ "$CLOSE_STATUS" = "closed" ]; then
     ISSUE_CLOSED=true
     echo "Issue #$ISSUE_NUMBER closed."
+  elif [ "$CLOSE_STATUS" = "skipped" ]; then
+    # Not a failure: ISSUE_CLOSED stays false, so the verification and its
+    # "was not closed after merge" exit below do not run.
+    ISSUE_KEPT_OPEN=true
+    echo "Issue #$ISSUE_NUMBER left open: PR #$PR_NUMBER says Refs, not a closing keyword ($(printf '%s\n' "$CLOSE_RESULT" | jq -r '.reason // empty')). The post-merge hook returns it to Ready."
   else
     echo "WARNING: Could not close issue #$ISSUE_NUMBER via Go binary (result: ${CLOSE_STATUS:-empty})" >&2
   fi
 else
   echo "WARNING: nightgauge binary not found — issue #$ISSUE_NUMBER was not closed automatically." >&2
 fi
-echo "issue_closed: $ISSUE_CLOSED"
+echo "issue_closed: $ISSUE_CLOSED issue_kept_open: $ISSUE_KEPT_OPEN"
 
 # Step 7.2.1.5: Verify issue is actually CLOSED (GitHub API eventual consistency)
 CLOSE_VERIFIED=false
