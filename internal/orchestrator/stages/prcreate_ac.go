@@ -65,21 +65,13 @@ func NormalizeACStatus(s string) string {
 // deterministic, diff, validate. Otherwise the criterion is not verifiable,
 // with the runtime step named when the diff verifier found one.
 //
-// Validate verdicts are matched by criterion text first and by index only
-// when they carry no text, so a 1-based or reordered list cannot misfile one.
+// Validate verdicts are matched to criteria by matchValidateVerdicts: text
+// first, index only as a fallback, so a reordered list cannot misfile one.
 func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.ACReconcileResult, diffCheck ACDiffChecker) []ACVerdict {
 	if len(criteria) == 0 {
 		return nil
 	}
-	byText := make(map[string]ACVerdict, len(validate))
-	byIndex := make(map[int]ACVerdict, len(validate))
-	for _, v := range validate {
-		if key := preflight.NormalizeACText(v.Text); key != "" {
-			byText[key] = v
-		} else {
-			byIndex[v.Index] = v
-		}
-	}
+	matched := matchValidateVerdicts(criteria, validate)
 	detByIndex := map[int]preflight.ReconciledCriterion{}
 	if det != nil {
 		for _, c := range det.AcceptanceCriteria {
@@ -102,11 +94,7 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 				cands = append(cands, ACVerdict{Status: r.Status, Source: ACSourceDiff, Evidence: r.Evidence, Step: r.Step})
 			}
 		}
-		val, ok := byText[preflight.NormalizeACText(text)]
-		if !ok {
-			val, ok = byIndex[i]
-		}
-		if ok {
+		if val, ok := matched[i]; ok {
 			v := ACVerdict{Status: NormalizeACStatus(val.Status), Source: ACSourceValidate, Evidence: strings.TrimSpace(val.Evidence)}
 			if v.Status == ACNotVerifiable && negativeEvidenceRE.MatchString(v.Evidence) {
 				v.Status = ACUnmet
@@ -133,6 +121,84 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 		out = append(out, v)
 	}
 	return out
+}
+
+// matchValidateVerdicts assigns each criterion at most one validate verdict,
+// claiming each verdict at most once, in four passes (#2679):
+//
+//  1. equal acMatchKey;
+//  2. a unique prefix match, either way round, so a criterion stored
+//     truncated still finds the verdict that carries its full text;
+//  3. a verdict at the criterion's index whose text matched no criterion;
+//  4. a verdict with no text at the criterion's index.
+//
+// Text passes run first, so a reordered list still lands on its own text.
+func matchValidateVerdicts(criteria []string, validate []ACVerdict) map[int]ACVerdict {
+	out := map[int]ACVerdict{}
+	claimed := make([]bool, len(validate))
+	vkeys := make([]string, len(validate))
+	for j, v := range validate {
+		vkeys[j] = acMatchKey(v.Text)
+	}
+	ckeys := make([]string, len(criteria))
+	for i, c := range criteria {
+		ckeys[i] = acMatchKey(c)
+	}
+	claim := func(i, j int) {
+		out[i] = validate[j]
+		claimed[j] = true
+	}
+	for i, ck := range ckeys {
+		for j, vk := range vkeys {
+			if ck != "" && !claimed[j] && vk == ck {
+				claim(i, j)
+				break
+			}
+		}
+	}
+	for i, ck := range ckeys {
+		if _, ok := out[i]; ok || ck == "" {
+			continue
+		}
+		hit := -1
+		for j, vk := range vkeys {
+			if claimed[j] || vk == "" || !(strings.HasPrefix(vk, ck) || strings.HasPrefix(ck, vk)) {
+				continue
+			}
+			if hit >= 0 {
+				hit = -2
+				break
+			}
+			hit = j
+		}
+		if hit >= 0 {
+			claim(i, hit)
+		}
+	}
+	for _, wantText := range []bool{true, false} {
+		for i := range criteria {
+			if _, ok := out[i]; ok {
+				continue
+			}
+			for j, v := range validate {
+				if !claimed[j] && v.Index == i && (vkeys[j] != "") == wantText {
+					claim(i, j)
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+// acMatchKey is the markdown-insensitive key used only to match validate
+// verdicts to criteria: whitespace-collapsed, lowercased, without backticks
+// or `*`/`_` emphasis, and without trailing `.`, `;` or `:`. It is not
+// NormalizeACText, which stays whitespace-only for fingerprints (#2623).
+func acMatchKey(s string) string {
+	s = strings.ToLower(preflight.NormalizeACText(s))
+	s = strings.NewReplacer("`", "", "*", "", "_", "").Replace(s)
+	return strings.TrimRight(strings.Join(strings.Fields(s), " "), ".;: ")
 }
 
 func firstACStatus(cands []ACVerdict, status string) (ACVerdict, bool) {

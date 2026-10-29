@@ -487,3 +487,59 @@ func TestReadCreateContext_RejectsMisplacedACVerdicts(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveACVerdicts_Issue2672Verdicts is the #2679 regression: #2678's
+// six met verdicts close #2672 whether its criteria were stored whole or with
+// AC2 truncated at the inline `<details>`. Verdict indices are 1-based so
+// only text matching can place them.
+func TestResolveACVerdicts_Issue2672Verdicts(t *testing.T) {
+	whole := []string{
+		"An issue body whose acceptance criteria are numbered items (`1. ...`, `1) ...`, `1. **AC1:** ...`) yields one criterion per item in `parseACs`.",
+		"Checkbox bullets (`- [ ]`, `* [x]`) keep parsing exactly as before, including the `<details>` exclusion and de-duplication.",
+		"A body with no checkboxes and no numbered items still yields zero criteria and `no-acs-detected`.",
+		"Re-running `nightgauge preflight ac-reconcile` on the #2665 body reports detected criteria instead of `no-acs-detected`.",
+		"Go unit tests cover numbered, parenthesised, bold-prefixed, and mixed-list bodies.",
+		"The SDK mirror of the parser (`packages/nightgauge-sdk/src/preflight/`) accepts the same forms, or its divergence from the Go port is documented.",
+	}
+	var validate []ACVerdict
+	for i, text := range whole {
+		validate = append(validate, ACVerdict{Index: i + 1, Text: text, Status: "met", Evidence: "verified"})
+	}
+	// A re-formatted verdict text: no backticks, no trailing period.
+	validate[2].Text = "A body with no checkboxes and no numbered items still yields zero criteria and no-acs-detected"
+	truncated := append([]string(nil), whole...)
+	truncated[1] = "Checkbox bullets (`- [ ]`, `* [x]`) keep parsing exactly as before, including the `"
+	for name, criteria := range map[string][]string{"whole": whole, "truncated": truncated} {
+		t.Run(name, func(t *testing.T) {
+			s := richSnap()
+			s.ACVerdicts = ResolveACVerdicts(criteria, validate, nil, nil)
+			if open := OpenACs(s.ACVerdicts); open != nil {
+				t.Fatalf("open criteria = %+v", open)
+			}
+			if !IssueClosedBy(s.ACVerdicts) {
+				t.Fatal("IssueClosedBy = false")
+			}
+			if body := RenderBody(s); !strings.Contains(body, "Closes #42\n") || strings.Contains(body, UnmetACHeading) {
+				t.Errorf("body must close with no unmet section:\n%s", body)
+			}
+		})
+	}
+}
+
+// TestResolveACVerdicts_TextBeatsIndex guards the #2679 fallbacks: verdicts
+// listed in swapped order still land on their own criteria.
+func TestResolveACVerdicts_TextBeatsIndex(t *testing.T) {
+	got := ResolveACVerdicts([]string{"alpha works", "beta works"}, []ACVerdict{
+		{Index: 0, Text: "Beta works.", Status: "unmet"},
+		{Index: 1, Text: "`alpha` works", Status: "met"},
+	}, nil, nil)
+	if got[0].Status != ACMet || got[1].Status != ACUnmet {
+		t.Errorf("verdicts = %+v", got)
+	}
+}
+
+func TestAcMatchKey(t *testing.T) {
+	if a, b := acMatchKey("Uses **`Foo`**  _now_."), acMatchKey("uses foo now"); a != b {
+		t.Errorf("%q != %q", a, b)
+	}
+}

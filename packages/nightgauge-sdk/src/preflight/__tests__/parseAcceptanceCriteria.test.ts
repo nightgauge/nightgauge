@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseAcceptanceCriteria } from "../parseAcceptanceCriteria.js";
 
@@ -98,6 +100,32 @@ describe("parseAcceptanceCriteria", () => {
       "keeps the `<details>` exclusion",
       "later",
     ]);
+  });
+
+  it.each([
+    [
+      "details line inside backtick fence",
+      "## Acceptance Criteria\n- [ ] first\n```html\n<details>\n```\n- [ ] after fence\n</details>\n- [ ] last\n",
+      ["first", "after fence", "last"],
+    ],
+    ["details line inside tilde fence", "~~~\n<details>\n~~~\n- [ ] kept\n</details>\n", ["kept"]],
+    [
+      "archive after fence still dropped",
+      "```\nx\n```\n<details>\n- [ ] archived\n</details>\n- [ ] live\n",
+      ["live"],
+    ],
+    ["unterminated details kept", "<details>\n- [ ] kept\n", ["kept"]],
+  ])("mirrors Go fence-aware <details> handling: %s", (_name, body, want) => {
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(want);
+  });
+
+  it("parses #2672's body into six whole criteria (#2679)", () => {
+    const body = readFileSync(join(__dirname, "fixtures", "issue-2672-body.md"), "utf8");
+    const got = parseAcceptanceCriteria(body);
+    expect(got).toHaveLength(6);
+    expect(got[1].text.endsWith("including the `<details>` exclusion and de-duplication.")).toBe(
+      true
+    );
   });
 
   it("drops repeated criteria", () => {
