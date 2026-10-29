@@ -868,6 +868,63 @@ describe("the retry ledger is scoped to the issue that recorded it (#2608)", () 
   });
 });
 
+describe("sub-agent calls and an honest write record (#2660)", () => {
+  it("is available and names a sibling path a Task's nested Write wrote", () => {
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Task", { prompt: "go" }, { id: "t1" });
+    record.observeToolUse(
+      "Write",
+      { file_path: path.join(sibling, "src", "a.ts") },
+      { id: "w1", parentToolUseId: "t1" }
+    );
+    expect(record.available).toBe(true);
+    expect(record.names([sibling], "src/a.ts")).toBe(true);
+  });
+
+  it("is unavailable when a Task contributed no nested calls", () => {
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Task", { prompt: "go" }, { id: "t1" });
+    record.observeToolUse("Write", { file_path: path.join(worktree, "a.ts") }, { id: "w1" });
+    expect(record.available).toBe(false);
+    expect(record.unavailableReason).toContain("write record incomplete: 1 sub-agent call(s)");
+  });
+
+  it("is unavailable when a delegation carries no id", () => {
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Agent", { prompt: "go" });
+    expect(record.available).toBe(false);
+  });
+
+  it("is unavailable once the total recorded text cap trips", () => {
+    const record = new StageWriteRecord(worktree);
+    const chunk = `echo ${"x".repeat(60 * 1024)} > out.txt`;
+    for (let i = 0; i < 80; i++) record.observeToolUse("Bash", { command: chunk });
+    expect(record.available).toBe(false);
+    expect(record.unavailableReason).toContain("MiB cap");
+  });
+
+  it("prints the record's reason instead of the no-record sentence", async () => {
+    const baseline = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+    });
+    stageWritesIntoSibling();
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Task", { prompt: "go" }, { id: "t1" });
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 2660,
+      writeRecord: record,
+    });
+    expect(report.breaches[0].attribution).toBe("filesystem-diff");
+    expect(report.breaches[0].attributionNote).toContain("write record incomplete");
+    const text = formatContainmentFailure("feature-dev", report);
+    expect(text).toContain("write record incomplete");
+    expect(text).not.toContain("adapter supplied no write record");
+  });
+});
+
 describe("a concurrent edit is not the stage's write (#2656)", () => {
   /** A record of a stage that wrote only inside its own worktree. */
   function worktreeOnlyRecord(): StageWriteRecord {

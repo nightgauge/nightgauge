@@ -1108,7 +1108,7 @@ workspace repo it does not own, and compares after the stage closes:
 | ------------------------------------------- | ------------------------------------------------------ |
 | clean → dirty, named by the write record    | **Stage failure.** Attributed, captured, reported.     |
 | clean → dirty, not named by the record      | Warning only. A concurrent edit; never attributed.     |
-| clean → dirty, no write record              | **Stage failure**, flagged "filesystem diff only".     |
+| clean → dirty, no usable write record       | **Stage failure**, flagged "filesystem diff only".     |
 | clean → dirty, in this issue's retry ledger | **Stage failure**, whether or not the record names it. |
 | dirty → dirty, fingerprint changed          | Warning only. Never attributed, never captured.        |
 | dirty at baseline, unchanged                | Ignored — the operator's standing work.                |
@@ -1126,7 +1126,11 @@ record can. A write the record cannot see — a generator run after `cd` into th
 sibling that names no path — is a warning, not a failure. When the adapter's
 stream carried no tool calls at all there is no record, and every clean → dirty
 path still fails the stage, with a line saying the attribution was by
-filesystem diff only.
+filesystem diff only. The record is also unusable (#2660) when a sub-agent call
+(`Task`/`Agent`) contributed no observed tool calls — its nested calls are
+linked by `parent_tool_use_id`, so a silent sub-agent may have written
+anything — or when the recorded text exceeded its 4 MiB cap. The failure line
+then names that reason instead.
 
 The asymmetry is deliberate. A sibling repo is very often dirty because the
 **operator** is working in it, and an operator's edit is indistinguishable from

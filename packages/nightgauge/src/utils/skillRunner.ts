@@ -7405,7 +7405,7 @@ function runStageSkillHeadlessImpl(
   //
   // Returns true when the caller must abort the stage.
   const seenToolUseIds = new Set<string>();
-  const observeToolCall = ({ name, input, id }: ToolCall): boolean => {
+  const observeToolCall = ({ name, input, id, parentToolUseId }: ToolCall): boolean => {
     // A call delivered in BOTH shapes must be counted once. Without this the
     // AskUserQuestion counter would advance twice per attempt and trip its
     // abort at HALF the intended threshold — a stage killed for a loop it
@@ -7464,7 +7464,7 @@ function runStageSkillHeadlessImpl(
     // All-tools call log (Issue #144) — every tool, not just Bash.
     toolCallLog.observeToolUse(name, input, id);
     // Containment attribution (#2656): the stage's write record.
-    stageWriteRecord?.observeToolUse(name, input);
+    stageWriteRecord?.observeToolUse(name, input, { id, parentToolUseId });
     // Wedge diagnostics (#1118): the only point at which a call's declared
     // timeout, and the task it is polling, are visible. Heartbeats arrive
     // later carrying nothing but a tool_use id.

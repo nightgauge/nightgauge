@@ -195,6 +195,11 @@ export interface ToolCall {
   name: string;
   input: unknown;
   id?: string;
+  /**
+   * The `Task`/`Agent` call this one ran under, from the assistant message's
+   * top-level `parent_tool_use_id` (#2660). Unset for top-level calls.
+   */
+  parentToolUseId?: string;
 }
 
 /**
@@ -641,7 +646,11 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       const contentBlocks = parsed.message?.content;
       if (Array.isArray(contentBlocks)) {
         const textParts: string[] = [];
-        const toolUses: { name: string; input: unknown; id?: string }[] = [];
+        const toolUses: ToolCall[] = [];
+        const parentToolUseId =
+          typeof parsed.parent_tool_use_id === "string" && parsed.parent_tool_use_id
+            ? (parsed.parent_tool_use_id as string)
+            : undefined;
         for (const block of contentBlocks) {
           if (block.type === "text" && typeof block.text === "string") {
             textParts.push(block.text);
@@ -658,6 +667,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
               name: block.name,
               input: block.input,
               ...(typeof block.id === "string" ? { id: block.id } : {}),
+              ...(parentToolUseId ? { parentToolUseId } : {}),
             });
           }
           // Deliberately NOT extracted: phase markers inside Bash tool_use

@@ -205,6 +205,23 @@ function emitToolUse(proc: ChildProcess, name: string, input: unknown): void {
   proc.stdout!.emit("data", Buffer.from(message + "\n"));
 }
 
+/** Emit a complete `assistant` message carrying one `tool_use` — the Claude CLI's runtime shape (#2660). */
+function emitAssistantToolUse(
+  proc: ChildProcess,
+  name: string,
+  input: unknown,
+  parentToolUseId?: string
+): string {
+  const id = `toolu_2660_${++toolUseSeq}`;
+  const message = JSON.stringify({
+    type: "assistant",
+    message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] },
+    ...(parentToolUseId ? { parent_tool_use_id: parentToolUseId } : {}),
+  });
+  proc.stdout!.emit("data", Buffer.from(message + "\n"));
+  return id;
+}
+
 describe("runStageSkillHeadless — worktree write containment (#129)", () => {
   it("establishes the containment boundary before the stage can write", async () => {
     const proc = createMockChildProcess();
@@ -423,5 +440,48 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
     expect(patches).toHaveLength(1);
     expect(fs.readFileSync(patches[0], "utf-8")).toContain("/* impl */");
     expect(git(["status", "--porcelain", "-uall"], sibling)).toBe(beforeStatus);
+  });
+
+  it("attributes a sibling write made by a sub-agent through its Task call (#2660)", async () => {
+    const { proc, completed } = await runStage();
+    const task = emitAssistantToolUse(proc, "Task", { prompt: "implement it" });
+    const target = path.join(sibling, "src", "handlers.ts");
+    emitAssistantToolUse(proc, "Write", { file_path: target, content: "x" }, task);
+    fs.writeFileSync(target, "export function handle() { /* impl */ }\n");
+
+    proc.emit("close", 0);
+    const result = await completed;
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain("src/handlers.ts");
+    expect(result.error?.message).not.toContain("filesystem diff only");
+  });
+
+  it("says the write record is incomplete when a Task contributed no observed calls (#2660)", async () => {
+    const { proc, completed } = await runStage();
+    emitAssistantToolUse(proc, "Task", { prompt: "implement it" });
+    fs.writeFileSync(path.join(sibling, "src", "handlers.ts"), "// sub-agent write\n");
+
+    proc.emit("close", 0);
+    const result = await completed;
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain("Attribution was by filesystem diff only");
+    expect(result.error?.message).toContain("write record incomplete");
+    expect(result.error?.message).not.toContain("adapter supplied no write record");
+  });
+
+  it("records an assistant-shape top-level Write like a content_block_start one (#2660)", async () => {
+    const { proc, completed, stderr } = await runStage();
+    const own = path.join(worktree, "src", "handlers.ts");
+    emitAssistantToolUse(proc, "Write", { file_path: own, content: "// stage work\n" });
+    fs.writeFileSync(own, "// stage work\n");
+    fs.writeFileSync(path.join(sibling, "src", "router.ts"), "// concurrent edit\n");
+
+    proc.emit("close", 0);
+    const result = await completed;
+
+    expect(result.success).toBe(true);
+    expect(stderr.join("")).toContain("sibling: src/router.ts");
   });
 });

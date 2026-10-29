@@ -121,6 +121,15 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
   that need a device, a deploy or an operator, and the PR names the step. A
   criteria list stored twice renders once.
 
+- **Containment no longer trusts a write record that missed a sub-agent's
+  writes (#2660).** A stage that delegated through `Task`/`Agent` counted as
+  fully recorded even when none of the sub-agent's tool calls reached the
+  stream, so a sibling file the sub-agent wrote was reported as someone else's
+  concurrent edit. Nested calls are now linked to their delegation by
+  `parent_tool_use_id`; a delegation with none, or a record past its new 4 MiB
+  total cap, falls back to filesystem-diff attribution, and the failure says
+  why instead of always claiming the adapter supplied no record.
+
 - **Reading a sibling repo no longer pins a concurrent edit on the stage.**
   Worktree containment now counts only write evidence. A read-only shell
   command such as `cat` or `git diff` on a sibling file, a non-write tool that
