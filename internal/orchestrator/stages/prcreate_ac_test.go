@@ -1,6 +1,7 @@
 package stages
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -36,13 +37,14 @@ func TestResolveACVerdicts(t *testing.T) {
 			criteria: criteria,
 			validate: []ACVerdict{{Index: 0, Status: "met"}, {Index: 1, Status: "unmet"}, {Index: 2, Status: "met"}},
 			det:      det(preflight.ACUnsatisfied, preflight.ACSatisfied, preflight.ACUndetectable),
-			want:     []string{"unmet/deterministic", "unmet/feature-validate", "met/feature-validate"},
+			// Text-less verdicts match by index, so only their unmet counts (#2669).
+			want: []string{"unmet/deterministic", "unmet/feature-validate", "not_verifiable/none"},
 		},
 		{
 			name:     "validate only",
 			criteria: criteria,
 			validate: []ACVerdict{{Index: 0, Status: "met"}, {Index: 1, Status: "not_verifiable"}, {Index: 2, Status: "unmet"}},
-			want:     []string{"met/feature-validate", "not_verifiable/feature-validate", "unmet/feature-validate"},
+			want:     []string{"not_verifiable/none", "not_verifiable/none", "unmet/feature-validate"},
 		},
 		{
 			name:     "neither source",
@@ -54,7 +56,7 @@ func TestResolveACVerdicts(t *testing.T) {
 			name:     "synonyms and unknown status",
 			criteria: criteria,
 			validate: []ACVerdict{{Index: 0, Status: "Satisfied"}, {Index: 1, Status: "unsatisfied"}, {Index: 2, Status: "maybe"}},
-			want:     []string{"met/feature-validate", "unmet/feature-validate", "not_verifiable/feature-validate"},
+			want:     []string{"not_verifiable/none", "unmet/feature-validate", "not_verifiable/none"},
 		},
 		{
 			name:     "zero criteria",
@@ -91,7 +93,7 @@ func TestRenderBody_PartialDeliveryRefsNotCloses(t *testing.T) {
 	s.ACVerdicts = ResolveACVerdicts(
 		[]string{"Add the widget", "Document the widget", "Test the widget"},
 		[]ACVerdict{
-			{Index: 0, Status: "met", Evidence: "widget.go:12"},
+			{Index: 0, Text: "Add the widget", Status: "met", Evidence: "widget.go:12"},
 			{Index: 1, Status: "unmet", Evidence: "no docs change"},
 			{Index: 2, Status: "unmet"},
 		}, nil, nil)
@@ -125,7 +127,7 @@ func TestRenderBody_PartialDeliveryRefsNotCloses(t *testing.T) {
 
 func TestRenderBody_AllMetCloses(t *testing.T) {
 	s := richSnap()
-	s.ACVerdicts = ResolveACVerdicts([]string{"a", "b"}, []ACVerdict{{Index: 0, Status: "met"}, {Index: 1, Status: "met"}}, nil, nil)
+	s.ACVerdicts = ResolveACVerdicts([]string{"a", "b"}, []ACVerdict{{Index: 0, Text: "a", Status: "met"}, {Index: 1, Text: "b", Status: "met"}}, nil, nil)
 	body := RenderBody(s)
 	if !strings.Contains(body, "Closes #42\n") || strings.Contains(body, UnmetACHeading) {
 		t.Errorf("all-met body must close with no unmet section:\n%s", body)
@@ -161,14 +163,15 @@ func TestNormalizeACStatus_NegativeSynonyms(t *testing.T) {
 }
 
 func TestResolveACVerdicts_NegativeEvidenceFolds(t *testing.T) {
-	got := ResolveACVerdicts([]string{"a"}, []ACVerdict{{Index: 0, Status: "not_verifiable", Evidence: "criterion 2 is not met"}}, nil, nil)
+	got := ResolveACVerdicts([]string{"a"}, []ACVerdict{{Index: 0, Status: "not_verifiable", Evidence: "criterion 1 is not met"}}, nil, nil)
 	if got[0].Status != ACUnmet {
 		t.Errorf("negative evidence must resolve unmet, got %q", got[0].Status)
 	}
+	// An explicit validate unmet still wins over a deterministic met (#2665).
 	det := &preflight.ACReconcileResult{AcceptanceCriteria: []preflight.ReconciledCriterion{{Index: 0, Classification: preflight.ACSatisfied, Reason: "found"}}}
-	got = ResolveACVerdicts([]string{"a"}, []ACVerdict{{Index: 0, Status: "not_verifiable", Evidence: "not met"}}, det, nil)
+	got = ResolveACVerdicts([]string{"a"}, []ACVerdict{{Index: 0, Status: "unmet"}}, det, nil)
 	if got[0].Status != ACUnmet || got[0].Source != ACSourceValidate {
-		t.Errorf("folded unmet must win over deterministic satisfied (#2665), got %+v", got[0])
+		t.Errorf("explicit unmet must win over deterministic satisfied (#2665), got %+v", got[0])
 	}
 }
 
@@ -213,7 +216,7 @@ func TestRenderBody_NotVerifiableRefsAndListsOnce(t *testing.T) {
 
 func TestRenderBody_MixedRefsEachOnce(t *testing.T) {
 	s := richSnap()
-	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, []ACVerdict{{Index: 0, Status: "met"}}, nil, nil)
+	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, []ACVerdict{{Index: 0, Text: "alpha crit", Status: "met"}}, nil, nil)
 	body := RenderBody(s)
 	if !strings.Contains(body, "Refs #42\n") || !strings.Contains(body, "- ✅ met: alpha crit\n") {
 		t.Errorf("mixed body wrong:\n%s", body)
@@ -296,11 +299,11 @@ func TestReadCreateContext_ResolvesACVerdicts(t *testing.T) {
 		"acceptance_criteria_verdicts": []map[string]any{
 			{"index": 0, "status": "unmet"},
 			{"index": 1, "status": "met"},
-			{"index": 2, "status": "met", "evidence": "widget_test.go"},
+			{"index": 2, "text": "The widget behaves", "status": "met", "evidence": "widget_test.go"},
 		},
 	})
 
-	snap, err := defaultReadCreateContext(dir, 42)
+	snap, err := defaultReadCreateContext(context.Background(), dir, 42)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +347,7 @@ func TestWritePRContext_ACFingerprint(t *testing.T) {
 func TestResolveACVerdicts_DiffAndTextMatching(t *testing.T) {
 	criteria := []string{"first crit", "second crit", "third crit"}
 	diff := func(results map[string]ACCheck) ACDiffChecker {
-		return func(text string) (ACCheck, bool) {
+		return func(text string, _ []string) (ACCheck, bool) {
 			r, ok := results[text]
 			return r, ok
 		}
@@ -414,7 +417,7 @@ func TestReadCreateContext_Issue2661ClosesFromDiff(t *testing.T) {
 		"validation_status": "passed",
 	})
 
-	snap, err := defaultReadCreateContext(dir, 2661)
+	snap, err := defaultReadCreateContext(context.Background(), dir, 2661)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +475,7 @@ func TestReadCreateContext_RejectsMisplacedACVerdicts(t *testing.T) {
 			if err := os.WriteFile(p, data, 0o644); err != nil {
 				t.Fatal(err)
 			}
-			snap, err := defaultReadCreateContext(dir, 7)
+			snap, err := defaultReadCreateContext(context.Background(), dir, 7)
 			if c.wantErr == "" {
 				if err != nil {
 					t.Fatalf("correct shape must read: %v", err)
@@ -566,5 +569,47 @@ func TestACTestState_UnconfirmedRunNeverPasses(t *testing.T) {
 		if got := acTestState(tc.snap).Passed; got != tc.want {
 			t.Errorf("%s: Passed = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// #2669: an index-matched verdict may only hold a criterion open.
+func TestResolveACVerdicts_IndexFallbackOnlyUnmet(t *testing.T) {
+	criteria := []string{"first crit", "second crit"}
+	got := ResolveACVerdicts(criteria, []ACVerdict{
+		{Index: 0, Text: "first, reworded", Status: "unmet"},
+		{Index: 1, Text: "second, reworded", Status: "met"},
+	}, nil, nil)
+	if got[0].Status != ACUnmet {
+		t.Errorf("reworded unmet at index: %+v", got[0])
+	}
+	if got[1].Status != ACNotVerifiable {
+		t.Errorf("reworded met at index: %+v, want not_verifiable", got[1])
+	}
+	got = ResolveACVerdicts(criteria, []ACVerdict{{Index: 0, Status: "met"}, {Index: 1, Status: "met"}}, nil, nil)
+	if IssueClosedBy(got) {
+		t.Errorf("index-only met closed the issue: %+v", got)
+	}
+}
+
+// #2669: negative evidence is scoped to its criterion and never overturns a
+// deterministic met.
+func TestResolveACVerdicts_ScopedNegativeEvidence(t *testing.T) {
+	criteria := []string{"first crit", "second crit", "third crit"}
+	got := ResolveACVerdicts(criteria, []ACVerdict{
+		{Text: "first crit", Status: "unknown", Evidence: "Done. AC3 is not met."},
+		{Text: "second crit", Status: "unknown", Evidence: "This is not met yet."},
+	}, nil, nil)
+	if got[0].Status != ACNotVerifiable {
+		t.Errorf("AC1 flipped by AC3's evidence: %+v", got[0])
+	}
+	if got[1].Status != ACUnmet {
+		t.Errorf("AC2 own negative evidence: %+v", got[1])
+	}
+	det := &preflight.ACReconcileResult{AcceptanceCriteria: []preflight.ReconciledCriterion{
+		{Index: 1, Classification: preflight.ACSatisfied, Evidence: []string{"x.go"}},
+	}}
+	got = ResolveACVerdicts(criteria, []ACVerdict{{Text: "second crit", Status: "unknown", Evidence: "not met"}}, det, nil)
+	if got[1].Status != ACMet {
+		t.Errorf("deterministic met overturned: %+v", got[1])
 	}
 }
