@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
@@ -142,5 +143,37 @@ func TestFeatureValidateGate_JudgeVerdict_FailTripsGate(t *testing.T) {
 	}
 	if !sawJudgeFail {
 		t.Fatalf("expected evidence to contain %q, got %v", "judges=fail", gr.Evidence)
+	}
+}
+
+// #2671: the #2661 validate context — five met verdicts under
+// acceptance_criteria — fails the gate naming both keys; the correct
+// {index, text, status, evidence} shape passes unchanged.
+func TestFeatureValidateGate_MisplacedACVerdicts(t *testing.T) {
+	metrics := []map[string]any{{"gate_name": "build", "result": "pass"}}
+	var wrong []map[string]any
+	for i := 1; i <= 5; i++ {
+		wrong = append(wrong, map[string]any{"index": i, "verdict": "met"})
+	}
+	ws := layouttest.Repo(t)
+	writeGateMetrics(t, ws, 2661, metrics)
+	writeValidateArtifact(t, ws, 2661, map[string]any{"validation_status": "passed", "acceptance_criteria": wrong})
+	gr := FeatureValidateGate{}.Verify(context.Background(), 2661, ws)
+	if gr.Passed || gr.TerminalKind != TerminalKindValidationError {
+		t.Fatalf("passed=%v kind=%q, want fail/%q", gr.Passed, gr.TerminalKind, TerminalKindValidationError)
+	}
+	joined := strings.Join(gr.Evidence, "\n")
+	for _, want := range []string{"acceptance_criteria:", "acceptance_criteria_verdicts", "status"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("evidence missing %q: %s", want, joined)
+		}
+	}
+
+	ok := layouttest.Repo(t)
+	writeGateMetrics(t, ok, 2661, metrics)
+	writeValidateArtifact(t, ok, 2661, map[string]any{"validation_status": "passed",
+		"acceptance_criteria_verdicts": []map[string]any{{"index": 0, "text": "x", "status": "met", "evidence": "diff"}}})
+	if gr := (FeatureValidateGate{}).Verify(context.Background(), 2661, ok); !gr.Passed {
+		t.Fatalf("correct shape must pass; reason=%q evidence=%v", gr.Reason, gr.Evidence)
 	}
 }

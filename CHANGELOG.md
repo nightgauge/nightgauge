@@ -110,6 +110,14 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
 
 ### Fixed
 
+- **feature-validate fails when acceptance-criteria verdicts sit under the
+  wrong key (#2671).** A validate context that recorded verdicts as
+  `acceptance_criteria[{index, verdict}]` passed the gate, and pr-create then
+  dropped every verdict and marked each criterion not verifiable. The gate now
+  rejects verdicts under `acceptance_criteria`, or a `verdict` field inside
+  `acceptance_criteria_verdicts`, naming the expected
+  `{index, text, status, evidence}` shape; pr-create refuses the same file.
+
 - **Pipeline PRs close their issue again when the diff meets every criterion
   (#2665).** Since #2655 a PR says `Closes #N` only when every acceptance
   criterion is met, but criteria the diff answers resolved "not verifiable":

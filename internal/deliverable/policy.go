@@ -289,6 +289,7 @@ func ApplyPolicy(stage string, decoded any) PolicyOutcome {
 	case "validate":
 		applySkippedPhasesRule(doc, &out)
 		applyGateMetricsRule(doc, &out)
+		applyACVerdictKeyRule(doc, &out)
 	}
 
 	out.Changed = len(out.Repairs()) > 0 || len(out.Quarantines()) > 0
@@ -668,6 +669,67 @@ var gateMetricResultVocabulary = map[string]string{
 }
 
 var gateMetricResultCanonical = map[string]bool{"pass": true, "catch": true, "fail": true}
+
+// MisplacedACVerdicts reports acceptance-criteria verdicts a validate context
+// carries under a key or field its consumers do not read (#2671). pr-create
+// decodes only acceptance_criteria_verdicts[{index, text, status, evidence}],
+// so a verdict anywhere else is silently dropped and every criterion resolves
+// to not_verifiable. It returns one problem per offence, empty when clean.
+// There is no alias: the wrong shape is rejected, never read (#2665).
+func MisplacedACVerdicts(doc map[string]any) []string {
+	var problems []string
+	if arr, ok := doc["acceptance_criteria"].([]any); ok {
+		n := 0
+		for _, entry := range arr {
+			obj, isObj := entry.(map[string]any)
+			if !isObj {
+				continue
+			}
+			_, hasVerdict := obj["verdict"]
+			_, hasStatus := obj["status"]
+			if hasVerdict || hasStatus {
+				n++
+			}
+		}
+		if n > 0 {
+			problems = append(problems, fmt.Sprintf(
+				"acceptance_criteria carries %d verdict entr%s; verdicts belong under acceptance_criteria_verdicts as {index, text, status, evidence}",
+				n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+		}
+	}
+	if arr, ok := doc["acceptance_criteria_verdicts"].([]any); ok {
+		for i, entry := range arr {
+			obj, isObj := entry.(map[string]any)
+			if !isObj {
+				continue
+			}
+			_, hasVerdict := obj["verdict"]
+			_, hasStatus := obj["status"]
+			if hasVerdict && !hasStatus {
+				problems = append(problems, fmt.Sprintf(
+					"acceptance_criteria_verdicts[%d] uses verdict; the field is status", i))
+			}
+		}
+	}
+	return problems
+}
+
+// applyACVerdictKeyRule fails a validate context whose AC verdicts sit where
+// pr-create cannot read them (#2671). FATAL, not repaired: the writer is wrong.
+func applyACVerdictKeyRule(doc map[string]any, out *PolicyOutcome) {
+	for _, p := range MisplacedACVerdicts(doc) {
+		field, rule := "acceptance_criteria", "validate.acceptance_criteria.verdicts_under_wrong_key"
+		if strings.HasPrefix(p, "acceptance_criteria_verdicts") {
+			field, rule = "acceptance_criteria_verdicts", "validate.acceptance_criteria_verdicts.verdict_field"
+		}
+		out.Notes = append(out.Notes, Note{
+			Field:       field,
+			Disposition: DispositionFatal,
+			Rule:        rule,
+			Detail:      p,
+		})
+	}
+}
 
 // applyGateMetricsRule repairs the result vocabulary and quarantines entries
 // with no gate name.

@@ -1035,6 +1035,9 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 		// hand-written copy of a wire shape is how consumers drift apart.
 		var doc map[string]any
 		if json.Unmarshal(data, &doc) == nil {
+			if problems := deliverable.MisplacedACVerdicts(doc); len(problems) > 0 {
+				return snap, fmt.Errorf("validate context carries AC verdicts under the wrong key: %s", strings.Join(problems, "; "))
+			}
 			snap.UnverifiedDeliverable = deliverable.FindingFromArtifact(doc)
 		}
 		snap.BuildPassed = raw.Build.Passed

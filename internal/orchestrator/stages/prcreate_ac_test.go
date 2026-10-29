@@ -385,9 +385,9 @@ func TestResolveACVerdicts_DiffAndTextMatching(t *testing.T) {
 }
 
 // End to end (#2665): the #2661 artifacts as they were written — a stored
-// criteria list doubled by a pre-#2655 parser and validate verdicts in the
-// drifted shape pr-create does not read — still give five met rows, each
-// once, and Closes #2661.
+// criteria list doubled by a pre-#2655 parser — still give five met rows,
+// each once, and Closes #2661. The drifted validate verdicts that run wrote
+// are now rejected (#2671); see TestReadCreateContext_RejectsMisplacedACVerdicts.
 func TestReadCreateContext_Issue2661ClosesFromDiff(t *testing.T) {
 	dir := changelogRepo(t)
 	addBullet2656(t, dir)
@@ -410,8 +410,7 @@ func TestReadCreateContext_Issue2661ClosesFromDiff(t *testing.T) {
 	write("ac-reconcile-2661.json", map[string]any{"acceptance_criteria": stored})
 	write("issue-2661.json", map[string]any{"issue_number": 2661, "branch": "docs/2661-changelog", "base_branch": "main"})
 	write("validate-2661.json", map[string]any{
-		"validation_status":   "passed",
-		"acceptance_criteria": []map[string]any{{"index": 1, "verdict": "met"}},
+		"validation_status": "passed",
 	})
 
 	snap, err := defaultReadCreateContext(dir, 2661)
@@ -438,5 +437,53 @@ func TestReadCreateContext_Issue2661ClosesFromDiff(t *testing.T) {
 		if n := strings.Count(body, ac); n != 1 {
 			t.Errorf("criterion rendered %d times: %q", n, ac)
 		}
+	}
+}
+
+// #2671: verdicts under the wrong key fail pr-create upstream instead of
+// rendering every criterion not_verifiable; the correct shape still reads.
+func TestReadCreateContext_RejectsMisplacedACVerdicts(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    map[string]any
+		wantErr string
+	}{
+		{"wrong key", map[string]any{"acceptance_criteria": []map[string]any{
+			{"index": 1, "verdict": "met"}, {"index": 2, "verdict": "met"}, {"index": 3, "verdict": "met"},
+			{"index": 4, "verdict": "met"}, {"index": 5, "verdict": "met"},
+		}}, "acceptance_criteria_verdicts"},
+		{"verdict field", map[string]any{"acceptance_criteria_verdicts": []map[string]any{
+			{"index": 0, "text": "x", "verdict": "met"},
+		}}, "the field is status"},
+		{"correct shape", map[string]any{"acceptance_criteria_verdicts": []map[string]any{
+			{"index": 0, "text": "x", "status": "met", "evidence": "diff"},
+		}}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := changelogRepo(t)
+			p := pipelineContextPath(dir, "validate-7.json")
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			c.body["validation_status"] = "passed"
+			data, _ := json.Marshal(c.body)
+			if err := os.WriteFile(p, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			snap, err := defaultReadCreateContext(dir, 7)
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("correct shape must read: %v", err)
+				}
+				if !snap.HasValidate {
+					t.Fatal("validate context not read")
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("err = %v, want it to name %q", err, c.wantErr)
+			}
+		})
 	}
 }

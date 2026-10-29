@@ -267,3 +267,38 @@ func TestSchemaVersionMatchesSkillIncludes(t *testing.T) {
 		}
 	}
 }
+
+// #2671: AC verdicts under a key or field pr-create does not read are FATAL.
+func TestApplyPolicy_ACVerdictKey(t *testing.T) {
+	verdict := []any{map[string]any{"index": 1.0, "verdict": "met"}}
+	good := []any{map[string]any{"index": 0.0, "text": "x", "status": "met", "evidence": "e"}}
+	cases := []struct {
+		name  string
+		doc   map[string]any
+		rules []string
+	}{
+		{"wrong key", map[string]any{"acceptance_criteria": verdict},
+			[]string{"validate.acceptance_criteria.verdicts_under_wrong_key"}},
+		{"wrong key alongside", map[string]any{"acceptance_criteria": verdict, "acceptance_criteria_verdicts": good},
+			[]string{"validate.acceptance_criteria.verdicts_under_wrong_key"}},
+		{"verdict field", map[string]any{"acceptance_criteria_verdicts": verdict},
+			[]string{"validate.acceptance_criteria_verdicts.verdict_field"}},
+		{"string list", map[string]any{"acceptance_criteria": []any{"a", "b"}}, nil},
+		{"correct shape", map[string]any{"acceptance_criteria_verdicts": good}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fatal := ApplyPolicy("validate", c.doc).Fatal()
+			var got []string
+			for _, n := range fatal {
+				got = append(got, n.Rule)
+				if !strings.Contains(n.Detail, "acceptance_criteria_verdicts") && !strings.Contains(n.Detail, "status") {
+					t.Errorf("detail does not name the expected key: %q", n.Detail)
+				}
+			}
+			if strings.Join(got, ",") != strings.Join(c.rules, ",") {
+				t.Errorf("fatal rules = %v, want %v", got, c.rules)
+			}
+		})
+	}
+}
