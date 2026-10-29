@@ -9,7 +9,7 @@ description: Re-review the current change with fresh-eyes critics that have no
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.0.0"
+  version: "1.0.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Edit Write Glob Grep Bash Task
 orchestration:
@@ -107,6 +107,10 @@ units; otherwise spawn them with `Task`. Each returns structured findings.
 >   needless complexity, altitude.
 > - **tests** — missing/weak assertions, untested branches, tests that can't
 >   fail, brittle fixtures.
+
+The severity scale is shared with the review passes on pull requests the
+pipeline did not author; its definition is in
+[docs/PR_REVIEW_PASSES.md](../../docs/PR_REVIEW_PASSES.md#severity).
 
 ### Phase 3: Judge and fix loop
 

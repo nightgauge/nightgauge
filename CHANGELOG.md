@@ -168,6 +168,15 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
   `behavior.effort_default` for both registry copies for you to apply in a
   pull request.
 
+- **Pull requests the pipeline did not author now get a severity-ranked review
+  (#1285).** The new `PR Review` workflow runs correctness, security and
+  plan-compliance passes on each such pull request and posts one advisory
+  comment as `github-actions[bot]`, edited in place on every push. Findings are
+  ranked blocker, major, nitpick, with at most five nitpicks shown. The review
+  never blocks a merge. Set the `NIGHTGAUGE_PIPELINE_AUTHORS` repository
+  variable to the pipeline's bot login so its own pull requests are skipped.
+  See `docs/PR_REVIEW_PASSES.md`.
+
 - **Discovered work is now filed after every merge, under one set of filing
   controls (#480).** A new `followup-materialize` stage runs after pr-merge on
   every issue and turns the run's `discovered-work-{N}.json` records into
