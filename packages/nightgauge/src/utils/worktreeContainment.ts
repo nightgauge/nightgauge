@@ -971,6 +971,8 @@ export class StageWriteRecord {
   private truncated = false;
   /** Delegation call id → whether any nested call carried it as its parent. */
   private readonly delegations = new Map<string, boolean>();
+  /** Delegation ids whose tool_result was an error. */
+  private readonly erroredDelegations = new Set<string>();
   /** Delegation calls with no id: their nested calls can never be linked. */
   private unresolvableDelegations = 0;
 
@@ -1033,12 +1035,14 @@ export class StageWriteRecord {
   }
 
   /**
-   * A delegation whose tool_result is an error, with no nested call linked to
-   * it, never ran: the harness rejected it (unknown `subagent_type`, a denied
-   * call). It wrote nothing, so it must not mark the record incomplete.
+   * Note a delegation whose tool_result is an error. With no nested call linked
+   * to it, the harness most likely rejected it (unknown `subagent_type`, a
+   * denied call) and it wrote nothing. That inference holds only when the
+   * stream has shown it delivers nested calls: on an adapter that never links
+   * them, a sub-agent that ran, wrote and then failed looks identical.
    */
   observeToolResult(toolUseId: string, isError: boolean): void {
-    if (isError && this.delegations.get(toolUseId) === false) this.delegations.delete(toolUseId);
+    if (isError && this.delegations.has(toolUseId)) this.erroredDelegations.add(toolUseId);
   }
 
   /** True when the record can be trusted to name every stage write. */
@@ -1055,7 +1059,12 @@ export class StageWriteRecord {
   get unavailableReason(): string | undefined {
     if (this.observed === 0) return "no tool calls reached the stream";
     let silent = this.unresolvableDelegations;
-    for (const contributed of this.delegations.values()) if (!contributed) silent++;
+    const streamLinksNestedCalls = [...this.delegations.values()].some(Boolean);
+    for (const [id, contributed] of this.delegations) {
+      if (contributed) continue;
+      if (streamLinksNestedCalls && this.erroredDelegations.has(id)) continue;
+      silent++;
+    }
     if (silent > 0) {
       return (
         `write record incomplete: ${silent} sub-agent call(s) (Task/Agent) contributed ` +

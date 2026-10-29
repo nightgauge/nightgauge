@@ -487,6 +487,8 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
 
   it("does not let a rejected Task poison the write record (#2660)", async () => {
     const { proc, completed, stderr } = await runStage();
+    const ran = emitAssistantToolUse(proc, "Task", { prompt: "look around" });
+    emitAssistantToolUse(proc, "Read", { file_path: "README.md" }, ran);
     const task = emitAssistantToolUse(proc, "Task", { subagent_type: "nope" });
     proc.stdout!.emit(
       "data",

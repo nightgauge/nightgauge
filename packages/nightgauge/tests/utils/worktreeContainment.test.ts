@@ -889,11 +889,20 @@ describe("sub-agent calls and an honest write record (#2660)", () => {
     expect(record.unavailableReason).toContain("write record incomplete: 1 sub-agent call(s)");
   });
 
-  it("stays available when a Task was rejected and its tool_result errored", () => {
+  it("excuses a rejected Task once the stream has linked another Task's calls", () => {
     const record = new StageWriteRecord(worktree);
     record.observeToolUse("Task", { subagent_type: "nope" }, { id: "t1" });
     record.observeToolResult("t1", true);
+    record.observeToolUse("Task", { prompt: "go" }, { id: "t2" });
+    record.observeToolUse("Read", { file_path: "a" }, { id: "r1", parentToolUseId: "t2" });
     expect(record.available).toBe(true);
+  });
+
+  it("does not excuse an errored silent Task when no nested call ever linked", () => {
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Task", { prompt: "go" }, { id: "t1" });
+    record.observeToolResult("t1", true);
+    expect(record.available).toBe(false);
   });
 
   it("stays unavailable when a silent Task's tool_result succeeded", () => {
