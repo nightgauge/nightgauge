@@ -729,21 +729,171 @@ async function buildPatch(
 /** Upper bound on one recorded command or patch, so a huge heredoc cannot balloon memory. */
 const MAX_RECORDED_TEXT = 64 * 1024;
 
-/** Tools whose path inputs are read, never written (lower-cased; across adapters). */
-const READ_ONLY_TOOLS = new Set([
-  "read",
-  "glob",
-  "grep",
-  "ls",
-  "notebookread",
-  "view",
-  "read_file",
-  "list_dir",
-  "list_directory",
-  "search",
-  "webfetch",
-  "websearch",
+/**
+ * Tools whose path inputs are writes (lower-cased; across adapters). Any tool
+ * not listed here or in {@link TEXT_WRITE_TOOLS} is counted as observed but
+ * records nothing (#2659): an unlisted read tool carrying `path` must not
+ * claim the file. A write tool missing here leaves its path unattributed — a
+ * warning, never a silent pass. Extend this set when an adapter adds one.
+ */
+const PATH_WRITE_TOOLS = new Set([
+  "write",
+  "edit",
+  "multiedit",
+  "notebookedit",
+  "write_file",
+  "edit_file",
+  "create_file",
+  "replace",
+  "str_replace_editor",
+  "str_replace_based_edit_tool",
 ]);
+
+/** Shell tools whose command text is recorded after read-only segments are dropped. */
+const SHELL_TOOLS = new Set([
+  "bash",
+  "shell",
+  "exec_command",
+  "run_shell_command",
+  "local_shell",
+  "container.exec",
+]);
+
+/** Patch tools whose text is recorded whole. */
+const PATCH_TOOLS = new Set(["apply_patch"]);
+
+/** Shell verbs that only read, when the segment has no output redirection. */
+const READ_ONLY_VERBS = new Set([
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "wc",
+  "grep",
+  "rg",
+  "ls",
+  "stat",
+  "file",
+  "diff",
+  "cmp",
+  "jq",
+  "test",
+  "[",
+  "realpath",
+  "readlink",
+  "echo",
+  "printf",
+]);
+
+/** `git` subcommands that only read. */
+const GIT_READ_SUBCOMMANDS = new Set([
+  "diff",
+  "log",
+  "show",
+  "status",
+  "blame",
+  "rev-parse",
+  "ls-files",
+  "grep",
+  "cat-file",
+]);
+
+/**
+ * Split a shell command into simple-command segments on unquoted `&&`, `||`,
+ * `;`, `|` and newlines. Null when the text cannot be split safely — an
+ * unbalanced quote or a heredoc — so the caller keeps it whole.
+ */
+function splitShellSegments(text: string): string[] | null {
+  if (text.includes("<<")) return null;
+  const out: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === "\\" && quote === '"' && i + 1 < text.length) {
+        cur += c + text[++i];
+        continue;
+      }
+      if (c === quote) quote = null;
+      cur += c;
+      continue;
+    }
+    if (c === "\\" && i + 1 < text.length) {
+      cur += c + text[++i];
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      cur += c;
+      continue;
+    }
+    const two = text.slice(i, i + 2);
+    if (two === "&&" || two === "||") {
+      out.push(cur);
+      cur = "";
+      i++;
+      continue;
+    }
+    if (c === ";" || c === "|" || c === "\n") {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  if (quote) return null;
+  out.push(cur);
+  return out.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/** The segment's words with quotes stripped, after leading assignments and wrappers. */
+function commandWords(segment: string): string[] {
+  const words = segment.split(/\s+/).map((w) => w.replace(/['"]/g, ""));
+  let i = 0;
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+  while (i < words.length && ["sudo", "env", "command"].includes(words[i])) i++;
+  return words.slice(i);
+}
+
+function isDirChange(segment: string): boolean {
+  const verb = commandWords(segment)[0];
+  return verb === "cd" || verb === "pushd";
+}
+
+/**
+ * A segment that cannot write: a read-only verb (or a read-only `git`
+ * subcommand, also as `git -C <dir> …`) and no output redirection other than
+ * to `/dev/null` or another descriptor. Anything unrecognised writes.
+ */
+function isReadOnlySegment(segment: string): boolean {
+  const stripped = segment.replace(/\d*>&\d+/g, "").replace(/(?:\d+|&)?>>?\s*\/dev\/null/g, "");
+  if (stripped.includes(">")) return false;
+  const words = commandWords(segment);
+  const verb = path.posix.basename(words[0] ?? "");
+  if (verb === "git") {
+    let i = 1;
+    while (i < words.length && words[i].startsWith("-")) {
+      i += words[i] === "-C" || words[i] === "-c" ? 2 : 1;
+    }
+    return GIT_READ_SUBCOMMANDS.has(words[i] ?? "");
+  }
+  return READ_ONLY_VERBS.has(verb);
+}
+
+/**
+ * The write evidence in a shell command: its segments minus the read-only
+ * ones, keeping `cd`/`pushd` for the repo context they give a later write.
+ * Empty when nothing but reads and directory changes remain; the whole text
+ * when it cannot be split safely.
+ */
+function shellWriteText(text: string): string {
+  const segments = splitShellSegments(text);
+  if (segments === null) return text;
+  const kept = segments.filter((s) => !isReadOnlySegment(s));
+  return kept.every(isDirChange) ? "" : kept.join("\n");
+}
 
 /** Characters that may appear inside a path segment; anything else is a boundary. */
 const SEGMENT_CHAR = /[A-Za-z0-9._@+~-]/;
@@ -784,13 +934,14 @@ function boundedIndexes(text: string, needle: string): number[] {
  * log is bounded to 200 entries with a 100-character target, which is not
  * sound evidence for a verdict that fails a stage.
  *
- * - A tool whose input carries `file_path`, `notebook_path` or `path` (Write,
- *   Edit, MultiEdit, NotebookEdit and adapter equivalents) records the path,
- *   resolved against the stage CWD. Read-only tools (Read, Grep, Glob, …) are
- *   counted as observed calls but record nothing.
- * - A tool whose input carries `command`, `cmd`, `patch` or `input` text, or is
- *   itself a string (Bash, Codex shell / `apply_patch`), records the text,
- *   capped at 64 KiB per entry.
+ * - A write tool (Write, Edit, MultiEdit, NotebookEdit and adapter
+ *   equivalents) records its `file_path`, `notebook_path` or `path`, resolved
+ *   against the stage CWD.
+ * - A shell or patch tool (Bash, Codex shell / `apply_patch`) records its
+ *   `command`, `cmd`, `patch` or `input` text, capped at 64 KiB per entry.
+ *   Read-only shell segments (`cat`, `grep`, `git diff`, … with no output
+ *   redirection) are dropped first (#2659).
+ * - Every other tool is counted as an observed call but records nothing.
  *
  * Indirect writes — a generator run after `cd ../sibling` that names no path —
  * are not attributed. The module's rule applies: under-detecting is strictly
@@ -808,24 +959,32 @@ export class StageWriteRecord {
 
   observeToolUse(toolName: string, toolInput: unknown): void {
     this.observed++;
-    // Reading a sibling file is not writing it; a Read naming the path a
-    // concurrent edit then dirtied would otherwise misattribute it.
-    if (READ_ONLY_TOOLS.has(toolName.toLowerCase())) return;
+    // Only write evidence is recorded (#2659): reading a sibling file is not
+    // writing it, and a read naming the path a concurrent edit then dirtied
+    // would otherwise misattribute it.
+    const name = toolName.toLowerCase();
+    if (PATH_WRITE_TOOLS.has(name)) {
+      if (!isRecord(toolInput)) return;
+      for (const key of ["file_path", "notebook_path", "path"]) {
+        const v = toolInput[key];
+        if (typeof v === "string" && v.length > 0) {
+          this.filePaths.add(path.resolve(this.stageCwd, expandHome(v)));
+        }
+      }
+      return;
+    }
+    const shell = SHELL_TOOLS.has(name);
+    if (!shell && !PATCH_TOOLS.has(name)) return;
+    const record = (text: string) => this.addText(shell ? shellWriteText(text) : text);
     if (typeof toolInput === "string") {
-      this.addText(toolInput);
+      record(toolInput);
       return;
     }
     if (!isRecord(toolInput)) return;
-    for (const key of ["file_path", "notebook_path", "path"]) {
-      const v = toolInput[key];
-      if (typeof v === "string" && v.length > 0) {
-        this.filePaths.add(path.resolve(this.stageCwd, expandHome(v)));
-      }
-    }
     for (const key of ["command", "cmd", "patch", "input"]) {
       const v = toolInput[key];
-      if (typeof v === "string") this.addText(v);
-      else if (Array.isArray(v)) this.addText(v.filter((x) => typeof x === "string").join(" "));
+      if (typeof v === "string") record(v);
+      else if (Array.isArray(v)) record(v.filter((x) => typeof x === "string").join(" "));
     }
   }
 
@@ -871,8 +1030,10 @@ export class StageWriteRecord {
   /**
    * The text refers to the repo directory: by an absolute spelling of its root
    * that is not merely the prefix of the stage's own CWD (a worktree inside
-   * the repo's main checkout), or by its name as a relative path such as
-   * `../<name>/` or `<name>/`.
+   * the repo's main checkout), or by its name as a path: `../<name>`,
+   * `<name>/`, or the directory of `cd`/`pushd`/`git -C`. A bare word equal
+   * to the name — the `nightgauge` CLI for a repo named `nightgauge` — is not
+   * a mention (#2659).
    */
   private mentionsRepo(text: string, spellings: readonly string[], repoName: string): boolean {
     for (const root of spellings) {
@@ -885,8 +1046,11 @@ export class StageWriteRecord {
       }
     }
     if (!repoName) return false;
+    const name = escapeRegExp(repoName);
+    const end = `(?=$|[/\\s'"\\);&|<>])`;
     const relative = new RegExp(
-      `(?:^|[\\s'"=:;(&|<>])(?:\\.{1,2}/)*${escapeRegExp(repoName)}(?=$|[/\\s'"\\);&|<>])`
+      `(?:^|[\\s'"=:;(&|<>])(?:(?:\\.{1,2}/)+${name}${end}|${name}/|` +
+        `(?:cd|pushd|-C)\\s+['"]?${name}${end})`
     );
     return relative.test(text);
   }
