@@ -417,14 +417,34 @@ func (s *Scheduler) tryDeterministicIssuePickup(
 		return punt(reason)
 	}
 
+	in, reason := s.pickupInput(ctx, item, workspaceRoot, dir)
+	if reason != "" {
+		return punt(reason)
+	}
+	res, err := s.issuePickupRunner.Run(ctx, in)
+	if err != nil {
+		return punt(fmt.Sprintf("%s: %v", "unexpected", err))
+	}
+	runtime.RecordExecutionPath(stage, "deterministic")
+	runtime.SetBranch(res.Branch)
+	log.Printf("#%d: issue-pickup deterministic path: branch %s (%s, base %s, pushed=%t, %dms)",
+		item.Number, res.Branch, res.Action, res.BaseBranch, res.Pushed, res.DurationMs)
+	return true
+}
+
+// pickupInput fetches the issue and assembles the runner's input for dir, or
+// returns the reason it cannot. It is the one derivation behind both the
+// deterministic runner and the recovery of a context the skill fallback left
+// broken (#1919), so the two write the same document for the same issue.
+func (s *Scheduler) pickupInput(ctx context.Context, item types.BoardItem, workspaceRoot, dir string) (IssuePickupInput, string) {
 	owner, repo := s.linkRepoFor(item.Repo)
 	issues := s.issueServiceFor(ctx, owner, repo)
 	if issues == nil {
-		return punt("no-issue-service")
+		return IssuePickupInput{}, "no-issue-service"
 	}
 	iss, err := issues.GetIssueWithRelations(ctx, owner, repo, item.Number, gh.NoRelations)
 	if err != nil || iss == nil {
-		return punt(fmt.Sprintf("issue-fetch: %v", err))
+		return IssuePickupInput{}, fmt.Sprintf("issue-fetch: %v", err)
 	}
 	if iss.Number == 0 {
 		iss.Number = item.Number
@@ -440,7 +460,7 @@ func (s *Scheduler) tryDeterministicIssuePickup(
 	// Run creates an epic branch only for a parent in this repository, so the
 	// title is read here, by this repository's number (#2377).
 	parent := git.EpicBranchParent(iss.Repo, iss.ParentIssueNumber, iss.ParentIssueRepo)
-	in := IssuePickupInput{
+	return IssuePickupInput{
 		Issue:    iss,
 		Dir:      dir,
 		Routing:  decision,
@@ -452,16 +472,7 @@ func (s *Scheduler) tryDeterministicIssuePickup(
 			}
 			return epic.Title, nil
 		},
-	}
-	res, err := s.issuePickupRunner.Run(ctx, in)
-	if err != nil {
-		return punt(fmt.Sprintf("%s: %v", "unexpected", err))
-	}
-	runtime.RecordExecutionPath(stage, "deterministic")
-	runtime.SetBranch(res.Branch)
-	log.Printf("#%d: issue-pickup deterministic path: branch %s (%s, base %s, pushed=%t, %dms)",
-		item.Number, res.Branch, res.Action, res.BaseBranch, res.Pushed, res.DurationMs)
-	return true
+	}, ""
 }
 
 // runWorktree resolves the run's worktree, provisioning it when this is the
@@ -503,4 +514,187 @@ func (s *Scheduler) runWorktree(runtime *state.RuntimeState, item types.BoardIte
 		return "", "no-run-worktree"
 	}
 	return dir, ""
+}
+
+// Faults recoverIssueContextAtPickup repairs: each is a reason the issue-pickup
+// gate would fail a context whose branch exists in git the whole time.
+const (
+	issueContextMissing     = "missing"
+	issueContextInvalidJSON = "invalid-json"
+	issueContextSchema      = "schema-mismatch"
+	issueContextNoBranch    = "no-branch"
+)
+
+// issueContextFault classifies the context file at path the way
+// gates.IssuePickupGate.Verify reads it, or returns "" when the gate would
+// pass it (or fail it for a reason recovery must not paper over, such as an
+// unreadable file).
+func issueContextFault(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return issueContextMissing
+		}
+		return ""
+	}
+	if !json.Valid(data) {
+		return issueContextInvalidJSON
+	}
+	var raw map[string]json.RawMessage
+	var doc struct {
+		Branch      string `json:"branch"`
+		IssueNumber int    `json:"issue_number"`
+	}
+	if json.Unmarshal(data, &raw) != nil || raw == nil || json.Unmarshal(data, &doc) != nil {
+		return issueContextSchema
+	}
+	if doc.Branch == "" {
+		return issueContextNoBranch
+	}
+	return ""
+}
+
+// recoverIssueContextAtPickup repairs the issue context a skill-path
+// issue-pickup left broken, before the post-condition gate reads it, and
+// returns the fault it repaired ("" when it changed nothing) (#1919).
+//
+// #1930 recovered only an empty `branch`. The rest of #1919's failures were
+// the model not producing the file at all — it ended its turn before the
+// write — or producing one that was not valid JSON or did not match the
+// schema. Escalating to a larger model cannot supply a structure the model
+// was asked to serialise and did not. So the write leaves the model's hands:
+//
+//   - missing, unparsable or schema-invalid → the whole document is rebuilt
+//     with the deterministic runner's own builder (pickupInput +
+//     buildIssueContext), merged over whatever parsed, and written
+//     atomically.
+//   - valid but branch-less → only `branch` is stamped, so everything else
+//     the skill wrote survives.
+//   - valid with a branch → nothing; a value the skill wrote is never
+//     overwritten, however wrong it looks (an empty slug is #1915's defect).
+//
+// It never invents a branch. Every repair requires HEAD in the run's worktree
+// to be on a branch whose issue number is THIS issue — the actionable
+// post-state the gate exists to check. A worktree still on the base branch, or
+// detached, repairs nothing and the gate fails the stage as it should.
+//
+// Non-fatal throughout: every failure is logged and the gate remains the
+// authority on whether the stage produced its post-state.
+func (s *Scheduler) recoverIssueContextAtPickup(ctx context.Context, workspaceRoot, worktreeDir string, item types.BoardItem) string {
+	repoDir := worktreeDir
+	if repoDir == "" {
+		repoDir = workspaceRoot
+	}
+	// The gate reads exactly this path (gates.contextFilePath on the same
+	// stage workspace), so that is the file recovery inspects and writes.
+	path, err := stagecontext.ContextPath(repoDir, item.Number, "issue")
+	if err != nil {
+		log.Printf("#%d: cannot resolve the issue context path in %s (non-fatal): %v", item.Number, repoDir, err)
+		return ""
+	}
+	fault := issueContextFault(path)
+	if fault == "" {
+		return ""
+	}
+
+	gitSvc, err := git.NewService(repoDir)
+	if err != nil {
+		log.Printf("#%d: issue context %s and the worktree at %s could not be opened to recover it (non-fatal): %v",
+			item.Number, fault, repoDir, err)
+		return ""
+	}
+	branch, err := gitSvc.CurrentBranch()
+	if err != nil {
+		log.Printf("#%d: issue context %s and HEAD in %s names no branch — recovering nothing: %v",
+			item.Number, fault, repoDir, err)
+		return ""
+	}
+	if n, ok := git.ParseIssueNumberFromBranch(branch); !ok || n != item.Number {
+		log.Printf("#%d: issue context %s and HEAD is on %q, which is not this issue's branch — recovering nothing",
+			item.Number, fault, branch)
+		return ""
+	}
+
+	if fault == issueContextNoBranch {
+		if err := stampIssueContextBranch(path, branch); err != nil {
+			log.Printf("#%d: could not write recovered branch %q into %s (non-fatal): %v", item.Number, branch, path, err)
+			return ""
+		}
+		log.Printf("#%d: issue context carried no branch; recovered %q from the worktree's HEAD (#1919)", item.Number, branch)
+		return fault
+	}
+
+	in, reason := s.pickupInput(ctx, item, workspaceRoot, repoDir)
+	if reason != "" {
+		log.Printf("#%d: issue context %s and the issue could not be read to rebuild it (%s) — recovering nothing",
+			item.Number, fault, reason)
+		return ""
+	}
+	parent := git.EpicBranchParent(in.Issue.Repo, in.Issue.ParentIssueNumber, in.Issue.ParentIssueRepo)
+	doc := buildIssueContext(in, branch, recoveredBaseBranch(gitSvc, parent), parent, time.Now())
+	doc.CreatedBy = "issue-pickup-recovery"
+	if err := writeIssueContextMerged(path, doc); err != nil {
+		log.Printf("#%d: could not write the recovered issue context to %s (non-fatal): %v", item.Number, path, err)
+		return ""
+	}
+	log.Printf("#%d: issue context %s; rebuilt it deterministically on branch %q (#1919)", item.Number, fault, branch)
+	return fault
+}
+
+// recoverPickupAfterSkill runs recoverIssueContextAtPickup for an issue-pickup
+// the skill fallback ran and reported successful, and appends the repair to
+// the stage's evidence so the run record says the orchestrator wrote the file
+// (#1919). The deterministic runner wrote its file from a typed struct, and a
+// failed stage never reaches the gate, so neither is touched. It returns the
+// fault repaired, "" when nothing was.
+func (s *Scheduler) recoverPickupAfterSkill(
+	ctx context.Context,
+	runtime *state.RuntimeState,
+	stageErr error,
+	exitCode int,
+	workspaceRoot string,
+	item types.BoardItem,
+) string {
+	stage := state.StageIssuePickup
+	if runtime == nil || stageErr != nil || exitCode != 0 || runtime.StageExecutionPath(stage) == "deterministic" {
+		return ""
+	}
+	fault := s.recoverIssueContextAtPickup(ctx, workspaceRoot, stageWorkspace(runtime, workspaceRoot), item)
+	if fault != "" {
+		runtime.AppendStageOutputTail(stage, fmt.Sprintf(
+			"[orchestrator] issue context recovered (%s) from the worktree's HEAD and the issue (#1919)", fault))
+	}
+	return fault
+}
+
+// recoveredBaseBranch is the base EnsureIssueBranch would have recorded for a
+// branch that already exists: the parent's epic branch when there is one, the
+// repository default otherwise. "" lets buildIssueContext default to main.
+func recoveredBaseBranch(gitSvc *git.Service, parent int) string {
+	if parent > 0 {
+		if epic, err := gitSvc.FindEpicBranch(parent); err == nil && epic != "" {
+			return epic
+		}
+	}
+	base, _ := gitSvc.DefaultBranch()
+	return base
+}
+
+// stampIssueContextBranch sets `branch` in an otherwise-valid context file,
+// preserving every other key, and writes it atomically.
+func stampIssueContextBranch(path, branch string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	raw["branch"] = branch
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(path, append(out, '\n'))
 }

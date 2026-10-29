@@ -214,7 +214,10 @@ type StageExitRecord struct {
 	// exits without joining the V3 record. (Issue #3863)
 	GateKind string `json:"gate_kind,omitempty"`
 	// GateReason is the short human-readable reason from the gate that ran,
-	// mirroring StageGateResult.Reason. Empty when no gate ran. (Issue #3863)
+	// mirroring StageGateResult.Reason (Issue #3863). When no gate ran,
+	// WriteStageExitRecord fills it with GateReasonWhenNoGate's "gate not
+	// run: …" text, so no record is written without one (#1919). GateKind
+	// stays empty in that case: it is the gate's verdict, and none was given.
 	GateReason string `json:"gate_reason,omitempty"`
 	// UnreclaimedStashes names the pipeline stashes still on this repo's stash
 	// stack when the stage exited, as `<ref> #<issue> <stage>`.
@@ -349,9 +352,38 @@ func WriteStageExitRecord(rootDir string, rec StageExitRecord) error {
 	if rec.Timestamp == "" {
 		rec.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
+	if rec.GateReason == "" {
+		rec.GateReason = GateReasonWhenNoGate(rec)
+	}
 	dir, err := ExitRecordsDir(rootDir)
 	if err != nil {
 		return err
 	}
 	return history.AppendJSONL(filepath.Join(dir, dailyFileName(time.Now())), rec)
+}
+
+// GateReasonWhenNoGate names why a record carries no gate verdict (#1919).
+//
+// The scheduler runs a stage's post-condition gate only when the stage exited
+// 0. Every other exit — a non-zero code, a kill, an adapter error, a run that
+// never dispatched — used to write an empty gate_reason, and 18 of the
+// issue-pickup failures behind #1919 were exactly those blanks: environment
+// and capability failures that read, in the daily file, like a missing cause.
+// The text is derived only from fields already on the record, so the same exit
+// always yields the same reason on every writer (scheduler, IPC, pre-dispatch).
+func GateReasonWhenNoGate(rec StageExitRecord) string {
+	kind := rec.TerminalKind
+	if kind == "" {
+		kind = "unclassified"
+	}
+	switch {
+	case rec.Stage == StagePreDispatch:
+		return "gate not run: run failed before any stage was dispatched"
+	case !rec.Success && rec.ExitCode != nil && *rec.ExitCode != 0:
+		return fmt.Sprintf("gate not run: stage exited %d before its post-condition check (%s)", *rec.ExitCode, kind)
+	case !rec.Success:
+		return fmt.Sprintf("gate not run: stage reported an error (%s)", kind)
+	default:
+		return "gate not run: no post-condition gate result was recorded for this stage"
+	}
 }

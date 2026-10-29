@@ -100,6 +100,23 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
 
 ### Fixed
 
+- **issue-pickup no longer fails a run whose branch already exists (#1919).**
+  The fix for the lost `BRANCH_NAME` variable (#1930) did not close the gap.
+  When the deterministic runner punts to the skill, the model still owned the
+  context file, and it often ended its turn before writing it or wrote invalid
+  JSON. A larger model cannot fix that, so the run was paid for twice. Now,
+  after a skill-path pickup exits 0 with HEAD on the issue's branch, the
+  orchestrator rebuilds a missing, invalid or schema-mismatched
+  `issue-{N}.json` with the deterministic runner's builder. A file that only
+  lacks `branch` still gets just the branch. A valid file is never touched, and
+  a run that created no branch still fails the gate.
+- **Every stage-exit record now says why it has a gate verdict or not
+  (#1919).** The post-condition gate runs only on exit 0, so a non-zero exit, a
+  kill or an adapter error wrote a blank `gate_reason`. Those blanks were 18 of
+  the issue-pickup failures behind #1919. `gate_reason` now reads
+  `gate not run: …` and names the exit code and terminal kind. `gate_kind`
+  stays empty when no gate ran.
+
 - **Discovered follow-up work is now filed on extension-run pipelines.**
   Concurrent slots run the extension's orchestrator, which never reached the
   `followup-materialize` stage, so every run's discovered-work capture was left
