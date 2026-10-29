@@ -4192,7 +4192,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * a heredoc PR body).
    *
    * LAST-RESORT safety net: it opens a minimal PR (title from the issue, body
-   * `Closes #N`) purely to unblock the pipeline — the rich description is the
+   * `Refs #N`, so merging it leaves the issue open — #2655) purely to unblock
+   * the pipeline — the rich description is the
    * pr-create stage's job. It runs `gh`/`git` via execFile (no shell, no
    * heredoc), so it cannot trip the destructive-git hook that may have blocked
    * the skill in the first place.
@@ -4339,7 +4340,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // keep default title
     }
     const body =
-      `Closes #${issueNumber}\n\n` +
+      `Refs #${issueNumber}\n\n` +
+      `This safety-net PR carries no verified acceptance criteria, so #${issueNumber} ` +
+      `stays open on merge (#2655).\n\n` +
       `_Opened by the deterministic pr-create fallback (#3927) after the pr-create stage ` +
       `exited without creating a PR. The full description is normally authored by the ` +
       `pr-create stage; this is a safety-net PR to unblock the pipeline._`;

@@ -10,6 +10,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`Closes #N` only when every acceptance criterion is met (#2655).** A
+  `not_verifiable` criterion, or an issue with no criteria, now gives `Refs #N`
+  too, and each criterion is listed exactly once. Skill version 1.24.0.
+
 - **A partial delivery says `Refs #N`, not `Closes #N` (#2595).** An `unmet`
   acceptance-criterion verdict in `validate-{N}.json` makes the body reference
   the issue and list the unmet criteria, so merging leaves the issue open. The

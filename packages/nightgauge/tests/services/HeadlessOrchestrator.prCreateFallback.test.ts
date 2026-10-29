@@ -218,7 +218,8 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     expect(create).toContain("--body");
     expect(create).toContain("--title");
     const body = create![create!.indexOf("--body") + 1];
-    expect(body).toContain("Closes #42");
+    expect(body).toContain("Refs #42");
+    expect(body).not.toMatch(/\bCloses #42\b/);
     const title = create![create!.indexOf("--title") + 1];
     expect(title).toBe("Add thing");
   });

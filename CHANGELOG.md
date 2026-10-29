@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **A PR closes its issue only when every acceptance criterion is met
+  (#2655).** pr-create wrote `Closes #N` whenever no criterion was outright
+  unmet, so a PR whose criteria could not be verified — or an issue with none
+  — closed on merge. Now any unmet or unverifiable criterion, or no criteria,
+  gives `Refs #N`, and `closes_issue` in pr-{N}.json always matches the body.
+  Each criterion appears once in the body: the parser ignores the original
+  body that refinement archives in a `<details>` block, and drops duplicates.
+  Validate evidence saying "not met" now counts as unmet. The extension's
+  fallback PR also writes `Refs #N`.
+
 - **Board reads cost less.** A board item's sub-issues no longer select their
   labels, which no board reader used. They were 36 of the 74 query units each
   item cost, so an item now costs 38. A board read that needs no relationship

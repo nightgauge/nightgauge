@@ -94,12 +94,18 @@ type acCheckbox struct {
 // time regardless, so the Go port bounds in code instead (see parseACs).
 var checkboxRE = regexp.MustCompile(`(?m)^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+(.+?)[ \t]*$`)
 
+// detailsBlockRE matches collapsed <details> blocks, where issue refinement
+// archives the original body; their checkboxes are not live criteria (#2655).
+var detailsBlockRE = regexp.MustCompile(`(?is)<details\b.*?</details>`)
+
 // parseACs extracts checkbox acceptance criteria from an issue body in
-// order. Checkbox state is informational — satisfaction is verified against
-// the working tree, not the box.
+// order, ignoring <details> blocks and repeated criteria. Checkbox state is
+// informational — satisfaction is verified against the working tree, not
+// the box.
 func parseACs(body string) []acCheckbox {
 	var out []acCheckbox
-	for _, m := range checkboxRE.FindAllStringSubmatch(body, -1) {
+	seen := map[string]bool{}
+	for _, m := range checkboxRE.FindAllStringSubmatch(detailsBlockRE.ReplaceAllString(body, ""), -1) {
 		text := strings.TrimSpace(m[2])
 		if text == "" {
 			continue
@@ -108,6 +114,11 @@ func parseACs(body string) []acCheckbox {
 		if len(text) > 4096 {
 			text = text[:4096]
 		}
+		key := NormalizeACText(text)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		state := "unchecked"
 		if m[1] != " " {
 			state = "checked"
