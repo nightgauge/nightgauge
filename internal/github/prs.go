@@ -555,18 +555,47 @@ func openPullsPath(owner, repo string) string {
 
 // openPullsDigest is the stored form of the open-PR list's first page.
 type openPullsDigest struct {
-	Count int `json:"count"`
+	Count int             `json:"count"`
+	PRs   []openPullEntry `json:"prs"`
+}
+
+// openPullEntry is what the digest keeps of one open PR: enough for the
+// stranded-follow-up sweep to read its head branch and closing keywords.
+type openPullEntry struct {
+	Number   int    `json:"number"`
+	HeadRef  string `json:"headRef"`
+	HeadRepo string `json:"headRepo"`
+	Body     string `json:"body"`
+	URL      string `json:"url"`
 }
 
 // openPulls reads the first page of the repository's open PRs conditionally
 // and returns its digest and the ETag it is current under.
 func (c *Client) openPulls(ctx context.Context, owner, repo string) (openPullsDigest, string, error) {
-	resp, err := c.condGet(ctx, openPullsPath(owner, repo), "open-pulls/v1", func(body []byte) (any, error) {
-		var raw []json.RawMessage
+	resp, err := c.condGet(ctx, openPullsPath(owner, repo), "open-pulls/v2", func(body []byte) (any, error) {
+		var raw []struct {
+			Number  int    `json:"number"`
+			Body    string `json:"body"`
+			HTMLURL string `json:"html_url"`
+			Head    struct {
+				Ref  string `json:"ref"`
+				Repo *struct {
+					FullName string `json:"full_name"`
+				} `json:"repo"`
+			} `json:"head"`
+		}
 		if err := json.Unmarshal(body, &raw); err != nil {
 			return nil, err
 		}
-		return openPullsDigest{Count: len(raw)}, nil
+		d := openPullsDigest{Count: len(raw), PRs: make([]openPullEntry, 0, len(raw))}
+		for _, pr := range raw {
+			e := openPullEntry{Number: pr.Number, HeadRef: pr.Head.Ref, Body: pr.Body, URL: pr.HTMLURL}
+			if pr.Head.Repo != nil { // nil when the fork was deleted
+				e.HeadRepo = pr.Head.Repo.FullName
+			}
+			d.PRs = append(d.PRs, e)
+		}
+		return d, nil
 	})
 	if err != nil {
 		return openPullsDigest{}, "", fmt.Errorf("list open PRs for %s/%s: %w", owner, repo, err)
@@ -592,4 +621,19 @@ func (s *PRService) HasOpenPRs(ctx context.Context, owner, repo string) (bool, e
 		return false, err
 	}
 	return d.Count > 0, nil
+}
+
+// ListOpenPRSummaries returns the first page of open PRs with only their
+// number, head branch and repository, body and URL, from the same conditional REST read
+// HasOpenPRs makes: free while the open-PR list is unchanged.
+func (s *PRService) ListOpenPRSummaries(ctx context.Context, owner, repo string) ([]forge.OpenPRSummary, error) {
+	d, _, err := s.client.openPulls(ctx, owner, repo)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]forge.OpenPRSummary, 0, len(d.PRs))
+	for _, pr := range d.PRs {
+		out = append(out, forge.OpenPRSummary{Number: pr.Number, HeadRef: pr.HeadRef, HeadRepo: pr.HeadRepo, Body: pr.Body, URL: pr.URL})
+	}
+	return out, nil
 }

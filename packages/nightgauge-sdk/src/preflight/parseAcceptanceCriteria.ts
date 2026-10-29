@@ -11,8 +11,18 @@ import type { AcceptanceCriterion } from "./types.js";
  */
 const CHECKBOX_RE = /^[-*][ \t]+\[([ xX])\][ \t]+(.{1,4096})$/;
 
-/** Numbered list item (`1.` or `1)`); a criterion only inside an AC section. */
-const NUMBERED_RE = /^\d{1,3}[.)][ \t]+(.{1,4096})$/;
+/**
+ * Top-level numbered list item (`1.` or `1)`), indented at most three spaces
+ * so a nested sub-step is not a criterion of its own. Matched against the
+ * untrimmed line; a criterion only inside an AC section.
+ */
+const NUMBERED_RE = /^ {0,3}\d{1,3}[.)][ \t]+(.{1,4096})$/;
+
+/**
+ * Code-fence open/close line. Lines inside a fence are example text: a `#`
+ * comment is not a heading and a `1.` line is not a criterion.
+ */
+const FENCE_RE = /^[ \t]*(`{3,}|~{3,})/;
 
 /** Optional `[ ]` / `[x]` at the start of a numbered item's text. */
 const LEADING_BOX_RE = /^\[([ xX])\][ \t]+(.+)$/;
@@ -28,13 +38,14 @@ const HEADING_RE = /^ {0,3}(#{1,6})[ \t]+(.*)$/;
 const DETAILS_OPEN_RE = /^[ \t]*<details\b/i;
 
 /** Closing tag of a `<details>` block. */
-const DETAILS_CLOSE_RE = /<\/details>/i;
+const DETAILS_CLOSE_ALL_RE = /<\/details>/gi;
 
 /**
  * Drop `<details>` blocks — where issue refinement archives the original
  * body — that open outside a fenced code block (``` or ~~~), from the
- * opening line through the first `</details>`; text after the closing tag
- * is kept. A block with no closing tag is kept whole. Mirrors Go
+ * opening line through the `</details>` that closes it, counting nested
+ * `<details>` so an archive holding an archive is dropped whole (#2655);
+ * text after the closing tag is kept. A block with no closing tag is kept whole. Mirrors Go
  * `stripDetailsBlocks` (#2679).
  */
 function stripDetailsBlocks(lines: string[]): string[] {
@@ -55,18 +66,19 @@ function stripDetailsBlocks(lines: string[]): string[] {
       continue;
     }
     let end = -1;
-    for (let j = i; j < lines.length; j++) {
-      if (DETAILS_CLOSE_RE.test(lines[j])) {
-        end = j;
-        break;
-      }
+    let depth = 0;
+    for (let j = i; j < lines.length && end < 0; j++) {
+      if (j > i && DETAILS_OPEN_RE.test(lines[j])) depth += 1;
+      else if (j === i) depth = 1;
+      depth -= (lines[j].match(DETAILS_CLOSE_ALL_RE) ?? []).length;
+      if (depth <= 0) end = j;
     }
     if (end < 0) {
       out.push(line);
       continue;
     }
-    const m = DETAILS_CLOSE_RE.exec(lines[end]);
-    const rest = m ? lines[end].slice(m.index + m[0].length) : "";
+    const closeAt = lines[end].toLowerCase().lastIndexOf("</details>");
+    const rest = lines[end].slice(closeAt + "</details>".length);
     if (rest.trim() !== "") out.push(rest);
     i = end;
   }
@@ -79,8 +91,8 @@ function stripDetailsBlocks(lines: string[]): string[] {
  * Mirrors the authoritative Go parser (`parseACs` in
  * `internal/preflight/ac_reconcile.go`): checkbox bullets anywhere, plus
  * numbered items inside an "Acceptance Criteria" heading section, in
- * document order. `<details>` blocks are ignored and repeated criteria
- * (whitespace-collapsed text) are dropped.
+ * document order. `<details>` blocks and fenced code blocks are ignored, and
+ * repeated criteria (whitespace-collapsed text) are dropped.
  *
  * State is informational — the reconciler verifies satisfaction against
  * `main`, not the box state. A numbered item without a box is unchecked.
@@ -93,7 +105,13 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
   const out: AcceptanceCriterion[] = [];
   const seen = new Set<string>();
   let sectionLevel = 0;
+  let inFence = false;
   for (const rawLine of stripDetailsBlocks(body.split(/\r?\n/))) {
+    if (FENCE_RE.test(rawLine)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
     const heading = HEADING_RE.exec(rawLine);
     if (heading) {
       const level = heading[1].length;
@@ -112,7 +130,7 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
       box = checkbox[1];
       text = checkbox[2];
     } else if (sectionLevel > 0) {
-      const numbered = NUMBERED_RE.exec(line);
+      const numbered = NUMBERED_RE.exec(rawLine.trimEnd());
       if (!numbered) continue;
       box = " ";
       text = numbered[1];

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
@@ -541,5 +542,29 @@ func TestResolveACVerdicts_TextBeatsIndex(t *testing.T) {
 func TestAcMatchKey(t *testing.T) {
 	if a, b := acMatchKey("Uses **`Foo`**  _now_."), acMatchKey("uses foo now"); a != b {
 		t.Errorf("%q != %q", a, b)
+	}
+}
+
+// TestACTestState_UnconfirmedRunNeverPasses: feature-dev's own counts stand
+// in for a test run only when feature-validate never ran and no built suite
+// went unexecuted, so an unconfirmed run cannot close an issue (#2665).
+func TestACTestState_UnconfirmedRunNeverPasses(t *testing.T) {
+	idle := deliverable.Finding{Artifacts: []deliverable.TestArtifact{{}}}
+	cases := []struct {
+		name string
+		snap PRCreateSnapshot
+		want bool
+	}{
+		{"validate passed", PRCreateSnapshot{HasValidate: true, UnitTestsPassed: true, TestsPassed: 3}, true},
+		{"dev counts, no validate", PRCreateSnapshot{TestsPassed: 3}, true},
+		{"dev counts, validate did not confirm", PRCreateSnapshot{HasValidate: true, TestsPassed: 3}, false},
+		{"dev counts, suite never executed", PRCreateSnapshot{TestsPassed: 3, UnverifiedDeliverable: idle}, false},
+		{"dev failures", PRCreateSnapshot{TestsPassed: 3, TestsFailed: 1}, false},
+		{"nothing recorded", PRCreateSnapshot{}, false},
+	}
+	for _, tc := range cases {
+		if got := acTestState(tc.snap).Passed; got != tc.want {
+			t.Errorf("%s: Passed = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

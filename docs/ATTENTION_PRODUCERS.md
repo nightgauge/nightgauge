@@ -706,3 +706,19 @@ the fingerprint is the owner alone, so each repeated 401 sweep refreshes the
 card silently. The card retracts on the first pass where every swept
 repository of that owner was evaluated. A pass that skipped one of them for
 another reason, such as a rate limit, leaves the card alone.
+
+## `stranded-follow-up-prs` (#2684)
+
+A repo-scoped sweep producer. It is the one producer that writes: a card
+alone would leave the PR with no dispatchable owner. It lists open PRs and
+reads the issue number each head branch encodes (`<prefix>/<N>-…`; a branch
+without one, Dependabot's included, is skipped). A PR is stranded when issue
+`N` is closed and the PR body names no open issue with a closing keyword: the
+scheduler dispatches only open issues, so nothing would land it. For each
+stranded PR it files one tracking issue, `fix: land stranded follow-up PR #X
+(for #N)`, labelled `bug` and `pipeline-gap` where those labels exist and
+added to the board. The hidden marker
+`<!-- nightgauge:stranded-follow-up pr=X -->` is the idempotency key, so a
+later sweep finds the issue instead of filing another. The card's key is
+`pr-X` and its fingerprint is the parent and tracking issue numbers. The
+card retracts once the PR merges or closes.

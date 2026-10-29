@@ -128,8 +128,50 @@ describe("parseAcceptanceCriteria", () => {
     );
   });
 
+  it("skips fenced code blocks inside an Acceptance Criteria section", () => {
+    const body =
+      "## Acceptance Criteria\n1. first:\n   ```sh\n   # run it\n   1. output line\n   - [ ] example box\n   ```\n2. second\n~~~\n1. phantom\n~~~\n";
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(["first:", "second"]);
+  });
+
+  it("does not count a nested numbered sub-step as a criterion", () => {
+    const body = "## Acceptance Criteria\n1. Do X:\n    1. sub-step\n2. Do Y\n";
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(["Do X:", "Do Y"]);
+  });
+
   it("drops repeated criteria", () => {
     const acs = parseAcceptanceCriteria("- [ ] same  text\n- [x] same text\n");
     expect(acs).toHaveLength(1);
+  });
+
+  it("skips <details> archives, nested or unterminated, and repeated criteria (#2655)", () => {
+    const body = [
+      "- [ ] One",
+      "- [x] Two",
+      "<details><summary>Original</summary>",
+      "- [ ] Archived",
+      "<details open>",
+      "- [ ] Inner",
+      "</details>",
+      "- [ ] After inner",
+      "</DETAILS>",
+      "- [ ]  One",
+      "- [ ] Three",
+    ].join("\n");
+    const acs = parseAcceptanceCriteria(body);
+    expect(acs.map((a) => [a.index, a.text])).toEqual([
+      [0, "One"],
+      [1, "Two"],
+      [2, "Three"],
+    ]);
+  });
+
+  it("matches Go's TestParseACs_ParityFixture", () => {
+    const body =
+      "## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n";
+    expect(parseAcceptanceCriteria(body).map((a) => [a.index, a.text])).toEqual([
+      [0, "first"],
+      [1, "second"],
+    ]);
   });
 });

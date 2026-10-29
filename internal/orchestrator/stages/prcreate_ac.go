@@ -291,7 +291,7 @@ func RewriteClosesToRefs(body string, n int) string {
 func AppendUnmetACs(body string, issueNumber int, criteria []string) string {
 	var items strings.Builder
 	for _, c := range criteria {
-		items.WriteString("- " + c + "\n")
+		items.WriteString("- " + RewriteClosesToRefs(c, issueNumber) + "\n")
 	}
 	if i := strings.Index(body, UnmetACHeading); i >= 0 {
 		// Insert at the end of the existing section (next heading or EOF).
