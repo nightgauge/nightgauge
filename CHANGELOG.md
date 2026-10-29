@@ -27,9 +27,13 @@ changelog, and the release workflow refuses a tag that does not.
   file inherits the file the previous criterion named, instead of matching any
   added line. "human-readable", "manual page" and "log rotation" are no longer
   read as operator or credential steps. A section check tries every named
-  file before reporting unmet. Reads are size-bounded, the diff collection
-  honours the stage's cancellation, and a verdict resting on uncommitted files
-  records them as `uncommitted_paths`.
+  file before reporting unmet. A file too large or otherwise unreadable is
+  treated as unknown, not empty, and a criterion checked only against a file
+  inherited from an earlier criterion can be met but never unmet. Credential
+  steps need an action ("rotate", "provision", …), so "the log never contains
+  credentials" is checkable. Reads are size-bounded and follow symlinks, the
+  diff collection honours the stage's cancellation, and a verdict resting on
+  uncommitted files records every such file as `uncommitted_paths`.
 
 - **A follow-up PR opened after its issue closed is no longer stranded
   (#2684).** The scheduler dispatches only open issues, so a review follow-up

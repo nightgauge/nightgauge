@@ -80,7 +80,8 @@ fanned out. Detail: Read
   `unmet` or `not_verifiable` criterion, or no criteria at all, means
   `Refs #N`, with each open criterion listed once under
   `## ⚠️ Unmet acceptance criteria`. Use the `pr-{N}.json` verdicts when
-  present, and never write "close #N" in such a body. Never pair "not run" with a test count in `## Validation`.
+  present, and never write "close #N" in such a body.
+  Never pair "not run" with a test count in `## Validation`.
 - **Pipeline stamp is mandatory (#1479).** `PR_BODY` must end with
   `<!-- nightgauge:pipeline stage=pr-create issue=${ISSUE_NUMBER} run=${NIGHTGAUGE_RUN_ID:--} -->`
   as its last line; `nightgauge pr create` labels such PRs `pipeline:created`.

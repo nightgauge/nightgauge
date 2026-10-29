@@ -72,7 +72,27 @@ type ACDiff struct {
 	// work the commit owner has not committed yet.
 	Uncommitted map[string]bool
 
-	content map[string][]string
+	content map[string]acContent
+}
+
+// acContent is one file's working-tree lines; ok=false means the file could
+// not be read, which is not the same as an empty file (#2669).
+type acContent struct {
+	lines []string
+	ok    bool
+}
+
+// acResult is one rule's answer for a clause. paths are the diffed files the
+// verdict rests on, so provenance does not depend on rendered evidence.
+type acResult struct {
+	status   string
+	evidence string
+	paths    []string
+	ok       bool
+}
+
+func acAnswer(status, evidence string, paths ...string) acResult {
+	return acResult{status: status, evidence: evidence, paths: paths, ok: true}
 }
 
 // acDiffTimeout bounds every git call the verifier makes.
@@ -83,10 +103,10 @@ const acDiffTimeout = 20 * time.Second
 // skipped by size before it is read.
 const acReadMaxBytes = 1 << 20
 
-// acReadBounded reads a regular file no larger than acReadMaxBytes; ok=false
-// for anything else.
+// acReadBounded reads a regular file, or a symlink to one, no larger than
+// acReadMaxBytes; ok=false for anything else.
 func acReadBounded(path string) ([]byte, bool) {
-	fi, err := os.Lstat(path)
+	fi, err := os.Stat(path)
 	if err != nil || !fi.Mode().IsRegular() || fi.Size() > acReadMaxBytes {
 		return nil, false
 	}
@@ -234,21 +254,23 @@ func (d *ACDiff) Checker(tests ACTestState) ACDiffChecker {
 	return func(text string, prior []string) (ACCheck, bool) { return VerifyACAgainstDiff(text, prior, d, tests) }
 }
 
-func (d *ACDiff) lines(path string) []string {
+// lines returns path's working-tree lines; ok=false when there is no Workdir
+// or the file could not be read (missing, too large, not a regular file).
+func (d *ACDiff) lines(path string) ([]string, bool) {
 	if d.content == nil {
-		d.content = map[string][]string{}
+		d.content = map[string]acContent{}
 	}
-	if l, ok := d.content[path]; ok {
-		return l
+	if c, ok := d.content[path]; ok {
+		return c.lines, c.ok
 	}
-	var l []string
+	var c acContent
 	if d.Workdir != "" {
 		if data, ok := acReadBounded(filepath.Join(d.Workdir, path)); ok {
-			l = strings.Split(string(data), "\n")
+			c = acContent{lines: strings.Split(string(data), "\n"), ok: true}
 		}
 	}
-	d.content[path] = l
-	return l
+	d.content[path] = c
+	return c.lines, c.ok
 }
 
 func (d *ACDiff) sortedPaths() []string {
@@ -375,7 +397,7 @@ var acRuntimeSteps = []struct {
 	{regexp.MustCompile(`(?i)\bdeploy(?:s|ed|ing|ment)?\b`), "a deploy"},
 	{regexp.MustCompile(`(?i)\b(?:publish(?:ed)?|cut|tag(?:ged)?)\s+(?:a |the )?release\b|\brelease\s+(?:is\s+)?(?:published|cut|tagged)\b|\bmarketplace\b`), "a release"},
 	{regexp.MustCompile(`(?i)\bmanually\b|\bmanual (?:step|check|review|test(?:ing)?|verification|QA|run|sign[- ]off|approval)\b|\boperator\b|\bby hand\b|\bhuman (?:review(?:er)?|step|check|approval|operator|in the loop)\b|\bsign[- ]off\b`), "a manual or operator step"},
-	{regexp.MustCompile(`(?i)\bcredentials?\b|\bAPI key\b|\brotat(?:e|ed|es|ing|ion)\b[^.]*\b(?:credentials?|keys?|tokens?|secrets?|passwords?)\b|\b(?:credentials?|keys?|tokens?|secrets?)\s+rotation\b`), "a credential"},
+	{regexp.MustCompile(`(?i)\b(?:rotat(?:e|es|ed|ing)|provision(?:s|ed|ing)?|suppl(?:y|ies|ied|ying)|configur(?:e|es|ed|ing)|set(?:s|ting)? up|issu(?:e|es|ed|ing)\s+(?:a|an|the|new)|generat(?:e|es|ed|ing)|obtain(?:s|ed|ing)?)\b[^.]*\b(?:credentials?|API keys?)\b|\b(?:credentials?|API keys?)\b[^.]*\b(?:rotated|provisioned|supplied|configured|issued|generated|obtained)\b|\brotat(?:e|ed|es|ing|ion)\b[^.]*\b(?:credentials?|keys?|tokens?|secrets?|passwords?)\b|\b(?:credentials?|keys?|tokens?|secrets?)\s+rotation\b`), "a credential"},
 	{regexp.MustCompile(`(?i)\b(?:live|real) (?:API|endpoint|service|call|GitHub|run)\b|\bagainst (?:the )?(?:live|real)\b`), "a live API call"},
 	{regexp.MustCompile(`(?i)\b(?:after|once)\b[^.]*\bmerged?\b|\bpost-merge\b`), "a post-merge observation"},
 	{regexp.MustCompile(`(?i)\b(?:observed|monitored)\b|\b(?:next|following|subsequent) (?:pipeline )?runs?\b`), "observing a live run"},
@@ -408,42 +430,39 @@ func VerifyACAgainstDiff(text string, prior []string, d *ACDiff, tests ACTestSta
 		}
 	}
 	inherited := acInheritedPaths(prior, d)
-	var met, unmet []string
+	var met, unmet []acResult
 	for _, raw := range splitACClauses(text) {
-		c := parseACClause(raw)
-		status, evidence, ok := verifyACClause(c, inherited, d, tests)
-		if !ok {
-			continue
-		}
-		if status == ACUnmet {
-			unmet = append(unmet, evidence)
-		} else {
-			met = append(met, evidence)
+		r := verifyACClause(parseACClause(raw), inherited, d, tests)
+		switch {
+		case !r.ok:
+		case r.status == ACUnmet:
+			unmet = append(unmet, r)
+		default:
+			met = append(met, r)
 		}
 	}
-	var r ACCheck
-	switch {
-	case len(unmet) > 0:
-		r = ACCheck{Status: ACUnmet, Evidence: strings.Join(unmet, "; ")}
-	case len(met) > 0:
-		r = ACCheck{Status: ACMet, Evidence: strings.Join(met, "; ")}
-	default:
+	win, status := unmet, ACUnmet
+	if len(win) == 0 {
+		win, status = met, ACMet
+	}
+	if len(win) == 0 {
 		return ACCheck{}, false
 	}
-	r.Uncommitted = d.uncommittedCited(r.Evidence)
-	return r, true
-}
-
-// uncommittedCited lists, sorted, the uncommitted paths evidence quotes.
-func (d *ACDiff) uncommittedCited(evidence string) []string {
-	var out []string
-	for p := range d.Uncommitted {
-		if strings.Contains(evidence, "`"+p+"`") || strings.Contains(evidence, "`"+p+":") {
-			out = append(out, p)
+	r := ACCheck{Status: status}
+	var ev []string
+	cited := map[string]bool{}
+	for _, c := range win {
+		ev = append(ev, c.evidence)
+		for _, p := range c.paths {
+			if d.Uncommitted[p] && !cited[p] {
+				cited[p] = true
+				r.Uncommitted = append(r.Uncommitted, p)
+			}
 		}
 	}
-	sort.Strings(out)
-	return out
+	r.Evidence = strings.Join(ev, "; ")
+	sort.Strings(r.Uncommitted)
+	return r, true
 }
 
 // acInheritedPaths returns the diffed paths named by the nearest prior
@@ -461,7 +480,10 @@ func acInheritedPaths(prior []string, d *ACDiff) []string {
 	return nil
 }
 
-func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState) (string, string, bool) {
+// verifyACClause routes a clause to its rule. A verdict drawn from inherited
+// files may only add met: the criterion never named those files, so their
+// failing to carry its tokens is no evidence against it (#2669).
+func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState) acResult {
 	switch {
 	case acScopeRE.MatchString(c.Prose) && len(c.Paths) > 0:
 		return acScope(c, d)
@@ -472,13 +494,20 @@ func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState
 		return acTest(name, re, d, tests)
 	}
 	diffed := acDiffedPaths(c, d)
-	if len(diffed) == 0 {
+	fromInherited := len(diffed) == 0 && len(inherited) > 0
+	if fromInherited {
 		diffed = inherited
 	}
+	var r acResult
 	if len(diffed) > 0 && len(c.Headings) > 0 {
-		return acSection(c, diffed, d)
+		r = acSection(c, diffed, d)
+	} else {
+		r = acTokens(c, diffed, d)
 	}
-	return acTokens(c, diffed, d)
+	if fromInherited && r.status == ACUnmet {
+		return acResult{}
+	}
+	return r
 }
 
 func acDiffedPaths(c acClause, d *ACDiff) []string {
@@ -501,68 +530,87 @@ func acPathAllowed(path string, allowed []string) bool {
 }
 
 // acScope: "no file other than X is modified", "only X changes".
-func acScope(c acClause, d *ACDiff) (string, string, bool) {
+func acScope(c acClause, d *ACDiff) acResult {
 	var extra []string
-	for _, p := range d.sortedPaths() {
+	all := d.sortedPaths()
+	for _, p := range all {
 		if !acPathAllowed(p, c.Paths) {
 			extra = append(extra, p)
 		}
 	}
 	if len(extra) > 0 {
-		return ACUnmet, "the diff also changes " + acList(extra, 5), true
+		return acAnswer(ACUnmet, "the diff also changes "+acList(extra, 5), extra...)
 	}
-	return ACMet, "the diff changes only " + acList(d.sortedPaths(), 5), true
+	return acAnswer(ACMet, "the diff changes only "+acList(all, 5), all...)
 }
 
 // acUnchanged: a named path must be absent from the diff, or its diff must
 // delete nothing. Headings narrow the check to the diffed files holding them;
-// a heading not qualified by "existing" must also gain no lines.
-func acUnchanged(c acClause, d *ACDiff) (string, string, bool) {
+// a heading not qualified by "existing" must also gain no lines. A file that
+// must be read and cannot be leaves the clause not diff-checkable.
+func acUnchanged(c acClause, d *ACDiff) acResult {
 	if len(c.Paths) > 0 {
-		var ev []string
+		var ev, paths []string
 		for _, p := range c.Paths {
 			f, ok := d.Files[p]
 			switch {
 			case !ok:
 				ev = append(ev, "`"+p+"` is not in the diff")
 			case f.Deleted > 0 || f.Status == "deleted" || f.Status == "renamed":
-				return ACUnmet, fmt.Sprintf("`%s` is %s with %d line(s) removed or rewritten", p, f.Status, f.Deleted), true
+				return acAnswer(ACUnmet, fmt.Sprintf("`%s` is %s with %d line(s) removed or rewritten", p, f.Status, f.Deleted), p)
 			case len(c.Headings) > 0:
-				if status, e := acHeadingsUnchanged(c.Headings, f, d); status == ACUnmet {
-					return ACUnmet, e, true
+				r := acHeadingsUnchanged(c.Headings, f, d)
+				if !r.ok || r.status == ACUnmet {
+					return r
 				}
 				ev = append(ev, "`"+p+"` removes no lines and adds none under "+acHeadingList(c.Headings, false))
+				paths = append(paths, p)
 			default:
-				return ACUnmet, fmt.Sprintf("`%s` changes in the diff", p), true
+				return acAnswer(ACUnmet, fmt.Sprintf("`%s` changes in the diff", p), p)
 			}
 		}
-		return ACMet, strings.Join(ev, "; "), true
+		return acAnswer(ACMet, strings.Join(ev, "; "), paths...)
 	}
 	if len(c.Headings) == 0 {
-		return "", "", false
+		return acResult{}
 	}
-	var ev []string
+	var ev, paths []string
 	for _, p := range d.sortedPaths() {
 		f := d.Files[p]
-		if !acFileHasHeadings(d.lines(p), c.Headings) {
+		if f.Status == "deleted" {
+			continue
+		}
+		content, ok := d.lines(p)
+		if !ok {
+			// It may hold the headings; met from the other files would be a guess.
+			return acResult{}
+		}
+		if !acFileHasHeadings(content, c.Headings) {
 			continue
 		}
 		if f.Deleted > 0 {
-			return ACUnmet, fmt.Sprintf("`%s` removes or rewrites %d line(s)", p, f.Deleted), true
+			return acAnswer(ACUnmet, fmt.Sprintf("`%s` removes or rewrites %d line(s)", p, f.Deleted), p)
 		}
-		if status, e := acHeadingsUnchanged(c.Headings, f, d); status == ACUnmet {
-			return ACUnmet, e, true
+		if r := acHeadingsUnchanged(c.Headings, f, d); !r.ok || r.status == ACUnmet {
+			return r
 		}
 		ev = append(ev, fmt.Sprintf("`%s` is a pure insertion that adds nothing under %s", p, acHeadingList(c.Headings, false)))
+		paths = append(paths, p)
 	}
 	if len(ev) == 0 {
-		return "", "", false
+		return acResult{}
 	}
-	return ACMet, strings.Join(ev, "; "), true
+	return acAnswer(ACMet, strings.Join(ev, "; "), paths...)
 }
 
-func acHeadingsUnchanged(hs []acHeading, f *ACFileDiff, d *ACDiff) (string, string) {
-	content := d.lines(f.Path)
+// acHeadingsUnchanged reports unmet when f adds a line under a heading not
+// qualified by "existing", met when it adds none, and ok=false when f cannot
+// be read.
+func acHeadingsUnchanged(hs []acHeading, f *ACFileDiff, d *ACDiff) acResult {
+	content, ok := d.lines(f.Path)
+	if !ok {
+		return acResult{}
+	}
 	for _, h := range hs {
 		if h.Existing {
 			continue
@@ -573,11 +621,11 @@ func acHeadingsUnchanged(hs []acHeading, f *ACFileDiff, d *ACDiff) (string, stri
 			}
 			stack := acHeadingStack(content, l.N)
 			if acHeadingEq(stack[h.Level], h.Text) {
-				return ACUnmet, fmt.Sprintf("`%s:%d` adds a line under %s", f.Path, l.N, h)
+				return acAnswer(ACUnmet, fmt.Sprintf("`%s:%d` adds a line under %s", f.Path, l.N, h), f.Path)
 			}
 		}
 	}
-	return ACMet, ""
+	return acAnswer(ACMet, "", f.Path)
 }
 
 func acFileHasHeadings(content []string, hs []acHeading) bool {
@@ -655,19 +703,20 @@ func acTestName(c acClause) (string, *regexp.Regexp, bool) {
 
 // acTest: the named test must be defined on the branch and the stage's test
 // run must have passed.
-func acTest(name string, re *regexp.Regexp, d *ACDiff, tests ACTestState) (string, string, bool) {
+func acTest(name string, re *regexp.Regexp, d *ACDiff, tests ACTestState) acResult {
 	loc, ok := d.findDefinition(re)
 	if !ok {
-		return ACUnmet, fmt.Sprintf("test `%s` is not defined on the branch", name), true
+		return acAnswer(ACUnmet, fmt.Sprintf("test `%s` is not defined on the branch", name))
 	}
+	file, _, _ := strings.Cut(loc, ":")
 	if !tests.Passed {
 		src := tests.Source
 		if src == "" {
 			src = "no recorded test run"
 		}
-		return ACUnmet, fmt.Sprintf("test `%s` is defined at `%s`, but the test run did not pass (%s)", name, loc, src), true
+		return acAnswer(ACUnmet, fmt.Sprintf("test `%s` is defined at `%s`, but the test run did not pass (%s)", name, loc, src), file)
 	}
-	return ACMet, fmt.Sprintf("test `%s` at `%s` passed in %s", name, loc, tests.Source), true
+	return acAnswer(ACMet, fmt.Sprintf("test `%s` at `%s` passed in %s", name, loc, tests.Source), file)
 }
 
 func (d *ACDiff) findDefinition(re *regexp.Regexp) (string, bool) {
@@ -701,7 +750,7 @@ func (d *ACDiff) findDefinition(re *regexp.Regexp) (string, bool) {
 
 // acSection: some added line in a named diffed file sits beneath the named
 // headings, and those lines carry the clause's tokens.
-func acSection(c acClause, diffed []string, d *ACDiff) (string, string, bool) {
+func acSection(c acClause, diffed []string, d *ACDiff) acResult {
 	levels := map[int][]string{}
 	for _, h := range c.Headings {
 		levels[h.Level] = append(levels[h.Level], h.Text)
@@ -718,11 +767,17 @@ func acSection(c acClause, diffed []string, d *ACDiff) (string, string, bool) {
 		}
 		return true
 	}
-	// Every named file is tried; unmet only when none satisfies (#2669).
-	var reasons []string
+	// Every named file is tried; unmet only when some file was read and none
+	// satisfies. An unreadable file is skipped, and with none read the clause
+	// is not diff-checkable (#2669).
+	var reasons, tried []string
 	for _, p := range diffed {
 		f := d.Files[p]
-		content := d.lines(p)
+		content, ok := d.lines(p)
+		if !ok {
+			continue
+		}
+		tried = append(tried, p)
 		var sec []acDiffLine
 		for _, l := range f.Added {
 			if strings.TrimSpace(l.Text) != "" && under(acHeadingStack(content, l.N)) {
@@ -741,22 +796,24 @@ func acSection(c acClause, diffed []string, d *ACDiff) (string, string, bool) {
 		if len(c.Tokens) > 0 {
 			ev += " citing " + acList(c.Tokens, 5)
 		}
-		return ACMet, ev, true
+		return acAnswer(ACMet, ev, p)
 	}
-	return ACUnmet, strings.Join(reasons, "; "), true
+	if len(tried) == 0 {
+		return acResult{}
+	}
+	return acAnswer(ACUnmet, strings.Join(reasons, "; "), tried...)
 }
 
 // acTokens: every named token appears in the added lines of the named (or
 // inherited) diffed files. A clause with no file is not diff-checkable: a
 // token found anywhere in the diff proves nothing about this criterion.
-func acTokens(c acClause, diffed []string, d *ACDiff) (string, string, bool) {
+func acTokens(c acClause, diffed []string, d *ACDiff) acResult {
 	if len(c.Tokens) == 0 || len(diffed) == 0 {
-		return "", "", false
+		return acResult{}
 	}
-	scope := diffed
 	var lines []acDiffLine
 	var where []string
-	for _, p := range scope {
+	for _, p := range diffed {
 		for _, l := range d.Files[p].Added {
 			lines = append(lines, l)
 			where = append(where, p)
@@ -764,18 +821,19 @@ func acTokens(c acClause, diffed []string, d *ACDiff) (string, string, bool) {
 	}
 	missing := acMissingTokens(c.Tokens, lines)
 	if len(missing) > 0 {
-		return ACUnmet, fmt.Sprintf("the %s diff does not add %s", acList(diffed, 3), acList(missing, 5)), true
+		return acAnswer(ACUnmet, fmt.Sprintf("the %s diff does not add %s", acList(diffed, 3), acList(missing, 5)), diffed...)
 	}
-	var ev []string
+	var ev, paths []string
 	for _, tok := range c.Tokens {
 		for i, l := range lines {
 			if strings.Contains(l.Text, tok) {
 				ev = append(ev, fmt.Sprintf("`%s` at `%s:%d`", tok, where[i], l.N))
+				paths = append(paths, where[i])
 				break
 			}
 		}
 	}
-	return ACMet, "the diff adds " + strings.Join(ev, ", "), true
+	return acAnswer(ACMet, "the diff adds "+strings.Join(ev, ", "), paths...)
 }
 
 func acMissingTokens(tokens []string, lines []acDiffLine) []string {

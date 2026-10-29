@@ -605,6 +605,12 @@ func TestResolveACVerdicts_ScopedNegativeEvidence(t *testing.T) {
 	if got[1].Status != ACUnmet {
 		t.Errorf("AC2 own negative evidence: %+v", got[1])
 	}
+	got = ResolveACVerdicts(criteria, []ACVerdict{
+		{Text: "first crit", Status: "unknown", Evidence: "AC1 and AC3 are not met."},
+	}, nil, nil)
+	if got[0].Status != ACUnmet {
+		t.Errorf("AC1 named alongside AC3 must fold to unmet: %+v", got[0])
+	}
 	det := &preflight.ACReconcileResult{AcceptanceCriteria: []preflight.ReconciledCriterion{
 		{Index: 1, Classification: preflight.ACSatisfied, Evidence: []string{"x.go"}},
 	}}

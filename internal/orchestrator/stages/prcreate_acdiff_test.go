@@ -214,9 +214,9 @@ new file mode 100644
 
 // memDiff builds an in-memory diff whose branch content is given per file.
 func memDiff(diff string, content map[string]string) *ACDiff {
-	d := &ACDiff{Files: parseUnifiedDiff(diff), content: map[string][]string{}}
+	d := &ACDiff{Files: parseUnifiedDiff(diff), content: map[string]acContent{}}
 	for p, c := range content {
-		d.content[p] = strings.Split(c, "\n")
+		d.content[p] = acContent{lines: strings.Split(c, "\n"), ok: true}
 	}
 	return d
 }
@@ -287,7 +287,11 @@ func TestACRuntimeSteps_Narrowed(t *testing.T) {
 		}
 		return ""
 	}
-	for _, text := range []string{"The output is human-readable.", "Link the manual page.", "Document log rotation."} {
+	for _, text := range []string{
+		"The output is human-readable.", "Link the manual page.", "Document log rotation.",
+		"The log output never contains credentials.", "Credentials are redacted from the PR body.",
+		"The API key is masked in errors.",
+	} {
 		if s := step(text); s != "" {
 			t.Errorf("%q resolved step %q, want none", text, s)
 		}
@@ -295,6 +299,11 @@ func TestACRuntimeSteps_Narrowed(t *testing.T) {
 	for _, text := range []string{"Manually verify the panel.", "The operator runs it.", "Rotate the API key.", "Needs human review.", "Rotate the deploy token."} {
 		if s := step(text); s == "" {
 			t.Errorf("%q resolved no step", text)
+		}
+	}
+	for _, text := range []string{"Rotate the service credentials.", "Provision an API key for CI.", "The credentials are supplied from the vault."} {
+		if s := step(text); s != "a credential" {
+			t.Errorf("%q resolved %q, want a credential", text, s)
 		}
 	}
 }
@@ -342,8 +351,107 @@ diff --git a/other.go b/other.go
 	if got, ok := VerifyACAgainstDiff("It mentions `--dry-run`.", prior, d, ACTestState{}); !ok || got.Status != ACMet {
 		t.Errorf("inherited met: %+v ok=%v", got, ok)
 	}
-	if got, ok := VerifyACAgainstDiff("It mentions `--wet-run`.", prior, d, ACTestState{}); !ok || got.Status != ACUnmet {
-		t.Errorf("inherited file lacks token: %+v ok=%v, want unmet", got, ok)
+	// Inheritance may only add met: the criterion never named docs/a.md.
+	if got, ok := VerifyACAgainstDiff("It mentions `--wet-run`.", prior, d, ACTestState{}); ok {
+		t.Errorf("inherited file lacks token: %+v, want not diff-checkable", got)
+	}
+}
+
+// #2669 review: a later criterion about another file must not fail against
+// the file an earlier criterion named.
+func TestVerifyACAgainstDiff_InheritedNeverUnmet(t *testing.T) {
+	d := memDiff(`diff --git a/internal/foo.go b/internal/foo.go
+--- a/internal/foo.go
++++ b/internal/foo.go
+@@ -1,0 +2 @@
++func Foo() {}
+diff --git a/internal/foo_test.go b/internal/foo_test.go
+--- a/internal/foo_test.go
++++ b/internal/foo_test.go
+@@ -1,0 +2 @@
++func TestFoo(t *testing.T) {}
+`, nil)
+	criteria := []string{
+		"`internal/foo.go` adds `Foo`.",
+		"Unit tests cover `Foo`.",
+		"The CLI prints `invalid mode`.",
+	}
+	got, ok := VerifyACAgainstDiff(criteria[2], criteria[:2], d, ACTestState{Passed: true})
+	if ok {
+		t.Errorf("criterion 3 resolved %+v from an inherited file, want not diff-checkable", got)
+	}
+	if got, ok := VerifyACAgainstDiff(criteria[1], criteria[:1], d, ACTestState{Passed: true}); !ok || got.Status != ACMet {
+		t.Errorf("inherited met still allowed: %+v ok=%v", got, ok)
+	}
+}
+
+// #2669 review: a file the verifier cannot read is not an empty file.
+func TestVerifyACAgainstDiff_UnreadableNotEmpty(t *testing.T) {
+	dir := changelogRepo(t)
+	big := filepath.Join(dir, "CHANGELOG.md")
+	f, err := os.OpenFile(big, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("\n- " + strings.Repeat("x", acReadMaxBytes) + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	d := collect(t, dir)
+	if _, ok := d.lines("CHANGELOG.md"); ok {
+		t.Fatal("oversized CHANGELOG.md was read")
+	}
+	for _, text := range []string{
+		"`CHANGELOG.md` adds a bullet under `## [Unreleased]`.",
+		"`CHANGELOG.md` section `## [Unreleased]` is unchanged.",
+		"The `## [Unreleased]` section is unchanged.",
+	} {
+		if got, ok := VerifyACAgainstDiff(text, nil, d, ACTestState{}); ok {
+			t.Errorf("%q: got %+v, want not diff-checkable", text, got)
+		}
+	}
+}
+
+// #2669 review: a tracked symlink to a regular file is read.
+func TestACDiff_LinesFollowsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "real.md", "# A\n## B\n")
+	if err := os.Symlink("real.md", filepath.Join(dir, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	d := &ACDiff{Files: map[string]*ACFileDiff{}, Workdir: dir}
+	if l, ok := d.lines("link.md"); !ok || len(l) < 2 || l[1] != "## B" {
+		t.Errorf("lines(link.md) = %q ok=%v", l, ok)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.lines("sub"); ok {
+		t.Error("a directory was read")
+	}
+}
+
+// #2669 review: provenance is structural, so paths elided from the rendered
+// evidence ("and N more") are still reported as uncommitted.
+func TestVerifyACAgainstDiff_UncommittedBeyondEvidence(t *testing.T) {
+	var diff strings.Builder
+	var allowed []string
+	for i := 1; i <= 8; i++ {
+		p := "docs/f" + string(rune('0'+i)) + ".md"
+		allowed = append(allowed, "`"+p+"`")
+		diff.WriteString("diff --git a/" + p + " b/" + p + "\n--- a/" + p + "\n+++ b/" + p + "\n@@ -1,0 +2 @@\n+x\n")
+	}
+	d := memDiff(diff.String(), nil)
+	d.Uncommitted = map[string]bool{"docs/f6.md": true, "docs/f7.md": true, "docs/f8.md": true}
+	got, ok := VerifyACAgainstDiff("Only "+strings.Join(allowed, ", ")+" change.", nil, d, ACTestState{})
+	if !ok || got.Status != ACMet {
+		t.Fatalf("got %+v ok=%v, want met", got, ok)
+	}
+	if strings.Contains(got.Evidence, "docs/f8.md") {
+		t.Fatalf("fixture must elide f8 from evidence: %q", got.Evidence)
+	}
+	if want := "docs/f6.md docs/f7.md docs/f8.md"; strings.Join(got.Uncommitted, " ") != want {
+		t.Errorf("uncommitted = %v, want %s", got.Uncommitted, want)
 	}
 }
 
@@ -367,8 +475,8 @@ func TestCollectACDiff_BoundedReads(t *testing.T) {
 	if s := d.Files["small.md"]; s == nil || len(s.Added) != 2 || s.Added[1].Text != "two" {
 		t.Errorf("small.md = %+v", s)
 	}
-	if l := d.lines("big.md"); l != nil {
-		t.Errorf("lines(big.md) = %d lines, want nil", len(l))
+	if l, ok := d.lines("big.md"); ok {
+		t.Errorf("lines(big.md) = %d lines, want unreadable", len(l))
 	}
 }
 

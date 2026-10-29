@@ -241,21 +241,24 @@ var acOtherCriterionRE = regexp.MustCompile(`(?i)\b(?:AC\s*#?|criteri(?:on|a)\s*
 var acEvidenceClauseRE = regexp.MustCompile(`[.;\n]+`)
 
 // acNegativeEvidence reports whether evidence for the criterion at 0-based
-// index i says it is not met, counting only clauses that name no other
-// criterion, so "AC3 is not met" in AC1's evidence leaves AC1 alone (#2669).
+// index i says it is not met. A clause counts when it names no criterion or
+// names this one; only a clause naming other criteria alone is ignored, so
+// "AC3 is not met" in AC1's evidence leaves AC1 alone while "AC1 and AC3 are
+// not met" does not (#2669).
 func acNegativeEvidence(evidence string, i int) bool {
 	for _, clause := range acEvidenceClauseRE.Split(evidence, -1) {
 		if !negativeEvidenceRE.MatchString(clause) {
 			continue
 		}
-		other := false
-		for _, m := range acOtherCriterionRE.FindAllStringSubmatch(clause, -1) {
-			if n, err := strconv.Atoi(m[1]); err == nil && n != i+1 {
-				other = true
+		refs := acOtherCriterionRE.FindAllStringSubmatch(clause, -1)
+		self := len(refs) == 0
+		for _, m := range refs {
+			if n, err := strconv.Atoi(m[1]); err == nil && n == i+1 {
+				self = true
 				break
 			}
 		}
-		if !other {
+		if self {
 			return true
 		}
 	}
