@@ -4,9 +4,11 @@ import (
 	"context"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
@@ -27,19 +29,26 @@ func (f *strandedBoardForge) Security() forge.SecurityService { return nil }
 func (f *strandedBoardForge) Auth() forge.AuthService         { return nil }
 func (f *strandedBoardForge) Repo() forge.RepoService         { return nil }
 
+// strandedBoard serves its open items through the summary read only, as the
+// GitHub adapter's REST read does. The list-carrying reads count their calls:
+// the producer must never make one (#1914).
 type strandedBoard struct {
-	items       []forgetypes.BoardItem
-	err         error
-	sawStatus   string
-	statusCalls int
+	items        []forgetypes.BoardItem
+	err          error
+	summaryCalls int
+	listCalls    int
 }
 
-func (b *strandedBoard) ListItems(_ context.Context, statusFilter string) ([]forgetypes.BoardItem, error) {
-	b.sawStatus = statusFilter
-	b.statusCalls++
-	return b.items, b.err
+func (b *strandedBoard) ListOpenItemsSummary(context.Context) ([]forgetypes.BoardItem, int, error) {
+	b.summaryCalls++
+	return b.items, len(b.items), b.err
+}
+func (b *strandedBoard) ListItems(context.Context, string) ([]forgetypes.BoardItem, error) {
+	b.listCalls++
+	return nil, forge.ErrUnsupported
 }
 func (b *strandedBoard) ListOpenItems(context.Context) ([]forgetypes.BoardItem, int, error) {
+	b.listCalls++
 	return nil, 0, forge.ErrUnsupported
 }
 func (b *strandedBoard) GetItem(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
@@ -65,8 +74,12 @@ func baseStrandedInput() Input {
 
 func TestStrandedReadyItems_MismatchRaisesOneRequestPerItem(t *testing.T) {
 	board := &strandedBoard{items: []forgetypes.BoardItem{
-		{Number: 216, Title: "Reconcile board sync", Repo: "nightgauge/nightgauge", URL: "https://example.com/216"},
-		{Number: 217, Title: "Reconcile board sync followup", Repo: "nightgauge/nightgauge", URL: "https://example.com/217"},
+		{Number: 216, Title: "Reconcile board sync", Repo: "nightgauge/nightgauge", Status: "Ready", URL: "https://example.com/216"},
+		{Number: 217, Title: "Reconcile board sync followup", Repo: "nightgauge/nightgauge", Status: "ready", URL: "https://example.com/217"},
+		// Open but not Ready, and Ready in another repository: neither is
+		// stranded for this one.
+		{Number: 218, Title: "In progress elsewhere", Repo: "nightgauge/nightgauge", Status: "In progress"},
+		{Number: 219, Title: "Sibling repo", Repo: "nightgauge/sibling", Status: "Ready"},
 	}}
 
 	p := &StrandedReadyItems{
@@ -93,8 +106,9 @@ func TestStrandedReadyItems_MismatchRaisesOneRequestPerItem(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("Evaluate: got %d requests, want 2: %+v", len(reqs), reqs)
 	}
-	if board.sawStatus != "Ready" {
-		t.Errorf("ListItems called with status %q, want Ready", board.sawStatus)
+	if board.summaryCalls != 1 || board.listCalls != 0 {
+		t.Errorf("summary reads = %d, list reads = %d; want the one relation-free summary read",
+			board.summaryCalls, board.listCalls)
 	}
 	for i, want := range []int{216, 217} {
 		if reqs[i].Producer != "" {
@@ -107,6 +121,40 @@ func TestStrandedReadyItems_MismatchRaisesOneRequestPerItem(t *testing.T) {
 		if reqs[i].IdempotencyKey != wantKey {
 			t.Errorf("request[%d].IdempotencyKey = %q, want %q", i, reqs[i].IdempotencyKey, wantKey)
 		}
+	}
+}
+
+// TestStrandedReadyItems_ReadsThroughTheSweepBoardCache hands two sweeps the
+// same board cache, as the daemon does: the second reads the stale board's
+// summary from the snapshot the first took.
+func TestStrandedReadyItems_ReadsThroughTheSweepBoardCache(t *testing.T) {
+	board := &strandedBoard{items: []forgetypes.BoardItem{
+		{Number: 216, Title: "Reconcile board sync", Repo: "nightgauge/nightgauge", Status: "Ready"},
+	}}
+	p := &StrandedReadyItems{
+		LoadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge", ProjectNumber: 4}, nil
+		},
+		FindMismatches: func(*config.Config, string) (config.ProjectMappingReport, error) {
+			return config.ProjectMappingReport{Mismatches: []config.ProjectMappingMismatch{
+				{Repo: "nightgauge/nightgauge", ManifestProject: 1, ResolvedProject: 4},
+			}}, nil
+		},
+		StaleClient: func(*config.Config, string, int) (forge.ForgeClient, error) {
+			return &strandedBoardForge{board: board}, nil
+		},
+	}
+	in := strandedInput()
+	in.Boards = boardcache.New(time.Hour)
+	for i := 0; i < 2; i++ {
+		reqs, err := p.Evaluate(context.Background(), in)
+		if err != nil || len(reqs) != 1 {
+			t.Fatalf("sweep %d: Evaluate = %+v, %v; want #216 alone", i+1, reqs, err)
+		}
+	}
+	if board.summaryCalls != 1 || board.listCalls != 0 {
+		t.Errorf("summary reads = %d, list reads = %d; want one summary read shared by both sweeps",
+			board.summaryCalls, board.listCalls)
 	}
 }
 

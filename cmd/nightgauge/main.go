@@ -5899,8 +5899,9 @@ func serveCmd() *cobra.Command {
 						autoSched.WithIPCRefinement()
 
 						// Graph builds read boards through the daemon's shared
-						// snapshot cache rather than issuing their own full
-						// board read per repo (#845, #847).
+						// snapshot cache rather than the scheduler's private
+						// one, so a sweep's board read serves them too (#845,
+						// #847, #1914).
 						autoSched.SetBoardCache(server.BoardCache())
 						// (#4151) Resolve the post-merge survival observation window
 						// from pipeline.survival.window_days (safe on a nil Pipeline).

@@ -68,7 +68,9 @@ func (rc RepoConfig) boardKey() boardKey {
 type BoardProvider func(repo RepoConfig) forge.BoardService
 
 // DefaultBoardProvider reads boards straight from the client — the shape a
-// one-shot CLI invocation wants, where a fresh process is a cold cache anyway.
+// one-shot graph build (BuildGraph) wants, where a fresh process is a cold
+// cache anyway. The autonomous scheduler, which builds a graph every cycle,
+// always reads through CachedBoardProvider.
 // The per-build board memo in buildGraphFromFetcherWithBatch still collapses
 // N repos on one board to one read.
 func DefaultBoardProvider(client *gh.Client) BoardProvider {

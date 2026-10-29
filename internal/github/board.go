@@ -64,8 +64,10 @@ func (b *BoardService) ListItems(ctx context.Context, statusFilter string) ([]ty
 // their end and returned; the others are empty on every item, never a first
 // page passed off as the list, and none of their later pages is read, so a
 // long list on any item can neither cost the caller requests nor fail it.
-// IsEpic still reports whether an item has sub-issues, because the first
-// page, which every board read selects, is enough to tell.
+// A NoRelations read sends the lean board document, which selects none of
+// the three connections, so it does not pay for their first pages either.
+// IsEpic still reports whether an item has sub-issues: the full document's
+// first page is enough to tell, and the lean one reads subIssuesSummary.
 func (b *BoardService) ListItemsWithRelations(ctx context.Context, statusFilter string, rels IssueRelations) ([]types.BoardItem, error) {
 	if statusFilter != "" {
 		if rels == AllRelations {
@@ -105,39 +107,13 @@ func restStatusQuery(status string) string {
 // This typically returns a single page (e.g., 2-15 items for "Ready") instead
 // of paginating through all 400+ items.
 func (b *BoardService) listItemsFiltered(ctx context.Context, statusFilter string, rels IssueRelations) ([]types.BoardItem, error) {
-	var nodes []projectItemNode
-	var cursor *graphql.String
-
 	// "Done" items are typically closed issues — don't filter by is:open
 	// or they vanish from the board after merge.
 	queryStr := fmt.Sprintf("status:\"%s\"", statusFilter)
 	if statusFilter != "Done" {
 		queryStr += " is:open"
 	}
-
-	for {
-		vars := map[string]interface{}{
-			"owner":         graphql.String(b.owner),
-			"projectNumber": graphql.Int(b.projectNumber),
-			"first":         graphql.Int(100),
-			"after":         cursor,
-			"query":         graphql.String(queryStr),
-		}
-
-		result, err := queryProjectItemsFiltered(ctx, b.client, b.ownerType, vars)
-		if err != nil {
-			return nil, fmt.Errorf("fetch board items (filtered): %w", err)
-		}
-		nodes = append(nodes, result.Items.Nodes...)
-
-		if !bool(result.Items.PageInfo.HasNextPage) {
-			break
-		}
-		endCursor := result.Items.PageInfo.EndCursor
-		cursor = &endCursor
-	}
-
-	items, err := b.itemsFromNodes(ctx, nodes, rels)
+	items, _, err := b.readBoard(ctx, queryStr, rels)
 	if err != nil {
 		return nil, fmt.Errorf("fetch board items (filtered): %w", err)
 	}
@@ -175,44 +151,56 @@ func (b *BoardService) ListOpenItems(ctx context.Context) ([]types.BoardItem, in
 // relationship lists in rels, with the same contract as
 // ListItemsWithRelations.
 func (b *BoardService) ListOpenItemsWithRelations(ctx context.Context, rels IssueRelations) ([]types.BoardItem, int, error) {
-	var nodes []projectItemNode
-	var cursor *graphql.String
-
-	for {
-		vars := map[string]interface{}{
-			"owner":         graphql.String(b.owner),
-			"projectNumber": graphql.Int(b.projectNumber),
-			"first":         graphql.Int(100),
-			"after":         cursor,
-			"query":         graphql.String("is:open"),
-		}
-
-		result, err := queryProjectItemsFiltered(ctx, b.client, b.ownerType, vars)
-		if err != nil {
-			return nil, 0, fmt.Errorf("fetch board items (open): %w", err)
-		}
-
-		nodes = append(nodes, result.Items.Nodes...)
-
-		if !bool(result.Items.PageInfo.HasNextPage) {
-			break
-		}
-		endCursor := result.Items.PageInfo.EndCursor
-		cursor = &endCursor
-	}
-
-	items, err := b.itemsFromNodes(ctx, nodes, rels)
+	items, raw, err := b.readBoard(ctx, "is:open", rels)
 	if err != nil {
 		return nil, 0, fmt.Errorf("fetch board items (open): %w", err)
 	}
-	return items, len(nodes), nil
+	return items, raw, nil
 }
 
 // listItemsAll fetches all project board items without filtering.
 func (b *BoardService) listItemsAll(ctx context.Context, rels IssueRelations) ([]types.BoardItem, error) {
-	var nodes []projectItemNode
-	var cursor *graphql.String
+	items, _, err := b.readBoard(ctx, "", rels)
+	if err != nil {
+		return nil, fmt.Errorf("fetch board items: %w", err)
+	}
+	return items, nil
+}
 
+// readBoard reads every page of the board items the Projects V2 `query`
+// filter selects (every item when query is empty) and returns them with the
+// relationship lists in rels whole, plus the raw node count. A NoRelations
+// read sends the lean document, which selects no relationship connection;
+// any other sends the full one and completes the connections rels names.
+func (b *BoardService) readBoard(ctx context.Context, query string, rels IssueRelations) ([]types.BoardItem, int, error) {
+	if rels == NoRelations {
+		nodes, err := readBoardNodes[leanProjectItemNode](ctx, b, query)
+		if err != nil {
+			return nil, 0, err
+		}
+		items := make([]types.BoardItem, 0, len(nodes))
+		for _, node := range nodes {
+			if item := leanNodeToItem(node); item != nil {
+				items = append(items, *item)
+			}
+		}
+		return items, len(nodes), nil
+	}
+	nodes, err := readBoardNodes[projectItemNode](ctx, b, query)
+	if err != nil {
+		return nil, 0, err
+	}
+	items, err := b.itemsFromNodes(ctx, nodes, rels)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, len(nodes), nil
+}
+
+// readBoardNodes pages a board document with item node N to its end.
+func readBoardNodes[N boardItemNode](ctx context.Context, b *BoardService, query string) ([]N, error) {
+	var nodes []N
+	var cursor *graphql.String
 	for {
 		vars := map[string]interface{}{
 			"owner":         graphql.String(b.owner),
@@ -220,25 +208,25 @@ func (b *BoardService) listItemsAll(ctx context.Context, rels IssueRelations) ([
 			"first":         graphql.Int(100),
 			"after":         cursor,
 		}
-
-		result, err := queryProjectItems(ctx, b.client, b.ownerType, vars)
+		var result *projectV2Result[N]
+		var err error
+		if query == "" {
+			result, err = queryProjectItems[N](ctx, b.client, b.ownerType, vars)
+		} else {
+			vars["query"] = graphql.String(query)
+			result, err = queryProjectItemsFiltered[N](ctx, b.client, b.ownerType, vars)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("fetch board items: %w", err)
+			return nil, err
 		}
 		nodes = append(nodes, result.Items.Nodes...)
 
 		if !bool(result.Items.PageInfo.HasNextPage) {
-			break
+			return nodes, nil
 		}
 		endCursor := result.Items.PageInfo.EndCursor
 		cursor = &endCursor
 	}
-
-	items, err := b.itemsFromNodes(ctx, nodes, rels)
-	if err != nil {
-		return nil, fmt.Errorf("fetch board items: %w", err)
-	}
-	return items, nil
 }
 
 // itemsFromNodes converts a board read's item nodes to BoardItems with the
@@ -257,8 +245,8 @@ func (b *BoardService) itemsFromNodes(ctx context.Context, nodes []projectItemNo
 			continue
 		}
 		f := &nodes[i].Content.IssueFields
-		subIssues, blockedBy, blocking := rels.pages(&f.SubIssues, &f.BlockedBy, &f.Blocking)
-		walk.add(nodeIDString(f.ID), fmt.Sprintf("%s#%d", f.Repository.NameWithOwner, f.Number),
+		subIssues, blockedBy, blocking := relationPages(rels, &f.SubIssues, &f.BlockedBy, &f.Blocking)
+		watchIssueRelations(&walk, nodeIDString(f.ID), fmt.Sprintf("%s#%d", f.Repository.NameWithOwner, f.Number),
 			subIssues, blockedBy, blocking)
 	}
 	if err := b.client.completeRelations(ctx, &walk); err != nil {
@@ -277,12 +265,61 @@ func (b *BoardService) itemsFromNodes(ctx context.Context, nodes []projectItemNo
 // holds it, with only the relationship lists in rels; itemsFromNodes is the
 // reader that first completes those lists.
 func (b *BoardService) nodeToItem(node projectItemNode, rels IssueRelations) *types.BoardItem {
-	var item types.BoardItem
-	item.ID = fmt.Sprintf("%v", node.ID)
+	item := boardItemBase(node.ID, node.Content.TypeName, &node.Content.IssueFields.boardIssueFields,
+		&node.Content.PRFields, node.FieldValues.Nodes)
+	if item == nil || item.IsPR {
+		return item
+	}
+	f := node.Content.IssueFields
+	// Relationships (GitHub native), only the lists rels names.
+	subIssues, blockedBy, blocking := relationPages(rels, &f.SubIssues, &f.BlockedBy, &f.Blocking)
+	if subIssues != nil {
+		for _, si := range subIssues.Nodes {
+			item.SubIssues = append(item.SubIssues, subIssueRef(si))
+		}
+	}
+	// An epic is identified by the canonical `type:epic` label OR by the
+	// presence of native sub-issues. Label is the source of truth — children
+	// are added after creation, so brand-new epics with zero sub-issues must
+	// still report IsEpic=true so views render them as epic group headers
+	// instead of filtering them out (Issue #3329).
+	item.IsEpic = len(f.SubIssues.Nodes) > 0 || hasTypeEpicLabel(item.Labels)
+	if blockedBy != nil {
+		for _, b := range blockedBy.Nodes {
+			item.BlockedBy = append(item.BlockedBy, blockingRef(b))
+		}
+	}
+	if blocking != nil {
+		for _, b := range blocking.Nodes {
+			item.Blocking = append(item.Blocking, blockingRef(b))
+		}
+	}
+	return item
+}
 
-	switch node.Content.TypeName {
+// leanNodeToItem converts a lean board node, which holds no relationship
+// connection, to a BoardItem with empty relationship lists. IsEpic reads the
+// sub-issue total in place of the first page nodeToItem reads.
+func leanNodeToItem(node leanProjectItemNode) *types.BoardItem {
+	item := boardItemBase(node.ID, node.Content.TypeName, &node.Content.IssueFields.boardIssueFields,
+		&node.Content.PRFields, node.FieldValues.Nodes)
+	if item == nil || item.IsPR {
+		return item
+	}
+	item.IsEpic = node.Content.IssueFields.SubIssuesSummary.Total > 0 || hasTypeEpicLabel(item.Labels)
+	return item
+}
+
+// boardItemBase converts the selection both board documents share: the item,
+// its issue's or pull request's own fields, and its project fields. Nodes that
+// are neither issues nor pull requests are dropped (nil).
+func boardItemBase(id graphql.ID, typeName string, issue *boardIssueFields, pr *boardPRFields, values []fieldValueNode) *types.BoardItem {
+	var item types.BoardItem
+	item.ID = fmt.Sprintf("%v", id)
+
+	switch typeName {
 	case "Issue":
-		f := node.Content.IssueFields
+		f := issue
 		item.Number = int(f.Number)
 		item.Title = string(f.Title)
 		item.State = string(f.State)
@@ -297,37 +334,14 @@ func (b *BoardService) nodeToItem(node projectItemNode, rels IssueRelations) *ty
 		// dispatch exclusion, IsEpic, Priority and Size all read item.Labels,
 		// and a clipped list would make every one of them fail open (#998).
 		item.LabelsTruncated = f.Labels.truncated()
-		// Relationships (GitHub native), only the lists rels names.
-		subIssues, blockedBy, blocking := rels.pages(&f.SubIssues, &f.BlockedBy, &f.Blocking)
-		if subIssues != nil {
-			for _, si := range subIssues.Nodes {
-				item.SubIssues = append(item.SubIssues, subIssueRef(si))
-			}
-		}
-		// An epic is identified by the canonical `type:epic` label OR by the
-		// presence of native sub-issues. Label is the source of truth — children
-		// are added after creation, so brand-new epics with zero sub-issues must
-		// still report IsEpic=true so views render them as epic group headers
-		// instead of filtering them out (Issue #3329).
-		item.IsEpic = len(f.SubIssues.Nodes) > 0 || hasTypeEpicLabel(item.Labels)
 		// Parent epic (for sub-issues whose parent epic is in a different status)
 		if parentNum := int(f.Parent.Number); parentNum != 0 {
 			item.ParentNumber = parentNum
 			item.ParentTitle = string(f.Parent.Title)
 			item.ParentRepo = string(f.Parent.Repository.NameWithOwner)
 		}
-		if blockedBy != nil {
-			for _, b := range blockedBy.Nodes {
-				item.BlockedBy = append(item.BlockedBy, blockingRef(b))
-			}
-		}
-		if blocking != nil {
-			for _, b := range blocking.Nodes {
-				item.Blocking = append(item.Blocking, blockingRef(b))
-			}
-		}
 	case "PullRequest":
-		f := node.Content.PRFields
+		f := pr
 		item.Number = int(f.Number)
 		item.Title = string(f.Title)
 		item.State = string(f.State)
@@ -339,12 +353,12 @@ func (b *BoardService) nodeToItem(node projectItemNode, rels IssueRelations) *ty
 		item.Labels = f.Labels.names()
 		item.LabelsTruncated = f.Labels.truncated()
 	default:
-		log.Printf("depgraph: board: nodeToItem dropping item id=%v type=%q (DraftIssue or unknown)", node.ID, node.Content.TypeName)
+		log.Printf("depgraph: board: nodeToItem dropping item id=%v type=%q (DraftIssue or unknown)", id, typeName)
 		return nil
 	}
 
 	// Extract field values (Status, Priority, Size, Pipeline Stage)
-	fields := itemFieldsOf(node.FieldValues.Nodes)
+	fields := itemFieldsOf(values)
 	item.Status = fields.Status
 	item.Priority = fields.Priority
 	item.Size = fields.Size
@@ -443,7 +457,8 @@ func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNum
 // its relationship lists, such as `forge project field-get`. SubIssues,
 // BlockedBy and Blocking are empty, and none of their later pages is read, so
 // a list the caller would discard can neither cost it requests nor fail it.
-// IsEpic still reflects the first page of sub-issues and the type:epic label.
+// It sends the lean board document, which selects none of the lists; IsEpic
+// still reflects the sub-issue total and the type:epic label.
 func (b *BoardService) GetItemWithoutRelations(ctx context.Context, owner, repo string, issueNumber int) (*types.BoardItem, error) {
 	return b.getItem(ctx, owner, repo, issueNumber, NoRelations)
 }
@@ -472,26 +487,39 @@ func (b *BoardService) getItem(ctx context.Context, owner, repo string, issueNum
 		"query":         graphql.String(queryStr),
 	}
 
-	result, err := queryProjectItemsFiltered(ctx, b.client, b.ownerType, vars)
+	wantRepo := owner + "/" + repo
+	matches := func(item *types.BoardItem) bool {
+		return item != nil && item.Number == issueNumber && item.Repo == wantRepo
+	}
+
+	if rels == NoRelations {
+		result, err := queryProjectItemsFiltered[leanProjectItemNode](ctx, b.client, b.ownerType, vars)
+		if err != nil {
+			return nil, fmt.Errorf("get board item #%d: %w", issueNumber, err)
+		}
+		for _, node := range result.Items.Nodes {
+			if item := leanNodeToItem(node); matches(item) {
+				return item, nil
+			}
+		}
+		return nil, fmt.Errorf("board item %s/%s#%d: %w", owner, repo, issueNumber, forge.ErrNotFound)
+	}
+
+	result, err := queryProjectItemsFiltered[projectItemNode](ctx, b.client, b.ownerType, vars)
 	if err != nil {
 		return nil, fmt.Errorf("get board item #%d: %w", issueNumber, err)
 	}
-
-	wantRepo := owner + "/" + repo
 	nodes := result.Items.Nodes
 	for i := range nodes {
-		item := b.nodeToItem(nodes[i], NoRelations)
-		if item == nil {
+		if !matches(b.nodeToItem(nodes[i], NoRelations)) {
 			continue
 		}
-		if item.Number == issueNumber && item.Repo == wantRepo {
-			// Only the matched item pays for reading its relationships whole.
-			full, err := b.itemsFromNodes(ctx, nodes[i:i+1], rels)
-			if err != nil {
-				return nil, fmt.Errorf("get board item #%d: %w", issueNumber, err)
-			}
-			return &full[0], nil
+		// Only the matched item pays for reading its relationships whole.
+		full, err := b.itemsFromNodes(ctx, nodes[i:i+1], rels)
+		if err != nil {
+			return nil, fmt.Errorf("get board item #%d: %w", issueNumber, err)
 		}
+		return &full[0], nil
 	}
 	return nil, fmt.Errorf("board item %s/%s#%d: %w", owner, repo, issueNumber, forge.ErrNotFound)
 }

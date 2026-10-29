@@ -359,6 +359,9 @@ func (f *Forge) issueFields(q string, n int) interface{} {
 			"repository": map[string]interface{}{"nameWithOwner": Owner + "/" + Repo},
 		}
 	}
+	if strings.Contains(q, "subIssuesSummary{total}") {
+		out["subIssuesSummary"] = map[string]interface{}{"total": len(iss.SubIssues)}
+	}
 	members := map[string][]int{"subIssues": iss.SubIssues, "blockedBy": iss.BlockedBy, "blocking": iss.Blocking}
 	for _, m := range reFirstPage.FindAllStringSubmatch(q, -1) {
 		conn := m[1]

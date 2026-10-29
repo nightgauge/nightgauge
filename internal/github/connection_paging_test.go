@@ -315,6 +315,9 @@ func (f *relationForge) issueFields(q string, iss *fakeIssue) map[string]interfa
 		withPageInfo := regexp.MustCompile(conn + `\([^)]*\)\s*\{\s*pageInfo`).MatchString(q)
 		out[conn] = f.page(conn, iss, 0, first, withPageInfo)
 	}
+	if strings.Contains(q, "subIssuesSummary{total}") {
+		out["subIssuesSummary"] = map[string]interface{}{"total": len(iss.subIssues)}
+	}
 	return out
 }
 
@@ -1240,6 +1243,84 @@ func TestBoardReadsWithRelations(t *testing.T) {
 	}
 }
 
+// TestBoardDocumentsShapedByRelations reads the same board through every
+// board reader with NoRelations and with AllRelations, and compares the
+// documents the client sent (#1914). Before, IssueRelations only filtered the
+// decoded result, so a NoRelations read sent, and was billed for, the full
+// document. Now it sends one that selects no relationship connection and is
+// strictly smaller, and still reports an epic by its sub-issue total.
+func TestBoardDocumentsShapedByRelations(t *testing.T) {
+	ctx := context.Background()
+	reads := []struct {
+		name string
+		read func(b *BoardService, rels IssueRelations) ([]types.BoardItem, error)
+	}{
+		{"ListItemsWithRelations all", func(b *BoardService, rels IssueRelations) ([]types.BoardItem, error) {
+			return b.ListItemsWithRelations(ctx, "", rels)
+		}},
+		{"ListItemsWithRelations Ready", func(b *BoardService, rels IssueRelations) ([]types.BoardItem, error) {
+			// The REST status read serves AllRelations on github.com; the
+			// fake forge has no REST, so both fall through to GraphQL.
+			return b.ListItemsWithRelations(ctx, "Ready", rels)
+		}},
+		{"ListOpenItemsWithRelations", func(b *BoardService, rels IssueRelations) ([]types.BoardItem, error) {
+			items, _, err := b.ListOpenItemsWithRelations(ctx, rels)
+			return items, err
+		}},
+		{"GetItem", func(b *BoardService, rels IssueRelations) ([]types.BoardItem, error) {
+			item, err := b.getItem(ctx, "acme", "widgets", 700, rels)
+			if err != nil {
+				return nil, err
+			}
+			return []types.BoardItem{*item}, nil
+		}},
+	}
+	document := func(t *testing.T, read func(*BoardService, IssueRelations) ([]types.BoardItem, error), rels IssueRelations) (string, types.BoardItem) {
+		t.Helper()
+		f := newRelationForge(t)
+		epic := f.issue(700, "OPEN")
+		epic.subIssues = f.numbers(1001, 3, "CLOSED")
+		f.board = []int{700}
+		items, err := read(NewBoardService(f.client(), "acme", 1), rels)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("items = %+v, want #700 alone", items)
+		}
+		var board []string
+		for _, q := range f.answered() {
+			if strings.Contains(q, "projectV2(") {
+				board = append(board, q)
+			}
+		}
+		if len(board) != 1 {
+			t.Fatalf("board documents sent = %d, want 1: %q", len(board), board)
+		}
+		return board[0], items[0]
+	}
+	for _, r := range reads {
+		t.Run(r.name, func(t *testing.T) {
+			full, _ := document(t, r.read, AllRelations)
+			lean, item := document(t, r.read, NoRelations)
+			if len(lean) >= len(full) {
+				t.Errorf("NoRelations document is %d bytes, AllRelations %d: want it strictly smaller", len(lean), len(full))
+			}
+			for _, conn := range []string{"subIssues(", "blockedBy(", "blocking("} {
+				if !strings.Contains(full, conn) {
+					t.Errorf("AllRelations document selects no %s connection", conn)
+				}
+				if strings.Contains(lean, conn) {
+					t.Errorf("NoRelations document selects %s connection:\n%s", conn, lean)
+				}
+			}
+			if !item.IsEpic {
+				t.Error("IsEpic = false on the lean read, want true: #700 has sub-issues")
+			}
+		})
+	}
+}
+
 // TestBatchIssueReadsWaitOnRateLimitGate holds the aliased batch read to the
 // rate-limit floor gate that GetIssue's first request passes through. The
 // dependency graph's per-issue body fallback uses the batch read, so without
@@ -1310,15 +1391,22 @@ func TestRelationPageSelectionsMatchStructs(t *testing.T) {
 	var sub struct {
 		P subIssuePage `graphql:"p"`
 	}
+	var boardSub struct {
+		P boardSubIssuePage `graphql:"p"`
+	}
 	var blk struct {
 		P blockingPage `graphql:"p"`
 	}
-	for _, q := range []interface{}{&sub, &blk} {
+	for _, q := range []interface{}{&sub, &boardSub, &blk} {
 		if err := c.query(context.Background(), q, nil); err != nil {
 			t.Fatalf("query: %v", err)
 		}
 	}
-	want := []string{"{p" + subIssuePageSelection + "}", "{p" + blockingPageSelection + "}"}
+	want := []string{
+		"{p" + subIssuePageSelection + "}",
+		"{p" + boardSubIssuePageSelection + "}",
+		"{p" + blockingPageSelection + "}",
+	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("client renders\n  %q\nfollow-up selections read\n  %q", got, want)
 	}

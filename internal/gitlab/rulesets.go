@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"time"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
@@ -16,13 +15,12 @@ import (
 // matches the GitHub adapter's CheckRulesets / SatisfyRulesets contract so
 // the pr-merge stage handles either backend transparently.
 type RulesetService struct {
-	client       *Client
-	pollInterval time.Duration
+	client *Client
 }
 
 // NewRulesetService constructs a RulesetService bound to client.
 func NewRulesetService(client *Client) *RulesetService {
-	return &RulesetService{client: client, pollInterval: 10 * time.Second}
+	return &RulesetService{client: client}
 }
 
 // RulesetCheckResult is an alias for the forge-agnostic ruleset precheck

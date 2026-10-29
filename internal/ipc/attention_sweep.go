@@ -323,6 +323,9 @@ func (s *Server) sweepOneRepo(ctx context.Context, store *attention.Store, repo 
 		Forge:         client,
 		WorkspaceRoot: s.workspaceRootPath(),
 		ManifestRoot:  manifestRoot,
+		// The daemon's one board cache, which the sweep's forge clients
+		// already read through (WithBoardCache, #845).
+		Boards: s.BoardCache(),
 	}
 	result, err := sweeper.Sweep(ctx, repo)
 	if err != nil {

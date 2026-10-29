@@ -598,7 +598,8 @@ func (p *ProjectService) DriftCheck(ctx context.Context) ([]FieldDrift, error) {
 		return nil, err
 	}
 
-	// Labels and fields only, so no item's relationship lists are read.
+	// Labels and fields only: the lean board document selects no item's
+	// relationship connections, so it neither pays for nor reads them.
 	boardSvc := NewBoardService(p.client, p.owner, p.projectNumber, p.ownerType)
 	items, err := boardSvc.ListItemsWithRelations(ctx, "", NoRelations)
 	if err != nil {

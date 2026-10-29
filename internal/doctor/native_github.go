@@ -823,7 +823,8 @@ func readBoardPopulation(ctx context.Context, cfg *config.Config, client *gh.Cli
 	if strings.EqualFold(cfg.OwnerType, "user") {
 		ownerType = gh.OwnerTypeUser
 	}
-	// Membership only, so no item's relationship lists are read.
+	// Membership only: the lean board document selects no item's
+	// relationship connections.
 	items, _, err := gh.NewBoardService(client, cfg.Owner, cfg.ProjectNumber, ownerType).ListOpenItemsWithRelations(ctx, gh.NoRelations)
 	if err != nil {
 		return pop, fmt.Errorf("list open items on project %d: %w", cfg.ProjectNumber, err)

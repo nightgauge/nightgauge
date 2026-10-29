@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Board reads cost less.** A board item's sub-issues no longer select their
+  labels, which no board reader used. They were 36 of the 74 query units each
+  item cost, so an item now costs 38. A board read that needs no relationship
+  lists (`NoRelations`: drift check, epic backstop sweep, doctor board
+  population, `project field-get`) now sends a smaller document that selects
+  no sub-issue, blocked-by or blocking connection. Before, it sent the full
+  document and only discarded the lists. The stranded-Ready sweep now reads
+  the stale board's open summary through the board cache instead of the full
+  list read. `nightgauge run --auto` from the CLI now reads its graph-build
+  boards through a board cache, as the daemon already did.
 - **Agents never read shell history or dump the environment.** A new workspace
   rule in `AGENTS.md` forbids opening shell history files and printing
   environment variables wholesale, since both can hold credentials.

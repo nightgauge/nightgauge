@@ -131,10 +131,10 @@ const (
 	AllRelations = RelationSubIssues | RelationBlockedBy | RelationBlocking
 )
 
-// pages returns the pages of the connections r names and nil for the others:
-// relationWalk.add leaves a nil page alone, and a reader returns only the
-// lists it was given a page for.
-func (r IssueRelations) pages(subIssues *subIssuePage, blockedBy, blocking *blockingPage) (*subIssuePage, *blockingPage, *blockingPage) {
+// relationPages returns the pages of the connections r names and nil for the
+// others: watchIssueRelations leaves a nil page alone, and a reader returns
+// only the lists it was given a page for.
+func relationPages[S subIssueNodeType](r IssueRelations, subIssues *relationPage[S], blockedBy, blocking *blockingPage) (*relationPage[S], *blockingPage, *blockingPage) {
 	if r&RelationSubIssues == 0 {
 		subIssues = nil
 	}
@@ -189,7 +189,7 @@ func (s *IssueService) GetIssueWithRelations(ctx context.Context, owner, repo st
 			"(id %q, number %d, title %q); refusing to use a partial issue",
 			number, nodeIDString(qi.ID), int(qi.Number), string(qi.Title))
 	}
-	subIssues, blockedBy, blocking := rels.pages(&qi.SubIssues, &qi.BlockedBy, &qi.Blocking)
+	subIssues, blockedBy, blocking := relationPages(rels, &qi.SubIssues, &qi.BlockedBy, &qi.Blocking)
 	label := fmt.Sprintf("%s/%s#%d", owner, repo, number)
 	if err := s.client.completeIssueRelations(ctx, nodeIDString(qi.ID), label, subIssues, blockedBy, blocking); err != nil {
 		return nil, fmt.Errorf("fetch issue #%d: %w", number, err)
@@ -225,7 +225,7 @@ func (s *IssueService) GetIssueWithRelations(ctx context.Context, owner, repo st
 	// Relationships, only those read whole.
 	if subIssues != nil {
 		for _, si := range subIssues.Nodes {
-			siRef := subIssueRef(si)
+			siRef := subIssueRef(si.boardSubIssueNode)
 			for _, l := range si.Labels.Nodes {
 				siRef.Labels = append(siRef.Labels, string(l.Name))
 			}
@@ -413,7 +413,7 @@ func (s *IssueService) getIssuesByNumbers(ctx context.Context, owner, repo strin
 		if node == nil || node.Number == 0 {
 			continue
 		}
-		walk.add(node.ID, fmt.Sprintf("%s/%s#%d", owner, repo, node.Number), &node.SubIssues, &node.BlockedBy, &node.Blocking)
+		watchIssueRelations(&walk, node.ID, fmt.Sprintf("%s/%s#%d", owner, repo, node.Number), &node.SubIssues, &node.BlockedBy, &node.Blocking)
 	}
 	if err := s.client.completeRelations(ctx, &walk); err != nil {
 		return nil, fmt.Errorf("batch fetch issues: %w", err)
@@ -445,7 +445,7 @@ func (s *IssueService) getIssuesByNumbers(ctx context.Context, owner, repo strin
 			issue.Assignees = append(issue.Assignees, a.Login)
 		}
 		for _, si := range node.SubIssues.Nodes {
-			issue.SubIssues = append(issue.SubIssues, subIssueRef(si))
+			issue.SubIssues = append(issue.SubIssues, subIssueRef(si.boardSubIssueNode))
 		}
 		issue.IsEpic = len(issue.SubIssues) > 0
 		for _, b := range node.BlockedBy.Nodes {
@@ -1418,7 +1418,7 @@ func (s *IssueService) GetEpicProgress(ctx context.Context, epicNodeID string) (
 	}
 
 	for _, si := range q.Node.Issue.SubIssues.Nodes {
-		ref := subIssueRef(si)
+		ref := subIssueRef(si.boardSubIssueNode)
 		for _, l := range si.Labels.Nodes {
 			ref.Labels = append(ref.Labels, string(l.Name))
 		}

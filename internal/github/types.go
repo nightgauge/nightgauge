@@ -29,15 +29,17 @@ type userProjectMetaQuery struct {
 	} `graphql:"user(login: $owner)"`
 }
 
-// projectV2Query fetches all items (no server-side filter).
-type projectV2Query struct {
+// projectV2Query fetches all items (no server-side filter). N is the item
+// node, and so the document: projectItemNode selects the issues' relationship
+// connections, leanProjectItemNode none of them (see boardItemNode).
+type projectV2Query[N boardItemNode] struct {
 	Organization struct {
 		ProjectV2 struct {
 			ID    graphql.ID
 			Title graphql.String
 			Items struct {
 				PageInfo pageInfo
-				Nodes    []projectItemNode
+				Nodes    []N
 			} `graphql:"items(first: $first, after: $after)"`
 		} `graphql:"projectV2(number: $projectNumber)"`
 	} `graphql:"organization(login: $owner)"`
@@ -80,14 +82,14 @@ type userProjectV2UpdatedAtQuery struct {
 
 // projectV2FilteredQuery fetches items with server-side status filtering.
 // Uses the query: parameter for efficient single-page fetches.
-type projectV2FilteredQuery struct {
+type projectV2FilteredQuery[N boardItemNode] struct {
 	Organization struct {
 		ProjectV2 struct {
 			ID    graphql.ID
 			Title graphql.String
 			Items struct {
 				PageInfo pageInfo
-				Nodes    []projectItemNode
+				Nodes    []N
 			} `graphql:"items(first: $first, after: $after, query: $query)"`
 		} `graphql:"projectV2(number: $projectNumber)"`
 	} `graphql:"organization(login: $owner)"`
@@ -97,35 +99,52 @@ type projectV2FilteredQuery struct {
 // These mirror the organization queries above but use user(login: $owner)
 // for GitHub user accounts that are not organizations.
 
-type userProjectV2Query struct {
+type userProjectV2Query[N boardItemNode] struct {
 	User struct {
 		ProjectV2 struct {
 			ID    graphql.ID
 			Title graphql.String
 			Items struct {
 				PageInfo pageInfo
-				Nodes    []projectItemNode
+				Nodes    []N
 			} `graphql:"items(first: $first, after: $after)"`
 		} `graphql:"projectV2(number: $projectNumber)"`
 	} `graphql:"user(login: $owner)"`
 }
 
-type userProjectV2FilteredQuery struct {
+type userProjectV2FilteredQuery[N boardItemNode] struct {
 	User struct {
 		ProjectV2 struct {
 			ID    graphql.ID
 			Title graphql.String
 			Items struct {
 				PageInfo pageInfo
-				Nodes    []projectItemNode
+				Nodes    []N
 			} `graphql:"items(first: $first, after: $after, query: $query)"`
 		} `graphql:"projectV2(number: $projectNumber)"`
 	} `graphql:"user(login: $owner)"`
 }
 
-type projectItemNode struct {
+// boardItemNode is the item node of a board document. There are two, and
+// BoardService picks one by the IssueRelations its caller names, because the
+// document, not the decode, is what GitHub bills:
+//
+//   - projectItemNode selects the first page of every issue's subIssues,
+//     blockedBy and blocking connections, for a read that returns any of them.
+//   - leanProjectItemNode selects none of the three, for a NoRelations read.
+//     It reads subIssuesSummary.total instead, an object field with no node
+//     cost, so IsEpic still holds for an epic whose type:epic label is gone.
+//
+// TestBoardDocumentsShapedByRelations pins the difference.
+type boardItemNode interface {
+	projectItemNode | leanProjectItemNode
+}
+
+// projectItemNodeOf is a board item with content C: projectItemContent or
+// leanProjectItemContent.
+type projectItemNodeOf[C any] struct {
 	ID      graphql.ID
-	Content projectItemContent `graphql:"content"`
+	Content C `graphql:"content"`
 	// Field values are fetched via fieldValues.
 	// We only read 4 project fields (Status, Priority, Size, Pipeline Stage)
 	// so first:8 is double our actual need with margin. Was 20 (#3587 follow-up
@@ -135,6 +154,12 @@ type projectItemNode struct {
 		Nodes []fieldValueNode
 	} `graphql:"fieldValues(first: 8)"`
 }
+
+// projectItemNode is a board item with its issue's relationship first pages.
+type projectItemNode = projectItemNodeOf[projectItemContent]
+
+// leanProjectItemNode is a board item with no relationship connection.
+type leanProjectItemNode = projectItemNodeOf[leanProjectItemContent]
 
 // projectItemFieldsQuery reads one board item's field values by its item node
 // id (BoardService.GetItemFields), with the same fieldValues selection as the
@@ -151,20 +176,23 @@ type projectItemFieldsQuery struct {
 	} `graphql:"node(id: $id)"`
 }
 
-// projectItemContent is the per-item fragment of the board scan query
-// (queryProjectItems / queryProjectItemsFiltered). All nested `first` values
-// here multiply by the page size (100), so each unit of `first` is 100 nodes
-// of cost. The values below are tuned for the workspace's actual data and
-// fall back to GetIssue / GetEpicProgress for the rare cases needing more.
+// projectItemContent is the per-item fragment of the full board document
+// (queryProjectItems / queryProjectItemsFiltered with projectItemNode). All
+// nested `first` values here multiply by the page size (100), so each unit of
+// `first` is 100 nodes of cost. The values below are tuned for the workspace's
+// actual data and fall back to GetIssue / GetEpicProgress for the rare cases
+// needing more.
 //
 // Per-item cost contribution (sum of nested first values):
 //
-//	BEFORE: 20 (labels) + 50 (subIssues) + 50×20 (subIssue labels) + 10 + 10 = 1090
-//	AFTER:   8 (labels) + 12 (subIssues) + 12×3 (subIssue labels) +  5 +  5 = 66
+//	before #3587: 20 (labels) + 50 (subIssues) + 50×20 (subIssue labels) + 10 + 10 = 1090
+//	#3587:         8 (labels) + 12 (subIssues) + 12×3 (subIssue labels)  +  5 +  5 = 66
+//	#1914:         8 (labels) + 12 (subIssues)                           +  5 +  5 = 30
 //
-// At 100 items/page that's a 16× drop in query cost. Sub-issue labels are
-// rarely consumed (board scan only uses sub-issue id/number/state), so the
-// reduction there is essentially free.
+// fieldValues(first: 8) on the item adds 8 to each. #1914 dropped the
+// sub-issue labels, 36 of the 74 units an item cost, because no board reader
+// consumed them: boardSubIssueNode selects none. A NoRelations read pays for
+// none of the three connections (leanProjectItemContent).
 //
 // The relationship sizes are FIRST-PAGE sizes, not limits: an item whose
 // subIssues, blockedBy or blocking connection reports a next page has the rest
@@ -173,52 +201,75 @@ type projectItemFieldsQuery struct {
 type projectItemContent struct {
 	TypeName    string `graphql:"__typename"`
 	IssueFields struct {
-		// ID is the issue's node id, the handle the relationship follow-up
-		// query pages from.
-		ID        graphql.ID
-		Number    graphql.Int
-		Title     graphql.String
-		State     graphql.String
-		URL       graphql.String
-		CreatedAt graphql.String
-		UpdatedAt graphql.String
-		Author    *trustActor
-		// labelPage (not a bare Nodes slice) so a clipped page is detectable:
-		// every label-derived board decision, including the owner-action
-		// dispatch exclusion, must fail CLOSED on an incomplete set (#998).
-		Labels     labelPage `graphql:"labels(first: 8)"`
-		Repository struct {
-			NameWithOwner graphql.String
-		}
+		boardIssueFields
 		// First pages only; BoardService.itemsFromNodes reads the rest.
-		SubIssues subIssuePage `graphql:"subIssues(first: 12)"`
-		BlockedBy blockingPage `graphql:"blockedBy(first: 5)"`
-		Blocking  blockingPage `graphql:"blocking(first: 5)"`
-		// Parent selects the epic's own repository with its number, as
-		// issueQuery's Parent does (#1181): a number alone is no coordinate
-		// for an epic that lives in another repository, and the epic cascade
-		// keyed on it read the sub-issue's own same-numbered issue (#2350).
-		// An object field, not a connection, so it adds no query cost.
-		Parent struct {
-			Number     graphql.Int
-			Title      graphql.String
-			Repository struct {
-				NameWithOwner graphql.String
-			}
+		SubIssues boardSubIssuePage `graphql:"subIssues(first: 12)"`
+		BlockedBy blockingPage      `graphql:"blockedBy(first: 5)"`
+		Blocking  blockingPage      `graphql:"blocking(first: 5)"`
+	} `graphql:"... on Issue"`
+	PRFields boardPRFields `graphql:"... on PullRequest"`
+}
+
+// leanProjectItemContent is projectItemContent without the issue's
+// relationship connections, for a board read that returns none of them.
+type leanProjectItemContent struct {
+	TypeName    string `graphql:"__typename"`
+	IssueFields struct {
+		boardIssueFields
+		// SubIssuesSummary is an object field, not a connection, so it adds
+		// no node cost. Its total is IsEpic's sub-issue signal.
+		SubIssuesSummary struct {
+			Total graphql.Int
 		}
 	} `graphql:"... on Issue"`
-	PRFields struct {
+	PRFields boardPRFields `graphql:"... on PullRequest"`
+}
+
+// boardIssueFields is the issue selection both board documents share.
+type boardIssueFields struct {
+	// ID is the issue's node id, the handle the relationship follow-up
+	// query pages from.
+	ID        graphql.ID
+	Number    graphql.Int
+	Title     graphql.String
+	State     graphql.String
+	URL       graphql.String
+	CreatedAt graphql.String
+	UpdatedAt graphql.String
+	Author    *trustActor
+	// labelPage (not a bare Nodes slice) so a clipped page is detectable:
+	// every label-derived board decision, including the owner-action
+	// dispatch exclusion, must fail CLOSED on an incomplete set (#998).
+	Labels     labelPage `graphql:"labels(first: 8)"`
+	Repository struct {
+		NameWithOwner graphql.String
+	}
+	// Parent selects the epic's own repository with its number, as
+	// issueQuery's Parent does (#1181): a number alone is no coordinate
+	// for an epic that lives in another repository, and the epic cascade
+	// keyed on it read the sub-issue's own same-numbered issue (#2350).
+	// An object field, not a connection, so it adds no query cost.
+	Parent struct {
 		Number     graphql.Int
 		Title      graphql.String
-		State      graphql.String
-		URL        graphql.String
-		CreatedAt  graphql.String
-		UpdatedAt  graphql.String
-		Labels     labelPage `graphql:"labels(first: 8)"`
 		Repository struct {
 			NameWithOwner graphql.String
 		}
-	} `graphql:"... on PullRequest"`
+	}
+}
+
+// boardPRFields is the pull request selection both board documents share.
+type boardPRFields struct {
+	Number     graphql.Int
+	Title      graphql.String
+	State      graphql.String
+	URL        graphql.String
+	CreatedAt  graphql.String
+	UpdatedAt  graphql.String
+	Labels     labelPage `graphql:"labels(first: 8)"`
+	Repository struct {
+		NameWithOwner graphql.String
+	}
 }
 
 type fieldValueNode struct {
@@ -335,13 +386,11 @@ type issueQuery struct {
 	} `graphql:"repository(owner: $owner, name: $name)"`
 }
 
-// subIssueNode is the sub-issue projection used inside parent queries (board
-// scan + issue view). Sub-issue labels are only consumed by GetEpicProgress
-// for type-detection — that path uses nodeQuery directly. Reducing labels
-// here from 20 → 3 is a 17-per-node savings that compounds because subIssues
-// is itself a nested connection. Hot-path savings: 100 items × 12 subIssues
-// × 17 labels = 20,400 nodes/page off the budget.
-type subIssueNode struct {
+// boardSubIssueNode is the sub-issue projection of the board document. It
+// selects no labels: a board item's sub-issue references carry none, so a
+// label page here was 3 nodes per sub-issue, 36 of an item's 74 units, that
+// every board read paid for and discarded (#1914).
+type boardSubIssueNode struct {
 	ID         graphql.ID
 	Number     graphql.Int
 	Title      graphql.String
@@ -349,6 +398,14 @@ type subIssueNode struct {
 	Repository struct {
 		NameWithOwner graphql.String
 	}
+}
+
+// subIssueNode is the sub-issue projection of the issue reads (issueQuery and
+// the batch read), whose sub-issue references carry labels. Reducing labels
+// here from 20 → 3 is a 17-per-node savings that compounds because subIssues
+// is itself a nested connection.
+type subIssueNode struct {
+	boardSubIssueNode
 	Labels struct {
 		Nodes []labelNode
 	} `graphql:"labels(first: 3)"`

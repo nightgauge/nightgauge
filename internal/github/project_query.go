@@ -6,35 +6,37 @@ import (
 	"github.com/shurcooL/graphql"
 )
 
-// projectV2Result is the common shape extracted from both org and user queries.
-type projectV2Result struct {
+// projectV2Result is the common shape extracted from both org and user
+// queries, over the board document's item node N.
+type projectV2Result[N boardItemNode] struct {
 	ID    graphql.ID
 	Title graphql.String
 	Items struct {
 		PageInfo pageInfo
-		Nodes    []projectItemNode
+		Nodes    []N
 	}
 }
 
 // queryProjectItems runs the appropriate org or user GraphQL query and returns
 // the common projectV2Result. Used by BoardService for unfiltered item fetches.
-func queryProjectItems(ctx context.Context, client *Client, ownerType OwnerType, vars map[string]interface{}) (*projectV2Result, error) {
+// N chooses the document: projectItemNode or leanProjectItemNode.
+func queryProjectItems[N boardItemNode](ctx context.Context, client *Client, ownerType OwnerType, vars map[string]interface{}) (*projectV2Result[N], error) {
 	if ownerType.IsUser() {
-		var q userProjectV2Query
+		var q userProjectV2Query[N]
 		if err := client.query(ctx, &q, vars); err != nil {
 			return nil, err
 		}
-		return &projectV2Result{
+		return &projectV2Result[N]{
 			ID:    q.User.ProjectV2.ID,
 			Title: q.User.ProjectV2.Title,
 			Items: q.User.ProjectV2.Items,
 		}, nil
 	}
-	var q projectV2Query
+	var q projectV2Query[N]
 	if err := client.query(ctx, &q, vars); err != nil {
 		return nil, err
 	}
-	return &projectV2Result{
+	return &projectV2Result[N]{
 		ID:    q.Organization.ProjectV2.ID,
 		Title: q.Organization.ProjectV2.Title,
 		Items: q.Organization.ProjectV2.Items,
@@ -43,23 +45,24 @@ func queryProjectItems(ctx context.Context, client *Client, ownerType OwnerType,
 
 // queryProjectItemsFiltered runs the appropriate org or user GraphQL query
 // with server-side status filtering and returns the common projectV2Result.
-func queryProjectItemsFiltered(ctx context.Context, client *Client, ownerType OwnerType, vars map[string]interface{}) (*projectV2Result, error) {
+// N chooses the document, as for queryProjectItems.
+func queryProjectItemsFiltered[N boardItemNode](ctx context.Context, client *Client, ownerType OwnerType, vars map[string]interface{}) (*projectV2Result[N], error) {
 	if ownerType.IsUser() {
-		var q userProjectV2FilteredQuery
+		var q userProjectV2FilteredQuery[N]
 		if err := client.query(ctx, &q, vars); err != nil {
 			return nil, err
 		}
-		return &projectV2Result{
+		return &projectV2Result[N]{
 			ID:    q.User.ProjectV2.ID,
 			Title: q.User.ProjectV2.Title,
 			Items: q.User.ProjectV2.Items,
 		}, nil
 	}
-	var q projectV2FilteredQuery
+	var q projectV2FilteredQuery[N]
 	if err := client.query(ctx, &q, vars); err != nil {
 		return nil, err
 	}
-	return &projectV2Result{
+	return &projectV2Result[N]{
 		ID:    q.Organization.ProjectV2.ID,
 		Title: q.Organization.ProjectV2.Title,
 		Items: q.Organization.ProjectV2.Items,

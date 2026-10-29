@@ -19,6 +19,8 @@ package github
 
 import (
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -169,33 +171,47 @@ func TestCriticalAPIDependencies_NodeQuery(t *testing.T) {
 
 // TestSubIssueNodeFieldNames validates that subIssueNode fields use camelCase
 // names matching GitHub API conventions. A field renamed on the Go side but not
-// in the graphql tag (or vice versa) causes silent query failures.
+// in the graphql tag (or vice versa) causes silent query failures. The board's
+// boardSubIssueNode must stay label-free (#1914): its labels were a third of a
+// board item's cost and no board reader consumed them.
 func TestSubIssueNodeFieldNames(t *testing.T) {
-	// subIssueNode has no graphql tags — it maps to connection node fields.
-	// Validate that the Go struct field names match what GitHub returns for
-	// Issue.subIssues(first:N).nodes[*].
-	typ := reflect.TypeOf(subIssueNode{})
-	expectedFields := map[string]bool{
-		"ID":         true,
-		"Number":     true,
-		"Title":      true,
-		"State":      true,
-		"Repository": true,
-		"Labels":     true, // labels(first: 20) — eliminates extra GetIssue calls in UpdateEpicEstimates
+	base := []string{"ID", "Number", "Title", "State", "Repository"}
+	t.Run("boardSubIssueNode", func(t *testing.T) {
+		assertNodeFields(t, reflect.TypeOf(boardSubIssueNode{}), base)
+	})
+	t.Run("subIssueNode", func(t *testing.T) {
+		// labels(first: 3) — eliminates extra GetIssue calls in UpdateEpicEstimates
+		assertNodeFields(t, reflect.TypeOf(subIssueNode{}), append(base, "Labels"))
+	})
+}
+
+// assertNodeFields requires the selected fields of a connection node struct,
+// embedded structs flattened, to be exactly want.
+func assertNodeFields(t *testing.T, typ reflect.Type, want []string) {
+	t.Helper()
+	// The node structs have no graphql tags — they map to connection node
+	// fields. Validate that the Go struct field names match what GitHub
+	// returns for Issue.subIssues(first:N).nodes[*].
+	expectedFields := make(map[string]bool, len(want))
+	for _, name := range want {
+		expectedFields[name] = true
 	}
-	for i := 0; i < typ.NumField(); i++ {
-		name := typ.Field(i).Name
+	for _, f := range reflect.VisibleFields(typ) {
+		if f.Anonymous {
+			continue
+		}
+		name := f.Name
 		if !expectedFields[name] {
 			t.Errorf(
-				"subIssueNode has unexpected field %q — verify it exists in GitHub API Issue.subIssues.nodes schema\n"+
+				"%s has unexpected field %q — verify it exists in GitHub API Issue.subIssues.nodes schema\n"+
 					"See: docs/GITHUB_API_DEPENDENCIES.md",
-				name,
+				typ.Name(), name,
 			)
 		}
 		delete(expectedFields, name)
 	}
 	for missing := range expectedFields {
-		t.Errorf("subIssueNode is missing expected field %q", missing)
+		t.Errorf("%s is missing expected field %q", typ.Name(), missing)
 	}
 }
 
@@ -311,7 +327,9 @@ func TestPaginationArguments(t *testing.T) {
 //	                    for more nodes.
 //	blockedBy    ≤  5 — first page only, completed the same way
 //	blocking     ≤  5 — symmetric
-//	subIssue.labels ≤ 3 — sub-issue labels are barely consumed at the board layer
+//	subIssue.labels = 0 — the board's sub-issue references carry no labels, so
+//	                    boardSubIssueNode selects none (#1914). The issue
+//	                    reads' subIssueNode keeps labels(first: 3).
 func TestBoardScanPaginationBudget(t *testing.T) {
 	cases := []struct {
 		queryType reflect.Type
@@ -361,6 +379,12 @@ func TestBoardScanPaginationBudget(t *testing.T) {
 			"labels(first: 3)",
 			"subIssueNode",
 		},
+		{
+			reflect.TypeOf(leanProjectItemContent{}.IssueFields),
+			"Labels",
+			"labels(first: 8)",
+			"leanProjectItemContent.IssueFields",
+		},
 	}
 
 	for _, tc := range cases {
@@ -382,6 +406,62 @@ func TestBoardScanPaginationBudget(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBoardItemNodeUnits pins the nested `first:` units one board item costs
+// in each board document, the figure the page size (100) multiplies. A
+// connection costs first × (1 + its nodes' own units); of a union's inline
+// fragments, only the largest is ever paid for.
+//
+// #1914 measured the full document at 74 units per item and dropped the 36 of
+// them that sub-issue labels cost, which no board reader consumed. The lean
+// document, for a NoRelations read, selects no relationship connection.
+func TestBoardItemNodeUnits(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  reflect.Type
+		want int
+	}{
+		// fieldValues 8 + labels 8 + subIssues 12 + blockedBy 5 + blocking 5.
+		{"projectItemNode", reflect.TypeOf(projectItemNode{}), 38},
+		// fieldValues 8 + labels 8.
+		{"leanProjectItemNode", reflect.TypeOf(leanProjectItemNode{}), 16},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nodeUnits(tc.typ); got != tc.want {
+				t.Errorf("%s costs %d units per item, want %d", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+var reFirstArg = regexp.MustCompile(`\(first: (\d+)`)
+
+// nodeUnits sums the nested `first:` units a selection struct costs.
+func nodeUnits(t reflect.Type) int {
+	for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return 0
+	}
+	sum, largestFragment := 0, 0
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := f.Tag.Get("graphql")
+		inner := nodeUnits(f.Type)
+		switch m := reFirstArg.FindStringSubmatch(tag); {
+		case m != nil:
+			n, _ := strconv.Atoi(m[1])
+			sum += n * (1 + inner)
+		case strings.HasPrefix(tag, "... on "):
+			largestFragment = max(largestFragment, inner)
+		default:
+			sum += inner
+		}
+	}
+	return sum + largestFragment
 }
 
 // --- 5. Deprecation Detection ------------------------------------------------
@@ -409,8 +489,9 @@ func TestNoDeprecatedFieldsUsed(t *testing.T) {
 		typ  reflect.Type
 	}{
 		{"issueQuery", reflect.TypeOf(issueQuery{})},
-		{"projectV2Query", reflect.TypeOf(projectV2Query{})},
-		{"projectV2FilteredQuery", reflect.TypeOf(projectV2FilteredQuery{})},
+		{"projectV2Query", reflect.TypeOf(projectV2Query[projectItemNode]{})},
+		{"projectV2FilteredQuery", reflect.TypeOf(projectV2FilteredQuery[projectItemNode]{})},
+		{"projectV2Query lean", reflect.TypeOf(projectV2Query[leanProjectItemNode]{})},
 		{"nodeQuery", reflect.TypeOf(nodeQuery{})},
 		{"pullRequestQuery", reflect.TypeOf(pullRequestQuery{})},
 	}
@@ -446,7 +527,7 @@ func TestSubIssueAndBlockingRefSymmetry(t *testing.T) {
 	// Fields that must be present and identical on both node types.
 	commonFields := []string{"ID", "Number", "Title", "State", "Repository"}
 
-	subType := reflect.TypeOf(subIssueNode{})
+	subType := reflect.TypeOf(boardSubIssueNode{})
 	blockType := reflect.TypeOf(blockingNode{})
 
 	subByName := make(map[string]reflect.StructField, subType.NumField())
@@ -514,6 +595,8 @@ var unionNodeTypes = map[string]reflect.Type{
 	"searchIssueNode": reflect.TypeOf(searchIssueNode{}),
 	// ProjectV2ItemContent — projectV2Item.content
 	"projectItemContent": reflect.TypeOf(projectItemContent{}),
+	// The lean board document's content (#1914) — the same union.
+	"leanProjectItemContent": reflect.TypeOf(leanProjectItemContent{}),
 	// ProjectV2ItemFieldValue — projectV2Item.fieldValues.nodes
 	"fieldValueNode": reflect.TypeOf(fieldValueNode{}),
 }

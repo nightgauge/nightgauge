@@ -786,9 +786,10 @@ type Scheduler struct {
 	stateSvc      *state.BoardStateService
 	owner         string
 	projectNumber int
-	// boardCache is the daemon's shared snapshot cache, set by
-	// AutonomousScheduler.SetBoardCache, so the post-merge board sync in
-	// checkEpicCompletion invalidates it. Nil outside the daemon.
+	// boardCache is the autonomous scheduler's board snapshot cache (the
+	// daemon's shared one, or the private one NewAutonomousScheduler sets),
+	// set by AutonomousScheduler.SetBoardCache, so the post-merge board sync
+	// in checkEpicCompletion invalidates it. Nil for a Scheduler used alone.
 	boardCache    *boardcache.Cache
 	workspaceRoot string
 
@@ -2527,8 +2528,9 @@ func (s *Scheduler) runEpicBackstopSweep(ctx context.Context) {
 	s.epicSvc.SetCheckoutResolver(s.EpicCheckout)
 
 	// Collect unique repos from board items (all statuses). Only each item's
-	// repo is used, so no relationship list is read: a long list on any item
-	// would otherwise cost this sweep requests and could stop it.
+	// repo is used, so the read sends the lean board document, which selects
+	// no relationship connection: neither their first pages nor a long list
+	// on any item can cost this sweep requests or stop it.
 	items, err := s.boardSvc.ListItemsWithRelations(ctx, "", gh.NoRelations)
 	if err != nil {
 		log.Printf("backstop sweep: failed to list board items: %v", err)
