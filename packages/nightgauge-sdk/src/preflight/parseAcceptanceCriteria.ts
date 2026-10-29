@@ -24,12 +24,54 @@ const LEADING_BOX_RE = /^\[([ xX])\][ \t]+(.+)$/;
  */
 const HEADING_RE = /^ {0,3}(#{1,6})[ \t]+(.*)$/;
 
+/** Line opening a collapsed `<details>` block; an inline mention does not. */
+const DETAILS_OPEN_RE = /^[ \t]*<details\b/i;
+
+/** Closing tag of a `<details>` block. */
+const DETAILS_CLOSE_RE = /<\/details>/i;
+
 /**
- * Collapsed `<details>` block whose opening tag starts a line — where issue
- * refinement archives the original body. An inline `<details>` mention does
- * not start a block.
+ * Drop `<details>` blocks — where issue refinement archives the original
+ * body — that open outside a fenced code block (``` or ~~~), from the
+ * opening line through the first `</details>`; text after the closing tag
+ * is kept. A block with no closing tag is kept whole. Mirrors Go
+ * `stripDetailsBlocks` (#2679).
  */
-const DETAILS_BLOCK_RE = /^[ \t]*<details\b[\s\S]*?<\/details>/gim;
+function stripDetailsBlocks(lines: string[]): string[] {
+  const out: string[] = [];
+  let fence = "";
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (fence !== "") {
+      if (trimmed.startsWith(fence)) fence = "";
+      out.push(line);
+      continue;
+    }
+    if (trimmed.startsWith("```")) fence = "```";
+    else if (trimmed.startsWith("~~~")) fence = "~~~";
+    if (fence !== "" || !DETAILS_OPEN_RE.test(line)) {
+      out.push(line);
+      continue;
+    }
+    let end = -1;
+    for (let j = i; j < lines.length; j++) {
+      if (DETAILS_CLOSE_RE.test(lines[j])) {
+        end = j;
+        break;
+      }
+    }
+    if (end < 0) {
+      out.push(line);
+      continue;
+    }
+    const m = DETAILS_CLOSE_RE.exec(lines[end]);
+    const rest = m ? lines[end].slice(m.index + m[0].length) : "";
+    if (rest.trim() !== "") out.push(rest);
+    i = end;
+  }
+  return out;
+}
 
 /**
  * Extract acceptance criteria from an issue body.
@@ -51,7 +93,7 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
   const out: AcceptanceCriterion[] = [];
   const seen = new Set<string>();
   let sectionLevel = 0;
-  for (const rawLine of body.replace(DETAILS_BLOCK_RE, "").split(/\r?\n/)) {
+  for (const rawLine of stripDetailsBlocks(body.split(/\r?\n/))) {
     const heading = HEADING_RE.exec(rawLine);
     if (heading) {
       const level = heading[1].length;

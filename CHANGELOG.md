@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A met acceptance criterion no longer forces `Refs #N` (#2679).** A
+  `<details>` line inside a fenced code block is no longer treated as an
+  archived block, so the criteria after it stay live (Go and SDK). pr-create
+  now matches feature-validate verdicts to criteria regardless of Markdown
+  formatting, trailing punctuation or a truncated stored criterion, falling
+  back to the verdict's index only when its text matches no criterion.
 - **ac-reconcile missed numbered acceptance criteria (#2672).** Numbered
   items (`1.`, `1)`, `1. **AC1:**`) inside an "Acceptance Criteria" section
   now count as criteria, so such an issue no longer reads as having none and

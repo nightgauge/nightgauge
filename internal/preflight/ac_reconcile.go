@@ -107,23 +107,73 @@ var leadingBoxRE = regexp.MustCompile(`^\[([ xX])\][ \t]+(.+)$`)
 // and text.
 var headingRE = regexp.MustCompile(`^[ ]{0,3}(#{1,6})[ \t]+(.*?)[ \t#]*$`)
 
-// detailsBlockRE matches collapsed <details> blocks, where issue refinement
-// archives the original body; their checkboxes are not live criteria (#2655).
-// The opening tag must start a line, so a criterion that mentions
-// `<details>` inline does not swallow the criteria after it (#2672).
-var detailsBlockRE = regexp.MustCompile(`(?ims)^[ \t]*<details\b.*?</details>`)
+// detailsOpenRE matches a line that opens a collapsed <details> block,
+// where issue refinement archives the original body; its checkboxes are
+// not live criteria (#2655). The tag must start a line, so a criterion that
+// mentions `<details>` inline does not swallow the criteria after it (#2672).
+var detailsOpenRE = regexp.MustCompile(`(?i)^[ \t]*<details\b`)
+
+// detailsCloseRE matches the closing tag of a <details> block.
+var detailsCloseRE = regexp.MustCompile(`(?i)</details>`)
+
+// stripDetailsBlocks drops <details> blocks that open outside a fenced code
+// block (``` or ~~~), from the opening line through the first </details>;
+// text after the closing tag on that line is kept. A block with no closing
+// tag is kept whole. A <details> line inside a fence is example text, not
+// an archive (#2679). The SDK's stripDetailsBlocks mirrors this.
+func stripDetailsBlocks(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	fence := ""
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if fence != "" {
+			if strings.HasPrefix(trimmed, fence) {
+				fence = ""
+			}
+			out = append(out, line)
+			continue
+		}
+		if strings.HasPrefix(trimmed, "```") {
+			fence = "```"
+		} else if strings.HasPrefix(trimmed, "~~~") {
+			fence = "~~~"
+		}
+		if fence != "" || !detailsOpenRE.MatchString(line) {
+			out = append(out, line)
+			continue
+		}
+		end := -1
+		for j := i; j < len(lines); j++ {
+			if detailsCloseRE.MatchString(lines[j]) {
+				end = j
+				break
+			}
+		}
+		if end < 0 {
+			out = append(out, line)
+			continue
+		}
+		loc := detailsCloseRE.FindStringIndex(lines[end])
+		if rest := lines[end][loc[1]:]; strings.TrimSpace(rest) != "" {
+			out = append(out, rest)
+		}
+		i = end
+	}
+	return out
+}
 
 // parseACs extracts acceptance criteria from an issue body in document
 // order: checkbox bullets anywhere, plus numbered items inside an
 // "Acceptance Criteria" heading section. It ignores <details> blocks and
-// repeated criteria. State is informational — satisfaction is verified
+// repeated criteria (see stripDetailsBlocks). State is informational — satisfaction is verified
 // against the working tree, not the box; a numbered item without a box is
 // unchecked.
 func parseACs(body string) []acCheckbox {
 	var out []acCheckbox
 	seen := map[string]bool{}
 	sectionLevel := 0 // heading level of the open AC section; 0 = none
-	for _, line := range strings.Split(detailsBlockRE.ReplaceAllString(body, ""), "\n") {
+	for _, line := range stripDetailsBlocks(strings.Split(body, "\n")) {
 		line = strings.TrimRight(line, "\r")
 		if h := headingRE.FindStringSubmatch(line); h != nil {
 			level := len(h[1])

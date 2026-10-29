@@ -273,6 +273,14 @@ func TestParseACs_Forms(t *testing.T) {
 		{"inline details mention", "## Acceptance Criteria\n- [ ] keeps the `<details>` exclusion\n- [ ] later\n" +
 			"\n<details>\n<summary>old</summary>\n\n- [ ] archived\n</details>\n",
 			[]string{"keeps the `<details>` exclusion", "later"}},
+		{"details line inside backtick fence", "## Acceptance Criteria\n- [ ] first\n```html\n<details>\n```\n" +
+			"- [ ] after fence\n</details>\n- [ ] last\n",
+			[]string{"first", "after fence", "last"}},
+		{"details line inside tilde fence", "~~~\n<details>\n~~~\n- [ ] kept\n</details>\n", []string{"kept"}},
+		{"archive after fence still dropped", "```\nx\n```\n<details>\n- [ ] archived\n</details>\n- [ ] live\n",
+			[]string{"live"}},
+		{"unterminated details kept", "<details>\n- [ ] kept\n", []string{"kept"}},
+		{"text after closing tag kept", "<details>\n- [ ] archived\n</details>\n- [ ] live\n", []string{"live"}},
 		{"numbered with box", "## Acceptance Criteria\n1. [x] done\n2. [ ] todo\n", []string{"done", "todo"}},
 	}
 	for _, tc := range cases {
@@ -302,5 +310,22 @@ func TestParseACs_Issue2665Body(t *testing.T) {
 		"5. **AC5:** CHANGELOG entry under Unreleased.\n\n## Notes\n\n1. not a criterion\n"
 	if got := parseACs(body); len(got) != 5 {
 		t.Fatalf("got %d criteria, want 5: %+v", len(got), got)
+	}
+}
+
+// TestParseACs_Issue2672Body is the #2679 regression: #2672's body, whose
+// AC2 mentions `<details>` inline above an archived block, parses into six
+// whole criteria.
+func TestParseACs_Issue2672Body(t *testing.T) {
+	raw, err := os.ReadFile("testdata/issue-2672-body.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := parseACs(string(raw))
+	if len(got) != 6 {
+		t.Fatalf("got %d criteria, want 6: %+v", len(got), got)
+	}
+	if want := "including the `<details>` exclusion and de-duplication."; !strings.HasSuffix(got[1].text, want) {
+		t.Errorf("AC2 = %q, want suffix %q", got[1].text, want)
 	}
 }
