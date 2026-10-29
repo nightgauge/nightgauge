@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A follow-up PR opened after its issue closed is no longer stranded
+  (#2684).** The scheduler dispatches only open issues, so a review follow-up
+  pushed after its parent PR merged had no owner and sat open. A new
+  `stranded-follow-up-prs` attention sweep finds an open PR whose branch names
+  a closed issue, files one tracking issue for it on the board, and raises an
+  Action Center card. The stranded follow-ups #2662, #2670 and #2681 land
+  here.
 - **A met acceptance criterion no longer forces `Refs #N` (#2679).** A
   `<details>` line inside a fenced code block is no longer treated as an
   archived block, so the criteria after it stay live (Go and SDK). pr-create
@@ -26,8 +33,10 @@ changelog, and the release workflow refuses a tag that does not.
   items (`1.`, `1)`, `1. **AC1:**`) inside an "Acceptance Criteria" section
   now count as criteria, so such an issue no longer reads as having none and
   merges with `Refs #N`. A criterion that mentions `<details>` inline no
-  longer hides the criteria after it. Issues with such bodies get a new
-  criteria fingerprint, so an open PR on one re-plans on resume.
+  longer hides the criteria after it, and fenced code blocks and nested
+  numbered sub-steps are not read as criteria or headings. Issues with such
+  bodies get a new criteria fingerprint, so an open PR on one re-plans on
+  resume.
 - **A blocked pr-create no longer gets a PR anyway (#2677).** When the secret
   scan or strict scope drift stopped pr-create, the deterministic fallback
   opened the PR regardless. The skill now records the stop and the fallback
@@ -50,7 +59,10 @@ changelog, and the release workflow refuses a tag that does not.
   Each criterion appears once in the body: the parser ignores the original
   body that refinement archives in a `<details>` block, and drops duplicates.
   Validate evidence saying "not met" now counts as unmet. The extension's
-  fallback PR also writes `Refs #N`.
+  fallback PR also writes `Refs #N`. A closing keyword inside a criterion's
+  text or evidence is rewritten to `Refs`, nested `<details>` archives are
+  skipped whole, the SDK parser matches the Go one, and a missing
+  ac-reconcile-{N}.json is named in the body instead of read as no criteria.
 
 - **Board reads cost less.** A board item's sub-issues no longer select their
   labels, which no board reader used. They were 36 of the 74 query units each
@@ -150,8 +162,8 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
   feature-validate wrote its verdicts under names pr-create does not read, so
   every PR said `Refs #N` and left its issue open. pr-create now checks each
   criterion against the branch diff: which files changed, what a heading
-  gained, whether a named test exists and the test run passed. An unmet answer
-  from any source keeps the issue open. "Not verifiable" is kept for criteria
+  gained, whether a named test exists and feature-validate confirmed the test
+  run passed. An unmet answer from any source keeps the issue open. "Not verifiable" is kept for criteria
   that need a device, a deploy or an operator, and the PR names the step. A
   criteria list stored twice renders once.
 

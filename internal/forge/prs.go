@@ -41,3 +41,17 @@ type PRService interface {
 	CreateEpicPR(ctx context.Context, owner, repo string, epicNumber int, epicTitle, epicBranch, baseBranch string) (*forgetypes.EpicPRResult, error)
 	MergeEpicPR(ctx context.Context, owner, repo string, prNodeID, epicBranch string) error
 }
+
+// OpenPRSummary is the cheap view of one open pull request that an adapter's
+// conditional open-PR read can report: enough to tell which branch, in which
+// repository, the PR comes from.
+type OpenPRSummary struct {
+	Number int
+	// HeadRef is the head branch name.
+	HeadRef string
+	// HeadRepo is the "owner/name" the head branch lives in; empty when the
+	// adapter cannot report it (a deleted fork).
+	HeadRepo string
+	Body     string
+	URL      string
+}

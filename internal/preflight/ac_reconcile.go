@@ -81,9 +81,9 @@ type SuggestedRoute struct {
 	Rationale string `json:"rationale"`
 }
 
-// acCheckbox is a parsed acceptance criterion (checkbox or numbered item)
+// acCriterion is a parsed acceptance criterion (checkbox or numbered item)
 // before rule evaluation.
-type acCheckbox struct {
+type acCriterion struct {
 	index int
 	text  string
 	state string
@@ -95,13 +95,20 @@ type acCheckbox struct {
 // time regardless, so the Go port bounds in code instead (see parseACs).
 var checkboxRE = regexp.MustCompile(`^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+(.+?)[ \t]*$`)
 
-// numberedRE matches a numbered list item (`1.` or `1)`). Numbered items
-// count as criteria only inside an acceptance-criteria section (#2672).
-var numberedRE = regexp.MustCompile(`^[ \t]*\d{1,3}[.)][ \t]+(.+?)[ \t]*$`)
+// numberedRE matches a top-level numbered list item (`1.` or `1)`), indented
+// at most three spaces so a nested sub-step is not a criterion of its own.
+// Numbered items count as criteria only inside an acceptance-criteria
+// section (#2672).
+var numberedRE = regexp.MustCompile(`^[ ]{0,3}\d{1,3}[.)][ \t]+(.+?)[ \t]*$`)
 
 // leadingBoxRE matches an optional `[ ]` / `[x]` at the start of a
 // numbered item's text.
 var leadingBoxRE = regexp.MustCompile(`^\[([ xX])\][ \t]+(.+)$`)
+
+// acFenceRE matches a code-fence open/close line, as acparse's fenceRe and
+// internal/docs/checklinks.go do. Lines inside a fence are example text:
+// a `#` comment there is not a heading and a `1.` line is not a criterion.
+var acFenceRE = regexp.MustCompile("^[ \\t]*(`{3,}|~{3,})")
 
 // headingRE matches an ATX Markdown heading and captures its level marks
 // and text.
@@ -117,9 +124,10 @@ var detailsOpenRE = regexp.MustCompile(`(?i)^[ \t]*<details\b`)
 var detailsCloseRE = regexp.MustCompile(`(?i)</details>`)
 
 // stripDetailsBlocks drops <details> blocks that open outside a fenced code
-// block (``` or ~~~), from the opening line through the first </details>;
-// text after the closing tag on that line is kept. A block with no closing
-// tag is kept whole. A <details> line inside a fence is example text, not
+// block (``` or ~~~), from the opening line through the </details> that
+// closes it, counting nested <details> so an archive holding an archive is
+// dropped whole (#2655); text after the closing tag on that line is kept.
+// A block with no closing tag is kept whole. A <details> line inside a fence is example text, not
 // an archive (#2679). The SDK's stripDetailsBlocks mirrors this.
 func stripDetailsBlocks(lines []string) []string {
 	out := make([]string, 0, len(lines))
@@ -143,19 +151,24 @@ func stripDetailsBlocks(lines []string) []string {
 			out = append(out, line)
 			continue
 		}
-		end := -1
-		for j := i; j < len(lines); j++ {
-			if detailsCloseRE.MatchString(lines[j]) {
+		end, depth := -1, 0
+		for j := i; j < len(lines) && end < 0; j++ {
+			if j > i && detailsOpenRE.MatchString(lines[j]) {
+				depth++
+			} else if j == i {
+				depth = 1
+			}
+			depth -= len(detailsCloseRE.FindAllStringIndex(lines[j], -1))
+			if depth <= 0 {
 				end = j
-				break
 			}
 		}
 		if end < 0 {
 			out = append(out, line)
 			continue
 		}
-		loc := detailsCloseRE.FindStringIndex(lines[end])
-		if rest := lines[end][loc[1]:]; strings.TrimSpace(rest) != "" {
+		closes := detailsCloseRE.FindAllStringIndex(lines[end], -1)
+		if rest := lines[end][closes[len(closes)-1][1]:]; strings.TrimSpace(rest) != "" {
 			out = append(out, rest)
 		}
 		i = end
@@ -165,16 +178,25 @@ func stripDetailsBlocks(lines []string) []string {
 
 // parseACs extracts acceptance criteria from an issue body in document
 // order: checkbox bullets anywhere, plus numbered items inside an
-// "Acceptance Criteria" heading section. It ignores <details> blocks and
-// repeated criteria (see stripDetailsBlocks). State is informational — satisfaction is verified
-// against the working tree, not the box; a numbered item without a box is
+// "Acceptance Criteria" heading section. It ignores <details> blocks (see
+// stripDetailsBlocks), fenced code blocks and repeated criteria. State is
+// informational — satisfaction is verified against the working tree, not the
+// box; a numbered item without a box is
 // unchecked.
-func parseACs(body string) []acCheckbox {
-	var out []acCheckbox
+func parseACs(body string) []acCriterion {
+	var out []acCriterion
 	seen := map[string]bool{}
 	sectionLevel := 0 // heading level of the open AC section; 0 = none
+	inFence := false
 	for _, line := range stripDetailsBlocks(strings.Split(body, "\n")) {
 		line = strings.TrimRight(line, "\r")
+		if acFenceRE.MatchString(line) {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
 		if h := headingRE.FindStringSubmatch(line); h != nil {
 			level := len(h[1])
 			if strings.Contains(strings.ToLower(h[2]), "acceptance criteria") {
@@ -216,7 +238,7 @@ func parseACs(body string) []acCheckbox {
 		if box != " " {
 			state = "checked"
 		}
-		out = append(out, acCheckbox{index: len(out), text: text, state: state})
+		out = append(out, acCriterion{index: len(out), text: text, state: state})
 	}
 	return out
 }
@@ -312,7 +334,7 @@ func deriveAggregate(criteria []ReconciledCriterion) (string, SuggestedRoute) {
 		return AggNoACsDetected, SuggestedRoute{
 			Approach:  "standard",
 			FocusACs:  []int{},
-			Rationale: "No acceptance-criterion checkboxes detected in issue body",
+			Rationale: "No acceptance criteria detected in issue body",
 		}
 	}
 

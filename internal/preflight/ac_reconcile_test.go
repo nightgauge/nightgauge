@@ -282,6 +282,11 @@ func TestParseACs_Forms(t *testing.T) {
 		{"unterminated details kept", "<details>\n- [ ] kept\n", []string{"kept"}},
 		{"text after closing tag kept", "<details>\n- [ ] archived\n</details>\n- [ ] live\n", []string{"live"}},
 		{"numbered with box", "## Acceptance Criteria\n1. [x] done\n2. [ ] todo\n", []string{"done", "todo"}},
+		{"fenced comment does not close section", "## Acceptance Criteria\n1. first:\n   ```sh\n   # run it\n   1. output line\n   - [ ] example box\n   ```\n2. second\n",
+			[]string{"first:", "second"}},
+		{"tilde fence skipped", "## Acceptance Criteria\n~~~\n1. phantom\n~~~\n1. real\n", []string{"real"}},
+		{"nested numbered sub-step not a criterion", "## Acceptance Criteria\n1. Do X:\n    1. sub-step\n2. Do Y\n",
+			[]string{"Do X:", "Do Y"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -327,5 +332,25 @@ func TestParseACs_Issue2672Body(t *testing.T) {
 	}
 	if want := "including the `<details>` exclusion and de-duplication."; !strings.HasSuffix(got[1].text, want) {
 		t.Errorf("AC2 = %q, want suffix %q", got[1].text, want)
+	}
+}
+
+func TestParseACs_NestedDetails(t *testing.T) {
+	live := "- [ ] One\n"
+	nested := "<details>\n- [ ] Outer\n<details open>\n- [ ] Inner\n</details>\n- [ ] After inner\n</details>\n- [ ] Two\n"
+	if got := parseACs(live + nested); len(got) != 2 || got[1].text != "Two" {
+		t.Errorf("nested: got %+v, want One and Two", got)
+	}
+	if got := parseACs("</details>\n" + live); len(got) != 1 {
+		t.Errorf("stray close: got %+v, want One", got)
+	}
+}
+
+// TestParseACs_ParityFixture shares its body with the SDK parser's parity
+// test: a fence, nested <details>, a 4-space sub-step and a duplicate.
+func TestParseACs_ParityFixture(t *testing.T) {
+	got := parseACs("## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n")
+	if len(got) != 2 || got[0].text != "first" || got[1].text != "second" || got[1].index != 1 {
+		t.Errorf("got %+v, want first and second", got)
 	}
 }

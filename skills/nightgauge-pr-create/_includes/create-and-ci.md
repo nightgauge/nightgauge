@@ -127,7 +127,11 @@ once (met ones go under `## Acceptance criteria`):
 This PR leaves #N open. These criteria are unmet or could not be verified:
 
 - <criterion text>
+  _<unmet | not verifiable> — <source>: <evidence>_
 ```
+
+The indented status line must not start with `- `: post-merge reads every
+bullet under the heading as a criterion.
 
 Post-merge reads that heading to name the remainder on the issue, which it
 leaves open and returns to Ready. Never write "close #N" or "fixes #N" in such a
