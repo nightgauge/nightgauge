@@ -44,6 +44,14 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
 - Follow-up work a run discovers is now filed as issues after the PR merges,
   instead of being left in the run's capture file (#2638).
 
+- **Reading a sibling repo no longer pins a concurrent edit on the stage
+  (#2659).** Worktree containment now counts only write evidence. A read-only
+  shell command such as `cat` or `git diff` on a sibling file, a non-write tool
+  that carries a path, or a command whose first word happens to equal a sibling
+  repo's name no longer marks that file as the stage's write. A concurrent edit
+  to it is reported as a warning. Writes through Write/Edit, redirects, `tee`,
+  `sed -i`, heredocs and `apply_patch` still fail the stage.
+
 - **A concurrent edit to a clean file in a sibling repo no longer fails the
   running stage (#2656).** Worktree containment used to attribute every sibling
   path that went clean → dirty during a stage to that stage, so an operator or
