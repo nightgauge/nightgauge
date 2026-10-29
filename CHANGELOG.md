@@ -14,6 +14,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **pr-merge leaves a `Refs #N` issue open (#2674).** The skill closed the
+  issue unconditionally after merge, before the post-merge hook could keep a
+  partial delivery open. `nightgauge issue close --pr <N>` now applies the
+  hook's own rule and skips the close when the PR names no closing keyword.
+
 ### Changed
 
 - **A PR closes its issue only when every acceptance criterion is met

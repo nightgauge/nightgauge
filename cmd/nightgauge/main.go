@@ -1631,14 +1631,21 @@ func issueCloseCmd() *cobra.Command {
 	var (
 		owner      string
 		repo       string
+		prNumber   int
 		outputJSON bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "close [number]",
 		Short: "Close an issue",
-		Args:  cobra.ExactArgs(1),
+		Long: `Close an issue.
+
+With --pr, read the merged PR's body first: a PR that references the issue
+without a closing keyword (Refs #N) delivered only part of it, so the issue is
+left open for the post-merge hook to return to Ready (#2674).`,
+		Args: cobra.ExactArgs(1),
 		Example: `  nightgauge issue close 42
+  nightgauge issue close 42 --pr 77
   nightgauge issue close 42 --repo nightgauge/other-repo`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			number, err := strconv.Atoi(args[0])
@@ -1652,6 +1659,27 @@ func issueCloseCmd() *cobra.Command {
 			}
 
 			ownerPart, repoPart := splitRepo(owner, repo)
+
+			if prNumber > 0 {
+				merge, err := gh.NewPRService(client).GetPRMergeInfo(cmd.Context(), ownerPart, repoPart, prNumber)
+				if err != nil {
+					return fmt.Errorf("read PR #%d before closing #%d: %w", prNumber, number, err)
+				}
+				if skip, reason := issueCloseSkipReason(merge.Body, number); skip {
+					if outputJSON {
+						return printJSON(map[string]interface{}{
+							"issueNumber": number,
+							"result":      "skipped",
+							"reason":      reason,
+							"pr":          prNumber,
+						})
+					}
+					fmt.Printf("Skipped closing #%d: PR #%d references it with Refs, not a closing keyword; "+
+						"the post-merge hook keeps it open and returns it to Ready\n", number, prNumber)
+					return nil
+				}
+			}
+
 			svc := gh.NewIssueService(client)
 
 			issue, err := svc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, number, gh.NoRelations)
@@ -1677,8 +1705,19 @@ func issueCloseCmd() *cobra.Command {
 
 	ownerFlag(cmd, &owner, "GitHub organization")
 	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
+	cmd.Flags().IntVar(&prNumber, "pr", 0, "Merged PR number; skip the close when its body only references the issue")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
+}
+
+// issueCloseSkipReason decides whether `issue close --pr` leaves the issue
+// open: a PR body that names it without a closing keyword is a partial
+// delivery (#2595, #2674). The predicate is the post-merge hook's own.
+func issueCloseSkipReason(body string, number int) (bool, string) {
+	if hooks.IsPartialDelivery(body, number) {
+		return true, "partial_delivery"
+	}
+	return false, ""
 }
 
 func issueEditCmd() *cobra.Command {
