@@ -116,7 +116,8 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
   feature-validate wrote its verdicts under names pr-create does not read, so
   every PR said `Refs #N` and left its issue open. pr-create now checks each
   criterion against the branch diff: which files changed, what a heading
-  gained, whether a named test exists and the test run passed. An unmet answer
+  gained, whether a named test exists and feature-validate confirmed the test
+  run passed. An unmet answer
   from any source keeps the issue open. "Not verifiable" is kept for criteria
   that need a device, a deploy or an operator, and the PR names the step. A
   criteria list stored twice renders once.

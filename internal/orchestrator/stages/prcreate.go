@@ -499,16 +499,19 @@ func unitTestsLabel(snap PRCreateSnapshot) string {
 }
 
 // acTestState is the test run a test-named criterion is checked against:
-// feature-validate's unit-test verdict, else feature-dev's counts when they
-// show a clean run.
+// feature-validate's unit-test verdict. feature-dev's self-reported counts
+// stand in only when validate never ran and no built suite went unexecuted,
+// so an unconfirmed run cannot close an issue.
 func acTestState(snap PRCreateSnapshot) ACTestState {
 	switch {
 	case snap.UnitTestsPassed:
 		return ACTestState{Passed: true, Source: "feature-validate unit tests"}
-	case snap.TestsFailed == 0 && snap.TestsPassed > 0:
-		return ACTestState{Passed: true, Source: fmt.Sprintf("feature-dev tests (%d passed, 0 failed)", snap.TestsPassed)}
+	case snap.UnverifiedDeliverable.Detected():
+		return ACTestState{Source: "tests added but never executed"}
 	case snap.HasValidate:
 		return ACTestState{Source: "feature-validate unit tests"}
+	case snap.TestsFailed == 0 && snap.TestsPassed > 0:
+		return ACTestState{Passed: true, Source: fmt.Sprintf("feature-dev tests (%d passed, 0 failed)", snap.TestsPassed)}
 	}
 	return ACTestState{}
 }
