@@ -77,8 +77,32 @@ cross-process; an in-process mutex for goroutine interleaving).
 | `rate_limit_remaining_at_exit`                                       | int                    | Go scheduler   | GitHub GraphQL bucket reading at stage end (REST / GraphQL share a tracker on the Go side). `-1` means "unavailable"; `0+` is a real reading.                                               |
 | `concurrent_pipelines_at_exit`                                       | []string               | Go scheduler   | Sibling pipelines that were running concurrently at exit (`owner/repo#number`). Empty when no siblings. Smoking gun for cross-pipeline interference (#3605 / #3591).                        |
 | `gate_kind`                                                          | string                 | Go scheduler   | Post-condition gate outcome shape when a gate ran: `ok` \| `no_op` \| `fail` (#3863). Empty when no gate ran.                                                                               |
-| `gate_reason`                                                        | string                 | Go scheduler   | Short human-readable reason from that gate. Populated on both dispatch paths since #125, so a retro sees _why_ a gate-caught failure failed without log archaeology.                        |
+| `gate_reason`                                                        | string                 | Go scheduler   | Short human-readable reason from that gate. Populated on both dispatch paths since #125. Never empty since #1919: when no gate ran, it reads `gate not run: …` (see below).                 |
 | `unreclaimed_stashes`                                                | []string               | Go scheduler   | This issue's pipeline stashes still on the stash stack at exit, as `<ref> #<issue> <stage>`. Omitted entirely on a clean exit (#330) — see below.                                           |
+
+### Why a Gate Did Not Run (#1919)
+
+The scheduler runs a stage's post-condition gate only when the stage exits 0.
+Every other exit used to write a blank `gate_reason`: a non-zero code, a kill,
+an adapter error, or a run that never dispatched. In #1919, 18 issue-pickup
+failures had no reason at all. They were environment and capability failures,
+not pickup defects, but in the daily file they looked like a missing cause.
+
+`WriteStageExitRecord` now fills an empty `gate_reason` from the record's own
+fields, so every writer (scheduler, IPC, pre-dispatch) gives the same exit the
+same text:
+
+| Record                        | `gate_reason`                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------- |
+| `stage == "pre-dispatch"`     | `gate not run: run failed before any stage was dispatched`                            |
+| failure, non-zero `exit_code` | `gate not run: stage exited <code> before its post-condition check (<terminal_kind>)` |
+| failure, exit 0 or no fork    | `gate not run: stage reported an error (<terminal_kind>)`                             |
+| success, no gate result       | `gate not run: no post-condition gate result was recorded for this stage`             |
+
+`<terminal_kind>` reads `unclassified` when no classifier matched. `gate_kind`
+stays empty in all four cases, because no gate gave a verdict. So
+`select(.gate_kind == "")` still finds the records with no gate, and
+`select(.gate_reason | startswith("gate not run"))` finds them with their cause.
 
 ### Unreclaimed Stashes (#330)
 

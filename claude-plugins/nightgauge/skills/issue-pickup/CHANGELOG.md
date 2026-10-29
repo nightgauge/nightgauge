@@ -15,6 +15,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Phase 8 says what happens to a broken context file (#1919).** When the stage
+  exits 0 on this issue's branch, the orchestrator now repairs a missing,
+  invalid, schema-mismatched or branch-less `issue-{N}.json` before the gate
+  reads it. The skill still owns the write.
 - `queue-state.json` is described as living in the checkout's git directory,
   not the clone's pipeline state directory (#2037, ADR-024 § 7).
 - The clone's pipeline context files are read at `$(nightgauge layout path <class> <name>)`

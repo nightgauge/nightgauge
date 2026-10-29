@@ -627,10 +627,10 @@ func TestWriteStageExitRecord_GatePassedSnapshot(t *testing.T) {
 	}
 }
 
-// TestWriteStageExitRecord_NoGateLeavesGateFieldsEmpty confirms that a stage
-// with no recorded gate result (e.g. a non-gated stage) produces empty
-// gate_kind/gate_reason — omitempty keeps the daily line terse.
-func TestWriteStageExitRecord_NoGateLeavesGateFieldsEmpty(t *testing.T) {
+// TestWriteStageExitRecord_NoGateNamesWhyAndLeavesKindEmpty confirms that a
+// stage with no recorded gate result keeps gate_kind empty (no verdict was
+// given) but still says why in gate_reason (#1919).
+func TestWriteStageExitRecord_NoGateNamesWhyAndLeavesKindEmpty(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id", testRunID())
@@ -644,9 +644,11 @@ func TestWriteStageExitRecord_NoGateLeavesGateFieldsEmpty(t *testing.T) {
 	if len(recs) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(recs))
 	}
-	if recs[0].GateKind != "" || recs[0].GateReason != "" {
-		t.Errorf("expected empty gate fields, got GateKind=%q GateReason=%q",
-			recs[0].GateKind, recs[0].GateReason)
+	if recs[0].GateKind != "" {
+		t.Errorf("GateKind = %q, want empty: no gate ran", recs[0].GateKind)
+	}
+	if want := "gate not run: no post-condition gate result was recorded for this stage"; recs[0].GateReason != want {
+		t.Errorf("GateReason = %q, want %q", recs[0].GateReason, want)
 	}
 }
 

@@ -388,6 +388,12 @@ printf '<!-- phase:start name="write-context" index=11 total=14 stage="issue-pic
 All data is available in shell variables at this point — write the context
 inline using `jq -n` for safe JSON construction.
 
+The file is still yours to write. If the stage exits 0 and the file is missing,
+is not valid JSON, does not match the schema, or has no `branch`, the
+orchestrator repairs it from the worktree's HEAD and the issue before the gate
+reads it. It does this only when HEAD is on this issue's branch (#1919). A
+recovered file is a recorded fault, not a success path.
+
 > **Read `_includes/context-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run Steps 8.1 and 8.2 there, then emit the `knowledge-scaffolding` marker below and continue through Steps 8.3–8.7.
 
 #### Step 8.3: Knowledge Scaffolding (MANDATORY)

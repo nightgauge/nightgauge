@@ -252,3 +252,96 @@ func TestExitRecordsDir_OutsideGitRepositoryIsAnError(t *testing.T) {
 		t.Errorf("nothing may be written in the working tree: %v", statErr)
 	}
 }
+
+// Every exit record names its gate outcome (#1919). A stage the scheduler
+// never gated used to write a blank gate_reason, which read as "no cause".
+func TestGateReasonWhenNoGate(t *testing.T) {
+	code := func(n int) *int { return &n }
+	cases := []struct {
+		name string
+		rec  StageExitRecord
+		want string
+	}{
+		{
+			name: "pre-dispatch",
+			rec:  StageExitRecord{Stage: StagePreDispatch, ExitCode: code(1)},
+			want: "gate not run: run failed before any stage was dispatched",
+		},
+		{
+			name: "non-zero exit, classified",
+			rec:  StageExitRecord{Stage: "issue-pickup", ExitCode: code(137), TerminalKind: "oom_killed"},
+			want: "gate not run: stage exited 137 before its post-condition check (oom_killed)",
+		},
+		{
+			name: "non-zero exit, unclassified",
+			rec:  StageExitRecord{Stage: "issue-pickup", ExitCode: code(-1)},
+			want: "gate not run: stage exited -1 before its post-condition check (unclassified)",
+		},
+		{
+			name: "failure with exit 0",
+			rec:  StageExitRecord{Stage: "issue-pickup", ExitCode: code(0), TerminalKind: "adapter_error"},
+			want: "gate not run: stage reported an error (adapter_error)",
+		},
+		{
+			name: "failure with no fork",
+			rec:  StageExitRecord{Stage: "issue-pickup"},
+			want: "gate not run: stage reported an error (unclassified)",
+		},
+		{
+			name: "success with no gate result",
+			rec:  StageExitRecord{Stage: "feature-dev", Success: true, ExitCode: code(0)},
+			want: "gate not run: no post-condition gate result was recorded for this stage",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := GateReasonWhenNoGate(tc.rec); got != tc.want {
+				t.Errorf("GateReasonWhenNoGate = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func readOnlyExitRecord(t *testing.T, root string) StageExitRecord {
+	t.Helper()
+	data, err := os.ReadFile(DailyFilePath(root, time.Now()))
+	if err != nil {
+		t.Fatalf("read daily file: %v", err)
+	}
+	var rec StageExitRecord
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &rec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return rec
+}
+
+func TestWriteStageExitRecord_FillsGateReasonWhenNoGateRan(t *testing.T) {
+	root := layouttest.Repo(t)
+	exit := 1
+	if err := WriteStageExitRecord(root, StageExitRecord{
+		Repo: "nightgauge/nightgauge", Issue: 1919, Stage: "issue-pickup", ExitCode: &exit,
+	}); err != nil {
+		t.Fatalf("WriteStageExitRecord: %v", err)
+	}
+	rec := readOnlyExitRecord(t, root)
+	if rec.GateReason != "gate not run: stage exited 1 before its post-condition check (unclassified)" {
+		t.Errorf("GateReason = %q, want the gate-not-run reason", rec.GateReason)
+	}
+	if rec.GateKind != "" {
+		t.Errorf("GateKind = %q, want empty: no gate gave a verdict", rec.GateKind)
+	}
+}
+
+func TestWriteStageExitRecord_KeepsTheGatesOwnReason(t *testing.T) {
+	root := layouttest.Repo(t)
+	exit := 0
+	if err := WriteStageExitRecord(root, StageExitRecord{
+		Repo: "nightgauge/nightgauge", Issue: 1919, Stage: "issue-pickup", ExitCode: &exit,
+		GateKind: "no_op", GateReason: "issue context file missing",
+	}); err != nil {
+		t.Fatalf("WriteStageExitRecord: %v", err)
+	}
+	if rec := readOnlyExitRecord(t, root); rec.GateReason != "issue context file missing" || rec.GateKind != "no_op" {
+		t.Errorf("gate fields = (%q, %q), want the gate's own verdict untouched", rec.GateKind, rec.GateReason)
+	}
+}
