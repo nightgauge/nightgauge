@@ -88,15 +88,43 @@ type acCheckbox struct {
 	state string
 }
 
-// checkboxRE mirrors the SDK parser: `-`/`*` bullets, any indentation,
-// `[ ]` / `[x]` / `[X]` states. The SDK bounds the text capture at 4096
-// chars defensively; RE2 caps repeat counts at 1000 and guarantees linear
-// time regardless, so the Go port bounds in code instead (see parseACs).
+// checkboxRE mirrors the SDK parser (parseAcceptanceCriteria.ts): `-`/`*`
+// bullets, any indentation, `[ ]` / `[x]` / `[X]` states. The SDK bounds the
+// text capture at 4096 chars defensively; RE2 caps repeat counts at 1000 and
+// guarantees linear time regardless, so the Go port bounds in code instead
+// (see parseACs).
 var checkboxRE = regexp.MustCompile(`(?m)^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+(.+?)[ \t]*$`)
 
-// detailsBlockRE matches collapsed <details> blocks, where issue refinement
-// archives the original body; their checkboxes are not live criteria (#2655).
-var detailsBlockRE = regexp.MustCompile(`(?is)<details\b.*?</details>`)
+// detailsTagRE matches an opening or closing <details> tag. Issue
+// refinement archives the original body in a collapsed <details> block;
+// its checkboxes are not live criteria (#2655).
+var detailsTagRE = regexp.MustCompile(`(?i)<(/?)details\b[^>]*>`)
+
+// stripDetails removes every <details> block from body, tracking nesting
+// depth so an archive that itself holds an archive is removed whole. An
+// unclosed <details> drops everything after it: an archived criterion left
+// live is never met, so the issue could never close.
+func stripDetails(body string) string {
+	var b strings.Builder
+	depth, last := 0, 0
+	for _, m := range detailsTagRE.FindAllStringSubmatchIndex(body, -1) {
+		if m[3] == m[2] { // opening tag
+			if depth == 0 {
+				b.WriteString(body[last:m[0]])
+			}
+			depth++
+		} else if depth > 0 {
+			depth--
+			if depth == 0 {
+				last = m[1]
+			}
+		}
+	}
+	if depth == 0 {
+		b.WriteString(body[last:])
+	}
+	return b.String()
+}
 
 // parseACs extracts checkbox acceptance criteria from an issue body in
 // order, ignoring <details> blocks and repeated criteria. Checkbox state is
@@ -105,7 +133,7 @@ var detailsBlockRE = regexp.MustCompile(`(?is)<details\b.*?</details>`)
 func parseACs(body string) []acCheckbox {
 	var out []acCheckbox
 	seen := map[string]bool{}
-	for _, m := range checkboxRE.FindAllStringSubmatch(detailsBlockRE.ReplaceAllString(body, ""), -1) {
+	for _, m := range checkboxRE.FindAllStringSubmatch(stripDetails(body), -1) {
 		text := strings.TrimSpace(m[2])
 		if text == "" {
 			continue

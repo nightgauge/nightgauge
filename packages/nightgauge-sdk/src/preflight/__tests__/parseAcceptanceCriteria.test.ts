@@ -66,4 +66,28 @@ describe("parseAcceptanceCriteria", () => {
     const acs = parseAcceptanceCriteria("- [ ]   has spaces   ");
     expect(acs[0].text).toBe("has spaces");
   });
+
+  it("skips <details> archives, nested or unclosed, and repeated criteria (#2655)", () => {
+    const body = [
+      "- [ ] One",
+      "- [x] Two",
+      "<details><summary>Original</summary>",
+      "- [ ] Archived",
+      "<details open>",
+      "- [ ] Inner",
+      "</details>",
+      "- [ ] After inner",
+      "</DETAILS>",
+      "- [ ]  One",
+      "- [ ] Three",
+      "<details>",
+      "- [ ] Unclosed",
+    ].join("\n");
+    const acs = parseAcceptanceCriteria(body);
+    expect(acs.map((a) => [a.index, a.text])).toEqual([
+      [0, "One"],
+      [1, "Two"],
+      [2, "Three"],
+    ]);
+  });
 });

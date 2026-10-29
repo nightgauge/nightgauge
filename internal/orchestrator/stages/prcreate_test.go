@@ -699,3 +699,29 @@ func TestRunner_ClosesIssueMatchesBody(t *testing.T) {
 		}
 	}
 }
+
+// #2655: a closing keyword inside untrusted criterion text or evidence must
+// not close the issue the verdicts leave open.
+func TestRenderBody_CriterionClosingKeywordDoesNotClose(t *testing.T) {
+	s := richSnap()
+	s.ACVerdicts = []ACVerdict{
+		{Index: 0, Text: "`nightgauge pr merge N` closes #42 on green", Status: ACMet, Source: ACSourceValidate, Evidence: "fixes #42"},
+		{Index: 1, Text: "resolves #42 later", Status: ACNotVerifiable, Source: ACSourceValidate, Evidence: "Closes: #42"},
+	}
+	body := RenderBody(s)
+	if got, want := BodyClosesIssue(body, 42), IssueClosedBy(s.ACVerdicts); got != want {
+		t.Errorf("body closes = %v, verdicts close = %v\n%s", got, want, body)
+	}
+	if got := AppendUnmetACs("Refs #42\n", 42, []string{"fix #42 here"}); BodyClosesIssue(got, 42) {
+		t.Errorf("AppendUnmetACs must not add a closing keyword: %q", got)
+	}
+}
+
+func TestRenderBody_NamesMissingACReconcile(t *testing.T) {
+	s := richSnap()
+	s.ACReconcileMissing = true
+	body := RenderBody(s)
+	if !strings.Contains(body, "ac-reconcile-42.json was not found") || BodyClosesIssue(body, 42) {
+		t.Errorf("missing artifact must be named and must not close:\n%s", body)
+	}
+}

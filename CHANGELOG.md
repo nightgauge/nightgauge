@@ -24,7 +24,10 @@ changelog, and the release workflow refuses a tag that does not.
   Each criterion appears once in the body: the parser ignores the original
   body that refinement archives in a `<details>` block, and drops duplicates.
   Validate evidence saying "not met" now counts as unmet. The extension's
-  fallback PR also writes `Refs #N`.
+  fallback PR also writes `Refs #N`. A closing keyword inside a criterion's text
+  or evidence is rewritten to `Refs`, nested or unclosed `<details>` archives
+  are skipped, the SDK parser matches the Go one, and a missing
+  ac-reconcile-{N}.json is named in the body instead of read as no criteria.
 
 - **Board reads cost less.** A board item's sub-issues no longer select their
   labels, which no board reader used. They were 36 of the 74 query units each

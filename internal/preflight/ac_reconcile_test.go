@@ -253,3 +253,17 @@ func TestParseACs_IgnoresDetailsAndDuplicates(t *testing.T) {
 		t.Error("fingerprint must ignore the archived block")
 	}
 }
+
+func TestParseACs_NestedAndUnclosedDetails(t *testing.T) {
+	live := "- [ ] One\n"
+	nested := "<details>\n- [ ] Outer\n<details open>\n- [ ] Inner\n</details>\n- [ ] After inner\n</details>\n- [ ] Two\n"
+	if got := parseACs(live + nested); len(got) != 2 || got[1].text != "Two" {
+		t.Errorf("nested: got %+v, want One and Two", got)
+	}
+	if got := parseACs(live + "<details>\n- [ ] Archived\n"); len(got) != 1 {
+		t.Errorf("unclosed: got %+v, want only One", got)
+	}
+	if got := parseACs("</details>\n" + live); len(got) != 1 {
+		t.Errorf("stray close: got %+v, want One", got)
+	}
+}

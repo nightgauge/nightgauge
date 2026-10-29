@@ -151,6 +151,10 @@ type PRCreateSnapshot struct {
 	// (#2595), built by ResolveACVerdicts. Unless every verdict is met
 	// (IssueClosedBy, #2655) the body says `Refs #N` instead of `Closes #N`.
 	ACVerdicts []ACVerdict
+	// ACReconcileMissing is true when ac-reconcile-{N}.json could not be
+	// read. The body then says the artifact is absent instead of blaming the
+	// issue for having no criteria.
+	ACReconcileMissing bool
 	// ACFingerprint is ac-reconcile's fingerprint of the criteria the run
 	// planned against (#2623), recorded in pr-{N}.json for the resume gate.
 	ACFingerprint string
@@ -406,6 +410,9 @@ func RenderBody(snap PRCreateSnapshot) string {
 	// Acceptance criteria (#2595, #2655): each criterion renders exactly
 	// once — met ones here, the rest under UnmetACHeading, which the
 	// post-merge hook reads (bullet lines only) to name the remainder.
+	// Criterion text and evidence are untrusted, so a closing keyword for
+	// this issue inside them is rewritten to `Refs` (#2655).
+	acText := func(s string) string { return RewriteClosesToRefs(s, snap.IssueNumber) }
 	var met []ACVerdict
 	for _, v := range snap.ACVerdicts {
 		if v.Status == ACMet {
@@ -415,9 +422,9 @@ func RenderBody(snap PRCreateSnapshot) string {
 	if len(met) > 0 {
 		b.WriteString("## Acceptance criteria\n\n")
 		for _, v := range met {
-			b.WriteString(fmt.Sprintf("- %s: %s", acStatusLabel(v.Status), v.Text))
+			b.WriteString(fmt.Sprintf("- %s: %s", acStatusLabel(v.Status), acText(v.Text)))
 			if v.Evidence != "" {
-				b.WriteString(fmt.Sprintf(" (%s: %s)", v.Source, v.Evidence))
+				b.WriteString(fmt.Sprintf(" (%s: %s)", v.Source, acText(v.Evidence)))
 			}
 			b.WriteString("\n")
 		}
@@ -426,15 +433,17 @@ func RenderBody(snap PRCreateSnapshot) string {
 	if !IssueClosedBy(snap.ACVerdicts) {
 		b.WriteString(UnmetACHeading + "\n\n")
 		open := OpenACs(snap.ACVerdicts)
-		if len(open) == 0 {
+		if len(open) == 0 && snap.ACReconcileMissing {
+			b.WriteString(fmt.Sprintf("This PR leaves #%d open: ac-reconcile-%d.json was not found, so no acceptance criteria could be verified.\n\n", snap.IssueNumber, snap.IssueNumber))
+		} else if len(open) == 0 {
 			b.WriteString(fmt.Sprintf("This PR leaves #%d open: no acceptance criteria were found to verify.\n\n", snap.IssueNumber))
 		} else {
 			b.WriteString(fmt.Sprintf("This PR leaves #%d open. These criteria are unmet or could not be verified:\n\n", snap.IssueNumber))
 			for _, v := range open {
-				b.WriteString(fmt.Sprintf("- %s\n", v.Text))
+				b.WriteString(fmt.Sprintf("- %s\n", acText(v.Text)))
 				b.WriteString(fmt.Sprintf("  _%s", acStatusLabel(v.Status)))
 				if v.Evidence != "" {
-					b.WriteString(fmt.Sprintf(" — %s: %s", v.Source, v.Evidence))
+					b.WriteString(fmt.Sprintf(" — %s: %s", v.Source, acText(v.Evidence)))
 				}
 				b.WriteString("_\n")
 			}
@@ -1054,6 +1063,9 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 		}
 		snap.ACVerdicts = ResolveACVerdicts(criteria, validateVerdicts, det)
 		snap.ACFingerprint = rec.ACFingerprint
+	} else {
+		snap.ACReconcileMissing = true
+		log.Printf("pr-create: WARNING ac-reconcile-%d.json unreadable (%v); the PR will say Refs #%d, not Closes", issueNumber, err, issueNumber)
 	}
 
 	// planning-{N}.json — picks up knowledge_path when not already set.
