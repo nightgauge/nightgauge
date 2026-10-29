@@ -110,6 +110,17 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
 
 ### Fixed
 
+- **Pipeline PRs close their issue again when the diff meets every criterion
+  (#2665).** Since #2655 a PR says `Closes #N` only when every acceptance
+  criterion is met, but criteria the diff answers resolved "not verifiable":
+  feature-validate wrote its verdicts under names pr-create does not read, so
+  every PR said `Refs #N` and left its issue open. pr-create now checks each
+  criterion against the branch diff: which files changed, what a heading
+  gained, whether a named test exists and the test run passed. An unmet answer
+  from any source keeps the issue open. "Not verifiable" is kept for criteria
+  that need a device, a deploy or an operator, and the PR names the step. A
+  criteria list stored twice renders once.
+
 - **Reading a sibling repo no longer pins a concurrent edit on the stage.**
   Worktree containment now counts only write evidence. A read-only shell
   command such as `cat` or `git diff` on a sibling file, a non-write tool that

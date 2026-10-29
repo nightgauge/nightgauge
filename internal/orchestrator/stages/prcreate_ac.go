@@ -23,6 +23,7 @@ const (
 // judgement.
 const (
 	ACSourceDeterministic = "deterministic"
+	ACSourceDiff          = "diff"
 	ACSourceValidate      = "feature-validate"
 	ACSourceNone          = "none"
 )
@@ -34,6 +35,9 @@ type ACVerdict struct {
 	Status   string `json:"status"`
 	Source   string `json:"source"`
 	Evidence string `json:"evidence,omitempty"`
+	// Step names the runtime or operator step a not_verifiable criterion
+	// needs (#2665), so the PR says what would verify it.
+	Step string `json:"step,omitempty"`
 }
 
 // NormalizeACStatus maps the verdict vocabulary feature-validate writes, and
@@ -53,17 +57,28 @@ func NormalizeACStatus(s string) string {
 
 // ResolveACVerdicts produces one verdict per criterion, in index order.
 //
-// Precedence per criterion: a deterministic `satisfied` or `unsatisfied`
-// from preflight.ReconcileACs on the branch tree wins, because it was
-// checked rather than judged. Otherwise feature-validate's verdict decides.
-// With neither, the criterion is not verifiable.
-func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.ACReconcileResult) []ACVerdict {
+// Each criterion gathers up to three answers: the deterministic tree
+// reconcile (preflight.ReconcileACs), the diff verifier (diffCheck, nil when
+// no diff was collected), and feature-validate's verdict. An unmet from any
+// source wins, so a heuristic met can never close an issue another source
+// judged unmet (#2665). Otherwise any met wins, cited from the first of
+// deterministic, diff, validate. Otherwise the criterion is not verifiable,
+// with the runtime step named when the diff verifier found one.
+//
+// Validate verdicts are matched by criterion text first and by index only
+// when they carry no text, so a 1-based or reordered list cannot misfile one.
+func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.ACReconcileResult, diffCheck ACDiffChecker) []ACVerdict {
 	if len(criteria) == 0 {
 		return nil
 	}
+	byText := make(map[string]ACVerdict, len(validate))
 	byIndex := make(map[int]ACVerdict, len(validate))
 	for _, v := range validate {
-		byIndex[v.Index] = v
+		if key := preflight.NormalizeACText(v.Text); key != "" {
+			byText[key] = v
+		} else {
+			byIndex[v.Index] = v
+		}
 	}
 	detByIndex := map[int]preflight.ReconciledCriterion{}
 	if det != nil {
@@ -74,25 +89,59 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 
 	out := make([]ACVerdict, 0, len(criteria))
 	for i, text := range criteria {
-		v := ACVerdict{Index: i, Text: text, Status: ACNotVerifiable, Source: ACSourceNone}
+		var cands []ACVerdict
 		if c, ok := detByIndex[i]; ok && (c.Classification == preflight.ACSatisfied || c.Classification == preflight.ACUnsatisfied) {
-			v.Status = NormalizeACStatus(c.Classification)
-			v.Source = ACSourceDeterministic
-			v.Evidence = strings.Join(c.Evidence, ", ")
-			if v.Evidence == "" {
-				v.Evidence = c.Reason
+			ev := strings.Join(c.Evidence, ", ")
+			if ev == "" {
+				ev = c.Reason
 			}
-		} else if val, ok := byIndex[i]; ok {
-			v.Status = NormalizeACStatus(val.Status)
-			v.Source = ACSourceValidate
-			v.Evidence = strings.TrimSpace(val.Evidence)
+			cands = append(cands, ACVerdict{Status: NormalizeACStatus(c.Classification), Source: ACSourceDeterministic, Evidence: ev})
+		}
+		if diffCheck != nil {
+			if r, ok := diffCheck(text); ok {
+				cands = append(cands, ACVerdict{Status: r.Status, Source: ACSourceDiff, Evidence: r.Evidence, Step: r.Step})
+			}
+		}
+		val, ok := byText[preflight.NormalizeACText(text)]
+		if !ok {
+			val, ok = byIndex[i]
+		}
+		if ok {
+			v := ACVerdict{Status: NormalizeACStatus(val.Status), Source: ACSourceValidate, Evidence: strings.TrimSpace(val.Evidence)}
 			if v.Status == ACNotVerifiable && negativeEvidenceRE.MatchString(v.Evidence) {
 				v.Status = ACUnmet
 			}
+			cands = append(cands, v)
 		}
+
+		v := ACVerdict{Status: ACNotVerifiable, Source: ACSourceNone, Evidence: "no rule or verdict could check this criterion"}
+		if r, ok := firstACStatus(cands, ACUnmet); ok {
+			v = r
+		} else if r, ok := firstACStatus(cands, ACMet); ok {
+			v = r
+		} else if len(cands) > 0 {
+			// Every answer is not_verifiable: prefer the one naming a step.
+			v = cands[len(cands)-1]
+			for _, c := range cands {
+				if c.Step != "" {
+					v = c
+					break
+				}
+			}
+		}
+		v.Index, v.Text = i, text
 		out = append(out, v)
 	}
 	return out
+}
+
+func firstACStatus(cands []ACVerdict, status string) (ACVerdict, bool) {
+	for _, c := range cands {
+		if c.Status == status {
+			return c, true
+		}
+	}
+	return ACVerdict{}, false
 }
 
 // negativeEvidenceRE matches validate evidence that says the criterion is

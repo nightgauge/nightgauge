@@ -29,12 +29,16 @@ full canonical form.
 | `AC_COMPLETION_STATUS` | `passed`, `failed`, `skipped`, `not_applicable`, `error`                                       |
 | `NOTES`                | A plain string (not a JSON array). Use newlines for multiple notes. Pass empty string if none. |
 
-### Step 6.0: Acceptance-criterion verdicts (#2595)
+### Step 6.0: Acceptance-criterion verdicts (#2595, #2665)
 
-pr-create decides `Closes #N` versus `Refs #N` from these verdicts, so a PR
-that delivers one of three criteria no longer closes the issue as Done. For
-each criterion in `ac-reconcile-{N}.json` (`.acceptance_criteria[]`, in index
-order), judge it against `git diff <base>...HEAD` and record one entry:
+pr-create decides `Closes #N` versus `Refs #N` from these verdicts and its own
+deterministic diff check. For each criterion in `ac-reconcile-{N}.json`
+(`.acceptance_criteria[]`, in index order), judge it against
+`git diff <base>...HEAD` and record one entry in `acceptance_criteria_verdicts`
+as `{index, text, status, evidence}`: `index` is the 0-based index from
+`ac-reconcile-{N}.json`, `text` is that criterion's text copied verbatim, and
+`status` is one of the values below. pr-create ignores any other shape: do not
+write the key `acceptance_criteria`, a `verdict` field, or 1-based indexes.
 
 - `met`: the diff satisfies it. `evidence` must name a `file:line` or a test
   name; without one, the verdict is `not_verifiable`.
@@ -42,10 +46,11 @@ order), judge it against `git diff <base>...HEAD` and record one entry:
 - `not_verifiable`: it cannot be judged from the diff (an operator action,
   a post-merge observation).
 
-Only `unmet` keeps the issue open, so do not mark a criterion `unmet` because
-it is hard to verify, and do not mark it `met` on intent. A deterministic
-`satisfied`/`unsatisfied` re-run by pr-create overrides your verdict. With no
-`ac-reconcile-{N}.json`, leave the array empty.
+The issue closes only when every criterion resolves `met` (#2655), and an
+`unmet` from any source wins. So do not mark a criterion `unmet` because it is
+hard to verify, and do not mark it `met` on intent. A `met` from pr-create's
+diff check or tree re-run lifts your `not_verifiable`; it never lifts your
+`unmet`. With no `ac-reconcile-{N}.json`, leave the array empty.
 
 ```bash
 # One object per criterion: {index, text, status, evidence}

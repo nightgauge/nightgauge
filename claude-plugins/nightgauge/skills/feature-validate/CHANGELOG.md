@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Step 6.0 names the verdict shape pr-create reads (#2665).** Verdicts go in
+  `acceptance_criteria_verdicts` as `{index, text, status, evidence}` with the
+  0-based index and verbatim text from `ac-reconcile-{N}.json`; the step no
+  longer says only `unmet` keeps the issue open. Skill version 1.23.0.
+
 ### Added
 
 - **Out-of-scope findings are recorded (#479).** Pre-existing test failures and

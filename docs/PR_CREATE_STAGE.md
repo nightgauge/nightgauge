@@ -200,18 +200,48 @@ The deterministic-property test calls each function 100× and asserts
 byte-equal output across calls. (The run id is read from
 `NIGHTGAUGE_RUN_ID` by the context loader, not by `RenderBody`.)
 
-### Acceptance criteria and partial delivery (#2595, #2655)
+### Acceptance criteria and partial delivery (#2595, #2655, #2665)
 
 The criteria come from `ac-reconcile-{N}.json`, which planning's preflight
-wrote from the issue body. `ResolveACVerdicts` (`prcreate_ac.go`) gives each
-one a status:
+wrote from the issue body. pr-create drops repeated criteria from that list,
+so a list a pre-#2655 parser doubled still renders each criterion once.
+`ResolveACVerdicts` (`prcreate_ac.go`) gathers up to three answers per
+criterion:
 
-1. A deterministic `satisfied` or `unsatisfied` from `preflight.ReconcileACs`,
-   re-run on the branch tree, wins.
-2. Otherwise, the verdict feature-validate wrote in `validate-{N}.json`
-   `acceptance_criteria_verdicts` decides.
-   Evidence that says the criterion is not met resolves `unmet`.
-3. With neither, the criterion is `not_verifiable`.
+- `deterministic`: a `satisfied` or `unsatisfied` from
+  `preflight.ReconcileACs`, re-run on the branch tree.
+- `diff`: `VerifyACAgainstDiff` (`prcreate_acdiff.go`), run against the
+  working tree diffed with the merge base of `origin/<base>` (or `<base>`) and
+  HEAD, plus untracked deliverable files. Uncommitted work counts, because
+  pr-create reads context before its commit owner runs.
+- `feature-validate`: the verdict in `validate-{N}.json`
+  `acceptance_criteria_verdicts`, matched by criterion text, or by `index`
+  only when the verdict has no text. Evidence that says the criterion is not
+  met resolves `unmet`.
+
+Any `unmet` wins, so a diff heuristic never closes an issue another source
+judged unmet. Otherwise any `met` wins, cited from the first of deterministic,
+diff and validate. Otherwise the criterion is `not_verifiable`.
+
+The diff verifier first rejects criteria that need a runtime or operator step:
+a physical device, production, a deploy, a release, a manual or operator step,
+a credential, a live API call, a post-merge observation or a live run. They
+stay `not_verifiable`, and the row reads `_❔ not verifiable — needs: <step>_`.
+Otherwise it splits the criterion at `, and` and `;` and gives each clause to
+the first rule that reads it. A clause no rule reads is skipped. The worst
+clause decides.
+
+| Rule       | Reads                                         | `met` when                                                                                                                                                  |
+| ---------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| scope      | "no file other than `X`", "only `X` changes"  | every changed file is a named path, or under a named `dir/`                                                                                                 |
+| unchanged  | "unchanged", "not modified"                   | a named path is not in the diff; for named headings, the diff deletes nothing and adds nothing under any heading not qualified by "existing"                |
+| test       | `TestX`, `test_x`, `` `it("…")` ``            | the test is defined on the branch and the stage's test run passed (feature-validate, else a clean feature-dev run); evidence cites the test and `file:line` |
+| section    | a diffed path plus backticked `## …` headings | an added line in that file sits beneath the headings and carries the clause's code spans and `#NNN` refs                                                    |
+| token/file | code spans and `#NNN` refs                    | every one appears in the added lines (of the named diffed file, when one is named)                                                                          |
+
+A missing token is `unmet` only when the clause names a diffed file. With no
+diffed file named, the clause is skipped, because it may be about something
+the diff does not hold.
 
 `IssueClosedBy` writes `Closes #<N>` only when there is at least one criterion
 and every one is `met`. Any `unmet` or `not_verifiable` criterion, or no

@@ -6,7 +6,7 @@ description: Create a pull request with correct base/head, issue linkage, valida
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.24.0"
+  version: "1.25.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 inputs:
@@ -103,9 +103,12 @@ phase node alongside the orchestrated stages.
   rely on `Closes #epic` alone. Closing only the epic leaves the subs OPEN, and
   the autonomous picker re-spawns them into conflicting PRs. (The post-merge
   reconciler closes such orphans as a backstop, but the PR body is the cheap fix.)
-- **`Closes #N` only when every criterion is met (#2595, #2655).** Unless
-  every entry in `validate-{N}.json` `acceptance_criteria_verdicts` is `met`
-  (any `unmet` or `not_verifiable`, or no criteria at all), write `Refs #N`
+- **`Closes #N` only when every criterion is met (#2595, #2655).** The
+  deterministic runner resolves each criterion from the branch diff, the tree
+  re-run and `validate-{N}.json` `acceptance_criteria_verdicts`, with any
+  `unmet` winning (#2665); use its verdicts when `pr-{N}.json` has them. Unless
+  every criterion is `met` (any `unmet` or `not_verifiable`, or no criteria at
+  all), write `Refs #N`
   and list each open criterion once under
   `## ⚠️ Unmet acceptance criteria`; post-merge then leaves the issue open and
   returns it to Ready. Do not write "close #N" anywhere in such a body: GitHub
