@@ -484,4 +484,31 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
     expect(result.success).toBe(true);
     expect(stderr.join("")).toContain("sibling: src/router.ts");
   });
+
+  it("does not let a rejected Task poison the write record (#2660)", async () => {
+    const { proc, completed, stderr } = await runStage();
+    const task = emitAssistantToolUse(proc, "Task", { subagent_type: "nope" });
+    proc.stdout!.emit(
+      "data",
+      Buffer.from(
+        JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: task, is_error: true, content: "x" }],
+          },
+        }) + "\n"
+      )
+    );
+    const own = path.join(worktree, "src", "handlers.ts");
+    emitAssistantToolUse(proc, "Write", { file_path: own, content: "// stage work\n" });
+    fs.writeFileSync(own, "// stage work\n");
+    fs.writeFileSync(path.join(sibling, "src", "router.ts"), "// concurrent edit\n");
+
+    proc.emit("close", 0);
+    const result = await completed;
+
+    expect(result.success).toBe(true);
+    expect(stderr.join("")).toContain("sibling: src/router.ts");
+  });
 });

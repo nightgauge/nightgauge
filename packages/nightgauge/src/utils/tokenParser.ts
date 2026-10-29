@@ -241,6 +241,12 @@ export interface ParsedStreamMessage {
    */
   toolUseId?: string;
   /**
+   * The `Task`/`Agent` call the singular {@link toolName} call ran under, from
+   * the line's top-level `parent_tool_use_id` (#2660). Carried on the singular
+   * shape too, so a nested call links whichever shape delivers it (#169).
+   */
+  parentToolUseId?: string;
+  /**
    * All tool_use blocks in an assistant message, in document order (Issue #3760).
    * The Claude CLI delivers tool calls inside complete `assistant` messages
    * (not `content_block_start` events), so `toolName`/`toolInput` above — which
@@ -515,6 +521,11 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
 
     // #559: a Grok `tool_call`. Its `tool_call_update` lines carry no toolName
     // and fall through to the generic return below with no tool.
+    const lineParentToolUseId =
+      typeof parsed.parent_tool_use_id === "string" && parsed.parent_tool_use_id
+        ? (parsed.parent_tool_use_id as string)
+        : undefined;
+
     if (parsed.type === "tool_call") {
       const call = grokToolCall(parsed);
       return call
@@ -523,6 +534,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
             toolName: call.name,
             toolInput: call.input,
             ...(call.id !== undefined ? { toolUseId: call.id } : {}),
+            ...(lineParentToolUseId ? { parentToolUseId: lineParentToolUseId } : {}),
           }
         : { type: "tool_call" };
     }
@@ -538,6 +550,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
         ...(typeof parsed.content_block.id === "string"
           ? { toolUseId: parsed.content_block.id }
           : {}),
+        ...(lineParentToolUseId ? { parentToolUseId: lineParentToolUseId } : {}),
       };
     }
 
@@ -647,10 +660,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       if (Array.isArray(contentBlocks)) {
         const textParts: string[] = [];
         const toolUses: ToolCall[] = [];
-        const parentToolUseId =
-          typeof parsed.parent_tool_use_id === "string" && parsed.parent_tool_use_id
-            ? (parsed.parent_tool_use_id as string)
-            : undefined;
+        const parentToolUseId = lineParentToolUseId;
         for (const block of contentBlocks) {
           if (block.type === "text" && typeof block.text === "string") {
             textParts.push(block.text);
@@ -738,6 +748,7 @@ export function collectToolCalls(parsed: ParsedStreamMessage | null): ToolCall[]
       name: parsed.toolName,
       input: parsed.toolInput,
       ...(parsed.toolUseId !== undefined ? { id: parsed.toolUseId } : {}),
+      ...(parsed.parentToolUseId !== undefined ? { parentToolUseId: parsed.parentToolUseId } : {}),
     });
   }
   for (const t of parsed.toolUses ?? []) {

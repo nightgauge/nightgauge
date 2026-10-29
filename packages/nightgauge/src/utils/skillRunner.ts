@@ -7413,7 +7413,12 @@ function runStageSkillHeadlessImpl(
     // processed as they arrive: double-counting an id-less call is a lesser
     // harm than dropping it. Same rule the bash ring already uses (#156).
     if (id !== undefined) {
-      if (seenToolUseIds.has(id)) return false;
+      if (seenToolUseIds.has(id)) {
+        // The first delivery may have lacked the parent id this one carries;
+        // dropping it would count the parent delegation silent (#2660).
+        if (parentToolUseId) stageWriteRecord?.observeNestedCall(parentToolUseId);
+        return false;
+      }
       seenToolUseIds.add(id);
     }
 
@@ -7914,6 +7919,8 @@ function runStageSkillHeadlessImpl(
         // what makes a batched envelope safe to iterate: each block finds its
         // own call.
         recentBashRing.observeToolResult(toolResult.toolUseId, toolResult.isError);
+        // Containment attribution (#2660): a rejected delegation wrote nothing.
+        stageWriteRecord?.observeToolResult(toolResult.toolUseId, toolResult.isError);
         // All-tools call log (Issue #144).
         toolCallLog.observeToolResult(
           toolResult.toolUseId,

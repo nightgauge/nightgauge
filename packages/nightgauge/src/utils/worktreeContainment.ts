@@ -984,9 +984,7 @@ export class StageWriteRecord {
     ids: { id?: string; parentToolUseId?: string } = {}
   ): void {
     this.observed++;
-    if (ids.parentToolUseId && this.delegations.has(ids.parentToolUseId)) {
-      this.delegations.set(ids.parentToolUseId, true);
-    }
+    if (ids.parentToolUseId) this.observeNestedCall(ids.parentToolUseId);
     // Only write evidence is recorded (#2659): reading a sibling file is not
     // writing it, and a read naming the path a concurrent edit then dirtied
     // would otherwise misattribute it.
@@ -1022,6 +1020,25 @@ export class StageWriteRecord {
       if (typeof v === "string") record(v);
       else if (Array.isArray(v)) record(v.filter((x) => typeof x === "string").join(" "));
     }
+  }
+
+  /**
+   * Link a nested call to the `Task`/`Agent` call it ran under. Separate from
+   * {@link observeToolUse} so a call delivered in both stream shapes, and
+   * deduped by the caller, still links when only the later delivery carried
+   * the parent id.
+   */
+  observeNestedCall(parentToolUseId: string): void {
+    if (this.delegations.has(parentToolUseId)) this.delegations.set(parentToolUseId, true);
+  }
+
+  /**
+   * A delegation whose tool_result is an error, with no nested call linked to
+   * it, never ran: the harness rejected it (unknown `subagent_type`, a denied
+   * call). It wrote nothing, so it must not mark the record incomplete.
+   */
+  observeToolResult(toolUseId: string, isError: boolean): void {
+    if (isError && this.delegations.get(toolUseId) === false) this.delegations.delete(toolUseId);
   }
 
   /** True when the record can be trusted to name every stage write. */

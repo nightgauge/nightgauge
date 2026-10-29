@@ -128,7 +128,9 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
   concurrent edit. Nested calls are now linked to their delegation by
   `parent_tool_use_id`; a delegation with none, or a record past its new 4 MiB
   total cap, falls back to filesystem-diff attribution, and the failure says
-  why instead of always claiming the adapter supplied no record.
+  why instead of always claiming the adapter supplied no record. A delegation
+  the harness rejected (errored result, no nested calls) wrote nothing and does
+  not count, and the link holds whichever stream shape delivers the nested call.
 
 - **Reading a sibling repo no longer pins a concurrent edit on the stage.**
   Worktree containment now counts only write evidence. A read-only shell

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseStreamJsonLine } from "../../src/utils/tokenParser";
+import { collectToolCalls, parseStreamJsonLine } from "../../src/utils/tokenParser";
 
 /**
  * `last_bash_exit` is the companion anchor to `last_bash_command`: it answers
@@ -110,5 +110,18 @@ describe("parseStreamJsonLine — parent_tool_use_id propagation (#2660)", () =>
       })
     );
     expect(parsed?.toolUses?.[0]).not.toHaveProperty("parentToolUseId");
+  });
+
+  it("carries parent_tool_use_id on the singular content_block_start shape", () => {
+    const parsed = parseStreamJsonLine(
+      JSON.stringify({
+        type: "content_block_start",
+        parent_tool_use_id: "toolu_task",
+        content_block: { type: "tool_use", id: "a", name: "Write", input: {} },
+      })
+    );
+    expect(collectToolCalls(parsed)).toEqual([
+      { name: "Write", input: {}, id: "a", parentToolUseId: "toolu_task" },
+    ]);
   });
 });

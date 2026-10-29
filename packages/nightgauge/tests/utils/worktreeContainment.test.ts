@@ -889,6 +889,28 @@ describe("sub-agent calls and an honest write record (#2660)", () => {
     expect(record.unavailableReason).toContain("write record incomplete: 1 sub-agent call(s)");
   });
 
+  it("stays available when a Task was rejected and its tool_result errored", () => {
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Task", { subagent_type: "nope" }, { id: "t1" });
+    record.observeToolResult("t1", true);
+    expect(record.available).toBe(true);
+  });
+
+  it("stays unavailable when a silent Task's tool_result succeeded", () => {
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Task", { prompt: "go" }, { id: "t1" });
+    record.observeToolResult("t1", false);
+    expect(record.available).toBe(false);
+  });
+
+  it("links a nested call reported only by a later, deduped delivery", () => {
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Task", { prompt: "go" }, { id: "t1" });
+    record.observeToolUse("Write", { file_path: path.join(worktree, "a.ts") }, { id: "w1" });
+    record.observeNestedCall("t1");
+    expect(record.available).toBe(true);
+  });
+
   it("is unavailable when a delegation carries no id", () => {
     const record = new StageWriteRecord(worktree);
     record.observeToolUse("Agent", { prompt: "go" });
