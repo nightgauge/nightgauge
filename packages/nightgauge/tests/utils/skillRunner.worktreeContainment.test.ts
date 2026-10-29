@@ -365,6 +365,37 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
     );
   });
 
+  it.each([
+    [
+      "a read-only shell command",
+      "Bash",
+      (t: string) => ({ command: `cat ${t} && git diff ${t}` }),
+    ],
+    ["an unlisted tool carrying a path", "mcp__fs__read_text_file", (t: string) => ({ path: t })],
+    [
+      "a bare repo basename",
+      "Bash",
+      () => ({ command: "sibling --version && echo x > src/router.ts" }),
+    ],
+  ])(
+    "does not fail a stage on a concurrent sibling edit named only by %s (#2659)",
+    async (_label, tool, input) => {
+      const { proc, completed, stderr } = await runStage();
+      const target = path.join(sibling, "src", "router.ts");
+      emitToolUse(proc, tool, input(target));
+      fs.writeFileSync(target, "// concurrent edit\n");
+
+      proc.emit("close", 0);
+      const result = await completed;
+
+      expect(result.success).toBe(true);
+      const out = stderr.join("");
+      expect(out).toContain("[containment-ambiguous]");
+      expect(out).toContain("sibling: src/router.ts");
+      expect(out).not.toContain(CONTAINMENT_ERROR_MARKER);
+    }
+  );
+
   it("still fails and preserves a sibling write the stage's tool calls name (#2656)", async () => {
     const { proc, completed } = await runStage();
     const target = path.join(sibling, "src", "handlers.ts");

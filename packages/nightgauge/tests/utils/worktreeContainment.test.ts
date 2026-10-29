@@ -962,6 +962,75 @@ describe("a concurrent edit is not the stage's write (#2656)", () => {
     expect(read.names(roots, "src/router.ts")).toBe(false);
   });
 
+  it("does not attribute a read-only shell command that names a sibling path (#2659)", () => {
+    const roots = [sibling];
+    for (const command of [
+      `cat ${sibling}/src/router.ts`,
+      `git -C ${sibling} diff src/router.ts`,
+      "git -C ../../../sibling diff src/router.ts",
+      "cd ../../../sibling && cat src/router.ts | head -5",
+      `grep -n route ${sibling}/src/router.ts 2>/dev/null`,
+    ]) {
+      const record = new StageWriteRecord(worktree);
+      record.observeToolUse("Bash", { command });
+      expect(record.available).toBe(true);
+      expect(record.names(roots, "src/router.ts"), command).toBe(false);
+    }
+  });
+
+  it("does not attribute a path carried by a tool that is not a write tool (#2659)", () => {
+    const record = new StageWriteRecord(worktree);
+    const target = path.join(sibling, "src", "router.ts");
+    record.observeToolUse("mcp__fs__read_text_file", { path: target });
+    record.observeToolUse("NotebookRead", { notebook_path: target });
+    record.observeToolUse("view_image", { file_path: target });
+    expect(record.available).toBe(true);
+    expect(record.names([sibling], "src/router.ts")).toBe(false);
+  });
+
+  it("does not treat a bare word equal to the repo name as a mention of the repo (#2659)", () => {
+    const record = new StageWriteRecord(worktree);
+    record.observeToolUse("Bash", { command: "sibling layout path plans && touch src/router.ts" });
+    expect(record.names([sibling], "src/router.ts")).toBe(false);
+    const cd = new StageWriteRecord(worktree);
+    cd.observeToolUse("Bash", { command: "cd sibling && touch src/router.ts" });
+    expect(cd.names([sibling], "src/router.ts")).toBe(true);
+  });
+
+  it("still attributes genuine sibling writes through shell and patch tools (#2659)", () => {
+    const roots = [sibling];
+    const cases: Array<[string, unknown]> = [
+      ["Edit", { file_path: path.join(sibling, "src", "router.ts") }],
+      ["Bash", { command: `cat x | tee ${sibling}/src/router.ts` }],
+      ["Bash", { command: "cd ../../../sibling && git status && echo x >> src/router.ts" }],
+      ["Bash", { command: `cat > ${sibling}/src/router.ts <<'EOF'\nx\nEOF` }],
+      ["Bash", { command: `cp a.ts ${sibling}/src/router.ts` }],
+      ["apply_patch", { input: `*** Update File: ${sibling}/src/router.ts\n` }],
+    ];
+    for (const [tool, input] of cases) {
+      const record = new StageWriteRecord(worktree);
+      record.observeToolUse(tool, input);
+      expect(record.names(roots, "src/router.ts"), JSON.stringify(input)).toBe(true);
+    }
+  });
+
+  it("warns, never fails, when the stage only read a sibling file someone else then edited (#2659)", async () => {
+    const baseline = await baselineFor();
+    const record = worktreeOnlyRecord();
+    record.observeToolUse("Bash", { command: `cat ${sibling}/README.md` });
+    fs.writeFileSync(path.join(sibling, "README.md"), "operator edit\n");
+
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 2659,
+      writeRecord: record,
+    });
+
+    expect(report.breaches).toEqual([]);
+    expect(report.warnings[0].unattributedPaths).toEqual(["README.md"]);
+  });
+
   it("splits a mixed repo: the named path fails and is patched, the rest is listed as not attributed", async () => {
     const baseline = await baselineFor();
     const record = worktreeOnlyRecord();
