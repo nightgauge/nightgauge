@@ -46,13 +46,19 @@ vi.mock("../../src/services/BinaryResolver", () => ({
 
 // Mutable state shared between the hoisted factory and tests.
 // vi.hoisted ensures these are initialized before vi.mock factories run.
-const { prViewCallCount, prViewMergeAfter, issueStateClosed } = vi.hoisted(() => ({
-  prViewCallCount: { value: 0 },
-  prViewMergeAfter: { value: Infinity },
-  // When true, gh issue view --json state -q .state returns "CLOSED"
-  // so reconcileCompletionSideEffects sees the issue as successfully closed.
-  issueStateClosed: { value: false },
-}));
+const { prViewCallCount, prViewMergeAfter, issueStateClosed, mergedPrs, gitLog, ghCalls } =
+  vi.hoisted(() => ({
+    // #2689: when set, `gh pr list --state merged` returns this list.
+    mergedPrs: { value: null as null | Array<Record<string, unknown>> },
+    // #2689: stdout for `git log main --grep=#N`.
+    gitLog: { value: "" },
+    ghCalls: [] as string[][],
+    prViewCallCount: { value: 0 },
+    prViewMergeAfter: { value: Infinity },
+    // When true, gh issue view --json state -q .state returns "CLOSED"
+    // so reconcileCompletionSideEffects sees the issue as successfully closed.
+    issueStateClosed: { value: false },
+  }));
 
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
@@ -68,6 +74,7 @@ vi.mock("child_process", async () => {
 
   const execFileMock: any = vi.fn();
   execFileMock[kCustom] = (cmd: string, args: string[]) => {
+    if (cmd === "gh" && args) ghCalls.push(args);
     // #3266: the binary's pr-merge gate. Substitute for gh polling in the
     // refactored verifyPostMergeState. cmd is the binary path; args are
     // ["gate", "verify", "pr-merge", N, ...].
@@ -86,6 +93,12 @@ vi.mock("child_process", async () => {
       err.stdout = stdout;
       err.stderr = "";
       return Promise.reject(err);
+    }
+    if (args && args[0] === "pr" && args[1] === "list" && mergedPrs.value) {
+      return Promise.resolve({ stdout: JSON.stringify(mergedPrs.value), stderr: "" });
+    }
+    if (cmd === "git" && args && args[0] === "log") {
+      return Promise.resolve({ stdout: gitLog.value, stderr: "" });
     }
     if (args && args[0] === "pr") {
       // Issue #3782: pre-merge guard queries mergeStateStatus before the skill
@@ -219,6 +232,8 @@ describe("HeadlessOrchestrator post-merge verification (Issue #3132)", () => {
     // Reset pr-view call counter and merge threshold
     prViewCallCount.value = 0;
     prViewMergeAfter.value = Infinity; // default: always OPEN (never merges)
+    mergedPrs.value = null;
+    gitLog.value = "";
     issueStateClosed.value = false; // default: issue stays OPEN (reconcile not needed)
 
     mockLogger = {
@@ -346,5 +361,81 @@ describe("HeadlessOrchestrator post-merge verification (Issue #3132)", () => {
     expect(verifyError).toBeUndefined();
 
     expect(result.success).toBe(true);
+  });
+});
+
+describe("reconcileCompletionSideEffects closing keyword (#2689)", () => {
+  let mockLogger: Logger;
+
+  beforeEach(() => {
+    ghCalls.length = 0;
+    mergedPrs.value = null;
+    gitLog.value = "";
+    issueStateClosed.value = false;
+    mockLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as Logger;
+  });
+
+  async function reconcile() {
+    const orchestrator = new HeadlessOrchestrator(createMockStateService(), mockLogger, {
+      contextFileWaitMs: 0,
+    });
+    return (orchestrator as any).reconcileCompletionSideEffects(2689);
+  }
+
+  function issueCloseArgs(): string[][] {
+    return ghCalls.filter((a) => a[0] === "issue" && a[1] === "close");
+  }
+
+  it("a Refs #N merge leaves the issue open by design, not failed", async () => {
+    mergedPrs.value = [
+      { number: 2700, title: "fix(#2689): thing", body: "Refs #2689", baseRefName: "main" },
+    ];
+    const result = await reconcile();
+    expect(issueCloseArgs()).toEqual([]);
+    expect(result).toMatchObject({
+      verified: true,
+      issueClosed: false,
+      openByDesign: true,
+      mergedPrNumber: 2700,
+    });
+    expect(result.error).toBeUndefined();
+    const info = vi.mocked(mockLogger.info).mock.calls.map((c) => String(c[0]));
+    expect(info.some((m) => m.includes("stays open by design"))).toBe(true);
+  });
+
+  it("a Closes #N merge closes the issue citing the PR", async () => {
+    mergedPrs.value = [
+      { number: 2701, title: "fix(#2684): other (#2689)", body: "Refs #2689", baseRefName: "main" },
+      { number: 2702, title: "fix(#2689): thing", body: "Closes #2689", baseRefName: "main" },
+    ];
+    await reconcile();
+    const closes = issueCloseArgs();
+    expect(closes).toHaveLength(1);
+    expect(closes[0]).toContain("2689");
+    expect(closes[0].join(" ")).toContain("merged PR #2702");
+  });
+
+  it("a Refs #N commit on main without a PR closes nothing", async () => {
+    mergedPrs.value = [];
+    gitLog.value =
+      "abc1234\x1ffix: thing\x1ffix: thing\n\nRefs #2689\n\x1e" +
+      "def5678\x1ffix: other\x1ffix: other\n\nCloses #26890\n\x1e";
+    const result = await reconcile();
+    expect(issueCloseArgs()).toEqual([]);
+    expect(result.issueClosed).toBe(false);
+  });
+
+  it("a Closes #N commit on main closes the issue", async () => {
+    mergedPrs.value = [];
+    gitLog.value = "abc1234\x1ffix: thing\x1ffix: thing\n\nCloses #2689\n\x1e";
+    await reconcile();
+    const closes = issueCloseArgs();
+    expect(closes).toHaveLength(1);
+    expect(closes[0].join(" ")).toContain("Commit: abc1234 fix: thing");
   });
 });

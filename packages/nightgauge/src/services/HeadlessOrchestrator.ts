@@ -27,6 +27,12 @@ import {
   pipelineStateDir,
   PIPELINE_STATE_DISPLAY,
 } from "../utils/cloneLayout";
+import {
+  mentionsIssue,
+  pickMergedPRForIssue,
+  prBodyClosesIssue,
+  type MergedPRRecord,
+} from "../utils/prDetection";
 import { exec, execFile } from "child_process";
 import { promisify } from "util";
 
@@ -561,6 +567,8 @@ interface CompletionReconciliationResult {
   epicSweepClosed?: number;
   /** True when issue intentionally stays open (epic sub-issue deferred to epic merge). */
   epicDeferred?: boolean;
+  /** True when a merged PR only references the issue (e.g. `Refs #N`), so it stays open (#2689). */
+  openByDesign?: boolean;
   error?: string;
 }
 
@@ -8824,6 +8832,45 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     return false;
   }
 
+  /**
+   * Merged PRs that reference `issueNumber` in title or body. The search hit
+   * is only a candidate set; references are re-checked locally (#2689).
+   */
+  private async listMergedPRsForIssue(
+    issueNumber: number,
+    ghExecOptions: { encoding: "utf-8"; cwd: string; timeout: number; env: NodeJS.ProcessEnv }
+  ): Promise<MergedPRRecord[]> {
+    const { stdout } = await execFileAsync(
+      "gh",
+      [
+        "pr",
+        "list",
+        "--state",
+        "merged",
+        "--search",
+        `#${issueNumber}`,
+        "--limit",
+        "50",
+        "--json",
+        "number,title,body,baseRefName,headRefName",
+        ...this.ghRepoArgs(),
+      ],
+      ghExecOptions
+    );
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout.toString());
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(parsed)) return [];
+    return (parsed as MergedPRRecord[]).filter(
+      (pr) =>
+        typeof pr?.number === "number" &&
+        mentionsIssue(`${pr.title ?? ""}\n${pr.body ?? ""}`, issueNumber)
+    );
+  }
+
   private async reconcileCompletionSideEffects(
     issueNumber: number
   ): Promise<CompletionReconciliationResult> {
@@ -8853,6 +8900,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // A `state.json` rung sat ahead of these until #471. Nothing writes that
     // file, so it contributed "" on every run and issue-{N}.json was always the
     // real primary source — this is the same ladder with the dead rung removed.
+    let mergedPRs: MergedPRRecord[] | undefined;
     try {
       const fs = require("fs");
       // Primary source: issue-{N}.json (if it still exists)
@@ -8878,24 +8926,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // Fallback: search for the merged PR's base branch via GitHub API.
       if (!baseBranch.startsWith("epic/")) {
         try {
-          const { stdout: prBaseRaw } = await execFileAsync(
-            "gh",
-            [
-              "pr",
-              "list",
-              "--state",
-              "merged",
-              "--search",
-              `#${issueNumber} in:title`,
-              "--json",
-              "baseRefName",
-              "-q",
-              ".[0].baseRefName",
-              ...this.ghRepoArgs(),
-            ],
-            ghExecOptions
-          );
-          const prBase = prBaseRaw.trim();
+          mergedPRs ??= await this.listMergedPRsForIssue(issueNumber, ghExecOptions);
+          const prBase = pickMergedPRForIssue(issueNumber, mergedPRs)?.baseRefName ?? "";
           if (prBase?.startsWith("epic/")) {
             baseBranch = prBase;
           }
@@ -8937,24 +8969,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // runs after every epic sub-issue merge.
         // @see Issue #1452 — stale feat/1462-* branch left on remote
         try {
-          const { stdout: headRefRaw } = await execFileAsync(
-            "gh",
-            [
-              "pr",
-              "list",
-              "--state",
-              "merged",
-              "--search",
-              `#${issueNumber} in:title`,
-              "--json",
-              "headRefName",
-              "-q",
-              ".[0].headRefName",
-              ...this.ghRepoArgs(),
-            ],
-            ghExecOptions
-          );
-          const headRef = headRefRaw.trim();
+          mergedPRs ??= await this.listMergedPRsForIssue(issueNumber, ghExecOptions);
+          const headRef = pickMergedPRForIssue(issueNumber, mergedPRs)?.headRefName ?? "";
           if (headRef && headRef.startsWith("feat/")) {
             // Check if remote ref still exists (GitHub auto-deletes head branches)
             let refExists = false;
@@ -9072,49 +9088,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     let mergedPrNumber: number | undefined;
     if (issueState === "OPEN") {
       try {
-        // Primary: search for closing keywords ("closes #N", "fixes #N")
-        const { stdout: primaryRaw } = await execFileAsync(
-          "gh",
-          [
-            "pr",
-            "list",
-            "--state",
-            "merged",
-            "--search",
-            `closes #${issueNumber}`,
-            "--json",
-            "number",
-            "-q",
-            ".[0].number",
-            ...this.ghRepoArgs(),
-          ],
-          ghExecOptions
-        );
-        let mergedPr = primaryRaw.trim();
-        // Fallback: search for issue number in PR title (e.g., "feat(#110): ...")
-        // Handles epic sub-issue PRs that use "Part of #PARENT" instead of "Closes #N"
-        if (!mergedPr) {
-          const { stdout: fallbackRaw } = await execFileAsync(
-            "gh",
-            [
-              "pr",
-              "list",
-              "--state",
-              "merged",
-              "--search",
-              `#${issueNumber} in:title`,
-              "--json",
-              "number",
-              "-q",
-              ".[0].number",
-              ...this.ghRepoArgs(),
-            ],
-            ghExecOptions
+        // #2689: read the closing keyword from the PR body locally. GitHub
+        // search is full-text, and every pipeline title is `fix(#N): …`, so a
+        // search hit alone would close the issue on a `Refs #N` merge.
+        mergedPRs ??= await this.listMergedPRsForIssue(issueNumber, ghExecOptions);
+        const closer = mergedPRs.find((pr) => prBodyClosesIssue(pr.body, issueNumber));
+        if (closer) {
+          mergedPrNumber = closer.number;
+        } else if (mergedPRs.length > 0) {
+          const referencing = mergedPRs[0].number;
+          this.logger.info(
+            `Issue stays open by design: merged PR #${referencing} references #${issueNumber} without a closing keyword`,
+            { issueNumber, mergedPrNumber: referencing }
           );
-          mergedPr = fallbackRaw.trim();
-        }
-        if (mergedPr) {
-          mergedPrNumber = Number.parseInt(mergedPr, 10);
+          return {
+            verified: true,
+            issueClosed: false,
+            mergedPrNumber: referencing,
+            openByDesign: true,
+          };
         }
       } catch (err) {
         this.logger.warn("Failed to check merged PR linkage", {
@@ -9165,12 +9157,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         try {
           const { stdout: commitLogRaw } = await execFileAsync(
             "git",
-            ["log", "main", "--oneline", `--grep=#${issueNumber}`, "--format=%h %s"],
+            ["log", "main", `--grep=#${issueNumber}`, "--format=%h%x1f%s%x1f%B%x1e"],
             ghExecOptions
           );
-          const commitLog = commitLogRaw.trim();
-          if (commitLog) {
-            const commitLines = commitLog.split("\n");
+          // #2689: close only on a commit whose own message closes the issue;
+          // `--grep` also matches `Refs #N` and substrings like issue 26890.
+          const commitLines = commitLogRaw
+            .split("\x1e")
+            .map((record) => record.trim().split("\x1f"))
+            .filter(([hash, , message]) => hash && prBodyClosesIssue(message, issueNumber))
+            .map(([hash, subject]) => `${hash} ${subject}`);
+          if (commitLines.length > 0) {
             const commitHashes = commitLines.map((line) => line.split(" ")[0]).join(", ");
             const commitSummary =
               commitLines.length === 1
@@ -13659,6 +13656,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       } else if (reconcile.epicDeferred) {
         this.logger.info("Epic sub-issue — closure deferred to epic merge", {
           issueNumber,
+        });
+      } else if (reconcile.openByDesign) {
+        // #2689: a merged PR referenced the issue without closing it.
+        this.logger.info("Issue stays open by design — merged PR did not close it", {
+          issueNumber,
+          mergedPrNumber: reconcile.mergedPrNumber,
         });
       } else if (reconcile.verified && !reconcile.issueClosed) {
         // #3691: classify the actual blocker so the operator gets a

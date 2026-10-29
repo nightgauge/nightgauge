@@ -11,6 +11,9 @@ import {
   findPRForIssueInList,
   getOpenPRsForRepo,
   clearOpenPRsCache,
+  mentionsIssue,
+  pickMergedPRForIssue,
+  prBodyClosesIssue,
 } from "../../src/utils/prDetection";
 
 // Only used by the getOpenPRsForRepo describe block below — mocked at module
@@ -414,5 +417,41 @@ describe("prDetection", () => {
 
       expect(result).toEqual([]);
     });
+  });
+});
+
+describe("closing-keyword predicates (#2689)", () => {
+  it("prBodyClosesIssue accepts every closing form", () => {
+    for (const body of [
+      "Closes #2689",
+      "fixes: #2689",
+      "RESOLVED #2689",
+      "Fixes nightgauge/nightgauge#2689",
+      "Closes https://github.com/nightgauge/nightgauge/issues/2689",
+    ]) {
+      expect(prBodyClosesIssue(body, 2689), body).toBe(true);
+    }
+  });
+
+  it("prBodyClosesIssue rejects non-closing references", () => {
+    for (const body of ["Refs #2689", "Closes #26890", "", "fix(#2689): thing", "Part of #2689"]) {
+      expect(prBodyClosesIssue(body, 2689), body).toBe(false);
+    }
+    expect(prBodyClosesIssue(undefined, 2689)).toBe(false);
+  });
+
+  it("mentionsIssue is word-boundary anchored", () => {
+    expect(mentionsIssue("Refs #2689", 2689)).toBe(true);
+    expect(mentionsIssue("see .../issues/2689", 2689)).toBe(true);
+    expect(mentionsIssue("Refs #26890", 2689)).toBe(false);
+  });
+
+  it("pickMergedPRForIssue prefers closer, then title scope, then null", () => {
+    const cite = { number: 1, title: "fix(#2684): other (#2689)", body: "Refs #2689" };
+    const scoped = { number: 2, title: "fix(#2689): this", body: "Refs #2689" };
+    const closer = { number: 3, title: "chore: x", body: "Closes #2689" };
+    expect(pickMergedPRForIssue(2689, [cite, scoped, closer])?.number).toBe(3);
+    expect(pickMergedPRForIssue(2689, [cite, scoped])?.number).toBe(2);
+    expect(pickMergedPRForIssue(2689, [cite])).toBeNull();
   });
 });

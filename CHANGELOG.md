@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A `Refs #N` merge no longer closes the issue after the pipeline (#2689).** Post-pipeline
+  verification now closes an open issue only when a merged PR body or a commit on main carries a
+  closing keyword (`Closes #N`, `owner/repo#N`, or the issue URL). A merge that only references
+  the issue leaves it open by design and no longer marks the run as a failed pr-merge.
+
 - **A follow-up PR opened after its issue closed is no longer stranded
   (#2684).** The scheduler dispatches only open issues, so a review follow-up
   pushed after its parent PR merged had no owner and sat open. A new

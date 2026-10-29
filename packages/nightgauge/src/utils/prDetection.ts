@@ -314,3 +314,67 @@ export function invalidateOpenPRsCache(owner: string, repo: string): void {
 export function clearOpenPRsCache(): void {
   repoPRListCache.clear();
 }
+
+/**
+ * A merged PR as returned by `gh pr list --state merged --json
+ * number,title,body,baseRefName,headRefName`.
+ */
+export interface MergedPRRecord {
+  number: number;
+  title?: string;
+  body?: string;
+  baseRefName?: string;
+  headRefName?: string;
+}
+
+/**
+ * Word-boundary anchored reference to an issue: `#N`, `owner/repo#N`, or a
+ * GitHub issue URL (`.../issues/N`). Issue 26890 never matches issue 2689.
+ */
+function issueRefPattern(issueNumber: number): string {
+  return String.raw`(?:#|/issues/)${issueNumber}\b`;
+}
+
+/**
+ * True when `text` carries a GitHub closing keyword (close/closes/closed,
+ * fix/fixes/fixed, resolve/resolves/resolved, optional `:`) immediately
+ * before a reference to `issueNumber` — `#N`, `owner/repo#N`, or the full
+ * issue URL. `Refs #N`, `Part of #N` and a title scope `fix(#N)` are not
+ * closing references.
+ *
+ * Mirrors Go `closingKeywordRE` (internal/hooks/post-merge.go) plus the
+ * issue-URL form.
+ *
+ * @see Issue #2689
+ */
+export function prBodyClosesIssue(text: string | undefined, issueNumber: number): boolean {
+  if (!text) return false;
+  const ref = String.raw`(?:[\w.-]+/[\w.-]+#|#|https?://github\.com/[\w.-]+/[\w.-]+/issues/)${issueNumber}\b`;
+  return new RegExp(
+    String.raw`\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+${ref}`,
+    "i"
+  ).test(text);
+}
+
+/** True when `text` references `issueNumber` at all (`#N` or `/issues/N`). */
+export function mentionsIssue(text: string | undefined, issueNumber: number): boolean {
+  return !!text && new RegExp(issueRefPattern(issueNumber)).test(text);
+}
+
+/**
+ * Choose the merged PR that belongs to `issueNumber`: the first whose body
+ * closes it, else the first whose title carries the conventional scope
+ * `(#N)`, else null. A PR whose title merely cites `#N` (another issue's
+ * `fix(#2684): … (#2686)`) is not chosen.
+ *
+ * @see Issue #2689
+ */
+export function pickMergedPRForIssue(
+  issueNumber: number,
+  prs: MergedPRRecord[]
+): MergedPRRecord | null {
+  const closer = prs.find((pr) => prBodyClosesIssue(pr.body, issueNumber));
+  if (closer) return closer;
+  const scope = new RegExp(String.raw`^\w+(?:\([^)]*#${issueNumber}\b[^)]*\))`);
+  return prs.find((pr) => scope.test(pr.title ?? "")) ?? null;
+}
