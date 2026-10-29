@@ -100,6 +100,17 @@ describe("parseAcceptanceCriteria", () => {
     ]);
   });
 
+  it("skips fenced code blocks inside an Acceptance Criteria section", () => {
+    const body =
+      "## Acceptance Criteria\n1. first:\n   ```sh\n   # run it\n   1. output line\n   - [ ] example box\n   ```\n2. second\n~~~\n1. phantom\n~~~\n";
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(["first:", "second"]);
+  });
+
+  it("does not count a nested numbered sub-step as a criterion", () => {
+    const body = "## Acceptance Criteria\n1. Do X:\n    1. sub-step\n2. Do Y\n";
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(["Do X:", "Do Y"]);
+  });
+
   it("drops repeated criteria", () => {
     const acs = parseAcceptanceCriteria("- [ ] same  text\n- [x] same text\n");
     expect(acs).toHaveLength(1);

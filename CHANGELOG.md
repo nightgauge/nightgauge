@@ -20,8 +20,10 @@ changelog, and the release workflow refuses a tag that does not.
   items (`1.`, `1)`, `1. **AC1:**`) inside an "Acceptance Criteria" section
   now count as criteria, so such an issue no longer reads as having none and
   merges with `Refs #N`. A criterion that mentions `<details>` inline no
-  longer hides the criteria after it. Issues with such bodies get a new
-  criteria fingerprint, so an open PR on one re-plans on resume.
+  longer hides the criteria after it, and fenced code blocks and nested
+  numbered sub-steps are not read as criteria or headings. Issues with such
+  bodies get a new criteria fingerprint, so an open PR on one re-plans on
+  resume.
 - **pr-merge leaves a `Refs #N` issue open (#2674).** The skill closed the
   issue unconditionally after merge, before the post-merge hook could keep a
   partial delivery open. `nightgauge issue close --pr <N>` now applies the

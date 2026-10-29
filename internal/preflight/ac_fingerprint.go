@@ -14,7 +14,7 @@ func NormalizeACText(s string) string {
 }
 
 // ACFingerprint identifies the acceptance-criteria scope of an issue body
-// (#2623): sha256 over the ordered, normalized checkbox texts parseACs finds.
+// (#2623): sha256 over the ordered, normalized criterion texts parseACs finds.
 // Checkbox state is excluded — ticking a box does not change the scope.
 func ACFingerprint(body string) string {
 	h := sha256.New()
@@ -25,7 +25,7 @@ func ACFingerprint(body string) string {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
-// ACCount returns the number of checkbox criteria parseACs finds in body.
+// ACCount returns the number of criteria parseACs finds in body.
 func ACCount(body string) int {
 	return len(parseACs(body))
 }

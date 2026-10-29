@@ -11,8 +11,18 @@ import type { AcceptanceCriterion } from "./types.js";
  */
 const CHECKBOX_RE = /^[-*][ \t]+\[([ xX])\][ \t]+(.{1,4096})$/;
 
-/** Numbered list item (`1.` or `1)`); a criterion only inside an AC section. */
-const NUMBERED_RE = /^\d{1,3}[.)][ \t]+(.{1,4096})$/;
+/**
+ * Top-level numbered list item (`1.` or `1)`), indented at most three spaces
+ * so a nested sub-step is not a criterion of its own. Matched against the
+ * untrimmed line; a criterion only inside an AC section.
+ */
+const NUMBERED_RE = /^ {0,3}\d{1,3}[.)][ \t]+(.{1,4096})$/;
+
+/**
+ * Code-fence open/close line. Lines inside a fence are example text: a `#`
+ * comment is not a heading and a `1.` line is not a criterion.
+ */
+const FENCE_RE = /^[ \t]*(`{3,}|~{3,})/;
 
 /** Optional `[ ]` / `[x]` at the start of a numbered item's text. */
 const LEADING_BOX_RE = /^\[([ xX])\][ \t]+(.+)$/;
@@ -37,7 +47,8 @@ const DETAILS_BLOCK_RE = /^[ \t]*<details\b[\s\S]*?<\/details>/gim;
  * Mirrors the authoritative Go parser (`parseACs` in
  * `internal/preflight/ac_reconcile.go`): checkbox bullets anywhere, plus
  * numbered items inside an "Acceptance Criteria" heading section, in
- * document order. `<details>` blocks are ignored and repeated criteria
+ * document order. `<details>` blocks and fenced code blocks are ignored, and
+ * repeated criteria
  * (whitespace-collapsed text) are dropped.
  *
  * State is informational — the reconciler verifies satisfaction against
@@ -51,7 +62,13 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
   const out: AcceptanceCriterion[] = [];
   const seen = new Set<string>();
   let sectionLevel = 0;
+  let inFence = false;
   for (const rawLine of body.replace(DETAILS_BLOCK_RE, "").split(/\r?\n/)) {
+    if (FENCE_RE.test(rawLine)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
     const heading = HEADING_RE.exec(rawLine);
     if (heading) {
       const level = heading[1].length;
@@ -70,7 +87,7 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
       box = checkbox[1];
       text = checkbox[2];
     } else if (sectionLevel > 0) {
-      const numbered = NUMBERED_RE.exec(line);
+      const numbered = NUMBERED_RE.exec(rawLine.trimEnd());
       if (!numbered) continue;
       box = " ";
       text = numbered[1];

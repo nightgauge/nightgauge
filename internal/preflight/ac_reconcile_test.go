@@ -274,6 +274,11 @@ func TestParseACs_Forms(t *testing.T) {
 			"\n<details>\n<summary>old</summary>\n\n- [ ] archived\n</details>\n",
 			[]string{"keeps the `<details>` exclusion", "later"}},
 		{"numbered with box", "## Acceptance Criteria\n1. [x] done\n2. [ ] todo\n", []string{"done", "todo"}},
+		{"fenced comment does not close section", "## Acceptance Criteria\n1. first:\n   ```sh\n   # run it\n   1. output line\n   - [ ] example box\n   ```\n2. second\n",
+			[]string{"first:", "second"}},
+		{"tilde fence skipped", "## Acceptance Criteria\n~~~\n1. phantom\n~~~\n1. real\n", []string{"real"}},
+		{"nested numbered sub-step not a criterion", "## Acceptance Criteria\n1. Do X:\n    1. sub-step\n2. Do Y\n",
+			[]string{"Do X:", "Do Y"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
