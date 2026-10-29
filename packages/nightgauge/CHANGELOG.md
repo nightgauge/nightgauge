@@ -11,6 +11,18 @@ and this project adheres to
 
 ### Added
 
+- **The pipeline tree shows what a running stage is doing.** A stage node now
+  reads `remediating · round 2 · lint failing`, `retrying after gate: PR not
+MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
+  cost so far and time since the last activity, each state with its own icon
+  and colour. Fix commits (sha and headline), failed gates, recovery attempts
+  and model escalations appear as child nodes, and the tooltip carries the
+  same detail. Gate, recovery and escalation data come from the run's runtime
+  state; fix commits and failing checks are read from the stage's tool output,
+  which is a heuristic until the orchestrator emits a structured event. The
+  new `pipeline.idle_indicator_seconds` (default `600`, `0` disables) sets when
+  a silent stage reads as idle (#1897).
+
 - **Pin or cap one issue's model with a label.** `model:pin-<band>` runs the
   pipeline-chosen stages on that band; `model:max-<band>` keeps every routed
   stage, retries included, at or below it. Explicit per-stage config, the

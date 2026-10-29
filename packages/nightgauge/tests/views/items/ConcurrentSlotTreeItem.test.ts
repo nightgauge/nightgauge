@@ -70,7 +70,14 @@ vi.mock("../../../src/views/items/StageTreeItem", () => ({
     setPhases = vi.fn();
     clearPhases = vi.fn();
     getPhaseCount = vi.fn().mockReturnValue(0);
+    getStatus = vi.fn().mockReturnValue("pending");
     setTokenUsage = vi.fn();
+    noteActivity = vi.fn();
+    recordToolCall = vi.fn();
+    setRuntimeActivity = vi.fn();
+    setStageStartedAt = vi.fn();
+    setIdleThreshold = vi.fn();
+    tick = vi.fn();
     getTokenInfo = vi.fn().mockReturnValue(null);
     getChildren = vi.fn().mockReturnValue([]);
     constructor(public stage: string) {
@@ -134,6 +141,7 @@ function makeStateService(issueNumber: number) {
       phaseCompleteListeners.push(cb);
       return { dispose: vi.fn() };
     },
+    onToolCallRecorded: () => ({ dispose: () => {} }),
     onTokenUsageUpdated: (cb: () => void) => {
       tokenListeners.push(cb);
       return { dispose: vi.fn() };

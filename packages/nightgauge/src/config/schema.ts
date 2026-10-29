@@ -694,6 +694,13 @@ export const PipelineConfigSchema = z.object({
    */
   stall_thresholds: StallThresholdsConfigSchema.optional(),
   /**
+   * Seconds without activity (event, phase, token or tool call) after which
+   * a running stage's tree node reads as idle. 0 disables. Default: 600.
+   *
+   * @see Issue #1897 - Surface stage remediation, retries and model escalation
+   */
+  idle_indicator_seconds: z.number().int().min(0).optional(),
+  /**
    * Multiplier of the stall threshold at which the process is forcibly killed.
    * For example, with a threshold of 600s and kill_multiplier of 8, the process
    * is terminated after 4800s (80 min). Set to 0 to disable auto-kill.
@@ -3887,6 +3894,7 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
       "pr-merge": 180,
     },
     stall_kill_multiplier: 8,
+    idle_indicator_seconds: 600,
     stage_cost_caps: {
       "issue-pickup": 1.0,
       "feature-planning": 6.0,

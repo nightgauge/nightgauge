@@ -64,6 +64,11 @@ function logPipelineTreeWarning(message: string): void {
 import type { CompletedIssuesService } from "../services/CompletedIssuesService";
 import type { CompletedIssuesState } from "../types/completedIssues";
 import { IpcClient } from "../services/IpcClient";
+import { fromRuntimeState } from "./items/stageActivity";
+import { DEFAULT_IDLE_INDICATOR_SECONDS } from "../utils/resolvers/monitoringResolver";
+
+/** How often running stages re-render elapsed and idle with no event (#1897). */
+export const ACTIVITY_TICK_MS = 30_000;
 import { slotKey } from "../utils/epicRef";
 
 /**
@@ -173,6 +178,10 @@ export class PipelineTreeProvider
   private concurrentSlots: Map<string, ConcurrentSlotTreeItem> = new Map();
   private preparingSlots: Map<string, ActionTreeItem> = new Map();
   private disposables: vscode.Disposable[] = [];
+  /** Re-renders running stages so elapsed/idle advance (#1897). */
+  private activityTicker: ReturnType<typeof setInterval> | undefined;
+  /** `pipeline.idle_indicator_seconds`, applied to every stage item (#1897). */
+  private idleIndicatorSeconds = DEFAULT_IDLE_INDICATOR_SECONDS;
   private teamSection: TeamSectionTreeItem = new TeamSectionTreeItem();
   private subscriptionSection: SubscriptionSectionTreeItem = new SubscriptionSectionTreeItem();
   private workspaceSyncSidebarItem: WorkspaceSyncSidebarItem = new WorkspaceSyncSidebarItem();
@@ -270,6 +279,7 @@ export class PipelineTreeProvider
           stageItem.setStatus("running");
         }
         const totalPhases = event.totalPhases ?? event.total;
+        stageItem.noteActivity();
         stageItem.applyPhaseEvent(
           event.phase,
           "running",
@@ -286,6 +296,7 @@ export class PipelineTreeProvider
       const stageItem = this.stages.get(event.stage as PipelineStage);
       if (stageItem) {
         const totalPhases = event.totalPhases ?? event.total;
+        stageItem.noteActivity();
         stageItem.applyPhaseEvent(
           event.phase,
           "complete",
@@ -311,6 +322,7 @@ export class PipelineTreeProvider
         const stageItem = this.stages.get(tokenUpdate.stage as PipelineStage);
         if (stageItem) {
           const current = stageItem.getTokenInfo();
+          stageItem.noteActivity();
           stageItem.setTokenUsage({
             inputTokens: (current?.inputTokens ?? 0) + tokenUpdate.inputTokens,
             outputTokens: (current?.outputTokens ?? 0) + tokenUpdate.outputTokens,
@@ -321,6 +333,18 @@ export class PipelineTreeProvider
       this.refreshAll();
     });
     this.disposables.push(tokenDisposable);
+
+    // Tool-call results carry fix commits and failing checks (#1897). In
+    // concurrent mode each slot has its own subscription.
+    const toolCallDisposable = stateService.onToolCallRecorded((event) => {
+      if (this.concurrentSlots.size > 0 || this.preparingSlots.size > 0) return;
+      const stageItem = event.stage ? this.stages.get(event.stage as PipelineStage) : undefined;
+      if (stageItem && stageItem.getStatus() === "running") {
+        stageItem.recordToolCall(event);
+        this.refresh(stageItem);
+      }
+    });
+    this.disposables.push(toolCallDisposable);
 
     // Initial sync
     stateService.getState().then((state) => {
@@ -625,6 +649,14 @@ export class PipelineTreeProvider
           stageItem.setError(stageState.error);
         }
 
+        // Activity from Go runtime state: gates, recoveries, escalations (#1897)
+        stageItem.setStageStartedAt(stageState.started_at);
+        stageItem.setRuntimeActivity(fromRuntimeState(stage, state));
+        for (const phase of stageState.phases ?? []) {
+          const t = phase.completed_at ?? phase.started_at;
+          if (t) stageItem.noteActivity(t);
+        }
+
         // Set execution mode for token display (Issue #498)
         // When mode is 'interactive', tokens display as N/A
         const executionMode =
@@ -714,6 +746,7 @@ export class PipelineTreeProvider
       }
     }
 
+    this.updateActivityTicker();
     this.refreshAll();
   }
 
@@ -1030,10 +1063,48 @@ export class PipelineTreeProvider
   /**
    * Reset all stages to pending
    */
+  /** Set the no-activity interval before a running stage reads as idle (#1897). */
+  setIdleIndicatorSeconds(seconds: number): void {
+    this.idleIndicatorSeconds = seconds;
+    for (const stageItem of this.stages.values()) {
+      stageItem.setIdleThreshold(seconds);
+    }
+    for (const slot of this.concurrentSlots.values()) {
+      slot.setIdleIndicatorSeconds(seconds);
+    }
+  }
+
   resetAllStages(): void {
     for (const stageItem of this.stages.values()) {
       stageItem.reset();
     }
+    this.updateActivityTicker();
+  }
+
+  /**
+   * Run the activity ticker only while a stage is running (#1897), so a
+   * silent stage still advances its elapsed time and turns idle.
+   */
+  updateActivityTicker(): void {
+    const running = [...this.stages.values()].some((s) => s.getStatus() === "running");
+    if (running && !this.activityTicker) {
+      this.activityTicker = setInterval(() => this.tickActivity(), ACTIVITY_TICK_MS);
+    } else if (!running && this.activityTicker) {
+      clearInterval(this.activityTicker);
+      this.activityTicker = undefined;
+    }
+  }
+
+  private tickActivity(): void {
+    let any = false;
+    for (const stageItem of this.stages.values()) {
+      if (stageItem.getStatus() === "running") {
+        stageItem.tick();
+        this.refresh(stageItem);
+        any = true;
+      }
+    }
+    if (!any) this.updateActivityTicker();
   }
 
   /**
@@ -1178,6 +1249,7 @@ export class PipelineTreeProvider
       epicRepo,
       repo
     );
+    slot.setIdleIndicatorSeconds(this.idleIndicatorSeconds);
     this.concurrentSlots.set(key, slot);
     console.log(
       `[PipelineTree] addConcurrentSlot #${issueNumber} slot=${slotIndex} (total=${this.concurrentSlots.size})`
@@ -1276,6 +1348,10 @@ export class PipelineTreeProvider
    * Dispose of resources
    */
   dispose(): void {
+    if (this.activityTicker) {
+      clearInterval(this.activityTicker);
+      this.activityTicker = undefined;
+    }
     this._onDidChangeTreeData.dispose();
     for (const slot of this.concurrentSlots.values()) {
       slot.dispose();

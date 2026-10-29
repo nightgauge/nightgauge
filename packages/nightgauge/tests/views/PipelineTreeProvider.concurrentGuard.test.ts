@@ -40,6 +40,7 @@ const createMockStateService = () => {
       callbacks["batchStateChanged"] = cb;
       return { dispose: vi.fn() };
     }),
+    onToolCallRecorded: () => ({ dispose: () => {} }),
     onTokenUsageUpdated: vi.fn((cb: Function) => {
       callbacks["tokenUsageUpdated"] = cb;
       return { dispose: vi.fn() };
@@ -122,6 +123,7 @@ function createSlotStateService() {
     onStateChanged: vi.fn(() => ({ dispose: vi.fn() })),
     onPhaseStart: vi.fn(() => ({ dispose: vi.fn() })),
     onPhaseComplete: vi.fn(() => ({ dispose: vi.fn() })),
+    onToolCallRecorded: () => ({ dispose: () => {} }),
     onTokenUsageUpdated: vi.fn(() => ({ dispose: vi.fn() })),
     getState: vi.fn(async () => null),
   };

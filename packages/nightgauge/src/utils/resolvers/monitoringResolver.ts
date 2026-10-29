@@ -147,6 +147,49 @@ export function getStallThresholds(workspaceRoot?: string): Record<string, numbe
   }
 }
 
+/** Default `pipeline.idle_indicator_seconds` (#1897). */
+export const DEFAULT_IDLE_INDICATOR_SECONDS = 600;
+
+/**
+ * Seconds without activity before a running stage reads as idle in the
+ * pipeline tree (#1897). 0 disables the indicator.
+ *
+ * Priority: NIGHTGAUGE_PIPELINE_IDLE_INDICATOR_SECONDS, then
+ * `pipeline.idle_indicator_seconds`, then the default.
+ */
+export function getIdleIndicatorSeconds(workspaceRoot?: string): number {
+  const fromEnv = process.env.NIGHTGAUGE_PIPELINE_IDLE_INDICATOR_SECONDS;
+  if (fromEnv !== undefined && /^\d+$/.test(fromEnv.trim())) {
+    return Number.parseInt(fromEnv, 10);
+  }
+  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) {
+    return DEFAULT_IDLE_INDICATOR_SECONDS;
+  }
+  try {
+    const pathResult = resolveConfigPathSync(root);
+    if (!pathResult.exists) {
+      return DEFAULT_IDLE_INDICATOR_SECONDS;
+    }
+    let inPipeline = false;
+    for (const line of readEffectiveConfigTextSync(pathResult).split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      if (!line.startsWith(" ")) {
+        inPipeline = trimmed === "pipeline:";
+        continue;
+      }
+      const match = inPipeline && line.match(/^ {2}idle_indicator_seconds:\s*(\d+)/);
+      if (match) {
+        return Number.parseInt(match[1], 10);
+      }
+    }
+  } catch (error) {
+    console.error("Failed to read idle_indicator_seconds from nightgauge config:", error);
+  }
+  return DEFAULT_IDLE_INDICATOR_SECONDS;
+}
+
 /**
  * Per-stage default overrides for the stall kill multiplier (#3020).
  *

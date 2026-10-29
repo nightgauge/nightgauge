@@ -71,6 +71,7 @@ function stubStateService(): PipelineStateService {
     onStateChanged: () => ({ dispose: () => {} }),
     onPhaseStart: () => ({ dispose: () => {} }),
     onPhaseComplete: () => ({ dispose: () => {} }),
+    onToolCallRecorded: () => ({ dispose: () => {} }),
     onTokenUsageUpdated: () => ({ dispose: () => {} }),
     getState: async () => null,
   } as unknown as PipelineStateService;

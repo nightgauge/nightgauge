@@ -72,6 +72,7 @@ function makeStateService(_issueNumber: number) {
     },
     onPhaseStart: () => ({ dispose: vi.fn() }),
     onPhaseComplete: () => ({ dispose: vi.fn() }),
+    onToolCallRecorded: () => ({ dispose: () => {} }),
     onTokenUsageUpdated: () => ({ dispose: vi.fn() }),
     getState: vi.fn().mockResolvedValue(null),
     fireStateChanged: (state: PipelineState | null) => {

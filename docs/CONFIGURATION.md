@@ -2236,6 +2236,28 @@ pipeline:
 
 ---
 
+#### pipeline.idle_indicator_seconds
+
+Seconds without activity after which a running stage's node in the pipeline
+tree switches to the **idle** indicator (`watch` icon, warning colour,
+`idle 12m` description). Activity is any fix commit, failing-check listing,
+gate result, recovery attempt, model escalation, phase marker, token update or
+tool call for that stage. The tree re-renders every 30 seconds, so elapsed time
+and idle advance without new events. `0` disables the indicator.
+
+| Key                      | Type    | Default | Description                   |
+| ------------------------ | ------- | ------- | ----------------------------- |
+| `idle_indicator_seconds` | integer | `600`   | No-activity interval, 0 = off |
+
+```yaml
+pipeline:
+  idle_indicator_seconds: 900
+```
+
+**Environment override:** `NIGHTGAUGE_PIPELINE_IDLE_INDICATOR_SECONDS=900`
+
+---
+
 #### pipeline.stall_thresholds
 
 Per-stage stall warning thresholds in seconds. Controls when the headless runner

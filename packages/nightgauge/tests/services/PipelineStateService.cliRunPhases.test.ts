@@ -121,8 +121,19 @@ describe("a CLI-started run's mid-stage snapshot", () => {
     expect(state?.stages["feature-dev"]?.current_phase).toBe("implementation");
 
     const slot = new ConcurrentSlotTreeItem(0, ISSUE, "surface CLI-started runs", svc);
-    await vi.waitFor(() =>
-      expect(String(slot.getStage("feature-dev")?.description ?? "")).toBe("Implementation [7/17]")
-    );
+    // The running description also carries elapsed time (#1897); pin the
+    // clock so the stage reads as working, not idle.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-10-26T21:41:00.000Z"));
+    try {
+      slot.getStage("feature-dev")?.tick();
+      await vi.waitFor(() =>
+        expect(String(slot.getStage("feature-dev")?.description ?? "")).toMatch(
+          /^Implementation \[7\/17\] · /
+        )
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
