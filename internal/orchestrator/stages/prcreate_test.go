@@ -414,7 +414,7 @@ func newTestRunner(snap PRCreateSnapshot, prc prCreateClient, git gitClient) *De
 	r := NewDeterministicPRCreateRunner()
 	r.prClient = prc
 	r.git = git
-	r.readContext = func(_ string, _ int) (PRCreateSnapshot, error) { return snap, nil }
+	r.readContext = func(_ context.Context, _ string, _ int) (PRCreateSnapshot, error) { return snap, nil }
 	r.writeContext = func(_ string, _ prContextPayload) error { return nil }
 	return r
 }
@@ -544,7 +544,7 @@ func TestRunner_CreatePRFails_Punts(t *testing.T) {
 
 func TestRunner_NilClients_Punts(t *testing.T) {
 	r := NewDeterministicPRCreateRunner()
-	r.readContext = func(_ string, _ int) (PRCreateSnapshot, error) { return richSnap(), nil }
+	r.readContext = func(_ context.Context, _ string, _ int) (PRCreateSnapshot, error) { return richSnap(), nil }
 
 	res, _ := r.Run(context.Background(), 42, "owner/repo", "/tmp")
 	if res.Path != CreatePathPunt {

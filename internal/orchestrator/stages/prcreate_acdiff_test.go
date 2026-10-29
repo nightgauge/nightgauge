@@ -99,7 +99,7 @@ func TestVerifyACAgainstDiff_Issue2661AllMet(t *testing.T) {
 	addBullet2656(t, dir)
 	d := collect(t, dir)
 	for i, ac := range issue2661ACs {
-		got, ok := VerifyACAgainstDiff(ac, d, ACTestState{})
+		got, ok := VerifyACAgainstDiff(ac, issue2661ACs[:i], d, ACTestState{})
 		if !ok || got.Status != ACMet {
 			t.Errorf("AC%d = %+v ok=%v, want met", i+1, got, ok)
 		}
@@ -115,7 +115,7 @@ func TestVerifyACAgainstDiff_Issue2661Violated(t *testing.T) {
 	writeFile(t, dir, "CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n\n- The #2656 fix, edited.\n")
 	d := collect(t, dir)
 	for _, i := range []int{3, 4} {
-		got, ok := VerifyACAgainstDiff(issue2661ACs[i], d, ACTestState{})
+		got, ok := VerifyACAgainstDiff(issue2661ACs[i], issue2661ACs[:i], d, ACTestState{})
 		if !ok || got.Status != ACUnmet {
 			t.Errorf("AC%d = %+v ok=%v, want unmet", i+1, got, ok)
 		}
@@ -125,7 +125,7 @@ func TestVerifyACAgainstDiff_Issue2661Violated(t *testing.T) {
 func TestVerifyACAgainstDiff_RuntimeNamesStep(t *testing.T) {
 	dir := changelogRepo(t)
 	addBullet2656(t, dir)
-	got, ok := VerifyACAgainstDiff("The `### Fixed` bullet renders when verified on a physical device.", collect(t, dir), ACTestState{})
+	got, ok := VerifyACAgainstDiff("The `### Fixed` bullet renders when verified on a physical device.", nil, collect(t, dir), ACTestState{})
 	if !ok || got.Status != ACNotVerifiable || got.Step != "a physical device" {
 		t.Errorf("got %+v ok=%v, want not_verifiable needing a physical device", got, ok)
 	}
@@ -146,15 +146,15 @@ func TestVerifyACAgainstDiff_TestNamedCriterion(t *testing.T) {
 	d := collect(t, dir)
 	ac := "`TestWidgetRendersOnce` covers the duplicate list."
 
-	got, ok := VerifyACAgainstDiff(ac, d, ACTestState{Passed: true, Source: "feature-validate unit tests"})
+	got, ok := VerifyACAgainstDiff(ac, nil, d, ACTestState{Passed: true, Source: "feature-validate unit tests"})
 	if !ok || got.Status != ACMet || !strings.Contains(got.Evidence, "TestWidgetRendersOnce") || !strings.Contains(got.Evidence, "widget_test.go:3") {
 		t.Errorf("passed run: got %+v ok=%v", got, ok)
 	}
-	got, ok = VerifyACAgainstDiff(ac, d, ACTestState{Source: "feature-validate unit tests"})
+	got, ok = VerifyACAgainstDiff(ac, nil, d, ACTestState{Source: "feature-validate unit tests"})
 	if !ok || got.Status != ACUnmet {
 		t.Errorf("failed run: got %+v ok=%v, want unmet", got, ok)
 	}
-	got, ok = VerifyACAgainstDiff("`TestMissing` covers it.", d, ACTestState{Passed: true})
+	got, ok = VerifyACAgainstDiff("`TestMissing` covers it.", nil, d, ACTestState{Passed: true})
 	if !ok || got.Status != ACUnmet || !strings.Contains(got.Evidence, "not defined") {
 		t.Errorf("missing test: got %+v ok=%v, want unmet", got, ok)
 	}
@@ -246,7 +246,8 @@ diff --git a/x_test.go b/x_test.go
 		{"section met", "`docs/a.md` documents the flag under `## Usage`, citing #77.", ACMet},
 		{"section wrong heading", "`docs/a.md` has a line under `## Other`.", ACUnmet},
 		{"section missing token", "`docs/a.md` adds a line under `## Usage` citing #78.", ACUnmet},
-		{"token met", "The diff mentions `--dry-run`.", ACMet},
+		{"token met in named file", "`docs/a.md` mentions `--dry-run`.", ACMet},
+		{"file-less token, no prior file (#2669)", "The diff mentions `--dry-run`.", ""},
 		{"token missing in named file", "`docs/a.md` mentions `--wet-run`.", ACUnmet},
 		{"token missing, no file", "The CLI accepts `--wet-run`.", ""},
 		{"semantic", "The widget behaves well.", ""},
@@ -255,7 +256,7 @@ diff --git a/x_test.go b/x_test.go
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, ok := VerifyACAgainstDiff(c.text, d, passed)
+			got, ok := VerifyACAgainstDiff(c.text, nil, d, passed)
 			if c.want == "" {
 				if ok {
 					t.Errorf("got %+v, want not diff-checkable", got)
@@ -267,10 +268,130 @@ diff --git a/x_test.go b/x_test.go
 			}
 		})
 	}
-	if _, ok := VerifyACAgainstDiff("`README.md` is unchanged.", &ACDiff{Files: map[string]*ACFileDiff{}}, passed); ok {
+	if _, ok := VerifyACAgainstDiff("`README.md` is unchanged.", nil, &ACDiff{Files: map[string]*ACFileDiff{}}, passed); ok {
 		t.Error("an empty diff must answer nothing")
 	}
 	if (&ACDiff{}).Checker(passed) != nil {
 		t.Error("an empty diff must give no checker")
+	}
+}
+
+// #2669: the operator-step and credential patterns no longer catch ordinary
+// prose, and still catch real steps.
+func TestACRuntimeSteps_Narrowed(t *testing.T) {
+	step := func(text string) string {
+		for _, r := range acRuntimeSteps {
+			if r.re.MatchString(text) {
+				return r.step
+			}
+		}
+		return ""
+	}
+	for _, text := range []string{"The output is human-readable.", "Link the manual page.", "Document log rotation."} {
+		if s := step(text); s != "" {
+			t.Errorf("%q resolved step %q, want none", text, s)
+		}
+	}
+	for _, text := range []string{"Manually verify the panel.", "The operator runs it.", "Rotate the API key.", "Needs human review.", "Rotate the deploy token."} {
+		if s := step(text); s == "" {
+			t.Errorf("%q resolved no step", text)
+		}
+	}
+}
+
+// #2669: acSection tries every named file before answering unmet.
+func TestVerifyACAgainstDiff_SectionChecksEveryFile(t *testing.T) {
+	d := memDiff(`diff --git a/docs/a.md b/docs/a.md
+--- a/docs/a.md
++++ b/docs/a.md
+@@ -2,0 +3 @@
++- unrelated line
+diff --git a/docs/b.md b/docs/b.md
+--- a/docs/b.md
++++ b/docs/b.md
+@@ -2,0 +3 @@
++- cites #77
+`, map[string]string{
+		"docs/a.md": "# A\n## Usage\n- unrelated line\n",
+		"docs/b.md": "# B\n## Usage\n- cites #77\n",
+	})
+	got, ok := VerifyACAgainstDiff("`docs/a.md` or `docs/b.md` adds a line under `## Usage` citing #77.", nil, d, ACTestState{})
+	if !ok || got.Status != ACMet {
+		t.Errorf("got %+v ok=%v, want met", got, ok)
+	}
+	got, _ = VerifyACAgainstDiff("`docs/a.md` or `docs/b.md` adds a line under `## Usage` citing #78.", nil, d, ACTestState{})
+	if got.Status != ACUnmet || !strings.Contains(got.Evidence, "docs/a.md") || !strings.Contains(got.Evidence, "docs/b.md") {
+		t.Errorf("got %+v, want unmet naming both files", got)
+	}
+}
+
+// #2669: a file-less clause inherits the prior criterion's file.
+func TestVerifyACAgainstDiff_InheritsPriorFile(t *testing.T) {
+	d := memDiff(`diff --git a/docs/a.md b/docs/a.md
+--- a/docs/a.md
++++ b/docs/a.md
+@@ -1,0 +2 @@
++- adds --dry-run
+diff --git a/other.go b/other.go
+--- a/other.go
++++ b/other.go
+@@ -1,0 +2 @@
++// --wet-run
+`, nil)
+	prior := []string{"`docs/a.md` documents the flag."}
+	if got, ok := VerifyACAgainstDiff("It mentions `--dry-run`.", prior, d, ACTestState{}); !ok || got.Status != ACMet {
+		t.Errorf("inherited met: %+v ok=%v", got, ok)
+	}
+	if got, ok := VerifyACAgainstDiff("It mentions `--wet-run`.", prior, d, ACTestState{}); !ok || got.Status != ACUnmet {
+		t.Errorf("inherited file lacks token: %+v ok=%v, want unmet", got, ok)
+	}
+}
+
+// #2669: oversized files are skipped by size, not read.
+func TestCollectACDiff_BoundedReads(t *testing.T) {
+	dir := changelogRepo(t)
+	big := filepath.Join(dir, "big.md")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(acReadMaxBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	writeFile(t, dir, "small.md", "one\ntwo\n")
+	d := collect(t, dir)
+	if _, ok := d.Files["big.md"]; ok {
+		t.Error("oversized untracked file was collected")
+	}
+	if s := d.Files["small.md"]; s == nil || len(s.Added) != 2 || s.Added[1].Text != "two" {
+		t.Errorf("small.md = %+v", s)
+	}
+	if l := d.lines("big.md"); l != nil {
+		t.Errorf("lines(big.md) = %d lines, want nil", len(l))
+	}
+}
+
+func TestCollectACDiff_CancelledContext(t *testing.T) {
+	dir := changelogRepo(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := CollectACDiff(ctx, dir, "main"); err == nil {
+		t.Error("cancelled context: want error")
+	}
+}
+
+// #2669: a diff verdict resting on uncommitted paths says so.
+func TestVerifyACAgainstDiff_UncommittedProvenance(t *testing.T) {
+	dir := changelogRepo(t)
+	addBullet2656(t, dir)
+	got, _ := VerifyACAgainstDiff(issue2661ACs[0], nil, collect(t, dir), ACTestState{})
+	if len(got.Uncommitted) != 1 || got.Uncommitted[0] != "packages/nightgauge/CHANGELOG.md" {
+		t.Errorf("uncommitted = %v", got.Uncommitted)
+	}
+	gitOut(t, dir, "commit", "-qam", "bullet")
+	got, _ = VerifyACAgainstDiff(issue2661ACs[0], nil, collect(t, dir), ACTestState{})
+	if got.Status != ACMet || len(got.Uncommitted) != 0 {
+		t.Errorf("committed: %+v", got)
 	}
 }
