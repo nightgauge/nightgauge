@@ -139,6 +139,36 @@ describe("parseAcceptanceCriteria", () => {
     expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(["Do X:", "Do Y"]);
   });
 
+  // Same cases as TestParseACs_Forms: the sub-step sits at the parent's content column (#2684).
+  it.each([
+    [
+      "3-space sub-step at the content column",
+      "## Acceptance Criteria\n1. Do X:\n   1. sub\n   2. sub two\n2. Do Y\n",
+      ["Do X:", "Do Y"],
+    ],
+    ["sub-step after a blank line", "## Acceptance Criteria\n1. Do X:\n\n   1. sub\n", ["Do X:"]],
+    ["sibling items", "## Acceptance Criteria\n1. a\n2. b\n", ["a", "b"]],
+    [
+      "4-column content keeps a 3-space item a sibling",
+      "## Acceptance Criteria\n10. x\n   1. y\n",
+      ["x", "y"],
+    ],
+    [
+      "2-space item below the column is a sibling",
+      "## Acceptance Criteria\n1. a\n  2. b\n",
+      ["a", "b"],
+    ],
+    ["first item at 3 spaces counts", "## Acceptance Criteria\n   1. lone\n", ["lone"]],
+    [
+      "unindented line ends the item",
+      "## Acceptance Criteria\n1. a\nNotes:\n   1. b\n",
+      ["a", "b"],
+    ],
+    ["heading ends the item", "## Acceptance Criteria\n1. a\n### More\n   1. b\n", ["a", "b"]],
+  ])("numbered sub-steps: %s", (_name, body, want) => {
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(want);
+  });
+
   it("drops repeated criteria", () => {
     const acs = parseAcceptanceCriteria("- [ ] same  text\n- [x] same text\n");
     expect(acs).toHaveLength(1);

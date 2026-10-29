@@ -28,6 +28,16 @@ changelog, and the release workflow refuses a tag that does not.
   a closed issue, files one tracking issue for it on the board, and raises an
   Action Center card. The stranded follow-ups #2662, #2670 and #2681 land
   here.
+- **The stranded follow-up sweep now files its tracking issue (#2684).** The
+  sweep hands producers a client wrapped for shared reads, and that wrapper hid
+  the forge's GraphQL surface. Every pass logged "forge client has no GraphQL
+  surface to resolve the repository id" and filed nothing. The wrapper now
+  forwards GraphQL, and a forge without it answers an unsupported error.
+- **A numbered sub-step is no longer an acceptance criterion of its own
+  (#2684).** In `1. Do X:` followed by `   1. sub`, the sub-step sits at the
+  parent item's content column, so ac-reconcile (Go and SDK) now reads it as
+  part of `Do X`. Previously it counted as a criterion whenever it was
+  indented three spaces or fewer.
 - **A met acceptance criterion no longer forces `Refs #N` (#2679).** A
   `<details>` line inside a fenced code block is no longer treated as an
   archived block, so the criteria after it stay live (Go and SDK). pr-create
