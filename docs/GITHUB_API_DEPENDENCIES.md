@@ -41,7 +41,11 @@ from task list checkboxes in the issue body).
 **Where we use it**:
 
 - `issueQuery` — fetching full issue detail with sub-issues
-- `projectItemContent` — board item display in the Ready Items tree view
+- `projectItemContent` — board item display in the Ready Items tree view.
+  The board selects no sub-issue labels. A `NoRelations` board read uses
+  `leanProjectItemContent` instead, which selects none of the three
+  relationship connections and reads `Issue.subIssuesSummary { total }` for
+  `IsEpic`
 - `nodeQuery` — cross-repo epic progress (`GetEpicProgress`)
 - Outside Go: the extension's post-completion board sync and the skills read
   sub-issues through `nightgauge issue list --epic --json`, which reads them

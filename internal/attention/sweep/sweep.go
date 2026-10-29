@@ -41,6 +41,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/trace"
 )
@@ -72,6 +73,13 @@ type Input struct {
 	// missing config file is not a failure to observe the repo, so it must never
 	// reach Evaluate's error return and freeze the producer's cards.
 	WorkspaceRoot string
+
+	// Boards is the board snapshot cache a producer reads a board it builds
+	// its own client for through (the stale board in strandedready.go), so
+	// that read is shared with the daemon's other board reads. Nil is a
+	// legitimate state (the CLI sweep, tests): the producer uses a private
+	// cache.
+	Boards *boardcache.Cache
 
 	// Existing is every non-terminal request already open for this repo, from
 	// every producer including the run-scoped ones.
@@ -237,6 +245,8 @@ type Sweeper struct {
 	// differ from WorkspaceRoot when that root is a member folder (#2540).
 	// Empty falls back to WorkspaceRoot.
 	ManifestRoot string
+	// Boards is handed to every producer as Input.Boards. Nil is allowed.
+	Boards *boardcache.Cache
 	// Timeout bounds one sweep. Zero uses DefaultTimeout.
 	Timeout time.Duration
 	// Logf receives degradation messages. Nil uses the standard logger.
@@ -309,6 +319,7 @@ func (s *Sweeper) Sweep(ctx context.Context, repo string) (Result, error) {
 		Name:          name,
 		Forge:         s.Forge,
 		WorkspaceRoot: s.WorkspaceRoot,
+		Boards:        s.Boards,
 		Existing:      existing,
 	}
 	var observed []attention.DecisionRequest

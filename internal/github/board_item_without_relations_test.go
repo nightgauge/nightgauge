@@ -41,7 +41,7 @@ func TestGetItemWithoutRelations(t *testing.T) {
 		t.Errorf("returned %d relationships; the read names none", n)
 	}
 	if !item.IsEpic {
-		t.Error("IsEpic = false, want true from the first page of sub-issues")
+		t.Error("IsEpic = false, want true from the sub-issue total")
 	}
 	if n := f.FollowUps(); n != 0 {
 		t.Fatalf("relationship pages requested = %d, want 0", n)

@@ -41,7 +41,9 @@ import (
 // fails on pages the caller would discard: GetIssueWithRelations for one
 // issue, BoardService.ListItemsWithRelations and ListOpenItemsWithRelations
 // for a board, and GetIssuesByNumbersWithoutRelations for a batch that reads
-// only bodies or states, which selects no connection at all.
+// only bodies or states, which selects no connection at all. A NoRelations
+// board read selects none either (leanProjectItemNode), so it does not pay for
+// the first pages; GetIssueWithRelations still selects all three.
 // BoardService.GetItemFields reads one board item's fields and no issue.
 
 const (
@@ -69,22 +71,39 @@ type relationPage[N any] struct {
 	Nodes    []N
 }
 
-// subIssuePage is one page of an issue's subIssues connection.
+// subIssuePage is one page of an issue's subIssues connection, as the issue
+// reads select it.
 type subIssuePage = relationPage[subIssueNode]
+
+// boardSubIssuePage is one page of an issue's subIssues connection, as the
+// board document selects it: without sub-issue labels.
+type boardSubIssuePage = relationPage[boardSubIssueNode]
 
 // blockingPage is one page of an issue's blockedBy or blocking connection.
 type blockingPage = relationPage[blockingNode]
 
 // The selections a follow-up page reads, written the way the GraphQL client
-// renders subIssuePage and blockingPage so a follow-up page decodes into the
-// same nodes as the first page. TestRelationPageSelectionsMatchStructs pins
-// them to the structs.
+// renders subIssuePage, boardSubIssuePage and blockingPage so a follow-up page
+// decodes into the same nodes as the first page.
+// TestRelationPageSelectionsMatchStructs pins them to the structs.
 const (
 	subIssuePageSelection = `{pageInfo{hasNextPage,endCursor},nodes{id,number,title,state,` +
 		`repository{nameWithOwner},labels(first: 3){nodes{name}}}}`
+	boardSubIssuePageSelection = `{pageInfo{hasNextPage,endCursor},nodes{id,number,title,state,` +
+		`repository{nameWithOwner}}}`
 	blockingPageSelection = `{pageInfo{hasNextPage,endCursor},nodes{id,number,title,state,` +
 		`repository{nameWithOwner}}}`
 )
+
+// subIssueNodeType is a sub-issue node a subIssues page can hold, with the
+// selection its follow-up pages read.
+type subIssueNodeType interface {
+	subIssueNode | boardSubIssueNode
+	pageSelection() string
+}
+
+func (subIssueNode) pageSelection() string      { return subIssuePageSelection }
+func (boardSubIssueNode) pageSelection() string { return boardSubIssuePageSelection }
 
 // relationWalk collects the relationship connections of one read whose first
 // page reported a next page, and reads them to their ends together.
@@ -107,11 +126,12 @@ func (r *openRelation) String() string {
 	return r.field + " of " + r.issue
 }
 
-// add registers an issue's relationship pages, as its query returned them.
-// A nil page is a connection the query did not select; a page with no next
-// page is already whole. issue names the issue in errors.
-func (w *relationWalk) add(issueID, issue string, subIssues *subIssuePage, blockedBy, blocking *blockingPage) {
-	watchRelation(w, "subIssues", subIssuePageSelection, issueID, issue, subIssues)
+// watchIssueRelations registers an issue's relationship pages in w, as its
+// query returned them. A nil page is a connection the query did not select; a
+// page with no next page is already whole. issue names the issue in errors.
+func watchIssueRelations[S subIssueNodeType](w *relationWalk, issueID, issue string, subIssues *relationPage[S], blockedBy, blocking *blockingPage) {
+	var s S
+	watchRelation(w, "subIssues", s.pageSelection(), issueID, issue, subIssues)
 	watchRelation(w, "blockedBy", blockingPageSelection, issueID, issue, blockedBy)
 	watchRelation(w, "blocking", blockingPageSelection, issueID, issue, blocking)
 }
@@ -175,7 +195,7 @@ func (c *Client) completeRelations(ctx context.Context, w *relationWalk) error {
 // completeIssueRelations is completeRelations for the connections of one issue.
 func (c *Client) completeIssueRelations(ctx context.Context, issueID, issue string, subIssues *subIssuePage, blockedBy, blocking *blockingPage) error {
 	var w relationWalk
-	w.add(issueID, issue, subIssues, blockedBy, blocking)
+	watchIssueRelations(&w, issueID, issue, subIssues, blockedBy, blocking)
 	return c.completeRelations(ctx, &w)
 }
 
@@ -271,8 +291,8 @@ func nodeIDString(id graphql.ID) string {
 }
 
 // subIssueRef converts a sub-issue node to its reference, without labels:
-// the readers that consume sub-issue labels add them themselves.
-func subIssueRef(n subIssueNode) types.SubIssueRef {
+// the readers that consume sub-issue labels add them from subIssueNode.
+func subIssueRef(n boardSubIssueNode) types.SubIssueRef {
 	return types.SubIssueRef{
 		NodeID: fmt.Sprintf("%v", n.ID),
 		Number: int(n.Number),

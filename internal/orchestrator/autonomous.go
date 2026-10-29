@@ -1261,17 +1261,17 @@ type AutonomousScheduler struct {
 	// overridable in tests without a real GitHub client.
 	buildGraphFn func(ctx context.Context) (*depgraph.Graph, error)
 
-	// boardProvider is where graph builds read boards from. The default reads
-	// straight from ghClient; the daemon swaps in its shared snapshot cache
-	// via SetBoardCache so a build inside the TTL of a sweep — or of the
-	// previous cycle — issues no board read at all (#845, #847).
+	// boardProvider is where graph builds read boards from: through
+	// boardCache, so a build inside the TTL of the previous cycle — or, in the
+	// daemon, of a sweep — issues no board read at all (#845, #847).
 	boardProvider depgraph.BoardProvider
 
 	// boardCache is the same shared snapshot cache, held so the scheduler's
 	// own board WRITES (every MoveStatus below) invalidate it. Reading through
 	// a cache while writing around it would let the daemon serve its pre-move
 	// open snapshot — to board.listOpen, board.counts and the sweeps — for up
-	// to a TTL after the scheduler moved an issue. Nil outside the daemon.
+	// to a TTL after the scheduler moved an issue. NewAutonomousScheduler
+	// sets a private cache; the daemon replaces it with its shared one.
 	boardCache *boardcache.Cache
 
 	// resolveDepStatesFn batch-resolves the true GitHub state ("OPEN"/"CLOSED")
@@ -1472,7 +1472,12 @@ func NewAutonomousScheduler(
 	// Wire the default graph builder. Tests override this field to inject a fake
 	// without requiring a real GitHub client. The provider is read at call
 	// time so SetBoardCache after construction takes effect.
-	as.boardProvider = depgraph.DefaultBoardProvider(ghClient)
+	//
+	// Graph builds read boards through a board snapshot cache from
+	// construction, so no caller can forget one (#1914): `run --auto` from the
+	// CLI never called SetBoardCache and read every board uncached. The daemon
+	// replaces this private cache with its shared one.
+	as.SetBoardCache(boardcache.New(0))
 	as.buildGraphFn = func(ctx context.Context) (*depgraph.Graph, error) {
 		return depgraph.BuildGraphWithBoards(ctx, as.ghClient, as.boardProvider, as.repos, as.repoAliases)
 	}
@@ -6777,11 +6782,12 @@ func (as *AutonomousScheduler) buildGraph(ctx context.Context) (*depgraph.Graph,
 	return depgraph.BuildGraphWithBoards(ctx, as.ghClient, as.boardProvider, as.repos, as.repoAliases)
 }
 
-// SetBoardCache routes every graph build through a shared board snapshot
-// cache. The daemon passes its own — the one its board verbs and the
-// attention sweep already read through — so six repos on one board are one
-// cached read, and a build inside the TTL of the last sweep costs nothing.
-// Wiring-time only: call before Run or RecoverOrphanedRunning.
+// SetBoardCache routes every graph build through a board snapshot cache,
+// replacing the private one NewAutonomousScheduler sets. The daemon passes its
+// own — the one its board verbs and the attention sweep already read through —
+// so six repos on one board are one cached read, and a build inside the TTL of
+// the last sweep costs nothing. Wiring-time only: call before Run or
+// RecoverOrphanedRunning.
 func (as *AutonomousScheduler) SetBoardCache(cache *boardcache.Cache) {
 	as.boardProvider = depgraph.CachedBoardProvider(as.ghClient, cache)
 	as.boardCache = cache

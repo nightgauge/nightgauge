@@ -29,10 +29,12 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
@@ -125,11 +127,25 @@ func (p *StrandedReadyItems) Evaluate(ctx context.Context, in Input) ([]attentio
 		if err != nil {
 			return nil, fmt.Errorf("stranded-ready-items: build Source A client for %s: %w", in.Repo, err)
 		}
-		items, err := staleClient.Board().ListItems(ctx, "Ready")
+		// Each item's status, number, title, URL and repo are all this reads,
+		// so it takes the board's open summary through the board cache: on
+		// GitHub a conditional REST read with relationship counts, never the
+		// GraphQL read that pays for every item's relationship lists (#1914).
+		boards := in.Boards
+		if boards == nil {
+			boards = boardcache.New(0)
+		}
+		staleClient = boardcache.WrapClient(boards, staleClient, in.Owner, mismatch.ManifestProject)
+		items, _, err := boardcache.ListOpenSummary(ctx, staleClient.Board())
 		if err != nil {
 			return nil, fmt.Errorf("stranded-ready-items: list Ready items on stale project %d for %s: %w", mismatch.ManifestProject, in.Repo, err)
 		}
 		for _, item := range items {
+			// The board's `status:"Ready"` filter this replaced matched the
+			// option name case-insensitively, as every Projects V2 qualifier does.
+			if !strings.EqualFold(item.Status, "Ready") {
+				continue
+			}
 			if item.Repo != "" && item.Repo != in.Repo {
 				continue
 			}
