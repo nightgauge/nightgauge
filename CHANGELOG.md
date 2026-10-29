@@ -128,9 +128,9 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
   concurrent edit. Nested calls and sub-agent messages are now linked to their
   `Task`/`Agent`/`Workflow` delegation by `parent_tool_use_id`, so a sub-agent
   that answered without calling a tool still counts as observed; a delegation
-  with no observed activity, or a record past its new 4 MiB
-  total cap, falls back to filesystem-diff attribution, and the failure says
-  why instead of always claiming the adapter supplied no record. A delegation
+  with no observed activity, or a record past its new 4 MiB total cap, falls
+  back to filesystem-diff attribution, and the failure says why instead of
+  always claiming the adapter supplied no record. A delegation
   the harness rejected (errored result, no nested calls) does not count when
   the same stream has linked another delegation's nested calls, and the link
   holds whichever stream shape delivers the nested call.
