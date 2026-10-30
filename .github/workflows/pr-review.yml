@@ -188,16 +188,22 @@ jobs:
           # Deliberately NO GH_TOKEN / GITHUB_TOKEN.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FINDINGS_FILE: ${{ runner.temp }}/findings/findings.json
+          # The one turn limit; docs/PR_REVIEW_PASSES.md states it too.
+          REVIEW_MAX_TURNS: "80"
         run: |
           set -euo pipefail
           npm install --global --no-fund --no-audit "$(scripts/adapter-cli-pin.sh claude-headless)"
 
           # No Bash: the diff is precomputed, so the model only reads files
-          # and writes the findings file.
+          # and writes the findings file. The limit handling stays in this step
+          # because scripts/ comes from BASE_SHA.
+          RESULT_FILE="$RUNNER_TEMP/review-result.json"
+          status=0
           claude -p \
             --no-session-persistence \
             --allowedTools "Read,Glob,Grep,Write" \
-            --max-turns 40 <<PROMPT
+            --output-format json \
+            --max-turns "$REVIEW_MAX_TURNS" > "$RESULT_FILE" <<PROMPT || status=$?
           Review a pull request. Follow docs/PR_REVIEW_PASSES.md exactly: run
           the correctness, security and plan-compliance passes and use its
           severity scale and finding schema.
@@ -214,6 +220,25 @@ jobs:
           Write ONLY ${FINDINGS_FILE}, with exactly the schema in the doc.
           At most 30 findings. If you find nothing, leave the file as it is.
           PROMPT
+
+          # A CLI crash leaves no JSON, so a missing subtype is not an error.
+          jq -r '.result // empty' "$RESULT_FILE" 2>/dev/null || true
+          subtype="$(jq -r '.subtype // empty' "$RESULT_FILE" 2>/dev/null || true)"
+
+          # The subtype, not the text: the model writes about untrusted diffs.
+          if [ "$subtype" = "error_max_turns" ]; then
+            message="The review did not finish: it reached the limit of $REVIEW_MAX_TURNS turns."
+            message="$message No findings were posted."
+            echo "::error title=Review did not finish::$message See docs/PR_REVIEW_PASSES.md#turn-limit."
+            {
+              echo "### PR review did not finish"
+              echo
+              echo "$message This is not a pass. Split the pull request into smaller ones;"
+              echo "see the Turn limit section of docs/PR_REVIEW_PASSES.md."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          exit "$status"
 
       - name: Validate the findings
         env:
