@@ -45,7 +45,7 @@ func TestClosingKeywords(t *testing.T) {
 func TestClosingRefsNumbers(t *testing.T) {
 	body := "Fixes #3, closes https://github.com/o/r/issues/7 and resolves o/r#9"
 	refs := ClosingRefs(body)
-	want := []ClosingRef{{"#3", "", 3}, {"https://github.com/o/r/issues/7", "o/r", 7}, {"o/r#9", "o/r", 9}}
+	want := []ClosingRef{{"#3", "", "", 3}, {"https://github.com/o/r/issues/7", "o/r", "github.com", 7}, {"o/r#9", "o/r", "", 9}}
 	if len(refs) != len(want) {
 		t.Fatalf("ClosingRefs = %+v, want %+v", refs, want)
 	}
@@ -80,5 +80,15 @@ func TestClosingKeywordsSharedTable(t *testing.T) {
 		if got := ClosesIssue(c.Body, c.Repo, c.N); got != c.Closes {
 			t.Errorf("ClosesIssue(%q, %q, %d) = %v, want %v", c.Body, c.Repo, c.N, got, c.Closes)
 		}
+	}
+}
+
+// Defanging untrusted text over-matches: a URL closer on any host becomes
+// Refs, since a GitHub Enterprise server acts on its own host (#2687).
+func TestRewriteClosingRefsDefangsEveryHost(t *testing.T) {
+	in := "Closes https://ghes.example/o/r/issues/7 and fixes https://github.com/o/r/issues/8"
+	want := "Refs https://ghes.example/o/r/issues/7 and Refs https://github.com/o/r/issues/8"
+	if got := RewriteClosingRefs(in, func(ClosingRef) bool { return true }); got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

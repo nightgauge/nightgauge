@@ -211,8 +211,10 @@ func TestRewriteClosesToRefs(t *testing.T) {
 }
 
 func TestRewriteAllClosesToRefs(t *testing.T) {
-	in := "Closes #7, fixes o/r#8, resolves https://github.com/o/r/issues/9, Refs #10"
-	want := "Refs #7, Refs o/r#8, Refs https://github.com/o/r/issues/9, Refs #10"
+	in := "Closes #7, fixes o/r#8, resolves https://github.com/o/r/issues/9, Refs #10, " +
+		"closes https://ghes.example/o/r/issues/11"
+	want := "Refs #7, Refs o/r#8, Refs https://github.com/o/r/issues/9, Refs #10, " +
+		"Refs https://ghes.example/o/r/issues/11"
 	got := RewriteAllClosesToRefs(in)
 	if got != want {
 		t.Errorf("got %q", got)
