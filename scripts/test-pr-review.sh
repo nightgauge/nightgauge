@@ -146,6 +146,79 @@ expect "gate: writes GITHUB_OUTPUT" 1 "$(grep -c '^reason=no ANTHROPIC_API_KEY' 
 node "$CLI" gate --event pull_request > /dev/null 2>&1
 expect "gate: missing --pr-json is a usage error" 2 $?
 
+# The review step's turn limit. The real step runs against stub claude and npm
+# binaries: what differs between the arms is the CLI's result, and the assertions
+# read the step's exit code, annotation and job summary.
+WORKFLOW=".github/workflows/pr-review.yml"
+STEP_SELECT='.jobs.review.steps[] | select(.name == "Run the review passes")'
+if ! command -v yq > /dev/null 2>&1; then
+  echo "HARNESS ERROR: yq is not installed; the review step could not run"
+  exit 1
+fi
+STEP_RUN="$(yq "$STEP_SELECT | .run" "$WORKFLOW")"
+MAX_TURNS="$(yq "$STEP_SELECT | .env.REVIEW_MAX_TURNS" "$WORKFLOW")"
+if [ -z "$STEP_RUN" ] || [ "$STEP_RUN" = "null" ] || [ "$MAX_TURNS" = "null" ]; then
+  echo "HARNESS ERROR: could not extract the review step from $WORKFLOW"
+  exit 1
+fi
+
+expect "limit: the turn limit is 80" 80 "$MAX_TURNS"
+expect "limit: one --max-turns in the workflow" 1 "$(grep -c -e '--max-turns' "$WORKFLOW")"
+
+STUBS="$TMP/stubs"
+mkdir -p "$STUBS"
+printf '#!/bin/sh\nexit 0\n' > "$STUBS/npm"
+cat > "$STUBS/claude" <<'STUB'
+#!/bin/sh
+cat > /dev/null
+printf '%s' "$STUB_OUTPUT"
+exit "$STUB_STATUS"
+STUB
+chmod +x "$STUBS/npm" "$STUBS/claude"
+
+run_step() {
+  # run_step <case> <stub stdout> <stub exit> -> sets STEP_STATUS; output in $TMP/<case>.*
+  local name="$1" dir="$TMP/step-$1"
+  mkdir -p "$dir"
+  : > "$dir/summary"
+  PATH="$STUBS:$PATH" RUNNER_TEMP="$dir" GITHUB_STEP_SUMMARY="$dir/summary" \
+    FINDINGS_FILE="$dir/findings.json" REVIEW_MAX_TURNS="$MAX_TURNS" \
+    STUB_OUTPUT="$2" STUB_STATUS="$3" bash -c "$STEP_RUN" > "$dir/log" 2>&1
+  STEP_STATUS=$?
+}
+count() { grep -c -e "$1" "$2"; }
+
+LIMIT_JSON='{"type":"result","subtype":"error_max_turns","is_error":true,"result":null,
+  "errors":["Reached maximum number of turns (80)"]}'
+
+run_step limit1 "$LIMIT_JSON" 1
+expect "limit reached: step is red" 1 "$STEP_STATUS"
+expect "limit reached: annotation names the limit" 1 \
+  "$(count '^::error title=Review did not finish::.*did not finish.*limit of 80 turns' "$TMP/step-limit1/log")"
+expect "limit reached: summary names the limit" 1 \
+  "$(count 'did not finish: it reached the limit of 80 turns' "$TMP/step-limit1/summary")"
+
+run_step limit0 "$LIMIT_JSON" 0
+expect "limit reached, CLI exit 0: step is still red" 1 "$STEP_STATUS"
+expect "limit reached, CLI exit 0: annotation" 1 \
+  "$(count '^::error title=Review did not finish' "$TMP/step-limit0/log")"
+
+run_step ok '{"type":"result","subtype":"success","is_error":false,"result":"All clear."}' 0
+expect "success: step is green" 0 "$STEP_STATUS"
+expect "success: closing message stays in the log" 1 "$(count '^All clear\.$' "$TMP/step-ok/log")"
+expect "success: no annotation" 0 "$(count '::error' "$TMP/step-ok/log")"
+expect "success: empty summary" 0 "$(wc -c < "$TMP/step-ok/summary" | tr -d ' ')"
+
+run_step crash '' 1
+expect "other failure: step keeps the CLI's exit" 1 "$STEP_STATUS"
+expect "other failure: no did-not-finish text" 0 \
+  "$(cat "$TMP/step-crash/log" "$TMP/step-crash/summary" | grep -c 'did not finish')"
+
+run_step other 'Reached max turns, said the model' 3
+expect "other text: exit code preserved" 3 "$STEP_STATUS"
+expect "other text: not read as the limit" 0 \
+  "$(cat "$TMP/step-other/log" "$TMP/step-other/summary" | grep -c 'did not finish')"
+
 echo
 echo "pr-review: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
