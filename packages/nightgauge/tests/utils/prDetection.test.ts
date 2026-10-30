@@ -4,6 +4,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { exec } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
 import {
   parsePRFromGHCLI,
   hasInReviewLabel,
@@ -421,23 +423,26 @@ describe("prDetection", () => {
 });
 
 describe("closing-keyword predicates (#2689)", () => {
-  it("prBodyClosesIssue accepts every closing form", () => {
-    for (const body of [
-      "Closes #2689",
-      "fixes: #2689",
-      "RESOLVED #2689",
-      "Fixes nightgauge/nightgauge#2689",
-      "Closes https://github.com/nightgauge/nightgauge/issues/2689",
-    ]) {
-      expect(prBodyClosesIssue(body, 2689), body).toBe(true);
+  // The same table drives Go's forge.ClosesIssue, so the two matchers cannot
+  // drift apart unnoticed (#2687).
+  it("prBodyClosesIssue agrees with Go on the shared grammar table", () => {
+    const table = JSON.parse(
+      fs.readFileSync(
+        path.resolve(__dirname, "../../../../internal/forge/testdata/closing_keywords.json"),
+        "utf-8"
+      )
+    ) as { body: string; repo: string; n: number; closes: boolean }[];
+    expect(table.length).toBeGreaterThan(0);
+    for (const c of table) {
+      expect(prBodyClosesIssue(c.body, c.n, c.repo), c.body).toBe(c.closes);
     }
   });
 
-  it("prBodyClosesIssue rejects non-closing references", () => {
-    for (const body of ["Refs #2689", "Closes #26890", "", "fix(#2689): thing", "Part of #2689"]) {
-      expect(prBodyClosesIssue(body, 2689), body).toBe(false);
-    }
-    expect(prBodyClosesIssue(undefined, 2689)).toBe(false);
+  it("prBodyClosesIssue with an unknown repository counts only a bare #N", () => {
+    expect(prBodyClosesIssue("Closes #2689", 2689, "")).toBe(true);
+    expect(prBodyClosesIssue("Fixes other/repo#2689", 2689, "")).toBe(false);
+    expect(prBodyClosesIssue("Closes https://github.com/o/r/issues/2689", 2689, "")).toBe(false);
+    expect(prBodyClosesIssue(undefined, 2689, "o/r")).toBe(false);
   });
 
   it("mentionsIssue is word-boundary anchored", () => {
@@ -450,8 +455,10 @@ describe("closing-keyword predicates (#2689)", () => {
     const cite = { number: 1, title: "fix(#2684): other (#2689)", body: "Refs #2689" };
     const scoped = { number: 2, title: "fix(#2689): this", body: "Refs #2689" };
     const closer = { number: 3, title: "chore: x", body: "Closes #2689" };
-    expect(pickMergedPRForIssue(2689, [cite, scoped, closer])?.number).toBe(3);
-    expect(pickMergedPRForIssue(2689, [cite, scoped])?.number).toBe(2);
-    expect(pickMergedPRForIssue(2689, [cite])).toBeNull();
+    const elsewhere = { number: 4, title: "chore: y", body: "Closes other/repo#2689" };
+    expect(pickMergedPRForIssue(2689, [cite, scoped, closer], "o/r")?.number).toBe(3);
+    expect(pickMergedPRForIssue(2689, [elsewhere, scoped], "o/r")?.number).toBe(2);
+    expect(pickMergedPRForIssue(2689, [cite, scoped], "o/r")?.number).toBe(2);
+    expect(pickMergedPRForIssue(2689, [cite], "o/r")).toBeNull();
   });
 });

@@ -81,7 +81,9 @@ func writeBackstopContext(t *testing.T, criteria ...string) string {
 		acs = append(acs, map[string]any{"index": i, "text": c})
 	}
 	write("ac-reconcile-7.json", map[string]any{"acceptance_criteria": acs})
-	write("pr-7.json", map[string]any{"pr_number": 42, "closes_issue": true, "status": "open"})
+	write("pr-7.json", map[string]any{
+		"pr_number": 42, "pr_url": "https://github.com/o/r/pull/42", "closes_issue": true, "status": "open",
+	})
 	return dir
 }
 
@@ -126,7 +128,7 @@ func TestACBackstop_UncoveredACDemotesBeforeMerge(t *testing.T) {
 		t.Errorf("events = %v, want edit then merge", b.events)
 	}
 	got := b.edited[0]
-	if BodyClosesIssue(got, 7) || !strings.Contains(got, "Refs #7") {
+	if BodyClosesIssue(got, "o/r", 7) || !strings.Contains(got, "Refs #7") {
 		t.Errorf("body still closes #7:\n%s", got)
 	}
 	if !strings.Contains(got, UnmetACHeading) || !strings.Contains(got, "- five added later") || strings.Contains(got, "six") {
@@ -198,23 +200,27 @@ func TestACBackstop_ClientWithoutInterface(t *testing.T) {
 
 func TestRewriteClosesToRefs(t *testing.T) {
 	in := "Closes #7\nfixes o/r#7 and resolves #70\nClose #8\n" +
-		"Resolves https://github.com/o/r/issues/7\nfixes https://github.com/o/r/issues/8"
+		"Resolves https://github.com/o/r/issues/7\nfixes https://github.com/o/r/issues/8\n" +
+		"fixes other/repo#7 and closes https://github.com/other/repo/issues/7"
 	want := "Refs #7\nRefs o/r#7 and resolves #70\nClose #8\n" +
-		"Refs https://github.com/o/r/issues/7\nfixes https://github.com/o/r/issues/8"
-	if got := RewriteClosesToRefs(in, 7); got != want {
+		"Refs https://github.com/o/r/issues/7\nfixes https://github.com/o/r/issues/8\n" +
+		"fixes other/repo#7 and closes https://github.com/other/repo/issues/7"
+	if got := RewriteClosesToRefs(in, "o/r", 7); got != want {
 		t.Errorf("got %q", got)
 	}
 }
 
 func TestRewriteAllClosesToRefs(t *testing.T) {
-	in := "Closes #7, fixes o/r#8, resolves https://github.com/o/r/issues/9, Refs #10"
-	want := "Refs #7, Refs o/r#8, Refs https://github.com/o/r/issues/9, Refs #10"
+	in := "Closes #7, fixes o/r#8, resolves https://github.com/o/r/issues/9, Refs #10, " +
+		"closes https://ghes.example/o/r/issues/11"
+	want := "Refs #7, Refs o/r#8, Refs https://github.com/o/r/issues/9, Refs #10, " +
+		"Refs https://ghes.example/o/r/issues/11"
 	got := RewriteAllClosesToRefs(in)
 	if got != want {
 		t.Errorf("got %q", got)
 	}
 	for _, n := range []int{7, 8, 9} {
-		if BodyClosesIssue(got, n) {
+		if BodyClosesIssue(got, "o/r", n) {
 			t.Errorf("rewritten text still closes #%d: %q", n, got)
 		}
 	}
@@ -225,5 +231,60 @@ func TestAppendUnmetACs_ExtendsExistingSection(t *testing.T) {
 	got := AppendUnmetACs(body, 7, []string{"b"})
 	if strings.Count(got, UnmetACHeading) != 1 || !strings.Contains(got, "- a\n- b\n") || !strings.Contains(got, "## Next\ny") {
 		t.Errorf("got:\n%s", got)
+	}
+}
+
+// The backstop scopes closers to the repository in pr_url (#2687): a URL
+// closer for o/r#7 is demoted, another repository's #7 is left alone, and a
+// body closing only another repository's #7 is not demoted at all.
+func TestACBackstop_ScopesClosersToPRRepository(t *testing.T) {
+	run := func(prBody string) *bodyGh {
+		t.Helper()
+		dir := writeBackstopContext(t, "one", "two", "three", "four")
+		b := &bodyGh{
+			queueGh:   queueGh{fakeGh: fakeGh{preMerge: cleanOpen, postMerge: PRViewSnapshot{State: "MERGED"}}},
+			prBody:    prBody,
+			issueBody: fourACs + "- [ ] five added later\n",
+		}
+		if _, err := newBackstopRunner(directBodyGh{b}).Run(context.Background(), 7, "", dir); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	b := run("Closes https://github.com/o/r/issues/7\nFixes other/repo#7\n")
+	if len(b.edited) != 1 {
+		t.Fatalf("edits = %d, want 1", len(b.edited))
+	}
+	if got := b.edited[0]; !strings.Contains(got, "Refs https://github.com/o/r/issues/7") ||
+		!strings.Contains(got, "Fixes other/repo#7") {
+		t.Errorf("body:\n%s", got)
+	}
+
+	if b := run("Fixes https://github.com/other/repo/issues/7\n"); len(b.edited) != 0 {
+		t.Errorf("a body closing only other/repo#7 was demoted: %q", b.edited)
+	}
+}
+
+// With no repository to scope by, the backstop fails closed: a closer naming
+// #7 in any repository is demoted rather than left to close the issue.
+func TestRewriteClosesToRefs_UnknownRepoFailsClosed(t *testing.T) {
+	in := "Fixes other/repo#7\nCloses https://github.com/o/r/issues/7\nCloses #8"
+	want := "Refs other/repo#7\nRefs https://github.com/o/r/issues/7\nCloses #8"
+	if got := RewriteClosesToRefs(in, "", 7); got != want {
+		t.Errorf("got %q", got)
+	}
+	if !BodyClosesIssue("Fixes other/repo#7", "", 7) {
+		t.Error("an unknown repository must count every closer of #7")
+	}
+}
+
+func TestReadPRContextRepo(t *testing.T) {
+	dir := writeBackstopContext(t)
+	if got := readPRContextRepo(dir, 7); got != "o/r" {
+		t.Errorf("readPRContextRepo = %q, want o/r", got)
+	}
+	if got := readPRContextRepo(dir, 8); got != "" {
+		t.Errorf("missing pr-8.json: readPRContextRepo = %q, want empty", got)
 	}
 }

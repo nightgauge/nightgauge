@@ -82,6 +82,11 @@ func TestStrandedFollowUpPRs(t *testing.T) {
 		{"open parent is not stranded", strandedPR(10, "feat/5-x", ""), map[int]string{5: "OPEN"}, 0},
 		{"body closes an open issue", strandedPR(11, "feat/5-x", "Closes #7"),
 			map[int]string{5: "CLOSED", 7: "OPEN"}, 0},
+		{"body closes an open issue by URL", strandedPR(17, "feat/5-x", "Closes https://github.com/o/r/issues/7"),
+			map[int]string{5: "CLOSED", 7: "OPEN"}, 0},
+		{"another repository's open #7 lands nothing here", strandedPR(18, "feat/5-x",
+			"Closes https://github.com/other/repo/issues/7\nFixes other/repo#7"),
+			map[int]string{5: "CLOSED", 7: "OPEN"}, 1},
 		{"body closes a closed issue", strandedPR(12, "feat/5-x", "Fixes #5"), map[int]string{5: "CLOSED"}, 1},
 		{"fork PR is never a candidate", func() forge.OpenPRSummary {
 			pr := strandedPR(14, "feat/5-x", "")

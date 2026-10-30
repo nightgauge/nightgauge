@@ -8893,6 +8893,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       timeout: 30000,
       env: execEnv,
     };
+    // #2687: closing keywords count only for this repository's issue.
+    const repoSlug = await this.resolveRunRepoSlug();
+    if (!repoSlug) {
+      this.logger.warn(
+        "Could not resolve the run's repository; only bare #N closing keywords count",
+        { issueNumber }
+      );
+    }
 
     // Epic branch sub-issues: PRs merge to the epic branch, not main.
     // The issue stays open until the epic→main PR merges (which GitHub
@@ -8927,7 +8935,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       if (!baseBranch.startsWith("epic/")) {
         try {
           mergedPRs ??= await this.listMergedPRsForIssue(issueNumber, ghExecOptions);
-          const prBase = pickMergedPRForIssue(issueNumber, mergedPRs)?.baseRefName ?? "";
+          const prBase = pickMergedPRForIssue(issueNumber, mergedPRs, repoSlug)?.baseRefName ?? "";
           if (prBase?.startsWith("epic/")) {
             baseBranch = prBase;
           }
@@ -8970,7 +8978,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // @see Issue #1452 — stale feat/1462-* branch left on remote
         try {
           mergedPRs ??= await this.listMergedPRsForIssue(issueNumber, ghExecOptions);
-          const headRef = pickMergedPRForIssue(issueNumber, mergedPRs)?.headRefName ?? "";
+          const headRef = pickMergedPRForIssue(issueNumber, mergedPRs, repoSlug)?.headRefName ?? "";
           if (headRef && headRef.startsWith("feat/")) {
             // Check if remote ref still exists (GitHub auto-deletes head branches)
             let refExists = false;
@@ -9092,7 +9100,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // search is full-text, and every pipeline title is `fix(#N): …`, so a
         // search hit alone would close the issue on a `Refs #N` merge.
         mergedPRs ??= await this.listMergedPRsForIssue(issueNumber, ghExecOptions);
-        const closer = mergedPRs.find((pr) => prBodyClosesIssue(pr.body, issueNumber));
+        const closer = mergedPRs.find((pr) => prBodyClosesIssue(pr.body, issueNumber, repoSlug));
         if (closer) {
           mergedPrNumber = closer.number;
         } else if (mergedPRs.length > 0) {
@@ -9165,7 +9173,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           const commitLines = commitLogRaw
             .split("\x1e")
             .map((record) => record.trim().split("\x1f"))
-            .filter(([hash, , message]) => hash && prBodyClosesIssue(message, issueNumber))
+            .filter(
+              ([hash, , message]) => hash && prBodyClosesIssue(message, issueNumber, repoSlug)
+            )
             .map(([hash, subject]) => `${hash} ${subject}`);
           if (commitLines.length > 0) {
             const commitHashes = commitLines.map((line) => line.split(" ")[0]).join(", ");

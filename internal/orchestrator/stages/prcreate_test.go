@@ -693,7 +693,7 @@ func TestRunner_ClosesIssueMatchesBody(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
-			if want := BodyClosesIssue(RenderBody(snap), 42); got.ClosesIssue != want {
+			if want := BodyClosesIssue(RenderBody(snap), "o/r", 42); got.ClosesIssue != want {
 				t.Errorf("closes_issue = %v, body closes = %v (reason %q)", got.ClosesIssue, want, res.Reason)
 			}
 		}
@@ -713,16 +713,18 @@ func TestRenderBody_CriterionClosingKeywordDoesNotClose(t *testing.T) {
 	body := RenderBody(s)
 	// Criterion text is untrusted: a keyword naming ANOTHER issue must not
 	// close it either.
-	if BodyClosesIssue(body, 999) || BodyClosesIssue(body, 998) || BodyClosesIssue(body, 997) {
+	// The oracle is written independently of the matcher that defangs, so the
+	// two cannot drift together.
+	if githubCloses(body, 999) || githubCloses(body, 998) || githubCloses(body, 997) {
 		t.Errorf("criterion text must not close an unrelated issue:\n%s", body)
 	}
-	if got, want := BodyClosesIssue(body, 42), IssueClosedBy(s.ACVerdicts); got != want {
+	if got, want := BodyClosesIssue(body, "o/r", 42), IssueClosedBy(s.ACVerdicts); got != want {
 		t.Errorf("body closes = %v, verdicts close = %v\n%s", got, want, body)
 	}
-	if got := AppendUnmetACs("Refs #42\n", 42, []string{"fix #42 here"}); BodyClosesIssue(got, 42) {
+	if got := AppendUnmetACs("Refs #42\n", 42, []string{"fix #42 here"}); BodyClosesIssue(got, "o/r", 42) {
 		t.Errorf("AppendUnmetACs must not add a closing keyword: %q", got)
 	}
-	if got := AppendUnmetACs("Refs #42\n", 42, []string{"closes #999"}); BodyClosesIssue(got, 999) {
+	if got := AppendUnmetACs("Refs #42\n", 42, []string{"closes #999"}); BodyClosesIssue(got, "o/r", 999) {
 		t.Errorf("AppendUnmetACs must not close an unrelated issue: %q", got)
 	}
 }
@@ -731,7 +733,7 @@ func TestRenderBody_NamesMissingACReconcile(t *testing.T) {
 	s := richSnap()
 	s.ACReconcileMissing = true
 	body := RenderBody(s)
-	if !strings.Contains(body, "ac-reconcile-42.json was not found") || BodyClosesIssue(body, 42) {
+	if !strings.Contains(body, "ac-reconcile-42.json was not found") || BodyClosesIssue(body, "o/r", 42) {
 		t.Errorf("missing artifact must be named and must not close:\n%s", body)
 	}
 }
