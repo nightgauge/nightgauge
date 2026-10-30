@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -232,6 +234,74 @@ func TestIsBlocked_OpenBlockerKeysOnState(t *testing.T) {
 	blocked, err := (&Scheduler{}).isBlocked(context.Background(), item)
 	if err != nil || !blocked {
 		t.Fatalf("isBlocked = %v, %v; want true for an OPEN blocker", blocked, err)
+	}
+}
+
+// TestPromotion_OpenDoneBlockerHoldsItsDependent reproduces the #2684 incident's
+// board: a `Refs` merge left the blocker OPEN and Done, with a dependent in
+// Backlog. Neither Backlog promotion path may move the dependent. The independent
+// node is promoted, which is what really happened to #2702: it had no edge to
+// #2684, and promoteUnblockedToReady sweeps every Backlog node (#288).
+func TestPromotion_OpenDoneBlockerHoldsItsDependent(t *testing.T) {
+	const repo = "nightgauge/nightgauge"
+	paths := map[string]func(as *AutonomousScheduler){
+		"cascade": func(as *AutonomousScheduler) { as.promoteUnblockedToReady(as.backgroundContext(), repo, 2684) },
+		"startup": func(as *AutonomousScheduler) { as.promoteUnblockedOnStartup(context.Background()) },
+	}
+	for name, promote := range paths {
+		t.Run(name, func(t *testing.T) {
+			as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
+			blocker := &depgraph.Node{Repo: repo, Number: 2684, State: "OPEN", BoardStatus: "Done"}
+			dependent := &depgraph.Node{
+				Repo: repo, Number: 2703, State: "OPEN", BoardStatus: "Backlog",
+				Priority: "P1", Labels: []string{"type:bug"}, AuthorLogin: "maintainer",
+			}
+			independent := &depgraph.Node{
+				Repo: repo, Number: 2702, State: "OPEN", BoardStatus: "Backlog",
+				Priority: "P1", Labels: []string{"type:bug"}, AuthorLogin: "maintainer",
+			}
+			edges := []depgraph.Edge{{From: dependent.ID(), To: blocker.ID()}}
+			as.buildGraphFn = func(_ context.Context) (*depgraph.Graph, error) {
+				return buildTestGraph([]*depgraph.Node{blocker, dependent, independent}, edges), nil
+			}
+
+			promote(as)
+			as.drainBackground()
+
+			if as.state.LastPromotionEligible != 1 {
+				t.Errorf("LastPromotionEligible = %d, want 1: only the independent node may promote", as.state.LastPromotionEligible)
+			}
+			if got := as.state.LastPromotionRejectionReasons["open-blocker"]; got != 1 {
+				t.Errorf("open-blocker rejections = %d, want 1: %v", got, as.state.LastPromotionRejectionReasons)
+			}
+		})
+	}
+}
+
+func TestIsTriagedAndUnblocked_OpenBlockerBlocksWhateverItsStatus(t *testing.T) {
+	dependent := &depgraph.Node{
+		Repo: "O/app", Number: 2, State: "OPEN", BoardStatus: "Backlog",
+		Priority: "P1", Labels: []string{"type:bug"},
+	}
+	eligible := func(*depgraph.Node) bool { return true }
+	for _, status := range []string{"Done", "In review", "Ready", ""} {
+		blocker := &depgraph.Node{Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: status}
+		g := buildTestGraph([]*depgraph.Node{blocker, dependent}, []depgraph.Edge{{From: dependent.ID(), To: blocker.ID()}})
+		if isTriagedAndUnblocked(dependent, g, g.Adjacency(), eligible) {
+			t.Errorf("status %q: an OPEN blocker released its dependent", status)
+		}
+	}
+}
+
+// TestPromotionCause: the promotion log names a cause only for a real dependent
+// of the completed issue.
+func TestPromotionCause(t *testing.T) {
+	dependents := []string{"O/app#2"}
+	if got, want := promotionCause(dependents, "O/app#2", "O/app#1"), "unblocked by O/app#1"; got != want {
+		t.Errorf("dependent: got %q, want %q", got, want)
+	}
+	if got := promotionCause(dependents, "O/app#3", "O/app#1"); strings.Contains(got, "unblocked by") {
+		t.Errorf("independent node reported as unblocked: %q", got)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -4935,13 +4936,8 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			continue
 		}
 
-		// Check if all dependencies are satisfied. A dep blocks dispatch only
-		// when it is OPEN and its work is not yet effectively complete. "In
-		// review" means the PR is open / merging — the upstream work is done,
-		// so downstream items can start. (If the PR is later rejected, the
-		// issue moves back to In progress / Backlog and the dep re-blocks on
-		// the next scan — self-healing.) "Done" is already CLOSED so it never
-		// reaches this branch.
+		// Check if all dependencies are satisfied. An OPEN dep blocks dispatch
+		// whatever its board status (#2706); see evaluateDeps.
 		blocked := false
 		var blocker, blockerStatus, blockerEdge string
 		offBoard, unvalidated := false, false
@@ -7190,8 +7186,8 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 			continue
 		}
 		promoted++
-		log.Printf("autonomous: promoted %s#%d from Backlog → Ready (unblocked by %s#%d)",
-			node.Repo, node.Number, completedRepo, completedIssue)
+		log.Printf("autonomous: promoted %s#%d from Backlog → Ready (%s)",
+			node.Repo, node.Number, promotionCause(downstreamKeys, downKey, completedKey))
 	}
 
 	as.recordPromotionDiagnostics(considered, eligible, promoted, rejections)
@@ -7201,6 +7197,17 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 	if promoted > 0 {
 		log.Printf("autonomous: promoteUnblockedToReady: promoted %d issue(s) to Ready", promoted)
 	}
+}
+
+// promotionCause names why promoteUnblockedToReady moved key. Its candidates
+// include every Backlog node (#288), so most promotions are not caused by the
+// completed issue. Saying "unblocked by" for those is how #2702, which depends
+// on nothing, was reported as released by #2684 (#2706).
+func promotionCause(dependents []string, key, completedKey string) string {
+	if slices.Contains(dependents, key) {
+		return "unblocked by " + completedKey
+	}
+	return "backlog sweep after " + completedKey + ", not a dependent"
 }
 
 // recordPromotionDiagnostics overwrites the LastPromotion* diagnostics fields

@@ -7125,15 +7125,9 @@ cause the command to exit non-zero.`,
 
 			// The extension passes no --project, so resolve the board the way
 			// sync-status does: the hook owns Ready on a `Refs` merge and the
-			// stage sync no longer writes over it (#2706). The hook is
-			// non-blocking, so a repo with no board keeps skipping the sync.
-			if !cmd.Flags().Changed("project") {
-				if cfg, cfgErr := config.Load(workdir); cfgErr == nil && cfg != nil {
-					if resolved, resolveErr := resolveProjectNumber(cfg, false, projectNumber, ownerPart, repoPart, workdir); resolveErr == nil {
-						projectNumber = resolved
-					}
-				}
-			}
+			// stage sync no longer writes over it (#2706).
+			cfg, cfgErr := config.Load(workdir)
+			projectNumber = hookBoardProject(os.Stderr, cmd.Flags().Changed("project"), projectNumber, cfg, cfgErr, ownerPart, repoPart, workdir)
 
 			// Board syncer is only wired when a project is configured; the hook
 			// no-ops the board-Done sync (#3981) when it is nil.
@@ -10211,6 +10205,28 @@ func resolveProjectNumber(cfg *config.Config, explicitProject bool, projectNumbe
 		SharedBoard: projectNumber,
 		StartDir:    startDir,
 	})
+}
+
+// hookBoardProject picks the board `hook post-merge` syncs. An explicit
+// --project wins; otherwise the board comes from resolveProjectNumber. The hook
+// is non-blocking, so a failure keeps projectNumber and skips the sync, but it
+// warns on w: the stage sync no longer writes Done over the hook, so a skipped
+// sync leaves a partial delivery in its old column with nothing else to say why
+// (#2706).
+func hookBoardProject(w io.Writer, explicitProject bool, projectNumber int, cfg *config.Config, cfgErr error, ownerPart, repoPart, workdir string) int {
+	if explicitProject {
+		return projectNumber
+	}
+	if cfgErr != nil {
+		fmt.Fprintf(w, "Warning: post-merge board sync skipped: load config: %v\n", cfgErr)
+		return projectNumber
+	}
+	resolved, err := resolveProjectNumber(cfg, false, projectNumber, ownerPart, repoPart, workdir)
+	if err != nil {
+		fmt.Fprintf(w, "Warning: post-merge board sync skipped: %v\n", err)
+		return projectNumber
+	}
+	return resolved
 }
 
 func printJSON(v interface{}) error {

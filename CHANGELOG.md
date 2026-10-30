@@ -26,10 +26,12 @@ changelog, and the release workflow refuses a tag that does not.
 - **A `Refs #N` merge now leaves the issue open and Ready (#2706).** The pipeline's pr-merge
   status sync writes Done only for a closed issue, and completion keeps the hook's Ready, so the
   scheduler dispatches the remainder. `nightgauge hook post-merge` resolves the repository's
-  board when `--project` is omitted. A failed run's In review park now uses the new
+  board when `--project` is omitted, and warns on stderr when it cannot, instead of skipping the
+  sync silently. A failed run's In review park now uses the new
   `project sync-status --only-from "In progress"`, so it never overwrites the scheduler's Ready.
   **Dependents now wait for a blocker to close:** an open issue never releases them, whatever
-  its board status, including one In review with an open PR.
+  its board status, including one In review with an open PR. The promotion log says "unblocked
+  by" only for a real dependent of the completed issue, not for every Backlog item it sweeps.
 - A closing keyword followed by a github.com issue URL
   (`Closes https://github.com/o/r/issues/N`) now counts as closing the issue, as it does on
   GitHub; a URL on any other host does not. The pr-merge acceptance backstop
