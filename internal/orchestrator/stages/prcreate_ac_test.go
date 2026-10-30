@@ -110,9 +110,9 @@ func githubCloses(body string, n int) bool {
 			rest := strings.TrimLeft(lower[end:], " \t")
 			rest = strings.TrimLeft(strings.TrimPrefix(rest, ":"), " \t")
 			if strings.HasPrefix(rest, "http://") || strings.HasPrefix(rest, "https://") {
-				// https://host/owner/repo/issues/N
+				// https://github.com/owner/repo/issues/N; GitHub acts on no other host.
 				parts := strings.SplitN(rest[strings.Index(rest, "//")+2:], "/", 5)
-				if len(parts) == 5 && parts[3] == "issues" && endsRef(parts[4]) {
+				if len(parts) == 5 && parts[0] == "github.com" && parts[3] == "issues" && endsRef(parts[4]) {
 					return true
 				}
 				continue

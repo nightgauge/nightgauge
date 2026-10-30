@@ -1,24 +1,134 @@
 [
-  { "body": "Closes #7", "repo": "o/r", "n": 7, "closes": true },
-  { "body": "closed #7", "repo": "o/r", "n": 7, "closes": true },
-  { "body": "Fixes:#7", "repo": "o/r", "n": 7, "closes": true },
-  { "body": "fixes: o/r#7", "repo": "o/r", "n": 7, "closes": true },
-  { "body": "resolves O/R#7", "repo": "o/r", "n": 7, "closes": true },
-  { "body": "Resolved https://github.com/o/r/issues/7", "repo": "o/r", "n": 7, "closes": true },
-  { "body": "closes http://ghe.example/o/r/issues/7", "repo": "o/r", "n": 7, "closes": true },
-  { "body": "Refs #7", "repo": "o/r", "n": 7, "closes": false },
-  { "body": "Part of #7", "repo": "o/r", "n": 7, "closes": false },
-  { "body": "fix(#7): thing", "repo": "o/r", "n": 7, "closes": false },
-  { "body": "Closes #70", "repo": "o/r", "n": 7, "closes": false },
-  { "body": "Closes https://github.com/o/r/pull/7", "repo": "o/r", "n": 7, "closes": false },
-  { "body": "Closes https://github.com/o/r/issues/7x", "repo": "o/r", "n": 7, "closes": false },
-  { "body": "Fixes other/repo#7", "repo": "o/r", "n": 7, "closes": false },
+  {
+    "body": "Closes #7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "closed #7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "Fixes:#7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "fixes: o/r#7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "resolves O/R#7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "Resolved https://github.com/o/r/issues/7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "closes http://ghe.example/o/r/issues/7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Refs #7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Part of #7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "fix(#7): thing",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Closes #70",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Closes https://github.com/o/r/pull/7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Closes https://github.com/o/r/issues/7x",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Fixes other/repo#7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
   {
     "body": "Closes https://github.com/other/repo/issues/7",
     "repo": "o/r",
     "n": 7,
     "closes": false
   },
-  { "body": "Refs #7\nCloses #12", "repo": "o/r", "n": 7, "closes": false },
-  { "body": "Fixes other/repo#7, closes #7", "repo": "o/r", "n": 7, "closes": true }
+  {
+    "body": "Refs #7\nCloses #12",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Fixes other/repo#7, closes #7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "Closes https://evil.example/o/r/issues/7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Closes https://github.com.evil.example/o/r/issues/7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Closes #7",
+    "repo": "",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "Fixes o/r#7",
+    "repo": "",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Closes https://github.com/o/r/issues/7",
+    "repo": "",
+    "n": 7,
+    "closes": false
+  }
 ]

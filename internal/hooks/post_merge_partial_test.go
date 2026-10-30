@@ -188,7 +188,8 @@ func TestClosesIssue(t *testing.T) {
 		{"Implements #600\nPart of #600", false},
 		{"Refs #600\nCloses #12", false},
 		{"Closes https://github.com/nightgauge/nightgauge/issues/600", true},
-		{"fixes: http://ghe.example/nightgauge/nightgauge/issues/600", true},
+		{"fixes: http://github.com/nightgauge/nightgauge/issues/600", true},
+		{"fixes: https://evil.example/nightgauge/nightgauge/issues/600", false},
 		{"Closes https://github.com/nightgauge/nightgauge/pull/600", false},
 		{"Closes https://github.com/nightgauge/nightgauge/issues/6000", false},
 		// Issue numbers overlap across repositories: another repo's #600 is

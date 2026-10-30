@@ -339,7 +339,8 @@ function issueRefPattern(issueNumber: number): string {
  * True when `text` carries a GitHub closing keyword (close/closes/closed,
  * fix/fixes/fixed, resolve/resolves/resolved, optional `:`) immediately
  * before a reference to issue `issueNumber` of `repo` ("owner/repo") — `#N`,
- * `owner/repo#N`, or the issue URL on any host. `Refs #N`, `Part of #N` and a
+ * `owner/repo#N`, or the github.com issue URL (no other host: GitHub acts on
+ * none, and a PR body is untrusted). `Refs #N`, `Part of #N` and a
  * title scope `fix(#N)` are not closing references.
  *
  * A bare `#N` names the PR's own repository; a reference naming a repository
@@ -359,7 +360,7 @@ export function prBodyClosesIssue(
 ): boolean {
   if (!text) return false;
   const closer =
-    /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(?:([\w.-]+\/[\w.-]+)?#(\d+)|https?:\/\/[^\s/]+\/([\w.-]+\/[\w.-]+)\/issues\/(\d+))\b/gi;
+    /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(?:([\w.-]+\/[\w.-]+)?#(\d+)|https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+))\b/gi;
   for (const m of text.matchAll(closer)) {
     const refRepo = m[1] ?? m[3] ?? "";
     const num = Number(m[2] ?? m[4]);

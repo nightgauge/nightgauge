@@ -7,15 +7,16 @@ import (
 )
 
 // closingKeywordRE matches GitHub's closing keywords followed by an issue
-// reference: `#N`, `owner/repo#N`, or an issue URL `https://host/owner/repo/issues/N`
-// (#2687). It is the only Go definition: the pr-merge AC backstop, the
+// reference: `#N`, `owner/repo#N`, or an issue URL `https://github.com/owner/repo/issues/N`
+// (#2687). Only the github.com host counts, as on GitHub: a URL on any other
+// host is untrusted PR text GitHub never acts on. It is the only Go definition: the pr-merge AC backstop, the
 // post-merge hook and the stranded follow-up producer all read it, so they
 // agree on what closes an issue. packages/nightgauge/src/utils/prDetection.ts
 // keeps a TypeScript copy of the same grammar.
 // Group 1 is the reference text; group 2 or 4 is the "owner/repo" it names
 // (empty for a bare `#N`); group 3 or 5 is the issue number.
 var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*` +
-	`(([\w.-]+/[\w.-]+)?#(\d+)|https?://[^\s/]+/([\w.-]+/[\w.-]+)/issues/(\d+))\b`)
+	`(([\w.-]+/[\w.-]+)?#(\d+)|https?://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+))\b`)
 
 // ClosingRef is one closing-keyword reference in a body. Ref is the text after
 // the keyword (`#7`, `o/r#7`, or the URL); Repo is the "owner/repo" the

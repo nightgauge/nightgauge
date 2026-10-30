@@ -8895,6 +8895,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     };
     // #2687: closing keywords count only for this repository's issue.
     const repoSlug = await this.resolveRunRepoSlug();
+    if (!repoSlug) {
+      this.logger.warn(
+        "Could not resolve the run's repository; only bare #N closing keywords count",
+        { issueNumber }
+      );
+    }
 
     // Epic branch sub-issues: PRs merge to the epic branch, not main.
     // The issue stays open until the epic→main PR merges (which GitHub

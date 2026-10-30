@@ -18,7 +18,7 @@ func TestClosingKeywords(t *testing.T) {
 		{"Closes #7", 7, true, "Refs #7"},
 		{"fixes: o/r#7", 7, true, "Refs o/r#7"},
 		{"Resolved https://github.com/o/r/issues/7", 7, true, "Refs https://github.com/o/r/issues/7"},
-		{"closes http://ghe.example/o/r/issues/7", 7, true, "Refs http://ghe.example/o/r/issues/7"},
+		{"closes http://ghe.example/o/r/issues/7", 7, false, "closes http://ghe.example/o/r/issues/7"},
 		{"Refs https://github.com/o/r/issues/7", 7, false, "Refs https://github.com/o/r/issues/7"},
 		{"Closes https://github.com/o/r/pull/7", 7, false, "Closes https://github.com/o/r/pull/7"},
 		{"Closes https://github.com/o/r/issues/7x", 7, false, "Closes https://github.com/o/r/issues/7x"},
