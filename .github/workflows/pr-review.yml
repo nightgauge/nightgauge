@@ -197,7 +197,7 @@ jobs:
           claude -p \
             --no-session-persistence \
             --allowedTools "Read,Glob,Grep,Write" \
-            --max-turns 40 <<PROMPT
+            --max-turns 80 <<PROMPT
           Review a pull request. Follow docs/PR_REVIEW_PASSES.md exactly: run
           the correctness, security and plan-compliance passes and use its
           severity scale and finding schema.

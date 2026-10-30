@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The advisory PR Review job no longer fails on large pull requests. Its model
+  turn cap rises from 40 to 80, because a diff of about 1,300 lines reached the
+  old cap on every run and ended with no review posted.
 - A re-run that rebased its conflicting PR branch no longer ends `branch_forked`.
   When origin's copy of the branch carries no change the local tree lacks, even
   if the rebase rewrote a commit's surrounding lines, the new

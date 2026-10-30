@@ -74,6 +74,7 @@ rejected.
 | Nitpicks shown    | 5     | The rest are counted in an "N more nitpicks omitted" line |
 | `claim` length    | 300   | Longer is rejected                                        |
 | `fix` length      | 1000  | Longer is rejected                                        |
+| Model turns       | 80    | The review job fails without posting if it reaches this   |
 
 ## Output
 
