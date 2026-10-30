@@ -9,6 +9,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
@@ -231,6 +232,11 @@ type strandedForge struct {
 
 func (f *strandedForge) Issues() forge.IssueService { return f.issues }
 
+// Board and Project answer nil so boardcache.WrapClient can wrap the fake
+// without a board behind it.
+func (f *strandedForge) Board() forge.BoardService     { return nil }
+func (f *strandedForge) Project() forge.ProjectService { return nil }
+
 type strandedGQLForge struct {
 	strandedForge
 	queries int
@@ -256,8 +262,9 @@ func (s *strandedIssues) CreateIssue(_ context.Context, repoID, title, body stri
 }
 
 // TestStrandedFollowUpPRs_FilesThroughSharedReadsWrap runs the producer's own
-// filing path through the client the sweep passes it, NewSharedReads().Wrap,
-// which embeds only forge.ForgeClient (#2684).
+// filing path through the client the sweep passes it: NewSharedReads().Wrap
+// over boardcache.WrapClient, both of which embed only forge.ForgeClient
+// (#2684). The direct wrap is kept as a second composition.
 func TestStrandedFollowUpPRs_FilesThroughSharedReadsWrap(t *testing.T) {
 	newProducer := func() *StrandedFollowUpPRs {
 		f := &strandedFake{
@@ -268,34 +275,44 @@ func TestStrandedFollowUpPRs_FilesThroughSharedReadsWrap(t *testing.T) {
 		p.FileTracking = nil // the real path: repository id, labels, CreateIssue
 		return p
 	}
+	compositions := map[string]func(forge.ForgeClient) forge.ForgeClient{
+		"sweep client (shared reads over board cache)": func(c forge.ForgeClient) forge.ForgeClient {
+			return NewSharedReads().Wrap(boardcache.WrapClient(boardcache.New(0), c, "o", 1))
+		},
+		"shared reads only": func(c forge.ForgeClient) forge.ForgeClient {
+			return NewSharedReads().Wrap(c)
+		},
+	}
 
-	t.Run("inner client with GraphQL files the tracking issue", func(t *testing.T) {
-		inner := &strandedGQLForge{strandedForge: strandedForge{issues: &strandedIssues{}}}
-		in := Input{Repo: "o/r", Owner: "o", Name: "r", Forge: NewSharedReads().Wrap(inner)}
-		reqs, err := newProducer().Evaluate(context.Background(), in)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if inner.queries != 1 {
-			t.Errorf("GraphQL queries through the wrapper = %d, want 1", inner.queries)
-		}
-		if got := inner.issues.createdIn; len(got) != 1 || got[0] != "R_repo" {
-			t.Fatalf("CreateIssue repo ids = %v, want [R_repo]", got)
-		}
-		if len(reqs) != 1 || !strings.Contains(reqs[0].Body, "#9100") {
-			t.Fatalf("card must name the filed tracking issue: %+v", reqs)
-		}
-	})
+	for name, wrap := range compositions {
+		t.Run(name+": inner client with GraphQL files the tracking issue", func(t *testing.T) {
+			inner := &strandedGQLForge{strandedForge: strandedForge{issues: &strandedIssues{}}}
+			in := Input{Repo: "o/r", Owner: "o", Name: "r", Forge: wrap(inner)}
+			reqs, err := newProducer().Evaluate(context.Background(), in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inner.queries != 1 {
+				t.Errorf("GraphQL queries through the wrapper = %d, want 1", inner.queries)
+			}
+			if got := inner.issues.createdIn; len(got) != 1 || got[0] != "R_repo" {
+				t.Fatalf("CreateIssue repo ids = %v, want [R_repo]", got)
+			}
+			if len(reqs) != 1 || !strings.Contains(reqs[0].Body, "#9100") {
+				t.Fatalf("card must name the filed tracking issue: %+v", reqs)
+			}
+		})
 
-	t.Run("inner client without GraphQL files nothing", func(t *testing.T) {
-		inner := &strandedForge{issues: &strandedIssues{}}
-		in := Input{Repo: "o/r", Owner: "o", Name: "r", Forge: NewSharedReads().Wrap(inner)}
-		_, err := newProducer().Evaluate(context.Background(), in)
-		if !errors.Is(err, forge.ErrUnsupported) {
-			t.Fatalf("err = %v, want one wrapping forge.ErrUnsupported", err)
-		}
-		if len(inner.issues.createdIn) != 0 {
-			t.Fatalf("filed %v with no GraphQL surface", inner.issues.createdIn)
-		}
-	})
+		t.Run(name+": inner client without GraphQL files nothing", func(t *testing.T) {
+			inner := &strandedForge{issues: &strandedIssues{}}
+			in := Input{Repo: "o/r", Owner: "o", Name: "r", Forge: wrap(inner)}
+			_, err := newProducer().Evaluate(context.Background(), in)
+			if !errors.Is(err, forge.ErrUnsupported) {
+				t.Fatalf("err = %v, want one wrapping forge.ErrUnsupported", err)
+			}
+			if len(inner.issues.createdIn) != 0 {
+				t.Fatalf("filed %v with no GraphQL surface", inner.issues.createdIn)
+			}
+		})
+	}
 }

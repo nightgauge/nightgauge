@@ -291,6 +291,7 @@ func TestParseACs_Forms(t *testing.T) {
 		{"3-space sub-step at the content column", "## Acceptance Criteria\n1. Do X:\n   1. sub\n   2. sub two\n2. Do Y\n",
 			[]string{"Do X:", "Do Y"}},
 		{"sub-step after a blank line", "## Acceptance Criteria\n1. Do X:\n\n   1. sub\n", []string{"Do X:"}},
+		{"whitespace-only item opens no column", "## Acceptance Criteria\n1.  \n   1. real\n", []string{"real"}},
 		{"sibling items", "## Acceptance Criteria\n1. a\n2. b\n", []string{"a", "b"}},
 		{"4-column content keeps a 3-space item a sibling", "## Acceptance Criteria\n10. x\n   1. y\n", []string{"x", "y"}},
 		{"2-space item below the column is a sibling", "## Acceptance Criteria\n1. a\n  2. b\n", []string{"a", "b"}},
