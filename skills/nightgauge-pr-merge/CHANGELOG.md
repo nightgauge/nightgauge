@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The Phase 5.5 freshness check merges the base instead of rebasing (#2699).**
+  It pushes with `nightgauge git push-branch`, never `--force-with-lease`. Phase
+  6 conflict resolution still rebases.
+
 ### Fixed
 
 - **A `Refs #N` merge no longer closes the issue (#2674).** Step 7.2 passes

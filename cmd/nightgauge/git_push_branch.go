@@ -37,12 +37,15 @@ type pushBranchResult struct {
 // A non-fast-forward rejection is reconciled with ReconcileSelfFork: a
 // self-fork (a rebased PR branch whose origin copy carries no change the local
 // tree lacks) is recovered with a commit descending from origin's tip and
-// pushed plainly; a genuine fork prints [branch-forked] and exits 3.
+// pushed plainly; a genuine fork, or a rejection that could not be reconciled,
+// prints [branch-forked] and exits 3. Exit 1 is reserved for a failure that was
+// not a rejection.
 func gitPushBranchCmd() *cobra.Command {
 	var outputJSON bool
 	cmd := &cobra.Command{
-		Use:   "push-branch",
-		Short: "Push the current branch to origin, recovering a self-inflicted fork without force (#2699)",
+		Use:          "push-branch",
+		Short:        "Push the current branch to origin, recovering a self-inflicted fork without force (#2699)",
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, err := os.Getwd()
 			if err != nil {
@@ -121,10 +124,12 @@ func runPushBranch(ctx context.Context, dir string, outputJSON bool, stdout, std
 		res.Outcome = "forked"
 		return emit(res, pushBranchForked)
 	default:
+		// Origin is still ahead and the push really was rejected, so this is a
+		// fork the run must stop on, never a failure it may defer past.
 		fmt.Fprint(stderr, pushErr)
-		fmt.Fprintf(stderr, "push-branch: could not reconcile: %s\n", rec.Detail)
-		res.Outcome = "failed"
-		return emit(res, pushBranchFailed)
+		fmt.Fprintf(stderr, "[branch-forked] PUSH REJECTED: could not reconcile: %s\n", rec.Detail)
+		res.Outcome = "forked"
+		return emit(res, pushBranchForked)
 	}
 }
 

@@ -425,7 +425,9 @@ func TestReconcileSelfFork_GenuineForkIsLeftAlone(t *testing.T) {
 	}
 }
 
-func TestReconcileSelfFork_OriginMergeCommitIsForked(t *testing.T) {
+// A merge of the base into origin's copy adds nothing the rebased local tree
+// lacks, so it is a self-fork: the shape the freshness check itself produces.
+func TestReconcileSelfFork_OriginBaseMergeIsRecovered(t *testing.T) {
 	const branch = "fix/2699-merge"
 	f, _ := selfForkFixture(t, branch)
 	op := f.clone()
@@ -434,8 +436,61 @@ func TestReconcileSelfFork_OriginMergeCommitIsForked(t *testing.T) {
 	gittest.Run(t, op, "push", "origin", branch)
 
 	res := ReconcileSelfFork(context.Background(), f.work, branch)
+	if res.Outcome != SelfForkRecovered {
+		t.Fatalf("outcome = %q, want recovered for a base merge; detail=%q", res.Outcome, res.Detail)
+	}
+}
+
+// A merge that brings content the local tree lacks stays a genuine fork.
+func TestReconcileSelfFork_OriginMergeWithForeignContentIsForked(t *testing.T) {
+	const branch = "fix/2699-merge-foreign"
+	f, _ := selfForkFixture(t, branch)
+	op := f.clone()
+	gittest.Run(t, op, "checkout", branch)
+	gittest.Run(t, op, "checkout", "-b", "foreign", "origin/main")
+	commitFile(t, op, "foreign.txt", "operator work\n", "operator work")
+	gittest.Run(t, op, "checkout", branch)
+	gittest.Run(t, op, "merge", "--no-ff", "-m", "merge foreign", "foreign")
+	gittest.Run(t, op, "push", "origin", branch)
+	local := gittest.Run(t, f.work, "rev-parse", "HEAD")
+
+	res := ReconcileSelfFork(context.Background(), f.work, branch)
 	if res.Outcome != SelfForkForked {
-		t.Fatalf("outcome = %q, want forked for an origin merge commit; detail=%q", res.Outcome, res.Detail)
+		t.Fatalf("outcome = %q, want forked; detail=%q", res.Outcome, res.Detail)
+	}
+	if got := gittest.Run(t, f.work, "rev-parse", "HEAD"); got != local {
+		t.Errorf("local branch moved on a genuine fork: %s -> %s", local, got)
+	}
+}
+
+// A criss-cross has two merge bases; comparing against the one that matches
+// origin would call this a self-fork and bury origin's work. Run both ways round
+// because which base `git merge-base` names depends on the history.
+func TestReconcileSelfFork_CrissCrossIsForked(t *testing.T) {
+	for _, tc := range []struct{ name, localFile, originFile string }{
+		{"local-first", "x.txt", "y.txt"},
+		{"origin-first", "y.txt", "x.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newForkFixture(t)
+			const branch = "fix/2699-crisscross"
+			gittest.Run(t, f.work, "checkout", "-b", "side-x", "origin/main")
+			x := commitFile(t, f.work, "x.txt", "x\n", "x")
+			gittest.Run(t, f.work, "checkout", "-b", "side-y", "origin/main")
+			y := commitFile(t, f.work, "y.txt", "y\n", "y")
+			tips := map[string]string{"x.txt": x, "y.txt": y}
+
+			gittest.Run(t, f.work, "checkout", "-b", "theirs", tips[tc.originFile])
+			gittest.Run(t, f.work, "merge", "-s", "ours", "--no-ff", "-m", "origin", tips[tc.localFile])
+			gittest.Run(t, f.work, "push", "origin", "theirs:refs/heads/"+branch)
+			gittest.Run(t, f.work, "checkout", "-b", branch, tips[tc.localFile])
+			gittest.Run(t, f.work, "merge", "-s", "ours", "--no-ff", "-m", "local", tips[tc.originFile])
+
+			res := ReconcileSelfFork(context.Background(), f.work, branch)
+			if res.Outcome != SelfForkForked {
+				t.Fatalf("outcome = %q, want forked; detail=%q", res.Outcome, res.Detail)
+			}
+		})
 	}
 }
 

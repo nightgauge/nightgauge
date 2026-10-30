@@ -6123,7 +6123,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					// from origin's tip and a plain push. A genuine fork falls
 					// through to the block below unchanged.
 					ws := stageWorkspace(runtime, workspaceRoot)
-					if rec := ReconcileSelfFork(ctx, ws, branch); rec.Outcome == SelfForkRecovered {
+					rec := ReconcileSelfFork(ctx, ws, branch)
+					if rec.Outcome != SelfForkRecovered {
+						log.Printf("#%d: self-fork not recovered (%s): %s", item.Number, rec.Outcome, rec.Detail)
+					} else {
 						if _, _, err := runGit(ctx, ws, "push", "origin", "refs/heads/"+branch+":refs/heads/"+branch); err == nil {
 							log.Printf("#%d: [self-fork-recovered] %s", item.Number, rec.Detail)
 							fork = CheckBranchFork(ctx, ws, branch)
