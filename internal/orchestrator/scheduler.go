@@ -8767,7 +8767,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		issueClosedNow = issueClosedOnForge(ctx, item.Repo, item.Number)
 	}
 
-	completionStatus := completionBoardStatus(reconciledArm, issueClosedNow)
+	completionStatus := completionBoardStatus(reconciledArm, issueClosedNow, runtime.Snapshot().PartialDelivery)
 	log.Printf("#%d: pipeline complete — resolved terminal board status %s (arm %s: %s%s)",
 		item.Number, completionStatus, reconciledArm, reconciledArm.completionReason(),
 		map[bool]string{true: "; the issue is CLOSED on the forge, so the run is done, not in review"}[issueClosedNow])
@@ -11186,6 +11186,11 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 // skipped and everything else runs exactly as it does for a live run.
 func (s *Scheduler) runPostMerge(ctx context.Context, item types.BoardItem, runtime *state.RuntimeState, mergedPRNumber int) hooks.PostMergeResult {
 	pmResult := s.checkEpicCompletion(ctx, item, mergedPRNumber)
+
+	// (#2706) completion must not overwrite the hook's Ready on a `Refs` merge.
+	if runtime != nil && pmResult.PartialDelivery {
+		runtime.SetPartialDelivery()
+	}
 
 	// (#4133) Persist the post-merge ground-truth breadcrumb onto runtime state
 	// so the run record carries the merge commit SHA + mergedAt. Best-effort:

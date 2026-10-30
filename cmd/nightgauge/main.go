@@ -4112,6 +4112,7 @@ func projectSyncStatusCmd() *cobra.Command {
 		owner         string
 		repo          string
 		projectNumber int
+		onlyFrom      string
 		outputJSON    bool
 	)
 
@@ -4124,11 +4125,14 @@ Status is a POSITIONAL argument, not a --status flag.
 
 Valid statuses: backlog, ready, in-progress, in-review, done, blocked, needs-info
 The board's own casing ("In progress", "In review") is accepted and normalized.
-in-review is refused unless an open PR whose head branch names the issue exists.`,
+in-review is refused unless an open PR whose head branch names the issue exists.
+--only-from writes only when the issue currently holds that status; otherwise it
+writes nothing and exits non-zero with a "yielding <status>" error.`,
 		Args: exactStatusArgs("sync-status"),
 		Example: `  nightgauge project sync-status 103 in-progress
   nightgauge project sync-status 103 "In progress"
-  nightgauge project sync-status 103 done --repo nightgauge/other-repo`,
+  nightgauge project sync-status 103 done --repo nightgauge/other-repo
+  nightgauge project sync-status 103 in-review --only-from "In progress"`,
 		// #1180 — without this a rejected invocation dumps flags and global
 		// flags below the error, which reads as help output; the operator who
 		// filed this saw only the trailing block and took the run for a no-op.
@@ -4145,6 +4149,11 @@ in-review is refused unless an open PR whose head branch names the issue exists.
 			if err != nil {
 				return err
 			}
+			if onlyFrom != "" {
+				if onlyFrom, err = normalizeBoardStatusArg(onlyFrom); err != nil {
+					return fmt.Errorf("--only-from: %w", err)
+				}
+			}
 
 			// Resolve the board before any network call — see projectAddCmd.
 			ownerPart, repoPart := splitRepo(owner, repo)
@@ -4160,6 +4169,9 @@ in-review is refused unless an open PR whose head branch names the issue exists.
 
 			client, err := clientFromConfig()
 			if err != nil {
+				return err
+			}
+			if err := requireCurrentStatus(cmd.Context(), gh.NewBoardService(client, ownerPart, projectNumber), ownerPart, repoPart, number, status, onlyFrom); err != nil {
 				return err
 			}
 			if err := requireOpenPRForInReview(cmd.Context(), client, ownerPart, repoPart, number, status); err != nil {
@@ -4187,6 +4199,7 @@ in-review is refused unless an open PR whose head branch names the issue exists.
 	ownerFlag(cmd, &owner, "GitHub organization")
 	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
+	cmd.Flags().StringVar(&onlyFrom, "only-from", "", "Write only when the issue currently holds this status")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	cmd.SetFlagErrorFunc(statusFlagErrorFunc("sync-status"))
 	return cmd
@@ -7109,6 +7122,18 @@ cause the command to exit non-zero.`,
 			epicSvc := gh.NewEpicService(client)
 			installEpicCheckout(epicSvc)
 			prSvc := gh.NewPRService(client)
+
+			// The extension passes no --project, so resolve the board the way
+			// sync-status does: the hook owns Ready on a `Refs` merge and the
+			// stage sync no longer writes over it (#2706). The hook is
+			// non-blocking, so a repo with no board keeps skipping the sync.
+			if !cmd.Flags().Changed("project") {
+				if cfg, cfgErr := config.Load(workdir); cfgErr == nil && cfg != nil {
+					if resolved, resolveErr := resolveProjectNumber(cfg, false, projectNumber, ownerPart, repoPart, workdir); resolveErr == nil {
+						projectNumber = resolved
+					}
+				}
+			}
 
 			// Board syncer is only wired when a project is configured; the hook
 			// no-ops the board-Done sync (#3981) when it is nil.

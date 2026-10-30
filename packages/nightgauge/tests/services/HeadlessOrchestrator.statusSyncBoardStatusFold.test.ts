@@ -35,6 +35,7 @@ vi.mock("../../src/utils/projectFieldWriter", async (importOriginal) => {
   return {
     ...actual,
     getProjectItemStatus: vi.fn(),
+    getIssueState: vi.fn(),
     ensureIssueOnProject: vi.fn(),
     updateProjectItemStatus: vi.fn(),
   };
@@ -43,6 +44,7 @@ vi.mock("../../src/utils/projectFieldWriter", async (importOriginal) => {
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import {
   getProjectItemStatus,
+  getIssueState,
   ensureIssueOnProject,
   updateProjectItemStatus,
 } from "../../src/utils/projectFieldWriter";
@@ -51,6 +53,7 @@ import { BOARD_STATUS } from "../../src/utils/projectFieldMapping";
 const ISSUE = 623;
 
 const readStatus = vi.mocked(getProjectItemStatus);
+vi.mocked(getIssueState).mockResolvedValue("CLOSED");
 const ensureOnProject = vi.mocked(ensureIssueOnProject);
 const writeStatus = vi.mocked(updateProjectItemStatus);
 

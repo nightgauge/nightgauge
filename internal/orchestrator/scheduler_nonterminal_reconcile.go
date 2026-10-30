@@ -136,9 +136,16 @@ func (o reconcileOutcome) completionReason() string {
 // first and short-circuits), and since #299 the reconciled run ends right
 // there. If a later observation finds it closed, `issueClosedNow` carries that
 // and the arm is not what decided it.
-func completionBoardStatus(arm reconcileOutcome, issueClosedNow bool) state.BoardStatus {
+//
+// partialDelivery is the post-merge hook's verdict on this run's merge (#2706):
+// a `Refs` merge left the issue open and the hook returned it to Ready so the
+// remainder is scheduled. Writing In Review here would undo that.
+func completionBoardStatus(arm reconcileOutcome, issueClosedNow, partialDelivery bool) state.BoardStatus {
 	if issueClosedNow {
 		return state.StatusDone
+	}
+	if partialDelivery && arm != reconcileIssueClosed {
+		return state.StatusReady
 	}
 	switch arm {
 	case reconcileIssueClosed:

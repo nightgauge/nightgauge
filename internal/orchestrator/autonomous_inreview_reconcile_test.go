@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 func prListJSON(t *testing.T) func(ctx context.Context, args ...string) ([]byte, error) {
@@ -204,22 +205,33 @@ func TestEvaluateDeps_InReviewWithoutPRBacking_Blocks(t *testing.T) {
 	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
 		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "In review"},
 	}}
-	res := evaluateDeps([]string{"O/app#1"}, g, nil, nil, nil)
+	res := evaluateDeps([]string{"O/app#1"}, g, nil, nil)
 	if !res.blocked {
 		t.Fatal("expected blocked=true for In-review dep with no PR-backing evidence")
 	}
 }
 
-// TestEvaluateDeps_InReviewWithPRBacking_Satisfies is the regression guard:
-// a dep confirmed PR-backed still satisfies the edge exactly as before.
-func TestEvaluateDeps_InReviewWithPRBacking_Satisfies(t *testing.T) {
-	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
-		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "In review"},
-	}}
-	prBacked := map[string]bool{"O/app#1": true}
-	res := evaluateDeps([]string{"O/app#1"}, g, nil, prBacked, nil)
-	if res.blocked {
-		t.Fatalf("expected blocked=false for In-review dep with confirmed PR backing, got %+v", res)
+// TestEvaluateDeps_OpenBlockerBlocksWhateverItsStatus (#2706): an OPEN blocker
+// holds its dependents in every column. A `Refs` merge can leave one Done, and
+// an open PR does not prove the dependents' contract exists.
+func TestEvaluateDeps_OpenBlockerBlocksWhateverItsStatus(t *testing.T) {
+	for _, status := range []string{"Done", "In review", "Ready"} {
+		g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
+			"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: status},
+		}}
+		if res := evaluateDeps([]string{"O/app#1"}, g, nil, nil); !res.blocked {
+			t.Errorf("status %q: an OPEN blocker released its dependent: %+v", status, res)
+		}
+	}
+}
+
+// TestIsBlocked_OpenBlockerKeysOnState (#2706): the Go scheduler's gate reads
+// the blocker's issue state; a board status is not part of its input.
+func TestIsBlocked_OpenBlockerKeysOnState(t *testing.T) {
+	item := types.BoardItem{Number: 2, BlockedBy: []types.BlockingRef{{Number: 1, State: "OPEN"}}}
+	blocked, err := (&Scheduler{}).isBlocked(context.Background(), item)
+	if err != nil || !blocked {
+		t.Fatalf("isBlocked = %v, %v; want true for an OPEN blocker", blocked, err)
 	}
 }
 

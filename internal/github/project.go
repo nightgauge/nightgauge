@@ -244,6 +244,11 @@ func mapStatusLabel(value string) string {
 	return value
 }
 
+// StatusLabel returns the board's option label for a CLI status slug.
+func StatusLabel(status string) string {
+	return mapStatusLabel(status)
+}
+
 // SetSingleSelectField sets a single-select field value on a project item.
 func (p *ProjectService) SetSingleSelectField(ctx context.Context, itemID, fieldName, optionName string) error {
 	if err := p.ensureFields(ctx); err != nil {

@@ -4259,14 +4259,10 @@ type CandidateItem struct {
 	OpenPRNumber int
 }
 
-// isWorkCompleteStatus returns true when the dep's board status is the one
-// that CAN mean the dep's pipeline work is effectively done — even if the
-// issue itself is still OPEN. Currently this covers "In review". The status
-// string alone is NOT sufficient evidence, though (#281): a status-only
-// match is verified against inReviewPRBacked by evaluateDeps before it is
-// treated as satisfying a blockedBy edge, since a halt can park an issue at
-// "In review" with no PR behind it. If the PR is later rejected, the issue
-// moves back to In progress / Backlog and the dep re-blocks on the next scan.
+// isWorkCompleteStatus returns true when the board status says the issue's
+// pipeline work is waiting on review. Currently this covers "In review". It
+// is not evidence of anything a dependent can use: evaluateDeps keys on issue
+// state, and an OPEN issue in this status still blocks (#2706).
 // repoContribution is one repo's contribution to a prioritize pass: how many
 // graph nodes it owns, how many are open, and how many survived every gate to
 // become dispatchable.
@@ -4475,12 +4471,11 @@ func depKeyNamesNoRepository(depKey string) bool {
 //     failed, or the batch response simply omitted it — never guess
 //     "satisfied" for a blocker of unknown state (#306).
 //
-// prBacked (keyed "repo#number", refreshed once per fresh graph build — see
-// inReviewPRBacked) is the evidence gate for the "In review" case (#281): a
-// dep whose board status is "In review" satisfies the edge only when its key
-// is also present in prBacked (a confirmed OPEN PR backs it). A status-only
-// match without confirmed PR evidence falls through to BLOCKED — the same
-// fail-closed posture as the off-board case above.
+// An on-board dep is decided by its issue state, never by its board status: an
+// OPEN dep blocks whether it is Done (a `Refs` merge can leave one, #2706), In
+// review with an open PR, or anything else. A partial delivery merges a PR and
+// stays open, so neither a PR nor a column proves the dependents' contract
+// exists; only closure does.
 //
 // validation (see ResolveValidationByKey) is the post-merge validation gate
 // (#2574). A closed dep that is a program member — an on-board node carrying a
@@ -4489,10 +4484,9 @@ func depKeyNamesNoRepository(depKey string) bool {
 // PR merged, the marker says main was green afterwards. A closed dep whose
 // standing is absent from validation fails closed when it could be a program
 // member (an off-board dep, whose labels only the resolver knows, or an
-// on-board program member). A program member "In review" never satisfies the
-// edge: the marker needs a merged, verified commit. A closed dep that is not
-// a program member keeps closure-based release.
-func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]string, prBacked map[string]bool, validation map[string]ValidationState) depBlockResult {
+// on-board program member). A closed dep that is not a program member keeps
+// closure-based release.
+func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]string, validation map[string]ValidationState) depBlockResult {
 	for _, depKey := range depKeys {
 		depNode, exists := g.Nodes[depKey]
 		if !exists {
@@ -4529,17 +4523,9 @@ func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]strin
 			}
 			continue
 		}
-		if isWorkCompleteStatus(depNode.BoardStatus) {
-			key := fmt.Sprintf("%s#%d", depNode.Repo, depNode.Number)
-			if program {
-				return depBlockResult{blocked: true, blocker: depKey, unvalidated: true,
-					status: depNode.BoardStatus + " (program issue — released only by the post-merge validation marker after it merges)"}
-			}
-			if prBacked[key] {
-				continue // satisfied — PR confirmed
-			}
-			// "In review" without a confirmed PR does not satisfy the edge —
-			// fall through to blocked below (#281).
+		if program && isWorkCompleteStatus(depNode.BoardStatus) {
+			return depBlockResult{blocked: true, blocker: depKey, unvalidated: true,
+				status: depNode.BoardStatus + " (program issue — released only by the post-merge validation marker after it merges)"}
 		}
 		return depBlockResult{blocked: true, blocker: depKey, status: depNode.BoardStatus}
 	}
@@ -4959,7 +4945,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		blocked := false
 		var blocker, blockerStatus, blockerEdge string
 		offBoard, unvalidated := false, false
-		if res := evaluateDeps(adj[key], g, resolvedDepStates, prBackedSet, depValidation); res.blocked {
+		if res := evaluateDeps(adj[key], g, resolvedDepStates, depValidation); res.blocked {
 			blocked = true
 			blocker = res.blocker
 			blockerStatus = res.status
@@ -5000,7 +4986,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 					log.Printf("autonomous: ignoring epic %s's edges to its own sub-issues %v in the cascade — an epic blocked by its child is a data defect, not a gate (#1937)",
 						epicKey, ownSubs)
 				}
-				if res := evaluateDeps(gating, g, resolvedDepStates, prBackedSet, depValidation); res.blocked {
+				if res := evaluateDeps(gating, g, resolvedDepStates, depValidation); res.blocked {
 					blocked = true
 					blocker = res.blocker
 					offBoard = res.offBoard
@@ -5077,7 +5063,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			}
 			epicKey := g.NodeKey(node.ID())
 			gating, _ := epicCascadeDeps(g, adj, epicKey)
-			hasOpenBlocker := evaluateDeps(gating, g, resolvedDepStates, prBackedSet, depValidation).blocked
+			hasOpenBlocker := evaluateDeps(gating, g, resolvedDepStates, depValidation).blocked
 			if !hasOpenBlocker {
 				continue
 			}
@@ -6598,9 +6584,8 @@ func (as *AutonomousScheduler) moveIssueToDone(parent context.Context, repo stri
 // "In review" — the truthful state when a PR exists but cannot merge (red
 // required check, review requirement, merge conflict). Keeping it OUT of
 // Ready stops the scheduler from re-dispatching into the same external
-// blocker, and "In review" already satisfies downstream dependency checks
-// (isWorkCompleteStatus). Modeled after moveIssueToDone. Best-effort: a
-// network failure logs a warning.
+// blocker. Its dependents keep waiting until it closes (#2706). Modeled after
+// moveIssueToDone. Best-effort: a network failure logs a warning.
 //
 // pr is the open PR that backs the issue, the evidence every "In review"
 // writer requires (#1496): a caller that has not confirmed one passes 0 and
