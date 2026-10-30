@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -79,11 +80,69 @@ func TestResolveACVerdicts(t *testing.T) {
 	}
 }
 
-// githubClosingRE is GitHub's closing-keyword grammar for issue 42. A Refs
-// body that matched it would still close the issue at merge. It is written
-// independently of forge's matcher so it can catch that matcher missing a form.
-var githubClosingRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*` +
-	`(?:(?:[\w.-]+/[\w.-]+)?#42|https?://[^\s/]+/[\w.-]+/[\w.-]+/issues/42)\b`)
+// githubCloses is an oracle for GitHub's documented closing-keyword grammar:
+// one of the nine keywords, an optional colon, then `#N`, `owner/repo#N` or an
+// issue URL. It scans the text by hand instead of sharing forge's regular
+// expression, so a form the matcher and the defanger both miss still fails
+// the tests that assert against it. A Refs body it accepts would still close
+// issue n at merge.
+func githubCloses(body string, n int) bool {
+	lower := strings.ToLower(body)
+	num := strconv.Itoa(n)
+	isWord := func(c byte) bool {
+		return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z'
+	}
+	// endsRef reports whether rest begins with the issue number as a whole number.
+	endsRef := func(rest string) bool {
+		return strings.HasPrefix(rest, num) && (len(rest) == len(num) || !isWord(rest[len(num)]))
+	}
+	for _, kw := range []string{"close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved"} {
+		for i := 0; ; {
+			j := strings.Index(lower[i:], kw)
+			if j < 0 {
+				break
+			}
+			start, end := i+j, i+j+len(kw)
+			i = start + 1
+			if (start > 0 && isWord(lower[start-1])) || (end < len(lower) && isWord(lower[end])) {
+				continue
+			}
+			rest := strings.TrimLeft(lower[end:], " \t")
+			rest = strings.TrimLeft(strings.TrimPrefix(rest, ":"), " \t")
+			if strings.HasPrefix(rest, "http://") || strings.HasPrefix(rest, "https://") {
+				// https://host/owner/repo/issues/N
+				parts := strings.SplitN(rest[strings.Index(rest, "//")+2:], "/", 5)
+				if len(parts) == 5 && parts[3] == "issues" && endsRef(parts[4]) {
+					return true
+				}
+				continue
+			}
+			// #N, or owner/repo#N with no whitespace inside the reference.
+			if hash := strings.IndexByte(rest, '#'); hash >= 0 &&
+				!strings.ContainsAny(rest[:hash], " \t\n") &&
+				(hash == 0 || strings.Count(rest[:hash], "/") == 1) && endsRef(rest[hash+1:]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestGithubClosesOracle(t *testing.T) {
+	for body, want := range map[string]bool{
+		"Closes #42":    true,
+		"fixes: o/r#42": true,
+		"Resolved https://github.com/o/r/issues/42": true,
+		"Refs #42":                              false,
+		"Closes #420":                           false,
+		"Closes https://github.com/o/r/pull/42": false,
+		"disclosed #42":                         false,
+	} {
+		if got := githubCloses(body, 42); got != want {
+			t.Errorf("githubCloses(%q) = %v, want %v", body, got, want)
+		}
+	}
+}
 
 // Regression fixture (#2595): an issue with three ACs and a diff that meets
 // one must produce Refs, not Closes, and name the two that remain.
@@ -102,7 +161,7 @@ func TestRenderBody_PartialDeliveryRefsNotCloses(t *testing.T) {
 	if !strings.Contains(body, "Refs #42\n") {
 		t.Errorf("partial delivery must say Refs #42:\n%s", body)
 	}
-	if githubClosingRE.MatchString(body) {
+	if githubCloses(body, 42) {
 		t.Errorf("partial delivery body carries a closing keyword for #42:\n%s", body)
 	}
 	if !strings.Contains(body, "Part of #7\n") {
@@ -197,7 +256,7 @@ func TestRenderBody_NotVerifiableRefsAndListsOnce(t *testing.T) {
 	s := richSnap()
 	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, nil, nil, nil)
 	body := RenderBody(s)
-	if !strings.Contains(body, "Refs #42\n") || BodyClosesIssue(body, 42) {
+	if !strings.Contains(body, "Refs #42\n") || BodyClosesIssue(body, "o/r", 42) {
 		t.Errorf("all-not-verifiable must say Refs:\n%s", body)
 	}
 	if strings.Contains(body, "## Acceptance criteria") {

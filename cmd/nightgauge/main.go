@@ -1665,7 +1665,7 @@ left open for the post-merge hook to return to Ready (#2674).`,
 				if err != nil {
 					return fmt.Errorf("read PR #%d before closing #%d: %w", prNumber, number, err)
 				}
-				if skip, reason := issueCloseSkipReason(merge.Body, number); skip {
+				if skip, reason := issueCloseSkipReason(merge.Body, ownerPart+"/"+repoPart, number); skip {
 					if outputJSON {
 						return printJSON(map[string]interface{}{
 							"issueNumber": number,
@@ -1713,8 +1713,8 @@ left open for the post-merge hook to return to Ready (#2674).`,
 // issueCloseSkipReason decides whether `issue close --pr` leaves the issue
 // open: a PR body that names it without a closing keyword is a partial
 // delivery (#2595, #2674). The predicate is the post-merge hook's own.
-func issueCloseSkipReason(body string, number int) (bool, string) {
-	if hooks.IsPartialDelivery(body, number) {
+func issueCloseSkipReason(body, repo string, number int) (bool, string) {
+	if hooks.IsPartialDelivery(body, repo, number) {
 		return true, "partial_delivery"
 	}
 	return false, ""

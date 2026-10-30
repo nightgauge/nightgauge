@@ -17,10 +17,14 @@ changelog, and the release workflow refuses a tag that does not.
 ### Fixed
 
 - A closing keyword followed by an issue URL (`Closes https://github.com/o/r/issues/N`) now
-  counts as closing the issue everywhere, as it does on GitHub. The pr-merge acceptance
-  backstop rewrites it to `Refs` on a partial delivery, and the post-merge hook and
-  `nightgauge issue close --pr` no longer report such a merge as partial. One matcher in
-  `internal/forge` replaces the two copies that disagreed with GitHub (#2687).
+  counts as closing the issue, as it does on GitHub. The pr-merge acceptance backstop
+  rewrites it to `Refs` on a partial delivery, the post-merge hook and
+  `nightgauge issue close --pr` no longer report such a merge as partial, and the stranded
+  follow-up sweep no longer files a tracking issue for a PR that closes an open issue by
+  URL. A reference naming another repository (`Fixes other/repo#N`, or its URL) no longer
+  counts as closing this repository's issue of the same number. One matcher in
+  `internal/forge` replaces the copies that disagreed with GitHub, and the extension's
+  matcher now accepts any issue-URL host (#2687).
 - **A `Refs #N` merge no longer closes the issue after the pipeline (#2689).** Post-pipeline
   verification now closes an open issue only when a merged PR body or a commit on main carries a
   closing keyword (`Closes #N`, `owner/repo#N`, or the issue URL). A merge that only references

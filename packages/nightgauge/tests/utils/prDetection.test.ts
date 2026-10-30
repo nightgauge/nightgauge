@@ -428,6 +428,10 @@ describe("closing-keyword predicates (#2689)", () => {
       "RESOLVED #2689",
       "Fixes nightgauge/nightgauge#2689",
       "Closes https://github.com/nightgauge/nightgauge/issues/2689",
+      // Same grammar as Go forge.closingKeywordRE (#2687): any host, and no
+      // whitespace required after the keyword.
+      "closes http://ghe.example/o/r/issues/2689",
+      "Fixes:#2689",
     ]) {
       expect(prBodyClosesIssue(body, 2689), body).toBe(true);
     }

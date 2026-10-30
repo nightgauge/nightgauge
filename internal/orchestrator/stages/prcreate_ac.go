@@ -256,17 +256,19 @@ func acCheckboxBody(criteria []string) string {
 	return b.String()
 }
 
-// BodyClosesIssue reports whether body carries a closing keyword for issue n.
-// forge owns the one closing-keyword matcher, shared with the post-merge hook.
-func BodyClosesIssue(body string, n int) bool {
-	return forge.ClosesIssue(body, n)
+// BodyClosesIssue reports whether body carries a closing keyword for issue n
+// of repo ("owner/repo"). forge owns the one closing-keyword matcher, shared
+// with the post-merge hook.
+func BodyClosesIssue(body, repo string, n int) bool {
+	return forge.ClosesIssue(body, repo, n)
 }
 
-// RewriteClosesToRefs replaces every closing keyword that targets issue n
-// with `Refs`, so merging the PR leaves the issue open (#2623, the #2595
-// rule). References to other issues are untouched.
-func RewriteClosesToRefs(body string, n int) string {
-	return forge.RewriteClosingRefs(body, func(r forge.ClosingRef) bool { return r.Number == n })
+// RewriteClosesToRefs replaces every closing keyword that targets issue n of
+// repo with `Refs`, so merging the PR leaves the issue open (#2623, the #2595
+// rule). References to other issues, including the same number in another
+// repository, are untouched.
+func RewriteClosesToRefs(body, repo string, n int) string {
+	return forge.RewriteClosingRefs(body, func(r forge.ClosingRef) bool { return r.Targets(repo, n) })
 }
 
 // RewriteAllClosesToRefs replaces every closing keyword with `Refs`,

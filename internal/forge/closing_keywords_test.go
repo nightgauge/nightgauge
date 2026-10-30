@@ -3,7 +3,7 @@ package forge
 import "testing"
 
 // One table for every closing-keyword form (#2687). stages and hooks delegate
-// here, so this table is what both agree on.
+// here, so this table is what both agree on. The PR is in repository o/r.
 func TestClosingKeywords(t *testing.T) {
 	cases := []struct {
 		body    string
@@ -28,10 +28,10 @@ func TestClosingKeywords(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		if got := ClosesIssue(c.body, c.n); got != c.closes {
-			t.Errorf("ClosesIssue(%q, %d) = %v, want %v", c.body, c.n, got, c.closes)
+		if got := ClosesIssue(c.body, "o/r", c.n); got != c.closes {
+			t.Errorf("ClosesIssue(%q, o/r, %d) = %v, want %v", c.body, c.n, got, c.closes)
 		}
-		got := RewriteClosingRefs(c.body, func(r ClosingRef) bool { return r.Number == c.n })
+		got := RewriteClosingRefs(c.body, func(r ClosingRef) bool { return r.Targets("o/r", c.n) })
 		if got != c.rewrite {
 			t.Errorf("RewriteClosingRefs(%q, %d) = %q, want %q", c.body, c.n, got, c.rewrite)
 		}
@@ -41,7 +41,7 @@ func TestClosingKeywords(t *testing.T) {
 func TestClosingRefsNumbers(t *testing.T) {
 	body := "Fixes #3, closes https://github.com/o/r/issues/7 and resolves o/r#9"
 	refs := ClosingRefs(body)
-	want := []ClosingRef{{"#3", 3}, {"https://github.com/o/r/issues/7", 7}, {"o/r#9", 9}}
+	want := []ClosingRef{{"#3", "", 3}, {"https://github.com/o/r/issues/7", "o/r", 7}, {"o/r#9", "o/r", 9}}
 	if len(refs) != len(want) {
 		t.Fatalf("ClosingRefs = %+v, want %+v", refs, want)
 	}

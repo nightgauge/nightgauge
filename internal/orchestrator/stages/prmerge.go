@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -932,7 +933,11 @@ func (r *DeterministicRunner) acBackstop(ctx context.Context, gh ghClient, workd
 		log.Printf("pr-merge: AC backstop skipped for PR #%d: read PR body: %v", prNumber, err)
 		return false
 	}
-	if !BodyClosesIssue(prBody, issueNumber) {
+	repo := readPRContextRepo(workdir, issueNumber)
+	if repo == "" {
+		log.Printf("pr-merge: AC backstop for #%d cannot read the repository from pr-%d.json pr_url; only bare #%d closers count", issueNumber, issueNumber, issueNumber)
+	}
+	if !BodyClosesIssue(prBody, repo, issueNumber) {
 		return false
 	}
 	issueBody, err := bc.IssueBody(ctx, issueNumber)
@@ -951,7 +956,7 @@ func (r *DeterministicRunner) acBackstop(ctx context.Context, gh ghClient, workd
 	if len(uncovered) == 0 {
 		return false
 	}
-	newBody := AppendUnmetACs(RewriteClosesToRefs(prBody, issueNumber), issueNumber, uncovered)
+	newBody := AppendUnmetACs(RewriteClosesToRefs(prBody, repo, issueNumber), issueNumber, uncovered)
 	if err := bc.EditPRBody(ctx, prNumber, newBody); err != nil {
 		log.Printf("pr-merge: AC backstop could not edit PR #%d body: %v", prNumber, err)
 		return false
@@ -1289,6 +1294,30 @@ func readPRContextNumber(workdir string, issueNumber int) (int, error) {
 }
 
 var errPRNumberMissing = errors.New("pr context: pr_number is missing or zero")
+
+// prURLRepoRE captures the "owner/repo" of a pull request URL.
+var prURLRepoRE = regexp.MustCompile(`^https?://[^\s/]+/([\w.-]+/[\w.-]+)/pull/\d+`)
+
+// readPRContextRepo returns the "owner/repo" of pr_url in pr-{N}.json, the
+// repository the PR merges into, or "" when it cannot be read. The AC
+// backstop scopes closing keywords to it: `Closes other/repo#N` does not
+// close this repository's #N (#2687).
+func readPRContextRepo(workdir string, issueNumber int) string {
+	data, err := readFile(pipelineContextPath(workdir, fmt.Sprintf("pr-%d.json", issueNumber)))
+	if err != nil {
+		return ""
+	}
+	var ctx struct {
+		PRURL string `json:"pr_url"`
+	}
+	if json.Unmarshal(data, &ctx) != nil {
+		return ""
+	}
+	if m := prURLRepoRE.FindStringSubmatch(ctx.PRURL); m != nil {
+		return m[1]
+	}
+	return ""
+}
 
 // classifyContextError maps a pr-context read error to a Reason constant.
 func classifyContextError(err error) string {

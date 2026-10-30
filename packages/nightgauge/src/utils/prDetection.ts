@@ -342,16 +342,18 @@ function issueRefPattern(issueNumber: number): string {
  * issue URL. `Refs #N`, `Part of #N` and a title scope `fix(#N)` are not
  * closing references.
  *
- * Mirrors Go `closingKeywordRE` (internal/hooks/post-merge.go) plus the
- * issue-URL form.
+ * Mirrors Go `closingKeywordRE` (internal/forge/closing_keywords.go): any
+ * issue-URL host, and no whitespace required after the keyword. Unlike the
+ * Go `ClosesIssue`, it matches on the issue number only, whatever repository
+ * an `owner/repo#N` or URL reference names.
  *
  * @see Issue #2689
  */
 export function prBodyClosesIssue(text: string | undefined, issueNumber: number): boolean {
   if (!text) return false;
-  const ref = String.raw`(?:[\w.-]+/[\w.-]+#|#|https?://github\.com/[\w.-]+/[\w.-]+/issues/)${issueNumber}\b`;
+  const ref = String.raw`(?:[\w.-]+/[\w.-]+#|#|https?://[^\s/]+/[\w.-]+/[\w.-]+/issues/)${issueNumber}\b`;
   return new RegExp(
-    String.raw`\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+${ref}`,
+    String.raw`\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*${ref}`,
     "i"
   ).test(text);
 }
