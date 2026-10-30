@@ -328,7 +328,7 @@
         "delete a successor's worktree.",
         "",
         "EVERY behavior in this manifest, accounted for. This list is exhaustive by construction: if you add a",
-        "behavior row above, add its disposition here, and keep the section counts summing to 26. TestForceClearAccountingIsExhaustive fails when a name is missing. (26 behaviors + this row.)",
+        "behavior row above, add its disposition here, and keep the section counts summing to 27. TestForceClearAccountingIsExhaustive fails when a name is missing. (27 behaviors + this row.)",
         "",
         "PERFORMED (3):",
         "  queue-item-completion       \u2014 completeQueueItem releases the dequeue's `processing` mark, on BOTH",
@@ -468,8 +468,9 @@
         "                                scheduler path performs both directly in its terminal defer (#440); this",
         "                                funnel is the extension side, where they are the claim's to do.",
         "",
-        "NOT APPLICABLE \u2014 Go-only by design (1):",
+        "NOT APPLICABLE \u2014 Go-only by design (2):",
         "  lifecycle-decision-trace    \u2014 ADR 013 / #179; the extension path emits no trace on either funnel.",
+        "  branch-forked-stranded-tip  — #2699; branch_forked is a Go scheduler terminal kind, never a force-clear outcome.",
         "",
         "NOT APPLICABLE \u2014 Go-only until #1648 (2):",
         "  opencode-run-root-cleanup   \u2014 only the Go manager dispatches opencode, so only a Go run has an OpenCode",
@@ -561,6 +562,17 @@
         "file": "internal/ipc/server.go",
         "anchor": "if err := rt.SealAndRemove(sealDir); err != nil {"
       }
+    },
+    {
+      "name": "branch-forked-stranded-tip",
+      "note": "#2699: a branch_forked run's local tip is pinned at refs/nightgauge/stranded/<issue> before worktree and branch cleanup, and the branch-forked Action Center card names the ref and the SHA.",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.preserveBranchForkedRun(ctx, item, runtime, workspaceRoot, branchForkEvidence)"
+      },
+      "extension": {
+        "pathSpecific": "Go-only: the branch_forked terminal kind and its Action Center card are produced by the Go scheduler's branch-fork pre-flight and terminal classification; the extension path has neither (#2699)."
+      }
     }
   ],
   "fences": [
@@ -569,7 +581,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "8086b0f50d24af7db5c122be00d0be2174a4725cf7cda50a2ba62d5bf5e52ec6"
+      "sha256": "e5e719f5d79364d402079eb3068f696ae4331b3932c5c425c2906193ee51228b"
     },
     {
       "id": "extension-runSlotPipeline-finally",

@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A re-run that rebased its conflicting PR branch no longer ends `branch_forked`. When origin's
+  copy of the branch carries no change the local tree lacks, even if the rebase rewrote a commit's
+  surrounding lines, the new `nightgauge git push-branch` (used by feature-validate) and the
+  scheduler's pre-flight write a commit descending from origin's tip and push it without force. A
+  failed recovery push puts the branch back, and a protected branch is never reconciled. A genuine
+  fork is still left untouched. The planning, feature-dev and feature-validate skills, and the
+  shared freshness check that feature-validate and pr-merge run, now update an existing PR branch
+  by merging its base, never by rebasing or force-pushing, and a contract test that follows
+  shared-fragment includes enforces that. A `branch_forked` run's tip is pinned at
+  `refs/nightgauge/stranded/<issue>` before cleanup, and the Action Center card names the ref and
+  the SHA.
 - With a live daemon, `autonomous status` again answers whether a reload is safe (#2720). The
   human output replaces `Status:` with the `Autonomous Mode: <Status> — <reload line>` sentence,
   covering manual runs, and `--json` adds `running_pipelines`, `running_pipelines_known` and

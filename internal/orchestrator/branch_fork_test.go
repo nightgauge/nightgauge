@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -329,4 +331,207 @@ func TestReclaimOrphanedRemoteBranch_DeclinesWhenLocalBranchIsGone(t *testing.T)
 	if !strings.Contains(res.Reason, "cannot prove") {
 		t.Errorf("Reason = %q, want it to name the missing proof", res.Reason)
 	}
+}
+
+// -----------------------------------------------------------------------
+// ReconcileSelfFork / PreserveStrandedTip (#2699)
+// -----------------------------------------------------------------------
+
+// selfForkFixture builds the #2669 shape: origin's PR branch holds C1 on the
+// old main; main then advances; the run rebases C1 onto the new main (C1')
+// and adds C2. Origin's tip carries C1's content but is not an ancestor.
+const changelogBase = "# Changelog\n\n## [Unreleased]\n\n- old a\n- old b\n"
+
+func selfForkFixture(t *testing.T, branch string) (*forkFixture, string) {
+	t.Helper()
+	f := newForkFixture(t)
+	// The #2669 shape: C1 and the base advance both add an entry under the
+	// same CHANGELOG heading, a few lines apart, so the rebase rewrites the
+	// context of C1's hunk and its patch-id changes.
+	commitFile(t, f.work, "CHANGELOG.md", changelogBase, "chore: changelog")
+	gittest.Run(t, f.work, "push", "origin", "main")
+	gittest.Run(t, f.work, "checkout", "-b", branch)
+	commitFile(t, f.work, "CHANGELOG.md",
+		strings.Replace(changelogBase, "- old a\n", "- old a\n- C1 entry\n", 1), "feat: C1")
+	commitFile(t, f.work, "impl.go", "// impl\n", "feat: C1 impl")
+	gittest.Run(t, f.work, "push", "origin", branch)
+	remote := gittest.Run(t, f.work, "rev-parse", "HEAD")
+
+	other := f.clone()
+	commitFile(t, other, "CHANGELOG.md",
+		strings.Replace(changelogBase, "## [Unreleased]\n\n", "## [Unreleased]\n\n- main entry\n", 1),
+		"chore: main advances")
+	gittest.Run(t, other, "push", "origin", "main")
+
+	gittest.Run(t, f.work, "fetch", "origin", "main")
+	gittest.Run(t, f.work, "rebase", "origin/main")
+	commitFile(t, f.work, "impl2.go", "// more\n", "feat: C2")
+	return f, remote
+}
+
+func TestReconcileSelfFork_RecoversRebasedPRBranch(t *testing.T) {
+	const branch = "fix/2669-rebased"
+	f, remote := selfForkFixture(t, branch)
+	ctx := context.Background()
+	localTree := gittest.Run(t, f.work, "rev-parse", "HEAD^{tree}")
+
+	if !CheckBranchFork(ctx, f.work, branch).Forked() {
+		t.Fatal("precondition: the rebased branch must look forked")
+	}
+	// Precondition for the #2669 shape: the rebase changed C1's patch-id.
+	if pre, post := patchIDOf(t, f.work, remote+"~1"), patchIDOf(t, f.work, "HEAD~2"); pre == post {
+		t.Fatal("precondition: rebased C1 must have a different patch-id than origin's copy")
+	}
+	res := ReconcileSelfFork(ctx, f.work, branch)
+	if res.Outcome != SelfForkRecovered {
+		t.Fatalf("outcome = %q, want recovered; detail=%q", res.Outcome, res.Detail)
+	}
+	if got := gittest.Run(t, f.work, "rev-parse", "HEAD"); got != res.NewSHA {
+		t.Errorf("HEAD = %s, want recovery commit %s", got, res.NewSHA)
+	}
+	if got := gittest.Run(t, f.work, "rev-parse", "HEAD^{tree}"); got != localTree {
+		t.Errorf("recovery tree %s != verified local tree %s", got, localTree)
+	}
+	gittest.Run(t, f.work, "merge-base", "--is-ancestor", remote, "HEAD")
+	gittest.Run(t, f.work, "push", "origin", "HEAD:refs/heads/"+branch) // no force
+	if CheckBranchFork(ctx, f.work, branch).Forked() {
+		t.Error("branch still forked after recovery push")
+	}
+}
+
+func TestReconcileSelfFork_GenuineForkIsLeftAlone(t *testing.T) {
+	const branch = "fix/2699-genuine"
+	f, _ := selfForkFixture(t, branch)
+	ctx := context.Background()
+
+	op := f.clone()
+	gittest.Run(t, op, "checkout", branch)
+	opSHA := commitFile(t, op, "operator.go", "// operator\n", "fix: operator work")
+	gittest.Run(t, op, "push", "origin", branch)
+	local := gittest.Run(t, f.work, "rev-parse", "HEAD")
+
+	res := ReconcileSelfFork(ctx, f.work, branch)
+	if res.Outcome != SelfForkForked {
+		t.Fatalf("outcome = %q, want forked; detail=%q", res.Outcome, res.Detail)
+	}
+	if len(res.Unmatched) != 1 || res.Unmatched[0] != opSHA {
+		t.Errorf("Unmatched = %v, want [%s]", res.Unmatched, opSHA)
+	}
+	if got := gittest.Run(t, f.work, "rev-parse", "HEAD"); got != local {
+		t.Errorf("local branch moved on a genuine fork: %s -> %s", local, got)
+	}
+	if got, _ := remoteBranchHead(ctx, f.work, branch); got != opSHA {
+		t.Errorf("origin moved: %s, want %s", got, opSHA)
+	}
+}
+
+func TestReconcileSelfFork_OriginMergeCommitIsForked(t *testing.T) {
+	const branch = "fix/2699-merge"
+	f, _ := selfForkFixture(t, branch)
+	op := f.clone()
+	gittest.Run(t, op, "checkout", branch)
+	gittest.Run(t, op, "merge", "--no-ff", "-m", "merge main", "origin/main")
+	gittest.Run(t, op, "push", "origin", branch)
+
+	res := ReconcileSelfFork(context.Background(), f.work, branch)
+	if res.Outcome != SelfForkForked {
+		t.Fatalf("outcome = %q, want forked for an origin merge commit; detail=%q", res.Outcome, res.Detail)
+	}
+}
+
+func TestReconcileSelfFork_CleanWhenFastForward(t *testing.T) {
+	f := newForkFixture(t)
+	const branch = "fix/2699-clean"
+	gittest.Run(t, f.work, "checkout", "-b", branch)
+	commitFile(t, f.work, "a.go", "a\n", "a")
+	gittest.Run(t, f.work, "push", "origin", branch)
+	commitFile(t, f.work, "b.go", "b\n", "b")
+	if res := ReconcileSelfFork(context.Background(), f.work, branch); res.Outcome != SelfForkClean {
+		t.Fatalf("outcome = %q, want clean", res.Outcome)
+	}
+}
+
+func TestPreserveStrandedTip_SurvivesBranchDeletion(t *testing.T) {
+	f := newForkFixture(t)
+	const branch = "fix/2699-stranded"
+	gittest.Run(t, f.work, "checkout", "-b", branch)
+	tip := commitFile(t, f.work, "w.go", "w\n", "work")
+	gittest.Run(t, f.work, "checkout", "main")
+
+	ref, sha, err := PreserveStrandedTip(context.Background(), f.work, 2699, branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != "refs/nightgauge/stranded/2699" || sha != tip {
+		t.Fatalf("got %s=%s, want refs/nightgauge/stranded/2699=%s", ref, sha, tip)
+	}
+	gittest.Run(t, f.work, "branch", "-D", branch)
+	if got := gittest.Run(t, f.work, "rev-parse", ref); got != tip {
+		t.Errorf("stranded ref = %s after branch delete, want %s", got, tip)
+	}
+}
+
+func patchIDOf(t *testing.T, dir, rev string) string {
+	t.Helper()
+	ids, err := patchIDs(context.Background(), dir, rev+"~1.."+rev)
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("patch-id of %s: %v %v", rev, ids, err)
+	}
+	return ids[0].id
+}
+
+func TestReconcileSelfFork_RefusesProtectedBranch(t *testing.T) {
+	f := newForkFixture(t)
+	for _, b := range []string{"main", "epic/42-x", "develop"} {
+		if res := ReconcileSelfFork(context.Background(), f.work, b); res.Outcome != SelfForkUnknown ||
+			!strings.Contains(res.Detail, "protected") {
+			t.Errorf("%s: outcome=%q detail=%q, want a protected-branch refusal", b, res.Outcome, res.Detail)
+		}
+	}
+}
+
+func TestRollbackSelfFork_RestoresLocalTip(t *testing.T) {
+	const branch = "fix/2699-rollback"
+	f, _ := selfForkFixture(t, branch)
+	local := gittest.Run(t, f.work, "rev-parse", "HEAD")
+	res := ReconcileSelfFork(context.Background(), f.work, branch)
+	if res.Outcome != SelfForkRecovered {
+		t.Fatalf("outcome = %q; detail=%q", res.Outcome, res.Detail)
+	}
+	if err := RollbackSelfFork(context.Background(), f.work, res); err != nil {
+		t.Fatal(err)
+	}
+	if got := gittest.Run(t, f.work, "rev-parse", "HEAD"); got != local {
+		t.Errorf("HEAD = %s after rollback, want %s", got, local)
+	}
+}
+
+type patchID struct{ id, commit string }
+
+// patchIDs returns (test helper) `git patch-id --stable` for every non-merge commit in rng.
+// Commits with an empty diff produce no patch-id and are omitted.
+func patchIDs(ctx context.Context, dir, rng string) ([]patchID, error) {
+	cctx, cancel := context.WithTimeout(ctx, branchForkGitTimeout)
+	defer cancel()
+	logCmd := exec.CommandContext(cctx, "git", "log", "-p", "--no-merges", "--no-color", rng)
+	logCmd.Dir = dir
+	patches, err := logCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git log -p %s: %w", rng, err)
+	}
+	pidCmd := exec.CommandContext(cctx, "git", "patch-id", "--stable")
+	pidCmd.Dir = dir
+	pidCmd.Stdin = strings.NewReader(string(patches))
+	out, err := pidCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git patch-id: %w", err)
+	}
+	var ids []patchID
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 {
+			ids = append(ids, patchID{id: f[0], commit: f[1]})
+		}
+	}
+	return ids, nil
 }

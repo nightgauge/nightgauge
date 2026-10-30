@@ -465,37 +465,35 @@ echo "Committed: $COMMIT_SHA"
 Push all committed changes so pr-create can immediately create a PR.
 
 ```bash
-# Determine push target — use base_branch tracking if on an epic branch
-git push origin HEAD
+# Never a bare or forced push: push-branch recovers a self-inflicted fork (#2699)
+nightgauge git push-branch
+PUSH_EXIT=$?
 ```
 
-If push fails, classify the failure:
+Branch on the exit code:
 
-- **Forked branch** (`non-fast-forward`, `fetch first`, `--force-with-lease`
-  refused): origin carries a commit this worktree never saw. Report it with the
-  marker below and stop. Do NOT force-push over it, and do NOT fall back to a
-  `-retry2` branch — both discard evidence the operator needs to decide which
-  side survives.
-
-  ```bash
-  echo "[branch-forked] PUSH REJECTED: non-fast-forward — origin/$(git rev-parse --abbrev-ref HEAD) is at $(git ls-remote --heads origin "$(git rev-parse --abbrev-ref HEAD)" | cut -f1 | cut -c1-8), local tip is $(git rev-parse --short=8 HEAD)."
-  ```
-
-  The `[branch-forked]` marker is what classifies the run as `branch_forked`
-  rather than a generic crash, so the pipeline stops retrying a rejection no
-  retry can clear (#163). The scheduler's pre-stage pre-flight normally catches
-  this before the stage runs; reaching it here means the fork appeared mid-run.
-
-- **Other non-recoverable** (auth denied, protected branch): stop and report. Do
-  NOT write context — the pipeline cannot proceed without a push.
-- **Transient network failure** (DNS, timeout): continue to write context, but
-  set `PUSH_STATUS="deferred"` and include a note in the summary.
+- **0 — pushed.** A `[self-fork-recovered]` line means origin held a
+  pre-rebase copy of this branch carrying no change the local tree lacks; the
+  binary wrote a commit descending from origin's tip with the verified tree and
+  pushed it without force. Continue.
+- **3 — forked.** The binary already printed the
+  `[branch-forked] PUSH REJECTED` marker and listed the origin-only commits
+  whose changes the local tree lacks. Stop. Never force-push over it, and never
+  fall back to a `-retry2` branch — both discard evidence the operator needs to
+  decide which side survives. The marker classifies the run as `branch_forked`
+  (#163); the scheduler pins the local tip at `refs/nightgauge/stranded/<N>`
+  before cleanup and names it on the Action Center card.
+- **1 — any other failure.** Classify git's stderr, printed by the binary:
+  - **Non-recoverable** (auth denied, protected branch): stop and report. Do
+    NOT write context — the pipeline cannot proceed without a push.
+  - **Transient network failure** (DNS, timeout): continue to write context,
+    but set `PUSH_STATUS="deferred"` and include a note in the summary.
 
 When continuing after a transient failure:
 
 ```
 PUSH_STATUS="deferred"
-echo "Remote push deferred due to transient network failure; run 'git push origin HEAD' before /nightgauge-pr-create."
+echo "Remote push deferred due to transient network failure; run 'nightgauge git push-branch' before /nightgauge-pr-create."
 ```
 
 ### Step 5.4: Validation Gate — Do Not Commit Broken Code

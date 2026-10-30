@@ -5316,6 +5316,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// "no terminal-kind reason was identified" — recordV2History writes a V2
 	// record in that case.
 	var terminalFailureKind string
+	// branchForkEvidence carries the pre-flight's fork comparison to the
+	// terminal block, which raises the one Action Center card for both the
+	// pre-flight and the push-time branch_forked paths (#2699).
+	var branchForkEvidence BranchFork
 	// workRecovered is set by either #3542 rescue site when uncommitted work
 	// was preserved into a recovery commit. Separate from terminalFailureKind
 	// on purpose (#875): "work survived" and "why the run failed" are different
@@ -5570,6 +5574,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		//
 		// Except a run paused by cancellation (#2258): run-state resumes it at
 		// the interrupted stage, and that stage's inputs live in this worktree.
+		// A branch_forked run's verified tip would survive cleanup only as an
+		// unreferenced object (#2699). Pin it outside refs/heads/ first, then
+		// raise the one Action Center card naming the ref and the SHA — for
+		// the pre-flight and the push-time paths alike.
+		if terminalFailureKind == TerminalKindBranchForked {
+			s.preserveBranchForkedRun(ctx, item, runtime, workspaceRoot, branchForkEvidence)
+		}
+
 		if s.execMgr != nil {
 			if !pipelineSuccess && ctx.Err() != nil {
 				log.Printf("#%d: run paused — keeping its worktree for the resume", item.Number)
@@ -6106,6 +6118,26 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if branch := resolveFeatureBranch(runtime, workspaceRoot, item.Number); branch != "" {
 				fork := CheckBranchFork(ctx, stageWorkspace(runtime, workspaceRoot), branch)
 				if fork.Forked() {
+					// A self-fork (#2699) — origin carries no change the local
+					// tree lacks — is recovered by a commit descending
+					// from origin's tip and a plain push. A genuine fork falls
+					// through to the block below unchanged.
+					ws := stageWorkspace(runtime, workspaceRoot)
+					if rec := ReconcileSelfFork(ctx, ws, branch); rec.Outcome == SelfForkRecovered {
+						if _, _, err := runGit(ctx, ws, "push", "origin", "refs/heads/"+branch+":refs/heads/"+branch); err == nil {
+							log.Printf("#%d: [self-fork-recovered] %s", item.Number, rec.Detail)
+							fork = CheckBranchFork(ctx, ws, branch)
+						} else {
+							// Put the branch back so the block below pins the tip
+							// the stage produced, not the unpushed recovery commit.
+							log.Printf("#%d: self-fork recovery push failed: %v", item.Number, err)
+							if rbErr := RollbackSelfFork(ctx, ws, rec); rbErr != nil {
+								log.Printf("#%d: self-fork rollback failed: %v", item.Number, rbErr)
+							}
+						}
+					}
+				}
+				if fork.Forked() {
 					reason := fmt.Sprintf("[branch-forked] %s", fork.Detail)
 					log.Printf("#%d: stage %s blocked before dispatch — %s", item.Number, stage, reason)
 					// Enter the stage before failing it. Nothing is dispatched
@@ -6122,10 +6154,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Source: "branch-fork-preflight",
 						Reason: fork.Detail,
 					})
-					// Action Center branch-fork producer (#163): no retry clears a
-					// fork, so surface it as an unblock card rather than letting the
-					// run recycle into the same rejection.
-					s.raiseBranchForked(item.Repo, item.Number, runtime.RunID, branch, fork)
+					// The Action Center card is raised by the terminal block, after
+					// the tip is pinned, so it can name the stranded ref (#2699).
+					branchForkEvidence = fork
 					return
 				}
 			}
@@ -11809,4 +11840,38 @@ func describeShippedBranchCleanup(branch string, res execution.ShippedBranchClea
 	}
 	return fmt.Sprintf("feature branch %s only partly cleaned up — still present: %s; "+
 		"see the branch cleanup line above", branch, strings.Join(survivors, " and "))
+}
+
+// preserveBranchForkedRun pins a branch_forked run's local tip at
+// refs/nightgauge/stranded/<issue> and raises the branch-forked card naming
+// it (#2699). evidence is the pre-flight's comparison; on the push-time path
+// it is empty and the card falls back to the stage error.
+func (s *Scheduler) preserveBranchForkedRun(ctx context.Context, item types.BoardItem,
+	runtime *state.RuntimeState, workspaceRoot string, evidence BranchFork) {
+	branch := evidence.Branch
+	if branch == "" {
+		branch = resolveFeatureBranch(runtime, workspaceRoot, item.Number)
+	}
+	if branch == "" {
+		log.Printf("#%d: branch_forked run has no resolvable branch — nothing to preserve", item.Number)
+		return
+	}
+	if evidence.Detail == "" {
+		snap := runtime.Snapshot()
+		evidence = BranchFork{State: ForkStateForked, Branch: branch,
+			Detail: snap.StageErrors[string(snap.Stage)]}
+		if evidence.Detail == "" {
+			evidence.Detail = "push rejected as non-fast-forward"
+		}
+	}
+	ref, sha, err := PreserveStrandedTip(ctx, workspaceRoot, item.Number, branch)
+	if err != nil {
+		log.Printf("#%d: could not pin stranded tip of %s: %v", item.Number, branch, err)
+	} else {
+		log.Printf("#%d: stranded tip of %s preserved at %s = %s", item.Number, branch, ref, sha)
+	}
+	if evidence.LocalSHA == "" {
+		evidence.LocalSHA = sha
+	}
+	s.raiseBranchForked(item.Repo, item.Number, runtime.RunID, branch, evidence, ref, sha)
 }

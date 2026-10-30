@@ -10,11 +10,11 @@ security re-scan (which will scan the merged state). Critical during epic batch
 processing where sibling sub-issues may merge while this branch is being worked
 on.
 
-**Key difference from `FRESHNESS_CHECK.md`**: This fragment uses `merge`
-(not `rebase`), preserving both lineages. This is the preferred strategy in
-batch scenarios where multiple sub-issues work in parallel. The shared
-`FRESHNESS_CHECK.md` fragment is used for pre-build freshness checks in
-`pr-merge` and uses rebase for a linear history.
+**Relation to `FRESHNESS_CHECK.md`**: both fragments merge the base (never
+rebase), preserving both lineages so a PR branch's origin tip stays an ancestor
+(#2699). This one runs before the PR exists and fails the stage on conflict;
+`FRESHNESS_CHECK.md` is the best-effort pre-build check in feature-validate and
+pr-merge.
 
 ```bash
 # Step 1: Determine base branch (already resolved in Phase 2)
