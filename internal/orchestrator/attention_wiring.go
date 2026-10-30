@@ -1603,21 +1603,26 @@ func (s *Scheduler) raiseAuthFailure(repo string, issue int, runID, reason strin
 // The card names both SHAs. A fork is only actionable if the operator can see
 // what diverged; "your branch has forked" without the two commits sends them
 // back to the terminal to re-derive the evidence the pipeline already had.
-func (s *Scheduler) raiseBranchForked(repo string, issue int, runID, branch string, fork BranchFork) {
+func (s *Scheduler) raiseBranchForked(repo string, issue int, runID, branch string, fork BranchFork, strandedRef, strandedSHA string) {
+	preserved, blocker := "", fmt.Sprintf("origin/%s=%s local=%s", branch, shortSHA(fork.RemoteSHA), shortSHA(fork.LocalSHA))
+	if strandedRef != "" {
+		preserved = fmt.Sprintf("Local work is preserved at `%s` = `%s`.\n\n", strandedRef, strandedSHA)
+		blocker += fmt.Sprintf(" stranded=%s@%s", strandedRef, shortSHA(strandedSHA))
+	}
 	s.raiseAttention(attention.DecisionRequest{
 		IdempotencyKey: fmt.Sprintf("branch-forked:%s#%d", repo, issue),
 		Kind:           attention.KindUnblock,
 		Severity:       attention.SeverityBlockingRun,
 		Title:          fmt.Sprintf("Branch %s has forked from origin", branch),
 		Body: fmt.Sprintf(
-			"#%d cannot push: %s\n\n"+
+			"#%d cannot push: %s\n\n%s"+
 				"No retry clears this. Decide which side survives — reset the local branch onto origin/%s, "+
 				"or delete origin/%s if the remote commit is an orphan from a killed run — then retry.",
-			issue, fork.Detail, branch, branch),
+			issue, fork.Detail, preserved, branch, branch),
 		Producer: "branch-fork",
 		Context: attention.Context{
 			Repo: repo, Issue: issue, RunID: runID,
-			Blocker:  fmt.Sprintf("origin/%s=%s local=%s", branch, shortSHA(fork.RemoteSHA), shortSHA(fork.LocalSHA)),
+			Blocker:  blocker,
 			TraceRef: runTraceRef(runID),
 		},
 		Options: []attention.Option{

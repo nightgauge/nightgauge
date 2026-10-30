@@ -6165,8 +6165,11 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// So: no lifetime-cap increment, no cascade-breaker feed (a forked branch
 		// says nothing about the health of the factory), no board revert to Ready
 		// — the issue is deliberately left where it is so nothing re-dispatches
-		// it. The Action Center card raised by the scheduler's pre-flight is the
+		// it. The Action Center card raised by the scheduler's terminal block is the
 		// way back in: resolving it clears the failure cooldown and requeues.
+		// A self-fork (a rebased PR branch whose origin commits all have local
+		// patch equivalents, #2699) is recovered before it reaches here, and a
+		// genuine fork arrives with its tip pinned at refs/nightgauge/stranded/<N>.
 		if terminalFailureKind == TerminalKindBranchForked {
 			detail := failureDetail
 			if detail == "" {

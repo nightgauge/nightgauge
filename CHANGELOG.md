@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A re-run that rebased its conflicting PR branch no longer ends `branch_forked`.
+  When every commit on origin's copy of the branch has a patch-equivalent local
+  commit, the new `nightgauge git push-branch` (used by feature-validate) and
+  the scheduler's pre-flight write a commit descending from origin's tip and
+  push it without force. A genuine fork is still left untouched. The planning,
+  feature-dev and feature-validate skills now update an existing PR branch by
+  merging its base, never by rebasing or force-pushing, and a contract test
+  enforces that. A `branch_forked` run's tip is pinned at
+  `refs/nightgauge/stranded/<issue>` before cleanup, and the Action Center card
+  names the ref and the SHA.
 - A closing keyword followed by an issue URL (`Closes https://github.com/o/r/issues/N`) now
   counts as closing the issue everywhere, as it does on GitHub. The pr-merge acceptance
   backstop rewrites it to `Refs` on a partial delivery, and the post-merge hook and

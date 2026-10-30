@@ -9,7 +9,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 
@@ -276,5 +278,98 @@ func TestClassifyTerminalKind_BranchForked(t *testing.T) {
 		if got := ClassifyTerminalKind(text); got != want {
 			t.Errorf("ClassifyTerminalKind(%q) = %q, want %q", text, got, want)
 		}
+	}
+}
+
+// newBranchForkScheduler builds the scheduler the branch-fork tests share.
+func newBranchForkScheduler(t *testing.T, root, branch string) (*Scheduler, *branchAwareStageRunner) {
+	t.Helper()
+	for _, dir := range []string{
+		"nightgauge-issue-pickup",
+		"nightgauge-feature-planning",
+		"nightgauge-feature-dev",
+		"nightgauge-feature-validate",
+		"nightgauge-pr-create",
+		"nightgauge-pr-merge",
+	} {
+		writeSkillFile(t, root, dir)
+	}
+	runner := newBranchAwareStageRunner(branch)
+	return &Scheduler{
+		trustGate:      allWritersGate(),
+		repoRunning:    make(map[string]int),
+		mergeLocks:     make(map[string]*sync.Mutex),
+		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),
+		budgetEngine:   NewBudgetEnforcer(DefaultBudgetConfig()),
+		ralphEngine:    NewRalphLoopController(DefaultRalphConfig()),
+		issueSvc:       newMockIssueSvc(),
+		execMgr:        execution.NewManager(root, nil),
+		stageRunner:    runner,
+		budgetRetries:  make(map[string]int),
+		workspaceRoot:  root,
+		prCreateRunner: alwaysPuntPRCreateRunner{},
+		attention:      attention.New(layouttest.Repo(t)),
+	}, runner
+}
+
+// TestScheduler_BranchForkPreflight_RecoversSelfFork is the #2699 shape: the
+// run rebased its PR branch, so origin's tip is patch-equivalent to local
+// history but not an ancestor. The pre-flight recovers it with a plain push
+// and the stages run instead of the run ending branch_forked.
+func TestScheduler_BranchForkPreflight_RecoversSelfFork(t *testing.T) {
+	const branch = "fix/2669-rebased"
+	f, remote := selfForkFixture(t, branch)
+	root := f.work
+	gittest.Run(t, root, "checkout", "main")
+
+	s, runner := newBranchForkScheduler(t, root, branch)
+	s.runPipeline(context.Background(), types.BoardItem{Number: 2669, Repo: "nightgauge/nightgauge", ID: "item-2669"})
+
+	if got := runner.count(state.StageFeatureDev); got == 0 {
+		t.Fatal("feature-dev never ran — a self-fork was classified branch_forked")
+	}
+	head, _ := remoteBranchHead(context.Background(), root, branch)
+	gittest.Run(t, root, "merge-base", "--is-ancestor", remote, head)
+	if CheckBranchFork(context.Background(), root, branch).Forked() {
+		t.Error("branch still forked after pre-flight recovery")
+	}
+}
+
+// TestScheduler_BranchForked_PinsStrandedTipAndNamesItOnTheCard asserts a
+// genuine fork still blocks, and that the run's tip survives cleanup at
+// refs/nightgauge/stranded/<N> with the Action Center card naming it (#2699).
+func TestScheduler_BranchForked_PinsStrandedTipAndNamesItOnTheCard(t *testing.T) {
+	f := newForkFixture(t)
+	root := f.work
+	const branch = "fix/2699-genuine"
+
+	other := f.clone()
+	gittest.Run(t, other, "checkout", "-b", branch)
+	commitFile(t, other, "impl.go", "// operator\n", "feat: operator")
+	gittest.Run(t, other, "push", "origin", branch)
+	gittest.Run(t, root, "branch", branch)
+	tip := gittest.Run(t, root, "rev-parse", branch)
+
+	s, runner := newBranchForkScheduler(t, root, branch)
+	s.runPipeline(context.Background(), types.BoardItem{Number: 2699, Repo: "nightgauge/nightgauge", ID: "item-2699"})
+
+	if got := runner.count(state.StageFeatureDev); got != 0 {
+		t.Fatalf("feature-dev dispatched %d time(s) onto a genuinely forked branch", got)
+	}
+	if got := gittest.Run(t, root, "rev-parse", "refs/nightgauge/stranded/2699"); got != tip {
+		t.Errorf("stranded ref = %s, want %s", got, tip)
+	}
+	reqs, err := s.attention.List(attention.ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body string
+	for _, r := range reqs {
+		if r.Producer == "branch-fork" {
+			body = r.Body
+		}
+	}
+	if !strings.Contains(body, "refs/nightgauge/stranded/2699") || !strings.Contains(body, tip) {
+		t.Errorf("branch-fork card body = %q, want the stranded ref and SHA %s", body, tip)
 	}
 }

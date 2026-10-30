@@ -330,3 +330,126 @@ func TestReclaimOrphanedRemoteBranch_DeclinesWhenLocalBranchIsGone(t *testing.T)
 		t.Errorf("Reason = %q, want it to name the missing proof", res.Reason)
 	}
 }
+
+// -----------------------------------------------------------------------
+// ReconcileSelfFork / PreserveStrandedTip (#2699)
+// -----------------------------------------------------------------------
+
+// selfForkFixture builds the #2669 shape: origin's PR branch holds C1 on the
+// old main; main then advances; the run rebases C1 onto the new main (C1')
+// and adds C2. Origin's tip is patch-equivalent to C1' but not an ancestor.
+func selfForkFixture(t *testing.T, branch string) (*forkFixture, string) {
+	t.Helper()
+	f := newForkFixture(t)
+	gittest.Run(t, f.work, "checkout", "-b", branch)
+	commitFile(t, f.work, "impl.go", "// impl\n", "feat: C1")
+	gittest.Run(t, f.work, "push", "origin", branch)
+	remote := gittest.Run(t, f.work, "rev-parse", "HEAD")
+
+	other := f.clone()
+	commitFile(t, other, "other.go", "// main moved\n", "chore: main advances")
+	gittest.Run(t, other, "push", "origin", "main")
+
+	gittest.Run(t, f.work, "fetch", "origin", "main")
+	gittest.Run(t, f.work, "rebase", "origin/main")
+	commitFile(t, f.work, "impl2.go", "// more\n", "feat: C2")
+	return f, remote
+}
+
+func TestReconcileSelfFork_RecoversRebasedPRBranch(t *testing.T) {
+	const branch = "fix/2669-rebased"
+	f, remote := selfForkFixture(t, branch)
+	ctx := context.Background()
+	localTree := gittest.Run(t, f.work, "rev-parse", "HEAD^{tree}")
+
+	if !CheckBranchFork(ctx, f.work, branch).Forked() {
+		t.Fatal("precondition: the rebased branch must look forked")
+	}
+	res := ReconcileSelfFork(ctx, f.work, branch)
+	if res.Outcome != SelfForkRecovered {
+		t.Fatalf("outcome = %q, want recovered; detail=%q", res.Outcome, res.Detail)
+	}
+	if got := gittest.Run(t, f.work, "rev-parse", "HEAD"); got != res.NewSHA {
+		t.Errorf("HEAD = %s, want recovery commit %s", got, res.NewSHA)
+	}
+	if got := gittest.Run(t, f.work, "rev-parse", "HEAD^{tree}"); got != localTree {
+		t.Errorf("recovery tree %s != verified local tree %s", got, localTree)
+	}
+	gittest.Run(t, f.work, "merge-base", "--is-ancestor", remote, "HEAD")
+	gittest.Run(t, f.work, "push", "origin", "HEAD:refs/heads/"+branch) // no force
+	if CheckBranchFork(ctx, f.work, branch).Forked() {
+		t.Error("branch still forked after recovery push")
+	}
+}
+
+func TestReconcileSelfFork_GenuineForkIsLeftAlone(t *testing.T) {
+	const branch = "fix/2699-genuine"
+	f, _ := selfForkFixture(t, branch)
+	ctx := context.Background()
+
+	op := f.clone()
+	gittest.Run(t, op, "checkout", branch)
+	opSHA := commitFile(t, op, "operator.go", "// operator\n", "fix: operator work")
+	gittest.Run(t, op, "push", "origin", branch)
+	local := gittest.Run(t, f.work, "rev-parse", "HEAD")
+
+	res := ReconcileSelfFork(ctx, f.work, branch)
+	if res.Outcome != SelfForkForked {
+		t.Fatalf("outcome = %q, want forked; detail=%q", res.Outcome, res.Detail)
+	}
+	if len(res.Unmatched) != 1 || res.Unmatched[0] != opSHA {
+		t.Errorf("Unmatched = %v, want [%s]", res.Unmatched, opSHA)
+	}
+	if got := gittest.Run(t, f.work, "rev-parse", "HEAD"); got != local {
+		t.Errorf("local branch moved on a genuine fork: %s -> %s", local, got)
+	}
+	if got, _ := remoteBranchHead(ctx, f.work, branch); got != opSHA {
+		t.Errorf("origin moved: %s, want %s", got, opSHA)
+	}
+}
+
+func TestReconcileSelfFork_OriginMergeCommitIsForked(t *testing.T) {
+	const branch = "fix/2699-merge"
+	f, _ := selfForkFixture(t, branch)
+	op := f.clone()
+	gittest.Run(t, op, "checkout", branch)
+	gittest.Run(t, op, "merge", "--no-ff", "-m", "merge main", "origin/main")
+	gittest.Run(t, op, "push", "origin", branch)
+
+	res := ReconcileSelfFork(context.Background(), f.work, branch)
+	if res.Outcome != SelfForkForked {
+		t.Fatalf("outcome = %q, want forked for an origin merge commit; detail=%q", res.Outcome, res.Detail)
+	}
+}
+
+func TestReconcileSelfFork_CleanWhenFastForward(t *testing.T) {
+	f := newForkFixture(t)
+	const branch = "fix/2699-clean"
+	gittest.Run(t, f.work, "checkout", "-b", branch)
+	commitFile(t, f.work, "a.go", "a\n", "a")
+	gittest.Run(t, f.work, "push", "origin", branch)
+	commitFile(t, f.work, "b.go", "b\n", "b")
+	if res := ReconcileSelfFork(context.Background(), f.work, branch); res.Outcome != SelfForkClean {
+		t.Fatalf("outcome = %q, want clean", res.Outcome)
+	}
+}
+
+func TestPreserveStrandedTip_SurvivesBranchDeletion(t *testing.T) {
+	f := newForkFixture(t)
+	const branch = "fix/2699-stranded"
+	gittest.Run(t, f.work, "checkout", "-b", branch)
+	tip := commitFile(t, f.work, "w.go", "w\n", "work")
+	gittest.Run(t, f.work, "checkout", "main")
+
+	ref, sha, err := PreserveStrandedTip(context.Background(), f.work, 2699, branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != "refs/nightgauge/stranded/2699" || sha != tip {
+		t.Fatalf("got %s=%s, want refs/nightgauge/stranded/2699=%s", ref, sha, tip)
+	}
+	gittest.Run(t, f.work, "branch", "-D", branch)
+	if got := gittest.Run(t, f.work, "rev-parse", ref); got != tip {
+		t.Errorf("stranded ref = %s after branch delete, want %s", got, tip)
+	}
+}

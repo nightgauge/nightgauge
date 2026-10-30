@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Conflict re-dispatch (Step 0.7.1b) merges the base into the existing PR branch instead of rebasing it, and pushes with `nightgauge git push-branch` (#2699).
+
 ### Added
 
 - **Deferrable discoveries are recorded (#479).** An adjacent bug, refactor or

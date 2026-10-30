@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Step 5.3 pushes with `nightgauge git push-branch`, which recovers a self-inflicted fork (a rebased PR branch) without force and exits 3 with `[branch-forked]` on a genuine fork (#2699).
+
 ### Fixed
 
 - **Step 6.0 names the verdict shape pr-create reads (#2665).** Verdicts go in

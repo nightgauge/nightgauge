@@ -8902,6 +8902,7 @@ func gitCmd() *cobra.Command {
 		gitDiffCmd(),
 		gitFetchCmd(),
 		gitPushCmd(),
+		gitPushBranchCmd(),
 		gitAbortPipelineCmd(),
 		gitResetPipelineCmd(),
 		gitBranchCleanupCmd(),

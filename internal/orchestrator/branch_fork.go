@@ -315,3 +315,206 @@ func truncateForLog(s string, max int) string {
 	}
 	return s[:max] + "…"
 }
+
+// Self-fork recovery and stranded-tip preservation (#2699).
+//
+// A re-run whose open PR conflicts with its base used to rebase the PR branch.
+// The rebased tip no longer descends from origin's tip, so the push is rejected
+// as non-fast-forward and the run ends branch_forked — yet origin carries
+// nothing this run lacks: every origin-only commit has a patch-equivalent
+// (`git patch-id --stable`) commit in the local history. That is a self-fork,
+// and it is recoverable without a force push.
+
+// SelfForkOutcome classifies one ReconcileSelfFork attempt.
+type SelfForkOutcome string
+
+const (
+	// SelfForkClean means there was nothing to reconcile: origin has no branch
+	// or its head is already reachable from the local tip.
+	SelfForkClean SelfForkOutcome = "clean"
+	// SelfForkRecovered means the branch was a self-fork and the local branch
+	// now points at a commit that descends from origin's tip.
+	SelfForkRecovered SelfForkOutcome = "recovered"
+	// SelfForkForked means origin carries work the local history does not:
+	// a genuine fork that must never be overwritten.
+	SelfForkForked SelfForkOutcome = "forked"
+	// SelfForkUnknown means the comparison could not be made.
+	SelfForkUnknown SelfForkOutcome = "unknown"
+)
+
+// SelfForkResult is the outcome of one ReconcileSelfFork call.
+type SelfForkResult struct {
+	Outcome   SelfForkOutcome
+	Branch    string
+	LocalSHA  string
+	RemoteSHA string
+	// NewSHA is the recovery commit when Outcome is SelfForkRecovered.
+	NewSHA string
+	// Unmatched lists origin-only commits with no local patch equivalent.
+	Unmatched []string
+	Detail    string
+}
+
+// ReconcileSelfFork turns a self-inflicted fork of `branch` into a branch that
+// fast-forwards origin, and declines everything else.
+//
+// The recovery commit has origin's tip as its first parent, the local tip as
+// its second, and exactly the local tip's tree — the tree validation already
+// verified — so nothing is re-applied and nothing can conflict. The branch ref
+// moves by compare-and-swap; when `dir` has the branch checked out the index
+// follows with `reset --soft`. Nothing is pushed here and nothing is forced.
+func ReconcileSelfFork(ctx context.Context, dir, branch string) SelfForkResult {
+	res := SelfForkResult{Outcome: SelfForkUnknown, Branch: branch}
+	fork := CheckBranchFork(ctx, dir, branch)
+	res.LocalSHA, res.RemoteSHA = fork.LocalSHA, fork.RemoteSHA
+	switch fork.State {
+	case ForkStateClean:
+		res.Outcome, res.Detail = SelfForkClean, fork.Detail
+		return res
+	case ForkStateUnknown:
+		res.Detail = fork.Detail
+		return res
+	}
+	local, remote := fork.LocalSHA, fork.RemoteSHA
+
+	if _, _, err := runGit(ctx, dir, "cat-file", "-e", remote+"^{commit}"); err != nil {
+		if _, _, err := runGit(ctx, dir, "fetch", "origin", "refs/heads/"+branch); err != nil {
+			res.Detail = fmt.Sprintf("could not fetch origin/%s: %v", branch, err)
+			return res
+		}
+	}
+	baseOut, _, err := runGit(ctx, dir, "merge-base", local, remote)
+	if err != nil {
+		res.Detail = fmt.Sprintf("no merge base between local %s and origin/%s %s: %v",
+			shortSHA(local), branch, shortSHA(remote), err)
+		return res
+	}
+	base := strings.TrimSpace(baseOut)
+
+	mergesOut, _, err := runGit(ctx, dir, "rev-list", "--merges", base+".."+remote)
+	if err != nil {
+		res.Detail = fmt.Sprintf("could not list origin-only commits: %v", err)
+		return res
+	}
+	if m := strings.Fields(mergesOut); len(m) > 0 {
+		res.Outcome = SelfForkForked
+		res.Unmatched = m
+		res.Detail = fmt.Sprintf("origin/%s carries merge commit %s this run cannot prove it authored",
+			branch, shortSHA(m[0]))
+		return res
+	}
+
+	originIDs, err := patchIDs(ctx, dir, base+".."+remote)
+	if err != nil {
+		res.Detail = fmt.Sprintf("could not compute origin patch-ids: %v", err)
+		return res
+	}
+	localIDs, err := patchIDs(ctx, dir, base+".."+local)
+	if err != nil {
+		res.Detail = fmt.Sprintf("could not compute local patch-ids: %v", err)
+		return res
+	}
+	have := make(map[string]bool, len(localIDs))
+	for _, p := range localIDs {
+		have[p.id] = true
+	}
+	for _, p := range originIDs {
+		if !have[p.id] {
+			res.Unmatched = append(res.Unmatched, p.commit)
+		}
+	}
+	if len(res.Unmatched) > 0 {
+		res.Outcome = SelfForkForked
+		short := make([]string, len(res.Unmatched))
+		for i, s := range res.Unmatched {
+			short[i] = shortSHA(s)
+		}
+		res.Detail = fmt.Sprintf("origin/%s carries %d commit(s) with no local equivalent (%s) — a genuine fork",
+			branch, len(res.Unmatched), strings.Join(short, ", "))
+		return res
+	}
+
+	newOut, _, err := runGit(ctx, dir, "commit-tree", local+"^{tree}", "-p", remote, "-p", local,
+		"-m", fmt.Sprintf("Merge rebased history of %s onto origin (self-fork recovery, #2699)", branch))
+	if err != nil {
+		res.Detail = fmt.Sprintf("could not write recovery commit: %v", err)
+		return res
+	}
+	newSHA := strings.TrimSpace(newOut)
+
+	headOut, _, _ := runGit(ctx, dir, "symbolic-ref", "--quiet", "HEAD")
+	if strings.TrimSpace(headOut) == "refs/heads/"+branch {
+		// reset --soft moves the checked-out branch ref and keeps the index;
+		// the trees are identical, so the work tree is already consistent.
+		cur, err := gitRevParse(ctx, dir, branch)
+		if err != nil || cur != local {
+			res.Detail = fmt.Sprintf("local %s moved during recovery — not touching it", branch)
+			return res
+		}
+		if _, _, err := runGit(ctx, dir, "reset", "--soft", newSHA); err != nil {
+			res.Detail = fmt.Sprintf("could not move %s to recovery commit: %v", branch, err)
+			return res
+		}
+	} else if _, _, err := runGit(ctx, dir, "update-ref", "refs/heads/"+branch, newSHA, local); err != nil {
+		res.Detail = fmt.Sprintf("could not move %s to recovery commit (ref moved?): %v", branch, err)
+		return res
+	}
+
+	res.Outcome = SelfForkRecovered
+	res.NewSHA = newSHA
+	res.Detail = fmt.Sprintf(
+		"origin/%s (%s) is patch-equivalent to local history; %s now descends from it as %s — push fast-forwards",
+		branch, shortSHA(remote), branch, shortSHA(newSHA))
+	return res
+}
+
+type patchID struct{ id, commit string }
+
+// patchIDs returns `git patch-id --stable` for every non-merge commit in rng.
+// Commits with an empty diff produce no patch-id and are omitted.
+func patchIDs(ctx context.Context, dir, rng string) ([]patchID, error) {
+	cctx, cancel := context.WithTimeout(ctx, branchForkGitTimeout)
+	defer cancel()
+	logCmd := exec.CommandContext(cctx, "git", "log", "-p", "--no-merges", "--no-color", rng)
+	logCmd.Dir = dir
+	patches, err := logCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git log -p %s: %w", rng, err)
+	}
+	pidCmd := exec.CommandContext(cctx, "git", "patch-id", "--stable")
+	pidCmd.Dir = dir
+	pidCmd.Stdin = strings.NewReader(string(patches))
+	out, err := pidCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git patch-id: %w", err)
+	}
+	var ids []patchID
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 {
+			ids = append(ids, patchID{id: f[0], commit: f[1]})
+		}
+	}
+	return ids, nil
+}
+
+// StrandedRef names the ref that pins a branch_forked run's tip.
+func StrandedRef(issue int) string {
+	return fmt.Sprintf("refs/nightgauge/stranded/%d", issue)
+}
+
+// PreserveStrandedTip pins the local tip of `branch` at
+// refs/nightgauge/stranded/<issue> so worktree and branch cleanup cannot
+// orphan the run's verified commit. The ref lives outside refs/heads/, so
+// branch cleanup and gc leave it alone. Idempotent: a newer tip overwrites it.
+func PreserveStrandedTip(ctx context.Context, repoRoot string, issue int, branch string) (string, string, error) {
+	sha, err := gitRevParse(ctx, repoRoot, branch)
+	if err != nil {
+		return "", "", err
+	}
+	ref := StrandedRef(issue)
+	if _, _, err := runGit(ctx, repoRoot, "update-ref", ref, sha); err != nil {
+		return "", "", err
+	}
+	return ref, sha, nil
+}

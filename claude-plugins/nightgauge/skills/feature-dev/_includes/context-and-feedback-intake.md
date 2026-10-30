@@ -199,12 +199,13 @@ fi
 When `IS_CONFLICT_RESOLUTION=true` and the context file is present, the agent
 MUST:
 
-1. Re-attempt the rebase of the PR branch onto `$CONFLICT_BASE` and read each
-   conflicting file. For each conflict, the `conflict-context-{N}.json` entry
-   carries the `ours` (this PR's feature work) and `theirs` (rebased base)
-   blobs — use them to understand both sides. Those names are the document's,
-   not git's index-stage names, which a rebase inverts; the writer has already
-   translated. An entry with `ours_mode`/`theirs_mode` `160000` is a submodule
+1. Merge the base into the PR branch — `git merge --no-ff "origin/$CONFLICT_BASE"`
+   — and read each conflicting file. Never rebase an existing PR branch: its
+   tip would stop descending from origin's, and the push is rejected (#2699).
+   For each conflict, the `conflict-context-{N}.json` entry carries the `ours`
+   (this PR's feature work) and `theirs` (the base) blobs — use them to
+   understand both sides. Under a merge these match git's own `ours`/`theirs`.
+   An entry with `ours_mode`/`theirs_mode` `160000` is a submodule
    pointer: it has no blobs, and `ours_commit`/`theirs_commit` are the two
    commits to choose between. An entry with `ours_present`/`theirs_present`
    `false` was deleted on that side (not emptied).
@@ -212,7 +213,8 @@ MUST:
    changes** (same rules as `nightgauge-pr-merge` Step 6.1.5: never blindly
    accept one side; integrate new code with base updates; re-apply refactors
    onto the updated base).
-3. Commit the resolution on the existing branch and push. The pipeline then
+3. Commit the merge on the existing branch and push it with
+   `nightgauge git push-branch` (never `--force`). The pipeline then
    flows forward to feature-validate → pr-create → pr-merge, which re-runs CI
    and merges the now-conflict-free PR.
 

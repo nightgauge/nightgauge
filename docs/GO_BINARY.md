@@ -1847,6 +1847,32 @@ anchor already did. This is a per-operation choice, not a fallback path: there
 is one implementation of each operation, and hand-rolling git's guards in Go
 would be a second, weaker copy of rules git already enforces.
 
+### Pushing a PR Branch Without Force (Issue #2699)
+
+```bash
+nightgauge git push-branch [--json]
+```
+
+Pushes the current branch with `git push origin HEAD:refs/heads/<branch>` and
+never forces. When the push is rejected as non-fast-forward, it checks whether
+the fork is self-inflicted: every origin-only commit has a local commit with the
+same `git patch-id --stable`, and none of them is a merge. That is the shape a
+rebased PR branch leaves. The verb then writes a commit with origin's tip as its
+first parent, the local tip as its second, and the local tree unchanged, moves
+the branch to it, and pushes again without force.
+
+| Exit | Meaning                                                                                               |
+| ---- | ----------------------------------------------------------------------------------------------------- |
+| 0    | Pushed. A recovery prints `[self-fork-recovered] origin/<b> <old>..<new>`.                            |
+| 1    | Another push failure; git's stderr is passed through.                                                 |
+| 3    | Genuine fork: `[branch-forked] PUSH REJECTED: …` plus the unmatched origin SHAs. Origin is untouched. |
+
+The scheduler's branch-fork pre-flight applies the same recovery before it
+blocks a stage. A run that still ends `branch_forked` has its local tip pinned
+at `refs/nightgauge/stranded/<issue>` before worktree and branch cleanup. The
+ref is outside `refs/heads/`, so cleanup and `git gc` keep it, and the Action
+Center card names the ref and the SHA.
+
 ### Worktree Reclamation (Issue #110)
 
 Worktree removal has two halves. The **inline** half runs when a run finishes.

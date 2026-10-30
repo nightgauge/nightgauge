@@ -91,6 +91,12 @@ before planning it (#2562).
 
 ## Gotchas
 
+- **An existing PR branch is updated by merging its base, never rebased.** When
+  the issue has an open PR that conflicts with its base, the plan merges
+  `origin/<base>` into the branch and pushes normally. Never prescribe a
+  rebase or a force push of any kind: a rebased tip no longer descends from
+  origin's, so validate's push is rejected and the run ends `branch_forked`
+  (#2699).
 - **Read docs and the knowledge base before proposing.** Skipping
   `knowledge_path/PRD.md` + `decisions.md` and the relevant `docs/` produces a
   plan that drifts from accumulated decisions and causes rework downstream.
