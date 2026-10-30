@@ -289,24 +289,24 @@ func RewriteClosesToRefs(body, repo string, n int) string {
 	return forge.RewriteClosingRefs(body, closesTarget(repo, n))
 }
 
-// RewriteAllClosesToRefs replaces every closing keyword with `Refs`,
-// whatever issue it names, including the issue-URL form. It is for untrusted
-// text — acceptance-criterion text and evidence come from an issue body anyone
-// who can file an issue writes — so no issue closes because a criterion named it.
-func RewriteAllClosesToRefs(s string) string {
+// rewriteAllClosesToRefs replaces every closing keyword with `Refs`, whatever
+// issue it names, including the issue-URL form. It rewrites keywords only:
+// untrusted text goes through UntrustedACText, which also collapses line breaks.
+func rewriteAllClosesToRefs(s string) string {
 	return forge.RewriteClosingRefs(s, func(forge.ClosingRef) bool { return true })
 }
 
 // lineBreakRun is a run of whitespace that contains a line break.
 var lineBreakRun = regexp.MustCompile(`[ \t\f]*[\r\n]\s*`)
 
-// UntrustedACText renders criterion text or evidence for a PR body: on one
-// line, so a newline in it cannot open a bullet or a heading inside the
-// section hooks.UnmetCriteria parses (#2662), and with every closing keyword
-// rewritten to `Refs`. The line breaks go first, so a keyword split across
-// them is rewritten too.
+// UntrustedACText renders criterion text or evidence for a PR body. Both come
+// from an issue body anyone who can file an issue writes. It puts them on one
+// line, so a newline cannot open a bullet or a heading inside the section
+// hooks.UnmetCriteria parses (#2662), and rewrites every closing keyword to
+// `Refs`, so no issue closes because a criterion named it. The line breaks go
+// first, so a keyword split across them is rewritten too.
 func UntrustedACText(s string) string {
-	return RewriteAllClosesToRefs(lineBreakRun.ReplaceAllString(s, " "))
+	return rewriteAllClosesToRefs(lineBreakRun.ReplaceAllString(s, " "))
 }
 
 // AppendUnmetACs adds criteria under UnmetACHeading, creating the section

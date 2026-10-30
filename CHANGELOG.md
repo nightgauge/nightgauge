@@ -52,8 +52,8 @@ changelog, and the release workflow refuses a tag that does not.
   (#2684, #2697).** The board-cache wrapper forwarded raw GraphQL without
   dropping its board snapshot, so a mutation sent that way let this process
   read back the board it had just changed. Any document that is not a query
-  now invalidates the board, on success or failure, as the project service's
-  own mutations do. Both wrappers share one GraphQL forwarder.
+  now drops every cached board, on success or failure, because a raw document
+  does not say which board it writes. Both wrappers share one GraphQL forwarder.
 - **pr-create no longer lets untrusted criterion text reshape the PR body
   (#2662, #2670).** Criterion text and evidence render on one line, so a
   newline in them can no longer add a bullet or heading to the unmet-criteria

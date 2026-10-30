@@ -25,8 +25,6 @@ func WrapClient(c *Cache, inner forge.ForgeClient, owner string, project int) fo
 		board:       c.Wrap(inner.Board(), owner, project),
 		project:     WrapProject(c, inner.Project(), owner, project),
 		cache:       c,
-		owner:       owner,
-		projectNum:  project,
 	}
 }
 
@@ -36,11 +34,9 @@ var _ forge.GraphQLService = (*cachedClient)(nil)
 // passed through untouched.
 type cachedClient struct {
 	forge.ForgeClient
-	board      forge.BoardService
-	project    forge.ProjectService
-	cache      *Cache
-	owner      string
-	projectNum int
+	board   forge.BoardService
+	project forge.ProjectService
+	cache   *Cache
 }
 
 func (c *cachedClient) Board() forge.BoardService     { return c.board }
@@ -50,16 +46,20 @@ func (c *cachedClient) Project() forge.ProjectService { return c.project }
 // which embedding only forge.ForgeClient would hide from every wrapper above
 // this one (#2684).
 //
-// A raw document can write anything a ProjectService method can, so it gets
-// the same discipline as invalidatingProject: unless the document is a read,
-// the board is dropped after the call returns, on success or failure. Only a
-// document whose first operation is `query` or the `{ ... }` shorthand counts
-// as a read; anything else, including a document that cannot be classified,
-// is treated as a write. Misclassifying a read costs one refetch; letting a
-// write through would serve this process a board it has already changed.
+// A raw document can write anything a ProjectService method can, and nothing in
+// its text says which board that is, so it gets the discipline of a call that
+// cannot name its board: unless the document is a read, every board is dropped
+// after the call returns, on success or failure. One Cache holds several boards
+// (the attention sweep wraps each repository's against the same one), so
+// dropping only the bound board would leave the one actually written stale.
+// Only a document whose first operation is `query` or the `{ ... }` shorthand
+// counts as a read; anything else, including a document that cannot be
+// classified, is treated as a write. Misclassifying a read costs one refetch;
+// letting a write through would serve this process a board it has already
+// changed.
 func (c *cachedClient) ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
 	if !isReadDocument(query) {
-		defer invalidateBoard(c.cache, c.owner, c.projectNum)
+		defer c.cache.InvalidateAll()
 	}
 	return forge.ForwardGraphQL(ctx, c.ForgeClient, query, variables)
 }
