@@ -616,7 +616,8 @@ type budgetEscalationRunner struct {
 	mu               sync.Mutex
 	callCount        map[state.PipelineStage]int
 	pickupCostUSD    float64
-	featureDevStalls int // number of times feature-dev stalls before succeeding
+	featureDevStalls int    // number of times feature-dev stalls before succeeding
+	stallError       string // overrides the default stall text
 }
 
 func (r *budgetEscalationRunner) RunStage(_ context.Context, params StageRunParams) (*StageRunResult, error) {
@@ -626,6 +627,9 @@ func (r *budgetEscalationRunner) RunStage(_ context.Context, params StageRunPara
 	r.mu.Unlock()
 
 	if params.Stage == state.StageFeatureDev && currentCall <= r.featureDevStalls {
+		if r.stallError != "" {
+			return &StageRunResult{ExitCode: 1}, errors.New(r.stallError)
+		}
 		return &StageRunResult{ExitCode: 1}, errors.New("feature-dev stall kill threshold reached after 4800s")
 	}
 
@@ -762,5 +766,43 @@ func TestScheduler3365Recovery(t *testing.T) {
 	sentinel := filepath.Join(layouttest.PipelineDir(t, root), "stop-hook-status-8365.json")
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 		t.Errorf("stop-hook sentinel not cleaned up after recovery; stat err=%v", err)
+	}
+}
+
+// A stall after a quota warning keeps its tier even past the budget threshold:
+// the stronger model spends the bucket that warned (#2711).
+func TestScheduler_WarningOnlyQuotaStallSkipsBudgetEscalation(t *testing.T) {
+	stubReconcileGhUnreachable(t)
+	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "sonnet")
+	root := gitWorkspace(t)
+	cfgDir := filepath.Join(root, ".nightgauge")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", t.TempDir())
+	cfg := "owner: testorg\npipeline:\n  adaptive_stall_recovery: true\n  token_budget_ceiling:\n    ceiling_usd: 10\n"
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &budgetEscalationRunner{
+		callCount:        make(map[state.PipelineStage]int),
+		pickupCostUSD:    6.0,
+		featureDevStalls: 1,
+		stallError: "[skillRunner] Stage [stall-killed] idle 15m 0s after rate_limit_event " +
+			"(status=allowed_warning; seven_day bucket; resetsAt=1778403000)",
+	}
+	s := buildStallTestScheduler(t, root, runner)
+
+	s.runPipeline(context.Background(), types.BoardItem{
+		Number: 2711,
+		Repo:   "nightgauge/nightgauge",
+		ID:     "item-2711",
+		Title:  "Soft quota stall keeps its tier",
+		Labels: []string{"type:feature"},
+	})
+
+	if got := s.retryEngine.CurrentModel("feature-dev"); got != "" {
+		t.Errorf("CurrentModel(feature-dev) = %q, want no escalation after a warning-only stall", got)
 	}
 }

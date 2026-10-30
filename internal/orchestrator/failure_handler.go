@@ -1093,10 +1093,28 @@ func DemoteEnvironmentalKindForOutcome(kind, detail string) (string, bool) {
 // (#2711). A detail with no status stays quota, because the provider's own
 // rejection text carries none.
 func DemoteWarningOnlyQuotaKind(kind, detail string) (string, bool) {
-	if kind != TerminalKindRateLimitQuotaExhausted ||
-		!strings.Contains(detail, "status=allowed_warning") ||
-		strings.Contains(detail, "status=limited") {
+	if kind != TerminalKindRateLimitQuotaExhausted || !IsWarningOnlyQuotaDetail(detail) {
 		return kind, false
 	}
 	return TerminalKindStallKill, true
+}
+
+// softQuotaKillMarker is the part of skillRunner's kill marker that names a
+// soft status. Matching the bare status token would also match the failure
+// text of a genuine exhaustion that merely quotes it.
+const softQuotaKillMarker = "after rate_limit_event (status=allowed_warning"
+
+// IsWarningOnlyQuotaDetail reports whether detail carries skillRunner's kill
+// marker for a stage that stopped after a soft quota warning, with no
+// status=limited alongside it.
+func IsWarningOnlyQuotaDetail(detail string) bool {
+	return strings.Contains(detail, softQuotaKillMarker) &&
+		!strings.Contains(detail, "status=limited")
+}
+
+// IsWarningOnlyQuotaStall reports a stall kill that followed a soft quota
+// warning. It is booked as a stall (#2711), but quota is still under pressure:
+// a stronger tier spends more of the bucket that just warned.
+func IsWarningOnlyQuotaStall(kind, detail string) bool {
+	return kind == TerminalKindStallKill && IsWarningOnlyQuotaDetail(detail)
 }
