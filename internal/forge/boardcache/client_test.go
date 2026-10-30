@@ -67,20 +67,22 @@ func TestExecuteGraphQLInvalidatesOnlyAfterAWrite(t *testing.T) {
 	}
 }
 
-// An unbound wrapper (project 0) cannot name the board a write touched, so a
-// write drops every board, as invalidatingProject does.
-func TestExecuteGraphQLWriteOnUnboundClientDropsEveryBoard(t *testing.T) {
-	c := New(time.Hour)
-	ctx := context.Background()
-	if _, _, err := c.Wrap(&countingBoard{items: sampleItems()}, "other", 5).ListOpenItems(ctx); err != nil {
-		t.Fatal(err)
-	}
-	client := WrapClient(c, &gqlClient{fakeClient: fakeClient{board: &countingBoard{}}}, "acme", 0)
-	if _, err := client.(forge.GraphQLService).ExecuteGraphQL(ctx, `mutation { x }`, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := c.Peek("other", 5, "open"); ok {
-		t.Error("an unbound GraphQL write left another board cached")
+// A raw document does not say which board it writes, and one Cache holds several
+// boards, so a write through any wrapper, bound or not, drops all of them.
+func TestExecuteGraphQLWriteDropsEveryBoard(t *testing.T) {
+	for _, project := range []int{3, 0} {
+		c := New(time.Hour)
+		ctx := context.Background()
+		if _, _, err := c.Wrap(&countingBoard{items: sampleItems()}, "other", 5).ListOpenItems(ctx); err != nil {
+			t.Fatal(err)
+		}
+		client := WrapClient(c, &gqlClient{fakeClient: fakeClient{board: &countingBoard{}}}, "acme", project)
+		if _, err := client.(forge.GraphQLService).ExecuteGraphQL(ctx, `mutation { x }`, nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := c.Peek("other", 5, "open"); ok {
+			t.Errorf("a GraphQL write through project %d left another board cached", project)
+		}
 	}
 }
 
