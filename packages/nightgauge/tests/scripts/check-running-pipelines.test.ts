@@ -1,9 +1,10 @@
 /**
  * Tests for scripts/check-running-pipelines.sh — the dev-install guard (#1511).
  *
- * Installing the extension ends in a window reload, and a reload calls
- * `abortAll()`, killing every in-flight pipeline. `autonomous stop` does not do
- * that; it lets the running slots finish. The guard's job is to notice that
+ * Installing the extension does not reload the window, but the reload the
+ * operator does next calls `abortAll()`, killing every in-flight pipeline.
+ * `autonomous stop` does not do that; it lets the running slots finish. The
+ * guard's job is to notice that
  * work is still in flight and let dev-install.sh ask before spending it.
  *
  * Every assertion here is about the two directions of being wrong:
@@ -50,6 +51,18 @@ function runGuard(bin?: string): { status: number; stdout: string } {
     const e = error as { status?: number; stdout?: string };
     return { status: e.status ?? -1, stdout: e.stdout ?? "" };
   }
+}
+
+/** The live-daemon `autonomous status --json` shape (#2720). */
+function liveDaemonStatus(reload: Record<string, unknown>): string {
+  return JSON.stringify({
+    daemon: true,
+    status: "stopped",
+    cycles: 12,
+    running: [],
+    inReviewWithoutPR: [],
+    ...reload,
+  });
 }
 
 describe("check-running-pipelines.sh (#1511)", () => {
@@ -114,6 +127,35 @@ describe("check-running-pipelines.sh (#1511)", () => {
     expect(stdout).toContain("[autonomous]");
     expect(stdout).toContain("[manual]");
     expect(stdout).toContain("feature-dev");
+  });
+
+  it("exits 1 for a manual run in the live-daemon shape, with the scheduler list empty", () => {
+    const bin = fakeBinary(
+      liveDaemonStatus({
+        running_pipelines_known: true,
+        reload_safe: false,
+        running_pipelines: [
+          { repo: "acme/platform", issueNumber: 1429, stage: "pr-create", source: "manual" },
+        ],
+      })
+    );
+
+    const { status, stdout } = runGuard(bin);
+
+    expect(status).toBe(1);
+    expect(stdout).toContain("#1429 platform");
+    expect(stdout).toContain("[manual]");
+  });
+
+  it("exits 0 for the live-daemon shape when the summary did not answer", () => {
+    const bin = fakeBinary(
+      liveDaemonStatus({
+        running_pipelines_known: false,
+        reload_safe: false,
+        running_pipelines: [],
+      })
+    );
+    expect(runGuard(bin).status).toBe(0);
   });
 
   it("flags a stale run rather than dropping it", () => {
