@@ -934,9 +934,6 @@ func (r *DeterministicRunner) acBackstop(ctx context.Context, gh ghClient, workd
 		return false
 	}
 	repo := readPRContextRepo(workdir, issueNumber)
-	if repo == "" {
-		log.Printf("pr-merge: AC backstop for #%d cannot read the repository from pr-%d.json pr_url; every closer naming #%d counts", issueNumber, issueNumber, issueNumber)
-	}
 	if !BodyClosesIssue(prBody, repo, issueNumber) {
 		return false
 	}
@@ -955,6 +952,10 @@ func (r *DeterministicRunner) acBackstop(ctx context.Context, gh ghClient, workd
 	uncovered := preflight.UncoveredACs(issueBody, rec)
 	if len(uncovered) == 0 {
 		return false
+	}
+	if repo == "" {
+		log.Printf("pr-merge: AC backstop for #%d cannot read the repository from pr-%d.json "+
+			"pr_url; demoting every closer naming #%d", issueNumber, issueNumber, issueNumber)
 	}
 	newBody := AppendUnmetACs(RewriteClosesToRefs(prBody, repo, issueNumber), issueNumber, uncovered)
 	if err := bc.EditPRBody(ctx, prNumber, newBody); err != nil {

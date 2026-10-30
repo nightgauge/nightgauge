@@ -11,6 +11,11 @@ and this project adheres to
 
 ### Fixed
 
+- **Post-pipeline verification no longer closes an issue for another repository's closer
+  (#2687).** A merged PR body or main commit saying `Fixes other/repo#N`, or that issue's URL,
+  no longer closes this repository's #N. A closer naming this repository now counts on any
+  issue-URL host, and needs no space after the keyword (`Fixes:#N`), as on the Go side.
+
 - **A `Refs #N` merge no longer closes the issue after the pipeline (#2689).** Post-pipeline
   verification now closes an open issue only when a merged PR body or a commit on main carries a
   closing keyword (`Closes #N`, `owner/repo#N`, or the issue URL). A merge that only references

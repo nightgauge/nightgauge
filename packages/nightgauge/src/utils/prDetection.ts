@@ -338,24 +338,37 @@ function issueRefPattern(issueNumber: number): string {
 /**
  * True when `text` carries a GitHub closing keyword (close/closes/closed,
  * fix/fixes/fixed, resolve/resolves/resolved, optional `:`) immediately
- * before a reference to `issueNumber` — `#N`, `owner/repo#N`, or the full
- * issue URL. `Refs #N`, `Part of #N` and a title scope `fix(#N)` are not
- * closing references.
+ * before a reference to issue `issueNumber` of `repo` ("owner/repo") — `#N`,
+ * `owner/repo#N`, or the issue URL on any host. `Refs #N`, `Part of #N` and a
+ * title scope `fix(#N)` are not closing references.
  *
- * Mirrors Go `closingKeywordRE` (internal/forge/closing_keywords.go): any
- * issue-URL host, and no whitespace required after the keyword. Unlike the
- * Go `ClosesIssue`, it matches on the issue number only, whatever repository
- * an `owner/repo#N` or URL reference names.
+ * A bare `#N` names the PR's own repository; a reference naming a repository
+ * counts only when it names `repo`, so `Fixes other/repo#N` never closes this
+ * repository's #N. With `repo` unknown (""), only a bare `#N` counts: the
+ * caller closes the issue on a match, so an unplaceable reference leaves it open.
  *
- * @see Issue #2689
+ * Mirrors Go `forge.ClosesIssue` (internal/forge/closing_keywords.go); both
+ * are tested against internal/forge/testdata/closing_keywords.json.
+ *
+ * @see Issue #2689, #2687
  */
-export function prBodyClosesIssue(text: string | undefined, issueNumber: number): boolean {
+export function prBodyClosesIssue(
+  text: string | undefined,
+  issueNumber: number,
+  repo: string
+): boolean {
   if (!text) return false;
-  const ref = String.raw`(?:[\w.-]+/[\w.-]+#|#|https?://[^\s/]+/[\w.-]+/[\w.-]+/issues/)${issueNumber}\b`;
-  return new RegExp(
-    String.raw`\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*${ref}`,
-    "i"
-  ).test(text);
+  const closer =
+    /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(?:([\w.-]+\/[\w.-]+)?#(\d+)|https?:\/\/[^\s/]+\/([\w.-]+\/[\w.-]+)\/issues\/(\d+))\b/gi;
+  for (const m of text.matchAll(closer)) {
+    const refRepo = m[1] ?? m[3] ?? "";
+    const num = Number(m[2] ?? m[4]);
+    if (num !== issueNumber) continue;
+    if (refRepo === "" || (repo !== "" && refRepo.toLowerCase() === repo.toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** True when `text` references `issueNumber` at all (`#N` or `/issues/N`). */
@@ -373,9 +386,10 @@ export function mentionsIssue(text: string | undefined, issueNumber: number): bo
  */
 export function pickMergedPRForIssue(
   issueNumber: number,
-  prs: MergedPRRecord[]
+  prs: MergedPRRecord[],
+  repo: string
 ): MergedPRRecord | null {
-  const closer = prs.find((pr) => prBodyClosesIssue(pr.body, issueNumber));
+  const closer = prs.find((pr) => prBodyClosesIssue(pr.body, issueNumber, repo));
   if (closer) return closer;
   const scope = new RegExp(String.raw`^\w+(?:\([^)]*#${issueNumber}\b[^)]*\))`);
   return prs.find((pr) => scope.test(pr.title ?? "")) ?? null;

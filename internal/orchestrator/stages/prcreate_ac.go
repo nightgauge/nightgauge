@@ -271,8 +271,9 @@ func closesTarget(repo string, n int) func(forge.ClosingRef) bool {
 // of repo ("owner/repo", or "" when unknown — see closesTarget). forge owns
 // the one closing-keyword matcher, shared with the post-merge hook.
 func BodyClosesIssue(body, repo string, n int) bool {
+	targets := closesTarget(repo, n)
 	for _, r := range forge.ClosingRefs(body) {
-		if closesTarget(repo, n)(r) {
+		if targets(r) {
 			return true
 		}
 	}

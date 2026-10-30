@@ -1,6 +1,10 @@
 package forge
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"testing"
+)
 
 // One table for every closing-keyword form (#2687). stages and hooks delegate
 // here, so this table is what both agree on. The PR is in repository o/r.
@@ -48,6 +52,33 @@ func TestClosingRefsNumbers(t *testing.T) {
 	for i := range want {
 		if refs[i] != want[i] {
 			t.Errorf("ClosingRefs[%d] = %+v, want %+v", i, refs[i], want[i])
+		}
+	}
+}
+
+// closing_keywords.json is the grammar table the extension's prBodyClosesIssue
+// (packages/nightgauge/src/utils/prDetection.ts) is tested against too, so the
+// Go and TypeScript matchers cannot drift apart unnoticed (#2687).
+func TestClosingKeywordsSharedTable(t *testing.T) {
+	data, err := os.ReadFile("testdata/closing_keywords.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Body   string `json:"body"`
+		Repo   string `json:"repo"`
+		N      int    `json:"n"`
+		Closes bool   `json:"closes"`
+	}
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("empty shared table")
+	}
+	for _, c := range cases {
+		if got := ClosesIssue(c.Body, c.Repo, c.N); got != c.Closes {
+			t.Errorf("ClosesIssue(%q, %q, %d) = %v, want %v", c.Body, c.Repo, c.N, got, c.Closes)
 		}
 	}
 }

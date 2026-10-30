@@ -23,8 +23,9 @@ changelog, and the release workflow refuses a tag that does not.
   follow-up sweep no longer files a tracking issue for a PR that closes an open issue by
   URL. A reference naming another repository (`Fixes other/repo#N`, or its URL) no longer
   counts as closing this repository's issue of the same number. One matcher in
-  `internal/forge` replaces the copies that disagreed with GitHub, and the extension's
-  matcher now accepts any issue-URL host (#2687).
+  `internal/forge` replaces the copies that disagreed with GitHub. The extension's
+  post-pipeline verification follows the same rules, and both matchers are tested
+  against one shared table (#2687).
 - **A `Refs #N` merge no longer closes the issue after the pipeline (#2689).** Post-pipeline
   verification now closes an open issue only when a merged PR body or a commit on main carries a
   closing keyword (`Closes #N`, `owner/repo#N`, or the issue URL). A merge that only references

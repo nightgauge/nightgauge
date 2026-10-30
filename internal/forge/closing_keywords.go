@@ -15,7 +15,7 @@ import (
 // Group 1 is the reference text; group 2 or 4 is the "owner/repo" it names
 // (empty for a bare `#N`); group 3 or 5 is the issue number.
 var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*` +
-	`((?:([\w.-]+/[\w.-]+))?#(\d+)|https?://[^\s/]+/([\w.-]+/[\w.-]+)/issues/(\d+))\b`)
+	`(([\w.-]+/[\w.-]+)?#(\d+)|https?://[^\s/]+/([\w.-]+/[\w.-]+)/issues/(\d+))\b`)
 
 // ClosingRef is one closing-keyword reference in a body. Ref is the text after
 // the keyword (`#7`, `o/r#7`, or the URL); Repo is the "owner/repo" the
