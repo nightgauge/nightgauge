@@ -410,9 +410,10 @@ func RenderBody(snap PRCreateSnapshot) string {
 	// Acceptance criteria (#2595, #2655): each criterion renders exactly
 	// once — met ones here, the rest under UnmetACHeading, which the
 	// post-merge hook reads (bullet lines only) to name the remainder.
-	// Criterion text and evidence are untrusted, so every closing keyword
-	// inside them is rewritten to `Refs`, whatever issue it names (#2655).
-	acText := RewriteAllClosesToRefs
+	// Criterion text and evidence are untrusted: they render on one line and
+	// every closing keyword inside them is rewritten to `Refs`, whatever
+	// issue it names (#2655, #2662).
+	acText := UntrustedACText
 	var met []ACVerdict
 	for _, v := range snap.ACVerdicts {
 		if v.Status == ACMet {
@@ -508,15 +509,16 @@ func unitTestsLabel(snap PRCreateSnapshot) string {
 }
 
 // acTestState is the test run a test-named criterion is checked against:
-// feature-validate's unit-test verdict. feature-dev's self-reported counts
-// stand in only when validate never ran and no built suite went unexecuted,
-// so an unconfirmed run cannot close an issue.
+// feature-validate's unit-test verdict. A built suite that went unexecuted
+// outranks that verdict, because a passed_unverified run can still report its
+// unit tests passed (#2670). feature-dev's self-reported counts stand in only
+// when validate never ran, so an unconfirmed run cannot close an issue.
 func acTestState(snap PRCreateSnapshot) ACTestState {
 	switch {
-	case snap.UnitTestsPassed:
-		return ACTestState{Passed: true, Source: "feature-validate unit tests"}
 	case snap.UnverifiedDeliverable.Detected():
 		return ACTestState{Source: "tests added but never executed"}
+	case snap.UnitTestsPassed:
+		return ACTestState{Passed: true, Source: "feature-validate unit tests"}
 	case snap.HasValidate:
 		return ACTestState{Source: "feature-validate unit tests"}
 	case snap.TestsFailed == 0 && snap.TestsPassed > 0:

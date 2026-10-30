@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"fmt"
 
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
@@ -29,6 +30,18 @@ type RepoService interface {
 // (-f key=value, -F key=value) and prints the envelope verbatim.
 type GraphQLService interface {
 	ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error)
+}
+
+// ForwardGraphQL runs query on inner's optional GraphQLService. A wrapper that
+// embeds only ForgeClient hides that surface from every caller above it, so
+// each wrapper implements ExecuteGraphQL by calling this (#2684). An inner
+// client without the surface answers ErrUnsupported wrapped via %w.
+func ForwardGraphQL(ctx context.Context, inner ForgeClient, query string, variables map[string]interface{}) ([]byte, error) {
+	gql, ok := inner.(GraphQLService)
+	if !ok {
+		return nil, fmt.Errorf("forge client has no GraphQL surface: %w", ErrUnsupported)
+	}
+	return gql.ExecuteGraphQL(ctx, query, variables)
 }
 
 // DefaultBranchFileService is an optional surface, not part of ForgeClient,

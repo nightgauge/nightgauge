@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
@@ -627,5 +628,81 @@ func TestACTestState_UnconfirmedRunNeverPasses(t *testing.T) {
 		if got := acTestState(tc.snap).Passed; got != tc.want {
 			t.Errorf("%s: Passed = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// #2670: a passed_unverified validate run still reports unit_tests.passed, so
+// checking that flag first made the never-executed suite case unreachable and
+// let it satisfy a test-named criterion. The snapshot is read from a validate
+// context written the way the gate writes it.
+func TestACTestState_UnverifiedSuiteOutranksValidatePass(t *testing.T) {
+	dir := initRepo(t)
+	doc := map[string]any{"validation_status": "passed", "unit_tests": map[string]any{"passed": true}}
+	f := deliverable.Finding{
+		Artifacts: []deliverable.TestArtifact{{Path: "e2e/widget.spec.ts", Tiers: []deliverable.Tier{deliverable.TierE2E}}},
+		Tiers:     []deliverable.Tier{deliverable.TierE2E},
+	}
+	if !deliverable.Apply(doc, f) {
+		t.Fatal("setup: Apply did not supersede the passed verdict")
+	}
+	p := pipelineContextPath(dir, "validate-42.json")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(doc)
+	if err := os.WriteFile(p, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := defaultReadCreateContext(dir, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.UnitTestsPassed || !snap.UnverifiedDeliverable.Detected() {
+		t.Fatalf("setup: want both flags set, got passed=%v unverified=%v", snap.UnitTestsPassed, snap.UnverifiedDeliverable.Detected())
+	}
+	got := acTestState(snap)
+	if got.Passed {
+		t.Errorf("a suite that never executed satisfied a test-named criterion: %+v", got)
+	}
+	if got.Source != "tests added but never executed" {
+		t.Errorf("Source = %q, want the unexecuted-suite reason", got.Source)
+	}
+}
+
+// #2662: criterion text and evidence are untrusted. A newline in either must
+// not open a bullet or a heading inside the section post-merge parses, and
+// must not split a closing keyword away from its rewrite.
+func TestRenderBody_UntrustedACTextRendersOnOneLine(t *testing.T) {
+	s := richSnap()
+	s.ACVerdicts = ResolveACVerdicts(
+		[]string{"Ship the widget\n- injected criterion", "Document it", "Done"},
+		[]ACVerdict{
+			{Index: 0, Status: "unmet", Evidence: "x\n- injected\n## Heading"},
+			{Index: 1, Status: "unmet", Evidence: "see notes\r\n  - also injected"},
+			{Index: 2, Status: "met", Evidence: "fixes\n#9 and closes\n\n#10"},
+		}, nil, nil)
+	body := RenderBody(s)
+
+	want := []string{"Ship the widget - injected criterion", "Document it"}
+	if got := hooks.UnmetCriteria(body); !reflect.DeepEqual(got, want) {
+		t.Errorf("hooks.UnmetCriteria = %q, want %q\n%s", got, want, body)
+	}
+	if strings.Contains(body, "\n## Heading") {
+		t.Errorf("evidence opened a heading:\n%s", body)
+	}
+	if !strings.Contains(body, "_❌ unmet — feature-validate: x - injected ## Heading_\n") {
+		t.Errorf("evidence not collapsed onto its status line:\n%s", body)
+	}
+	if !strings.Contains(body, "(feature-validate: Refs #9 and Refs #10)") || BodyClosesIssue(body, "o/r", 9) || BodyClosesIssue(body, "o/r", 10) {
+		t.Errorf("a closing keyword split by a newline survived:\n%s", body)
+	}
+}
+
+func TestAppendUnmetACs_UntrustedTextRendersOnOneLine(t *testing.T) {
+	body := AppendUnmetACs("Body\n", 42, []string{"real\n## Heading\n- fake", "Closes\n#7"})
+	want := []string{"real ## Heading - fake", "Refs #7"}
+	if got := hooks.UnmetCriteria(body); !reflect.DeepEqual(got, want) {
+		t.Errorf("hooks.UnmetCriteria = %q, want %q\n%s", got, want, body)
 	}
 }
