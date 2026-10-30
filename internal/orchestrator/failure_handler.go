@@ -1086,3 +1086,17 @@ func DemoteEnvironmentalKindForOutcome(kind, detail string) (string, bool) {
 	}
 	return TerminalKindBlockedOutcomeHold, true
 }
+
+// DemoteWarningOnlyQuotaKind turns a quota kind whose detail reports a soft
+// `status=allowed_warning` into a stall. A cooldown that runs to resetsAt stops
+// the whole fleet, so it needs a hard signal: no request was rejected here
+// (#2711). A detail with no status stays quota, because the provider's own
+// rejection text carries none.
+func DemoteWarningOnlyQuotaKind(kind, detail string) (string, bool) {
+	if kind != TerminalKindRateLimitQuotaExhausted ||
+		!strings.Contains(detail, "status=allowed_warning") ||
+		strings.Contains(detail, "status=limited") {
+		return kind, false
+	}
+	return TerminalKindStallKill, true
+}

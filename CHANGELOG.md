@@ -19,6 +19,10 @@ changelog, and the release workflow refuses a tag that does not.
 - PR Review now allows 80 turns instead of 40, so a large diff can finish. A review that still
   reaches the limit fails with an annotation and job summary saying it did not finish and naming
   the limit, instead of a bare red check; `docs/PR_REVIEW_PASSES.md` says what to do next.
+- A soft `allowed_warning` no longer stops the fleet (#2711). Time on a live background task,
+  foreground tool call or declared process, within its ceiling, no longer counts as idle, and a
+  kill that followed only a warning is booked as a stall. A global cooldown to `resetsAt` now
+  requires a hard signal.
 - A closing keyword followed by a github.com issue URL
   (`Closes https://github.com/o/r/issues/N`) now counts as closing the issue, as it does on
   GitHub; a URL on any other host does not. The pr-merge acceptance backstop

@@ -5547,6 +5547,14 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			terminalFailureKind = demoted
 		}
 
+		// A warning is not a rejection: whatever produced this kind, a failure
+		// with only `allowed_warning` behind it must not suspend dispatch.
+		if demoted, ok := DemoteWarningOnlyQuotaKind(terminalFailureKind, failureDetail); ok {
+			log.Printf("autonomous: %s quota kind demoted — warning-only, no hard signal; no global cooldown (%s → %s)",
+				key, terminalFailureKind, demoted)
+			terminalFailureKind = demoted
+		}
+
 		// The demoted BLOCKED outcome is held for this one issue as a
 		// non-fault outcome, like not_pipeline_actionable below: no retry, no
 		// cooldown, no lifetime-cap increment, no board revert — the extension

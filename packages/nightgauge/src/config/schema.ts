@@ -730,10 +730,13 @@ export const PipelineConfigSchema = z.object({
    * fast-fail kills the stage. Applies even to a soft `allowed_warning` that
    * precedes the CLI hanging on a later hard-limited request. Capped below the
    * stage's normal idle budget, so a quota signal only makes a stage fail
-   * faster, never slower. Default: 900000 (15 min).
+   * faster, never slower. Time on a live background task does not count, and
+   * a kill after only a soft signal is a stall, not quota exhaustion. Default:
+   * 900000 (15 min).
    *
    * @env NIGHTGAUGE_PIPELINE_QUOTA_SIGNAL_IDLE_MS
    * @see Issue #3702 — soft quota signal preceded an 81-min idle hang.
+   * @see Issue #2711 — a gate wait was killed and set a day-long global cooldown.
    */
   quota_signal_idle_ms: z.number().int().min(0).optional(),
   /**
