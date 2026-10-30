@@ -89,23 +89,25 @@ describe("moveToInReviewIfPRBacked", () => {
 describe("failed-run park against the scheduler's revert", () => {
   function board(start: string) {
     const state = { status: start };
+    const cli = (args: string[], status: string) => {
+      const from = args[args.indexOf("--only-from") + 1];
+      if (args.includes("--only-from") && state.status !== from) {
+        throw Object.assign(new Error("Command failed"), {
+          stderr: `Error: yielding ${status}: it is "${state.status}"`,
+        });
+      }
+      state.status = status;
+    };
     const park = () =>
       moveToInReviewIfPRBacked(312, "/repo", makeLogger(), undefined, {
         onlyFrom: "In progress",
         deps: deps(async (_binary, args) => {
-          const from = args[args.indexOf("--only-from") + 1];
-          if (args.includes("--only-from") && state.status !== from) {
-            throw Object.assign(new Error("Command failed"), {
-              stderr: `Error: yielding In review: it is "${state.status}"`,
-            });
-          }
-          state.status = "In review";
+          cli(args, "In review");
           return {};
         }),
       });
-    const revert = () => {
-      state.status = "Ready";
-    };
+    // revertFailedIssueStatus is an unconditional MoveStatus: no --only-from.
+    const revert = () => cli(["project", "move-status", "312", "ready"], "Ready");
     return { state, park, revert };
   }
 

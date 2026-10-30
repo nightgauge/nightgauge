@@ -2164,7 +2164,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     stage: PipelineStage,
     issueNumber: number
   ): Promise<void> {
-    const statusValue = STAGE_STATUS_VALUES[stage];
+    let statusValue = STAGE_STATUS_VALUES[stage];
     if (!statusValue) {
       return;
     }
@@ -2228,10 +2228,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
     }
 
-    // Done means the issue is closed. A `Refs` merge leaves it open and the
-    // post-merge hook returns it to Ready; Done here would overwrite that and
-    // the scheduler would never dispatch the remainder. An unreadable state
-    // writes nothing: the hook's own Done sync covers a closed issue. @see #2706
+    // Done means the issue is closed. The post-merge hook has already run, so
+    // an open issue is a partial delivery: it goes to Ready so the scheduler
+    // dispatches the remainder. That repeats the hook's write on purpose: the
+    // hook skips it when it cannot resolve a board, and In review would then
+    // strand the issue. An unreadable state writes nothing, since a guess could
+    // be wrong either way, but it must not pass silently. @see #2706
     if (stage === "pr-merge") {
       const issueState = await getIssueState(
         issueNumber,
@@ -2239,12 +2241,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         this.logger,
         this.repoOverride
       );
-      if (issueState !== "CLOSED") {
-        this.logger.warn("Not writing Done after pr-merge: the issue is not closed", {
+      if (issueState === null) {
+        this.logger.warn("Not writing Done after pr-merge: the issue state is unreadable", {
           issueNumber,
-          issueState,
         });
+        await this.raiseBoardStatusWriteFailed(issueNumber, stage);
         return;
+      }
+      if (issueState !== "CLOSED") {
+        statusValue = BOARD_STATUS.ready;
       }
     }
 
