@@ -147,6 +147,11 @@ describe("parseAcceptanceCriteria", () => {
       ["Do X:", "Do Y"],
     ],
     ["sub-step after a blank line", "## Acceptance Criteria\n1. Do X:\n\n   1. sub\n", ["Do X:"]],
+    [
+      "whitespace-only item opens no column",
+      "## Acceptance Criteria\n1.  \n   1. real\n",
+      ["real"],
+    ],
     ["sibling items", "## Acceptance Criteria\n1. a\n2. b\n", ["a", "b"]],
     [
       "4-column content keeps a 3-space item a sibling",

@@ -2,6 +2,7 @@ package boardcache
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -37,6 +38,17 @@ type cachedClient struct {
 
 func (c *cachedClient) Board() forge.BoardService     { return c.board }
 func (c *cachedClient) Project() forge.ProjectService { return c.project }
+
+// ExecuteGraphQL forwards the inner client's optional forge.GraphQLService,
+// which embedding only forge.ForgeClient would hide from every wrapper above
+// this one (#2684). An inner client without it answers ErrUnsupported.
+func (c *cachedClient) ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
+	gql, ok := c.ForgeClient.(forge.GraphQLService)
+	if !ok {
+		return nil, fmt.Errorf("forge client has no GraphQL surface: %w", forge.ErrUnsupported)
+	}
+	return gql.ExecuteGraphQL(ctx, query, variables)
+}
 
 // WrapProject returns a ProjectService that drops the board's snapshots after
 // any call that can change what a board read would return.

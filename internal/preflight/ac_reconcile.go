@@ -219,6 +219,11 @@ func parseACs(body string) []acCriterion {
 		var numbered []string
 		if sectionLevel > 0 {
 			numbered = numberedRE.FindStringSubmatch(line)
+			// A marker with only whitespace after it is not an item: the SDK
+			// matches against the right-trimmed line and misses it (#2684).
+			if numbered != nil && strings.TrimSpace(numbered[2]) == "" {
+				numbered = nil
+			}
 		}
 		indent := len(line) - len(strings.TrimLeft(line, " \t"))
 		if numbered != nil {
