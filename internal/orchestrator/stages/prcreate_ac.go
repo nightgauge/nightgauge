@@ -297,12 +297,24 @@ func RewriteAllClosesToRefs(s string) string {
 	return forge.RewriteClosingRefs(s, func(forge.ClosingRef) bool { return true })
 }
 
+// lineBreakRun is a run of whitespace that contains a line break.
+var lineBreakRun = regexp.MustCompile(`[ \t\f]*[\r\n]\s*`)
+
+// UntrustedACText renders criterion text or evidence for a PR body: on one
+// line, so a newline in it cannot open a bullet or a heading inside the
+// section hooks.UnmetCriteria parses (#2662), and with every closing keyword
+// rewritten to `Refs`. The line breaks go first, so a keyword split across
+// them is rewritten too.
+func UntrustedACText(s string) string {
+	return RewriteAllClosesToRefs(lineBreakRun.ReplaceAllString(s, " "))
+}
+
 // AppendUnmetACs adds criteria under UnmetACHeading, creating the section
 // when the body has none, so post-merge names them as the remainder.
 func AppendUnmetACs(body string, issueNumber int, criteria []string) string {
 	var items strings.Builder
 	for _, c := range criteria {
-		items.WriteString("- " + RewriteAllClosesToRefs(c) + "\n")
+		items.WriteString("- " + UntrustedACText(c) + "\n")
 	}
 	if i := strings.Index(body, UnmetACHeading); i >= 0 {
 		// Insert at the end of the existing section (next heading or EOF).

@@ -3,7 +3,6 @@ package sweep
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 
@@ -56,17 +55,14 @@ type sharedClient struct {
 	reads *SharedReads
 }
 
+var _ forge.GraphQLService = (*sharedClient)(nil)
+
 // ExecuteGraphQL forwards the inner client's optional forge.GraphQLService.
 // Embedding only forge.ForgeClient hides it, so without this a producer
 // asserting the surface on the wrapper finds none even when the adapter has
-// one (#2684). An inner client without the surface answers ErrUnsupported,
-// the repo.go convention for adapters with no GraphQL transport.
+// one (#2684).
 func (c *sharedClient) ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
-	gql, ok := c.ForgeClient.(forge.GraphQLService)
-	if !ok {
-		return nil, fmt.Errorf("forge client has no GraphQL surface: %w", forge.ErrUnsupported)
-	}
-	return gql.ExecuteGraphQL(ctx, query, variables)
+	return forge.ForwardGraphQL(ctx, c.ForgeClient, query, variables)
 }
 
 // Security keeps the inner client's nil — producers test for it to report

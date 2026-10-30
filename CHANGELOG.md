@@ -48,6 +48,18 @@ changelog, and the release workflow refuses a tag that does not.
   logged "forge client has no GraphQL surface to resolve the repository id"
   and filed nothing. Both wrappers now forward GraphQL, and a forge without it
   answers an unsupported error.
+- **A GraphQL write through the board cache no longer leaves a stale board
+  (#2684, #2697).** The board-cache wrapper forwarded raw GraphQL without
+  dropping its board snapshot, so a mutation sent that way let this process
+  read back the board it had just changed. Any document that is not a query
+  now invalidates the board, on success or failure, as the project service's
+  own mutations do. Both wrappers share one GraphQL forwarder.
+- **pr-create no longer lets untrusted criterion text reshape the PR body
+  (#2662, #2670).** Criterion text and evidence render on one line, so a
+  newline in them can no longer add a bullet or heading to the unmet-criteria
+  section post-merge reads. A built test suite that never ran now leaves a
+  test-named criterion unmet even when feature-validate reported its unit
+  tests passed.
 - **A numbered sub-step is no longer an acceptance criterion of its own
   (#2684).** In `1. Do X:` followed by `   1. sub`, the sub-step sits at the
   parent item's content column, so ac-reconcile (Go and SDK) now reads it as
