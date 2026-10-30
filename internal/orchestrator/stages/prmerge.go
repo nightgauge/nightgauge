@@ -935,7 +935,7 @@ func (r *DeterministicRunner) acBackstop(ctx context.Context, gh ghClient, workd
 	}
 	repo := readPRContextRepo(workdir, issueNumber)
 	if repo == "" {
-		log.Printf("pr-merge: AC backstop for #%d cannot read the repository from pr-%d.json pr_url; only bare #%d closers count", issueNumber, issueNumber, issueNumber)
+		log.Printf("pr-merge: AC backstop for #%d cannot read the repository from pr-%d.json pr_url; every closer naming #%d counts", issueNumber, issueNumber, issueNumber)
 	}
 	if !BodyClosesIssue(prBody, repo, issueNumber) {
 		return false

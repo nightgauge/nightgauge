@@ -264,6 +264,19 @@ func TestACBackstop_ScopesClosersToPRRepository(t *testing.T) {
 	}
 }
 
+// With no repository to scope by, the backstop fails closed: a closer naming
+// #7 in any repository is demoted rather than left to close the issue.
+func TestRewriteClosesToRefs_UnknownRepoFailsClosed(t *testing.T) {
+	in := "Fixes other/repo#7\nCloses https://github.com/o/r/issues/7\nCloses #8"
+	want := "Refs other/repo#7\nRefs https://github.com/o/r/issues/7\nCloses #8"
+	if got := RewriteClosesToRefs(in, "", 7); got != want {
+		t.Errorf("got %q", got)
+	}
+	if !BodyClosesIssue("Fixes other/repo#7", "", 7) {
+		t.Error("an unknown repository must count every closer of #7")
+	}
+}
+
 func TestReadPRContextRepo(t *testing.T) {
 	dir := writeBackstopContext(t)
 	if got := readPRContextRepo(dir, 7); got != "o/r" {

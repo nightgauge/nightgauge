@@ -256,19 +256,36 @@ func acCheckboxBody(criteria []string) string {
 	return b.String()
 }
 
+// closesTarget selects the closing references that close issue n of repo
+// ("owner/repo"). An unknown repo ("") selects every reference to number n
+// whatever repository it names: the AC backstop must fail closed, demoting a
+// closer it cannot place rather than letting it close the issue at merge.
+func closesTarget(repo string, n int) func(forge.ClosingRef) bool {
+	if repo == "" {
+		return func(r forge.ClosingRef) bool { return r.Number == n }
+	}
+	return func(r forge.ClosingRef) bool { return r.Targets(repo, n) }
+}
+
 // BodyClosesIssue reports whether body carries a closing keyword for issue n
-// of repo ("owner/repo"). forge owns the one closing-keyword matcher, shared
-// with the post-merge hook.
+// of repo ("owner/repo", or "" when unknown — see closesTarget). forge owns
+// the one closing-keyword matcher, shared with the post-merge hook.
 func BodyClosesIssue(body, repo string, n int) bool {
-	return forge.ClosesIssue(body, repo, n)
+	for _, r := range forge.ClosingRefs(body) {
+		if closesTarget(repo, n)(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // RewriteClosesToRefs replaces every closing keyword that targets issue n of
 // repo with `Refs`, so merging the PR leaves the issue open (#2623, the #2595
-// rule). References to other issues, including the same number in another
-// repository, are untouched.
+// rule). References to other issues, including the same number in a named
+// other repository, are untouched; an unknown repo ("") rewrites every
+// reference to number n.
 func RewriteClosesToRefs(body, repo string, n int) string {
-	return forge.RewriteClosingRefs(body, func(r forge.ClosingRef) bool { return r.Targets(repo, n) })
+	return forge.RewriteClosingRefs(body, closesTarget(repo, n))
 }
 
 // RewriteAllClosesToRefs replaces every closing keyword with `Refs`,
