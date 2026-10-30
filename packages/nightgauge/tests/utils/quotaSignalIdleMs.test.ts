@@ -135,6 +135,7 @@ describe("shouldQuotaFastFail (#3702)", () => {
         quotaExhaustedSignalActive: false,
         anyQuotaSignalSeen: false,
         idleSinceQuotaSignalMs: Number.POSITIVE_INFINITY,
+        softIdleSinceQuotaSignalMs: Number.POSITIVE_INFINITY,
         exhaustedFastFailIdleMs: EXHAUSTED_MS,
         quotaSignalIdleBudgetMs: SOFT_BUDGET_MS,
       })
@@ -147,6 +148,33 @@ describe("shouldQuotaFastFail (#3702)", () => {
         quotaExhaustedSignalActive: true,
         anyQuotaSignalSeen: true,
         idleSinceQuotaSignalMs: 120_000,
+        softIdleSinceQuotaSignalMs: 120_000,
+        exhaustedFastFailIdleMs: EXHAUSTED_MS,
+        quotaSignalIdleBudgetMs: SOFT_BUDGET_MS,
+      })
+    ).toBe(true);
+  });
+
+  it("does not count live background work toward the soft budget (#2711)", () => {
+    expect(
+      shouldQuotaFastFail({
+        quotaExhaustedSignalActive: false,
+        anyQuotaSignalSeen: true,
+        idleSinceQuotaSignalMs: 1_800_000, // 30 min of stream silence
+        softIdleSinceQuotaSignalMs: 30_000, // the gate was live on the last tick
+        exhaustedFastFailIdleMs: EXHAUSTED_MS,
+        quotaSignalIdleBudgetMs: SOFT_BUDGET_MS,
+      })
+    ).toBe(false);
+  });
+
+  it("keeps the hard signal on raw idle, whatever background work is live (#2711)", () => {
+    expect(
+      shouldQuotaFastFail({
+        quotaExhaustedSignalActive: true,
+        anyQuotaSignalSeen: true,
+        idleSinceQuotaSignalMs: 120_000,
+        softIdleSinceQuotaSignalMs: 30_000,
         exhaustedFastFailIdleMs: EXHAUSTED_MS,
         quotaSignalIdleBudgetMs: SOFT_BUDGET_MS,
       })
@@ -161,6 +189,7 @@ describe("shouldQuotaFastFail (#3702)", () => {
         quotaExhaustedSignalActive: false,
         anyQuotaSignalSeen: true,
         idleSinceQuotaSignalMs: 600_000, // 10 min < 15 min budget
+        softIdleSinceQuotaSignalMs: 600_000,
         exhaustedFastFailIdleMs: EXHAUSTED_MS,
         quotaSignalIdleBudgetMs: SOFT_BUDGET_MS,
       })
@@ -175,6 +204,7 @@ describe("shouldQuotaFastFail (#3702)", () => {
         quotaExhaustedSignalActive: false,
         anyQuotaSignalSeen: true,
         idleSinceQuotaSignalMs: 900_000, // 15 min == budget
+        softIdleSinceQuotaSignalMs: 900_000,
         exhaustedFastFailIdleMs: EXHAUSTED_MS,
         quotaSignalIdleBudgetMs: SOFT_BUDGET_MS,
       })
@@ -188,6 +218,7 @@ describe("shouldQuotaFastFail (#3702)", () => {
         quotaExhaustedSignalActive: false,
         anyQuotaSignalSeen: true,
         idleSinceQuotaSignalMs: 200_000, // > 120s but < 15 min
+        softIdleSinceQuotaSignalMs: 200_000,
         exhaustedFastFailIdleMs: EXHAUSTED_MS,
         quotaSignalIdleBudgetMs: SOFT_BUDGET_MS,
       })

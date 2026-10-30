@@ -6356,6 +6356,8 @@ function runStageSkillHeadlessImpl(
   // Initialised to startedAtMs so the first idle window is measured from
   // process start, matching pre-split behaviour for genuinely silent stages.
   let lastChunkAtMs = startedAtMs;
+  // Last stall tick that saw live work: a task, tool call or declared process (#2711).
+  let lastLiveWorkAtMs = startedAtMs;
 
   // Connectivity-aware stall gating (Issue #3203). When ConnectivityStateBus
   // reports the network is offline, the subagent is almost certainly blocked
@@ -6525,6 +6527,13 @@ function runStageSkillHeadlessImpl(
   stallTicker = setInterval(() => {
     const elapsed = Date.now() - startedAtMs;
     const idleMs = Date.now() - lastChunkAtMs;
+    // A stage waiting on a live gate is silent, not idle (#2711). The soft
+    // kills measure from the last tick with live work, so the budget resumes
+    // when the task ends, and the ceiling on that task bounds the exemption.
+    if (progressMonitor.isBackgroundWorkLive()) {
+      lastLiveWorkAtMs = Date.now();
+    }
+    const softIdleMs = Math.min(idleMs, Date.now() - lastLiveWorkAtMs);
 
     // Connectivity-aware stall gating (Issue #3203). Suspend kill checks when
     // the network is offline; reset the idle window when connectivity returns.
@@ -6623,6 +6632,7 @@ function runStageSkillHeadlessImpl(
       lastRateLimitEventAtMs !== undefined
         ? Math.min(idleMs, Date.now() - lastRateLimitEventAtMs)
         : Number.POSITIVE_INFINITY;
+    const softIdleSinceQuotaSignalMs = Math.min(softIdleMs, idleSinceQuotaSignalMs);
 
     // Soft-quota-signal idle fast-fail (Issue #3702). The aggressive gate above
     // only fires on `status: "limited"` — but a soft `allowed_warning` (e.g. the
@@ -6633,9 +6643,8 @@ function runStageSkillHeadlessImpl(
     // streaming and resets the idle clock — but prolonged silence after a
     // quota-PRESSURE signal is a reliable quota-block tell. The budget is capped
     // below `stallKillMs` so a quota signal can only make a stage fail faster,
-    // never slower, and the kill is classified as quota-exhausted (below) so the
-    // scheduler re-arms at the bucket's resetsAt instead of penalizing the
-    // issue's failure cap.
+    // never slower. The kill is booked as a stall (below): silence after a
+    // warning is a guess, and only a hard signal may stop the fleet (#2711).
     //
     // Issue #3825: only a DEGRADED status (`allowed_warning` or `limited`) arms
     // this gate — NOT a plain `status: "allowed"`. The CLI emits `allowed`
@@ -6660,6 +6669,7 @@ function runStageSkillHeadlessImpl(
         quotaExhaustedSignalActive,
         anyQuotaSignalSeen: degradedQuotaSignalSeen,
         idleSinceQuotaSignalMs,
+        softIdleSinceQuotaSignalMs,
         exhaustedFastFailIdleMs: QUOTA_EXHAUSTED_FAST_FAIL_IDLE_MS,
         quotaSignalIdleBudgetMs,
       });
@@ -6857,7 +6867,7 @@ function runStageSkillHeadlessImpl(
     const noProductiveProgress =
       progressMonitor.msSinceLastProductiveProgress > progressRunawayWindowMs;
     const stallDecision = evaluateStallKill({
-      idleMs,
+      idleMs: softIdleMs,
       stallKillMs,
       elapsedMs: effectiveElapsed,
       hardCapMs: effectiveHardCapMs,
@@ -6913,20 +6923,20 @@ function runStageSkillHeadlessImpl(
       // payload, mis-routing dozens of healthy idle-stalls as quota
       // failures. The Go classifier sees `[rate-limit-quota-exhausted]`
       // only when the bucket truly IS limited.
-      // Issue #3702: classify ANY quota-fast-fail kill as quota-exhausted, not
-      // just the `status: "limited"` case. Both the aggressive 120s gate and the
-      // soft-signal idle gate indicate the stage is wedged behind a quota wall,
-      // so both should route to the Go scheduler's quota-backoff/resume-at-reset
-      // path rather than the generic stall path (which penalizes the issue's
-      // lifetime failure cap and re-fires under the same conditions).
-      const quotaExhausted = !hardCapReached && quotaFastFailReached;
+      // Issue #2711: the soft gate fired on a warning, and no request was
+      // rejected, so it is booked as a stall: backoff, no lifetime-cap charge,
+      // no global cooldown. Only the marker below reaches that cooldown.
+      const quotaExhausted = !hardCapReached && quotaFastFailReached && quotaExhaustedSignalActive;
       // Issue #3425/#3702: when a fast-fail gate fires, the marker's reported
       // idle window is the gate's threshold (120s for `limited`, the capped
       // quota-signal budget otherwise), not the full `stallKillMs` (which would
       // say 80m even when we killed far sooner). Use whichever idle measurement
       // actually triggered the kill.
       const reportedIdleMs = quotaFastFailReached
-        ? Math.max(quotaFastFailThresholdMs, idleSinceQuotaSignalMs)
+        ? Math.max(
+            quotaFastFailThresholdMs,
+            quotaExhaustedSignalActive ? idleSinceQuotaSignalMs : softIdleSinceQuotaSignalMs
+          )
         : stallKillMs;
       const killReason = hardCapReached
         ? timeCapActive
@@ -6934,7 +6944,9 @@ function runStageSkillHeadlessImpl(
           : `exceeded stage_hard_cap (${formatElapsed(effectiveHardCapMs)} total runtime)`
         : quotaExhausted
           ? `[rate-limit-quota-exhausted] idle ${formatElapsed(reportedIdleMs)} after rate_limit_event (status=${lastRateLimitEvent?.status ?? "unknown"}; ${lastRateLimitEvent?.rateLimitType ?? "unknown"} bucket; resetsAt=${lastRateLimitEvent?.resetsAt ?? "unknown"})`
-          : `exceeded stall idle threshold (${formatElapsed(stallKillMs)} without output)`;
+          : quotaFastFailReached
+            ? `[stall-killed] idle ${formatElapsed(reportedIdleMs)} after rate_limit_event (status=${lastRateLimitEvent?.status ?? "unknown"}; ${lastRateLimitEvent?.rateLimitType ?? "unknown"} bucket; resetsAt=${lastRateLimitEvent?.resetsAt ?? "unknown"})`
+            : `exceeded stall idle threshold (${formatElapsed(stallKillMs)} without output)`;
       // Name the ceiling and its resolved value (#161). `signalSource` alone
       // is ambiguous — `hard-cap` covers both `stage_hard_caps` and the
       // zero-cost-adapter `stage_time_caps` fallback, which resolve from

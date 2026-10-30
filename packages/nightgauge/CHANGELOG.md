@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- **A long gate wait after a quota warning is no longer killed (#2711).** Time on a live
+  background task or foreground tool call no longer counts toward the idle budgets, and a kill
+  that followed only an `allowed_warning` is booked as a stall, with no global cooldown.
 - **Post-pipeline verification no longer closes an issue for another repository's closer
   (#2687).** A merged PR body or main commit saying `Fixes other/repo#N`, or that issue's URL,
   no longer closes this repository's #N, and an issue URL counts only on github.com, as on

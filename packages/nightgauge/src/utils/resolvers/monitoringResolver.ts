@@ -542,11 +542,12 @@ export function getQuotaSignalIdleMs(workspaceRoot?: string): number {
 /**
  * Decide whether the quota fast-fail should fire on the current stall tick.
  *
- * Two independent triggers, both gated on idle-since-the-last-rate-limit-signal:
+ * Two independent triggers, each gated on its own idle measure:
  *  1. Aggressive: a hard `status: "limited"` signal + idle ≥ exhaustedFastFailIdleMs (120s).
- *  2. Soft: ANY rate-limit signal seen + idle ≥ quotaSignalIdleBudgetMs (capped
- *     below the stage's normal idle budget). Catches a soft `allowed_warning`
- *     that precedes the CLI hanging on a later hard-limited request (#3702).
+ *  2. Soft: ANY rate-limit signal seen + soft idle ≥ quotaSignalIdleBudgetMs
+ *     (capped below the stage's normal idle budget). Catches a soft
+ *     `allowed_warning` that precedes the CLI hanging on a later hard-limited
+ *     request (#3702). Time on live work is not soft idle (#2711).
  *
  * Extracted as a pure function so this cost-sensitive decision is unit-testable
  * without spawning a subprocess.
@@ -564,6 +565,8 @@ export function shouldQuotaFastFail(params: {
   anyQuotaSignalSeen: boolean;
   /** Idle ms measured since the last rate-limit signal (min of idle and signal age). */
   idleSinceQuotaSignalMs: number;
+  /** The same measure with live background work removed; drives the soft trigger (#2711). */
+  softIdleSinceQuotaSignalMs: number;
   /** Aggressive `status: "limited"` fast-fail threshold (default 120s). */
   exhaustedFastFailIdleMs: number;
   /** Soft-signal idle budget, already capped below the stage's stallKillMs. */
@@ -573,13 +576,14 @@ export function shouldQuotaFastFail(params: {
     quotaExhaustedSignalActive,
     anyQuotaSignalSeen,
     idleSinceQuotaSignalMs,
+    softIdleSinceQuotaSignalMs,
     exhaustedFastFailIdleMs,
     quotaSignalIdleBudgetMs,
   } = params;
   if (quotaExhaustedSignalActive && idleSinceQuotaSignalMs >= exhaustedFastFailIdleMs) {
     return true;
   }
-  if (anyQuotaSignalSeen && idleSinceQuotaSignalMs >= quotaSignalIdleBudgetMs) {
+  if (anyQuotaSignalSeen && softIdleSinceQuotaSignalMs >= quotaSignalIdleBudgetMs) {
     return true;
   }
   return false;

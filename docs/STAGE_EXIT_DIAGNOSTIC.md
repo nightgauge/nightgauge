@@ -177,7 +177,7 @@ left no candidate.
 | `nx-stall-multiple`           | Elapsed reached N× the stall **warn** threshold, no productive progress | `stall warn threshold × NX_RUNAWAY_KILL_MULTIPLE` — **derived, not configurable** |
 | `stage-hard-cap`              | Elapsed reached the absolute per-stage cap                              | `pipeline.stage_hard_caps.<stage>`                                                |
 | `stage-time-cap`              | Elapsed cap for zero-cost adapters (`provider_scale=0`)                 | `min(stage_hard_caps.<stage>, stage_time_caps.<stage>)`                           |
-| `quota-fast-fail-idle`        | Idle past the quota budget after a rate-limit signal                    | `QUOTA_EXHAUSTED_FAST_FAIL_IDLE_MS` or `min(stallKillMs, quota_signal_idle_ms)`   |
+| `quota-fast-fail-idle`        | Idle past the quota budget after a rate-limit signal (a stall if soft)  | `QUOTA_EXHAUSTED_FAST_FAIL_IDLE_MS` or `min(stallKillMs, quota_signal_idle_ms)`   |
 | `stall-idle`                  | Idle past `stallKillMs` with no subprocess output                       | Calibrated or static idle-kill threshold                                          |
 
 These names are a diagnostic contract — they are grepped in retros and appear
