@@ -16,12 +16,13 @@ func TestIssueCloseSkipReason(t *testing.T) {
 		{"fixes with colon", "Fixes: #600\n", false},
 		{"resolved", "resolved #600", false},
 		{"repo qualified", "Closes nightgauge/nightgauge#600", false},
+		{"another repository's #600", "Closes other/repo#600", true},
 		{"empty body", "", false},
 		{"blank body", "  \n", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			skip, reason := issueCloseSkipReason(tc.body, 600)
+			skip, reason := issueCloseSkipReason(tc.body, "nightgauge/nightgauge", 600)
 			if skip != tc.skip {
 				t.Fatalf("skip = %v, want %v", skip, tc.skip)
 			}

@@ -121,7 +121,7 @@ func TestPostMergeZeroPRNumberKeepsClosing(t *testing.T) {
 // (#2674): the skill's `issue close --pr` consults IsPartialDelivery and skips,
 // then the hook keeps the issue open, moves it to Ready once and comments once.
 func TestRefsMergeEndToEndStaysOpen(t *testing.T) {
-	if !IsPartialDelivery(partialBody, 600) {
+	if !IsPartialDelivery(partialBody, "o/r", 600) {
 		t.Fatal("the skill-side close must skip a Refs body")
 	}
 	res, closer, _, board, commenter := runPartial(t, partialBody, 77)
@@ -140,7 +140,7 @@ func TestRefsMergeEndToEndStaysOpen(t *testing.T) {
 // and the hook moves the board to Done.
 func TestClosesMergeEndToEndCloses(t *testing.T) {
 	body := strings.Replace(partialBody, "Refs #600", "Closes #600", 1)
-	if IsPartialDelivery(body, 600) {
+	if IsPartialDelivery(body, "o/r", 600) {
 		t.Fatal("the skill-side close must close a Closes body")
 	}
 	res, closer, _, board, commenter := runPartial(t, body, 77)
@@ -156,17 +156,20 @@ func TestClosesMergeEndToEndCloses(t *testing.T) {
 }
 
 func TestIsPartialDeliveryUnreadBody(t *testing.T) {
-	if IsPartialDelivery("", 600) || IsPartialDelivery(" \n\t", 600) {
+	if IsPartialDelivery("", "o/r", 600) || IsPartialDelivery(" \n\t", "o/r", 600) {
 		t.Error("an unread body is not a partial delivery")
 	}
 }
 
 func TestIsPartialDeliveryURLCloser(t *testing.T) {
-	if IsPartialDelivery("Closes https://github.com/o/r/issues/600", 600) {
+	if IsPartialDelivery("Closes https://github.com/o/r/issues/600", "o/r", 600) {
 		t.Error("a URL-form closer delivers the issue in full")
 	}
-	if !IsPartialDelivery("Refs https://github.com/o/r/issues/600", 600) {
+	if !IsPartialDelivery("Refs https://github.com/o/r/issues/600", "o/r", 600) {
 		t.Error("a URL-form Refs is a partial delivery")
+	}
+	if !IsPartialDelivery("Closes https://github.com/other/repo/issues/600", "o/r", 600) {
+		t.Error("a closer naming another repository's #600 does not deliver o/r#600")
 	}
 }
 
@@ -185,12 +188,17 @@ func TestClosesIssue(t *testing.T) {
 		{"Implements #600\nPart of #600", false},
 		{"Refs #600\nCloses #12", false},
 		{"Closes https://github.com/nightgauge/nightgauge/issues/600", true},
-		{"fixes: http://ghe.example/o/r/issues/600", true},
-		{"Closes https://github.com/o/r/pull/600", false},
-		{"Closes https://github.com/o/r/issues/6000", false},
+		{"fixes: http://github.com/nightgauge/nightgauge/issues/600", true},
+		{"fixes: https://evil.example/nightgauge/nightgauge/issues/600", false},
+		{"Closes https://github.com/nightgauge/nightgauge/pull/600", false},
+		{"Closes https://github.com/nightgauge/nightgauge/issues/6000", false},
+		// Issue numbers overlap across repositories: another repo's #600 is
+		// not this one's (#2687).
+		{"Fixes https://github.com/other/repo/issues/600", false},
+		{"resolves other/repo#600", false},
 	}
 	for _, c := range cases {
-		if got := ClosesIssue(c.body, 600); got != c.want {
+		if got := ClosesIssue(c.body, "nightgauge/nightgauge", 600); got != c.want {
 			t.Errorf("ClosesIssue(%q) = %v, want %v", c.body, got, c.want)
 		}
 	}

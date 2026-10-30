@@ -94,6 +94,9 @@ vi.mock("child_process", async () => {
       err.stderr = "";
       return Promise.reject(err);
     }
+    if (args && args[0] === "repo" && args[1] === "view") {
+      return Promise.resolve({ stdout: "nightgauge/nightgauge\n", stderr: "" });
+    }
     if (args && args[0] === "pr" && args[1] === "list" && mergedPrs.value) {
       return Promise.resolve({ stdout: JSON.stringify(mergedPrs.value), stderr: "" });
     }
@@ -418,6 +421,32 @@ describe("reconcileCompletionSideEffects closing keyword (#2689)", () => {
     expect(closes).toHaveLength(1);
     expect(closes[0]).toContain("2689");
     expect(closes[0].join(" ")).toContain("merged PR #2702");
+  });
+
+  it("a merge closing another repository's #N leaves this issue open (#2687)", async () => {
+    mergedPrs.value = [
+      {
+        number: 2703,
+        title: "fix(#2689): thing",
+        body: "Closes other/repo#2689\nFixes https://github.com/other/repo/issues/2689",
+        baseRefName: "main",
+      },
+    ];
+    await reconcile();
+    expect(issueCloseArgs()).toEqual([]);
+  });
+
+  it("a URL closer naming this repository closes the issue (#2687)", async () => {
+    mergedPrs.value = [
+      {
+        number: 2704,
+        title: "fix(#2689): thing",
+        body: "Closes https://github.com/nightgauge/nightgauge/issues/2689",
+        baseRefName: "main",
+      },
+    ];
+    await reconcile();
+    expect(issueCloseArgs()).toHaveLength(1);
   });
 
   it("a Refs #N commit on main without a PR closes nothing", async () => {

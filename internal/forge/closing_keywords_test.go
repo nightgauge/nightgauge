@@ -1,9 +1,13 @@
 package forge
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"testing"
+)
 
 // One table for every closing-keyword form (#2687). stages and hooks delegate
-// here, so this table is what both agree on.
+// here, so this table is what both agree on. The PR is in repository o/r.
 func TestClosingKeywords(t *testing.T) {
 	cases := []struct {
 		body    string
@@ -14,7 +18,7 @@ func TestClosingKeywords(t *testing.T) {
 		{"Closes #7", 7, true, "Refs #7"},
 		{"fixes: o/r#7", 7, true, "Refs o/r#7"},
 		{"Resolved https://github.com/o/r/issues/7", 7, true, "Refs https://github.com/o/r/issues/7"},
-		{"closes http://ghe.example/o/r/issues/7", 7, true, "Refs http://ghe.example/o/r/issues/7"},
+		{"closes http://ghe.example/o/r/issues/7", 7, false, "closes http://ghe.example/o/r/issues/7"},
 		{"Refs https://github.com/o/r/issues/7", 7, false, "Refs https://github.com/o/r/issues/7"},
 		{"Closes https://github.com/o/r/pull/7", 7, false, "Closes https://github.com/o/r/pull/7"},
 		{"Closes https://github.com/o/r/issues/7x", 7, false, "Closes https://github.com/o/r/issues/7x"},
@@ -28,10 +32,10 @@ func TestClosingKeywords(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		if got := ClosesIssue(c.body, c.n); got != c.closes {
-			t.Errorf("ClosesIssue(%q, %d) = %v, want %v", c.body, c.n, got, c.closes)
+		if got := ClosesIssue(c.body, "o/r", c.n); got != c.closes {
+			t.Errorf("ClosesIssue(%q, o/r, %d) = %v, want %v", c.body, c.n, got, c.closes)
 		}
-		got := RewriteClosingRefs(c.body, func(r ClosingRef) bool { return r.Number == c.n })
+		got := RewriteClosingRefs(c.body, func(r ClosingRef) bool { return r.Targets("o/r", c.n) })
 		if got != c.rewrite {
 			t.Errorf("RewriteClosingRefs(%q, %d) = %q, want %q", c.body, c.n, got, c.rewrite)
 		}
@@ -41,7 +45,7 @@ func TestClosingKeywords(t *testing.T) {
 func TestClosingRefsNumbers(t *testing.T) {
 	body := "Fixes #3, closes https://github.com/o/r/issues/7 and resolves o/r#9"
 	refs := ClosingRefs(body)
-	want := []ClosingRef{{"#3", 3}, {"https://github.com/o/r/issues/7", 7}, {"o/r#9", 9}}
+	want := []ClosingRef{{"#3", "", "", 3}, {"https://github.com/o/r/issues/7", "o/r", "github.com", 7}, {"o/r#9", "o/r", "", 9}}
 	if len(refs) != len(want) {
 		t.Fatalf("ClosingRefs = %+v, want %+v", refs, want)
 	}
@@ -49,5 +53,42 @@ func TestClosingRefsNumbers(t *testing.T) {
 		if refs[i] != want[i] {
 			t.Errorf("ClosingRefs[%d] = %+v, want %+v", i, refs[i], want[i])
 		}
+	}
+}
+
+// closing_keywords.json is the grammar table the extension's prBodyClosesIssue
+// (packages/nightgauge/src/utils/prDetection.ts) is tested against too, so the
+// Go and TypeScript matchers cannot drift apart unnoticed (#2687).
+func TestClosingKeywordsSharedTable(t *testing.T) {
+	data, err := os.ReadFile("testdata/closing_keywords.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Body   string `json:"body"`
+		Repo   string `json:"repo"`
+		N      int    `json:"n"`
+		Closes bool   `json:"closes"`
+	}
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("empty shared table")
+	}
+	for _, c := range cases {
+		if got := ClosesIssue(c.Body, c.Repo, c.N); got != c.Closes {
+			t.Errorf("ClosesIssue(%q, %q, %d) = %v, want %v", c.Body, c.Repo, c.N, got, c.Closes)
+		}
+	}
+}
+
+// Defanging untrusted text over-matches: a URL closer on any host becomes
+// Refs, since a GitHub Enterprise server acts on its own host (#2687).
+func TestRewriteClosingRefsDefangsEveryHost(t *testing.T) {
+	in := "Closes https://ghes.example/o/r/issues/7 and fixes https://github.com/o/r/issues/8"
+	want := "Refs https://ghes.example/o/r/issues/7 and Refs https://github.com/o/r/issues/8"
+	if got := RewriteClosingRefs(in, func(ClosingRef) bool { return true }); got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
