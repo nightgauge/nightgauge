@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- With a live daemon, `autonomous status` again answers whether a reload is safe (#2720). The
+  human output replaces `Status:` with the `Autonomous Mode: <Status> — <reload line>` sentence,
+  covering manual runs, and `--json` adds `running_pipelines`, `running_pipelines_known` and
+  `reload_safe`, so the `dev-install.sh` warning can fire. If the daemon cannot give the summary,
+  the answer is unknown, never safe. The docs and warning no longer say installing reloads the
+  window: the operator does.
 - PR Review now allows 80 turns instead of 40, so a large diff can finish. A review that still
   reaches the limit fails with an annotation and job summary saying it did not finish and naming
   the limit, instead of a bare red check; `docs/PR_REVIEW_PASSES.md` says what to do next.
