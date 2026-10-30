@@ -63,7 +63,7 @@ func TestEvaluateDeps_CrossRepoFrontier(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			g := buildTestGraph(tc.nodes, nil)
-			res := evaluateDeps([]string{dep}, g, tc.resolved, nil, tc.validation)
+			res := evaluateDeps([]string{dep}, g, tc.resolved, tc.validation)
 			if res.blocked != tc.wantBlocked {
 				t.Fatalf("evaluateDeps = %+v, want blocked=%v", res, tc.wantBlocked)
 			}
@@ -139,7 +139,7 @@ func TestEvaluateDeps_ProgramValidationGate(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			g := buildTestGraph(tc.nodes, nil)
-			res := evaluateDeps([]string{dep}, g, tc.resolved, tc.prBacked, tc.validation)
+			res := evaluateDeps([]string{dep}, g, tc.resolved, tc.validation)
 			if res.blocked != tc.wantBlocked {
 				t.Fatalf("evaluateDeps = %+v, want blocked=%v", res, tc.wantBlocked)
 			}

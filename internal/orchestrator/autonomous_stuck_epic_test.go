@@ -368,9 +368,9 @@ func TestStuckEpics_TodoStatusNotDispatchable(t *testing.T) {
 	}
 }
 
-// TestStuckEpics_InReviewDepNotBlocking: a sub blocked only by an "In review" dep
-// is dispatchable (the dep's PR is up), so the epic must NOT be flagged stuck.
-func TestStuckEpics_InReviewDepNotBlocking(t *testing.T) {
+// TestStuckEpics_InReviewDepBlocksDependent: a sub blocked only by an open "In
+// review" dep waits for it to close (#2706), so nothing in the epic can dispatch.
+func TestStuckEpics_InReviewDepBlocksDependent(t *testing.T) {
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{
 			{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In review"},
@@ -382,8 +382,8 @@ func TestStuckEpics_InReviewDepNotBlocking(t *testing.T) {
 		now: time.Unix(1_700_000_000, 0), runningSet: map[string]bool{},
 		isRecovering: noRecovery, failureReason: noReason,
 	})
-	if len(got) != 0 {
-		t.Fatalf("#144 blocked only by an In-review dep is dispatchable → NOT stuck, got %+v", got)
+	if len(got) != 1 {
+		t.Fatalf("#144 waits on an open In-review dep, so the epic is stuck; got %+v", got)
 	}
 }
 

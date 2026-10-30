@@ -231,6 +231,11 @@ type RuntimeState struct {
 	MergedCommitSha string `json:"mergedCommitSha,omitempty"`
 	MergedAt        string `json:"mergedAt,omitempty"`
 
+	// PartialDelivery is set when the post-merge hook found that this run's
+	// merge left the issue open (a `Refs` PR, #2595). The board then belongs to
+	// the hook's Ready, not to completion's In Review (#2706).
+	PartialDelivery bool `json:"partialDelivery,omitempty"`
+
 	// MainCheckVerdict + MainCheckFailing are the post-merge verification of
 	// the base branch (#1249, #2055): whether the merge was green (the merge
 	// commit's tree is the merged PR head's, the head's required checks passed,
@@ -1838,6 +1843,13 @@ func (rs *RuntimeState) SetMergeOutcome(sha, mergedAt string) {
 	}
 }
 
+// SetPartialDelivery records that this run's merge left the issue open (#2706).
+func (rs *RuntimeState) SetPartialDelivery() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.PartialDelivery = true
+}
+
 // SetMainCheckOutcome records the post-merge observation of the base branch
 // (#1249). An empty verdict is ignored so a caller that has nothing to say
 // cannot erase an earlier observation. failing is copied.
@@ -3197,6 +3209,7 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		PrUrl:                    rs.PrUrl,
 		MergedCommitSha:          rs.MergedCommitSha,
 		MergedAt:                 rs.MergedAt,
+		PartialDelivery:          rs.PartialDelivery,
 		MainCheckVerdict:         rs.MainCheckVerdict,
 		MainCheckFailing:         append([]string(nil), rs.MainCheckFailing...),
 		// The two durable latch halves travel with every copy and therefore

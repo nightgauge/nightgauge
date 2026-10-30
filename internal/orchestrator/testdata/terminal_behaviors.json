@@ -74,7 +74,7 @@
       },
       "extension": {
         "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
-        "anchor": "await moveToInReviewIfPRBacked(slot.issueNumber, cwd, this.logger, slot.repo);"
+        "anchor": "await moveToInReviewIfPRBacked(slot.issueNumber, cwd, this.logger, slot.repo, {"
       }
     },
     {
@@ -588,7 +588,7 @@
       "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
       "begin": "terminal-parity:begin runSlotPipeline-finally",
       "end": "terminal-parity:end runSlotPipeline-finally",
-      "sha256": "4854f26b9165dbfa45ae32a98fe24c24d78f607d6731251ff63140800f95712d"
+      "sha256": "ec6f1f07f50d4f69fa406192c8977dc1df2b2e0ebbd5091845a7f7a8227415f3"
     },
     {
       "id": "extension-force-clear-funnel",

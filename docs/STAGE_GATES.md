@@ -281,16 +281,12 @@ issue to the same status (the gate fires _before_ feature-dev ever runs, so
 no branch, no PR). Every dependent of that issue read the bare status string
 and dispatched against a contract that was never built.
 
-- **`Done` / issue `CLOSED`** — always satisfies. Terminal, unambiguous.
-- **`In review`** — satisfies **only** when an OPEN PR is confirmed for that
-  issue, via `openPRMergeStatesForRepo` (one batched `gh pr list` per repo,
-  cached each fresh graph build as `AutonomousScheduler.inReviewPRBacked`).
-  The board string alone is never sufficient — `evaluateDeps` checks
-  membership in that confirmed set before treating the dep as satisfied.
-  Fail-closed on query failure: a repo whose PR query fails contributes
-  nothing to `inReviewPRBacked`, so its `"In review"` deps read as blocked,
-  never as silently satisfied.
-- **`Ready`, `Backlog`, `In progress`, no status** — never satisfies.
+- **Issue `CLOSED`** — satisfies, subject to the validation marker for a
+  program member.
+- **Issue `OPEN`** — never satisfies, whatever its board status (#2706). A
+  `Refs` merge leaves an issue open with its PR merged, so neither `Done` nor
+  `In review` with an open PR proves the contract a dependent needs. A blocker
+  parked `In review` holds its dependents until someone resolves it.
 
 The halt path that produced the false positive is fixed the same way:
 `sidelineHalt` now checks `openPRMergeStatesForRepo` before choosing a board
