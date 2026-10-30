@@ -34,7 +34,9 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
   if git merge --no-edit -m "Merge origin/$FRESHNESS_BASE into $CURRENT_BRANCH" "origin/$FRESHNESS_BASE" 2>/dev/null; then
     echo "Merge successful. Branch is now up-to-date with $FRESHNESS_BASE."
     # Plain push; push-branch never forces and recovers a self-inflicted fork.
-    if ! nightgauge git push-branch; then
+    # Best-effort: stderr stays quiet so a rejection here cannot stamp the
+    # `[branch-forked]` terminal marker on a stage that carries on.
+    if ! nightgauge git push-branch 2>/dev/null; then
       echo "WARNING: Failed to push merged branch. Continuing with the local merge."
     fi
   else
@@ -92,7 +94,7 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
 
       if git commit --no-edit 2>/dev/null; then
         echo "Conflict resolution successful."
-        nightgauge git push-branch || true
+        nightgauge git push-branch 2>/dev/null || true
       else
         echo "ERROR: Committing the merge failed after conflict resolution."
         git merge --abort 2>/dev/null || true

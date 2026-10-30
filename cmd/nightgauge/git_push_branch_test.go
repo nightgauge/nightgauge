@@ -101,6 +101,23 @@ func TestRunPushBranch_GenuineForkExits3(t *testing.T) {
 	}
 }
 
+// A rejected push that could not be reconciled (here a protected branch, which
+// is never rewritten) must be the forked verdict: exit 1 lets a stage defer past
+// a branch that was never pushed.
+func TestRunPushBranch_UnreconciledRejectionExits3(t *testing.T) {
+	_, work, remote := pushBranchFixture(t, "epic/2699-z")
+	var out, errb bytes.Buffer
+	if code := runPushBranch(context.Background(), work, false, &out, &errb); code != pushBranchForked {
+		t.Fatalf("exit %d, want %d; stderr=%s", code, pushBranchForked, errb.String())
+	}
+	if !strings.Contains(errb.String(), "[branch-forked]") {
+		t.Errorf("missing marker: %s", errb.String())
+	}
+	if got := gittest.Run(t, work, "ls-remote", "origin", "refs/heads/epic/2699-z"); !strings.HasPrefix(got, remote) {
+		t.Errorf("origin moved: %s, want %s", got, remote)
+	}
+}
+
 func TestRunPushBranch_PlainPushAndFailure(t *testing.T) {
 	_, work, _ := pushBranchFixture(t, "fix/2699-z")
 	gittest.Run(t, work, "checkout", "-b", "fresh")

@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge git push-branch` now ends a rejected push it could not reconcile as a fork (exit 3
+  with the `[branch-forked]` marker), so a stage can no longer carry on from an unpushed branch
+  (#2749). Self-fork recovery judges an origin merge commit by content, so a branch updated by
+  merging its base recovers, while a merge carrying work the local tree lacks, or a criss-cross
+  history, stays a fork. The verb no longer prints usage after a verdict, the freshness check's
+  best-effort push no longer emits the terminal marker, and the scheduler logs why a self-fork was
+  not recovered. Recovery needs git 2.38 or later.
 - A re-run that rebased its conflicting PR branch no longer ends `branch_forked`. When origin's
   copy of the branch carries no change the local tree lacks, even if the rebase rewrote a commit's
   surrounding lines, the new `nightgauge git push-branch` (used by feature-validate) and the

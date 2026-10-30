@@ -1855,15 +1855,17 @@ nightgauge git push-branch [--json]
 
 Pushes the current branch with `git push origin HEAD:refs/heads/<branch>` and
 never forces. When the push is rejected as non-fast-forward, it checks whether
-the fork is self-inflicted: origin's origin-only commits contain no merge, and a
-three-way merge of origin's tip into the local tip is conflict-free and yields
-the local tree unchanged. That is the shape a rebased PR branch leaves. The
+the fork is self-inflicted: a three-way merge of origin's tip into the local tip
+is conflict-free and yields the local tree unchanged, whether or not origin's
+commits include merges. That is the shape a rebased PR branch leaves. The
 check compares content, not `git patch-id`, because a rebase that rewrites a
 hunk's context lines changes its patch-id. The verb then writes a commit with
 origin's tip as its first parent, the local tip as its second, and the local
 tree unchanged, moves the branch to it, and pushes again without force. If that
 push fails, the branch moves back to the original local tip. Protected branches
-(`main`, `master`, `develop`, `epic/*`) are never reconciled.
+(`main`, `master`, `develop`, `epic/*`) are never reconciled. The check uses
+`git merge-tree --write-tree`, so recovery needs git 2.38 or later; on an older
+git a rejected push ends as a fork.
 
 | Exit | Meaning                                                                                            |
 | ---- | -------------------------------------------------------------------------------------------------- |

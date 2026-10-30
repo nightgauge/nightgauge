@@ -403,22 +403,14 @@ func ReconcileSelfFork(ctx context.Context, dir, branch string) SelfForkResult {
 	}
 	base := strings.TrimSpace(baseOut)
 
-	mergesOut, _, err := runGit(ctx, dir, "rev-list", "--merges", base+".."+remote)
-	if err != nil {
-		res.Detail = fmt.Sprintf("could not list origin-only commits: %v", err)
-		return res
-	}
-	if m := strings.Fields(mergesOut); len(m) > 0 {
-		res.Outcome = SelfForkForked
-		res.Unmatched = m
-		res.Detail = fmt.Sprintf("origin/%s carries merge commit %s this run cannot prove it authored",
-			branch, shortSHA(m[0]))
-		return res
-	}
-
-	mergedOut, code, mergeErr := runGit(ctx, dir, "merge-tree", "--write-tree", "--merge-base="+base, local, remote)
+	// A merge commit gets no special case: the freshness check puts them on
+	// origin routinely, and merged tree == local tree proves one adds nothing.
+	// git picks the base itself: a criss-cross has several, and comparing
+	// against just one can pass a genuine fork as a self-fork.
+	mergedOut, code, mergeErr := runGit(ctx, dir, "merge-tree", "--write-tree", local, remote)
 	if mergeErr != nil && code != 1 {
-		res.Detail = fmt.Sprintf("could not merge origin/%s into local: %v", branch, mergeErr)
+		// `merge-tree --write-tree` needs git 2.38+; an older git lands here.
+		res.Detail = fmt.Sprintf("could not merge origin/%s into local (needs git 2.38+): %v", branch, mergeErr)
 		return res
 	}
 	treeOut, _, err := runGit(ctx, dir, "rev-parse", "--verify", "--quiet", local+"^{tree}")
