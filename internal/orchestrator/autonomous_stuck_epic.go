@@ -264,16 +264,12 @@ func epicRefFor(n *depgraph.Node, epic depgraph.NodeID) string {
 	return epic.String()
 }
 
-// hasOpenBlocker reports whether any dependency in depKeys is OPEN and not
-// work-complete ("In review" deps don't block downstream, matching the
-// dispatcher's isWorkCompleteStatus skip).
+// hasOpenBlocker reports whether any dependency in depKeys is OPEN, whatever
+// its board status, matching the dispatcher's evaluateDeps (#2706).
 func hasOpenBlocker(depKeys []string, graph *depgraph.Graph) bool {
 	for _, depKey := range depKeys {
 		dep, ok := graph.Nodes[depKey]
 		if !ok || !strings.EqualFold(dep.State, "OPEN") {
-			continue
-		}
-		if isWorkCompleteStatus(dep.BoardStatus) {
 			continue
 		}
 		return true
@@ -281,7 +277,7 @@ func hasOpenBlocker(depKeys []string, graph *depgraph.Graph) bool {
 	return false
 }
 
-// openBlockerRefs returns the refs of the OPEN, non-work-complete dependencies
+// openBlockerRefs returns the refs of the OPEN dependencies
 // in depKeys (the same set hasOpenBlocker counts), for use in a human reason
 // string about an issue in home. A dependency in home reads "#N"; one in any
 // other repository reads "owner/repo#N", because in a reason about home's issue
@@ -292,7 +288,7 @@ func openBlockerRefs(depKeys []string, graph *depgraph.Graph, home string) []str
 	var deps []depgraph.NodeID
 	for _, depKey := range depKeys {
 		dep, ok := graph.Nodes[depKey]
-		if !ok || !strings.EqualFold(dep.State, "OPEN") || isWorkCompleteStatus(dep.BoardStatus) {
+		if !ok || !strings.EqualFold(dep.State, "OPEN") {
 			continue
 		}
 		deps = append(deps, dep.ID())

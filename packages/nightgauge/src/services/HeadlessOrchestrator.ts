@@ -81,6 +81,7 @@ import {
   updateProjectItemStatus,
   ensureIssueOnProject,
   getProjectItemStatus,
+  getIssueState,
   type ProjectStatusValue,
 } from "../utils/projectFieldWriter";
 import { BOARD_STATUS, boardStatusEquals } from "../utils/projectFieldMapping";
@@ -2155,7 +2156,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * - feature-dev       -> "In progress" (reinforcement)
    * - feature-validate  -> "In progress" (reinforcement)
    * - pr-create         -> "In review"
-   * - pr-merge          -> "Done"
+   * - pr-merge          -> "Done", only when the issue is closed (#2706)
    *
    * @see Issue #1714 - Write project fields directly via GraphQL
    */
@@ -2224,6 +2225,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           issueNumber,
           err: err instanceof Error ? err.message : String(err),
         });
+      }
+    }
+
+    // Done means the issue is closed. A `Refs` merge leaves it open and the
+    // post-merge hook returns it to Ready; Done here would overwrite that and
+    // the scheduler would never dispatch the remainder. An unreadable state
+    // writes nothing: the hook's own Done sync covers a closed issue. @see #2706
+    if (stage === "pr-merge") {
+      const issueState = await getIssueState(
+        issueNumber,
+        workspaceRoot,
+        this.logger,
+        this.repoOverride
+      );
+      if (issueState !== "CLOSED") {
+        this.logger.warn("Not writing Done after pr-merge: the issue is not closed", {
+          issueNumber,
+          issueState,
+        });
+        return;
       }
     }
 
@@ -2312,6 +2333,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * scheduler's revert. Writing In review unconditionally here raced that
    * revert and stranded PR-less issues in In review (#1496). A TS-only run
    * with no PR stays "In progress", which the non-terminal reconcile recovers.
+   * It writes only from "In progress", so it never undoes the scheduler's Ready
+   * (#2706).
    *
    * Non-blocking: failures are logged but never throw.
    * @see Issue #1115 - Stale status after pipeline failure
@@ -2330,7 +2353,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       issueNumber,
       this.getPersistentRoot(),
       this.logger,
-      this.repoOverride
+      this.repoOverride,
+      { onlyFrom: BOARD_STATUS.inProgress }
     );
   }
 

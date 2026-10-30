@@ -2,9 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 func prListJSON(t *testing.T) func(ctx context.Context, args ...string) ([]byte, error) {
@@ -204,22 +207,101 @@ func TestEvaluateDeps_InReviewWithoutPRBacking_Blocks(t *testing.T) {
 	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
 		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "In review"},
 	}}
-	res := evaluateDeps([]string{"O/app#1"}, g, nil, nil, nil)
+	res := evaluateDeps([]string{"O/app#1"}, g, nil, nil)
 	if !res.blocked {
 		t.Fatal("expected blocked=true for In-review dep with no PR-backing evidence")
 	}
 }
 
-// TestEvaluateDeps_InReviewWithPRBacking_Satisfies is the regression guard:
-// a dep confirmed PR-backed still satisfies the edge exactly as before.
-func TestEvaluateDeps_InReviewWithPRBacking_Satisfies(t *testing.T) {
-	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
-		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "In review"},
-	}}
-	prBacked := map[string]bool{"O/app#1": true}
-	res := evaluateDeps([]string{"O/app#1"}, g, nil, prBacked, nil)
-	if res.blocked {
-		t.Fatalf("expected blocked=false for In-review dep with confirmed PR backing, got %+v", res)
+// TestEvaluateDeps_OpenBlockerBlocksWhateverItsStatus (#2706): an OPEN blocker
+// holds its dependents in every column. A `Refs` merge can leave one Done, and
+// an open PR does not prove the dependents' contract exists.
+func TestEvaluateDeps_OpenBlockerBlocksWhateverItsStatus(t *testing.T) {
+	for _, status := range []string{"Done", "In review", "Ready"} {
+		g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
+			"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: status},
+		}}
+		if res := evaluateDeps([]string{"O/app#1"}, g, nil, nil); !res.blocked {
+			t.Errorf("status %q: an OPEN blocker released its dependent: %+v", status, res)
+		}
+	}
+}
+
+// TestIsBlocked_OpenBlockerKeysOnState (#2706): the Go scheduler's gate reads
+// the blocker's issue state; a board status is not part of its input.
+func TestIsBlocked_OpenBlockerKeysOnState(t *testing.T) {
+	item := types.BoardItem{Number: 2, BlockedBy: []types.BlockingRef{{Number: 1, State: "OPEN"}}}
+	blocked, err := (&Scheduler{}).isBlocked(context.Background(), item)
+	if err != nil || !blocked {
+		t.Fatalf("isBlocked = %v, %v; want true for an OPEN blocker", blocked, err)
+	}
+}
+
+// TestPromotion_OpenDoneBlockerHoldsItsDependent reproduces the #2684 incident's
+// board: a `Refs` merge left the blocker OPEN and Done, with a dependent in
+// Backlog. Neither Backlog promotion path may move the dependent. The independent
+// node is promoted, which is what really happened to #2702: it had no edge to
+// #2684, and promoteUnblockedToReady sweeps every Backlog node (#288).
+func TestPromotion_OpenDoneBlockerHoldsItsDependent(t *testing.T) {
+	const repo = "nightgauge/nightgauge"
+	paths := map[string]func(as *AutonomousScheduler){
+		"cascade": func(as *AutonomousScheduler) { as.promoteUnblockedToReady(as.backgroundContext(), repo, 2684) },
+		"startup": func(as *AutonomousScheduler) { as.promoteUnblockedOnStartup(context.Background()) },
+	}
+	for name, promote := range paths {
+		t.Run(name, func(t *testing.T) {
+			as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
+			blocker := &depgraph.Node{Repo: repo, Number: 2684, State: "OPEN", BoardStatus: "Done"}
+			dependent := &depgraph.Node{
+				Repo: repo, Number: 2703, State: "OPEN", BoardStatus: "Backlog",
+				Priority: "P1", Labels: []string{"type:bug"}, AuthorLogin: "maintainer",
+			}
+			independent := &depgraph.Node{
+				Repo: repo, Number: 2702, State: "OPEN", BoardStatus: "Backlog",
+				Priority: "P1", Labels: []string{"type:bug"}, AuthorLogin: "maintainer",
+			}
+			edges := []depgraph.Edge{{From: dependent.ID(), To: blocker.ID()}}
+			as.buildGraphFn = func(_ context.Context) (*depgraph.Graph, error) {
+				return buildTestGraph([]*depgraph.Node{blocker, dependent, independent}, edges), nil
+			}
+
+			promote(as)
+			as.drainBackground()
+
+			if as.state.LastPromotionEligible != 1 {
+				t.Errorf("LastPromotionEligible = %d, want 1: only the independent node may promote", as.state.LastPromotionEligible)
+			}
+			if got := as.state.LastPromotionRejectionReasons["open-blocker"]; got != 1 {
+				t.Errorf("open-blocker rejections = %d, want 1: %v", got, as.state.LastPromotionRejectionReasons)
+			}
+		})
+	}
+}
+
+func TestIsTriagedAndUnblocked_OpenBlockerBlocksWhateverItsStatus(t *testing.T) {
+	dependent := &depgraph.Node{
+		Repo: "O/app", Number: 2, State: "OPEN", BoardStatus: "Backlog",
+		Priority: "P1", Labels: []string{"type:bug"},
+	}
+	eligible := func(*depgraph.Node) bool { return true }
+	for _, status := range []string{"Done", "In review", "Ready", ""} {
+		blocker := &depgraph.Node{Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: status}
+		g := buildTestGraph([]*depgraph.Node{blocker, dependent}, []depgraph.Edge{{From: dependent.ID(), To: blocker.ID()}})
+		if isTriagedAndUnblocked(dependent, g, g.Adjacency(), eligible) {
+			t.Errorf("status %q: an OPEN blocker released its dependent", status)
+		}
+	}
+}
+
+// TestPromotionCause: the promotion log names a cause only for a real dependent
+// of the completed issue.
+func TestPromotionCause(t *testing.T) {
+	dependents := []string{"O/app#2"}
+	if got, want := promotionCause(dependents, "O/app#2", "O/app#1"), "unblocked by O/app#1"; got != want {
+		t.Errorf("dependent: got %q, want %q", got, want)
+	}
+	if got := promotionCause(dependents, "O/app#3", "O/app#1"); strings.Contains(got, "unblocked by") {
+		t.Errorf("independent node reported as unblocked: %q", got)
 	}
 }
 

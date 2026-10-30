@@ -146,6 +146,7 @@ import type { Logger } from "../utils/logger";
 import { requeueOptionsFor, type ActiveSlot, type QueueItem } from "../types/queue";
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { moveToInReviewIfPRBacked } from "../utils/inReviewGuard";
+import { BOARD_STATUS } from "../utils/projectFieldMapping";
 import { postFailureComment } from "../utils/failureComment";
 import { epicBranchParent } from "../utils/epicBranchParent";
 import { formatEpicRef, isEpic, sameRepo, slotKey, type EpicRef } from "../utils/epicRef";
@@ -2526,7 +2527,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
               vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
               "";
             if (cwd) {
-              await moveToInReviewIfPRBacked(slot.issueNumber, cwd, this.logger, slot.repo);
+              await moveToInReviewIfPRBacked(slot.issueNumber, cwd, this.logger, slot.repo, {
+                onlyFrom: BOARD_STATUS.inProgress,
+              });
             }
           } catch {
             // Best effort — never block cleanup
