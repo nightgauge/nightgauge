@@ -4293,6 +4293,107 @@ allowed-tools: Read Write Edit Bash
     expect(stderrCalls.some((s) => s.includes("[rate-limit-quota-exhausted]"))).toBe(true);
   });
 
+  describe("after only an allowed_warning (#2711)", () => {
+    const warning =
+      JSON.stringify({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "allowed_warning",
+          resetsAt: 1778403000,
+          rateLimitType: "seven_day",
+          utilization: 76,
+        },
+      }) + "\n";
+    const backgroundStarted =
+      '{"type":"system","subtype":"task_started","task_id":"gate","is_backgrounded":true,"task_type":"local_bash"}\n';
+
+    // An inherited override would move the budget these tests measure against.
+    const inheritedQuotaIdleMs = process.env.NIGHTGAUGE_PIPELINE_QUOTA_SIGNAL_IDLE_MS;
+    beforeEach(() => {
+      delete process.env.NIGHTGAUGE_PIPELINE_QUOTA_SIGNAL_IDLE_MS;
+    });
+    afterEach(() => {
+      if (inheritedQuotaIdleMs !== undefined) {
+        process.env.NIGHTGAUGE_PIPELINE_QUOTA_SIGNAL_IDLE_MS = inheritedQuotaIdleMs;
+      }
+    });
+
+    it("does not kill a stage holding a live background task for 30 minutes", () => {
+      // feature-validate: both the 15-minute soft budget and the 20-minute
+      // stall kill sit inside the hold.
+      runStageSkillHeadless("feature-validate", 889, {});
+      mockProcess.stdout?.emit("data", Buffer.from(warning));
+      mockProcess.stdout?.emit("data", Buffer.from(backgroundStarted));
+
+      vi.advanceTimersByTime(30 * 60_000);
+
+      expect(mockProcess.kill).not.toHaveBeenCalled();
+    });
+
+    it("does not kill a stage inside a long foreground tool call", () => {
+      const toolStarted =
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "toolu_gate", name: "Bash", input: {} }],
+          },
+        }) + "\n";
+      runStageSkillHeadless("feature-validate", 889, {});
+      mockProcess.stdout?.emit("data", Buffer.from(warning));
+      mockProcess.stdout?.emit("data", Buffer.from(toolStarted));
+
+      vi.advanceTimersByTime(18 * 60_000);
+
+      expect(mockProcess.kill).not.toHaveBeenCalled();
+    });
+
+    it("holds a live background task for 30 minutes in autonomous mode", () => {
+      const onStallEvent = vi.fn();
+      const onStallPause = vi.fn();
+      runStageSkillHeadless(
+        "feature-validate",
+        889,
+        { onStallEvent, onStallPause },
+        undefined, // issueMetadata
+        undefined, // _batchContext
+        undefined, // skipToPhase
+        undefined, // modelOverride
+        undefined, // pauseAutoRouting
+        undefined, // pinnedWorkspaceRoot
+        undefined, // modelOverrideSource
+        undefined, // injectedSkillContent
+        true // autonomousMode
+      );
+      mockProcess.stdout?.emit("data", Buffer.from(warning));
+      mockProcess.stdout?.emit("data", Buffer.from(backgroundStarted));
+
+      vi.advanceTimersByTime(30 * 60_000);
+
+      expect(mockProcess.kill).not.toHaveBeenCalled();
+      expect(onStallPause).not.toHaveBeenCalled();
+      const actions = onStallEvent.mock.calls.map(
+        (c: unknown[]) => (c[0] as { action: string }).action
+      );
+      expect(actions).not.toContain("escalation_pause");
+      expect(actions).not.toContain("kill");
+    });
+
+    it("books a silent stage as a stall, not quota exhaustion", () => {
+      const onStderr = vi.fn();
+      runStageSkillHeadless("feature-dev", 889, { onStderr });
+      mockProcess.stdout?.emit("data", Buffer.from(warning));
+
+      vi.advanceTimersByTime(16 * 60_000);
+
+      expect(mockProcess.kill).toHaveBeenCalledWith("SIGTERM");
+      const stderr = onStderr.mock.calls.map((c: unknown[]) => String(c[0])).join("");
+      expect(stderr).toContain("[stall-killed]");
+      expect(stderr).toContain("status=allowed_warning");
+      expect(stderr).not.toContain("[rate-limit-quota-exhausted]");
+    });
+  });
+
   it("does NOT fast-fail before the 120s idle threshold has elapsed since the quota event", () => {
     runStageSkillHeadless("feature-dev", 889, {});
 

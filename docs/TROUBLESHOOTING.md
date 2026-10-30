@@ -859,6 +859,17 @@ names a PR that is green and waiting on a person.
 See [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md) and
 [ADR 015](decisions/015-decision-requests.md) (Decisions L and M).
 
+### A stage was killed after a quota warning (#2711)
+
+**Symptom:** a `[stall-killed]` line reports `idle … after rate_limit_event
+(status=allowed_warning; …)`.
+
+**Meaning:** the stage stayed silent past `quota_signal_idle_ms` with no live
+background task, foreground tool call or declared process. No request was
+rejected, so the issue retries after the stall backoff on the same model tier
+and other issues keep dispatching. Only `status=limited` or a provider rejection
+sets the global cooldown.
+
 ### A stage was killed and its implementation is "gone" (#128)
 
 **Symptom:** a stage is terminated by a guard —

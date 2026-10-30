@@ -105,6 +105,44 @@ func TestBlockedQuota_RawAdapterUsageLimitStillSetsCooldown(t *testing.T) {
 	}
 }
 
+// #2711: a warning-only failure is a stall on this issue; dispatch keeps running.
+func TestBlockedQuota_WarningOnlyLeavesDispatchRunning(t *testing.T) {
+	as := newBlockedQuotaScheduler(t)
+	addRunning(as, "acme/core", 123, "gate wait")
+	reset := time.Now().Add(20 * time.Hour).Unix()
+	as.NotifyComplete("acme/core", 123, false, false, TerminalKindRateLimitQuotaExhausted,
+		fmt.Sprintf("[rate-limit-quota-exhausted] idle 15m after rate_limit_event (status=allowed_warning; seven_day bucket; resetsAt=%d)", reset))
+	as.drainBackground()
+
+	key := "acme/core#123"
+	if as.state.QuotaCooldownUntil != "" {
+		t.Errorf("QuotaCooldownUntil = %q, want empty — a warning rejected nothing", as.state.QuotaCooldownUntil)
+	}
+	if got := failedKind(t, as, "acme/core", 123); got != TerminalKindStallKill {
+		t.Errorf("recorded kind = %q, want %q", got, TerminalKindStallKill)
+	}
+	if got := as.state.LifetimeIssueFailures[key]; got != 0 {
+		t.Errorf("LifetimeIssueFailures[%q] = %d, want 0", key, got)
+	}
+	deadline, ok := retryDeadline(as, key)
+	if !ok || time.Until(deadline) > stallKillBackoff {
+		t.Errorf("retry deadline = %v (set %v), want within the stall backoff", deadline, ok)
+	}
+}
+
+func TestBlockedQuota_LimitedStatusStillSetsCooldown(t *testing.T) {
+	as := newBlockedQuotaScheduler(t)
+	addRunning(as, "acme/core", 124, "hard limit")
+	reset := time.Now().Add(40 * time.Minute).Unix()
+	as.NotifyComplete("acme/core", 124, false, false, TerminalKindRateLimitQuotaExhausted,
+		fmt.Sprintf("[rate-limit-quota-exhausted] idle 2m after rate_limit_event (status=limited; five_hour bucket; resetsAt=%d)", reset))
+	as.drainBackground()
+
+	if as.state.QuotaCooldownUntil == "" {
+		t.Fatal("status=limited must still set the global cooldown")
+	}
+}
+
 func failedKind(t *testing.T, as *AutonomousScheduler, repo string, number int) string {
 	t.Helper()
 	for _, f := range as.state.Failed {

@@ -7870,6 +7870,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			stallErrMsg := stageFailureText(err, result)
 			isStallKill := ResolveTerminalKind(gateRan, gateRes.TerminalKind, stallErrMsg) == TerminalKindStallKill
 			isCostCapKill := HasCostCapKillMarker(stallErrMsg)
+			softQuotaStall := isStallKill && IsWarningOnlyQuotaDetail(stallErrMsg)
 			if isStallKill && !isCostCapKill {
 				// Issue #3542: budget-aware model escalation. When a stall-kill
 				// occurs AND the pipeline has already burned >50% of its USD
@@ -7877,7 +7878,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// the rest of the budget the same way. Prefer escalating the
 				// model (sonnet → opus) — a stronger model is more likely to
 				// finish within the remaining budget than a re-plan retry.
-				if pipelineBudgetCeilingUSD > 0 {
+				// Not after a quota warning (#2711): the stronger model spends
+				// the bucket that warned.
+				if pipelineBudgetCeilingUSD > 0 && !softQuotaStall {
 					budgetRatio := runtime.TotalCostUSD / pipelineBudgetCeilingUSD
 					if budgetRatio > 0.5 {
 						escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
@@ -8376,7 +8379,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s failed — NOT escalating model: it was stopped at its budget (budget_exceeded), which a retry would spend again",
 					item.Number, stage)
 			}
-			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked && !budgetStopped {
+			if softQuotaStall {
+				log.Printf("#%d: stage %s failed — NOT escalating model: it stalled after a quota warning, and a stronger tier spends more of that bucket",
+					item.Number, stage)
+			}
+			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked && !budgetStopped && !softQuotaStall {
 				escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
 				if escalation.ShouldEscalate {
 					log.Printf("#%d: stage %s failed — escalating model to %s",

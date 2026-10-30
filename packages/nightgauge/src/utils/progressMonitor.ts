@@ -312,6 +312,8 @@ export class ProgressMonitor {
   private readonly declaredPids = new Map<number, string>();
   /** Declared progress logs → last observed size in bytes (Issue #1488). */
   private readonly declaredLogs = new Map<string, number>();
+  /** Log sizes last seen by {@link isBackgroundWorkLive}, apart from the 30-second poll's. */
+  private readonly liveCheckLogSizes = new Map<string, number>();
   /** Tool calls issued with no matching tool_result yet (Issue #1488). */
   private inFlightToolCalls = 0;
   /** Claude Code background tasks still running (Issue #2517). */
@@ -441,6 +443,8 @@ export class ProgressMonitor {
     if (typeof log === "string" && log.length > 0) {
       evictOldest(this.declaredLogs);
       this.declaredLogs.set(log, this.probe.fileSize(log) ?? 0);
+      evictOldest(this.liveCheckLogSizes);
+      this.liveCheckLogSizes.set(log, this.declaredLogs.get(log) ?? 0);
       declared = true;
     }
 
@@ -477,6 +481,50 @@ export class ProgressMonitor {
   setBackgroundTasks(count: number, oldestStartedAtMs: number | null = null): void {
     this.backgroundTasks = Math.max(0, count);
     this.oldestBackgroundTaskStartMs = this.backgroundTasks > 0 ? oldestStartedAtMs : null;
+  }
+
+  /**
+   * Whether a tracked background task, a foreground tool call or a declared
+   * process is running inside its bound (#2711): a call with no tool_result, a
+   * live pid, or a log that grew since the last call. The stall ticker reads
+   * this on every tick and records no signal. Its syscalls are bounded by
+   * {@link MAX_EXTERNAL_DECLARATIONS}.
+   */
+  isBackgroundWorkLive(): boolean {
+    if (this.backgroundTasks > 0 && this.backgroundTasksWithinBound()) return true;
+    const ceilingMs = this.config.externalProgressCeilingMs;
+    if (ceilingMs <= 0 || this.msSinceLastProductiveProgress > ceilingMs) return false;
+
+    let live = this.inFlightToolCalls > 0;
+    for (const pid of this.declaredPids.keys()) {
+      if (this.probe.isProcessAlive(pid)) live = true;
+    }
+    for (const [path, lastSize] of this.liveCheckLogSizes) {
+      const size = this.probe.fileSize(path);
+      if (size !== null && size > lastSize) {
+        this.liveCheckLogSizes.set(path, size);
+        live = true;
+      }
+    }
+    return live;
+  }
+
+  /**
+   * Background tasks carry their own bound (#2554): the oldest task's age
+   * against `backgroundTaskCeilingMs`, independent of when the stage last made
+   * productive progress. With the bound disabled (0) or no start time known,
+   * they fall back under the external ceiling.
+   */
+  private backgroundTasksWithinBound(): boolean {
+    const backgroundCeilingMs =
+      this.config.backgroundTaskCeilingMs ?? DEFAULT_BACKGROUND_TASK_CEILING_MS;
+    if (backgroundCeilingMs > 0 && this.oldestBackgroundTaskStartMs !== null) {
+      return Date.now() - this.oldestBackgroundTaskStartMs <= backgroundCeilingMs;
+    }
+    return (
+      this.config.externalProgressCeilingMs > 0 &&
+      this.msSinceLastProductiveProgress <= this.config.externalProgressCeilingMs
+    );
   }
 
   /**
@@ -661,20 +709,10 @@ export class ProgressMonitor {
     const externalCeilingReached =
       this.config.externalProgressCeilingMs <= 0 ||
       msSinceLastProgress > this.config.externalProgressCeilingMs;
-    // Background tasks carry their own bound (#2554): the oldest task's age
-    // against `backgroundTaskCeilingMs`, independent of when the stage last
-    // made productive progress. With the bound disabled (0) or no start time
-    // known, they fall back under the external ceiling.
-    const backgroundCeilingMs =
-      this.config.backgroundTaskCeilingMs ?? DEFAULT_BACKGROUND_TASK_CEILING_MS;
-    const backgroundAllowed =
-      backgroundCeilingMs > 0 && this.oldestBackgroundTaskStartMs !== null
-        ? Date.now() - this.oldestBackgroundTaskStartMs <= backgroundCeilingMs
-        : !externalCeilingReached;
     const external = windowExceeded
       ? this.pollExternalProgress({
           declared: !externalCeilingReached,
-          background: backgroundAllowed,
+          background: this.backgroundTasksWithinBound(),
         })
       : { active: false, reason: "" };
 
@@ -734,7 +772,7 @@ export class ProgressMonitor {
           `No productive progress for ${Math.round(msSinceLastProgress / 1000)}s, but external ` +
           `progress observed: ${external.reason} — waiting on real work, not stalled ` +
           `(external ceiling: ${this.config.externalProgressCeilingMs / 1000}s, background task ` +
-          `ceiling: ${backgroundCeilingMs / 1000}s, Issues #1488/#2554)`,
+          `ceiling: ${(this.config.backgroundTaskCeilingMs ?? DEFAULT_BACKGROUND_TASK_CEILING_MS) / 1000}s, Issues #1488/#2554)`,
         msSinceLastProgress,
         ...base(),
       };

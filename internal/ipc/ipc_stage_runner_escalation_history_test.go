@@ -123,3 +123,39 @@ func TestRunStage_SuccessfulStageRecordsNoEscalation(t *testing.T) {
 			"never escalated would report more attempts than it took", got)
 	}
 }
+
+// A stall after a quota warning must not climb a tier (#2711). This runner
+// records the escalation before the scheduler sees the failure, so the
+// scheduler's own guard cannot catch it.
+func TestRunStage_WarningOnlyQuotaStallDoesNotEscalate(t *testing.T) {
+	var buf bytes.Buffer
+	runner, _ := newEscalatingStageRunner(&buf)
+
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 2711, "item-2711", testRunID)
+	runtime.BeginStage(state.StageFeatureDev)
+
+	res := runStageWithResult(t, runner, orchestrator.StageRunParams{
+		Stage:       state.StageFeatureDev,
+		IssueNumber: 2711,
+		Repo:        "nightgauge/nightgauge",
+		Model:       "sonnet",
+		Timeout:     30 * time.Second,
+		RunID:       testRunID,
+		Runtime:     runtime,
+	}, StageResultParams{
+		Stage:       string(state.StageFeatureDev),
+		IssueNumber: 2711,
+		Success:     false,
+		ExitCode:    1,
+		ErrorText: "[skillRunner] Stage [stall-killed] idle 15m 0s after rate_limit_event " +
+			"(status=allowed_warning; seven_day bucket; resetsAt=1778403000) — forcibly " +
+			"terminating process after 40m 0s (idle for 15m 0s).",
+	})
+
+	if res.EscalationRecorded {
+		t.Fatal("EscalationRecorded = true — a warning-only stall retried on a stronger model")
+	}
+	if got := runtime.Snapshot().EscalationHistory; len(got) != 0 {
+		t.Fatalf("EscalationHistory = %+v, want none", got)
+	}
+}

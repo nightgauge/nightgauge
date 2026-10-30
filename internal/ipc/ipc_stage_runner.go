@@ -230,6 +230,12 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 				// manifest exists to prevent.
 				log.Printf("#%d: stage %s failed — NOT escalating model: %s (no model can supply a missing credential)",
 					params.IssueNumber, params.Stage, reason)
+			} else if orchestrator.IsWarningOnlyQuotaStall(orchestrator.ClassifyTerminalKind(result.ErrorText), result.ErrorText) {
+				// #2711: this runner records the escalation before the
+				// scheduler sees the failure, and only the extension path
+				// stamps the soft-quota marker.
+				log.Printf("#%d: stage %s failed — NOT escalating model: it stalled after a quota warning, and a stronger tier spends more of that bucket",
+					params.IssueNumber, params.Stage)
 			} else {
 				decision := r.retryEngine.EvaluateEscalation(string(params.Stage), params.Model)
 				if decision.ShouldEscalate {

@@ -57,6 +57,62 @@ function tickTo(monitor: ProgressMonitor, seconds: number, costUsd = 1.5) {
   return monitor.check(costUsd);
 }
 
+describe("isBackgroundWorkLive (#2711)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("holds until the task ceiling, then lets the idle clocks run", () => {
+    const monitor = new ProgressMonitor(makeConfig({ backgroundTaskCeilingMs: 60_000 }), noProbe);
+    expect(monitor.isBackgroundWorkLive()).toBe(false);
+    monitor.setBackgroundTasks(1, Date.now());
+    vi.advanceTimersByTime(60_000);
+    expect(monitor.isBackgroundWorkLive()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(monitor.isBackgroundWorkLive()).toBe(false);
+  });
+
+  it("holds for a declared log only while it grows, and a declared pid while alive", () => {
+    let size = 100;
+    let alive = false;
+    const probe: ExternalProgressProbe = {
+      isProcessAlive: () => alive,
+      fileSize: () => size,
+    };
+    const monitor = new ProgressMonitor(makeConfig(), probe);
+    monitor.declareExternalProgress({ pid: 4242, log: "/tmp/gate.log", label: "gate" });
+    expect(monitor.isBackgroundWorkLive()).toBe(false);
+    size = 200;
+    expect(monitor.isBackgroundWorkLive()).toBe(true);
+    expect(monitor.isBackgroundWorkLive()).toBe(false);
+    alive = true;
+    expect(monitor.isBackgroundWorkLive()).toBe(true);
+    vi.advanceTimersByTime(1_200_001);
+    expect(monitor.isBackgroundWorkLive()).toBe(false);
+  });
+
+  it("holds for a foreground tool call until it returns or passes the external ceiling", () => {
+    const monitor = new ProgressMonitor(makeConfig(), noProbe);
+    monitor.setInFlightToolCalls(1);
+    expect(monitor.isBackgroundWorkLive()).toBe(true);
+    monitor.setInFlightToolCalls(0);
+    expect(monitor.isBackgroundWorkLive()).toBe(false);
+    monitor.setInFlightToolCalls(1);
+    vi.advanceTimersByTime(1_200_001);
+    expect(monitor.isBackgroundWorkLive()).toBe(false);
+  });
+
+  it("stops when the last task ends", () => {
+    const monitor = new ProgressMonitor(makeConfig(), noProbe);
+    monitor.setBackgroundTasks(1, Date.now());
+    monitor.setBackgroundTasks(0);
+    expect(monitor.isBackgroundWorkLive()).toBe(false);
+  });
+});
+
 describe("applyBackgroundTaskEvent (#2517)", () => {
   it("replaces the set with the list in background_tasks_changed", () => {
     const ids = new Map<string, number>([["stale", 0]]);

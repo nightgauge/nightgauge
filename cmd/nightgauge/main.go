@@ -11840,6 +11840,48 @@ func runningPipelinesForWorkspace(ctx context.Context, workdir string) (ipc.Runn
 	return res, true
 }
 
+// capitalizeStatus renders a scheduler status for the human status line.
+func capitalizeStatus(status string) string {
+	if status == "" {
+		return status
+	}
+	return strings.ToUpper(status[:1]) + status[1:]
+}
+
+// liveAutonomousModeLine is the headline of `autonomous status` when a daemon
+// answered: the same sentence the state-file branch prints, so the doc and
+// dev-install.sh hold in both (#2720). A daemon that answered autonomous.status
+// but not the summary gets "unknown": the scheduler's own list omits manual
+// runs, so it cannot stand in, and a false all-clear costs every running run.
+func liveAutonomousModeLine(status string, summary ipc.RunningPipelinesResult, known bool) string {
+	reload := "reload safety unknown"
+	if known {
+		reload = reloadSafetyLine(summary.Runs)
+	}
+	return fmt.Sprintf("Autonomous Mode: %s — %s", capitalizeStatus(status), reload)
+}
+
+// liveAutonomousStatusJSON is the `--json` payload when a daemon answered. The
+// reload keys match the state-file branch's: the guard in
+// check-running-pipelines.sh reads them, and a live daemon is the only case
+// with a window to reload (#2720).
+func liveAutonomousStatusJSON(res orchestrator.AutonomousState, summary ipc.RunningPipelinesResult, known bool) map[string]any {
+	runs := summary.Runs
+	if runs == nil {
+		runs = []ipc.RunningPipelineInfo{}
+	}
+	return map[string]any{
+		"daemon":                  true,
+		"status":                  res.Status,
+		"cycles":                  res.CyclesRun,
+		"running":                 res.Running,
+		"inReviewWithoutPR":       inReviewWithoutPRJSON(res.InReviewWithoutPR),
+		"running_pipelines":       runs,
+		"running_pipelines_known": known,
+		"reload_safe":             known && summary.Count == 0,
+	}
+}
+
 func autonomousStatusCmd() *cobra.Command {
 	var outputJSON bool
 
@@ -11861,16 +11903,15 @@ func autonomousStatusCmd() *cobra.Command {
 				defer client.Close()
 				var res orchestrator.AutonomousState
 				if callErr := client.Call(cmd.Context(), "autonomous.status", nil, &res); callErr == nil {
+					// Its own dial: the socket serves one request per connection,
+					// so `client` is spent. This is the one branch with a window
+					// to reload (#2720).
+					summary, known := runningPipelinesForWorkspace(cmd.Context(), workdir)
 					if outputJSON {
-						return printJSON(map[string]any{
-							"daemon":            true,
-							"status":            res.Status,
-							"cycles":            res.CyclesRun,
-							"running":           res.Running,
-							"inReviewWithoutPR": inReviewWithoutPRJSON(res.InReviewWithoutPR),
-						})
+						return printJSON(liveAutonomousStatusJSON(res, summary, known))
 					}
-					fmt.Printf("Source: live daemon\nStatus: %s\nCycles: %d\n", res.Status, res.CyclesRun)
+					fmt.Printf("Source: live daemon\n%s\nCycles: %d\n",
+						liveAutonomousModeLine(res.Status, summary, known), res.CyclesRun)
 					if len(res.Running) > 0 {
 						fmt.Printf("\nRunning (%d):\n", len(res.Running))
 						for _, r := range res.Running {
@@ -11956,10 +11997,7 @@ func autonomousStatusCmd() *cobra.Command {
 			}
 
 			// Human-readable table format
-			statusDisplay := state.Status
-			if len(statusDisplay) > 0 {
-				statusDisplay = strings.ToUpper(statusDisplay[:1]) + statusDisplay[1:]
-			}
+			statusDisplay := capitalizeStatus(state.Status)
 			if stalled {
 				fmt.Printf("Autonomous Mode: Stalled (pid %d is not running)\n", state.PID)
 			} else if daemonKnown {

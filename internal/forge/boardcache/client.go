@@ -2,7 +2,6 @@ package boardcache
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -25,8 +24,11 @@ func WrapClient(c *Cache, inner forge.ForgeClient, owner string, project int) fo
 		ForgeClient: inner,
 		board:       c.Wrap(inner.Board(), owner, project),
 		project:     WrapProject(c, inner.Project(), owner, project),
+		cache:       c,
 	}
 }
+
+var _ forge.GraphQLService = (*cachedClient)(nil)
 
 // cachedClient embeds the inner client so every service it does not override is
 // passed through untouched.
@@ -34,6 +36,7 @@ type cachedClient struct {
 	forge.ForgeClient
 	board   forge.BoardService
 	project forge.ProjectService
+	cache   *Cache
 }
 
 func (c *cachedClient) Board() forge.BoardService     { return c.board }
@@ -41,13 +44,54 @@ func (c *cachedClient) Project() forge.ProjectService { return c.project }
 
 // ExecuteGraphQL forwards the inner client's optional forge.GraphQLService,
 // which embedding only forge.ForgeClient would hide from every wrapper above
-// this one (#2684). An inner client without it answers ErrUnsupported.
+// this one (#2684).
+//
+// A raw document can write anything a ProjectService method can, and nothing in
+// its text says which board that is, so it gets the discipline of a call that
+// cannot name its board: unless the document is a read, every board is dropped
+// after the call returns, on success or failure. One Cache holds several boards
+// (the attention sweep wraps each repository's against the same one), so
+// dropping only the bound board would leave the one actually written stale.
+// Only a document whose first operation is `query` or the `{ ... }` shorthand
+// counts as a read; anything else, including a document that cannot be
+// classified, is treated as a write. Misclassifying a read costs one refetch;
+// letting a write through would serve this process a board it has already
+// changed.
 func (c *cachedClient) ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
-	gql, ok := c.ForgeClient.(forge.GraphQLService)
-	if !ok {
-		return nil, fmt.Errorf("forge client has no GraphQL surface: %w", forge.ErrUnsupported)
+	if !isReadDocument(query) {
+		defer c.cache.InvalidateAll()
 	}
-	return gql.ExecuteGraphQL(ctx, query, variables)
+	return forge.ForwardGraphQL(ctx, c.ForgeClient, query, variables)
+}
+
+// isReadDocument reports whether a GraphQL document's first definition is a
+// query operation: the `query` keyword or the `{` shorthand, after the
+// ignored tokens the spec allows (whitespace, commas, a BOM, `#` comments).
+func isReadDocument(doc string) bool {
+	rest := doc
+	for {
+		rest = strings.TrimLeft(rest, " \t\r\n,\ufeff")
+		if !strings.HasPrefix(rest, "#") {
+			break
+		}
+		nl := strings.IndexAny(rest, "\r\n")
+		if nl < 0 {
+			return false
+		}
+		rest = rest[nl:]
+	}
+	if strings.HasPrefix(rest, "{") {
+		return true
+	}
+	if !strings.HasPrefix(rest, "query") {
+		return false
+	}
+	after := rest[len("query"):]
+	return after == "" || !isNameChar(after[0])
+}
+
+func isNameChar(b byte) bool {
+	return b == '_' || ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z') || ('0' <= b && b <= '9')
 }
 
 // WrapProject returns a ProjectService that drops the board's snapshots after
@@ -99,11 +143,16 @@ type invalidatingProject struct {
 // move is to drop everything: a cold cache costs one refetch, a confidently
 // wrong one costs an operator acting on a board that has already changed.
 func (p *invalidatingProject) invalidate() {
-	if p.project <= 0 {
-		p.cache.InvalidateAll()
+	invalidateBoard(p.cache, p.owner, p.project)
+}
+
+// invalidateBoard drops owner's board, or every board when project <= 0.
+func invalidateBoard(c *Cache, owner string, project int) {
+	if project <= 0 {
+		c.InvalidateAll()
 		return
 	}
-	p.cache.Invalidate(p.owner, p.project)
+	c.Invalidate(owner, project)
 }
 
 func (p *invalidatingProject) AddItem(ctx context.Context, contentNodeID string) (string, error) {

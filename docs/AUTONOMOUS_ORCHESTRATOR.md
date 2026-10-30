@@ -1454,9 +1454,10 @@ affordance in **Nightgauge: Stop After Current Issue**
 (`ConcurrentPipelineManager.pauseFilling`).
 
 What discards running slots is the **window reload**: the extension's
-`deactivate` calls `abortAll()`. Installing a new build ends in a reload, so a
-rebuild during a busy fleet kills every in-flight run, and each one restarts
-from scratch and re-spends its planning. The reload keeps the queue (#2396):
+`deactivate` calls `abortAll()`. `dev-install.sh` installs a new build and does
+not reload; the build takes effect when the operator reloads, and that reload
+during a busy fleet kills every in-flight run, each of which restarts from
+scratch and re-spends its planning. The reload keeps the queue (#2396):
 it drops only the items of the runs it ends, and every waiting issue,
 platform-triggered runs and issues it had dequeued but not begun to start
 included, is still queued when the window comes back.
@@ -1484,7 +1485,8 @@ to reload" while two pipelines are still mid-`feature-dev`.
    `Autonomous: Stopped — safe to reload`), and updates itself as the slots
    land, so the drain can be watched without re-running anything.
 
-3. Reload the window (or run `dev-install.sh`, which asks first — see below).
+3. Install if you are rebuilding (`dev-install.sh`, which asks first — see
+   below), then reload the window yourself. Installing does not reload it.
 4. Start again: `nightgauge autonomous run`, or the Start button.
 
 **Where the count comes from.** `pipeline.runningSummary` reads the IPC **run
@@ -1492,9 +1494,10 @@ registry**, not the scheduler's `running` list. That distinction is the whole
 point of step 2: the scheduler knows only about the runs it dispatched, while a
 manually picked-up issue, a queue batch or a drag-to-Ready is invisible there —
 and a reload kills all of them identically. `autonomous status --json` carries
-the same data as `running_pipelines`, with `running_pipelines_known: false`
-when no daemon answered, so a script never reads an empty list as "nothing is
-running".
+the same data as `running_pipelines`, with `reload_safe`, and with a live daemon
+these keys sit beside the scheduler's `running` list. `running_pipelines_known`
+is false when no daemon or no summary answered, so a script never reads an empty
+list as "nothing is running", and `reload_safe` is then false too.
 
 A run that has not reported progress inside the liveness window is **reported
 as stale, not dropped**. Hiding it would turn "possibly finished" into

@@ -74,7 +74,18 @@ rejected.
 | Nitpicks shown    | 5     | The rest are counted in an "N more nitpicks omitted" line |
 | `claim` length    | 300   | Longer is rejected                                        |
 | `fix` length      | 1000  | Longer is rejected                                        |
-| Model turns       | 80    | The review job fails without posting if it reaches this   |
+| Turns per review  | 80    | Reaching it stops the review; the job fails, no comment   |
+
+## Turn limit
+
+A review that reaches the turn limit did not finish. Its red check is neither
+a pass nor a finding, and nothing is posted. The job summary and the error
+annotation say so and name the limit.
+
+The review scales with the diff, so the remedy is to split the pull request
+into smaller ones. One re-run is reasonable because turn use varies; repeating
+it is not the remedy. The value lives once, as `REVIEW_MAX_TURNS` in
+`.github/workflows/pr-review.yml`.
 
 ## Output
 
@@ -111,7 +122,8 @@ explained in the job summary.
 The review is advisory:
 
 - No job fails because of a finding. A job fails only when the harness itself
-  breaks, for example when the findings file is rejected.
+  breaks, for example when the findings file is rejected or the review reaches
+  its turn limit.
 - The comment is a plain comment. It never approves or requests changes.
 - The workflow is not a required status check, and must not be added to a
   ruleset.

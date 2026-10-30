@@ -16,22 +16,30 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
-- The advisory PR Review job no longer fails on large pull requests. Its model
-  turn cap rises from 40 to 80, because a diff of about 1,300 lines reached the
-  old cap on every run and ended with no review posted.
-- A re-run that rebased its conflicting PR branch no longer ends `branch_forked`.
-  When origin's copy of the branch carries no change the local tree lacks, even
-  if the rebase rewrote a commit's surrounding lines, the new
-  `nightgauge git push-branch` (used by feature-validate) and the scheduler's
-  pre-flight write a commit descending from origin's tip and push it without
-  force. A failed recovery push puts the branch back, and a protected branch is
-  never reconciled. A genuine fork is still left untouched. The planning,
-  feature-dev and feature-validate skills, and the shared freshness check that
-  feature-validate and pr-merge run, now update an existing PR branch by
-  merging its base, never by rebasing or force-pushing, and a contract test
-  that follows shared-fragment includes enforces that. A `branch_forked` run's tip is pinned at
-  `refs/nightgauge/stranded/<issue>` before cleanup, and the Action Center card
-  names the ref and the SHA.
+- A re-run that rebased its conflicting PR branch no longer ends `branch_forked`. When origin's
+  copy of the branch carries no change the local tree lacks, even if the rebase rewrote a commit's
+  surrounding lines, the new `nightgauge git push-branch` (used by feature-validate) and the
+  scheduler's pre-flight write a commit descending from origin's tip and push it without force. A
+  failed recovery push puts the branch back, and a protected branch is never reconciled. A genuine
+  fork is still left untouched. The planning, feature-dev and feature-validate skills, and the
+  shared freshness check that feature-validate and pr-merge run, now update an existing PR branch
+  by merging its base, never by rebasing or force-pushing, and a contract test that follows
+  shared-fragment includes enforces that. A `branch_forked` run's tip is pinned at
+  `refs/nightgauge/stranded/<issue>` before cleanup, and the Action Center card names the ref and
+  the SHA.
+- With a live daemon, `autonomous status` again answers whether a reload is safe (#2720). The
+  human output replaces `Status:` with the `Autonomous Mode: <Status> — <reload line>` sentence,
+  covering manual runs, and `--json` adds `running_pipelines`, `running_pipelines_known` and
+  `reload_safe`, so the `dev-install.sh` warning can fire. If the daemon cannot give the summary,
+  the answer is unknown, never safe. The docs and warning no longer say installing reloads the
+  window: the operator does.
+- PR Review now allows 80 turns instead of 40, so a large diff can finish. A review that still
+  reaches the limit fails with an annotation and job summary saying it did not finish and naming
+  the limit, instead of a bare red check; `docs/PR_REVIEW_PASSES.md` says what to do next.
+- A soft `allowed_warning` no longer stops the fleet (#2711). Time on a live background task,
+  foreground tool call or declared process, within its ceiling, no longer counts as idle, and a
+  kill that followed only a warning is booked as a stall and does not retry on a stronger model.
+  A global cooldown to `resetsAt` now requires a hard signal.
 - A closing keyword followed by a github.com issue URL
   (`Closes https://github.com/o/r/issues/N`) now counts as closing the issue, as it does on
   GitHub; a URL on any other host does not. The pr-merge acceptance backstop
@@ -61,6 +69,18 @@ changelog, and the release workflow refuses a tag that does not.
   logged "forge client has no GraphQL surface to resolve the repository id"
   and filed nothing. Both wrappers now forward GraphQL, and a forge without it
   answers an unsupported error.
+- **A GraphQL write through the board cache no longer leaves a stale board
+  (#2684, #2697).** The board-cache wrapper forwarded raw GraphQL without
+  dropping its board snapshot, so a mutation sent that way let this process
+  read back the board it had just changed. Any document that is not a query
+  now drops every cached board, on success or failure, because a raw document
+  does not say which board it writes. Both wrappers share one GraphQL forwarder.
+- **pr-create no longer lets untrusted criterion text reshape the PR body
+  (#2662, #2670).** Criterion text and evidence render on one line, so a
+  newline in them can no longer add a bullet or heading to the unmet-criteria
+  section post-merge reads. A built test suite that never ran now leaves a
+  test-named criterion unmet even when feature-validate reported its unit
+  tests passed.
 - **A numbered sub-step is no longer an acceptance criterion of its own
   (#2684).** In `1. Do X:` followed by `   1. sub`, the sub-step sits at the
   parent item's content column, so ac-reconcile (Go and SDK) now reads it as

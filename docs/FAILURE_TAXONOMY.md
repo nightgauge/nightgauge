@@ -884,6 +884,15 @@ classifies `not_pipeline_actionable`
 non-fault outcome, with no retry, no global cooldown and no lifetime-cap
 increment. A stage that reached a verdict proves its own adapter was working.
 
+**A warning never feeds the global cooldown (#2711).** The cooldown to `resetsAt`
+needs a hard signal: `status: "limited"` or a provider rejection. The soft
+quota-signal idle kill follows only an `allowed_warning`, so `SkillRunner` stamps
+it `[stall-killed]`, and the scheduler demotes any quota kind whose detail reports
+`status=allowed_warning` to `stall_kill` (`DemoteWarningOnlyQuotaKind`). A detail
+with no status stays quota, because the provider's own rejection text carries none.
+Such a stall is never retried on a stronger model (`IsWarningOnlyQuotaStall`):
+quota is still under pressure, and a higher tier spends more of the bucket that warned.
+
 **Why it is bounded.** Extensions are consulted only after the rule ladder has
 projected **no signal**, so an extension can never overrule a kind projected by a
 `signal: true` **rule** — the widest it can reach is text the signal subset
