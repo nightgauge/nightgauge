@@ -228,10 +228,27 @@ function createMockStateService(): PipelineStateService {
   } as unknown as PipelineStateService;
 }
 
-async function drainTimers(iterations = 40) {
-  for (let i = 0; i < iterations; i++) {
+// Captured before vi.useFakeTimers(), which fakes setImmediate too.
+const realSetImmediate = globalThis.setImmediate;
+
+/**
+ * Advance fake time until `run` settles. A fixed number of ticks is not enough:
+ * part of the run awaits real I/O, and on a loaded runner that can finish after
+ * a fixed drain has returned, leaving the run's next fake timer unadvanced and
+ * the test hung until its timeout (#2684).
+ */
+async function drainUntilSettled(run: Promise<unknown>, maxTicks = 2_000) {
+  let settled = false;
+  void run.then(
+    () => (settled = true),
+    () => (settled = true)
+  );
+  for (let i = 0; i < maxTicks && !settled; i++) {
     await vi.advanceTimersByTimeAsync(2_500);
+    // Give real I/O a macrotask to land before the next fake tick.
+    if (!settled) await new Promise<void>((r) => realSetImmediate(() => r()));
   }
+  await run;
 }
 
 const LAUNCH_ROOT = "/launch-root";
@@ -288,8 +305,7 @@ describe("HeadlessOrchestrator materializes discovered work after pr-merge (#263
       return { kill: vi.fn(), process: null } as any;
     });
     const p = newOrchestrator().runPipeline(2119);
-    await drainTimers();
-    await p;
+    await drainUntilSettled(p);
 
     expect(followupSpawns.length, "followup materialize was never reached").toBe(1);
     const { args } = followupSpawns[0];
