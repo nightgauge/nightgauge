@@ -890,6 +890,8 @@ quota-signal idle kill follows only an `allowed_warning`, so `SkillRunner` stamp
 it `[stall-killed]`, and the scheduler demotes any quota kind whose detail reports
 `status=allowed_warning` to `stall_kill` (`DemoteWarningOnlyQuotaKind`). A detail
 with no status stays quota, because the provider's own rejection text carries none.
+Such a stall is never retried on a stronger model (`IsWarningOnlyQuotaStall`):
+quota is still under pressure, and a higher tier spends more of the bucket that warned.
 
 **Why it is bounded.** Extensions are consulted only after the rule ladder has
 projected **no signal**, so an extension can never overrule a kind projected by a

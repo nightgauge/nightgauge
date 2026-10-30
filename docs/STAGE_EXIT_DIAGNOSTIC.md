@@ -178,7 +178,7 @@ left no candidate.
 | `stage-hard-cap`              | Elapsed reached the absolute per-stage cap                              | `pipeline.stage_hard_caps.<stage>`                                                |
 | `stage-time-cap`              | Elapsed cap for zero-cost adapters (`provider_scale=0`)                 | `min(stage_hard_caps.<stage>, stage_time_caps.<stage>)`                           |
 | `quota-fast-fail-idle`        | Idle past the quota budget after a rate-limit signal (a stall if soft)  | `QUOTA_EXHAUSTED_FAST_FAIL_IDLE_MS` or `min(stallKillMs, quota_signal_idle_ms)`   |
-| `stall-idle`                  | Idle past `stallKillMs` with no subprocess output                       | Calibrated or static idle-kill threshold                                          |
+| `stall-idle`                  | Idle past `stallKillMs` with no output or live work within its ceiling  | Calibrated or static idle-kill threshold                                          |
 
 These names are a diagnostic contract — they are grepped in retros and appear
 verbatim in historical records, so treat the set as append-mostly.

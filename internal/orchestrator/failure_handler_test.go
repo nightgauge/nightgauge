@@ -201,6 +201,7 @@ func TestDemoteWarningOnlyQuotaKind(t *testing.T) {
 		{TerminalKindRateLimitQuotaExhausted, "[rate-limit-quota-exhausted] idle 2m (status=limited; resetsAt=1)", TerminalKindRateLimitQuotaExhausted, false},
 		{TerminalKindRateLimitQuotaExhausted, warning + " then status=limited", TerminalKindRateLimitQuotaExhausted, false},
 		{TerminalKindRateLimitQuotaExhausted, "[rate-limit-quota-exhausted] resets 10:30am; resetsAt=1", TerminalKindRateLimitQuotaExhausted, false},
+		{TerminalKindRateLimitQuotaExhausted, "You've hit your usage limit; the docs mention status=allowed_warning", TerminalKindRateLimitQuotaExhausted, false},
 		{TerminalKindSubagentCrash, warning, TerminalKindSubagentCrash, false},
 	}
 	for _, c := range cases {
@@ -216,6 +217,26 @@ func TestSoftQuotaKillTextClassifiesAsStall(t *testing.T) {
 	detail := "[skillRunner] Stage [stall-killed] idle 15m 0s after rate_limit_event (status=allowed_warning; seven_day bucket; resetsAt=1778403000) — forcibly terminating process after 40m 0s (idle for 15m 0s)."
 	if got := ClassifyTerminalKind(detail); got != TerminalKindStallKill {
 		t.Fatalf("ClassifyTerminalKind = %q, want %q", got, TerminalKindStallKill)
+	}
+}
+
+// A stall after a quota warning must not climb to a stronger model.
+func TestIsWarningOnlyQuotaStall(t *testing.T) {
+	soft := "[skillRunner] Stage [stall-killed] idle 15m 0s after rate_limit_event (status=allowed_warning; seven_day bucket; resetsAt=1)"
+	cases := []struct {
+		name, kind, detail string
+		want               bool
+	}{
+		{"soft kill", TerminalKindStallKill, soft, true},
+		{"plain stall", TerminalKindStallKill, "[stall-killed] exceeded stall idle threshold", false},
+		{"bare status token", TerminalKindStallKill, "[stall-killed] the log quoted status=allowed_warning", false},
+		{"limited alongside", TerminalKindStallKill, soft + " then status=limited", false},
+		{"other kind", TerminalKindSubagentCrash, soft, false},
+	}
+	for _, c := range cases {
+		if got := IsWarningOnlyQuotaStall(c.kind, c.detail); got != c.want {
+			t.Errorf("%s: IsWarningOnlyQuotaStall = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 

@@ -2770,7 +2770,7 @@ export const STALL_NUDGE_GRACE_MS = 60_000;
 export type StallKillPath = "idle" | "hard_cap" | "quota" | "none";
 
 export interface StallKillTickInputs {
-  /** ms since the last stdout/stderr chunk from the subprocess. */
+  /** ms since the last output or live work (background task, tool call, declared process). */
   idleMs: number;
   /** Idle threshold; 0 disables the idle gate entirely (cold start). */
   stallKillMs: number;
@@ -6897,7 +6897,7 @@ function runStageSkillHeadlessImpl(
     }
 
     if (stallDecision.emitNudge) {
-      const nudgeMsg = `[stall-nudge] Stage ${stage} idle for ${formatElapsed(idleMs)}. Waiting ${NUDGE_GRACE_MS / 1000}s before kill.\n`;
+      const nudgeMsg = `[stall-nudge] Stage ${stage} idle for ${formatElapsed(softIdleMs)}. Waiting ${NUDGE_GRACE_MS / 1000}s before kill.\n`;
       stderrBuffer = appendTail(stderrBuffer, nudgeMsg, OUTPUT_ERROR_TAIL_MAX_CHARS);
       callbacks?.onStderr?.(nudgeMsg);
     }
@@ -7006,7 +7006,7 @@ function runStageSkillHeadlessImpl(
       const killMarker =
         `[skillRunner] Stage ${killReason} — ` +
         `forcibly terminating process after ${formatElapsed(elapsed)} ` +
-        `(idle for ${formatElapsed(idleMs)}).\n`;
+        `(idle for ${formatElapsed(softIdleMs)}).\n`;
       stderrBuffer = appendTail(stderrBuffer, killMarker, OUTPUT_ERROR_TAIL_MAX_CHARS);
       callbacks?.onStderr?.(killMarker);
 
@@ -7020,7 +7020,7 @@ function runStageSkillHeadlessImpl(
           `stage: ${stage}`,
           `issue: ${issueNumber}`,
           `elapsed: ${formatElapsed(elapsed)}`,
-          `idle: ${formatElapsed(idleMs)}`,
+          `idle: ${formatElapsed(softIdleMs)}`,
           `kill_reason: ${killReason}`,
           `kill_path: ${
             hardCapReached

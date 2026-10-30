@@ -865,9 +865,10 @@ See [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md) and
 (status=allowed_warning; …)`.
 
 **Meaning:** the stage stayed silent past `quota_signal_idle_ms` with no live
-background task, foreground tool call or declared process. No request was rejected, so the issue retries after the stall
-backoff and other issues keep dispatching. Only `status=limited` or a provider
-rejection sets the global cooldown.
+background task, foreground tool call or declared process. No request was
+rejected, so the issue retries after the stall backoff on the same model tier
+and other issues keep dispatching. Only `status=limited` or a provider rejection
+sets the global cooldown.
 
 ### A stage was killed and its implementation is "gone" (#128)
 

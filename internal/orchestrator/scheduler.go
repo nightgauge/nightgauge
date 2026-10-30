@@ -8345,7 +8345,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s failed — NOT escalating model: it was stopped at its budget (budget_exceeded), which a retry would spend again",
 					item.Number, stage)
 			}
-			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked && !budgetStopped {
+			softQuotaStall := IsWarningOnlyQuotaStall(resolvedFailureKind, failText)
+			if softQuotaStall {
+				log.Printf("#%d: stage %s failed — NOT escalating model: it stalled after a quota warning, and a stronger tier spends more of that bucket",
+					item.Number, stage)
+			}
+			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked && !budgetStopped && !softQuotaStall {
 				escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
 				if escalation.ShouldEscalate {
 					log.Printf("#%d: stage %s failed — escalating model to %s",
