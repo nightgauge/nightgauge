@@ -321,9 +321,14 @@ func truncateForLog(s string, max int) string {
 // A re-run whose open PR conflicts with its base used to rebase the PR branch.
 // The rebased tip no longer descends from origin's tip, so the push is rejected
 // as non-fast-forward and the run ends branch_forked — yet origin carries
-// nothing this run lacks: every origin-only commit has a patch-equivalent
-// (`git patch-id --stable`) commit in the local history. That is a self-fork,
-// and it is recoverable without a force push.
+// nothing this run lacks: merging origin's tip into the local tip changes
+// nothing. That is a self-fork, and it is recoverable without a force push.
+//
+// The test is content, not `git patch-id`: patch-id hashes each hunk's context
+// lines, so a rebase that rewrites the lines around a hunk (a CHANGELOG entry
+// landing next to it, the #2669 shape) changes the id of an otherwise
+// identical commit. A conflict-free three-way merge whose tree equals the
+// local tip's tree proves origin carries no change the local tree lacks.
 
 // SelfForkOutcome classifies one ReconcileSelfFork attempt.
 type SelfForkOutcome string
@@ -365,6 +370,13 @@ type SelfForkResult struct {
 // follows with `reset --soft`. Nothing is pushed here and nothing is forced.
 func ReconcileSelfFork(ctx context.Context, dir, branch string) SelfForkResult {
 	res := SelfForkResult{Outcome: SelfForkUnknown, Branch: branch}
+	// The branch name can come from a stage-written context file; a protected
+	// branch is never rewritten, whatever names it (same guard as
+	// ReclaimOrphanedRemoteBranch).
+	if isProtectedBranch(branch) {
+		res.Detail = fmt.Sprintf("refusing to reconcile protected branch %q", branch)
+		return res
+	}
 	fork := CheckBranchFork(ctx, dir, branch)
 	res.LocalSHA, res.RemoteSHA = fork.LocalSHA, fork.RemoteSHA
 	switch fork.State {
@@ -404,33 +416,30 @@ func ReconcileSelfFork(ctx context.Context, dir, branch string) SelfForkResult {
 		return res
 	}
 
-	originIDs, err := patchIDs(ctx, dir, base+".."+remote)
-	if err != nil {
-		res.Detail = fmt.Sprintf("could not compute origin patch-ids: %v", err)
+	mergedOut, code, mergeErr := runGit(ctx, dir, "merge-tree", "--write-tree", "--merge-base="+base, local, remote)
+	if mergeErr != nil && code != 1 {
+		res.Detail = fmt.Sprintf("could not merge origin/%s into local: %v", branch, mergeErr)
 		return res
 	}
-	localIDs, err := patchIDs(ctx, dir, base+".."+local)
+	treeOut, _, err := runGit(ctx, dir, "rev-parse", "--verify", "--quiet", local+"^{tree}")
 	if err != nil {
-		res.Detail = fmt.Sprintf("could not compute local patch-ids: %v", err)
+		res.Detail = fmt.Sprintf("could not read local tree: %v", err)
 		return res
 	}
-	have := make(map[string]bool, len(localIDs))
-	for _, p := range localIDs {
-		have[p.id] = true
+	localTree := strings.TrimSpace(treeOut)
+	mergedTree := ""
+	if code == 0 {
+		mergedTree = strings.TrimSpace(strings.SplitN(mergedOut, "\n", 2)[0])
 	}
-	for _, p := range originIDs {
-		if !have[p.id] {
-			res.Unmatched = append(res.Unmatched, p.commit)
-		}
-	}
-	if len(res.Unmatched) > 0 {
+	if mergedTree != localTree {
 		res.Outcome = SelfForkForked
+		res.Unmatched = originOnlyCommits(ctx, dir, base, local, remote)
 		short := make([]string, len(res.Unmatched))
 		for i, s := range res.Unmatched {
 			short[i] = shortSHA(s)
 		}
-		res.Detail = fmt.Sprintf("origin/%s carries %d commit(s) with no local equivalent (%s) — a genuine fork",
-			branch, len(res.Unmatched), strings.Join(short, ", "))
+		res.Detail = fmt.Sprintf("origin/%s carries changes the local tree lacks (%s) — a genuine fork",
+			branch, strings.Join(short, ", "))
 		return res
 	}
 
@@ -463,39 +472,59 @@ func ReconcileSelfFork(ctx context.Context, dir, branch string) SelfForkResult {
 	res.Outcome = SelfForkRecovered
 	res.NewSHA = newSHA
 	res.Detail = fmt.Sprintf(
-		"origin/%s (%s) is patch-equivalent to local history; %s now descends from it as %s — push fast-forwards",
+		"origin/%s (%s) carries nothing the local tree lacks; %s now descends from it as %s — push fast-forwards",
 		branch, shortSHA(remote), branch, shortSHA(newSHA))
 	return res
 }
 
-type patchID struct{ id, commit string }
+// RollbackSelfFork moves `rec.Branch` back from the recovery commit to the
+// local tip it replaced. Callers use it when the recovery push fails, so a
+// failed recovery leaves the branch exactly as the stage produced it. It moves
+// the ref only if it still points at the recovery commit.
+func RollbackSelfFork(ctx context.Context, dir string, rec SelfForkResult) error {
+	if rec.Outcome != SelfForkRecovered || rec.NewSHA == "" || rec.LocalSHA == "" {
+		return nil
+	}
+	headOut, _, _ := runGit(ctx, dir, "symbolic-ref", "--quiet", "HEAD")
+	if strings.TrimSpace(headOut) == "refs/heads/"+rec.Branch {
+		cur, err := gitRevParse(ctx, dir, rec.Branch)
+		if err != nil {
+			return err
+		}
+		if cur != rec.NewSHA {
+			return fmt.Errorf("%s moved since recovery (%s) — not rolling back", rec.Branch, shortSHA(cur))
+		}
+		_, _, err = runGit(ctx, dir, "reset", "--soft", rec.LocalSHA)
+		return err
+	}
+	_, _, err := runGit(ctx, dir, "update-ref", "refs/heads/"+rec.Branch, rec.LocalSHA, rec.NewSHA)
+	return err
+}
 
-// patchIDs returns `git patch-id --stable` for every non-merge commit in rng.
-// Commits with an empty diff produce no patch-id and are omitted.
-func patchIDs(ctx context.Context, dir, rng string) ([]patchID, error) {
-	cctx, cancel := context.WithTimeout(ctx, branchForkGitTimeout)
-	defer cancel()
-	logCmd := exec.CommandContext(cctx, "git", "log", "-p", "--no-merges", "--no-color", rng)
-	logCmd.Dir = dir
-	patches, err := logCmd.Output()
+// originOnlyCommits names the origin-only commits of a genuine fork for the
+// operator: each one whose change, applied onto the local tip, is not already
+// there (a conflict-free cherry-pick that leaves the local tree unchanged means
+// the local history already holds it). Falls back to every origin-only commit
+// when no single commit can be singled out.
+func originOnlyCommits(ctx context.Context, dir, base, local, remote string) []string {
+	out, _, _ := runGit(ctx, dir, "rev-list", "--reverse", base+".."+remote)
+	all := strings.Fields(out)
+	treeOut, _, err := runGit(ctx, dir, "rev-parse", "--verify", "--quiet", local+"^{tree}")
 	if err != nil {
-		return nil, fmt.Errorf("git log -p %s: %w", rng, err)
+		return all
 	}
-	pidCmd := exec.CommandContext(cctx, "git", "patch-id", "--stable")
-	pidCmd.Dir = dir
-	pidCmd.Stdin = strings.NewReader(string(patches))
-	out, err := pidCmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git patch-id: %w", err)
-	}
-	var ids []patchID
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.Fields(line)
-		if len(f) == 2 {
-			ids = append(ids, patchID{id: f[0], commit: f[1]})
+	localTree := strings.TrimSpace(treeOut)
+	var unmatched []string
+	for _, c := range all {
+		picked, code, _ := runGit(ctx, dir, "merge-tree", "--write-tree", "--merge-base="+c+"^", local, c)
+		if code != 0 || strings.TrimSpace(strings.SplitN(picked, "\n", 2)[0]) != localTree {
+			unmatched = append(unmatched, c)
 		}
 	}
-	return ids, nil
+	if len(unmatched) == 0 {
+		return all
+	}
+	return unmatched
 }
 
 // StrandedRef names the ref that pins a branch_forked run's tip.

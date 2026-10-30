@@ -313,8 +313,8 @@ func newBranchForkScheduler(t *testing.T, root, branch string) (*Scheduler, *bra
 }
 
 // TestScheduler_BranchForkPreflight_RecoversSelfFork is the #2699 shape: the
-// run rebased its PR branch, so origin's tip is patch-equivalent to local
-// history but not an ancestor. The pre-flight recovers it with a plain push
+// run rebased its PR branch, so origin's tip carries nothing the local tree
+// lacks but is not an ancestor. The pre-flight recovers it with a plain push
 // and the stages run instead of the run ending branch_forked.
 func TestScheduler_BranchForkPreflight_RecoversSelfFork(t *testing.T) {
 	const branch = "fix/2669-rebased"

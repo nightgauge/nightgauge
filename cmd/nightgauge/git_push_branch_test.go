@@ -22,23 +22,29 @@ func pushBranchFixture(t *testing.T, branch string) (root, work, remote string) 
 	gittest.Run(t, root, "init", "--bare", "-b", "main", origin)
 	work = filepath.Join(root, "work")
 	gittest.Run(t, root, "clone", origin, work)
-	commit := func(dir, name, msg string) {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(msg+"\n"), 0o644); err != nil {
+	write := func(dir, name, content, msg string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		gittest.Run(t, dir, "add", "-A")
 		gittest.Run(t, dir, "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-m", msg)
 	}
+	commit := func(dir, name, msg string) { write(dir, name, msg+"\n", msg) }
+	// The #2669 shape: C1 and the base advance edit the same CHANGELOG a few
+	// lines apart, so the rebase rewrites C1's hunk context and its patch-id.
+	const changelog = "# Changelog\n\n## [Unreleased]\n\n- old a\n- old b\n"
 	commit(work, "README.md", "base")
+	write(work, "CHANGELOG.md", changelog, "changelog")
 	gittest.Run(t, work, "push", "origin", "main")
 	gittest.Run(t, work, "checkout", "-b", branch)
-	commit(work, "impl.go", "C1")
+	write(work, "CHANGELOG.md", strings.Replace(changelog, "- old a\n", "- old a\n- C1 entry\n", 1), "C1")
 	gittest.Run(t, work, "push", "origin", branch)
 	remote = gittest.Run(t, work, "rev-parse", "HEAD")
 
 	other := filepath.Join(root, "other")
 	gittest.Run(t, root, "clone", origin, other)
-	commit(other, "main.go", "main advances")
+	write(other, "CHANGELOG.md",
+		strings.Replace(changelog, "## [Unreleased]\n\n", "## [Unreleased]\n\n- main entry\n", 1), "main advances")
 	gittest.Run(t, other, "push", "origin", "main")
 
 	gittest.Run(t, work, "fetch", "origin", "main")
@@ -105,5 +111,20 @@ func TestRunPushBranch_PlainPushAndFailure(t *testing.T) {
 	gittest.Run(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
 	if code := runPushBranch(context.Background(), work, false, &out, &errb); code != pushBranchFailed {
 		t.Errorf("unreachable origin exit %d, want 1", code)
+	}
+}
+
+func TestRunPushBranch_JSONRecoveryKeepsMarkerOnStderr(t *testing.T) {
+	_, work, _ := pushBranchFixture(t, "fix/2699-json")
+	var out, errb bytes.Buffer
+	if code := runPushBranch(context.Background(), work, true, &out, &errb); code != pushBranchOK {
+		t.Fatalf("exit %d; stderr=%s", code, errb.String())
+	}
+	var res pushBranchResult
+	if err := json.Unmarshal(out.Bytes(), &res); err != nil || res.Outcome != "recovered" {
+		t.Fatalf("stdout = %q (%v), want pure JSON with outcome recovered", out.String(), err)
+	}
+	if !strings.Contains(errb.String(), "[self-fork-recovered]") {
+		t.Errorf("stderr = %q, want the [self-fork-recovered] marker", errb.String())
 	}
 }

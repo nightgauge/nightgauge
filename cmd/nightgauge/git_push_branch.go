@@ -35,8 +35,8 @@ type pushBranchResult struct {
 
 // gitPushBranchCmd pushes the current branch to origin without ever forcing.
 // A non-fast-forward rejection is reconciled with ReconcileSelfFork: a
-// self-fork (a rebased PR branch whose origin commits all have local patch
-// equivalents) is recovered with a commit descending from origin's tip and
+// self-fork (a rebased PR branch whose origin copy carries no change the local
+// tree lacks) is recovered with a commit descending from origin's tip and
 // pushed plainly; a genuine fork prints [branch-forked] and exits 3.
 func gitPushBranchCmd() *cobra.Command {
 	var outputJSON bool
@@ -97,14 +97,21 @@ func runPushBranch(ctx context.Context, dir string, outputJSON bool, stdout, std
 	case orchestrator.SelfForkRecovered:
 		if again, _ := pushPlain(ctx, dir, branch); again != "" {
 			fmt.Fprint(stderr, again)
+			if err := orchestrator.RollbackSelfFork(ctx, dir, rec); err != nil {
+				fmt.Fprintf(stderr, "push-branch: could not roll back recovery commit: %v\n", err)
+			}
 			res.Outcome, res.Detail = "failed", strings.TrimSpace(again)
 			return emit(res, pushBranchFailed)
 		}
 		res.Outcome, res.NewSHA = "recovered", rec.NewSHA
-		if !outputJSON {
-			fmt.Fprintf(stdout, "[self-fork-recovered] origin/%s %s..%s\n",
-				branch, shortCommit(rec.RemoteSHA), shortCommit(rec.NewSHA))
+		// The marker always prints; under --json it goes to stderr so stdout
+		// stays pure JSON.
+		marker := stdout
+		if outputJSON {
+			marker = stderr
 		}
+		fmt.Fprintf(marker, "[self-fork-recovered] origin/%s %s..%s\n",
+			branch, shortCommit(rec.RemoteSHA), shortCommit(rec.NewSHA))
 		return emit(res, pushBranchOK)
 	case orchestrator.SelfForkForked:
 		fmt.Fprintf(stderr, "[branch-forked] PUSH REJECTED: %s\n", rec.Detail)

@@ -301,7 +301,7 @@ push, and wait for CI to re-run.
 printf '<!-- phase:start name="freshness-check" index=7 total=13 stage="pr-merge" -->\n'
 ```
 
-**PURPOSE**: Proactively rebase the feature branch onto the latest base branch
+**PURPOSE**: Proactively merge the latest base branch into the feature branch
 BEFORE attempting merge. This prevents the reactive conflict resolution in Phase
 6 from ever being needed in most cases. Critical for epic batch processing where
 concurrent sub-issues merge and shift main/epic branch forward.
@@ -310,7 +310,7 @@ concurrent sub-issues merge and shift main/epic branch forward.
 
 If `FRESHNESS_CHECK_FAILED=true`, proceed to Phase 6 anyway — the reactive
 conflict resolution (Step 6.1.5) may still succeed with a different strategy.
-If the rebase succeeded and pushed, CI re-runs on the new head. Do not wait
+If the merge succeeded and pushed, CI re-runs on the new head. Do not wait
 for it here: hand back to the deterministic merge path, which waits for CI and
 merges (#2504):
 
@@ -320,7 +320,7 @@ if [ "$BEHIND_COUNT" -gt 0 ] && [ "$FRESHNESS_CHECK_FAILED" != "true" ] && [ "$C
   jq -n --argjson pr "$PR_NUMBER" --arg sha "$(git rev-parse HEAD)" \
     '{result: "fix-pushed", pr_number: $pr, head_sha: $sha, attempt: 0}' \
     | nightgauge layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
-  echo "Branch rebased and pushed — handing back to the deterministic merge path."
+  echo "Base merged and pushed — handing back to the deterministic merge path."
   exit 0
 fi
 ```

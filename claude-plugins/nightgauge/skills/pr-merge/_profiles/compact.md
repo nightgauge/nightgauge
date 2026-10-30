@@ -147,10 +147,10 @@ non-blocking (skip prompts under `--auto-fix`). Apply fixes, commit as
 printf '<!-- phase:start name="freshness-check" index=7 total=13 stage="pr-merge" -->\n'
 ```
 
-Rebase onto the latest base branch BEFORE attempting merge, so the reactive
+Merge the latest base branch in BEFORE attempting merge, so the reactive
 conflict resolution in Phase 6 is rarely needed. **Read
 `skills/_shared/FRESHNESS_CHECK.md` now and follow it before continuing this
-phase.** If the rebase pushed, do not wait for CI: write the
+phase.** If the merge pushed, do not wait for CI: write the
 `pr-merge-fix-{N}.json` marker and exit 0 so the deterministic path waits and
 merges (`skills/_shared/AUTO_FIX_LOOP.md` Step 5, #2504).
 

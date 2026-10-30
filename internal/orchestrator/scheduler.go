@@ -6118,8 +6118,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if branch := resolveFeatureBranch(runtime, workspaceRoot, item.Number); branch != "" {
 				fork := CheckBranchFork(ctx, stageWorkspace(runtime, workspaceRoot), branch)
 				if fork.Forked() {
-					// A self-fork (#2699) — origin's commits all have patch
-					// equivalents locally — is recovered by a commit descending
+					// A self-fork (#2699) — origin carries no change the local
+					// tree lacks — is recovered by a commit descending
 					// from origin's tip and a plain push. A genuine fork falls
 					// through to the block below unchanged.
 					ws := stageWorkspace(runtime, workspaceRoot)
@@ -6128,7 +6128,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 							log.Printf("#%d: [self-fork-recovered] %s", item.Number, rec.Detail)
 							fork = CheckBranchFork(ctx, ws, branch)
 						} else {
+							// Put the branch back so the block below pins the tip
+							// the stage produced, not the unpushed recovery commit.
 							log.Printf("#%d: self-fork recovery push failed: %v", item.Number, err)
+							if rbErr := RollbackSelfFork(ctx, ws, rec); rbErr != nil {
+								log.Printf("#%d: self-fork rollback failed: %v", item.Number, rbErr)
+							}
 						}
 					}
 				}

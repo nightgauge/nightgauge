@@ -6167,8 +6167,8 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// — the issue is deliberately left where it is so nothing re-dispatches
 		// it. The Action Center card raised by the scheduler's terminal block is the
 		// way back in: resolving it clears the failure cooldown and requeues.
-		// A self-fork (a rebased PR branch whose origin commits all have local
-		// patch equivalents, #2699) is recovered before it reaches here, and a
+		// A self-fork (a rebased PR branch whose origin copy carries no change
+		// the local tree lacks, #2699) is recovered before it reaches here, and a
 		// genuine fork arrives with its tip pinned at refs/nightgauge/stranded/<N>.
 		if terminalFailureKind == TerminalKindBranchForked {
 			detail := failureDetail

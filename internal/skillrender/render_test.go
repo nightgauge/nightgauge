@@ -1236,6 +1236,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // of polling CI itself.
 // All four captures were re-pinned for #366 by the same method: every changed
 // line is the removed batch phase, its include and the renumbered markers.
+// The pr-merge capture was re-pinned for #2699: every changed line is the
+// shared freshness check moving from rebase + force-push to merging the base.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which
