@@ -6978,7 +6978,7 @@ function runStageSkillHeadlessImpl(
           : {
               name: "stall-idle",
               limit: msLimit(stallKillMs),
-              derivation: `idle-kill threshold (source: ${thresholdSource}) — no subprocess output`,
+              derivation: `idle-kill threshold (source: ${thresholdSource}) — no output or live work within its ceiling`,
             };
       const killEvent: StallEvent = {
         timestamp: new Date().toISOString(),
