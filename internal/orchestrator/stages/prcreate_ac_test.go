@@ -107,8 +107,8 @@ func githubCloses(body string, n int) bool {
 			if (start > 0 && isWord(lower[start-1])) || (end < len(lower) && isWord(lower[end])) {
 				continue
 			}
-			rest := strings.TrimLeft(lower[end:], " \t")
-			rest = strings.TrimLeft(strings.TrimPrefix(rest, ":"), " \t")
+			rest := strings.TrimLeft(lower[end:], " \t\r\n")
+			rest = strings.TrimLeft(strings.TrimPrefix(rest, ":"), " \t\r\n")
 			if strings.HasPrefix(rest, "http://") || strings.HasPrefix(rest, "https://") {
 				// https://github.com/owner/repo/issues/N; GitHub acts on no other host.
 				parts := strings.SplitN(rest[strings.Index(rest, "//")+2:], "/", 5)

@@ -130,5 +130,17 @@
     "repo": "",
     "n": 7,
     "closes": false
+  },
+  {
+    "body": "Closes\n#7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "Fixes:\r\n  https://github.com/o/r/issues/7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
   }
 ]

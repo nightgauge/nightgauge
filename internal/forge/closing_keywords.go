@@ -16,7 +16,7 @@ import (
 // keeps a TypeScript copy of the same grammar.
 // Group 1 is the reference text; group 2 or 5 is the "owner/repo" it names
 // (empty for a bare `#N`); group 3 or 6 is the issue number; group 4 is a URL's host.
-var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*` +
+var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*` +
 	`(([\w.-]+/[\w.-]+)?#(\d+)|https?://([^\s/]+)/([\w.-]+/[\w.-]+)/issues/(\d+))\b`)
 
 // ClosingRef is one closing-keyword reference in a body. Ref is the text after

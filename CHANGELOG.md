@@ -16,8 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
-- A closing keyword followed by a github.com issue URL (`Closes https://github.com/o/r/issues/N`)
-  now counts as closing the issue, as it does on GitHub; a URL on any other host does not. The pr-merge acceptance backstop
+- A closing keyword followed by a github.com issue URL
+  (`Closes https://github.com/o/r/issues/N`) now counts as closing the issue, as it does on
+  GitHub; a URL on any other host does not. The pr-merge acceptance backstop
   rewrites it to `Refs` on a partial delivery, the post-merge hook and
   `nightgauge issue close --pr` no longer report such a merge as partial, and the stranded
   follow-up sweep no longer files a tracking issue for a PR that closes an open issue by

@@ -172,6 +172,7 @@ func (p *StrandedFollowUpPRs) Evaluate(ctx context.Context, in Input) ([]attenti
 func repoClosingRefs(body, repo string) []forge.ClosingRef {
 	var out []forge.ClosingRef
 	for _, r := range forge.ClosingRefs(body) {
+		// Targets supplies the repository and host checks; the number is r's own.
 		if r.Targets(repo, r.Number) {
 			out = append(out, r)
 		}
