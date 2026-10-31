@@ -147,6 +147,7 @@ func writeExtensionsIndexRaw(t *testing.T, home, content string) string {
 func isolateCascade(t *testing.T) {
 	t.Helper()
 	t.Setenv("NIGHTGAUGE_BIN", "")
+	t.Setenv(devRepoBinEnv, "")
 	// PATH is narrowed to just git's directory (never "nightgauge" itself) —
 	// both ResolveBinary's own git-based cascade steps and this test file's
 	// git helper calls need `git` resolvable, while step 1 (PATH lookup of
@@ -212,6 +213,7 @@ func TestResolveBinary_RepoBin(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	writeFakeBinary(t, filepath.Join(repo, "bin", "nightgauge"))
+	markCoreCheckout(t, repo)
 	t.Chdir(repo)
 
 	resolved := ResolveBinary()
@@ -238,6 +240,7 @@ func TestResolveBinary_CanonicalRepoBin(t *testing.T) {
 	}
 
 	writeFakeBinary(t, filepath.Join(repo, "bin", "nightgauge"))
+	markCoreCheckout(t, repo)
 	t.Chdir(worktreeDir)
 
 	resolved := ResolveBinary()
@@ -675,6 +678,7 @@ func TestResolveBinary_GuardShParity(t *testing.T) {
 				runGit(t, repo, "init")
 				fake := filepath.Join(repo, "bin", "nightgauge")
 				writeFakeBinary(t, fake)
+				markCoreCheckout(t, repo)
 				t.Chdir(repo)
 				return fake
 			},
@@ -694,6 +698,7 @@ func TestResolveBinary_GuardShParity(t *testing.T) {
 				}
 				fake := filepath.Join(repo, "bin", "nightgauge")
 				writeFakeBinary(t, fake)
+				markCoreCheckout(t, repo)
 				t.Chdir(worktreeDir)
 				return fake
 			},
@@ -1430,6 +1435,7 @@ func precedenceCases() []precedenceCase {
 				repo := newGitRepo(t)
 				repoBin := filepath.Join(repo, "bin", "nightgauge")
 				writeFakeBinary(t, repoBin)
+				markCoreCheckout(t, repo)
 				t.Chdir(repo)
 				pathDir := realPath(t, t.TempDir())
 				pathBin := filepath.Join(pathDir, "nightgauge")
@@ -1448,6 +1454,7 @@ func precedenceCases() []precedenceCase {
 				repo := newGitRepo(t)
 				canonicalBin := filepath.Join(repo, "bin", "nightgauge")
 				writeFakeBinary(t, canonicalBin)
+				markCoreCheckout(t, repo)
 				worktreeDir := filepath.Join(realPath(t, t.TempDir()), "worktree")
 				if out, err := gittest.Command(repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
 					t.Skipf("git worktree add failed (environment limitation): %v: %s", err, out)
@@ -1456,6 +1463,7 @@ func precedenceCases() []precedenceCase {
 				// win over the canonical repo's copy at step 3.
 				worktreeBin := filepath.Join(worktreeDir, "bin", "nightgauge")
 				writeFakeBinary(t, worktreeBin)
+				markCoreCheckout(t, worktreeDir)
 				t.Chdir(worktreeDir)
 				return worktreeBin, canonicalBin
 			},
@@ -1473,6 +1481,7 @@ func precedenceCases() []precedenceCase {
 				repo := newGitRepo(t)
 				canonicalBin := filepath.Join(repo, "bin", "nightgauge")
 				writeFakeBinary(t, canonicalBin)
+				markCoreCheckout(t, repo)
 				worktreeDir := filepath.Join(realPath(t, t.TempDir()), "worktree")
 				if out, err := gittest.Command(repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
 					t.Skipf("git worktree add failed (environment limitation): %v: %s", err, out)
@@ -1517,6 +1526,205 @@ func precedenceCases() []precedenceCase {
 				return envBin, goBin
 			},
 		},
+	}
+}
+
+// markCoreCheckout makes dir pass repoBinTrusted and turns the setting on.
+func markCoreCheckout(t *testing.T, dir string) {
+	t.Helper()
+	writeCoreGoMod(t, dir, coreModuleLine)
+	// A worktree shares its origin with the canonical repo, set once there.
+	if out, err := gittest.Command(dir, "config", "--get", "remote.origin.url").Output(); err != nil || len(out) == 0 {
+		runGit(t, dir, "remote", "add", "origin", "git@github.com:nightgauge/nightgauge.git")
+	}
+	t.Setenv(devRepoBinEnv, "1")
+}
+
+func writeCoreGoMod(t *testing.T, dir, moduleLine string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(moduleLine+"\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRepoBinGate pins the #2758 trust rule through ResolveBinary and guard.sh.
+// A bundle is installed in every case, so a rejection resolves to it and an
+// acceptance resolves to the repository binary.
+func TestRepoBinGate(t *testing.T) {
+	if bashBinPath == "" || gitBinPath == "" {
+		t.Skip("bash and git required")
+	}
+	guardPath := guardShPath(t)
+
+	cases := []struct {
+		name    string
+		setting string
+		module  string
+		origin  string
+		trusted bool
+	}{
+		{"ssh_scp_origin", "1", coreModuleLine, "git@github.com:nightgauge/nightgauge.git", true},
+		{"https_origin_no_suffix", "1", coreModuleLine, "https://github.com/nightgauge/nightgauge", true},
+		{"ssh_url_origin", "1", coreModuleLine, "ssh://git@github.com/nightgauge/nightgauge.git", true},
+		{"setting_off", "", coreModuleLine, "git@github.com:nightgauge/nightgauge.git", false},
+		{"setting_not_exactly_1", "true", coreModuleLine, "git@github.com:nightgauge/nightgauge.git", false},
+		{"wrong_module", "1", "module github.com/nightgauge/nightgauge-fork", "git@github.com:nightgauge/nightgauge.git", false},
+		{"lookalike_origin", "1", coreModuleLine, "https://evil.example/github.com/nightgauge/nightgauge", false},
+		{"fork_origin", "1", coreModuleLine, "git@github.com:someone/nightgauge.git", false},
+		{"double_git_suffix", "1", coreModuleLine, "git@github.com:nightgauge/nightgauge.git.git", false},
+		{"no_origin", "1", coreModuleLine, "", false},
+	}
+	for _, tc := range cases {
+		for _, canonical := range []bool{false, true} {
+			name := tc.name + "/repo"
+			if canonical {
+				name = tc.name + "/canonical"
+			}
+			t.Run(name, func(t *testing.T) {
+				isolateCascade(t)
+				bundle := installBundle(t, os.Getenv("HOME"), bundleDirPrefix+"0.1.0", true)
+				repo := realPath(t, t.TempDir())
+				runGit(t, repo, "init")
+				runGit(t, repo, "config", "user.email", "test@example.com")
+				runGit(t, repo, "config", "user.name", "Test")
+				runGit(t, repo, "commit", "--allow-empty", "-m", "init")
+				if tc.origin != "" {
+					runGit(t, repo, "remote", "add", "origin", tc.origin)
+				}
+				writeCoreGoMod(t, repo, tc.module)
+				repoBin := filepath.Join(repo, "bin", "nightgauge")
+				writeFakeBinary(t, repoBin)
+				t.Setenv(devRepoBinEnv, tc.setting)
+				cwd := repo
+				if canonical {
+					cwd = filepath.Join(realPath(t, t.TempDir()), "worktree")
+					if out, err := gittest.Command(repo, "worktree", "add", "--detach", cwd).CombinedOutput(); err != nil {
+						t.Skipf("git worktree add failed (environment limitation): %v: %s", err, out)
+					}
+				}
+				t.Chdir(cwd)
+
+				want := bundle
+				if tc.trusted {
+					want = repoBin
+				}
+				if got := ResolveBinary().Path; got != want {
+					t.Errorf("ResolveBinary = %q, want %q", got, want)
+				}
+				if got := guardShResolve(t, guardPath); got != want {
+					t.Errorf("guard.sh = %q, want %q", got, want)
+				}
+			})
+		}
+	}
+}
+
+// markerEnv is a minimal hook environment. guard.sh makes its source-time
+// `forge auth token` call whenever a binary resolves.
+func markerEnv(marker string) []string {
+	env := []string{"LC_ALL=C", "NG_MARKER=" + marker, "HOME=" + os.Getenv("HOME"), "PATH=" + os.Getenv("PATH"),
+		"NIGHTGAUGE_HOOK_LOG=" + marker + ".log"}
+	if v := os.Getenv(devRepoBinEnv); v != "" {
+		env = append(env, devRepoBinEnv+"="+v)
+	}
+	return env
+}
+
+// TestForeignRepoBinaryNeverExecuted is the #2758 attack: a repository plants
+// an executable bin/nightgauge, and nothing on PATH or in HOME competes with
+// it. The positive-control arm proves the marker probe is live, so the
+// negative arms cannot pass by the planted file simply never being reachable.
+func TestForeignRepoBinaryNeverExecuted(t *testing.T) {
+	if bashBinPath == "" || gitBinPath == "" {
+		t.Skip("bash and git required")
+	}
+	guardPath := guardShPath(t)
+	prePush := filepath.Join(filepath.Dir(guardPath), "..", "pre-push-validate.sh")
+
+	planted := func(t *testing.T) (repo, marker string) {
+		t.Helper()
+		isolateCascade(t)
+		repo = realPath(t, t.TempDir())
+		runGit(t, repo, "init", "-b", "feat/1-attack")
+		runGit(t, repo, "config", "user.email", "test@example.com")
+		runGit(t, repo, "config", "user.name", "Test")
+		runGit(t, repo, "commit", "--allow-empty", "-m", "init")
+		bin := filepath.Join(repo, "bin", "nightgauge")
+		if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\necho x > \"$NG_MARKER\"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return repo, filepath.Join(t.TempDir(), "executed")
+	}
+	entrypoints := []struct {
+		name   string
+		script []string
+	}{
+		{"guard", []string{"-c", `source "$1"; :`, "guard.sh", guardPath}},
+		{"pre_push", []string{prePush}},
+	}
+	run := func(t *testing.T, dir, marker string, script []string) bool {
+		t.Helper()
+		cmd := exec.Command(bashBinPath, script...)
+		cmd.Dir, cmd.Env = dir, markerEnv(marker)
+		// An exit status is not the assertion: the marker is.
+		_ = cmd.Run()
+		_, err := os.Stat(marker)
+		return err == nil
+	}
+
+	for _, ep := range entrypoints {
+		t.Run(ep.name+"/foreign_repo_setting_off", func(t *testing.T) {
+			repo, marker := planted(t)
+			if run(t, repo, marker, ep.script) {
+				t.Error("planted bin/nightgauge was executed")
+			}
+		})
+		t.Run(ep.name+"/foreign_repo_setting_on", func(t *testing.T) {
+			repo, marker := planted(t)
+			t.Setenv(devRepoBinEnv, "1")
+			if run(t, repo, marker, ep.script) {
+				t.Error("planted bin/nightgauge was executed in an unverified repo")
+			}
+		})
+		t.Run(ep.name+"/canonical_from_worktree", func(t *testing.T) {
+			repo, marker := planted(t)
+			worktree := filepath.Join(realPath(t, t.TempDir()), "worktree")
+			if out, err := gittest.Command(repo, "worktree", "add", "-b", "feat/2-wt", worktree).CombinedOutput(); err != nil {
+				t.Skipf("git worktree add failed (environment limitation): %v: %s", err, out)
+			}
+			if run(t, worktree, marker, ep.script) {
+				t.Error("canonical repo's planted bin/nightgauge was executed")
+			}
+		})
+		t.Run(ep.name+"/positive_control_verified_checkout", func(t *testing.T) {
+			repo, marker := planted(t)
+			markCoreCheckout(t, repo)
+			if !run(t, repo, marker, ep.script) {
+				t.Error("verified checkout's binary did not run: the marker probe is dead")
+			}
+		})
+	}
+}
+
+// TestPrePushHookBlockMatchesReferenceCopy keeps the installed hook, which only
+// exists as a Go string, on the gated block the tests above execute.
+func TestPrePushHookBlockMatchesReferenceCopy(t *testing.T) {
+	hooksDir := filepath.Join(filepath.Dir(guardShPath(t)), "..")
+	reference, err := os.ReadFile(filepath.Join(hooksDir, "pre-push-validate.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := string(reference)
+	block := ref[strings.Index(ref, "BINARY=$(command -v"):strings.Index(ref, "exec \"$BINARY\"")]
+	installed, err := os.ReadFile(filepath.Join(hooksDir, "..", "..", "..", "cmd", "nightgauge", "cmd_pre_push.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(installed), block) || !strings.Contains(block, devRepoBinEnv) {
+		t.Errorf("cmd_pre_push.go does not carry the gated block:\n%s", block)
 	}
 }
 

@@ -120,6 +120,19 @@ claude -p "Show me the /nightgauge:issue-pickup help"
 > **Note**: Hooks are automatically loaded when the plugin is installed. No
 > separate hook installation is required.
 
+## Binary Resolution
+
+Hooks and skills resolve `nightgauge` in this order: `NIGHTGAUGE_BIN`, `PATH`,
+the VS Code extension bundle (hooks only; skill hosts export `NIGHTGAUGE_BIN`
+instead), then `~/go/bin`.
+
+A repository's `bin/nightgauge` is never run by default, because this plugin
+loads in every repository. Maintainers opt in with `NIGHTGAUGE_DEV_REPO_BIN=1`,
+set in the environment and not in repository config. It applies only in a
+checkout whose `go.mod` declares `github.com/nightgauge/nightgauge` and whose
+`origin` is that exact repository, and it places the repository build ahead of
+the bundle. Forks do not qualify: use `NIGHTGAUGE_BIN=$PWD/bin/nightgauge`.
+
 ## Pipeline Commands
 
 | Command                        | Description                                              |

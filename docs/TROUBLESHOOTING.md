@@ -62,6 +62,13 @@ Start with `nightgauge doctor`. Every problem it reports carries a code
 
 ## Command Execution Issues
 
+### Hooks stopped using my local `bin/nightgauge`
+
+A repository build needs `NIGHTGAUGE_DEV_REPO_BIN=1` in the environment and a
+checkout whose `go.mod` and `origin` identify the Nightgauge core repository.
+`nightgauge doctor` names the step that resolved the binary. On a fork, set
+`NIGHTGAUGE_BIN=$PWD/bin/nightgauge`.
+
 ### /smart-setup doesn't generate files
 
 **Symptoms:**

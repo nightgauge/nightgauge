@@ -10,19 +10,22 @@
 #      Honored first so resolution is identical to the skill cascade (#4029).
 #   1. PATH lookup (`command -v nightgauge`)
 #   2. $REPO_ROOT/bin/nightgauge (same-repo build, where REPO_ROOT comes
-#      from `git rev-parse --show-toplevel`)
+#      from `git rev-parse --show-toplevel`). Development only, see below.
 #   3. $CANONICAL_REPO/bin/nightgauge — the canonical repo when invoked
 #      from inside a git worktree (`git rev-parse --git-common-dir` → `.git`
-#      of the parent worktree). Pre-#3234 every concurrent-mode pipeline run
-#      that triggered the Stop hook hard-failed here because worktrees do not
-#      inherit `bin/` build artifacts. The agent then went silent for 100+
-#      minutes until skillRunner stall-killed the stage.
+#      of the parent worktree). Development only, see below.
 #   4. ~/.vscode/extensions/nightgauge.nightgauge-[0-9]*/dist/bin/nightgauge
 #      — the binary that ships with the VSCode extension. Every user of the
 #      extension has a current copy here, so this is the most reliable
 #      machine-local fallback. When several bundles are on disk, the one VSCode
 #      RECORDS as installed wins (#356) — see the selection rule below.
 #   5. ~/go/bin/nightgauge — `go install` default path, common dev setup.
+#
+# Steps 2-3 gate (#2758): this plugin is user-scoped, so any repository can
+# supply a bin/nightgauge, and the `forge auth token` call below would run it
+# at source time with credentials in reach. Both steps therefore require
+# NIGHTGAUGE_DEV_REPO_BIN=1, set outside the repository and tested before any
+# git command, AND a verified core checkout (_ng_repo_bin_trusted).
 #
 # Step 4 selection authority (#356): VSCode keeps superseded extension
 # directories on disk until it restarts, so step 4's glob routinely matches
@@ -69,8 +72,8 @@
 # "no fork" was the expensive option by two orders of magnitude.
 #
 # Sync contract with skills/_shared/PREFLIGHT.md (#3262 → #4029): the SHARED
-# resolution order ($NIGHTGAUGE_BIN → PATH → repo → canonical → ~/go/bin)
-# stays mirrored in both. This file INTENTIONALLY diverges by keeping step 4
+# resolution order ($NIGHTGAUGE_BIN → PATH → gated repo → gated canonical →
+# ~/go/bin) stays mirrored in both. This file INTENTIONALLY diverges by keeping step 4
 # (the ~/.vscode/extensions glob): guard.sh is Claude-Code-only and must serve
 # the standalone-terminal-Claude case where no host exports $NIGHTGAUGE_BIN.
 # Skills must stay portable Markdown (Claude/Codex/Cursor/Gemini) and therefore
@@ -244,28 +247,34 @@ if [ -z "$NIGHTGAUGE_BINARY" ]; then
   NIGHTGAUGE_BINARY="$(command -v nightgauge 2>/dev/null || true)"
 fi
 
-# 2. Same-repo build (or worktree's own bin if anyone bothered to drop a binary
-#    there, which is unusual but harmless to check).
-if [ -z "$NIGHTGAUGE_BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  if [ -x "$REPO_ROOT/bin/nightgauge" ]; then
-    NIGHTGAUGE_BINARY="$REPO_ROOT/bin/nightgauge"
-  fi
-fi
+# _ng_repo_bin_trusted succeeds when $1 is a verified Nightgauge core checkout
+# holding an executable bin/nightgauge. Same rule as repoBinTrusted in
+# internal/doctor/binary_resolve.go (#2758); callers test the setting first.
+_ng_repo_bin_trusted() {
+  local root="$1" origin
+  [ -n "$root" ] && [ -x "$root/bin/nightgauge" ] && [ ! -d "$root/bin/nightgauge" ] || return 1
+  grep -qx 'module github.com/nightgauge/nightgauge' "$root/go.mod" 2>/dev/null || return 1
+  origin="$(git -C "$root" config --get remote.origin.url 2>/dev/null)" || return 1
+  case "${origin%.git}" in
+    git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+      ssh://git@github.com/nightgauge/nightgauge) return 0 ;;
+  esac
+  return 1
+}
 
-# 3. Canonical repo when invoked from a worktree.
-#    `git rev-parse --git-common-dir` returns the .git of the canonical repo
-#    when called from inside a worktree (and the worktree's own .git when not
-#    in one — same as --show-toplevel for that case, which we already
-#    handled).
-if [ -z "$NIGHTGAUGE_BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    # GIT_COMMON_DIR is the `.git` directory; its parent is the canonical
-    # working tree.
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    if [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ]; then
-      NIGHTGAUGE_BINARY="$CANONICAL_REPO/bin/nightgauge"
+# 2-3. Same-repo build, then the canonical repo when invoked from a worktree
+#      (`git rev-parse --git-common-dir` returns its .git). Development only.
+if [ -z "$NIGHTGAUGE_BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if _ng_repo_bin_trusted "$REPO_ROOT"; then
+    NIGHTGAUGE_BINARY="$REPO_ROOT/bin/nightgauge"
+  else
+    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+    if [ -n "$GIT_COMMON_DIR" ]; then
+      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
+      if _ng_repo_bin_trusted "$CANONICAL_REPO"; then
+        NIGHTGAUGE_BINARY="$CANONICAL_REPO/bin/nightgauge"
+      fi
     fi
   fi
 fi

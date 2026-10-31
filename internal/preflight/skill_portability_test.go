@@ -71,6 +71,7 @@ name: feature-dev
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+[ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ] || true
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
@@ -269,6 +270,7 @@ func TestSkillPortability_FullCascadePasses(t *testing.T) {
 	writeSkillFile(t, root, "nightgauge-feature-dev/_includes/gate.md", "```bash"+`
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+[ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ] || true
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
@@ -284,6 +286,28 @@ GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
 	}
 }
 
+// TestSkillPortability_FlagsUngatedRepoRungs pins #2758: every rung present but
+// no NIGHTGAUGE_DEV_REPO_BIN gate is the attack shape, not a complete cascade.
+func TestSkillPortability_FlagsUngatedRepoRungs(t *testing.T) {
+	root := t.TempDir()
+	writeSkillFile(t, root, "nightgauge-feature-dev/_includes/gate.md", "```bash"+`
+BINARY="${NIGHTGAUGE_BIN:-}"
+[ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+[ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
+`+"```"+`
+`)
+
+	res, err := RunSkillPortabilityCheck(context.Background(), SkillPortabilityOptions{Root: root})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Findings) != 1 || !strings.Contains(res.Findings[0].Match, "dev repo bin gate") {
+		t.Fatalf("expected one dev-repo-bin-gate finding, got %+v", res.Findings)
+	}
+}
+
 // TestSkillPortability_FullCascadeCannotHideTruncatedSibling is derived from
 // post-merge.md's #365 defect: several complete resolver blocks made a later
 // truncated block pass the old file-level `go/bin/nightgauge` check.
@@ -294,6 +318,7 @@ func TestSkillPortability_FullCascadeCannotHideTruncatedSibling(t *testing.T) {
 `+"```bash"+`
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+[ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ] || true
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 [ -z "$BINARY" ] && [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
@@ -320,10 +345,10 @@ BINARY="${NIGHTGAUGE_BIN:-}"
 	if f.Check != CheckTruncatedBinaryCascade {
 		t.Errorf("check = %q, want %q", f.Check, CheckTruncatedBinaryCascade)
 	}
-	if f.Line != 15 {
-		t.Errorf("line = %d, want truncated cascade start at line 15", f.Line)
+	if f.Line != 16 {
+		t.Errorf("line = %d, want truncated cascade start at line 16", f.Line)
 	}
-	for _, want := range []string{"bash block line 14", "repo bin", "canonical repo bin"} {
+	for _, want := range []string{"bash block line 15", "repo bin", "canonical repo bin", "dev repo bin gate"} {
 		if !strings.Contains(f.Match, want) {
 			t.Errorf("finding must name offending block/missing rung %q, got %q", want, f.Match)
 		}

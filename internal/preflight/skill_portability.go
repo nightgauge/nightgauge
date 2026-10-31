@@ -87,7 +87,7 @@ var vscodeExtensionPathRE = regexp.MustCompile(`(?i)\.vscode/extensions/nightgau
 var stopHookRE = regexp.MustCompile(`^hooks:\s*$`)
 
 // Cascade checks are block-scoped: a complete cascade elsewhere in the same
-// Markdown file must not hide a truncated sibling (#365). The five rungs are
+// Markdown file must not hide a truncated sibling (#365). The six rungs are
 // the provider-neutral discovery contract from PREFLIGHT.md.
 var (
 	cascadeStartRE  = regexp.MustCompile(`BINARY="\$\{NIGHTGAUGE_BIN`)
@@ -100,6 +100,7 @@ var (
 		{name: "PATH", pattern: regexp.MustCompile(`command -v nightgauge`)},
 		{name: "repo bin", pattern: regexp.MustCompile(`git rev-parse --show-toplevel`)},
 		{name: "canonical repo bin", pattern: regexp.MustCompile(`git rev-parse --git-common-dir`)},
+		{name: "dev repo bin gate", pattern: regexp.MustCompile(`NIGHTGAUGE_DEV_REPO_BIN:-`)},
 		{name: "go bin", pattern: regexp.MustCompile(`go/bin/nightgauge`)},
 	}
 )

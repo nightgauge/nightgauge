@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -19,6 +20,24 @@ const (
 	StepVSCodeExtension  ResolveBinaryStep = "vscode_extension"
 	StepGoBin            ResolveBinaryStep = "go_bin"
 )
+
+// devRepoBinEnv is the development setting that opens the two repository
+// steps. It is environment-only on purpose: .nightgauge/config.yaml is
+// repository content, so a hostile repository could turn its own gate on
+// (#2758).
+const devRepoBinEnv = "NIGHTGAUGE_DEV_REPO_BIN"
+
+// coreModuleLine is the go.mod line of a Nightgauge core checkout.
+const coreModuleLine = "module github.com/nightgauge/nightgauge"
+
+// coreOriginURLs are the accepted remote.origin.url values, after removing one
+// trailing ".git". Exact matches: a substring test would accept
+// https://evil.example/github.com/nightgauge/nightgauge.
+var coreOriginURLs = []string{
+	"git@github.com:nightgauge/nightgauge",
+	"https://github.com/nightgauge/nightgauge",
+	"ssh://git@github.com/nightgauge/nightgauge",
+}
 
 // bundleDirPrefix is the VS Code extension directory prefix for this
 // extension. A bundle directory is `<prefix><version>[-<targetPlatform>]`,
@@ -54,9 +73,9 @@ type ResolvedBinary struct {
 	Step ResolveBinaryStep // empty when unresolved
 	// Bundles is the step-4 VSCode-extension inventory. It is populated on
 	// EVERY resolve, not just when step 4 wins, because `nightgauge doctor`
-	// reports it either way: inside a nightgauge checkout the hooks use
-	// <repo>/bin/nightgauge and the installed bundles are invisible, which is
-	// exactly the cwd-dependence that made #356 impossible to notice.
+	// reports it either way: when an earlier step wins the installed bundles
+	// are invisible, which is exactly the cwd-dependence that made #356
+	// impossible to notice.
 	Bundles VSCodeBundleScan
 }
 
@@ -305,8 +324,10 @@ func isPlainDirName(name string) bool {
 //
 //  0. $NIGHTGAUGE_BIN
 //  1. PATH (exec.LookPath)
-//  2. <repo-root>/bin/nightgauge (git rev-parse --show-toplevel)
-//  3. <canonical-repo-root>/bin/nightgauge (git rev-parse --git-common-dir)
+//  2. <repo-root>/bin/nightgauge (git rev-parse --show-toplevel), only when
+//     repoBinTrusted accepts the root
+//  3. <canonical-repo-root>/bin/nightgauge (git rev-parse --git-common-dir),
+//     under the same gate
 //  4. ~/.vscode/extensions/nightgauge.nightgauge-*/dist/bin/nightgauge
 //     — the bundle VS Code RECORDS as installed (#356), falling back to the
 //     first glob match when there is no usable record
@@ -336,20 +357,17 @@ func ResolveBinary() ResolvedBinary {
 		return ResolvedBinary{Path: path, Step: StepPath, Bundles: bundles}
 	}
 
-	// 2. <repo-root>/bin/nightgauge.
-	if repoRoot, err := gitRevParse("--show-toplevel"); err == nil && repoRoot != "" {
-		candidate := filepath.Join(repoRoot, "bin", "nightgauge")
-		if isExecutable(candidate) {
-			return ResolvedBinary{Path: candidate, Step: StepRepoBin, Bundles: bundles}
+	// 2-3. Repository builds, development only (#2758). Tested first, so with
+	// the setting off no git command runs and no repository file is read.
+	if os.Getenv(devRepoBinEnv) == "1" {
+		if repoRoot, err := gitRevParse("--show-toplevel"); err == nil && repoBinTrusted(repoRoot) {
+			return ResolvedBinary{Path: filepath.Join(repoRoot, "bin", "nightgauge"), Step: StepRepoBin, Bundles: bundles}
 		}
-	}
-
-	// 3. <canonical-repo-root>/bin/nightgauge.
-	if gitCommonDir, err := gitRevParse("--git-common-dir"); err == nil && gitCommonDir != "" {
-		canonicalRepo := filepath.Dir(gitCommonDir)
-		candidate := filepath.Join(canonicalRepo, "bin", "nightgauge")
-		if isExecutable(candidate) {
-			return ResolvedBinary{Path: candidate, Step: StepCanonicalRepoBin, Bundles: bundles}
+		if gitCommonDir, err := gitRevParse("--git-common-dir"); err == nil && gitCommonDir != "" {
+			canonicalRepo := filepath.Dir(gitCommonDir)
+			if repoBinTrusted(canonicalRepo) {
+				return ResolvedBinary{Path: filepath.Join(canonicalRepo, "bin", "nightgauge"), Step: StepCanonicalRepoBin, Bundles: bundles}
+			}
 		}
 	}
 
@@ -367,6 +385,25 @@ func ResolveBinary() ResolvedBinary {
 	}
 
 	return ResolvedBinary{Bundles: bundles}
+}
+
+// repoBinTrusted reports whether root is a verified Nightgauge core checkout
+// holding an executable bin/nightgauge: the exact module line in go.mod and an
+// exact origin URL. guard.sh's _ng_repo_bin_trusted is the same rule (#2758).
+// Callers test devRepoBinEnv first.
+func repoBinTrusted(root string) bool {
+	if root == "" || !isExecutable(filepath.Join(root, "bin", "nightgauge")) {
+		return false
+	}
+	gomod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil || !slices.Contains(strings.Split(string(gomod), "\n"), coreModuleLine) {
+		return false
+	}
+	out, err := exec.Command("git", "-C", root, "config", "--get", "remote.origin.url").Output()
+	if err != nil {
+		return false
+	}
+	return slices.Contains(coreOriginURLs, strings.TrimSuffix(trimTrailingNewline(string(out)), ".git"))
 }
 
 // isExecutable reports whether path exists, is a regular file, and has at

@@ -24,9 +24,18 @@ cleanup_failed_pr() {
   # Only cleanup if we have a PR number and it's still open
   if [ -z "$PR_NUMBER" ]; then return; fi
   local _CLEANUP_BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-  if [ -z "$_CLEANUP_BINARY" ]; then
-    local _REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    [ -x "$_REPO_ROOT/bin/nightgauge" ] && _CLEANUP_BINARY="$_REPO_ROOT/bin/nightgauge"
+  if [ -z "$_CLEANUP_BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+    local NG_ROOT NG_ORIGIN
+    for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+      "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+      [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+      grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+      NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+      case "${NG_ORIGIN%.git}" in
+        git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+          ssh://git@github.com/nightgauge/nightgauge) _CLEANUP_BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+      esac
+    done
   fi
   local STATE=""
   if [ -n "$_CLEANUP_BINARY" ]; then
@@ -85,16 +94,17 @@ cleanup_failed_pr() {
   BINARY="${NIGHTGAUGE_BIN:-}"
   [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
   [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-  if [ -z "$BINARY" ]; then
-    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-  fi
-  if [ -z "$BINARY" ]; then
-    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-    if [ -n "$GIT_COMMON_DIR" ]; then
-      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-      [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-    fi
+  if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+    for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+      "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+      [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+      grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+      NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+      case "${NG_ORIGIN%.git}" in
+        git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+          ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+      esac
+    done
   fi
   [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
   [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"

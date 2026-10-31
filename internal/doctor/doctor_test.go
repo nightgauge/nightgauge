@@ -759,6 +759,12 @@ func TestGitHubFindings(t *testing.T) {
 		if r := f.Remedies[0]; r.Kind != RemedyAuto || r.Verb != verbBuildCLI || !strings.Contains(r.Preview, "make build-cli") {
 			t.Errorf("in the checkout the remedy is auto make build-cli, got %+v", r)
 		}
+		bundled := p
+		bundled.resolved.Step = StepVSCodeExtension
+		fs, _ = binaryFindings(bundled, root)
+		if r := fs[0].Remedies[0]; r.Kind != RemedyManual {
+			t.Errorf("a rebuild cannot change a bundle-resolved hook binary, got %+v", r)
+		}
 		fs, _ = binaryFindings(p, sourceCheckoutRoot(t.TempDir()))
 		if r := fs[0].Remedies[0]; r.Kind != RemedyManual || !strings.Contains(strings.Join(r.Steps, " "), installCommand) {
 			t.Errorf("outside the checkout the remedy is manual install, got %+v", r)
