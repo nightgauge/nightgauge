@@ -25,6 +25,10 @@ changelog, and the release workflow refuses a tag that does not.
   `NIGHTGAUGE_SKILLS_ROOT`. Claude stages receive the resolved skills tree with
   `--add-dir`, so includes read under default permissions, with file-tool writes
   to it denied. Each stage logs `skill_path=` when it starts (#2718).
+- The read-only skills tree on Claude stages now holds for every file-write tool
+  and through a symlink. The deny rules cover `MultiEdit` and `NotebookEdit` as
+  well as `Edit` and `Write`, and name both the given and resolved forms of the
+  tree. The extension no longer grants the parent of a flat skills tree (#2718).
 - The VSIX skill bundle is now complete, and a package-time check proves it. The
   bundler ships whole skill directories, so per-skill overlays reach Fable stages,
   and it ships `pattern-mining` and `verify-ui`, which stage prompts now name by

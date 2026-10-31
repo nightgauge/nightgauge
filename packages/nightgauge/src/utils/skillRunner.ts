@@ -3256,8 +3256,10 @@ export function getStageLabel(stage: RunnableStage): string {
  * checkout is why it exists. The override is listed even when it does not
  * exist, so a typo shows in the binary's not-found error.
  *
- * `workspaceRoot` is the root the run is pinned to; without one, the first
- * workspace folder.
+ * `workspaceRoot` is the root the run is pinned to, which on a pipeline run is
+ * the per-issue worktree; without one, the first workspace folder. The Go host
+ * derives its workspace from the repository root instead, so the order is
+ * shared and the `<workspace>` in it may be a different checkout.
  */
 export function resolveSkillRoots(
   workspaceRoot: string | undefined = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
@@ -3297,14 +3299,22 @@ export function resolveSkillRoots(
  * contract as claudeSkillsDirArgs in internal/execution/adapters/claude.go,
  * including its reason for skipping a tree inside the stage's working directory.
  */
-export function claudeSkillsDirArgs(skillDir: string, cwd: string | undefined): string[] {
-  const root = path.dirname(skillDir);
+export function claudeSkillsDirArgs(skillPath: string, cwd: string | undefined): string[] {
+  // The binary locates <root>/<dir>/SKILL.md or <root>/<dir>.md.
+  const skillDir = path.dirname(skillPath);
+  const root = path.basename(skillPath) === "SKILL.md" ? path.dirname(skillDir) : skillDir;
   if (!path.isAbsolute(root) || isPathWithin(root, cwd)) {
     return [];
   }
-  const rule = `//${root.split(path.sep).join("/").replace(/^\/+/, "")}/**`;
-  return ["--add-dir", root, "--disallowedTools", `Edit(${rule}),Write(${rule})`];
+  const forms = [...new Set([root, resolvedPath(root)])];
+  const deny = forms.flatMap((form) => {
+    const rule = `//${form.split(path.sep).join("/").replace(/^\/+/, "")}/**`;
+    return CLAUDE_FILE_WRITE_TOOLS.map((tool) => `${tool}(${rule})`);
+  });
+  return ["--add-dir", root, "--disallowedTools", deny.join(",")];
 }
+
+const CLAUDE_FILE_WRITE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 function isPathWithin(candidate: string, dir: string | undefined): boolean {
   if (!dir) return false;
@@ -4819,6 +4829,7 @@ function runStageSkillHeadlessImpl(
   // rendered, so it only needs frontmatter extraction and the one path
   // rewrite; the disk path gets both from the binary.
   let skillDir: string;
+  let renderedSkillPath: string;
   let skillData: {
     content: string;
     allowedTools: string[];
@@ -4835,6 +4846,7 @@ function runStageSkillHeadlessImpl(
   try {
     const rendered = renderSkill(stage, modelDecision.model, adapter, true, workspaceRoot);
     skillDir = rendered.skillDir;
+    renderedSkillPath = rendered.skillPath;
     skillSource = rendered.skillPath;
     if (injectedSkillContent) {
       const parsed = parseSkillContent(injectedSkillContent);
@@ -4933,7 +4945,7 @@ function runStageSkillHeadlessImpl(
       "--verbose",
       "--allowedTools",
       allAllowedTools.join(","),
-      ...claudeSkillsDirArgs(skillDir, workspaceRoot),
+      ...claudeSkillsDirArgs(renderedSkillPath, workspaceRoot),
     ];
 
     if (authProvider === "bedrock") {
@@ -9515,7 +9527,7 @@ export function runStageSkillInteractive(
     "--verbose",
     "--allowedTools",
     allInteractiveAllowedTools.join(","),
-    ...claudeSkillsDirArgs(skillData.skillDir, workspaceRoot),
+    ...claudeSkillsDirArgs(skillData.skillPath, workspaceRoot),
   ];
 
   // Add backend-specific flag based on auth_provider config (Issue #511)

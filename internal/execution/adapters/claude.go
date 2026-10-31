@@ -138,8 +138,9 @@ func claudeKnowledgeDirArgs(opts RunOptions) []string {
 // under a default user's permissions (#2718): over-budget includes are read
 // from that tree at run time, and it lies outside the worktree. --add-dir also
 // makes it a working directory, so file-tool writes are denied explicitly;
-// deny rules hold under bypassPermissions too. Bash can still write there, the
-// limit ADR-022 records for OpenCode.
+// deny rules hold under bypassPermissions too. A tree reached through a symlink
+// is denied in its given and resolved forms, as OpenCode's allow-list grants
+// both. Bash can still write there, the limit ADR-022 records for OpenCode.
 //
 // A tree inside the worktree gets neither flag. It is already reachable, and
 // it is the checkout the stage was dispatched to change: a deny there would
@@ -149,12 +150,26 @@ func claudeSkillsDirArgs(opts RunOptions) []string {
 	if !filepath.IsAbs(root) || pathWithin(root, opts.WorktreeDir) {
 		return nil
 	}
-	rule := "//" + strings.TrimLeft(filepath.ToSlash(root), "/") + "/**"
+	forms := []string{root}
+	if resolved := resolvedPath(root); resolved != root {
+		forms = append(forms, resolved)
+	}
+	var deny []string
+	for _, form := range forms {
+		rule := "//" + strings.TrimLeft(filepath.ToSlash(form), "/") + "/**"
+		for _, tool := range claudeFileWriteTools {
+			deny = append(deny, tool+"("+rule+")")
+		}
+	}
 	return []string{
 		"--add-dir", root,
-		"--disallowedTools", "Edit(" + rule + "),Write(" + rule + ")",
+		"--disallowedTools", strings.Join(deny, ","),
 	}
 }
+
+// claudeFileWriteTools are the tools OpenCode's edit permission covers
+// (opencode_guard.go), so the two adapters' read-only trees match.
+var claudeFileWriteTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 // pathWithin reports whether path is dir or lies under it, comparing resolved
 // paths so a symlinked temp or home directory does not read as outside.

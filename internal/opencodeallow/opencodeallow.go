@@ -70,8 +70,8 @@ const EnvKnowledgeDir = "NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR"
 
 // SkillsRootOf is the skills tree the dispatched skill was located in
 // (#2191): the directory CONTAINING the skill directories, which a render
-// resolved from <workspace>/skills, $NIGHTGAUGE_SKILLS_ROOT or the bundle's
-// <prefix>/skills. A rendered skill's read directives are rewritten to
+// resolved from $NIGHTGAUGE_SKILLS_ROOT, the bundle's <prefix>/skills or
+// <workspace>/skills. A rendered skill's read directives are rewritten to
 // absolute paths into this whole tree (skills/_shared/..., sibling
 // includes), not only the stage's own directory, so this is what a read must
 // reach. skillrender.Locate matches <root>/<dir>/SKILL.md or <root>/<dir>.md,

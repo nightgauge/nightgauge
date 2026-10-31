@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -159,7 +160,8 @@ func TestClaudeAdapters_SkillsTreeIsReadableAndDenied(t *testing.T) {
 		if got := flagValues(args, "--add-dir"); !slices.Equal(got, want) {
 			t.Errorf("%s: --add-dir = %v, want %v", name, got, want)
 		}
-		deny := "Edit(//bundle/dist/skills/**),Write(//bundle/dist/skills/**)"
+		deny := "Edit(//bundle/dist/skills/**),Write(//bundle/dist/skills/**)," +
+			"MultiEdit(//bundle/dist/skills/**),NotebookEdit(//bundle/dist/skills/**)"
 		if got := flagValues(args, "--disallowedTools"); !slices.Equal(got, []string{deny}) {
 			t.Errorf("%s: --disallowedTools = %v, want %q", name, got, deny)
 		}
@@ -189,6 +191,37 @@ func TestClaudeSkillsDirArgs_SkipsATreeInsideTheWorktree(t *testing.T) {
 	}
 	if got := claudeSkillsDirArgs(sibling); len(got) == 0 {
 		t.Error("a sibling whose name extends the worktree's must still be added")
+	}
+}
+
+// TestClaudeSkillsDirArgs_DeniesTheResolvedFormOfASymlinkedTree: the deny has to
+// name the path a file tool resolves to, not only the path the tree was given as.
+func TestClaudeSkillsDirArgs_DeniesTheResolvedFormOfASymlinkedTree(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(base, "real-skills")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "linked-skills")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	args := claudeSkillsDirArgs(RunOptions{
+		SkillPath:   filepath.Join(link, "nightgauge-feature-dev", "SKILL.md"),
+		WorktreeDir: filepath.Join(base, "worktree"),
+	})
+	if got := flagValues(args, "--add-dir"); !slices.Equal(got, []string{link}) {
+		t.Errorf("--add-dir = %v, want the given form %q", got, link)
+	}
+	deny := strings.Join(flagValues(args, "--disallowedTools"), ",")
+	for _, form := range []string{link, real} {
+		rule := "Edit(//" + strings.TrimLeft(filepath.ToSlash(form), "/") + "/**)"
+		if !strings.Contains(deny, rule) {
+			t.Errorf("--disallowedTools = %q, want %q", deny, rule)
+		}
 	}
 }
 

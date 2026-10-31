@@ -52,6 +52,7 @@ vi.mock("fs", () => ({
   // A non-Claude stage is handed its rendered skill in a file (#2381).
   writeFileSync: vi.fn(),
   rmSync: vi.fn(),
+  realpathSync: vi.fn((target: string) => target),
 }));
 
 // Mock child_process module
@@ -384,24 +385,47 @@ describe("skillRunner - File Discovery and Parsing", () => {
   });
 
   describe("claude skills tree flags (#2718)", () => {
-    const skillDir = "/ext/dist/skills/nightgauge-feature-dev";
+    const skillPath = "/ext/dist/skills/nightgauge-feature-dev/SKILL.md";
     const expected = [
       "--add-dir",
       "/ext/dist/skills",
       "--disallowedTools",
-      "Edit(//ext/dist/skills/**),Write(//ext/dist/skills/**)",
+      "Edit(//ext/dist/skills/**),Write(//ext/dist/skills/**)," +
+        "MultiEdit(//ext/dist/skills/**),NotebookEdit(//ext/dist/skills/**)",
     ];
 
     it("adds the tree and denies file-tool writes to it", () => {
-      expect(claudeSkillsDirArgs(skillDir, "/worktrees/issue-1")).toEqual(expected);
+      expect(claudeSkillsDirArgs(skillPath, "/worktrees/issue-1")).toEqual(expected);
+    });
+
+    it("takes the skill's parent as the tree for the flat <root>/<dir>.md layout", () => {
+      expect(claudeSkillsDirArgs("/opt/skills/nightgauge-feature-dev.md", "/repo")[1]).toBe(
+        "/opt/skills"
+      );
+    });
+
+    it("denies the resolved form of a symlinked tree as well", () => {
+      const realpath = (target: string): string => target.replace("/linked/", "/real/");
+      vi.mocked(fs.realpathSync).mockImplementation(realpath as unknown as typeof fs.realpathSync);
+      const args = claudeSkillsDirArgs("/linked/skills/stage/SKILL.md", "/repo");
+      expect(args[1]).toBe("/linked/skills");
+      expect(args[3]).toContain("Edit(//linked/skills/**)");
+      expect(args[3]).toContain("Edit(//real/skills/**)");
+      vi.mocked(fs.realpathSync).mockImplementation(
+        ((target: string) => target) as unknown as typeof fs.realpathSync
+      );
     });
 
     it("skips a tree inside the working directory", () => {
-      expect(claudeSkillsDirArgs("/repo/skills/nightgauge-feature-dev", "/repo")).toEqual([]);
+      expect(claudeSkillsDirArgs("/repo/skills/nightgauge-feature-dev/SKILL.md", "/repo")).toEqual(
+        []
+      );
     });
 
     it("still adds a sibling whose name extends the working directory", () => {
-      expect(claudeSkillsDirArgs("/repo-2/skills/nightgauge-feature-dev", "/repo")).toHaveLength(4);
+      expect(
+        claudeSkillsDirArgs("/repo-2/skills/nightgauge-feature-dev/SKILL.md", "/repo")
+      ).toHaveLength(4);
     });
 
     it("reaches the headless argv", () => {

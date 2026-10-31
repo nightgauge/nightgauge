@@ -237,9 +237,10 @@ How the `opencode` adapter
   and the Claude adapters pass it as `--add-dir`.
 - **Skills tree access on Claude.** Stage spawns pass the resolved skills tree
   as `--add-dir`, so a rendered skill's includes read without user-level
-  `additionalDirectories`, and pair it with `--disallowedTools` `Edit` and
-  `Write` rules for that tree (#2718). As with OpenCode, read-only holds for the
-  file tools only. A tree inside the stage's worktree gets neither flag: it is
+  `additionalDirectories`, and pair it with `--disallowedTools` rules denying
+  `Edit`, `Write`, `MultiEdit` and `NotebookEdit` on both the given and
+  symlink-resolved forms of that tree (#2718). As with OpenCode, read-only holds
+  for the file tools only. A tree inside the stage's worktree gets neither flag: it is
   already reachable, and it is the checkout the stage may need to change.
 - **Hooks map to the Nightgauge OpenCode plugin.** Claude `PreToolUse` gates
   run as the plugin's `tool.execute.before` handler; completion checks are Go

@@ -879,9 +879,8 @@ the bundle lacks (#2718). A packaged extension searches the same order; an
 Extension Development or Test host searches the override, the workspace, then
 the bundle. A plain `go build` binary anywhere else finds no skills outside this
 repository: set `NIGHTGAUGE_SKILLS_ROOT` or use the prefix layout (#2220).
-`nightgauge doctor`
-reports the `skills` check: whether this binary can locate every stage's
-`SKILL.md`, and the roots it searched.
+`nightgauge doctor` reports the `skills` check: whether this binary can locate
+every stage's `SKILL.md`, and the roots it searched.
 
 **Resolution cascade** (ADR 016 §2, as amended by #582), general to specific,
 shared before skill-specific — provider, then the concrete id. The band
