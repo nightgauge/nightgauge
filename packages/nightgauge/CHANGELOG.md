@@ -18,6 +18,11 @@ and this project adheres to
   cannot be read, a warning says why. The extension no longer
   tries to install `smart-setup` and `docs`, which are skills inside the plugin
   (#2719).
+- Pipeline stages now load the safety gates the extension ships, whatever the
+  state of your user-level Claude plugin. A packaged extension uses its bundled
+  plugin ahead of a workspace copy, and stops a stage before any work with an
+  Action Center card if the plugin did not load. Extension Development Hosts keep
+  the workspace first and warn instead (#2723).
 - A packaged extension now runs its own bundled skills, even in a workspace that
   holds a `skills/` tree. `NIGHTGAUGE_SKILLS_ROOT` overrides the bundle, a skill
   the bundle lacks still resolves from the workspace, and the Extension

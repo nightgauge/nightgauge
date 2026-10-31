@@ -589,6 +589,27 @@ or tests for.
 
 ---
 
+## Claude Plugin Loading (Issue #2723)
+
+Every Claude spawn passes `--plugin-dir` with the plugin the running build
+shipped, so a stage's gates do not depend on the operator's user-level install.
+The Go binary reads `<prefix>/claude-plugins/nightgauge` beside
+`<prefix>/bin/nightgauge`. A packaged extension reads
+`dist/claude-plugins/nightgauge`, then a workspace copy. A development host keeps
+the workspace first. A directory counts only when it holds `hooks/hooks.json`.
+
+The CLI replaces a same-named user-level install with the `--plugin-dir` copy and
+reports one `nightgauge` entry, with source `nightgauge@inline`, so each gate fires
+once. Claude Code 2.1.223 (the manifest floor) and 2.1.316 both report `plugins` on
+`system/init`, and so does a `--resume` run.
+
+The stage runner reads that event on Go `RunStage` (the `claude` and `claude-sdk`
+adapters) and on the extension's headless and resume paths. See
+[Gate plugin missing](FAILURE_TAXONOMY.md#gate-plugin-missing-2723) for what it does
+with the reading. Each stage records the version it loaded as
+`model_selection.plugin_version` in the run record. Interactive stages pass the flag
+but have no stream to read.
+
 ## Per-Stage Executor Dispatch (single-agent vs. fan-out)
 
 Independent of the manual/automated **mode** above, each stage is dispatched to

@@ -84,10 +84,22 @@ type StreamEvent struct {
 	// Shape verified in internal/conversation/testdata.
 	Event *StreamAPIEvent `json:"event,omitempty"`
 
+	// Plugins is set on system/init: the plugins this session loaded (#2723).
+	// Absent and empty are different readings, so a missing key stays nil.
+	Plugins []StreamPlugin `json:"plugins,omitempty"`
+
 	// PerTurnEffortActive is set on system/init: whether the CLI applied the
 	// --effort it was given. The CLI drops a rung the model has no axis for
 	// with no warning, so this is how a turn learns what effort ran (#1568).
 	PerTurnEffortActive *bool `json:"per_turn_effort_active,omitempty"`
+}
+
+// StreamPlugin is one entry of a system/init event's plugins list. Shape
+// verified in testdata/claude_init_plugin_present.jsonl.
+type StreamPlugin struct {
+	Name    string `json:"name"`
+	Source  string `json:"source,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 // StreamAPIEvent is one API streaming event: message_start,

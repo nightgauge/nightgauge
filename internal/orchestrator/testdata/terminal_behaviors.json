@@ -79,7 +79,7 @@
     },
     {
       "name": "learning-outcome-record",
-      "note": "Wired on both paths as of #304, and rooted identically \u2014 the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes \u2014 the Go scheduler's recordOutcome is unreachable from the extension path. SKIP PARITY: both paths record NOTHING for a blocked-dependency deferral (#305), a network_unavailable failure (#3296) and an environment_halt (#101). The scheduler keys all three on terminal_failure_kind; the extension keys the deferral on record.outcome_type (which #305 sets from the wire flag and which clears terminal_failure_kind) and the network and environment cases on terminal_failure_kind. Same three states, different fields, because the deferral override on the extension path erases the kind.",
+      "note": "Wired on both paths as of #304, and rooted identically \u2014 the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes \u2014 the Go scheduler's recordOutcome is unreachable from the extension path. SKIP PARITY: both paths record NOTHING for a blocked-dependency deferral (#305), a network_unavailable failure (#3296), an environment_halt (#101) and a gate_plugin_missing stop (#2723). The scheduler keys all four on terminal_failure_kind; the extension keys the deferral on record.outcome_type (which #305 sets from the wire flag and which clears terminal_failure_kind) and the other three on terminal_failure_kind. Same four states, different fields, because the deferral override on the extension path erases the kind.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, workspaceRoot)"
@@ -328,7 +328,7 @@
         "delete a successor's worktree.",
         "",
         "EVERY behavior in this manifest, accounted for. This list is exhaustive by construction: if you add a",
-        "behavior row above, add its disposition here, and keep the section counts summing to 27. TestForceClearAccountingIsExhaustive fails when a name is missing. (27 behaviors + this row.)",
+        "behavior row above, add its disposition here, and keep the section counts summing to 28. TestForceClearAccountingIsExhaustive fails when a name is missing. (28 behaviors + this row.)",
         "",
         "PERFORMED (3):",
         "  queue-item-completion       \u2014 completeQueueItem releases the dequeue's `processing` mark, on BOTH",
@@ -468,9 +468,10 @@
         "                                scheduler path performs both directly in its terminal defer (#440); this",
         "                                funnel is the extension side, where they are the claim's to do.",
         "",
-        "NOT APPLICABLE \u2014 Go-only by design (2):",
+        "NOT APPLICABLE \u2014 Go-only by design (3):",
         "  lifecycle-decision-trace    \u2014 ADR 013 / #179; the extension path emits no trace on either funnel.",
         "  branch-forked-stranded-tip  — #2699; branch_forked is a Go scheduler terminal kind, never a force-clear outcome.",
+        "  gate-plugin-missing-attention — #2723; the kind comes from a stage's stderr marker, and a force-clear books `Cancelled by user`, never this kind.",
         "",
         "NOT APPLICABLE \u2014 Go-only until #1648 (2):",
         "  opencode-run-root-cleanup   \u2014 only the Go manager dispatches opencode, so only a Go run has an OpenCode",
@@ -573,6 +574,18 @@
       "extension": {
         "pathSpecific": "Go-only: the branch_forked terminal kind and its Action Center card are produced by the Go scheduler's branch-fork pre-flight and terminal classification; the extension path has neither (#2699)."
       }
+    },
+    {
+      "name": "gate-plugin-missing-attention",
+      "note": "#2723: parking raises no card, so a stage stopped because its Claude plugin did not load raises one on each path. Both build it in gatePluginMissingRequest with one idempotency key, so a path that reaches both funnels leaves one card.",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.raiseGatePluginMissing(item.Repo, item.Number, runtime.RunID, string(stage), failText)"
+      },
+      "extension": {
+        "file": "internal/ipc/server.go",
+        "anchor": "orchestrator.RaiseGatePluginMissing(s.attentionStore(), recordRepo, p.IssueNumber, runID, string(snap.Stage), errMsg)"
+      }
     }
   ],
   "fences": [
@@ -581,7 +594,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "e5e719f5d79364d402079eb3068f696ae4331b3932c5c425c2906193ee51228b"
+      "sha256": "a3f33a38d9f3a4b279c6821ed24790c79463f5ca120aa4ca2ce572b4e7f8d4a1"
     },
     {
       "id": "extension-runSlotPipeline-finally",

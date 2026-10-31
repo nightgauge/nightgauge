@@ -92,8 +92,11 @@ type Manager struct {
 	// falls back to workspaceRoot — additive, existing behavior unchanged.
 	repoPathResolver func(repo string) string
 	adapter          adapters.SkillRunner
-	mu               sync.Mutex
-	running          map[string]*Execution // keyed by "repo#issue"
+	// claudePluginDir overrides the bundled plugin lookup in tests. nil reads
+	// the directory beside this executable (resolveClaudePluginDir).
+	claudePluginDir func() string
+	mu              sync.Mutex
+	running         map[string]*Execution // keyed by "repo#issue"
 }
 
 // Execution represents a single running pipeline execution.
@@ -392,6 +395,14 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 			return nil, fmt.Errorf("dispatch refused for adapter %q: %w", adapter.Name(), prepErr)
 		}
 		runOpts.RunRoot = root
+	}
+
+	// Claude stages name their plugin and prove it loaded (#2723). Set here, the
+	// one place both claude-spawning adapters reach, so no dispatch can skip it.
+	var pluginGate *claudePluginGate
+	if adapters.IsClaudeCLI(adapter.Name()) {
+		runOpts.ClaudePluginDir = m.resolveClaudePluginDir()
+		pluginGate = newClaudePluginGate(runOpts.ClaudePluginDir != "")
 	}
 
 	cmdName, args, env := adapter.BuildCommand(runOpts)
@@ -779,6 +790,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 			if stageBudget.observe(event, stepAdded, tokenAcc) {
 				stageBudget.stop()
 			}
+			// A Claude stage's plugin gate (#2723). The kill comes first and the
+			// marker is appended after wg.Wait(), as for the handshake below.
+			if pluginGate.observe(event) {
+				killProcessTreeUntilGone(cmd.Process, openCodeHandshakeKillWindow)
+			}
 			// Nightgauge OpenCode plugin handshake (#1635): step_start is the
 			// earliest point at which a tool call could possibly exist, so
 			// checking the instant the FIRST one is observed proves the
@@ -988,6 +1004,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	if handshakeFailure != "" {
 		keepStderr([]byte(handshakeFailure))
 	}
+	if notice := pluginGate.notice(); notice != "" {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", stageLabel, notice)
+		keepStderr([]byte(notice))
+	}
 	err = cmd.Wait()
 	// Signal waitForExit callers (CancelWithGrace/StopExecution) that the
 	// process is reaped, THIS function is the one that reaped it — closing
@@ -1017,7 +1037,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		execErr:     execCtx.Err(),
 		parentErr:   ctx.Err(),
 		stopped:     execution.stopRequested.Load(),
-		otherMarker: handshakeFailure != "" || stageBudget.notice() != "" || (costCap != nil && costCap.fired) || streamStalled,
+		otherMarker: handshakeFailure != "" || pluginGate.stopped() || stageBudget.notice() != "" || (costCap != nil && costCap.fired) || streamStalled,
 		timeout:     opts.Timeout,
 		elapsed:     time.Since(stageStartedAt),
 	}); notice != "" {
@@ -1091,6 +1111,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		}
 	}
 	result := runResultFromAccumulator(string(stdoutBuf), string(stderrBuf), tokenAcc, modelTracker)
+	result.PluginVersion = pluginGate.version()
 	if openCodeDone != nil {
 		openCodeDone.apply(result)
 		openCodeDone.report(opts)
@@ -1147,6 +1168,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	// never loaded, or loaded late, could still report success (#1635 fix
 	// round finding 4).
 	if handshakeFailure != "" && result.ExitCode == 0 {
+		result.ExitCode = 1
+	}
+	// As must a Claude stage its plugin gate stopped (#2723), whatever the CLI
+	// exited with after the kill.
+	if pluginGate.stopped() && result.ExitCode == 0 {
 		result.ExitCode = 1
 	}
 	// So did a stage stopped at its stage timeout, even when it trapped the

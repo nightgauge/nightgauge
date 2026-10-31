@@ -1442,3 +1442,46 @@ func TestAuthFailureTriggersCoalesce(t *testing.T) {
 		t.Fatalf("got %d open requests, want 1 (coalesced)", len(reqs))
 	}
 }
+
+// A parked stop raises no card by itself, and an operator has no other way to
+// hear about a stage that never started (#2723). Both funnels leave one card.
+func TestGatePluginMissingRaisesOneCard(t *testing.T) {
+	store := attention.New(layouttest.Repo(t))
+	s := &Scheduler{attention: store}
+	detail := "stderr tail\nexit 1: [gate-plugin-missing] stopped before any work: system/init lists no nightgauge plugin\nmore tail"
+
+	s.raiseGatePluginMissing("acme/repo", 2723, "run-1", "feature-dev", detail)
+	RaiseGatePluginMissing(store, "acme/repo", 2723, "run-1", "feature-dev", detail)
+
+	reqs, err := store.List(attention.ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqs) != 1 {
+		t.Fatalf("got %d cards, want 1", len(reqs))
+	}
+	card := reqs[0]
+	if card.Producer != producerGatePluginMissing || card.Context.Blocker != TerminalKindGatePluginMissing {
+		t.Errorf("card = %+v", card)
+	}
+	if !strings.Contains(card.Body, "system/init lists no nightgauge plugin") || !strings.Contains(card.Body, "clear-failures") {
+		t.Errorf("body names neither the reading nor the release step: %q", card.Body)
+	}
+	if strings.Contains(card.Body, "stderr tail") {
+		t.Errorf("body carries the stderr tail: %q", card.Body)
+	}
+	for _, o := range card.Options {
+		if !attention.IsRegisteredVerb(o.Verb) {
+			t.Errorf("option %s has unregistered verb %q", o.ID, o.Verb)
+		}
+	}
+}
+
+func TestGatePluginMissingParks(t *testing.T) {
+	if !TerminalKindParks(TerminalKindGatePluginMissing) {
+		t.Error("a retry meets the same install, so the kind must park")
+	}
+	if TerminalKindRemediation(TerminalKindGatePluginMissing) == "" {
+		t.Error("a parked kind must name the operator's next step")
+	}
+}

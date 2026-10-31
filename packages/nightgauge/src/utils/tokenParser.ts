@@ -14,6 +14,7 @@
  * @see docs/ARCHITECTURE_DIAGRAMS.md - Token Counting Data Flow
  */
 
+import type { ClaudeInitPlugin } from "./claudePluginGate";
 import { grokToolCall } from "@nightgauge/sdk";
 import type { ExecutionAdapter } from "../config/schema";
 import type { TokenUsageUpdate } from "../services/PipelineStateService";
@@ -303,6 +304,8 @@ export interface ParsedStreamMessage {
   toolProgress?: { toolUseId: string; toolName?: string; elapsedSeconds: number };
   /** System-event subtype (`init`, `model_refusal_fallback`, ...) (#91) */
   subtype?: string;
+  /** The `plugins` list of a `system/init` event, unset when it has none (#2723). */
+  initPlugins?: ClaudeInitPlugin[];
   /**
    * Model reported serving this event: `message.model` on assistant
    * messages, `model` on system/init. The LAST observed value is the
@@ -607,6 +610,9 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       }
       if (typeof parsed.model === "string" && parsed.model) {
         msg.model = parsed.model;
+      }
+      if (parsed.subtype === "init" && Array.isArray(parsed.plugins)) {
+        msg.initPlugins = parsed.plugins;
       }
       if (
         parsed.subtype === "model_refusal_fallback" &&

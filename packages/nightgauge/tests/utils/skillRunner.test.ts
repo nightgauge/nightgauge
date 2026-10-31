@@ -4969,3 +4969,139 @@ describe("skillRunner - a non-Claude stage is handed its render (#2381, #2390)",
     expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
 });
+
+// Every Claude spawn the extension makes names the plugin, and the two with a
+// stream hold it to system/init (#2723).
+describe("skillRunner - Claude plugin gate (#2723)", () => {
+  const dir = "/ext/nightgauge/dist/claude-plugins/nightgauge";
+  const absentInit = JSON.stringify({
+    type: "system",
+    subtype: "init",
+    plugins: [{ name: "cc-plugin-telemetry", path: "builtin" }],
+  });
+  const presentInit = JSON.stringify({
+    type: "system",
+    subtype: "init",
+    plugins: [{ name: "nightgauge", source: "nightgauge@inline", version: "1.25.0" }],
+  });
+  const laterResult = JSON.stringify({
+    type: "result",
+    usage: { input_tokens: 999, output_tokens: 999 },
+  });
+  let mockProcess: ChildProcess;
+
+  const claudeArgv = (): string[] =>
+    vi.mocked(spawn).mock.calls.find(([cmd]) => cmd === "claude")![1] as string[];
+  const send = (...lines: string[]): void => {
+    mockProcess.stdout!.emit("data", Buffer.from(lines.join("\n") + "\n"));
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProcess = createMockChildProcess();
+    vi.mocked(spawn).mockReturnValue(mockProcess);
+    vi.mocked(vscode.extensions.getExtension).mockReturnValue({
+      extensionPath: "/ext/nightgauge",
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    setExtensionIsPackaged(true);
+  });
+
+  afterEach(() => {
+    killAllActiveProcesses();
+    setExtensionIsPackaged(true);
+  });
+
+  it("pins --plugin-dir on the headless spawn", () => {
+    runStageSkillHeadless("feature-dev", 42, {});
+    expect(
+      claudeArgv().slice(
+        claudeArgv().indexOf("--plugin-dir"),
+        claudeArgv().indexOf("--plugin-dir") + 2
+      )
+    ).toEqual(["--plugin-dir", dir]);
+  });
+
+  it("pins --plugin-dir on the resume spawn", () => {
+    resumeSessionWithResponse("session-1", "go", {});
+    expect(claudeArgv()).toEqual(expect.arrayContaining(["--plugin-dir", dir]));
+  });
+
+  it("pins --plugin-dir on the interactive spawn", () => {
+    runStageSkillInteractive("feature-dev", 42, {});
+    expect(claudeArgv()).toEqual(expect.arrayContaining(["--plugin-dir", dir]));
+  });
+
+  it("stops a bundled headless stage on init, before any later event", async () => {
+    const onComplete = vi.fn();
+    const onStderr = vi.fn();
+    const onTokenUsage = vi.fn();
+    runStageSkillHeadless("feature-dev", 42, { onComplete, onStderr, onTokenUsage });
+
+    send(absentInit, laterResult);
+
+    expect(mockProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(onTokenUsage).not.toHaveBeenCalled();
+    mockProcess.emit("close", 0);
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onStderr).toHaveBeenCalledWith(expect.stringContaining("[gate-plugin-missing]"));
+    const result = onComplete.mock.calls[0][0];
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toContain("[gate-plugin-missing]");
+    expect(result.pluginVersion).toBeUndefined();
+  });
+
+  it("reports the loaded version from a headless stage", async () => {
+    const onComplete = vi.fn();
+    runStageSkillHeadless("feature-dev", 42, { onComplete });
+
+    send(presentInit);
+
+    expect(mockProcess.kill).not.toHaveBeenCalled();
+    mockProcess.emit("close", 0);
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true, pluginVersion: "1.25.0" });
+  });
+
+  it("warns and completes with no bundle", async () => {
+    vi.mocked(vscode.extensions.getExtension).mockReturnValue(undefined as never);
+    const onComplete = vi.fn();
+    const onStderr = vi.fn();
+    runStageSkillHeadless("feature-dev", 42, { onComplete, onStderr });
+
+    send(absentInit);
+
+    expect(mockProcess.kill).not.toHaveBeenCalled();
+    expect(onStderr).toHaveBeenCalledWith(expect.stringContaining("[gate-plugin-warning]"));
+    mockProcess.emit("close", 0);
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onComplete.mock.calls[0][0].success).toBe(true);
+  });
+
+  it("stops a bundled resume on init, before any later event", () => {
+    const onComplete = vi.fn();
+    const onStderr = vi.fn();
+    const onTokenUsage = vi.fn();
+    resumeSessionWithResponse("session-1", "go", { onComplete, onStderr, onTokenUsage });
+
+    send(absentInit, laterResult);
+
+    expect(mockProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(onTokenUsage).not.toHaveBeenCalled();
+    expect(onStderr).toHaveBeenCalledWith(expect.stringContaining("[gate-plugin-missing]"));
+    mockProcess.emit("close", 0);
+    const result = onComplete.mock.calls[0][0];
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toContain("[gate-plugin-missing]");
+  });
+
+  it("reports the loaded version from a resume", () => {
+    const onComplete = vi.fn();
+    resumeSessionWithResponse("session-1", "go", { onComplete });
+
+    send(presentInit);
+    mockProcess.emit("close", 0);
+
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true, pluginVersion: "1.25.0" });
+  });
+});

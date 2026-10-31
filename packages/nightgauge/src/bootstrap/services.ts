@@ -3592,6 +3592,7 @@ export async function initializeServices(
                   // inventing an observation.
                   servedModel: result.servedModel,
                   servedEffort: result.servedEffort,
+                  pluginVersion: result.pluginVersion,
                   servedThinking: result.servedThinking,
                 });
               } catch (error) {
