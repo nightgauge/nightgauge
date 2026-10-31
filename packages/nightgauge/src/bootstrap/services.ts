@@ -1637,7 +1637,8 @@ export async function initializeServices(
         slotStateService,
         epicNumber,
         repoSlug,
-        epicRepo
+        epicRepo,
+        runId
       ) => {
         const key = slotKey(repoSlug, issueNumber);
         // #191: scope this slot's disk session log to the run's TARGET repo.
@@ -1666,7 +1667,7 @@ export async function initializeServices(
           ? (workspaceManager?.findRepositoryByGitHub(repoSlug)?.path ?? null)
           : null;
         outputWindow.setSlotLogRoot(slotIndex, slotRepoPath);
-        outputWindow.registerSlotInfo(slotIndex, issueNumber, title, repoSlug);
+        outputWindow.registerSlotInfo(slotIndex, issueNumber, title, repoSlug, { runId });
         slotOutputManager!.createSlotChannel(slotIndex, issueNumber, title, repoSlug);
         slotOutputManager!.updateStage(issueNumber, "issue-pickup", repoSlug);
 
@@ -3118,7 +3119,7 @@ export async function initializeServices(
     // Tracks one slot per pipeline run so the output window tab bar renders
     // for single-issue (non-concurrent) runs.
     let nextSequentialSlotIndex = 0;
-    let sequentialSlotRegistered = false;
+    let sequentialSlotIndex: number | null = null;
 
     headlessOrchestrator.setDefaultPipelineCallbacks({
       onStageStart: (stage) => {
@@ -3142,9 +3143,9 @@ export async function initializeServices(
           .then((num) => {
             if (num) {
               outputWindow.setIssueNumber(num);
-              if (!sequentialSlotRegistered) {
-                sequentialSlotRegistered = true;
-                outputWindow.registerSlotInfo(nextSequentialSlotIndex++, num, `Issue #${num}`);
+              if (sequentialSlotIndex === null) {
+                sequentialSlotIndex = nextSequentialSlotIndex++;
+                outputWindow.registerSlotInfo(sequentialSlotIndex, num, `Issue #${num}`);
               }
             }
           })
@@ -3229,8 +3230,19 @@ export async function initializeServices(
             scopedRefresh(undefined);
           }
         }
-        // Reset per-run slot flag so the next pipeline run registers a new slot (#2812)
-        sequentialSlotRegistered = false;
+        // Settle the run's slot: this is the only completion signal a
+        // sequential run has (#2785). A deferral is not a failure, and no cost
+        // arrives here, so the slot keeps its running total.
+        if (sequentialSlotIndex !== null) {
+          const settled = result.success || result.deferred === true;
+          outputWindow.notifySlotCompleted(
+            sequentialSlotIndex,
+            settled ? "complete" : "error",
+            undefined
+          );
+        }
+        // Reset per-run slot state so the next pipeline run registers a new slot (#2812)
+        sequentialSlotIndex = null;
         // Clear the per-run log root so non-run output falls back to the
         // bootstrap default (#191).
         outputWindow.setRunLogRoot(null);
