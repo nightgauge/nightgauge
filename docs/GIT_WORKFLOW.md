@@ -1108,9 +1108,12 @@ bash scripts/verify-release-channels.sh --channel open-vsx
 #     opened the Homebrew cask pull request: check its sha256s against the
 #     release's checksums.txt, merge it, and confirm the tap serves the version.
 bash scripts/verify-release-channels.sh --channel homebrew
-#     release.yml's last step fast-forwards the release-owned `stable` branch,
-#     which is what installed Claude plugins follow. Never move it by hand
-#     except to repair a refused move; the watchdog stays red until it matches.
+#     release.yml fast-forwards the release-owned `stable` branch, which is what
+#     installed Claude plugins follow. Never move it by hand except to repair a
+#     refused move or create it where it is missing (at the latest release's
+#     commit, gh api repos/nightgauge/nightgauge/git/refs -f
+#     ref=refs/heads/stable -f sha=<sha>); the watchdog stays red and keeps one
+#     issue open until it matches.
 bash scripts/verify-release-channels.sh --channel claude-plugin
 
 # 13. Read each listing page as a user would. The listing is the extension's
