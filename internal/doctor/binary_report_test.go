@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // TestRunDoctor_ReportsHookResolutionFromCwd covers #356 AC3: `nightgauge
@@ -260,6 +262,70 @@ func TestRunDoctor_CrossStepComparisonRequiresInstallRecord(t *testing.T) {
 		if strings.Contains(warning, unrecordedBin) {
 			t.Errorf("an unrecorded bundle must not emit a comparison warning, got %q", warning)
 		}
+	}
+}
+
+// TestRunDoctor_FetchForksNoBackgroundWriter pins the #2761 root cause. A
+// doctor run really fetches from origin, and an unisolated fetch forks a
+// detached `git maintenance run --auto` that writes into .git after RunDoctor
+// returns. That race cannot be asserted by timing, so this reads git's own
+// trace: the fetch must have run, and it must not have started maintenance.
+func TestRunDoctor_FetchForksNoBackgroundWriter(t *testing.T) {
+	setupCrossStepVersionBinaries(t, "nightgauge v1", "nightgauge v1", true)
+	repo, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origin := t.TempDir()
+	gittest.Run(t, origin, "init", "--initial-branch=main")
+	gittest.Run(t, origin, "commit", "--allow-empty", "-m", "base")
+	runGit(t, repo, "remote", "set-url", "origin", "file://"+origin)
+
+	trace := filepath.Join(t.TempDir(), "git-trace.log")
+	t.Setenv("GIT_TRACE", trace)
+	RunDoctor(context.Background(), nil, nil, nil)
+
+	raw, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatalf("read git trace: %v", err)
+	}
+	if !strings.Contains(string(raw), "fetch origin main") {
+		t.Fatalf("the doctor run must fetch origin or this test proves nothing; trace:\n%s", raw)
+	}
+	if strings.Contains(string(raw), "maintenance run") {
+		t.Errorf("a fetch under the doctor run forked background maintenance; trace:\n%s", raw)
+	}
+}
+
+// TestRunDoctor_FixtureOriginStaysOffTheNetwork pins the other half of #2761:
+// markCoreCheckout's origin is the real repository, so a fixture that may use
+// ssh or https downloads it into the temp repo on every doctor run.
+func TestRunDoctor_FixtureOriginStaysOffTheNetwork(t *testing.T) {
+	setupCrossStepVersionBinaries(t, "nightgauge v1", "nightgauge v1", true)
+	repo, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trace := filepath.Join(t.TempDir(), "git-trace.log")
+	t.Setenv("GIT_TRACE", trace)
+	RunDoctor(context.Background(), nil, nil, nil)
+
+	raw, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatalf("read git trace: %v", err)
+	}
+	if !strings.Contains(string(raw), "fetch origin main") {
+		t.Fatalf("the doctor run must attempt its fetch or this test proves nothing; trace:\n%s", raw)
+	}
+	// The ssh command line carries git-upload-pack, so this names the transport
+	// itself and holds on a machine or runner with no GitHub credentials.
+	if strings.Contains(string(raw), "git-upload-pack") {
+		t.Errorf("the fixture's fetch reached a network transport; trace:\n%s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git", "refs", "remotes", "origin", "main")); err == nil {
+		t.Error("the fixture fetched origin/main from a network remote")
 	}
 }
 

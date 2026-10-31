@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/runstate"
@@ -25,6 +26,18 @@ import (
 // what stands between this suite and the operator's state.
 func TestMain(m *testing.M) {
 	cleanup := hometest.Isolate()
+	// A doctor run fetches: the leaked-worktree scan's SweepMergedWorktrees
+	// runs `git fetch origin <default>` with a bare exec.Command, which sees
+	// only this process's environment. A successful fetch forks a detached
+	// `git maintenance run --auto`, whose `commit-graph write` lands in .git
+	// after the fetch and often the test have returned, so t.TempDir cleanup
+	// failed with "directory not empty" under load (#2761, the class of #680
+	// and #1293). IsolateProcess disarms that writer for inherited git.
+	gittest.IsolateProcess()
+	// markCoreCheckout gives fixtures a real origin URL because the #2758 trust
+	// gate reads it, so without this each doctor run downloaded the whole
+	// repository from GitHub. Local fixtures keep working over file.
+	_ = os.Setenv("GIT_ALLOW_PROTOCOL", "file")
 	// checkOpenCode builds a per-run config through
 	// adapters.OpenCodeConfigInputFor/BuildOpenCodeConfig for every row this
 	// package checks, and that unconditionally asks in.Discover for the

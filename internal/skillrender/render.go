@@ -17,9 +17,12 @@
 // Fail-open is the designed default at every step. An unknown model, a local
 // provider with no registry entry, or an unreadable fragment all render
 // base-only and exit 0 — exactly today's behavior. A malformed overlay must
-// never take down a pipeline run. The tool grant is the exception: there,
-// failing open grants tools the skill did not name, so an `allowed-tools`
-// field that lists no tool fails the render (errNoAllowedTools).
+// never take down a pipeline run. Two things fail closed instead. The tool
+// grant: failing open grants tools the skill did not name, so an `allowed-tools`
+// field that lists no tool fails the render (errNoAllowedTools). And a missing
+// include or phase-include target: an overlay is an optional refinement, but an
+// include is part of the procedure, so a render without it is a different stage
+// that still exits 0 (#2761).
 package skillrender
 
 import (
@@ -440,7 +443,9 @@ func render(opts Options) (*Result, error) {
 		res.applyFrontmatter(fm)
 		res.WholeFile = override
 		res.InjectionSite = SiteWholeFile
-		body = ExpandIncludes(body, skillDir)
+		if body, err = composeIncludes(body, skillDir); err != nil {
+			return nil, err
+		}
 		res.Content = RewriteSkillRelativePaths(body, opts.Stage, skillDir)
 		return res, nil
 	}
@@ -514,7 +519,9 @@ func render(opts Options) (*Result, error) {
 	// Expansion runs AFTER injection so an overlay may itself carry includes,
 	// and so the injection point is computed against the directives that are
 	// still present — expansion erases them.
-	body = ExpandIncludes(body, skillDir)
+	if body, err = composeIncludes(body, skillDir); err != nil {
+		return nil, err
+	}
 	if res.Profile != ProfileCompact || opts.SupplyIncludes {
 		body, res.SuppliedIncludes = SupplyPhaseIncludes(body, skillDir, opts.IncludeBudget)
 	}
@@ -529,6 +536,10 @@ func render(opts Options) (*Result, error) {
 // pr-merge sets are supplied in directive order until it is spent, and the
 // rest stay reads.
 const DefaultIncludeBudget = 64 * 1024
+
+// EveryPhaseInclude is an Options.IncludeBudget that supplies every phase
+// include, for a caller inspecting all the text a stage can be handed.
+const EveryPhaseInclude = 1 << 30
 
 // SuppliedIncludesHeading titles the block SupplyPhaseIncludes appends.
 const SuppliedIncludesHeading = "## Supplied includes"
@@ -551,10 +562,11 @@ var phaseIncludeDirectiveRE = regexp.MustCompile("Read `_includes/([A-Za-z0-9._-
 //
 // Includes are taken in the order their first directive appears; one that
 // does not fit in the remaining budget is skipped (its directives stay
-// reads) and the next is tried, so the result is deterministic. A missing
-// or unreadable include is left as a read directive. The SKILL.md on disk is
-// unchanged: an interactive host that loads it directly still reads each
-// include when its phase says to.
+// reads) and the next is tried, so the result is deterministic. Render has
+// already refused a missing target (composeIncludes), so the one left behind
+// here is an include that vanished since, and it stays a read directive. The
+// SKILL.md on disk is unchanged: an interactive host that loads it directly
+// still reads each include when its phase says to.
 func SupplyPhaseIncludes(body, skillDir string, budget int) (string, []string) {
 	if budget < 0 {
 		return body, nil
@@ -651,29 +663,77 @@ func inject(body, block string) (string, string) {
 var IncludePattern = regexp.MustCompile(`<!-- include: (.+?) -->`)
 
 // ExpandIncludes replaces include directives with file content, resolved
-// relative to the SKILL.md's directory. A missing target is left as-is: the
-// same document must remain readable under a host that does not expand.
-func ExpandIncludes(content string, skillDir string) string {
-	return IncludePattern.ReplaceAllStringFunc(content, func(match string) string {
+// relative to the SKILL.md's directory. A target that cannot be read is an
+// error, joined with every other one so a removed directory names all of its
+// files at once: leaving the directive in place sent the model a literal HTML
+// comment where the procedure should have been, with exit 0 (#2761). A host that
+// does not expand reads the source document and never reaches this function.
+func ExpandIncludes(content string, skillDir string) (string, error) {
+	var missing []error
+	seen := map[string]bool{}
+	out := IncludePattern.ReplaceAllStringFunc(content, func(match string) string {
 		subs := IncludePattern.FindStringSubmatch(match)
 		if len(subs) < 2 {
 			return match
 		}
-		data, err := os.ReadFile(filepath.Join(skillDir, strings.TrimSpace(subs[1])))
+		target := strings.TrimSpace(subs[1])
+		data, err := os.ReadFile(filepath.Join(skillDir, target))
 		if err != nil {
+			if !seen[target] {
+				seen[target] = true
+				missing = append(missing, fmt.Errorf("%s: include %q: %w", skillDir, target, err))
+			}
 			return match
 		}
 		return string(data)
 	})
+	return out, errors.Join(missing...)
 }
+
+// checkPhaseIncludes reports every `_includes/` file a phase directive in body
+// tells the model to read now and that does not exist. It runs apart from
+// SupplyPhaseIncludes because supplying is optional: a compact profile and a
+// negative budget skip it, and neither makes a missing file acceptable.
+func checkPhaseIncludes(body, skillDir string) error {
+	var missing []error
+	seen := map[string]bool{}
+	for _, m := range phaseIncludeDirectiveRE.FindAllStringSubmatch(body, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		target := filepath.Join("_includes", m[1])
+		if _, err := os.Stat(filepath.Join(skillDir, target)); err != nil {
+			missing = append(missing, fmt.Errorf("%s: phase include %q: %w", skillDir, target, err))
+		}
+	}
+	return errors.Join(missing...)
+}
+
+// composeIncludes expands body's includes and verifies its phase includes,
+// reporting every failure of both kinds in one error.
+func composeIncludes(body, skillDir string) (string, error) {
+	expanded, expandErr := ExpandIncludes(body, skillDir)
+	if err := errors.Join(expandErr, checkPhaseIncludes(expanded, skillDir)); err != nil {
+		return "", err
+	}
+	return expanded, nil
+}
+
+// crossSkillRefRE matches a repo-relative reference to a skill directory. The
+// left boundary keeps an already-absolute path, a URL and a longer name out, and
+// the name class keeps a `{STAGE_NAME}` or `<name>` placeholder out.
+var crossSkillRefRE = regexp.MustCompile(`(^|[^/\w.-])skills/(nightgauge-[a-z0-9-]+)/`)
 
 // RewriteSkillRelativePaths rewrites skill-relative read-directive paths to
 // absolute host paths. ADR-010 assumed CWD is the nightgauge repo root — only
 // true when dogfooding nightgauge itself; cross-repo runs spawn in the target
 // repo's worktree, which has no skills/ directory, and agents fell back to
-// whole-filesystem scans and stale ~/.codex/skills copies (#196). Only the
-// skill's OWN references are rewritten, plus the sibling skills/_shared/ —
-// cross-skill references keep naming the other skill.
+// whole-filesystem scans and stale ~/.codex/skills copies (#196). The skill's
+// OWN references are rewritten, plus the sibling skills/_shared/. A cross-skill
+// reference is rewritten when that sibling exists under the same root, because
+// the relative form resolves against a customer worktree that does not hold it.
+// One with no sibling stays as written, which `preflight skill-bundle` reports.
 func RewriteSkillRelativePaths(content string, stage string, skillDir string) string {
 	dir := strings.TrimRight(skillDir, "/\\")
 	shared := filepath.Join(filepath.Dir(dir), "_shared") + string(filepath.Separator)
@@ -692,7 +752,20 @@ func RewriteSkillRelativePaths(content string, stage string, skillDir string) st
 	// Skill-relative form (`_includes/foo.md` next to SKILL.md). Require the
 	// leading backtick so an already-absolute path is not rewritten again.
 	out = strings.ReplaceAll(out, "`_includes/", "`"+dir+string(filepath.Separator)+"_includes/")
-	return out
+	return rewriteCrossSkillRefs(out, filepath.Dir(dir))
+}
+
+// rewriteCrossSkillRefs points each skills/nightgauge-<x>/ reference at the
+// sibling <root>/nightgauge-<x>/ when that directory exists.
+func rewriteCrossSkillRefs(content, root string) string {
+	return crossSkillRefRE.ReplaceAllStringFunc(content, func(match string) string {
+		subs := crossSkillRefRE.FindStringSubmatch(match)
+		sibling := filepath.Join(root, subs[2])
+		if st, err := os.Stat(sibling); err != nil || !st.IsDir() {
+			return match
+		}
+		return subs[1] + sibling + string(filepath.Separator)
+	})
 }
 
 // frontmatter holds the SKILL.md header fields the pipeline consumes.

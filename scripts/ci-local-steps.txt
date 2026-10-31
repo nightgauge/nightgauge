@@ -61,6 +61,7 @@ analyze-model-routing.ts typecheck
 ESLint
 Prettier format:check
 npm run build (all workspaces)
+skill bundle (dist/skills)
 Phase markers ↔ PHASE_REGISTRY
 npm run test (all workspaces)
 Generated VSCode contributions in sync

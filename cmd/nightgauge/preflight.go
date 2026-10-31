@@ -43,6 +43,7 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightSyntaxCmd())
 	cmd.AddCommand(preflightSecretsCmd())
 	cmd.AddCommand(preflightSkillIncludesCmd())
+	cmd.AddCommand(preflightSkillBundleCmd())
 	cmd.AddCommand(preflightSkillNoDirectGHCmd())
 	cmd.AddCommand(preflightPlatformRawHTTPCmd())
 	cmd.AddCommand(preflightSkillAntiPatternsCmd())
@@ -405,11 +406,10 @@ func preflightSkillIncludesCmd() *cobra.Command {
 		Long: `Walk the skill trees and emit a finding for each '<!-- include: path -->'
 directive whose target does not resolve to an existing file (#337).
 
-Include expansion is deliberately fail-open: skillrender.ExpandIncludes leaves
-a directive in place when its target cannot be read, so the document stays
-readable under a host that does not expand includes at all. The cost is that a
-DEAD include and a DELIBERATELY UNEXPANDED one are byte-identical — the model
-gets the literal HTML comment, and nothing says so.
+Render fails on a dead include, but only for the files one render composes and
+only when a stage runs. A host that loads SKILL.md directly never renders it, so
+the model gets the literal HTML comment. This gate finds a dead include before
+merge, in every file.
 
 Targets are resolved with the composer's own regex, so the captured path is
 exactly what expansion would try to open, and the finding echoes it VERBATIM.
@@ -417,8 +417,8 @@ That is what makes a malformed directive obvious: a trailing annotation inside
 the comment, as in '<!-- include: ../_shared/EPIC_HANDLING.md (sub-issue fetch
 section) -->', becomes part of the path even though the file it names exists.
 
-Scope is SKILL.md plus supporting files under _includes/ and _shared/, across
-both skills/ and the generated claude-plugins/nightgauge/skills/ mirror.
+Scope is SKILL.md plus supporting files under _includes/, _shared/, _profiles/
+and _overlays/, across both skills/ and the generated claude-plugins/nightgauge/skills/ mirror.
 README files are NOT scanned — they document the directive shape rather than
 using it.
 
@@ -792,6 +792,87 @@ func printPreflightSkillNoDirectGHHuman(r *preflight.SkillNoDirectGHResult) {
 	}
 	if len(r.Findings) == 0 {
 		fmt.Println("no direct gh calls found in non-allowlisted skills ✓")
+	}
+}
+
+// preflightSkillBundleCmd wraps `internal/preflight.RunSkillBundleCheck`, the
+// package-time check on a built skills tree (#2761). release.yml and staging.yml
+// run it on the skills extracted from each VSIX; ci-local.sh runs it on dist/.
+func preflightSkillBundleCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		skillsRoot string
+		sourceRoot string
+	)
+	cmd := &cobra.Command{
+		Use:   "skill-bundle",
+		Short: "Fail when a built skills tree would not render every stage completely",
+		Long: `Validate a built skills tree, such as dist/skills or the tree inside a VSIX
+(#2761). Scans it for dead includes, renders every stage for the full and compact
+profiles under each overlay the tree carries, and requires every skill path a
+render names to exist under the tree. With --source-root, also compares the
+tree's file set with the source, the only way to see a dropped overlay: overlay
+absence is normal at render time.
+
+An empty tree is a failure, never a pass: every stage must render.
+
+Schema version 1 — field names (v, skills_root, source_root, files_checked,
+renders_checked, findings, warnings) are stable.
+
+Exit codes:
+  0  the tree is complete
+  1  one or more findings (gate fails)
+  2  the check could not run (e.g. the tree does not exist)`,
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := preflight.RunSkillBundleCheck(cmd.Context(), preflight.SkillBundleOptions{
+				SkillsRoot: skillsRoot,
+				SourceRoot: sourceRoot,
+			})
+			if err != nil {
+				return err
+			}
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					return err
+				}
+			} else {
+				printPreflightSkillBundleHuman(cmd.OutOrStdout(), result)
+			}
+			if len(result.Findings) > 0 {
+				return verdictExit{code: 1}
+			}
+			return nil
+		},
+	}
+	markCouldNotRunExit(cmd)
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON")
+	cmd.Flags().StringVar(&skillsRoot, "skills-root", "", "Built skills tree to validate (required)")
+	cmd.Flags().StringVar(&sourceRoot, "source-root", "", "Source skills tree; compares file sets when set")
+	_ = cmd.MarkFlagRequired("skills-root")
+	return cmd
+}
+
+func printPreflightSkillBundleHuman(w io.Writer, r *preflight.SkillBundleResult) {
+	fmt.Fprintf(w, "nightgauge preflight skill-bundle — schema v%d\n", r.V)
+	fmt.Fprintf(w, "skills root: %s\n", r.SkillsRoot)
+	if r.SourceRoot != "" {
+		fmt.Fprintf(w, "source root: %s\n", r.SourceRoot)
+	}
+	fmt.Fprintf(w, "files checked: %d  renders checked: %d  findings: %d\n", r.FilesChecked, r.RendersChecked, len(r.Findings))
+	for _, f := range r.Findings {
+		fmt.Fprintf(w, "  ✗ [%s] %s: %s", f.Rule, f.Path, f.Detail)
+		if f.Render != "" {
+			fmt.Fprintf(w, " (%s)", f.Render)
+		}
+		fmt.Fprintln(w)
+	}
+	for _, warning := range r.Warnings {
+		fmt.Fprintf(w, "  ! %s\n", warning)
+	}
+	if len(r.Findings) == 0 {
+		fmt.Fprintln(w, "the skills tree is complete ✓")
 	}
 }
 

@@ -331,6 +331,11 @@ jobs:
           done
           echo "Packaged:"; ls -1 *.vsix
 
+      # The VSIX binaries are cross-compiled, so the bundle check below needs one
+      # built for this runner (#2761).
+      - name: Build the runner's binary
+        run: go build -o "$RUNNER_TEMP/nightgauge-runner" ./cmd/nightgauge
+
       # Defense-in-depth: every .vsix must carry the build-info stamp AND a
       # bundled binary before GoReleaser hands them to consumers — and must NOT
       # ship source maps or type declarations (.vscodeignore drift).
@@ -360,6 +365,15 @@ jobs:
             # No shipped file may carry a fetch piped to a shell or a base64
             # decode, from whichever package it was bundled (#2320, #2321).
             bash scripts/check-shipped-code.sh "$VSIX"
+
+            # Validate the skills this VSIX carries, not dist/: only the
+            # extracted tree speaks for what .vscodeignore let through (#2761).
+            SKILLS_TMP="$(mktemp -d "$RUNNER_TEMP/vsix-skills.XXXXXX")"
+            unzip -q "$VSIX" 'extension/dist/skills/*' -d "$SKILLS_TMP"
+            "$RUNNER_TEMP/nightgauge-runner" preflight skill-bundle \
+              --skills-root "$SKILLS_TMP/extension/dist/skills" \
+              --source-root "$GITHUB_WORKSPACE/skills"
+            rm -rf "$SKILLS_TMP"
 
             # Assert the PACKAGED binary is Developer ID signed, not merely the
             # one the signing step touched. The VSIX freezes a copy, so this is
