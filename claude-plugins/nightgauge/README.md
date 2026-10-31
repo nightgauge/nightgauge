@@ -46,7 +46,7 @@ No per-repository configuration needed.
 
 ```bash
 # Add the Nightgauge plugins marketplace
-claude plugin marketplace add https://github.com/nightgauge/nightgauge.git
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
 ```
 
 ### Install the Plugin
@@ -69,12 +69,38 @@ Or add to your `~/.claude/settings.json`:
     "nightgauge-plugins": {
       "source": {
         "source": "git",
-        "url": "https://github.com/nightgauge/nightgauge.git"
+        "url": "https://github.com/nightgauge/nightgauge.git",
+        "ref": "stable"
       }
     }
   }
 }
 ```
+
+### Updates
+
+`#stable` is a branch that moves only when a release is published, so you
+receive releases and never the tip of `main`. Updates are manual: Claude Code
+leaves auto-update off for third-party marketplaces. Turn it on under `/plugin`
+
+> Marketplaces > Enable auto-update, or refresh by hand and restart:
+
+```bash
+claude plugin marketplace update nightgauge-plugins
+claude plugin update nightgauge@nightgauge-plugins
+```
+
+An install added without `#stable` follows `main` and must move once. Claude
+Code refuses to re-add a marketplace from a different source, and removing it
+**uninstalls the plugin and deletes that plugin's saved options and data**:
+
+```bash
+claude plugin marketplace remove nightgauge-plugins
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
+claude plugin install nightgauge@nightgauge-plugins
+```
+
+The version can drop after this move, because `main` is ahead of the release.
 
 ### Verify Installation
 
@@ -454,15 +480,15 @@ tool):
 
 **Plugin vs. Skill Versions**
 
-The Nightgauge plugin (`plugin.json`) and individual skills (`SKILL.md`
+The plugin version is independent of the product version and is bumped in the
+changelog rollover PR whenever plugin files changed. The Nightgauge plugin
+(`plugin.json`) and individual skills (`SKILL.md`
 files) maintain **independent versions**:
 
-| Component                       | Version | Purpose                                  |
-| ------------------------------- | ------- | ---------------------------------------- |
-| `nightgauge` plugin             | 1.4.0   | Claude Code wrapper with hooks           |
-| `nightgauge-issue-pickup` skill | 1.x.x   | Universal skill (works with any AI tool) |
-| `nightgauge-feature-dev` skill  | 1.x.x   | Universal skill                          |
-| ...                             | ...     | ...                                      |
+| Component           | Version source                   | Purpose                              |
+| ------------------- | -------------------------------- | ------------------------------------ |
+| `nightgauge` plugin | `plugin.json` only               | What `claude plugin update` compares |
+| Each skill          | `metadata.version` in `SKILL.md` | Universal skill (any AI tool)        |
 
 The plugin wraps the universal skills for Claude Code-specific features (like
 hooks). There is no `skills/nightgauge/SKILL.md` because the plugin itself

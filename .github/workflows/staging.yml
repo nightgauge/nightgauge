@@ -70,6 +70,10 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "RC dry-run: $TAG"
 
+      # release.yml refuses this; an RC finds it first (#2724).
+      - name: Plugin version changed with the plugin
+        run: bash scripts/check-plugin-version.sh --tag "${GITHUB_REF_NAME}"
+
       - name: Install dependencies
         run: npm ci
 

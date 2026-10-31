@@ -5,11 +5,11 @@ description: Make any repository AI-ready with a tool-neutral AGENTS.md, a thin
   repositories that use the older CLAUDE.md-first layout. Use when setting up a
   new project, when a repository is missing or has outdated AI configuration
   files, or to verify conformance with `/smart-setup verify`. Run after
-  repo-init. User-invoked: the user types `/nightgauge:smart-setup`.
+  repo-init. User-invoked; the user types `/nightgauge:smart-setup`.
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "5.1.0"
+  version: "5.1.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 ---

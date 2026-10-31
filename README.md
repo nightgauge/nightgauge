@@ -158,13 +158,23 @@ For terminal-based workflows, install the Nightgauge plugin:
 
 ```bash
 # Add the marketplace
-claude plugin marketplace add https://github.com/nightgauge/nightgauge.git
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
 
 # Install the Nightgauge plugin
 claude plugin install nightgauge@nightgauge-plugins
 
 # Start the pipeline
 /nightgauge:issue-pickup
+```
+
+`#stable` moves only when a release is published. Updates are manual unless you
+enable auto-update under `/plugin` > Marketplaces. To update, run these and
+restart Claude Code. [Plugin README](claude-plugins/nightgauge/README.md#updates)
+covers moving an older install.
+
+```bash
+claude plugin marketplace update nightgauge-plugins
+claude plugin update nightgauge@nightgauge-plugins
 ```
 
 ### Grok Build TUI

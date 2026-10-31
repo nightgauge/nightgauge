@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- Remote Claude plugin installs now follow the `stable` release branch, so
+  `claude plugin update` delivers releases. The new default for
+  `nightgauge.plugins.marketplaceUrl` ends in `#stable` (#2724).
+
 - **A long gate wait after a quota warning is no longer killed (#2711).** Time on a live
   background task or foreground tool call no longer counts toward the idle budgets, and a kill
   that followed only an `allowed_warning` is booked as a stall, with no global cooldown.

@@ -979,7 +979,10 @@ bash scripts/marketplace-channel.sh 0.2.0      # prints: release
 # 0. Land the changelog rollover PR first (§ Changelog): [Unreleased] becomes
 #    [X.Y.Z] - date in CHANGELOG.md and the extension's changelog. release.yml
 #    refuses a tag without it.
+#    Bump claude-plugins/nightgauge/.claude-plugin/plugin.json in that PR when
+#    plugin files changed, or installed plugins receive nothing (#2724).
 bash scripts/check-changelog.sh --tag v0.2.0   # exit 0 before tagging
+bash scripts/check-plugin-version.sh --tag v0.2.0
 
 # 1. Ensure main is up to date
 git checkout main && git pull origin main
@@ -1105,6 +1108,10 @@ bash scripts/verify-release-channels.sh --channel open-vsx
 #     opened the Homebrew cask pull request: check its sha256s against the
 #     release's checksums.txt, merge it, and confirm the tap serves the version.
 bash scripts/verify-release-channels.sh --channel homebrew
+#     release.yml's last step fast-forwards the release-owned `stable` branch,
+#     which is what installed Claude plugins follow. Never move it by hand
+#     except to repair a refused move; the watchdog stays red until it matches.
+bash scripts/verify-release-channels.sh --channel claude-plugin
 
 # 13. Read each listing page as a user would. The listing is the extension's
 #     README as packaged in the VSIX, so it only changes with a release:
@@ -1208,8 +1215,12 @@ the same rule.
 
 1. Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` in both files, add a
    fresh empty `## [Unreleased]` above it, and update the compare links.
-2. `bash scripts/check-changelog.sh --tag vX.Y.Z` must exit 0 locally.
-3. Merge that PR, verify `main`'s own run is green, then tag.
+2. Bump the version in `claude-plugins/nightgauge/.claude-plugin/plugin.json` if
+   plugin files changed since the last stable tag. It is independent of the
+   product version and never goes down.
+3. `bash scripts/check-changelog.sh --tag vX.Y.Z` and
+   `bash scripts/check-plugin-version.sh --tag vX.Y.Z` must exit 0 locally.
+4. Merge that PR, verify `main`'s own run is green, then tag.
 
 The new section's compare links (`compare/vX.Y.Z...HEAD`, `compare/vPREV...vX.Y.Z`)
 404 until the tag exists — that is the ordering, not a mistake — so

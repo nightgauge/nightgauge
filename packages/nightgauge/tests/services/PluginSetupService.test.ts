@@ -138,7 +138,7 @@ describe("PluginSetupService", () => {
     it("has expected default values in DEFAULT_CONFIG", () => {
       const defaults = DEFAULT_CONFIG.ui!.plugins!;
       expect(defaults.auto_prompt).toBe(true);
-      expect(defaults.marketplace_url).toBe("https://github.com/nightgauge/nightgauge.git");
+      expect(defaults.marketplace_url).toBe("https://github.com/nightgauge/nightgauge.git#stable");
     });
   });
 

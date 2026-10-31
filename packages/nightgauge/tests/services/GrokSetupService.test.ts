@@ -204,4 +204,20 @@ describe("GrokSetupService", () => {
     expect(fs.existsSync(destShared)).toBe(true);
     expect(fs.readFileSync(destSkill, "utf8")).toContain("issue-create");
   });
+
+  it("hands grok the marketplace URL without the #stable ref", async () => {
+    const vscode = await import("vscode");
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Install" as never);
+
+    const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+    const service = new GrokSetupService(makeMockContext(extensionPath) as never);
+    await service.checkAndPromptSetup();
+
+    expect(mockExecAsync).toHaveBeenCalledWith("grok", [
+      "plugin",
+      "marketplace",
+      "add",
+      "https://github.com/nightgauge/nightgauge.git",
+    ]);
+  });
 });
