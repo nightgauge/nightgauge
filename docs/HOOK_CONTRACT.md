@@ -207,7 +207,8 @@ available (`ok`, `required`, `optional`, `missing`).
 - `<issue-number>` — Issue number (positional, required)
 - `--target` (default: `main`) — Target branch to merge against
 - `--timeout` (default: `hooks.pre_push.timeout_seconds`, else `1800`) — Limit
-  in seconds, also passed to `go test -timeout`; `0` means no limit
+  in seconds; `go test -timeout` gets what remains of it less 60 s, so a hung
+  package panics with its goroutine dump first; `0` means no limit
 - `--json` — Output JSON instead of human-readable
 
 **Exit codes:**
@@ -220,7 +221,7 @@ available (`ok`, `required`, `optional`, `missing`).
 
 On a timeout the phase in progress reports `timeout`, `failure_kind` is
 `timeout`, the context file's `overall_status` is `timeout`, and the reason names
-the phase, the limit and how to raise it. `--json` also exits 3.
+the phase, the limit and how to raise it. `--json` uses the same exit codes.
 
 Only the Go `test` phase can be skipped, and `go build` and `go vet` still run. It
 reports `skipped` with `test_skip_reason` when no changed path is a Go input (a

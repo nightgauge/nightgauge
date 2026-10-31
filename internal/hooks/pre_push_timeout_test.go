@@ -112,6 +112,27 @@ func TestEvaluatePrePush_RealTestFailureStaysFailed(t *testing.T) {
 	}
 }
 
+func TestGoTestTimeoutArg_FiresBeforeTheGateDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2400*time.Second)
+	defer cancel()
+	got, err := time.ParseDuration(goTestTimeoutArg(ctx, 2400))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 2340 * time.Second; got > want || got < want-5*time.Second {
+		t.Errorf("timer = %s, want about %s", got, want)
+	}
+
+	short, cancelShort := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShort()
+	if got, want := goTestTimeoutArg(short, 2400), "60s"; got != want {
+		t.Errorf("nearly spent budget: timer = %s, want floor %s", got, want)
+	}
+	if got, want := goTestTimeoutArg(ctx, 0), "0"; got != want {
+		t.Errorf("no limit: timer = %s, want %s", got, want)
+	}
+}
+
 func TestEvaluatePrePush_GoTestTimeoutArgument(t *testing.T) {
 	for _, tc := range []struct {
 		seconds int

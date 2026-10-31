@@ -102,7 +102,7 @@ func prePushValidateCmd() *cobra.Command {
 				if err := enc.Encode(result); err != nil {
 					return err
 				}
-				return prePushTimeoutExit(result)
+				return prePushJSONExit(result)
 			}
 
 			// Human-readable output
@@ -145,6 +145,19 @@ func resolvePrePushTimeout(flagSet bool, flagValue int, workDir string) int {
 func prePushTimeoutExit(result hooks.PrePushResult) error {
 	if result.FailureKind == hooks.FailureKindTimeout {
 		return verdictExit{exitPrePushTimeout}
+	}
+	return nil
+}
+
+// prePushJSONExit gives --json the same exit codes as the human path, so a
+// caller scripting the gate cannot read a block as a pass. The JSON result
+// already carries the reason.
+func prePushJSONExit(result hooks.PrePushResult) error {
+	if err := prePushTimeoutExit(result); err != nil {
+		return err
+	}
+	if result.Decision == "block" {
+		return verdictExit{code: 1}
 	}
 	return nil
 }

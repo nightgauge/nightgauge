@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // goTestPassRecord is written by scripts/ci-local-go-test.sh after `go test`
@@ -20,13 +21,24 @@ type changedPaths struct {
 	err   error
 }
 
-// goTestTimeoutArg ties Go's per-package timer to the gate's limit, so it
-// cannot expire first. 0 is Go's own "no limit".
-func goTestTimeoutArg(timeoutSeconds int) string {
+// goTestTimerHeadroom is how far ahead of the gate's deadline Go's per-package
+// timer aims, and the shortest timer it is given. A shorter budget lets the
+// gate's deadline fire instead of failing packages that are merely starting.
+const goTestTimerHeadroom = 60 * time.Second
+
+// goTestTimeoutArg sets Go's per-package timer from what remains of the gate's
+// deadline, so a hung package panics with its goroutine dump naming the test
+// before the gate kills it with truncated output. 0 is Go's own "no limit".
+func goTestTimeoutArg(ctx context.Context, timeoutSeconds int) string {
 	if timeoutSeconds <= 0 {
 		return "0"
 	}
-	return strconv.Itoa(timeoutSeconds) + "s"
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return strconv.Itoa(timeoutSeconds) + "s"
+	}
+	timer := max(time.Until(deadline)-goTestTimerHeadroom, goTestTimerHeadroom)
+	return strconv.Itoa(int(timer.Seconds())) + "s"
 }
 
 // collectChangedPaths lists everything that differs from the merge base,

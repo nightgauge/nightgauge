@@ -19,9 +19,11 @@ changelog, and the release workflow refuses a tag that does not.
 - `nightgauge pre-push validate` now reports an expired limit as a timeout, with
   exit code 3 and a reason naming the limit and how to raise it, never as a test
   failure. The default limit rises from 180 s to 1800 s, is configurable with
-  `hooks.pre_push.timeout_seconds`, and also sets `go test -timeout`. The gate skips
-  the Go test phase, and says why, when no Go input changed or `ci-local` already
-  passed the same tree (#2700).
+  `hooks.pre_push.timeout_seconds`, and also bounds `go test -timeout`, which fires
+  first so a hung package names itself. `--json` now uses the same exit codes as
+  the human output, so a blocked push no longer exits 0. The gate skips the Go test
+  phase, and says why, when no Go input changed or `ci-local` already passed the
+  same tree (#2700).
 - Security: hooks and skills no longer run a `bin/nightgauge` supplied by the
   repository you are in. A repository build is used only with
   `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge core checkout, so

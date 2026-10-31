@@ -42,6 +42,24 @@ func TestResolvePrePushTimeout_Precedence(t *testing.T) {
 	}
 }
 
+func TestPrePushJSONExit(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result hooks.PrePushResult
+		want   int
+	}{
+		{"pass", hooks.PrePushResult{Decision: "allow"}, 0},
+		{"block", hooks.PrePushResult{Decision: "block"}, 1},
+		{"timeout", hooks.PrePushResult{Decision: "block", FailureKind: hooks.FailureKindTimeout}, exitPrePushTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := exitCodeFor(io.Discard, nil, prePushJSONExit(tc.result)); got != tc.want {
+				t.Errorf("exit = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPrePushTimeoutExit(t *testing.T) {
 	timedOut := prePushTimeoutExit(hooks.PrePushResult{Decision: "block", FailureKind: hooks.FailureKindTimeout})
 	if got := exitCodeFor(io.Discard, nil, timedOut); got != exitPrePushTimeout {

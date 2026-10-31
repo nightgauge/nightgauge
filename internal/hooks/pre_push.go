@@ -21,7 +21,7 @@ type PrePushInput struct {
 	WorkDir       string
 	TargetBranch  string
 	FeatureBranch string
-	// TimeoutSeconds is the gate's limit: it goes to `go test -timeout` and is
+	// TimeoutSeconds is the gate's limit: it bounds `go test -timeout` and is
 	// named in a timeout reason. 0 means no limit.
 	TimeoutSeconds int
 }
@@ -288,7 +288,7 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 			result.TestSkipReason = reason
 		} else {
 			fmt.Fprintf(os.Stderr, "Running go test: %s\n", reason)
-			if out, err := runner.Run(ctx, workDir, "go", "test", "-timeout", goTestTimeoutArg(timeoutSeconds), "./..."); err != nil {
+			if out, err := runner.Run(ctx, workDir, "go", "test", "-timeout", goTestTimeoutArg(ctx, timeoutSeconds), "./..."); err != nil {
 				if blockIfTimedOut(ctx, "test", out, timeoutSeconds, result) {
 					return
 				}
