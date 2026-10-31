@@ -919,6 +919,19 @@ environment, and rotate them. Only key names are reported.
 
 ### Adapters
 
+#### NGD051
+
+**A Nightgauge Claude plugin that failed to load.** `claude_plugin_health` ·
+`warning`, also when `claude plugin list --json` cannot be read. A machine with
+no `claude` CLI, or without the plugin, passes.
+
+The finding carries Claude Code's error, for example
+`Marketplace nightgauge-plugins failed to load: cache-miss`, because that entry
+can still read `"enabled": true`. Its skills and hooks are unavailable. Manual
+`repoint`: reload the VS Code window so the extension repoints the marketplace at
+its stable copy, or run `bash scripts/install-agent-skills.sh --claude-only` from
+the primary checkout.
+
 #### NGD015
 
 **No usable AI coding agent.** `ai_adapter` · `warning`.

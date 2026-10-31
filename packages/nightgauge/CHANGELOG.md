@@ -11,6 +11,13 @@ and this project adheres to
 
 ### Fixed
 
+- The Claude plugin keeps working after an extension upgrade. Its marketplace now
+  lives in global storage, and an existing install moves there with its plugin data
+  intact. A plugin that failed to load is repaired on activation, or Claude Code's
+  error is shown, even if you dismissed the install prompt. If the plugin's status
+  cannot be read, a warning says why. The extension no longer
+  tries to install `smart-setup` and `docs`, which are skills inside the plugin
+  (#2719).
 - A packaged extension now runs its own bundled skills, even in a workspace that
   holds a `skills/` tree. `NIGHTGAUGE_SKILLS_ROOT` overrides the bundle, a skill
   the bundle lacks still resolves from the workspace, and the Extension
