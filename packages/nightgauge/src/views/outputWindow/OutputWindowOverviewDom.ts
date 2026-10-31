@@ -31,6 +31,7 @@ export interface OverviewCardUpdatePayload {
   cacheTokens: number;
   startedAt?: number | null;
   completedAt?: number | null;
+  runGeneration?: number;
   currentPhase?: { name: string; index: number; total: number } | null;
 }
 
@@ -74,11 +75,12 @@ export function tickOverviewCardElapsed(root: DomLikeRoot, nowMs: number): void 
  * Apply an `overview-card-update` message to the matching card under `root`.
  *
  * Establish-once semantics for `data-started-at` and `data-completed-at`
- * (Issue #3010 root cause): the slot's startedAt is immutable once
- * registered, so re-stamping it on every token-delta patch was resetting
- * the elapsed math to ~0 each tick — visible to the user as "frozen at
- * 2s". We set the attributes only on first arrival of a non-null value
- * and never delete them.
+ * (Issue #3010 root cause): one run's startedAt is immutable, so re-stamping
+ * it on every token-delta patch was resetting the elapsed math to ~0 each
+ * tick — visible to the user as "frozen at 2s". Within one run we set the
+ * attributes only on first arrival of a non-null value and never delete them.
+ * A different `runGeneration` means another run took the slot index, so its
+ * anchors replace the previous occupant's (#2785).
  *
  * Phase patch: the `.overview-card-phase` span is always present in
  * initial HTML and styled with `:empty { display: none }`, so the patch
@@ -123,6 +125,16 @@ export function applyOverviewCardUpdate(root: DomLikeRoot, u: OverviewCardUpdate
 
   const elapsedEl = card.querySelector(".overview-card-elapsed");
   if (elapsedEl) {
+    if (u.runGeneration != null) {
+      const generation = String(u.runGeneration);
+      const shown = elapsedEl.dataset.runGeneration;
+      if (shown && shown !== generation) {
+        delete elapsedEl.dataset.startedAt;
+        delete elapsedEl.dataset.completedAt;
+        elapsedEl.textContent = "—";
+      }
+      elapsedEl.dataset.runGeneration = generation;
+    }
     if (u.startedAt != null && !elapsedEl.dataset.startedAt) {
       elapsedEl.dataset.startedAt = String(u.startedAt);
     }
@@ -136,7 +148,7 @@ export function applyOverviewCardUpdate(root: DomLikeRoot, u: OverviewCardUpdate
       elapsedEl.textContent =
         h > 0 ? h + "h " + m + "m " + s + "s" : m > 0 ? m + "m " + s + "s" : s + "s";
     }
-    // Note: never delete data-completed-at on a patch lacking it — a
-    // running slot's update simply doesn't advance the completion stamp.
+    // Note: never delete data-completed-at on a same-run patch lacking it —
+    // a running slot's update simply doesn't advance the completion stamp.
   }
 }

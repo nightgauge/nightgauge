@@ -22,6 +22,7 @@ import type {
   SlotInfo,
 } from "./OutputWindowState";
 import type { ContentType } from "./contentFormatter";
+import { applyOverviewCardUpdate, tickOverviewCardElapsed } from "./OutputWindowOverviewDom";
 
 /**
  * Escape HTML special characters for security
@@ -2078,21 +2079,7 @@ function getScript(): string {
 
       // Keep overview card elapsed timers ticking for running slots (Issue #2817)
       function updateOverviewCardElapsed() {
-        const cards = document.querySelectorAll('.overview-card-elapsed[data-started-at]');
-        cards.forEach(function(el) {
-          if (el.dataset.completedAt) return;
-          const started = parseInt(el.dataset.startedAt || '0', 10);
-          if (!started) return;
-          const total = Math.max(0, Math.floor((Date.now() - started) / 1000));
-          const s = total % 60;
-          const m = Math.floor(total / 60) % 60;
-          const h = Math.floor(total / 3600);
-          el.textContent = h > 0
-            ? h + 'h ' + m + 'm ' + s + 's'
-            : m > 0
-              ? m + 'm ' + s + 's'
-              : s + 's';
-        });
+        (${tickOverviewCardElapsed.toString()})(document, Date.now());
       }
       const overviewElapsedTimer = setInterval(updateOverviewCardElapsed, 1000);
       window.addEventListener('unload', function() {
@@ -2970,71 +2957,7 @@ function getScript(): string {
             // Live patch the per-issue Overview card in place so cost / tokens /
             // stage / status / elapsed-anchor stay current mid-pipeline. Companion
             // to slot-badge-update — fires on every event that drives the badge.
-            const u = message;
-            const card = document.querySelector('.overview-card[data-slot="' + u.slotIndex + '"]');
-            if (!card) break;
-            // Status badge
-            const statusBadge = card.querySelector('.overview-status-badge');
-            if (statusBadge) {
-              statusBadge.className = 'overview-status-badge overview-status-' + u.status;
-              statusBadge.textContent = u.statusLabel;
-            }
-            // Stage label
-            const stageEl = card.querySelector('.overview-card-stage');
-            if (stageEl) stageEl.textContent = u.stageLabel || '—';
-            // Cost
-            const costEl = card.querySelector('.overview-card-cost');
-            if (costEl) costEl.textContent = '$' + (u.costUsd || 0).toFixed(4);
-            // Tokens (input · output · cache)
-            const tokensEl = card.querySelector('.overview-card-tokens');
-            if (tokensEl) {
-              tokensEl.textContent =
-                (u.inputTokens || 0).toLocaleString() + ' in · ' +
-                (u.outputTokens || 0).toLocaleString() + ' out · ' +
-                (u.cacheTokens || 0).toLocaleString() + ' cache';
-            }
-            // Phase label patch (Issue #3010). The span is always present in
-            // initial HTML; CSS hides it when empty, so we only set/clear text.
-            const phaseEl = card.querySelector('.overview-card-phase');
-            if (phaseEl) {
-              if (u.currentPhase) {
-                phaseEl.textContent =
-                  u.currentPhase.name + ' · ' + u.currentPhase.index + '/' + u.currentPhase.total;
-              } else {
-                phaseEl.textContent = '';
-              }
-            }
-            // Elapsed timer anchors — the existing 1Hz overviewElapsedTimer
-            // keeps ticking from these data attrs. Establish-once semantics
-            // (Issue #3010): set on first arrival, never overwrite or delete
-            // on subsequent patches. The slot's startedAt is immutable once
-            // registered, so re-stamping it on every token-delta patch was
-            // resetting the elapsed math to ~0 and freezing the visible tick.
-            const elapsedEl = card.querySelector('.overview-card-elapsed');
-            if (elapsedEl) {
-              if (u.startedAt != null && !elapsedEl.dataset.startedAt) {
-                elapsedEl.dataset.startedAt = String(u.startedAt);
-              }
-              if (u.completedAt != null) {
-                elapsedEl.dataset.completedAt = String(u.completedAt);
-                // Stamp the final value so the dash doesn't flash before the
-                // next tick (the 1Hz updater skips completed cards).
-                const startMs = parseInt(elapsedEl.dataset.startedAt || String(u.completedAt), 10);
-                const total = Math.max(
-                  0,
-                  Math.floor((u.completedAt - startMs) / 1000)
-                );
-                const s = total % 60, m = Math.floor(total / 60) % 60, h = Math.floor(total / 3600);
-                elapsedEl.textContent = h > 0
-                  ? h + 'h ' + m + 'm ' + s + 's'
-                  : m > 0
-                    ? m + 'm ' + s + 's'
-                    : s + 's';
-              }
-              // Note: never delete data-completed-at on a patch lacking it —
-              // a running slot's update simply doesn't advance the completion
-              // stamp.
-            }
+            (${applyOverviewCardUpdate.toString()})(document, message);
             break;
           }
           case 'slot-badge-update': {
@@ -4386,7 +4309,7 @@ function getOverviewCardHtml(slot: SlotInfo, nowMs: number): string {
     : "";
 
   const elapsedAttrs = hasStart
-    ? ` data-started-at="${slot.startedAt as number}"${completedAt != null ? ` data-completed-at="${completedAt}"` : ""}`
+    ? ` data-started-at="${slot.startedAt as number}"${completedAt != null ? ` data-completed-at="${completedAt}"` : ""}${slot.runGeneration != null ? ` data-run-generation="${slot.runGeneration}"` : ""}`
     : "";
 
   const slotIndex = slot.slotIndex;

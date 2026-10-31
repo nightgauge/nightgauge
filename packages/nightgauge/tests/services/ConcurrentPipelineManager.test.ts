@@ -362,7 +362,8 @@ describe("ConcurrentPipelineManager", () => {
         expect.anything(),
         undefined,
         undefined,
-        undefined
+        undefined,
+        expect.any(String)
       );
     });
 
