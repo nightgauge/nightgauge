@@ -536,7 +536,9 @@ describe("PluginSetupService", () => {
         "View Output"
       );
       const output = vi.mocked(vscode.window.createOutputChannel).mock.results[0]?.value;
-      const lines = vi.mocked(output.appendLine).mock.calls.map((call) => String(call[0]));
+      const lines = vi
+        .mocked(output.appendLine)
+        .mock.calls.map((call: unknown[]) => String(call[0]));
       expect(lines.join("\n")).not.toContain("✓ Marketplace repaired");
     });
 
@@ -552,7 +554,9 @@ describe("PluginSetupService", () => {
       expect(status.marketplaceAdded).toBe(true);
       expect(status.marketplacePath).toBeUndefined();
       const output = vi.mocked(vscode.window.createOutputChannel).mock.results[0]?.value;
-      const lines = vi.mocked(output.appendLine).mock.calls.map((call) => String(call[0]));
+      const lines = vi
+        .mocked(output.appendLine)
+        .mock.calls.map((call: unknown[]) => String(call[0]));
       expect(lines.join("\n")).toContain("has no usable source");
     });
 
