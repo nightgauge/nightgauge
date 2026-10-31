@@ -18,7 +18,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 - Validation retries can now succeed in a reused worktree. `FeatureValidateGate`
   judges the latest verdict per gate, so a later `pass` clears an earlier
-  `catch`; `nightgauge health gate-metrics` still reports every row (#2746).
+  `catch`; `nightgauge health gate-metrics` still reports every row. Judge
+  verdicts stay fail-closed: any failing judge in the latest attempt fails the
+  gate, so one judge's pass cannot erase another's fail (#2746).
 - Security: hooks and skills no longer run a `bin/nightgauge` supplied by the
   repository you are in. A repository build is used only with
   `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge core checkout, so

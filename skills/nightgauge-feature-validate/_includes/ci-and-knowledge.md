@@ -493,7 +493,8 @@ Then record exactly one verdict. A `catch` fails the run; it is not a log of
 what the review found. A defect fixed in the fix loop gets `pass`, and you
 describe it in the validate notes. The gate judges the latest verdict per
 `gate_name`, in file order, so a later verdict for the same gate supersedes an
-earlier one, and a `catch` no later verdict replaces stands:
+earlier one, and a `catch` no later verdict replaces stands. Judge rows are the
+exception: any failure in the latest attempt under `judges` fails the gate:
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"

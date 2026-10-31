@@ -642,6 +642,7 @@ type GateResult struct {
 	DurationMs   int64  `json:"duration_ms,omitempty"`
 	ErrorSummary string `json:"error_summary,omitempty"` // first line of error when result="catch"
 	Timestamp    string `json:"timestamp"`               // ISO 8601
+	AttemptID    string `json:"attempt_id,omitempty"`    // groups the rows of one run; judge rows only
 }
 
 // StageGateResult records the outcome of a stage post-condition gate (Issue

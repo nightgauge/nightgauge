@@ -15,7 +15,9 @@ import (
 // latest verdict per gate name, in file order (latestVerdicts): a verdict other
 // than "pass" trips this gate unless a later verdict for that gate supersedes
 // it, so a retry in a reused worktree can clear an earlier attempt's "catch"
-// by re-running the gate (#2746).
+// by re-running the gate (#2746). The "judges" gate is an aggregate of
+// independent critics, so its verdict is the whole of its latest attempt: any
+// non-pass row in that attempt trips this gate.
 //
 // Unlike the per-stage skill output, the gate-metrics file is the canonical
 // signal for build/lint/test results — it is what the existing scheduler
@@ -47,13 +49,21 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 		if err != nil {
 			return false, "failed to read gate-metrics.jsonl", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
 		}
-		verdicts := latestVerdicts(results)
-		if len(verdicts) == 0 {
+		if len(results) == 0 {
 			// validate skill said success but never wrote any quality-gate
 			// records — no-op (the skill skipped the work).
 			return false, "no quality-gate results recorded", []string{
 				"feature-validate skill did not emit any gate-metrics records",
 			}, KindNoOp, ""
+		}
+		verdicts := latestVerdicts(results)
+		if len(verdicts) == 0 {
+			// The skill wrote rows, but none of them carries a verdict. Work
+			// was recorded and nothing vouches for it, which is a failure and
+			// not a skipped stage.
+			return false, "no quality-gate verdicts recorded", []string{
+				fmt.Sprintf("%d gate-metrics row(s) carry no result", len(results)),
+			}, KindFail, TerminalKindValidationFailed
 		}
 		var failed []string
 		for _, r := range verdicts {
@@ -76,7 +86,7 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 			return false, te.Reason, te.Evidence, KindFail, TerminalKindValidationFailed
 		}
 
-		details := []string{fmt.Sprintf("gates=%d", len(verdicts))}
+		details := []string{fmt.Sprintf("gates=%d rows=%d", len(verdicts), len(results))}
 		details = append(details, te.Evidence...)
 		details = append(details, validatePolicy.Summary()...)
 		if summary := markUnexercisedDeliverable(issueNumber, workspace); summary != "" {
@@ -85,6 +95,10 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 		return true, "all quality gates passed", details, KindOK, ""
 	})
 }
+
+// judgeGateName is the gate_name of adversarial judge rows, written by
+// GateMetricsWriter.appendJudgeVerdicts. It mirrors JUDGE_GATE_NAME there.
+const judgeGateName = "judges"
 
 // latestVerdicts reduces gate-metric rows to the verdicts the gate judges: the
 // last row per GateName, in file order, kept at that name's first position so
@@ -95,11 +109,30 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 // with a Result but no GateName has no key to collapse on, so it stands alone
 // and a nameless "pass" cannot clear a nameless "catch". File order decides,
 // not Timestamp, because rows may lack one.
+//
+// Judge rows do not collapse by name: one run writes a row per judge under the
+// shared name, so a later judge's pass must not erase an earlier judge's fail.
+// Every row of the latest attempt stands, and an older attempt's rows drop out.
+// A row with no AttemptID cannot be placed in an attempt, so it always stands,
+// and a latest row with no AttemptID keeps every judge row. Doubt fails closed.
 func latestVerdicts(results []state.GateResult) []state.GateResult {
+	var judgeAttempt string
+	for _, r := range results {
+		if r.GateName == judgeGateName && r.Result != "" {
+			judgeAttempt = r.AttemptID
+		}
+	}
+
 	verdicts := make([]state.GateResult, 0, len(results))
 	position := make(map[string]int, len(results))
 	for _, r := range results {
 		if r.Result == "" {
+			continue
+		}
+		if r.GateName == judgeGateName {
+			if judgeAttempt == "" || r.AttemptID == "" || r.AttemptID == judgeAttempt {
+				verdicts = append(verdicts, r)
+			}
 			continue
 		}
 		if r.GateName == "" {
