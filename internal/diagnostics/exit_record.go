@@ -134,6 +134,9 @@ type StageExitRecord struct {
 	// record, because the one that fired is computed at runtime and appears in
 	// no config file. Known values:
 	//   "progress-no-progress-window"  — no productive signal for the window
+	//   "progress-background-task-ceiling"      — a task outlived background_task_ceiling_ms
+	//   "progress-background-task-hard-ceiling" — a growing log outlived background_task_hard_ceiling_ms
+	//   "progress-external-progress-ceiling"    — a declared source outlived external_progress_ceiling_ms
 	//   "progress-churn-tools"         — churn_tool_threshold distinct tools
 	//   "progress-catastrophic-cost"   — catastrophic_limit_usd reached
 	//   "nx-stall-multiple"            — elapsed hit warn threshold × N

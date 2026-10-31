@@ -14,6 +14,13 @@ and this project adheres to
 - Remote Claude plugin installs now follow the `stable` release branch, so
   `claude plugin update` delivers releases. The new default for
   `nightgauge.plugins.marketplaceUrl` ends in `#stable` (#2724).
+- A stage waiting on its own gate is no longer killed by the runaway monitor while the gate
+  still runs (#2694). `pipeline.progress_runaway.background_task_ceiling_ms` rises from 45 to 90
+  minutes, because a loaded `ci-local.sh` takes 50 and any live task now counts, declared or not.
+  A task whose declared log keeps growing can run to `background_task_hard_ceiling_ms` (120
+  minutes). A connectivity restore takes the outage off the monitor's clocks, a kill names the
+  expired ceiling and the task's age, and the failure report says the runaway monitor stopped the
+  stage instead of blaming the implementation.
 
 - **A long gate wait after a quota warning is no longer killed (#2711).** Time on a live
   background task or foreground tool call no longer counts toward the idle budgets, and a kill

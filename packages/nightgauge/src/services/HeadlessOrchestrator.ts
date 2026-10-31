@@ -16546,6 +16546,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // crossing and (b) printed a ceiling the cost never approached. Only
               // synthesize when skillRunner left no runaway marker at all, and do
               // so with honest progress-kill semantics (no invented ceiling).
+              // The monitor's `Ceiling:` line goes to the stream, not this error,
+              // so the expired ceiling is stamped here from the structured value
+              // for the failure report to name (#2694).
+              const killedAtCeiling = result.killCeiling
+                ? ` Ceiling: ${result.killCeiling}=${result.killCeilingValue ?? "unset"}.`
+                : "";
               const emittedMarker = result.error?.message ?? "";
               const hasRunawayMarker =
                 emittedMarker.includes("[runaway-progress-exceeded]") ||
@@ -16554,7 +16560,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 ? emittedMarker
                 : `[runaway-progress-exceeded] Stage ${stage} terminated: progress-based runaway kill ` +
                   `at cost $${costAtTermUsd.toFixed(4)} (no dollar ceiling crossed). ` +
-                  `Treated as transient — will retry with 30-minute backoff (Issue #3783).`;
+                  `Treated as transient — will retry with 30-minute backoff (Issue #3783).` +
+                  killedAtCeiling;
               const costCapError = new Error(runawayMarker);
 
               if (this.stateService) {
