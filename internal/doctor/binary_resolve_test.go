@@ -1538,6 +1538,11 @@ func markCoreCheckout(t *testing.T, dir string) {
 		runGit(t, dir, "remote", "add", "origin", "git@github.com:nightgauge/nightgauge.git")
 	}
 	t.Setenv(devRepoBinEnv, "1")
+	// With an origin, RunDoctor's leak sweep runs a plain `git fetch` here, outside
+	// gittest's disarming. Its detached auto-maintenance outlived the test and wrote
+	// into .git during t.TempDir cleanup: "unlinkat .git: directory not empty" (#2759).
+	runGit(t, dir, "config", "maintenance.auto", "false")
+	runGit(t, dir, "config", "gc.auto", "0")
 }
 
 func writeCoreGoMod(t *testing.T, dir, moduleLine string) {

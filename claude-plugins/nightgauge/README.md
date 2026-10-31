@@ -16,6 +16,10 @@ practices. Nightgauge uses **Claude Code hooks** to _enforce_ them:
 | LLM might follow plan    | Hooks **verify** plan completion        |
 | Context lost on resume   | Hooks **restore** context automatically |
 
+This enforcement needs the `nightgauge` binary: see
+[Install the Binary](#install-the-binary-required). Without it, binary-backed
+hooks do nothing.
+
 ## Using Nightgauge in Any Repository
 
 Once installed, Nightgauge works in **any Git repository**. The plugin is
@@ -31,16 +35,31 @@ claude
 > /nightgauge:issue-pickup 42
 ```
 
-**That's it.** The hooks automatically:
+With the `nightgauge` binary installed, the hooks automatically:
 
 - Detect your current branch and linked issue
 - Restore context when you resume sessions
 - Enforce quality gates on every operation
 - Format code after edits
 
-No per-repository configuration needed.
+Without the binary, binary-backed hooks do nothing, so no gate is enforced, and
+skills fail at their first `nightgauge` call. No per-repository configuration
+is needed.
 
 ## Installation
+
+### Install the Binary (Required)
+
+```bash
+brew install --cask nightgauge/tap/nightgauge    # macOS
+# or, with Go 1.26+ and $GOPATH/bin on PATH:
+go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest
+```
+
+Confirm it with `nightgauge doctor`. See
+[docs/GO_BINARY.md](../../docs/GO_BINARY.md) for release binaries and the full
+install matrix. The VSCode extension's bundled copy serves hooks but puts nothing
+on `PATH`.
 
 ### Add the Marketplace
 
@@ -56,26 +75,8 @@ claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stabl
 claude plugin install nightgauge@nightgauge-plugins
 ```
 
-### Manual Configuration
-
-Or add to your `~/.claude/settings.json`:
-
-```json
-{
-  "enabledPlugins": {
-    "nightgauge@nightgauge-plugins": true
-  },
-  "extraKnownMarketplaces": {
-    "nightgauge-plugins": {
-      "source": {
-        "source": "git",
-        "url": "https://github.com/nightgauge/nightgauge.git",
-        "ref": "stable"
-      }
-    }
-  }
-}
-```
+Editing `settings.json` alone does not install the plugin. Use the commands
+above.
 
 ### Updates
 

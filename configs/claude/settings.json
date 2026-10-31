@@ -1,6 +1,6 @@
 {
   "$schema": "https://claude.ai/schemas/settings.json",
-  "description": "Nightgauge Claude Code team settings - add to ~/.claude/settings.json or org config",
+  "description": "Nightgauge Claude Code team settings for org config; each member still runs claude plugin install",
 
   "enabledPlugins": {
     "nightgauge@nightgauge-plugins": true

@@ -399,12 +399,8 @@ yamllint configs/ standards/
 1. **Install the plugin locally:**
 
    ```bash
-   # Add to settings.json
-   {
-     "plugins": [
-       "/path/to/nightgauge/claude-plugins/nightgauge"
-     ]
-   }
+   claude plugin marketplace add /path/to/nightgauge
+   claude plugin install nightgauge@nightgauge-plugins
    ```
 
 2. **Test commands in a sample repository:**

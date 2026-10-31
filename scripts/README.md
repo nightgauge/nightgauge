@@ -105,6 +105,14 @@ Chat-only adapters (`gemini-sdk`, `openai-compatible`) are refused.
   (`npm run -w @nightgauge/sdk build`)
 - `gh auth` is configured
 
+## Plugin install docs gate
+
+The Claude plugin install docs have their own gate.
+`check-plugin-install-docs.sh` requires a binary step and `nightgauge doctor`, bans
+settings-based routes, and runs the documented commands in a scratch
+`CLAUDE_CONFIG_DIR` against a temporary mirror of `HEAD`.
+`test-check-plugin-install-docs.sh` proves each arm can go red.
+
 ## Project Board And Pipeline State
 
 Project board sync, config generation, config validation, and context cleanup

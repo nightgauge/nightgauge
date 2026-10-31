@@ -17,31 +17,19 @@ Start with `nightgauge doctor`. Every problem it reports carries a code
 
 **Solutions:**
 
-1. **Verify settings.json syntax:**
+1. **Check what is installed:**
 
    ```bash
-   cat ~/.claude/settings.json | jq .
+   claude plugin marketplace list
+   claude plugin list
    ```
 
-   If this fails, you have invalid JSON.
+2. **Install it with the CLI.** Editing `settings.json` alone does not install
+   the plugin:
 
-2. **Check the plugin settings:**
-
-   ```json
-   {
-     "enabledPlugins": {
-       "nightgauge@nightgauge-plugins": true
-     },
-     "extraKnownMarketplaces": {
-       "nightgauge-plugins": {
-         "source": {
-           "source": "git",
-           "url": "https://github.com/nightgauge/nightgauge.git",
-           "ref": "stable"
-         }
-       }
-     }
-   }
+   ```bash
+   claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
+   claude plugin install nightgauge@nightgauge-plugins
    ```
 
 3. **Restart Claude Code:** Close and reopen your terminal/IDE.
@@ -57,20 +45,16 @@ Start with `nightgauge doctor`. Every problem it reports carries a code
 
 **Solutions:**
 
-1. **Verify marketplace URL:**
+1. **Verify the marketplace is registered:**
 
-   ```json
-   {
-     "extraKnownMarketplaces": {
-       "nightgauge-plugins": {
-         "source": {
-           "source": "git",
-           "url": "https://github.com/nightgauge/nightgauge.git",
-           "ref": "stable"
-         }
-       }
-     }
-   }
+   ```bash
+   claude plugin marketplace list
+   ```
+
+   If `nightgauge-plugins` is missing, add it:
+
+   ```bash
+   claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
    ```
 
 2. **Check marketplace.json exists:**

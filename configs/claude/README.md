@@ -4,37 +4,26 @@ Settings for configuring Claude Code across your organization.
 
 ## For Team Administrators
 
-Copy `settings.json` to your organization's Claude Code configuration to enable plugins for all team members automatically.
+Copy `settings.json` to your organization's Claude Code configuration to declare the marketplace and plugin for team members. Declaring them was not shown to install the plugin: a fresh config did not materialize it from the CLI, `claude -p` or a logged-out startup, and an authenticated startup has not been checked. Have each member run the commands below.
 
 ## For Individual Developers
 
-Add to your `~/.claude/settings.json`:
+Install the `nightgauge` binary (see [docs/GO_BINARY.md](../../docs/GO_BINARY.md)),
+confirm it with `nightgauge doctor`, then run:
 
-```json
-{
-  "enabledPlugins": {
-    "nightgauge@nightgauge-plugins": true
-  },
-  "extraKnownMarketplaces": {
-    "nightgauge-plugins": {
-      "source": {
-        "source": "git",
-        "url": "https://github.com/nightgauge/nightgauge.git",
-        "ref": "stable"
-      }
-    }
-  }
-}
+```bash
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
+claude plugin install nightgauge@nightgauge-plugins
 ```
 
 ## For Repository-Level Configuration
 
-Add `.claude/settings.json` to any repository:
+Run these from the repository and commit the `.claude/settings.json` they write:
 
-```json
-{
-  "plugins": ["nightgauge"]
-}
+```bash
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable --scope project
+claude plugin install nightgauge@nightgauge-plugins --scope project
 ```
 
-All team members who clone the repository will have the plugin available.
+Each teammate runs the same two commands after cloning. The committed settings
+alone were not shown to install the plugin for them.

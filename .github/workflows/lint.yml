@@ -60,6 +60,12 @@ jobs:
         run: bash scripts/test-check-plugin-version.sh
       - name: Plugin has one version and valid skills
         run: bash scripts/check-plugin-version.sh
+      # Install docs (#2759): the binary step is present and the documented
+      # commands install the plugin from this commit in a scratch config.
+      - name: Plugin install docs gate self-test
+        run: bash scripts/test-check-plugin-install-docs.sh
+      - name: Documented plugin install works
+        run: bash scripts/check-plugin-install-docs.sh
       # Self-test first, same reasoning as the band-vocabulary and mirror-link
       # gates below: the validator reported a missing field once, on a file that
       # provably had it, because a frontmatter block that never closed handed the

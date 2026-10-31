@@ -76,6 +76,8 @@ Changelog gate regression suite
 Changelog names every released tag
 Plugin version gate regression suite
 Plugin has one version and valid skills
+Plugin install docs gate regression suite
+Documented plugin install works
 Mirror drift gate regression suite
 Agent-skill install target regression suite
 Issue-body contract gate regression suite
