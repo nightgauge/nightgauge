@@ -11,8 +11,11 @@ import (
 )
 
 // FeatureValidateGate verifies the post-conditions of feature-validate by
-// reading the gate-metrics.jsonl emitted by the validate stage. Any record
-// with Result == "catch" is a quality-gate failure and trips this gate.
+// reading the gate-metrics.jsonl emitted by the validate stage. It judges the
+// latest verdict per gate name, in file order (latestVerdicts): a verdict other
+// than "pass" trips this gate unless a later verdict for that gate supersedes
+// it, so a retry in a reused worktree can clear an earlier attempt's "catch"
+// by re-running the gate (#2746).
 //
 // Unlike the per-stage skill output, the gate-metrics file is the canonical
 // signal for build/lint/test results — it is what the existing scheduler
@@ -44,7 +47,8 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 		if err != nil {
 			return false, "failed to read gate-metrics.jsonl", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
 		}
-		if len(results) == 0 {
+		verdicts := latestVerdicts(results)
+		if len(verdicts) == 0 {
 			// validate skill said success but never wrote any quality-gate
 			// records — no-op (the skill skipped the work).
 			return false, "no quality-gate results recorded", []string{
@@ -52,7 +56,7 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 			}, KindNoOp, ""
 		}
 		var failed []string
-		for _, r := range results {
+		for _, r := range verdicts {
 			if r.Result != "pass" {
 				failed = append(failed, fmt.Sprintf("%s=%s", r.GateName, r.Result))
 			}
@@ -72,7 +76,7 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 			return false, te.Reason, te.Evidence, KindFail, TerminalKindValidationFailed
 		}
 
-		details := []string{fmt.Sprintf("gates=%d", len(results))}
+		details := []string{fmt.Sprintf("gates=%d", len(verdicts))}
 		details = append(details, te.Evidence...)
 		details = append(details, validatePolicy.Summary()...)
 		if summary := markUnexercisedDeliverable(issueNumber, workspace); summary != "" {
@@ -80,6 +84,36 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 		}
 		return true, "all quality gates passed", details, KindOK, ""
 	})
+}
+
+// latestVerdicts reduces gate-metric rows to the verdicts the gate judges: the
+// last row per GateName, in file order, kept at that name's first position so
+// the output is deterministic. Telemetry reads every row, so this view stays
+// unexported and private to the gate (#2746).
+//
+// A row with an empty Result carries no verdict and supersedes nothing. A row
+// with a Result but no GateName has no key to collapse on, so it stands alone
+// and a nameless "pass" cannot clear a nameless "catch". File order decides,
+// not Timestamp, because rows may lack one.
+func latestVerdicts(results []state.GateResult) []state.GateResult {
+	verdicts := make([]state.GateResult, 0, len(results))
+	position := make(map[string]int, len(results))
+	for _, r := range results {
+		if r.Result == "" {
+			continue
+		}
+		if r.GateName == "" {
+			verdicts = append(verdicts, r)
+			continue
+		}
+		if i, seen := position[r.GateName]; seen {
+			verdicts[i] = r
+			continue
+		}
+		position[r.GateName] = len(verdicts)
+		verdicts = append(verdicts, r)
+	}
+	return verdicts
 }
 
 // markUnexercisedDeliverable re-derives the validation verdict from the change's
