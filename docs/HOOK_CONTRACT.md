@@ -12,21 +12,16 @@ now empty. Skills invoke the `nightgauge` Go binary directly.
 
 ## Binary resolution
 
-Skills resolve the binary using:
+Hooks and skills resolve the binary in this order: `$NIGHTGAUGE_BIN`, `PATH`,
+the recorded VS Code extension bundle (hooks only), then `~/go/bin`. The cascade
+lives in `claude-plugins/nightgauge/hooks/lib/guard.sh` and
+`skills/_shared/PREFLIGHT.md`.
 
-```bash
-if [ -f "${BINARY:-}" ]; then
-  BINARY="$BINARY"
-elif [ -f "bin/nightgauge" ]; then
-  BINARY="bin/nightgauge"
-elif command -v nightgauge >/dev/null 2>&1; then
-  BINARY="nightgauge"
-else
-  echo "ERROR: nightgauge binary not found. Build it first:" >&2
-  echo "  go build -o bin/nightgauge ./cmd/nightgauge/" >&2
-  exit 1
-fi
-```
+A repository's `bin/nightgauge` runs only with `NIGHTGAUGE_DEV_REPO_BIN=1` in a
+verified core checkout, ahead of the bundle. A verified checkout has the exact
+module line in `go.mod` and an exact `github.com/nightgauge/nightgauge` origin.
+The setting is environment-only, since repository config could otherwise enable
+its own gate. Forks use `NIGHTGAUGE_BIN=$PWD/bin/nightgauge`.
 
 If the binary is missing, the pipeline exits immediately with an actionable
 error message and build instructions.
@@ -321,9 +316,9 @@ WARNING: nightgauge project sync-status failed. Board sync will be skipped.
 
 ## Go binary dependency
 
-All pipeline operations depend on the `nightgauge` Go binary. Skills check
-for the binary at `bin/nightgauge` first, then fall back to `PATH`. If
-neither is available, they exit with code 1 and print build instructions.
+All pipeline operations depend on the `nightgauge` Go binary. Skills resolve it
+as described in [Binary resolution](#binary-resolution). If that finds nothing,
+they exit with code 1 and print install instructions.
 
 Build the binary:
 

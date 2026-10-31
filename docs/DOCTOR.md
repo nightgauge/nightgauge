@@ -348,7 +348,8 @@ is never left running behind it.
 
 The hooks resolve `nightgauge` from the current directory in this order:
 `$NIGHTGAUGE_BIN`, `PATH`, `<repo root>/bin/nightgauge`, the canonical checkout's
-`bin/nightgauge` (worktrees), the VS Code extension bundle VS Code records as
+`bin/nightgauge` (worktrees; both repository steps need
+`NIGHTGAUGE_DEV_REPO_BIN=1` and a verified core checkout), the VS Code extension bundle VS Code records as
 installed, then `~/go/bin/nightgauge`. The result is cwd-dependent, so the same
 hook runs different binaries in different repos; the evidence names the resolved
 path, the resolving step and the binary's version.

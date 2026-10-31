@@ -1238,6 +1238,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // line is the removed batch phase, its include and the renumbered markers.
 // The pr-merge capture was re-pinned for #2699: every changed line is the
 // shared freshness check moving from rebase + force-push to merging the base.
+// All four captures were re-pinned for #2758: every changed line is the gated
+// repository rung replacing the two ungated ones, and the matching wording.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which

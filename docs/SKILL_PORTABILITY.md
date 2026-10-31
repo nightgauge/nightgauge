@@ -49,9 +49,12 @@ order, then prepends `dirname($BINARY)` to `PATH`:
 
 1. `$NIGHTGAUGE_BIN` (host-exported — primary under any adapter)
 2. `command -v nightgauge` (PATH)
-3. `$REPO_ROOT/bin/nightgauge`
-4. canonical-repo `bin/nightgauge` (git worktrees)
+3. `$REPO_ROOT/bin/nightgauge`, development only
+4. canonical-repo `bin/nightgauge` (git worktrees), development only
 5. `$HOME/go/bin/nightgauge`
+
+Steps 3 and 4 run only with `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge
+core checkout, so a foreign repository can never supply the binary (#2758).
 
 No VSCode-extension path appears anywhere in `skills/`.
 
