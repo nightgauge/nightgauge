@@ -6,7 +6,7 @@ description: Validate feature implementation with integration/E2E tests and manu
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.23.0"
+  version: "1.23.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:

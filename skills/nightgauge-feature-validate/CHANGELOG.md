@@ -14,6 +14,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A `catch` fails the run; it is not a log of findings (#2746).** A defect
+  fixed in the fix loop gets `pass` and is described in the validate notes, and
+  the gate judges the latest verdict per `gate_name`, so a retry's verdict
+  supersedes an earlier one. Skill version 1.23.1.
 - **Step 6.0 names the verdict shape pr-create reads (#2665).** Verdicts go in
   `acceptance_criteria_verdicts` as `{index, text, status, evidence}` with the
   0-based index and verbatim text from `ac-reconcile-{N}.json`; the step no

@@ -25,7 +25,9 @@ type gateMetricRecord struct {
 }
 
 // ReadGateMetricsForIssue reads gate-metrics.jsonl and returns GateResult records
-// matching the given issue number. Returns nil, nil if the file does not exist.
+// matching the given issue number, every row in file order: telemetry needs the
+// superseded rows too, so the latest-verdict view lives in FeatureValidateGate
+// (#2746). Returns nil, nil if the file does not exist.
 // Malformed lines are skipped. Errors during reading log a warning and return
 // the records collected so far.
 func ReadGateMetricsForIssue(workspaceRoot string, issueNumber int) ([]GateResult, error) {

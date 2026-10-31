@@ -85,6 +85,39 @@ func TestAppendGateMetric_WritesCheckoutNotWorkingTree(t *testing.T) {
 	}
 }
 
+// Superseded verdicts stay visible to telemetry: the reader and the clone
+// history both keep the earlier "catch" after a later "pass" (#2746).
+func TestAppendGateMetric_SupersededCatchStaysVisible(t *testing.T) {
+	ws := layouttest.Repo(t)
+	if err := AppendGateMetric(ws, 2746, "adversarial-review", "catch", "x", "2026-10-31T00:00:00Z"); err != nil {
+		t.Fatalf("append catch: %v", err)
+	}
+	if err := AppendGateMetric(ws, 2746, "adversarial-review", "pass", "", "2026-10-31T00:01:00Z"); err != nil {
+		t.Fatalf("append pass: %v", err)
+	}
+
+	got, err := ReadGateMetricsForIssue(ws, 2746)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) != 2 || got[0].Result != "catch" || got[1].Result != "pass" {
+		t.Fatalf("reader = %+v, want catch then pass", got)
+	}
+
+	history, err := layout.ClassFilePath(ws, layout.ClassLogs, GateMetricsHistoryName)
+	if err != nil {
+		t.Fatalf("history path: %v", err)
+	}
+	data, err := os.ReadFile(history)
+	if err != nil {
+		t.Fatalf("read history: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"result":"catch"`) || !strings.Contains(lines[1], `"result":"pass"`) {
+		t.Fatalf("history = %q, want catch then pass", lines)
+	}
+}
+
 // A record written from a linked pipeline worktree must survive the
 // worktree's removal in the clone's cross-run history, while the in-run gate
 // input stays per-checkout so the main checkout never sees it (#2535).

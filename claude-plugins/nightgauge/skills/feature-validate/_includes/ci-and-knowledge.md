@@ -511,17 +511,21 @@ nightgauge discovered-work record --issue "$ISSUE_NUMBER" \
   || echo "discovered work not recorded (non-fatal)"
 ```
 
-Then record exactly one verdict — a `catch` fails validation through the
-existing gate:
+Then record exactly one verdict. A `catch` fails the run; it is not a log of
+what the review found. A defect fixed in the fix loop gets `pass`, and you
+describe it in the validate notes. The gate judges the latest verdict per
+`gate_name`, in file order, so a later verdict for the same gate supersedes an
+earlier one, and a `catch` no later verdict replaces stands:
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-# Only when a REAL, unfixed blocking defect remains after the fix loop:
+# Only when a REAL, unfixed blocking defect remains after the fix loop (this fails the run):
 "$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate adversarial-review \
   --result catch --error-summary "<lens>: <one-line defect>"
 # (also set VALIDATION_STATUS="failed" so commit/push is skipped)
 
-# Otherwise — the change survived all four lenses with only nitpicks:
+# Otherwise — no blocking defect remains: the change survived all four lenses with only
+# nitpicks, or the fix loop fixed what they found (describe it in the validate notes):
 "$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate adversarial-review --result pass
 ```

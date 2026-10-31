@@ -23,6 +23,9 @@ changelog, and the release workflow refuses a tag that does not.
   first so a hung package names itself. `--json` now uses the same exit codes as
   the human output, so a blocked push no longer exits 0. The gate skips the Go test
   phase, and says why, only when `ci-local` already passed the same tree (#2700).
+- Validation retries can now succeed in a reused worktree. `FeatureValidateGate`
+  judges the latest verdict per gate, so a later `pass` clears an earlier
+  `catch`; `nightgauge health gate-metrics` still reports every row (#2746).
 - Security: hooks and skills no longer run a `bin/nightgauge` supplied by the
   repository you are in. A repository build is used only with
   `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge core checkout, so

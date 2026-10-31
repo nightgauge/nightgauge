@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- A validation retry in a reused worktree can now pass: the latest verdict per
+  gate decides, so an earlier `catch` no longer fails every later attempt, and
+  gate telemetry still shows every row (#2746).
 - Security: hooks no longer run a `bin/nightgauge` from the open repository,
   so they use the bundled binary unless `NIGHTGAUGE_DEV_REPO_BIN=1` is set in a
   verified Nightgauge core checkout.
