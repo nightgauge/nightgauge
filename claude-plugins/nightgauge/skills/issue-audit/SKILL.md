@@ -710,7 +710,7 @@ exit 0
 The skill exits 2 — distinct from finding-driven exit 1 — when the audit
 itself cannot run:
 
-- Go binary not in `$PATH` and not at `bin/nightgauge`
+- Go binary not in `$PATH`, `$NIGHTGAUGE_BIN` or `~/go/bin`
 - `nightgauge forge` not authenticated
 - `--manifest <path>` does not exist or fails JSON parse
 - an epic's sub-issue list cannot be read whole (`nightgauge issue list --epic`

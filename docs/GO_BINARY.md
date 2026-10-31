@@ -1088,10 +1088,10 @@ now asserts that **no** directive survives expansion.
 **`skill-portability` check enum:** `vscode_extension_path` (hardcoded
 VSCode-extension binary path), `hooks_frontmatter` (Claude-only completion
 hook), and `truncated_binary_cascade` (a fenced bash resolver block missing any
-of the five PREFLIGHT rungs). The cascade check is per block, not per file: one
+of the six PREFLIGHT rungs, the `NIGHTGAUGE_DEV_REPO_BIN` gate included). The cascade check is per block, not per file: one
 complete resolver cannot hide a truncated sibling (#365). Scans every `*.md`
 under `skills/`; skills must resolve the binary provider-neutrally
-(`$NIGHTGAUGE_BIN` → PATH → repo bin → canonical-repo bin → `~/go/bin`). See
+(`$NIGHTGAUGE_BIN` → PATH → gated repo bin → gated canonical-repo bin → `~/go/bin`). See
 docs/SKILL_PORTABILITY.md (#4029).
 
 **No subcommand exposes `--fix`.** No deterministic auto-fix exists for broken

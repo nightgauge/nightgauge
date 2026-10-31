@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Security: hooks and skills no longer run a `bin/nightgauge` supplied by the
+  repository you are in. A repository build is used only with
+  `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge core checkout, so
+  maintainers' local builds are no longer picked up without that setting. Fork
+  contributors set `NIGHTGAUGE_BIN=$PWD/bin/nightgauge`.
 - Installed Claude plugins now receive updates. Each release that changes the
   plugin must raise its version, and installs follow a `stable` branch that moves
   only on release, so `claude plugin update` delivers releases and never the tip

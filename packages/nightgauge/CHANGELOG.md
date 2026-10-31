@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- Security: hooks no longer run a `bin/nightgauge` from the open repository,
+  so they use the bundled binary unless `NIGHTGAUGE_DEV_REPO_BIN=1` is set in a
+  verified Nightgauge core checkout.
 - Remote Claude plugin installs now follow the `stable` release branch, so
   `claude plugin update` delivers releases. The new default for
   `nightgauge.plugins.marketplaceUrl` ends in `#stable` (#2724).

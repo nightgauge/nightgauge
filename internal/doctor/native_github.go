@@ -184,7 +184,8 @@ type binaryProbe struct {
 
 // binaryFindings reports a missing binary (blocker) or one that diverges from
 // the recorded install right now (warning). The stale remedy rebuilds with
-// `make build-cli` inside the source checkout, else names the install command.
+// `make build-cli` when a repo step resolved the binary inside the source
+// checkout, else names the install command.
 func binaryFindings(p binaryProbe, checkout string) ([]Finding, string) {
 	const check, code = "binary", "NGD001"
 	install := manualRemedy("install", "Install nightgauge on PATH", check,
@@ -197,7 +198,7 @@ func binaryFindings(p binaryProbe, checkout string) ([]Finding, string) {
 			"nightgauge binary not found where the hooks look",
 			"the hooks resolve no nightgauge binary from this directory, so every hook fails",
 			map[string]string{
-				"searched": "NIGHTGAUGE_BIN, PATH, repo bin/, canonical-repo bin/, VSCode extension bundle, ~/go/bin",
+				"searched": "NIGHTGAUGE_BIN, PATH, dev-gated repo bin/, dev-gated canonical-repo bin/, VSCode extension bundle, ~/go/bin",
 				"bundles":  strings.TrimPrefix(bundleInventory(p.resolved.Bundles), "; "),
 			},
 			[]string{"missing"}, install)}, p.detail
@@ -216,7 +217,8 @@ func binaryFindings(p binaryProbe, checkout string) ([]Finding, string) {
 	}
 	remedy := install
 	remedy.ID, remedy.Summary = "reinstall", "Reinstall nightgauge so the hooks resolve the current build"
-	if checkout != "" {
+	// A rebuild changes what hooks run only when a repo step resolved them.
+	if checkout != "" && (p.resolved.Step == StepRepoBin || p.resolved.Step == StepCanonicalRepoBin) {
 		remedy = Remedy{ID: "build", Kind: RemedyAuto, Verb: verbBuildCLI, Verify: check, Reversible: true,
 			Summary: "Rebuild the CLI from this source checkout with `make build-cli`",
 			Preview: "make build-cli in " + checkout + " (rewrites " + filepath.Join(checkout, "bin", "nightgauge") + ")"}
@@ -720,9 +722,8 @@ func probeBinary() binaryProbe {
 // bundleInventory renders the step-4 VSCode-extension inventory: how many
 // bundle directories are on disk and which one VS Code RECORDS as installed.
 // It is appended on every outcome, including when an earlier cascade step
-// wins — that is the exact confusion #356 describes, since inside a nightgauge
-// checkout `bin/nightgauge` short-circuits the cascade and the bundles other
-// repos will run are invisible.
+// wins — that is the exact confusion #356 describes, since an earlier step
+// short-circuits the cascade and the bundles other repos will run are invisible.
 //
 // Versions here are opaque display strings. Nothing in this file orders them.
 func bundleInventory(scan VSCodeBundleScan) string {

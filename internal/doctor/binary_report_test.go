@@ -165,6 +165,7 @@ func TestRunDoctor_BinaryDetailNamesBundleInventoryFromRepo(t *testing.T) {
 	runGit(t, repo, "init")
 	repoBin := filepath.Join(repo, "bin", "nightgauge")
 	writeVersionBinary(t, repoBin, strings.TrimPrefix(layout.RecordedRelativeLocation, bundleDirPrefix))
+	markCoreCheckout(t, repo)
 	t.Chdir(repo)
 
 	result := RunDoctor(context.Background(), nil, nil, nil)
@@ -286,6 +287,7 @@ func setupCrossStepVersionBinaries(
 	runGit(t, repo, "init")
 	repoBin := filepath.Join(repo, "bin", "nightgauge")
 	writeVersionBinary(t, repoBin, resolvedVersion)
+	markCoreCheckout(t, repo)
 	t.Chdir(repo)
 	return repoBin, bundleBin
 }
