@@ -233,11 +233,9 @@ jobs:
       - name: Malware scan (ClamAV)
         run: |
           set -euo pipefail
-          brew install --quiet clamav
-          CLAMETC="$(brew --prefix)/etc/clamav"
-          mkdir -p "$CLAMETC" "$(brew --prefix)/var/lib/clamav"
-          sed 's/^Example/#Example/' "$CLAMETC/freshclam.conf.sample" > "$CLAMETC/freshclam.conf"
-          freshclam --quiet
+          bash scripts/install-clamav-macos.sh
+          export PATH="/usr/local/clamav/bin:$PATH"
+          freshclam
           bash scripts/malware-scan.sh \
             --report "$RUNNER_TEMP/clamav-report.json" \
             packages/nightgauge/*.vsix bin/

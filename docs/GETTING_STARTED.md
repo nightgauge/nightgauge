@@ -17,8 +17,6 @@ coding assistant.
 
 ### Claude Code (Recommended)
 
-#### Option 1: Add Plugin Marketplace
-
 Add to your `~/.claude/settings.json`:
 
 ```json
@@ -40,16 +38,6 @@ utility commands, including smart setup and documentation maintenance:
 
 ```bash
 claude plugin install nightgauge@nightgauge-plugins
-```
-
-#### Option 2: Direct Plugin Reference
-
-Add to your `~/.claude/settings.json`:
-
-```json
-{
-  "plugins": ["https://github.com/nightgauge/nightgauge/tree/main/claude-plugins/nightgauge"]
-}
 ```
 
 ### GitHub Copilot, OpenAI Codex, Cursor, and Kiro

@@ -22,7 +22,11 @@ import type { DefaultModel } from "./modelResolver";
 import type { ClaudeEffort } from "./stageResolver";
 import type { ExecutionAdapter } from "../../config/schema";
 import { CodexModelCatalogService } from "../../services/CodexModelCatalogService";
-import { DEFAULT_BACKGROUND_TASK_CEILING_MS, type ProgressMonitorConfig } from "../progressMonitor";
+import {
+  DEFAULT_BACKGROUND_TASK_CEILING_MS,
+  DEFAULT_BACKGROUND_TASK_HARD_CEILING_MS,
+  type ProgressMonitorConfig,
+} from "../progressMonitor";
 import { isLocalExecution, isPriceableOpenCodeModel, localExecutionKey } from "../computeStageCost";
 
 // ============================================================================
@@ -2103,6 +2107,7 @@ export function getProgressRunawayConfig(
   let catastrophicLimitUsd = DEFAULT_CATASTROPHIC_LIMIT_USD;
   let externalProgressCeilingMs = DEFAULT_EXTERNAL_PROGRESS_CEILING_MS;
   let backgroundTaskCeilingMs = DEFAULT_BACKGROUND_TASK_CEILING_MS;
+  let backgroundTaskHardCeilingMs = DEFAULT_BACKGROUND_TASK_HARD_CEILING_MS;
 
   // Env var overrides
   const envEnabled = process.env["NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_ENABLED"];
@@ -2146,6 +2151,13 @@ export function getProgressRunawayConfig(
   if (envBackgroundCeiling !== undefined && envBackgroundCeiling !== "") {
     const parsed = Number.parseInt(envBackgroundCeiling, 10);
     if (!Number.isNaN(parsed) && parsed >= 0) backgroundTaskCeilingMs = parsed;
+  }
+
+  const envBackgroundHardCeiling =
+    process.env["NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_BACKGROUND_TASK_HARD_CEILING_MS"];
+  if (envBackgroundHardCeiling !== undefined && envBackgroundHardCeiling !== "") {
+    const parsed = Number.parseInt(envBackgroundHardCeiling, 10);
+    if (!Number.isNaN(parsed) && parsed >= 0) backgroundTaskHardCeilingMs = parsed;
   }
 
   // Config file overrides (only if no env override already changed the default)
@@ -2212,6 +2224,13 @@ export function getProgressRunawayConfig(
               const parsed = Number.parseInt(backgroundCeilingMatch[1], 10);
               if (!Number.isNaN(parsed) && parsed >= 0) backgroundTaskCeilingMs = parsed;
             }
+            const backgroundHardMatch = trimmed.match(
+              /^background_task_hard_ceiling_ms\s*:\s*(\d+)/
+            );
+            if (backgroundHardMatch && envBackgroundHardCeiling === undefined) {
+              const parsed = Number.parseInt(backgroundHardMatch[1], 10);
+              if (!Number.isNaN(parsed) && parsed >= 0) backgroundTaskHardCeilingMs = parsed;
+            }
           }
         }
       }
@@ -2239,6 +2258,7 @@ export function getProgressRunawayConfig(
     catastrophicKill,
     externalProgressCeilingMs,
     backgroundTaskCeilingMs,
+    backgroundTaskHardCeilingMs,
   };
 }
 

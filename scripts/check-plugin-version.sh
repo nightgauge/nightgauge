@@ -17,8 +17,10 @@
 #   check-plugin-version.sh --tag vX.Y.Z[-rc.N]
 #       The first two arms, then compare the tag with the highest stable tag
 #       below it: a changed plugin needs a different version, and the version
-#       never goes down. No lower stable tag passes. An unpushed tag is read
-#       as HEAD, so this works before tagging. Needs full history and tags.
+#       never goes down. A first release, with stable tags but none below it,
+#       passes; a clone with no stable tag at all could not run. An unpushed tag
+#       is read as HEAD, so this works before tagging. Needs full history and
+#       tags.
 #
 # Exit codes: 0 contract holds; 1 a violation was found (each named on stderr);
 # 2 usage error, or the check could not run.
@@ -46,7 +48,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-cannot_run() { echo "check-plugin-version: $1" >&2; exit 2; }
+# HARNESS ERROR: ci-local.sh reports the step as INFRASTRUCTURE, not a finding.
+cannot_run() { echo "HARNESS ERROR: check-plugin-version: $1" >&2; exit 2; }
 
 FAIL=0
 violation() { echo "VIOLATION: $1" >&2; FAIL=1; }
@@ -103,12 +106,16 @@ else
   [[ "$BASE" =~ $SEMVER_RE ]] || cannot_run "--tag expects vX.Y.Z[-rc.N], got '$GATE_TAG'"
 
   PREV=""
+  STABLE_TAGS=0
   while IFS= read -r t; do
     v="${t#v}"
     [[ "$v" =~ $SEMVER_RE ]] || continue
+    STABLE_TAGS=$((STABLE_TAGS + 1))
     semver_lt "$v" "$BASE" || continue
     if [ -z "$PREV" ] || semver_lt "$PREV" "$v"; then PREV="$v"; fi
   done < <(git tag -l 'v*')
+  # A tagless clone would pass vacuously, skipping the comparison entirely.
+  [ "$STABLE_TAGS" -gt 0 ] || cannot_run "no stable tag in this clone (git fetch --tags)"
 
   TARGET="HEAD"
   git rev-parse -q --verify "refs/tags/$GATE_TAG" >/dev/null && TARGET="refs/tags/$GATE_TAG"
@@ -120,7 +127,11 @@ else
     git diff --quiet "v$PREV" "$TARGET" -- "$PLUGIN_DIR" .claude-plugin
     DIFF=$?
     [ "$DIFF" -le 1 ] || cannot_run "cannot diff v$PREV against $TARGET"
-    if [[ "$PREV_VERSION" =~ $SEMVER_RE ]] && [[ "$VERSION" =~ $SEMVER_RE ]]; then
+    [[ "$PREV_VERSION" =~ $SEMVER_RE ]] ||
+      cannot_run "no X.Y.Z version in $PLUGIN_JSON at v$PREV, got '${PREV_VERSION:-<none>}'"
+    if ! [[ "$VERSION" =~ $SEMVER_RE ]]; then
+      violation "$PLUGIN_JSON version at $GATE_TAG must be X.Y.Z, got '${VERSION:-<none>}'"
+    else
       if semver_lt "$VERSION" "$PREV_VERSION"; then
         violation "plugin version went down: $PREV_VERSION at v$PREV, $VERSION at $GATE_TAG"
       elif [ "$DIFF" -eq 1 ] && [ "$VERSION" = "$PREV_VERSION" ]; then

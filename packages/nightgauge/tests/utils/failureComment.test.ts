@@ -459,3 +459,90 @@ describe("postFailureComment — pr-create killed with a verified PR (Issue #153
     expect(cmd).not.toContain("stalled after opening it");
   });
 });
+
+describe("postFailureComment — runaway kill (Issue #2694)", () => {
+  beforeEach(() => {
+    execMock.mockReset();
+    execMock.mockImplementation((_cmd: string, _opts: unknown, cb: Function) => {
+      cb(null, "", "");
+    });
+  });
+
+  async function comment(failedStage: string, ceiling: string): Promise<string> {
+    execMock.mockClear();
+    await postFailureComment({
+      issueNumber: 2694,
+      result: makeResult({
+        budgetExceeded: false,
+        failedStage,
+        error: new Error(
+          `[runaway-progress-exceeded] Stage terminated: x. Ceiling: ${ceiling}. Cost $1`
+        ),
+      } as Partial<PipelineRunResult>),
+      state: null,
+      cwd: "/tmp/repo",
+      logger,
+    });
+    return execMock.mock.calls[0][0];
+  }
+
+  it("names the monitor and ceiling instead of a validation verdict", async () => {
+    const cmd = await comment("feature-validate", "progress-background-task-ceiling=2700000ms (x)");
+    expect(cmd).toContain("Stopped by the runaway monitor");
+    expect(cmd).toContain("progress-background-task-ceiling=2700000ms");
+    expect(cmd).not.toContain("Validation failed");
+  });
+
+  it("keeps a decimal limit whole and drops the sentence's period", async () => {
+    expect(await comment("feature-validate", "progress-catastrophic-cost=$2.50 (x)")).toContain(
+      "`progress-catastrophic-cost=$2.50`"
+    );
+    expect(await comment("feature-validate", "progress-no-progress-window=90000ms")).toContain(
+      "`progress-no-progress-window=90000ms`"
+    );
+  });
+
+  it("drops the verdict on another stage and survives an unattributed kill", async () => {
+    const cmd = await comment("feature-dev", "(unattributed)");
+    expect(cmd).toContain("ceiling not recorded");
+    expect(cmd).not.toContain("could not implement the feature");
+  });
+
+  it("names the ceiling from the text HeadlessOrchestrator really produces", async () => {
+    execMock.mockClear();
+    await postFailureComment({
+      issueNumber: 2694,
+      result: makeResult({
+        budgetExceeded: false,
+        failedStage: "feature-validate",
+        error: new Error(
+          "[runaway-progress-exceeded] Stage feature-validate terminated: progress-based runaway " +
+            "kill at cost $1.6663 (no dollar ceiling crossed). Treated as transient — will retry " +
+            "with 30-minute backoff (Issue #3783). Ceiling: progress-background-task-ceiling=5400000ms."
+        ),
+      } as Partial<PipelineRunResult>),
+      state: null,
+      cwd: "/tmp/repo",
+      logger,
+    });
+    expect(execMock.mock.calls[0][0]).toContain("`progress-background-task-ceiling=5400000ms`");
+  });
+
+  it("keeps the #1531 guidance when a runaway kill follows a verified PR", async () => {
+    execMock.mockClear();
+    const killed = prCreateKilledResult();
+    await postFailureComment({
+      issueNumber: 1431,
+      result: {
+        ...killed,
+        error: new Error(`[runaway-progress-exceeded] ${killed.error?.message}`),
+      },
+      state: prCreateState({ pr_number: 1432, pr_url: "https://github.com/o/r/pull/1432" }),
+      cwd: "/tmp/repo",
+      logger,
+    });
+    const cmd = execMock.mock.calls[0][0];
+    expect(cmd).toContain("Stopped by the runaway monitor");
+    expect(cmd).toContain("The PR was created");
+  });
+});

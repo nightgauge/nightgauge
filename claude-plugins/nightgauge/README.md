@@ -81,9 +81,8 @@ Or add to your `~/.claude/settings.json`:
 
 `#stable` is a branch that moves only when a release is published, so you
 receive releases and never the tip of `main`. Updates are manual: Claude Code
-leaves auto-update off for third-party marketplaces. Turn it on under `/plugin`
-
-> Marketplaces > Enable auto-update, or refresh by hand and restart:
+leaves auto-update off for third-party marketplaces. Turn it on under
+`/plugin` → Marketplaces → Enable auto-update, or refresh by hand and restart:
 
 ```bash
 claude plugin marketplace update nightgauge-plugins

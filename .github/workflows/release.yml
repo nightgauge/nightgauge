@@ -393,8 +393,9 @@ jobs:
       # Malware-scan every artifact BEFORE anything is attested or published.
       # v0.4.4 reached the Marketplace unscanned by us and was flagged there
       # (6/66, all generic heuristics, artifact clean). Whatever a scanner is
-      # going to say, we say it first. Runs on macOS via Homebrew because this
-      # job needs macos-latest for `codesign`.
+      # going to say, we say it first. Runs on macOS because this job needs
+      # macos-latest for `codesign`, with the official pinned ClamAV package;
+      # scripts/install-clamav-macos.sh says why not Homebrew.
       #
       # The gate is not clamscan's exit code: clamscan exits 0 both for a clean
       # artifact and for one it never read. malware-scan.sh additionally asserts
@@ -402,11 +403,9 @@ jobs:
       - name: Malware scan (ClamAV)
         run: |
           set -euo pipefail
-          brew install --quiet clamav
-          CLAMETC="$(brew --prefix)/etc/clamav"
-          mkdir -p "$CLAMETC" "$(brew --prefix)/var/lib/clamav"
-          sed 's/^Example/#Example/' "$CLAMETC/freshclam.conf.sample" > "$CLAMETC/freshclam.conf"
-          freshclam --quiet
+          bash scripts/install-clamav-macos.sh
+          export PATH="/usr/local/clamav/bin:$PATH"
+          freshclam
           bash scripts/malware-scan.sh \
             --report "$RUNNER_TEMP/clamav-report.json" \
             packages/nightgauge/*.vsix bin/
@@ -545,31 +544,15 @@ jobs:
         with:
           subject-path: packages/nightgauge/*.vsix
 
-      # FINAL STEP. GoReleaser only PROPOSES the cask (a pull request on the
-      # tap, .goreleaser.yml), so the release is not complete until that pull
-      # request merges. Prove it was proposed, close every older cask PR as
-      # superseded so the queue cannot pile up (#1874: seven sat open), and
-      # name the one to merge. The daily release watchdog stays red until the
-      # tap's main serves this version.
-      - name: Homebrew cask proposed; close superseded cask PRs
-        env:
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
-            echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set; the cask was not proposed (see Preflight)."
-            exit 0
-          fi
-          GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" bash scripts/verify-release-channels.sh \
-            --channel homebrew --release --version "$VERSION" --close-superseded
-
       # Claude plugin channel (#2724): the marketplace is installed at #stable,
       # which only this step moves, so plugins reach users with a release and
-      # never from main. Last, so a failed publish leaves stable alone.
+      # never from main. After every publish step, so a failed publish leaves
+      # stable alone; before the cask verification, which concerns another
+      # channel and must not hold plugins back.
       # Fast-forward only; a refused move fails here and the watchdog's
       # claude-plugin channel stays red until a maintainer moves the branch.
       - name: Advance the stable branch to this release
+        id: advance-stable
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -583,3 +566,24 @@ jobs:
               -f ref=refs/heads/stable -f sha="$SHA" >/dev/null
           fi
           echo "stable is now ${GITHUB_REF_NAME} ($SHA)" >> "$GITHUB_STEP_SUMMARY"
+
+      # FINAL STEP. GoReleaser only PROPOSES the cask (a pull request on the
+      # tap, .goreleaser.yml), so the release is not complete until that pull
+      # request merges. Prove it was proposed, close every older cask PR as
+      # superseded so the queue cannot pile up (#1874: seven sat open), and
+      # name the one to merge. The daily release watchdog stays red until the
+      # tap's main serves this version.
+      - name: Homebrew cask proposed; close superseded cask PRs
+        # Runs after a refused stable move too: the release is already out.
+        if: ${{ !cancelled() && steps.advance-stable.conclusion != 'skipped' }}
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
+            echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set; the cask was not proposed (see Preflight)."
+            exit 0
+          fi
+          GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" bash scripts/verify-release-channels.sh \
+            --channel homebrew --release --version "$VERSION" --close-superseded
