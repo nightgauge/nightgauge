@@ -27,7 +27,8 @@ changelog, and the release workflow refuses a tag that does not.
   Started guide include a required `nightgauge` binary step with
   `nightgauge doctor`, settings-only routes that installed nothing are gone, and
   the plugin README says hooks enforce nothing without the binary. A new gate
-  runs the documented commands in a scratch config (#2759).
+  runs each documented route in its own scratch config (#2759).
+  `configs/claude/settings.json` is removed: it shipped the settings-only route.
 - Validation retries can now succeed in a reused worktree. `FeatureValidateGate`
   judges the latest verdict per gate, so a later `pass` clears an earlier
   `catch`; `nightgauge health gate-metrics` still reports every row. Judge

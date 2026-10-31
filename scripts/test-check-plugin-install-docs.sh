@@ -45,6 +45,7 @@ write_stub() {
 #!/usr/bin/env bash
 [ "${1:-}" = "--version" ] && { [ -z "${STUB_BROKEN:-}" ]; exit; }
 c="$CLAUDE_CONFIG_DIR"
+[ -z "${STUB_HANG:-}" ] || exec sleep 30
 case "$*" in
   "plugin marketplace add "*)
     git ls-remote --exit-code https://github.com/nightgauge/nightgauge.git stable >/dev/null ||
@@ -53,6 +54,13 @@ case "$*" in
   "plugin install "*)
     [ -f "$c/marketplace" ] || { echo 'Plugin "nightgauge" not found in marketplace'; exit 1; }
     [ -z "${STUB_INSTALL_FAILS:-}" ] || { echo "install failed"; exit 1; }
+    case "$*" in
+      *" --scope project")
+        [ -n "${STUB_NO_PROJECT_SETTINGS:-}" ] || {
+          mkdir -p .claude
+          echo '{"enabledPlugins":{"nightgauge@nightgauge-plugins":true}}' >.claude/settings.json
+        } ;;
+    esac
     mkdir -p "$c/plugin/skills/a"
     [ -n "${STUB_NO_SKILLS:-}" ] || touch "$c/plugin/skills/a/SKILL.md" ;;
   "plugin list --json")
@@ -144,6 +152,39 @@ expect "no commands to run" 1 "GETTING_STARTED.md: no marketplace add command"
 
 fixture
 expect "claude unavailable is a harness error" 2 "HARNESS ERROR" STUB_BROKEN=1
+
+fixture
+expect "a hung claude is a harness error, not a hang" 2 "did not finish in 1s" \
+  STUB_HANG=1 PLUGIN_INSTALL_TIMEOUT_SECS=1
+
+# A doc with both routes, like configs/claude/README.md.
+add_project_route() {
+  printf "\`\`\`bash\n%s --scope project\n%s --scope project\n\`\`\`\n" "$ADD" "$INSTALL" \
+    >>"$TMP/configs/claude/README.md"
+}
+
+fixture
+add_project_route
+expect "user and project routes pass" 0 "check-plugin-install-docs: OK"
+
+fixture
+add_project_route
+expect "project route writes no settings" 1 "project route did not write" \
+  STUB_NO_PROJECT_SETTINGS=1
+
+fixture
+add_project_route
+sed -i.bak '/marketplace add.*--scope project/d' "$TMP/configs/claude/README.md"
+expect "project route cannot reuse the user route's marketplace" 1 "not found in marketplace"
+
+fixture
+add_project_route
+sed -i.bak 's/--scope project/--scope projct/' "$TMP/configs/claude/README.md"
+expect "mistyped scope" 1 "undocumented install form"
+
+fixture
+echo '{"extraKnownMarketplaces": {}}' >"$TMP/configs/claude/settings.json"
+expect "shipped settings marketplace" 1 "configs/claude/settings.json: documents a settings-based"
 
 echo "check-plugin-install-docs suite: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

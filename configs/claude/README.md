@@ -4,7 +4,10 @@ Settings for configuring Claude Code across your organization.
 
 ## For Team Administrators
 
-Copy `settings.json` to your organization's Claude Code configuration to declare the marketplace and plugin for team members. Declaring them was not shown to install the plugin: a fresh config did not materialize it from the CLI, `claude -p` or a logged-out startup, and an authenticated startup has not been checked. Have each member run the commands below.
+There is no settings file to distribute. Declaring the marketplace and plugin in
+settings was not shown to install the plugin: a fresh config did not materialize
+it from the CLI, `claude -p` or a logged-out startup, and an authenticated startup
+has not been checked. Have each member run the commands below.
 
 ## For Individual Developers
 

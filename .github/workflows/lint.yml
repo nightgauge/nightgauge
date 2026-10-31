@@ -67,6 +67,7 @@ jobs:
       - name: Plugin install docs gate self-test
         run: bash scripts/test-check-plugin-install-docs.sh
       - name: Documented plugin install works
+        timeout-minutes: 10
         run: bash scripts/check-plugin-install-docs.sh
       # Self-test first, same reasoning as the band-vocabulary and mirror-link
       # gates below: the validator reported a missing field once, on a file that
