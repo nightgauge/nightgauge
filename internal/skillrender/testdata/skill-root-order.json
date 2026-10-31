@@ -28,6 +28,14 @@
     "want": ["override", "workspace"]
   },
   {
+    "name": "production-no-workspace",
+    "mode": "production",
+    "override": false,
+    "bundle": true,
+    "no_workspace": true,
+    "want": ["bundle"]
+  },
+  {
     "name": "development-all-roots",
     "mode": "development",
     "override": true,

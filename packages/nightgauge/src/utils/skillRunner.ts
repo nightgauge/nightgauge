@@ -3245,42 +3245,44 @@ export function getStageLabel(stage: RunnableStage): string {
 }
 
 /**
- * Skill roots for this host, in search order (first match wins).
+ * The binary to spawn for a `nightgauge` verb from this host.
  *
- * Skill LOCATION is deliberately the host's job (ADR 016 §4): the binary
- * cannot reproduce this discovery, because the bundle path depends on the
- * VSCode extension host and carries the garbage-collected-bundle self-heal
- * from #3883. Everything DOWNSTREAM of location — frontmatter, `_includes`,
- * overlays, path rewriting — belongs to `nightgauge skill render`.
+ * Tiers 1-3 read a VSCode setting and the extension bundle. Either can be
+ * unavailable — during activation, or in a host that is not the extension
+ * host at all — and that is precisely what BinaryResolver's PATH tier is
+ * for. Fall back to the bare name rather than failing the stage on a
+ * resolver that could not answer.
+ */
+function skillBinary(): string {
+  try {
+    return BinaryResolver.fromVSCode().resolveSync() ?? "nightgauge";
+  } catch {
+    return "nightgauge";
+  }
+}
+
+/**
+ * Skill roots for this host, in search order (first match wins).
  *
  * A root is a directory CONTAINING skill directories, not a SKILL.md path.
  *
- * The order is the one contract both hosts share (#2718), pinned by
- * internal/skillrender/testdata/skill-root-order.json: the operator's override,
- * then a build's own bundle, then the workspace. An Extension Development or
- * Test host keeps the workspace ahead of the bundle, because testing the
- * checkout is why it exists. The override is listed even when it does not
- * exist, so a typo shows in the binary's not-found error.
+ * This gathers what only the extension host knows and takes the answer from
+ * `nightgauge skill roots`, the one implementation of the order (#2718, ADR 016
+ * amendment): the bundle path, with the #3883 self-heal, and whether this is a
+ * Development or Test host. The operator's override reaches the binary through
+ * the inherited environment. Keep ordering out of this function.
  *
  * `workspaceRoot` is the root the run is pinned to, which on a pipeline run is
- * the per-issue worktree; without one, the first workspace folder. The Go host
- * derives its workspace from the repository root instead, so the order is
- * shared and the `<workspace>` in it may be a different checkout.
+ * the per-issue worktree; without one, the first workspace folder.
+ *
+ * Throws on failure rather than ordering locally. A second implementation is
+ * the drift this replaced, and a stage cannot render without the binary anyway.
  */
 export function resolveSkillRoots(
   workspaceRoot: string | undefined = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 ): string[] {
-  const roots: string[] = [];
-
-  const override = process.env.NIGHTGAUGE_SKILLS_ROOT?.trim();
-  if (override) {
-    roots.push(override);
-  }
-
-  const workspaceSkills = workspaceRoot ? path.join(workspaceRoot, "skills") : undefined;
-  if (workspaceSkills && !packagedExtensionHost) {
-    roots.push(workspaceSkills);
-  }
+  const args = ["skill", "roots", "--json"];
+  if (workspaceRoot) args.push("--workspace", workspaceRoot);
 
   // Skills bundled inside the extension's dist/. This is how standalone repos
   // (customers) find pipeline skills without the nightgauge source repo as a
@@ -3288,22 +3290,37 @@ export function resolveSkillRoots(
   // (auto-update GC): resolve to VS Code's recorded sibling bundle (#3883, #360).
   const ext = vscode.extensions.getExtension("nightgauge.nightgauge");
   const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
-  if (bundleRoot) {
-    roots.push(path.join(bundleRoot, "dist", "skills"));
+  if (bundleRoot) args.push("--bundle", path.join(bundleRoot, "dist", "skills"));
+
+  if (!packagedExtensionHost) args.push("--workspace-first");
+
+  let stdout: string;
+  try {
+    stdout = execFileSync(skillBinary(), args, { encoding: "utf-8" });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`skill roots failed: ${detail}`, { cause: err });
   }
 
-  if (workspaceSkills && packagedExtensionHost) {
-    roots.push(workspaceSkills);
+  let roots: unknown;
+  try {
+    roots = (JSON.parse(stdout) as { roots?: unknown }).roots;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`skill roots returned unparseable output: ${detail}`, { cause: err });
   }
-
-  return roots;
+  if (!Array.isArray(roots) || !roots.every((root) => typeof root === "string")) {
+    throw new Error("skill roots returned no roots list");
+  }
+  return roots as string[];
 }
 
 /**
  * Claude flags that make the resolved skills tree readable under a default
  * user's permissions, with file-tool writes to it denied (#2718). The same
  * contract as claudeSkillsDirArgs in internal/execution/adapters/claude.go,
- * including its reason for skipping a tree inside the stage's working directory.
+ * including every path form in the deny and its reason for skipping a tree
+ * inside the stage's working directory.
  */
 export function claudeSkillsDirArgs(skillPath: string, cwd: string | undefined): string[] {
   // The binary locates <root>/<dir>/SKILL.md or <root>/<dir>.md.
@@ -3312,8 +3329,7 @@ export function claudeSkillsDirArgs(skillPath: string, cwd: string | undefined):
   if (!path.isAbsolute(root) || isPathWithin(root, cwd)) {
     return [];
   }
-  const forms = [...new Set([root, resolvedPath(root)])];
-  const deny = forms.flatMap((form) => {
+  const deny = skillsTreeForms(root).flatMap((form) => {
     const rule = `//${form.split(path.sep).join("/").replace(/^\/+/, "")}/**`;
     return CLAUDE_FILE_WRITE_TOOLS.map((tool) => `${tool}(${rule})`);
   });
@@ -3321,6 +3337,28 @@ export function claudeSkillsDirArgs(skillPath: string, cwd: string | undefined):
 }
 
 const CLAUDE_FILE_WRITE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+
+/** Top-level system symlinks a path is reached through, as openCodeSystemAliases. */
+const SYSTEM_PATH_ALIASES = ["/tmp"];
+
+/**
+ * Every form in which a tool call can name `root`: as given, resolved through
+ * symlinks, and the resolved form re-rooted on a system alias. /private/tmp/x is
+ * also /tmp/x on macOS. Realpath cannot find an alias form, which points AT the
+ * path rather than out of it. Matches openCodePathForms in opencode_guard.go.
+ */
+function skillsTreeForms(root: string): string[] {
+  const resolved = resolvedPath(root);
+  const forms = [path.normalize(root), resolved];
+  for (const alias of SYSTEM_PATH_ALIASES) {
+    const target = resolvedPath(alias);
+    if (target === alias) continue;
+    if (resolved === target || resolved.startsWith(`${target}${path.sep}`)) {
+      forms.push(path.join(alias, path.relative(target, resolved)));
+    }
+  }
+  return [...new Set(forms)];
+}
 
 function isPathWithin(candidate: string, dir: string | undefined): boolean {
   if (!dir) return false;
@@ -3347,7 +3385,13 @@ function resolvedPath(target: string): string {
 export function findSkillFile(stage: PipelineStage): string | null {
   const skillDir = STAGE_TO_SKILL_DIR[stage];
 
-  for (const root of resolveSkillRoots()) {
+  let roots: string[];
+  try {
+    roots = resolveSkillRoots();
+  } catch {
+    return null;
+  }
+  for (const root of roots) {
     const skillPath = path.join(root, skillDir, "SKILL.md");
     if (fs.existsSync(skillPath)) {
       return skillPath;
@@ -3423,17 +3467,7 @@ export function renderSkill(
     throw new Error(`No skills root available for stage ${stage} (no workspace folder, no bundle)`);
   }
 
-  // Tiers 1-3 read a VSCode setting and the extension bundle. Either can be
-  // unavailable — during activation, or in a host that is not the extension
-  // host at all — and that is precisely what BinaryResolver's PATH tier is
-  // for. Fall back to the bare name rather than failing the stage on a
-  // resolver that could not answer.
-  let binary = "nightgauge";
-  try {
-    binary = BinaryResolver.fromVSCode().resolveSync() ?? binary;
-  } catch {
-    // Keep the PATH name.
-  }
+  const binary = skillBinary();
   const args = ["skill", "render", "--stage", stage, "--json", "--include-content"];
   if (model) args.push("--model", model);
   if (adapter) args.push("--adapter", adapter);

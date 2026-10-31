@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/skillrender"
 )
 
 // `skill render`'s CLI surface. The composition rules themselves are covered
@@ -466,5 +469,58 @@ func TestRenderAliasResolvesAdapterBeforeKeyingTheHostOverlay(t *testing.T) {
 				t.Errorf("content applied hosts/%s.md, keyed off the raw --adapter value", tt.adapter)
 			}
 		})
+	}
+}
+
+// runRoots runs `nightgauge skill roots --json` and returns the list.
+func runRoots(t *testing.T, args ...string) []string {
+	t.Helper()
+	cmd := skillRootsCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs(append([]string{"--json"}, args...))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("skill roots %v: %v", args, err)
+	}
+	var env skillRootsEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("parse %q: %v", stdout.String(), err)
+	}
+	if env.V != 1 || env.Roots == nil {
+		t.Fatalf("envelope = %+v, want v1 with a roots list", env)
+	}
+	return env.Roots
+}
+
+// TestSkillRootsAppliesHostFactsAndTheOverride pins what the extension relies
+// on: --bundle stands in for the binary's own tree, --workspace-first swaps only
+// the inferred roots, and the override leads from the environment alone (#2718).
+func TestSkillRootsAppliesHostFactsAndTheOverride(t *testing.T) {
+	t.Setenv(skillrender.SkillsRootEnv, "")
+	workspace := filepath.Join("/w", "skills")
+	const bundle = "/ext/dist/skills"
+
+	got := runRoots(t, "--workspace", "/w", "--bundle", bundle)
+	if !slices.Equal(got, []string{bundle, workspace}) {
+		t.Errorf("packaged order = %v", got)
+	}
+	got = runRoots(t, "--workspace", "/w", "--bundle", bundle, "--workspace-first")
+	if !slices.Equal(got, []string{workspace, bundle}) {
+		t.Errorf("development order = %v", got)
+	}
+
+	t.Setenv(skillrender.SkillsRootEnv, "/x")
+	got = runRoots(t, "--workspace", "/w", "--bundle", bundle, "--workspace-first")
+	if !slices.Equal(got, []string{"/x", workspace, bundle}) {
+		t.Errorf("override order = %v", got)
+	}
+}
+
+// TestSkillRootsEmitsAnEmptyListNotNull: a host parses `roots` as an array, and
+// a test binary has no bundle beside it.
+func TestSkillRootsEmitsAnEmptyListNotNull(t *testing.T) {
+	t.Setenv(skillrender.SkillsRootEnv, "")
+	if got := runRoots(t); len(got) != 0 {
+		t.Errorf("roots = %v, want none", got)
 	}
 }
