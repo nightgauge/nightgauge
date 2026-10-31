@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The Output window's Overview card shows the right time for a running issue. A run
+  taking over a reused slot starts from a clean record, a stage boundary no longer
+  marks a live run finished, and the card's timer follows the new run.
 - The Claude plugin survives extension upgrades. The extension registers a copy of
   its marketplace in global storage instead of its version-keyed install directory,
   moves an existing registration there without losing plugin data, and repairs a

@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- The Output window's Overview card shows the right time for a running issue. A run
+  taking over a reused slot starts from a clean record, a stage boundary no longer
+  marks a live run finished, and the card's timer follows the new run.
 - The Claude plugin keeps working after an extension upgrade. Its marketplace now
   lives in global storage, and an existing install moves there with its plugin data
   intact. A plugin that failed to load is repaired on activation, or Claude Code's
