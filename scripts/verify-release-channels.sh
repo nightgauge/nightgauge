@@ -318,11 +318,26 @@ if [ "$CHANNEL" = "claude-plugin" ]; then
     echo "ERROR: cannot resolve tag v$VERSION on $SOURCE" >&2
     exit 2
   fi
-  if ! SERVED="$(gh api "repos/$SOURCE/commits/heads/stable" | jq -r '.sha // empty')" || [ -z "$SERVED" ]; then
+  say "- release: \`$VERSION\` at \`$WANT\` ($SOURCE)"
+  # git/ref, not commits/: a missing ref is a 404 there, and only a 404 means the
+  # channel serves nothing. Any other failure says nothing about the channel.
+  STABLE_ERR="$(mktemp)"
+  SERVED="$(gh api "repos/$SOURCE/git/ref/heads/stable" 2>"$STABLE_ERR" | jq -r '.object.sha // empty')"
+  STABLE_ABSENT=0
+  grep -q 'HTTP 404' "$STABLE_ERR" && STABLE_ABSENT=1
+  rm -f "$STABLE_ERR"
+  if [ "$STABLE_ABSENT" -eq 1 ]; then
+    VERDICT=1
+    REASON="the stable branch does not exist, so plugin installs at #stable fail: create it (gh api repos/$SOURCE/git/refs -f ref=refs/heads/stable -f sha=$WANT)."
+    say "- verdict: MISSING. $REASON"
+    echo "::error::$REASON" >&2
+    sync_issue
+    exit "$VERDICT"
+  fi
+  if [ -z "$SERVED" ]; then
     echo "ERROR: cannot read the stable branch of $SOURCE" >&2
     exit 2
   fi
-  say "- release: \`$VERSION\` at \`$WANT\` ($SOURCE)"
   say "- \`stable\` serves: \`$SERVED\`"
   if [ "$SERVED" = "$WANT" ]; then
     VERDICT=0

@@ -8,6 +8,12 @@
 # Also run by scripts/ci-local.sh and .github/workflows/lint.yml.
 set -uo pipefail
 
+if [[ "$(yq --version 2>/dev/null)" != *mikefarah* ]]; then
+  # ci-local.sh reports this step as INFRASTRUCTURE, never as a pass.
+  echo "HARNESS ERROR: mikefarah yq is not installed, so the plugin-version suite could not run."
+  exit 2
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GATE="$REPO_ROOT/scripts/check-plugin-version.sh"
 PASS=0
@@ -35,7 +41,10 @@ commit() {
 # fixture: a valid repository with v1.0.0 tagged at plugin version 1.0.0.
 fixture() {
   [ -n "$TMP" ] && rm -rf "$TMP"
-  TMP="$(mktemp -d)"
+  TMP="$(mktemp -d)" || {
+    echo "HARNESS ERROR: mktemp failed, so the plugin-version suite could not run."
+    exit 2
+  }
   mkdir -p "$TMP/scripts" "$TMP/.claude-plugin" \
     "$TMP/claude-plugins/nightgauge/.claude-plugin" "$TMP/claude-plugins/nightgauge/skills/a"
   cp "$GATE" "$TMP/scripts/"
@@ -127,6 +136,27 @@ git -C "$TMP" tag v1.1.0
 set_version 1.1.0
 commit three
 expect "a pushed tag is read from its own tree" 1 "still 1.0.0" --tag v1.1.0
+
+# A gate that skips its comparison must not report OK.
+fixture
+git -C "$TMP" tag -d v1.0.0 >/dev/null
+expect "a clone with no stable tag could not run" 2 "HARNESS ERROR" --tag v1.1.0
+
+fixture
+printf '{"name": "nightgauge"}\n' >"$TMP/claude-plugins/nightgauge/.claude-plugin/plugin.json"
+commit two
+git -C "$TMP" tag v1.1.0
+set_version 1.1.0
+commit three
+expect "a pushed tag with no version fails" 1 "must be X.Y.Z" --tag v1.1.0
+
+fixture
+printf '{"name": "nightgauge"}\n' >"$TMP/claude-plugins/nightgauge/.claude-plugin/plugin.json"
+commit two
+git -C "$TMP" tag -f v1.0.0 >/dev/null
+set_version 1.0.0
+commit three
+expect "a baseline tag with no version could not run" 2 "at v1.0.0" --tag v1.1.0
 
 fixture
 expect "a malformed tag is a usage error" 2 "--tag expects" --tag latest

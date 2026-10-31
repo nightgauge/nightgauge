@@ -50,14 +50,22 @@ Start with `nightgauge doctor`. Every problem it reports carries a code
 
    ```json
    {
-     "extraKnownMarketplaces": ["https://github.com/nightgauge/nightgauge"]
+     "extraKnownMarketplaces": {
+       "nightgauge-plugins": {
+         "source": {
+           "source": "git",
+           "url": "https://github.com/nightgauge/nightgauge.git",
+           "ref": "stable"
+         }
+       }
+     }
    }
    ```
 
 2. **Check marketplace.json exists:**
 
    ```bash
-   curl https://raw.githubusercontent.com/nightgauge/nightgauge/main/.claude-plugin/marketplace.json
+   curl https://raw.githubusercontent.com/nightgauge/nightgauge/stable/.claude-plugin/marketplace.json
    ```
 
 ## Command Execution Issues
