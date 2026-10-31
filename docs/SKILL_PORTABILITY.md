@@ -120,6 +120,12 @@ fragments at render time, so skill rendering is no longer model-independent.
   entries by design (a local model on an OpenCode endpoint), an unreadable fragment, or no `--model`
   at all: every one of these renders the base document and exits 0. That is
   byte-for-byte the behavior that predates overlays.
+- **A missing include is not base-only.** An overlay is an optional refinement,
+  so its absence is normal. An `<!-- include: -->` target or a phase-include
+  target is part of the procedure, so `nightgauge skill render` fails, naming the
+  file. A dropped overlay cannot be seen at render time for the same reason its
+  absence is normal, so `nightgauge preflight skill-bundle --source-root` catches
+  it by comparing the built tree with its source at package time.
 
 **Acknowledged gap.** Adaptation is applied by the render path only. A skill
 read _directly_ — opened by hand, or loaded by the harness when a user types

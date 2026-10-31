@@ -1673,6 +1673,12 @@ run_step "Prettier format:check" npm run format:check
 # 7. Build all workspaces
 run_step "npm run build (all workspaces)" npm run build
 
+# 7a. The built skill bundle (#2761). The source tree masks a file the bundler
+# forgot, so this runs on dist/, the tree a VSIX is packaged from.
+run_step "skill bundle (dist/skills)" \
+  go run ./cmd/nightgauge preflight skill-bundle \
+  --skills-root packages/nightgauge/dist/skills --source-root skills
+
 # 7b. Phase markers ↔ PHASE_REGISTRY drift check
 # Runs after the SDK build so the script can import PHASE_REGISTRY from
 # the workspace package. Catches the class of registry↔skill marker drift

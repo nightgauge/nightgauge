@@ -10,7 +10,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PKG_DIR/../.." && pwd)"
-DIST="$PKG_DIR/dist"
+# NIGHTGAUGE_BUNDLE_DIST redirects the output so a test can run this script for
+# real into a temp directory (TestBundleShipsEverySkillFile).
+DIST="${NIGHTGAUGE_BUNDLE_DIST:-$PKG_DIR/dist}"
 
 # 1. Copy root marketplace manifest
 mkdir -p "$DIST/.claude-plugin"
@@ -35,38 +37,36 @@ SHARED_DIR="$REPO_ROOT/skills/_shared"
 # a skill the binary can name but the VSIX does not ship resolves in the
 # nightgauge source tree and nowhere else (#1029). Pinned by
 # TestBundleShipsEverySkillTheGoDirectPathRenders.
+#
+# pattern-mining and verify-ui are not stages. They are cross-skill targets: the
+# feature-planning and feature-validate prompts tell the model to follow them,
+# so a stage's prompt is incomplete without them (#2761).
+#
+# A whole skill ships, not a list of its sidecars: a list dropped _overlays/ and
+# would have dropped verify-ui's flows/. Only CHANGELOG.md and tests/ stay
+# behind; skillrender.BundleExcludes is the Go half of this rule.
 for skill in nightgauge-issue-pickup nightgauge-feature-planning \
              nightgauge-feature-dev nightgauge-feature-validate \
              nightgauge-pr-create nightgauge-pr-merge \
              nightgauge-issue-refine nightgauge-spike-materialize \
-             nightgauge-followup-materialize; do
+             nightgauge-followup-materialize \
+             nightgauge-pattern-mining nightgauge-verify-ui; do
   src="$REPO_ROOT/skills/$skill"
-  if [ -d "$src" ]; then
-    dest="$SKILLS_DIR/$skill"
-    mkdir -p "$dest"
-    cp "$src/SKILL.md" "$dest/SKILL.md"
-    # Bundle the skill's on-demand _includes/ reference files (ADR-010
-    # progressive disclosure). The refactored SKILL.md bodies emit
-    # "Read `_includes/X.md` (same directory as this SKILL.md) now ..."
-    # directives, so the bundled skill is incomplete without them.
-    if [ -d "$src/_includes" ]; then
-      rsync -a "$src/_includes/" "$dest/_includes/"
-    fi
-    # Bundle the compact render profile (ADR 023 §Q5, #1654) the same way:
-    # `nightgauge skill render --profile compact` resolves
-    # <skillDir>/_profiles/<profile>.md relative to wherever SKILL.md
-    # actually lives, so a customer repo running only against this bundle
-    # needs the file on disk here too, not just in the source tree.
-    if [ -d "$src/_profiles" ]; then
-      rsync -a "$src/_profiles/" "$dest/_profiles/"
-    fi
+  if [ ! -d "$src" ]; then
+    echo "Skill source $src is missing." >&2
+    exit 1
   fi
+  dest="$SKILLS_DIR/$skill"
+  mkdir -p "$dest"
+  rsync -a --delete --exclude=/CHANGELOG.md --exclude=/tests/ "$src/" "$dest/"
 done
 # Copy shared includes so <!-- include: ../_shared/... --> directives resolve
-if [ -d "$SHARED_DIR" ]; then
-  mkdir -p "$SKILLS_DIR/_shared"
-  rsync -a "$SHARED_DIR/" "$SKILLS_DIR/_shared/"
+if [ ! -d "$SHARED_DIR" ]; then
+  echo "Shared skill source $SHARED_DIR is missing." >&2
+  exit 1
 fi
+mkdir -p "$SKILLS_DIR/_shared"
+rsync -a --delete "$SHARED_DIR/" "$SKILLS_DIR/_shared/"
 
 # 4. Bundle the Nightgauge OpenCode plugin (#1635) so OpenCodeSetupService can
 #    install it from the VSIX, never from a network fetch (#1671). Same two

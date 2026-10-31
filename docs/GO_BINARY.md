@@ -851,6 +851,10 @@ nightgauge skill render --stage pr-merge --model opus --skills-root ./skills \
 | `--json`            | Emit the provenance envelope instead of the composed text           |
 | `--include-content` | With `--json`, carry the composed text in the envelope's `content`  |
 
+**A missing include is an error.** `skill render` exits non-zero when an
+`<!-- include: -->` target or a phase-include target cannot be read, and names
+each one. An absent overlay still renders base-only (ADR 016 §2).
+
 **`--include-content` exists so a host needing both halves renders once.** The
 extension builds a prompt from the body _and_ a CLI allowlist from the
 frontmatter tool lists; without the flag that is two spawns, which is not
@@ -944,6 +948,9 @@ nightgauge preflight secrets --workdir . [--json]
 # Fail when a skill include directive points at a file that does not exist (#337)
 nightgauge preflight skill-includes --root . [--tree DIR] [--json]
 
+# Fail when a built skills tree would not render every stage completely (#2761)
+nightgauge preflight skill-bundle --skills-root DIR [--source-root DIR] [--json]
+
 # Fail when a skill SKILL.md contains a direct `gh ` call (forge-abstraction gate)
 nightgauge preflight skill-no-direct-gh --root . [--json]
 
@@ -973,17 +980,26 @@ nightgauge preflight managed-steering --root . [--fix] [--json]
 
 **Subcommand details:**
 
-| Subcommand            | Wraps                  | Stable JSON schema (v1)                                                                            |
-| --------------------- | ---------------------- | -------------------------------------------------------------------------------------------------- |
-| `links`               | `internal/docs.Run`    | `v, root, files_scanned, links_total, links_broken, findings, warnings`                            |
-| `syntax`              | `internal/preflight`   | `v, workdir, files_scanned, files_invalid, findings[{file, line, format, error}], warnings`        |
-| `secrets`             | `internal/scan.Run...` | `v, workdir, patterns{generic_kv,...}, total, warnings`                                            |
-| `skill-includes`      | `internal/preflight`   | `v, root, trees, files_checked, findings[{file, line, target, resolved, directive}], warnings`     |
-| `skill-no-direct-gh`  | `internal/preflight`   | `v, root, skills_checked, skills_exempted, findings[{skill, file, line, match}], warnings`         |
-| `skill-anti-patterns` | `internal/preflight`   | `v, root, files_checked, findings[{check, file, line, match}], warnings`                           |
-| `thinking-effort`     | `internal/preflight`   | `v, thinking_disabled, checked, findings[{source, model, effort, max_allowed, message}], warnings` |
-| `skill-portability`   | `internal/preflight`   | `v, root, files_checked, findings[{skill_file, line, check, match}], warnings`                     |
-| `managed-steering`    | `codexprovision`       | `v, root, files_checked, findings[path], fixed[path]`                                              |
+| Subcommand            | Wraps                  | Stable JSON schema (v1)                                                                                         |
+| --------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `links`               | `internal/docs.Run`    | `v, root, files_scanned, links_total, links_broken, findings, warnings`                                         |
+| `syntax`              | `internal/preflight`   | `v, workdir, files_scanned, files_invalid, findings[{file, line, format, error}], warnings`                     |
+| `secrets`             | `internal/scan.Run...` | `v, workdir, patterns{generic_kv,...}, total, warnings`                                                         |
+| `skill-includes`      | `internal/preflight`   | `v, root, trees, files_checked, findings[{file, line, target, resolved, directive}], warnings`                  |
+| `skill-bundle`        | `internal/preflight`   | `v, skills_root, source_root, files_checked, renders_checked, findings[{rule, path, detail, render}], warnings` |
+| `skill-no-direct-gh`  | `internal/preflight`   | `v, root, skills_checked, skills_exempted, findings[{skill, file, line, match}], warnings`                      |
+| `skill-anti-patterns` | `internal/preflight`   | `v, root, files_checked, findings[{check, file, line, match}], warnings`                                        |
+| `thinking-effort`     | `internal/preflight`   | `v, thinking_disabled, checked, findings[{source, model, effort, max_allowed, message}], warnings`              |
+| `skill-portability`   | `internal/preflight`   | `v, root, files_checked, findings[{skill_file, line, check, match}], warnings`                                  |
+| `managed-steering`    | `codexprovision`       | `v, root, files_checked, findings[path], fixed[path]`                                                           |
+
+**`skill-bundle` rule enum:** `dead_include`, `render_failed`, `unresolved_path`,
+`file_set`. It validates a built tree: `release.yml` and `staging.yml` run it on
+the skills extracted from each VSIX, and `ci-local.sh` on `dist/skills`. Each
+stage renders for the full and compact profiles under each overlay the tree
+carries, with every phase include supplied, and each skill path in the result
+must exist under the tree. `--source-root` adds the file-set comparison, the only
+check that sees a dropped overlay. An empty tree fails; an absent one exits 2.
 
 **`syntax` finding format enum:** `"json"` or `"yaml"`. Empty files are
 treated as valid (matches `python3 -m json.tool` and `yaml.safe_load`
@@ -1053,13 +1069,11 @@ tree-content guards do: a docs-only edit that drops the rule from a SKILL.md is
 exactly the change class a run_heavy gate would skip. The worked example lives in
 [`skills/_shared/UNOBSERVED_MECHANISM.md`](../skills/_shared/UNOBSERVED_MECHANISM.md).
 
-**`skill-includes` — the dead-include gate (#337).** Include expansion is
-fail-open by contract: `ExpandIncludes` leaves a directive in place when its
-target cannot be read, so the same document stays readable under a host that
-does not expand at all (Claude Code never does). The cost is that a **dead**
-include and a **deliberately unexpanded** one are byte-identical — the model
-receives the literal HTML comment where the shared content belonged, and
-nothing warns. Six shipped stage skills carried
+**`skill-includes` — the dead-include gate (#337).** `skill render` fails on a
+dead include, but only for the files one render composes and only when a stage
+runs. A host that loads `SKILL.md` directly never renders it (Claude Code never
+expands), so the model receives the literal HTML comment where the shared content
+belonged. This gate finds a dead include before merge, in every file. Six shipped stage skills carried
 `<!-- include: ../_shared/BATCH_MODE.md -->` against a file that had never been
 written, for the whole life of the repository; `pr-merge` carried it as the
 entire body of its declared Phase 0.5. (Batch mode itself was later removed,
