@@ -136,6 +136,27 @@ func (s *SanitizationConfig) ResolvedMode() SanitizationMode {
 // HooksConfig holds settings for the local Claude Code / OpenCode hooks.
 type HooksConfig struct {
 	PushGate *PushGateConfig `json:"pushGate,omitempty" yaml:"push_gate,omitempty"`
+	PrePush  *PrePushConfig  `json:"prePush,omitempty" yaml:"pre_push,omitempty"`
+}
+
+// DefaultPrePushTimeoutSeconds bounds `nightgauge pre-push validate` when the
+// repository sets no limit. It is about four times the 437 s `go test ./...`
+// takes on this repository, so the gate still finishes on a loaded machine;
+// the previous 180 s could not fit the suite at all (#2700).
+const DefaultPrePushTimeoutSeconds = 1800
+
+// PrePushConfig configures the pre-push merged-state gate (#2700).
+type PrePushConfig struct {
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty" yaml:"timeout_seconds,omitempty"`
+}
+
+// ResolvePrePushTimeoutSeconds returns the configured gate limit, or the
+// default when cfg is nil or the value is unset or non-positive.
+func ResolvePrePushTimeoutSeconds(cfg *Config) int {
+	if cfg != nil && cfg.Hooks != nil && cfg.Hooks.PrePush != nil && cfg.Hooks.PrePush.TimeoutSeconds > 0 {
+		return cfg.Hooks.PrePush.TimeoutSeconds
+	}
+	return DefaultPrePushTimeoutSeconds
 }
 
 // PushGateConfig configures the workflow gate's optional push gate (#2124).

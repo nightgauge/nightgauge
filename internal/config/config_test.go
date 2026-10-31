@@ -1664,3 +1664,19 @@ func TestStageBudgetsUnpricedStageKeepsHostedDefaultsButRefusesUnlimited(t *test
 		t.Errorf("unpriced budget = %+v, want the hosted defaults with -1 refused", got)
 	}
 }
+
+func TestResolvePrePushTimeoutSeconds(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cfg  *Config
+		want int
+	}{
+		"nil config": {nil, DefaultPrePushTimeoutSeconds},
+		"unset":      {&Config{Hooks: &HooksConfig{}}, DefaultPrePushTimeoutSeconds},
+		"zero":       {&Config{Hooks: &HooksConfig{PrePush: &PrePushConfig{}}}, DefaultPrePushTimeoutSeconds},
+		"set":        {&Config{Hooks: &HooksConfig{PrePush: &PrePushConfig{TimeoutSeconds: 2400}}}, 2400},
+	} {
+		if got := ResolvePrePushTimeoutSeconds(tc.cfg); got != tc.want {
+			t.Errorf("%s: got %d, want %d", name, got, tc.want)
+		}
+	}
+}

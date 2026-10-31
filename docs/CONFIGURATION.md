@@ -5372,6 +5372,27 @@ are resolved before matching. `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` bypasses it.
 
 ---
 
+### hooks.pre_push
+
+Limit for `nightgauge pre-push validate` (#2700). `go test -timeout` gets what
+remains of it less 60 s, so a hung package normally panics with its goroutine
+dump before the gate stops it.
+
+```yaml
+hooks:
+  pre_push:
+    timeout_seconds: 2400 # default: 1800
+```
+
+An unset or non-positive value uses the default. `--timeout` overrides it. Set it
+above how long the merged-state gate takes on a loaded machine: an expired limit
+blocks the push with exit code 3.
+
+**Used by:** `nightgauge pre-push validate`, the installed git hook and
+feature-validate
+
+---
+
 ### local_gate
 
 The repository's complete local gate, as `nightgauge workspace contract

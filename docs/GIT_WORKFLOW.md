@@ -1636,7 +1636,7 @@ If the `nightgauge` binary is not available:
 
 ```bash
 # Run validation manually
-nightgauge pre-push validate <issue-number> [--target main] [--timeout 180] [--json]
+nightgauge pre-push validate <issue-number> [--target main] [--timeout <seconds>] [--json]
 
 # Install git hook
 nightgauge pre-push install

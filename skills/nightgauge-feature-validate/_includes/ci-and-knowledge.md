@@ -381,6 +381,16 @@ validation left — failures that would otherwise be caught during `pr-create` o
 
 ### Step 2.7.1: Resolve Binary and Run Gate
 
+Pass no timeout flag: the verb resolves `hooks.pre_push.timeout_seconds`, then
+its default, which covers the repository's suite. That limit can exceed a
+foreground shell's 10-minute cap, so run this step as a background command and
+wait for it to exit before continuing.
+
+Exit 3 means a limit expired, not that an assertion failed. If the reason names
+the gate's limit, do not edit code: raise the limit it names. If it names Go's
+per-package limit, a package ran for most of the budget, so treat it as a likely
+hang in the change and find the package in the goroutine dump.
+
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
@@ -408,16 +418,28 @@ if [ -n "$BINARY" ]; then
   TARGET_BRANCH=$(jq -r '.base_branch // "main"' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
   [ -z "$TARGET_BRANCH" ] && TARGET_BRANCH="main"
 
-  "$BINARY" pre-push validate "$ISSUE_NUMBER" --target "$TARGET_BRANCH" && {
-    PREPUSH_STATUS="passed"
-    echo "Pre-push validation passed"
-  } || {
-    PREPUSH_STATUS="failed"
-    echo "GATE BLOCKED: Pre-push validation failed. Fix issues before committing/pushing."
+  PREPUSH_EXIT=0
+  "$BINARY" pre-push validate "$ISSUE_NUMBER" --target "$TARGET_BRANCH" || PREPUSH_EXIT=$?
+  case "$PREPUSH_EXIT" in
+    0)
+      PREPUSH_STATUS="passed"
+      echo "Pre-push validation passed"
+      ;;
+    3)
+      PREPUSH_STATUS="timeout"
+      ERROR_CATEGORY="gate-timeout"
+      echo "GATE TIMED OUT: a limit expired before the gate finished; no check failed."
+      ;;
+    *)
+      PREPUSH_STATUS="failed"
+      echo "GATE BLOCKED: Pre-push validation failed. Fix issues before committing/pushing."
+      ;;
+  esac
+  if [ "$PREPUSH_EXIT" -ne 0 ]; then
     echo "See $(nightgauge layout path pipeline pre-push-${ISSUE_NUMBER}.json) for details."
     VALIDATION_STATUS="failed"
     SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "commit-and-push", "reason": "pre-push gate blocked"}]')
-  }
+  fi
 else
   # Graceful degradation: binary unavailable — run shell-based checks
   echo "WARNING: nightgauge binary not available — running shell-based pre-push checks"

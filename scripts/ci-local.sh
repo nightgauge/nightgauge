@@ -459,6 +459,8 @@ REQUIRED_FILES=(
   scripts/test-ci-local-concurrency.sh
   scripts/test-ci-local-changed-scope.sh
   scripts/test-ci-local-bootstrap.sh
+  scripts/ci-local-go-test.sh
+  scripts/test-ci-local-go-pass-stamp.sh
   scripts/state-backstop.sh
   scripts/test-state-backstop.sh
   scripts/doctor-app-permission-walkthrough.sh
@@ -1262,6 +1264,11 @@ run_step "ci-local.sh change-scoping contract" \
 run_step "ci-local.sh dependency bootstrap decision" \
   bash scripts/test-ci-local-bootstrap.sh
 
+# 0c3. When the go test step records a passing tree (#2700). A stub `go`, so
+#      seconds; pre-push validate trusts this record to skip the suite.
+run_step "ci-local.sh go test pass record" \
+  bash scripts/test-ci-local-go-pass-stamp.sh
+
 # 0d. The machine-state backstop's own regression suite (#2311), before the
 #     steps it watches: the last step trusts it to go red when a run removes or
 #     changes the developer's ~/.nightgauge data. Seconds, against a fake HOME.
@@ -1303,7 +1310,7 @@ if [ "$GO_SCOPE_RUN" -eq 0 ]; then
     "--changed, and $GO_SCOPE_REASON"
 else
 run_group "go test ./... -count=1 (with skip accounting)" \
-  bash -c 'set -o pipefail; go test -json ./... -count=1 -timeout "$1" | tee go-test.json | python3 scripts/go-test-json-echo.py && python3 scripts/check-go-test-skips.py go-test.json' _ "$GO_TEST_TIMEOUT"
+  bash scripts/ci-local-go-test.sh "$GO_TEST_TIMEOUT" "$LOG_DIR/go-test-pass.tree"
 fi
 # Mirrors the race half of ci.yml's "Test (plain and race, concurrently)" step
 # (#493, merged with the plain pass in #1218), which replaced the

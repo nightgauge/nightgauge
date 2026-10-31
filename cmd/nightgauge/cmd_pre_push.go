@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
@@ -18,6 +19,11 @@ import (
 
 // safeBranchName validates branch names at the CLI boundary before passing to hooks.
 var safeBranchName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9\-_./]*$`)
+
+// exitPrePushTimeout is the verb's exit code when a limit expired: 1 is a failed
+// phase and 2 is could-not-run, so a caller can tell "raise the limit" from
+// "fix the code" (#2700).
+const exitPrePushTimeout = 3
 
 func prePushCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -68,18 +74,21 @@ func prePushValidateCmd() *cobra.Command {
 				}
 			}
 
+			limit := resolvePrePushTimeout(cmd.Flags().Changed("timeout"), timeout, workDir)
+
 			ctx := cmd.Context()
-			if timeout > 0 {
+			if limit > 0 {
 				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+				ctx, cancel = context.WithTimeout(ctx, time.Duration(limit)*time.Second)
 				defer cancel()
 			}
 
 			input := hooks.PrePushInput{
-				IssueNumber:   issueNumber,
-				WorkDir:       workDir,
-				TargetBranch:  target,
-				FeatureBranch: featureBranch,
+				IssueNumber:    issueNumber,
+				WorkDir:        workDir,
+				TargetBranch:   target,
+				FeatureBranch:  featureBranch,
+				TimeoutSeconds: limit,
 			}
 
 			fmt.Fprintf(os.Stderr, "=== Pre-Push Merge Validation Gate ===\n")
@@ -90,12 +99,18 @@ func prePushValidateCmd() *cobra.Command {
 			if jsonOut {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
-				return enc.Encode(result)
+				if err := enc.Encode(result); err != nil {
+					return err
+				}
+				return prePushJSONExit(result)
 			}
 
 			// Human-readable output
 			printPrePushSummary(result)
 
+			if err := prePushTimeoutExit(result); err != nil {
+				return err
+			}
 			if result.Decision == "block" {
 				return fmt.Errorf("pre-push validation failed: %s", result.Reason)
 			}
@@ -104,10 +119,47 @@ func prePushValidateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&target, "target", "main", "Target branch to merge against")
-	cmd.Flags().IntVar(&timeout, "timeout", 180, "Timeout in seconds")
+	cmd.Flags().IntVar(&timeout, "timeout", config.DefaultPrePushTimeoutSeconds,
+		"Timeout in seconds; when unset, hooks.pre_push.timeout_seconds applies; 0 means no limit")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output JSON instead of human-readable")
 
 	return cmd
+}
+
+// resolvePrePushTimeout returns the gate limit in seconds, 0 meaning none: an
+// explicit --timeout, then hooks.pre_push.timeout_seconds, then the default.
+func resolvePrePushTimeout(flagSet bool, flagValue int, workDir string) int {
+	if flagSet {
+		return max(flagValue, 0)
+	}
+	cfg, err := config.Load(workDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: config load failed, using the default pre-push limit: %v\n", err)
+		cfg = nil
+	}
+	return config.ResolvePrePushTimeoutSeconds(cfg)
+}
+
+// prePushTimeoutExit carries a timeout's exit code in both output modes. The
+// reason has already been written by the summary or the JSON result.
+func prePushTimeoutExit(result hooks.PrePushResult) error {
+	if result.FailureKind == hooks.FailureKindTimeout {
+		return verdictExit{exitPrePushTimeout}
+	}
+	return nil
+}
+
+// prePushJSONExit gives --json the same exit codes as the human path, so a
+// caller scripting the gate cannot read a block as a pass. The JSON result
+// already carries the reason.
+func prePushJSONExit(result hooks.PrePushResult) error {
+	if err := prePushTimeoutExit(result); err != nil {
+		return err
+	}
+	if result.Decision == "block" {
+		return verdictExit{code: 1}
+	}
+	return nil
 }
 
 func prePushInstallCmd() *cobra.Command {
@@ -201,6 +253,9 @@ func printPrePushSummary(result hooks.PrePushResult) {
 		switch status {
 		case "failed":
 			icon = "✗"
+		case "timeout":
+			// A limit expired; nothing was proven wrong with the code.
+			icon = "⏱"
 		case "skipped", "not-applicable":
 			// "not-applicable" is a phase this project has no script for
 			// (#1159) — reported, never silently folded into a pass.
@@ -211,6 +266,10 @@ func printPrePushSummary(result hooks.PrePushResult) {
 			icon = "?"
 		}
 		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", icon, phase, status)
+	}
+
+	if result.TestSkipReason != "" {
+		fmt.Fprintf(os.Stderr, "\n  test skipped: %s\n", result.TestSkipReason)
 	}
 
 	fmt.Fprintf(os.Stderr, "\n")

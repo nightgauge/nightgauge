@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge pre-push validate` now reports an expired limit as a timeout, with
+  exit code 3 and a reason naming the limit and how to raise it, never as a test
+  failure. The default limit rises from 180 s to 1800 s, is configurable with
+  `hooks.pre_push.timeout_seconds`, and also bounds `go test -timeout`, which fires
+  first so a hung package names itself. `--json` now uses the same exit codes as
+  the human output, so a blocked push no longer exits 0. The gate skips the Go test
+  phase, and says why, only when `ci-local` already passed the same tree (#2700).
 - Validation retries can now succeed in a reused worktree. `FeatureValidateGate`
   judges the latest verdict per gate, so a later `pass` clears an earlier
   `catch`; `nightgauge health gate-metrics` still reports every row. Judge
