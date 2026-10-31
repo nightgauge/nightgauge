@@ -39,6 +39,14 @@ changelog, and the release workflow refuses a tag that does not.
   shared-fragment includes enforces that. A `branch_forked` run's tip is pinned at
   `refs/nightgauge/stranded/<issue>` before cleanup, and the Action Center card names the ref and
   the SHA.
+- A stage waiting on its own gate is no longer killed by the runaway monitor while the gate
+  still runs (#2694). `pipeline.progress_runaway.background_task_ceiling_ms` rises from 45 to 90
+  minutes, because a loaded `ci-local.sh` takes 50 and any live task now counts, declared or not.
+  A task whose declared log keeps growing can run to `background_task_hard_ceiling_ms` (120
+  minutes). A connectivity restore takes the outage off the monitor's clocks, a kill names the
+  expired ceiling and the task's age, and the failure report says the runaway monitor stopped the
+  stage instead of blaming the implementation.
+
 - With a live daemon, `autonomous status` again answers whether a reload is safe (#2720). The
   human output replaces `Status:` with the `Autonomous Mode: <Status> — <reload line>` sentence,
   covering manual runs, and `--json` adds `running_pipelines`, `running_pipelines_known` and

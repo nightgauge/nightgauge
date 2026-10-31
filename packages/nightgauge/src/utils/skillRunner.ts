@@ -215,6 +215,8 @@ import { formatKillCeilingValue, msLimit } from "./killCeiling";
 import {
   ProgressMonitor,
   applyBackgroundTaskEvent,
+  applyConnectivityResume,
+  syncBackgroundTasks,
   recordToolCallProgress,
   isBlindMonitorKill,
 } from "./progressMonitor";
@@ -6561,6 +6563,11 @@ function runStageSkillHeadlessImpl(
       if (connectivityGate.resetIdleWindow) {
         lastChunkAtMs = Date.now();
       }
+      applyConnectivityResume(
+        progressMonitor,
+        backgroundTaskIds,
+        connectivityGate.offlineDurationMs ?? 0
+      );
       const resumeEvent: StallEvent = {
         timestamp: new Date().toISOString(),
         elapsed_ms: Date.now() - startedAtMs,
@@ -7554,10 +7561,7 @@ function runStageSkillHeadlessImpl(
       }
 
       if (applyBackgroundTaskEvent(line, backgroundTaskIds)) {
-        progressMonitor.setBackgroundTasks(
-          backgroundTaskIds.size,
-          backgroundTaskIds.size > 0 ? Math.min(...backgroundTaskIds.values()) : null
-        );
+        syncBackgroundTasks(progressMonitor, backgroundTaskIds);
       }
 
       // Detect CI progress from wait-for-ci-checks.sh (Issue #902)

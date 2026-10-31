@@ -198,6 +198,13 @@ export interface ProgressMonitorConfig {
    * background tasks under `externalProgressCeilingMs` like other sources.
    */
   backgroundTaskCeilingMs?: number;
+  /**
+   * Ms a background task may run past `backgroundTaskCeilingMs` while a
+   * declared progress log keeps growing (Issue #2694). A silent wedged task
+   * still dies at the soft ceiling. Default 7_200_000 (120 minutes). A value at
+   * or below the soft ceiling disables the extension.
+   */
+  backgroundTaskHardCeilingMs?: number;
 }
 
 /**
@@ -206,8 +213,30 @@ export interface ProgressMonitorConfig {
  * Injected so the deferral logic is testable without spawning processes or
  * writing files; {@link defaultExternalProgressProbe} is the production one.
  */
-/** Default {@link ProgressMonitorConfig.backgroundTaskCeilingMs} (Issue #2554). */
-export const DEFAULT_BACKGROUND_TASK_CEILING_MS = 45 * 60_000;
+/**
+ * Default {@link ProgressMonitorConfig.backgroundTaskCeilingMs} (Issue #2554).
+ *
+ * 90 minutes, raised from 45 (Issue #2694). A full `ci-local.sh` took 50m13s on
+ * a loaded machine, and the 45-minute ceiling killed #2687, #2740 and #2758
+ * inside their own gates. A log extension alone did not stop those kills: stages
+ * run gates without declaring a log, and a loaded gate's top-level log can stay
+ * quiet for far longer than the activity window. So any live task defers. A
+ * stage that waits spends no tokens, so a wedged task costs wall clock, while a
+ * false kill costs the whole stage and halts the repository.
+ */
+export const DEFAULT_BACKGROUND_TASK_CEILING_MS = 90 * 60_000;
+
+/** Default {@link ProgressMonitorConfig.backgroundTaskHardCeilingMs} (Issue #2694). */
+export const DEFAULT_BACKGROUND_TASK_HARD_CEILING_MS = 120 * 60_000;
+
+/** `2741000` → `45m41s`; whole minutes drop the seconds. */
+function formatAge(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`;
+}
 
 export interface ExternalProgressProbe {
   /** True when a process with this pid exists (any owner). */
@@ -319,6 +348,8 @@ export class ProgressMonitor {
   /** Claude Code background tasks still running (Issue #2517). */
   private backgroundTasks = 0;
   private oldestBackgroundTaskStartMs: number | null = null;
+  /** The latest label a stage declared, for naming an expired deferral (Issue #2694). */
+  private declaredLabel: string | undefined;
 
   constructor(
     private readonly config: ProgressMonitorConfig,
@@ -449,6 +480,7 @@ export class ProgressMonitor {
     }
 
     if (declared) {
+      if (declaration.label) this.declaredLabel = declaration.label;
       // Declaring is itself proof of life — the stage just started something.
       this.recordSignal("external_progress");
     }
@@ -484,6 +516,18 @@ export class ProgressMonitor {
   }
 
   /**
+   * Restore the clocks after a connectivity outage (Issue #2694). The productive
+   * clock moves by the outage; the activity clock restarts, because a shift
+   * alone could leave a clock already stale before the outage only seconds of
+   * window. Each restore therefore grants one activity window.
+   */
+  resumeAfterOffline(offlineMs: number): void {
+    const now = Date.now();
+    this.lastProgressMs = Math.min(now, this.lastProgressMs + Math.max(0, offlineMs));
+    this.lastActivityMs = now;
+  }
+
+  /**
    * Whether a tracked background task, a foreground tool call or a declared
    * process is running inside its bound (#2711): a call with no tool_result, a
    * live pid, or a log that grew since the last call. The stall ticker reads
@@ -493,11 +537,15 @@ export class ProgressMonitor {
   isBackgroundWorkLive(): boolean {
     if (this.backgroundTasks > 0 && this.backgroundTasksWithinBound()) return true;
     const ceilingMs = this.config.externalProgressCeilingMs;
-    if (ceilingMs <= 0 || this.msSinceLastProductiveProgress > ceilingMs) return false;
+    const withinExternal = ceilingMs > 0 && this.msSinceLastProductiveProgress <= ceilingMs;
+    if (!withinExternal && !this.backgroundLogExtensionOpen()) return false;
 
-    let live = this.inFlightToolCalls > 0;
-    for (const pid of this.declaredPids.keys()) {
-      if (this.probe.isProcessAlive(pid)) live = true;
+    let live = false;
+    if (withinExternal) {
+      live = this.inFlightToolCalls > 0;
+      for (const pid of this.declaredPids.keys()) {
+        if (this.probe.isProcessAlive(pid)) live = true;
+      }
     }
     for (const [path, lastSize] of this.liveCheckLogSizes) {
       const size = this.probe.fileSize(path);
@@ -527,6 +575,89 @@ export class ProgressMonitor {
     );
   }
 
+  private get backgroundCeilingMs(): number {
+    return this.config.backgroundTaskCeilingMs ?? DEFAULT_BACKGROUND_TASK_CEILING_MS;
+  }
+
+  private get backgroundHardCeilingMs(): number {
+    return this.config.backgroundTaskHardCeilingMs ?? DEFAULT_BACKGROUND_TASK_HARD_CEILING_MS;
+  }
+
+  /** The oldest live task's age, or null when none is tracked with a start. */
+  private get oldestBackgroundTaskAgeMs(): number | null {
+    if (this.backgroundTasks <= 0 || this.oldestBackgroundTaskStartMs === null) return null;
+    return Date.now() - this.oldestBackgroundTaskStartMs;
+  }
+
+  /**
+   * A running task is past its soft ceiling but inside the hard one, with a
+   * declared log to judge it by (Issue #2694). Log growth alone may then defer
+   * the kill: pids and in-flight calls prove a process exists, not that it moves.
+   */
+  private backgroundLogExtensionOpen(): boolean {
+    const age = this.oldestBackgroundTaskAgeMs;
+    const soft = this.backgroundCeilingMs;
+    return (
+      age !== null &&
+      soft > 0 &&
+      age > soft &&
+      age <= this.backgroundHardCeilingMs &&
+      this.declaredLogs.size > 0
+    );
+  }
+
+  /**
+   * The deferral that expired behind a kill (Issue #2694), or undefined when
+   * the stage had nothing to defer on. Without this a kill reads as an idle
+   * stage while its gate is still running.
+   */
+  private expiredDeferral(
+    msSinceLastProgress: number
+  ): { ceiling: KillCeiling; sentence: string } | undefined {
+    const label = this.declaredLabel ? `${this.declaredLabel} ` : "";
+    const age = this.oldestBackgroundTaskAgeMs;
+    const soft = this.backgroundCeilingMs;
+    const hard = this.backgroundHardCeilingMs;
+    if (age !== null && soft > 0 && age > soft) {
+      const useHard = hard > soft && age > hard && this.declaredLogs.size > 0;
+      const limitMs = useHard ? hard : soft;
+      return {
+        ceiling: {
+          name: useHard
+            ? "progress-background-task-hard-ceiling"
+            : "progress-background-task-ceiling",
+          limit: msLimit(limitMs),
+          derivation: useHard
+            ? "pipeline.progress_runaway.background_task_hard_ceiling_ms, oldest task's own age"
+            : "pipeline.progress_runaway.background_task_ceiling_ms, oldest task's own age",
+        },
+        sentence:
+          `${label}background task ran ${formatAge(age)}, past the ${formatAge(limitMs)} ` +
+          `background-task ${useHard ? "hard " : ""}ceiling`,
+      };
+    }
+
+    const external = this.config.externalProgressCeilingMs;
+    const hadSource =
+      this.backgroundTasks > 0 ||
+      this.inFlightToolCalls > 0 ||
+      this.declaredLogs.size > 0 ||
+      [...this.declaredPids.keys()].some((pid) => this.probe.isProcessAlive(pid));
+    if (external > 0 && msSinceLastProgress > external && hadSource) {
+      return {
+        ceiling: {
+          name: "progress-external-progress-ceiling",
+          limit: msLimit(external),
+          derivation: "pipeline.progress_runaway.external_progress_ceiling_ms, productive clock",
+        },
+        sentence:
+          `${label}external work ran ${formatAge(msSinceLastProgress)} with no productive ` +
+          `progress, past the ${formatAge(external)} external-progress ceiling`,
+      };
+    }
+    return undefined;
+  }
+
   /**
    * Consult the external-progress sources and record activity if any is live.
    *
@@ -534,20 +665,28 @@ export class ProgressMonitor {
    * here — one `kill(pid, 0)` and one `stat` per declaration, both bounded by
    * {@link MAX_EXTERNAL_DECLARATIONS} — run at most twice a minute.
    */
-  private pollExternalProgress(sources: { declared: boolean; background: boolean }): {
+  private pollExternalProgress(sources: {
+    declared: boolean;
+    background: boolean;
+    logsOnly: boolean;
+  }): {
     active: boolean;
     reason: string;
   } {
     const reasons: string[] = [];
-    if (!sources.declared) return this.finishExternalPoll(reasons, sources.background);
+    if (!sources.declared && !sources.logsOnly) {
+      return this.finishExternalPoll(reasons, sources.background);
+    }
 
-    for (const [pid, label] of [...this.declaredPids]) {
-      if (this.probe.isProcessAlive(pid)) {
-        reasons.push(`child pid ${pid} (${label}) alive`);
-      } else {
-        // Reaped — drop it, so a finished suite stops deferring immediately
-        // rather than at the next ceiling.
-        this.declaredPids.delete(pid);
+    if (sources.declared) {
+      for (const [pid, label] of [...this.declaredPids]) {
+        if (this.probe.isProcessAlive(pid)) {
+          reasons.push(`child pid ${pid} (${label}) alive`);
+        } else {
+          // Reaped — drop it, so a finished suite stops deferring immediately
+          // rather than at the next ceiling.
+          this.declaredPids.delete(pid);
+        }
       }
     }
 
@@ -560,7 +699,7 @@ export class ProgressMonitor {
       }
     }
 
-    if (this.inFlightToolCalls > 0) {
+    if (sources.declared && this.inFlightToolCalls > 0) {
       reasons.push(`${this.inFlightToolCalls} tool call(s) in flight`);
     }
 
@@ -713,6 +852,7 @@ export class ProgressMonitor {
       ? this.pollExternalProgress({
           declared: !externalCeilingReached,
           background: this.backgroundTasksWithinBound(),
+          logsOnly: this.backgroundLogExtensionOpen(),
         })
       : { active: false, reason: "" };
 
@@ -730,6 +870,9 @@ export class ProgressMonitor {
       // tool count alone; the live child is the discriminator (#1488).
       !external.active;
 
+    // Only the two kills below can follow an expired deferral (Issue #2694).
+    const expired = windowExceeded ? this.expiredDeferral(msSinceLastProgress) : undefined;
+
     if (churnDetected && !this.config.observeOnly) {
       return {
         shouldKill: true,
@@ -737,9 +880,10 @@ export class ProgressMonitor {
         reason:
           `Churn detected: ${this.churnSinceProgress} distinct tool calls with no productive ` +
           `progress (commits/new-files/phase) for ${Math.round(msSinceLastProgress / 1000)}s ` +
-          `(threshold: ${this.config.churnToolThreshold}, Issue #3851)`,
+          `(threshold: ${this.config.churnToolThreshold}, Issue #3851)` +
+          (expired ? `; ${expired.sentence}` : ""),
         msSinceLastProgress,
-        ceiling: {
+        ceiling: expired?.ceiling ?? {
           name: "progress-churn-tools",
           limit: `${this.config.churnToolThreshold} tools`,
           derivation:
@@ -807,9 +951,10 @@ export class ProgressMonitor {
       `${Math.round(msSinceLastProgress / 1000)}s ` +
       `and no tool activity for ${Math.round(msSinceLastActivity / 1000)}s ` +
       `(window: ${this.config.noProgressWindowMs / 1000}s, productive signals: ${this.productiveSignals}, ` +
-      `activity signals: ${this.totalSignals})`;
+      `activity signals: ${this.totalSignals})` +
+      (expired ? `; ${expired.sentence}` : "");
 
-    const noProgressCeiling: KillCeiling = {
+    const noProgressCeiling: KillCeiling = expired?.ceiling ?? {
       name: "progress-no-progress-window",
       limit: msLimit(this.config.noProgressWindowMs),
       derivation:
@@ -949,6 +1094,42 @@ export function recordToolCallProgress(
  */
 export function isBlindMonitorKill(signalsSeen: number, parsedToolEventCount: number): boolean {
   return signalsSeen === 0 && parsedToolEventCount > 0;
+}
+
+/**
+ * Credit an outage to tasks that were running through it (Issue #2694). A task
+ * started during the outage is left alone: it was not in the outage.
+ */
+export function shiftBackgroundTaskStarts(
+  tasks: Map<string, number>,
+  offlineMs: number,
+  nowMs: number
+): void {
+  const outageStartMs = nowMs - offlineMs;
+  for (const [id, startedAt] of tasks) {
+    if (startedAt < outageStartMs) tasks.set(id, startedAt + offlineMs);
+  }
+}
+
+/** Publish the running task set to the monitor. */
+export function syncBackgroundTasks(monitor: ProgressMonitor, tasks: Map<string, number>): void {
+  monitor.setBackgroundTasks(tasks.size, tasks.size > 0 ? Math.min(...tasks.values()) : null);
+}
+
+/**
+ * Take an outage off every monitor clock on a connectivity resume (Issue
+ * #2694). The tasks shift in skillRunner's map, not the monitor, because the
+ * next task event re-syncs the monitor from that map and would undo it.
+ */
+export function applyConnectivityResume(
+  monitor: ProgressMonitor,
+  tasks: Map<string, number>,
+  offlineMs: number,
+  nowMs: number = Date.now()
+): void {
+  monitor.resumeAfterOffline(offlineMs);
+  shiftBackgroundTaskStarts(tasks, offlineMs, nowMs);
+  syncBackgroundTasks(monitor, tasks);
 }
 
 /**
