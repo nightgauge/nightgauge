@@ -945,6 +945,12 @@ func TestLearningOutcomeFor_SkipVerdictsFromRecordFields(t *testing.T) {
 	if _, d := learningOutcomeFor(envhalt, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeSkipEnvironmentHalt {
 		t.Errorf("environment-halt record: decision = %s, want %s", d, outcomeSkipEnvironmentHalt)
 	}
+
+	gateStop := base
+	gateStop.TerminalFailureKind = orchestrator.TerminalKindGatePluginMissing
+	if _, d := learningOutcomeFor(gateStop, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeSkipGatePluginMissing {
+		t.Errorf("gate-plugin-missing record: decision = %s, want %s", d, outcomeSkipGatePluginMissing)
+	}
 }
 
 // captureLog redirects the standard logger for the duration of fn.

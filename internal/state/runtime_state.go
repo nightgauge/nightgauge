@@ -381,7 +381,10 @@ type RuntimeState struct {
 	// independent of the requested StageEfforts/StageThinking above. Absent
 	// means honestly-unreported — the #299/#397 convention — never a copy of
 	// the requested value.
-	StageServedEfforts  map[string]string `json:"stageServedEfforts,omitempty"`
+	StageServedEfforts map[string]string `json:"stageServedEfforts,omitempty"`
+	// StagePluginVersions holds the Nightgauge Claude plugin version each stage's
+	// system/init reported (#2723). Absent means the stage reported none.
+	StagePluginVersions map[string]string `json:"stagePluginVersions,omitempty"`
 	StageServedThinking map[string]string `json:"stageServedThinking,omitempty"`
 
 	// StageModelSelectionModes captures model_routing.mode (manual |
@@ -2300,6 +2303,20 @@ func (rs *RuntimeState) RecordStageServedModel(stage PipelineStage, model string
 	rs.StageServedModels[string(stage)] = model
 }
 
+// RecordStagePluginVersion records the plugin version a stage reported loading
+// (#2723). Empty is ignored, as for RecordStageServedModel.
+func (rs *RuntimeState) RecordStagePluginVersion(stage PipelineStage, version string) {
+	if version == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StagePluginVersions == nil {
+		rs.StagePluginVersions = make(map[string]string)
+	}
+	rs.StagePluginVersions[string(stage)] = version
+}
+
 // RecordStageOpenCodeSession records the OpenCode session id observed for a
 // stage's latest opencode dispatch (#1643). Mirrors
 // RecordStageServedModel/RecordStageAdapter: empty ids are ignored to
@@ -3345,6 +3362,12 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		snap.StageThinking = make(map[string]string, len(rs.StageThinking))
 		for k, v := range rs.StageThinking {
 			snap.StageThinking[k] = v
+		}
+	}
+	if len(rs.StagePluginVersions) > 0 {
+		snap.StagePluginVersions = make(map[string]string, len(rs.StagePluginVersions))
+		for k, v := range rs.StagePluginVersions {
+			snap.StagePluginVersions[k] = v
 		}
 	}
 	if len(rs.StageServedEfforts) > 0 {

@@ -113,6 +113,7 @@ const HALT_SKIP_PARKED: ReadonlySet<string> = new Set([
   "adapter_incompatible",
   "environment_halt",
   "dev_context_stale",
+  "gate_plugin_missing",
 ]);
 
 /**

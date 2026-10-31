@@ -57,6 +57,7 @@ func (a *ClaudeSdkAdapter) BuildCommand(opts RunOptions) (string, []string, map[
 
 	args = append(args, claudeKnowledgeDirArgs(opts)...)
 	args = append(args, claudeSkillsDirArgs(opts)...)
+	args = append(args, claudePluginDirArgs(opts)...)
 
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)

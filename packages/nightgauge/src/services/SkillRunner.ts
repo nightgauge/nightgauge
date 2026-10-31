@@ -253,6 +253,8 @@ export interface StageResult {
    */
   servedEffort?: string;
   servedThinking?: string;
+  /** The Nightgauge plugin version the stage reported loading (#2723). */
+  pluginVersion?: string;
   /** Original model of the CLI's refusal fallback, when one was observed. */
   refusalFallbackFrom?: string;
   /** Fallback model of the CLI's refusal fallback, when one was observed. */
@@ -615,6 +617,7 @@ export class SkillRunner {
               servedModel: result.servedModel,
               // ── #606 served-envelope forwarding ────────────────────
               servedEffort: result.servedEffort,
+              pluginVersion: result.pluginVersion,
               servedThinking: result.servedThinking,
               refusalFallbackFrom: result.modelRefusalFallback?.originalModel,
               refusalFallbackTo: result.modelRefusalFallback?.fallbackModel,

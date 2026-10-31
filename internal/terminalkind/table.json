@@ -168,6 +168,13 @@
       "why": "A project-declared preflight.environment check failed in a stage's Phase 0 (#101): the operator's local environment (a service down, emulator storage full, PATH order) is broken, not the code. `nightgauge preflight environment` and the shared PREFLIGHT.md Layer 3 stamp the bracketed marker. Next to adapter-auth-failed and above the subagent-crash fallback, whose `exit ` substring would otherwise book an environment halt as a crash and feed the cascade breaker. The marker literal is unique to this producer, so its position among the other marker rules changes no other classification. Deliberately not matched on prose such as `environment check failed`, which a test runner's own output can print."
     },
     {
+      "id": "gate-plugin-missing",
+      "kind": "gate_plugin_missing",
+      "signal": true,
+      "clauses": [["[gate-plugin-missing]"], ["gate_plugin_missing"]],
+      "why": "A bundled build's Claude stage did not load the Nightgauge plugin exactly once, so the stage runner stopped it before any work (#2723). Both stage runners stamp the bracketed marker, the same shape as environment-halt beside it and for the same reasons: above the subagent-crash fallback, whose `exit ` substring would book it as a crash and feed the cascade breaker, and unique to this producer, so its position changes no other classification. The no-bundle warning prints the separate `[gate-plugin-warning]` literal, so a warning in the stderr of an unrelated failure does not park that failure."
+    },
+    {
       "id": "context-window-exceeded",
       "kind": "context_window_exceeded",
       "signal": false,

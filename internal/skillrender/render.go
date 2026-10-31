@@ -1258,6 +1258,29 @@ func bundleSkillsRoot(exe string) string {
 	return ""
 }
 
+// BundledClaudePluginDir returns the Claude plugin shipped alongside exe, or ""
+// when there is not one (#2723). It uses bundleSkillsRoot's layout,
+// `<prefix>/bin/nightgauge` beside `<prefix>/claude-plugins/nightgauge`, and
+// resolves symlinks the same way. A directory counts only when it holds
+// hooks/hooks.json: the gates are the reason to load it, and a plugin with no
+// hooks would satisfy the init check with none of them running.
+//
+// A non-empty answer is what makes a build "bundled": the stage runner stops a
+// bundled build's stage when this plugin did not load, and only warns otherwise.
+func BundledClaudePluginDir(exe string) string {
+	if exe == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	candidate := filepath.Join(filepath.Dir(filepath.Dir(exe)), "claude-plugins", "nightgauge")
+	if info, err := os.Stat(filepath.Join(candidate, "hooks", "hooks.json")); err == nil && !info.IsDir() {
+		return candidate
+	}
+	return ""
+}
+
 // phaseMarkerRE matches the literal phase-marker HTML comment the Phase
 // Marker Protocol emits (`<!-- phase:start name="..." index=N total=T
 // stage="..." -->`) — the orchestrator counts these, so it is the one element

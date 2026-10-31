@@ -269,6 +269,7 @@ export type TerminalFailureKind =
   // increment, no cascade feed, and the entry is held for an operator.
   | "context_window_exceeded" // Issue #1631 — the prompt outgrew the context the model server has the model loaded with; classified only from the adapter's own failed-request line (`AI_APICallError: …`), never from model text. Not an agent failure; parked with remediation until re-route (#1645) and decomposition (#1655) land
   | "adapter_permission_rejected" // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's `[adapter-permission-rejected]` marker): an `ask` rule from OpenCode's own `.env` read guard or a repository's or the user's opencode.json, the same kind whatever tool it names. Distinct from permission_denied, which retries
+  | "gate_plugin_missing" // Issue #2723 — a bundled build's Claude stage did not load the Nightgauge plugin exactly once (`[gate-plugin-missing]`); parked and excluded from the calibration corpus
   | "environment_halt" // Issue #101 — a project-declared preflight.environment check failed in Phase 0 (`[environment-halt]`); the operator's environment, not the code; parked and excluded from the calibration corpus
   | "adapter_incompatible"; // Issue #1631 — the adapter's binary cannot serve the dispatch (below the compat floor or unreadable; #1627; a newer version is never refused); install a build at or above the floor
 
@@ -327,6 +328,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "context_window_exceeded",
   "adapter_permission_rejected",
   "environment_halt",
+  "gate_plugin_missing",
   "adapter_incompatible",
 ];
 

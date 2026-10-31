@@ -16575,6 +16575,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     // inventing an observation.
                     servedModel: result.servedModel,
                     servedEffort: result.servedEffort,
+                    pluginVersion: result.pluginVersion,
                     servedThinking: result.servedThinking,
                   });
                 } catch (err) {
@@ -16638,6 +16639,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     // inventing an observation.
                     servedModel: result.servedModel,
                     servedEffort: result.servedEffort,
+                    pluginVersion: result.pluginVersion,
                     servedThinking: result.servedThinking,
                   });
                 } catch (err) {
@@ -16768,6 +16770,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                       // inventing an observation.
                       servedModel: result.servedModel,
                       servedEffort: result.servedEffort,
+                      pluginVersion: result.pluginVersion,
                       servedThinking: result.servedThinking,
                     });
                   }
@@ -16875,6 +16878,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     // inventing an observation.
                     servedModel: result.servedModel,
                     servedEffort: result.servedEffort,
+                    pluginVersion: result.pluginVersion,
                     servedThinking: result.servedThinking,
                   });
                   // A second `setStageModelSelection` call used to sit here
@@ -17029,6 +17033,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                       // inventing an observation.
                       servedModel: result.servedModel,
                       servedEffort: result.servedEffort,
+                      pluginVersion: result.pluginVersion,
                       servedThinking: result.servedThinking,
                     });
                     await this.stateService.clearRetrying(stage);

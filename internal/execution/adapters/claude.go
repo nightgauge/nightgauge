@@ -53,6 +53,7 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 
 	args = append(args, claudeKnowledgeDirArgs(opts)...)
 	args = append(args, claudeSkillsDirArgs(opts)...)
+	args = append(args, claudePluginDirArgs(opts)...)
 
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
@@ -132,6 +133,22 @@ func claudeKnowledgeDirArgs(opts RunOptions) []string {
 		return nil
 	}
 	return []string{"--add-dir", opts.KnowledgeDir}
+}
+
+// IsClaudeCLI reports whether the adapter spawns the claude CLI, whose stage
+// loads the Nightgauge plugin (#2723).
+func IsClaudeCLI(adapterName string) bool {
+	return adapterName == "claude" || adapterName == "claude-sdk"
+}
+
+// claudePluginDirArgs names the plugin the stage loads (#2723). The CLI replaces
+// a same-named user-level install with it, reporting one `nightgauge` entry whose
+// source is `nightgauge@inline`, so a gate does not fire twice.
+func claudePluginDirArgs(opts RunOptions) []string {
+	if opts.ClaudePluginDir == "" {
+		return nil
+	}
+	return []string{"--plugin-dir", opts.ClaudePluginDir}
 }
 
 // claudeSkillsDirArgs makes the skills tree the stage rendered from readable

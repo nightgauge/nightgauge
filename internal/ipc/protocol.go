@@ -1213,6 +1213,9 @@ type PipelineNotifyStageTransitionParams struct {
 	ServedModel    string `json:"servedModel,omitempty"`
 	ServedEffort   string `json:"servedEffort,omitempty"`
 	ServedThinking string `json:"servedThinking,omitempty"`
+	// PluginVersion is the Nightgauge Claude plugin version the stage's
+	// system/init reported (#2723), verbatim. Empty means it reported none.
+	PluginVersion string `json:"pluginVersion,omitempty"`
 	// StagePid is the advisory OS pid of the process executing the stage (ADR-017
 	// §7.2). Advisory, not an identity — omitempty is fine.
 	//

@@ -474,6 +474,9 @@ type V2ModelSelect struct {
 	// honestly-unreported — never a guess or a copy of the requested value.
 	ServedEffort   string `json:"served_effort,omitempty"`
 	ServedThinking string `json:"served_thinking,omitempty"`
+	// PluginVersion is the Nightgauge Claude plugin version the stage's
+	// system/init reported (#2723). Empty means it reported none.
+	PluginVersion string `json:"plugin_version,omitempty"`
 	// Mode is model_routing.mode (manual | automatic | hybrid) active when
 	// this stage's model was resolved (resolves #462). Distinguishes an
 	// operator-pinned model (manual) from a router-chosen one
@@ -1467,6 +1470,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 				// #606 served-envelope attribution, the ServedModel analogues.
 				ServedEffort:   snap.StageServedEfforts[stageName],
 				ServedThinking: snap.StageServedThinking[stageName],
+				PluginVersion:  snap.StagePluginVersions[stageName],
 				Mode:           snap.StageModelSelectionModes[stageName],
 				// ADR-022 § 2 identity of a multi-provider adapter's stage.
 				ModelProvider: snap.StageModelIdentities[stageName].Provider,
