@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- Installing Codex or Grok skills warns when any were skipped, with the count
+  (`installed N of M, skipped K`), instead of reporting success. The skipped
+  directories keep their old skills, and the output channel names them.
+- Installing Codex or Grok skills removes Nightgauge skills that no longer ship.
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.

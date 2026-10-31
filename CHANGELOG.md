@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Skill installs no longer report success while leaving skills stale. Codex and Grok
+  installs print `installed N of M, skipped K`, and a skipped directory makes
+  `install-agent-skills.sh` exit non-zero after the other tools refresh. The extension
+  shows the same count as a warning.
+- `install-agent-skills.sh --adopt` replaces directories from before the install
+  marker when git history proves they shipped, and moves the old copy beside the
+  skills directory. Locally edited directories are left alone and named.
+- Installs remove marked skills that no longer exist in source, and the Grok path
+  removes `nightgauge` plugin and marketplace entries whose path is gone.
+- `nightgauge doctor` reports Codex and Grok skills that differ from the installed
+  build (`NGD112`).
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.

@@ -14,7 +14,13 @@ import * as os from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { getPrefixedMainChannel } from "../utils/logger";
-import { copySkillsTree, installWorkspaceSkills, resolveBundledSkillsDir } from "./bundledSkills";
+import {
+  copySkillsTree,
+  installWorkspaceSkills,
+  isCompleteBundledSource,
+  reportSkillCopy,
+  resolveBundledSkillsDir,
+} from "./bundledSkills";
 
 const execAsync = promisify(exec);
 
@@ -142,10 +148,15 @@ export class CodexSetupService implements vscode.Disposable {
       // Skill sync reads the VSIX bundle only, never the workspace: the
       // development source is installSkillsFromWorkspace().
       const sourceSkillsDir = resolveBundledSkillsDir(this.context.extensionPath);
+      let skillsComplete = true;
       if (sourceSkillsDir) {
-        await copySkillsTree(sourceSkillsDir, path.join(codexHome(), "skills"), (message) =>
-          this.outputChannel.appendLine(`WARNING: ${message}`)
+        const result = await copySkillsTree(
+          sourceSkillsDir,
+          path.join(codexHome(), "skills"),
+          (message) => this.outputChannel.appendLine(`WARNING: ${message}`),
+          { prune: isCompleteBundledSource(this.context.extensionPath, sourceSkillsDir) }
         );
+        skillsComplete = reportSkillCopy("Codex", result, this.outputChannel);
       }
 
       await this.context.globalState.update(CodexSetupService.INSTALLED_KEY, true);
@@ -153,9 +164,11 @@ export class CodexSetupService implements vscode.Disposable {
       this.outputChannel.appendLine("✓ Codex commands installed");
       this.outputChannel.appendLine(`✓ Destination: ${commandsDest}`);
 
-      vscode.window.showInformationMessage(
-        "Nightgauge Codex commands installed. Try /nightgauge-issue-pickup."
-      );
+      if (skillsComplete) {
+        vscode.window.showInformationMessage(
+          "Nightgauge Codex commands installed. Try /nightgauge-issue-pickup."
+        );
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.outputChannel.appendLine(`✗ Installation failed: ${errorMessage}`);

@@ -14,7 +14,8 @@
  *   copies a linked file only when the link resolves inside the source tree,
  *   never follows a linked directory, refuses a destination that overlaps the
  *   source, and replaces an existing destination directory only when it
- *   holds the install marker Nightgauge writes.
+ *   holds the install marker Nightgauge writes. It reports what it skipped,
+ *   and removes marked directories whose skill has left a complete source.
  */
 
 import * as fs from "fs";
@@ -39,6 +40,22 @@ const INSTALL_MARKER_TEXT =
 /** Receives one line per source or destination entry the install skipped. */
 export type SkillCopyWarn = (message: string) => void;
 
+/** What copySkillsTree did. `total` counts every eligible source directory. */
+export interface SkillCopyResult {
+  installed: number;
+  total: number;
+  skipped: number;
+  removed: number;
+}
+
+export interface SkillCopyOptions {
+  /**
+   * Remove marked destination directories that have no skill in the source.
+   * Pass true only for a complete source: see isCompleteBundledSource().
+   */
+  prune: boolean;
+}
+
 export function resolveBundledSkillsDir(extensionPath: string): string | null {
   const pluginSkills = path.join(extensionPath, "dist", "claude-plugins", "nightgauge", "skills");
   if (fs.existsSync(pluginSkills)) {
@@ -49,6 +66,14 @@ export function resolveBundledSkillsDir(extensionPath: string): string | null {
     return distSkills;
   }
   return null;
+}
+
+/**
+ * False for the dist/skills fallback, which holds only the pipeline skills:
+ * pruning against that subset would delete every other installed skill.
+ */
+export function isCompleteBundledSource(extensionPath: string, source: string): boolean {
+  return path.resolve(source) !== path.resolve(extensionPath, "dist", "skills");
 }
 
 function destSkillName(dirName: string, restorePrefix: boolean): string {
@@ -181,16 +206,21 @@ async function resolveContained(
  * work. A symlink or a file is always the operator's.
  */
 async function mayReplace(target: string): Promise<boolean> {
-  let stats: fs.Stats;
   try {
-    stats = await fs.promises.lstat(target);
+    await fs.promises.lstat(target);
   } catch (error) {
     if (isMissing(error)) {
       return true;
     }
     throw error;
   }
-  if (!stats.isDirectory()) {
+  return holdsMarker(target);
+}
+
+/** True when `target` is a real directory holding the install marker. */
+async function holdsMarker(target: string): Promise<boolean> {
+  const stats = await fs.promises.lstat(target).catch(() => null);
+  if (!stats?.isDirectory()) {
     return false;
   }
   const marker = await fs.promises.lstat(path.join(target, INSTALL_MARKER)).catch(() => null);
@@ -235,22 +265,27 @@ async function copyContained(
  * Refuses (throws) when the source and destination overlap. A skill is
  * installed only under a name Nightgauge owns and only where mayReplace()
  * allows, so every other destination entry is left untouched (with a
- * warning). Each installed directory gets the install marker before its
- * content, so even a partial install is recognised as Nightgauge's next
- * time. Returns the number of directories installed.
+ * warning) and counted as skipped. Each installed directory gets the install
+ * marker before its content, so even a partial install is recognised as
+ * Nightgauge's next time. With `prune`, a marked directory whose skill is not
+ * in the source is removed, unless the source is empty. An extension has no
+ * git history, so it cannot adopt a marker-less directory the way
+ * `install-agent-skills.sh --adopt` does.
  */
 export async function copySkillsTree(
   sourceDir: string,
   destDir: string,
-  warn: SkillCopyWarn
-): Promise<number> {
+  warn: SkillCopyWarn,
+  options: SkillCopyOptions
+): Promise<SkillCopyResult> {
   const { root } = await resolveInstallPaths(sourceDir, destDir);
   const restorePrefix =
     !fs.existsSync(path.join(root, "nightgauge-issue-create")) &&
     fs.existsSync(path.join(root, "issue-create"));
 
   await fs.promises.mkdir(destDir, { recursive: true });
-  let count = 0;
+  const sourceNames = new Set<string>();
+  const result: SkillCopyResult = { installed: 0, total: 0, skipped: 0, removed: 0 };
   for (const name of await fs.promises.readdir(root)) {
     const entryPath = path.join(root, name);
     const entry = await resolveContained(entryPath, root, warn);
@@ -265,26 +300,68 @@ export async function copySkillsTree(
     }
     const destName = destSkillName(name, restorePrefix);
     const target = path.join(destDir, destName);
+    sourceNames.add(destName);
     if (!isNightgaugeSkillName(destName)) {
       warn(
         `Skipped ${entryPath}: ${destName} is not a Nightgauge skill name; ${target} is untouched.`
       );
       continue;
     }
+    result.total += 1;
     if (!(await mayReplace(target))) {
       warn(
         `Skipped ${entryPath}: ${target} is not a directory Nightgauge installed, so it is ` +
           `left untouched. Remove it to let Nightgauge install ${destName}.`
       );
+      result.skipped += 1;
       continue;
     }
     await fs.promises.rm(target, { recursive: true, force: true });
     await fs.promises.mkdir(target);
     await fs.promises.writeFile(path.join(target, INSTALL_MARKER), INSTALL_MARKER_TEXT);
     await copyContained(entryPath, target, root, warn);
-    count += 1;
+    result.installed += 1;
   }
-  return count;
+  if (options.prune && result.total > 0) {
+    for (const name of await fs.promises.readdir(destDir)) {
+      const target = path.join(destDir, name);
+      if (!sourceNames.has(name) && (await holdsMarker(target))) {
+        await fs.promises.rm(target, { recursive: true, force: true });
+        warn(`Removed ${target}: its skill is no longer in the source.`);
+        result.removed += 1;
+      }
+    }
+  }
+  return result;
+}
+
+/** `installed N of M, skipped K`, the same words the script installer prints. */
+export function formatSkillCopySummary(result: SkillCopyResult): string {
+  const summary = `installed ${result.installed} of ${result.total}, skipped ${result.skipped}`;
+  return result.removed > 0 ? `${summary}, removed ${result.removed}` : summary;
+}
+
+/**
+ * Log the summary and, when a skill was skipped, warn the user with the same
+ * count. Returns true when the install was complete, so the caller shows its
+ * success message only then.
+ */
+export function reportSkillCopy(
+  agent: string,
+  result: SkillCopyResult,
+  output: vscode.OutputChannel
+): boolean {
+  const summary = formatSkillCopySummary(result);
+  if (result.skipped === 0) {
+    output.appendLine(`✓ ${agent} skills: ${summary}`);
+    return true;
+  }
+  output.appendLine(`✗ ${agent} skills incomplete: ${summary}`);
+  vscode.window.showWarningMessage(
+    `Nightgauge ${agent} skills are incomplete: ${summary}. The skipped directories keep ` +
+      "their old skills; the Nightgauge output channel names them."
+  );
+  return false;
 }
 
 const INSTALL_FROM_WORKSPACE = "Install from Workspace";
@@ -347,13 +424,17 @@ export async function installWorkspaceSkills(
 
   output.show(true);
   try {
-    const count = await copySkillsTree(source, destDir, (message) =>
-      output.appendLine(`WARNING: ${message}`)
+    const result = await copySkillsTree(
+      source,
+      destDir,
+      (message) => output.appendLine(`WARNING: ${message}`),
+      { prune: true }
     );
-    output.appendLine(`✓ Copied ${count} skill directories from ${source} to ${realDest}`);
-    vscode.window.showInformationMessage(
-      `Installed ${count} ${agent} skill directories from ${source}.`
-    );
+    if (reportSkillCopy(agent, result, output)) {
+      vscode.window.showInformationMessage(
+        `Installed ${result.installed} ${agent} skill directories from ${source}.`
+      );
+    }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     output.appendLine(`✗ Installation from ${source} failed: ${errorMessage}`);

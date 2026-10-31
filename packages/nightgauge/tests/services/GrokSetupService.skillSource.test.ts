@@ -133,6 +133,21 @@ describe("GrokSetupService skill source", () => {
     expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
   });
 
+  it("a skipped skill warns with the count instead of the success message", async () => {
+    const vscode = await import("vscode");
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Install" as never);
+    fs.mkdirSync(path.join(skillsDest, "_shared"), { recursive: true });
+
+    await (await makeService()).checkAndPromptSetup();
+
+    expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+      expect.stringMatching(/installed \d+ of \d+, skipped 1/)
+    );
+    expect(vscode.window.showInformationMessage).not.toHaveBeenCalledWith(
+      expect.stringContaining("skills installed")
+    );
+  });
+
   it("the development command refuses an untrusted workspace", async () => {
     const vscode = await import("vscode");
     (vscode.workspace as { isTrusted: boolean }).isTrusted = false;

@@ -265,7 +265,9 @@ for root in "$HOME_H1/.codex/skills" "$HOME_H1/.grok/skills"; do
   : >"$root/nightgauge-retro/$MARKER"
   echo stale >"$root/nightgauge-retro/stale.md"
 done
-if HOME="$HOME_H1" PATH="$SAFE_PATH" bash "$INSTALLER" >/dev/null 2>"$TMP/h1.err"; then
+if HOME="$HOME_H1" PATH="$SAFE_PATH" bash "$INSTALLER" >"$TMP/h1.out" 2>"$TMP/h1.err"; then
+  nope "(h1) an install that skipped skills exited 0"
+else
   h1_ok=1
   for root in "$HOME_H1/.codex/skills" "$HOME_H1/.grok/skills"; do
     [ "$(cat "$root/update-docs/mine.md" 2>/dev/null)" = mine ] &&
@@ -277,15 +279,16 @@ if HOME="$HOME_H1" PATH="$SAFE_PATH" bash "$INSTALLER" >/dev/null 2>"$TMP/h1.err
       [ -f "$root/nightgauge-issue-create/$MARKER" ] || h1_ok=0
   done
   if [ "$h1_ok" = 1 ] && grep -q "skipped update-docs" "$TMP/h1.err" &&
-    grep -q "skipped _shared" "$TMP/h1.err"; then
-    ok "(h1) unowned update-docs and _shared survive with a warning; a marked dir is replaced"
+    grep -q "skipped _shared" "$TMP/h1.err" &&
+    grep -Eq "Codex: installed [0-9]+ of [0-9]+, skipped 2" "$TMP/h1.out" &&
+    grep -Eq "Grok: installed [0-9]+ of [0-9]+, skipped 2" "$TMP/h1.out" &&
+    grep -q "Agent skill sync INCOMPLETE: Codex and Grok" "$TMP/h1.err" &&
+    ! grep -q "Agent skill sync complete" "$TMP/h1.out"; then
+    ok "(h1) unowned dirs survive, the count is reported and Grok still ran after Codex skipped"
   else
     nope "(h1) an unowned directory was replaced, a marked one was not, or no warning"
-    sed 's/^/    /' "$TMP/h1.err"
+    sed 's/^/    /' "$TMP/h1.out" "$TMP/h1.err"
   fi
-else
-  nope "(h1) install exited non-zero"
-  sed 's/^/    /' "$TMP/h1.err"
 fi
 
 # (h2) a symlink at a skill's destination is the operator's: left in place,
@@ -293,7 +296,8 @@ fi
 HOME_H2="$TMP/home-h2"
 mkdir -p "$HOME_H2/.codex/skills" "$HOME_H2/linked-target"
 ln -s "$HOME_H2/linked-target" "$HOME_H2/.codex/skills/nightgauge-issue-create"
-if HOME="$HOME_H2" PATH="$SAFE_PATH" bash "$INSTALLER" --codex-only >/dev/null 2>"$TMP/h2.err" &&
+if ! HOME="$HOME_H2" PATH="$SAFE_PATH" bash "$INSTALLER" --codex-only >"$TMP/h2.out" 2>"$TMP/h2.err" &&
+  grep -Eq "installed [0-9]+ of [0-9]+, skipped 1" "$TMP/h2.out" &&
   [ -L "$HOME_H2/.codex/skills/nightgauge-issue-create" ] &&
   [ -z "$(ls -A "$HOME_H2/linked-target")" ] &&
   grep -q "skipped nightgauge-issue-create" "$TMP/h2.err"; then
@@ -375,6 +379,240 @@ elif [ "$(cd "$SBH4/skills" && find . -type f | sort | xargs shasum -a 256)" = "
 else
   nope "(h4) refused, but the canonical skills/ changed first"
   sed 's/^/    /' "$TMP/h4.err"
+fi
+
+# --- (j) --adopt and retired skills (#2739) --------------------------------
+# A real git repository with two versions of one skill and an old _shared
+# file, so the shipped set has history to prove against. Its installer is the
+# working-tree copy, like every other arm.
+SBJ="$TMP/sbj"
+j_git() { git -C "$SBJ" -c user.name=t -c user.email=t@example.com "$@"; }
+mkdir -p "$SBJ/scripts"
+cp -R "$SANDBOX/skills" "$SBJ/skills"
+cp -R "$SANDBOX/scripts/." "$SBJ/scripts/"
+j_old="$TMP/j-old-skill.md"
+cp "$SBJ/skills/nightgauge-retro/SKILL.md" "$j_old"
+j_old_shared="$TMP/j-old-shared.md"
+cp "$SBJ/skills/_shared/PREFLIGHT.md" "$j_old_shared"
+if ! git init -q "$SBJ" || ! j_git add -A || ! j_git commit -qm old; then
+  nope "(j0) could not build the adopt sandbox; no (j) arm ran"
+else
+  echo "# a later version" >>"$SBJ/skills/nightgauge-retro/SKILL.md"
+  echo "# a later version" >>"$SBJ/skills/_shared/PREFLIGHT.md"
+  j_git add -A && j_git commit -qm new
+  j_seed() {
+    local root="$1/.codex/skills"
+    mkdir -p "$root/nightgauge-retro" "$root/_shared" "$root/nightgauge-issue-create"
+    cp "$j_old" "$root/nightgauge-retro/SKILL.md"
+    cp "$j_old_shared" "$root/_shared/PREFLIGHT.md"
+    echo "my edit" >"$root/nightgauge-issue-create/SKILL.md"
+  }
+
+  # (j1) a shipped old copy is replaced and moved outside the root; a local
+  # edit stays and is named; the run is still non-zero because of it.
+  HOME_J1="$TMP/home-j1"
+  j_seed "$HOME_J1"
+  J_INSTALLER="$SBJ/scripts/install-agent-skills.sh"
+  if HOME="$HOME_J1" PATH="$SAFE_PATH" bash "$J_INSTALLER" --codex-only --adopt \
+    >"$TMP/j1.out" 2>"$TMP/j1.err"; then
+    nope "(j1) --adopt exited 0 with a locally edited directory left behind"
+  else
+    root="$HOME_J1/.codex/skills"
+    aside="$(find "$root.nightgauge-adopted" -type f -path '*/nightgauge-retro/SKILL.md' 2>/dev/null)"
+    shared_aside="$(find "$root.nightgauge-adopted" -type f -path '*/_shared/PREFLIGHT.md' 2>/dev/null)"
+    if [ -f "$root/nightgauge-retro/$MARKER" ] &&
+      cmp -s "$root/nightgauge-retro/SKILL.md" "$SBJ/skills/nightgauge-retro/SKILL.md" &&
+      [ -n "$aside" ] && cmp -s "$aside" "$j_old" &&
+      [ -f "$root/_shared/$MARKER" ] && [ -n "$shared_aside" ] &&
+      [ "$(cat "$root/nightgauge-issue-create/SKILL.md")" = "my edit" ] &&
+      [ ! -e "$root/nightgauge-issue-create/$MARKER" ] &&
+      grep -q "skipped nightgauge-issue-create" "$TMP/j1.err" &&
+      grep -Eq "skipped 1, adopted 2" "$TMP/j1.out"; then
+      ok "(j1) --adopt replaces shipped copies, keeps them outside the root, leaves local edits"
+    else
+      nope "(j1) --adopt did the wrong thing to a shipped or a locally edited directory"
+      sed 's/^/    /' "$TMP/j1.out" "$TMP/j1.err"
+    fi
+  fi
+
+  # (j2) without --adopt the very same home is skipped: the proof is the flag's.
+  HOME_J2="$TMP/home-j2"
+  j_seed "$HOME_J2"
+  if ! HOME="$HOME_J2" PATH="$SAFE_PATH" bash "$J_INSTALLER" --codex-only \
+    >"$TMP/j2.out" 2>"$TMP/j2.err" &&
+    [ ! -e "$HOME_J2/.codex/skills/nightgauge-retro/$MARKER" ] &&
+    [ ! -e "$HOME_J2/.codex/skills.nightgauge-adopted" ] &&
+    grep -Eq "skipped 3$" "$TMP/j2.out"; then
+    ok "(j2) a plain install adopts nothing"
+  else
+    nope "(j2) a plain install touched a marker-less directory"
+    sed 's/^/    /' "$TMP/j2.out" "$TMP/j2.err"
+  fi
+
+  # (j3) a symlink at a skill's destination is never adopted, even with --adopt.
+  HOME_J3="$TMP/home-j3"
+  mkdir -p "$HOME_J3/.codex/skills" "$TMP/j3-target"
+  cp "$j_old" "$TMP/j3-target/SKILL.md"
+  ln -s "$TMP/j3-target" "$HOME_J3/.codex/skills/nightgauge-retro"
+  if ! HOME="$HOME_J3" PATH="$SAFE_PATH" bash "$J_INSTALLER" --codex-only --adopt \
+    >"$TMP/j3.out" 2>"$TMP/j3.err" &&
+    [ -L "$HOME_J3/.codex/skills/nightgauge-retro" ] &&
+    cmp -s "$TMP/j3-target/SKILL.md" "$j_old"; then
+    ok "(j3) --adopt leaves a symlink alone"
+  else
+    nope "(j3) --adopt touched a symlinked skill"
+    sed 's/^/    /' "$TMP/j3.out" "$TMP/j3.err"
+  fi
+
+  # (j4) a shallow clone cannot prove anything: exit 1, nothing written.
+  SBJS="$TMP/sbj-shallow"
+  git clone -q --depth 1 "file://$SBJ" "$SBJS"
+  mkdir -p "$SBJS/scripts/lib"
+  cp "$SBJ/scripts/install-agent-skills.sh" "$SBJS/scripts/"
+  cp "$SBJ/scripts/lib/"*.py "$SBJS/scripts/lib/"
+  HOME_J4="$TMP/home-j4"
+  j_seed "$HOME_J4"
+  HOME="$HOME_J4" PATH="$SAFE_PATH" bash "$SBJS/scripts/install-agent-skills.sh" --codex-only --adopt \
+    >"$TMP/j4.out" 2>"$TMP/j4.err"
+  j4_code=$?
+  if [ "$j4_code" = 1 ] && grep -q "refusing --adopt" "$TMP/j4.err" &&
+    [ ! -e "$HOME_J4/.codex/skills/nightgauge-retro/$MARKER" ] &&
+    [ ! -e "$HOME_J4/.codex/skills/nightgauge-feature-dev" ]; then
+    ok "(j4) a shallow clone is refused and nothing is written"
+  else
+    nope "(j4) --adopt ran on a shallow clone (exit $j4_code)"
+    sed 's/^/    /' "$TMP/j4.err"
+  fi
+
+  # (j5) the arms above can go red: with the proof forced true, the edit goes.
+  SBJV="$TMP/sbj-vacuous"
+  cp -R "$SBJ" "$SBJV"
+  python3 - "$SBJV/scripts/lib/install_skill_tree.py" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+old = "if not is_shipped(target, name, blobs, checkout):"
+assert old in text
+open(path, "w", encoding="utf-8").write(text.replace(old, "if False:"))
+PY
+  HOME_J5="$TMP/home-j5"
+  j_seed "$HOME_J5"
+  HOME="$HOME_J5" PATH="$SAFE_PATH" bash "$SBJV/scripts/install-agent-skills.sh" --codex-only --adopt \
+    >/dev/null 2>&1
+  if [ -f "$HOME_J5/.codex/skills/nightgauge-issue-create/$MARKER" ]; then
+    ok "(j5) without the proof a local edit is replaced (the arms are not vacuous)"
+  else
+    nope "(j5) disabling the proof changed nothing; (j1) measures nothing"
+  fi
+fi
+
+# (j6) --adopt is rejected where it means nothing.
+for j_arg in --claude-only --generate-only --check-mirror --opencode-only; do
+  if HOME="$TMP/home-j6" PATH="$SAFE_PATH" bash "$INSTALLER" "$j_arg" --adopt >/dev/null 2>"$TMP/j6.err"; then
+    nope "(j6) $j_arg --adopt was accepted"
+  else
+    j6_code=$?
+    if [ "$j6_code" = 2 ] && grep -q "applies only to" "$TMP/j6.err"; then
+      ok "(j6) $j_arg --adopt is rejected with exit 2"
+    else
+      nope "(j6) $j_arg --adopt exited $j6_code"
+    fi
+  fi
+done
+
+# (k) a marked directory whose skill left skills/ is removed; an unmarked
+# stranger of the same shape and a marked symlink target stay.
+HOME_K="$TMP/home-k"
+k_root="$HOME_K/.codex/skills"
+mkdir -p "$k_root/nightgauge-backlog-audit" "$k_root/find-skills" "$k_root/nightgauge-unmarked" \
+  "$TMP/k-target"
+touch "$k_root/nightgauge-backlog-audit/$MARKER" "$TMP/k-target/$MARKER"
+echo mine >"$k_root/find-skills/SKILL.md"
+ln -s "$TMP/k-target" "$k_root/nightgauge-linked"
+if HOME="$HOME_K" PATH="$SAFE_PATH" bash "$INSTALLER" --codex-only >"$TMP/k.out" 2>"$TMP/k.err" &&
+  [ ! -e "$k_root/nightgauge-backlog-audit" ] && [ -f "$k_root/find-skills/SKILL.md" ] &&
+  [ -d "$k_root/nightgauge-unmarked" ] && [ -L "$k_root/nightgauge-linked" ] &&
+  [ -f "$TMP/k-target/$MARKER" ] &&
+  grep -Eq "skipped 0, removed 1" "$TMP/k.out" && grep -q "removed nightgauge-backlog-audit" "$TMP/k.err"; then
+  ok "(k) a marked retired skill is removed; unmarked dirs and symlinks stay; no skip means exit 0"
+else
+  nope "(k) retired-skill removal touched the wrong directories"
+  sed 's/^/    /' "$TMP/k.out" "$TMP/k.err"
+fi
+
+# (k2) an empty source never prunes: it would delete every installed skill.
+k2_src="$TMP/k2-empty"
+HOME_K2="$TMP/home-k2"
+mkdir -p "$k2_src" "$HOME_K2/skills/nightgauge-retro"
+touch "$HOME_K2/skills/nightgauge-retro/$MARKER"
+if python3 "$REPO_ROOT/scripts/lib/install_skill_tree.py" install --source "$k2_src" \
+  --dest "$HOME_K2/skills" --checkout "$SANDBOX" --label K2 >"$TMP/k2.out" 2>&1 &&
+  [ -d "$HOME_K2/skills/nightgauge-retro" ] && grep -q "installed 0 of 0, skipped 0" "$TMP/k2.out"; then
+  ok "(k2) an empty source removes nothing"
+else
+  nope "(k2) an empty source pruned, or reported the wrong count"
+fi
+
+# (l) dead Grok entries. The stub answers with the JSON shape the real CLI
+# printed on 2026-10-31 and logs every call. It does not model what `uninstall`
+# does with duplicate names: that was never exercised on a real home.
+GROK_BIN="$TMP/grok-bin"
+GROK_LOG="$TMP/grok.log"
+mkdir -p "$GROK_BIN"
+cat >"$GROK_BIN/grok" <<'SH'
+#!/bin/bash
+echo "$*" >>"$GROK_LOG"
+case "$*" in
+  "plugin marketplace list --json") cat "$GROK_STATE/marketplaces.json" ;;
+  "plugin list --json") cat "$GROK_STATE/plugins.json" ;;
+esac
+exit 0
+SH
+chmod +x "$GROK_BIN/grok"
+GROK_STATE="$TMP/grok-state"
+mkdir -p "$GROK_STATE"
+cat >"$GROK_STATE/marketplaces.json" <<JSON
+[{"name":"xAI Official","kind":"git","source":{"url":"https://example.invalid/x.git","branch":null}},
+ {"name":"nightgauge","kind":"local","source":{"path":"$TMP"}},
+ {"name":"nightgauge-issue-7","kind":"local","source":{"path":"$TMP/gone-worktree"}},
+ {"name":"someone-else","kind":"local","source":{"path":"$TMP/gone-other"}}]
+JSON
+cat >"$GROK_STATE/plugins.json" <<JSON
+[{"status":"installed","name":"nightgauge","source":"$TMP/gone-worktree/claude-plugins/nightgauge"},
+ {"status":"installed","name":"other","source":"$TMP/gone-other/plugin"}]
+JSON
+HOME_L="$TMP/home-l"
+mkdir -p "$HOME_L/.grok"
+if GROK_LOG="$GROK_LOG" GROK_STATE="$GROK_STATE" HOME="$HOME_L" PATH="$GROK_BIN:$SAFE_PATH" \
+  bash "$INSTALLER" --grok-only >"$TMP/l.out" 2>"$TMP/l.err" &&
+  grep -qx "plugin marketplace remove $TMP/gone-worktree" "$GROK_LOG" &&
+  grep -qx "plugin uninstall nightgauge --confirm" "$GROK_LOG" &&
+  [ "$(grep -c "marketplace remove" "$GROK_LOG")" = 1 ] &&
+  [ "$(grep -c "plugin uninstall" "$GROK_LOG")" = 1 ] &&
+  [ "$(grep -n "plugin uninstall" "$GROK_LOG" | cut -d: -f1)" -lt \
+    "$(grep -n "marketplace add" "$GROK_LOG" | cut -d: -f1)" ] &&
+  [ "$(grep -n "plugin uninstall" "$GROK_LOG" | cut -d: -f1)" -lt \
+    "$(grep -n "plugin install" "$GROK_LOG" | head -1 | cut -d: -f1)" ]; then
+  ok "(l1) dead nightgauge entries are removed before the install; live and foreign ones are not"
+else
+  nope "(l1) the wrong Grok entries were removed, or removal ran after install"
+  sed 's/^/    /' "$GROK_LOG" "$TMP/l.err"
+fi
+
+# (l2) a live plugin is left, and output Grok does not explain warns, not fails.
+: >"$GROK_LOG"
+echo 'not json' >"$GROK_STATE/marketplaces.json"
+cat >"$GROK_STATE/plugins.json" <<JSON
+[{"status":"installed","name":"nightgauge","source":"$TMP"}]
+JSON
+if GROK_LOG="$GROK_LOG" GROK_STATE="$GROK_STATE" HOME="$HOME_L" PATH="$GROK_BIN:$SAFE_PATH" \
+  bash "$INSTALLER" --grok-only >"$TMP/l2.out" 2>"$TMP/l2.err" &&
+  ! grep -q "remove\|uninstall" "$GROK_LOG" &&
+  grep -q "could not read Grok's marketplaces" "$TMP/l2.err"; then
+  ok "(l2) unreadable Grok output warns, removes nothing and does not fail the copy"
+else
+  nope "(l2) unreadable Grok output failed the run or removed something"
+  sed 's/^/    /' "$GROK_LOG" "$TMP/l2.err"
 fi
 
 # --- (o*) OpenCode target (#1666) -------------------------------------------
