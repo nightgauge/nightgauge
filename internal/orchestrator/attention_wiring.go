@@ -54,6 +54,7 @@ const (
 	producerRefinementExhausted = "refinement-exhausted"
 	producerSafetyRailTrip      = "safety-rail-trip"
 	producerEpicIntegration     = "epic-integration"
+	producerGatePluginMissing   = "gate-plugin-missing"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -1591,6 +1592,54 @@ func (s *Scheduler) raiseAuthFailure(repo string, issue int, runID, reason strin
 		ExpiresAt:     expiryFromNow(12 * time.Hour),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Add detail on the auth fix before the retry"},
 	})
+}
+
+// --- Producer (unnumbered): gate plugin missing (per-issue) -----------------
+
+// gatePluginMissingRequest is the card for a stage stopped because its Claude
+// plugin did not load (#2723). Parking holds the issue and raises nothing, and a
+// card is the only way an operator hears about a stage that never started. Both
+// terminal funnels build it here, and the shared key coalesces them.
+func gatePluginMissingRequest(repo string, issue int, runID, stage, detail string) attention.DecisionRequest {
+	key := fmt.Sprintf("%s#%d", repo, issue)
+	// The failure text carries the stage's whole stderr tail; the card needs the
+	// reading.
+	for _, line := range strings.Split(detail, "\n") {
+		if i := strings.Index(line, "[gate-plugin-missing]"); i >= 0 {
+			detail = line[i:]
+			break
+		}
+	}
+	return attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("%s:%s", producerGatePluginMissing, key),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("#%d stopped: safety gates did not load", issue),
+		Body: fmt.Sprintf("%s#%d stopped at %s before doing any work: %s\n\nNext: %s.",
+			repo, issue, stage, detail, ParkedRemediation(TerminalKindGatePluginMissing, detail)),
+		Producer: producerGatePluginMissing,
+		Context: attention.Context{Repo: repo, Issue: issue, RunID: runID, Stage: stage,
+			Blocker: TerminalKindGatePluginMissing, TraceRef: runTraceRef(runID)},
+		Options: []attention.Option{
+			{ID: "fixed-and-retry", Label: "Fixed — release the issue", Verb: attention.VerbAutonomousClearIssueFailures,
+				Args: map[string]any{"key": key, "then": "autonomous.rescan"}, Style: attention.StylePrimary},
+			noopOption("park", "Keep it parked"),
+		},
+		DefaultAction: "park",
+		ExpiresAt:     expiryFromNow(24 * time.Hour),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note what you changed before releasing the issue"},
+	}
+}
+
+// RaiseGatePluginMissing raises the card on the extension's terminal funnel,
+// which holds the store and no Scheduler. Fail-open like every raise path.
+func RaiseGatePluginMissing(store *attention.Store, repo string, issue int, runID, stage, detail string) {
+	raiseThrough(store, gatePluginMissingRequest(repo, issue, runID, stage, detail))
+}
+
+// raiseGatePluginMissing raises the card on the Go scheduler's path.
+func (s *Scheduler) raiseGatePluginMissing(repo string, issue int, runID, stage, detail string) {
+	s.raiseAttention(gatePluginMissingRequest(repo, issue, runID, stage, detail))
 }
 
 // --- Producer (unnumbered): branch forked from its remote (run-scoped) -------

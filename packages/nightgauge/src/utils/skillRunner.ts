@@ -104,6 +104,7 @@ import { shouldEmitSnapshot } from "./budgetStreamEnforcement";
 import { resolveExtensionBundleRoot } from "./extensionBundle";
 import { BinaryResolver } from "../services/BinaryResolver";
 import { killProcessTree, DescendantTracker } from "./processTree";
+import { ClaudePluginGate } from "./claudePluginGate";
 import {
   StageBudgetEnforcer,
   getStageBudgetResolver,
@@ -578,6 +579,11 @@ export interface SkillRunResult {
    */
   servedEffort?: string;
   servedThinking?: string;
+  /**
+   * The Nightgauge plugin version the stage's `system/init` reported (#2723).
+   * Undefined when the adapter is not Claude or the plugin did not load.
+   */
+  pluginVersion?: string;
   /**
    * The CLI's silent model swap after a safety refusal, when one was
    * observed (#91). Attribution + notification only — never used to retry.
@@ -4173,38 +4179,81 @@ Stage: ${getStageLabel(stage)}\n\n`;
  * product workspace) that path does not exist, so the safety hooks were silently
  * absent and a pr-merge agent was able to push straight to main unguarded.
  *
- * Resolution order:
- *   1. Any workspace folder that has a live `claude-plugins/nightgauge`
- *      (dogfooding the nightgauge repo — live hooks win so edits apply
- *      without a republish).
- *   2. The extension's bundled `dist/claude-plugins/nightgauge` (ships in
- *      every VSIX — the universal fallback that guarantees customer repos and
- *      non-nightgauge workspaces still get the guards).
- *   3. undefined — only when neither is found (dev shell with no extension).
+ * Resolution order (#2723, the #2718 rule for hooks: a build runs what it shipped):
+ *   - A packaged extension: its bundled `dist/claude-plugins/nightgauge`, then
+ *     a workspace copy.
+ *   - An Extension Development or Test host: a workspace copy, so hook edits
+ *     apply without a republish, then the bundle.
+ *   - undefined when neither is found.
  */
 export function resolvePluginRoot(): string | undefined {
-  const hasHooks = (root: string): boolean => fs.existsSync(path.join(root, "hooks", "hooks.json"));
+  const bundled = bundledPluginRoot();
+  if (packagedExtensionHost && bundled) {
+    return bundled;
+  }
+  return workspacePluginRoot() ?? bundled;
+}
 
-  // 1. Prefer a live workspace copy (any folder, not just [0]).
+/** The plugin hooks a directory must hold to count as the plugin. */
+function hasPluginHooks(root: string): boolean {
+  return fs.existsSync(path.join(root, "hooks", "hooks.json"));
+}
+
+/** The first workspace folder's live `claude-plugins/nightgauge`, any folder. */
+function workspacePluginRoot(): string | undefined {
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
     const candidate = path.join(folder.uri.fsPath, "claude-plugins", "nightgauge");
-    if (hasHooks(candidate)) {
+    if (hasPluginHooks(candidate)) {
       return candidate;
     }
   }
+  return undefined;
+}
 
-  // 2. Fall back to the hooks bundled inside the extension's dist/ — always
-  //    present, so non-nightgauge workspaces still get the safety guards.
+/** The plugin the extension's dist/ ships. */
+function bundledPluginRoot(): string | undefined {
   const ext = vscode.extensions.getExtension("nightgauge.nightgauge");
   const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
-  if (bundleRoot) {
-    const bundled = path.join(bundleRoot, "dist", "claude-plugins", "nightgauge");
-    if (hasHooks(bundled)) {
-      return bundled;
-    }
-  }
+  if (!bundleRoot) return undefined;
+  const bundled = path.join(bundleRoot, "dist", "claude-plugins", "nightgauge");
+  return hasPluginHooks(bundled) ? bundled : undefined;
+}
 
-  return undefined;
+/**
+ * What a Claude spawn loads and how strictly it is held to it (#2723). `bundled`
+ * makes the stage's plugin gate stop instead of warn: a packaged build whose own
+ * bundle is the directory being loaded.
+ */
+export function resolveClaudePlugin(): { dir: string | undefined; bundled: boolean } {
+  const dir = resolvePluginRoot();
+  return {
+    dir,
+    bundled: packagedExtensionHost && dir !== undefined && dir === bundledPluginRoot(),
+  };
+}
+
+/** Claude flags that load the plugin, the twin of claudePluginDirArgs in claude.go. */
+export function claudePluginDirArgs(dir: string | undefined): string[] {
+  return dir ? ["--plugin-dir", dir] : [];
+}
+
+/**
+ * Stop a Claude process its plugin gate refused (#2723): SIGTERM now, then
+ * SIGKILL to the whole tree, as the stall kill does, so a child cannot outlive it.
+ */
+function stopClaudeForPluginGate(proc: ChildProcess, onStderr?: (data: string) => void): void {
+  proc.kill("SIGTERM");
+  const killTimer = setTimeout(() => {
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      /* already dead */
+    }
+    if (proc.pid) {
+      void killProcessTree(proc.pid, "SIGKILL", onStderr);
+    }
+  }, 5000);
+  proc.on("exit", () => clearTimeout(killTimer));
 }
 
 /**
@@ -4935,8 +4984,14 @@ function runStageSkillHeadlessImpl(
   // guess. The ServedModel analogue, reported through pipeline.stageResult.
   let dispatchedEffort: string | undefined;
 
+  // The plugin a Claude stage loads and proves it loaded (#2723). Null for every
+  // other adapter.
+  let pluginGate: ClaudePluginGate | null = null;
+
   if (adapter === "claude") {
     const authProvider = getAuthProvider(workspaceRoot);
+    const claudePlugin = resolveClaudePlugin();
+    pluginGate = new ClaudePluginGate(claudePlugin.bundled);
     args = [
       "-p",
       "--no-session-persistence",
@@ -4946,6 +5001,7 @@ function runStageSkillHeadlessImpl(
       "--allowedTools",
       allAllowedTools.join(","),
       ...claudeSkillsDirArgs(renderedSkillPath, workspaceRoot),
+      ...claudePluginDirArgs(claudePlugin.dir),
     ];
 
     if (authProvider === "bedrock") {
@@ -5513,8 +5569,8 @@ function runStageSkillHeadlessImpl(
 
   // Compute absolute CLAUDE_PLUGIN_ROOT so hook scripts (wait-for-ci-checks.sh,
   // fetch-ci-failure-logs.sh, the push-to-main guard, etc.) are always found
-  // regardless of which repo is the active working directory. Resolves to a
-  // live workspace copy when present, else the extension's bundled hooks — so
+  // regardless of which repo is the active working directory. Resolves to the
+  // extension's bundled hooks on a packaged host, so
   // non-nightgauge workspaces (platform, dashboard, customer repos, the
   // acmeapp incident) still load the deterministic safety guards instead of
   // pointing CLAUDE_PLUGIN_ROOT at a non-existent path. @see resolvePluginRoot
@@ -5978,6 +6034,23 @@ function runStageSkillHeadlessImpl(
   let stdoutBuffer = "";
   let stderrBuffer = "";
   let stdoutRawTail = "";
+
+  // Reads each message into the plugin gate (#2723). Its notice goes into
+  // stderrBuffer because that is what classifies the failure.
+  const observePluginGate = (parsed: ReturnType<typeof parseStreamJsonLine>): boolean => {
+    const stop = pluginGate?.observe(parsed) ?? false;
+    const notice = parsed?.subtype === "init" || stop ? pluginGate?.notice : undefined;
+    if (notice) {
+      stderrBuffer = appendTail(stderrBuffer, `${notice}\n`, OUTPUT_ERROR_TAIL_MAX_CHARS);
+      callbacks?.onStderr?.(`${notice}\n`);
+    }
+    if (stop) {
+      exitSignal = "SIGTERM";
+      exitSignalSource = "gate-plugin-missing";
+      stopClaudeForPluginGate(proc, callbacks?.onStderr);
+    }
+    return stop;
+  };
 
   // Buffer for phase marker detection in streaming text content.
   // Phase markers are HTML comments emitted by skills in content_block_delta
@@ -7666,6 +7739,14 @@ function runStageSkillHeadlessImpl(
 
       const parsed = parseStreamJsonLine(line);
 
+      // Nothing after the stop is processed: the stage is being killed (#2723).
+      if (pluginGate?.stopped) {
+        continue;
+      }
+      if (observePluginGate(parsed)) {
+        continue;
+      }
+
       // Served-model attribution (#91): last observed model wins; a refusal
       // fallback event gets one observable log line the moment it fires.
       observeServedModel(parsed);
@@ -8136,8 +8217,9 @@ function runStageSkillHeadlessImpl(
       /* best-effort */
     }
     // Process any remaining buffered output
-    if (stdoutBuffer) {
+    if (stdoutBuffer && !pluginGate?.stopped) {
       const parsed = parseStreamJsonLine(stdoutBuffer);
+      observePluginGate(parsed);
       observeServedModel(parsed);
       if (parsed?.usage) {
         tokenAccumulator.add(parsed.usage);
@@ -8151,7 +8233,8 @@ function runStageSkillHeadlessImpl(
       }
     }
 
-    const success = exitCode === 0;
+    // A CLI that traps the kill and exits 0 is still a stopped stage (#2723).
+    const success = exitCode === 0 && !pluginGate?.stopped;
     const stderrText = stderrBuffer.trim();
     const stdoutText = appendTail(stdoutRawTail, stdoutBuffer, OUTPUT_ERROR_TAIL_MAX_CHARS).trim();
 
@@ -8483,6 +8566,7 @@ function runStageSkillHeadlessImpl(
       // (honestly unreported, the provider default served).
       servedEffort: dispatchedEffort !== effortOverride ? dispatchedEffort : undefined,
       servedThinking: dispatchedThinking,
+      pluginVersion: pluginGate?.version,
       modelRefusalFallback,
     });
   });
@@ -8761,6 +8845,10 @@ export function resumeSessionWithResponse(
   callbacks?.onStderr?.(`[skillRunner] Resuming session: ${sessionId}\n`);
   callbacks?.onStderr?.(`[skillRunner] Response: ${response}\n`);
 
+  // A resumed session reads system/init afresh, so it proves its plugin too (#2723).
+  const claudePlugin = resolveClaudePlugin();
+  const pluginGate = new ClaudePluginGate(claudePlugin.bundled);
+
   // Build CLI arguments for resuming
   const args = [
     "-p",
@@ -8770,6 +8858,7 @@ export function resumeSessionWithResponse(
     "--verbose",
     "--resume",
     sessionId,
+    ...claudePluginDirArgs(claudePlugin.dir),
   ];
 
   // Add backend-specific flag based on auth_provider config
@@ -8850,6 +8939,18 @@ export function resumeSessionWithResponse(
     }
   };
 
+  const observePluginGate = (parsed: ReturnType<typeof parseStreamJsonLine>): boolean => {
+    const stop = pluginGate.observe(parsed);
+    const notice = parsed?.subtype === "init" || stop ? pluginGate.notice : undefined;
+    if (notice) {
+      callbacks?.onStderr?.(`${notice}\n`);
+    }
+    if (stop) {
+      stopClaudeForPluginGate(proc, callbacks?.onStderr);
+    }
+    return stop;
+  };
+
   // Handle stdout
   proc.stdout?.on("data", (data: Buffer) => {
     const text = data.toString();
@@ -8861,6 +8962,9 @@ export function resumeSessionWithResponse(
 
     for (const line of lines) {
       const parsed = parseStreamJsonLine(line);
+      if (pluginGate.stopped || observePluginGate(parsed)) {
+        continue;
+      }
       observeServedModel(parsed);
       if (parsed?.usage) {
         tokenAccumulator.add(parsed.usage);
@@ -8900,8 +9004,9 @@ export function resumeSessionWithResponse(
 
   // Handle completion
   proc.on("close", (exitCode) => {
-    if (stdoutBuffer) {
+    if (stdoutBuffer && !pluginGate.stopped) {
       const parsed = parseStreamJsonLine(stdoutBuffer);
+      observePluginGate(parsed);
       observeServedModel(parsed);
       if (parsed?.usage) {
         tokenAccumulator.add(parsed.usage);
@@ -8920,13 +9025,15 @@ export function resumeSessionWithResponse(
     const bookedUsage = resolveStageBookedUsage(tokenAccumulator, liveEstimator);
     activeProcesses.delete(processKey);
     callbacks?.onComplete?.({
-      success: exitCode === 0,
+      success: exitCode === 0 && !pluginGate.stopped,
       exitCode,
+      ...(pluginGate.stopped ? { error: new Error(pluginGate.notice) } : {}),
       tokenUsage: bookedUsage?.usage,
       costEstimated: bookedUsage?.estimated || undefined,
       sessionId: capturedSessionId,
       // #91 served-model attribution (diverged-only, like the stage path).
       servedModel: servedModel && servedModel !== defaultModel ? servedModel : undefined,
+      pluginVersion: pluginGate.version,
       modelRefusalFallback,
     });
   });
@@ -9528,6 +9635,8 @@ export function runStageSkillInteractive(
     "--allowedTools",
     allInteractiveAllowedTools.join(","),
     ...claudeSkillsDirArgs(skillData.skillPath, workspaceRoot),
+    // No stream here, so this path passes the flag with no init check (#2723).
+    ...claudePluginDirArgs(resolveClaudePlugin().dir),
   ];
 
   // Add backend-specific flag based on auth_provider config (Issue #511)

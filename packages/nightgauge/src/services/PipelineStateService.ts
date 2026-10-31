@@ -215,6 +215,8 @@ export interface StageAttribution {
   servedModel?: string;
   servedEffort?: string;
   servedThinking?: string;
+  /** The Nightgauge plugin version the stage's system/init reported (#2723). */
+  pluginVersion?: string;
 }
 
 export type ExtendedStageState = {
@@ -1368,6 +1370,7 @@ export class PipelineStateService implements vscode.Disposable {
           ...(attribution?.servedModel ? { servedModel: attribution.servedModel } : {}),
           ...(attribution?.servedEffort ? { servedEffort: attribution.servedEffort } : {}),
           ...(attribution?.servedThinking ? { servedThinking: attribution.servedThinking } : {}),
+          ...(attribution?.pluginVersion ? { pluginVersion: attribution.pluginVersion } : {}),
           // A finished child must not vouch for the run (ADR-017 §7.2): the
           // terminal transition zeroes the pid so the PID-reuse window is
           // bounded by one stage rather than by the whole run.
@@ -1440,6 +1443,7 @@ export class PipelineStateService implements vscode.Disposable {
           ...(attribution?.servedModel ? { servedModel: attribution.servedModel } : {}),
           ...(attribution?.servedEffort ? { servedEffort: attribution.servedEffort } : {}),
           ...(attribution?.servedThinking ? { servedThinking: attribution.servedThinking } : {}),
+          ...(attribution?.pluginVersion ? { pluginVersion: attribution.pluginVersion } : {}),
           // Terminal transition — see completeStage (ADR-017 §7.2).
           stagePid: 0,
           runId,

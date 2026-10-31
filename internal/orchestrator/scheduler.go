@@ -314,6 +314,9 @@ type StageRunResult struct {
 	// routing, sticky substitutions, or retries.
 	ServedEffort   string
 	ServedThinking string
+	// PluginVersion is the Nightgauge Claude plugin version the stage reported
+	// loading (#2723). Empty when it reported none.
+	PluginVersion string
 	// RefusalFallback* echo the CLI's model_refusal_fallback event when one
 	// was observed (#91). Attribution + notification only.
 	RefusalFallbackFrom     string
@@ -743,6 +746,7 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 		// #91 served-model attribution, tracked by the execution manager's
 		// stream reader, and a multi-provider adapter's ADR-022 § 2 identity.
 		ServedModel:             result.ServedModel,
+		PluginVersion:           result.PluginVersion,
 		ModelProvider:           result.ModelProvider,
 		UpstreamModel:           result.UpstreamModel,
 		Endpoint:                result.Endpoint,
@@ -5482,8 +5486,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// emitting. Writes stop at the seal, not here.
 		runtime.MarkTerminal(schedulerTerminalOutcome(pipelineSuccess, terminalFailureKind))
 
-		// Three terminal kinds record NOTHING, and the extension path skips the
-		// same three (internal/ipc/outcome_record.go) — one corpus, one meaning
+		// Four terminal kinds record NOTHING, and the extension path skips the
+		// same four (internal/ipc/outcome_record.go) — one corpus, one meaning
 		// per field, or `success` and `costUsd` carry two meanings across the
 		// file's two writers with no discriminator to tell them apart.
 		//
@@ -5494,6 +5498,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		//   environment_halt (#101) — a project-declared preflight.environment
 		//   check halted the run in Phase 0: the operator's environment was
 		//   broken, so the row would measure the environment, not the model.
+		//
+		//   gate_plugin_missing (#2723) — the stage was stopped before any work
+		//   because its plugin did not load: the row would measure the install.
 		//
 		//   blocked_dependency (#305) — a deferral is not a failure and did no
 		//   work: no AI stage ran, so the row would book success:false at ~$0.
@@ -5514,6 +5521,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		case TerminalKindEnvironmentHalt:
 			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — operator environment broken, not model)",
 				item.Number, TerminalKindEnvironmentHalt)
+		case TerminalKindGatePluginMissing:
+			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — stage stopped before any work)",
+				item.Number, TerminalKindGatePluginMissing)
 		default:
 			// recordOutcome re-resolves the prediction from the run's worktree
 			// before writing the row (#994) — the values here were read at
@@ -7091,6 +7101,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// request-or-served value servedModel computes.
 		if result != nil {
 			runtime.RecordStageServedModel(stage, result.ServedModel)
+			runtime.RecordStagePluginVersion(stage, result.PluginVersion)
 			// Session resume (#1643 AC 5): record the OpenCode session this
 			// dispatch used, read back from the run's own events file
 			// (opencodeplugin.Event.SessionID) — the SAME source #1624
@@ -8249,6 +8260,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			parked := TerminalKindParks(resolvedFailureKind)
 			if parked {
 				terminalFailureKind = resolvedFailureKind
+			}
+			if resolvedFailureKind == TerminalKindGatePluginMissing {
+				s.raiseGatePluginMissing(item.Repo, item.Number, runtime.RunID, string(stage), failText)
 			}
 			// A budget stop (#1652, ADR-004): the stage was stopped at a
 			// budget the operator set — a stage budget or a cost cap — and a

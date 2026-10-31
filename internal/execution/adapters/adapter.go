@@ -72,6 +72,13 @@ type RunOptions struct {
 	CostBudget   float64  // Max cost in USD
 	TargetRepo   string   // Expected repo for skill verification (owner/repo)
 
+	// ClaudePluginDir is the Claude plugin directory the stage loads with
+	// --plugin-dir (#2723), so its gates come from the running build and not
+	// from whatever the operator's user-level install did. "" passes nothing:
+	// a build with no bundle beside it. Only the claude-spawning adapters read
+	// it.
+	ClaudePluginDir string
+
 	// RunID is the canonical lowercase UUIDv7 run identity minted at dispatch
 	// (ADR-017). Every adapter exports it to the child process as
 	// RunIDEnvVar so the stage — and everything it spawns — can name the run
@@ -195,6 +202,11 @@ type RunResult struct {
 	RefusalFallbackFrom     string
 	RefusalFallbackTo       string
 	RefusalFallbackCategory string
+
+	// PluginVersion is the Nightgauge Claude plugin version the stage's
+	// system/init event reported (#2723). Empty when the adapter is not Claude,
+	// no init was seen, or the plugin did not load. Attribution only.
+	PluginVersion string
 
 	// PeakStepInputTokens is the largest prompt a single model step sent:
 	// its input plus cache-read and cache-write tokens. Unlike the summed

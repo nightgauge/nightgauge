@@ -25,6 +25,15 @@ changelog, and the release workflow refuses a tag that does not.
   Nightgauge plugin with that error as `NGD051`. `install-agent-skills.sh` refuses
   every global-writing mode in a linked worktree and names the primary checkout;
   `--generate-only` and `--check-mirror` still run there (#2719).
+- Claude stages now load their safety gates from the running build. Every Claude
+  spawn passes `--plugin-dir` with the bundled plugin, so a failed or declined
+  user-level install no longer removes them. A bundled build reads `system/init`
+  and stops a stage before any work if the plugin did not load exactly once,
+  with the parked `gate_plugin_missing` outcome and an Action Center card. A
+  build with no bundle warns and continues. The run record states the plugin
+  version each stage loaded as `model_selection.plugin_version`. A packaged
+  extension now runs its bundled hooks ahead of a workspace copy, so a hook edit
+  reaches it through a release (#2723).
 - Installed builds now run the skills they ship. The Go binary and a packaged
   extension search `NIGHTGAUGE_SKILLS_ROOT`, then the bundle, then
   `<workspace>/skills`, so a repository holding a `skills/` tree no longer
