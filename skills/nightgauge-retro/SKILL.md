@@ -134,12 +134,13 @@ autonomous decisions or fail with clear error.
 
 ## Data Sources
 
-| Source            | Location                          | What It Provides                                                   |
-| ----------------- | --------------------------------- | ------------------------------------------------------------------ |
-| Session Logs      | `logs/YYYY-MM-DD_NNN_session.log` | Timestamped stage events, error messages, token budget warnings    |
-| Pipeline Context  | `pipeline/{stage}-{N}.json`       | Per-issue stage outputs, test results, validation status           |
-| Batch State       | `checkout/batch-state.json`       | Per-issue completion status, failed stages, token usage per run    |
-| Execution History | `pipeline/history/*.jsonl`        | Structured per-run records with outcome, stage statuses, durations |
+| Source            | Location                          | What It Provides                                                     |
+| ----------------- | --------------------------------- | -------------------------------------------------------------------- |
+| Session Logs      | `logs/YYYY-MM-DD_NNN_session.log` | Timestamped stage events, error messages, token budget warnings      |
+| Pipeline Context  | `pipeline/{stage}-{N}.json`       | Per-issue stage outputs, test results, validation status             |
+| Batch State       | `checkout/batch-state.json`       | Per-issue completion status, failed stages, token usage per run      |
+| Execution History | `pipeline/history/*.jsonl`        | Structured per-run records with outcome, stage statuses, durations   |
+| Gate Spend        | `pipeline/exit-records/*.jsonl`   | Full gates per stage and run: `nightgauge exit-records gate-summary` |
 
 Locations are relative to the clone's per-clone class directories, or this
 checkout's directory for `checkout/...`; resolve one with

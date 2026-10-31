@@ -108,11 +108,19 @@ SUMMARY_PROBE_FAIL=0
 # `--deps-probe DIR` prints the dependency-bootstrap decision for DIR and exits
 # (#2562), so scripts/test-ci-local-bootstrap.sh asserts it without running npm.
 DEPS_PROBE=""
+# `--no-reuse` runs the gate even when the ledger says this exact tree passed.
+NO_REUSE=0
+# `--ledger-probe pass|fail|skip` drives the real ledger calls around one trivial
+# step, so scripts/test-ci-local-gate-reuse.sh asserts what a run records without
+# running the gate (#2784).
+LEDGER_PROBE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --list-steps) LIST_STEPS=1; shift ;;
     --env-probe) ENV_PROBE=1; shift ;;
     --changed) CHANGED_SCOPE=1; shift ;;
+    --no-reuse) NO_REUSE=1; shift ;;
+    --ledger-probe) LEDGER_PROBE="${2:-pass}"; shift; [ "$#" -gt 0 ] && shift ;;
     --scope-probe) SCOPE_PROBE=1; shift ;;
     --summary-probe)
       SUMMARY_PROBE=1
@@ -463,6 +471,7 @@ REQUIRED_FILES=(
   scripts/test-ci-local-bootstrap.sh
   scripts/ci-local-go-test.sh
   scripts/test-ci-local-go-pass-stamp.sh
+  scripts/test-ci-local-gate-reuse.sh
   scripts/state-backstop.sh
   scripts/test-state-backstop.sh
   scripts/doctor-app-permission-walkthrough.sh
@@ -706,7 +715,74 @@ reap_group_children() {
   return 0
 }
 
+# ── The gate ledger (#2784) ──────────────────────────────────────────────────
+#
+# A pipeline run repeated this gate across stages on a tree that had not changed.
+# The binary owns the ledger (no script writes under the git directory by path,
+# #2700): this asks whether the exact tree already passed, skips the run if so,
+# and records every run's start and finish, so a killed gate is counted too. A
+# missing or older binary means a full run and one line saying so: the safe
+# direction. CI never consults the ledger, because a runner has none to read.
+GATE_LEDGER_BIN=""
+GATE_RUN_ID=""
+GATE_TREE=""
+GATE_RUN_STARTED=0
+
+gate_ledger_open() {
+  [ -z "${CI:-}" ] || return 0
+  local bin status full_flag=""
+  bin="${NIGHTGAUGE_BIN:-}"
+  [ -n "$bin" ] && [ -x "$bin" ] || bin="$(command -v nightgauge 2>/dev/null || true)"
+  if [ -z "$bin" ]; then
+    echo "gate ledger: no nightgauge binary, so this run is neither reused nor recorded"
+    return 0
+  fi
+  if ! status="$("$bin" ci gate-status --kind local-gate --json 2>/dev/null)" ||
+    ! printf '%s' "$status" | jq -e . >/dev/null 2>&1; then
+    echo "gate ledger: $bin has no ci gate-status, so this run is neither reused nor recorded"
+    return 0
+  fi
+  GATE_LEDGER_BIN="$bin"
+  GATE_TREE="$(printf '%s' "$status" | jq -r '.tree // ""')"
+  if [ "$CHANGED_SCOPE" -eq 0 ] && [ "$NO_REUSE" -eq 0 ] &&
+    [ "$(printf '%s' "$status" | jq -r '.reusable')" = "true" ]; then
+    echo "✓ Gate skipped: tree $GATE_TREE already passed" \
+      "($(printf '%s' "$status" | jq -r '"\(.passed_stage // "" | if . == "" then "outside a stage" else . end) at \(.passed_at), \(.passed_seconds)s"'))."
+    echo "  Force a run with: bash scripts/ci-local.sh --no-reuse"
+    # A full pass included the go test step, so pre-push may skip it here too,
+    # even when the pass came from another worktree of this clone.
+    printf '%s\n' "$GATE_TREE" >"$LOG_DIR/go-test-pass.tree" || true
+    "$bin" ci gate-record --event reused --kind local-gate --tree "$GATE_TREE" >/dev/null 2>&1 || true
+    exit 0
+  fi
+  [ "$CHANGED_SCOPE" -eq 1 ] || full_flag="--full"
+  GATE_RUN_STARTED=$SECONDS
+  # shellcheck disable=SC2086 # full_flag is one flag or nothing
+  GATE_RUN_ID="$("$bin" ci gate-record --event start --kind local-gate --tree "$GATE_TREE" \
+    $full_flag 2>/dev/null || true)"
+}
+
+# Called from the EXIT trap, so every way out of a run records its verdict. Pass
+# needs exit 0 and no failed step. Any other exit that no real check failed is an
+# infrastructure stop: it asserted nothing about the tree.
+gate_ledger_finish() { # gate_ledger_finish <exit code>
+  [ -n "$GATE_RUN_ID" ] || return 0
+  local run="$GATE_RUN_ID" verdict=infra full_flag=""
+  GATE_RUN_ID=""
+  if [ "$1" -eq 0 ] && [ "${FAIL_COUNT:-0}" -eq 0 ]; then
+    verdict=pass
+  elif [ "${FAIL_COUNT:-0}" -gt "${INFRA_COUNT:-0}" ]; then
+    verdict=fail
+  fi
+  [ "$CHANGED_SCOPE" -eq 0 ] && [ "${SKIP_COUNT:-0}" -eq 0 ] && full_flag="--full"
+  # shellcheck disable=SC2086 # full_flag is one flag or nothing
+  "$GATE_LEDGER_BIN" ci gate-record --event finish --run-id "$run" --kind local-gate \
+    --tree "$GATE_TREE" --verdict "$verdict" --seconds "$((SECONDS - GATE_RUN_STARTED))" \
+    $full_flag >/dev/null || echo "gate ledger: this run's result was not recorded" >&2
+}
+
 on_exit() {
+  local exit_code=$?
   # Only the main shell cleans up: a grouped step runs in a subshell that
   # inherits this trap, and letting it release the lock would hand the gate to
   # a second instance mid-run.
@@ -719,6 +795,7 @@ on_exit() {
     BACKSTOP_DONE=1
     bash scripts/state-backstop.sh verify "$BACKSTOP_DIR/before" "$BACKSTOP_DIR/after" >&2 || true
   fi
+  gate_ledger_finish "$exit_code"
   return 0
 }
 
@@ -1195,7 +1272,19 @@ if [ "$SUMMARY_PROBE" -eq 1 ]; then
   exit $?
 fi
 
+if [ -n "$LEDGER_PROBE" ]; then
+  gate_ledger_open
+  run_step "ledger probe passing step" true
+  case "$LEDGER_PROBE" in
+    fail) run_step "ledger probe failing step" false ;;
+    skip) skip_step "ledger probe skipped step" "the probe asked for one" ;;
+  esac
+  print_final_verdict
+  exit $?
+fi
+
 if [ "$LIST_STEPS" -eq 0 ]; then
+  gate_ledger_open
   echo "CI-parity local validation — order mirrors .github/workflows/ci.yml"
   # Install dependencies once, before any step, when they are missing or stale
   # (#2562). A failed install means no npm step can run, so it is an
@@ -1270,6 +1359,11 @@ run_step "ci-local.sh dependency bootstrap decision" \
 #      seconds; pre-push validate trusts this record to skip the suite.
 run_step "ci-local.sh go test pass record" \
   bash scripts/test-ci-local-go-pass-stamp.sh
+
+# 0c4. When the gate reuses a passed tree and what it records (#2784). A stub
+#      binary and one trivial step, so seconds.
+run_step "ci-local.sh gate ledger reuse" \
+  bash scripts/test-ci-local-gate-reuse.sh
 
 # 0d. The machine-state backstop's own regression suite (#2311), before the
 #     steps it watches: the last step trusts it to go red when a run removes or

@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A pipeline run gates a tree once. `scripts/ci-local.sh` records every run in a
+  ledger keyed on the exact tree and skips a repeat that already passed, saying
+  what passed it (`--no-reuse` forces a run). feature-validate's CI parity phase
+  runs the repository's local gate as its one gate, and feature-dev now runs
+  focused checks only and receives all of its phase instructions. Stage exit
+  records state each stage's full gates and seconds, and
+  `nightgauge exit-records gate-summary` totals them per run and stage (#2784).
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.

@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/gateledger"
 	"github.com/nightgauge/nightgauge/internal/history"
 	"github.com/nightgauge/nightgauge/internal/layout"
 )
@@ -244,7 +245,27 @@ type StageExitRecord struct {
 	// error text is the only reason there is. Bounded to
 	// PreDispatchDetailMaxRunes, tail-truncated.
 	FailureDetail string `json:"failure_detail,omitempty"`
+	// GateRuns, GateSeconds, GateReused and GateUnfinished are this stage's
+	// share of the gate ledger (#2784): full gates finished and their total
+	// seconds, gates skipped because the tree had already passed, and full gates
+	// started with no finish (killed, so their duration is unknown). Filled by
+	// WriteStageExitRecord so every writer reports them.
+	GateRuns       int `json:"gate_runs,omitempty"`
+	GateSeconds    int `json:"gate_seconds,omitempty"`
+	GateReused     int `json:"gate_reused,omitempty"`
+	GateUnfinished int `json:"gate_unfinished,omitempty"`
+	// ReviewPhases says whether a feature-dev stage reached its quality review
+	// (#2784): ReviewPhasesRan, ReviewPhasesMissing, or empty when the stage is
+	// another one or no runtime state was available to say. Its wall time depends
+	// on this, so `exit-records gate-summary` splits on it.
+	ReviewPhases string `json:"review_phases,omitempty"`
 }
+
+// ReviewPhases values.
+const (
+	ReviewPhasesRan     = "ran"
+	ReviewPhasesMissing = "missing"
+)
 
 // StagePreDispatch is the synthetic stage name of the exit record written for
 // a run that failed before any pipeline stage started (#1329). It keeps the
@@ -362,7 +383,28 @@ func WriteStageExitRecord(rootDir string, rec StageExitRecord) error {
 	if err != nil {
 		return err
 	}
+	applyGateUsage(rootDir, &rec)
 	return history.AppendJSONL(filepath.Join(dir, dailyFileName(time.Now())), rec)
+}
+
+// applyGateUsage copies the stage's gate spend from the ledger. The window is
+// the stage's own wall time. A ledger that cannot be read costs the record its
+// gate fields, never the record.
+func applyGateUsage(rootDir string, rec *StageExitRecord) {
+	if rec.Issue == 0 || rec.ElapsedMs <= 0 {
+		return
+	}
+	to, err := time.Parse(time.RFC3339Nano, rec.Timestamp)
+	if err != nil {
+		return
+	}
+	from := to.Add(-time.Duration(rec.ElapsedMs) * time.Millisecond)
+	usage, err := gateledger.UsageIn(rootDir, rec.Issue, rec.Stage, from, to)
+	if err != nil {
+		return
+	}
+	rec.GateRuns, rec.GateSeconds = usage.Runs, usage.Seconds
+	rec.GateReused, rec.GateUnfinished = usage.Reused, usage.Unfinished
 }
 
 // GateReasonWhenNoGate names why a record carries no gate verdict (#1919).

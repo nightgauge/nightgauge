@@ -3,6 +3,7 @@ ci-local.sh concurrency and failure-reporting contract
 ci-local.sh change-scoping contract
 ci-local.sh dependency bootstrap decision
 ci-local.sh go test pass record
+ci-local.sh gate ledger reuse
 state-backstop.sh regression suite
 go build ./...
 go test ./... -count=1 (with skip accounting)

@@ -1395,6 +1395,22 @@ generated files must be regenerated before the TypeScript build, and the build
 must succeed before tests can run. `format:check` is the #1 cause of avoidable
 CI failures — always run `npm run format` before committing.
 
+### One gate per tree
+
+A passed gate is recorded against the exact tree (#2784). Running
+`scripts/ci-local.sh` again on that tree prints what passed it and exits 0, and
+`--no-reuse` forces a run. `--changed`, a run with a skipped step, a failed run
+and a tree edited during the run are never reusable. CI never consults the record
+and stays the authority. Reuse needs a `nightgauge` binary that has `ci
+gate-status`; without one the gate runs in full and says so.
+
+In a pipeline run, feature-dev runs focused checks only. feature-validate's Phase
+2.5 is the run's gate: it runs the repository's local gate, so `pre-push validate`
+can skip `go test` on that tree and a later push on it reuses the pass. A review
+fix changes the tree, so it is gated again. `nightgauge exit-records gate-summary`
+totals gates per stage and run. See
+[GO_BINARY.md](GO_BINARY.md#ci-gate-status-and-ci-gate-record).
+
 ### The gate is not the loop
 
 `ci-local.sh` is a **pre-push gate**, not an iteration loop. Run it once, when

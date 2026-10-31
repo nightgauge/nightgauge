@@ -8139,9 +8139,9 @@ func checkRunFailing(checks []gh.CheckDetail, name string) bool {
 func ciCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ci",
-		Short: "CI check operations (wait, logs, history, parity, discover-commands)",
+		Short: "CI check operations (wait, logs, history, parity, discover-commands, gate-status, gate-record)",
 	}
-	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd(), ciChecksCompleteCmd())
+	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd(), ciChecksCompleteCmd(), ciGateStatusCmd(), ciGateRecordCmd())
 	return cmd
 }
 

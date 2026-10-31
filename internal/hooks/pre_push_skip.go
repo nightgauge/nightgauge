@@ -45,7 +45,7 @@ func decideGoTestSkip(ctx context.Context, runner CmdRunner, workDir string) (bo
 		return false, "ci-local recorded no pass"
 	}
 	want := strings.TrimSpace(string(recorded))
-	got, err := treeFingerprint(ctx, runner, workDir)
+	got, err := TreeFingerprint(ctx, runner, workDir)
 	if err != nil {
 		return false, fmt.Sprintf("the tree could not be fingerprinted: %v", err)
 	}
@@ -55,10 +55,10 @@ func decideGoTestSkip(ctx context.Context, runner CmdRunner, workDir string) (bo
 	return true, fmt.Sprintf("ci-local already passed go test on tree %s", got)
 }
 
-// treeFingerprint hashes the working tree through a scratch index, leaving the
+// TreeFingerprint hashes the working tree through a scratch index, leaving the
 // real index alone. scripts/ci-local-go-test.sh computes the same tree;
 // scripts/test-ci-local-go-pass-stamp.sh pins that they agree.
-func treeFingerprint(ctx context.Context, runner CmdRunner, workDir string) (string, error) {
+func TreeFingerprint(ctx context.Context, runner CmdRunner, workDir string) (string, error) {
 	dir, err := os.MkdirTemp("", "ng-pre-push-tree-")
 	if err != nil {
 		return "", err

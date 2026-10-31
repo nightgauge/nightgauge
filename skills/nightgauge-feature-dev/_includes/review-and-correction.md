@@ -162,30 +162,26 @@ nightgauge format run 2>&1 || { echo "ERROR: format run failed"; exit 1; }
 
 If the formatter modifies files, those changes must be included in the commit.
 
-### Step 6.4: Verify All Checks Pass (HARD GATE)
+### Step 6.4: Verify Focused Checks Pass (HARD GATE)
 
-Run the project's full CI validation suite locally before proceeding. These
-checks are **blocking** — feature-dev MUST NOT report success if any of them
-fail. Swallowing failures here lets a broken PR through to `pr-create`, where
-CI catches it and blocks the merge. See issue #2779 for the incident that
-motivated this gate.
+Run the build, the tests covering what you changed, and the formatter's check.
+These are **blocking**: feature-dev MUST NOT report success if any of them
+fails, because a swallowed failure is how a broken PR reached `pr-create` in
+#2779. Run `nightgauge build run --json` when Step 4.1.5 predates your last
+edit, and scope the tests to the touched packages or paths.
+
+The repository's complete gate is **feature-validate's**, once per tree. Do not
+run it here, under any name: on #2700 and #2724 repeated gates took a run past
+four hours (#2784).
 
 ```bash
-CI_PARITY_RESULT=$(nightgauge ci parity-check --json 2>/dev/null || \
-  echo '{"passed":false,"commands_run":[],"failures":[{"command":"ci parity-check","failure_type":"build","output":"binary not found","exit_code":1}],"timestamp":""}')
-CI_PARITY_PASSED=$(printf '%s\n' "$CI_PARITY_RESULT" | jq -r '.passed')
-
-if [ "$CI_PARITY_PASSED" != "true" ]; then
-  echo "ERROR: CI parity check failed:"
-  printf '%s\n' "$CI_PARITY_RESULT" | jq -r '.failures[] | "  FAIL [\(.failure_type)]: \(.command)"'
-  echo "Fix the failures and re-run Step 6.3 + 6.4. Do NOT proceed to commit or to feature-validate."
-  exit 1
-fi
+nightgauge build run --json | jq -e '.status != "failed"' >/dev/null \
+  || { echo "ERROR: build failed. Fix it before feature-validate."; exit 1; }
 ```
 
-If `format` failures appear, Step 6.3 should have already applied the fix. If
-the failure persists, the drift is likely in a file the formatter cannot rewrite
-(e.g., generated output). Investigate before proceeding.
+If the formatter's check still fails after Step 6.3, the drift is likely in a
+file the formatter cannot rewrite (generated output). Investigate before
+proceeding.
 
 ---
 
