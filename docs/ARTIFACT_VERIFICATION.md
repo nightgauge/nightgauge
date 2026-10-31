@@ -114,6 +114,11 @@ verdict. `clamscan` exits `0` both for a clean artifact and for one it never
 read — with `--max-filesize=1M` the real `.vsix` reports `Data scanned: 0 B`
 and still exits `0`. The gate additionally asserts a floor on bytes actually
 scanned, so a misconfigured scan fails closed instead of reporting success.
+Before it reads any artifact it streams the EICAR test string to `clamscan`
+and stops unless that is detected, so a scanner that detects nothing cannot
+pass either. All three signature databases must be present and the scan must
+load at least 3,000,000 signatures, because `freshclam` exits `0` on a 429 from
+the signature CDN with only part of the database.
 
 ## On antivirus false positives
 

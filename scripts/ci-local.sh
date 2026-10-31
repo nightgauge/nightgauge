@@ -1392,8 +1392,9 @@ run_group "sign-macos-binaries.sh regression suite" \
 #       scanned, and this suite is what proves that floor can fail. The arms
 #       are stubbed so they run without ClamAV installed; a real-clamscan arm
 #       asserts the tool still emits the summary fields the script parses, so
-#       the stubs cannot drift. No arm plants an EICAR sample -- this suite
-#       runs only on developer machines, where that would trip real antivirus.
+#       the stubs cannot drift. No arm writes an EICAR sample -- this suite
+#       runs only on developer machines, where a lasting file would trip real
+#       antivirus. clamscan spools the gate's canary to a short-lived file.
 run_group "malware-scan.sh regression suite" \
   bash scripts/test-malware-scan.sh
 
