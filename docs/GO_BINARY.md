@@ -870,12 +870,16 @@ error rather than a guessed default — guessing is how an agent ends up reading
 a stale `~/.codex/skills` copy (#196).
 
 **The Go-direct path (`nightgauge run`, the scheduler) has no host to ask**, so
-it searches, in order: `<workspace>/skills`, then `$NIGHTGAUGE_SKILLS_ROOT` when
-set, then `<prefix>/skills` beside a binary installed as
-`<prefix>/bin/nightgauge` (the extension's `dist/` layout, or a hand install
-such as `~/.local/share/<name>/{bin,skills}`). A plain `go build` binary
-anywhere else finds no skills outside this repository: set
-`NIGHTGAUGE_SKILLS_ROOT` or use the prefix layout (#2220). `nightgauge doctor`
+it searches, in order: `$NIGHTGAUGE_SKILLS_ROOT` when set, then `<prefix>/skills`
+beside a binary installed as `<prefix>/bin/nightgauge` (the extension's `dist/`
+layout, or a hand install such as `~/.local/share/<name>/{bin,skills}`), then
+`<workspace>/skills`. An installed build therefore runs the skills it shipped,
+even in a checkout of this repository, and the workspace still supplies a skill
+the bundle lacks (#2718). A packaged extension searches the same order; an
+Extension Development or Test host searches the override, the workspace, then
+the bundle. A plain `go build` binary anywhere else finds no skills outside this
+repository: set `NIGHTGAUGE_SKILLS_ROOT` or use the prefix layout (#2220).
+`nightgauge doctor`
 reports the `skills` check: whether this binary can locate every stage's
 `SKILL.md`, and the roots it searched.
 

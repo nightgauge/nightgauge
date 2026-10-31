@@ -3,6 +3,7 @@ package adapters
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -124,34 +125,79 @@ func TestOpenCodePermissionMap_SkillsRootInsideWorktreeStaysEditable(t *testing.
 	}
 }
 
-// Claude adapter parity: the knowledge base is added as a working directory
-// (edits into it are allowed), the skills tree is not.
+// Claude adapter parity: the knowledge base is added as a working directory,
+// and with no skill path the skills flags stay off the command.
 func TestClaudeAdapters_AddKnowledgeDir(t *testing.T) {
-	opts := RunOptions{KnowledgeDir: "/main/.nightgauge/knowledge", SkillPath: "/bundle/skills/nightgauge-feature-dev/SKILL.md", Model: "m"}
+	opts := RunOptions{KnowledgeDir: "/main/.nightgauge/knowledge", Model: "m"}
 	for name, a := range map[string]interface {
 		BuildCommand(RunOptions) (string, []string, map[string]string)
 	}{"claude": NewClaudeAdapter(), "claude-sdk": NewClaudeSdkAdapter()} {
 		_, args, _ := a.BuildCommand(opts)
-		found := false
-		for i, a := range args {
-			if a == "--add-dir" {
-				if i+1 >= len(args) || args[i+1] != opts.KnowledgeDir {
-					t.Errorf("%s: --add-dir not followed by the knowledge dir: %v", name, args)
-				}
-				found = true
-			}
-			if a == "/bundle/skills" || a == "/bundle/skills/nightgauge-feature-dev" {
-				t.Errorf("%s: skills tree must not be a working directory: %v", name, args)
-			}
-		}
-		if !found {
-			t.Errorf("%s: no --add-dir for the knowledge base: %v", name, args)
+		if got := flagValues(args, "--add-dir"); !slices.Equal(got, []string{opts.KnowledgeDir}) {
+			t.Errorf("%s: --add-dir = %v, want only the knowledge dir", name, got)
 		}
 		_, args, _ = a.BuildCommand(RunOptions{})
-		for _, a := range args {
-			if a == "--add-dir" {
-				t.Errorf("%s: --add-dir with no knowledge dir", name)
-			}
+		if got := flagValues(args, "--add-dir"); len(got) != 0 {
+			t.Errorf("%s: --add-dir with no knowledge dir: %v", name, got)
 		}
 	}
+}
+
+// TestClaudeAdapters_SkillsTreeIsReadableAndDenied pins #2718: the resolved tree
+// is added, not every search root, and the same argv denies file-tool writes.
+func TestClaudeAdapters_SkillsTreeIsReadableAndDenied(t *testing.T) {
+	opts := RunOptions{
+		KnowledgeDir: "/main/.nightgauge/knowledge",
+		SkillPath:    "/bundle/dist/skills/nightgauge-feature-dev/SKILL.md",
+		WorktreeDir:  "/worktrees/issue-1",
+	}
+	for name, a := range map[string]interface {
+		BuildCommand(RunOptions) (string, []string, map[string]string)
+	}{"claude": NewClaudeAdapter(), "claude-sdk": NewClaudeSdkAdapter()} {
+		_, args, _ := a.BuildCommand(opts)
+		want := []string{opts.KnowledgeDir, "/bundle/dist/skills"}
+		if got := flagValues(args, "--add-dir"); !slices.Equal(got, want) {
+			t.Errorf("%s: --add-dir = %v, want %v", name, got, want)
+		}
+		deny := "Edit(//bundle/dist/skills/**),Write(//bundle/dist/skills/**)"
+		if got := flagValues(args, "--disallowedTools"); !slices.Equal(got, []string{deny}) {
+			t.Errorf("%s: --disallowedTools = %v, want %q", name, got, deny)
+		}
+	}
+}
+
+// TestClaudeSkillsDirArgs_SkipsATreeInsideTheWorktree: a dev-host or override
+// render can resolve the worktree's own skills/. Denying edits there would stop
+// a stage changing the repository it was dispatched to change.
+func TestClaudeSkillsDirArgs_SkipsATreeInsideTheWorktree(t *testing.T) {
+	worktree := t.TempDir()
+	tree := filepath.Join(worktree, "skills")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inside := RunOptions{
+		SkillPath:   filepath.Join(tree, "nightgauge-feature-dev", "SKILL.md"),
+		WorktreeDir: worktree,
+	}
+	if got := claudeSkillsDirArgs(inside); got != nil {
+		t.Errorf("tree inside the worktree: args = %v, want none", got)
+	}
+
+	sibling := RunOptions{
+		SkillPath:   filepath.Join(worktree+"-other", "skills", "nightgauge-feature-dev", "SKILL.md"),
+		WorktreeDir: worktree,
+	}
+	if got := claudeSkillsDirArgs(sibling); len(got) == 0 {
+		t.Error("a sibling whose name extends the worktree's must still be added")
+	}
+}
+
+func flagValues(args []string, flag string) []string {
+	var values []string
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			values = append(values, args[i+1])
+		}
+	}
+	return values
 }

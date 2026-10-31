@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Installed builds now run the skills they ship. The Go binary and a packaged
+  extension search `NIGHTGAUGE_SKILLS_ROOT`, then the bundle, then
+  `<workspace>/skills`, so a repository holding a `skills/` tree no longer
+  replaces a stage's prompt. The workspace still supplies a skill the bundle
+  lacks, and an Extension Development Host keeps it ahead of the bundle. To test
+  a branch's skill edits through an installed build, set
+  `NIGHTGAUGE_SKILLS_ROOT`. Claude stages receive the resolved skills tree with
+  `--add-dir`, so includes read under default permissions, with file-tool writes
+  to it denied. Each stage logs `skill_path=` when it starts (#2718).
 - The VSIX skill bundle is now complete, and a package-time check proves it. The
   bundler ships whole skill directories, so per-skill overlays reach Fable stages,
   and it ships `pattern-mining` and `verify-ui`, which stage prompts now name by

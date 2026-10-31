@@ -18,10 +18,14 @@ import {
   rootsFromRenderArgs,
   skillRenderStdout,
 } from "../helpers/skillRender";
+import * as path from "path";
 import type { ChildProcess } from "child_process";
 import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as vscode from "vscode";
+
+// The mocked fs cannot read the root-order vectors Go shares with this suite.
+const rootOrderFs = await vi.importActual<typeof fs>("fs");
 
 // Mock vscode module
 vi.mock("vscode", () => ({
@@ -168,6 +172,9 @@ import {
   extractStreamJsonError,
   resolveTokenForSubprocess,
   resolveSdkCliPath,
+  claudeSkillsDirArgs,
+  resolveSkillRoots,
+  setExtensionIsPackaged,
 } from "../../src/utils/skillRunner";
 import type { PipelineStage } from "@nightgauge/sdk";
 import {
@@ -293,6 +300,134 @@ describe("skillRunner - File Discovery and Parsing", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  describe("skill root order (#2718)", () => {
+    const BUNDLE = "/ext/dist/skills";
+    const WORKSPACE = "/test/workspace/skills";
+    const OVERRIDE = "/operator/skills";
+    const tokens: Record<string, string> = {
+      override: OVERRIDE,
+      bundle: BUNDLE,
+      workspace: WORKSPACE,
+    };
+
+    function stubBundle(present: boolean): void {
+      vi.mocked(vscode.extensions.getExtension).mockReturnValue(
+        (present ? { extensionPath: "/ext" } : undefined) as never
+      );
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+    }
+
+    afterEach(() => {
+      setExtensionIsPackaged(true);
+      vi.mocked(vscode.extensions.getExtension).mockReturnValue(undefined as never);
+      delete process.env.NIGHTGAUGE_SKILLS_ROOT;
+    });
+
+    // The same file drives Go's TestDefaultRootsMatchTheSharedVectors, so a
+    // change to either host's order fails until the vectors agree.
+    const vectors = JSON.parse(
+      rootOrderFs.readFileSync(
+        path.resolve(__dirname, "../../../../internal/skillrender/testdata/skill-root-order.json"),
+        "utf-8"
+      )
+    ) as { name: string; mode: string; override: boolean; bundle: boolean; want: string[] }[];
+
+    it.each(vectors.map((v) => [v.name, v] as const))("%s", (_name, vector) => {
+      setExtensionIsPackaged(vector.mode === "production");
+      stubBundle(vector.bundle);
+      if (vector.override) process.env.NIGHTGAUGE_SKILLS_ROOT = OVERRIDE;
+
+      expect(resolveSkillRoots()).toEqual(vector.want.map((token) => tokens[token]));
+    });
+
+    it("treats an unreported host mode as packaged", () => {
+      stubBundle(true);
+      expect(resolveSkillRoots()).toEqual([BUNDLE, WORKSPACE]);
+    });
+
+    it("uses the pinned root instead of the first workspace folder", () => {
+      stubBundle(false);
+      expect(resolveSkillRoots("/pinned/repo")).toEqual(["/pinned/repo/skills"]);
+    });
+
+    it("renders a pinned run from its pinned root", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+
+      runStageSkillHeadless(
+        "feature-dev",
+        42,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "/pinned/repo"
+      );
+
+      const render = vi
+        .mocked(execFileSync)
+        .mock.calls.map(([, args]) => (args ?? []) as string[])
+        .find((args) => isSkillRenderCall(args))!;
+      expect(rootsFromRenderArgs(render)).toEqual(["/pinned/repo/skills"]);
+    });
+
+    it("trims the override and lists it even when missing", () => {
+      stubBundle(false);
+      process.env.NIGHTGAUGE_SKILLS_ROOT = "  /nope  ";
+      expect(resolveSkillRoots()).toEqual(["/nope", WORKSPACE]);
+      process.env.NIGHTGAUGE_SKILLS_ROOT = "   ";
+      expect(resolveSkillRoots()).toEqual([WORKSPACE]);
+    });
+  });
+
+  describe("claude skills tree flags (#2718)", () => {
+    const skillDir = "/ext/dist/skills/nightgauge-feature-dev";
+    const expected = [
+      "--add-dir",
+      "/ext/dist/skills",
+      "--disallowedTools",
+      "Edit(//ext/dist/skills/**),Write(//ext/dist/skills/**)",
+    ];
+
+    it("adds the tree and denies file-tool writes to it", () => {
+      expect(claudeSkillsDirArgs(skillDir, "/worktrees/issue-1")).toEqual(expected);
+    });
+
+    it("skips a tree inside the working directory", () => {
+      expect(claudeSkillsDirArgs("/repo/skills/nightgauge-feature-dev", "/repo")).toEqual([]);
+    });
+
+    it("still adds a sibling whose name extends the working directory", () => {
+      expect(claudeSkillsDirArgs("/repo-2/skills/nightgauge-feature-dev", "/repo")).toHaveLength(4);
+    });
+
+    it("reaches the headless argv", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+      vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) =>
+        isSkillRenderCall(args)
+          ? skillRenderStdout(args, { skillsRoot: "/ext/dist/skills" })
+          : "") as never);
+
+      runStageSkillHeadless("feature-dev", 42, {});
+
+      const argv = vi.mocked(spawn).mock.calls.find(([cmd]) => cmd === "claude")![1] as string[];
+      const i = argv.indexOf("--add-dir");
+      expect(argv.slice(i, i + 4)).toEqual(expected);
+    });
+
+    it("logs the resolved skill_path when the stage starts", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+      const onStderr = vi.fn();
+
+      runStageSkillHeadless("feature-dev", 42, { onStderr });
+
+      expect(onStderr).toHaveBeenCalledWith(
+        expect.stringMatching(/^\[skillRunner\] skill_path=.*nightgauge-feature-dev\/SKILL\.md\n$/)
+      );
+    });
   });
 
   describe("skill composition delegates to `nightgauge skill render` (#79)", () => {

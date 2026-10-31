@@ -2068,6 +2068,18 @@ export function setRunningWorktreePathsProvider(provider: (() => readonly string
   runningWorktreePathsProvider = provider;
 }
 
+/**
+ * Whether this is a packaged extension, rather than an Extension Development or
+ * Test host. Only `activate` holds `ExtensionMode`, so it reports it here.
+ * Unset reads as packaged: a missed call fails toward the bundle (#2718).
+ */
+let packagedExtensionHost = true;
+
+/** Record the host's mode. Called first in `activate`. */
+export function setExtensionIsPackaged(packaged: boolean): void {
+  packagedExtensionHost = packaged;
+}
+
 function resolveRunningWorktreePaths(): string[] {
   try {
     return [...(runningWorktreePathsProvider?.() ?? [])];
@@ -3236,14 +3248,30 @@ export function getStageLabel(stage: RunnableStage): string {
  * overlays, path rewriting — belongs to `nightgauge skill render`.
  *
  * A root is a directory CONTAINING skill directories, not a SKILL.md path.
+ *
+ * The order is the one contract both hosts share (#2718), pinned by
+ * internal/skillrender/testdata/skill-root-order.json: the operator's override,
+ * then a build's own bundle, then the workspace. An Extension Development or
+ * Test host keeps the workspace ahead of the bundle, because testing the
+ * checkout is why it exists. The override is listed even when it does not
+ * exist, so a typo shows in the binary's not-found error.
+ *
+ * `workspaceRoot` is the root the run is pinned to; without one, the first
+ * workspace folder.
  */
-export function resolveSkillRoots(): string[] {
+export function resolveSkillRoots(
+  workspaceRoot: string | undefined = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+): string[] {
   const roots: string[] = [];
 
-  // The nightgauge source repo's own skills/ (dev mode / dogfooding).
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (workspaceRoot) {
-    roots.push(path.join(workspaceRoot, "skills"));
+  const override = process.env.NIGHTGAUGE_SKILLS_ROOT?.trim();
+  if (override) {
+    roots.push(override);
+  }
+
+  const workspaceSkills = workspaceRoot ? path.join(workspaceRoot, "skills") : undefined;
+  if (workspaceSkills && !packagedExtensionHost) {
+    roots.push(workspaceSkills);
   }
 
   // Skills bundled inside the extension's dist/. This is how standalone repos
@@ -3256,7 +3284,40 @@ export function resolveSkillRoots(): string[] {
     roots.push(path.join(bundleRoot, "dist", "skills"));
   }
 
+  if (workspaceSkills && packagedExtensionHost) {
+    roots.push(workspaceSkills);
+  }
+
   return roots;
+}
+
+/**
+ * Claude flags that make the resolved skills tree readable under a default
+ * user's permissions, with file-tool writes to it denied (#2718). The same
+ * contract as claudeSkillsDirArgs in internal/execution/adapters/claude.go,
+ * including its reason for skipping a tree inside the stage's working directory.
+ */
+export function claudeSkillsDirArgs(skillDir: string, cwd: string | undefined): string[] {
+  const root = path.dirname(skillDir);
+  if (!path.isAbsolute(root) || isPathWithin(root, cwd)) {
+    return [];
+  }
+  const rule = `//${root.split(path.sep).join("/").replace(/^\/+/, "")}/**`;
+  return ["--add-dir", root, "--disallowedTools", `Edit(${rule}),Write(${rule})`];
+}
+
+function isPathWithin(candidate: string, dir: string | undefined): boolean {
+  if (!dir) return false;
+  const rel = path.relative(resolvedPath(dir), resolvedPath(candidate));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+function resolvedPath(target: string): string {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return target;
+  }
 }
 
 /**
@@ -3338,9 +3399,10 @@ export function renderSkill(
   stage: PipelineStage,
   model?: string,
   adapter?: string,
-  headless = false
+  headless = false,
+  workspaceRoot?: string
 ): RenderedSkill {
-  const roots = resolveSkillRoots();
+  const roots = resolveSkillRoots(workspaceRoot);
   if (roots.length === 0) {
     throw new Error(`No skills root available for stage ${stage} (no workspace folder, no bundle)`);
   }
@@ -4771,7 +4833,7 @@ function runStageSkillHeadlessImpl(
   // allowed-tools: empty when it declares none.
   let headlessDeclaredTools: string[];
   try {
-    const rendered = renderSkill(stage, modelDecision.model, adapter, true);
+    const rendered = renderSkill(stage, modelDecision.model, adapter, true, workspaceRoot);
     skillDir = rendered.skillDir;
     skillSource = rendered.skillPath;
     if (injectedSkillContent) {
@@ -4793,6 +4855,7 @@ function runStageSkillHeadlessImpl(
     // The render above is headless, so the binary already refused a disk
     // skill left with no tool; an injected skill is refused here (#2390).
     headlessDeclaredTools = filterHeadlessTools(skillData.declaredAllowedTools, skillSource);
+    callbacks?.onStderr?.(`[skillRunner] skill_path=${skillSource}\n`);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     callbacks?.onError?.(error);
@@ -4870,6 +4933,7 @@ function runStageSkillHeadlessImpl(
       "--verbose",
       "--allowedTools",
       allAllowedTools.join(","),
+      ...claudeSkillsDirArgs(skillDir, workspaceRoot),
     ];
 
     if (authProvider === "bedrock") {
@@ -9360,7 +9424,8 @@ export function runStageSkillInteractive(
   // renders base-only, which ADR 016 §2 defines as the fail-open result.
   let skillData: RenderedSkill;
   try {
-    skillData = renderSkill(stage);
+    skillData = renderSkill(stage, undefined, undefined, false, workspaceRoot);
+    callbacks?.onStderr?.(`[skillRunner] skill_path=${skillData.skillPath}\n`);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     callbacks?.onError?.(error);
@@ -9446,7 +9511,12 @@ export function runStageSkillInteractive(
   // NO -p flag (keeps stdin open for conversation)
   // NO --output-format stream-json (raw text output)
   // NO --no-session-persistence (session can persist for multi-turn)
-  const args = ["--verbose", "--allowedTools", allInteractiveAllowedTools.join(",")];
+  const args = [
+    "--verbose",
+    "--allowedTools",
+    allInteractiveAllowedTools.join(","),
+    ...claudeSkillsDirArgs(skillData.skillDir, workspaceRoot),
+  ];
 
   // Add backend-specific flag based on auth_provider config (Issue #511)
   // Default behavior ('max') requires no additional flag

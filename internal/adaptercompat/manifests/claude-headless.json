@@ -16,6 +16,7 @@
   "required_flags": [
     "--add-dir",
     "--allowedTools",
+    "--disallowedTools",
     "--max-budget-usd",
     "--max-turns",
     "--model",
