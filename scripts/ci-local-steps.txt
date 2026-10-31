@@ -73,6 +73,8 @@ Agent-guidance architecture
 Smart Setup bundles the canonical agent-guidance check
 Changelog gate regression suite
 Changelog names every released tag
+Plugin version gate regression suite
+Plugin has one version and valid skills
 Mirror drift gate regression suite
 Agent-skill install target regression suite
 Issue-body contract gate regression suite

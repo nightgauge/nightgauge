@@ -80,7 +80,7 @@ export interface MarketplaceConfig {
  * Default marketplace configuration for Nightgauge
  */
 const DEFAULT_MARKETPLACE: MarketplaceConfig = {
-  repoUrl: "https://github.com/nightgauge/nightgauge.git",
+  repoUrl: "https://github.com/nightgauge/nightgauge.git#stable",
   marketplaceName: "nightgauge-plugins",
   plugins: ["nightgauge", "smart-setup", "docs"],
 };

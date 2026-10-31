@@ -143,7 +143,8 @@ export class GrokSetupService implements vscode.Disposable {
 
   private async installPluginBestEffort(): Promise<void> {
     const bundledPath = this.getBundledMarketplacePath();
-    const marketplaceSource = bundledPath ?? getMarketplaceUrl();
+    // grok's handling of a `#ref` suffix is unverified, so hand it the bare URL.
+    const marketplaceSource = bundledPath ?? getMarketplaceUrl().split("#")[0];
     try {
       await execFileAsync("grok", ["plugin", "marketplace", "add", marketplaceSource]);
     } catch (error) {

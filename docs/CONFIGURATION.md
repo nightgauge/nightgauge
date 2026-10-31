@@ -6421,10 +6421,10 @@ ui:
 
 Plugin management settings.
 
-| Option            | Type    | Default                                          | Description                      |
-| ----------------- | ------- | ------------------------------------------------ | -------------------------------- |
-| `auto_prompt`     | boolean | `true`                                           | Prompt to install Claude plugins |
-| `marketplace_url` | string  | `"https://github.com/nightgauge/nightgauge.git"` | Plugin marketplace repository    |
+| Option            | Type    | Default                                                 | Description                      |
+| ----------------- | ------- | ------------------------------------------------------- | -------------------------------- |
+| `auto_prompt`     | boolean | `true`                                                  | Prompt to install Claude plugins |
+| `marketplace_url` | string  | `"https://github.com/nightgauge/nightgauge.git#stable"` | Plugin marketplace repository    |
 
 **Example:**
 
@@ -6432,7 +6432,7 @@ Plugin management settings.
 ui:
   plugins:
     auto_prompt: true
-    marketplace_url: https://github.com/nightgauge/nightgauge.git
+    marketplace_url: https://github.com/nightgauge/nightgauge.git#stable
 ```
 
 ---

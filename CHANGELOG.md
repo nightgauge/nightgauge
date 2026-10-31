@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Installed Claude plugins now receive updates. Each release that changes the
+  plugin must raise its version, and installs follow a `stable` branch that moves
+  only on release, so `claude plugin update` delivers releases and never the tip
+  of `main`. An install added without `#stable` must move once, which removes
+  its saved plugin data; the plugin README gives the commands (#2724).
+- `issue-create`, `repo-init` and `smart-setup` no longer lose their frontmatter
+  to a YAML error when loaded as Claude plugin skills (#2724).
+
 - A re-run that rebased its conflicting PR branch no longer ends `branch_forked`. When origin's
   copy of the branch carries no change the local tree lacks, even if the rebase rewrote a commit's
   surrounding lines, the new `nightgauge git push-branch` (used by feature-validate) and the

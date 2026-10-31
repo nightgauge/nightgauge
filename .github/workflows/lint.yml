@@ -53,6 +53,13 @@ jobs:
         run: |
           git fetch --tags --force --quiet origin
           bash scripts/check-changelog.sh
+      # Claude plugin contract (#2724): one version, in plugin.json, and every
+      # skill's frontmatter parses, because `claude plugin validate` is not
+      # installed here. The self-test first proves the gate can go red.
+      - name: Plugin version gate self-test
+        run: bash scripts/test-check-plugin-version.sh
+      - name: Plugin has one version and valid skills
+        run: bash scripts/check-plugin-version.sh
       # Self-test first, same reasoning as the band-vocabulary and mirror-link
       # gates below: the validator reported a missing field once, on a file that
       # provably had it, because a frontmatter block that never closed handed the

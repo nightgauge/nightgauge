@@ -3,11 +3,11 @@ name: issue-create
 description: Create well-structured GitHub issues with SDLC metadata, project board sync,
   and optional parent/child linking. Use when filing a new issue or epic that the
   pipeline will pick up, so it lands board-ready with correct labels and links.
-  User-invoked: the user types `/nightgauge:issue-create`.
+  User-invoked; the user types `/nightgauge:issue-create`.
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.26.0"
+  version: "1.26.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 disable-model-invocation: true

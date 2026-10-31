@@ -1548,8 +1548,8 @@
         "nightgauge.plugins.marketplaceUrl": {
           "type": "string",
           "scope": "machine",
-          "default": "https://github.com/nightgauge/nightgauge.git",
-          "description": "Git URL for the Nightgauge plugin marketplace"
+          "default": "https://github.com/nightgauge/nightgauge.git#stable",
+          "description": "Git URL for the Nightgauge plugin marketplace. `#stable` follows releases."
         },
         "nightgauge.pipeline.defaultMode": {
           "type": "string",

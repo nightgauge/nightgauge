@@ -135,6 +135,11 @@ jobs:
           echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
           echo "Release notes ($(wc -l < "$NOTES") lines) from CHANGELOG.md § [${GITHUB_REF_NAME#v}]"
 
+      # An installed plugin only updates when its version changes (#2724), so a
+      # tag that changed the plugin without a bump publishes nothing.
+      - name: Plugin version changed with the plugin
+        run: bash scripts/check-plugin-version.sh --tag "${GITHUB_REF_NAME}"
+
       # ---------------------------------------------------------------------
       # PREFLIGHT — validate the Homebrew tap credential BEFORE anything is
       # published. GoReleaser creates the GitHub Release before it pushes the
@@ -558,3 +563,23 @@ jobs:
           fi
           GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" bash scripts/verify-release-channels.sh \
             --channel homebrew --release --version "$VERSION" --close-superseded
+
+      # Claude plugin channel (#2724): the marketplace is installed at #stable,
+      # which only this step moves, so plugins reach users with a release and
+      # never from main. Last, so a failed publish leaves stable alone.
+      # Fast-forward only; a refused move fails here and the watchdog's
+      # claude-plugin channel stays red until a maintainer moves the branch.
+      - name: Advance the stable branch to this release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/stable" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/stable" \
+              -f sha="$SHA" -F force=false >/dev/null
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref=refs/heads/stable -f sha="$SHA" >/dev/null
+          fi
+          echo "stable is now ${GITHUB_REF_NAME} ($SHA)" >> "$GITHUB_STEP_SUMMARY"

@@ -20,8 +20,12 @@
 # in the repository that queries either host (#1767 keeps the docs link gate
 # off them).
 #
+# The Claude plugin marketplace is installed at the `stable` branch, which
+# release.yml advances last (#2724). A branch left behind means `claude plugin
+# update` serves an old release, so it must sit on the release tag's commit.
+#
 # Usage:
-#   verify-release-channels.sh --channel homebrew|marketplace|open-vsx [options]
+#   verify-release-channels.sh --channel homebrew|marketplace|open-vsx|claude-plugin [options]
 #
 # Options:
 #   --version X.Y.Z       Expected version. Default: the latest non-prerelease
@@ -105,9 +109,9 @@ done
 REPO_RE='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 
-CHANNELS="homebrew, marketplace, open-vsx"
+CHANNELS="homebrew, marketplace, open-vsx, claude-plugin"
 case "$CHANNEL" in
-homebrew | marketplace | open-vsx) ;;
+homebrew | marketplace | open-vsx | claude-plugin) ;;
 "") echo "ERROR: --channel is required ($CHANNELS)" >&2; exit 2 ;;
 *) echo "ERROR: unknown channel '$CHANNEL' ($CHANNELS)" >&2; exit 2 ;;
 esac
@@ -120,7 +124,7 @@ if [ -n "$VERSION" ] && [[ ! "$VERSION" =~ $SEMVER_RE ]]; then
   echo "ERROR: --version must be X.Y.Z (a stable release), got '$VERSION'" >&2
   exit 2
 fi
-if [ "$CHANNEL" != "homebrew" ]; then
+if [ "$CHANNEL" = "marketplace" ] || [ "$CHANNEL" = "open-vsx" ]; then
   if [ -z "$EXTENSION" ]; then
     MANIFEST="$(cd "$(dirname "$0")/.." && pwd)/packages/nightgauge/package.json"
     EXTENSION="$(jq -r '"\(.publisher).\(.name)"' "$MANIFEST" 2>/dev/null)" || EXTENSION=""
@@ -307,6 +311,33 @@ Detected by \`scripts/verify-release-channels.sh --channel $CHANNEL\` (#1874, #1
 }
 
 CURRENT=0
+
+# --- The plugin channel: where the stable branch points --------------------------
+if [ "$CHANNEL" = "claude-plugin" ]; then
+  if ! WANT="$(gh api "repos/$SOURCE/commits/v$VERSION" | jq -r '.sha // empty')" || [ -z "$WANT" ]; then
+    echo "ERROR: cannot resolve tag v$VERSION on $SOURCE" >&2
+    exit 2
+  fi
+  if ! SERVED="$(gh api "repos/$SOURCE/commits/heads/stable" | jq -r '.sha // empty')" || [ -z "$SERVED" ]; then
+    echo "ERROR: cannot read the stable branch of $SOURCE" >&2
+    exit 2
+  fi
+  say "- release: \`$VERSION\` at \`$WANT\` ($SOURCE)"
+  say "- \`stable\` serves: \`$SERVED\`"
+  if [ "$SERVED" = "$WANT" ]; then
+    VERDICT=0
+    CURRENT=1
+    say "- verdict: current"
+  else
+    VERDICT=1
+    REASON="stable is at $SERVED but the latest release v$VERSION is $WANT, so plugin updates stop there: fast-forward it (gh api -X PATCH repos/$SOURCE/git/refs/heads/stable -f sha=$WANT -F force=false)."
+    say "- verdict: BEHIND. $REASON"
+    echo "::error::$REASON" >&2
+  fi
+  sync_issue
+  exit "$VERDICT"
+fi
+
 if [ "$CHANNEL" != "homebrew" ]; then
   check_listing
   sync_issue

@@ -23,7 +23,15 @@ Add to your `~/.claude/settings.json`:
 
 ```json
 {
-  "extraKnownMarketplaces": ["https://github.com/nightgauge/nightgauge"]
+  "extraKnownMarketplaces": {
+    "nightgauge-plugins": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/nightgauge/nightgauge.git",
+        "ref": "stable"
+      }
+    }
+  }
 }
 ```
 
