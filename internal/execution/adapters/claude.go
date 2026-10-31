@@ -155,9 +155,9 @@ func claudePluginDirArgs(opts RunOptions) []string {
 // under a default user's permissions (#2718): over-budget includes are read
 // from that tree at run time, and it lies outside the worktree. --add-dir also
 // makes it a working directory, so file-tool writes are denied explicitly;
-// deny rules hold under bypassPermissions too. A tree reached through a symlink
-// is denied in its given and resolved forms, as OpenCode's allow-list grants
-// both. Bash can still write there, the limit ADR-022 records for OpenCode.
+// deny rules hold under bypassPermissions too. The deny names every form a tool
+// call can use (openCodePathForms): given, resolved, and a system alias such as
+// /tmp. Bash can still write there, the limit ADR-022 records for OpenCode.
 //
 // A tree inside the worktree gets neither flag. It is already reachable, and
 // it is the checkout the stage was dispatched to change: a deny there would
@@ -167,12 +167,8 @@ func claudeSkillsDirArgs(opts RunOptions) []string {
 	if !filepath.IsAbs(root) || pathWithin(root, opts.WorktreeDir) {
 		return nil
 	}
-	forms := []string{root}
-	if resolved := resolvedPath(root); resolved != root {
-		forms = append(forms, resolved)
-	}
 	var deny []string
-	for _, form := range forms {
+	for _, form := range openCodePathForms(root) {
 		rule := "//" + strings.TrimLeft(filepath.ToSlash(form), "/") + "/**"
 		for _, tool := range claudeFileWriteTools {
 			deny = append(deny, tool+"("+rule+")")

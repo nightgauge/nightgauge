@@ -225,6 +225,44 @@ func TestClaudeSkillsDirArgs_DeniesTheResolvedFormOfASymlinkedTree(t *testing.T)
 	}
 }
 
+// TestClaudeSkillsDirArgs_DeniesTheAliasFormOfTheTree is the #2797 carryover: a
+// tree given as /private/tmp/... stayed writable as /tmp/.... The alias is a
+// temp symlink, so this runs on a Linux host whose /tmp is a real directory.
+func TestClaudeSkillsDirArgs_DeniesTheAliasFormOfTheTree(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(base, "private-tmp")
+	tree := filepath.Join(target, "skills")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "tmp")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	saved := openCodeSystemAliases
+	openCodeSystemAliases = []string{alias}
+	t.Cleanup(func() { openCodeSystemAliases = saved })
+
+	args := claudeSkillsDirArgs(RunOptions{
+		SkillPath:   filepath.Join(tree, "nightgauge-feature-dev", "SKILL.md"),
+		WorktreeDir: filepath.Join(base, "worktree"),
+	})
+
+	if got := flagValues(args, "--add-dir"); !slices.Equal(got, []string{tree}) {
+		t.Errorf("--add-dir = %v, want the given form %q", got, tree)
+	}
+	deny := strings.Join(flagValues(args, "--disallowedTools"), ",")
+	aliased := "//" + strings.TrimLeft(filepath.ToSlash(filepath.Join(alias, "skills")), "/") + "/**"
+	for _, tool := range claudeFileWriteTools {
+		if rule := tool + "(" + aliased + ")"; !strings.Contains(deny, rule) {
+			t.Errorf("--disallowedTools = %q, want %q", deny, rule)
+		}
+	}
+}
+
 func flagValues(args []string, flag string) []string {
 	var values []string
 	for i, a := range args {

@@ -1,8 +1,9 @@
 /**
  * Test stub for `nightgauge skill render` — the ONE composer (#78, ADR 016 §4).
  *
- * Since #79 the extension no longer reads or composes SKILL.md itself: it
- * passes `--skills-root` to the binary and consumes the JSON envelope. Tests
+ * Since #79 the extension no longer reads or composes SKILL.md itself: it asks
+ * `skill roots` for the search list, passes it as `--skills-root` to the binary
+ * and consumes the JSON envelope. Tests
  * that drive a stage dispatch therefore need the render call answered, and a
  * shared stub keeps 9 test files from each inventing a different envelope
  * shape (which is how a mock drifts away from the contract it stands in for).
@@ -35,8 +36,39 @@ export function rootsFromRenderArgs(args: readonly string[]): string[] {
 }
 
 /** True when this argv is a `nightgauge skill render` invocation. */
-export function isSkillRenderCall(args: readonly string[] | undefined): boolean {
+export function isRenderInvocation(args: readonly string[] | undefined): boolean {
   return !!args && args[0] === "skill" && args[1] === "render";
+}
+
+/** True when this argv is a `nightgauge skill roots` invocation. */
+export function isRootsInvocation(args: readonly string[] | undefined): boolean {
+  return !!args && args[0] === "skill" && args[1] === "roots";
+}
+
+/** True for either verb a dispatch spawns, the argv `skillRenderStdout` answers. */
+export function isSkillRenderCall(args: readonly string[] | undefined): boolean {
+  return isRenderInvocation(args) || isRootsInvocation(args);
+}
+
+function flagValue(args: readonly string[], flag: string): string | undefined {
+  const i = args.indexOf(flag);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+/**
+ * Build the stdout of `skill roots --json` from the facts in its argv, so a
+ * dispatch test sees the list the host would. The order is pinned against the
+ * real implementation in internal/skillrender/default_roots_test.go.
+ */
+export function skillRootsStdout(args: readonly string[]): string {
+  const workspace = flagValue(args, "--workspace");
+  const workspaceSkills = workspace ? [`${workspace}/skills`] : [];
+  const bundle = flagValue(args, "--bundle");
+  const bundleRoots = bundle ? [bundle] : [];
+  const roots = args.includes("--workspace-first")
+    ? [...workspaceSkills, ...bundleRoots]
+    : [...bundleRoots, ...workspaceSkills];
+  return JSON.stringify({ v: 1, roots });
 }
 
 export interface SkillRenderStubOptions {
@@ -60,6 +92,7 @@ export function skillRenderStdout(
   args: readonly string[],
   options: SkillRenderStubOptions = {}
 ): string {
+  if (isRootsInvocation(args)) return skillRootsStdout(args);
   const stage = stageFromRenderArgs(args) || "feature-dev";
   const root = options.skillsRoot ?? rootsFromRenderArgs(args)[0] ?? "/test/workspace/skills";
   const skillPath = `${root}/nightgauge-${stage}/SKILL.md`;

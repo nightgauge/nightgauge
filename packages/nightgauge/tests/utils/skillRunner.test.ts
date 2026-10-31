@@ -13,6 +13,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { spawn, execFileSync } from "child_process";
 import {
+  isRenderInvocation,
+  isRootsInvocation,
   isSkillRenderCall,
   modelFromRenderArgs,
   rootsFromRenderArgs,
@@ -23,9 +25,6 @@ import type { ChildProcess } from "child_process";
 import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as vscode from "vscode";
-
-// The mocked fs cannot read the root-order vectors Go shares with this suite.
-const rootOrderFs = await vi.importActual<typeof fs>("fs");
 
 // Mock vscode module
 vi.mock("vscode", () => ({
@@ -53,6 +52,7 @@ vi.mock("fs", () => ({
   writeFileSync: vi.fn(),
   rmSync: vi.fn(),
   realpathSync: vi.fn((target: string) => target),
+  readdirSync: vi.fn(() => []),
 }));
 
 // Mock child_process module
@@ -174,6 +174,7 @@ import {
   resolveTokenForSubprocess,
   resolveSdkCliPath,
   claudeSkillsDirArgs,
+  findSkillFile,
   resolveSkillRoots,
   setExtensionIsPackaged,
 } from "../../src/utils/skillRunner";
@@ -303,16 +304,9 @@ describe("skillRunner - File Discovery and Parsing", () => {
     vi.restoreAllMocks();
   });
 
-  describe("skill root order (#2718)", () => {
-    const BUNDLE = "/ext/dist/skills";
-    const WORKSPACE = "/test/workspace/skills";
-    const OVERRIDE = "/operator/skills";
-    const tokens: Record<string, string> = {
-      override: OVERRIDE,
-      bundle: BUNDLE,
-      workspace: WORKSPACE,
-    };
-
+  // The order is ResolveRoots' and is pinned in Go. These pin the facts the
+  // host hands over, and that it returns the binary's answer unchanged.
+  describe("skill roots come from the binary (#2718)", () => {
     function stubBundle(present: boolean): void {
       vi.mocked(vscode.extensions.getExtension).mockReturnValue(
         (present ? { extensionPath: "/ext" } : undefined) as never
@@ -320,37 +314,96 @@ describe("skillRunner - File Discovery and Parsing", () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
     }
 
+    function rootsArgv(): string[] {
+      return vi
+        .mocked(execFileSync)
+        .mock.calls.map(([, args]) => (args ?? []) as string[])
+        .filter((args) => isRootsInvocation(args))
+        .at(-1)!;
+    }
+
     afterEach(() => {
       setExtensionIsPackaged(true);
       vi.mocked(vscode.extensions.getExtension).mockReturnValue(undefined as never);
-      delete process.env.NIGHTGAUGE_SKILLS_ROOT;
     });
 
-    // The same file drives Go's TestDefaultRootsMatchTheSharedVectors, so a
-    // change to either host's order fails until the vectors agree.
-    const vectors = JSON.parse(
-      rootOrderFs.readFileSync(
-        path.resolve(__dirname, "../../../../internal/skillrender/testdata/skill-root-order.json"),
-        "utf-8"
-      )
-    ) as { name: string; mode: string; override: boolean; bundle: boolean; want: string[] }[];
+    it("sends the bundle and workspace and no order flag on a packaged host", () => {
+      setExtensionIsPackaged(true);
+      stubBundle(true);
+      expect(resolveSkillRoots()).toEqual(["/ext/dist/skills", "/test/workspace/skills"]);
+      expect(rootsArgv()).toEqual([
+        "skill",
+        "roots",
+        "--json",
+        "--workspace",
+        "/test/workspace",
+        "--bundle",
+        "/ext/dist/skills",
+      ]);
+    });
 
-    it.each(vectors.map((v) => [v.name, v] as const))("%s", (_name, vector) => {
-      setExtensionIsPackaged(vector.mode === "production");
-      stubBundle(vector.bundle);
-      if (vector.override) process.env.NIGHTGAUGE_SKILLS_ROOT = OVERRIDE;
-
-      expect(resolveSkillRoots()).toEqual(vector.want.map((token) => tokens[token]));
+    it("asks for the workspace first off a packaged host", () => {
+      setExtensionIsPackaged(false);
+      stubBundle(true);
+      expect(resolveSkillRoots()).toEqual(["/test/workspace/skills", "/ext/dist/skills"]);
+      expect(rootsArgv()).toContain("--workspace-first");
     });
 
     it("treats an unreported host mode as packaged", () => {
       stubBundle(true);
-      expect(resolveSkillRoots()).toEqual([BUNDLE, WORKSPACE]);
+      resolveSkillRoots();
+      expect(rootsArgv()).not.toContain("--workspace-first");
     });
 
-    it("uses the pinned root instead of the first workspace folder", () => {
+    it("sends the self-healed bundle, not the stale extension path", () => {
+      vi.mocked(vscode.extensions.getExtension).mockReturnValue({
+        extensionPath: "/exts/nightgauge.nightgauge-1.0.0",
+      } as never);
+      vi.mocked(fs.existsSync).mockImplementation((p) => p !== "/exts/nightgauge.nightgauge-1.0.0");
+      vi.mocked(fs.readdirSync).mockReturnValue(["nightgauge.nightgauge-1.1.0"] as never);
+      resolveSkillRoots();
+      const argv = rootsArgv();
+      expect(argv[argv.indexOf("--bundle") + 1]).toBe(
+        "/exts/nightgauge.nightgauge-1.1.0/dist/skills"
+      );
+    });
+
+    it("sends the pinned root instead of the first workspace folder", () => {
       stubBundle(false);
       expect(resolveSkillRoots("/pinned/repo")).toEqual(["/pinned/repo/skills"]);
+      expect(rootsArgv()).not.toContain("--bundle");
+    });
+
+    it("omits --workspace when there is no workspace", () => {
+      stubBundle(false);
+      const folders = vscode.workspace.workspaceFolders;
+      (vscode.workspace as { workspaceFolders: unknown }).workspaceFolders = undefined;
+      resolveSkillRoots();
+      (vscode.workspace as { workspaceFolders: unknown }).workspaceFolders = folders;
+      expect(rootsArgv()).not.toContain("--workspace");
+    });
+
+    it("returns the binary's answer, override included, without reordering it", () => {
+      vi.mocked(execFileSync).mockReturnValueOnce(JSON.stringify({ v: 1, roots: ["/x", "/y"] }));
+      expect(resolveSkillRoots()).toEqual(["/x", "/y"]);
+    });
+
+    it("throws when the binary fails, and when its output is not a roots list", () => {
+      vi.mocked(execFileSync).mockImplementationOnce(() => {
+        throw new Error("spawn ENOENT");
+      });
+      expect(() => resolveSkillRoots()).toThrow(/skill roots failed: spawn ENOENT/);
+      vi.mocked(execFileSync).mockReturnValueOnce("not json");
+      expect(() => resolveSkillRoots()).toThrow(/unparseable/);
+      vi.mocked(execFileSync).mockReturnValueOnce("{}");
+      expect(() => resolveSkillRoots()).toThrow(/no roots list/);
+    });
+
+    it("findSkillFile answers null when the binary fails", () => {
+      vi.mocked(execFileSync).mockImplementationOnce(() => {
+        throw new Error("spawn ENOENT");
+      });
+      expect(findSkillFile("feature-dev")).toBeNull();
     });
 
     it("renders a pinned run from its pinned root", () => {
@@ -371,16 +424,8 @@ describe("skillRunner - File Discovery and Parsing", () => {
       const render = vi
         .mocked(execFileSync)
         .mock.calls.map(([, args]) => (args ?? []) as string[])
-        .find((args) => isSkillRenderCall(args))!;
+        .find((args) => isRenderInvocation(args))!;
       expect(rootsFromRenderArgs(render)).toEqual(["/pinned/repo/skills"]);
-    });
-
-    it("trims the override and lists it even when missing", () => {
-      stubBundle(false);
-      process.env.NIGHTGAUGE_SKILLS_ROOT = "  /nope  ";
-      expect(resolveSkillRoots()).toEqual(["/nope", WORKSPACE]);
-      process.env.NIGHTGAUGE_SKILLS_ROOT = "   ";
-      expect(resolveSkillRoots()).toEqual([WORKSPACE]);
     });
   });
 
@@ -411,6 +456,20 @@ describe("skillRunner - File Discovery and Parsing", () => {
       expect(args[1]).toBe("/linked/skills");
       expect(args[3]).toContain("Edit(//linked/skills/**)");
       expect(args[3]).toContain("Edit(//real/skills/**)");
+      vi.mocked(fs.realpathSync).mockImplementation(
+        ((target: string) => target) as unknown as typeof fs.realpathSync
+      );
+    });
+
+    it("denies the /tmp form of a tree given under /private/tmp, for every write tool", () => {
+      const realpath = (target: string): string => (target === "/tmp" ? "/private/tmp" : target);
+      vi.mocked(fs.realpathSync).mockImplementation(realpath as unknown as typeof fs.realpathSync);
+      const args = claudeSkillsDirArgs("/private/tmp/ext/skills/stage/SKILL.md", "/repo");
+      expect(args[1]).toBe("/private/tmp/ext/skills");
+      for (const tool of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) {
+        expect(args[3]).toContain(`${tool}(//tmp/ext/skills/**)`);
+        expect(args[3]).toContain(`${tool}(//private/tmp/ext/skills/**)`);
+      }
       vi.mocked(fs.realpathSync).mockImplementation(
         ((target: string) => target) as unknown as typeof fs.realpathSync
       );
@@ -460,7 +519,7 @@ describe("skillRunner - File Discovery and Parsing", () => {
       return vi
         .mocked(execFileSync)
         .mock.calls.map(([, args]) => (args ?? []) as string[])
-        .filter((args) => isSkillRenderCall(args));
+        .filter((args) => isRenderInvocation(args));
     }
 
     /** Point the render stub at a specific envelope for this test. */
@@ -567,7 +626,8 @@ describe("skillRunner - File Discovery and Parsing", () => {
       // implementation is the drift #78 removed. The binary is already a hard
       // dependency of every stage run, so this says so instead of shipping a
       // silently unexpanded skill.
-      vi.mocked(execFileSync).mockImplementation((() => {
+      vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) => {
+        if (isRootsInvocation(args)) return skillRenderStdout(args);
         throw new Error('SKILL.md not found for stage "feature-dev"');
       }) as never);
 
@@ -586,7 +646,8 @@ describe("skillRunner - File Discovery and Parsing", () => {
     });
 
     it("fails the stage when the render returns unparseable output", () => {
-      vi.mocked(execFileSync).mockImplementation((() => "not json at all") as never);
+      vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) =>
+        isRootsInvocation(args) ? skillRenderStdout(args) : "not json at all") as never);
 
       const onError = vi.fn();
       const onComplete = vi.fn();
@@ -4892,7 +4953,7 @@ describe("skillRunner - a non-Claude stage is handed its render (#2381, #2390)",
     const renderArgs = vi
       .mocked(execFileSync)
       .mock.calls.map((call) => call[1] as string[])
-      .find((args) => isSkillRenderCall(args))!;
+      .find((args) => isRenderInvocation(args))!;
     expect(renderArgs).toEqual(expect.arrayContaining(["--adapter", "codex", "--headless"]));
     const { render } = handedRender();
     expect(render.stage).toBe("feature-dev");

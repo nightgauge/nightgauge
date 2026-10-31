@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The extension and the Go scheduler now search the same skills trees in the same
+  order. `nightgauge skill roots` is the one answer, and a pipeline run's scheduler
+  searches the issue's worktree as the extension does. The Claude write deny on a
+  stage's skills tree also covers a system alias, so a tree given as
+  `/private/tmp/...` is no longer writable as `/tmp/...` (#2718).
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.
