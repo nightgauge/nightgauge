@@ -12,33 +12,38 @@ coding assistant.
   - OpenAI Codex
   - Cursor IDE
   - Kiro IDE
+- For Claude Code in a terminal: the `nightgauge` binary, installed below
 
 ## Installation
 
 ### Claude Code (Recommended)
 
-Add to your `~/.claude/settings.json`:
+Install the `nightgauge` binary first. It is required: skills call it directly,
+and binary-backed hooks do nothing without it.
 
-```json
-{
-  "extraKnownMarketplaces": {
-    "nightgauge-plugins": {
-      "source": {
-        "source": "git",
-        "url": "https://github.com/nightgauge/nightgauge.git",
-        "ref": "stable"
-      }
-    }
-  }
-}
+```bash
+brew install --cask nightgauge/tap/nightgauge    # macOS
+# or, with Go 1.26+ and $GOPATH/bin on PATH:
+go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest
 ```
 
-Then install the Nightgauge plugin via Claude Code. It includes the pipeline and
+Confirm it with `nightgauge doctor`. [GO_BINARY.md](GO_BINARY.md) has release
+binaries and the full install matrix.
+
+Then add the marketplace and install the plugin. It includes the pipeline and
 utility commands, including smart setup and documentation maintenance:
 
 ```bash
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
 claude plugin install nightgauge@nightgauge-plugins
 ```
+
+These commands are the only route that has been run and shown to install the
+plugin, in a scratch `CLAUDE_CONFIG_DIR` on Claude Code 2.1.316, and
+`scripts/check-plugin-install-docs.sh` re-runs them. Editing `settings.json`
+alone does not: the CLI then reports the plugin not found in the marketplace, and
+neither `claude -p` nor a logged-out interactive startup materializes it. An
+authenticated interactive startup has not been checked.
 
 ### GitHub Copilot, OpenAI Codex, Cursor, and Kiro
 

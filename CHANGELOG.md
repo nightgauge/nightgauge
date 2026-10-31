@@ -40,6 +40,12 @@ changelog, and the release workflow refuses a tag that does not.
   first so a hung package names itself. `--json` now uses the same exit codes as
   the human output, so a blocked push no longer exits 0. The gate skips the Go test
   phase, and says why, only when `ci-local` already passed the same tree (#2700).
+- The install docs now work as written. The README, plugin README and Getting
+  Started guide include a required `nightgauge` binary step with
+  `nightgauge doctor`, settings-only routes that installed nothing are gone, and
+  the plugin README says hooks enforce nothing without the binary. A new gate
+  runs each documented route in its own scratch config (#2759).
+  `configs/claude/settings.json` is removed: it shipped the settings-only route.
 - Validation retries can now succeed in a reused worktree. `FeatureValidateGate`
   judges the latest verdict per gate, so a later `pass` clears an earlier
   `catch`; `nightgauge health gate-metrics` still reports every row. Judge
