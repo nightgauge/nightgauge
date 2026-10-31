@@ -1,16 +1,13 @@
 // Dead-include gate (#337). Every `<!-- include: path -->` directive in a
 // shipped skill must resolve to a file that exists.
 //
-// Why this needs a gate at all: include expansion is deliberately fail-open.
-// `skillrender.ExpandIncludes` leaves a directive in place when its target
-// cannot be read, because the same document has to stay readable under a host
-// that does not expand includes at all (Claude Code, for one, never does). The
-// cost of that portability rule is that a DEAD include and a DELIBERATELY
-// UNEXPANDED one are byte-identical: the model receives the literal HTML
-// comment where the shared content should have been, and nothing anywhere
-// says so. Six shipped stage skills carried
-// `<!-- include: ../_shared/BATCH_MODE.md -->` for the entire life of the
-// repository against a file that was never written.
+// Why this needs a gate as well as the render error: render fails on a dead
+// include only in the file set one render composes, and only when a stage runs
+// (#2761). A host that loads SKILL.md directly never renders it at all, so it
+// reads the literal HTML comment where the shared content should have been. Six
+// shipped stage skills carried `<!-- include: ../_shared/BATCH_MODE.md -->` for
+// the entire life of the repository against a file that was never written. This
+// gate finds such a directive before merge, in every file.
 //
 // The check resolves targets with skillrender.IncludePattern — the composer's
 // OWN regex, not a copy. That matters: capture group 1 is non-greedy up to the
@@ -23,7 +20,9 @@
 // makes a malformed directive self-evident, where "target not found" alone
 // sends a reader hunting for a file that is sitting right there.
 //
-// Scope is SKILL.md plus supporting files under _includes/ and _shared/.
+// Scope is SKILL.md plus supporting files under _includes/, _shared/, _profiles/
+// and _overlays/: render expands directives in the last two as well, so one that
+// goes dead there fails a stage.
 // skills/README.md is deliberately NOT scanned: it documents the directive
 // shape in prose and in fenced examples, and those are not directives.
 //
@@ -199,7 +198,8 @@ func skillDirFor(path string) string {
 }
 
 // isScannedSkillFile reports whether a .md path is in scope: a SKILL.md, or a
-// supporting file under a _includes/ or _shared/ directory. Everything else in
+// supporting file under a _includes/, _shared/, _profiles/ or _overlays/
+// directory. Everything else in
 // the skill trees — README.md above all — documents the directive shape rather
 // than using it, and flagging those examples would fail CI on the docs.
 func isScannedSkillFile(path string) bool {
@@ -208,7 +208,7 @@ func isScannedSkillFile(path string) bool {
 	}
 	sep := string(filepath.Separator)
 	for _, seg := range strings.Split(filepath.Dir(path), sep) {
-		if seg == "_includes" || seg == "_shared" {
+		if seg == "_includes" || seg == "_shared" || seg == "_profiles" || seg == "_overlays" {
 			return true
 		}
 	}

@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- The extension now ships every file a pipeline stage needs, including per-skill
+  model overlays and the `pattern-mining` and `verify-ui` skills. A stage whose
+  bundled skill is missing an include now fails and names the file, instead of
+  running on a partial prompt (#2761).
 - A validation retry in a reused worktree can now pass: the latest verdict per
   gate decides, so an earlier `catch` no longer fails every later attempt, and
   gate telemetry still shows every row. One judge's pass cannot erase another

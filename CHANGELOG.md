@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The VSIX skill bundle is now complete, and a package-time check proves it. The
+  bundler ships whole skill directories, so per-skill overlays reach Fable stages,
+  and it ships `pattern-mining` and `verify-ui`, which stage prompts now name by
+  their path under the bundle. `nightgauge skill render` fails, naming the file,
+  when an include or phase-include target is missing, instead of exiting 0 with a
+  partial prompt. The new `nightgauge preflight skill-bundle` renders every stage
+  from a built tree and runs on each VSIX in the release and staging workflows and
+  on `dist/skills` in `scripts/ci-local.sh` (#2761).
 - `nightgauge pre-push validate` now reports an expired limit as a timeout, with
   exit code 3 and a reason naming the limit and how to raise it, never as a test
   failure. The default limit rises from 180 s to 1800 s, is configurable with

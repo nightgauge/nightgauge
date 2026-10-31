@@ -18,19 +18,17 @@ func TestSupplyPhaseIncludes2178(t *testing.T) {
 		"## Phase 2\n\n> **Read `_includes/big.md` (same directory as this SKILL.md) now and follow it.**\n\n" +
 		"## Phase 3\n\n> **Read `_includes/c.md` (same directory as this\n> SKILL.md) now and follow it.**\n\n" +
 		"## Phase 4\n\n> **Read `_includes/a.md` now and follow it again.**\n\n" +
-		"Config detail: Read `_includes/lazy.md` when needed.\n\n" +
-		"> **Read `_includes/missing.md` (same directory as this SKILL.md) now.**\n"
+		"Config detail: Read `_includes/lazy.md` when needed.\n"
 
 	got, supplied := SupplyPhaseIncludes(body, skillDir, 100)
 	if strings.Join(supplied, ",") != "a.md,c.md" {
-		t.Fatalf("supplied = %v, want [a.md c.md] (big.md over budget, lazy.md on demand, missing.md absent)", supplied)
+		t.Fatalf("supplied = %v, want [a.md c.md] (big.md over budget, lazy.md on demand)", supplied)
 	}
 	for _, want := range []string{
 		"Follow `_includes/a.md` (supplied in full",
 		"Follow `_includes/c.md` (supplied in full",
 		"Read `_includes/big.md` (same directory as this SKILL.md) now",
 		"Read `_includes/lazy.md` when needed",
-		"Read `_includes/missing.md` (same directory as this SKILL.md) now",
 		SuppliedIncludesHeading,
 		"### `_includes/a.md`\n\n# A\nstep a\n",
 		"### `_includes/c.md`\n\n# C\nstep c\n",
@@ -51,6 +49,17 @@ func TestSupplyPhaseIncludes2178(t *testing.T) {
 	}
 	if off, s := SupplyPhaseIncludes(body, skillDir, -1); off != body || s != nil {
 		t.Error("a negative budget changed the body")
+	}
+}
+
+// Render refuses a missing target before this function runs, so what remains is
+// a file that vanished after that check, and SupplyPhaseIncludes still leaves its
+// read in place rather than dropping the step.
+func TestSupplyPhaseIncludesLeavesAVanishedIncludeAsARead(t *testing.T) {
+	body := "> **Read `_includes/gone.md` (same directory as this SKILL.md) now.**\n"
+	got, supplied := SupplyPhaseIncludes(body, t.TempDir(), 100)
+	if got != body || supplied != nil {
+		t.Errorf("got %q, %v; want the body unchanged", got, supplied)
 	}
 }
 
