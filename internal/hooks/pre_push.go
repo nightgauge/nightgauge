@@ -255,9 +255,6 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 		}
 	}()
 
-	// The changed set is the branch's own work, so read it before the merge.
-	changes := collectChangedPaths(ctx, runner, workDir, targetBranch)
-
 	// Attempt merge with target
 	mergeOutput, err := runner.Run(ctx, workDir, "git", "merge", "--no-commit", "--no-ff", fmt.Sprintf("origin/%s", targetBranch))
 	if err != nil {
@@ -284,7 +281,7 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 		}
 		result.ValidationPhases["build"] = "passed"
 
-		if skip, reason := decideGoTestSkip(ctx, runner, workDir, changes); skip {
+		if skip, reason := decideGoTestSkip(ctx, runner, workDir); skip {
 			result.TestSkipReason = reason
 		} else {
 			fmt.Fprintf(os.Stderr, "Running go test: %s\n", reason)

@@ -22,8 +22,7 @@ changelog, and the release workflow refuses a tag that does not.
   `hooks.pre_push.timeout_seconds`, and also bounds `go test -timeout`, which fires
   first so a hung package names itself. `--json` now uses the same exit codes as
   the human output, so a blocked push no longer exits 0. The gate skips the Go test
-  phase, and says why, when no Go input changed or `ci-local` already passed the
-  same tree (#2700).
+  phase, and says why, only when `ci-local` already passed the same tree (#2700).
 - Security: hooks and skills no longer run a `bin/nightgauge` supplied by the
   repository you are in. A repository build is used only with
   `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge core checkout, so

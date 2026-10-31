@@ -224,10 +224,10 @@ On a timeout the phase in progress reports `timeout`, `failure_kind` is
 the phase, the limit and how to raise it. `--json` uses the same exit codes.
 
 Only the Go `test` phase can be skipped, and `go build` and `go vet` still run. It
-reports `skipped` with `test_skip_reason` when no changed path is a Go input (a
-`.go` file, `go.mod`, `go.sum`, `go.work`, or a path at or below a Go package
-directory), or when `.ci-local-logs/go-test-pass.tree` matches the merged tree.
-Any doubt runs the suite. CI still runs it on the pull request.
+reports `skipped` with `test_skip_reason` only when
+`.ci-local-logs/go-test-pass.tree` matches the merged tree. A non-Go change gets no
+skip of its own, because Go tests read `skills/`, `docs/` and `scripts/`. Any doubt
+runs the suite. CI still runs it on the pull request.
 
 **Output JSON schema:**
 

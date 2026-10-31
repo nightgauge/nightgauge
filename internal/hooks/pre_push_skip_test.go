@@ -93,23 +93,6 @@ func recordTree(t *testing.T, dir string) {
 	write(t, dir, goTestPassRecord, tree+"\n")
 }
 
-func TestPrePushSkip_NoGoInputSkipsTestButNotBuildOrVet(t *testing.T) {
-	dir := skipFixture(t)
-	write(t, dir, "docs/a.md", "changed\n")
-
-	result, runner := evaluateFixture(t, dir)
-
-	if ranGoVerb(runner, "test") {
-		t.Error("go test ran for a change with no Go input")
-	}
-	if !ranGoVerb(runner, "build") || !ranGoVerb(runner, "vet") {
-		t.Errorf("build and vet must always run: %v", runner.goes)
-	}
-	if result.ValidationPhases["test"] != "skipped" || !strings.Contains(result.TestSkipReason, "Go input") {
-		t.Errorf("phases=%v reason=%q", result.ValidationPhases, result.TestSkipReason)
-	}
-}
-
 func TestPrePushSkip_MatchingPassRecordSkips(t *testing.T) {
 	dir := skipFixture(t)
 	write(t, dir, "pkg/a.go", "package pkg\n\nvar X = 1\n")
@@ -125,59 +108,52 @@ func TestPrePushSkip_MatchingPassRecordSkips(t *testing.T) {
 	}
 }
 
-func TestPrePushSkip_RealGoChangeRuns(t *testing.T) {
-	for name, stale := range map[string]bool{"no record": false, "stale record": true} {
+func TestPrePushSkip_UnprovenChangeRuns(t *testing.T) {
+	// A non-Go path counts: Go tests read skills/, docs/ and scripts/.
+	for name, tc := range map[string]struct {
+		path  string
+		stale bool
+	}{
+		"go, no record":      {"pkg/a.go", false},
+		"go, stale record":   {"pkg/a.go", true},
+		"docs, no record":    {"docs/a.md", false},
+		"docs, stale record": {"docs/a.md", true},
+	} {
 		t.Run(name, func(t *testing.T) {
 			dir := skipFixture(t)
-			if stale {
+			if tc.stale {
 				recordTree(t, dir)
 			}
-			write(t, dir, "pkg/a.go", "package pkg\n\nvar X = 1\n")
+			write(t, dir, tc.path, "package pkg\n\nvar X = 1\n")
 
 			result, runner := evaluateFixture(t, dir)
 
 			if !ranGoVerb(runner, "test") || result.ValidationPhases["test"] != "passed" {
-				t.Errorf("a real Go change must run: goes=%v phases=%v", runner.goes, result.ValidationPhases)
+				t.Errorf("an unproven change must run: goes=%v phases=%v", runner.goes, result.ValidationPhases)
+			}
+			if !ranGoVerb(runner, "build") || !ranGoVerb(runner, "vet") {
+				t.Errorf("build and vet must always run: %v", runner.goes)
 			}
 		})
 	}
 }
 
-func TestPrePushSkip_NonGoFileInPackageDirectoryRuns(t *testing.T) {
-	dir := skipFixture(t)
-	write(t, dir, "pkg/testdata/embedded.json", "{}\n")
-
-	if _, runner := evaluateFixture(t, dir); !ranGoVerb(runner, "test") {
-		t.Error("a file below a Go package can be embedded, so it must run the suite")
-	}
-}
-
 func TestDecideGoTestSkip_FailsClosed(t *testing.T) {
 	ctx := context.Background()
-	m := newMockRunner()
-	if skip, _ := decideGoTestSkip(ctx, m, t.TempDir(), changedPaths{err: errors.New("boom")}); skip {
-		t.Error("a git error skipped the suite")
+	dir := t.TempDir()
+	if skip, _ := decideGoTestSkip(ctx, newMockRunner(), dir); skip {
+		t.Error("a missing record skipped the suite")
 	}
-	if skip, _ := decideGoTestSkip(ctx, m, t.TempDir(), changedPaths{}); skip {
-		t.Error("an empty changed set skipped the suite")
-	}
-	m.set("git ls-files -- *.go", "", errors.New("boom"))
-	if skip, _ := decideGoTestSkip(ctx, m, t.TempDir(), changedPaths{paths: []string{"a.md"}}); skip {
-		t.Error("a failed package listing skipped the suite")
+	write(t, dir, goTestPassRecord, "tree\n")
+	if skip, _ := decideGoTestSkip(ctx, &failingRunner{}, dir); skip {
+		t.Error("a failed fingerprint skipped the suite")
 	}
 }
 
-func TestIsGoInput(t *testing.T) {
-	dirs := map[string]bool{"pkg": true}
-	for p, want := range map[string]bool{
-		"x/y.go": true, "sub/go.mod": true, "go.sum": true, "go.work": true,
-		"pkg/data.json": true, "pkg/deep/er/data.json": true,
-		"docs/a.md": false, "README.md": false,
-	} {
-		if got := isGoInput(p, dirs); got != want {
-			t.Errorf("isGoInput(%q) = %v, want %v", p, got, want)
-		}
-	}
+type failingRunner struct{}
+
+func (*failingRunner) Run(context.Context, string, string, ...string) ([]byte, error) {
+	return nil, errors.New("boom")
 }
 
 // The record is only useful if both sides compute the same tree.

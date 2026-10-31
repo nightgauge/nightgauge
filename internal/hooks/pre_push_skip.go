@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,12 +13,6 @@ import (
 // goTestPassRecord is written by scripts/ci-local-go-test.sh after `go test`
 // passes, relative to the worktree. It holds the tree that passed.
 var goTestPassRecord = filepath.Join(".ci-local-logs", "go-test-pass.tree")
-
-// changedPaths is the branch's changed set, or why it could not be derived.
-type changedPaths struct {
-	paths []string
-	err   error
-}
 
 // goTestTimerHeadroom is how far ahead of the gate's deadline Go's per-package
 // timer aims, and the shortest timer it is given. A shorter budget lets the
@@ -41,93 +34,25 @@ func goTestTimeoutArg(ctx context.Context, timeoutSeconds int) string {
 	return strconv.Itoa(int(timer.Seconds())) + "s"
 }
 
-// collectChangedPaths lists everything that differs from the merge base,
-// including uncommitted and untracked work, since the gate runs before commit.
-// --no-renames reports both sides, so a file renamed away from .go still counts.
-func collectChangedPaths(ctx context.Context, runner CmdRunner, workDir, targetBranch string) changedPaths {
-	baseOut, err := runner.Run(ctx, workDir, "git", "merge-base", "HEAD", "origin/"+targetBranch)
-	if err != nil {
-		return changedPaths{err: fmt.Errorf("merge-base: %w", err)}
-	}
-	base := strings.TrimSpace(string(baseOut))
-	if base == "" {
-		return changedPaths{err: fmt.Errorf("merge-base came back empty")}
-	}
-	diffOut, err := runner.Run(ctx, workDir, "git", "diff", "--name-only", "--no-renames", base)
-	if err != nil {
-		return changedPaths{err: fmt.Errorf("diff: %w", err)}
-	}
-	untrackedOut, err := runner.Run(ctx, workDir, "git", "ls-files", "--others", "--exclude-standard")
-	if err != nil {
-		return changedPaths{err: fmt.Errorf("ls-files: %w", err)}
-	}
-	return changedPaths{paths: append(lines(diffOut), lines(untrackedOut)...)}
-}
-
 // decideGoTestSkip decides whether the test phase can be skipped on the merged
-// tree. It fails closed: anything it cannot prove runs the suite. The returned
-// reason says why either way.
-func decideGoTestSkip(ctx context.Context, runner CmdRunner, workDir string, changes changedPaths) (bool, string) {
-	if changes.err != nil {
-		return false, "the changed set could not be derived: " + changes.err.Error()
-	}
-	if len(changes.paths) == 0 {
-		return false, "the changed set came back empty, which is indistinguishable from a broken derivation"
-	}
-	goFilesOut, err := runner.Run(ctx, workDir, "git", "ls-files", "--", "*.go")
-	if err != nil {
-		return false, "tracked Go files could not be listed: " + err.Error()
-	}
-	goFiles := lines(goFilesOut)
-	if len(goFiles) == 0 {
-		return false, "no tracked Go files were listed, which cannot be right in a Go project"
-	}
-	packageDirs := make(map[string]bool, len(goFiles))
-	for _, f := range goFiles {
-		packageDirs[path.Dir(f)] = true
-	}
-
-	goInput := ""
-	for _, p := range changes.paths {
-		if isGoInput(p, packageDirs) {
-			goInput = p
-			break
-		}
-	}
-	if goInput == "" {
-		return true, fmt.Sprintf("none of the %d changed path(s) is a Go input", len(changes.paths))
-	}
-
+// tree. The only proof is ci-local's pass record for this exact tree: a change
+// outside Go files can still fail a Go test, because many read skills/, docs/
+// and scripts/. It fails closed: anything it cannot prove runs the suite. The
+// returned reason says why either way.
+func decideGoTestSkip(ctx context.Context, runner CmdRunner, workDir string) (bool, string) {
 	recorded, err := os.ReadFile(filepath.Join(workDir, goTestPassRecord))
 	if err != nil {
-		return false, fmt.Sprintf("a Go input changed (%s) and ci-local recorded no pass", goInput)
+		return false, "ci-local recorded no pass"
 	}
 	want := strings.TrimSpace(string(recorded))
 	got, err := treeFingerprint(ctx, runner, workDir)
 	if err != nil {
-		return false, fmt.Sprintf("a Go input changed (%s) and the tree could not be fingerprinted: %v", goInput, err)
+		return false, fmt.Sprintf("the tree could not be fingerprinted: %v", err)
 	}
 	if want == "" || want != got {
-		return false, fmt.Sprintf("a Go input changed (%s) and ci-local's pass record is for another tree", goInput)
+		return false, "ci-local's pass record is for another tree"
 	}
 	return true, fmt.Sprintf("ci-local already passed go test on tree %s", got)
-}
-
-// isGoInput reports whether a path can change what `go test` does. The ancestor
-// walk covers //go:embed, which cannot reach outside its package directory.
-func isGoInput(p string, packageDirs map[string]bool) bool {
-	base := path.Base(p)
-	if strings.HasSuffix(base, ".go") || base == "go.mod" || base == "go.sum" || base == "go.work" {
-		return true
-	}
-	for d := path.Dir(p); ; d = path.Dir(d) {
-		if packageDirs[d] {
-			return true
-		}
-		if d == "." || d == "/" {
-			return false
-		}
-	}
 }
 
 // treeFingerprint hashes the working tree through a scratch index, leaving the
@@ -152,14 +77,4 @@ func treeFingerprint(ctx context.Context, runner CmdRunner, workDir string) (str
 		return "", fmt.Errorf("write-tree came back empty")
 	}
 	return tree, nil
-}
-
-func lines(out []byte) []string {
-	var result []string
-	for _, l := range strings.Split(string(out), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			result = append(result, l)
-		}
-	}
-	return result
 }
