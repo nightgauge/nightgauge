@@ -39,12 +39,63 @@ func TestFeatureValidateGate_LatestVerdict(t *testing.T) {
 			wantKind: KindFail, evidence: []string{gate + "=catch"},
 		},
 		{
-			name: "judges fail then pass passes",
+			name: "a later judge's pass does not erase an earlier judge's fail",
+			records: []map[string]any{
+				{"gate_name": "judges", "result": "fail", "attempt_id": "a"},
+				{"gate_name": "judges", "result": "pass", "attempt_id": "a"},
+			},
+			wantKind: KindFail, evidence: []string{"judges=fail"},
+		},
+		{
+			name: "any failing judge in the latest attempt fails",
+			records: []map[string]any{
+				{"gate_name": "judges", "result": "fail", "attempt_id": "a"},
+				{"gate_name": "judges", "result": "pass", "attempt_id": "b"},
+				{"gate_name": "judges", "result": "fail", "attempt_id": "b"},
+				{"gate_name": "judges", "result": "pass", "attempt_id": "b"},
+			},
+			wantKind: KindFail, evidence: []string{"judges=fail"},
+		},
+		{
+			name: "a later attempt with every judge passing clears an earlier fail",
+			records: []map[string]any{
+				{"gate_name": "judges", "result": "fail", "attempt_id": "a"},
+				{"gate_name": "judges", "result": "pass", "attempt_id": "b"},
+				{"gate_name": "judges", "result": "pass", "attempt_id": "b"},
+			},
+			wantPass: true, wantKind: KindOK,
+		},
+		{
+			name: "judge rows with no attempt stay fail-closed",
 			records: []map[string]any{
 				{"gate_name": "judges", "result": "fail"},
 				{"gate_name": "judges", "result": "pass"},
 			},
-			wantPass: true, wantKind: KindOK,
+			wantKind: KindFail, evidence: []string{"judges=fail"},
+		},
+		{
+			name: "an attempt does not clear a judge fail with no attempt",
+			records: []map[string]any{
+				{"gate_name": "judges", "result": "fail"},
+				{"gate_name": "judges", "result": "pass", "attempt_id": "b"},
+			},
+			wantKind: KindFail, evidence: []string{"judges=fail"},
+		},
+		{
+			name: "a pass with no attempt does not clear an attempt's fail",
+			records: []map[string]any{
+				{"gate_name": "judges", "result": "fail", "attempt_id": "a"},
+				{"gate_name": "judges", "result": "pass"},
+			},
+			wantKind: KindFail, evidence: []string{"judges=fail"},
+		},
+		{
+			name: "an empty judge result does not end the latest attempt",
+			records: []map[string]any{
+				{"gate_name": "judges", "result": "fail", "attempt_id": "a"},
+				{"gate_name": "judges", "attempt_id": "b"},
+			},
+			wantKind: KindFail, evidence: []string{"judges=fail"},
 		},
 		{
 			name: "gate names are judged independently",
@@ -88,9 +139,9 @@ func TestFeatureValidateGate_LatestVerdict(t *testing.T) {
 			wantKind: KindFail, evidence: []string{"=catch"},
 		},
 		{
-			name:     "only empty-result rows is a no-op",
+			name:     "only empty-result rows fails rather than reading as a no-op",
 			records:  []map[string]any{{"gate_name": gate}},
-			wantKind: KindNoOp,
+			wantKind: KindFail, evidence: []string{"1 gate-metrics row(s) carry no result"},
 		},
 	}
 	for _, tc := range tests {

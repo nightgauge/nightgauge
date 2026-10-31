@@ -36,7 +36,7 @@ For `type:spike` issues, run `nightgauge spike materialize "$ISSUE_NUMBER" --dry
 
 ## Orchestration
 
-Validation is an ordered pipeline — build (1.5) → tests (2) → CI-parity (2.5) — closed by an adversarial **gate** judge whose verdict is the evidence the Go `FeatureValidateGate.Verify()` loop consumes: a failed verdict fails validation. A `catch` fails the run and is not a log of what the review found: a defect fixed in the fix loop gets `pass` and is described in the validate notes, and the gate judges the latest verdict per `gate_name`, in file order. `gate_metrics[]` flows into the validate context (Phase 6); FeatureValidateGate treats zero records as a no-op failure. Full orchestration and supporting-file index: Read `skills/nightgauge-feature-validate/SKILL.md` when needed.
+Validation is an ordered pipeline — build (1.5) → tests (2) → CI-parity (2.5) — closed by an adversarial **gate** judge whose verdict is the evidence the Go `FeatureValidateGate.Verify()` loop consumes: a failed verdict fails validation. A `catch` fails the run and is not a log of what the review found: a defect fixed in the fix loop gets `pass` and is described in the validate notes, and the gate judges the latest verdict per `gate_name`, in file order, except `judges` rows, where any failure in the latest attempt fails. `gate_metrics[]` flows into the validate context (Phase 6); FeatureValidateGate treats zero records as a no-op failure. Full orchestration and supporting-file index: Read `skills/nightgauge-feature-validate/SKILL.md` when needed.
 
 ## Gotchas
 

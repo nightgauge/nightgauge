@@ -223,6 +223,22 @@ describe("GateMetricsWriter", () => {
       expect(results).toEqual(["pass", "fail"]);
     });
 
+    it("stamps one attempt_id per call so the gate can tell a retry from a sibling judge", async () => {
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
+        judgeNode("fail", { nodeId: "judge:run-1:0:0" }),
+        judgeNode("pass", { nodeId: "judge:run-1:0:1" }),
+      ]);
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [judgeNode("pass")]);
+
+      const ids = vi
+        .mocked(fs.appendFile)
+        .mock.calls.map((c) => JSON.parse((c[1] as string).trim()).attempt_id);
+      expect(ids).toHaveLength(3);
+      expect(ids[0]).toEqual(expect.any(String));
+      expect(ids[1]).toBe(ids[0]);
+      expect(ids[2]).not.toBe(ids[0]);
+    });
+
     it("writes nothing when there are no judge verdicts", async () => {
       await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, []);
       expect(fs.appendFile).not.toHaveBeenCalled();
