@@ -77,6 +77,8 @@ export interface PluginStatus {
   plugin: PluginState;
   /** Claude Code's own error text, verbatim. */
   pluginErrors: string[];
+  /** Why `plugin` is `unknown`. Unset whenever the list was read. */
+  pluginReadError?: string;
 }
 
 interface PluginListEntry {
@@ -186,6 +188,9 @@ export class PluginSetupService implements vscode.Disposable {
       );
       status = await this.repairIfNeeded(status, stable);
       await this.refreshIfRecopied(status, stable);
+      if (status.plugin === "unknown") {
+        this.reportUnreadable(status);
+      }
     }
 
     const dismissed = this.context.globalState.get<boolean>(
@@ -231,6 +236,15 @@ export class PluginSetupService implements vscode.Disposable {
       status.marketplaceAdded = entry !== undefined;
       if (entry?.source === "directory" && typeof entry.path === "string") {
         status.marketplacePath = entry.path;
+      } else if (
+        entry !== undefined &&
+        (typeof entry.source !== "string" || entry.source === "directory")
+      ) {
+        // Without a path the move off a version-keyed source cannot run.
+        this.outputChannel.appendLine(
+          `WARNING: marketplace ${this.marketplace.marketplaceName} has no usable source: ` +
+            JSON.stringify(entry)
+        );
       }
     } catch (error) {
       this.logCliFailure("marketplace list", error);
@@ -239,8 +253,12 @@ export class PluginSetupService implements vscode.Disposable {
     try {
       const { stdout } = await execFileAsync("claude", ["plugin", "list", "--json"]);
       Object.assign(status, parsePluginState(stdout, this.pluginId()));
+      if (status.plugin === "unknown") {
+        status.pluginReadError = "claude plugin list --json returned unreadable output";
+      }
     } catch (error) {
       this.logCliFailure("plugin list", error);
+      status.pluginReadError = error instanceof Error ? error.message : String(error);
     }
 
     return status;
@@ -296,10 +314,29 @@ export class PluginSetupService implements vscode.Disposable {
     const problems = [...after.pluginErrors, ...(addError ? [addError] : [])];
     if (problems.length > 0) {
       this.reportFailure(problems);
+    } else if (after.plugin === "unknown") {
+      // checkAndPromptSetup surfaces this once, for repaired and unrepaired alike.
+      this.outputChannel.appendLine("Marketplace repointed; the repair could not be verified");
     } else {
       this.outputChannel.appendLine("✓ Marketplace repaired");
     }
     return after;
+  }
+
+  /** A status that could not be read is neither healthy nor absent: say so. */
+  private reportUnreadable(status: PluginStatus): void {
+    const detail = status.pluginReadError ?? "no plugin list was read";
+    this.outputChannel.appendLine(`✗ Nightgauge plugin status unavailable: ${detail}`);
+    vscode.window
+      .showWarningMessage(
+        `Could not read the Nightgauge Claude plugin's status: ${detail}`,
+        "View Output"
+      )
+      .then((selection) => {
+        if (selection === "View Output") {
+          this.outputChannel.show(true);
+        }
+      });
   }
 
   private reportFailure(problems: string[]): void {

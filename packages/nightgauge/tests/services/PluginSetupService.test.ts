@@ -70,6 +70,8 @@ interface FakeClaude {
   marketplacePath?: string;
   afterAdd?: unknown;
   addFails?: string;
+  listFails?: string;
+  marketplaceEntry?: unknown;
 }
 
 /** A scripted `claude` CLI. Every invocation lands in `mockExecFile.mock.calls`. */
@@ -78,15 +80,28 @@ function scriptClaude(fake: FakeClaude): void {
     expect(file).toBe("claude");
     const command = args.join(" ");
     if (command === "plugin list --json") {
+      if (fake.listFails) {
+        throw new Error(fake.listFails);
+      }
       return {
         stdout: typeof fake.plugins === "string" ? fake.plugins : JSON.stringify(fake.plugins),
       };
     }
     if (command === "plugin marketplace list --json") {
+      // Field shape captured from Claude Code 2.1.316.
       const entries =
-        fake.marketplacePath === undefined
-          ? []
-          : [{ name: "nightgauge-plugins", source: "directory", path: fake.marketplacePath }];
+        fake.marketplaceEntry !== undefined
+          ? [fake.marketplaceEntry]
+          : fake.marketplacePath === undefined
+            ? []
+            : [
+                {
+                  name: "nightgauge-plugins",
+                  source: "directory",
+                  path: fake.marketplacePath,
+                  installLocation: fake.marketplacePath,
+                },
+              ];
       return { stdout: JSON.stringify(entries) };
     }
     if (command.startsWith("plugin marketplace add ")) {
@@ -113,7 +128,9 @@ describe("PluginSetupService", () => {
     getUI: Mock;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    const vscode = await import("vscode");
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValue(undefined as never);
     mockExecFile.mockReset();
     mockExecFile.mockResolvedValue({ stdout: "" });
     mockConfigBridge = {
@@ -479,7 +496,7 @@ describe("PluginSetupService", () => {
       expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
     });
 
-    it("neither prompts nor repairs on unparsable output", async () => {
+    it("warns, and neither prompts nor repairs, on unparsable output", async () => {
       const vscode = await import("vscode");
       scriptClaude({ plugins: "Error: not json", marketplacePath: "/src/nightgauge" });
 
@@ -487,6 +504,56 @@ describe("PluginSetupService", () => {
 
       expect(cliCalls("plugin marketplace add")).toEqual([]);
       expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining("unreadable output"),
+        "View Output"
+      );
+    });
+
+    it("names the failure when plugin list cannot run, even with the prompt dismissed", async () => {
+      const vscode = await import("vscode");
+      dismissed = true;
+      scriptClaude({ plugins: [], listFails: "unknown option --json" });
+
+      await (await makeService()).checkAndPromptSetup();
+
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining("unknown option --json"),
+        "View Output"
+      );
+    });
+
+    it("does not call a repair it could not verify a success", async () => {
+      const vscode = await import("vscode");
+      scriptClaude({ plugins: OUTAGE, marketplacePath: "/gone", afterAdd: "Error: not json" });
+
+      await (await makeService()).checkAndPromptSetup();
+
+      expect(cliCalls("plugin marketplace add")).toHaveLength(1);
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledTimes(1);
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining("unreadable output"),
+        "View Output"
+      );
+      const output = vi.mocked(vscode.window.createOutputChannel).mock.results[0]?.value;
+      const lines = vi.mocked(output.appendLine).mock.calls.map((call) => String(call[0]));
+      expect(lines.join("\n")).not.toContain("✓ Marketplace repaired");
+    });
+
+    it("logs a marketplace entry whose source cannot be read", async () => {
+      const vscode = await import("vscode");
+      scriptClaude({
+        plugins: HEALTHY,
+        marketplaceEntry: { name: "nightgauge-plugins", source: "directory" },
+      });
+
+      const status = await (await makeService()).getPluginStatus();
+
+      expect(status.marketplaceAdded).toBe(true);
+      expect(status.marketplacePath).toBeUndefined();
+      const output = vi.mocked(vscode.window.createOutputChannel).mock.results[0]?.value;
+      const lines = vi.mocked(output.appendLine).mock.calls.map((call) => String(call[0]));
+      expect(lines.join("\n")).toContain("has no usable source");
     });
 
     it("offers an install for an absent plugin", async () => {

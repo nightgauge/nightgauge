@@ -20,7 +20,8 @@ changelog, and the release workflow refuses a tag that does not.
   its marketplace in global storage instead of its version-keyed install directory,
   moves an existing registration there without losing plugin data, and repairs a
   plugin that failed to load, or shows Claude Code's error if it cannot, even when
-  the install prompt is dismissed or off. `nightgauge doctor` reports a failed
+  the install prompt is dismissed or off. A plugin status it cannot read now warns
+  with the reason instead of passing silently. `nightgauge doctor` reports a failed
   Nightgauge plugin with that error as `NGD051`. `install-agent-skills.sh` refuses
   every global-writing mode in a linked worktree and names the primary checkout;
   `--generate-only` and `--check-mirror` still run there (#2719).
