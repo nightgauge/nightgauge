@@ -5375,8 +5375,8 @@ are resolved before matching. `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` bypasses it.
 ### hooks.pre_push
 
 Limit for `nightgauge pre-push validate` (#2700). `go test -timeout` gets what
-remains of it less 60 s, so a hung package panics with its goroutine dump before
-the gate stops it.
+remains of it less 60 s, so a hung package normally panics with its goroutine
+dump before the gate stops it.
 
 ```yaml
 hooks:

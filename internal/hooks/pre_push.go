@@ -172,9 +172,12 @@ func EvaluatePrePush(ctx context.Context, runner CmdRunner, input PrePushInput) 
 	if result.Decision != "block" {
 		runPrePushSecurityGate(ctx, runner, workDir, input.TargetBranch, &result)
 		// The scan's fallback returns quietly when its diff fails, so an expired
-		// gate would otherwise pass unscanned.
-		if result.Decision != "block" && ctx.Err() != nil {
-			blockIfTimedOut(ctx, "security", nil, input.TimeoutSeconds, &result)
+		// or cancelled gate would otherwise pass unscanned.
+		if result.Decision != "block" && ctx.Err() != nil &&
+			!blockIfTimedOut(ctx, "security", nil, input.TimeoutSeconds, &result) {
+			result.ValidationPhases["security"] = "failed"
+			result.Decision = "block"
+			result.Reason = "Pre-push gate was interrupted before the security scan finished."
 		}
 	}
 

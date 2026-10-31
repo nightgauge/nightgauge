@@ -87,6 +87,36 @@ func TestEvaluatePrePush_DeadlineInSecurityPhaseBlocks(t *testing.T) {
 	}
 }
 
+func TestEvaluatePrePush_CancelledInSecurityPhaseBlocks(t *testing.T) {
+	dir := goWorkDir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &cancelOnRunner{mockCmdRunner: setupCleanBranchMock(), prefix: "gitleaks", cancel: cancel}
+	result := EvaluatePrePush(ctx, runner, PrePushInput{
+		IssueNumber: 42, WorkDir: dir, TargetBranch: "main", TimeoutSeconds: 2400,
+	})
+	if result.Decision != "block" || result.ValidationPhases["security"] != "failed" {
+		t.Errorf("a cancelled gate passed unscanned: decision=%s phases=%v", result.Decision, result.ValidationPhases)
+	}
+	if result.FailureKind == FailureKindTimeout {
+		t.Errorf("a cancellation is not a timeout: %q", result.Reason)
+	}
+}
+
+// cancelOnRunner cancels the gate when a command starting with prefix runs.
+type cancelOnRunner struct {
+	*mockCmdRunner
+	prefix string
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	if strings.HasPrefix(name+" "+strings.Join(args, " "), r.prefix) {
+		r.cancel()
+		return nil, ctx.Err()
+	}
+	return r.mockCmdRunner.Run(ctx, dir, name, args...)
+}
+
 func TestEvaluatePrePush_GoPerPackageTimeoutIsATimeout(t *testing.T) {
 	dir := goWorkDir(t)
 	m := setupCleanBranchMock()

@@ -386,8 +386,10 @@ its default, which covers the repository's suite. That limit can exceed a
 foreground shell's 10-minute cap, so run this step as a background command and
 wait for it to exit before continuing.
 
-Exit 3 means a limit expired, not that a check failed. Do not edit code for it:
-the reason in the output names the limit and how to raise it.
+Exit 3 means a limit expired, not that an assertion failed. If the reason names
+the gate's limit, do not edit code: raise the limit it names. If it names Go's
+per-package limit, a package ran for most of the budget, so treat it as a likely
+hang in the change and find the package in the goroutine dump.
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"

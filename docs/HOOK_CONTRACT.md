@@ -208,7 +208,7 @@ available (`ok`, `required`, `optional`, `missing`).
 - `--target` (default: `main`) — Target branch to merge against
 - `--timeout` (default: `hooks.pre_push.timeout_seconds`, else `1800`) — Limit
   in seconds; `go test -timeout` gets what remains of it less 60 s, so a hung
-  package panics with its goroutine dump first; `0` means no limit
+  package normally panics with its goroutine dump first; `0` means no limit
 - `--json` — Output JSON instead of human-readable
 
 **Exit codes:**
