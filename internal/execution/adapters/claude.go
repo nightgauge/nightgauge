@@ -3,7 +3,10 @@ package adapters
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
 // ClaudeAdapter implements SkillRunner for Claude Code CLI.
@@ -49,6 +52,7 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	}
 
 	args = append(args, claudeKnowledgeDirArgs(opts)...)
+	args = append(args, claudeSkillsDirArgs(opts)...)
 
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
@@ -122,12 +126,49 @@ const KnowledgeDirEnvVar = "NIGHTGAUGE_KNOWLEDGE_DIR"
 // claudeKnowledgeDirArgs makes the run's knowledge base a Claude Code working
 // directory (#2194). A stage runs in a worktree, and Claude Code confines
 // edits to its working directories, so the PRD/decisions/lessons writes into
-// the main checkout's .nightgauge/knowledge need it added. Only that
-// directory is added: the skills tree a rendered skill reads from stays
-// outside, reachable by the stage's Read grant but never writable.
+// the main checkout's .nightgauge/knowledge need it added.
 func claudeKnowledgeDirArgs(opts RunOptions) []string {
 	if opts.KnowledgeDir == "" {
 		return nil
 	}
 	return []string{"--add-dir", opts.KnowledgeDir}
+}
+
+// claudeSkillsDirArgs makes the skills tree the stage rendered from readable
+// under a default user's permissions (#2718): over-budget includes are read
+// from that tree at run time, and it lies outside the worktree. --add-dir also
+// makes it a working directory, so file-tool writes are denied explicitly;
+// deny rules hold under bypassPermissions too. Bash can still write there, the
+// limit ADR-022 records for OpenCode.
+//
+// A tree inside the worktree gets neither flag. It is already reachable, and
+// it is the checkout the stage was dispatched to change: a deny there would
+// stop a stage editing the repository's own skills/.
+func claudeSkillsDirArgs(opts RunOptions) []string {
+	root := opencodeallow.SkillsRootOf(opts.SkillPath)
+	if !filepath.IsAbs(root) || pathWithin(root, opts.WorktreeDir) {
+		return nil
+	}
+	rule := "//" + strings.TrimLeft(filepath.ToSlash(root), "/") + "/**"
+	return []string{
+		"--add-dir", root,
+		"--disallowedTools", "Edit(" + rule + "),Write(" + rule + ")",
+	}
+}
+
+// pathWithin reports whether path is dir or lies under it, comparing resolved
+// paths so a symlinked temp or home directory does not read as outside.
+func pathWithin(path, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedPath(dir), resolvedPath(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func resolvedPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }

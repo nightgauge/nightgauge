@@ -215,15 +215,17 @@ func TestSchedulerRendersWithAModel(t *testing.T) {
 	}
 }
 
-// TestDefaultRootsPutsTheWorkspaceFirst pins the half of the contract that has
-// always held: the workspace checkout's own skills/ tree is searched first, so
-// dogfooding in this repository keeps beating anything shipped in a bundle.
+// TestDefaultRootsSearchesTheWorkspaceWithNoBundle pins the half of the contract
+// that has always held: with no override and no bundle beside the binary, the
+// workspace checkout's own skills/ tree is the root. The test binary has no
+// bundle; #2718's order with one is pinned in internal/skillrender.
 //
 // This test used to assert `len(roots) == 1`, and it passed for the whole life
 // of #874 — the bug was that the ONE root could not match in any repository
 // but this one. An assertion that pins a count is not an assertion about
 // behaviour; the bundle arm is covered by TestDefaultRootsAppendsTheBundleTree.
-func TestDefaultRootsPutsTheWorkspaceFirst(t *testing.T) {
+func TestDefaultRootsSearchesTheWorkspaceWithNoBundle(t *testing.T) {
+	t.Setenv(skillrender.SkillsRootEnv, "")
 	roots := skillrender.DefaultRoots("/repo")
 
 	if len(roots) == 0 {

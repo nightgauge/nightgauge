@@ -18,7 +18,7 @@ import {
 } from "./utils/cloneLayout";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
-import { getStageLabel, killAllActiveProcesses } from "./utils/skillRunner";
+import { getStageLabel, killAllActiveProcesses, setExtensionIsPackaged } from "./utils/skillRunner";
 import { applyPerRepoGitHubTokenEnv } from "./utils/perRepoGitHubTokenEnv";
 import { CONTEXT_URI_SCHEME } from "./views";
 import { initializeServices, type ExtensionServices } from "./bootstrap/services";
@@ -60,6 +60,8 @@ let extensionContext: vscode.ExtensionContext | null = null;
  * defined in package.json.
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // Skill root order depends on it, and a stage can render during activation.
+  setExtensionIsPackaged(context.extensionMode === vscode.ExtensionMode.Production);
   extensionContext = context;
   // A new activation is a new platform agent instance (#2395): its
   // registration, heartbeats and deregistration carry a fresh instance id.

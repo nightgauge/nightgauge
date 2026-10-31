@@ -1190,17 +1190,24 @@ func FilterHeadlessTools(tools []string) ([]string, error) {
 // the one thing it does know: where its own executable lives.
 //
 // The objection above is answered rather than ignored: the bundle root is
-// appended ONLY when it resolves to a real directory, so the returned list
+// listed ONLY when it resolves to a real directory, so the returned list
 // never contains a root that cannot match.
 //
 // THE OPERATOR CAN NAME A THIRD SOURCE (#2220). A binary built with `go build`
 // or `go install` into any other location has no skills tree beside it, so the
 // Go-direct path worked only inside this repository or from the extension
-// bundle. SkillsRootEnv names a skills tree explicitly; it is searched after
-// the workspace (a checkout's own skills still win) and before the bundle (an
-// explicit choice beats an inferred one). Unlike the bundle arm it is listed
-// even when it does not resolve: the operator asked for it, and a typo must
-// show up in the not-found error's search list rather than vanish.
+// bundle. SkillsRootEnv names a skills tree explicitly. Unlike the bundle arm
+// it is listed even when it does not resolve: the operator asked for it, and a
+// typo must show up in the not-found error's search list rather than vanish.
+//
+// THE ORDER IS OVERRIDE, BUNDLE, WORKSPACE (#2718). An explicit choice beats an
+// inferred one, and a build runs the skills it shipped: with the workspace
+// first, any repository holding skills/nightgauge-<stage>/SKILL.md replaced
+// that stage's prompt, and an installed build dogfooding this repository never
+// exercised its own bundle. The workspace stays as the last root, so a skill
+// the bundle lacks still resolves. A contributor testing a live tree sets
+// SkillsRootEnv. internal/skillrender/testdata/skill-root-order.json pins the
+// order for this host and the extension.
 func DefaultRoots(workspaceRoot string) []string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -1216,14 +1223,14 @@ const SkillsRootEnv = "NIGHTGAUGE_SKILLS_ROOT"
 // defaultRoots is DefaultRoots with the executable path and the override
 // injected, so every arm is testable without a real bundle or environment.
 func defaultRoots(workspaceRoot, exe, override string) []string {
-	roots := []string{filepath.Join(workspaceRoot, "skills")}
+	var roots []string
 	if override = strings.TrimSpace(override); override != "" {
 		roots = append(roots, override)
 	}
 	if bundle := bundleSkillsRoot(exe); bundle != "" {
 		roots = append(roots, bundle)
 	}
-	return roots
+	return append(roots, filepath.Join(workspaceRoot, "skills"))
 }
 
 // bundleSkillsRoot returns the skills tree shipped alongside this binary, or

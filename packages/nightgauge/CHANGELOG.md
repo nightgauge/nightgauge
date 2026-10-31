@@ -17,6 +17,11 @@ and this project adheres to
   error is shown, even if you dismissed the install prompt. The extension no longer
   tries to install `smart-setup` and `docs`, which are skills inside the plugin
   (#2719).
+- A packaged extension now runs its own bundled skills, even in a workspace that
+  holds a `skills/` tree. `NIGHTGAUGE_SKILLS_ROOT` overrides the bundle, a skill
+  the bundle lacks still resolves from the workspace, and the Extension
+  Development Host keeps the workspace first. Claude stages can read the bundle
+  under default permissions and cannot edit it with file tools (#2718).
 - The extension now ships every file a pipeline stage needs, including per-skill
   model overlays and the `pattern-mining` and `verify-ui` skills. A stage whose
   bundled skill is missing an include now fails and names the file, instead of

@@ -8872,10 +8872,10 @@ func refinementModel(workspaceRoot string) string {
 // in this repository and failed to locate its skill at all in every other one.
 func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumber int, adapterName string) (execution.StageOptions, error) {
 	// Same composer the pipeline stages use (scheduler.go, skillrender.Render).
-	// Locating through DefaultRoots is what gives refinement the bundle
-	// fallback #874 added: <workspaceRoot>/skills first, then
-	// <binary>/../skills, which is the only root that exists in a workspace
-	// that is not the nightgauge source tree.
+	// Locating through DefaultRoots is what gives refinement the bundle root
+	// #874 added: <binary>/../skills ahead of <workspaceRoot>/skills (#2718),
+	// and the only root that exists in a workspace that is not the nightgauge
+	// source tree.
 	model := refinementModel(as.workspaceRoot)
 	rendered, err := skillrender.Render(skillrender.Options{
 		Stage:       string(state.StageIssueRefine),
@@ -8888,6 +8888,7 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 	if err != nil {
 		return execution.StageOptions{}, fmt.Errorf("refinement skill render failed: %w", err)
 	}
+	logResolvedSkillPath(issueNumber, state.StageIssueRefine, rendered.SkillPath)
 
 	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
 	return execution.StageOptions{
