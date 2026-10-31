@@ -191,20 +191,22 @@ describe("ValidateContextSchema — errorCategory (Issue #3041)", () => {
   // omitted originally, so a real validation failure on a Flutter/UI issue
   // parsed as a "non-fatal schema mismatch" and its failure signal was
   // dropped — letting a failed validation advance to pr-create.
-  it.each(["mobile-apk-build-failed", "mobile-mcp-tests-failed", "verify-ui-gate-failed"])(
-    "accepts errorCategory the skill emits: %s",
-    (category) => {
-      const result = ValidateContextSchema.safeParse({
-        ...minimalValidate,
-        validation_status: "failed",
-        errorCategory: category,
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.errorCategory).toBe(category);
-      }
+  it.each([
+    "mobile-apk-build-failed",
+    "mobile-mcp-tests-failed",
+    "verify-ui-gate-failed",
+    "gate-timeout",
+  ])("accepts errorCategory the skill emits: %s", (category) => {
+    const result = ValidateContextSchema.safeParse({
+      ...minimalValidate,
+      validation_status: "failed",
+      errorCategory: category,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.errorCategory).toBe(category);
     }
-  );
+  });
 
   it("rejects unknown errorCategory value", () => {
     const result = ValidateContextSchema.safeParse({

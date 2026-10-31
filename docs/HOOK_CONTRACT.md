@@ -211,7 +211,8 @@ available (`ok`, `required`, `optional`, `missing`).
 
 - `<issue-number>` — Issue number (positional, required)
 - `--target` (default: `main`) — Target branch to merge against
-- `--timeout` (default: `180`) — Timeout in seconds
+- `--timeout` (default: `hooks.pre_push.timeout_seconds`, else `1800`) — Limit
+  in seconds, also passed to `go test -timeout`; `0` means no limit
 - `--json` — Output JSON instead of human-readable
 
 **Exit codes:**
@@ -220,6 +221,17 @@ available (`ok`, `required`, `optional`, `missing`).
 | ---- | -------------------------------------------- |
 | 0    | All validation phases passed                 |
 | 1    | One or more phases failed (see context file) |
+| 3    | A limit expired; no check failed             |
+
+On a timeout the phase in progress reports `timeout`, `failure_kind` is
+`timeout`, the context file's `overall_status` is `timeout`, and the reason names
+the phase, the limit and how to raise it. `--json` also exits 3.
+
+Only the Go `test` phase can be skipped, and `go build` and `go vet` still run. It
+reports `skipped` with `test_skip_reason` when no changed path is a Go input (a
+`.go` file, `go.mod`, `go.sum`, `go.work`, or a path at or below a Go package
+directory), or when `.ci-local-logs/go-test-pass.tree` matches the merged tree.
+Any doubt runs the suite. CI still runs it on the pull request.
 
 **Output JSON schema:**
 

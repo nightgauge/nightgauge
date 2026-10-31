@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge pre-push validate` now reports an expired limit as a timeout, with
+  exit code 3 and a reason naming the limit and how to raise it, never as a test
+  failure. The default limit rises from 180 s to 1800 s, is configurable with
+  `hooks.pre_push.timeout_seconds`, and also sets `go test -timeout`. The gate skips
+  the Go test phase, and says why, when no Go input changed or `ci-local` already
+  passed the same tree (#2700).
 - Installed Claude plugins now receive updates. Each release that changes the
   plugin must raise its version, and installs follow a `stable` branch that moves
   only on release, so `claude plugin update` delivers releases and never the tip
