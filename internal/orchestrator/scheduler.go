@@ -6360,6 +6360,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				"skill-render", reason)
 			return
 		}
+		logResolvedSkillPath(item.Number, stage, skillData.SkillPath)
 
 		// A model on a local OpenCode endpoint is in no registry, so
 		// OverlayKeys resolves no window for it. Its window is the context
@@ -11874,4 +11875,11 @@ func (s *Scheduler) preserveBranchForkedRun(ctx context.Context, item types.Boar
 		evidence.LocalSHA = sha
 	}
 	s.raiseBranchForked(item.Repo, item.Number, runtime.RunID, branch, evidence, ref, sha)
+}
+
+// logResolvedSkillPath records which SKILL.md a stage runs (#2718), so the
+// skills tree in use is read from the log instead of inferred from
+// NIGHTGAUGE_SKILL_DIR.
+func logResolvedSkillPath(issue int, stage state.PipelineStage, skillPath string) {
+	log.Printf("#%d: stage %s skill_path=%s", issue, stage, skillPath)
 }

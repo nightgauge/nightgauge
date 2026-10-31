@@ -11,9 +11,9 @@ import (
 
 // bundleScript is the marketplace bundler the VSIX is built from. Reading a
 // sibling package's shell script from Go is the same cross-file idiom
-// TestGoAndTypeScriptAgreeOnSkillRootOrder already uses to pin the root order
-// against skillRunner.ts — the two halves of a contract live in two languages,
-// so the guard has to reach across.
+// TestGoAndTypeScriptShareSkillRootVectors uses to tie the root order to the
+// TypeScript tests — the two halves of a contract live in two languages, so the
+// guard has to reach across.
 const bundleScript = "../../packages/nightgauge/scripts/bundle-marketplace.sh"
 
 // TestBundleShipsEverySkillTheGoDirectPathRenders is the guard #1029 needed and

@@ -217,8 +217,8 @@ How the `opencode` adapter
   skills never load.
 - **`_includes` and `_shared` access.** A rendered skill's read directives
   are absolute paths into the skills tree the render resolved
-  (`<workspace>/skills`, `$NIGHTGAUGE_SKILLS_ROOT`, or the bundle's
-  `<prefix>/skills`), which lies outside the worktree. The per-run
+  (`$NIGHTGAUGE_SKILLS_ROOT`, the bundle's `<prefix>/skills`, or
+  `<workspace>/skills`), which lies outside the worktree. The per-run
   `external_directory` allow-list grants that whole tree read-only (both its
   given and symlink-resolved path forms), with a matching `edit` deny, so
   `_includes/…` and `skills/_shared/…` resolve for the core repository and
@@ -234,8 +234,13 @@ How the `opencode` adapter
   `git rev-parse --git-common-dir` (#2194). Stages receive it as
   `NIGHTGAUGE_KNOWLEDGE_DIR`; OpenCode's `external_directory` allow-list
   grants it read and write (the only external root without an `edit` deny),
-  and the Claude adapters pass it as `--add-dir`. The skills tree is never a
-  Claude working directory, so it stays read-only there too.
+  and the Claude adapters pass it as `--add-dir`.
+- **Skills tree access on Claude.** Stage spawns pass the resolved skills tree
+  as `--add-dir`, so a rendered skill's includes read without user-level
+  `additionalDirectories`, and pair it with `--disallowedTools` `Edit` and
+  `Write` rules for that tree (#2718). As with OpenCode, read-only holds for the
+  file tools only. A tree inside the stage's worktree gets neither flag: it is
+  already reachable, and it is the checkout the stage may need to change.
 - **Hooks map to the Nightgauge OpenCode plugin.** Claude `PreToolUse` gates
   run as the plugin's `tool.execute.before` handler; completion checks are Go
   StageGates, as for every non-Claude host. A tool the plugin cannot map is
