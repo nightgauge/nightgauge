@@ -862,15 +862,35 @@ merely wasteful — two renders are two filesystem snapshots, so an edit landing
 between them yields tool declarations describing a different document than the
 body. It requires `--json` and refuses without it rather than silently no-opping.
 
-**Skill location is the caller's responsibility.** The binary cannot reproduce
-the extension's bundle discovery (`dist/skills/`, plus the
-garbage-collected-bundle self-heal from #3883), so it owns only parsing,
+**Skill location is the caller's input to `render`.** `render` owns only parsing,
 expansion, resolution, and composition. Supplying no `--skills-root` is an
 error rather than a guessed default — guessing is how an agent ends up reading
 a stale `~/.codex/skills` copy (#196).
 
+**`nightgauge skill roots` answers the list** (#2718). `skillrender.ResolveRoots`
+is the only implementation of the order, and every host uses it:
+
+```bash
+nightgauge skill roots --workspace /path/to/worktree --json
+nightgauge skill roots --workspace "$PWD" --bundle "$EXT/dist/skills" --workspace-first --json
+```
+
+| Flag                | Purpose                                                             |
+| ------------------- | ------------------------------------------------------------------- |
+| `--workspace`       | Checkout whose `skills/` is searched; omit for no workspace root    |
+| `--bundle`          | Skills tree the build ships; replaces the one beside this binary    |
+| `--workspace-first` | Rank the workspace ahead of the bundle (Development and Test hosts) |
+| `--json`            | Emit `{"v":1,"roots":[...]}` instead of one root per line           |
+
+The extension passes `--bundle` because its self-healed path (#3883) is a fact
+the binary cannot see and its binary may come from PATH. The override is read
+only from `$NIGHTGAUGE_SKILLS_ROOT`. A failed call fails the stage: the extension
+has no ordering of its own to fall back to.
+
 **The Go-direct path (`nightgauge run`, the scheduler) has no host to ask**, so
-it searches, in order: `$NIGHTGAUGE_SKILLS_ROOT` when set, then `<prefix>/skills`
+it uses the same resolver with the bundle beside the binary and, on a pipeline
+run, the issue's worktree as the workspace. It searches, in order:
+`$NIGHTGAUGE_SKILLS_ROOT` when set, then `<prefix>/skills`
 beside a binary installed as `<prefix>/bin/nightgauge` (the extension's `dist/`
 layout, or a hand install such as `~/.local/share/<name>/{bin,skills}`), then
 `<workspace>/skills`. An installed build therefore runs the skills it shipped,

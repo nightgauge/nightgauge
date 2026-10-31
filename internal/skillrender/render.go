@@ -1189,7 +1189,7 @@ func FilterHeadlessTools(tools []string) ([]string, error) {
 // root, always — was generalised from that one dead layout to "there is no
 // second source", and that is false. The VSCode extension ships the pipeline
 // skills at `dist/skills/` beside the binary at `dist/bin/nightgauge`, and the
-// TypeScript host already searches both (`resolveSkillRoots`, skillRunner.ts).
+// TypeScript host already searched both.
 // Only the Go-direct path did not, so `nightgauge queue run` and the Go
 // autonomous scheduler could not render a single stage skill in any repository
 // that does not vendor this repo's `skills/` tree — i.e. every user's repo,
@@ -1198,7 +1198,9 @@ func FilterHeadlessTools(tools []string) ([]string, error) {
 // ADR 016 §4 makes skill LOCATION the host's job because the bundle path
 // depends on the extension host. That holds for the IPC path, where the host
 // passes roots explicitly. The Go-direct path has no host to ask, so it asks
-// the one thing it does know: where its own executable lives.
+// the one thing it does know: where its own executable lives. The IPC host
+// keeps discovering its bundle, and passes that fact to `skill roots`, because
+// its self-heal is not something the binary can see. It does not decide order.
 //
 // The objection above is answered rather than ignored: the bundle root is
 // listed ONLY when it resolves to a real directory, so the returned list
@@ -1211,14 +1213,7 @@ func FilterHeadlessTools(tools []string) ([]string, error) {
 // it is listed even when it does not resolve: the operator asked for it, and a
 // typo must show up in the not-found error's search list rather than vanish.
 //
-// THE ORDER IS OVERRIDE, BUNDLE, WORKSPACE (#2718). An explicit choice beats an
-// inferred one, and a build runs the skills it shipped: with the workspace
-// first, any repository holding skills/nightgauge-<stage>/SKILL.md replaced
-// that stage's prompt, and an installed build dogfooding this repository never
-// exercised its own bundle. The workspace stays as the last root, so a skill
-// the bundle lacks still resolves. A contributor testing a live tree sets
-// SkillsRootEnv. internal/skillrender/testdata/skill-root-order.json pins the
-// order for this host and the extension.
+// The order itself lives in ResolveRoots, which every host shares.
 func DefaultRoots(workspaceRoot string) []string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -1231,17 +1226,70 @@ func DefaultRoots(workspaceRoot string) []string {
 // a directory containing nightgauge-issue-pickup/SKILL.md and its siblings.
 const SkillsRootEnv = "NIGHTGAUGE_SKILLS_ROOT"
 
+// RootInputs are the facts a host knows about where skills can live. Hosts
+// supply facts and ResolveRoots decides the order, so the order has one
+// implementation (#2718, ADR 016 amendment).
+type RootInputs struct {
+	// Workspace is the checkout the run is rooted at, not its skills/ directory.
+	// On a pipeline run that is the issue's worktree. Empty omits the root.
+	Workspace string
+	// Bundle is a build's own skills tree. Empty omits the root.
+	Bundle string
+	// Override is the operator's explicit tree, SkillsRootEnv.
+	Override string
+	// WorkspaceFirst ranks the workspace ahead of the bundle, for an Extension
+	// Development or Test host: testing the checkout is why those hosts exist.
+	WorkspaceFirst bool
+}
+
+// ResolveRoots is the one statement of the skill-root order, first match wins.
+//
+// THE ORDER IS OVERRIDE, BUNDLE, WORKSPACE (#2718). An explicit choice beats an
+// inferred one, and a build runs the skills it shipped: with the workspace
+// first, any repository holding skills/nightgauge-<stage>/SKILL.md replaced
+// that stage's prompt, and an installed build dogfooding this repository never
+// exercised its own bundle. The workspace stays as the last root, so a skill
+// the bundle lacks still resolves. A contributor testing a live tree sets
+// SkillsRootEnv. The override is listed even when it does not exist, so a typo
+// shows in the not-found error.
+func ResolveRoots(in RootInputs) []string {
+	var roots []string
+	if override := strings.TrimSpace(in.Override); override != "" {
+		roots = append(roots, override)
+	}
+	workspace := ""
+	if in.Workspace != "" {
+		workspace = filepath.Join(in.Workspace, "skills")
+	}
+	inferred := []string{in.Bundle, workspace}
+	if in.WorkspaceFirst {
+		inferred = []string{workspace, in.Bundle}
+	}
+	for _, root := range inferred {
+		if root != "" {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// ExecutableBundleRoot is the skills tree beside the running binary, or "".
+func ExecutableBundleRoot() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return bundleSkillsRoot(exe)
+}
+
 // defaultRoots is DefaultRoots with the executable path and the override
 // injected, so every arm is testable without a real bundle or environment.
 func defaultRoots(workspaceRoot, exe, override string) []string {
-	var roots []string
-	if override = strings.TrimSpace(override); override != "" {
-		roots = append(roots, override)
-	}
-	if bundle := bundleSkillsRoot(exe); bundle != "" {
-		roots = append(roots, bundle)
-	}
-	return append(roots, filepath.Join(workspaceRoot, "skills"))
+	return ResolveRoots(RootInputs{
+		Workspace: workspaceRoot,
+		Bundle:    bundleSkillsRoot(exe),
+		Override:  override,
+	})
 }
 
 // bundleSkillsRoot returns the skills tree shipped alongside this binary, or
