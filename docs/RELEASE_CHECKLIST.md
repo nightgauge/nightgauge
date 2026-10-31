@@ -549,6 +549,23 @@ their binary-verb equivalents. A second-machine pass by someone who is not
 the maintainer remains the honest next step and is not a blocker for a
 pre-release.
 
+## The malware-scan gate
+
+`scripts/malware-scan.sh` needs ClamAV. Install it with:
+
+```text
+scripts/install-clamav-macos.sh, with /usr/local/clamav/bin on PATH / apt-get install -y clamav
+```
+
+The first form is macOS and the second is Linux. Then run `freshclam`. The macOS script installs
+the official ClamAV 1.5.4 package from the Cisco-Talos release and refuses any other bytes.
+Homebrew is not used: its `clamav` 1.5.4_1 rejected every signature database on the
+`macos-26-arm64` image `20261026.0455.x`, which carries `openssl@4` 4.1.0 (#2740), and a pin means
+the scanner changes only by a reviewed edit.
+
+To bump the pin, change `CLAMAV_VERSION` and `PKG_SHA256` in the script and the digest in
+`scripts/test-malware-scan.sh`, taking the digest from the release asset.
+
 ## What this checklist is not
 
 - It is not the current channel policy. This file records the first Marketplace

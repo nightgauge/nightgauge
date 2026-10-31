@@ -28,6 +28,13 @@ changelog, and the release workflow refuses a tag that does not.
   the plugin version gate fails instead of passing when it cannot compare
   versions. The team settings template installs from `stable` too (#2724).
 
+- RC and release builds install ClamAV from the official, SHA-256-pinned 1.5.4 package through
+  `scripts/install-clamav-macos.sh` instead of Homebrew, whose OpenSSL 4 build rejects every
+  signature database (#2740). `freshclam` now prints its failures, and `scripts/malware-scan.sh`
+  refuses to scan any artifact unless ClamAV first detects an EICAR canary streamed on stdin.
+  The gate also requires all three signature databases and a floor of 3,000,000 loaded
+  signatures, because `freshclam` exits 0 on a 429 from the signature CDN with only `daily.cvd`,
+  which would otherwise scan with about 10% of the signatures and report clean.
 - A re-run that rebased its conflicting PR branch no longer ends `branch_forked`. When origin's
   copy of the branch carries no change the local tree lacks, even if the rebase rewrote a commit's
   surrounding lines, the new `nightgauge git push-branch` (used by feature-validate) and the
