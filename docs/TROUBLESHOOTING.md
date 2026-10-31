@@ -25,11 +25,22 @@ Start with `nightgauge doctor`. Every problem it reports carries a code
 
    If this fails, you have invalid JSON.
 
-2. **Check plugin path:**
+2. **Check the plugin settings:**
 
    ```json
    {
-     "plugins": ["https://github.com/nightgauge/nightgauge/tree/main/claude-plugins/nightgauge"]
+     "enabledPlugins": {
+       "nightgauge@nightgauge-plugins": true
+     },
+     "extraKnownMarketplaces": {
+       "nightgauge-plugins": {
+         "source": {
+           "source": "git",
+           "url": "https://github.com/nightgauge/nightgauge.git",
+           "ref": "stable"
+         }
+       }
+     }
    }
    ```
 

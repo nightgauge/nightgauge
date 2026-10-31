@@ -12,7 +12,18 @@ Add to your `~/.claude/settings.json`:
 
 ```json
 {
-  "plugins": ["https://github.com/nightgauge/nightgauge/tree/main/claude-plugins/nightgauge"]
+  "enabledPlugins": {
+    "nightgauge@nightgauge-plugins": true
+  },
+  "extraKnownMarketplaces": {
+    "nightgauge-plugins": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/nightgauge/nightgauge.git",
+        "ref": "stable"
+      }
+    }
+  }
 }
 ```
 

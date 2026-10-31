@@ -553,6 +553,7 @@ jobs:
       # Fast-forward only; a refused move fails here and the watchdog's
       # claude-plugin channel stays red until a maintainer moves the branch.
       - name: Advance the stable branch to this release
+        id: advance-stable
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -574,6 +575,8 @@ jobs:
       # name the one to merge. The daily release watchdog stays red until the
       # tap's main serves this version.
       - name: Homebrew cask proposed; close superseded cask PRs
+        # Runs after a refused stable move too: the release is already out.
+        if: ${{ !cancelled() && steps.advance-stable.conclusion != 'skipped' }}
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
