@@ -10,12 +10,23 @@ directly.
 
 ### install-agent-skills.sh
 
-Installs/refreshes the Nightgauge skills into the agent tools on this
-machine, sourced from the **local working tree** — so skills you edit here are
-usable in any project you open with Claude Code, Codex, or Grok.
+To refresh the committed plugin-skills mirror after editing `skills/`, use
+`--generate-only`. It writes only inside this checkout:
 
 ```bash
-# Usage
+./scripts/install-agent-skills.sh --generate-only
+```
+
+Every other install form, including the bare one, **changes global state on this
+machine**: it installs the skills into the agent tools from the **local working
+tree**, so skills you edit here are usable in any project you open with Claude
+Code, Codex, or Grok. These forms refuse to run in a linked worktree, exit 1, and
+name the primary checkout to run from, because the marketplace would break when
+the worktree is removed and unmerged skills would reach every project.
+`--generate-only` and `--check-mirror` still work in a linked worktree.
+
+```bash
+# Global installs, from the primary checkout
 ./scripts/install-agent-skills.sh                # refresh Claude Code + Codex + Grok
 ./scripts/install-agent-skills.sh --claude-only  # only Claude Code plugins
 ./scripts/install-agent-skills.sh --codex-only   # only Codex (~/.codex/skills)

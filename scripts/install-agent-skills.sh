@@ -22,6 +22,10 @@
 #   ./scripts/install-agent-skills.sh --generate-only # regenerate the mirror, no tool refresh
 #   ./scripts/install-agent-skills.sh --check-mirror  # ASSERT the mirror, non-mutating
 #
+# Every form except `--generate-only` and `--check-mirror` changes global state
+# on this machine, so it refuses to run in a linked worktree: the source would
+# disappear with the worktree, and unmerged skills would reach every project.
+#
 # `--generate-only` and `--check-mirror` are the fix/assert pair for the
 # committed plugin-skills mirror: the first WRITES it, the second only READS it
 # and exits non-zero when it disagrees with generator output. Keep them
@@ -899,6 +903,40 @@ check_mirror() {
 if [ "$MODE" = "check" ]; then
   check_mirror
   exit 0
+fi
+
+# The tool refreshes write outside this checkout. A marketplace pointed at a
+# linked worktree breaks when the worktree is removed, and a pipeline stage must
+# not change operator-global state, so refuse before anything is written.
+#
+# The git environment is cleared because a pre-push hook sets GIT_DIR, which
+# would answer for the hook's repository instead of $REPO_ROOT. --git-dir and
+# --git-common-dir differ only in a linked worktree. Outside a git repository
+# there is nothing to compare and the install proceeds.
+refuse_linked_worktree() {
+  local git_dir common_dir primary
+  git_dir="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+    git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 0
+  common_dir="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+    git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
+  [ "$git_dir" = "$common_dir" ] && return 0
+
+  primary="$(dirname "$common_dir")"
+  {
+    echo "Refusing to run in a linked worktree: this mode changes global state on this machine."
+    echo "A marketplace or skill copy taken from $REPO_ROOT would publish unmerged"
+    echo "skills to every project, and break when the worktree is removed."
+    echo ""
+    echo "Run it from the primary checkout instead:"
+    echo "  cd $primary && bash scripts/install-agent-skills.sh"
+    echo ""
+    echo "To refresh the mirror here, use --generate-only."
+  } >&2
+  exit 1
+}
+
+if [ "$MODE" = "install" ]; then
+  refuse_linked_worktree
 fi
 
 # Always regenerate the plugin skills tree first — it is committed output the

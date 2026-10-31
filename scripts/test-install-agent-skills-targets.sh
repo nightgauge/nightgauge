@@ -616,6 +616,147 @@ else
   ok "(o9) with install_opencode disabled, (o1)'s expected files are absent"
 fi
 
+# --- (w*) a linked worktree cannot change global state (#2719) --------------
+# Runs against a real `git worktree add`: the question is what git says about
+# the checkout, so a faked .git file would prove nothing. The worktree is a
+# complete sandbox, so an install that was not refused would genuinely write.
+WT_PRIMARY="$TMP/wt-primary"
+WT_LINKED="$TMP/wt-linked"
+mkdir -p "$WT_PRIMARY"
+cp -R "$SANDBOX/skills" "$SANDBOX/scripts" "$WT_PRIMARY/"
+mkdir -p "$WT_PRIMARY/.claude-plugin"
+echo '{"name":"nightgauge-plugins","plugins":[{"name":"nightgauge"}]}' \
+  >"$WT_PRIMARY/.claude-plugin/marketplace.json"
+wt_git() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
+    git -C "$WT_PRIMARY" -c user.name=t -c user.email=t@example.invalid "$@"
+}
+if ! wt_git init -q || ! wt_git add -A || ! wt_git commit -qm seed ||
+  ! wt_git worktree add -q "$WT_LINKED" -b wt-arm; then
+  nope "(w0) could not build the linked-worktree sandbox; no (w) arm ran"
+fi
+WT_PRIMARY_REAL="$(cd "$WT_PRIMARY" && pwd -P)"
+
+# A recording stub: any `claude` call during a refused run is a failure.
+WT_STUB="$TMP/wt-stub"
+WT_CALLS="$TMP/wt-claude-calls"
+mkdir -p "$WT_STUB"
+cat >"$WT_STUB/claude" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"$CLAUDE_CALLS"
+exit 0
+STUB
+chmod +x "$WT_STUB/claude"
+
+# A home with both tool directories, since the installer skips a tool without
+# one and a skipped tool would pass "wrote nothing" for the wrong reason.
+wt_home() {
+  mkdir -p "$1/.codex" "$1/.grok"
+}
+
+wt_run() {
+  local checkout="$1" home="$2"
+  shift 2
+  HOME="$home" XDG_CONFIG_HOME="$home/xdg" \
+    CLAUDE_CALLS="$WT_CALLS" PATH="$WT_STUB:$(filter_path)" \
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
+    bash "$checkout/scripts/install-agent-skills.sh" "$@"
+}
+
+wt_refused_arm() {
+  local label="$1"
+  shift
+  local home="$TMP/home-$label" err="$TMP/err-$label" mode="${*:-bare}" rc=0
+  wt_home "$home"
+  : >"$WT_CALLS"
+  wt_run "$WT_LINKED" "$home" "$@" >/dev/null 2>"$err" || rc=$?
+  if [ "$rc" -ne 1 ]; then
+    nope "($label) $mode: exit $rc, want 1"
+  elif ! grep -qF "$WT_PRIMARY_REAL" "$err"; then
+    nope "($label) $mode: refusal does not name the primary checkout"
+  elif [ -n "$(find "$home" -mindepth 2 -print -quit)" ] || [ -e "$home/xdg" ]; then
+    nope "($label) $mode: wrote under HOME"
+  elif [ -s "$WT_CALLS" ]; then
+    nope "($label) $mode: called the claude CLI"
+  elif [ -d "$WT_LINKED/claude-plugins" ]; then
+    nope "($label) $mode: regenerated the mirror"
+  else
+    ok "($label) $mode refuses, names the primary checkout, writes nothing"
+  fi
+}
+
+wt_refused_arm w1
+wt_refused_arm w2 --claude-only
+wt_refused_arm w3 --codex-only
+wt_refused_arm w4 --grok-only
+wt_refused_arm w5 --opencode-only --yes
+WT_PROJECT="$TMP/wt-project"
+mkdir -p "$WT_PROJECT"
+wt_refused_arm w6 --opencode-only --opencode-project "$WT_PROJECT" --yes
+if [ -n "$(find "$WT_PROJECT" -mindepth 1 -print -quit)" ]; then
+  nope "(w6b) --opencode-project wrote into the project"
+else
+  ok "(w6b) --opencode-project left the project untouched"
+fi
+
+# The two modes that stay inside the checkout still run there.
+HOME_W7="$TMP/home-w7"
+wt_home "$HOME_W7"
+if wt_run "$WT_LINKED" "$HOME_W7" --generate-only >/dev/null 2>&1 &&
+  [ -f "$WT_LINKED/claude-plugins/nightgauge/skills/issue-create/SKILL.md" ]; then
+  ok "(w7) --generate-only regenerates the mirror in a linked worktree"
+else
+  nope "(w7) --generate-only did not run in a linked worktree"
+fi
+if wt_run "$WT_LINKED" "$HOME_W7" --check-mirror >/dev/null 2>&1; then
+  ok "(w8) --check-mirror runs in a linked worktree"
+else
+  nope "(w8) --check-mirror did not pass in a linked worktree"
+fi
+
+# (w9) refusal is about the worktree: the same installer runs in the primary.
+HOME_W9="$TMP/home-w9"
+wt_home "$HOME_W9"
+: >"$WT_CALLS"
+if wt_run "$WT_PRIMARY" "$HOME_W9" --codex-only >/dev/null 2>&1 &&
+  [ -f "$HOME_W9/.codex/skills/nightgauge-issue-create/SKILL.md" ]; then
+  ok "(w9) the same installer installs from the primary checkout"
+else
+  nope "(w9) the installer did not install from the primary checkout"
+fi
+
+# (w10) a pre-push hook exports GIT_DIR. Detection must read $REPO_ROOT, so a
+# primary checkout stays allowed and a worktree stays refused under that env.
+HOME_W10="$TMP/home-w10"
+wt_home "$HOME_W10"
+hooked_run() {
+  HOME="$HOME_W10" CLAUDE_CALLS="$WT_CALLS" PATH="$WT_STUB:$(filter_path)" \
+    GIT_DIR="$1" bash "$2/scripts/install-agent-skills.sh" --codex-only
+}
+if ! hooked_run "$WT_PRIMARY/.git/worktrees/wt-linked" "$WT_PRIMARY" >/dev/null 2>&1 ||
+  [ ! -f "$HOME_W10/.codex/skills/nightgauge-issue-create/SKILL.md" ]; then
+  nope "(w10) GIT_DIR naming a worktree made the primary checkout refuse"
+elif hooked_run "$WT_PRIMARY/.git" "$WT_LINKED" >/dev/null 2>&1; then
+  nope "(w10) GIT_DIR naming the primary let a linked worktree install"
+else
+  ok "(w10) detection ignores GIT_DIR in both directions"
+fi
+
+# (w11) the assertion can go red: with the guard call removed, the worktree
+# writes, so arm (w3)'s "writes nothing" is measuring a real thing.
+HOME_W11="$TMP/home-w11"
+wt_home "$HOME_W11"
+sed 's/^  refuse_linked_worktree$/  :/' "$WT_LINKED/scripts/install-agent-skills.sh" \
+  >"$WT_LINKED/scripts/unguarded.sh"
+if HOME="$HOME_W11" PATH="$(filter_path)" \
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
+  bash "$WT_LINKED/scripts/unguarded.sh" >/dev/null 2>&1 &&
+  [ -f "$HOME_W11/.codex/skills/nightgauge-issue-create/SKILL.md" ]; then
+  ok "(w11) without the guard the same run writes HOME (the arms are not vacuous)"
+else
+  nope "(w11) an unguarded run did not write, so (w1)-(w6) prove nothing"
+fi
+
 # --- (g) the suite never wrote the checkout it runs in ----------------------
 # ci-local.sh runs this suite concurrently with the read-only mirror drift gate,
 # and lint.yml runs it just before that gate. A run that regenerated the

@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The Claude plugin survives extension upgrades. The extension registers a copy of
+  its marketplace in global storage instead of its version-keyed install directory,
+  moves an existing registration there without losing plugin data, and repairs a
+  plugin that failed to load, or shows Claude Code's error if it cannot, even when
+  the install prompt is dismissed or off. `nightgauge doctor` reports a failed
+  Nightgauge plugin with that error as `NGD051`. `install-agent-skills.sh` refuses
+  every global-writing mode in a linked worktree and names the primary checkout;
+  `--generate-only` and `--check-mirror` still run there (#2719).
 - The VSIX skill bundle is now complete, and a package-time check proves it. The
   bundler ships whole skill directories, so per-skill overlays reach Fable stages,
   and it ships `pattern-mining` and `verify-ui`, which stage prompts now name by
