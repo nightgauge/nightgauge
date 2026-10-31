@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gateledger"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 )
 
@@ -17,9 +17,7 @@ func gateRepo(t *testing.T) string {
 	for _, args := range [][]string{
 		{"init", "-q"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"},
 	} {
-		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
+		gittest.Run(t, dir, args...)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a\n"), 0o644); err != nil {
 		t.Fatal(err)
