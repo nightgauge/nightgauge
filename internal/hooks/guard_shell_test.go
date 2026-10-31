@@ -167,16 +167,30 @@ func TestGuardShell(t *testing.T) {
 	t.Run("canonical repo binary is found from inside a worktree", func(t *testing.T) {
 		// Build a fake repo with a worktree subdir, drop a fake binary in
 		// canonical_repo/bin/nightgauge, source guard.sh from inside the
-		// worktree subdir, assert it resolves to the canonical binary.
+		// worktree subdir. The canonical binary resolves only in a verified
+		// core checkout with the development setting on (#2758).
 		fakeRepo := t.TempDir()
 		runShell(t, fakeRepo, "git init -q && git config user.email t@t && git config user.name t && git commit --allow-empty -qm init")
 		runShell(t, fakeRepo, "mkdir -p .worktrees/fake-issue && git worktree add -q -b fake-branch .worktrees/fake-issue HEAD 2>/dev/null || git worktree add -q .worktrees/fake-issue HEAD")
 		runShell(t, fakeRepo, "mkdir -p bin && printf '#!/bin/bash\necho fake-binary\n' > bin/nightgauge && chmod +x bin/nightgauge")
 		worktreeDir := filepath.Join(fakeRepo, ".worktrees", "fake-issue")
 
+		// Setting off, and setting on in an unverified repository: never resolved.
+		unverified := []map[string]string{
+			{"PATH": "/nonexistent", "HOME": t.TempDir()},
+			{"PATH": "/nonexistent", "HOME": t.TempDir(), "NIGHTGAUGE_DEV_REPO_BIN": "1"},
+		}
+		for _, env := range unverified {
+			if out, _, _ := runGuard(t, guardPath, env, worktreeDir); strings.Contains(out, filepath.Join(fakeRepo, "bin", "nightgauge")) {
+				t.Errorf("unverified canonical bin resolved with env %v: stdout=%q", env, out)
+			}
+		}
+
+		runShell(t, fakeRepo, "printf 'module github.com/nightgauge/nightgauge\\n' > go.mod && git remote add origin https://github.com/nightgauge/nightgauge.git")
 		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
-			"PATH": "/nonexistent",
-			"HOME": t.TempDir(),
+			"PATH":                    "/nonexistent",
+			"HOME":                    t.TempDir(),
+			"NIGHTGAUGE_DEV_REPO_BIN": "1",
 		}, worktreeDir)
 		if code != 0 {
 			t.Errorf("expected exit 0 (canonical resolved), got %d. stdout=%q stderr=%q", code, stdout, stderr)
