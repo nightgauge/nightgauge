@@ -42,7 +42,7 @@ export const SEVERITIES = ["blocker", "major", "nitpick"];
 const FINDING_KEYS = ["pass", "file", "line", "claim", "severity", "fix"];
 const SKIPPED_AUTHORS = new Set(["dependabot[bot]"]);
 
-// The model runs in the same job as ANTHROPIC_API_KEY. A string shaped like a
+// The model runs in the same job as CLAUDE_CODE_OAUTH_TOKEN. A string shaped like a
 // credential in its output is treated as a leak, not as a finding.
 const CREDENTIAL_SHAPES = [/sk-ant-/, /\bgh[posu]_[A-Za-z0-9]/, /github_pat_/];
 
@@ -106,7 +106,7 @@ export function decide({ pr, event, pipelineAuthors, hasKey }) {
         "fork pull request: no secrets under pull_request; a maintainer can run workflow_dispatch",
     };
   }
-  if (!hasKey) return { run: false, reason: "no ANTHROPIC_API_KEY configured" };
+  if (!hasKey) return { run: false, reason: "no CLAUDE_CODE_OAUTH_TOKEN configured" };
   return { run: true, reason: `review ${login}'s pull request` };
 }
 
