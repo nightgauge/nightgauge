@@ -11,17 +11,13 @@ and this project adheres to
 
 ### Fixed
 
-- Initialize Repository works on a fresh install: it writes
-  `.nightgauge/config.yaml` with the bundled binary, so it needs neither the
-  Claude plugin nor `nightgauge` on `PATH`. Link a GitHub Project afterwards;
-  a repository with no board no longer shows the `project config incomplete`
-  warning.
-- Make Repo AI-Ready runs `/nightgauge:smart-setup`, and offers plugin setup
-  when the plugin is not enabled.
-- Terminals the extension opens for a skill or for `nightgauge pr merge` can run
-  `nightgauge`, because its directory is on `PATH`.
-- Hints that name a `/nightgauge:*` command appear only when the Claude plugin
-  is enabled.
+- A long merge-queue wait no longer ends in a paid LLM merge stage: the extension
+  takes its pr-merge timeout from the binary instead of a fixed 20 minutes. The
+  stage logs the `pr-stage` pid at spawn and names any signal that kills it.
+- The orphan reaper checks a process's start time before it kills, so it cannot
+  kill an unrelated process that reused a tracked pid.
+- A re-dispatched issue resumes at feature-validate from preserved work instead of
+  repeating planning and dev, when its acceptance criteria are unchanged (#2730).
 - Stages find their skills through `nightgauge skill roots`, so the extension and
   the binary can no longer disagree on which skills run. If that call fails, the
   stage fails with the reason. The write protection on a stage's skills tree now
@@ -46,6 +42,17 @@ and this project adheres to
   the bundle lacks still resolves from the workspace, and the Extension
   Development Host keeps the workspace first. Claude stages can read the bundle
   under default permissions and cannot edit it with file tools (#2718).
+- Initialize Repository works on a fresh install: it writes
+  `.nightgauge/config.yaml` with the bundled binary, so it needs neither the
+  Claude plugin nor `nightgauge` on `PATH`. Link a GitHub Project afterwards;
+  a repository with no board no longer shows the `project config incomplete`
+  warning.
+- Make Repo AI-Ready runs `/nightgauge:smart-setup`, and offers plugin setup
+  when the plugin is not enabled.
+- Terminals the extension opens for a skill or for `nightgauge pr merge` can run
+  `nightgauge`, because its directory is on `PATH`.
+- Hints that name a `/nightgauge:*` command appear only when the Claude plugin
+  is enabled.
 - The extension now ships every file a pipeline stage needs, including per-skill
   model overlays and the `pattern-mining` and `verify-ui` skills. A stage whose
   bundled skill is missing an include now fails and names the file, instead of

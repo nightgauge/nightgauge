@@ -674,9 +674,20 @@ stays blocked for agents.
 
 #### Step 6.3: Execute Merge
 
+The review gate runs immediately before the merge, on this stage's path as on the
+deterministic one (#2730). It reads the newest review, refuses while a fix round
+is open, and files every open finding before it answers, so nothing depends on
+this stage surviving the merge. `proceed: false` means do not merge: report the
+`reason` and stop.
+
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+REVIEW_GATE=$(nightgauge pr-stage review-gate "$ISSUE_NUMBER" --json) || exit 1
+if [ "$(printf '%s\n' "$REVIEW_GATE" | jq -r '.proceed')" != "true" ]; then
+  echo "Review gate holds the merge: $(printf '%s\n' "$REVIEW_GATE" | jq -r '.reason')" >&2
+  exit 1
+fi
 DELETE_FLAG=""
 if [ "$ARG_NO_CLEANUP" != "true" ]; then
   DELETE_FLAG="--delete-branch"

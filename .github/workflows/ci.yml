@@ -1,11 +1,12 @@
 # CI — build and test on isolated GitHub-hosted runners.
 name: CI
+run-name: ${{ github.event.merge_group.head_commit.message }}
 
-# Pull requests only (#2055). The PR run IS the gate: main's ruleset sets
-# strict_required_status_checks_policy, so a PR merges only when it is up to
-# date with main, and its squash commit's tree is the PR head's tested tree.
-# Re-running these suites on push to main adds no evidence about the diff, it
-# only re-rolls nondeterministic tests. The PR caches these jobs restore are
+# The merge queue IS the gate: every change lands through it, and the commit it
+# tests is the commit that lands. The local gate has already run the suites, so
+# a pull request's run skips them (see `changes` below) and the queue runs them
+# once. Re-running them on push to main adds no evidence about the diff, it only
+# re-rolls nondeterministic tests (#2055). The PR caches these jobs restore are
 # saved on main by cache-warm.yml instead.
 on:
   pull_request:
@@ -46,12 +47,18 @@ jobs:
   #
   # This job is intentionally NOT a required check: nothing may depend on a
   # gate whose only job is to decide how much work to do.
+  #
+  # A pull request leaves the heavy suites to the merge queue, whatever its class:
+  # the same required checks run on the merge-group commit, classified from the
+  # group's diff, so a bad change cannot reach main without passing them. That only
+  # holds while the queue is enforced, so it is read from the live ruleset. If the
+  # rule is gone or the read fails, the pull request runs the suites itself.
   changes:
     name: Change class
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      run_heavy: ${{ steps.classify.outputs.run_heavy }}
+      run_heavy: ${{ steps.queue.outputs.enforced == 'true' && 'false' || steps.classify.outputs.run_heavy }}
       change_class: ${{ steps.classify.outputs.change_class }}
       reason: ${{ steps.classify.outputs.reason }}
     steps:
@@ -79,6 +86,18 @@ jobs:
           NG_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           NG_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: bash scripts/ci-change-class.sh
+      - name: Confirm the merge queue gates this pull request
+        id: queue
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.base_ref }}
+        # Never fails the job: no answer leaves `enforced` unset, which runs heavy.
+        run: |
+          types="$(gh api "repos/$GITHUB_REPOSITORY/rules/branches/$BASE_REF" --jq '.[].type' 2>/dev/null || true)"
+          if grep -qx merge_queue <<<"$types"; then
+            echo "enforced=true" >> "$GITHUB_OUTPUT"
+          fi
 
   go:
     name: Go build & test

@@ -1310,6 +1310,9 @@ type PipelineNotifyStageProgressParams struct {
 	CacheReadTokens int     `json:"cacheReadTokens,omitempty"`
 	CostUsd         float64 `json:"costUsd,omitempty"`
 	Model           string  `json:"model,omitempty"`
+	// MergedPR marks this message as "the run's PR is forge-confirmed MERGED"
+	// (#2730) rather than a token estimate.
+	MergedPR int `json:"mergedPr,omitempty"`
 	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
 	// 1). REQUIRED: absent is run_id_required, non-canonical is
 	// run_id_invalid. RUN-PROGRESS class (Decision 3), and the one Decision 4
@@ -1638,6 +1641,9 @@ type RunningPipelineInfo struct {
 	// Source is "autonomous" when the scheduler dispatched this run, "manual"
 	// otherwise — a picked-up issue, a queue batch, a drag to Ready.
 	Source string `json:"source"`
+	// MergedPR is set once the run's PR merged (#2730): the run is doing
+	// post-merge follow-up, whatever Stage still says.
+	MergedPR int `json:"mergedPr,omitempty"`
 }
 
 // RunningPipelinesResult answers "is any pipeline running in this window?"

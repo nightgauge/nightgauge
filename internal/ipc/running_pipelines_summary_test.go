@@ -58,6 +58,30 @@ func TestRunningPipelinesSnapshot_CountsManualRuns(t *testing.T) {
 	}
 }
 
+// AC 5 (#2730): a run past its merge reports the PR, and it still counts, because
+// a reload would kill its follow-up work like any other.
+func TestRunningPipelinesSnapshot_ReportsAMergedRun(t *testing.T) {
+	s, _, _ := reconcileServer(t)
+	now := time.Now()
+	id := installRun(t, s, "acme/web", 42, now)
+	if res := s.RunningPipelinesSnapshot(now); res.Runs[0].MergedPR != 0 {
+		t.Fatalf("an unmerged run reports PR %d", res.Runs[0].MergedPR)
+	}
+
+	s.runtimesMu.Lock()
+	entry := s.activeRuntimes[id]
+	s.runtimesMu.Unlock()
+	entry.rs.SetMergedPR(77)
+
+	res := s.RunningPipelinesSnapshot(now)
+	if res.Count != 1 || res.ReloadSafe {
+		t.Errorf("count=%d reloadSafe=%v: follow-up work must still block a reload", res.Count, res.ReloadSafe)
+	}
+	if res.Runs[0].MergedPR != 77 {
+		t.Errorf("MergedPR = %d, want 77", res.Runs[0].MergedPR)
+	}
+}
+
 func TestRunningPipelinesSnapshot_ReportsStaleRatherThanDroppingIt(t *testing.T) {
 	// A run that has gone quiet may be finished, or may be mid-`feature-dev`
 	// on a long build. Filtering it out would turn the second case into

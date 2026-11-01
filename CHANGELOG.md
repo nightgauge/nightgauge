@@ -14,19 +14,28 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
-### Added
-
-- `nightgauge config init --detect` writes a config from the `origin` remote
-  with no GitHub Project linked. Unlike plain `config init`, its output loads
-  straight away, and it makes no GitHub query.
-
 ### Fixed
 
-- A new VS Code user can initialize a repository with no Claude plugin and no
-  `nightgauge` on `PATH`: Initialize Repository now runs the bundled binary.
-  Terminals the extension opens for a skill or a `nightgauge` command also get
-  that binary on `PATH`, and the plugin invocation lines in the skills use the
-  `/nightgauge:<name>` form.
+- A green PR now merges through the deterministic path instead of paying for an
+  LLM stage. The extension asks the new `nightgauge pr-stage budget` for its
+  timeout, so a normal merge-queue wait no longer kills the run, and a transient
+  `UNKNOWN` mergeability is re-read with backoff, including after the CI wait.
+  `pr-stage` logs its pid at spawn and names the signal that kills it, and the
+  orphan reaper now kills only a process whose start time it can match, so a
+  reused pid survives.
+- `pr-merge` no longer enqueues past a review finding. It reads the Nightgauge
+  review before either merge path: a blocker, or a correctness major on a
+  documented user path such as `README*`, `docs/**` or a package manifest, holds
+  the enqueue for a fix round, capped at two. Every other major becomes a tracked
+  issue before the merge call, under the `follow_up_filing` controls, and a
+  finding that cannot be tracked refuses the merge. `pr-stage review-gate` and
+  `pr-stage review-round begin|end` give the LLM stage the same rules.
+- `nightgauge autonomous status` shows a run that has merged as
+  `merged #<PR>, post-merge follow-up`, not as a run waiting to merge, in text and
+  in `mergedPr` under `--json`.
+- A re-dispatched issue resumes at feature-validate when its dev work survived,
+  on the branch or preserved under `refs/nightgauge/wip/`, and its acceptance
+  criteria are unchanged, so it no longer repeats planning and dev (#2730).
 - A relative date in a query (`updated>3d`) means whole 24-hour days. It stepped
   back in local calendar days, so it ran an hour long after a daylight-saving
   change, and the SDK suite failed on a machine in a DST zone for three days after
@@ -50,6 +59,11 @@ changelog, and the release workflow refuses a tag that does not.
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.
+- A new VS Code user can initialize a repository with no Claude plugin and no
+  `nightgauge` on `PATH`: Initialize Repository now runs the bundled binary.
+  Terminals the extension opens for a skill or a `nightgauge` command also get
+  that binary on `PATH`, and the plugin invocation lines in the skills use the
+  `/nightgauge:<name>` form.
 - The Claude plugin survives extension upgrades. The extension registers a copy of
   its marketplace in global storage instead of its version-keyed install directory,
   moves an existing registration there without losing plugin data, and repairs a
@@ -249,6 +263,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- GitHub runs the heavy suites once, in the merge queue, instead of on the pull
+  request and again in the queue. A pull request keeps its fast safety checks and
+  takes about 15 minutes less, and the queue still blocks a change that fails.
+  Queue runs in the Actions tab are titled with the commit message (#2828).
 - PR Review no longer runs on every pull request. It is a manual
   `workflow_dispatch` second opinion on the Claude subscription
   (`CLAUDE_CODE_OAUTH_TOKEN`), so it adds no per-use model spend, and a red
@@ -347,6 +365,11 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
   the result join path has diverged, instead of the record reading as calls that
   quietly succeeded. The Bash ring keeps the same check disabled on purpose: its
   10 entries can all be in flight in one parallel turn (#457).
+### Added
+
+- `nightgauge config init --detect` writes a config from the `origin` remote
+  with no GitHub Project linked. Unlike plain `config init`, its output loads
+  straight away, and it makes no GitHub query.
 
 ### Fixed
 

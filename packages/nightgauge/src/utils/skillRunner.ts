@@ -8202,11 +8202,11 @@ function runStageSkillHeadlessImpl(
     // Orphan reaper: kill any descendants that outlived the parent. Tracked
     // pids were captured periodically while the parent was alive, so we can
     // still reach them after they've been reparented to init (#781 retro).
-    try {
-      descendantTracker.killSurvivors(callbacks?.onStderr);
-    } catch {
+    // Not awaited: it reads each survivor's identity from `ps`, and completion
+    // must not wait on that.
+    void descendantTracker.killSurvivors(callbacks?.onStderr).catch(() => {
       /* best-effort */
-    }
+    });
     // Process any remaining buffered output
     if (stdoutBuffer && !pluginGate?.stopped) {
       const parsed = parseStreamJsonLine(stdoutBuffer);

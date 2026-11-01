@@ -1,4 +1,4 @@
-//go:build integration
+//go:build claude_integration
 
 package adapters
 
@@ -19,7 +19,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/hometest"
 )
 
-// Run with: go test -tags integration -run TestClaudeSkillsTreeLive ./internal/execution/adapters/
+// Run with: go test -tags claude_integration -run TestClaudeSkillsTreeLive ./internal/execution/adapters/
 // It spends a few Haiku turns and needs an authenticated claude CLI.
 
 // TestClaudeSkillsTreeLive drives the flags stages use through the real CLI
@@ -27,6 +27,9 @@ import (
 // model's wording, and each arm has a control without the flag under test, so a
 // model that ignores the prompt fails the test rather than passing it.
 // --setting-sources project keeps user-level additionalDirectories out of it.
+// The write arms carry a stage's --allowedTools, so the refusal is the deny
+// outranking a Write allow. The read arms do not: a Read allow could open the
+// tree on its own and leave the --add-dir they measure unproven.
 func TestClaudeSkillsTreeLive(t *testing.T) {
 	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("claude is not on PATH, so nothing here can be proven")
@@ -50,7 +53,8 @@ func TestClaudeSkillsTreeLive(t *testing.T) {
 	if len(flags) == 0 {
 		t.Fatal("claudeSkillsDirArgs returned no flags for a tree outside the worktree")
 	}
-	addDirOnly := []string{"--add-dir", tree}
+	writeFlags := append(append([]string(nil), flags...), stageAllow...)
+	addDirOnly := append([]string{"--add-dir", tree}, stageAllow...)
 
 	readPrompt := "Use the Read tool on " + include + " and reply with its first line, verbatim."
 	writePrompt := func(path string) string {
@@ -74,7 +78,7 @@ func TestClaudeSkillsTreeLive(t *testing.T) {
 
 	t.Run("write is refused with the stage flags", func(t *testing.T) {
 		target := filepath.Join(tree, "written-with-flags.txt")
-		run := runClaudeLive(t, worktree, writePrompt(target), bypass(flags))
+		run := runClaudeLive(t, worktree, writePrompt(target), bypass(writeFlags))
 		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("the deny let a file-tool write through (stat err %v): %q", err, run.Result)
 		}
@@ -99,6 +103,11 @@ func TestClaudeSkillsTreeLive(t *testing.T) {
 		}
 	})
 }
+
+// stageAllow is the file-tool part of the allow list stages send, from the
+// allowed-tools frontmatter of skills/nightgauge-feature-dev/SKILL.md. Bash is
+// left out because withBashDenied removes it from every arm.
+var stageAllow = []string{"--allowedTools", "Read,Write,Edit,Glob,Grep"}
 
 type claudeLiveRun struct {
 	Subtype string `json:"subtype"`
@@ -165,9 +174,10 @@ func claudeLiveWarnings(t *testing.T, cwd string, flags []string) string {
 }
 
 // claudeLiveEnv gives the CLI its real login: TestMain isolates HOME, and a
-// claude under that fake home answers "Not logged in". The NIGHTGAUGE_ variables
-// go with it, so the real HOME is never paired with the test's temporary state
-// root, the combination #2311 lost data to.
+// claude under that fake home answers "Not logged in". It is an allowlist because
+// these spawns run a model with permissions bypassed, so the operator's tokens
+// stay out. NIGHTGAUGE_ variables stay out too: the real HOME is never paired with
+// the test's temporary state root, the combination #2311 lost data to.
 func claudeLiveEnv(t *testing.T) []string {
 	t.Helper()
 	if hometest.RealHome == "" {
@@ -175,7 +185,13 @@ func claudeLiveEnv(t *testing.T) []string {
 	}
 	env := []string{"HOME=" + hometest.RealHome}
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "HOME=") && !strings.HasPrefix(kv, "NIGHTGAUGE_") {
+		name, _, _ := strings.Cut(kv, "=")
+		switch name {
+		case "PATH", "TERM", "TMPDIR", "USER", "LOGNAME", "LANG":
+			env = append(env, kv)
+			continue
+		}
+		if strings.HasPrefix(name, "ANTHROPIC_") || strings.HasPrefix(name, "CLAUDE_") {
 			env = append(env, kv)
 		}
 	}

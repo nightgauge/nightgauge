@@ -3191,6 +3191,30 @@ accepted for compatibility, so items it validated keep releasing dependents.
 The hook never writes it and reports `present` for such an issue; an untrusted
 copy is ignored like any pasted marker.
 
+### PR Stage Runners
+
+`nightgauge pr-stage` is how the extension reaches the deterministic pr-create and
+pr-merge runners. See [PR_MERGE_STAGE.md](PR_MERGE_STAGE.md).
+
+```bash
+# Run a stage
+nightgauge pr-stage create <issue> --repo owner/name [--workdir W] [--json]
+nightgauge pr-stage merge <issue> [--workdir W] [--json]
+
+# The time budget derived from pipeline.merge_queue.wait_timeout
+nightgauge pr-stage budget [--workdir W] [--json]
+
+# The enqueue review gate; files open findings; read `proceed` from the JSON
+nightgauge pr-stage review-gate <issue> [--workdir W] [--json]
+
+# Open or close a review-fix round; `begin` refuses past the cap of two
+nightgauge pr-stage review-round begin <issue> [--workdir W]
+nightgauge pr-stage review-round end <issue> [--workdir W]
+
+# Whether a re-dispatch can resume at feature-validate, restoring preserved work
+nightgauge pr-stage resume-point <issue> [--workdir W]
+```
+
 ### PR Operations
 
 ```bash

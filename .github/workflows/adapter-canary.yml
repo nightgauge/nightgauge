@@ -1,4 +1,5 @@
 name: adapter-canary
+run-name: ${{ github.event.merge_group.head_commit.message }}
 
 # The scheduled latest-CLI canary (#1639). Nothing else installs a non-Claude
 # CLI in CI, and nothing ever runs the newest release of any manifest CLI
