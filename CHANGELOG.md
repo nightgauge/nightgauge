@@ -238,6 +238,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- GitHub runs the heavy suites once, in the merge queue, instead of on the pull
+  request and again in the queue. A pull request keeps its fast safety checks and
+  takes about 15 minutes less, and the queue still blocks a change that fails.
+  Queue runs in the Actions tab are titled with the commit message (#2828).
 - PR Review no longer runs on every pull request. It is a manual
   `workflow_dispatch` second opinion on the Claude subscription
   (`CLAUDE_CODE_OAUTH_TOKEN`), so it adds no per-use model spend, and a red
