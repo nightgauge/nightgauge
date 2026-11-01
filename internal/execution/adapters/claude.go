@@ -157,9 +157,9 @@ func claudePluginDirArgs(opts RunOptions) []string {
 // makes it a working directory, so file-tool writes are denied explicitly;
 // deny rules hold under bypassPermissions too. The deny is one Edit rule for
 // every form a tool call can use (openCodePathForms): given, resolved, and a
-// system alias such as /tmp. Edit is the only tool the CLI applies path rules
-// to, and an Edit rule stops Write too: on Claude Code 2.1.316 a Write(path)
-// rule alone let the write through.
+// system alias such as /tmp. Among the file-write tools, Edit is the only one
+// the CLI matches a path rule against, and an Edit rule stops Write too: on
+// Claude Code 2.1.316 a Write(path) rule alone let the write through.
 // TestClaudeSkillsTreeLive re-proves that against the installed CLI. Bash can
 // still write there, the limit ADR-022 records for OpenCode.
 //
