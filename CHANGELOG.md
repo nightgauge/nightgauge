@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A relative date in a query (`updated>3d`) means whole 24-hour days. It stepped
+  back in local calendar days, so it ran an hour long after a daylight-saving
+  change, and the SDK suite failed on a machine in a DST zone for three days after
+  each autumn change. CI runs in UTC and could not see it (#2828).
 - A pipeline run gates a tree once. `scripts/ci-local.sh` records every run in a
   ledger keyed on the exact tree and skips a repeat that already passed, saying
   what passed it (`--no-reuse` forces a run). feature-validate's CI parity phase

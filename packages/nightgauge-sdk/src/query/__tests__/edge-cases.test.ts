@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { executeQuery, parse, tokenize } from "../index.js";
 import {
   isValidField,
@@ -171,15 +171,28 @@ describe("Edge Cases", () => {
   describe("date parsing", () => {
     it("parseRelativeDate parses valid relative dates", () => {
       const date = parseRelativeDate("7d");
-      const expected = new Date();
-      expected.setDate(expected.getDate() - 7);
+      const expected = Date.now() - 7 * 86_400_000;
       // Allow 1 second tolerance
-      expect(Math.abs(date.getTime() - expected.getTime())).toBeLessThan(1000);
+      expect(Math.abs(date.getTime() - expected)).toBeLessThan(1000);
     });
 
     it("parseRelativeDate handles large day counts", () => {
       const date = parseRelativeDate("365d");
       expect(date).toBeInstanceOf(Date);
+    });
+
+    it("parseRelativeDate counts 24-hour days across a DST change", () => {
+      const tz = process.env.TZ;
+      process.env.TZ = "America/Denver";
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-01T12:00:00.000Z"));
+      try {
+        expect(parseRelativeDate("3d").toISOString()).toBe("2026-10-29T12:00:00.000Z");
+      } finally {
+        vi.useRealTimers();
+        if (tz === undefined) delete process.env.TZ;
+        else process.env.TZ = tz;
+      }
     });
 
     it("parseRelativeDate throws for invalid format", () => {
