@@ -873,7 +873,11 @@ func flagValue(cmd *cobra.Command, name string) (string, bool) {
 func resolveTargetFlags(cmd *cobra.Command, cfg *config.Config, workdir string) error {
 	flags := cmd.Flags()
 	if cfg != nil {
-		if !flags.Changed("owner") && cfg.Owner != "" {
+		// `config init --detect` takes its identity from the remote and refuses
+		// --owner, so a configured owner must not read as one the user passed.
+		detect := flags.Lookup("detect")
+		detecting := detect != nil && detect.Changed
+		if !flags.Changed("owner") && cfg.Owner != "" && !detecting {
 			_ = flags.Set("owner", cfg.Owner) // cobra flag.Set never errors for known flags
 		}
 		if !flags.Changed("repo") && cfg.DefaultRepo != "" && cmd.Annotations[repoBackfillAnnotation] == "true" {

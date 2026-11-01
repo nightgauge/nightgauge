@@ -321,6 +321,7 @@ import {
   type PhaseStaleEvent,
 } from "../utils/PhaseTimeoutManager";
 import { TelemetryService } from "./TelemetryService";
+import { pluginHint } from "../utils/pluginHint";
 
 /**
  * Result of a full pipeline run
@@ -7722,7 +7723,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       message +=
         `Progress: ${closedCount}/${totalCount} sub-issues complete.\n\n` +
         `Open sub-issues:\n${openList}\n\n` +
-        `Pick up a sub-issue instead: /nightgauge:issue-pickup <number>`;
+        pluginHint(
+          "issue-pickup",
+          "Pick up a sub-issue instead.",
+          (command) => `Pick up a sub-issue instead: ${command} <number>`
+        );
     } else {
       message += `No sub-issues found. Pick up a sub-issue instead or close this epic manually.`;
     }

@@ -81,6 +81,11 @@ changelog, and the release workflow refuses a tag that does not.
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.
+- A new VS Code user can initialize a repository with no Claude plugin and no
+  `nightgauge` on `PATH`: Initialize Repository now runs the bundled binary.
+  Terminals the extension opens for a skill or a `nightgauge` command also get
+  that binary on `PATH`, and the plugin invocation lines in the skills use the
+  `/nightgauge:<name>` form.
 - The Claude plugin survives extension upgrades. The extension registers a copy of
   its marketplace in global storage instead of its version-keyed install directory,
   moves an existing registration there without losing plugin data, and repairs a
@@ -382,6 +387,12 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
   the result join path has diverged, instead of the record reading as calls that
   quietly succeeded. The Bash ring keeps the same check disabled on purpose: its
   10 entries can all be in flight in one parallel turn (#457).
+
+### Added
+
+- `nightgauge config init --detect` writes a config from the `origin` remote
+  with no GitHub Project linked. Unlike plain `config init`, its output loads
+  straight away, and it makes no GitHub query.
 
 ### Fixed
 

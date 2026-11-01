@@ -83,7 +83,7 @@ This skill completes the Issue-to-PR pipeline by:
 
 | Tool           | Command                             |
 | -------------- | ----------------------------------- |
-| Claude Code    | `/nightgauge-pr-merge` (via plugin) |
+| Claude Code    | `/nightgauge:pr-merge` (via plugin) |
 | OpenAI Codex   | `$nightgauge-pr-merge`              |
 | GitHub Copilot | Invoke via Agent Skills             |
 | Cursor         | Invoke via Agent Skills             |

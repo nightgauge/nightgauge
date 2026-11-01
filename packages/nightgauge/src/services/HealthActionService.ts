@@ -16,6 +16,7 @@ import { HealthTrendsWriter } from "@nightgauge/sdk";
 import { IpcClient } from "./IpcClient";
 import type { Logger } from "../utils/logger";
 import type { PipelinePolicyOverrides, HealthPolicyTier } from "./PipelinePolicyOverrides";
+import { pluginHint } from "../utils/pluginHint";
 
 /** Default thresholds */
 const DEFAULT_WARNING_THRESHOLD = 70;
@@ -97,7 +98,11 @@ export class HealthActionService {
         actions.push({
           level: "critical",
           message: `Critical health score: ${score}. Auto-routing effectiveness may be degraded.`,
-          suggestion: "Consider running /nightgauge:backlog-groom to audit the pipeline.",
+          suggestion: pluginHint(
+            "backlog-groom",
+            "Audit recent pipeline failures and the open backlog.",
+            (command) => `Consider running ${command} to audit the pipeline.`
+          ),
           autoApplied: false,
         });
       } else if (score < warningThreshold) {

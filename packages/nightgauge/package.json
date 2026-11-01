@@ -98,7 +98,7 @@
     "viewsWelcome": [
       {
         "view": "nightgauge.pipelineView",
-        "contents": "Welcome to Nightgauge.\n\nThis repository isn't set up for Nightgauge yet. Run the quick setup steps below to get started — nothing is written to your repo until you opt in.\n\n[$(rocket) Initialize Repository](command:nightgauge.quickstartRepoInit)\n[$(book) Make Repo AI-Ready](command:nightgauge.quickstartSmartSetup)\n[$(info) Learn More](command:nightgauge.quickstartLearnMore)\n\nInitialize creates .nightgauge/config.yaml, standard labels, and links your GitHub Project board. AI-Ready adds AGENTS.md, CLAUDE.md, and focused docs for agent use.",
+        "contents": "Welcome to Nightgauge.\n\nThis repository isn't set up for Nightgauge yet. Run the quick setup steps below to get started — nothing is written to your repo until you opt in.\n\n[$(rocket) Initialize Repository](command:nightgauge.quickstartRepoInit)\n[$(book) Make Repo AI-Ready](command:nightgauge.quickstartSmartSetup)\n[$(info) Learn More](command:nightgauge.quickstartLearnMore)\n\nInitialize creates .nightgauge/config.yaml from this repository's origin remote; link a GitHub Project board afterwards. AI-Ready adds AGENTS.md, CLAUDE.md, and focused docs for agent use.",
         "when": "!nightgauge.repoInitialized"
       },
       {

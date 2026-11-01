@@ -57,6 +57,7 @@ import type {
   PipelineFeedbackSignalType,
   TerminalFailureKind,
 } from "@nightgauge/sdk";
+import { pluginHint } from "../utils/pluginHint";
 
 // ============================================================================
 // Types
@@ -1991,7 +1992,11 @@ export class AutoRetroService {
         "Apply the remedy the failed check names, then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. Do not change code: a retry meets the same environment.",
       "gate-plugin-missing":
         "Read the `[gate-plugin-missing]` line for what system/init reported. Reinstall the build so its bundled plugin is intact, or update Claude Code if it rejected the plugin, then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. A retry meets the same install.",
-      unknown: "Review logs manually. Run /nightgauge:retro for AI-powered root cause analysis.",
+      unknown: pluginHint(
+        "retro",
+        "Review logs manually.",
+        (command) => `Review logs manually. Run ${command} for AI-powered root cause analysis.`
+      ),
     };
 
     const severities: Record<RetroFailureCategory, "low" | "medium" | "high"> = {

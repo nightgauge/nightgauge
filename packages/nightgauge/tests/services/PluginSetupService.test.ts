@@ -12,6 +12,7 @@ import * as os from "os";
 import * as path from "path";
 import { ConfigBridge } from "../../src/services/ConfigBridge";
 import { DEFAULT_CONFIG } from "../../src/config/schema";
+import type { PluginStatus } from "../../src/services/PluginSetupService";
 import { resetMainChannelForTests } from "../../src/utils/logger";
 
 const mockExecFile = vi.hoisted(() => vi.fn());
@@ -352,6 +353,49 @@ describe("PluginSetupService", () => {
 
     afterEach(() => {
       fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    describe("fresh install against the real manifest (#2760)", () => {
+      const manifest = JSON.parse(
+        fs.readFileSync(
+          path.resolve(__dirname, "../../../../.claude-plugin/marketplace.json"),
+          "utf8"
+        )
+      ) as { name: string; plugins: { name: string }[] };
+
+      it("installs every default plugin and reports success, not a false failure", async () => {
+        const vscode = await import("vscode");
+        const { isPluginEnabled } = await import("../../src/utils/pluginHint");
+        const known = manifest.plugins.map((plugin) => `${plugin.name}@${manifest.name}`);
+        mockExecFile.mockImplementation(async (_file: string, args: string[]) => {
+          if (args[0] === "plugin" && args[1] === "install" && !known.includes(args[2])) {
+            throw new Error(`Plugin ${args[2]} not found in marketplace`);
+          }
+          return { stdout: "" };
+        });
+        (vscode.window.withProgress as Mock).mockImplementation((_options, task) => task());
+        (vscode.window.showInformationMessage as Mock).mockResolvedValue(undefined);
+        (vscode.window.showErrorMessage as Mock).mockResolvedValue(undefined);
+
+        const status = {
+          claudeCliAvailable: true,
+          marketplaceAdded: true,
+          plugin: "absent",
+          pluginErrors: [],
+        } as PluginStatus;
+        const service = await makeService();
+        await (
+          service as unknown as { installPlugins(status: PluginStatus): Promise<void> }
+        ).installPlugins(status);
+
+        expect(vscode.window.showErrorMessage).not.toHaveBeenCalled();
+        expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+          expect.stringContaining("Nightgauge plugins installed!"),
+          "Show Commands"
+        );
+        expect(cliCalls("plugin install").map((args) => args[2])).toEqual(known);
+        expect(isPluginEnabled()).toBe(true);
+      });
     });
 
     describe("getPluginStatus", () => {
