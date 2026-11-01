@@ -76,6 +76,15 @@ export function isCompleteBundledSource(extensionPath: string, source: string): 
   return path.resolve(source) !== path.resolve(extensionPath, "dist", "skills");
 }
 
+/**
+ * True for a canonical tree, recognised by its entry skill. A workspace's
+ * `skills/` may be any project's, and pruning against one that merely holds a
+ * Nightgauge-named skill would delete every other installed skill.
+ */
+function isCanonicalSkillsTree(source: string): boolean {
+  return fs.existsSync(path.join(source, "nightgauge-issue-pickup", "SKILL.md"));
+}
+
 function destSkillName(dirName: string, restorePrefix: boolean): string {
   if (!restorePrefix) {
     return dirName;
@@ -428,7 +437,7 @@ export async function installWorkspaceSkills(
       source,
       destDir,
       (message) => output.appendLine(`WARNING: ${message}`),
-      { prune: true }
+      { prune: isCanonicalSkillsTree(source) }
     );
     if (reportSkillCopy(agent, result, output)) {
       vscode.window.showInformationMessage(

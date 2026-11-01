@@ -31,6 +31,7 @@ func writeSkillVersion(t *testing.T, dir, version string, marked bool) {
 func agentSkillsFixture(t *testing.T) (home agentSkillsHome, roots []string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "skills")
+	writeSkillVersion(t, filepath.Join(root, agentSkillsEntry), "1.0.0", false)
 	writeSkillVersion(t, filepath.Join(root, "nightgauge-retro"), "1.0.0", false)
 	skills := filepath.Join(t.TempDir(), "skills")
 	if err := os.MkdirAll(skills, 0o755); err != nil {
@@ -137,13 +138,26 @@ func TestAgentSkillsNoSkillsTreeIsSkipped(t *testing.T) {
 	}
 }
 
+// Run in another project by a binary with no bundle, the only root is that
+// project's own skills/. Nothing there says a Nightgauge skill was retired.
+func TestAgentSkillsIgnoresAnotherProjectsSkillsTree(t *testing.T) {
+	home, _ := agentSkillsFixture(t)
+	writeSkillVersion(t, filepath.Join(home.skills, "nightgauge-retro"), "1.0.0", true)
+	foreign := filepath.Join(t.TempDir(), "skills")
+	writeSkillVersion(t, filepath.Join(foreign, "mine"), "1.0.0", false)
+	fs, detail := agentSkillsFindingsIn([]agentSkillsHome{home}, []string{foreign})
+	if len(fs) != 0 || !strings.HasPrefix(detail, "skipped") {
+		t.Fatalf("findings = %s, detail %q", findingsText(fs), detail)
+	}
+}
+
 // The extension's dist/skills is a subset; the rest of the build is the mirror
 // beside it, stored without the prefix.
 func TestAgentSkillsResolvesMirrorReference(t *testing.T) {
 	home, _ := agentSkillsFixture(t)
 	dist := t.TempDir()
 	root := filepath.Join(dist, "skills")
-	writeSkillVersion(t, filepath.Join(root, "nightgauge-retro"), "1.0.0", false)
+	writeSkillVersion(t, filepath.Join(root, agentSkillsEntry), "1.0.0", false)
 	writeSkillVersion(t, filepath.Join(dist, "claude-plugins", "nightgauge", "skills", "issue-audit"), "2.0.0", false)
 	writeSkillVersion(t, filepath.Join(home.skills, "nightgauge-issue-audit"), "1.0.0", true)
 	fs, _ := agentSkillsFindingsIn([]agentSkillsHome{home}, []string{root})

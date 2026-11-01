@@ -177,6 +177,24 @@ describe("GrokSetupService skill source", () => {
     expect(fs.existsSync(skillsDest)).toBe(false);
   });
 
+  it("the development command prunes only from a canonical skills tree", async () => {
+    const retired = path.join(skillsDest, "nightgauge-backlog-audit");
+    write(path.join(retired, ".nightgauge-installed"), "x");
+    const vscode = await import("vscode");
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValue(
+      "Install from Workspace" as never
+    );
+
+    // This workspace merely holds a Nightgauge-named skill.
+    await (await makeService()).installSkillsFromWorkspace();
+    expect(fs.existsSync(path.join(skillsDest, "nightgauge-issue-create"))).toBe(true);
+    expect(fs.existsSync(retired)).toBe(true);
+
+    write(path.join(workspaceRoot, "skills", "nightgauge-issue-pickup", "SKILL.md"), WORKSPACE);
+    await (await makeService()).installSkillsFromWorkspace();
+    expect(fs.existsSync(retired)).toBe(false);
+  });
+
   it("the development command names the resolved destination in its confirmation", async () => {
     const realSkills = path.join(tmpRoot, "real-grok-skills");
     fs.mkdirSync(realSkills);

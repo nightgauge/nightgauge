@@ -31,6 +31,7 @@ const (
 	agentSkillsMarker = ".nightgauge-installed"
 	agentSkillsPrefix = "nightgauge-"
 	agentSkillsShared = "_shared"
+	agentSkillsEntry  = "nightgauge-issue-pickup"
 )
 
 // agentSkillsUserHome is the check's reach into the machine. A variable so a
@@ -84,9 +85,12 @@ func agentSkillsFindings(startDir string) ([]Finding, string) {
 }
 
 func agentSkillsFindingsIn(homes []agentSkillsHome, roots []string) ([]Finding, string) {
+	// DefaultRoots ends with <workspace>/skills, which in another project is
+	// that project's own tree: comparing with it would call every installed
+	// skill retired. The entry skill tells a Nightgauge tree from a stranger.
 	var usable []string
 	for _, root := range roots {
-		if info, err := os.Stat(root); err == nil && info.IsDir() {
+		if _, err := os.Stat(filepath.Join(root, agentSkillsEntry, "SKILL.md")); err == nil {
 			usable = append(usable, root)
 		}
 	}

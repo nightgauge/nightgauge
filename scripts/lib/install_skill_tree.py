@@ -286,10 +286,11 @@ def install(args):
                       file=sys.stderr)
                 adopted += 1
             else:
+                how = "Remove it" if args.adopt else (
+                    "Remove it, or run with --adopt if it is an old install,")
                 warn(args.label, f"skipped {name}: {target} is not a directory Nightgauge "
-                     f"installed (no {INSTALL_MARKER}), so it is left untouched. Remove it, or "
-                     f"run with --adopt if it is an old install, to let Nightgauge install "
-                     f"{name}.")
+                     f"installed (no {INSTALL_MARKER}), so it is left untouched. {how} to let "
+                     f"Nightgauge install {name}.")
                 skipped += 1
                 continue
         if os.path.lexists(target):

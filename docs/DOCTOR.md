@@ -936,7 +936,8 @@ the primary checkout.
 
 **Codex or Grok skills that differ from this build.** `agent_skills_drift` ·
 `warning`, also when a skills directory cannot be read. A machine with no Codex or
-Grok skills directory passes, and so does one where no skills tree can be found.
+Grok skills directory passes, and so does one where no Nightgauge skills tree can be
+found: another project's own `skills/` is not one.
 
 For `$CODEX_HOME/skills` (default `~/.codex/skills`) and `$GROK_HOME/skills`
 (default `~/.grok/skills`), the check reads each real `nightgauge-*` directory and

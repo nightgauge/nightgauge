@@ -457,7 +457,9 @@ else
   if ! HOME="$HOME_J3" PATH="$SAFE_PATH" bash "$J_INSTALLER" --codex-only --adopt \
     >"$TMP/j3.out" 2>"$TMP/j3.err" &&
     [ -L "$HOME_J3/.codex/skills/nightgauge-retro" ] &&
-    cmp -s "$TMP/j3-target/SKILL.md" "$j_old"; then
+    cmp -s "$TMP/j3-target/SKILL.md" "$j_old" &&
+    grep -q 'skipped nightgauge-retro' "$TMP/j3.err" &&
+    ! grep -q 'run with --adopt if' "$TMP/j3.err"; then
     ok "(j3) --adopt leaves a symlink alone"
   else
     nope "(j3) --adopt touched a symlinked skill"
@@ -592,7 +594,7 @@ if GROK_LOG="$GROK_LOG" GROK_STATE="$GROK_STATE" HOME="$HOME_L" PATH="$GROK_BIN:
   [ "$(grep -n "plugin uninstall" "$GROK_LOG" | cut -d: -f1)" -lt \
     "$(grep -n "marketplace add" "$GROK_LOG" | cut -d: -f1)" ] &&
   [ "$(grep -n "plugin uninstall" "$GROK_LOG" | cut -d: -f1)" -lt \
-    "$(grep -n "plugin install" "$GROK_LOG" | head -1 | cut -d: -f1)" ]; then
+    "$(grep -n "plugin install" "$GROK_LOG" | sed -n 1p | cut -d: -f1)" ]; then
   ok "(l1) dead nightgauge entries are removed before the install; live and foreign ones are not"
 else
   nope "(l1) the wrong Grok entries were removed, or removal ran after install"
