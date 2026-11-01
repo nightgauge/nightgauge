@@ -103,6 +103,7 @@ import { readEffectiveConfigTextSync } from "./mergedConfigReader";
 import { shouldEmitSnapshot } from "./budgetStreamEnforcement";
 import { resolveExtensionBundleRoot } from "./extensionBundle";
 import { BinaryResolver } from "../services/BinaryResolver";
+import { resolveBinaryDiscoveryEnv } from "./binaryDiscoveryEnv";
 import { killProcessTree, DescendantTracker } from "./processTree";
 import { ClaudePluginGate } from "./claudePluginGate";
 import {
@@ -4331,50 +4332,6 @@ export function reconcileOpenCodeSpawnEnv(env: NodeJS.ProcessEnv, model: string 
  * SDK builds the `opencode` process's env, not here.
  */
 const NIGHTGAUGE_NAMESPACE = "NIGHTGAUGE_";
-
-/**
- * Resolve the nightgauge Go binary and return env vars that make it
- * discoverable to skill subprocesses under ANY adapter (Claude, Codex, Gemini,
- * …) — Issue #4029.
- *
- * The extension bundles the binary at `<extensionPath>/dist/bin/…`, which is
- * NOT on the subprocess PATH. Skills historically located it by globbing the
- * `~/.vscode/extensions/nightgauge.<version>/dist/bin/` directory — a
- * VSCode-extension-specific path that breaks portability (and missed the
- * published, platform-suffixed binary). Instead the host now resolves the
- * binary authoritatively (BinaryResolver) and exports:
- *   - `NIGHTGAUGE_BIN` — absolute path, honored first by the skill cascade
- *     and `claude-plugins/.../guard.sh`.
- *   - `PATH` — with the binary's dir prepended so bare `nightgauge …` and
- *     `command -v nightgauge` resolve in every provider's shell.
- *
- * Returns `{}` when the binary is already on PATH (BinaryResolver's filesystem
- * tiers miss) — the skill's own `command -v` cascade covers that case — or when
- * resolution throws (defensive: never block a stage spawn over discovery).
- */
-function resolveBinaryDiscoveryEnv(): Record<string, string> {
-  try {
-    const binaryPath = BinaryResolver.fromVSCode().resolveSync();
-    if (!binaryPath) return {};
-    // Only export a path we can actually execute. If it exists but lacks the
-    // execute bit, fall through to the skill's own cascade (which guards on
-    // `[ -x ]`) rather than exporting a misleading NIGHTGAUGE_BIN.
-    try {
-      fs.accessSync(binaryPath, fs.constants.X_OK);
-    } catch {
-      return {};
-    }
-    const binDir = path.dirname(binaryPath);
-    const sep = process.platform === "win32" ? ";" : ":";
-    const currentPath = process.env.PATH ?? "";
-    return {
-      NIGHTGAUGE_BIN: binaryPath,
-      PATH: currentPath ? `${binDir}${sep}${currentPath}` : binDir,
-    };
-  } catch {
-    return {};
-  }
-}
 
 const loadedUnderVitest = process.env.VITEST === "true";
 
@@ -8785,37 +8742,6 @@ export function runStageSkillHeadless(
   return handle;
 }
 
-export function runStageSkill(
-  stage: PipelineStage,
-  issueNumber?: number,
-  _callbacks?: SkillRunCallbacks
-): vscode.Terminal {
-  const skillDir = STAGE_TO_SKILL_DIR[stage];
-
-  // Build the command
-  let command = `claude /nightgauge:${skillDir.replace("nightgauge-", "")}`;
-  if (issueNumber && stage === "issue-pickup") {
-    command += ` ${issueNumber}`;
-  }
-
-  const terminalName = issueNumber ? `Nightgauge: Issue #${issueNumber}` : "Nightgauge Pipeline";
-
-  // Try to find an existing Nightgauge terminal
-  let terminal = vscode.window.terminals.find((t) => t.name.startsWith("Nightgauge:"));
-
-  if (!terminal) {
-    terminal = vscode.window.createTerminal({
-      name: terminalName,
-      cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-    });
-  }
-
-  terminal.show(true);
-  terminal.sendText(command);
-
-  return terminal;
-}
-
 /**
  * Kill all active skill processes
  */
@@ -9434,6 +9360,7 @@ function launchCodexInteractiveTerminal(
   const terminal = vscode.window.createTerminal({
     name: terminalName,
     cwd: workspaceRoot,
+    env: resolveBinaryDiscoveryEnv(),
     shellPath: launch.shellPath,
     shellArgs: launch.shellArgs,
   });

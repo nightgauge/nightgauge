@@ -17,7 +17,7 @@ quality review, and write dev context for `/nightgauge-feature-validate`.
 
 ## Invocation
 
-`/nightgauge-feature-dev` (Claude Code plugin); `$nightgauge-feature-dev`
+`/nightgauge:feature-dev` (Claude Code plugin); `$nightgauge-feature-dev`
 (Codex); Agent Skills (Copilot/Cursor). Flags: `--plan <path>` (override plan
 file), `--sequential` (disable parallel file creation), `--skip-review` (not
 recommended). **Prerequisites**: `PLAN.md` from `/feature-planning` (or

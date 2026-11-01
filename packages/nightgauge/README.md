@@ -66,12 +66,13 @@ Nightgauge health item in the status bar opens the same panel. (The
    bar until you trust it. Click **Manage** in the Restricted Mode banner,
    then **Trust**, and the icon appears.
 4. **Initialize the repo** — Open the Nightgauge sidebar and click
-   **Initialize Repository** in the welcome view. This starts your AI agent
-   (the `claude` CLI by default) in a VS Code terminal, so expect an
-   interactive session — the agent may ask its own questions, including its
-   own folder-trust prompt, before it does anything. It then writes
-   `.nightgauge/config.yaml`, standard labels, and links your GitHub
-   Project board. Nothing is written until you opt in.
+   **Initialize Repository** in the welcome view. The bundled binary writes
+   `.nightgauge/config.yaml` from the repository's GitHub `origin` remote; it
+   needs neither the Claude plugin nor `nightgauge` on your `PATH`. Nothing is
+   written until you opt in. Board views stay empty until a GitHub Project is
+   linked: with the Nightgauge Claude plugin enabled, the confirmation offers
+   **Link Project Board**, which runs `/nightgauge:repo-init` in a terminal and
+   also creates the standard labels.
 5. **Claim an issue** — Click **Nightgauge: Pick Up Issue** (or drag an
    item out of the _Ready_ list) to start the pipeline on a GitHub issue.
 6. **Watch it run** — The pipeline moves through `issue-pickup` →
@@ -452,7 +453,8 @@ off through the GitHub API.
 
 **To disable via CLI:** from a clone of this repository, run
 `nightgauge repo disable-auto-merge --owner <org> --repo <repo>`. The binary
-bundled with the extension is not on your `PATH`.
+bundled with the extension is not on your own shell's `PATH`; terminals the
+extension opens for a skill or a `nightgauge` command have it.
 
 ---
 

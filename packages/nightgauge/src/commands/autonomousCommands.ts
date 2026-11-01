@@ -11,6 +11,7 @@
  * @see Issue #2373 — Autonomous mode UX
  */
 
+import { resolveBinaryDiscoveryEnv } from "../utils/binaryDiscoveryEnv";
 import { CLONE_LOGS_DISPLAY } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import { IpcClient } from "../services/IpcClient";
@@ -680,6 +681,7 @@ async function rerunPrMerge(
   const terminal = vscode.window.createTerminal({
     name: `Nightgauge PR Merge #${prNumber}`,
     cwd: workspaceRoot,
+    env: resolveBinaryDiscoveryEnv(),
   });
   terminal.show(true);
   terminal.sendText(`nightgauge pr merge ${prNumber}`);

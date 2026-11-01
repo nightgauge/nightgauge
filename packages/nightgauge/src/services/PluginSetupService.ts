@@ -18,6 +18,7 @@ import {
   isVersionKeyedSource,
   type StableMarketplace,
 } from "./stableMarketplace";
+import { setPluginState } from "../utils/pluginHint";
 
 const execFileAsync = promisify(execFile);
 
@@ -261,6 +262,7 @@ export class PluginSetupService implements vscode.Disposable {
       status.pluginReadError = error instanceof Error ? error.message : String(error);
     }
 
+    setPluginState(status.plugin);
     return status;
   }
 
@@ -472,6 +474,7 @@ export class PluginSetupService implements vscode.Disposable {
         this.outputChannel.appendLine(`✓ ${plugin} installed\n`);
       }
 
+      setPluginState("enabled");
       this.outputChannel.appendLine("All plugins installed successfully!");
       this.outputChannel.appendLine("\nAvailable commands:");
       this.outputChannel.appendLine("  /nightgauge:issue-pickup     - Pick up an issue");

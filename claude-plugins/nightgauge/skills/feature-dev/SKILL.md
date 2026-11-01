@@ -77,7 +77,7 @@ This skill implements features by:
 
 | Tool           | Command                                |
 | -------------- | -------------------------------------- |
-| Claude Code    | `/nightgauge-feature-dev` (via plugin) |
+| Claude Code    | `/nightgauge:feature-dev` (via plugin) |
 | OpenAI Codex   | `$nightgauge-feature-dev`              |
 | GitHub Copilot | Invoke via Agent Skills                |
 | Cursor         | Invoke via Agent Skills                |

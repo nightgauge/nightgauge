@@ -15,6 +15,7 @@
 
 import { escapeHtml, formatRelativeTime } from "../DashboardComponents";
 import type { DiscoveryActivityData } from "../../../services/DiscoveryActivityService";
+import { pluginHint } from "../../../utils/pluginHint";
 
 const BACKLOG_DISPLAY_LIMIT = 20;
 
@@ -254,8 +255,12 @@ function getBacklogSectionHtml(backlog: DiscoveryActivityData["backlog"]): strin
       </summary>
       <div class="section-content">
         <p class="discovery-backlog-hint">
-          These changes scored below the auto-creation threshold. Raise the score threshold
-          or run <code>/nightgauge:release-watch --create-issues</code> to process them.
+          These changes scored below the auto-creation threshold. ${pluginHint(
+            "release-watch",
+            "Raise the score threshold to process them.",
+            (command) =>
+              `Raise the score threshold or run <code>${command} --create-issues</code> to process them.`
+          )}
         </p>
         <table class="discovery-backlog-table">
           <thead>

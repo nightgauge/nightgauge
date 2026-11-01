@@ -14,8 +14,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- `nightgauge config init --detect` writes a config from the `origin` remote
+  with no GitHub Project linked. Unlike plain `config init`, its output loads
+  straight away, and it makes no GitHub query.
+
 ### Fixed
 
+- A new VS Code user can initialize a repository with no Claude plugin and no
+  `nightgauge` on `PATH`: Initialize Repository now runs the bundled binary.
+  Terminals the extension opens for a skill or a `nightgauge` command also get
+  that binary on `PATH`, and the plugin invocation lines in the skills use the
+  `/nightgauge:<name>` form.
 - A pipeline run gates a tree once. `scripts/ci-local.sh` records every run in a
   ledger keyed on the exact tree and skips a repeat that already passed, saying
   what passed it (`--no-reuse` forces a run). feature-validate's CI parity phase

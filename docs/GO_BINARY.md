@@ -8656,6 +8656,7 @@ nightgauge config show --key autonomous --json
 ```bash
 nightgauge config init --owner <login> [--owner-type org|user] [--repo <name>] \
   [--project <N>] [--out <path>] [--force] [--no-fetch] [--json]
+nightgauge config init --detect [--owner-type org|user] [--out <path>] [--force] [--json]
 ```
 
 Renders the canonical `.nightgauge/config.yaml` template (audit row
@@ -8674,12 +8675,19 @@ parser.
   `internal/github.ProjectService.SnapshotFields` cache, substitute the
   discovered project ID + Status/Priority/Size field IDs, and emit a
   fully-populated config.
+- **Detect** (`--detect`): take the owner and repository from the `origin`
+  remote and write a config with no project linked (`number: 0`, an empty
+  `id`, no `fields` block). This is the only offline form that loads
+  (`<PROJECT_NUMBER>` does not parse as an integer); the VS Code Initialize
+  Repository command uses it. It reads git only and makes no GitHub query. With
+  no GitHub `origin` it fails and writes nothing. Refuses `--owner`, `--repo`
+  and `--project`.
 
 **Flags**:
 
 | Flag              | Default                        | Behavior                                                                        |
 | ----------------- | ------------------------------ | ------------------------------------------------------------------------------- |
-| `--owner <login>` | _required_                     | GitHub project owner (org or user login)                                        |
+| `--owner <login>` | _required_ without `--detect`  | GitHub project owner (org or user login)                                        |
 | `--owner-type`    | `org`                          | `org` or `user` — must match the project's owner type                           |
 | `--repo <name>`   | _empty_                        | Default repo name; empty emits the `<REPO_NAME>` placeholder                    |
 | `--project <N>`   | `0`                            | Project V2 number; `0` emits placeholders for every project ID                  |
@@ -8687,6 +8695,7 @@ parser.
 | `--force`         | `false`                        | Overwrite an existing file at `--out`                                           |
 | `--no-fetch`      | `false`                        | Skip GitHub queries even when `--project` is set; emit field-ID placeholders    |
 | `--json`          | `false`                        | After writing, print `{"path":"...","wrote":true}` to stdout (machine-readable) |
+| `--detect`        | `false`                        | Derive owner and repo from `origin`; write a loadable config with no project    |
 
 **Ignore rules**: when `--out` is a `.nightgauge/config.yaml`, the verb also
 ensures the `.nightgauge/` ignore rules in that repository (also when it
