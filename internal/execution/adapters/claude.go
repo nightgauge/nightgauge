@@ -155,9 +155,13 @@ func claudePluginDirArgs(opts RunOptions) []string {
 // under a default user's permissions (#2718): over-budget includes are read
 // from that tree at run time, and it lies outside the worktree. --add-dir also
 // makes it a working directory, so file-tool writes are denied explicitly;
-// deny rules hold under bypassPermissions too. The deny names every form a tool
-// call can use (openCodePathForms): given, resolved, and a system alias such as
-// /tmp. Bash can still write there, the limit ADR-022 records for OpenCode.
+// deny rules hold under bypassPermissions too. The deny is one Edit rule for
+// every form a tool call can use (openCodePathForms): given, resolved, and a
+// system alias such as /tmp. Edit is the only tool the CLI applies path rules
+// to, and an Edit rule stops Write too: on Claude Code 2.1.316 a Write(path)
+// rule alone let the write through.
+// TestClaudeSkillsTreeLive re-proves that against the installed CLI. Bash can
+// still write there, the limit ADR-022 records for OpenCode.
 //
 // A tree inside the worktree gets neither flag. It is already reachable, and
 // it is the checkout the stage was dispatched to change: a deny there would
@@ -169,20 +173,13 @@ func claudeSkillsDirArgs(opts RunOptions) []string {
 	}
 	var deny []string
 	for _, form := range openCodePathForms(root) {
-		rule := "//" + strings.TrimLeft(filepath.ToSlash(form), "/") + "/**"
-		for _, tool := range claudeFileWriteTools {
-			deny = append(deny, tool+"("+rule+")")
-		}
+		deny = append(deny, "Edit(//"+strings.TrimLeft(filepath.ToSlash(form), "/")+"/**)")
 	}
 	return []string{
 		"--add-dir", root,
 		"--disallowedTools", strings.Join(deny, ","),
 	}
 }
-
-// claudeFileWriteTools are the tools OpenCode's edit permission covers
-// (opencode_guard.go), so the two adapters' read-only trees match.
-var claudeFileWriteTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 // pathWithin reports whether path is dir or lies under it, comparing resolved
 // paths so a symlinked temp or home directory does not read as outside.

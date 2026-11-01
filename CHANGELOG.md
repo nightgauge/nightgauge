@@ -27,6 +27,10 @@ changelog, and the release workflow refuses a tag that does not.
   removes `nightgauge` plugin and marketplace entries whose path is gone.
 - `nightgauge doctor` reports Codex and Grok skills that differ from the installed
   build (`NGD112`).
+- A relative date in a query (`updated>3d`) means whole 24-hour days. It stepped
+  back in local calendar days, so it ran an hour long after a daylight-saving
+  change, and the SDK suite failed on a machine in a DST zone for three days after
+  each autumn change. CI runs in UTC and could not see it (#2828).
 - A pipeline run gates a tree once. `scripts/ci-local.sh` records every run in a
   ledger keyed on the exact tree and skips a repeat that already passed, saying
   what passed it (`--no-reuse` forces a run). feature-validate's CI parity phase
@@ -73,10 +77,12 @@ changelog, and the release workflow refuses a tag that does not.
   `NIGHTGAUGE_SKILLS_ROOT`. Claude stages receive the resolved skills tree with
   `--add-dir`, so includes read under default permissions, with file-tool writes
   to it denied. Each stage logs `skill_path=` when it starts (#2718).
-- The read-only skills tree on Claude stages now holds for every file-write tool
-  and through a symlink. The deny rules cover `MultiEdit` and `NotebookEdit` as
-  well as `Edit` and `Write`, and name both the given and resolved forms of the
-  tree. The extension no longer grants the parent of a flat skills tree (#2718).
+- The read-only skills tree on Claude stages now holds through a symlink. The deny
+  is one `Edit(path)` rule for each form of the tree: `Edit` is the rule that stops
+  file-tool writes, and the `Write`, `MultiEdit` and `NotebookEdit` path rules did
+  nothing. The extension no longer grants the parent of a flat skills tree.
+  `TestClaudeSkillsTreeLive` proves the read and the deny against the installed
+  `claude`; see `docs/TESTING.md` to run it (#2718).
 - The VSIX skill bundle is now complete, and a package-time check proves it. The
   bundler ships whole skill directories, so per-skill overlays reach Fable stages,
   and it ships `pattern-mining` and `verify-ui`, which stage prompts now name by
@@ -243,6 +249,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- PR Review no longer runs on every pull request. It is a manual
+  `workflow_dispatch` second opinion on the Claude subscription
+  (`CLAUDE_CODE_OAUTH_TOKEN`), so it adds no per-use model spend, and a red
+  advisory check can no longer stop `pr-merge` on finished work (#2828).
 - **A PR closes its issue only when every acceptance criterion is met
   (#2655).** pr-create wrote `Closes #N` whenever no criterion was outright
   unmet, so a PR whose criteria could not be verified — or an issue with none

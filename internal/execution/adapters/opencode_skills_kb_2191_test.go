@@ -160,8 +160,7 @@ func TestClaudeAdapters_SkillsTreeIsReadableAndDenied(t *testing.T) {
 		if got := flagValues(args, "--add-dir"); !slices.Equal(got, want) {
 			t.Errorf("%s: --add-dir = %v, want %v", name, got, want)
 		}
-		deny := "Edit(//bundle/dist/skills/**),Write(//bundle/dist/skills/**)," +
-			"MultiEdit(//bundle/dist/skills/**),NotebookEdit(//bundle/dist/skills/**)"
+		deny := "Edit(//bundle/dist/skills/**)"
 		if got := flagValues(args, "--disallowedTools"); !slices.Equal(got, []string{deny}) {
 			t.Errorf("%s: --disallowedTools = %v, want %q", name, got, deny)
 		}
@@ -255,10 +254,15 @@ func TestClaudeSkillsDirArgs_DeniesTheAliasFormOfTheTree(t *testing.T) {
 		t.Errorf("--add-dir = %v, want the given form %q", got, tree)
 	}
 	deny := strings.Join(flagValues(args, "--disallowedTools"), ",")
-	aliased := "//" + strings.TrimLeft(filepath.ToSlash(filepath.Join(alias, "skills")), "/") + "/**"
-	for _, tool := range claudeFileWriteTools {
-		if rule := tool + "(" + aliased + ")"; !strings.Contains(deny, rule) {
-			t.Errorf("--disallowedTools = %q, want %q", deny, rule)
+	aliased := "Edit(//" + strings.TrimLeft(filepath.ToSlash(filepath.Join(alias, "skills")), "/") + "/**)"
+	if !strings.Contains(deny, aliased) {
+		t.Errorf("--disallowedTools = %q, want %q", deny, aliased)
+	}
+	// Only Edit path rules reach the file permission check. The CLI warns on
+	// stderr for the others, and a Write(path) rule alone does not stop a write.
+	for _, inert := range []string{"Write(", "MultiEdit(", "NotebookEdit("} {
+		if strings.Contains(deny, inert) {
+			t.Errorf("--disallowedTools = %q, must not carry a %s rule", deny, inert)
 		}
 	}
 }
