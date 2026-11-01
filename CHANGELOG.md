@@ -155,8 +155,9 @@ changelog, and the release workflow refuses a tag that does not.
   kill that followed only a warning is booked as a stall and does not retry on a stronger model.
   A global cooldown to `resetsAt` now requires a hard signal.
 - **A `Refs #N` merge now leaves the issue open and Ready (#2706).** The pipeline's pr-merge
-  status sync writes Done only for a closed issue, and completion keeps the hook's Ready, so the
-  scheduler dispatches the remainder. `nightgauge hook post-merge` resolves the repository's
+  status sync writes Done only for a closed issue and Ready for an open one, even when the hook
+  could not resolve a board, so the scheduler dispatches the remainder. An unreadable issue state
+  raises the board-status card instead of passing silently. `nightgauge hook post-merge` resolves the repository's
   board when `--project` is omitted, and warns on stderr when it cannot, instead of skipping the
   sync silently. A failed run's In review park now uses the new
   `project sync-status --only-from "In progress"`, so it never overwrites the scheduler's Ready.

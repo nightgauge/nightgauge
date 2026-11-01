@@ -1278,8 +1278,10 @@ nightgauge project set-field <issue-number> --start-date 2026-05-01 --target-dat
 # Move issue to a status column
 nightgauge project move-status <issue-number> <status>
 
-# Sync issue status field (idempotent)
-nightgauge project sync-status <issue-number> <status>
+# Sync issue status field (idempotent). --only-from <status> writes only when
+# the issue holds that status; otherwise, or when the current status is
+# unreadable, it writes nothing and exits non-zero ("yielding <status>").
+nightgauge project sync-status <issue-number> <status> [--only-from <status>]
 
 # List project board items
 nightgauge board list [--status Ready] [--owner ORG] [--project N] [--json]

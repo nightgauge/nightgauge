@@ -4260,10 +4260,6 @@ type CandidateItem struct {
 	OpenPRNumber int
 }
 
-// isWorkCompleteStatus returns true when the board status says the issue's
-// pipeline work is waiting on review. Currently this covers "In review". It
-// is not evidence of anything a dependent can use: evaluateDeps keys on issue
-// state, and an OPEN issue in this status still blocks (#2706).
 // repoContribution is one repo's contribution to a prioritize pass: how many
 // graph nodes it owns, how many are open, and how many survived every gate to
 // become dispatchable.
@@ -4309,6 +4305,10 @@ func (as *AutonomousScheduler) logRepoContributions(contrib map[string]*repoCont
 	}
 }
 
+// isWorkCompleteStatus returns true when the board status says the issue's
+// pipeline work is waiting on review. Currently this covers "In review". It
+// is not evidence of anything a dependent can use: evaluateDeps keys on issue
+// state, and an OPEN issue in this status still blocks (#2706).
 func isWorkCompleteStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
 	return s == "in review"
@@ -6626,10 +6626,9 @@ func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo 
 // moveIssueToInProgress moves a sidelined issue's board status to "In
 // progress" — the truthful state when no PR backs it (e.g. the
 // architecture-approval gate halted before feature-dev ever ran). Modeled
-// after moveIssueToDone/moveIssueToInReview. Unlike "In review" this status
-// is never treated as satisfying a blockedBy edge (isWorkCompleteStatus only
-// matches "in review"), so dependents correctly stay blocked. Best-effort: a
-// network failure logs a warning.
+// after moveIssueToDone/moveIssueToInReview. No board status satisfies a
+// blockedBy edge, so dependents stay blocked while the issue is open (#2706).
+// Best-effort: a network failure logs a warning.
 func (as *AutonomousScheduler) moveIssueToInProgress(parent context.Context, repo string, issue int, reason string) {
 	owner, repoName := splitOwnerRepo(repo)
 	var projectNum int
