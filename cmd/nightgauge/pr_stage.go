@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/cmd/followup"
 	"github.com/nightgauge/nightgauge/internal/config"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
@@ -56,6 +57,10 @@ scheduler contract instead of maintaining a second, divergent implementation.`,
 	}
 	cmd.AddCommand(prStageCreateCmd())
 	cmd.AddCommand(prStageMergeCmd())
+	cmd.AddCommand(prStageBudgetCmd())
+	cmd.AddCommand(prStageReviewRoundCmd())
+	cmd.AddCommand(prStageReviewGateCmd())
+	cmd.AddCommand(prStageResumePointCmd())
 	return cmd
 }
 
@@ -255,7 +260,7 @@ caller DEFERS instead of running the LLM into an exhausted bucket (#3976).`,
 			if err != nil {
 				return err
 			}
-			authenticatePrStageGh(workspace)
+			cfg := authenticatePrStageGh(workspace)
 
 			if !cmd.Flags().Changed("timeout") {
 				timeoutSec = prMergeDefaultTimeoutSec(workspace)
@@ -265,7 +270,7 @@ caller DEFERS instead of running the LLM into an exhausted bucket (#3976).`,
 
 			// #1397 — see the pr-create verb above.
 			phases := newPrStagePhaseRecorder(cmd, outputJSON)
-			runner := pmstages.NewDeterministicRunner()
+			runner := newPrStageMergeRunner(cfg)
 			res, runErr := runner.Run(pmstages.WithPhaseReporter(ctx, phases), issueNumber, repo, workspace)
 
 			out := prStageResultJSON{
@@ -294,6 +299,24 @@ caller DEFERS instead of running the LLM into an exhausted bucket (#3976).`,
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
 	cmd.Flags().IntVar(&timeoutSec, "timeout", prMergeCITimeoutSec, "Overall timeout in seconds (0 = no CLI timeout). When unset, raised to cover pipeline.merge_queue.wait_timeout plus 10m (#2214)")
 	return cmd
+}
+
+// newPrStageMergeRunner builds the runner the scheduler would build for cfg, so
+// the queue and CI budgets the budget verb reports are the ones the runner uses.
+func newPrStageMergeRunner(cfg *config.Config) *pmstages.DeterministicRunner {
+	runner := pmstages.NewDeterministicRunner()
+	var pipeline *config.PipelineConfig
+	var pr *config.PRConfig
+	if cfg != nil {
+		pipeline, pr = cfg.Pipeline, cfg.PR
+		var resolver gh.TokenResolver = cfg
+		if client, err := gh.NewClientFromConfig(resolver, cfg.Owner, ""); err == nil {
+			runner.SetReviewFiling(followup.ReviewFiling(client, cfg))
+		}
+	}
+	runner.SetMergeQueueWaitTimeout(pipeline.ResolveMergeQueueWaitTimeout())
+	runner.SetCIWaitTimeout(pr.ResolveCICheckTimeout())
+	return runner
 }
 
 // newPrStagePhaseRecorder builds the runner's phase sink.
@@ -327,18 +350,193 @@ func prStageContext(cmd *cobra.Command, timeoutSec int) (context.Context, contex
 // prMergeCITimeoutSec is the pr-merge verb's default ceiling for a CI wait.
 const prMergeCITimeoutSec = 1200
 
+// prStageClientMarginSec is how far the caller's kill sits past the CLI's own
+// timeout, so the CLI's context always fires first and returns a structured
+// result instead of dying to SIGKILL (#2730).
+const prStageClientMarginSec = 60
+
+// prStageBudgetJSON is the wire shape of `pr-stage budget`.
+type prStageBudgetJSON struct {
+	QueueWaitMs     int64 `json:"queue_wait_ms"`
+	CLITimeoutMs    int64 `json:"cli_timeout_ms"`
+	ClientTimeoutMs int64 `json:"client_timeout_ms"`
+}
+
+// prMergeQueueWait is the resolved pipeline.merge_queue.wait_timeout.
+func prMergeQueueWait(workspace string) time.Duration {
+	var pipeline *config.PipelineConfig
+	if cfg, err := config.Load(workspace); err == nil && cfg != nil {
+		pipeline = cfg.Pipeline
+	}
+	return pipeline.ResolveMergeQueueWaitTimeout()
+}
+
 // prMergeDefaultTimeoutSec returns the pr-merge verb's default --timeout. A
 // merge-queue wait (#2214) runs up to pipeline.merge_queue.wait_timeout, so the
 // CLI ceiling must not cut it short at the plain CI-wait default: it is the
 // larger of the two, with ten minutes' margin over the queue wait.
 func prMergeDefaultTimeoutSec(workspace string) int {
-	var pipeline *config.PipelineConfig
-	if cfg, err := config.Load(workspace); err == nil && cfg != nil {
-		pipeline = cfg.Pipeline
-	}
-	queue := int((pipeline.ResolveMergeQueueWaitTimeout() + 10*time.Minute).Seconds())
+	queue := int((prMergeQueueWait(workspace) + 10*time.Minute).Seconds())
 	if queue > prMergeCITimeoutSec {
 		return queue
 	}
 	return prMergeCITimeoutSec
+}
+
+// prMergeBudget derives every pr-merge time limit from the one resolved queue
+// wait (#2730). The binary owns this: the caller asks instead of holding a
+// second constant, which is how a 20-minute client came to kill a 90-minute wait.
+func prMergeBudget(workspace string) prStageBudgetJSON {
+	cliSec := int64(prMergeDefaultTimeoutSec(workspace))
+	return prStageBudgetJSON{
+		QueueWaitMs:     prMergeQueueWait(workspace).Milliseconds(),
+		CLITimeoutMs:    cliSec * 1000,
+		ClientTimeoutMs: (cliSec + prStageClientMarginSec) * 1000,
+	}
+}
+
+// prStageBudgetCmd runs `nightgauge pr-stage budget`.
+func prStageBudgetCmd() *cobra.Command {
+	var workdir string
+	var outputJSON bool
+	cmd := &cobra.Command{
+		Use:          "budget",
+		Short:        "Report the pr-merge time budget derived from pipeline.merge_queue.wait_timeout",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			workspace, err := resolvePrStageWorkspace(workdir)
+			if err != nil {
+				return err
+			}
+			budget := prMergeBudget(workspace)
+			if outputJSON {
+				data, err := json.Marshal(budget)
+				if err != nil {
+					return fmt.Errorf("marshal pr-stage budget: %w", err)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), string(data))
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "queue wait %s, CLI timeout %s, client timeout %s\n",
+				time.Duration(budget.QueueWaitMs)*time.Millisecond,
+				time.Duration(budget.CLITimeoutMs)*time.Millisecond,
+				time.Duration(budget.ClientTimeoutMs)*time.Millisecond)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
+	return cmd
+}
+
+// prStageReviewRoundCmd runs `nightgauge pr-stage review-round begin|end <N>`.
+func prStageReviewRoundCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "review-round",
+		Short: "Open or close a pr-merge review-fix round (capped; #2730)",
+	}
+	verb := func(use, short string, apply func(workdir string, issue int, now time.Time) (pmstages.ReviewLedger, error)) *cobra.Command {
+		var workdir string
+		sub := &cobra.Command{
+			Use:          use + " <issue-number>",
+			Short:        short,
+			Args:         cobra.ExactArgs(1),
+			SilenceUsage: true,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				issue, err := parseIssueNumberArg(args[0])
+				if err != nil {
+					return err
+				}
+				workspace, err := resolvePrStageWorkspace(workdir)
+				if err != nil {
+					return err
+				}
+				ledger, err := apply(workspace, issue, time.Now())
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "#%d: review round %d of %d, in progress: %t\n",
+					issue, ledger.Rounds, pmstages.MaxReviewFixRounds, ledger.InProgress)
+				return nil
+			},
+		}
+		sub.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
+		return sub
+	}
+	cmd.AddCommand(verb("begin", "Open a fix round; refuses past the cap or beside an open round", pmstages.BeginReviewRound))
+	cmd.AddCommand(verb("end", "Close the open fix round", pmstages.EndReviewRound))
+	return cmd
+}
+
+// prStageResumePointCmd runs `nightgauge pr-stage resume-point <N>`: whether a
+// re-dispatch can start at feature-validate, restoring preserved work if it can
+// (#2730). The decision lives in Go so both runtimes make the same one.
+func prStageResumePointCmd() *cobra.Command {
+	var workdir string
+	cmd := &cobra.Command{
+		Use:          "resume-point <issue-number>",
+		Short:        "Report whether a re-dispatch can resume at feature-validate from preserved work",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issue, err := parseIssueNumberArg(args[0])
+			if err != nil {
+				return err
+			}
+			workspace, err := resolvePrStageWorkspace(workdir)
+			if err != nil {
+				return err
+			}
+			authenticatePrStageGh(workspace)
+			res := pmstages.ResolvePreservedResume(cmd.Context(), workspace, issue, pmstages.ExecIssueBodyReader(workspace))
+			data, err := json.Marshal(res)
+			if err != nil {
+				return fmt.Errorf("marshal resume point: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(data))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
+	return cmd
+}
+
+// prStageReviewGateCmd runs `nightgauge pr-stage review-gate <N>`: the gate
+// DeterministicRunner.Run applies, for the LLM stage to run before it merges.
+// Exit 0 with a JSON verdict either way; the caller reads `proceed`.
+func prStageReviewGateCmd() *cobra.Command {
+	var workdir string
+	var outputJSON bool
+	cmd := &cobra.Command{
+		Use:          "review-gate <issue-number>",
+		Short:        "Evaluate the enqueue review gate, filing open findings (#2730)",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issue, err := parseIssueNumberArg(args[0])
+			if err != nil {
+				return err
+			}
+			workspace, err := resolvePrStageWorkspace(workdir)
+			if err != nil {
+				return err
+			}
+			cfg := authenticatePrStageGh(workspace)
+			out := newPrStageMergeRunner(cfg).ReviewGate(cmd.Context(), issue, workspace)
+			if outputJSON {
+				data, err := json.Marshal(out)
+				if err != nil {
+					return fmt.Errorf("marshal review gate: %w", err)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), string(data))
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "#%d: %s, proceed=%t %s\n", issue, out.Verdict, out.Proceed, out.Reason)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
+	return cmd
 }

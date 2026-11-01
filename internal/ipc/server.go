@@ -3812,6 +3812,11 @@ func (s *Server) registerMethods() {
 			repo = p.Repo
 		}
 
+		if p.MergedPR > 0 {
+			res.rs.SetMergedPR(p.MergedPR)
+			return map[string]string{"status": "ok"}, nil
+		}
+
 		// Emit the live in-stage token/cost estimate as a stage_progress event.
 		// Skipped internally (no runID / bookend stage) rather than erroring.
 		s.emitStageProgressTelemetry(runID, repo, p.IssueNumber, p.Stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, res.rs.RunVisibility())

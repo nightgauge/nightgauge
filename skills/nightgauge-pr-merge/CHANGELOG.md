@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Review-fix rounds are capped and gated (#2730).** Phase 5 asks
+  `pr-stage review-gate`, fixes `hold` findings only, and wraps its one round in
+  `pr-stage review-round begin|end`. Step 6.3 runs the gate before merging. Every
+  other major is filed as an issue instead of becoming another commit.
+
 ### Fixed
 
 - **A `Refs #N` merge no longer closes the issue (#2674).** Step 7.2 passes

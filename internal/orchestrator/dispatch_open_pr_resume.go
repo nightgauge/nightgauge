@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	gitpkg "github.com/nightgauge/nightgauge/internal/git"
+	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -15,6 +16,25 @@ import (
 // pr-merge because its issue already has an open PR. It is the #1531 wording
 // the extension uses for the same fast path, so the two runtimes read alike.
 const dispatchedPRResumeReason = "an open PR already exists for this issue — resuming at pr-merge (#1531)"
+
+// preservedWorkResumeIndex returns the index of feature-validate when a
+// re-dispatch's dev work survived (#2730), or 0 to run every stage.
+func preservedWorkResumeIndex(ctx context.Context, stages []state.PipelineStage, workspaceRoot string, issueNumber int) (int, string) {
+	for i, st := range stages {
+		if st != state.StageFeatureValidate {
+			continue
+		}
+		if i == 0 {
+			return 0, ""
+		}
+		res := pmstages.ResolvePreservedResume(ctx, workspaceRoot, issueNumber, pmstages.ExecIssueBodyReader(workspaceRoot))
+		if res.Resume {
+			return i, res.Reason
+		}
+		return 0, ""
+	}
+	return 0, ""
+}
 
 // dispatchedPRResumeIndex returns the index of pr-merge in stages when a run
 // dispatched with an open PR (#2541) can start there, restoring pr-{N}.json

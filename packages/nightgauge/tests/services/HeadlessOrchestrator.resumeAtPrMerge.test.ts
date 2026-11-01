@@ -224,6 +224,63 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
     expect(mockState.completeStage).not.toHaveBeenCalled();
   });
 
+  describe("resume at feature-validate from preserved work (#2730)", () => {
+    function stubResumePoint(orchestrator: HeadlessOrchestrator, reason: string | null) {
+      return vi
+        .spyOn(
+          orchestrator as unknown as { preservedResumePoint(n: number): Promise<string | null> },
+          "preservedResumePoint"
+        )
+        .mockResolvedValue(reason);
+    }
+
+    it("skips planning and dev, and leaves feature-validate to run", async () => {
+      withPrContext(null);
+      const { service, stages } = createGoFaithfulStateService(1431);
+      const orchestrator = new HeadlessOrchestrator(service, logger, { contextFileWaitMs: 0 });
+      stubResumePoint(orchestrator, "restored preserved work");
+
+      await detect(orchestrator, 1431);
+
+      expect(stages["issue-pickup"]?.status).toBe("skipped");
+      expect(stages["feature-planning"]?.status).toBe("skipped");
+      expect(stages["feature-dev"]?.status).toBe("skipped");
+      expect(stages["feature-validate"]).toBeUndefined();
+    });
+
+    it("runs every stage when the binary says no: nothing proves the work survived", async () => {
+      withPrContext(null);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
+      stubResumePoint(orchestrator, null);
+
+      await detect(orchestrator, 1431);
+
+      expect(mockState.skipStage).not.toHaveBeenCalled();
+    });
+
+    it("does not ask when state already remembers dev completing", async () => {
+      withPrContext(null);
+      const state = { ...freshState(1431), stages: { "feature-dev": { status: "complete" } } };
+      const { orchestrator, mockState } = makeOrchestrator(state);
+      const point = stubResumePoint(orchestrator, "1 commit(s) beyond origin/main");
+
+      await detect(orchestrator, 1431);
+
+      expect(point).not.toHaveBeenCalled();
+      expect(mockState.skipStage).not.toHaveBeenCalled();
+    });
+
+    it("an open PR still wins: pr-merge is the later resume point", async () => {
+      withPrContext({ pr_number: 1447, status: "open", ac_fingerprint: FP });
+      const { orchestrator } = makeOrchestrator(freshState(1431));
+      const point = stubResumePoint(orchestrator, "restored preserved work");
+
+      await detect(orchestrator, 1431);
+
+      expect(point).not.toHaveBeenCalled();
+    });
+  });
+
   it("does not skip anything when the recorded PR is closed", async () => {
     withPrContext({ issue_number: 1431, pr_number: 1447, status: "closed" });
 
