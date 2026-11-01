@@ -133,6 +133,24 @@ const (
 	// ReasonMergeQueueEnqueueFailed is recorded (with PathRefused) when the
 	// enqueuePullRequest mutation itself failed.
 	ReasonMergeQueueEnqueueFailed = "merge-queue-enqueue-failed"
+	// ReasonReviewFixNeeded (PathPunt) hands a hold finding to the LLM stage for
+	// one fix round (#2730).
+	ReasonReviewFixNeeded = "review-fix-needed"
+	// ReasonReviewRoundCap (PathRefused): a hold finding survived
+	// MaxReviewFixRounds. The owner decides; no LLM spends a third round.
+	ReasonReviewRoundCap = "review-round-cap"
+	// ReasonReviewFixInProgress (PathRefused): a fix round is open, so its head
+	// is not the head that would be enqueued.
+	ReasonReviewFixInProgress = "review-fix-in-progress"
+	// ReasonReviewUnparseable (PathRefused): a marker comment did not parse. It
+	// must never read as a clean review.
+	ReasonReviewUnparseable = "review-unparseable"
+	// ReasonReviewFilingFailed (PathRefused): an open finding could not become
+	// an issue, so merging would lose it.
+	ReasonReviewFilingFailed = "review-filing-failed"
+	// ReasonReviewReadFailed (PathPunt): the review or its ledger could not be
+	// read. The LLM stage runs the same gate before it merges.
+	ReasonReviewReadFailed = "review-read-failed"
 )
 
 // CI-wait budget for the deterministic pr-merge path (Issue #297). When the
@@ -151,6 +169,16 @@ const (
 	// bounded so a repo with no CI at all cannot hold the deterministic path
 	// for the full 15 min before punting `no-checks-created`.
 	DefaultCINoCheckGracePolls = 4
+	// DefaultMergeabilityBackoffCap caps the doubling mergeability delay
+	// (#2730). With github.DefaultMergeabilityPolls that budgets 2+4+8+16x7 =
+	// 126 s. The old flat 20 s was shorter than GitHub takes to recompute after
+	// the base branch moves, so the wait expired on a PR that had no problem.
+	DefaultMergeabilityBackoffCap = 16 * time.Second
+	// mergeSettlePasses bounds how many CI waits one Run may spend. A CI wait
+	// can end on UNKNOWN, and that verdict can land as pending CI again, so the
+	// two waits alternate; the bound stops a PR whose base keeps moving from
+	// holding the path indefinitely.
+	mergeSettlePasses = 3
 )
 
 // PRMergeResult is the outcome of a single Run invocation.
@@ -378,10 +406,11 @@ func logPuntSnapshot(prNumber int, reason string, snap PRViewSnapshot) {
 		len(snap.StatusCheckRollup), strings.Join(checks, ", "), strings.Join(snap.RequiredChecks, ", "))
 }
 
-// The mergeability wait (#1933) is bounded by github.DefaultMergeabilityPolls x
-// github.DefaultMergeabilityPollInterval; github.MergeableUnknown is GitHub's
+// The mergeability wait (#1933) makes github.DefaultMergeabilityPolls polls from
+// github.DefaultMergeabilityPollInterval, doubling up to
+// DefaultMergeabilityBackoffCap (#2730); github.MergeableUnknown is GitHub's
 // "not computed yet" answer. They live in internal/github so the merge queue's
-// readiness wait shares the budget (#2584).
+// readiness wait shares the base values (#2584).
 
 // DefaultECPolls / DefaultECPollInterval mirror the eventual-consistency
 // budget the TS verifyPostMergeState uses. Re-declared here so the Go runner
@@ -413,7 +442,11 @@ type DeterministicRunner struct {
 	// thing on a different timescale.
 	mergeabilityPollInterval time.Duration
 	mergeabilityPollMax      int
-	now                      func() time.Time
+	// mergeabilityBackoffCap caps the doubling of waitForMergeability's delay
+	// (#2730). queueConflict keeps the plain interval: it re-reads a PR the
+	// queue already rejected, which is a shorter question.
+	mergeabilityBackoffCap time.Duration
+	now                    func() time.Time
 	// knowledgeConformance checks the issue's knowledge entries against the
 	// frontmatter contract. Injectable for tests; nil disables the gate.
 	knowledgeConformance func(workdir string, issueNumber int) (*knowledge.ConformanceResult, error)
@@ -425,6 +458,14 @@ type DeterministicRunner struct {
 	// on the merge-group commit, not for eventual consistency. Configured by
 	// pipeline.merge_queue.wait_timeout.
 	queueWait github.MergeQueueWaitOptions
+	// reviewFiling files the review findings left open at enqueue (#2730).
+	// nil means this runner cannot file, so such a finding refuses the merge.
+	reviewFiling ReviewFiling
+}
+
+// SetReviewFiling wires the filer the enqueue gate uses for open findings.
+func (r *DeterministicRunner) SetReviewFiling(f ReviewFiling) {
+	r.reviewFiling = f
 }
 
 // SetMergeQueueWaitTimeout sets the merge-queue wait budget (#2214). A
@@ -458,6 +499,7 @@ func NewDeterministicRunner() *DeterministicRunner {
 
 		mergeabilityPollInterval: github.DefaultMergeabilityPollInterval,
 		mergeabilityPollMax:      github.DefaultMergeabilityPolls,
+		mergeabilityBackoffCap:   DefaultMergeabilityBackoffCap,
 
 		now: time.Now,
 
@@ -556,101 +598,18 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		return finish(r.awaitMergeQueue(ctx, ph, mq, prNumber, snap, queueStatus), nil)
 	}
 
-	// Bounded mergeability wait (#1933). GitHub computes `mergeable`
-	// asynchronously and answers UNKNOWN for the first seconds after a PR is
-	// created; pr-merge starts seconds after pr-create, so the first snapshot
-	// of a pipeline-authored PR routinely has no verdict yet.
-	//
-	// This runs BEFORE Decide because UNKNOWN is the absence of a verdict, and
-	// every downstream test treats it as a negative one: Decide punts on
-	// `Mergeable != "MERGEABLE"` at its first test, and MergeBlockedByPendingCI
-	// demands MERGEABLE too, so an unresolved value did not merely mis-answer
-	// one question — it denied the #297 CI wait its turn entirely, and the LLM
-	// path then babysat CI to green at real per-run cost for work this path
-	// does for free once the verdict lands.
-	//
-	// It runs AFTER the steering gate for the reason that gate documents: a
-	// refusal must precede anything that can punt, and waiting here would
-	// otherwise delay a refusal the runner can already make.
-	if snap.State == "OPEN" && snap.Mergeable == github.MergeableUnknown {
-		waited, waitErr := r.waitForMergeability(ctx, gh, prNumber, snap)
-		if waitErr != nil {
-			ph.supersedeInFlight()
-			return finish(PRMergeResult{
-				Path:     PathPunt,
-				PRNumber: prNumber,
-				PRState:  snap.State,
-				Reason:   classifyFetchError(waitErr),
-			}, nil)
-		}
-		snap = waited
-		// Still no verdict when the budget expired. Punt — but name the absence
-		// rather than reporting a conflict the runner never observed.
-		if snap.State == "OPEN" && snap.Mergeable == github.MergeableUnknown {
-			ph.supersedeInFlight()
-			logPuntSnapshot(prNumber, ReasonMergeabilityUnresolved, snap)
-			return finish(PRMergeResult{
-				Path:     PathPunt,
-				PRNumber: prNumber,
-				PRState:  snap.State,
-				Reason:   ReasonMergeabilityUnresolved,
-			}, nil)
-		}
+	// Settle the snapshot: the mergeability wait (#1933) and the CI wait (#297)
+	// in whichever order the PR needs them. See settleMergeState. It runs AFTER
+	// the steering gate for the reason that gate documents: a refusal must
+	// precede anything that can punt, and waiting here would otherwise delay a
+	// refusal the runner can already make.
+	settled, punt := r.settleMergeState(ctx, gh, prNumber, snap)
+	if punt != nil {
+		ph.supersedeInFlight()
+		return finish(*punt, nil)
 	}
-
+	snap = settled
 	decision := Decide(snap)
-
-	// Bounded CI wait (Issue #297). When the ONLY thing blocking an otherwise
-	// mergeable, conflict-free, review-clean PR is in-flight CI, poll until the
-	// merge state clears instead of punting to the LLM path. pr-merge starts
-	// immediately after pr-create, so on repos whose CI takes minutes (the
-	// dogfood workspace ~10 min) the first snapshot is always BLOCKED/UNSTABLE
-	// with pending checks — pre-#297 that punted `dirty-merge-state: BLOCKED`
-	// on EVERY run and the LLM skill "won" only by babysitting CI, burning
-	// real per-run LLM spend for zero engineering work. On a hard blocker
-	// emerging mid-wait (a check fails, a conflict/review appears) or on timeout,
-	// re-Decide/return the appropriate punt so the LLM path still gets its turn.
-	//
-	// The predicate also holds for a BLOCKED/UNSTABLE PR with an EMPTY check
-	// rollup (#1027): GitHub has not created a check run yet, which is the
-	// shape of the very first snapshot on every run. That case is waited for
-	// a shorter grace window (ciNoCheckGrace polls) and punts
-	// `no-checks-created` if no run ever appears, so a repo without CI does
-	// not hold the deterministic path for the full budget.
-	if !decision.ShouldMerge && MergeBlockedByPendingCI(snap) {
-		waited, outcome, waitErr := r.waitForCleanMergeState(ctx, gh, prNumber, snap)
-		if waitErr != nil {
-			ph.supersedeInFlight()
-			return finish(PRMergeResult{
-				Path:     PathPunt,
-				PRNumber: prNumber,
-				PRState:  snap.State,
-				Reason:   classifyFetchError(waitErr),
-			}, nil)
-		}
-		snap = waited
-		switch outcome {
-		case ciWaitTimedOut:
-			ph.supersedeInFlight()
-			logPuntSnapshot(prNumber, ReasonCIWaitTimeout, snap)
-			return finish(PRMergeResult{
-				Path:     PathPunt,
-				PRNumber: prNumber,
-				PRState:  snap.State,
-				Reason:   withRequiredCheckEvidence(ReasonCIWaitTimeout, snap),
-			}, nil)
-		case ciWaitNoChecksCreated:
-			ph.supersedeInFlight()
-			logPuntSnapshot(prNumber, ReasonNoChecksCreated, snap)
-			return finish(PRMergeResult{
-				Path:     PathPunt,
-				PRNumber: prNumber,
-				PRState:  snap.State,
-				Reason:   ReasonNoChecksCreated,
-			}, nil)
-		}
-		decision = Decide(snap)
-	}
 	ph.complete("ci-gate")
 
 	// freshness-check is the merge-state verdict itself: whether the snapshot
@@ -709,6 +668,19 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 				Reason:   fmt.Sprintf("%s: %s", ReasonKnowledgeNonConformant, conformanceSummary(conf)),
 			}, nil)
 		}
+	}
+
+	// The enqueue gate (#2730) reads the review immediately before either merge
+	// path. Issues for open findings are filed here, ahead of the merge call,
+	// so nothing depends on a stage that may end. Like conformance, it maps to
+	// no registry phase.
+	if out := r.reviewGate(ctx, gh, workdir, issueNumber, prNumber); !out.Proceed {
+		return finish(PRMergeResult{
+			Path:     out.Path,
+			PRNumber: prNumber,
+			PRState:  snap.State,
+			Reason:   out.Reason,
+		}, nil)
 	}
 
 	// Re-check the head immediately before merging: the CI wait above can
@@ -824,7 +796,7 @@ func (r *DeterministicRunner) detectMergeQueue(ctx context.Context, gh ghClient,
 // commit, and a queue wait is never handed to the LLM skill.
 func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmitter, mq mergeQueueClient, prNumber int, snap PRViewSnapshot, st github.MergeQueueStatus) PRMergeResult {
 	log.Printf("pr-merge: PR #%d targets %s, which requires a merge queue — enqueueing and waiting up to %s",
-		prNumber, st.BaseRef, r.queueWaitTimeout())
+		prNumber, st.BaseRef, r.QueueWaitTimeout())
 	final, err := mq.EnqueueAndWait(ctx, st, r.queueWait)
 	if err == nil && final.State == "MERGED" {
 		ph.complete("merge")
@@ -909,7 +881,8 @@ func (r *DeterministicRunner) queueConflict(ctx context.Context, mq mergeQueueCl
 	return "", "", false
 }
 
-func (r *DeterministicRunner) queueWaitTimeout() time.Duration {
+// QueueWaitTimeout is the merge-queue wait this runner will honour.
+func (r *DeterministicRunner) QueueWaitTimeout() time.Duration {
 	if r.queueWait.Timeout > 0 {
 		return r.queueWait.Timeout
 	}
@@ -1082,8 +1055,81 @@ func (r *DeterministicRunner) fetchWithPolling(ctx context.Context, gh ghClient,
 	return last, nil
 }
 
-// waitForMergeability polls until GitHub has computed the PR's `mergeable`
-// field, or the bounded budget expires (#1933).
+// settleMergeState runs the mergeability and CI waits until the snapshot holds
+// a verdict, returning the snapshot for Decide or the punt that ended the wait.
+//
+// Mergeability first (#1933): GitHub computes `mergeable` asynchronously, and
+// UNKNOWN is the absence of a verdict that every downstream test reads as a
+// negative one. Decide punts on `Mergeable != "MERGEABLE"` at its first test,
+// and MergeBlockedByPendingCI demands MERGEABLE too, so an unresolved value
+// denies the #297 CI wait its turn entirely.
+//
+// Then the bounded CI wait (#297). When the ONLY thing blocking an otherwise
+// mergeable, conflict-free, review-clean PR is in-flight CI, poll until the
+// merge state clears: pr-merge starts immediately after pr-create, so on repos
+// whose CI takes minutes the first snapshot is always BLOCKED/UNSTABLE. A
+// BLOCKED/UNSTABLE PR with an EMPTY rollup (#1027) gets a shorter grace window
+// and punts `no-checks-created` if no run appears.
+//
+// The loop exists because the CI wait can END on UNKNOWN (#2730): it returns
+// any snapshot that is no longer blocked by pending CI, and a PR read just after
+// its base moved is UNKNOWN. That went straight to Decide and punted
+// `not-mergeable: UNKNOWN`, costing a full LLM stage, 18 seconds after main
+// moved in the #2726 run. So every verdict passes through the mergeability wait,
+// and Decide sees UNKNOWN never: a survivor punts with the named reason.
+func (r *DeterministicRunner) settleMergeState(ctx context.Context, gh ghClient, prNumber int, snap PRViewSnapshot) (PRViewSnapshot, *PRMergeResult) {
+	punt := func(reason string) *PRMergeResult {
+		return &PRMergeResult{Path: PathPunt, PRNumber: prNumber, PRState: snap.State, Reason: reason}
+	}
+	for pass := 0; ; pass++ {
+		if snap.State == "OPEN" && snap.Mergeable == github.MergeableUnknown {
+			waited, err := r.waitForMergeability(ctx, gh, prNumber, snap)
+			if err != nil {
+				return snap, punt(classifyFetchError(err))
+			}
+			snap = waited
+			// Still no verdict when the budget expired. Name the absence rather
+			// than reporting a conflict the runner never observed.
+			if snap.State == "OPEN" && snap.Mergeable == github.MergeableUnknown {
+				logPuntSnapshot(prNumber, ReasonMergeabilityUnresolved, snap)
+				return snap, punt(ReasonMergeabilityUnresolved)
+			}
+		}
+		if pass == mergeSettlePasses || Decide(snap).ShouldMerge || !MergeBlockedByPendingCI(snap) {
+			return snap, nil
+		}
+
+		waited, outcome, err := r.waitForCleanMergeState(ctx, gh, prNumber, snap)
+		if err != nil {
+			return snap, punt(classifyFetchError(err))
+		}
+		snap = waited
+		switch outcome {
+		case ciWaitTimedOut:
+			logPuntSnapshot(prNumber, ReasonCIWaitTimeout, snap)
+			return snap, punt(withRequiredCheckEvidence(ReasonCIWaitTimeout, snap))
+		case ciWaitNoChecksCreated:
+			logPuntSnapshot(prNumber, ReasonNoChecksCreated, snap)
+			return snap, punt(ReasonNoChecksCreated)
+		}
+	}
+}
+
+// mergeabilityDelay is the wait before mergeability poll n: the base interval,
+// doubling, capped at mergeabilityBackoffCap (#2730).
+func (r *DeterministicRunner) mergeabilityDelay(n int) time.Duration {
+	d := r.mergeabilityPollInterval
+	for i := 0; i < n && d < r.mergeabilityBackoffCap; i++ {
+		d *= 2
+	}
+	if d > r.mergeabilityBackoffCap {
+		return r.mergeabilityBackoffCap
+	}
+	return d
+}
+
+// waitForMergeability polls with exponential backoff until GitHub has computed
+// the PR's `mergeable` field, or the bounded budget expires (#1933, #2730).
 //
 // Returns the last snapshot seen either way; the caller decides what an
 // unresolved verdict means. It stops early on any resolution — including the
@@ -1101,7 +1147,7 @@ func (r *DeterministicRunner) waitForMergeability(ctx context.Context, gh ghClie
 		select {
 		case <-ctx.Done():
 			return last, ctx.Err()
-		case <-time.After(r.mergeabilityPollInterval):
+		case <-time.After(r.mergeabilityDelay(poll)):
 		}
 		snap, err := gh.View(ctx, prNumber)
 		if err != nil {
@@ -1560,6 +1606,21 @@ func (c *execGhClient) EditPRBody(ctx context.Context, prNumber int, body string
 		return normalizeGhError(err)
 	}
 	return nil
+}
+
+// ReviewComment implements reviewClient: the newest pipeline review comment
+// (`<!-- nightgauge:pr-review -->`), from the reviewer identity only. Anyone can
+// comment on a pull request, so a marker in someone else's comment is not a
+// review and must not be able to hold a merge or file an issue.
+func (c *execGhClient) ReviewComment(ctx context.Context, prNumber int) (ReviewComment, bool, error) {
+	filter := fmt.Sprintf(`.[] | select(.user.login == %q and (.body | startswith(%q))) | {body, updated_at}`,
+		reviewCommentAuthor, reviewCommentMarker)
+	out, err := github.RunGhSubprocess(ctx, c.workdir, "api", "--paginate",
+		fmt.Sprintf("repos/{owner}/{repo}/issues/%d/comments", prNumber), "--jq", filter)
+	if err != nil {
+		return ReviewComment{}, false, normalizeGhError(err)
+	}
+	return lastReviewComment(out)
 }
 
 // MergeQueueStatus implements mergeQueueClient over `gh api graphql`, with

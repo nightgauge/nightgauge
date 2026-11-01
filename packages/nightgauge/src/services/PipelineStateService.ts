@@ -19,6 +19,7 @@ import { IpcClient } from "./IpcClient";
 import {
   type NotifyCompleteParams,
   type NotifyPhaseTransitionParams,
+  type NotifyStageProgressParams,
   type NotifyStageTransitionParams,
   type SetPausedParams,
 } from "./ipcNotifyParams";
@@ -1716,6 +1717,27 @@ export class PipelineStateService implements vscode.Disposable {
    * post-routing, post-planning, epic context) so downstream consumers
    * like DiscordService can surface richer information.
    */
+  /**
+   * Tell Go the run's PR merged (#2730), so `autonomous status` reads a run in
+   * post-merge follow-up as that. Best-effort: this is a display fact, and the
+   * ground truth reaches Go through notifyComplete either way.
+   */
+  async notifyPrMerged(prNumber: number): Promise<void> {
+    const runId = this.wireIdentityOrSkip("pipeline.notifyStageProgress", "pr-merge");
+    if (runId === null) return;
+    try {
+      await this.ipc.call("pipeline.notifyStageProgress", {
+        repo: this.runRepo,
+        issueNumber: this.issueNumber ?? 0,
+        stage: "pr-merge",
+        mergedPr: prNumber,
+        runId,
+      } satisfies NotifyStageProgressParams);
+    } catch (err) {
+      console.debug("[PipelineStateService] notifyPrMerged failed (best-effort)", err);
+    }
+  }
+
   setMeta(meta: Partial<PipelineMeta>): void {
     if (!this._lastState) return;
     this._lastState.pipeline_meta = {

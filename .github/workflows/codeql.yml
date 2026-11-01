@@ -1,4 +1,5 @@
 name: CodeQL
+run-name: ${{ github.event.merge_group.head_commit.message }}
 
 # Static analysis for Go, TypeScript and the workflows themselves (the
 # `actions` language covers .github/workflows). CodeQL is free for public

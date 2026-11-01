@@ -11,9 +11,13 @@ and this project adheres to
 
 ### Fixed
 
-- Retry on a halted repository's Action Center card now resumes the repository
-  and closes the card. It used to freeze the scheduler until the daemon
-  restarted, while the status still read running (#2750).
+- A long merge-queue wait no longer ends in a paid LLM merge stage: the extension
+  takes its pr-merge timeout from the binary instead of a fixed 20 minutes. The
+  stage logs the `pr-stage` pid at spawn and names any signal that kills it.
+- The orphan reaper checks a process's start time before it kills, so it cannot
+  kill an unrelated process that reused a tracked pid.
+- A re-dispatched issue resumes at feature-validate from preserved work instead of
+  repeating planning and dev, when its acceptance criteria are unchanged (#2730).
 - Stages find their skills through `nightgauge skill roots`, so the extension and
   the binary can no longer disagree on which skills run. If that call fails, the
   stage fails with the reason. The write protection on a stage's skills tree now
@@ -21,6 +25,9 @@ and this project adheres to
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.
+- Retry on a halted repository's Action Center card now resumes the repository
+  and closes the card. It used to freeze the scheduler until the daemon
+  restarted, while the status still read running (#2750).
 - The Claude plugin keeps working after an extension upgrade. Its marketplace now
   lives in global storage, and an existing install moves there with its plugin data
   intact. A plugin that failed to load is repaired on activation, or Claude Code's

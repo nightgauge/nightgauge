@@ -11850,10 +11850,30 @@ func reloadSafetyLine(runs []ipc.RunningPipelineInfo) string {
 			// can tell. Dropping it would manufacture a false "safe".
 			label += " (no progress recently)"
 		}
+		if r.MergedPR > 0 {
+			label += " (" + mergedFollowUpLabel(r.MergedPR) + ")"
+		}
 		names = append(names, label)
 	}
 	return fmt.Sprintf("%d pipeline(s) still running (%s); reload is not safe yet",
 		len(runs), strings.Join(names, ", "))
+}
+
+// mergedFollowUpLabel is how a run past its merge reads (#2730). Such a run stays
+// registered, at stage pr-merge, until its follow-up ends, and that read as a run
+// waiting to merge. The work is on main and what is left is cleanup.
+func mergedFollowUpLabel(pr int) string {
+	return fmt.Sprintf("merged #%d, post-merge follow-up", pr)
+}
+
+// mergedPRFor returns the merged PR of the running pipeline for repo#number, or 0.
+func mergedPRFor(runs []ipc.RunningPipelineInfo, repo string, number int) int {
+	for _, r := range runs {
+		if r.Repo == repo && r.IssueNumber == number {
+			return r.MergedPR
+		}
+	}
+	return 0
 }
 
 // shortRepoName reduces "owner/some-repo" to "some-repo" for display.
@@ -12102,6 +12122,10 @@ func autonomousStatusCmd() *cobra.Command {
 					repoShort := r.Repo
 					if idx := strings.LastIndex(r.Repo, "/"); idx >= 0 {
 						repoShort = r.Repo[idx+1:]
+					}
+					if pr := mergedPRFor(summary.Runs, r.Repo, r.Number); pr > 0 {
+						fmt.Printf("  #%-4d %-12s %s elapsed — %s\n", r.Number, repoShort, elapsed, mergedFollowUpLabel(pr))
+						continue
 					}
 					fmt.Printf("  #%-4d %-12s %s elapsed\n", r.Number, repoShort, elapsed)
 				}

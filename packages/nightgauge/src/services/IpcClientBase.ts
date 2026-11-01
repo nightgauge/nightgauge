@@ -1083,6 +1083,8 @@ export interface RunningPipelineInfo {
   stale: boolean;
   /** "autonomous" when the scheduler dispatched it, "manual" otherwise. */
   source: string;
+  /** The PR this run merged; set means post-merge follow-up, whatever stage says (#2730). */
+  mergedPr?: number;
 }
 
 /**

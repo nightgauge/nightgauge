@@ -1,9 +1,10 @@
 # Lint — formatting, ESLint, license-header guard, skill metadata.
 name: Lint
+run-name: ${{ github.event.merge_group.head_commit.message }}
 
-# No push to main (#2055): the strict ruleset merges only an up-to-date PR whose
-# squash tree is the tree this PR run already linted, so a push run re-checks
-# an identical tree.
+# No push to main (#2055): the merge queue tests the commit that lands, so a push
+# run re-checks an identical tree. The slowest self-tests run in the queue only;
+# the local gate has already run them.
 on:
   pull_request:
     branches: [main]
@@ -166,12 +167,14 @@ jobs:
       # `git diff --exit-code` or to `exit 0` produces a fully green build,
       # which is #529 all over again.
       - name: Mirror drift gate self-test
+        if: ${{ github.event_name != 'pull_request' }}
         run: bash scripts/test-mirror-drift-gate.sh
       # The local gate's own concurrency and failure-reporting contract (#1983).
       # Runs here too because the helpers it asserts are what every other step's
       # failure is read through, and because a gate that reports a red it cannot
       # explain trains people to dismiss reds.
       - name: ci-local.sh concurrency and failure-reporting contract
+        if: ${{ github.event_name != 'pull_request' }}
         run: bash scripts/test-ci-local-concurrency.sh
       # The local gate's change-scoping contract (#1985). `--changed` can remove
       # the two Go suites from a local run, and this is what holds the rule that
@@ -190,6 +193,7 @@ jobs:
       - name: ci-local.sh gate ledger reuse
         run: bash scripts/test-ci-local-gate-reuse.sh
       - name: Agent-skill install target regression suite
+        if: ${{ github.event_name != 'pull_request' }}
         run: bash scripts/test-install-agent-skills-targets.sh
       # Read-only, and free to sit anywhere in this job: `--check-mirror`
       # regenerates into a temp destination and compares the two trees — paths,

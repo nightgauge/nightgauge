@@ -110,6 +110,31 @@ export function createLineSplitter(onLine: (line: string) => void): {
   };
 }
 
+/** `nightgauge pr-stage budget --json`: every limit derives from the queue wait. */
+export interface PrStageBudget {
+  queue_wait_ms: number;
+  cli_timeout_ms: number;
+  client_timeout_ms: number;
+}
+
+/**
+ * Parse the budget verb's output, or throw. The client limit comes from the
+ * binary because a constant here is how a 20-minute kill came to sit under a
+ * 90-minute wait (#2730). A budget that breaks the ordering is rejected rather
+ * than used: it would reproduce the same kill.
+ */
+export function parsePrStageBudget(stdout: string): PrStageBudget {
+  const b = JSON.parse(stdout.trim()) as Partial<PrStageBudget>;
+  const ordered =
+    typeof b.queue_wait_ms === "number" &&
+    typeof b.cli_timeout_ms === "number" &&
+    typeof b.client_timeout_ms === "number" &&
+    b.client_timeout_ms > b.cli_timeout_ms &&
+    b.cli_timeout_ms > b.queue_wait_ms;
+  if (!ordered) throw new Error(`invalid pr-stage budget: ${stdout.trim()}`);
+  return b as PrStageBudget;
+}
+
 export interface PhaseStreamRunOptions {
   cwd: string;
   timeoutMs: number;
@@ -117,6 +142,8 @@ export interface PhaseStreamRunOptions {
   onPhase: (t: PrStagePhaseTransition) => void;
   /** Called for stderr lines that are not phase events. */
   onLog?: (line: string) => void;
+  /** Called with the child's pid, so a later signal death can be attributed. */
+  onSpawn?: (pid: number) => void;
 }
 
 export interface PhaseStreamRunResult {
@@ -137,6 +164,7 @@ export function runWithPhaseStream(
 ): Promise<PhaseStreamRunResult> {
   return new Promise<PhaseStreamRunResult>((resolve, reject) => {
     const child = spawn(binary, args, { cwd: opts.cwd });
+    if (child.pid !== undefined) opts.onSpawn?.(child.pid);
 
     let stdout = "";
     let settled = false;
@@ -179,8 +207,9 @@ export function runWithPhaseStream(
     child.stderr?.on("data", (c: string) => stderrLines.push(c));
 
     child.on("error", (err) => finish(err));
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (code === 0) finish();
+      else if (signal) finish(new Error(`pr-stage killed by signal ${signal}`));
       else finish(new Error(`pr-stage exited with code ${code}`));
     });
   });

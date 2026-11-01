@@ -319,6 +319,26 @@ refute_block() {
 
 assert_block changes 'run_heavy:.*steps\.classify\.outputs\.run_heavy' \
   "the changes job exports run_heavy"
+assert_block changes "run_heavy:.*steps\.queue\.outputs\.enforced == 'true' && 'false'" \
+  "a pull request leaves the heavy suites to an enforced merge queue"
+assert_block changes "if grep -qx merge_queue" \
+  "enforcement is read from the live ruleset"
+assert_block changes 'if: .*github\.event_name == .pull_request.' \
+  "only a pull request can skip on the queue's account"
+if [ "$(jq '[.rules[].type] | index("merge_queue") != null' "$REPO_ROOT/.github/rulesets/main-branch.json")" = "true" ]; then
+  ok "the recorded ruleset requires the merge queue"
+else
+  bad "the recorded ruleset requires the merge queue" "no merge_queue rule"
+fi
+# The queue is the only place the heavy suites run, so losing its trigger would
+# leave them running nowhere, with every check green.
+for wf in "$WORKFLOW" "$REPO_ROOT/.github/workflows/lint.yml"; do
+  if [ "$(yq '.on | has("merge_group")' "$wf")" = "true" ]; then
+    ok "$(basename "$wf") runs in the merge queue"
+  else
+    bad "$(basename "$wf") runs in the merge queue" "no merge_group trigger"
+  fi
+done
 assert_block changes 'scripts/ci-change-class\.sh' \
   "the changes job runs scripts/ci-change-class.sh"
 assert_block changes 'github\.event\.pull_request\.base\.sha' \
