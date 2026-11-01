@@ -82,7 +82,7 @@ func (s *Store) saveStreaksLocked(f streakFile) error {
 	}
 	path := s.streakPath()
 	// Per-writer temp path, for the reason materializedTempPath spells out
-	// (#1425): the read-modify-write above is serialised by acquireDir, but
+	// (#1425): the read-modify-write above is serialised by acquireSection, but
 	// that lock is fail-open, and a shared staging name turns a lost lock into
 	// a corrupted counts file rather than a lost update.
 	tmp, err := materializedTempPath(path)
@@ -112,7 +112,10 @@ func (s *Store) IncrementStreak(key string) (int, error) {
 		return 0, fmt.Errorf("attention: increment streak requires a key")
 	}
 
-	release := s.acquireSection()
+	release, err := s.acquireSection()
+	if err != nil {
+		return 0, err
+	}
 	defer release()
 
 	f := s.loadStreaksLocked()
@@ -135,7 +138,10 @@ func (s *Store) ResetStreak(key string) error {
 		return fmt.Errorf("attention: reset streak requires a key")
 	}
 
-	release := s.acquireSection()
+	release, err := s.acquireSection()
+	if err != nil {
+		return err
+	}
 	defer release()
 
 	f := s.loadStreaksLocked()
@@ -146,12 +152,18 @@ func (s *Store) ResetStreak(key string) error {
 	return s.saveStreaksLocked(f)
 }
 
-// StreakCount reports the current count for key without changing it.
+// StreakCount reports the current count for key without changing it. A count
+// it could not read is 0, the same loss-of-signal loadStreaksLocked accepts for
+// an unreadable file; the store being busy is logged so it stays visible.
 func (s *Store) StreakCount(key string) int {
 	if s.err != nil {
 		return 0
 	}
-	release := s.acquireSection()
+	release, err := s.acquireSection()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "attention: streak count for %q unavailable (fail-open): %v\n", key, err)
+		return 0
+	}
 	defer release()
 
 	return s.loadStreaksLocked().Counts[key]

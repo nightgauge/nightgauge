@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- Retry on a halted repository's Action Center card now resumes the repository
+  and closes the card. It used to freeze the scheduler until the daemon
+  restarted, while the status still read running (#2750).
 - Stages find their skills through `nightgauge skill roots`, so the extension and
   the binary can no longer disagree on which skills run. If that call fails, the
   stage fails with the reason. The write protection on a stage's skills tree now

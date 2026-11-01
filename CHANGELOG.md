@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Retry on a halted repository's Action Center card no longer deadlocks the
+  attention store and stops the scheduler. Retry, Retry with escalation and
+  Resume now release the halt and close the card as resolved, with no daemon
+  restart. Attention work reachable from a card's action runs off the store
+  lock, and a static test holds every future action to that. Background writers
+  now give up after 25 seconds with a logged warning, so a stuck store slows a
+  scan instead of stopping it. A card raised during such a wait is dropped; a
+  standing card returns on the next scan. Startup recovery moves a closed issue
+  to Done rather than Ready. When it cannot read the issue it leaves the status
+  alone and checks again once GitHub answers (#2750).
+
 - A pipeline run gates a tree once. `scripts/ci-local.sh` records every run in a
   ledger keyed on the exact tree and skips a repeat that already passed, saying
   what passed it (`--no-reuse` forces a run). feature-validate's CI parity phase
