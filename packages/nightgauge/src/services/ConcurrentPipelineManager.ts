@@ -3376,7 +3376,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           // label — a validation_error (harness/bookkeeping fault) must not
           // present as an unclassifiable organic failure on the halt card.
           const pauseTerminalKind = pipelineResult?.terminalKind || "unclassified";
-          const pauseReason = `haltQueueOnSlotFailure: issue #${slot.issueNumber} failed at ${failedStage}`;
+          // #2841: a conflict halt names its files, so the card must carry them.
+          const pauseDetail =
+            pauseTerminalKind === "merge_conflict" && pipelineResult?.error
+              ? `: ${pipelineResult.error.message}`
+              : "";
+          const pauseReason = `haltQueueOnSlotFailure: issue #${slot.issueNumber} failed at ${failedStage}${pauseDetail}`;
           // #1148: pauseRepo, not pause. Both verbs raise the same
           // terminal-failure card and both latch until an explicit human
           // Resume — the ONLY difference is how much stops. `autonomousPause`

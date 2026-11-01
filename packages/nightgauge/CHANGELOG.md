@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- A merge-queue conflict now goes through conflict recovery instead of halting
+  the repository, and the halt card names the files when recovery cannot
+  resolve it.
 - A long merge-queue wait no longer ends in a paid LLM merge stage: the extension
   takes its pr-merge timeout from the binary instead of a fixed 20 minutes. The
   stage logs the `pr-stage` pid at spawn and names any signal that kills it.

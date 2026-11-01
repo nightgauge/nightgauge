@@ -3213,7 +3213,18 @@ nightgauge pr-stage review-round end <issue> [--workdir W]
 
 # Whether a re-dispatch can resume at feature-validate, restoring preserved work
 nightgauge pr-stage resume-point <issue> [--workdir W]
+
+# Run conflict recovery for a refused pr-merge; read `outcome`, not the exit code
+nightgauge pr-stage recover <issue> --reason <text> [--workdir W] [--json]
 ```
+
+`pr-stage recover` reports one of four outcomes:
+
+- `recovered`: recovery landed the merge.
+- `rewind`: re-dispatch feature-dev on the same branch using `backtrack_signal`, at most
+  `max_dev_redispatch` times.
+- `escalated`: recovery could not resolve the conflict; `conflicting_files` names the files.
+- `unmatched`: no recovery action applies, or conflict recovery is disabled.
 
 ### PR Operations
 

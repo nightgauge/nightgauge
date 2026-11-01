@@ -56,6 +56,9 @@ type ConflictRecoveryLoop struct {
 	// conflict-context-{N}.json exists. Rebasing captures it on a real
 	// conflict, or re-enqueues when the CONFLICTING read was stale.
 	rebaseFallback RecoveryAction
+	// changelogUnion runs ahead of rebaseFallback, so a conflict confined to
+	// changelogs never reaches an LLM stage (#2841).
+	changelogUnion *ChangelogUnionMerge
 }
 
 // NewConflictRecoveryLoop builds the action with the configured re-dispatch
@@ -72,6 +75,13 @@ func NewConflictRecoveryLoop(maxDevRedispatch int) *ConflictRecoveryLoop {
 // registry's BranchOutOfDate.
 func (a *ConflictRecoveryLoop) WithRebaseFallback(fallback RecoveryAction) *ConflictRecoveryLoop {
 	a.rebaseFallback = fallback
+	return a
+}
+
+// WithChangelogUnion sets the step that resolves a changelog-only merge-queue
+// conflict before the rebase fallback runs (#2841).
+func (a *ConflictRecoveryLoop) WithChangelogUnion(step *ChangelogUnionMerge) *ConflictRecoveryLoop {
+	a.changelogUnion = step
 	return a
 }
 
@@ -266,12 +276,21 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 	contextPath := filepath.Join(pipelineDir, fmt.Sprintf("conflict-context-%d.json", failure.IssueNumber))
 
 	data, err := os.ReadFile(contextPath)
+	var unionEvidence []string
+	if err != nil && os.IsNotExist(err) && a.changelogUnion != nil && isQueueConflict(failure) {
+		res, handled, evidence := a.changelogUnion.Attempt(ctx, failure, a.Name())
+		if handled {
+			res.Evidence = append([]string{"queue_conflict=true"}, res.Evidence...)
+			return res
+		}
+		unionEvidence = evidence
+	}
 	if err != nil && os.IsNotExist(err) && a.rebaseFallback != nil && isQueueConflict(failure) {
 		// A merge-queue conflict never rebased locally, so there is no context
 		// yet: rebase to capture it (rewinds to feature-dev) or, when the
 		// conflict was stale, re-enqueue (#2611).
 		res := a.rebaseFallback.Execute(ctx, failure)
-		res.Evidence = append([]string{"queue_conflict=true"}, res.Evidence...)
+		res.Evidence = append(append([]string{"queue_conflict=true"}, unionEvidence...), res.Evidence...)
 		return res
 	}
 	if err != nil {

@@ -693,6 +693,34 @@ describe("AutoRetroService", () => {
       expect(findings[0].recommendation).toContain("credentials");
     });
 
+    describe("an unresolved queue conflict (Issue #2841)", () => {
+      const terminalReason =
+        "[merge-conflict] deterministic pr-merge refused: merge-queue-failed: merge conflict " +
+        "with main: PR #7 is CONFLICTING (mergeStateStatus DIRTY); conflicting files: src/a.ts, b.go";
+
+      it.each([
+        ["the terminal reason alone", terminalReason],
+        // The gate and the punt log print this, and the run log joins the corpus.
+        // The prose arm must not claim the category and shed the named files.
+        ["a log that trips the merge-blocked prose arm", "PR #7 mergeStateStatus=DIRTY"],
+      ])("names the files as merge-blocked from %s", (_name, text) => {
+        const findings = AutoRetroService.classifyFailure(
+          {
+            text,
+            sourcesAnalyzed: ["session_log"],
+            terminalKind: "merge_conflict",
+            terminalReason,
+          },
+          "pr-merge"
+        );
+        expect(findings[0].category).toBe("merge-blocked");
+        expect(findings[0].category).not.toBe("timeout");
+        const evidence = findings[0].evidence.join("\n");
+        expect(evidence).toContain("src/a.ts");
+        expect(evidence).toContain("b.go");
+      });
+    });
+
     it.each([
       [
         "context_window_exceeded",

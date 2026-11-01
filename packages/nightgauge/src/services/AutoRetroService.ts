@@ -619,6 +619,10 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   gate_plugin_missing: "gate-plugin-missing",
   git_transport_auth_failed: "credential-failure",
 
+  // Conflict recovery gave up: the PR cannot merge until the files the terminal
+  // reason names are resolved (#2841).
+  merge_conflict: "merge-blocked",
+
   // A person owns the next move.
   architecture_approval_required: "human-decision-required",
   not_pipeline_actionable: "human-decision-required",
@@ -768,8 +772,11 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
   // classify AHEAD of skill-no-op below. The orchestrator threads the blocker
   // reason into the terminal_reason source, e.g.
   // `blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)`.
-  ({ text, failedStage, feedbackSignals }) => {
+  ({ text, failedStage, feedbackSignals, terminalKind }) => {
     if (failedStage !== "pr-merge") return null;
+    // The record already says merge-blocked, and its reason names the files.
+    // Claiming the category here would drop that finding as a duplicate (#2841).
+    if (terminalKind === "merge_conflict") return null;
     const m = text.match(
       /blocked by (?:failing check|required review|review|merge conflict|non-mergeable state)[^\n]*/i
     );

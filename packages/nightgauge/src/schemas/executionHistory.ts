@@ -587,6 +587,7 @@ export const TerminalFailureKindSchema = z.enum([
   "validation_failed", // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure
   "branch_forked", // Issue #163 — branch diverged from its remote; pushes rejected non-fast-forward, unrecoverable by retry
   "runaway_progress", // Issue #3783 — progress-based runaway monitor fired; treated like stall_kill
+  "merge_conflict", // Issue #2841 — conflict recovery could not land a merge-queue conflict
   "pr_merge_unmerged", // Issue #3691 — pr-merge exited cleanly but the PR was not actually merged
   "blocked_dependency", // Issue #305 — scheduler dispatched an issue whose blockedBy dependencies are still open; non-failure deferral
   "architecture_approval_required", // Issue #4098/#4222 — architecture-approval gate halted the run before feature-dev for a human-owned decision
