@@ -226,6 +226,12 @@ on core, #2225). The runner therefore:
    `conflict-context-{N}.json` and rewinds to `feature-dev` on the same
    branch; a stale one pushes and re-enqueues. Failed merge-group checks and
    closed PRs keep their reasons and are not routed to conflict recovery.
+
+   Both orchestration paths run the same recovery. The VS Code path reaches it
+   through `nightgauge pr-stage recover`. A conflict confined to `CHANGELOG.md`
+   files is unioned onto a merge of the base, without an LLM stage. Rewinds to
+   feature-dev stop at `max_dev_redispatch`, and an unresolved conflict halts as
+   `merge_conflict`, naming the files on the card and in the retro (#2841).
    An `UNMERGEABLE` entry on a PR that still reads `MERGEABLE` or `UNKNOWN`
    is blocked behind an entry ahead, so the wait continues. If GitHub removes
    that entry while the PR reads `MERGEABLE`, the wait re-enqueues it; once
@@ -313,30 +319,30 @@ LLM path.
 
 ### Failure modes
 
-| Reason                                      | Cause                                                                           | What happens                    |
-| ------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------- |
-| `no-pr-context-file`                        | `pr-{N}.json` missing (pr-create did not write it)                              | Punt → LLM                      |
-| `pr-context-invalid-json`                   | Corrupted pr-{N}.json                                                           | Punt → LLM                      |
-| `pr-context-missing-pr-number`              | pr-{N}.json present but `pr_number` is empty/zero                               | Punt → LLM                      |
-| `gh-unavailable`                            | `gh` CLI not on PATH                                                            | Punt → LLM                      |
-| `rate-limited`                              | GitHub or `gh` rate limit                                                       | Defer → cooldown (ADR-006)      |
-| `unexpected-error: …`                       | Anything else from `gh`                                                         | Punt → LLM                      |
-| `merge-call-failed: …`                      | Pre-flight passed but `gh pr merge` returned non-zero                           | Punt → LLM                      |
-| `not-mergeable`                             | `mergeable != MERGEABLE`                                                        | Punt → LLM                      |
-| `dirty-merge-state`                         | `mergeStateStatus != CLEAN`                                                     | Punt → LLM                      |
-| `failed-ci-checks: <name>`                  | At least one `FAILURE` or `ERROR` check                                         | Punt → LLM                      |
-| `review-not-approved: …`                    | `REVIEW_REQUIRED` or `CHANGES_REQUESTED`                                        | Punt → LLM                      |
-| `merge-ec-timeout: …`                       | Merge call succeeded but post-merge re-fetch errored or never observed `MERGED` | Punt → LLM (see #4070)          |
-| `merge-queue-failed: merge conflict with …` | Queued PR removed because it conflicts with its base                            | Conflict recovery → feature-dev |
-| `merge-queue-failed: …`                     | Queued PR removed from the merge queue (failed group, unmergeable, closed)      | Stage fails, no LLM             |
-| `merge-queue-timeout: …`                    | Queued PR not merged within `pipeline.merge_queue.wait_timeout`                 | Stage fails, no LLM             |
-| `review-fix-needed: …`                      | A hold finding, with fix rounds left                                            | Punt → LLM, one fix round       |
-| `review-round-cap: …`                       | A hold finding after `MaxReviewFixRounds`                                       | Stage fails, no LLM             |
-| `review-fix-in-progress`                    | A fix round is open                                                             | Stage fails, no LLM             |
-| `review-unparseable: …`                     | A review comment did not parse                                                  | Stage fails, no LLM             |
-| `review-filing-failed: …`                   | An open finding could not become an issue                                       | Stage fails, no LLM             |
-| `review-read-failed: …`                     | The review or its ledger could not be read                                      | Punt → LLM                      |
-| `merge-queue-enqueue-failed: …`             | `enqueuePullRequest` returned an error                                          | Stage fails, no LLM             |
+| Reason                                      | Cause                                                                           | What happens                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `no-pr-context-file`                        | `pr-{N}.json` missing (pr-create did not write it)                              | Punt → LLM                                            |
+| `pr-context-invalid-json`                   | Corrupted pr-{N}.json                                                           | Punt → LLM                                            |
+| `pr-context-missing-pr-number`              | pr-{N}.json present but `pr_number` is empty/zero                               | Punt → LLM                                            |
+| `gh-unavailable`                            | `gh` CLI not on PATH                                                            | Punt → LLM                                            |
+| `rate-limited`                              | GitHub or `gh` rate limit                                                       | Defer → cooldown (ADR-006)                            |
+| `unexpected-error: …`                       | Anything else from `gh`                                                         | Punt → LLM                                            |
+| `merge-call-failed: …`                      | Pre-flight passed but `gh pr merge` returned non-zero                           | Punt → LLM                                            |
+| `not-mergeable`                             | `mergeable != MERGEABLE`                                                        | Punt → LLM                                            |
+| `dirty-merge-state`                         | `mergeStateStatus != CLEAN`                                                     | Punt → LLM                                            |
+| `failed-ci-checks: <name>`                  | At least one `FAILURE` or `ERROR` check                                         | Punt → LLM                                            |
+| `review-not-approved: …`                    | `REVIEW_REQUIRED` or `CHANGES_REQUESTED`                                        | Punt → LLM                                            |
+| `merge-ec-timeout: …`                       | Merge call succeeded but post-merge re-fetch errored or never observed `MERGED` | Punt → LLM (see #4070)                                |
+| `merge-queue-failed: merge conflict with …` | Queued PR removed because it conflicts with its base                            | Changelog union, else conflict recovery → feature-dev |
+| `merge-queue-failed: …`                     | Queued PR removed from the merge queue (failed group, unmergeable, closed)      | Stage fails, no LLM                                   |
+| `merge-queue-timeout: …`                    | Queued PR not merged within `pipeline.merge_queue.wait_timeout`                 | Stage fails, no LLM                                   |
+| `review-fix-needed: …`                      | A hold finding, with fix rounds left                                            | Punt → LLM, one fix round                             |
+| `review-round-cap: …`                       | A hold finding after `MaxReviewFixRounds`                                       | Stage fails, no LLM                                   |
+| `review-fix-in-progress`                    | A fix round is open                                                             | Stage fails, no LLM                                   |
+| `review-unparseable: …`                     | A review comment did not parse                                                  | Stage fails, no LLM                                   |
+| `review-filing-failed: …`                   | An open finding could not become an issue                                       | Stage fails, no LLM                                   |
+| `review-read-failed: …`                     | The review or its ledger could not be read                                      | Punt → LLM                                            |
+| `merge-queue-enqueue-failed: …`             | `enqueuePullRequest` returned an error                                          | Stage fails, no LLM                                   |
 
 > **#4070 — no self-reported merge on post-verify failure.** The deterministic
 > runner used to return `PathMerged` when the post-merge re-fetch _errored_

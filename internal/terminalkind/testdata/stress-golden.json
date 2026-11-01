@@ -26,6 +26,21 @@
       "signal": ""
     },
     {
+      "input": "[merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[MERGE-CONFLICT]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -2746,6 +2761,266 @@
       "signal": ""
     },
     {
+      "input": "[merge-conflict] | stage_budget_exceeded:",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | network unavailable: extended github connectivity loss",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | adapter_incompatible",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [model-stream-stalled]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | stream idle timeout",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | overloaded",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | socket connection was closed",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [rate-limit-quota-exhausted]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [adapter-auth-failed]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [environment-halt]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [gate-plugin-missing]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | ai_apicallerror context_length_exceeded",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | not_found_error model",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | pipeline-start-failure issue-closed",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [blocked-dependency]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | architecture approval required",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | github-quota-low",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | github-network-outage",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | secondary rate limit",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [pr-merge-unmerged",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [stage:worktree-containment]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [not-pipeline-actionable]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [dev-produced-no-changes]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [dev-handoff-missing]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [dev-step-cap-reached]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [dev-step-progress-unproven]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | invalid auth method",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | premature turn end",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | worktree_uncommitted",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | budget_ceiling_hit",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [runaway-progress-exceeded]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [runaway-ceiling-exceeded]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [cost-cap-exceeded]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | stage-no-output-timeout",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [stall-killed]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | pipeline_budget_exceeded",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | schema validation",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [no-changes-produced]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [validation-failed]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [validation-inconclusive]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [branch-forked]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [commit-orphaned]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [adapter-permission-rejected]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [permission-denied]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | stage_context_unreadable",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | dev_build_verification_missing",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | dev_build_verification_failed",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [dev-context-stale]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | dev_tests_failed",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | pr_merge_lookup_failed",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | subagent crash",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "stage_budget_exceeded: | network unavailable: extended github connectivity loss",
       "kind": "budget_exceeded",
       "signal": ""
@@ -2993,6 +3268,11 @@
     {
       "input": "stage_budget_exceeded: | subagent crash",
       "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -3246,6 +3526,11 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "adapter_incompatible | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -3493,6 +3778,11 @@
     {
       "input": "adapter_incompatible | subagent crash",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -3746,6 +4036,11 @@
       "signal": ""
     },
     {
+      "input": "stream idle timeout | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "stream idle timeout | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -3994,6 +4289,11 @@
       "input": "stream idle timeout | subagent crash",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "overloaded | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
     },
     {
       "input": "overloaded | stage_budget_exceeded:",
@@ -4246,6 +4546,11 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "socket connection was closed | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "socket connection was closed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -4494,6 +4799,11 @@
       "input": "socket connection was closed | subagent crash",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
     },
     {
       "input": "[rate-limit-quota-exhausted] | stage_budget_exceeded:",
@@ -4746,6 +5056,11 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[adapter-auth-failed] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[adapter-auth-failed] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -4994,6 +5309,11 @@
       "input": "[adapter-auth-failed] | subagent crash",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[environment-halt] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
     },
     {
       "input": "[environment-halt] | stage_budget_exceeded:",
@@ -5246,6 +5566,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[gate-plugin-missing] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[gate-plugin-missing] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -5496,6 +5821,11 @@
       "signal": "gate_plugin_missing"
     },
     {
+      "input": "ai_apicallerror context_length_exceeded | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -5743,6 +6073,11 @@
     {
       "input": "ai_apicallerror context_length_exceeded | subagent crash",
       "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -5996,6 +6331,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -6243,6 +6583,11 @@
     {
       "input": "pipeline-start-failure issue-closed | subagent crash",
       "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -6496,6 +6841,11 @@
       "signal": ""
     },
     {
+      "input": "architecture approval required | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "architecture approval required | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -6744,6 +7094,11 @@
       "input": "architecture approval required | subagent crash",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
+    },
+    {
+      "input": "github-quota-low | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
     },
     {
       "input": "github-quota-low | stage_budget_exceeded:",
@@ -6996,6 +7351,11 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-network-outage | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "github-network-outage | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7246,6 +7606,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "secondary rate limit | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "secondary rate limit | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7493,6 +7858,11 @@
     {
       "input": "secondary rate limit | subagent crash",
       "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -7746,6 +8116,11 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7993,6 +8368,11 @@
     {
       "input": "[stage:worktree-containment] | subagent crash",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -8246,6 +8626,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -8493,6 +8878,11 @@
     {
       "input": "[dev-produced-no-changes] | subagent crash",
       "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -8746,6 +9136,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-cap-reached] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-cap-reached] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -8993,6 +9388,11 @@
     {
       "input": "[dev-step-cap-reached] | subagent crash",
       "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -9246,6 +9646,11 @@
       "signal": ""
     },
     {
+      "input": "invalid auth method | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "invalid auth method | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -9493,6 +9898,11 @@
     {
       "input": "invalid auth method | subagent crash",
       "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -9746,6 +10156,11 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "worktree_uncommitted | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -9993,6 +10408,11 @@
     {
       "input": "worktree_uncommitted | subagent crash",
       "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -10246,6 +10666,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[runaway-progress-exceeded] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -10493,6 +10918,11 @@
     {
       "input": "[runaway-progress-exceeded] | subagent crash",
       "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -10746,6 +11176,11 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[cost-cap-exceeded] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -10993,6 +11428,11 @@
     {
       "input": "[cost-cap-exceeded] | subagent crash",
       "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -11246,6 +11686,11 @@
       "signal": ""
     },
     {
+      "input": "[stall-killed] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -11493,6 +11938,11 @@
     {
       "input": "[stall-killed] | subagent crash",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -11746,6 +12196,11 @@
       "signal": ""
     },
     {
+      "input": "schema validation | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "schema validation | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -11993,6 +12448,11 @@
     {
       "input": "schema validation | subagent crash",
       "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -12246,6 +12706,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-failed] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[validation-failed] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -12493,6 +12958,11 @@
     {
       "input": "[validation-failed] | subagent crash",
       "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -12746,6 +13216,11 @@
       "signal": ""
     },
     {
+      "input": "[branch-forked] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[branch-forked] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -12993,6 +13468,11 @@
     {
       "input": "[branch-forked] | subagent crash",
       "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -13246,6 +13726,11 @@
       "signal": ""
     },
     {
+      "input": "[adapter-permission-rejected] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[adapter-permission-rejected] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -13493,6 +13978,11 @@
     {
       "input": "[adapter-permission-rejected] | subagent crash",
       "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -13746,6 +14236,11 @@
       "signal": ""
     },
     {
+      "input": "stage_context_unreadable | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "stage_context_unreadable | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -13993,6 +14488,11 @@
     {
       "input": "stage_context_unreadable | subagent crash",
       "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -14246,6 +14746,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_failed | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_failed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -14493,6 +14998,11 @@
     {
       "input": "dev_build_verification_failed | subagent crash",
       "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "[dev-context-stale] | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {
@@ -14746,6 +15256,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -14996,6 +15511,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -15243,6 +15763,11 @@
     {
       "input": "pr_merge_lookup_failed | subagent crash",
       "kind": "pr_merge_lookup_failed",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [merge-conflict]",
+      "kind": "merge_conflict",
       "signal": ""
     },
     {

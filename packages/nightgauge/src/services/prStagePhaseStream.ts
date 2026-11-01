@@ -115,6 +115,7 @@ export interface PrStageBudget {
   queue_wait_ms: number;
   cli_timeout_ms: number;
   client_timeout_ms: number;
+  recovery_client_timeout_ms: number;
 }
 
 /**
@@ -129,6 +130,8 @@ export function parsePrStageBudget(stdout: string): PrStageBudget {
     typeof b.queue_wait_ms === "number" &&
     typeof b.cli_timeout_ms === "number" &&
     typeof b.client_timeout_ms === "number" &&
+    typeof b.recovery_client_timeout_ms === "number" &&
+    b.recovery_client_timeout_ms > b.client_timeout_ms &&
     b.client_timeout_ms > b.cli_timeout_ms &&
     b.cli_timeout_ms > b.queue_wait_ms;
   if (!ordered) throw new Error(`invalid pr-stage budget: ${stdout.trim()}`);

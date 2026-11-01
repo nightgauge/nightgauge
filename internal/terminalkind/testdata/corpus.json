@@ -55,6 +55,15 @@
   ],
   "cases": [
     {
+      "id": "synthetic-merge-conflict-escalation",
+      "input": "[merge-conflict] deterministic pr-merge refused: merge-queue-failed: merge conflict with main: PR #429 is CONFLICTING; conflicting files: internal/timeout.go",
+      "expected": "merge_conflict",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "packages/nightgauge/src/services/HeadlessOrchestrator.ts: queueConflictEscalationError",
+      "rationale": "The escalation HeadlessOrchestrator writes when conflict recovery gives up (#2841). The file list is free text, so a path holding `timeout` must not move it to another kind."
+    },
+    {
       "id": "captured-api-overloaded",
       "input": "API Error: Overloaded",
       "expected": "api_overloaded",

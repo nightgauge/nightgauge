@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A merge-queue conflict on the VS Code path no longer halts the repository
+  outright. It now runs the same conflict recovery as the Go loop, a conflict
+  confined to changelogs resolves without an LLM stage on both paths, and a
+  conflict recovery cannot resolve halts as `merge_conflict`, naming the files.
 - The malware-scan gate now refuses input it cannot trust. A non-numeric, empty or
   oversized `--min-scanned-mb` or `--min-signatures`, a value flag with no value
   (which used to hang), and a `clamconf` that is missing, unparseable or names no

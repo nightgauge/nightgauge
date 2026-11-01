@@ -71,6 +71,13 @@
   "kinds_without_rules": ["orchestrator_crash", "abandoned_commit", "operator_stop"],
   "rules": [
     {
+      "id": "merge-conflict",
+      "kind": "merge_conflict",
+      "signal": false,
+      "clauses": [["[merge-conflict]"]],
+      "why": "Conflict recovery could not land a merge-queue conflict (#2841). HeadlessOrchestrator stamps the marker on the escalation, which names the conflicting files. First in the ladder because those file names and the refusal text are free-form: a path holding `timeout` or `network` must not reclassify a conflict."
+    },
+    {
       "id": "stamped-stage-stop",
       "kind": "budget_exceeded",
       "signal": false,
