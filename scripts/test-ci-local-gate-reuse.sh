@@ -49,7 +49,7 @@ run() { # run <binary> <status json> <args...>; sets OUT and CODE
   local bin="$1" status="$2"
   shift 2
   : > "$STUB_LOG"
-  OUT="$(env -u CI NIGHTGAUGE_BIN="$bin" STUB_STATUS="$status" PATH="$CLEAN_PATH" bash "$GATE" "$@" 2>&1)"
+  OUT="$(env -u CI -u GITHUB_ACTIONS NIGHTGAUGE_BIN="$bin" STUB_STATUS="$status" PATH="$CLEAN_PATH" bash "$GATE" "$@" 2>&1)"
   CODE=$?
   CALLS="$(cat "$STUB_LOG")"
 }
@@ -117,7 +117,7 @@ check "CI never consults the ledger" "$(result test -z "$CALLS")"
 check "CI runs the step" "$(result has "$OUT" "ledger probe passing step")"
 
 : > "$STUB_LOG"
-OUT="$(CI=true PATH="$CLEAN_PATH" NIGHTGAUGE_BIN="$TMP/bin/nightgauge" STUB_STATUS="$PASSED" bash "$GATE" --ledger-probe pass 2>&1)"
+OUT="$(env -u GITHUB_ACTIONS CI=true PATH="$CLEAN_PATH" NIGHTGAUGE_BIN="$TMP/bin/nightgauge" STUB_STATUS="$PASSED" bash "$GATE" --ledger-probe pass 2>&1)"
 check "a stage shell exporting CI still reuses" "$(result has "$OUT" "Gate skipped")"
 
 echo "passed=$PASS failed=$FAIL"
