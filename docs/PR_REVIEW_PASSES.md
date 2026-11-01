@@ -128,6 +128,12 @@ The review is advisory:
 - The workflow is not a required status check, and must not be added to a
   ruleset.
 
+The pipeline's own merge is the one consumer. Before it enqueues, `pr-merge` reads
+the comment and may hold the merge or file its findings as issues. See
+[PR_MERGE_STAGE.md](PR_MERGE_STAGE.md#enqueue-review-gate-2730), which depends on
+this comment's format. Change `scripts/pr-review.mjs` and
+`internal/orchestrator/stages/prmerge_review.go` together.
+
 ## Fork pull requests
 
 Under `pull_request`, a fork's run gets no secrets and a read-only token, so it
