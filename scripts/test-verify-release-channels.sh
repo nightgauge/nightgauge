@@ -67,6 +67,13 @@ esac
 [ "$1" = "api" ] || exit 1
 for arg in "$@"; do
   case "$arg" in
+  */git/ref/heads/stable)
+    [ -e "$fake/stable-missing" ] && { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+    [ -e "$fake/stable.sha" ] || { echo 'gh: Bad Gateway (HTTP 502)' >&2; exit 1; }
+    printf '{"object": {"sha": "%s"}}\n' "$(cat "$fake/stable.sha")"
+    exit 0
+    ;;
+  */commits/v*) printf '{"sha": "tagsha"}\n'; exit 0 ;;
   */releases/latest) [ -e "$fake/no-release" ] && exit 1; cat "$fake/latest.json"; exit 0 ;;
   */contents/Casks/nightgauge.rb*) cat "$fake/cask.rb"; exit 0 ;;
   */pulls\?*) cat "$fake/pulls.json"; exit 0 ;;
@@ -227,7 +234,7 @@ expect "a missing --channel is rejected" 2 "--channel is required"
 fixture v0.4.4 0.4.4 '[]'
 OUT="$(PATH="$FAKE/bin:$PATH" bash "$SCRIPT" --channel snap 2>&1)"
 RC=$?
-expect "an unknown --channel names the three channels" 2 "(homebrew, marketplace, open-vsx)"
+expect "an unknown --channel names the channels" 2 "(homebrew, marketplace, open-vsx, claude-plugin)"
 
 # --- The extension listings (#1769) ----------------------------------------------
 # The Marketplace and Open VSX are channels of the same script: one query per
@@ -373,6 +380,31 @@ expect "an unparseable Open VSX answer is exit 2" 2 "unparseable"
 fixture v0.7.2 0.7.2 '[]'
 run_listing marketplace --extension 'not an id'
 expect "a malformed --extension is rejected" 2 "--extension must be publisher.name"
+
+# 25b. The plugin channel: stable must sit on the latest release's commit.
+fixture v0.7.2 0.7.2 '[]'
+echo tagsha >"$FAKE/stable.sha"
+run_listing claude-plugin
+expect "stable at the release is current" 0 "verdict: current"
+
+fixture v0.7.2 0.7.2 '[]'
+echo oldsha >"$FAKE/stable.sha"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "stable left behind is red and files one issue" 1 "fast-forward it" "issue create"
+
+fixture v0.7.2 0.7.2 '[]'
+run_listing claude-plugin
+expect "an unreadable stable branch is exit 2" 2 "cannot read the stable branch"
+
+fixture v0.7.2 0.7.2 '[]'
+touch "$FAKE/stable-missing"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "a missing stable branch is red and files one issue" 1 "does not exist" "issue create"
+
+fixture v0.7.2 0.7.2 '[]' '[{"number": 9, "title": "Release channel behind: claude-plugin"}]'
+echo tagsha >"$FAKE/stable.sha"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "a current stable closes the channel issue" 0 "closed issue nightgauge/nightgauge#9" "issue close 9"
 
 # 26. The listing check is the only automated query to either registry host
 #     (#1767, #1769): no other workflow or script names one. The link-check

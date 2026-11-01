@@ -22,10 +22,13 @@ type gateMetricRecord struct {
 	ComplexityLabel *string `json:"complexity_label"`
 	DurationMs      *int64  `json:"duration_ms"`
 	ErrorSummary    *string `json:"error_summary"`
+	AttemptID       string  `json:"attempt_id"`
 }
 
 // ReadGateMetricsForIssue reads gate-metrics.jsonl and returns GateResult records
-// matching the given issue number. Returns nil, nil if the file does not exist.
+// matching the given issue number, every row in file order: telemetry needs the
+// superseded rows too, so the latest-verdict view lives in FeatureValidateGate
+// (#2746). Returns nil, nil if the file does not exist.
 // Malformed lines are skipped. Errors during reading log a warning and return
 // the records collected so far.
 func ReadGateMetricsForIssue(workspaceRoot string, issueNumber int) ([]GateResult, error) {
@@ -63,6 +66,7 @@ func ReadGateMetricsForIssue(workspaceRoot string, issueNumber int) ([]GateResul
 			GateName:  raw.GateName,
 			Result:    raw.Result,
 			Timestamp: raw.Timestamp,
+			AttemptID: raw.AttemptID,
 		}
 		if raw.DurationMs != nil {
 			gr.DurationMs = *raw.DurationMs

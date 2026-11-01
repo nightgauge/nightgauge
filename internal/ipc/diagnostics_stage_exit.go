@@ -42,6 +42,9 @@ func makeDiagnosticsRecordStageExitHandler(srv *Server) Handler {
 			captureIPCActualSize(srv, root, p)
 		}
 		rec := buildStageExitRecordFromIPC(p)
+		if runtime := runtimeForStageExit(srv, p); runtime != nil {
+			rec.ReviewPhases = runtime.Snapshot().ReviewPhases(state.PipelineStage(p.Stage))
+		}
 		if err := diagnostics.WriteStageExitRecord(root, rec); err != nil {
 			return nil, fmt.Errorf("write stage-exit record: %w", err)
 		}

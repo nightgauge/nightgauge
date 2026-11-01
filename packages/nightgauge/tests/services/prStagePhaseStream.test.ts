@@ -11,6 +11,8 @@ import {
   PHASE_STREAM_PREFIX,
   parsePhaseStreamLine,
   createLineSplitter,
+  parsePrStageBudget,
+  runWithPhaseStream,
   type PrStagePhaseTransition,
 } from "../../src/services/prStagePhaseStream";
 
@@ -103,5 +105,55 @@ describe("createLineSplitter", () => {
     splitter.flush();
     splitter.flush();
     expect(onLine).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("parsePrStageBudget (#2730)", () => {
+  it("reads the binary's budget", () => {
+    const stdout =
+      '{"queue_wait_ms":5400000,"cli_timeout_ms":6000000,"client_timeout_ms":6060000}\n';
+    expect(parsePrStageBudget(stdout).client_timeout_ms).toBe(6060000);
+  });
+
+  it("rejects a client limit that does not outlive the CLI and the queue", () => {
+    // Accepting this ordering is the #2730 defect: the client kills a healthy wait.
+    expect(() =>
+      parsePrStageBudget(
+        '{"queue_wait_ms":5400000,"cli_timeout_ms":6000000,"client_timeout_ms":1200000}'
+      )
+    ).toThrow(/invalid pr-stage budget/);
+    expect(() =>
+      parsePrStageBudget('{"queue_wait_ms":5400000,"cli_timeout_ms":5400000,"client_timeout_ms":1}')
+    ).toThrow(/invalid pr-stage budget/);
+  });
+
+  it("rejects output that is not a budget", () => {
+    expect(() => parsePrStageBudget("{}")).toThrow(/invalid pr-stage budget/);
+    expect(() => parsePrStageBudget("not json")).toThrow();
+  });
+});
+
+describe.skipIf(process.platform === "win32")("runWithPhaseStream (#2730)", () => {
+  const opts = { cwd: process.cwd(), timeoutMs: 15_000, onPhase: () => undefined };
+
+  it("reports the child's pid at spawn", async () => {
+    const pids: number[] = [];
+    const { stdout } = await runWithPhaseStream("/bin/sh", ["-c", "echo $$"], {
+      ...opts,
+      onSpawn: (pid) => pids.push(pid),
+    });
+    expect(pids).toEqual([Number(stdout.trim())]);
+  });
+
+  it("names the signal when the child is killed", async () => {
+    await expect(runWithPhaseStream("/bin/sh", ["-c", "kill -KILL $$"], opts)).rejects.toThrow(
+      "pr-stage killed by signal SIGKILL"
+    );
+  });
+
+  it("still reports a plain non-zero exit as a code", async () => {
+    await expect(runWithPhaseStream("/bin/sh", ["-c", "exit 3"], opts)).rejects.toThrow(
+      "pr-stage exited with code 3"
+    );
   });
 });

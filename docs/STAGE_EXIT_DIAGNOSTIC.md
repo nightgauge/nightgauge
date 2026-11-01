@@ -169,16 +169,19 @@ left no candidate.
 `kill_ceiling` closes that gap by naming the limit itself, and
 `kill_ceiling_value` carries what it resolved to **and how**:
 
-| `kill_ceiling`                | Fires when                                                              | `kill_ceiling_value` is derived from                                              |
-| ----------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `progress-no-progress-window` | No productive signal, and no novel tool call, for the window            | `pipeline.progress_runaway.no_progress_window_ms`                                 |
-| `progress-churn-tools`        | `churn_tool_threshold` distinct tools with no productive signal         | `pipeline.progress_runaway.churn_tool_threshold`                                  |
-| `progress-catastrophic-cost`  | `catastrophic_limit_usd` reached with no productive progress            | `pipeline.progress_runaway.catastrophic_limit_usd`                                |
-| `nx-stall-multiple`           | Elapsed reached N× the stall **warn** threshold, no productive progress | `stall warn threshold × NX_RUNAWAY_KILL_MULTIPLE` — **derived, not configurable** |
-| `stage-hard-cap`              | Elapsed reached the absolute per-stage cap                              | `pipeline.stage_hard_caps.<stage>`                                                |
-| `stage-time-cap`              | Elapsed cap for zero-cost adapters (`provider_scale=0`)                 | `min(stage_hard_caps.<stage>, stage_time_caps.<stage>)`                           |
-| `quota-fast-fail-idle`        | Idle past the quota budget after a rate-limit signal (a stall if soft)  | `QUOTA_EXHAUSTED_FAST_FAIL_IDLE_MS` or `min(stallKillMs, quota_signal_idle_ms)`   |
-| `stall-idle`                  | Idle past `stallKillMs` with no output or live work within its ceiling  | Calibrated or static idle-kill threshold                                          |
+| `kill_ceiling`                          | Fires when                                                                                                         | `kill_ceiling_value` is derived from                                              |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `progress-no-progress-window`           | No productive signal, and no novel tool call, for the window                                                       | `pipeline.progress_runaway.no_progress_window_ms`                                 |
+| `progress-background-task-ceiling`      | A background task outlived `background_task_ceiling_ms`. Replaces the no-progress name when that deferral expired. | `pipeline.progress_runaway.background_task_ceiling_ms`                            |
+| `progress-background-task-hard-ceiling` | A task with a growing declared log outlived `background_task_hard_ceiling_ms`.                                     | `pipeline.progress_runaway.background_task_hard_ceiling_ms`                       |
+| `progress-external-progress-ceiling`    | A declared log or process outlived `external_progress_ceiling_ms`.                                                 | `pipeline.progress_runaway.external_progress_ceiling_ms`                          |
+| `progress-churn-tools`                  | `churn_tool_threshold` distinct tools with no productive signal                                                    | `pipeline.progress_runaway.churn_tool_threshold`                                  |
+| `progress-catastrophic-cost`            | `catastrophic_limit_usd` reached with no productive progress                                                       | `pipeline.progress_runaway.catastrophic_limit_usd`                                |
+| `nx-stall-multiple`                     | Elapsed reached N× the stall **warn** threshold, no productive progress                                            | `stall warn threshold × NX_RUNAWAY_KILL_MULTIPLE` — **derived, not configurable** |
+| `stage-hard-cap`                        | Elapsed reached the absolute per-stage cap                                                                         | `pipeline.stage_hard_caps.<stage>`                                                |
+| `stage-time-cap`                        | Elapsed cap for zero-cost adapters (`provider_scale=0`)                                                            | `min(stage_hard_caps.<stage>, stage_time_caps.<stage>)`                           |
+| `quota-fast-fail-idle`                  | Idle past the quota budget after a rate-limit signal (a stall if soft)                                             | `QUOTA_EXHAUSTED_FAST_FAIL_IDLE_MS` or `min(stallKillMs, quota_signal_idle_ms)`   |
+| `stall-idle`                            | Idle past `stallKillMs` with no output or live work within its ceiling                                             | Calibrated or static idle-kill threshold                                          |
 
 These names are a diagnostic contract — they are grepped in retros and appear
 verbatim in historical records, so treat the set as append-mostly.
@@ -200,6 +203,23 @@ The JSON tags MUST stay stable once shipped. Additive fields are allowed
 (always with `omitempty`), but renames or removals would break the
 `nightgauge exit-records tail` reader and any external operator tooling
 that `grep`s or `jq`s the daily file.
+
+### Gate Spend Fields (#2784)
+
+Every writer fills `gate_runs`, `gate_seconds`, `gate_reused` and
+`gate_unfinished` from the gate ledger, over the stage's own wall time. A gate
+started with no finish was killed, so it counts as unfinished and has no
+duration. `review_phases` on a feature-dev record is `ran` or `missing`, and
+absent when no runtime state was available.
+
+```bash
+nightgauge exit-records gate-summary --issue 2784
+nightgauge exit-records gate-summary --since 2026-11-01 --json
+```
+
+`gate-summary` totals these per run and per stage, and splits feature-dev by
+`review_phases`, since a stage that did its review takes longer for a reason
+unrelated to gates.
 
 ### `success` is the Post-Gate Outcome (#125)
 

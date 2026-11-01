@@ -12,8 +12,9 @@ Claude, Codex, Gemini, etc.:
 
 1. `$NIGHTGAUGE_BIN` (exported by the host that spawns the skill)
 2. `command -v nightgauge` (PATH)
-3. `$REPO_ROOT/bin/nightgauge`
-4. canonical repo `bin/` in worktrees, then `$HOME/go/bin`
+3. repo, then worktree canonical-repo, `bin/nightgauge`: only with
+   `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge core checkout
+4. `$HOME/go/bin`
 
 Then `nightgauge doctor --json` confirms the environment is healthy.
 
@@ -46,6 +47,7 @@ nightgauge health trends --limit 10 --json
 nightgauge health gate-metrics --json
 nightgauge skills usage --json                          # skill-usage telemetry (#3957)
 nightgauge exit-records tail
+nightgauge exit-records gate-summary --issue 42         # full gates per run and stage
 
 # Per-clone data layout (ADR-024 § 7): pipeline, plans, retros, logs
 nightgauge layout                                       # whole layout as JSON

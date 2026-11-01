@@ -571,6 +571,36 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "exit 1: [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[GATE-PLUGIN-MISSING]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "gate_plugin_missing",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "exit 1: gate_plugin_missing",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "GATE_PLUGIN_MISSING",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -2761,6 +2791,11 @@
       "signal": ""
     },
     {
+      "input": "stage_budget_exceeded: | [gate-plugin-missing]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "stage_budget_exceeded: | ai_apicallerror context_length_exceeded",
       "kind": "budget_exceeded",
       "signal": ""
@@ -3002,6 +3037,11 @@
     },
     {
       "input": "network unavailable: extended github connectivity loss | [environment-halt]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | [gate-plugin-missing]",
       "kind": "network_unavailable",
       "signal": ""
     },
@@ -3251,6 +3291,11 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | [gate-plugin-missing]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "adapter_incompatible | ai_apicallerror context_length_exceeded",
       "kind": "adapter_incompatible",
       "signal": ""
@@ -3492,6 +3537,11 @@
     },
     {
       "input": "[model-stream-stalled] | [environment-halt]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [gate-plugin-missing]",
       "kind": "model_stream_stalled",
       "signal": ""
     },
@@ -3741,6 +3791,11 @@
       "signal": "stream_idle_timeout"
     },
     {
+      "input": "stream idle timeout | [gate-plugin-missing]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
       "input": "stream idle timeout | ai_apicallerror context_length_exceeded",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3982,6 +4037,11 @@
     },
     {
       "input": "overloaded | [environment-halt]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | [gate-plugin-missing]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -4231,6 +4291,11 @@
       "signal": "api_connection_lost"
     },
     {
+      "input": "socket connection was closed | [gate-plugin-missing]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
       "input": "socket connection was closed | ai_apicallerror context_length_exceeded",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
@@ -4472,6 +4537,11 @@
     },
     {
       "input": "[rate-limit-quota-exhausted] | [environment-halt]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [gate-plugin-missing]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
@@ -4721,6 +4791,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[adapter-auth-failed] | [gate-plugin-missing]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "[adapter-auth-failed] | ai_apicallerror context_length_exceeded",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
@@ -4966,6 +5041,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[environment-halt] | [gate-plugin-missing]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[environment-halt] | ai_apicallerror context_length_exceeded",
       "kind": "environment_halt",
       "signal": "environment_halt"
@@ -5166,6 +5246,256 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[gate-plugin-missing] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[gate-plugin-missing] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[gate-plugin-missing] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[gate-plugin-missing] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[gate-plugin-missing] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[gate-plugin-missing] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[gate-plugin-missing] | ai_apicallerror context_length_exceeded",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | not_found_error model",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | pipeline-start-failure issue-closed",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [blocked-dependency]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | architecture approval required",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | github-quota-low",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | github-network-outage",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | secondary rate limit",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [pr-merge-unmerged",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [stage:worktree-containment]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [not-pipeline-actionable]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [dev-produced-no-changes]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [dev-handoff-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [dev-step-cap-reached]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [dev-step-progress-unproven]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | invalid auth method",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | premature turn end",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | worktree_uncommitted",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | budget_ceiling_hit",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [runaway-progress-exceeded]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [runaway-ceiling-exceeded]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | stage-no-output-timeout",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [stall-killed]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | pipeline_budget_exceeded",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | schema validation",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [no-changes-produced]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [validation-failed]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [validation-inconclusive]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [branch-forked]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [commit-orphaned]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [adapter-permission-rejected]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [permission-denied]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | stage_context_unreadable",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | dev_build_verification_missing",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | dev_build_verification_failed",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [dev-context-stale]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | dev_tests_failed",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | pr_merge_lookup_failed",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | subagent crash",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -5214,6 +5544,11 @@
       "input": "ai_apicallerror context_length_exceeded | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "ai_apicallerror context_length_exceeded | not_found_error model",
@@ -5461,6 +5796,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "not_found_error model | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "not_found_error model | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -5704,6 +6044,11 @@
       "input": "pipeline-start-failure issue-closed | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "pipeline-start-failure issue-closed | ai_apicallerror context_length_exceeded",
@@ -5951,6 +6296,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[blocked-dependency] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[blocked-dependency] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -6194,6 +6544,11 @@
       "input": "architecture approval required | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "architecture approval required | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "architecture approval required | ai_apicallerror context_length_exceeded",
@@ -6441,6 +6796,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "github-quota-low | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "github-quota-low | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -6684,6 +7044,11 @@
       "input": "github-network-outage | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "github-network-outage | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "github-network-outage | ai_apicallerror context_length_exceeded",
@@ -6931,6 +7296,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "secondary rate limit | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "secondary rate limit | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -7174,6 +7544,11 @@
       "input": "[pr-merge-unmerged | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[pr-merge-unmerged | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[pr-merge-unmerged | ai_apicallerror context_length_exceeded",
@@ -7421,6 +7796,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[stage:worktree-containment] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[stage:worktree-containment] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -7664,6 +8044,11 @@
       "input": "[not-pipeline-actionable] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[not-pipeline-actionable] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[not-pipeline-actionable] | ai_apicallerror context_length_exceeded",
@@ -7911,6 +8296,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[dev-produced-no-changes] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[dev-produced-no-changes] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -8154,6 +8544,11 @@
       "input": "[dev-handoff-missing] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[dev-handoff-missing] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[dev-handoff-missing] | ai_apicallerror context_length_exceeded",
@@ -8401,6 +8796,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[dev-step-cap-reached] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[dev-step-cap-reached] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -8644,6 +9044,11 @@
       "input": "[dev-step-progress-unproven] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[dev-step-progress-unproven] | ai_apicallerror context_length_exceeded",
@@ -8891,6 +9296,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "invalid auth method | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "invalid auth method | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -9134,6 +9544,11 @@
       "input": "premature turn end | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "premature turn end | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "premature turn end | ai_apicallerror context_length_exceeded",
@@ -9381,6 +9796,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "worktree_uncommitted | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "worktree_uncommitted | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -9624,6 +10044,11 @@
       "input": "budget_ceiling_hit | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "budget_ceiling_hit | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "budget_ceiling_hit | ai_apicallerror context_length_exceeded",
@@ -9871,6 +10296,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[runaway-progress-exceeded] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[runaway-progress-exceeded] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -10116,6 +10546,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[runaway-ceiling-exceeded] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -10357,6 +10792,11 @@
     },
     {
       "input": "[cost-cap-exceeded] | [environment-halt]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | [gate-plugin-missing]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -10606,6 +11046,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "stage-no-output-timeout | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "stage-no-output-timeout | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -10849,6 +11294,11 @@
       "input": "[stall-killed] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[stall-killed] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[stall-killed] | ai_apicallerror context_length_exceeded",
@@ -11096,6 +11546,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "pipeline_budget_exceeded | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "pipeline_budget_exceeded | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -11339,6 +11794,11 @@
       "input": "schema validation | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "schema validation | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "schema validation | ai_apicallerror context_length_exceeded",
@@ -11586,6 +12046,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[no-changes-produced] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[no-changes-produced] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -11829,6 +12294,11 @@
       "input": "[validation-failed] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[validation-failed] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[validation-failed] | ai_apicallerror context_length_exceeded",
@@ -12076,6 +12546,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[validation-inconclusive] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[validation-inconclusive] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -12319,6 +12794,11 @@
       "input": "[branch-forked] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[branch-forked] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[branch-forked] | ai_apicallerror context_length_exceeded",
@@ -12566,6 +13046,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[commit-orphaned] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[commit-orphaned] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -12809,6 +13294,11 @@
       "input": "[adapter-permission-rejected] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[adapter-permission-rejected] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[adapter-permission-rejected] | ai_apicallerror context_length_exceeded",
@@ -13056,6 +13546,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[permission-denied] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[permission-denied] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -13299,6 +13794,11 @@
       "input": "stage_context_unreadable | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "stage_context_unreadable | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "stage_context_unreadable | ai_apicallerror context_length_exceeded",
@@ -13546,6 +14046,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "dev_build_verification_missing | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "dev_build_verification_missing | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -13789,6 +14294,11 @@
       "input": "dev_build_verification_failed | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "dev_build_verification_failed | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "dev_build_verification_failed | ai_apicallerror context_length_exceeded",
@@ -14036,6 +14546,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[dev-context-stale] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "[dev-context-stale] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -14279,6 +14794,11 @@
       "input": "dev_tests_failed | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "dev_tests_failed | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "dev_tests_failed | ai_apicallerror context_length_exceeded",
@@ -14526,6 +15046,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "pr_merge_lookup_failed | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
       "input": "pr_merge_lookup_failed | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -14769,6 +15294,11 @@
       "input": "subagent crash | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "subagent crash | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "subagent crash | ai_apicallerror context_length_exceeded",
@@ -15084,6 +15614,26 @@
       "input": "usage limit | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[gate-plugin-missing] | session limit",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "session limit | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | usage limit",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "usage limit | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "architecture approval required | session limit",

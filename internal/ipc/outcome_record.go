@@ -42,6 +42,10 @@ const (
 	// broken; nothing about the model or the issue was measured. Exact parity
 	// with the Go scheduler's skip in scheduler.go.
 	outcomeSkipEnvironmentHalt
+	// outcomeSkipGatePluginMissing: the stage was stopped before any work
+	// because its Claude plugin did not load (#2723). Exact parity with the Go
+	// scheduler's skip in scheduler.go.
+	outcomeSkipGatePluginMissing
 )
 
 // String names the decision for logs. Distinct strings per state so a log line
@@ -56,6 +60,8 @@ func (d outcomeDecision) String() string {
 		return "skip-network-unavailable"
 	case outcomeSkipEnvironmentHalt:
 		return "skip-environment-halt"
+	case outcomeSkipGatePluginMissing:
+		return "skip-gate-plugin-missing"
 	default:
 		return "unset"
 	}
@@ -93,6 +99,9 @@ func learningOutcomeFor(
 	}
 	if record.TerminalFailureKind == orchestrator.TerminalKindEnvironmentHalt {
 		return learning.Outcome{}, outcomeSkipEnvironmentHalt
+	}
+	if record.TerminalFailureKind == orchestrator.TerminalKindGatePluginMissing {
+		return learning.Outcome{}, outcomeSkipGatePluginMissing
 	}
 
 	// Post-#266 ground truth: the record's outcome is authoritative (a run whose

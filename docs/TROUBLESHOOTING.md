@@ -17,20 +17,19 @@ Start with `nightgauge doctor`. Every problem it reports carries a code
 
 **Solutions:**
 
-1. **Verify settings.json syntax:**
+1. **Check what is installed:**
 
    ```bash
-   cat ~/.claude/settings.json | jq .
+   claude plugin marketplace list
+   claude plugin list
    ```
 
-   If this fails, you have invalid JSON.
+2. **Install it with the CLI.** Editing `settings.json` alone does not install
+   the plugin:
 
-2. **Check plugin path:**
-
-   ```json
-   {
-     "plugins": ["https://github.com/nightgauge/nightgauge/tree/main/claude-plugins/nightgauge"]
-   }
+   ```bash
+   claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
+   claude plugin install nightgauge@nightgauge-plugins
    ```
 
 3. **Restart Claude Code:** Close and reopen your terminal/IDE.
@@ -46,21 +45,32 @@ Start with `nightgauge doctor`. Every problem it reports carries a code
 
 **Solutions:**
 
-1. **Verify marketplace URL:**
+1. **Verify the marketplace is registered:**
 
-   ```json
-   {
-     "extraKnownMarketplaces": ["https://github.com/nightgauge/nightgauge"]
-   }
+   ```bash
+   claude plugin marketplace list
+   ```
+
+   If `nightgauge-plugins` is missing, add it:
+
+   ```bash
+   claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
    ```
 
 2. **Check marketplace.json exists:**
 
    ```bash
-   curl https://raw.githubusercontent.com/nightgauge/nightgauge/main/.claude-plugin/marketplace.json
+   curl https://raw.githubusercontent.com/nightgauge/nightgauge/stable/.claude-plugin/marketplace.json
    ```
 
 ## Command Execution Issues
+
+### Hooks stopped using my local `bin/nightgauge`
+
+A repository build needs `NIGHTGAUGE_DEV_REPO_BIN=1` in the environment and a
+checkout whose `go.mod` and `origin` identify the Nightgauge core repository.
+`nightgauge doctor` names the step that resolved the binary. On a fork, set
+`NIGHTGAUGE_BIN=$PWD/bin/nightgauge`.
 
 ### /smart-setup doesn't generate files
 

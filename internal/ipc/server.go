@@ -3535,6 +3535,7 @@ func (s *Server) registerMethods() {
 		// "the executor did not say" and "the executor said X" must remain
 		// distinguishable, which is the entire point of these fields.
 		rt.RecordStageServedModel(stage, p.ServedModel)
+		rt.RecordStagePluginVersion(stage, p.PluginVersion)
 		rt.RecordStageServedEffort(stage, p.ServedEffort)
 		rt.RecordStageServedThinking(stage, p.ServedThinking)
 		// When the executor served something OTHER than what was requested,
@@ -3809,6 +3810,11 @@ func (s *Server) registerMethods() {
 		repo := res.rs.TargetRepo()
 		if repo == "" {
 			repo = p.Repo
+		}
+
+		if p.MergedPR > 0 {
+			res.rs.SetMergedPR(p.MergedPR)
+			return map[string]string{"status": "ok"}, nil
 		}
 
 		// Emit the live in-stage token/cost estimate as a stage_progress event.
@@ -4127,6 +4133,9 @@ func (s *Server) registerMethods() {
 					gateTerminalKind = gateResults[len(gateResults)-1].TerminalKind
 				}
 				kind := orchestrator.ResolveTerminalKind(gateRan, gateTerminalKind, errMsg)
+				if kind == orchestrator.TerminalKindGatePluginMissing {
+					orchestrator.RaiseGatePluginMissing(s.attentionStore(), recordRepo, p.IssueNumber, runID, string(snap.Stage), errMsg)
+				}
 				if kind == "" {
 					kind = orchestrator.TerminalKindSubagentCrash
 				}
@@ -4341,7 +4350,7 @@ func (s *Server) registerMethods() {
 				if err := learning.NewRecorder(root).Record(outcome); err != nil {
 					log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
 				}
-			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt:
+			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt, outcomeSkipGatePluginMissing:
 				log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
 					p.IssueNumber, outcomeVerdict)
 			case outcomeUnset:

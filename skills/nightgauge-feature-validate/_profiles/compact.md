@@ -13,7 +13,7 @@
 
 Trusts the dev context handoff (no build/unit-test/security re-runs that already passed), runs integration/E2E tests with Ralph Loop self-healing (up to 3 auto-fix attempts, [docs/RALPH_LOOP.md](../../../docs/RALPH_LOOP.md)), excludes pre-existing failures via baseline comparison, and writes validation context for `/nightgauge-pr-create`.
 
-**Invoke**: `/nightgauge-feature-validate` (Claude Code plugin), `$nightgauge-feature-validate` (Codex), or via Agent Skills (Copilot/Cursor). **Requires**: `dev-{N}.json` (in the clone's pipeline state directory, `nightgauge layout path pipeline`) from `/nightgauge-feature-dev`, on the feature branch from `/nightgauge-issue-pickup` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../docs/CONTEXT_ARCHITECTURE.md)). **Config**: `.nightgauge/config.yaml` ([docs/CONFIGURATION.md](../../../docs/CONFIGURATION.md)); per-key defaults and env overrides in `_includes/configuration.md` (read when needed).
+**Invoke**: `/nightgauge:feature-validate` (Claude Code plugin), `$nightgauge-feature-validate` (Codex), or via Agent Skills (Copilot/Cursor). **Requires**: `dev-{N}.json` (in the clone's pipeline state directory, `nightgauge layout path pipeline`) from `/nightgauge-feature-dev`, on the feature branch from `/nightgauge-issue-pickup` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../docs/CONTEXT_ARCHITECTURE.md)). **Config**: `.nightgauge/config.yaml` ([docs/CONFIGURATION.md](../../../docs/CONFIGURATION.md)); per-key defaults and env overrides in `_includes/configuration.md` (read when needed).
 
 ## Arguments
 
@@ -21,7 +21,7 @@ Trusts the dev context handoff (no build/unit-test/security re-runs that already
 
 ## Exit Contract — Read This First
 
-**This stage is NOT complete until `validate-{N}.json` exists in the clone's pipeline state directory (written with `nightgauge layout write pipeline validate-{N}.json`).** On any error, budget exhaustion, or bail-out, STILL execute Phase 6 and write it (`validation_status: "failed"` plus the matching `errorCategory` — enum: `build-failed`, `tests-failed`, `integration-failed`, `dead-code-blocked`, `mobile-apk-build-failed`, `mobile-mcp-tests-failed`, `verify-ui-gate-failed`). Exiting without it triggers a repo-blind orchestrator fallback that may misreport tests. The very last act before signaling completion MUST be:
+**This stage is NOT complete until `validate-{N}.json` exists in the clone's pipeline state directory (written with `nightgauge layout write pipeline validate-{N}.json`).** On any error, budget exhaustion, or bail-out, STILL execute Phase 6 and write it (`validation_status: "failed"` plus the matching `errorCategory` — enum: `build-failed`, `tests-failed`, `gate-timeout`, `integration-failed`, `dead-code-blocked`, `mobile-apk-build-failed`, `mobile-mcp-tests-failed`, `verify-ui-gate-failed`). Exiting without it triggers a repo-blind orchestrator fallback that may misreport tests. The very last act before signaling completion MUST be:
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
@@ -36,7 +36,7 @@ For `type:spike` issues, run `nightgauge spike materialize "$ISSUE_NUMBER" --dry
 
 ## Orchestration
 
-Validation is an ordered pipeline — build (1.5) → tests (2) → CI-parity (2.5) — closed by an adversarial **gate** judge whose verdict is the evidence the Go `FeatureValidateGate.Verify()` loop consumes: a failed verdict fails validation. `gate_metrics[]` flows into the validate context (Phase 6); FeatureValidateGate treats zero records as a no-op failure. Full orchestration and supporting-file index: Read `skills/nightgauge-feature-validate/SKILL.md` when needed.
+Validation is an ordered pipeline — build (1.5) → tests (2) → CI-parity (2.5) — closed by an adversarial **gate** judge whose verdict is the evidence the Go `FeatureValidateGate.Verify()` loop consumes: a failed verdict fails validation. A `catch` fails the run and is not a log of what the review found: a defect fixed in the fix loop gets `pass` and is described in the validate notes, and the gate judges the latest verdict per `gate_name`, in file order, except `judges` rows, where any failure in the latest attempt fails. `gate_metrics[]` flows into the validate context (Phase 6); FeatureValidateGate treats zero records as a no-op failure. Full orchestration and supporting-file index: Read `skills/nightgauge-feature-validate/SKILL.md` when needed.
 
 ## Gotchas
 
@@ -163,7 +163,7 @@ printf '<!-- phase:start name="verify-ui-gate" index=11 total=22 stage="feature-
 printf '<!-- phase:start name="ci-parity-check" index=12 total=22 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run the repo's actual CI commands locally (format, lint, typecheck, full build). **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. The adversarial-review `gate record-metric` is emitted per the include.
+> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run this tree's one full gate: skip it when `nightgauge ci gate-status` says the tree passed, otherwise run the repository's local gate, or its CI commands when it has none. **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. The adversarial-review `gate record-metric` is emitted per the include.
 
 ### Phase 2.6: Knowledge Coverage Check
 

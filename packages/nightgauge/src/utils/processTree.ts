@@ -93,6 +93,25 @@ export async function killProcessTree(
 }
 
 /**
+ * What makes a pid THIS process and not a later one holding the same number: the
+ * process's start time, or null when it cannot be read. `kill(pid, 0)` proves
+ * only that some process has the pid.
+ */
+export type ProcessIdentityReader = (pid: number) => Promise<string | null>;
+
+export const readProcessStartTime: ProcessIdentityReader = async (pid) => {
+  try {
+    const { stdout } = await execFileAsync("ps", ["-o", "lstart=", "-p", String(pid)], {
+      timeout: 2000,
+    });
+    const started = stdout.trim();
+    return started.length > 0 ? started : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
  * Tracks descendants of a long-running parent process by periodically walking
  * `pgrep -P`. Lets us reap children that get reparented to init when the
  * parent exits — by then `pgrep -P parent` returns nothing, so we have to
@@ -101,18 +120,26 @@ export async function killProcessTree(
  * Used by skillRunner: a hung vitest spawned by Claude becomes an orphan
  * the moment Claude dies, and its parent re-points to PID 1. Tracking pids
  * during the run and killing the survivors on close closes that gap.
+ *
+ * A stage can run for over an hour, so a tracked pid can be reused by an
+ * unrelated process, another run's included (#2730). Each pid is remembered with
+ * its start time and reaped only on an exact match.
  */
 export class DescendantTracker {
-  private readonly tracked = new Set<number>();
+  /** pid → start time at tracking; null until an identity has been read. */
+  private readonly tracked = new Map<number, string | null>();
   private timer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(private readonly readIdentity: ProcessIdentityReader = readProcessStartTime) {}
 
   start(rootPid: number, intervalMs = 15_000): void {
     const collect = (): void => {
       const all = new Set<number>();
       collectDescendants(rootPid, all)
-        .then(() => {
+        .then(async () => {
           for (const pid of all) {
-            if (pid !== rootPid) this.tracked.add(pid);
+            if (pid === rootPid || this.tracked.get(pid)) continue;
+            this.tracked.set(pid, await this.readIdentity(pid));
           }
         })
         .catch(() => {
@@ -132,24 +159,39 @@ export class DescendantTracker {
   }
 
   /**
-   * SIGKILLs any tracked pid still alive. Returns the killed list. The probe
-   * uses signal 0 — throws if dead, letting us silently skip already-departed
-   * pids instead of spamming logs with every npm/node intermediate.
+   * SIGKILLs any tracked pid that is still the process it tracked. Returns the
+   * killed list. The probe uses signal 0 — throws if dead, letting us silently
+   * skip already-departed pids instead of spamming logs with every npm/node
+   * intermediate.
+   *
+   * A pid whose identity cannot be shown is left alone: an orphan that survives
+   * is a nuisance, and a kill that lands on another run is a mystery SIGKILL.
    */
-  killSurvivors(log?: LogFn): number[] {
+  async killSurvivors(log?: LogFn): Promise<number[]> {
     this.stop();
     const killed: number[] = [];
-    for (const pid of this.tracked) {
+    const unreadable: number[] = [];
+    for (const [pid, identity] of this.tracked) {
       try {
         process.kill(pid, 0);
       } catch {
         continue;
       }
-      if (killOne(pid, "SIGKILL")) killed.push(pid);
+      const current = await this.readIdentity(pid);
+      if (identity === null || current === null) {
+        unreadable.push(pid);
+      } else if (current === identity && killOne(pid, "SIGKILL")) {
+        killed.push(pid);
+      }
     }
     if (killed.length > 0) {
       log?.(
         `[processTree] Reaped ${killed.length} orphaned child(ren) after parent exit: ${killed.join(",")}`
+      );
+    }
+    if (unreadable.length > 0) {
+      log?.(
+        `[processTree] Left ${unreadable.length} pid(s) unreaped, identity unreadable: ${unreadable.join(",")}`
       );
     }
     this.tracked.clear();

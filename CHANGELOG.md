@@ -17,12 +17,167 @@ changelog, and the release workflow refuses a tag that does not.
 ### Fixed
 
 - `nightgauge git push-branch` now ends a rejected push it could not reconcile as a fork (exit 3
-  with the `[branch-forked]` marker), so a stage can no longer carry on from an unpushed branch
+  with the `[branch-forked]` marker, and `--json` outcome `unreconciled` when the check could not
+  run), so a stage can no longer carry on from an unpushed branch
   (#2749). Self-fork recovery judges an origin merge commit by content, so a branch updated by
   merging its base recovers, while a merge carrying work the local tree lacks, or a criss-cross
   history, stays a fork. The verb no longer prints usage after a verdict, the freshness check's
-  best-effort push no longer emits the terminal marker, and the scheduler logs why a self-fork was
-  not recovered. Recovery needs git 2.38 or later.
+  best-effort pushes keep their cause but no longer emit the terminal marker, and the scheduler
+  logs why a self-fork was not recovered. `pr-create`'s stale-branch merge now pushes through the
+  verb too. Recovery needs git 2.38 or later.
+- A green PR now merges through the deterministic path instead of paying for an
+  LLM stage. The extension asks the new `nightgauge pr-stage budget` for its
+  timeout, so a normal merge-queue wait no longer kills the run, and a transient
+  `UNKNOWN` mergeability is re-read with backoff, including after the CI wait.
+  `pr-stage` logs its pid at spawn and names the signal that kills it, and the
+  orphan reaper now kills only a process whose start time it can match, so a
+  reused pid survives.
+- `pr-merge` no longer enqueues past a review finding. It reads the Nightgauge
+  review before either merge path: a blocker, or a correctness major on a
+  documented user path such as `README*`, `docs/**` or a package manifest, holds
+  the enqueue for a fix round, capped at two. Every other major becomes a tracked
+  issue before the merge call, under the `follow_up_filing` controls, and a
+  finding that cannot be tracked refuses the merge. `pr-stage review-gate` and
+  `pr-stage review-round begin|end` give the LLM stage the same rules.
+- Skill installs no longer report success while leaving skills stale. Codex and Grok
+  installs print `installed N of M, skipped K`, and a skipped directory makes
+  `install-agent-skills.sh` exit non-zero after the other tools refresh. The extension
+  shows the same count as a warning.
+- `install-agent-skills.sh --adopt` replaces directories from before the install
+  marker when git history proves they shipped, and moves the old copy beside the
+  skills directory. Locally edited directories are left alone and named.
+- Installs remove marked skills that no longer exist in source, and the Grok path
+  removes `nightgauge` plugin and marketplace entries whose path is gone.
+- `nightgauge doctor` reports Codex and Grok skills that differ from the installed
+  build (`NGD112`).
+- `nightgauge autonomous status` shows a run that has merged as
+  `merged #<PR>, post-merge follow-up`, not as a run waiting to merge, in text and
+  in `mergedPr` under `--json`.
+- A re-dispatched issue resumes at feature-validate when its dev work survived,
+  on the branch or preserved under `refs/nightgauge/wip/`, and its acceptance
+  criteria are unchanged, so it no longer repeats planning and dev (#2730).
+- A relative date in a query (`updated>3d`) means whole 24-hour days. It stepped
+  back in local calendar days, so it ran an hour long after a daylight-saving
+  change, and the SDK suite failed on a machine in a DST zone for three days after
+  each autumn change. CI runs in UTC and could not see it (#2828).
+
+- Retry on a halted repository's Action Center card no longer deadlocks the
+  attention store and stops the scheduler. Retry, Retry with escalation and
+  Resume now release the halt and close the card as resolved, with no daemon
+  restart. Attention work reachable from a card's action runs off the store
+  lock, and a static test holds every future action to that. Background writers
+  now give up after 25 seconds with a logged warning, so a stuck store slows a
+  scan instead of stopping it. A card raised during such a wait is dropped; a
+  standing card returns on the next scan. Startup recovery moves a closed issue
+  to Done rather than Ready. When it cannot read the issue it leaves the status
+  alone and checks again once GitHub answers (#2750).
+- A pipeline run gates a tree once. `scripts/ci-local.sh` records every run in a
+  ledger keyed on the exact tree and skips a repeat that already passed, saying
+  what passed it (`--no-reuse` forces a run). feature-validate's CI parity phase
+  runs the repository's local gate as its one gate, and feature-dev now runs
+  focused checks only and receives all of its phase instructions. Stage exit
+  records state each stage's full gates and seconds, and
+  `nightgauge exit-records gate-summary` totals them per run and stage. The new
+  `nightgauge ci gate-run` runs the gate's steps directly, never through a shell,
+  and a declared `local_gate` that fails validation now fails the phase (#2784).
+- The extension and the Go scheduler now search the same skills trees in the same
+  order. `nightgauge skill roots` is the one answer, and a pipeline run's scheduler
+  searches the issue's worktree as the extension does. The Claude write deny on a
+  stage's skills tree also covers a system alias, so a tree given as
+  `/private/tmp/...` is no longer writable as `/tmp/...`. A stage soft-routed by the
+  capacity gate searches that worktree too, and a broken binary is logged as itself
+  rather than reported as a missing skill (#2718).
+- The Output window's Overview card shows the right time for a running issue. A run
+  taking over a reused slot starts from a clean record, a stage boundary no longer
+  marks a live run finished, and the card's timer follows the new run.
+- A new VS Code user can initialize a repository with no Claude plugin and no
+  `nightgauge` on `PATH`: Initialize Repository now runs the bundled binary.
+  Terminals the extension opens for a skill or a `nightgauge` command also get
+  that binary on `PATH`, and the plugin invocation lines in the skills use the
+  `/nightgauge:<name>` form.
+- The Claude plugin survives extension upgrades. The extension registers a copy of
+  its marketplace in global storage instead of its version-keyed install directory,
+  moves an existing registration there without losing plugin data, and repairs a
+  plugin that failed to load, or shows Claude Code's error if it cannot, even when
+  the install prompt is dismissed or off. A plugin status it cannot read now warns
+  with the reason instead of passing silently. `nightgauge doctor` reports a failed
+  Nightgauge plugin with that error as `NGD051`. `install-agent-skills.sh` refuses
+  every global-writing mode in a linked worktree and names the primary checkout;
+  `--generate-only` and `--check-mirror` still run there (#2719).
+- Claude stages now load their safety gates from the running build. Every Claude
+  spawn passes `--plugin-dir` with the bundled plugin, so a failed or declined
+  user-level install no longer removes them. A bundled build reads `system/init`
+  and stops a stage before any work if the plugin did not load exactly once,
+  with the parked `gate_plugin_missing` outcome and an Action Center card. A
+  build with no bundle warns and continues. The run record states the plugin
+  version each stage loaded as `model_selection.plugin_version`. A packaged
+  extension now runs its bundled hooks ahead of a workspace copy, so a hook edit
+  reaches it through a release (#2723).
+- Installed builds now run the skills they ship. The Go binary and a packaged
+  extension search `NIGHTGAUGE_SKILLS_ROOT`, then the bundle, then
+  `<workspace>/skills`, so a repository holding a `skills/` tree no longer
+  replaces a stage's prompt. The workspace still supplies a skill the bundle
+  lacks, and an Extension Development Host keeps it ahead of the bundle. To test
+  a branch's skill edits through an installed build, set
+  `NIGHTGAUGE_SKILLS_ROOT`. Claude stages receive the resolved skills tree with
+  `--add-dir`, so includes read under default permissions, with file-tool writes
+  to it denied. Each stage logs `skill_path=` when it starts (#2718).
+- The read-only skills tree on Claude stages now holds through a symlink. The deny
+  is one `Edit(path)` rule for each form of the tree: `Edit` is the rule that stops
+  file-tool writes, and the `Write`, `MultiEdit` and `NotebookEdit` path rules did
+  nothing. The extension no longer grants the parent of a flat skills tree.
+  `TestClaudeSkillsTreeLive` proves the read and the deny against the installed
+  `claude`; see `docs/TESTING.md` to run it (#2718).
+- The VSIX skill bundle is now complete, and a package-time check proves it. The
+  bundler ships whole skill directories, so per-skill overlays reach Fable stages,
+  and it ships `pattern-mining` and `verify-ui`, which stage prompts now name by
+  their path under the bundle. `nightgauge skill render` fails, naming the file,
+  when an include or phase-include target is missing, instead of exiting 0 with a
+  partial prompt. The new `nightgauge preflight skill-bundle` renders every stage
+  from a built tree and runs on each VSIX in the release and staging workflows and
+  on `dist/skills` in `scripts/ci-local.sh` (#2761).
+- `nightgauge pre-push validate` now reports an expired limit as a timeout, with
+  exit code 3 and a reason naming the limit and how to raise it, never as a test
+  failure. The default limit rises from 180 s to 1800 s, is configurable with
+  `hooks.pre_push.timeout_seconds`, and also bounds `go test -timeout`, which fires
+  first so a hung package names itself. `--json` now uses the same exit codes as
+  the human output, so a blocked push no longer exits 0. The gate skips the Go test
+  phase, and says why, only when `ci-local` already passed the same tree (#2700).
+- The install docs now work as written. The README, plugin README and Getting
+  Started guide include a required `nightgauge` binary step with
+  `nightgauge doctor`, settings-only routes that installed nothing are gone, and
+  the plugin README says hooks enforce nothing without the binary. A new gate
+  runs each documented route in its own scratch config (#2759).
+  `configs/claude/settings.json` is removed: it shipped the settings-only route.
+- Validation retries can now succeed in a reused worktree. `FeatureValidateGate`
+  judges the latest verdict per gate, so a later `pass` clears an earlier
+  `catch`; `nightgauge health gate-metrics` still reports every row. Judge
+  verdicts stay fail-closed: any failing judge in the latest attempt fails the
+  gate, so one judge's pass cannot erase another's fail (#2746).
+- Security: hooks and skills no longer run a `bin/nightgauge` supplied by the
+  repository you are in. A repository build is used only with
+  `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge core checkout, so
+  maintainers' local builds are no longer picked up without that setting. Fork
+  contributors set `NIGHTGAUGE_BIN=$PWD/bin/nightgauge`.
+- Installed Claude plugins now receive updates. Each release that changes the
+  plugin must raise its version, and installs follow a `stable` branch that moves
+  only on release, so `claude plugin update` delivers releases and never the tip
+  of `main`. An install added without `#stable` must move once, which removes
+  its saved plugin data; the plugin README gives the commands (#2724).
+- `issue-create`, `repo-init` and `smart-setup` no longer lose their frontmatter
+  to a YAML error when loaded as Claude plugin skills (#2724).
+- The Claude plugin channel now reports a missing `stable` branch as a failure
+  with a tracking issue, a failed cask check no longer holds `stable` back, and
+  the plugin version gate fails instead of passing when it cannot compare
+  versions. The team settings template installs from `stable` too (#2724).
+
+- RC and release builds install ClamAV from the official, SHA-256-pinned 1.5.4 package through
+  `scripts/install-clamav-macos.sh` instead of Homebrew, whose OpenSSL 4 build rejects every
+  signature database (#2740). `freshclam` now prints its failures, and `scripts/malware-scan.sh`
+  refuses to scan any artifact unless ClamAV first detects an EICAR canary streamed on stdin.
+  The gate also requires all three signature databases and a floor of 3,000,000 loaded
+  signatures, because `freshclam` exits 0 on a 429 from the signature CDN with only `daily.cvd`,
+  which would otherwise scan with about 10% of the signatures and report clean.
 - A re-run that rebased its conflicting PR branch no longer ends `branch_forked`. When origin's
   copy of the branch carries no change the local tree lacks, even if the rebase rewrote a commit's
   surrounding lines, the new `nightgauge git push-branch` (used by feature-validate) and the
@@ -34,6 +189,14 @@ changelog, and the release workflow refuses a tag that does not.
   shared-fragment includes enforces that. A `branch_forked` run's tip is pinned at
   `refs/nightgauge/stranded/<issue>` before cleanup, and the Action Center card names the ref and
   the SHA.
+- A stage waiting on its own gate is no longer killed by the runaway monitor while the gate
+  still runs (#2694). `pipeline.progress_runaway.background_task_ceiling_ms` rises from 45 to 90
+  minutes, because a loaded `ci-local.sh` takes 50 and any live task now counts, declared or not.
+  A task whose declared log keeps growing can run to `background_task_hard_ceiling_ms` (120
+  minutes). A connectivity restore takes the outage off the monitor's clocks, a kill names the
+  expired ceiling and the task's age, and the failure report says the runaway monitor stopped the
+  stage instead of blaming the implementation.
+
 - With a live daemon, `autonomous status` again answers whether a reload is safe (#2720). The
   human output replaces `Status:` with the `Autonomous Mode: <Status> — <reload line>` sentence,
   covering manual runs, and `--json` adds `running_pipelines`, `running_pipelines_known` and
@@ -131,6 +294,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- GitHub runs the heavy suites once, in the merge queue, instead of on the pull
+  request and again in the queue. A pull request keeps its fast safety checks and
+  takes about 15 minutes less, and the queue still blocks a change that fails.
+  Queue runs in the Actions tab are titled with the commit message (#2828).
+- PR Review no longer runs on every pull request. It is a manual
+  `workflow_dispatch` second opinion on the Claude subscription
+  (`CLAUDE_CODE_OAUTH_TOKEN`), so it adds no per-use model spend, and a red
+  advisory check can no longer stop `pr-merge` on finished work (#2828).
 - **A PR closes its issue only when every acceptance criterion is met
   (#2655).** pr-create wrote `Closes #N` whenever no criterion was outright
   unmet, so a PR whose criteria could not be verified — or an issue with none
@@ -225,6 +396,12 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
   the result join path has diverged, instead of the record reading as calls that
   quietly succeeded. The Bash ring keeps the same check disabled on purpose: its
   10 entries can all be in flight in one parallel turn (#457).
+
+### Added
+
+- `nightgauge config init --detect` writes a config from the `origin` remote
+  with no GitHub Project linked. Unlike plain `config init`, its output loads
+  straight away, and it makes no GitHub query.
 
 ### Fixed
 

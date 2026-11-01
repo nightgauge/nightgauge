@@ -1,9 +1,10 @@
 # Lint — formatting, ESLint, license-header guard, skill metadata.
 name: Lint
+run-name: ${{ github.event.merge_group.head_commit.message }}
 
-# No push to main (#2055): the strict ruleset merges only an up-to-date PR whose
-# squash tree is the tree this PR run already linted, so a push run re-checks
-# an identical tree.
+# No push to main (#2055): the merge queue tests the commit that lands, so a push
+# run re-checks an identical tree. The slowest self-tests run in the queue only;
+# the local gate has already run them.
 on:
   pull_request:
     branches: [main]
@@ -25,7 +26,9 @@ concurrency:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The steps total about 15 minutes on a good run, so a 15-minute budget
+    # cancels the job in whichever step is running when it expires (#2759).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -53,6 +56,20 @@ jobs:
         run: |
           git fetch --tags --force --quiet origin
           bash scripts/check-changelog.sh
+      # Claude plugin contract (#2724): one version, in plugin.json, and every
+      # skill's frontmatter parses, because `claude plugin validate` is not
+      # installed here. The self-test first proves the gate can go red.
+      - name: Plugin version gate self-test
+        run: bash scripts/test-check-plugin-version.sh
+      - name: Plugin has one version and valid skills
+        run: bash scripts/check-plugin-version.sh
+      # Install docs (#2759): the binary step is present and the documented
+      # commands install the plugin from this commit in a scratch config.
+      - name: Plugin install docs gate self-test
+        run: bash scripts/test-check-plugin-install-docs.sh
+      - name: Documented plugin install works
+        timeout-minutes: 10
+        run: bash scripts/check-plugin-install-docs.sh
       # Self-test first, same reasoning as the band-vocabulary and mirror-link
       # gates below: the validator reported a missing field once, on a file that
       # provably had it, because a frontmatter block that never closed handed the
@@ -150,12 +167,14 @@ jobs:
       # `git diff --exit-code` or to `exit 0` produces a fully green build,
       # which is #529 all over again.
       - name: Mirror drift gate self-test
+        if: ${{ github.event_name != 'pull_request' }}
         run: bash scripts/test-mirror-drift-gate.sh
       # The local gate's own concurrency and failure-reporting contract (#1983).
       # Runs here too because the helpers it asserts are what every other step's
       # failure is read through, and because a gate that reports a red it cannot
       # explain trains people to dismiss reds.
       - name: ci-local.sh concurrency and failure-reporting contract
+        if: ${{ github.event_name != 'pull_request' }}
         run: bash scripts/test-ci-local-concurrency.sh
       # The local gate's change-scoping contract (#1985). `--changed` can remove
       # the two Go suites from a local run, and this is what holds the rule that
@@ -167,7 +186,14 @@ jobs:
       # The local gate's dependency-bootstrap decision (#2562).
       - name: ci-local.sh dependency bootstrap decision
         run: bash scripts/test-ci-local-bootstrap.sh
+      # The record pre-push validate reads to skip a proven tree (#2700).
+      - name: ci-local.sh go test pass record
+        run: bash scripts/test-ci-local-go-pass-stamp.sh
+      # When the gate reuses a passed tree, and what every run records (#2784).
+      - name: ci-local.sh gate ledger reuse
+        run: bash scripts/test-ci-local-gate-reuse.sh
       - name: Agent-skill install target regression suite
+        if: ${{ github.event_name != 'pull_request' }}
         run: bash scripts/test-install-agent-skills-targets.sh
       # Read-only, and free to sit anywhere in this job: `--check-mirror`
       # regenerates into a temp destination and compares the two trees — paths,

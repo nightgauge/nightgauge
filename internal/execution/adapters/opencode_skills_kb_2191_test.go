@@ -3,6 +3,8 @@ package adapters
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -124,34 +126,153 @@ func TestOpenCodePermissionMap_SkillsRootInsideWorktreeStaysEditable(t *testing.
 	}
 }
 
-// Claude adapter parity: the knowledge base is added as a working directory
-// (edits into it are allowed), the skills tree is not.
+// Claude adapter parity: the knowledge base is added as a working directory,
+// and with no skill path the skills flags stay off the command.
 func TestClaudeAdapters_AddKnowledgeDir(t *testing.T) {
-	opts := RunOptions{KnowledgeDir: "/main/.nightgauge/knowledge", SkillPath: "/bundle/skills/nightgauge-feature-dev/SKILL.md", Model: "m"}
+	opts := RunOptions{KnowledgeDir: "/main/.nightgauge/knowledge", Model: "m"}
 	for name, a := range map[string]interface {
 		BuildCommand(RunOptions) (string, []string, map[string]string)
 	}{"claude": NewClaudeAdapter(), "claude-sdk": NewClaudeSdkAdapter()} {
 		_, args, _ := a.BuildCommand(opts)
-		found := false
-		for i, a := range args {
-			if a == "--add-dir" {
-				if i+1 >= len(args) || args[i+1] != opts.KnowledgeDir {
-					t.Errorf("%s: --add-dir not followed by the knowledge dir: %v", name, args)
-				}
-				found = true
-			}
-			if a == "/bundle/skills" || a == "/bundle/skills/nightgauge-feature-dev" {
-				t.Errorf("%s: skills tree must not be a working directory: %v", name, args)
-			}
-		}
-		if !found {
-			t.Errorf("%s: no --add-dir for the knowledge base: %v", name, args)
+		if got := flagValues(args, "--add-dir"); !slices.Equal(got, []string{opts.KnowledgeDir}) {
+			t.Errorf("%s: --add-dir = %v, want only the knowledge dir", name, got)
 		}
 		_, args, _ = a.BuildCommand(RunOptions{})
-		for _, a := range args {
-			if a == "--add-dir" {
-				t.Errorf("%s: --add-dir with no knowledge dir", name)
-			}
+		if got := flagValues(args, "--add-dir"); len(got) != 0 {
+			t.Errorf("%s: --add-dir with no knowledge dir: %v", name, got)
 		}
 	}
+}
+
+// TestClaudeAdapters_SkillsTreeIsReadableAndDenied pins #2718: the resolved tree
+// is added, not every search root, and the same argv denies file-tool writes.
+func TestClaudeAdapters_SkillsTreeIsReadableAndDenied(t *testing.T) {
+	opts := RunOptions{
+		KnowledgeDir: "/main/.nightgauge/knowledge",
+		SkillPath:    "/bundle/dist/skills/nightgauge-feature-dev/SKILL.md",
+		WorktreeDir:  "/worktrees/issue-1",
+	}
+	for name, a := range map[string]interface {
+		BuildCommand(RunOptions) (string, []string, map[string]string)
+	}{"claude": NewClaudeAdapter(), "claude-sdk": NewClaudeSdkAdapter()} {
+		_, args, _ := a.BuildCommand(opts)
+		want := []string{opts.KnowledgeDir, "/bundle/dist/skills"}
+		if got := flagValues(args, "--add-dir"); !slices.Equal(got, want) {
+			t.Errorf("%s: --add-dir = %v, want %v", name, got, want)
+		}
+		deny := "Edit(//bundle/dist/skills/**)"
+		if got := flagValues(args, "--disallowedTools"); !slices.Equal(got, []string{deny}) {
+			t.Errorf("%s: --disallowedTools = %v, want %q", name, got, deny)
+		}
+	}
+}
+
+// TestClaudeSkillsDirArgs_SkipsATreeInsideTheWorktree: a dev-host or override
+// render can resolve the worktree's own skills/. Denying edits there would stop
+// a stage changing the repository it was dispatched to change.
+func TestClaudeSkillsDirArgs_SkipsATreeInsideTheWorktree(t *testing.T) {
+	worktree := t.TempDir()
+	tree := filepath.Join(worktree, "skills")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inside := RunOptions{
+		SkillPath:   filepath.Join(tree, "nightgauge-feature-dev", "SKILL.md"),
+		WorktreeDir: worktree,
+	}
+	if got := claudeSkillsDirArgs(inside); got != nil {
+		t.Errorf("tree inside the worktree: args = %v, want none", got)
+	}
+
+	sibling := RunOptions{
+		SkillPath:   filepath.Join(worktree+"-other", "skills", "nightgauge-feature-dev", "SKILL.md"),
+		WorktreeDir: worktree,
+	}
+	if got := claudeSkillsDirArgs(sibling); len(got) == 0 {
+		t.Error("a sibling whose name extends the worktree's must still be added")
+	}
+}
+
+// TestClaudeSkillsDirArgs_DeniesTheResolvedFormOfASymlinkedTree: the deny has to
+// name the path a file tool resolves to, not only the path the tree was given as.
+func TestClaudeSkillsDirArgs_DeniesTheResolvedFormOfASymlinkedTree(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(base, "real-skills")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "linked-skills")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	args := claudeSkillsDirArgs(RunOptions{
+		SkillPath:   filepath.Join(link, "nightgauge-feature-dev", "SKILL.md"),
+		WorktreeDir: filepath.Join(base, "worktree"),
+	})
+	if got := flagValues(args, "--add-dir"); !slices.Equal(got, []string{link}) {
+		t.Errorf("--add-dir = %v, want the given form %q", got, link)
+	}
+	deny := strings.Join(flagValues(args, "--disallowedTools"), ",")
+	for _, form := range []string{link, real} {
+		rule := "Edit(//" + strings.TrimLeft(filepath.ToSlash(form), "/") + "/**)"
+		if !strings.Contains(deny, rule) {
+			t.Errorf("--disallowedTools = %q, want %q", deny, rule)
+		}
+	}
+}
+
+// TestClaudeSkillsDirArgs_DeniesTheAliasFormOfTheTree is the #2797 carryover: a
+// tree given as /private/tmp/... stayed writable as /tmp/.... The alias is a
+// temp symlink, so this runs on a Linux host whose /tmp is a real directory.
+func TestClaudeSkillsDirArgs_DeniesTheAliasFormOfTheTree(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(base, "private-tmp")
+	tree := filepath.Join(target, "skills")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "tmp")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	saved := openCodeSystemAliases
+	openCodeSystemAliases = []string{alias}
+	t.Cleanup(func() { openCodeSystemAliases = saved })
+
+	args := claudeSkillsDirArgs(RunOptions{
+		SkillPath:   filepath.Join(tree, "nightgauge-feature-dev", "SKILL.md"),
+		WorktreeDir: filepath.Join(base, "worktree"),
+	})
+
+	if got := flagValues(args, "--add-dir"); !slices.Equal(got, []string{tree}) {
+		t.Errorf("--add-dir = %v, want the given form %q", got, tree)
+	}
+	deny := strings.Join(flagValues(args, "--disallowedTools"), ",")
+	aliased := "Edit(//" + strings.TrimLeft(filepath.ToSlash(filepath.Join(alias, "skills")), "/") + "/**)"
+	if !strings.Contains(deny, aliased) {
+		t.Errorf("--disallowedTools = %q, want %q", deny, aliased)
+	}
+	// Only Edit path rules reach the file permission check. The CLI warns on
+	// stderr for the others, and a Write(path) rule alone does not stop a write.
+	for _, inert := range []string{"Write(", "MultiEdit(", "NotebookEdit("} {
+		if strings.Contains(deny, inert) {
+			t.Errorf("--disallowedTools = %q, must not carry a %s rule", deny, inert)
+		}
+	}
+}
+
+func flagValues(args []string, flag string) []string {
+	var values []string
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			values = append(values, args[i+1])
+		}
+	}
+	return values
 }

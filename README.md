@@ -98,6 +98,7 @@ already use rather than replacing them:
 | Requirement                                                               | Needed for                                                                                                 |
 | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | **Claude Code** (or another supported adapter)                            | Stage execution — bring your own subscription/keys; nothing is proxied                                     |
+| **`nightgauge` binary** ([install](#install-the-binary))                  | Required: skills and hooks call it. The VSCode extension bundles a copy; terminal use needs an install     |
 | **git** + **gh CLI** (authenticated)                                      | Branching, PRs, issue operations                                                                           |
 | **A GitHub repository with issues**                                       | The pipeline's unit of work                                                                                |
 | **GitHub Projects v2 board** (+ `.nightgauge/config.yaml` pointing at it) | The autonomous scheduler and board-driven views — without a board you can still run single issues manually |
@@ -108,7 +109,18 @@ Linux amd64 CLI and VSIX binaries are tested on Debian and Alpine; live
 provider-driven Linux pipelines still have less coverage. Windows is not
 currently supported; use WSL2.
 
-## Install from Source
+## Install the binary
+
+The `nightgauge` binary is required for terminal use. Skills call it directly, so
+without it a slash command fails at its first `nightgauge` call.
+
+```bash
+brew install --cask nightgauge/tap/nightgauge    # macOS
+# or, with Go 1.26+ and $GOPATH/bin on PATH:
+go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest
+```
+
+Or build it from source:
 
 ```bash
 git clone https://github.com/nightgauge/nightgauge.git
@@ -116,7 +128,10 @@ cd nightgauge
 go install ./cmd/nightgauge
 ```
 
-Signed release binaries, checksums, and the Homebrew cask are available from
+Confirm it with `nightgauge doctor`, which exits 0 when healthy, 1 with warnings
+and 2 when broken.
+
+Signed release binaries and checksums are available from
 [GitHub Releases](https://github.com/nightgauge/nightgauge/releases). See
 [docs/GO_BINARY.md](docs/GO_BINARY.md) for the full install matrix.
 
@@ -154,17 +169,31 @@ for extension development and intentionally produces a non-release build.
 
 ### Claude Code CLI (Alternative)
 
-For terminal-based workflows, install the Nightgauge plugin:
+For terminal-based workflows, first [install the binary](#install-the-binary),
+then the Nightgauge plugin:
 
 ```bash
+# Confirm the binary is installed
+nightgauge doctor
+
 # Add the marketplace
-claude plugin marketplace add https://github.com/nightgauge/nightgauge.git
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
 
 # Install the Nightgauge plugin
 claude plugin install nightgauge@nightgauge-plugins
 
 # Start the pipeline
 /nightgauge:issue-pickup
+```
+
+`#stable` moves only when a release is published. Updates are manual unless you
+enable auto-update under `/plugin` > Marketplaces. To update, run these and
+restart Claude Code. [Plugin README](claude-plugins/nightgauge/README.md#updates)
+covers moving an older install.
+
+```bash
+claude plugin marketplace update nightgauge-plugins
+claude plugin update nightgauge@nightgauge-plugins
 ```
 
 ### Grok Build TUI

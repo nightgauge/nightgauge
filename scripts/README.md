@@ -10,17 +10,47 @@ directly.
 
 ### install-agent-skills.sh
 
-Installs/refreshes the Nightgauge skills into the agent tools on this
-machine, sourced from the **local working tree** — so skills you edit here are
-usable in any project you open with Claude Code, Codex, or Grok.
+To refresh the committed plugin-skills mirror after editing `skills/`, use
+`--generate-only`. It writes only inside this checkout:
 
 ```bash
-# Usage
+./scripts/install-agent-skills.sh --generate-only
+```
+
+Every other install form, including the bare one, **changes global state on this
+machine**: it installs the skills into the agent tools from the **local working
+tree**, so skills you edit here are usable in any project you open with Claude
+Code, Codex, or Grok. These forms refuse to run in a linked worktree, exit 1, and
+name the primary checkout to run from, because the marketplace would break when
+the worktree is removed and unmerged skills would reach every project.
+`--generate-only` and `--check-mirror` still work in a linked worktree.
+
+```bash
+# Global installs, from the primary checkout
 ./scripts/install-agent-skills.sh                # refresh Claude Code + Codex + Grok
 ./scripts/install-agent-skills.sh --claude-only  # only Claude Code plugins
 ./scripts/install-agent-skills.sh --codex-only   # only Codex (~/.codex/skills)
 ./scripts/install-agent-skills.sh --grok-only    # only Grok (~/.grok/skills + plugin)
+./scripts/install-agent-skills.sh --adopt        # also replace old copies proven shipped
 ```
+
+Codex and Grok report `installed N of M, skipped K`. A directory without
+`.nightgauge-installed` is never replaced by a plain install, so K above zero leaves
+it on its old skills: the other tools still refresh, then the run prints
+`Agent skill sync INCOMPLETE` and exits non-zero. An operator's own directory with a
+skill's name, such as `update-docs`, keeps every run in that state until it is
+renamed or removed.
+
+`--adopt` works with the default run, `--codex-only` and `--grok-only`. It replaces a
+marker-less directory only when its `SKILL.md` (for `_shared`, every file) is a blob
+in this repository's git history, and moves the old copy to
+`<skills root>.nightgauge-adopted/<UTC-stamp>/<name>`. Anything else is left alone
+and named. A shallow clone or missing history is refused with exit 1, and nothing is
+written. Delete the moved copies when you no longer want them.
+
+An install removes a directory holding the marker when its skill has left `skills/`,
+and the Grok path removes `nightgauge` plugin and marketplace entries whose path no
+longer exists.
 
 What it does:
 
@@ -104,6 +134,14 @@ Chat-only adapters (`gemini-sdk`, `openai-compatible`) are refused.
 - `packages/nightgauge-sdk/dist/cli/index.js` exists
   (`npm run -w @nightgauge/sdk build`)
 - `gh auth` is configured
+
+## Plugin install docs gate
+
+The Claude plugin install docs have their own gate.
+`check-plugin-install-docs.sh` requires a binary step and `nightgauge doctor`, bans
+settings-based routes, and runs the documented commands in a scratch
+`CLAUDE_CONFIG_DIR` against a temporary mirror of `HEAD`.
+`test-check-plugin-install-docs.sh` proves each arm can go red.
 
 ## Project Board And Pipeline State
 

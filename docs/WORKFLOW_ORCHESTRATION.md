@@ -38,7 +38,7 @@ to the floor.
 | Capability declaration           | `OrchestrationCapability` on `ICliAdapter`                                  | `native-workflow` \| `sdk-fanout` (replaced the dead 4-boolean `AdapterCapabilities`) |
 | Backend resolution + durability  | `WorkflowExecutor`                                                          | Native vs floor, budget, quota gate, journal, cross-process resume                    |
 | Selection / routing              | `PipelineOrchestrator.selectExecutor` + `AutoProviderRouter`                | One selection point; workflow sub-score in the router                                 |
-| Anti-hallucination gating        | `GateMetricsWriter.appendJudgeVerdicts` → Go `FeatureValidateGate.Verify()` | Judge verdicts become gate evidence; zero new Go scaffolding                          |
+| Anti-hallucination gating        | `GateMetricsWriter.appendJudgeVerdicts` → Go `FeatureValidateGate.Verify()` | Judge verdicts become gate evidence; any failure in the latest attempt trips the gate |
 
 ## The `OrchestrationCapability` seam
 
@@ -361,11 +361,16 @@ Go scaffolding. `GateMetricsWriter.appendJudgeVerdicts`
 `JudgeVerdict` nodes of an orchestrated `feature-validate` run into
 the checkout's `health/gate-metrics.jsonl`
 (`nightgauge layout path checkout health/gate-metrics.jsonl`) as
-`{ gate_name: "judges", result }` records, which the existing Go
-`FeatureValidateGate.Verify()` loop already consumes. The verdict → result mapping
+`{ gate_name: "judges", result, attempt_id }` records, which the Go
+`FeatureValidateGate.Verify()` loop consumes. The verdict → result mapping
 is **fail-closed**: only an explicit `pass` yields `result: "pass"`; both `fail`
 and `uncertain` yield `result: "fail"` (an unconfirmed claim must not slip past
-the gate), and the Go gate trips on any `result != "pass"`. A failing record
+the gate). Other gates are judged on their latest row per `gate_name` (#2746),
+but `judges` rows are independent critics, not successive verdicts: every record
+one run writes shares an `attempt_id`, and the Go gate trips on any
+`result != "pass"` in the latest attempt. A later attempt replaces an earlier
+one, so a retry can clear a failure, and one judge's pass can never erase
+another's fail. A `judges` row with no `attempt_id` is never superseded. A failing record
 carries the judge's first-line `rationale` as `error_summary` for triage. The
 writer is non-critical (never throws) and validates each record through a Zod
 schema before writing.

@@ -11,6 +11,77 @@ and this project adheres to
 
 ### Fixed
 
+- A long merge-queue wait no longer ends in a paid LLM merge stage: the extension
+  takes its pr-merge timeout from the binary instead of a fixed 20 minutes. The
+  stage logs the `pr-stage` pid at spawn and names any signal that kills it.
+- The orphan reaper checks a process's start time before it kills, so it cannot
+  kill an unrelated process that reused a tracked pid.
+- Installing Codex or Grok skills warns when any were skipped, with the count
+  (`installed N of M, skipped K`), instead of reporting success. The skipped
+  directories keep their old skills, and the output channel names them.
+- Installing Codex or Grok skills removes Nightgauge skills that no longer ship.
+- A re-dispatched issue resumes at feature-validate from preserved work instead of
+  repeating planning and dev, when its acceptance criteria are unchanged (#2730).
+- Stages find their skills through `nightgauge skill roots`, so the extension and
+  the binary can no longer disagree on which skills run. If that call fails, the
+  stage fails with the reason. The write protection on a stage's skills tree now
+  also covers the `/tmp` form of a path (#2718).
+- The Output window's Overview card shows the right time for a running issue. A run
+  taking over a reused slot starts from a clean record, a stage boundary no longer
+  marks a live run finished, and the card's timer follows the new run.
+- Retry on a halted repository's Action Center card now resumes the repository
+  and closes the card. It used to freeze the scheduler until the daemon
+  restarted, while the status still read running (#2750).
+- The Claude plugin keeps working after an extension upgrade. Its marketplace now
+  lives in global storage, and an existing install moves there with its plugin data
+  intact. A plugin that failed to load is repaired on activation, or Claude Code's
+  error is shown, even if you dismissed the install prompt. If the plugin's status
+  cannot be read, a warning says why. The extension no longer
+  tries to install `smart-setup` and `docs`, which are skills inside the plugin
+  (#2719).
+- Pipeline stages now load the safety gates the extension ships, whatever the
+  state of your user-level Claude plugin. A packaged extension uses its bundled
+  plugin ahead of a workspace copy, and stops a stage before any work with an
+  Action Center card if the plugin did not load. Extension Development Hosts keep
+  the workspace first and warn instead (#2723).
+- A packaged extension now runs its own bundled skills, even in a workspace that
+  holds a `skills/` tree. `NIGHTGAUGE_SKILLS_ROOT` overrides the bundle, a skill
+  the bundle lacks still resolves from the workspace, and the Extension
+  Development Host keeps the workspace first. Claude stages can read the bundle
+  under default permissions and cannot edit it with file tools (#2718).
+- Initialize Repository works on a fresh install: it writes
+  `.nightgauge/config.yaml` with the bundled binary, so it needs neither the
+  Claude plugin nor `nightgauge` on `PATH`. Link a GitHub Project afterwards;
+  a repository with no board no longer shows the `project config incomplete`
+  warning.
+- Make Repo AI-Ready runs `/nightgauge:smart-setup`, and offers plugin setup
+  when the plugin is not enabled.
+- Terminals the extension opens for a skill or for `nightgauge pr merge` can run
+  `nightgauge`, because its directory is on `PATH`.
+- Hints that name a `/nightgauge:*` command appear only when the Claude plugin
+  is enabled.
+- The extension now ships every file a pipeline stage needs, including per-skill
+  model overlays and the `pattern-mining` and `verify-ui` skills. A stage whose
+  bundled skill is missing an include now fails and names the file, instead of
+  running on a partial prompt (#2761).
+- A validation retry in a reused worktree can now pass: the latest verdict per
+  gate decides, so an earlier `catch` no longer fails every later attempt, and
+  gate telemetry still shows every row. One judge's pass cannot erase another
+  judge's fail: any failing judge in the latest attempt fails validation (#2746).
+- Security: hooks no longer run a `bin/nightgauge` from the open repository,
+  so they use the bundled binary unless `NIGHTGAUGE_DEV_REPO_BIN=1` is set in a
+  verified Nightgauge core checkout.
+- Remote Claude plugin installs now follow the `stable` release branch, so
+  `claude plugin update` delivers releases. The new default for
+  `nightgauge.plugins.marketplaceUrl` ends in `#stable` (#2724).
+- A stage waiting on its own gate is no longer killed by the runaway monitor while the gate
+  still runs (#2694). `pipeline.progress_runaway.background_task_ceiling_ms` rises from 45 to 90
+  minutes, because a loaded `ci-local.sh` takes 50 and any live task now counts, declared or not.
+  A task whose declared log keeps growing can run to `background_task_hard_ceiling_ms` (120
+  minutes). A connectivity restore takes the outage off the monitor's clocks, a kill names the
+  expired ceiling and the task's age, and the failure report says the runaway monitor stopped the
+  stage instead of blaming the implementation.
+
 - **A long gate wait after a quota warning is no longer killed (#2711).** Time on a live
   background task or foreground tool call no longer counts toward the idle budgets, and a kill
   that followed only an `allowed_warning` is booked as a stall, with no global cooldown.

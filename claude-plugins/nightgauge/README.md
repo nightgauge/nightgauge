@@ -16,6 +16,10 @@ practices. Nightgauge uses **Claude Code hooks** to _enforce_ them:
 | LLM might follow plan    | Hooks **verify** plan completion        |
 | Context lost on resume   | Hooks **restore** context automatically |
 
+This enforcement needs the `nightgauge` binary: see
+[Install the Binary](#install-the-binary-required). Without it, binary-backed
+hooks do nothing.
+
 ## Using Nightgauge in Any Repository
 
 Once installed, Nightgauge works in **any Git repository**. The plugin is
@@ -31,22 +35,37 @@ claude
 > /nightgauge:issue-pickup 42
 ```
 
-**That's it.** The hooks automatically:
+With the `nightgauge` binary installed, the hooks automatically:
 
 - Detect your current branch and linked issue
 - Restore context when you resume sessions
 - Enforce quality gates on every operation
 - Format code after edits
 
-No per-repository configuration needed.
+Without the binary, binary-backed hooks do nothing, so no gate is enforced, and
+skills fail at their first `nightgauge` call. No per-repository configuration
+is needed.
 
 ## Installation
+
+### Install the Binary (Required)
+
+```bash
+brew install --cask nightgauge/tap/nightgauge    # macOS
+# or, with Go 1.26+ and $GOPATH/bin on PATH:
+go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest
+```
+
+Confirm it with `nightgauge doctor`. See
+[docs/GO_BINARY.md](../../docs/GO_BINARY.md) for release binaries and the full
+install matrix. The VSCode extension's bundled copy serves hooks but puts nothing
+on `PATH`.
 
 ### Add the Marketplace
 
 ```bash
 # Add the Nightgauge plugins marketplace
-claude plugin marketplace add https://github.com/nightgauge/nightgauge.git
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
 ```
 
 ### Install the Plugin
@@ -56,25 +75,32 @@ claude plugin marketplace add https://github.com/nightgauge/nightgauge.git
 claude plugin install nightgauge@nightgauge-plugins
 ```
 
-### Manual Configuration
+Editing `settings.json` alone does not install the plugin. Use the commands
+above.
 
-Or add to your `~/.claude/settings.json`:
+### Updates
 
-```json
-{
-  "enabledPlugins": {
-    "nightgauge@nightgauge-plugins": true
-  },
-  "extraKnownMarketplaces": {
-    "nightgauge-plugins": {
-      "source": {
-        "source": "git",
-        "url": "https://github.com/nightgauge/nightgauge.git"
-      }
-    }
-  }
-}
+`#stable` is a branch that moves only when a release is published, so you
+receive releases and never the tip of `main`. Updates are manual: Claude Code
+leaves auto-update off for third-party marketplaces. Turn it on under
+`/plugin` → Marketplaces → Enable auto-update, or refresh by hand and restart:
+
+```bash
+claude plugin marketplace update nightgauge-plugins
+claude plugin update nightgauge@nightgauge-plugins
 ```
+
+An install added without `#stable` follows `main` and must move once. Claude
+Code refuses to re-add a marketplace from a different source, and removing it
+**uninstalls the plugin and deletes that plugin's saved options and data**:
+
+```bash
+claude plugin marketplace remove nightgauge-plugins
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
+claude plugin install nightgauge@nightgauge-plugins
+```
+
+The version can drop after this move, because `main` is ahead of the release.
 
 ### Verify Installation
 
@@ -93,6 +119,19 @@ claude -p "Show me the /nightgauge:issue-pickup help"
 
 > **Note**: Hooks are automatically loaded when the plugin is installed. No
 > separate hook installation is required.
+
+## Binary Resolution
+
+Hooks and skills resolve `nightgauge` in this order: `NIGHTGAUGE_BIN`, `PATH`,
+the VS Code extension bundle (hooks only; skill hosts export `NIGHTGAUGE_BIN`
+instead), then `~/go/bin`.
+
+A repository's `bin/nightgauge` is never run by default, because this plugin
+loads in every repository. Maintainers opt in with `NIGHTGAUGE_DEV_REPO_BIN=1`,
+set in the environment and not in repository config. It applies only in a
+checkout whose `go.mod` declares `github.com/nightgauge/nightgauge` and whose
+`origin` is that exact repository, and it places the repository build ahead of
+the bundle. Forks do not qualify: use `NIGHTGAUGE_BIN=$PWD/bin/nightgauge`.
 
 ## Pipeline Commands
 
@@ -454,15 +493,15 @@ tool):
 
 **Plugin vs. Skill Versions**
 
-The Nightgauge plugin (`plugin.json`) and individual skills (`SKILL.md`
+The plugin version is independent of the product version and is bumped in the
+changelog rollover PR whenever plugin files changed. The Nightgauge plugin
+(`plugin.json`) and individual skills (`SKILL.md`
 files) maintain **independent versions**:
 
-| Component                       | Version | Purpose                                  |
-| ------------------------------- | ------- | ---------------------------------------- |
-| `nightgauge` plugin             | 1.4.0   | Claude Code wrapper with hooks           |
-| `nightgauge-issue-pickup` skill | 1.x.x   | Universal skill (works with any AI tool) |
-| `nightgauge-feature-dev` skill  | 1.x.x   | Universal skill                          |
-| ...                             | ...     | ...                                      |
+| Component           | Version source                   | Purpose                              |
+| ------------------- | -------------------------------- | ------------------------------------ |
+| `nightgauge` plugin | `plugin.json` only               | What `claude plugin update` compares |
+| Each skill          | `metadata.version` in `SKILL.md` | Universal skill (any AI tool)        |
 
 The plugin wraps the universal skills for Claude Code-specific features (like
 hooks). There is no `skills/nightgauge/SKILL.md` because the plugin itself

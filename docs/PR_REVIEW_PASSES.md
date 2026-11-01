@@ -1,10 +1,19 @@
 # PR Review Passes
 
-Pull requests the pipeline opens are reviewed inside the pipeline. Pull requests
-opened by a person or by another tool are not. The
-`.github/workflows/pr-review.yml` workflow closes that gap: it runs the
-severity-ranked review passes defined here on every pull request the pipeline
-did not author, and posts the result as one advisory comment.
+Pull requests the pipeline opens are reviewed inside the pipeline. The
+`.github/workflows/pr-review.yml` workflow is the manual second opinion: a
+maintainer runs it on one pull request with `workflow_dispatch`, and it runs the
+severity-ranked review passes defined here and posts the result as one advisory
+comment. It never runs on its own, so it adds no model spend and no check to a
+pull request. To run it:
+
+```bash
+gh workflow run pr-review.yml -f pr_number=<N>
+```
+
+It authenticates with the `CLAUDE_CODE_OAUTH_TOKEN` secret, created with
+`claude setup-token`, so it draws on the Claude subscription. The workflow passes
+no `ANTHROPIC_API_KEY`: the CLI would prefer it, and it bills per use.
 
 This file is the committed definition. The review model reads it at run time,
 and `scripts/pr-review.mjs` enforces its limits before anything is posted.
@@ -63,7 +72,7 @@ rejected.
 - `claim` is one line of at most 300 characters.
 - `fix` is at most 1000 characters.
 - No string may contain a credential shape (`sk-ant-`, `ghp_`, `ghs_`, `gho_`,
-  `ghu_`, `github_pat_`). The model runs beside the API key, so such a string
+  `ghu_`, `github_pat_`). The model runs beside the model token, so such a string
   is treated as a leak and the whole file is rejected.
 
 ## Caps
@@ -112,8 +121,8 @@ The comment is posted with the workflow's `GITHUB_TOKEN`, as
 the reviewer login equals the author login, so the reviewer is never the
 author.
 
-Also skipped: `dependabot[bot]`, draft pull requests, runs without an
-`ANTHROPIC_API_KEY` secret, and runs whose base commit has no
+Also skipped: `dependabot[bot]`, draft pull requests, runs without a
+`CLAUDE_CODE_OAUTH_TOKEN` secret, and runs whose base commit has no
 `scripts/pr-review.mjs` (the pull request that introduces it). A skip is
 explained in the job summary.
 
@@ -128,13 +137,17 @@ The review is advisory:
 - The workflow is not a required status check, and must not be added to a
   ruleset.
 
+The pipeline's own merge is the one consumer. Before it enqueues, `pr-merge` reads
+the comment and may hold the merge or file its findings as issues. See
+[PR_MERGE_STAGE.md](PR_MERGE_STAGE.md#enqueue-review-gate-2730), which depends on
+this comment's format. Change `scripts/pr-review.mjs` and
+`internal/orchestrator/stages/prmerge_review.go` together.
+
 ## Fork pull requests
 
-Under `pull_request`, a fork's run gets no secrets and a read-only token, so it
-cannot call the model or post. Fork pull requests are skipped with an
-explanation. A maintainer reviews one by running the workflow manually with
-`workflow_dispatch` and the pull request number. Automatic fork review needs a
-different trigger and key isolation and is not implemented.
+A manual run reviews a fork's pull request like any other, because a maintainer
+chose to start it. Automatic fork review needs a `pull_request` trigger, which
+gives a fork no secrets, so it is not implemented.
 
 ## Security model
 

@@ -70,6 +70,10 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "RC dry-run: $TAG"
 
+      # release.yml refuses this; an RC finds it first (#2724).
+      - name: Plugin version changed with the plugin
+        run: bash scripts/check-plugin-version.sh --tag "${GITHUB_REF_NAME}"
+
       - name: Install dependencies
         run: npm ci
 
@@ -160,6 +164,11 @@ jobs:
           done
           echo "Packaged:"; ls -1 *.vsix
 
+      # The VSIX binaries are cross-compiled, so the bundle check below needs one
+      # built for this runner (#2761).
+      - name: Build the runner's binary
+        run: go build -o "$RUNNER_TEMP/nightgauge-runner" ./cmd/nightgauge
+
       # Every .vsix must carry the build-info stamp AND a bundled binary, and
       # must NOT ship source maps or type declarations (.vscodeignore drift).
       - name: Verify VSIX contents
@@ -188,6 +197,15 @@ jobs:
             # No shipped file may carry a fetch piped to a shell or a base64
             # decode, from whichever package it was bundled (#2320, #2321).
             bash scripts/check-shipped-code.sh "$VSIX"
+
+            # Validate the skills this VSIX carries, not dist/: only the
+            # extracted tree speaks for what .vscodeignore let through (#2761).
+            SKILLS_TMP="$(mktemp -d "$RUNNER_TEMP/vsix-skills.XXXXXX")"
+            unzip -q "$VSIX" 'extension/dist/skills/*' -d "$SKILLS_TMP"
+            "$RUNNER_TEMP/nightgauge-runner" preflight skill-bundle \
+              --skills-root "$SKILLS_TMP/extension/dist/skills" \
+              --source-root "$GITHUB_WORKSPACE/skills"
+            rm -rf "$SKILLS_TMP"
 
             # Assert the PACKAGED binary is Developer ID signed, not the one the
             # signing step happened to touch. The VSIX freezes a copy, so this
@@ -229,11 +247,9 @@ jobs:
       - name: Malware scan (ClamAV)
         run: |
           set -euo pipefail
-          brew install --quiet clamav
-          CLAMETC="$(brew --prefix)/etc/clamav"
-          mkdir -p "$CLAMETC" "$(brew --prefix)/var/lib/clamav"
-          sed 's/^Example/#Example/' "$CLAMETC/freshclam.conf.sample" > "$CLAMETC/freshclam.conf"
-          freshclam --quiet
+          bash scripts/install-clamav-macos.sh
+          export PATH="/usr/local/clamav/bin:$PATH"
+          freshclam
           bash scripts/malware-scan.sh \
             --report "$RUNNER_TEMP/clamav-report.json" \
             packages/nightgauge/*.vsix bin/

@@ -9,16 +9,21 @@
  * does not auto-scaffold `.nightgauge/` on their disk until they opt in.
  */
 
+import { execFile } from "child_process";
+import { promisify } from "util";
 import * as vscode from "vscode";
+import { BinaryResolver } from "../services/BinaryResolver";
+import { resolveBinaryDiscoveryEnv } from "../utils/binaryDiscoveryEnv";
 import type { Logger } from "../utils/logger";
+import { isPluginEnabled } from "../utils/pluginHint";
 import {
   GettingStartedPanel,
   type GettingStartedAction,
 } from "../views/onboarding/GettingStartedPanel.js";
 import { shouldAutoShowGettingStarted } from "../views/onboarding/onboardingGate.js";
 
-const REPO_INIT_SKILL = "/nightgauge:repo-init";
-const SMART_SETUP_SKILL = "/smart-setup";
+export const REPO_INIT_SKILL = "/nightgauge:repo-init";
+export const SMART_SETUP_SKILL = "/nightgauge:smart-setup";
 const DOCS_URL = "https://github.com/nightgauge/nightgauge#readme";
 
 /** globalState key tracking whether the Getting Started panel has already
@@ -48,10 +53,55 @@ function openSkillInTerminal(skill: string, cwd: string | undefined, logger: Log
   const terminal = vscode.window.createTerminal({
     name: `Nightgauge: ${skill}`,
     cwd,
+    env: resolveBinaryDiscoveryEnv(),
   });
   terminal.show();
   terminal.sendText(`claude ${skill}`, true);
   logger.info("Opened skill in terminal", { skill, cwd });
+}
+
+/**
+ * Writes `.nightgauge/config.yaml` with the bundled binary, so onboarding needs
+ * neither the Claude plugin nor `nightgauge` on PATH (#2760, #1154). The config
+ * has no board; linking one stays in the `repo-init` skill.
+ */
+async function initializeRepository(cwd: string, logger: Logger): Promise<void> {
+  if (await refreshRepoInitializedContext(cwd, logger)) {
+    vscode.window.showInformationMessage("Nightgauge: this repository is already initialized.");
+    return;
+  }
+
+  const binary = await BinaryResolver.fromVSCode().resolve();
+  if (!binary) {
+    vscode.window.showErrorMessage(
+      "Nightgauge: the bundled binary was not found. Reinstall the extension, " +
+        "or set nightgauge.backend.binaryPath."
+    );
+    return;
+  }
+
+  try {
+    await promisify(execFile)(binary, ["config", "init", "--detect", "--json"], { cwd });
+  } catch (error) {
+    const { stderr, message } = error as { stderr?: string; message?: string };
+    const reason = stderr?.trim() || message || String(error);
+    logger.warn("Repository initialization failed", { cwd, reason });
+    vscode.window.showErrorMessage(`Nightgauge: could not initialize this repository. ${reason}`);
+    return;
+  }
+
+  await refreshRepoInitializedContext(cwd, logger);
+  logger.info("Initialized repository", { cwd });
+
+  const created = "Nightgauge: created .nightgauge/config.yaml. No GitHub Project is linked yet.";
+  if (!isPluginEnabled()) {
+    vscode.window.showInformationMessage(created);
+    return;
+  }
+  const linkBoard = "Link Project Board";
+  if ((await vscode.window.showInformationMessage(created, linkBoard)) === linkBoard) {
+    openSkillInTerminal(REPO_INIT_SKILL, cwd, logger);
+  }
 }
 
 function resolveWorkspaceCwd(): string | undefined {
@@ -118,7 +168,7 @@ export function registerQuickstartCommands(
       );
       return;
     }
-    openSkillInTerminal(REPO_INIT_SKILL, cwd, logger);
+    await initializeRepository(cwd, logger);
   });
 
   const smartSetup = vscode.commands.registerCommand(
@@ -129,6 +179,10 @@ export function registerQuickstartCommands(
         vscode.window.showWarningMessage(
           "Nightgauge: Open a folder or repository first, then try again."
         );
+        return;
+      }
+      if (!isPluginEnabled()) {
+        await vscode.commands.executeCommand("nightgauge.setupPlugins");
         return;
       }
       openSkillInTerminal(SMART_SETUP_SKILL, cwd, logger);

@@ -4,11 +4,16 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -215,15 +220,17 @@ func TestSchedulerRendersWithAModel(t *testing.T) {
 	}
 }
 
-// TestDefaultRootsPutsTheWorkspaceFirst pins the half of the contract that has
-// always held: the workspace checkout's own skills/ tree is searched first, so
-// dogfooding in this repository keeps beating anything shipped in a bundle.
+// TestDefaultRootsSearchesTheWorkspaceWithNoBundle pins the half of the contract
+// that has always held: with no override and no bundle beside the binary, the
+// workspace checkout's own skills/ tree is the root. The test binary has no
+// bundle; #2718's order with one is pinned in internal/skillrender.
 //
 // This test used to assert `len(roots) == 1`, and it passed for the whole life
 // of #874 — the bug was that the ONE root could not match in any repository
 // but this one. An assertion that pins a count is not an assertion about
 // behaviour; the bundle arm is covered by TestDefaultRootsAppendsTheBundleTree.
-func TestDefaultRootsPutsTheWorkspaceFirst(t *testing.T) {
+func TestDefaultRootsSearchesTheWorkspaceWithNoBundle(t *testing.T) {
+	t.Setenv(skillrender.SkillsRootEnv, "")
 	roots := skillrender.DefaultRoots("/repo")
 
 	if len(roots) == 0 {
@@ -238,6 +245,39 @@ func TestDefaultRootsPutsTheWorkspaceFirst(t *testing.T) {
 		if strings.Contains(r, filepath.Join("claude-plugins", "nightgauge", "commands")) {
 			t.Errorf("root %q is the retired plugin-command layout", r)
 		}
+	}
+}
+
+// TestStageSkillRootsSearchesTheRunsWorktree pins the input half of #2718's one
+// resolution: the extension passes the run's worktree, so the scheduler has to
+// search that checkout rather than the repository root, or the hosts apply one
+// order to different trees. A worktree that has gone falls back to the root.
+func TestStageSkillRootsSearchesTheRunsWorktree(t *testing.T) {
+	t.Setenv(skillrender.SkillsRootEnv, "")
+	root := t.TempDir()
+	worktree := t.TempDir()
+	baseDir := layouttest.MkCheckoutDir(t, root)
+	now := time.Now().UTC().Format(time.RFC3339)
+	rs := &runstate.RunState{
+		SchemaVersion: runstate.SchemaVersion, IssueNumber: 2718, State: runstate.StateRunning,
+		RunID: "run-2718", AttemptNumber: 1, CompletedStages: []runstate.Stage{},
+		WorktreePath: &worktree, Branch: "feat/2718", CreatedAt: now, UpdatedAt: now,
+		Attempts: []runstate.Attempt{{RunID: "run-2718", AttemptNumber: 1, StartedAt: now}},
+	}
+	if err := runstate.Save(baseDir, rs); err != nil {
+		t.Fatalf("save run-state: %v", err)
+	}
+
+	if got := stageSkillRoots(root, 2718); !slices.Contains(got, filepath.Join(worktree, "skills")) ||
+		slices.Contains(got, filepath.Join(root, "skills")) {
+		t.Errorf("roots = %v, want the worktree's skills and not the repository's", got)
+	}
+
+	if err := os.RemoveAll(worktree); err != nil {
+		t.Fatal(err)
+	}
+	if got := stageSkillRoots(root, 2718); !slices.Contains(got, filepath.Join(root, "skills")) {
+		t.Errorf("roots with the worktree gone = %v, want the repository's skills", got)
 	}
 }
 

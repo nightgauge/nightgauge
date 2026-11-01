@@ -568,16 +568,17 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
   BINARY="${NIGHTGAUGE_BIN:-}"
   [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
   [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-  if [ -z "$BINARY" ]; then
-    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-  fi
-  if [ -z "$BINARY" ]; then
-    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-    if [ -n "$GIT_COMMON_DIR" ]; then
-      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-      [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-    fi
+  if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+    for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+      "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+      [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+      grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+      NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+      case "${NG_ORIGIN%.git}" in
+        git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+          ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+      esac
+    done
   fi
   [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
   [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
@@ -673,9 +674,20 @@ stays blocked for agents.
 
 #### Step 6.3: Execute Merge
 
+The review gate runs immediately before the merge, on this stage's path as on the
+deterministic one (#2730). It reads the newest review, refuses while a fix round
+is open, and files every open finding before it answers, so nothing depends on
+this stage surviving the merge. `proceed: false` means do not merge: report the
+`reason` and stop.
+
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+REVIEW_GATE=$(nightgauge pr-stage review-gate "$ISSUE_NUMBER" --json) || exit 1
+if [ "$(printf '%s\n' "$REVIEW_GATE" | jq -r '.proceed')" != "true" ]; then
+  echo "Review gate holds the merge: $(printf '%s\n' "$REVIEW_GATE" | jq -r '.reason')" >&2
+  exit 1
+fi
 DELETE_FLAG=""
 if [ "$ARG_NO_CLEANUP" != "true" ]; then
   DELETE_FLAG="--delete-branch"

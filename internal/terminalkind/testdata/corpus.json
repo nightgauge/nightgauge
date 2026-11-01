@@ -1862,6 +1862,24 @@
       "source": "synthetic",
       "producer": "nightgauge preflight environment (#101)",
       "rationale": "The verb's own per-check line wrapped in the stage's exit text. The `exit ` prefix is what the subagent-crash fallback keys on, so this pins the environment-halt rule sitting above it in the table."
+    },
+    {
+      "id": "gate-plugin-missing-stop-marker",
+      "input": "exit 1: [gate-plugin-missing] stopped before any work: system/init lists no nightgauge plugin; this build's safety gates did not load",
+      "expected": "gate_plugin_missing",
+      "expected_signal": "gate_plugin_missing",
+      "source": "synthetic",
+      "producer": "internal/execution/claude_plugin_gate.go and claudePluginGate.ts (#2723)",
+      "rationale": "The stage runner's stop marker wrapped in the stage's exit text. Booked as subagent_crash it would feed the cascade breaker for an install fault a retry cannot clear."
+    },
+    {
+      "id": "gate-plugin-warning-does-not-park",
+      "input": "exit 1: [gate-plugin-warning] system/init lists no nightgauge plugin; this build has no bundled plugin, so the stage continues without confirmed gates",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/execution/claude_plugin_gate.go and claudePluginGate.ts (#2723)",
+      "rationale": "A contributor's no-bundle warning sits in the stderr of whatever the stage later fails on. It must never name the failure, or a real crash on a local run would park as a plugin fault."
     }
   ]
 }

@@ -135,6 +135,11 @@ jobs:
           echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
           echo "Release notes ($(wc -l < "$NOTES") lines) from CHANGELOG.md § [${GITHUB_REF_NAME#v}]"
 
+      # An installed plugin only updates when its version changes (#2724), so a
+      # tag that changed the plugin without a bump publishes nothing.
+      - name: Plugin version changed with the plugin
+        run: bash scripts/check-plugin-version.sh --tag "${GITHUB_REF_NAME}"
+
       # ---------------------------------------------------------------------
       # PREFLIGHT — validate the Homebrew tap credential BEFORE anything is
       # published. GoReleaser creates the GitHub Release before it pushes the
@@ -326,6 +331,11 @@ jobs:
           done
           echo "Packaged:"; ls -1 *.vsix
 
+      # The VSIX binaries are cross-compiled, so the bundle check below needs one
+      # built for this runner (#2761).
+      - name: Build the runner's binary
+        run: go build -o "$RUNNER_TEMP/nightgauge-runner" ./cmd/nightgauge
+
       # Defense-in-depth: every .vsix must carry the build-info stamp AND a
       # bundled binary before GoReleaser hands them to consumers — and must NOT
       # ship source maps or type declarations (.vscodeignore drift).
@@ -355,6 +365,15 @@ jobs:
             # No shipped file may carry a fetch piped to a shell or a base64
             # decode, from whichever package it was bundled (#2320, #2321).
             bash scripts/check-shipped-code.sh "$VSIX"
+
+            # Validate the skills this VSIX carries, not dist/: only the
+            # extracted tree speaks for what .vscodeignore let through (#2761).
+            SKILLS_TMP="$(mktemp -d "$RUNNER_TEMP/vsix-skills.XXXXXX")"
+            unzip -q "$VSIX" 'extension/dist/skills/*' -d "$SKILLS_TMP"
+            "$RUNNER_TEMP/nightgauge-runner" preflight skill-bundle \
+              --skills-root "$SKILLS_TMP/extension/dist/skills" \
+              --source-root "$GITHUB_WORKSPACE/skills"
+            rm -rf "$SKILLS_TMP"
 
             # Assert the PACKAGED binary is Developer ID signed, not merely the
             # one the signing step touched. The VSIX freezes a copy, so this is
@@ -388,8 +407,9 @@ jobs:
       # Malware-scan every artifact BEFORE anything is attested or published.
       # v0.4.4 reached the Marketplace unscanned by us and was flagged there
       # (6/66, all generic heuristics, artifact clean). Whatever a scanner is
-      # going to say, we say it first. Runs on macOS via Homebrew because this
-      # job needs macos-latest for `codesign`.
+      # going to say, we say it first. Runs on macOS because this job needs
+      # macos-latest for `codesign`, with the official pinned ClamAV package;
+      # scripts/install-clamav-macos.sh says why not Homebrew.
       #
       # The gate is not clamscan's exit code: clamscan exits 0 both for a clean
       # artifact and for one it never read. malware-scan.sh additionally asserts
@@ -397,11 +417,9 @@ jobs:
       - name: Malware scan (ClamAV)
         run: |
           set -euo pipefail
-          brew install --quiet clamav
-          CLAMETC="$(brew --prefix)/etc/clamav"
-          mkdir -p "$CLAMETC" "$(brew --prefix)/var/lib/clamav"
-          sed 's/^Example/#Example/' "$CLAMETC/freshclam.conf.sample" > "$CLAMETC/freshclam.conf"
-          freshclam --quiet
+          bash scripts/install-clamav-macos.sh
+          export PATH="/usr/local/clamav/bin:$PATH"
+          freshclam
           bash scripts/malware-scan.sh \
             --report "$RUNNER_TEMP/clamav-report.json" \
             packages/nightgauge/*.vsix bin/
@@ -540,6 +558,29 @@ jobs:
         with:
           subject-path: packages/nightgauge/*.vsix
 
+      # Claude plugin channel (#2724): the marketplace is installed at #stable,
+      # which only this step moves, so plugins reach users with a release and
+      # never from main. After every publish step, so a failed publish leaves
+      # stable alone; before the cask verification, which concerns another
+      # channel and must not hold plugins back.
+      # Fast-forward only; a refused move fails here and the watchdog's
+      # claude-plugin channel stays red until a maintainer moves the branch.
+      - name: Advance the stable branch to this release
+        id: advance-stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/stable" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/stable" \
+              -f sha="$SHA" -F force=false >/dev/null
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref=refs/heads/stable -f sha="$SHA" >/dev/null
+          fi
+          echo "stable is now ${GITHUB_REF_NAME} ($SHA)" >> "$GITHUB_STEP_SUMMARY"
+
       # FINAL STEP. GoReleaser only PROPOSES the cask (a pull request on the
       # tap, .goreleaser.yml), so the release is not complete until that pull
       # request merges. Prove it was proposed, close every older cask PR as
@@ -547,6 +588,8 @@ jobs:
       # name the one to merge. The daily release watchdog stays red until the
       # tap's main serves this version.
       - name: Homebrew cask proposed; close superseded cask PRs
+        # Runs after a refused stable move too: the release is already out.
+        if: ${{ !cancelled() && steps.advance-stable.conclusion != 'skipped' }}
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}

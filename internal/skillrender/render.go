@@ -17,9 +17,12 @@
 // Fail-open is the designed default at every step. An unknown model, a local
 // provider with no registry entry, or an unreadable fragment all render
 // base-only and exit 0 — exactly today's behavior. A malformed overlay must
-// never take down a pipeline run. The tool grant is the exception: there,
-// failing open grants tools the skill did not name, so an `allowed-tools`
-// field that lists no tool fails the render (errNoAllowedTools).
+// never take down a pipeline run. Two things fail closed instead. The tool
+// grant: failing open grants tools the skill did not name, so an `allowed-tools`
+// field that lists no tool fails the render (errNoAllowedTools). And a missing
+// include or phase-include target: an overlay is an optional refinement, but an
+// include is part of the procedure, so a render without it is a different stage
+// that still exits 0 (#2761).
 package skillrender
 
 import (
@@ -440,7 +443,9 @@ func render(opts Options) (*Result, error) {
 		res.applyFrontmatter(fm)
 		res.WholeFile = override
 		res.InjectionSite = SiteWholeFile
-		body = ExpandIncludes(body, skillDir)
+		if body, err = composeIncludes(body, skillDir); err != nil {
+			return nil, err
+		}
 		res.Content = RewriteSkillRelativePaths(body, opts.Stage, skillDir)
 		return res, nil
 	}
@@ -514,21 +519,38 @@ func render(opts Options) (*Result, error) {
 	// Expansion runs AFTER injection so an overlay may itself carry includes,
 	// and so the injection point is computed against the directives that are
 	// still present — expansion erases them.
-	body = ExpandIncludes(body, skillDir)
+	if body, err = composeIncludes(body, skillDir); err != nil {
+		return nil, err
+	}
 	if res.Profile != ProfileCompact || opts.SupplyIncludes {
-		body, res.SuppliedIncludes = SupplyPhaseIncludes(body, skillDir, opts.IncludeBudget)
+		body, res.SuppliedIncludes = SupplyPhaseIncludes(body, skillDir, includeBudget(opts))
 	}
 	res.Content = RewriteSkillRelativePaths(body, opts.Stage, skillDir)
 	return res, nil
 }
 
+// includeBudget resolves the budget for a render. feature-dev is the one stage
+// that gets every include (#2784): an include left as a read directive was
+// skipped by 30% of its stages, and the one the budget dropped was the review
+// phases themselves. A caller's explicit budget always wins.
+func includeBudget(opts Options) int {
+	if opts.IncludeBudget == 0 && opts.Stage == "feature-dev" {
+		return EveryPhaseInclude
+	}
+	return opts.IncludeBudget
+}
+
 // DefaultIncludeBudget is how many bytes of `_includes/` files a full render
 // supplies inline when Options.IncludeBudget is zero. It holds every include
 // feature-planning (46 KB), issue-pickup (50 KB) and pr-create (40 KB)
-// direct a phase to read; the larger feature-dev, feature-validate and
-// pr-merge sets are supplied in directive order until it is spent, and the
-// rest stay reads.
+// direct a phase to read; the larger feature-validate and pr-merge sets are
+// supplied in directive order until it is spent, and the rest stay reads.
+// feature-dev is exempt: see includeBudget.
 const DefaultIncludeBudget = 64 * 1024
+
+// EveryPhaseInclude is an Options.IncludeBudget that supplies every phase
+// include, for a caller inspecting all the text a stage can be handed.
+const EveryPhaseInclude = 1 << 30
 
 // SuppliedIncludesHeading titles the block SupplyPhaseIncludes appends.
 const SuppliedIncludesHeading = "## Supplied includes"
@@ -551,10 +573,11 @@ var phaseIncludeDirectiveRE = regexp.MustCompile("Read `_includes/([A-Za-z0-9._-
 //
 // Includes are taken in the order their first directive appears; one that
 // does not fit in the remaining budget is skipped (its directives stay
-// reads) and the next is tried, so the result is deterministic. A missing
-// or unreadable include is left as a read directive. The SKILL.md on disk is
-// unchanged: an interactive host that loads it directly still reads each
-// include when its phase says to.
+// reads) and the next is tried, so the result is deterministic. Render has
+// already refused a missing target (composeIncludes), so the one left behind
+// here is an include that vanished since, and it stays a read directive. The
+// SKILL.md on disk is unchanged: an interactive host that loads it directly
+// still reads each include when its phase says to.
 func SupplyPhaseIncludes(body, skillDir string, budget int) (string, []string) {
 	if budget < 0 {
 		return body, nil
@@ -651,29 +674,77 @@ func inject(body, block string) (string, string) {
 var IncludePattern = regexp.MustCompile(`<!-- include: (.+?) -->`)
 
 // ExpandIncludes replaces include directives with file content, resolved
-// relative to the SKILL.md's directory. A missing target is left as-is: the
-// same document must remain readable under a host that does not expand.
-func ExpandIncludes(content string, skillDir string) string {
-	return IncludePattern.ReplaceAllStringFunc(content, func(match string) string {
+// relative to the SKILL.md's directory. A target that cannot be read is an
+// error, joined with every other one so a removed directory names all of its
+// files at once: leaving the directive in place sent the model a literal HTML
+// comment where the procedure should have been, with exit 0 (#2761). A host that
+// does not expand reads the source document and never reaches this function.
+func ExpandIncludes(content string, skillDir string) (string, error) {
+	var missing []error
+	seen := map[string]bool{}
+	out := IncludePattern.ReplaceAllStringFunc(content, func(match string) string {
 		subs := IncludePattern.FindStringSubmatch(match)
 		if len(subs) < 2 {
 			return match
 		}
-		data, err := os.ReadFile(filepath.Join(skillDir, strings.TrimSpace(subs[1])))
+		target := strings.TrimSpace(subs[1])
+		data, err := os.ReadFile(filepath.Join(skillDir, target))
 		if err != nil {
+			if !seen[target] {
+				seen[target] = true
+				missing = append(missing, fmt.Errorf("%s: include %q: %w", skillDir, target, err))
+			}
 			return match
 		}
 		return string(data)
 	})
+	return out, errors.Join(missing...)
 }
+
+// checkPhaseIncludes reports every `_includes/` file a phase directive in body
+// tells the model to read now and that does not exist. It runs apart from
+// SupplyPhaseIncludes because supplying is optional: a compact profile and a
+// negative budget skip it, and neither makes a missing file acceptable.
+func checkPhaseIncludes(body, skillDir string) error {
+	var missing []error
+	seen := map[string]bool{}
+	for _, m := range phaseIncludeDirectiveRE.FindAllStringSubmatch(body, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		target := filepath.Join("_includes", m[1])
+		if _, err := os.Stat(filepath.Join(skillDir, target)); err != nil {
+			missing = append(missing, fmt.Errorf("%s: phase include %q: %w", skillDir, target, err))
+		}
+	}
+	return errors.Join(missing...)
+}
+
+// composeIncludes expands body's includes and verifies its phase includes,
+// reporting every failure of both kinds in one error.
+func composeIncludes(body, skillDir string) (string, error) {
+	expanded, expandErr := ExpandIncludes(body, skillDir)
+	if err := errors.Join(expandErr, checkPhaseIncludes(expanded, skillDir)); err != nil {
+		return "", err
+	}
+	return expanded, nil
+}
+
+// crossSkillRefRE matches a repo-relative reference to a skill directory. The
+// left boundary keeps an already-absolute path, a URL and a longer name out, and
+// the name class keeps a `{STAGE_NAME}` or `<name>` placeholder out.
+var crossSkillRefRE = regexp.MustCompile(`(^|[^/\w.-])skills/(nightgauge-[a-z0-9-]+)/`)
 
 // RewriteSkillRelativePaths rewrites skill-relative read-directive paths to
 // absolute host paths. ADR-010 assumed CWD is the nightgauge repo root — only
 // true when dogfooding nightgauge itself; cross-repo runs spawn in the target
 // repo's worktree, which has no skills/ directory, and agents fell back to
-// whole-filesystem scans and stale ~/.codex/skills copies (#196). Only the
-// skill's OWN references are rewritten, plus the sibling skills/_shared/ —
-// cross-skill references keep naming the other skill.
+// whole-filesystem scans and stale ~/.codex/skills copies (#196). The skill's
+// OWN references are rewritten, plus the sibling skills/_shared/. A cross-skill
+// reference is rewritten when that sibling exists under the same root, because
+// the relative form resolves against a customer worktree that does not hold it.
+// One with no sibling stays as written, which `preflight skill-bundle` reports.
 func RewriteSkillRelativePaths(content string, stage string, skillDir string) string {
 	dir := strings.TrimRight(skillDir, "/\\")
 	shared := filepath.Join(filepath.Dir(dir), "_shared") + string(filepath.Separator)
@@ -692,7 +763,20 @@ func RewriteSkillRelativePaths(content string, stage string, skillDir string) st
 	// Skill-relative form (`_includes/foo.md` next to SKILL.md). Require the
 	// leading backtick so an already-absolute path is not rewritten again.
 	out = strings.ReplaceAll(out, "`_includes/", "`"+dir+string(filepath.Separator)+"_includes/")
-	return out
+	return rewriteCrossSkillRefs(out, filepath.Dir(dir))
+}
+
+// rewriteCrossSkillRefs points each skills/nightgauge-<x>/ reference at the
+// sibling <root>/nightgauge-<x>/ when that directory exists.
+func rewriteCrossSkillRefs(content, root string) string {
+	return crossSkillRefRE.ReplaceAllStringFunc(content, func(match string) string {
+		subs := crossSkillRefRE.FindStringSubmatch(match)
+		sibling := filepath.Join(root, subs[2])
+		if st, err := os.Stat(sibling); err != nil || !st.IsDir() {
+			return match
+		}
+		return subs[1] + sibling + string(filepath.Separator)
+	})
 }
 
 // frontmatter holds the SKILL.md header fields the pipeline consumes.
@@ -1105,7 +1189,7 @@ func FilterHeadlessTools(tools []string) ([]string, error) {
 // root, always — was generalised from that one dead layout to "there is no
 // second source", and that is false. The VSCode extension ships the pipeline
 // skills at `dist/skills/` beside the binary at `dist/bin/nightgauge`, and the
-// TypeScript host already searches both (`resolveSkillRoots`, skillRunner.ts).
+// TypeScript host already searched both.
 // Only the Go-direct path did not, so `nightgauge queue run` and the Go
 // autonomous scheduler could not render a single stage skill in any repository
 // that does not vendor this repo's `skills/` tree — i.e. every user's repo,
@@ -1114,20 +1198,22 @@ func FilterHeadlessTools(tools []string) ([]string, error) {
 // ADR 016 §4 makes skill LOCATION the host's job because the bundle path
 // depends on the extension host. That holds for the IPC path, where the host
 // passes roots explicitly. The Go-direct path has no host to ask, so it asks
-// the one thing it does know: where its own executable lives.
+// the one thing it does know: where its own executable lives. The IPC host
+// keeps discovering its bundle, and passes that fact to `skill roots`, because
+// its self-heal is not something the binary can see. It does not decide order.
 //
 // The objection above is answered rather than ignored: the bundle root is
-// appended ONLY when it resolves to a real directory, so the returned list
+// listed ONLY when it resolves to a real directory, so the returned list
 // never contains a root that cannot match.
 //
 // THE OPERATOR CAN NAME A THIRD SOURCE (#2220). A binary built with `go build`
 // or `go install` into any other location has no skills tree beside it, so the
 // Go-direct path worked only inside this repository or from the extension
-// bundle. SkillsRootEnv names a skills tree explicitly; it is searched after
-// the workspace (a checkout's own skills still win) and before the bundle (an
-// explicit choice beats an inferred one). Unlike the bundle arm it is listed
-// even when it does not resolve: the operator asked for it, and a typo must
-// show up in the not-found error's search list rather than vanish.
+// bundle. SkillsRootEnv names a skills tree explicitly. Unlike the bundle arm
+// it is listed even when it does not resolve: the operator asked for it, and a
+// typo must show up in the not-found error's search list rather than vanish.
+//
+// The order itself lives in ResolveRoots, which every host shares.
 func DefaultRoots(workspaceRoot string) []string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -1140,17 +1226,70 @@ func DefaultRoots(workspaceRoot string) []string {
 // a directory containing nightgauge-issue-pickup/SKILL.md and its siblings.
 const SkillsRootEnv = "NIGHTGAUGE_SKILLS_ROOT"
 
+// RootInputs are the facts a host knows about where skills can live. Hosts
+// supply facts and ResolveRoots decides the order, so the order has one
+// implementation (#2718, ADR 016 amendment).
+type RootInputs struct {
+	// Workspace is the checkout the run is rooted at, not its skills/ directory.
+	// On a pipeline run that is the issue's worktree. Empty omits the root.
+	Workspace string
+	// Bundle is a build's own skills tree. Empty omits the root.
+	Bundle string
+	// Override is the operator's explicit tree, SkillsRootEnv.
+	Override string
+	// WorkspaceFirst ranks the workspace ahead of the bundle, for an Extension
+	// Development or Test host: testing the checkout is why those hosts exist.
+	WorkspaceFirst bool
+}
+
+// ResolveRoots is the one statement of the skill-root order, first match wins.
+//
+// THE ORDER IS OVERRIDE, BUNDLE, WORKSPACE (#2718). An explicit choice beats an
+// inferred one, and a build runs the skills it shipped: with the workspace
+// first, any repository holding skills/nightgauge-<stage>/SKILL.md replaced
+// that stage's prompt, and an installed build dogfooding this repository never
+// exercised its own bundle. The workspace stays as the last root, so a skill
+// the bundle lacks still resolves. A contributor testing a live tree sets
+// SkillsRootEnv. The override is listed even when it does not exist, so a typo
+// shows in the not-found error.
+func ResolveRoots(in RootInputs) []string {
+	var roots []string
+	if override := strings.TrimSpace(in.Override); override != "" {
+		roots = append(roots, override)
+	}
+	workspace := ""
+	if in.Workspace != "" {
+		workspace = filepath.Join(in.Workspace, "skills")
+	}
+	inferred := []string{in.Bundle, workspace}
+	if in.WorkspaceFirst {
+		inferred = []string{workspace, in.Bundle}
+	}
+	for _, root := range inferred {
+		if root != "" {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// ExecutableBundleRoot is the skills tree beside the running binary, or "".
+func ExecutableBundleRoot() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return bundleSkillsRoot(exe)
+}
+
 // defaultRoots is DefaultRoots with the executable path and the override
 // injected, so every arm is testable without a real bundle or environment.
 func defaultRoots(workspaceRoot, exe, override string) []string {
-	roots := []string{filepath.Join(workspaceRoot, "skills")}
-	if override = strings.TrimSpace(override); override != "" {
-		roots = append(roots, override)
-	}
-	if bundle := bundleSkillsRoot(exe); bundle != "" {
-		roots = append(roots, bundle)
-	}
-	return roots
+	return ResolveRoots(RootInputs{
+		Workspace: workspaceRoot,
+		Bundle:    bundleSkillsRoot(exe),
+		Override:  override,
+	})
 }
 
 // bundleSkillsRoot returns the skills tree shipped alongside this binary, or
@@ -1173,6 +1312,29 @@ func bundleSkillsRoot(exe string) string {
 	}
 	candidate := filepath.Join(filepath.Dir(filepath.Dir(exe)), "skills")
 	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		return candidate
+	}
+	return ""
+}
+
+// BundledClaudePluginDir returns the Claude plugin shipped alongside exe, or ""
+// when there is not one (#2723). It uses bundleSkillsRoot's layout,
+// `<prefix>/bin/nightgauge` beside `<prefix>/claude-plugins/nightgauge`, and
+// resolves symlinks the same way. A directory counts only when it holds
+// hooks/hooks.json: the gates are the reason to load it, and a plugin with no
+// hooks would satisfy the init check with none of them running.
+//
+// A non-empty answer is what makes a build "bundled": the stage runner stops a
+// bundled build's stage when this plugin did not load, and only warns otherwise.
+func BundledClaudePluginDir(exe string) string {
+	if exe == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	candidate := filepath.Join(filepath.Dir(filepath.Dir(exe)), "claude-plugins", "nightgauge")
+	if info, err := os.Stat(filepath.Join(candidate, "hooks", "hooks.json")); err == nil && !info.IsDir() {
 		return candidate
 	}
 	return ""

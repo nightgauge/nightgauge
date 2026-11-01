@@ -1,4 +1,5 @@
 name: CLA (merge queue)
+run-name: ${{ github.event.merge_group.head_commit.message }}
 
 # Merge-queue pass-through for the required `cla` context.
 #

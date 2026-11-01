@@ -76,7 +76,7 @@ This skill implements features by:
 
 | Tool           | Command                                |
 | -------------- | -------------------------------------- |
-| Claude Code    | `/nightgauge-feature-dev` (via plugin) |
+| Claude Code    | `/nightgauge:feature-dev` (via plugin) |
 | OpenAI Codex   | `$nightgauge-feature-dev`              |
 | GitHub Copilot | Invoke via Agent Skills                |
 | Cursor         | Invoke via Agent Skills                |
@@ -266,16 +266,17 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 if [ -n "$BINARY" ]; then
@@ -519,13 +520,14 @@ printf '<!-- phase:start name="self-correction" index=11 total=17 stage="feature
 ```
 
 **PURPOSE**: Address review findings, re-run tests, run the formatter, and pass
-the Step 6.4 CI-parity HARD GATE before proceeding.
+the Step 6.4 focused-check HARD GATE before proceeding.
 
-**Step 6.4 — Verify All Checks Pass (HARD GATE)**: The full CI validation suite
-MUST pass locally before proceeding. These checks are **blocking** — feature-dev
-MUST NOT report success if any of them fail. Swallowing failures here lets a
-broken PR through to `pr-create`, where CI catches it and blocks the merge. See
-issue #2779 for the incident that motivated this gate.
+**Step 6.4 — Verify Focused Checks Pass (HARD GATE)**: The build, the tests for
+what changed and the formatter MUST pass before proceeding. These checks are
+**blocking** — feature-dev MUST NOT report success if any of them fail.
+Swallowing failures here lets a broken PR through to `pr-create`, where CI
+catches it and blocks the merge. See issue #2779 for the incident that motivated
+this gate. The repository's complete gate belongs to feature-validate (#2784).
 
 > **Read `_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 

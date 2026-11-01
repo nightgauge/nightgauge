@@ -3,7 +3,10 @@ package adapters
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
 // ClaudeAdapter implements SkillRunner for Claude Code CLI.
@@ -49,6 +52,8 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	}
 
 	args = append(args, claudeKnowledgeDirArgs(opts)...)
+	args = append(args, claudeSkillsDirArgs(opts)...)
+	args = append(args, claudePluginDirArgs(opts)...)
 
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
@@ -122,12 +127,73 @@ const KnowledgeDirEnvVar = "NIGHTGAUGE_KNOWLEDGE_DIR"
 // claudeKnowledgeDirArgs makes the run's knowledge base a Claude Code working
 // directory (#2194). A stage runs in a worktree, and Claude Code confines
 // edits to its working directories, so the PRD/decisions/lessons writes into
-// the main checkout's .nightgauge/knowledge need it added. Only that
-// directory is added: the skills tree a rendered skill reads from stays
-// outside, reachable by the stage's Read grant but never writable.
+// the main checkout's .nightgauge/knowledge need it added.
 func claudeKnowledgeDirArgs(opts RunOptions) []string {
 	if opts.KnowledgeDir == "" {
 		return nil
 	}
 	return []string{"--add-dir", opts.KnowledgeDir}
+}
+
+// IsClaudeCLI reports whether the adapter spawns the claude CLI, whose stage
+// loads the Nightgauge plugin (#2723).
+func IsClaudeCLI(adapterName string) bool {
+	return adapterName == "claude" || adapterName == "claude-sdk"
+}
+
+// claudePluginDirArgs names the plugin the stage loads (#2723). The CLI replaces
+// a same-named user-level install with it, reporting one `nightgauge` entry whose
+// source is `nightgauge@inline`, so a gate does not fire twice.
+func claudePluginDirArgs(opts RunOptions) []string {
+	if opts.ClaudePluginDir == "" {
+		return nil
+	}
+	return []string{"--plugin-dir", opts.ClaudePluginDir}
+}
+
+// claudeSkillsDirArgs makes the skills tree the stage rendered from readable
+// under a default user's permissions (#2718): over-budget includes are read
+// from that tree at run time, and it lies outside the worktree. --add-dir also
+// makes it a working directory, so file-tool writes are denied explicitly;
+// deny rules hold under bypassPermissions too. The deny is one Edit rule for
+// every form a tool call can use (openCodePathForms): given, resolved, and a
+// system alias such as /tmp. Among the file-write tools, Edit is the only one
+// the CLI matches a path rule against, and an Edit rule stops Write too: on
+// Claude Code 2.1.316 a Write(path) rule alone let the write through.
+// TestClaudeSkillsTreeLive re-proves that against the installed CLI. Bash can
+// still write there, the limit ADR-022 records for OpenCode.
+//
+// A tree inside the worktree gets neither flag. It is already reachable, and
+// it is the checkout the stage was dispatched to change: a deny there would
+// stop a stage editing the repository's own skills/.
+func claudeSkillsDirArgs(opts RunOptions) []string {
+	root := opencodeallow.SkillsRootOf(opts.SkillPath)
+	if !filepath.IsAbs(root) || pathWithin(root, opts.WorktreeDir) {
+		return nil
+	}
+	var deny []string
+	for _, form := range openCodePathForms(root) {
+		deny = append(deny, "Edit(//"+strings.TrimLeft(filepath.ToSlash(form), "/")+"/**)")
+	}
+	return []string{
+		"--add-dir", root,
+		"--disallowedTools", strings.Join(deny, ","),
+	}
+}
+
+// pathWithin reports whether path is dir or lies under it, comparing resolved
+// paths so a symlinked temp or home directory does not read as outside.
+func pathWithin(path, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedPath(dir), resolvedPath(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func resolvedPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }

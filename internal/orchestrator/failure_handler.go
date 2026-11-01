@@ -559,6 +559,13 @@ const (
 	// autonomous clear-failures`. The run is also excluded from the
 	// calibration corpus (learning.IsCalibrationExcludedKind).
 	TerminalKindEnvironmentHalt = "environment_halt"
+	// TerminalKindGatePluginMissing: a bundled build's Claude stage did not load
+	// the Nightgauge plugin exactly once, so the stage runner stopped it before
+	// any work on the `[gate-plugin-missing]` marker (#2723). The next attempt
+	// meets the same install, and the run measured the install, not the model, so
+	// it PARKS and records no outcome row, as TerminalKindEnvironmentHalt does.
+	// Parking alone raises no card; raiseGatePluginMissing does.
+	TerminalKindGatePluginMissing = "gate_plugin_missing"
 	// Gate-sourced structured kinds for the KindFail sites that used to emit an
 	// empty TerminalKind (#1237). Every one of them fell through
 	// ResolveTerminalKind's prose ladder, which has no clause for the
@@ -653,7 +660,7 @@ const (
 func TerminalKindParks(kind string) bool {
 	switch kind {
 	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible,
-		TerminalKindEnvironmentHalt, TerminalKindDevContextStale:
+		TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing:
 		return true
 	}
 	return false
@@ -673,6 +680,10 @@ func TerminalKindRemediation(kind string) string {
 		return "a project-declared preflight.environment check failed, so the local environment is broken, not the code; " +
 			"apply the remedy the check names (in the failure text), " + parkedReleaseStep +
 			" — a retry meets the same environment"
+	case TerminalKindGatePluginMissing:
+		return "the stage's Claude process did not load this build's Nightgauge plugin exactly once, so its safety gates " +
+			"cannot be trusted; the failure text names the reading. Reinstall the build so its bundled plugin is intact, " +
+			"or update Claude Code if it rejected the plugin, " + parkedReleaseStep + " — a retry meets the same install"
 	case TerminalKindContextWindowExceeded:
 		return "the prompt outgrew the context the model server has the model loaded with; " +
 			"reload the model with a larger context, route the stage to a model with a larger one, " +

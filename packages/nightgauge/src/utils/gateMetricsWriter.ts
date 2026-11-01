@@ -13,6 +13,7 @@
  * @see Issue #1412 - Quality gate hit-rate metrics
  */
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -27,8 +28,8 @@ const GATE_METRICS_FILE = "gate-metrics.jsonl";
 
 /**
  * Canonical gate_name for adversarial anti-hallucination judge verdicts (#3918).
- * The Go FeatureValidateGate.Verify() consumes these as ordinary gate-metrics
- * records — anything other than result="pass" trips the deterministic gate.
+ * The Go FeatureValidateGate.Verify() judges the rows of the latest attempt as a
+ * set — any result other than "pass" among them trips the deterministic gate.
  */
 const JUDGE_GATE_NAME = "judges" as const;
 
@@ -72,8 +73,12 @@ export class GateMetricsWriter {
    * Verdict → result mapping (fail-closed): only an explicit `"pass"` verdict
    * yields `result: "pass"`. Both `"fail"` and `"uncertain"` yield
    * `result: "fail"` — an unconfirmed claim must not be allowed to slip past the
-   * deterministic gate. The Go gate trips on any `result != "pass"`, so a
-   * rejected (or merely uncertain) judge verdict fails the gate.
+   * deterministic gate. The Go gate trips on any `result != "pass"` in the latest
+   * attempt, so a rejected (or merely uncertain) judge verdict fails the gate.
+   *
+   * One call folds one run, so every record of a call shares an `attempt_id`.
+   * That is how the gate tells a retry, which replaces an earlier attempt, from a
+   * sibling judge, which must not (#2746).
    *
    * Accepts the raw `WorkflowEvent` node stream and selects judge nodes itself,
    * so callers can hand it the run's emitted events without pre-filtering. The
@@ -93,6 +98,7 @@ export class GateMetricsWriter {
     const verdicts = judgeNodes.filter((n): n is JudgeVerdict =>
       isJudgeVerdict(n as Parameters<typeof isJudgeVerdict>[0])
     );
+    const attemptId = randomUUID();
 
     for (const judge of verdicts) {
       const passed = judge.verdict === "pass";
@@ -106,6 +112,7 @@ export class GateMetricsWriter {
         gate_name: JUDGE_GATE_NAME,
         result: passed ? "pass" : "fail",
         error_summary: errorSummary,
+        attempt_id: attemptId,
       };
 
       await this.appendRecord(workspaceRoot, record);

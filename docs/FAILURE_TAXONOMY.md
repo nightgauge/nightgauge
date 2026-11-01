@@ -254,6 +254,7 @@ record may carry both fields, neither, or only one.
 | `adapter_incompatible`           | The adapter's binary cannot serve the dispatch: below the compat floor or unreadable (Issues #1627, #1631; a newer version is never refused) — parked; install a build at or above the floor                                                                                                                                                                                                                                         |
 | `dev_context_stale`              | feature-dev's gate found a `dev-N.json` older than the stage it judged, the `[dev-context-stale]` reason (Issue #2637) — a prior attempt's handoff; parked, never judged on its contents, not charged to the issue                                                                                                                                                                                                                   |
 | `environment_halt`               | A project-declared `preflight.environment` check failed in Phase 0, the `[environment-halt]` marker (Issue #101) — the operator's environment, not the code; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                      |
+| `gate_plugin_missing`            | A bundled build's Claude stage did not load the Nightgauge plugin exactly once, the `[gate-plugin-missing]` marker (Issue #2723) — stopped before any work; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                       |
 
 A rejected tool call the session recovered from (a later call completed and its step finished) is a warning, not `adapter_permission_rejected`: only a rejection still open when the session ends classifies it. A non-zero OpenCode exit whose only errors were recovered is handed to the stage's post-condition gate, which decides (Issue #2168).
 
@@ -558,6 +559,7 @@ kinds that halt on purpose and say so, and the three parked kinds (#1631):
 | `adapter_incompatible`           | A binary at or above the floor, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `dev_context_stale`              | A filed pipeline-gap and the stale handoff removed   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `environment_halt`               | The check's remedy, applied to the environment       | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `gate_plugin_missing`            | An intact bundled plugin, or a newer Claude Code     | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 
 The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
 derives the hold from it via `HoldForTerminalKind`, so retryability has one
@@ -604,6 +606,28 @@ not a recovery attempt.
 `worktree_uncommitted` and `budget_ceiling_hit` are **recoverable** kinds: the
 autonomous scheduler does not increment `LifetimeIssueFailures` for them and the
 Go scheduler skips the board-status revert — the issue is re-dispatchable.
+
+### Gate plugin missing (#2723)
+
+A Claude stage's safety gates ship in the Nightgauge plugin, so a stage names it
+with `--plugin-dir` and reads the CLI's `system/init` event to prove it loaded.
+On a bundled build, each of these stops the stage before any work:
+
+- `plugins` is missing from `system/init`.
+- `plugins` has no entry named exactly `nightgauge`.
+- `plugins` has more than one such entry.
+- Work arrives on the stream with no `system/init` before it.
+
+The stage runner kills the process tree and writes `[gate-plugin-missing]` to
+stderr, which classifies as `gate_plugin_missing`. The kind parks and both
+outcome writers skip the run, as for `environment_halt`. Parking raises no card,
+so both terminal funnels raise a `gate-plugin-missing` Action Center card under
+one key.
+
+A build with no bundle beside it writes `[gate-plugin-warning]` on the same
+readings and continues. That literal is separate so a warning in the stderr of a
+later failure does not park that failure. Interactive stages have no stream, so
+they pass `--plugin-dir` with no check.
 
 ### Project environment halt (#101)
 
@@ -692,6 +716,7 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `adapter_permission_rejected`    | parked — a `deny` or `ask` rule on an allowed tool; no lifetime-cap increment, no cascade   |
 | `adapter_incompatible`           | parked — the adapter's binary, not the issue; no lifetime-cap increment, no cascade         |
 | `environment_halt`               | parked — the operator's environment, not the issue; no lifetime-cap increment, no cascade   |
+| `gate_plugin_missing`            | parked — the install, not the issue; no lifetime-cap increment, no cascade                  |
 
 **The sweep (#1237).** #9 built the mechanism but left eleven `KindFail`
 sites emitting an empty `TerminalKind` — four in `feature_dev_gate.go`, two

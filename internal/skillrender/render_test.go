@@ -158,15 +158,66 @@ allowed-tools: Read
 	}
 }
 
-func TestMissingIncludeIsLeftInPlace(t *testing.T) {
-	// Portability contract: the same document must stay readable under a host
-	// that does not expand. Erroring here would make a skill unrunnable on any
-	// adapter whose bundle omits an optional include.
+func TestMissingIncludeFailsRender(t *testing.T) {
+	// Overlays may be absent (ADR 016 §2); an include is the procedure itself. A
+	// render that left this directive in place exited 0 with the shared text gone
+	// (#2761).
 	root := t.TempDir()
-	writeSkill(t, root, "nightgauge-feature-dev", "body\n<!-- include: ../_shared/ABSENT.md -->\n")
-	res := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}})
-	if !strings.Contains(res.Content, "<!-- include: ../_shared/ABSENT.md -->") {
-		t.Errorf("missing include should be left as-is, got:\n%s", res.Content)
+	writeSkill(t, root, "nightgauge-feature-dev",
+		"body\n<!-- include: ../_shared/ABSENT.md -->\n<!-- include: ../_shared/GONE.md -->\n")
+	_, err := Render(Options{Stage: "feature-dev", SkillsRoots: []string{root}})
+	if err == nil {
+		t.Fatal("a render with a missing include returned no error")
+	}
+	for _, want := range []string{"nightgauge-feature-dev", "../_shared/ABSENT.md", "../_shared/GONE.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q:\n%v", want, err)
+		}
+	}
+}
+
+func TestMissingPhaseIncludeFailsRender(t *testing.T) {
+	directive := "> **Read `_includes/absent.md` (same directory as this SKILL.md) now.**\n"
+	for _, tt := range []struct {
+		name    string
+		profile string
+		budget  int
+	}{
+		{name: "full"},
+		{name: "supply off", budget: -1},
+		{name: "compact", profile: ProfileCompact},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeSkill(t, root, "nightgauge-feature-dev", directive)
+			write(t, filepath.Join(root, "nightgauge-feature-dev", profilesDir, ProfileCompact+".md"), directive)
+			_, err := Render(Options{
+				Stage:         "feature-dev",
+				SkillsRoots:   []string{root},
+				Profile:       tt.profile,
+				IncludeBudget: tt.budget,
+			})
+			if err == nil || !strings.Contains(err.Error(), filepath.Join("_includes", "absent.md")) {
+				t.Fatalf("err = %v, want one naming the missing phase include", err)
+			}
+		})
+	}
+}
+
+func TestOnDemandIncludeMayBeAbsent(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "nightgauge-feature-dev", "Read `_includes/absent.md` when needed.\n")
+	mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}})
+}
+
+func TestMissingIncludeInWholeFileOverrideFailsRender(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "nightgauge-feature-dev", "base\n")
+	write(t, filepath.Join(root, "nightgauge-feature-dev", "_overlays", "claude-opus-5-5.SKILL.md"),
+		"---\nname: override\n---\n<!-- include: ../_shared/ABSENT.md -->\n")
+	_, err := Render(Options{Stage: "feature-dev", Model: "claude-opus-5-5", SkillsRoots: []string{root}})
+	if err == nil || !strings.Contains(err.Error(), "../_shared/ABSENT.md") {
+		t.Fatalf("err = %v, want one naming the missing include", err)
 	}
 }
 
@@ -192,6 +243,35 @@ func TestRewriteSkillRelativePaths(t *testing.T) {
 	}
 	if strings.Contains(got, "`_includes/") {
 		t.Errorf("skill-relative `_includes/` path survived the rewrite:\n%s", got)
+	}
+}
+
+func TestRewriteCrossSkillRefs(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	dir := filepath.Join(root, "nightgauge-feature-planning")
+	sibling := filepath.Join(root, "nightgauge-pattern-mining")
+	write(t, filepath.Join(sibling, "SKILL.md"), "x\n")
+	write(t, filepath.Join(dir, "SKILL.md"), "x\n")
+
+	abs := sibling + "/SKILL.md"
+	for _, tt := range []struct{ name, in, want string }{
+		{"shipped sibling", "follow `skills/nightgauge-pattern-mining/SKILL.md` now", "follow `" + abs + "` now"},
+		{"start of text", "skills/nightgauge-pattern-mining/SKILL.md", abs},
+		{"unshipped sibling", "see skills/nightgauge-retro/SKILL.md", "see skills/nightgauge-retro/SKILL.md"},
+		{"already absolute", abs, abs},
+		{"placeholder", "skills/nightgauge-{STAGE_NAME}/SKILL.md", "skills/nightgauge-{STAGE_NAME}/SKILL.md"},
+		{"url", "https://x.test/skills/nightgauge-pattern-mining/a", "https://x.test/skills/nightgauge-pattern-mining/a"},
+		{"longer word", "myskills/nightgauge-pattern-mining/a", "myskills/nightgauge-pattern-mining/a"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RewriteSkillRelativePaths(tt.in, "feature-planning", dir)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+			if again := RewriteSkillRelativePaths(got, "feature-planning", dir); again != got {
+				t.Errorf("not idempotent: %q then %q", got, again)
+			}
+		})
 	}
 }
 
@@ -805,6 +885,13 @@ func writeSkill(t *testing.T, root, dir, content string) {
 	write(t, filepath.Join(root, dir, "SKILL.md"), content)
 }
 
+// writeContextIncludes writes the targets of bodyWithContextIncludes.
+func writeContextIncludes(t *testing.T, root string) {
+	t.Helper()
+	write(t, filepath.Join(root, "_shared", "PIPELINE_CONTEXT.md"), "pipeline context\n")
+	write(t, filepath.Join(root, "_shared", "AUTONOMY_CONTRACT.md"), "autonomy contract\n")
+}
+
 // overlayFixture builds a skills root with a feature-dev skill plus the given
 // shared and skill-scoped overlay fragments, keyed by overlay key.
 func overlayFixture(t *testing.T, shared, skill map[string]string, body string) string {
@@ -814,6 +901,7 @@ func overlayFixture(t *testing.T, shared, skill map[string]string, body string) 
 		body = bodyWithContextIncludes
 	}
 	writeSkill(t, root, "nightgauge-feature-dev", body)
+	writeContextIncludes(t, root)
 	for key, text := range shared {
 		write(t, filepath.Join(root, "_shared", "_overlays", key+".md"), text+"\n")
 	}
@@ -1238,6 +1326,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // line is the removed batch phase, its include and the renumbered markers.
 // The pr-merge capture was re-pinned for #2699: every changed line is the
 // shared freshness check moving from rebase + force-push to merging the base.
+// All four captures were re-pinned for #2758: every changed line is the gated
+// repository rung replacing the two ungated ones, and the matching wording.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which
@@ -1304,6 +1394,7 @@ func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 func TestHostAndProviderNamespacesDoNotCollide(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, "nightgauge-feature-dev", bodyWithContextIncludes)
+	writeContextIncludes(t, root)
 	write(t, filepath.Join(root, "_shared", "_overlays", "lm-studio.md"), "PLAIN-PROVIDER-LMSTUDIO\n")
 	write(t, filepath.Join(root, "_shared", "_overlays", "hosts", "lm-studio.md"), "HOST-LMSTUDIO\n")
 
@@ -1331,6 +1422,8 @@ func TestOverlayKeyPathSafety(t *testing.T) {
 	t.Run("directory traversal is refused, not encoded, and reads nothing outside _overlays/", func(t *testing.T) {
 		root := t.TempDir()
 		writeSkill(t, root, "nightgauge-feature-dev", bodyWithContextIncludes)
+		writeContextIncludes(t, root)
+		writeContextIncludes(t, root)
 		// A file that WOULD be read if ".." ever reached the filesystem call
 		// unsanitized: _overlays/../../../etc/passwd.md relative to _shared,
 		// i.e. something outside the skills root entirely.

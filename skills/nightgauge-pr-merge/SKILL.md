@@ -5,7 +5,7 @@ description: Wait for PR reviews, address feedback, and merge. Completes the Iss
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.18.0"
+  version: "1.19.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 model: haiku
@@ -36,7 +36,7 @@ This skill completes the Issue-to-PR pipeline by:
 
 | Tool           | Command                             |
 | -------------- | ----------------------------------- |
-| Claude Code    | `/nightgauge-pr-merge` (via plugin) |
+| Claude Code    | `/nightgauge:pr-merge` (via plugin) |
 | OpenAI Codex   | `$nightgauge-pr-merge`              |
 | GitHub Copilot | Invoke via Agent Skills             |
 | Cursor         | Invoke via Agent Skills             |
@@ -269,29 +269,58 @@ Ready if `APPROVED` and no critical issues. Not ready if `REVIEW_REQUIRED` or
 printf '<!-- phase:start name="address-feedback" index=6 total=13 stage="pr-merge" -->\n'
 ```
 
+The binary decides what a review finding may do, and how many rounds a PR may
+spend. A green, mergeable PR enqueues; remaining findings become issues, not
+more commits on this PR (#2730). Ask it first:
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+REVIEW_GATE=$(nightgauge pr-stage review-gate "$ISSUE_NUMBER" --json)
+printf '%s\n' "$REVIEW_GATE" | jq '{proceed, verdict, reason, rounds, hold, filed}'
+```
+
 #### Step 5.0: Check for Fast-Track Merge
 
-Fast-track conditions (all must be true): `READY_TO_MERGE`, no critical/major
-issues, CI passed, PR mergeable.
+Fast-track conditions (all must be true): `READY_TO_MERGE`, `verdict` is
+`enqueue`, CI passed, PR mergeable.
 
 If `FAST_TRACK=true`, skip Steps 5.1-5.4 and proceed to Phase 6.
 
-#### Step 5.1: Handle Critical Issues
+#### Step 5.1: Handle Hold Findings
 
-If critical issues exist, they MUST be addressed.
+`verdict` `fix-round` lists the findings in `hold`: every blocker, plus any
+correctness major on a documented user path. Those are the ONLY findings this
+stage fixes.
 
-#### Step 5.2: Handle Major Issues
+#### Step 5.2: Leave Every Other Finding Alone
 
-Major issues should typically be fixed but user can override.
+Do not fix any other major or nitpick here, whether or not it looks easy. The
+gate files each remaining major as an issue before the merge, and every extra
+commit re-runs CI and restarts the review.
 
-#### Step 5.3: Handle Minor Issues
+#### Step 5.3: Stop on a Refusal
 
-Minor issues are non-blocking. If `--auto-fix` flag is set, skip prompts.
+`verdict` `hold-at-cap` or `wait-round`, or any `path` of `refused`, is terminal
+for this stage: report the `reason` and stop. Do not start another round and do
+not merge. `MaxReviewFixRounds` is a hard cap for the owner to look at.
 
-#### Step 5.4: Apply Fixes
+#### Step 5.4: Apply One Fix Round
 
-Make changes, stage, commit with `fix(#$ISSUE_NUMBER): address review feedback`,
-push, and wait for CI to re-run.
+Wrap the fix in a round. `begin` refuses past the cap, and that refusal is final.
+While a round is open nothing may enqueue, so `end` only after the push:
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+nightgauge pr-stage review-round begin "$ISSUE_NUMBER" || exit 1
+# Fix the `hold` findings, stage, commit with
+# `fix(#$ISSUE_NUMBER): address review feedback`, and push.
+nightgauge pr-stage review-round end "$ISSUE_NUMBER"
+```
+
+Run one round, then wait for CI to re-run on the new head and continue to the
+next phase. Never loop back to Phase 3.
 
 ---
 
@@ -338,8 +367,9 @@ printf '<!-- phase:start name="merge" index=8 total=13 stage="pr-merge" -->\n'
 
 Run the ruleset pre-check, final mergeable verification, the knowledge
 conformance gate (every entry this issue wrote must carry the frontmatter
-contract), conflict resolution, merge-strategy selection, the deterministic
-Go-binary merge (with its `blockedBy` gate), and merge verification.
+contract), conflict resolution, merge-strategy selection, the review gate, the
+deterministic Go-binary merge (with its `blockedBy` gate), and merge
+verification.
 
 > **NEVER pass `--admin` (or `--auto`) to any merge command — no admin bypass
 > exists in this pipeline.** A merge blocked by branch protection or required
@@ -414,16 +444,17 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"

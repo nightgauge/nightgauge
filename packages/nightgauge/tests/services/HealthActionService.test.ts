@@ -41,6 +41,7 @@ vi.mock("../../src/services/IpcClient", () => ({
 }));
 
 import { HealthActionService } from "../../src/services/HealthActionService";
+import { setPluginState } from "../../src/utils/pluginHint";
 
 function createMockLogger() {
   return {
@@ -158,6 +159,23 @@ describe("HealthActionService", () => {
       expect(criticalAction!.suggestion).toBeDefined();
       expect(criticalAction!.suggestion).toMatch(/audit|pipeline|routing/i);
       expect(criticalAction!.autoApplied).toBe(false);
+    });
+
+    it("names the plugin command only when the plugin is enabled (#2760)", async () => {
+      mockReadAll.mockResolvedValue([createSnapshot(30, "2026-02-20T10:00:00Z", "critical")]);
+      const suggestion = async () => {
+        const result = await HealthActionService.evaluate(workspaceRoot, logger as any);
+        return result!.actions.find((a) => a.level === "critical")!.suggestion;
+      };
+
+      expect(await suggestion()).not.toContain("/nightgauge:");
+
+      setPluginState("enabled");
+      try {
+        expect(await suggestion()).toContain("/nightgauge:backlog-groom");
+      } finally {
+        setPluginState("unknown");
+      }
     });
 
     it("returns critical-level action at score 49", async () => {

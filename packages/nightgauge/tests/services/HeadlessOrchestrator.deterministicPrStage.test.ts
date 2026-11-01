@@ -61,7 +61,16 @@ const {
   gatePrMergePassed,
   prStagePhaseLines,
   gitHeadLeaked,
+  prStageBudget,
 } = vi.hoisted(() => ({
+  // #2730: what `pr-stage budget` answers; null makes the verb fail.
+  prStageBudget: {
+    value: {
+      queue_wait_ms: 5_400_000,
+      cli_timeout_ms: 6_000_000,
+      client_timeout_ms: 6_060_000,
+    } as Record<string, number> | null,
+  },
   // Issue 1675: when true, the branch's published head commits AGENTS.md
   // with the managed steering block (the fake `git` below serves it).
   gitHeadLeaked: { value: false },
@@ -131,6 +140,11 @@ vi.mock("child_process", async () => {
       }
       // merge-base / log / push: nothing publishable from this fake clone.
       return Promise.reject(new Error(`git ${g.join(" ")}: not in this fixture`));
+    }
+
+    if (isBinary && a[0] === "pr-stage" && a[1] === "budget") {
+      if (prStageBudget.value === null) return Promise.reject(new Error("no budget verb"));
+      return Promise.resolve({ stdout: JSON.stringify(prStageBudget.value), stderr: "" });
     }
 
     if (isBinary && a[0] === "pr-stage") {
@@ -373,6 +387,11 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
   let mockLogger: Logger;
 
   beforeEach(() => {
+    prStageBudget.value = {
+      queue_wait_ms: 5_400_000,
+      cli_timeout_ms: 6_000_000,
+      client_timeout_ms: 6_060_000,
+    };
     vi.clearAllMocks();
     // The worktree's per-clone data resolves under its git dir (ADR-024 § 7).
     fakeCloneLayout(WORKTREE);
@@ -539,6 +558,54 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
 
     expect(result.success).toBe(true);
     expect(vi.mocked(state.startPhase).mock.calls).toEqual([["pr-merge", "merge", 14, 9]]);
+  });
+
+  it("pr-merge: the client limit is the binary's, not a constant (#2730)", async () => {
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await orchestrator.runPipeline(300);
+      const delays = timers.mock.calls.map((c) => c[1]);
+      expect(delays).toContain(6_060_000);
+      expect(delays).not.toContain(20 * 60_000);
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
+  it("pr-merge: a verified merge tells Go, so status reads it as follow-up (#2730)", async () => {
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const notifyPrMerged = vi.fn().mockResolvedValue(undefined);
+    (state as unknown as { notifyPrMerged: typeof notifyPrMerged }).notifyPrMerged = notifyPrMerged;
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+    const context = vi
+      .spyOn(
+        orchestrator as unknown as { prNumberFromContext(n: number): number },
+        "prNumberFromContext"
+      )
+      .mockReturnValue(999);
+
+    await orchestrator.runPipeline(300);
+
+    expect(context).toHaveBeenCalledWith(300);
+    expect(notifyPrMerged).toHaveBeenCalledWith(999);
+  });
+
+  it("pr-merge: no budget means no timed run, so it is a runner error (#2730)", async () => {
+    prStageBudget.value = null;
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+    await orchestrator.runPipeline(300);
+    expect(prStageCalls.value.some((c) => c.verb === "merge")).toBe(false);
+    const skillStages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+    expect(skillStages).toContain("pr-merge");
   });
 
   it("pr-merge: 'punt' records the reason and falls through to the LLM skill", async () => {

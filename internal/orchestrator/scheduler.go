@@ -25,6 +25,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/ci"
+	"github.com/nightgauge/nightgauge/internal/cmd/followup"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
@@ -314,6 +315,9 @@ type StageRunResult struct {
 	// routing, sticky substitutions, or retries.
 	ServedEffort   string
 	ServedThinking string
+	// PluginVersion is the Nightgauge Claude plugin version the stage reported
+	// loading (#2723). Empty when it reported none.
+	PluginVersion string
 	// RefusalFallback* echo the CLI's model_refusal_fallback event when one
 	// was observed (#91). Attribution + notification only.
 	RefusalFallbackFrom     string
@@ -743,6 +747,7 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 		// #91 served-model attribution, tracked by the execution manager's
 		// stream reader, and a multi-provider adapter's ADR-022 § 2 identity.
 		ServedModel:             result.ServedModel,
+		PluginVersion:           result.PluginVersion,
 		ModelProvider:           result.ModelProvider,
 		UpstreamModel:           result.UpstreamModel,
 		Endpoint:                result.Endpoint,
@@ -1357,7 +1362,7 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 		excludeLabels:            excludeLabels,
 		adapterExplicit:          cfg.AdapterExplicit,
 		runDefaultAdapter:        cfg.Adapter,
-		prMergeRunner:            newPRMergeRunner(cfg.RuntimeConfig),
+		prMergeRunner:            newPRMergeRunner(client, cfg.RuntimeConfig),
 		prAutoFixMaxAttempts:     prAutoFixMaxAttempts(cfg.RuntimeConfig),
 		prCreateRunner:           NewDefaultPRCreateRunner(client),
 		issuePickupRunner:        NewDeterministicIssuePickupRunner(),
@@ -1596,11 +1601,17 @@ func (s *Scheduler) WithRepoRootsResolver(fn func() []string) {
 
 // launchRepoSlug returns the "owner/repo" the launch root's own config names,
 // or "" when no config was loaded or it does not name both halves.
+// prNumberFromURLRE captures the number of a pull request URL.
+var prNumberFromURLRE = regexp.MustCompile(`/pull/(\d+)`)
+
 // newPRMergeRunner builds the deterministic pr-merge runner with the
 // configured merge-queue wait budget (pipeline.merge_queue.wait_timeout,
 // #2214) and CI-wait budget (pr.ci_check_timeout, #2504).
-func newPRMergeRunner(cfg *config.Config) *pmstages.DeterministicRunner {
+func newPRMergeRunner(client *gh.Client, cfg *config.Config) *pmstages.DeterministicRunner {
 	r := pmstages.NewDeterministicRunner()
+	if client != nil && cfg != nil {
+		r.SetReviewFiling(followup.ReviewFiling(client, cfg))
+	}
 	var p *config.PipelineConfig
 	var pr *config.PRConfig
 	if cfg != nil {
@@ -4825,6 +4836,18 @@ func loadWorktreePath(workspaceRoot string, issueNumber int) string {
 	return workspaceRoot
 }
 
+// stageSkillRoots is the root list for a stage of issue's run. The workspace it
+// searches is the run's worktree, the input the extension passes too, so the
+// hosts agree on the checkout as well as the order (#2718). A worktree that has
+// gone falls back to the repository root.
+func stageSkillRoots(workspaceRoot string, issueNumber int) []string {
+	root := loadWorktreePath(workspaceRoot, issueNumber)
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		root = workspaceRoot
+	}
+	return skillrender.DefaultRoots(root)
+}
+
 // refusePreDispatch books a stage the pipeline declines to DISPATCH — the
 // prerequisite gate and the skill-render failure — and returns the terminal
 // failure kind the caller must assign to terminalFailureKind before it
@@ -5482,8 +5505,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// emitting. Writes stop at the seal, not here.
 		runtime.MarkTerminal(schedulerTerminalOutcome(pipelineSuccess, terminalFailureKind))
 
-		// Three terminal kinds record NOTHING, and the extension path skips the
-		// same three (internal/ipc/outcome_record.go) — one corpus, one meaning
+		// Four terminal kinds record NOTHING, and the extension path skips the
+		// same four (internal/ipc/outcome_record.go) — one corpus, one meaning
 		// per field, or `success` and `costUsd` carry two meanings across the
 		// file's two writers with no discriminator to tell them apart.
 		//
@@ -5494,6 +5517,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		//   environment_halt (#101) — a project-declared preflight.environment
 		//   check halted the run in Phase 0: the operator's environment was
 		//   broken, so the row would measure the environment, not the model.
+		//
+		//   gate_plugin_missing (#2723) — the stage was stopped before any work
+		//   because its plugin did not load: the row would measure the install.
 		//
 		//   blocked_dependency (#305) — a deferral is not a failure and did no
 		//   work: no AI stage ran, so the row would book success:false at ~$0.
@@ -5514,6 +5540,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		case TerminalKindEnvironmentHalt:
 			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — operator environment broken, not model)",
 				item.Number, TerminalKindEnvironmentHalt)
+		case TerminalKindGatePluginMissing:
+			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — stage stopped before any work)",
+				item.Number, TerminalKindGatePluginMissing)
 		default:
 			// recordOutcome re-resolves the prediction from the run's worktree
 			// before writing the row (#994) — the values here were read at
@@ -5966,6 +5995,19 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			return
 		}
 	}
+	// A re-dispatch whose dev work survived starts at feature-validate (#2730).
+	// This asks after provisioning because the answer depends on the run's
+	// worktree: the workspace root is the primary checkout, not the issue branch.
+	if stageIdx == 0 {
+		runWorkspace := stageWorkspace(runtime, workspaceRoot)
+		if i, reason := preservedWorkResumeIndex(ctx, stages, runWorkspace, item.Number); i > 0 {
+			log.Printf("#%d: skipping %v — resuming from preserved work: %s", item.Number, stages[:i], reason)
+			stageIdx = i
+			if b := resolveFeatureBranch(runtime, workspaceRoot, item.Number); b != "" {
+				runtime.SetBranch(b)
+			}
+		}
+	}
 
 	// Endpoint-aware OpenCode dispatch (#1679): the slot a stage holds on a
 	// declared endpoint, the endpoints it has lost, and how often it has
@@ -6333,7 +6375,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			Stage:       string(stage),
 			Model:       model,
 			Adapter:     adapterName,
-			SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+			SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
 			Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 			Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 		})
@@ -6363,6 +6405,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				"skill-render", reason)
 			return
 		}
+		logResolvedSkillPath(item.Number, stage, skillData.SkillPath)
 
 		// A model on a local OpenCode endpoint is in no registry, so
 		// OverlayKeys resolves no window for it. Its window is the context
@@ -6420,7 +6463,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					Stage:       string(stage),
 					Model:       model,
 					Adapter:     adapterName,
-					SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+					SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
 					Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 					Profile:     skillrender.ProfileCompact,
 					Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
@@ -6439,7 +6482,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Stage:          string(stage),
 						Model:          model,
 						Adapter:        adapterName,
-						SkillsRoots:    skillrender.DefaultRoots(workspaceRoot),
+						SkillsRoots:    stageSkillRoots(workspaceRoot, item.Number),
 						Headless:       true, // every stage this dispatches runs non-interactively (#2390)
 						Profile:        skillrender.ProfileCompact,
 						SupplyIncludes: true,
@@ -6485,7 +6528,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Stage:       string(stage),
 						Model:       alt.ID,
 						Adapter:     adapterName,
-						SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+						SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
 						Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 						Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 					})
@@ -7093,6 +7136,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// request-or-served value servedModel computes.
 		if result != nil {
 			runtime.RecordStageServedModel(stage, result.ServedModel)
+			runtime.RecordStagePluginVersion(stage, result.PluginVersion)
 			// Session resume (#1643 AC 5): record the OpenCode session this
 			// dispatch used, read back from the run's own events file
 			// (opencodeplugin.Event.SessionID) — the SAME source #1624
@@ -8251,6 +8295,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			parked := TerminalKindParks(resolvedFailureKind)
 			if parked {
 				terminalFailureKind = resolvedFailureKind
+			}
+			if resolvedFailureKind == TerminalKindGatePluginMissing {
+				s.raiseGatePluginMissing(item.Repo, item.Number, runtime.RunID, string(stage), failText)
 			}
 			// A budget stop (#1652, ADR-004): the stage was stopped at a
 			// budget the operator set — a stage budget or a cost cap — and a
@@ -11175,6 +11222,13 @@ func (s *Scheduler) verifyPRMerged(ctx context.Context, prURL string, issueNumbe
 func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardItem, runtime *state.RuntimeState, reasonPrefix string) bool {
 	snap := runtime.Snapshot()
 	merged, reason := s.verifyPRMerged(ctx, snap.PrUrl, item.Number)
+	if merged {
+		if m := prNumberFromURLRE.FindStringSubmatch(snap.PrUrl); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				runtime.SetMergedPR(n)
+			}
+		}
+	}
 	if !merged {
 		label := reason
 		if reasonPrefix != "" {
@@ -11397,6 +11451,7 @@ func (s *Scheduler) tryDeterministicPRMerge(
 		return false, detResult.PRState, false, fmt.Errorf("pr-merge refused: %s", detResult.Reason)
 	}
 	if detErr == nil && detResult.Path == pmstages.PathMerged {
+		runtime.SetMergedPR(detResult.PRNumber)
 		runtime.RecordExecutionPath(stage, "deterministic")
 		log.Printf("#%d: pr-merge deterministic path: %s (PR #%d, %s, %dms)",
 			item.Number, detResult.Path, detResult.PRNumber, detResult.Reason, detResult.DurationMs)
@@ -11877,4 +11932,11 @@ func (s *Scheduler) preserveBranchForkedRun(ctx context.Context, item types.Boar
 		evidence.LocalSHA = sha
 	}
 	s.raiseBranchForked(item.Repo, item.Number, runtime.RunID, branch, evidence, ref, sha)
+}
+
+// logResolvedSkillPath records which SKILL.md a stage runs (#2718), so the
+// skills tree in use is read from the log instead of inferred from
+// NIGHTGAUGE_SKILL_DIR.
+func logResolvedSkillPath(issue int, stage state.PipelineStage, skillPath string) {
+	log.Printf("#%d: stage %s skill_path=%s", issue, stage, skillPath)
 }

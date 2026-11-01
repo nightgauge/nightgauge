@@ -55,6 +55,8 @@ function makeMockContext(extensionPath: string, overrides?: { dismissed?: boolea
       update: vi.fn().mockResolvedValue(undefined),
     },
     extensionPath,
+    globalStorageUri: { fsPath: path.join(path.dirname(extensionPath), "globalStorage") },
+    extension: { packageJSON: { version: "2.0.0" } },
   };
 }
 
@@ -203,5 +205,46 @@ describe("GrokSetupService", () => {
     expect(fs.existsSync(destInclude)).toBe(true);
     expect(fs.existsSync(destShared)).toBe(true);
     expect(fs.readFileSync(destSkill, "utf8")).toContain("issue-create");
+  });
+
+  it("registers a marketplace outside the version-keyed extension directory (#2719)", async () => {
+    const vscode = await import("vscode");
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Install" as never);
+
+    const dist = path.join(extensionPath, "dist");
+    const pluginDir = path.join(dist, "claude-plugins", "nightgauge");
+    fs.mkdirSync(path.join(pluginDir, "skills", "issue-create"), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "skills", "issue-create", "SKILL.md"), "# x\n");
+    fs.mkdirSync(path.join(dist, ".claude-plugin"), { recursive: true });
+    fs.writeFileSync(path.join(dist, ".claude-plugin", "marketplace.json"), "{}");
+
+    const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+    const service = new GrokSetupService(makeMockContext(extensionPath) as never);
+    await service.checkAndPromptSetup();
+
+    const stable = path.join(tmpRoot, "globalStorage", "claude-marketplace");
+    expect(mockExecAsync).toHaveBeenCalledWith("grok", ["plugin", "marketplace", "add", stable]);
+    expect(mockExecAsync).toHaveBeenCalledWith("grok", [
+      "plugin",
+      "install",
+      path.join(stable, "claude-plugins", "nightgauge"),
+      "--trust",
+    ]);
+  });
+
+  it("hands grok the marketplace URL without the #stable ref", async () => {
+    const vscode = await import("vscode");
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Install" as never);
+
+    const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+    const service = new GrokSetupService(makeMockContext(extensionPath) as never);
+    await service.checkAndPromptSetup();
+
+    expect(mockExecAsync).toHaveBeenCalledWith("grok", [
+      "plugin",
+      "marketplace",
+      "add",
+      "https://github.com/nightgauge/nightgauge.git",
+    ]);
   });
 });

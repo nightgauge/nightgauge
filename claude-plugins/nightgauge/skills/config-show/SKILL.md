@@ -29,7 +29,7 @@ This skill displays the effective Nightgauge configuration, showing:
 
 | Tool           | Command                                |
 | -------------- | -------------------------------------- |
-| Claude Code    | `/nightgauge-config-show` (via plugin) |
+| Claude Code    | `/nightgauge:config-show` (via plugin) |
 | OpenAI Codex   | `$nightgauge-config-show`              |
 | GitHub Copilot | Invoke via Agent Skills                |
 | Cursor         | Invoke via Agent Skills                |

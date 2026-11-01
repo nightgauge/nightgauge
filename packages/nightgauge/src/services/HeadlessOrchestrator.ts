@@ -46,7 +46,11 @@ const execFileAsync = promisify(execFile);
 import { BinaryResolver } from "./BinaryResolver";
 import { moveToInReviewIfPRBacked } from "../utils/inReviewGuard";
 import { IpcClient } from "./IpcClient";
-import { runWithPhaseStream, type PrStagePhaseTransition } from "./prStagePhaseStream";
+import {
+  parsePrStageBudget,
+  runWithPhaseStream,
+  type PrStagePhaseTransition,
+} from "./prStagePhaseStream";
 import { isAgenticReconcileStage, reconcileAgenticStagePhases } from "./agenticPhaseReconcile";
 import type { AttentionRaiseCheck } from "./IpcClientBase";
 import {
@@ -317,6 +321,7 @@ import {
   type PhaseStaleEvent,
 } from "../utils/PhaseTimeoutManager";
 import { TelemetryService } from "./TelemetryService";
+import { pluginHint } from "../utils/pluginHint";
 
 /**
  * Result of a full pipeline run
@@ -4660,9 +4665,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     if (repo.includes("/")) {
       args.push("--repo", repo);
     }
-    // pr-merge waits out in-flight CI (bounded ~15 min in the runner); give the
-    // subprocess headroom above that. pr-create is fast.
-    const timeoutMs = stage === "pr-merge" ? 20 * 60_000 : 3 * 60_000;
+    // pr-merge can wait out CI and then a merge queue, so the binary derives its
+    // limit from pipeline.merge_queue.wait_timeout (#2730). pr-create is fast.
+    let timeoutMs = 3 * 60_000;
+    if (stage === "pr-merge") {
+      try {
+        const { stdout } = await execFileAsync(
+          binary,
+          ["pr-stage", "budget", "--workdir", workdir, "--json"],
+          { encoding: "utf-8", cwd: workdir, timeout: 30_000 }
+        );
+        timeoutMs = parsePrStageBudget(stdout).client_timeout_ms;
+      } catch (err) {
+        this.logger.warn("Deterministic pr-stage budget unavailable — running LLM path", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        this.stageExecutionPaths.set(stage, { path: "llm", puntReason: "runner-error" });
+        return { kind: "llm" };
+      }
+    }
 
     // Signal start + mark running (runStage would do this; we skip runStage).
     // onStageStart is idempotent; this shows the spinner during the CI-wait.
@@ -4706,6 +4728,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         timeoutMs,
         onPhase: applyPhase,
         onLog: (line) => this.logger.debug(`pr-stage ${stage}: ${line}`),
+        onSpawn: (pid) =>
+          this.logger.info(`pr-stage ${stage} spawned pid=${pid} issue=#${issueNumber}`),
       });
       parsed = JSON.parse(stdout.trim());
     } catch (err) {
@@ -5722,6 +5746,83 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Resume a re-dispatch at feature-validate when its dev work survived on the
+   * branch or under refs/nightgauge/wip/ (#2730). `pr-stage resume-point` makes
+   * the decision and restores the work, so the Go scheduler and this path agree.
+   * Anything but a clear yes runs every stage. Returns true when fast-forwarded.
+   */
+  private async resumeAtFeatureValidate(issueNumber: number): Promise<boolean> {
+    if (!this.stateService) return false;
+    const stages: PipelineStage[] = ["issue-pickup", "feature-planning", "feature-dev"];
+    const reason = await this.preservedResumePoint(issueNumber);
+    if (reason === null) return false;
+
+    const skip = `Skipped: resuming at feature-validate from preserved work — ${reason} (#2730)`;
+    const state = await this.stateService.getState();
+    for (const stage of stages) {
+      if (state?.stages[stage]?.status === "complete") continue;
+      try {
+        await this.stateService.skipStage(stage, skip);
+      } catch (err) {
+        this.logger.warn("Resume-at-feature-validate: could not mark stage skipped", {
+          stage,
+          err,
+        });
+        return false;
+      }
+    }
+    this.logger.info("Resuming at feature-validate from preserved work", { issueNumber, reason });
+    this.eventDispatcher.onStageSkipped("feature-planning", skip);
+    return true;
+  }
+
+  /** What the resume rests on, from `pr-stage resume-point`; null for no resume. */
+  private async preservedResumePoint(issueNumber: number): Promise<string | null> {
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) return null;
+      const workdir = this.getWorkingDirectory();
+      const { stdout } = await execFileAsync(
+        binary,
+        ["pr-stage", "resume-point", String(issueNumber), "--workdir", workdir],
+        { encoding: "utf-8", cwd: workdir, timeout: 60_000 }
+      );
+      const parsed = JSON.parse(stdout) as { resume?: unknown; reason?: unknown };
+      if (parsed.resume !== true) return null;
+      return typeof parsed.reason === "string" ? parsed.reason : "";
+    } catch (err) {
+      this.logger.warn("Resume-at-feature-validate: no decision, running every stage", {
+        issueNumber,
+        err,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Pin the merge ground truth (#266) and tell Go, so `autonomous status` reads
+   * the rest of this run as post-merge follow-up (#2730). The flag is set
+   * synchronously; the notice is a display fact, so it never rejects. The PR
+   * number comes from the caller or the run's pr context, with no forge call.
+   */
+  private async markPrMerged(issueNumber: number, prNumber?: number): Promise<void> {
+    this.prMergedGroundTruth = true;
+    try {
+      const pr = prNumber ?? this.prNumberFromContext(issueNumber);
+      if (pr > 0) await this.stateService?.notifyPrMerged(pr);
+    } catch (err) {
+      this.logger.debug("Could not report the merged PR", { issueNumber, err });
+    }
+  }
+
+  private prNumberFromContext(issueNumber: number): number {
+    const parsed = JSON.parse(fs.readFileSync(this.getContextPath("pr", issueNumber), "utf-8")) as {
+      pr_number?: unknown;
+    };
+    return typeof parsed.pr_number === "number" ? parsed.pr_number : 0;
+  }
+
+  /**
    * Fingerprint of the issue's current acceptance criteria, from
    * `nightgauge preflight ac-fingerprint` so the parser is the one
    * ac-reconcile used (#2623). Null when it cannot be computed.
@@ -5794,7 +5895,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return;
     }
 
-    if (prCreateState?.status !== "complete") return;
+    if (prCreateState?.status !== "complete") {
+      if (state.stages["feature-dev"]?.status !== "complete") {
+        await this.resumeAtFeatureValidate(issueNumber);
+      }
+      return;
+    }
 
     // Check if the pr context file is missing (worktree was cleaned up)
     if (fs.existsSync(prContextPath)) return; // Already have context, resume will work
@@ -7617,7 +7723,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       message +=
         `Progress: ${closedCount}/${totalCount} sub-issues complete.\n\n` +
         `Open sub-issues:\n${openList}\n\n` +
-        `Pick up a sub-issue instead: /nightgauge:issue-pickup <number>`;
+        pluginHint(
+          "issue-pickup",
+          "Pick up a sub-issue instead.",
+          (command) => `Pick up a sub-issue instead: ${command} <number>`
+        );
     } else {
       message += `No sub-issues found. Pick up a sub-issue instead or close this epic manually.`;
     }
@@ -12631,7 +12741,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // #266: the deterministic gate confirms the PR is MERGED. Pin the
             // ground-truth flag so pipeline.notifyComplete can tell the Go
             // recording boundary the merge landed even if a later stage trips.
-            this.prMergedGroundTruth = true;
+            void this.markPrMerged(issueNumber);
           }
           if (mergeVerifyError) {
             // Check if PR is still OPEN (not CLOSED) — worth retrying once
@@ -12745,7 +12855,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   break;
                 }
                 // Retry succeeded and the gate confirms MERGED (#266).
-                this.prMergedGroundTruth = true;
+                void this.markPrMerged(issueNumber);
                 // Retry succeeded — clear retry state and continue
                 if (this.stateService) {
                   try {
@@ -13645,7 +13755,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           budgetExceeded,
         });
         shippedButOverbudget = true;
-        this.prMergedGroundTruth = true; // #266: forge confirms MERGED
+        void this.markPrMerged(issueNumber, verified.prNumber); // #266: forge confirms MERGED
         if (!completedStages.includes("pr-merge")) {
           completedStages.push("pr-merge");
         }
@@ -16471,7 +16581,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             ) {
               const merged = await this.checkPrMergedForIssue(issueNumber);
               if (merged) {
-                this.prMergedGroundTruth = true;
+                void this.markPrMerged(issueNumber, merged.prNumber);
                 this.logger.warn(
                   "pr-merge killed after the merge landed — PR is MERGED; recording success " +
                     "(ground truth overrides late per-stage kill) (#266)",
@@ -16546,6 +16656,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // crossing and (b) printed a ceiling the cost never approached. Only
               // synthesize when skillRunner left no runaway marker at all, and do
               // so with honest progress-kill semantics (no invented ceiling).
+              // The monitor's `Ceiling:` line goes to the stream, not this error,
+              // so the expired ceiling is stamped here from the structured value
+              // for the failure report to name (#2694).
+              const killedAtCeiling = result.killCeiling
+                ? ` Ceiling: ${result.killCeiling}=${result.killCeilingValue ?? "unset"}.`
+                : "";
               const emittedMarker = result.error?.message ?? "";
               const hasRunawayMarker =
                 emittedMarker.includes("[runaway-progress-exceeded]") ||
@@ -16554,7 +16670,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 ? emittedMarker
                 : `[runaway-progress-exceeded] Stage ${stage} terminated: progress-based runaway kill ` +
                   `at cost $${costAtTermUsd.toFixed(4)} (no dollar ceiling crossed). ` +
-                  `Treated as transient — will retry with 30-minute backoff (Issue #3783).`;
+                  `Treated as transient — will retry with 30-minute backoff (Issue #3783).` +
+                  killedAtCeiling;
               const costCapError = new Error(runawayMarker);
 
               if (this.stateService) {
@@ -16568,6 +16685,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     // inventing an observation.
                     servedModel: result.servedModel,
                     servedEffort: result.servedEffort,
+                    pluginVersion: result.pluginVersion,
                     servedThinking: result.servedThinking,
                   });
                 } catch (err) {
@@ -16631,6 +16749,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     // inventing an observation.
                     servedModel: result.servedModel,
                     servedEffort: result.servedEffort,
+                    pluginVersion: result.pluginVersion,
                     servedThinking: result.servedThinking,
                   });
                 } catch (err) {
@@ -16761,6 +16880,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                       // inventing an observation.
                       servedModel: result.servedModel,
                       servedEffort: result.servedEffort,
+                      pluginVersion: result.pluginVersion,
                       servedThinking: result.servedThinking,
                     });
                   }
@@ -16868,6 +16988,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     // inventing an observation.
                     servedModel: result.servedModel,
                     servedEffort: result.servedEffort,
+                    pluginVersion: result.pluginVersion,
                     servedThinking: result.servedThinking,
                   });
                   // A second `setStageModelSelection` call used to sit here
@@ -17022,6 +17143,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                       // inventing an observation.
                       servedModel: result.servedModel,
                       servedEffort: result.servedEffort,
+                      pluginVersion: result.pluginVersion,
                       servedThinking: result.servedThinking,
                     });
                     await this.stateService.clearRetrying(stage);

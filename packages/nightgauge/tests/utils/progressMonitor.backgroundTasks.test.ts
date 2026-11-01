@@ -17,6 +17,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   ProgressMonitor,
   applyBackgroundTaskEvent,
+  applyConnectivityResume,
+  shiftBackgroundTaskStarts,
+  syncBackgroundTasks,
   type ExternalProgressProbe,
   type ProgressMonitorConfig,
 } from "../../src/utils/progressMonitor";
@@ -262,5 +265,127 @@ describe("ProgressMonitor — background task ceiling (#2554)", () => {
     expect(tasks.get("mon1")).toBe(9_000);
     applyBackgroundTaskEvent(GATE_STARTED, tasks, 20_000);
     expect(tasks.get("gate1")).toBe(1_000);
+  });
+});
+
+describe("ProgressMonitor gate deferrals (#2694)", () => {
+  const MIN = 60_000;
+  let size = 0;
+  const logProbe: ExternalProgressProbe = {
+    isProcessAlive: () => false,
+    fileSize: () => size,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    size = 100;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  function monitorWithTask(ageMs: number): ProgressMonitor {
+    const monitor = new ProgressMonitor(makeConfig(), logProbe);
+    monitor.declareExternalProgress({ log: "/tmp/gate.log", label: "ci-local.sh gate" });
+    monitor.setBackgroundTasks(1, Date.now() - ageMs);
+    return monitor;
+  }
+
+  /** Advance in 30s ticks, optionally growing the log; returns the first kill. */
+  function tick(monitor: ProgressMonitor, ticks: number, grow: boolean) {
+    for (let i = 0; i < ticks; i++) {
+      vi.advanceTimersByTime(30_000);
+      if (grow) size += 10;
+      const result = monitor.check(1);
+      if (result.shouldKill) return result;
+    }
+    return undefined;
+  }
+
+  it("a connectivity resume keeps a task alive for the next two ticks", () => {
+    const tasks = new Map([["t", Date.now()]]);
+    const monitor = new ProgressMonitor(makeConfig({ backgroundTaskCeilingMs: 5 * MIN }), noProbe);
+    syncBackgroundTasks(monitor, tasks);
+    vi.advanceTimersByTime(10 * MIN);
+    applyConnectivityResume(monitor, tasks, 10 * MIN);
+    expect(tick(monitor, 2, false)).toBeUndefined();
+  });
+
+  it("shifts only tasks that started before the outage", () => {
+    const now = Date.now();
+    const tasks = new Map([
+      ["old", now - 20 * MIN],
+      ["new", now - MIN],
+    ]);
+    shiftBackgroundTaskStarts(tasks, 10 * MIN, now);
+    expect(tasks.get("old")).toBe(now - 10 * MIN);
+    expect(tasks.get("new")).toBe(now - MIN);
+  });
+
+  it("the restart gives a clock already stale before the outage a whole window", () => {
+    const monitor = new ProgressMonitor(makeConfig(), noProbe);
+    vi.advanceTimersByTime(100_000);
+    vi.advanceTimersByTime(10 * MIN);
+    monitor.resumeAfterOffline(10 * MIN);
+    expect(monitor.msSinceLastActivity).toBe(0);
+    expect(monitor.msSinceLastProductiveProgress).toBe(100_000);
+  });
+
+  it("keeps a 100-minute task with a growing log alive", () => {
+    const monitor = monitorWithTask(100 * MIN);
+    vi.advanceTimersByTime(5 * MIN);
+    expect(tick(monitor, 6, true)).toBeUndefined();
+    size += 10;
+    expect(monitor.isBackgroundWorkLive()).toBe(true);
+  });
+
+  // The two real kills: a 50-minute gate. #2740 restarted its gate in the
+  // background and declared nothing; #2758 declared a log that went quiet.
+  it("keeps a 50-minute gate alive whether or not it declared a log", () => {
+    const undeclared = new ProgressMonitor(makeConfig(), noProbe);
+    undeclared.setBackgroundTasks(1, Date.now() - 50 * MIN);
+    const quiet = monitorWithTask(50 * MIN);
+    vi.advanceTimersByTime(5 * MIN);
+    expect(tick(undeclared, 6, false)).toBeUndefined();
+    expect(tick(quiet, 6, false)).toBeUndefined();
+  });
+
+  it("kills one whose log stopped, naming the ceiling and the age", () => {
+    const monitor = monitorWithTask(100 * MIN);
+    vi.advanceTimersByTime(5 * MIN);
+    const kill = tick(monitor, 6, false);
+    expect(kill?.ceiling?.name).toBe("progress-background-task-ceiling");
+    expect(kill?.reason).toMatch(
+      /ci-local\.sh gate background task ran \d+m\d*s?, past the 90m background-task ceiling/
+    );
+  });
+
+  it("an undeclared task dies at the ceiling, so no wait is unbounded", () => {
+    const monitor = new ProgressMonitor(makeConfig(), noProbe);
+    monitor.setBackgroundTasks(1, Date.now() - 88 * MIN);
+    vi.advanceTimersByTime(5 * MIN);
+    const kill = tick(monitor, 6, false);
+    expect(kill?.ceiling?.name).toBe("progress-background-task-ceiling");
+  });
+
+  it("a growing log dies at the hard bound", () => {
+    const monitor = monitorWithTask(119 * MIN);
+    vi.advanceTimersByTime(25 * MIN);
+    const kill = tick(monitor, 8, true);
+    expect(kill?.ceiling?.name).toBe("progress-background-task-hard-ceiling");
+  });
+
+  it("names the external ceiling when that deferral expired", () => {
+    const monitor = new ProgressMonitor(makeConfig(), logProbe);
+    monitor.declareExternalProgress({ log: "/tmp/gate.log" });
+    vi.advanceTimersByTime(21 * MIN);
+    const result = monitor.check(1);
+    expect(result.shouldKill).toBe(true);
+    expect(result.ceiling?.name).toBe("progress-external-progress-ceiling");
+    expect(result.reason).toContain("past the 20m external-progress ceiling");
+  });
+
+  it("keeps today's ceiling when nothing was deferring", () => {
+    const monitor = new ProgressMonitor(makeConfig(), noProbe);
+    vi.advanceTimersByTime(21 * MIN);
+    expect(monitor.check(1).ceiling?.name).toBe("progress-no-progress-window");
   });
 });

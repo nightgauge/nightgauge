@@ -40,6 +40,12 @@ export const ARCHITECTURE_APPROVAL_REQUIRED_MARKER = "ARCHITECTURE APPROVAL REQU
  */
 export const BLOCKED_DEPENDENCY_MARKER = "[blocked-dependency]";
 
+/**
+ * Stamped on a stage the runaway monitor stopped (#2694). Such a stage reached
+ * no verdict, so the stage-specific "did not pass" guidance would be false.
+ */
+export const RUNAWAY_PROGRESS_MARKER = "[runaway-progress-exceeded]";
+
 /** Stage display order for the timeline */
 const STAGE_ORDER: PipelineStage[] = [
   "issue-pickup",
@@ -447,8 +453,23 @@ function getRecommendations(
     );
   }
 
+  const runaway = errMessage.includes(RUNAWAY_PROGRESS_MARKER);
+  if (runaway) {
+    const ceiling = errMessage.match(/Ceiling: ([a-z-]+=\S*[^\s.])/)?.[1];
+    recs.push(
+      `- \u{1F6D1} **Stopped by the runaway monitor** (${ceiling ? `ceiling \`${ceiling}\`` : "ceiling not recorded"}) ` +
+        "— the stage reached no test or implementation verdict. The run retries after its " +
+        "30-minute backoff; a halted repository needs Resume. If the stage was waiting on real " +
+        "work, raise that ceiling under `pipeline.progress_runaway`."
+    );
+  }
+
   // Stage-specific recommendations
-  switch (failedStage) {
+  // A runaway kill reached no verdict, so "did not pass" would be false. The
+  // exception is the kill #1531 guards: pr-create stopped after opening its PR.
+  const prCreatedBeforeKill =
+    runaway && failedStage === "pr-create" && resolveVerifiedPr(state) !== null;
+  switch (runaway && !prCreatedBeforeKill ? undefined : failedStage) {
     case "issue-pickup":
       recs.push(
         "- \u{1F4DD} **Issue pickup failed** — verify the issue exists, has clear acceptance criteria, and the pipeline has the correct repo access. Check for auth/session issues."

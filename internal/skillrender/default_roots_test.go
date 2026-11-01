@@ -1,9 +1,10 @@
 package skillrender
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -29,31 +30,31 @@ func fakeBundle(t *testing.T, withSkills bool) string {
 	return exe
 }
 
-// TestDefaultRootsAppendsTheBundleTree is the regression for #874.
+// TestDefaultRootsListsTheBundleTree is the regression for #874.
 //
 // The Go-direct path (`queue run`, the autonomous scheduler) had exactly one
 // root, `{workspaceRoot}/skills`, which exists in this repository and nowhere
 // else. Every stage in every user's repo failed to render its SKILL.md while
 // the file sat in the bundle one directory above the running binary.
-func TestDefaultRootsAppendsTheBundleTree(t *testing.T) {
+func TestDefaultRootsListsTheBundleTree(t *testing.T) {
 	exe := fakeBundle(t, true)
 	bundleSkills := filepath.Join(filepath.Dir(filepath.Dir(exe)), "skills")
 
 	roots := defaultRoots("/repo", exe, "")
 
 	if len(roots) != 2 {
-		t.Fatalf("roots = %v, want the workspace tree and the bundle tree", roots)
-	}
-	if roots[0] != filepath.Join("/repo", "skills") {
-		t.Errorf("roots[0] = %q, want the workspace tree first", roots[0])
+		t.Fatalf("roots = %v, want the bundle tree and the workspace tree", roots)
 	}
 	// EvalSymlinks: macOS /var/folders temp dirs resolve through /private.
 	wantBundle, err := filepath.EvalSymlinks(bundleSkills)
 	if err != nil {
 		wantBundle = bundleSkills
 	}
-	if roots[1] != wantBundle {
-		t.Errorf("roots[1] = %q, want the bundle tree %q", roots[1], wantBundle)
+	if roots[0] != wantBundle {
+		t.Errorf("roots[0] = %q, want the bundle tree %q", roots[0], wantBundle)
+	}
+	if roots[1] != filepath.Join("/repo", "skills") {
+		t.Errorf("roots[1] = %q, want the workspace tree last", roots[1])
 	}
 }
 
@@ -80,84 +81,143 @@ func TestDefaultRootsSurvivesAnUnknownExecutable(t *testing.T) {
 	}
 }
 
-// TestGoAndTypeScriptAgreeOnSkillRootOrder is the test that would have caught
-// #874, and the reason it is written across both languages.
-//
-// The two hosts resolve skill roots independently: this package for the
-// Go-direct path, resolveSkillRoots() in skillRunner.ts for the extension.
-// Asserting Go's roots ALONE passed throughout the bug's life — Go was
-// self-consistent and simply searched one place. Only a comparison against the
-// other implementation shows the disagreement, so this reads the TypeScript
-// source and pins the ORDER both must use: workspace checkout first, extension
-// bundle second.
-func TestGoAndTypeScriptAgreeOnSkillRootOrder(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join(
+// rootOrderVector is one case of skill-root-order.json, which the extension's
+// host facts reach through `nightgauge skill roots`. Want lists the tokens
+// override, bundle and workspace.
+type rootOrderVector struct {
+	Name        string   `json:"name"`
+	Mode        string   `json:"mode"`
+	Override    bool     `json:"override"`
+	Bundle      bool     `json:"bundle"`
+	NoWorkspace bool     `json:"no_workspace"`
+	Want        []string `json:"want"`
+}
+
+const rootOrderVectorFile = "skill-root-order.json"
+
+func rootOrderVectors(t *testing.T) []rootOrderVector {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", rootOrderVectorFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors []rootOrderVector
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatalf("parse %s: %v", rootOrderVectorFile, err)
+	}
+	return vectors
+}
+
+// TestResolveRootsMatchesTheVectors pins #2718's order for every host: override,
+// bundle, workspace, with the last two swapped for a development host.
+func TestResolveRootsMatchesTheVectors(t *testing.T) {
+	const override, bundle = "/operator/skills", "/ext/dist/skills"
+	tokens := map[string]string{
+		"override":  override,
+		"bundle":    bundle,
+		"workspace": filepath.Join("/repo", "skills"),
+	}
+	modes := map[string]int{}
+	for _, v := range rootOrderVectors(t) {
+		modes[v.Mode]++
+		t.Run(v.Name, func(t *testing.T) {
+			in := RootInputs{Workspace: "/repo", WorkspaceFirst: v.Mode == "development"}
+			if v.NoWorkspace {
+				in.Workspace = ""
+			}
+			if v.Override {
+				in.Override = override
+			}
+			if v.Bundle {
+				in.Bundle = bundle
+			}
+			want := make([]string, 0, len(v.Want))
+			for _, token := range v.Want {
+				want = append(want, tokens[token])
+			}
+			if got := ResolveRoots(in); !slices.Equal(got, want) {
+				t.Errorf("roots = %v, want %v", got, want)
+			}
+		})
+	}
+	for _, mode := range []string{"production", "development"} {
+		if modes[mode] == 0 {
+			t.Errorf("%s has no %s vectors", rootOrderVectorFile, mode)
+		}
+	}
+}
+
+// TestSkillRunnerLeavesRootOrderToTheBinary is what stops the second resolver
+// coming back. #874 passed Go's root tests throughout its life because the two
+// hosts resolved independently, so the extension may gather facts but not order
+// them, and may not read the override the binary already reads.
+func TestSkillRunnerLeavesRootOrderToTheBinary(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(
 		"..", "..", "packages", "nightgauge", "src", "utils", "skillRunner.ts"))
 	if err != nil {
 		t.Fatalf("read skillRunner.ts: %v", err)
 	}
-
-	body := between(t, string(src), "export function resolveSkillRoots()", "\n}")
-
-	pushes := regexp.MustCompile(`roots\.push\(([^)]*)\)`).FindAllStringSubmatch(body, -1)
-	if len(pushes) != 2 {
-		t.Fatalf("resolveSkillRoots pushes %d roots, want 2 — if the host's root "+
-			"list changed, DefaultRoots must change with it (#874)", len(pushes))
+	src := string(raw)
+	if strings.Contains(src, "env."+SkillsRootEnv) {
+		t.Errorf("skillRunner.ts reads %s; the binary owns the override", SkillsRootEnv)
 	}
-	if !strings.Contains(pushes[0][1], "workspaceRoot") {
-		t.Errorf("TS root 0 = %q, want the workspace checkout first", pushes[0][1])
+	_, rest, found := strings.Cut(src, "export function resolveSkillRoots(")
+	if !found {
+		t.Fatal("skillRunner.ts no longer defines resolveSkillRoots")
 	}
-	if !strings.Contains(pushes[1][1], "bundleRoot") {
-		t.Errorf("TS root 1 = %q, want the extension bundle second", pushes[1][1])
+	body, _, found := strings.Cut(rest, "\n}\n")
+	if !found {
+		t.Fatal("cannot find the end of resolveSkillRoots")
 	}
-
-	// Go must produce the same two, in the same order.
-	exe := fakeBundle(t, true)
-	roots := defaultRoots("/repo", exe, "")
-	if len(roots) != 2 {
-		t.Fatalf("Go roots = %v, want 2 to match the TypeScript host", roots)
+	if strings.Contains(body, "roots.push") {
+		t.Error("resolveSkillRoots orders roots itself; ResolveRoots owns the order")
 	}
-	if !strings.HasSuffix(roots[0], filepath.Join("repo", "skills")) {
-		t.Errorf("Go root 0 = %q, want the workspace checkout first", roots[0])
-	}
-	if !strings.Contains(roots[1], filepath.Join("dist", "skills")) {
-		t.Errorf("Go root 1 = %q, want the extension bundle second", roots[1])
+	if !strings.Contains(body, `"roots"`) {
+		t.Error("resolveSkillRoots does not ask `nightgauge skill roots`")
 	}
 }
 
-func between(t *testing.T, s, start, end string) string {
-	t.Helper()
-	i := strings.Index(s, start)
-	if i < 0 {
-		t.Fatalf("marker %q not found — did resolveSkillRoots move or get renamed?", start)
-	}
-	rest := s[i:]
-	j := strings.Index(rest, end)
-	if j < 0 {
-		t.Fatalf("end marker %q not found after %q", end, start)
-	}
-	return rest[:j]
-}
-
-// TestDefaultRootsOrderWithOverride pins #2220's order: the workspace tree
-// first, the operator's NIGHTGAUGE_SKILLS_ROOT second, the bundle last.
-func TestDefaultRootsOrderWithOverride(t *testing.T) {
+// TestLocateFallsBackToTheWorkspace: the order changed in #2718, the root list
+// did not. A skill the bundle does not ship still resolves from the workspace,
+// and one both hold resolves from the bundle.
+func TestLocateFallsBackToTheWorkspace(t *testing.T) {
 	exe := fakeBundle(t, true)
-	override := t.TempDir()
+	bundle := filepath.Join(filepath.Dir(filepath.Dir(exe)), "skills")
+	workspace := t.TempDir()
+	write := func(root, stage string) string {
+		dir := filepath.Join(root, StageSkillDirs[stage])
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, "SKILL.md")
+		if err := os.WriteFile(p, []byte("# skill\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	onlyWorkspace := write(filepath.Join(workspace, "skills"), "issue-pickup")
+	write(filepath.Join(workspace, "skills"), "feature-dev")
+	bundled := write(bundle, "feature-dev")
+	roots := defaultRoots(workspace, exe, "")
 
-	roots := defaultRoots("/repo", exe, override)
-
-	if len(roots) != 3 {
-		t.Fatalf("roots = %v, want workspace, override, bundle", roots)
+	got, err := Locate("issue-pickup", roots)
+	if err != nil {
+		t.Fatalf("Locate a workspace-only skill: %v", err)
 	}
-	if roots[0] != filepath.Join("/repo", "skills") {
-		t.Errorf("roots[0] = %q, want the workspace tree", roots[0])
+	if got != onlyWorkspace {
+		t.Errorf("workspace-only skill = %q, want %q", got, onlyWorkspace)
 	}
-	if roots[1] != override {
-		t.Errorf("roots[1] = %q, want the override %q", roots[1], override)
+	got, err = Locate("feature-dev", roots)
+	if err != nil {
+		t.Fatalf("Locate a bundled skill: %v", err)
 	}
-	if !strings.HasSuffix(roots[2], filepath.Join("dist", "skills")) {
-		t.Errorf("roots[2] = %q, want the bundle tree", roots[2])
+	// EvalSymlinks: DefaultRoots resolves the bundle, and macOS temp dirs are links.
+	want, err := filepath.EvalSymlinks(bundled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("skill in both trees = %q, want the bundle's %q", got, want)
 	}
 }
 
@@ -166,8 +226,8 @@ func TestDefaultRootsOrderWithOverride(t *testing.T) {
 func TestDefaultRootsKeepsAMissingOverride(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope")
 	roots := defaultRoots("/repo", "", "  "+missing+" ")
-	if len(roots) != 2 || roots[1] != missing {
-		t.Fatalf("roots = %v, want the workspace tree and %q", roots, missing)
+	if len(roots) != 2 || roots[0] != missing {
+		t.Fatalf("roots = %v, want %q and the workspace tree", roots, missing)
 	}
 	if got := defaultRoots("/repo", "", "   "); len(got) != 1 {
 		t.Fatalf("blank override: roots = %v, want only the workspace tree", got)
@@ -190,8 +250,8 @@ func TestDefaultRootsReadsTheEnvOverride(t *testing.T) {
 
 	workspace := t.TempDir() // a repository with no skills/ tree
 	roots := DefaultRoots(workspace)
-	if len(roots) < 2 || roots[1] != override {
-		t.Fatalf("DefaultRoots = %v, want %q second", roots, override)
+	if len(roots) < 2 || roots[0] != override {
+		t.Fatalf("DefaultRoots = %v, want %q first", roots, override)
 	}
 	path, err := Locate("issue-pickup", roots)
 	if err != nil {

@@ -1213,6 +1213,9 @@ type PipelineNotifyStageTransitionParams struct {
 	ServedModel    string `json:"servedModel,omitempty"`
 	ServedEffort   string `json:"servedEffort,omitempty"`
 	ServedThinking string `json:"servedThinking,omitempty"`
+	// PluginVersion is the Nightgauge Claude plugin version the stage's
+	// system/init reported (#2723), verbatim. Empty means it reported none.
+	PluginVersion string `json:"pluginVersion,omitempty"`
 	// StagePid is the advisory OS pid of the process executing the stage (ADR-017
 	// §7.2). Advisory, not an identity — omitempty is fine.
 	//
@@ -1307,6 +1310,9 @@ type PipelineNotifyStageProgressParams struct {
 	CacheReadTokens int     `json:"cacheReadTokens,omitempty"`
 	CostUsd         float64 `json:"costUsd,omitempty"`
 	Model           string  `json:"model,omitempty"`
+	// MergedPR marks this message as "the run's PR is forge-confirmed MERGED"
+	// (#2730) rather than a token estimate.
+	MergedPR int `json:"mergedPr,omitempty"`
 	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
 	// 1). REQUIRED: absent is run_id_required, non-canonical is
 	// run_id_invalid. RUN-PROGRESS class (Decision 3), and the one Decision 4
@@ -1635,6 +1641,9 @@ type RunningPipelineInfo struct {
 	// Source is "autonomous" when the scheduler dispatched this run, "manual"
 	// otherwise — a picked-up issue, a queue batch, a drag to Ready.
 	Source string `json:"source"`
+	// MergedPR is set once the run's PR merged (#2730): the run is doing
+	// post-merge follow-up, whatever Stage still says.
+	MergedPR int `json:"mergedPr,omitempty"`
 }
 
 // RunningPipelinesResult answers "is any pipeline running in this window?"

@@ -321,6 +321,7 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 			// #606 served-envelope attribution, the ServedModel analogues.
 			ServedEffort:            result.ServedEffort,
 			ServedThinking:          result.ServedThinking,
+			PluginVersion:           result.PluginVersion,
 			RefusalFallbackFrom:     result.RefusalFallbackFrom,
 			RefusalFallbackTo:       result.RefusalFallbackTo,
 			RefusalFallbackCategory: result.RefusalFallbackCategory,

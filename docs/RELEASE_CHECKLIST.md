@@ -489,13 +489,13 @@ absent in the container — but the agent's own credentials are inherited, so
 a first `claude` login is not walked. Two Quick Start steps are not walked
 through the product either, and each is filed as a finding:
 
-| Step                      | How the gate walks it                                                                                                                                                                                      | Finding |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| 3 — Trust the folder      | `--disable-workspace-trust`; the banner click is a VS Code surface, and #900 already fixed the product side                                                                                                | —       |
-| 4 — Initialize Repository | The command only opens an interactive `claude /nightgauge:repo-init` terminal. The container runs the VSIX's own binary verbs instead (`config init`, `label ensure`, `project ensure-fields`, board link) | #1154   |
-| 4 — board link            | The skill's `nightgauge forge graphql` link step fails on the default GitHub forge; the container links the board with `gh api graphql`                                                                    | #1157   |
-| 5 — Pick Up Issue         | The command accepts only a live tree item and otherwise opens an input box; the driver types the number with `xdotool`                                                                                     | #1155   |
-| 6 — Watch it run          | `pre-push validate` blocked any Node project without an `npm run build` script (the first real run halted at feature-validate after ~3 USD); fixed in #1159, the fixture keeps its `build` script          | #1159   |
+| Step                      | How the gate walks it                                                                                                                                                                                                                                                          | Finding |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| 3 — Trust the folder      | `--disable-workspace-trust`; the banner click is a VS Code surface, and #900 already fixed the product side                                                                                                                                                                    | —       |
+| 4 — Initialize Repository | The command runs `config init --detect` through the VSIX binary, which writes an unlinked config. Labels, fields and the board stay in the interactive `repo-init` skill, so the container runs the binary verbs instead (`label ensure`, `project ensure-fields`, board link) | #1154   |
+| 4 — board link            | The skill's `nightgauge forge graphql` link step fails on the default GitHub forge; the container links the board with `gh api graphql`                                                                                                                                        | #1157   |
+| 5 — Pick Up Issue         | The command accepts only a live tree item and otherwise opens an input box; the driver types the number with `xdotool`                                                                                                                                                         | #1155   |
+| 6 — Watch it run          | `pre-push validate` blocked any Node project without an `npm run build` script (the first real run halted at feature-validate after ~3 USD); fixed in #1159, the fixture keeps its `build` script                                                                              | #1159   |
 
 The driver (`tests/clean-install/driver/`) is a plain-JavaScript extension
 loaded with `--extensionDevelopmentPath`; the product extension is always the
@@ -548,6 +548,23 @@ credentials), and the two interactive Quick Start steps, which are walked by
 their binary-verb equivalents. A second-machine pass by someone who is not
 the maintainer remains the honest next step and is not a blocker for a
 pre-release.
+
+## The malware-scan gate
+
+`scripts/malware-scan.sh` needs ClamAV. Install it with:
+
+```text
+scripts/install-clamav-macos.sh, with /usr/local/clamav/bin on PATH / apt-get install -y clamav
+```
+
+The first form is macOS and the second is Linux. Then run `freshclam`. The macOS script installs
+the official ClamAV 1.5.4 package from the Cisco-Talos release and refuses any other bytes.
+Homebrew is not used: its `clamav` 1.5.4_1 rejected every signature database on the
+`macos-26-arm64` image `20261026.0455.x`, which carries `openssl@4` 4.1.0 (#2740), and a pin means
+the scanner changes only by a reviewed edit.
+
+To bump the pin, change `CLAMAV_VERSION` and `PKG_SHA256` in the script and the digest in
+`scripts/test-malware-scan.sh`, taking the digest from the release asset.
 
 ## What this checklist is not
 

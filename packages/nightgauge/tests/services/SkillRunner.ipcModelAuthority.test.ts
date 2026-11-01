@@ -19,7 +19,12 @@ import { spawn, execFileSync } from "child_process";
 import type { ChildProcess } from "child_process";
 import { EventEmitter } from "events";
 import * as fs from "fs";
-import { isSkillRenderCall, modelFromRenderArgs, skillRenderStdout } from "../helpers/skillRender";
+import {
+  isRenderInvocation,
+  isSkillRenderCall,
+  modelFromRenderArgs,
+  skillRenderStdout,
+} from "../helpers/skillRender";
 
 vi.mock("vscode", () => ({
   workspace: {
@@ -188,7 +193,7 @@ function flagValue(args: string[], flag: string): string | undefined {
 function renderArgs(): string[] {
   const call = vi
     .mocked(execFileSync)
-    .mock.calls.filter(([, a]) => isSkillRenderCall(a as string[]))
+    .mock.calls.filter(([, a]) => isRenderInvocation(a as string[]))
     .pop();
   expect(call, "skill render was never invoked").toBeDefined();
   return call![1] as string[];

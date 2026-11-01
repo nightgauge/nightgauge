@@ -16,7 +16,14 @@ import { promisify } from "util";
 import { ConfigBridge } from "./ConfigBridge";
 import { DEFAULT_CONFIG } from "../config/schema";
 import { getPrefixedMainChannel } from "../utils/logger";
-import { copySkillsTree, installWorkspaceSkills, resolveBundledSkillsDir } from "./bundledSkills";
+import {
+  copySkillsTree,
+  installWorkspaceSkills,
+  isCompleteBundledSource,
+  reportSkillCopy,
+  resolveBundledSkillsDir,
+} from "./bundledSkills";
+import { ensureStableMarketplace } from "./stableMarketplace";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -128,22 +135,12 @@ export class GrokSetupService implements vscode.Disposable {
     return { grokCliAvailable: true, nightgaugeInstalled: false };
   }
 
-  private getBundledMarketplacePath(): string | undefined {
-    const marketplacePath = path.join(
-      this.context.extensionPath,
-      "dist",
-      ".claude-plugin",
-      "marketplace.json"
-    );
-    if (fs.existsSync(marketplacePath)) {
-      return path.join(this.context.extensionPath, "dist");
-    }
-    return undefined;
-  }
-
   private async installPluginBestEffort(): Promise<void> {
-    const bundledPath = this.getBundledMarketplacePath();
-    const marketplaceSource = bundledPath ?? getMarketplaceUrl();
+    const bundledPath = ensureStableMarketplace(this.context, (message) =>
+      this.outputChannel.appendLine(`WARNING: ${message}`)
+    )?.path;
+    // grok's handling of a `#ref` suffix is unverified, so hand it the bare URL.
+    const marketplaceSource = bundledPath ?? getMarketplaceUrl().split("#")[0];
     try {
       await execFileAsync("grok", ["plugin", "marketplace", "add", marketplaceSource]);
     } catch (error) {
@@ -167,8 +164,11 @@ export class GrokSetupService implements vscode.Disposable {
     }
   }
 
-  /** The default install reads the VSIX bundle only, never the workspace. */
-  private async copySkills(): Promise<void> {
+  /**
+   * The default install reads the VSIX bundle only, never the workspace.
+   * Returns true when no skill was skipped.
+   */
+  private async copySkills(): Promise<boolean> {
     const dest = path.join(grokHome(), "skills");
     const source = resolveBundledSkillsDir(this.context.extensionPath);
     if (!source) {
@@ -176,10 +176,13 @@ export class GrokSetupService implements vscode.Disposable {
         "No bundled Grok skills found (dist/claude-plugins/nightgauge/skills or dist/skills)."
       );
     }
-    const count = await copySkillsTree(source, dest, (message) =>
-      this.outputChannel.appendLine(`WARNING: ${message}`)
+    const result = await copySkillsTree(
+      source,
+      dest,
+      (message) => this.outputChannel.appendLine(`WARNING: ${message}`),
+      { prune: isCompleteBundledSource(this.context.extensionPath, source) }
     );
-    this.outputChannel.appendLine(`✓ Copied ${count} skill directories to ${dest}`);
+    return reportSkillCopy("Grok", result, this.outputChannel);
   }
 
   /**
@@ -196,12 +199,14 @@ export class GrokSetupService implements vscode.Disposable {
 
     try {
       await this.installPluginBestEffort();
-      await this.copySkills();
+      const complete = await this.copySkills();
       await this.context.globalState.update(GrokSetupService.INSTALLED_KEY, true);
-      this.outputChannel.appendLine("✓ Nightgauge Grok skills installed");
-      vscode.window.showInformationMessage(
-        "Nightgauge Grok skills installed. Try /nightgauge-issue-create or /issue-create."
-      );
+      if (complete) {
+        this.outputChannel.appendLine("✓ Nightgauge Grok skills installed");
+        vscode.window.showInformationMessage(
+          "Nightgauge Grok skills installed. Try /nightgauge-issue-create or /issue-create."
+        );
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.outputChannel.appendLine(`✗ Installation failed: ${errorMessage}`);

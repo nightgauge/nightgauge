@@ -348,7 +348,8 @@ is never left running behind it.
 
 The hooks resolve `nightgauge` from the current directory in this order:
 `$NIGHTGAUGE_BIN`, `PATH`, `<repo root>/bin/nightgauge`, the canonical checkout's
-`bin/nightgauge` (worktrees), the VS Code extension bundle VS Code records as
+`bin/nightgauge` (worktrees; both repository steps need
+`NIGHTGAUGE_DEV_REPO_BIN=1` and a verified core checkout), the VS Code extension bundle VS Code records as
 installed, then `~/go/bin/nightgauge`. The result is cwd-dependent, so the same
 hook runs different binaries in different repos; the evidence names the resolved
 path, the resolving step and the binary's version.
@@ -917,6 +918,48 @@ remove the keys from the machine file, pass credentials through the job
 environment, and rotate them. Only key names are reported.
 
 ### Adapters
+
+#### NGD051
+
+**A Nightgauge Claude plugin that failed to load.** `claude_plugin_health` ·
+`warning`, also when `claude plugin list --json` cannot be read. A machine with
+no `claude` CLI, or without the plugin, passes.
+
+The finding carries Claude Code's error, for example
+`Marketplace nightgauge-plugins failed to load: cache-miss`, because that entry
+can still read `"enabled": true`. Its skills and hooks are unavailable. Manual
+`repoint`: reload the VS Code window so the extension repoints the marketplace at
+its stable copy, or run `bash scripts/install-agent-skills.sh --claude-only` from
+the primary checkout.
+
+#### NGD112
+
+**Codex or Grok skills that differ from this build.** `agent_skills_drift` ·
+`warning`, also when a skills directory cannot be read. A machine with no Codex or
+Grok skills directory passes, and so does one where no Nightgauge skills tree can be
+found: another project's own `skills/` is not one.
+
+For `$CODEX_HOME/skills` (default `~/.codex/skills`) and `$GROK_HOME/skills`
+(default `~/.grok/skills`), the check reads each real `nightgauge-*` directory and
+each directory holding `.nightgauge-installed`. Symlinks and an operator's own
+unmarked `update-docs` are not reported. The reference is the first
+`<root>/<name>/SKILL.md`, or its copy under the sibling
+`claude-plugins/nightgauge/skills/`, across the skill roots a run renders from.
+
+| Finding                                     | Remedy                              |
+| ------------------------------------------- | ----------------------------------- |
+| `metadata.version` differs or is missing    | Run the installer                   |
+| Current skill with no install marker        | Run the installer with `--adopt`    |
+| Retired skill holding the marker            | Run the installer, which removes it |
+| Retired `nightgauge-*` skill with no marker | Remove the directory by hand        |
+
+The installer is `bash scripts/install-agent-skills.sh` from the primary checkout.
+An extension install has no git history, so it cannot adopt: remove a marker-less
+directory by hand and reinstall.
+
+The check compares versions, not bytes, because installed copies legitimately
+differ from the build's mirror (`name:`, `disable-model-invocation`, rebased
+links). It therefore cannot see an edit made without a version bump.
 
 #### NGD015
 

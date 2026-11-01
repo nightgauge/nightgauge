@@ -257,9 +257,12 @@ merge queue instead of the strict up-to-date policy. In the queue the required
 checks run on the temporary `gh-readonly-queue/main/*` commit, which is the
 commit that then lands on `main`:
 
+- `ci.yml`'s heavy suites run here and not on the pull request. Its jobs still
+  run and report on a pull request, with their expensive steps skipped, because
+  the local gate has already run them. The queue runs them once, on the commit
+  that lands, and `lint.yml` does the same with its slowest self-tests.
 - `ci.yml`'s change-class gate classifies `merge_group.base_sha..head_sha`, the
-  group's cumulative diff against `main`, exactly as it classifies a pull
-  request's base and head.
+  group's cumulative diff against `main`.
 - `adapter-canary.yml` treats `merge_group` like `pull_request`: pinned CLI
   versions, the manifest diff against `merge_group.base_sha`, and never the
   drift-issue `report` job.
@@ -979,7 +982,10 @@ bash scripts/marketplace-channel.sh 0.2.0      # prints: release
 # 0. Land the changelog rollover PR first (§ Changelog): [Unreleased] becomes
 #    [X.Y.Z] - date in CHANGELOG.md and the extension's changelog. release.yml
 #    refuses a tag without it.
+#    Bump claude-plugins/nightgauge/.claude-plugin/plugin.json in that PR when
+#    plugin files changed, or installed plugins receive nothing (#2724).
 bash scripts/check-changelog.sh --tag v0.2.0   # exit 0 before tagging
+bash scripts/check-plugin-version.sh --tag v0.2.0
 
 # 1. Ensure main is up to date
 git checkout main && git pull origin main
@@ -1105,6 +1111,13 @@ bash scripts/verify-release-channels.sh --channel open-vsx
 #     opened the Homebrew cask pull request: check its sha256s against the
 #     release's checksums.txt, merge it, and confirm the tap serves the version.
 bash scripts/verify-release-channels.sh --channel homebrew
+#     release.yml fast-forwards the release-owned `stable` branch, which is what
+#     installed Claude plugins follow. Never move it by hand except to repair a
+#     refused move or create it where it is missing (at the latest release's
+#     commit, gh api repos/nightgauge/nightgauge/git/refs -f
+#     ref=refs/heads/stable -f sha=<sha>); the watchdog stays red and keeps one
+#     issue open until it matches.
+bash scripts/verify-release-channels.sh --channel claude-plugin
 
 # 13. Read each listing page as a user would. The listing is the extension's
 #     README as packaged in the VSIX, so it only changes with a release:
@@ -1208,8 +1221,12 @@ the same rule.
 
 1. Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` in both files, add a
    fresh empty `## [Unreleased]` above it, and update the compare links.
-2. `bash scripts/check-changelog.sh --tag vX.Y.Z` must exit 0 locally.
-3. Merge that PR, verify `main`'s own run is green, then tag.
+2. Bump the version in `claude-plugins/nightgauge/.claude-plugin/plugin.json` if
+   plugin files changed since the last stable tag. It is independent of the
+   product version and never goes down.
+3. `bash scripts/check-changelog.sh --tag vX.Y.Z` and
+   `bash scripts/check-plugin-version.sh --tag vX.Y.Z` must exit 0 locally.
+4. Merge that PR, verify `main`'s own run is green, then tag.
 
 The new section's compare links (`compare/vX.Y.Z...HEAD`, `compare/vPREV...vX.Y.Z`)
 404 until the tag exists — that is the ordering, not a mistake — so
@@ -1380,6 +1397,22 @@ If any step fails, fix the issue and re-run before pushing. The order matters:
 generated files must be regenerated before the TypeScript build, and the build
 must succeed before tests can run. `format:check` is the #1 cause of avoidable
 CI failures — always run `npm run format` before committing.
+
+### One gate per tree
+
+A passed gate is recorded against the exact tree (#2784). Running
+`scripts/ci-local.sh` again on that tree prints what passed it and exits 0, and
+`--no-reuse` forces a run. `--changed`, a run with a skipped step, a failed run
+and a tree edited during the run are never reusable. CI never consults the record
+and stays the authority. Reuse needs a `nightgauge` binary that has `ci
+gate-status`; without one the gate runs in full and says so.
+
+In a pipeline run, feature-dev runs focused checks only. feature-validate's Phase
+2.5 is the run's gate: it runs the repository's local gate, so `pre-push validate`
+can skip `go test` on that tree and a later push on it reuses the pass. A review
+fix changes the tree, so it is gated again. `nightgauge exit-records gate-summary`
+totals gates per stage and run. See
+[GO_BINARY.md](GO_BINARY.md#ci-gate-status-ci-gate-run-and-ci-gate-record).
 
 ### The gate is not the loop
 
@@ -1622,7 +1655,7 @@ If the `nightgauge` binary is not available:
 
 ```bash
 # Run validation manually
-nightgauge pre-push validate <issue-number> [--target main] [--timeout 180] [--json]
+nightgauge pre-push validate <issue-number> [--target main] [--timeout <seconds>] [--json]
 
 # Install git hook
 nightgauge pre-push install

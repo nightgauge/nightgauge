@@ -43,6 +43,12 @@ export type KillCeilingName =
   | "progress-churn-tools"
   /** ProgressMonitor: `catastrophic_limit_usd` reached with no productive progress. */
   | "progress-catastrophic-cost"
+  /** ProgressMonitor: a background task outlived `background_task_ceiling_ms`. */
+  | "progress-background-task-ceiling"
+  /** ProgressMonitor: a background task outlived `background_task_hard_ceiling_ms`. */
+  | "progress-background-task-hard-ceiling"
+  /** ProgressMonitor: external work outlived `external_progress_ceiling_ms`. */
+  | "progress-external-progress-ceiling"
   /** skillRunner: elapsed reached `stall warn threshold × NX_RUNAWAY_KILL_MULTIPLE`. */
   | "nx-stall-multiple"
   /** skillRunner: elapsed reached `pipeline.stage_hard_caps.<stage>`. */

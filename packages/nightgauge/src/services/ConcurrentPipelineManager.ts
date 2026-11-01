@@ -113,6 +113,7 @@ const HALT_SKIP_PARKED: ReadonlySet<string> = new Set([
   "adapter_incompatible",
   "environment_halt",
   "dev_context_stale",
+  "gate_plugin_missing",
 ]);
 
 /**
@@ -423,7 +424,8 @@ export interface ConcurrentPipelineCallbacks {
     stateService: PipelineStateService,
     epicNumber?: number,
     repoSlug?: string,
-    epicRepo?: string
+    epicRepo?: string,
+    runId?: string
   ) => void;
   /** Called when a slot's pipeline stage changes */
   onSlotStageChanged?: (
@@ -2101,7 +2103,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       stateService,
       item.epicNumber,
       item.repoName,
-      item.epicRepo
+      item.epicRepo,
+      slot.runId
     );
 
     // Run pipeline asynchronously — don't await, let it complete in background

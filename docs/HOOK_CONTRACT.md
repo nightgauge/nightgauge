@@ -12,21 +12,16 @@ now empty. Skills invoke the `nightgauge` Go binary directly.
 
 ## Binary resolution
 
-Skills resolve the binary using:
+Hooks and skills resolve the binary in this order: `$NIGHTGAUGE_BIN`, `PATH`,
+the recorded VS Code extension bundle (hooks only), then `~/go/bin`. The cascade
+lives in `claude-plugins/nightgauge/hooks/lib/guard.sh` and
+`skills/_shared/PREFLIGHT.md`.
 
-```bash
-if [ -f "${BINARY:-}" ]; then
-  BINARY="$BINARY"
-elif [ -f "bin/nightgauge" ]; then
-  BINARY="bin/nightgauge"
-elif command -v nightgauge >/dev/null 2>&1; then
-  BINARY="nightgauge"
-else
-  echo "ERROR: nightgauge binary not found. Build it first:" >&2
-  echo "  go build -o bin/nightgauge ./cmd/nightgauge/" >&2
-  exit 1
-fi
-```
+A repository's `bin/nightgauge` runs only with `NIGHTGAUGE_DEV_REPO_BIN=1` in a
+verified core checkout, ahead of the bundle. A verified checkout has the exact
+module line in `go.mod` and an exact `github.com/nightgauge/nightgauge` origin.
+The setting is environment-only, since repository config could otherwise enable
+its own gate. Forks use `NIGHTGAUGE_BIN=$PWD/bin/nightgauge`.
 
 If the binary is missing, the pipeline exits immediately with an actionable
 error message and build instructions.
@@ -211,7 +206,9 @@ available (`ok`, `required`, `optional`, `missing`).
 
 - `<issue-number>` — Issue number (positional, required)
 - `--target` (default: `main`) — Target branch to merge against
-- `--timeout` (default: `180`) — Timeout in seconds
+- `--timeout` (default: `hooks.pre_push.timeout_seconds`, else `1800`) — Limit
+  in seconds; `go test -timeout` gets what remains of it less 60 s, so a hung
+  package normally panics with its goroutine dump first; `0` means no limit
 - `--json` — Output JSON instead of human-readable
 
 **Exit codes:**
@@ -220,6 +217,17 @@ available (`ok`, `required`, `optional`, `missing`).
 | ---- | -------------------------------------------- |
 | 0    | All validation phases passed                 |
 | 1    | One or more phases failed (see context file) |
+| 3    | A limit expired; no check failed             |
+
+On a timeout the phase in progress reports `timeout`, `failure_kind` is
+`timeout`, the context file's `overall_status` is `timeout`, and the reason names
+the phase, the limit and how to raise it. `--json` uses the same exit codes.
+
+Only the Go `test` phase can be skipped, and `go build` and `go vet` still run. It
+reports `skipped` with `test_skip_reason` only when
+`.ci-local-logs/go-test-pass.tree` matches the merged tree. A non-Go change gets no
+skip of its own, because Go tests read `skills/`, `docs/` and `scripts/`. Any doubt
+runs the suite. CI still runs it on the pull request.
 
 **Output JSON schema:**
 
@@ -309,9 +317,9 @@ WARNING: nightgauge project sync-status failed. Board sync will be skipped.
 
 ## Go binary dependency
 
-All pipeline operations depend on the `nightgauge` Go binary. Skills check
-for the binary at `bin/nightgauge` first, then fall back to `PATH`. If
-neither is available, they exit with code 1 and print build instructions.
+All pipeline operations depend on the `nightgauge` Go binary. Skills resolve it
+as described in [Binary resolution](#binary-resolution). If that finds nothing,
+they exit with code 1 and print install instructions.
 
 Build the binary:
 

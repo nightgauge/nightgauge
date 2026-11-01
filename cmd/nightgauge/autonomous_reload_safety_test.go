@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -37,6 +38,44 @@ func TestReloadSafetyLineNamesEveryRunningIssue(t *testing.T) {
 	}
 	if !strings.Contains(got, "reload is not safe yet") {
 		t.Errorf("missing the verdict: %q", got)
+	}
+}
+
+// AC 5 (#2730): a run past its merge is still running, so it still blocks a
+// reload, but it must not read as a run waiting to merge.
+func TestReloadSafetyLineNamesAMergedRunsFollowUp(t *testing.T) {
+	got := reloadSafetyLine([]ipc.RunningPipelineInfo{
+		{Repo: "acme/web", IssueNumber: 7, Stage: "pr-merge", MergedPR: 41},
+		{Repo: "acme/web", IssueNumber: 8, Stage: "pr-merge"},
+	})
+	if !strings.Contains(got, "#7 web (merged #41, post-merge follow-up)") {
+		t.Errorf("the merged run does not read as follow-up: %q", got)
+	}
+	if strings.Contains(got, "#8 web (merged") {
+		t.Errorf("an unmerged run reads as merged: %q", got)
+	}
+	if !strings.Contains(got, "reload is not safe yet") {
+		t.Errorf("follow-up work still blocks the safe verdict: %q", got)
+	}
+}
+
+func TestMergedPRForMatchesRepoAndIssue(t *testing.T) {
+	runs := []ipc.RunningPipelineInfo{{Repo: "acme/web", IssueNumber: 7, MergedPR: 41}}
+	if got := mergedPRFor(runs, "acme/web", 7); got != 41 {
+		t.Errorf("mergedPRFor = %d, want 41", got)
+	}
+	if got := mergedPRFor(runs, "acme/api", 7); got != 0 {
+		t.Errorf("another repo's issue 7 matched: %d", got)
+	}
+}
+
+func TestRunningPipelineInfoCarriesMergedPRInJSON(t *testing.T) {
+	data, err := json.Marshal(ipc.RunningPipelineInfo{IssueNumber: 7, MergedPR: 41})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"mergedPr":41`) {
+		t.Errorf("--json omits the merged PR: %s", data)
 	}
 }
 

@@ -4156,7 +4156,7 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     },
     plugins: {
       auto_prompt: true,
-      marketplace_url: "https://github.com/nightgauge/nightgauge.git",
+      marketplace_url: "https://github.com/nightgauge/nightgauge.git#stable",
     },
     limits: {
       monthly_budget_usd: 0,

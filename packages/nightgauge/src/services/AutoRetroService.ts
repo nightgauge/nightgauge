@@ -57,6 +57,7 @@ import type {
   PipelineFeedbackSignalType,
   TerminalFailureKind,
 } from "@nightgauge/sdk";
+import { pluginHint } from "../utils/pluginHint";
 
 // ============================================================================
 // Types
@@ -162,6 +163,7 @@ export type RetroFailureCategory =
   | "adapter-permission-rejected"
   | "adapter-incompatible"
   | "environment-halt"
+  | "gate-plugin-missing"
   | "unknown";
 
 export interface RetroFinding {
@@ -614,6 +616,7 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // A project-declared environment check failed in Phase 0; the operator
   // fixes the environment the check's remedy names (#101).
   environment_halt: "environment-halt",
+  gate_plugin_missing: "gate-plugin-missing",
   git_transport_auth_failed: "credential-failure",
 
   // A person owns the next move.
@@ -1915,6 +1918,8 @@ export class AutoRetroService {
         "The adapter's binary cannot serve the dispatch — its version is below the tested floor or unreadable",
       "environment-halt":
         "A project-declared preflight.environment check failed before the stage did any work — the local environment is broken, not the code",
+      "gate-plugin-missing":
+        "A Claude stage did not load this build's Nightgauge plugin exactly once, so the stage runner stopped it before any work — the stage's safety gates could not be trusted",
       unknown: "Pipeline failure detected but category could not be determined",
     };
 
@@ -1985,7 +1990,13 @@ export class AutoRetroService {
         "The dispatch was refused before anything ran: the adapter's binary is below the compat manifest's floor or its version could not be read. Install a build at or above the floor (the refusal names the tested one) and pin the adapter's binary to it (for OpenCode, `opencode.binary` in ~/.nightgauge/config.yaml; see `nightgauge doctor`), then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. A retry on the same binary is refused the same way.",
       "environment-halt":
         "Apply the remedy the failed check names, then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. Do not change code: a retry meets the same environment.",
-      unknown: "Review logs manually. Run /nightgauge:retro for AI-powered root cause analysis.",
+      "gate-plugin-missing":
+        "Read the `[gate-plugin-missing]` line for what system/init reported. Reinstall the build so its bundled plugin is intact, or update Claude Code if it rejected the plugin, then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. A retry meets the same install.",
+      unknown: pluginHint(
+        "retro",
+        "Review logs manually.",
+        (command) => `Review logs manually. Run ${command} for AI-powered root cause analysis.`
+      ),
     };
 
     const severities: Record<RetroFailureCategory, "low" | "medium" | "high"> = {
@@ -2028,6 +2039,7 @@ export class AutoRetroService {
       "adapter-permission-rejected": "high",
       "adapter-incompatible": "high",
       "environment-halt": "medium",
+      "gate-plugin-missing": "high",
       unknown: "low",
     };
 

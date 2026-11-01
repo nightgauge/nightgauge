@@ -314,7 +314,7 @@ export const ValidateContextSchema = z
      *
      * MUST stay a superset of every `ERROR_CATEGORY="..."` the feature-validate
      * skill emits (`skills/nightgauge-feature-validate/_includes/`:
-     * build-verification.md, mobile-mcp-tests.md, verify-ui-gate.md). When the skill gains a new
+     * build-verification.md, ci-and-knowledge.md, mobile-mcp-tests.md, verify-ui-gate.md). When the skill gains a new
      * category, add it here in the SAME change — a value the skill emits but
      * this enum omits fails the parse and the whole validation-failure signal
      * is silently dropped as a "non-fatal schema mismatch", which is how a
@@ -332,6 +332,7 @@ export const ValidateContextSchema = z
         "mobile-apk-build-failed",
         "mobile-mcp-tests-failed",
         "verify-ui-gate-failed",
+        "gate-timeout",
       ])
       .nullish(),
     build: z

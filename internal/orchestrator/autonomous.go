@@ -2951,8 +2951,10 @@ func (as *AutonomousScheduler) ResumeRepo(repo string) bool {
 	as.mu.Unlock()
 	log.Printf("autonomous: repo halt released for %s", repo)
 	// The halt is over, so its card must go with it — same contract as the
-	// fleet resume, evaluated on the next reconcile pass.
-	as.reconcileTerminalFailureCards()
+	// fleet resume. Dispatched because a card's Retry reaches this under the
+	// store lock (#2750); there it queues behind Resolve, finds the card already
+	// resolved, and leaves it that way.
+	as.dispatchAttention(as.reconcileTerminalFailureCards)
 	select {
 	case as.rescanCh <- struct{}{}:
 	default:
@@ -3056,8 +3058,9 @@ func (as *AutonomousScheduler) Resume() {
 			as.safetyRails.Reset()
 		}
 		// The halt is over, so its card must go with it — otherwise the fleet is
-		// running while the Action Center still says it is stopped.
-		defer as.resolveSafetyRailTrip()
+		// running while the Action Center still says it is stopped. Dispatched:
+		// as.mu is held here, and on a verb path the store lock is too (#2750).
+		as.dispatchAttention(as.resolveSafetyRailTrip)
 		// #3605 bullet C: clearing the cascading-failure breaker is gated on
 		// explicit user Resume — never on an automatic / self-clear path. We
 		// land here only from operator action, so reset is appropriate.
@@ -6856,6 +6859,25 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 			continue
 		}
 
+		// Never Ready for a closed issue: Ready is the dispatchable status, and
+		// a session can die after the issue closed (#2750). An unread state is
+		// unknown, not open, so the recheck decides once the forge answers.
+		closed, err := as.orphanIssueClosed(opCtx, owner, repoName, item.Number)
+		if err != nil {
+			log.Printf("autonomous: recovery: NOT moving %s#%d to Ready — could not read the issue's state (%v); status left unchanged, will re-check once the forge answers",
+				item.Repo, item.Number, err)
+			as.enqueuePRRecheck(item.Repo, item.Number, 0, "")
+			recovered++
+			continue
+		}
+		if closed {
+			log.Printf("autonomous: recovery: NOT moving %s#%d to Ready — the issue is closed; moving it to Done instead",
+				item.Repo, item.Number)
+			as.moveIssueToDone(context.WithoutCancel(ctx), item.Repo, item.Number)
+			recovered++
+			continue
+		}
+
 		// Never Ready on top of the issue's own open PR, for the reason
 		// revertFailedIssueStatus gives: a session can crash in pr-merge,
 		// after pr-create opened the PR (#1707).
@@ -6897,6 +6919,24 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 	if recovered > 0 {
 		log.Printf("autonomous: startup recovery complete — recovered %d orphaned item(s)", recovered)
 	}
+}
+
+// orphanIssueClosed reads an orphaned item's issue state through the repo's own
+// client when one is resolvable. Unlike issueClosedOnForge it reports a failed
+// read as an error, so the caller cannot take "could not look" for "open".
+func (as *AutonomousScheduler) orphanIssueClosed(ctx context.Context, owner, repoName string, number int) (bool, error) {
+	if as.ghClient == nil {
+		return false, fmt.Errorf("no forge client")
+	}
+	var issues issueGetter = gh.NewIssueService(as.ghClient)
+	if as.scheduler != nil && as.scheduler.clientResolver != nil {
+		issues = as.scheduler.issueServiceFor(ctx, owner, repoName)
+	}
+	issue, err := issues.GetIssueWithRelations(ctx, owner, repoName, number, gh.NoRelations)
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(issue.State, "CLOSED"), nil
 }
 
 // isTriagedAndUnblocked returns true if a Backlog node is fully triaged
@@ -8872,10 +8912,10 @@ func refinementModel(workspaceRoot string) string {
 // in this repository and failed to locate its skill at all in every other one.
 func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumber int, adapterName string) (execution.StageOptions, error) {
 	// Same composer the pipeline stages use (scheduler.go, skillrender.Render).
-	// Locating through DefaultRoots is what gives refinement the bundle
-	// fallback #874 added: <workspaceRoot>/skills first, then
-	// <binary>/../skills, which is the only root that exists in a workspace
-	// that is not the nightgauge source tree.
+	// Locating through DefaultRoots is what gives refinement the bundle root
+	// #874 added: <binary>/../skills ahead of <workspaceRoot>/skills (#2718),
+	// and the only root that exists in a workspace that is not the nightgauge
+	// source tree.
 	model := refinementModel(as.workspaceRoot)
 	rendered, err := skillrender.Render(skillrender.Options{
 		Stage:       string(state.StageIssueRefine),
@@ -8888,6 +8928,7 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 	if err != nil {
 		return execution.StageOptions{}, fmt.Errorf("refinement skill render failed: %w", err)
 	}
+	logResolvedSkillPath(issueNumber, state.StageIssueRefine, rendered.SkillPath)
 
 	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
 	return execution.StageOptions{
