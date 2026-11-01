@@ -58,12 +58,13 @@ because its self-healed path is a fact the binary cannot see, and its binary
 may come from PATH. The override is read only from the environment.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if bundle == "" {
-				bundle = skillrender.ExecutableBundleRoot()
+			bundleRoot := bundle
+			if bundleRoot == "" {
+				bundleRoot = skillrender.ExecutableBundleRoot()
 			}
 			roots := skillrender.ResolveRoots(skillrender.RootInputs{
 				Workspace:      workspace,
-				Bundle:         bundle,
+				Bundle:         bundleRoot,
 				Override:       os.Getenv(skillrender.SkillsRootEnv),
 				WorkspaceFirst: workspaceFirst,
 			})

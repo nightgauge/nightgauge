@@ -3388,7 +3388,10 @@ export function findSkillFile(stage: PipelineStage): string | null {
   let roots: string[];
   try {
     roots = resolveSkillRoots();
-  } catch {
+  } catch (err) {
+    // Keep the null contract for schema repair and SkillLoader, but name the
+    // cause: a broken binary is not a missing skill.
+    console.warn(`findSkillFile(${stage}): ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
   for (const root of roots) {
