@@ -3319,8 +3319,8 @@ export function resolveSkillRoots(
  * Claude flags that make the resolved skills tree readable under a default
  * user's permissions, with file-tool writes to it denied (#2718). The same
  * contract as claudeSkillsDirArgs in internal/execution/adapters/claude.go,
- * including every path form in the deny and its reason for skipping a tree
- * inside the stage's working directory.
+ * including one Edit rule per path form, why Edit alone stops file writes, and
+ * its reason for skipping a tree inside the stage's working directory.
  */
 export function claudeSkillsDirArgs(skillPath: string, cwd: string | undefined): string[] {
   // The binary locates <root>/<dir>/SKILL.md or <root>/<dir>.md.
@@ -3329,14 +3329,11 @@ export function claudeSkillsDirArgs(skillPath: string, cwd: string | undefined):
   if (!path.isAbsolute(root) || isPathWithin(root, cwd)) {
     return [];
   }
-  const deny = skillsTreeForms(root).flatMap((form) => {
-    const rule = `//${form.split(path.sep).join("/").replace(/^\/+/, "")}/**`;
-    return CLAUDE_FILE_WRITE_TOOLS.map((tool) => `${tool}(${rule})`);
-  });
+  const deny = skillsTreeForms(root).map(
+    (form) => `Edit(//${form.split(path.sep).join("/").replace(/^\/+/, "")}/**)`
+  );
   return ["--add-dir", root, "--disallowedTools", deny.join(",")];
 }
-
-const CLAUDE_FILE_WRITE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 /** Top-level system symlinks a path is reached through, as openCodeSystemAliases. */
 const SYSTEM_PATH_ALIASES = ["/tmp"];
