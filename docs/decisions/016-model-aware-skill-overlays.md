@@ -325,6 +325,22 @@ reports each one as a drift liability so the count stays visible and near zero.
 
 ---
 
+## Amendment (2026-10-31, #2718) — the binary owns root order
+
+Decision 4 keeps bundle **discovery** with the host, and that stands: the binary
+cannot see the extension's path or the #3883 self-heal. It never required the
+host to decide **order**, and two resolvers did drift on it. Their inputs differed
+too, the extension searching the run's worktree and the scheduler the repository
+root.
+
+`skillrender.ResolveRoots` is now the only implementation of the order: the
+override, the bundle, then the workspace, with the last two swapped on an
+Extension Development or Test host. The extension passes its facts to
+`nightgauge skill roots` and returns the answer. The scheduler searches the run's
+worktree. `skill render --skills-root` is unchanged, and a failed `skill roots`
+call fails the stage. A Go test keeps ordering and the override out of
+`skillRunner.ts`.
+
 ## Amendment (2026-09-14, #1636) — host overlay segment
 
 [ADR-022](022-opencode-multi-provider-adapter.md) §14 amends Decision 2's

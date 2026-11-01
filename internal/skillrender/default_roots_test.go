@@ -81,14 +81,16 @@ func TestDefaultRootsSurvivesAnUnknownExecutable(t *testing.T) {
 	}
 }
 
-// rootOrderVectors is skill-root-order.json: the one statement of the root
-// order. Each `want` lists the tokens override, bundle and workspace.
+// rootOrderVector is one case of skill-root-order.json, which the extension's
+// host facts reach through `nightgauge skill roots`. Want lists the tokens
+// override, bundle and workspace.
 type rootOrderVector struct {
-	Name     string   `json:"name"`
-	Mode     string   `json:"mode"`
-	Override bool     `json:"override"`
-	Bundle   bool     `json:"bundle"`
-	Want     []string `json:"want"`
+	Name        string   `json:"name"`
+	Mode        string   `json:"mode"`
+	Override    bool     `json:"override"`
+	Bundle      bool     `json:"bundle"`
+	NoWorkspace bool     `json:"no_workspace"`
+	Want        []string `json:"want"`
 }
 
 const rootOrderVectorFile = "skill-root-order.json"
@@ -106,73 +108,72 @@ func rootOrderVectors(t *testing.T) []rootOrderVector {
 	return vectors
 }
 
-// TestDefaultRootsMatchTheSharedVectors pins #2718's order. Go-direct is a
-// production host, so it runs the production vectors; the development vectors
-// describe the extension's Development and Test hosts.
-func TestDefaultRootsMatchTheSharedVectors(t *testing.T) {
-	ran := 0
-	for _, v := range rootOrderVectors(t) {
-		if v.Mode != "production" {
-			continue
-		}
-		ran++
-		t.Run(v.Name, func(t *testing.T) {
-			exe := fakeBundle(t, v.Bundle)
-			override := ""
-			if v.Override {
-				override = t.TempDir()
-			}
-
-			roots := defaultRoots("/repo", exe, override)
-
-			tokens := make([]string, 0, len(roots))
-			for _, r := range roots {
-				switch {
-				case r == override:
-					tokens = append(tokens, "override")
-				case r == filepath.Join("/repo", "skills"):
-					tokens = append(tokens, "workspace")
-				case strings.HasSuffix(r, filepath.Join("dist", "skills")):
-					tokens = append(tokens, "bundle")
-				default:
-					t.Fatalf("unrecognized root %q", r)
-				}
-			}
-			if !slices.Equal(tokens, v.Want) {
-				t.Errorf("roots = %v (%v), want %v", tokens, roots, v.Want)
-			}
-		})
+// TestResolveRootsMatchesTheVectors pins #2718's order for every host: override,
+// bundle, workspace, with the last two swapped for a development host.
+func TestResolveRootsMatchesTheVectors(t *testing.T) {
+	const override, bundle = "/operator/skills", "/ext/dist/skills"
+	tokens := map[string]string{
+		"override":  override,
+		"bundle":    bundle,
+		"workspace": filepath.Join("/repo", "skills"),
 	}
-	if ran == 0 {
-		t.Fatalf("%s has no production vectors", rootOrderVectorFile)
-	}
-}
-
-// TestGoAndTypeScriptShareSkillRootVectors is the guard #874 needed, written
-// across both languages. The two hosts resolve skill roots independently: this
-// package for the Go-direct path, resolveSkillRoots() in skillRunner.ts for the
-// extension. Asserting Go's roots ALONE passed throughout that bug's life, so
-// both suites read one vector file. This fails if either mode's vectors go, or
-// if the TypeScript suite stops reading the file.
-func TestGoAndTypeScriptShareSkillRootVectors(t *testing.T) {
 	modes := map[string]int{}
 	for _, v := range rootOrderVectors(t) {
 		modes[v.Mode]++
+		t.Run(v.Name, func(t *testing.T) {
+			in := RootInputs{Workspace: "/repo", WorkspaceFirst: v.Mode == "development"}
+			if v.NoWorkspace {
+				in.Workspace = ""
+			}
+			if v.Override {
+				in.Override = override
+			}
+			if v.Bundle {
+				in.Bundle = bundle
+			}
+			want := make([]string, 0, len(v.Want))
+			for _, token := range v.Want {
+				want = append(want, tokens[token])
+			}
+			if got := ResolveRoots(in); !slices.Equal(got, want) {
+				t.Errorf("roots = %v, want %v", got, want)
+			}
+		})
 	}
 	for _, mode := range []string{"production", "development"} {
 		if modes[mode] == 0 {
 			t.Errorf("%s has no %s vectors", rootOrderVectorFile, mode)
 		}
 	}
+}
 
-	src, err := os.ReadFile(filepath.Join(
-		"..", "..", "packages", "nightgauge", "tests", "utils", "skillRunner.test.ts"))
+// TestSkillRunnerLeavesRootOrderToTheBinary is what stops the second resolver
+// coming back. #874 passed Go's root tests throughout its life because the two
+// hosts resolved independently, so the extension may gather facts but not order
+// them, and may not read the override the binary already reads.
+func TestSkillRunnerLeavesRootOrderToTheBinary(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(
+		"..", "..", "packages", "nightgauge", "src", "utils", "skillRunner.ts"))
 	if err != nil {
-		t.Fatalf("read skillRunner.test.ts: %v", err)
+		t.Fatalf("read skillRunner.ts: %v", err)
 	}
-	if !strings.Contains(string(src), rootOrderVectorFile) {
-		t.Errorf("skillRunner.test.ts does not read %s, so the hosts can drift",
-			rootOrderVectorFile)
+	src := string(raw)
+	if strings.Contains(src, "env."+SkillsRootEnv) {
+		t.Errorf("skillRunner.ts reads %s; the binary owns the override", SkillsRootEnv)
+	}
+	_, rest, found := strings.Cut(src, "export function resolveSkillRoots(")
+	if !found {
+		t.Fatal("skillRunner.ts no longer defines resolveSkillRoots")
+	}
+	body, _, found := strings.Cut(rest, "\n}\n")
+	if !found {
+		t.Fatal("cannot find the end of resolveSkillRoots")
+	}
+	if strings.Contains(body, "roots.push") {
+		t.Error("resolveSkillRoots orders roots itself; ResolveRoots owns the order")
+	}
+	if !strings.Contains(body, `"roots"`) {
+		t.Error("resolveSkillRoots does not ask `nightgauge skill roots`")
 	}
 }
 

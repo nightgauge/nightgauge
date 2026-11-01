@@ -4829,6 +4829,18 @@ func loadWorktreePath(workspaceRoot string, issueNumber int) string {
 	return workspaceRoot
 }
 
+// stageSkillRoots is the root list for a stage of issue's run. The workspace it
+// searches is the run's worktree, the input the extension passes too, so the
+// hosts agree on the checkout as well as the order (#2718). A worktree that has
+// gone falls back to the repository root.
+func stageSkillRoots(workspaceRoot string, issueNumber int) []string {
+	root := loadWorktreePath(workspaceRoot, issueNumber)
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		root = workspaceRoot
+	}
+	return skillrender.DefaultRoots(root)
+}
+
 // refusePreDispatch books a stage the pipeline declines to DISPATCH — the
 // prerequisite gate and the skill-render failure — and returns the terminal
 // failure kind the caller must assign to terminalFailureKind before it
@@ -6340,7 +6352,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			Stage:       string(stage),
 			Model:       model,
 			Adapter:     adapterName,
-			SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+			SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
 			Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 			Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 		})
@@ -6428,7 +6440,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					Stage:       string(stage),
 					Model:       model,
 					Adapter:     adapterName,
-					SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+					SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
 					Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 					Profile:     skillrender.ProfileCompact,
 					Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
@@ -6447,7 +6459,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Stage:          string(stage),
 						Model:          model,
 						Adapter:        adapterName,
-						SkillsRoots:    skillrender.DefaultRoots(workspaceRoot),
+						SkillsRoots:    stageSkillRoots(workspaceRoot, item.Number),
 						Headless:       true, // every stage this dispatches runs non-interactively (#2390)
 						Profile:        skillrender.ProfileCompact,
 						SupplyIncludes: true,
@@ -6493,7 +6505,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Stage:       string(stage),
 						Model:       alt.ID,
 						Adapter:     adapterName,
-						SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+						SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
 						Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 						Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 					})

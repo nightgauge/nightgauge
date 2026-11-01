@@ -365,13 +365,14 @@ printf '<!-- phase:start name="self-correction" index=11 total=17 stage="feature
 ```
 
 **PURPOSE**: Address review findings, re-run tests, run the formatter, and
-pass the Step 6.4 CI-parity HARD GATE before proceeding.
+pass the Step 6.4 focused-check HARD GATE before proceeding.
 
-**Step 6.4 — Verify All Checks Pass (HARD GATE)**: The full CI validation
-suite MUST pass locally before proceeding. These checks are **blocking** —
-feature-dev MUST NOT report success if any of them fail. Swallowing failures
-here lets a broken PR through to `pr-create`, where CI catches it and blocks
-the merge. See the CI-parity incident that motivated this gate.
+**Step 6.4 — Verify Focused Checks Pass (HARD GATE)**: The build, the tests
+for what changed and the formatter MUST pass before proceeding. These checks
+are **blocking** — feature-dev MUST NOT report success if any of them fail.
+Swallowing failures here lets a broken PR through to `pr-create`, where CI
+catches it and blocks the merge. The repository's complete gate belongs to
+feature-validate (#2784).
 
 > **Follow this phase's section of the review-and-correction include, read in Phase 5 above.**
 

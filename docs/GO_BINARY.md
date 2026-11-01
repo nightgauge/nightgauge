@@ -862,15 +862,35 @@ merely wasteful — two renders are two filesystem snapshots, so an edit landing
 between them yields tool declarations describing a different document than the
 body. It requires `--json` and refuses without it rather than silently no-opping.
 
-**Skill location is the caller's responsibility.** The binary cannot reproduce
-the extension's bundle discovery (`dist/skills/`, plus the
-garbage-collected-bundle self-heal from #3883), so it owns only parsing,
+**Skill location is the caller's input to `render`.** `render` owns only parsing,
 expansion, resolution, and composition. Supplying no `--skills-root` is an
 error rather than a guessed default — guessing is how an agent ends up reading
 a stale `~/.codex/skills` copy (#196).
 
+**`nightgauge skill roots` answers the list** (#2718). `skillrender.ResolveRoots`
+is the only implementation of the order, and every host uses it:
+
+```bash
+nightgauge skill roots --workspace /path/to/worktree --json
+nightgauge skill roots --workspace "$PWD" --bundle "$EXT/dist/skills" --workspace-first --json
+```
+
+| Flag                | Purpose                                                             |
+| ------------------- | ------------------------------------------------------------------- |
+| `--workspace`       | Checkout whose `skills/` is searched; omit for no workspace root    |
+| `--bundle`          | Skills tree the build ships; replaces the one beside this binary    |
+| `--workspace-first` | Rank the workspace ahead of the bundle (Development and Test hosts) |
+| `--json`            | Emit `{"v":1,"roots":[...]}` instead of one root per line           |
+
+The extension passes `--bundle` because its self-healed path (#3883) is a fact
+the binary cannot see and its binary may come from PATH. The override is read
+only from `$NIGHTGAUGE_SKILLS_ROOT`. A failed call fails the stage: the extension
+has no ordering of its own to fall back to.
+
 **The Go-direct path (`nightgauge run`, the scheduler) has no host to ask**, so
-it searches, in order: `$NIGHTGAUGE_SKILLS_ROOT` when set, then `<prefix>/skills`
+it uses the same resolver with the bundle beside the binary and, on a pipeline
+run, the issue's worktree as the workspace. It searches, in order:
+`$NIGHTGAUGE_SKILLS_ROOT` when set, then `<prefix>/skills`
 beside a binary installed as `<prefix>/bin/nightgauge` (the extension's `dist/`
 layout, or a hand install such as `~/.local/share/<name>/{bin,skills}`), then
 `<workspace>/skills`. An installed build therefore runs the skills it shipped,
@@ -4475,8 +4495,38 @@ Each failure entry:
 
 `failure_type` values: `"format"` | `"lint"` | `"typecheck"` | `"build"` | `"test"` | `"unknown"`
 
-Used by `skills/nightgauge-feature-dev/SKILL.md` Phase 6.4 and
-`skills/nightgauge-feature-validate/SKILL.md` Phase 2.5.1.
+`ci discover-commands` is used by `skills/nightgauge-feature-validate/SKILL.md`
+Phase 2.5.1.
+
+#### `ci gate-status`, `ci gate-run` and `ci gate-record`
+
+One tree-keyed ledger, `gate-runs.jsonl` in the pipeline state directory, counts
+full gates and reuses a pass (#2784). `scripts/ci-local.sh` and feature-validate
+Phase 2.5 go through these verbs; nothing writes the file by path.
+
+```bash
+nightgauge ci gate-status --kind local-gate --json
+nightgauge ci gate-run
+RUN=$(nightgauge ci gate-record --event start --kind parity --tree "$TREE" --full)
+nightgauge ci gate-record --event finish --run-id "$RUN" --kind parity --tree "$TREE" \
+  --verdict pass --full --seconds 120
+```
+
+`gate-status` prints `reusable`, `reason`, `tree`, `gate_command`,
+`gate_records_itself`, and `passed_stage`, `passed_at` and `passed_seconds` when
+reusable, and `gate_error` when a declared gate fails validation. `gate_command`
+renders the repository's `local_gate`, else `bash scripts/ci-local.sh` when that
+script exists. It is for display and is never executed: arguments may hold shell
+metacharacters. `gate-run` runs each step as an argv, stops at the first failure,
+and fails on a `gate_error` or a repository with no gate.
+
+A pass is reusable only when it was full, the tree held still for the whole run,
+and no later failure or infrastructure stop landed on that tree. A `local-gate`
+pass satisfies both kinds. A `parity` pass satisfies only `parity`, because the
+discovered commands omit the repository's full test suite. Anything the ledger
+cannot prove means run the gate. Issue and stage come from
+`NIGHTGAUGE_ISSUE_NUMBER` and `NIGHTGAUGE_STAGE`, falling back to the branch for
+the issue.
 
 ---
 

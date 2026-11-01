@@ -15,6 +15,10 @@ and this project adheres to
   (`installed N of M, skipped K`), instead of reporting success. The skipped
   directories keep their old skills, and the output channel names them.
 - Installing Codex or Grok skills removes Nightgauge skills that no longer ship.
+- Stages find their skills through `nightgauge skill roots`, so the extension and
+  the binary can no longer disagree on which skills run. If that call fails, the
+  stage fails with the reason. The write protection on a stage's skills tree now
+  also covers the `/tmp` form of a path (#2718).
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.

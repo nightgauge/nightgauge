@@ -86,7 +86,7 @@ func ranGoVerb(r *realGitRunner, verb string) bool {
 
 func recordTree(t *testing.T, dir string) {
 	t.Helper()
-	tree, err := treeFingerprint(context.Background(), &ExecCmdRunner{}, dir)
+	tree, err := TreeFingerprint(context.Background(), &ExecCmdRunner{}, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestTreeFingerprintMatchesCILocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
-	got, err := treeFingerprint(context.Background(), &ExecCmdRunner{}, dir)
+	got, err := TreeFingerprint(context.Background(), &ExecCmdRunner{}, dir)
 	if err != nil {
 		t.Fatal(err)
 	}

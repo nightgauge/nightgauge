@@ -222,7 +222,7 @@ printf '<!-- phase:start name="verify-ui-gate" index=11 total=22 stage="feature-
 printf '<!-- phase:start name="ci-parity-check" index=12 total=22 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run the repo's actual CI commands locally (format, lint, typecheck, full build). **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. The adversarial-review `gate record-metric` is emitted per the include.
+> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run this tree's one full gate: skip it when `nightgauge ci gate-status` says the tree passed, otherwise run the repository's local gate, or its CI commands when it has none. **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. The adversarial-review `gate record-metric` is emitted per the include.
 
 ### Phase 2.6: Knowledge Coverage Check
 

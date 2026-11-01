@@ -186,6 +186,9 @@ jobs:
       # The record pre-push validate reads to skip a proven tree (#2700).
       - name: ci-local.sh go test pass record
         run: bash scripts/test-ci-local-go-pass-stamp.sh
+      # When the gate reuses a passed tree, and what every run records (#2784).
+      - name: ci-local.sh gate ledger reuse
+        run: bash scripts/test-ci-local-gate-reuse.sh
       - name: Agent-skill install target regression suite
         run: bash scripts/test-install-agent-skills-targets.sh
       # Read-only, and free to sit anywhere in this job: `--check-mirror`

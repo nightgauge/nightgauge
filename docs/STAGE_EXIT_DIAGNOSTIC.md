@@ -204,6 +204,23 @@ The JSON tags MUST stay stable once shipped. Additive fields are allowed
 `nightgauge exit-records tail` reader and any external operator tooling
 that `grep`s or `jq`s the daily file.
 
+### Gate Spend Fields (#2784)
+
+Every writer fills `gate_runs`, `gate_seconds`, `gate_reused` and
+`gate_unfinished` from the gate ledger, over the stage's own wall time. A gate
+started with no finish was killed, so it counts as unfinished and has no
+duration. `review_phases` on a feature-dev record is `ran` or `missing`, and
+absent when no runtime state was available.
+
+```bash
+nightgauge exit-records gate-summary --issue 2784
+nightgauge exit-records gate-summary --since 2026-11-01 --json
+```
+
+`gate-summary` totals these per run and per stage, and splits feature-dev by
+`review_phases`, since a stage that did its review takes longer for a reason
+unrelated to gates.
+
 ### `success` is the Post-Gate Outcome (#125)
 
 `success` and the run record's `V2StageDetail.status` describe the same

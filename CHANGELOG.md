@@ -27,6 +27,22 @@ changelog, and the release workflow refuses a tag that does not.
   removes `nightgauge` plugin and marketplace entries whose path is gone.
 - `nightgauge doctor` reports Codex and Grok skills that differ from the installed
   build (`NGD112`).
+- A pipeline run gates a tree once. `scripts/ci-local.sh` records every run in a
+  ledger keyed on the exact tree and skips a repeat that already passed, saying
+  what passed it (`--no-reuse` forces a run). feature-validate's CI parity phase
+  runs the repository's local gate as its one gate, and feature-dev now runs
+  focused checks only and receives all of its phase instructions. Stage exit
+  records state each stage's full gates and seconds, and
+  `nightgauge exit-records gate-summary` totals them per run and stage. The new
+  `nightgauge ci gate-run` runs the gate's steps directly, never through a shell,
+  and a declared `local_gate` that fails validation now fails the phase (#2784).
+- The extension and the Go scheduler now search the same skills trees in the same
+  order. `nightgauge skill roots` is the one answer, and a pipeline run's scheduler
+  searches the issue's worktree as the extension does. The Claude write deny on a
+  stage's skills tree also covers a system alias, so a tree given as
+  `/private/tmp/...` is no longer writable as `/tmp/...`. A stage soft-routed by the
+  capacity gate searches that worktree too, and a broken binary is logged as itself
+  rather than reported as a missing skill (#2718).
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.

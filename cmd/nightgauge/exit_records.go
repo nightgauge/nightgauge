@@ -35,7 +35,7 @@ optionally filtered to a single issue number. Daily files are ordered
 lexicographically and recursively scanned newest-first so you don't have to
 guess which day's file holds the failure you're investigating.`,
 	}
-	cmd.AddCommand(exitRecordsTailCmd())
+	cmd.AddCommand(exitRecordsTailCmd(), exitRecordsGateSummaryCmd())
 	return cmd
 }
 

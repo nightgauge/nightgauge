@@ -714,13 +714,14 @@ printf '<!-- phase:start name="self-correction" index=11 total=17 stage="feature
 ```
 
 **PURPOSE**: Address review findings, re-run tests, run the formatter, and pass
-the Step 6.4 CI-parity HARD GATE before proceeding.
+the Step 6.4 focused-check HARD GATE before proceeding.
 
-**Step 6.4 — Verify All Checks Pass (HARD GATE)**: The full CI validation suite
-MUST pass locally before proceeding. These checks are **blocking** — feature-dev
-MUST NOT report success if any of them fail. Swallowing failures here lets a
-broken PR through to `pr-create`, where CI catches it and blocks the merge. See
-issue #2779 for the incident that motivated this gate.
+**Step 6.4 — Verify Focused Checks Pass (HARD GATE)**: The build, the tests for
+what changed and the formatter MUST pass before proceeding. These checks are
+**blocking** — feature-dev MUST NOT report success if any of them fail.
+Swallowing failures here lets a broken PR through to `pr-create`, where CI
+catches it and blocks the merge. See issue #2779 for the incident that motivated
+this gate. The repository's complete gate belongs to feature-validate (#2784).
 
 > **Read `<REPO_ROOT>/skills/nightgauge-feature-dev/_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 

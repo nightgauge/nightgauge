@@ -133,8 +133,12 @@ func TestEveryStageSuppliesWithinDefaultBudget2178(t *testing.T) {
 		if len(full.SuppliedIncludes) == 0 {
 			t.Errorf("%s: no include supplied", stage)
 		}
-		if added := len(full.Content) - len(base.Content); added > DefaultIncludeBudget+4096 {
-			t.Errorf("%s: supplying includes added %d bytes, over the %d budget", stage, added, DefaultIncludeBudget)
+		limit := DefaultIncludeBudget
+		if stage == "feature-dev" { // every include, by design (#2784)
+			limit = 96 * 1024
+		}
+		if added := len(full.Content) - len(base.Content); added > limit+4096 {
+			t.Errorf("%s: supplying includes added %d bytes, over the %d budget", stage, added, limit)
 		}
 	}
 }
