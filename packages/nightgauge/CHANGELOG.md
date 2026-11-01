@@ -11,10 +11,17 @@ and this project adheres to
 
 ### Fixed
 
+- A long merge-queue wait no longer ends in a paid LLM merge stage: the extension
+  takes its pr-merge timeout from the binary instead of a fixed 20 minutes. The
+  stage logs the `pr-stage` pid at spawn and names any signal that kills it.
+- The orphan reaper checks a process's start time before it kills, so it cannot
+  kill an unrelated process that reused a tracked pid.
 - Installing Codex or Grok skills warns when any were skipped, with the count
   (`installed N of M, skipped K`), instead of reporting success. The skipped
   directories keep their old skills, and the output channel names them.
 - Installing Codex or Grok skills removes Nightgauge skills that no longer ship.
+- A re-dispatched issue resumes at feature-validate from preserved work instead of
+  repeating planning and dev, when its acceptance criteria are unchanged (#2730).
 - Stages find their skills through `nightgauge skill roots`, so the extension and
   the binary can no longer disagree on which skills run. If that call fails, the
   stage fails with the reason. The write protection on a stage's skills tree now

@@ -949,6 +949,7 @@ func (s *Server) RunningPipelinesSnapshot(now time.Time) RunningPipelinesResult 
 			Title:       snap.Title,
 			Stage:       string(snap.Stage),
 			Source:      "manual",
+			MergedPR:    snap.MergedPR,
 		}
 		if autonomous[fmt.Sprintf("%s#%d", repo, issue)] {
 			info.Source = "autonomous"

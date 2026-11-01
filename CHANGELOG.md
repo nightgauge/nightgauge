@@ -16,6 +16,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A green PR now merges through the deterministic path instead of paying for an
+  LLM stage. The extension asks the new `nightgauge pr-stage budget` for its
+  timeout, so a normal merge-queue wait no longer kills the run, and a transient
+  `UNKNOWN` mergeability is re-read with backoff, including after the CI wait.
+  `pr-stage` logs its pid at spawn and names the signal that kills it, and the
+  orphan reaper now kills only a process whose start time it can match, so a
+  reused pid survives.
+- `pr-merge` no longer enqueues past a review finding. It reads the Nightgauge
+  review before either merge path: a blocker, or a correctness major on a
+  documented user path such as `README*`, `docs/**` or a package manifest, holds
+  the enqueue for a fix round, capped at two. Every other major becomes a tracked
+  issue before the merge call, under the `follow_up_filing` controls, and a
+  finding that cannot be tracked refuses the merge. `pr-stage review-gate` and
+  `pr-stage review-round begin|end` give the LLM stage the same rules.
 - Skill installs no longer report success while leaving skills stale. Codex and Grok
   installs print `installed N of M, skipped K`, and a skipped directory makes
   `install-agent-skills.sh` exit non-zero after the other tools refresh. The extension
@@ -27,6 +41,12 @@ changelog, and the release workflow refuses a tag that does not.
   removes `nightgauge` plugin and marketplace entries whose path is gone.
 - `nightgauge doctor` reports Codex and Grok skills that differ from the installed
   build (`NGD112`).
+- `nightgauge autonomous status` shows a run that has merged as
+  `merged #<PR>, post-merge follow-up`, not as a run waiting to merge, in text and
+  in `mergedPr` under `--json`.
+- A re-dispatched issue resumes at feature-validate when its dev work survived,
+  on the branch or preserved under `refs/nightgauge/wip/`, and its acceptance
+  criteria are unchanged, so it no longer repeats planning and dev (#2730).
 - A relative date in a query (`updated>3d`) means whole 24-hour days. It stepped
   back in local calendar days, so it ran an hour long after a daylight-saving
   change, and the SDK suite failed on a machine in a DST zone for three days after
@@ -249,6 +269,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- GitHub runs the heavy suites once, in the merge queue, instead of on the pull
+  request and again in the queue. A pull request keeps its fast safety checks and
+  takes about 15 minutes less, and the queue still blocks a change that fails.
+  Queue runs in the Actions tab are titled with the commit message (#2828).
 - PR Review no longer runs on every pull request. It is a manual
   `workflow_dispatch` second opinion on the Claude subscription
   (`CLAUDE_CODE_OAUTH_TOKEN`), so it adds no per-use model spend, and a red

@@ -87,6 +87,11 @@ type RuntimeState struct {
 	StartedAt  time.Time     `json:"startedAt"`
 	StageStart time.Time     `json:"stageStart"`
 
+	// MergedPR is the run's PR once the forge confirms it MERGED (#2730). The
+	// run stays registered through its post-merge follow-up, still reading
+	// stage pr-merge, so this is what tells the two apart. Zero until then.
+	MergedPR int `json:"mergedPr,omitempty"`
+
 	// Process tracking
 	PID         int    `json:"pid,omitempty"`
 	WorktreeDir string `json:"worktreeDir,omitempty"`
@@ -1341,6 +1346,14 @@ func (rs *RuntimeState) SetActualLinesChanged(lines int) {
 // evidence, and it stays 0 here.
 //
 // Idempotent: RunStage's post-start SetProcess re-stamps the same path.
+// SetMergedPR records that the run's PR is forge-confirmed MERGED (#2730), so a
+// run still doing post-merge follow-up reads as that, not as waiting to merge.
+func (rs *RuntimeState) SetMergedPR(pr int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.MergedPR = pr
+}
+
 func (rs *RuntimeState) SetWorktree(worktreeDir string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -3200,6 +3213,7 @@ func (rs *RuntimeState) Snapshot() *RuntimeState {
 // snapshotLocked creates a deep copy while the caller already holds rs.mu.
 func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 	snap := &RuntimeState{
+		MergedPR:                 rs.MergedPR,
 		Repo:                     rs.Repo,
 		IssueNumber:              rs.IssueNumber,
 		ItemID:                   rs.ItemID,
