@@ -1535,12 +1535,13 @@ vi.mocked(execAsync).mockResolvedValue({
 `TestClaudeSkillsTreeLive` drives the flags `claudeSkillsDirArgs` builds through
 the installed `claude`, so it proves what no argv test can: the stage skills tree
 is readable under default permissions and refuses file-tool writes. It spends a
-few Haiku turns and needs an authenticated CLI, so it carries the `integration`
-build tag and neither `go test ./...` nor `scripts/ci-local.sh` compiles it. Run
-it after changing those flags or upgrading Claude Code:
+few Haiku turns and needs an authenticated CLI, so it carries its own
+`claude_integration` build tag and no routine target compiles it: not
+`go test ./...`, `scripts/ci-local.sh` or `make test-integration`. Run it after
+changing those flags or upgrading Claude Code:
 
 ```bash
-go test -tags integration -run TestClaudeSkillsTreeLive ./internal/execution/adapters/
+go test -tags claude_integration -run TestClaudeSkillsTreeLive ./internal/execution/adapters/
 ```
 
 It skips only when `claude` is not on `PATH`. An authentication or CLI error fails it.
