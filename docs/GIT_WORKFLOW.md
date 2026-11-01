@@ -257,9 +257,12 @@ merge queue instead of the strict up-to-date policy. In the queue the required
 checks run on the temporary `gh-readonly-queue/main/*` commit, which is the
 commit that then lands on `main`:
 
+- `ci.yml`'s heavy suites run here and not on the pull request. Its jobs still
+  run and report on a pull request, with their expensive steps skipped, because
+  the local gate has already run them. The queue runs them once, on the commit
+  that lands, and `lint.yml` does the same with its slowest self-tests.
 - `ci.yml`'s change-class gate classifies `merge_group.base_sha..head_sha`, the
-  group's cumulative diff against `main`, exactly as it classifies a pull
-  request's base and head.
+  group's cumulative diff against `main`.
 - `adapter-canary.yml` treats `merge_group` like `pull_request`: pinned CLI
   versions, the manifest diff against `merge_group.base_sha`, and never the
   drift-issue `report` job.
