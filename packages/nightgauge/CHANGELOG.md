@@ -16,6 +16,10 @@ and this project adheres to
   stage logs the `pr-stage` pid at spawn and names any signal that kills it.
 - The orphan reaper checks a process's start time before it kills, so it cannot
   kill an unrelated process that reused a tracked pid.
+- Installing Codex or Grok skills warns when any were skipped, with the count
+  (`installed N of M, skipped K`), instead of reporting success. The skipped
+  directories keep their old skills, and the output channel names them.
+- Installing Codex or Grok skills removes Nightgauge skills that no longer ship.
 - A re-dispatched issue resumes at feature-validate from preserved work instead of
   repeating planning and dev, when its acceptance criteria are unchanged (#2730).
 - Stages find their skills through `nightgauge skill roots`, so the extension and
@@ -25,6 +29,9 @@ and this project adheres to
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.
+- Retry on a halted repository's Action Center card now resumes the repository
+  and closes the card. It used to freeze the scheduler until the daemon
+  restarted, while the status still read running (#2750).
 - The Claude plugin keeps working after an extension upgrade. Its marketplace now
   lives in global storage, and an existing install moves there with its plugin data
   intact. A plugin that failed to load is repaired on activation, or Claude Code's

@@ -932,6 +932,35 @@ can still read `"enabled": true`. Its skills and hooks are unavailable. Manual
 its stable copy, or run `bash scripts/install-agent-skills.sh --claude-only` from
 the primary checkout.
 
+#### NGD112
+
+**Codex or Grok skills that differ from this build.** `agent_skills_drift` ·
+`warning`, also when a skills directory cannot be read. A machine with no Codex or
+Grok skills directory passes, and so does one where no Nightgauge skills tree can be
+found: another project's own `skills/` is not one.
+
+For `$CODEX_HOME/skills` (default `~/.codex/skills`) and `$GROK_HOME/skills`
+(default `~/.grok/skills`), the check reads each real `nightgauge-*` directory and
+each directory holding `.nightgauge-installed`. Symlinks and an operator's own
+unmarked `update-docs` are not reported. The reference is the first
+`<root>/<name>/SKILL.md`, or its copy under the sibling
+`claude-plugins/nightgauge/skills/`, across the skill roots a run renders from.
+
+| Finding                                     | Remedy                              |
+| ------------------------------------------- | ----------------------------------- |
+| `metadata.version` differs or is missing    | Run the installer                   |
+| Current skill with no install marker        | Run the installer with `--adopt`    |
+| Retired skill holding the marker            | Run the installer, which removes it |
+| Retired `nightgauge-*` skill with no marker | Remove the directory by hand        |
+
+The installer is `bash scripts/install-agent-skills.sh` from the primary checkout.
+An extension install has no git history, so it cannot adopt: remove a marker-less
+directory by hand and reinstall.
+
+The check compares versions, not bytes, because installed copies legitimately
+differ from the build's mirror (`name:`, `disable-model-invocation`, rebased
+links). It therefore cannot see an edit made without a version bump.
+
 #### NGD015
 
 **No usable AI coding agent.** `ai_adapter` · `warning`.

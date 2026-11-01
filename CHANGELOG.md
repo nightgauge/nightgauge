@@ -30,6 +30,17 @@ changelog, and the release workflow refuses a tag that does not.
   issue before the merge call, under the `follow_up_filing` controls, and a
   finding that cannot be tracked refuses the merge. `pr-stage review-gate` and
   `pr-stage review-round begin|end` give the LLM stage the same rules.
+- Skill installs no longer report success while leaving skills stale. Codex and Grok
+  installs print `installed N of M, skipped K`, and a skipped directory makes
+  `install-agent-skills.sh` exit non-zero after the other tools refresh. The extension
+  shows the same count as a warning.
+- `install-agent-skills.sh --adopt` replaces directories from before the install
+  marker when git history proves they shipped, and moves the old copy beside the
+  skills directory. Locally edited directories are left alone and named.
+- Installs remove marked skills that no longer exist in source, and the Grok path
+  removes `nightgauge` plugin and marketplace entries whose path is gone.
+- `nightgauge doctor` reports Codex and Grok skills that differ from the installed
+  build (`NGD112`).
 - `nightgauge autonomous status` shows a run that has merged as
   `merged #<PR>, post-merge follow-up`, not as a run waiting to merge, in text and
   in `mergedPr` under `--json`.
@@ -40,6 +51,17 @@ changelog, and the release workflow refuses a tag that does not.
   back in local calendar days, so it ran an hour long after a daylight-saving
   change, and the SDK suite failed on a machine in a DST zone for three days after
   each autumn change. CI runs in UTC and could not see it (#2828).
+
+- Retry on a halted repository's Action Center card no longer deadlocks the
+  attention store and stops the scheduler. Retry, Retry with escalation and
+  Resume now release the halt and close the card as resolved, with no daemon
+  restart. Attention work reachable from a card's action runs off the store
+  lock, and a static test holds every future action to that. Background writers
+  now give up after 25 seconds with a logged warning, so a stuck store slows a
+  scan instead of stopping it. A card raised during such a wait is dropped; a
+  standing card returns on the next scan. Startup recovery moves a closed issue
+  to Done rather than Ready. When it cannot read the issue it leaves the status
+  alone and checks again once GitHub answers (#2750).
 - A pipeline run gates a tree once. `scripts/ci-local.sh` records every run in a
   ledger keyed on the exact tree and skips a repeat that already passed, saying
   what passed it (`--no-reuse` forces a run). feature-validate's CI parity phase
@@ -365,6 +387,7 @@ MERGED`, `escalated sonnet → opus` or `idle 12m`, followed by elapsed time,
   the result join path has diverged, instead of the record reading as calls that
   quietly succeeded. The Bash ring keeps the same check disabled on purpose: its
   10 entries can all be in flight in one parallel turn (#457).
+
 ### Added
 
 - `nightgauge config init --detect` writes a config from the `origin` remote

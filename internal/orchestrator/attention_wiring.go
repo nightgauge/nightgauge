@@ -380,6 +380,11 @@ func (as *AutonomousScheduler) raiseOwnerActionHandoff(repo string, issue int, t
 // already held it and wedged the daemon. This helper is the single
 // enforcement point for every attention call made while as.mu is held.
 //
+// The rule also covers everything a verb can reach, as.mu held or not (#2750):
+// a verb runs on the goroutine that holds the store lock, which is not
+// reentrant, so ResumeRepo's reconcile deadlocked on Retry with as.mu already
+// released. TestNoInlineAttentionReachableFromAVerb pins this.
+//
 // Dispatched ops run unordered relative to each other; callers must not
 // dispatch a raise and a retract for the same idempotency key in one pass.
 func (as *AutonomousScheduler) dispatchAttention(fn func()) {
