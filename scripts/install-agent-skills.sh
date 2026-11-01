@@ -19,6 +19,8 @@
 #   ./scripts/install-agent-skills.sh --grok-only     # only Grok ~/.grok/skills (+ plugin)
 #   ./scripts/install-agent-skills.sh --opencode-only [--opencode-project <dir>] [--with-plugin] [--yes]
 #                                     # only OpenCode (never part of the default run)
+#   ./scripts/install-agent-skills.sh --adopt         # also take over old copies proven shipped
+#                                     # (with the default run, --codex-only or --grok-only)
 #   ./scripts/install-agent-skills.sh --generate-only # regenerate the mirror, no tool refresh
 #   ./scripts/install-agent-skills.sh --check-mirror  # ASSERT the mirror, non-mutating
 #
@@ -33,7 +35,8 @@
 # else, and a fix command that refuses to write is not a fix.
 #
 # Idempotent and best-effort: a tool that isn't installed is skipped with a
-# notice rather than failing the run.
+# notice rather than failing the run. A Codex or Grok install that left a skill
+# behind is different: the other tools still refresh, then the run ends non-zero.
 
 set -euo pipefail
 
@@ -55,8 +58,12 @@ OPENCODE_PLUGIN=0
 OPENCODE_PROJECT=""
 MODE="install"
 TARGET=""
+ADOPT=0
+# Labels of the home-skills installs that finished with skipped directories.
+INCOMPLETE=""
 usage() {
   echo "Usage: $0 [--claude-only|--codex-only|--grok-only|--generate-only|--check-mirror]" >&2
+  echo "       $0 [--codex-only|--grok-only] --adopt" >&2
   echo "       $0 --opencode-only [--opencode-project <dir>] [--with-plugin] [--yes]" >&2
 }
 set_target() {
@@ -84,6 +91,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --yes) OPENCODE_YES=1 ;;
     --with-plugin) OPENCODE_PLUGIN=1 ;;
+    --adopt) ADOPT=1 ;;
     # Regenerate the committed plugin skills tree in place and stop. No tool
     # refresh, no assertions — this is the FIX command a contributor runs after
     # editing `skills/` (CONTRIBUTING.md § Authoring Checklist). It mutates the
@@ -104,6 +112,17 @@ if [ "$DO_OPENCODE" = "0" ] && { [ -n "$OPENCODE_PROJECT" ] || [ "$OPENCODE_YES"
   echo "--opencode-project, --yes and --with-plugin apply only to --opencode-only." >&2
   usage
   exit 2
+fi
+
+if [ "$ADOPT" = "1" ]; then
+  case "$TARGET" in
+    "" | --codex-only | --grok-only) ;;
+    *)
+      echo "--adopt applies only to the default run, --codex-only and --grok-only." >&2
+      usage
+      exit 2
+      ;;
+  esac
 fi
 
 # ---------------------------------------------------------------------------
@@ -248,7 +267,14 @@ PY
 #     destination directory is replaced only when it holds one. An operator's
 #     own `update-docs`, another skill pack's `_shared`, a symlink or a file of
 #     the same name is left alone and named in a warning. A directory an older
-#     version of this script installed has no marker either: remove it once.
+#     version of this script installed has no marker either: `--adopt` replaces
+#     it when git history proves its content shipped (#2739), and moves the old
+#     copy to <root>.nightgauge-adopted/, outside the root the agent loads.
+#   - a skipped directory is a failure, not a footnote (#2739): the summary says
+#     `installed N of M, skipped K` and the run ends non-zero. Exit 3 from the
+#     installer means it finished with skips, so the other tools still refresh;
+#     any other non-zero exit stops here.
+#   - a directory holding the marker whose skill left skills/ is removed.
 #   - a source symlink is installed only when it resolves to a file inside
 #     skills/, and lands as a regular file. A link out of the tree (to ~/.ssh,
 #     say), a dangling link and a linked directory are skipped with a warning;
@@ -259,10 +285,18 @@ PY
 # what `rsync --delete` did here before.
 # ---------------------------------------------------------------------------
 install_home_skills() {
-  local label="$1" dest_root="$2" count
-  count="$(python3 "$REPO_ROOT/scripts/lib/install_skill_tree.py" install \
-    --source "$SKILLS_SRC" --dest "$dest_root" --checkout "$REPO_ROOT" --label "$label")"
-  echo "    Installed $count skill directories (with _shared) to $label."
+  local label="$1" dest_root="$2" code=0
+  local -a adopt=()
+  [ "$ADOPT" = "0" ] || adopt=(--adopt)
+  # The guarded expansion: macOS bash 3.2 calls an empty "${adopt[@]}" unbound.
+  python3 "$REPO_ROOT/scripts/lib/install_skill_tree.py" install \
+    --source "$SKILLS_SRC" --dest "$dest_root" --checkout "$REPO_ROOT" --label "$label" \
+    ${adopt[@]+"${adopt[@]}"} || code=$?
+  case "$code" in
+    0) ;;
+    3) INCOMPLETE="${INCOMPLETE:+$INCOMPLETE and }$label" ;;
+    *) exit "$code" ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -279,6 +313,68 @@ install_codex() {
   fi
   echo "==> Codex: syncing skills into $dest_root ..."
   install_home_skills Codex "$dest_root"
+}
+
+# dead_grok_entries <marketplaces|plugins> <json>: one line per `nightgauge`
+# entry whose local path is gone. Marketplaces print that path, which is how
+# `marketplace remove` names them; plugins print the name, the only thing
+# `plugin uninstall` accepts. Exit 1 when the JSON cannot be read.
+dead_grok_entries() {
+  python3 - "$1" "$2" <<'PY'
+import json, os, sys
+kind, raw = sys.argv[1], sys.argv[2]
+try:
+    for entry in json.loads(raw):
+        name = entry["name"]
+        if kind == "marketplaces":
+            ours = name == "nightgauge" or name.startswith("nightgauge-")
+            path = (entry.get("source") or {}).get("path") if entry.get("kind") == "local" else None
+            result = path
+        else:
+            ours = name == "nightgauge"
+            path = entry.get("source")
+            result = name
+        if ours and isinstance(path, str) and os.path.isabs(path) and not os.path.exists(path):
+            print(result)
+except (ValueError, TypeError, KeyError, AttributeError):
+    sys.exit(1)
+PY
+}
+
+# remove_dead_grok_entries: runs from pipeline worktrees left entries pointing
+# at deleted directories, because Grok keeps one per path (#2739). `marketplace
+# remove` also uninstalls that marketplace's plugins, so the plugin list is read
+# after it. `plugin uninstall` takes only a name and may drop a live sibling;
+# the install that follows restores it. Best-effort, like the rest of the Grok
+# plugin path: a failure here warns and never fails the home-skills copy.
+remove_dead_grok_entries() {
+  local json dead entry
+  if json="$(grok plugin marketplace list --json 2>/dev/null)" &&
+    dead="$(dead_grok_entries marketplaces "$json")"; then
+    while IFS= read -r entry; do
+      [ -n "$entry" ] || continue
+      if grok plugin marketplace remove "$entry" >/dev/null 2>&1; then
+        echo "    Removed dead Grok marketplace $entry."
+      else
+        echo "    WARNING: could not remove dead Grok marketplace $entry." >&2
+      fi
+    done <<<"$dead"
+  else
+    echo "    WARNING: could not read Grok's marketplaces; dead entries were not checked." >&2
+  fi
+  if json="$(grok plugin list --json 2>/dev/null)" &&
+    dead="$(dead_grok_entries plugins "$json")"; then
+    while IFS= read -r entry; do
+      [ -n "$entry" ] || continue
+      if grok plugin uninstall "$entry" --confirm >/dev/null 2>&1; then
+        echo "    Removed dead Grok plugin entry $entry."
+      else
+        echo "    WARNING: could not remove dead Grok plugin entry $entry." >&2
+      fi
+    done <<<"$dead"
+  else
+    echo "    WARNING: could not read Grok's plugins; dead entries were not checked." >&2
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -328,6 +424,7 @@ install_grok() {
   if [ "$grok_cli" -eq 1 ]; then
     local plugin_src="$REPO_ROOT/claude-plugins/nightgauge"
     local out
+    remove_dead_grok_entries
     echo "    Installing Nightgauge plugin via grok (best-effort) ..."
     if out="$(grok plugin marketplace add "$REPO_ROOT" 2>&1)" ||
       grep -q 'already configured' <<<"$out"; then
@@ -954,4 +1051,10 @@ fi
 [ "$DO_GROK" = "1" ] && install_grok
 [ "$DO_OPENCODE" = "1" ] && install_opencode
 
+if [ -n "$INCOMPLETE" ]; then
+  echo "==> Agent skill sync INCOMPLETE: $INCOMPLETE skipped directories named above, so" >&2
+  echo "    they still hold old skills. Re-run with --adopt to take over copies this" >&2
+  echo "    repository shipped, or remove the directories." >&2
+  exit 1
+fi
 echo "==> Agent skill sync complete."

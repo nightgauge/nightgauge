@@ -30,6 +30,17 @@ changelog, and the release workflow refuses a tag that does not.
   issue before the merge call, under the `follow_up_filing` controls, and a
   finding that cannot be tracked refuses the merge. `pr-stage review-gate` and
   `pr-stage review-round begin|end` give the LLM stage the same rules.
+- Skill installs no longer report success while leaving skills stale. Codex and Grok
+  installs print `installed N of M, skipped K`, and a skipped directory makes
+  `install-agent-skills.sh` exit non-zero after the other tools refresh. The extension
+  shows the same count as a warning.
+- `install-agent-skills.sh --adopt` replaces directories from before the install
+  marker when git history proves they shipped, and moves the old copy beside the
+  skills directory. Locally edited directories are left alone and named.
+- Installs remove marked skills that no longer exist in source, and the Grok path
+  removes `nightgauge` plugin and marketplace entries whose path is gone.
+- `nightgauge doctor` reports Codex and Grok skills that differ from the installed
+  build (`NGD112`).
 - `nightgauge autonomous status` shows a run that has merged as
   `merged #<PR>, post-merge follow-up`, not as a run waiting to merge, in text and
   in `mergedPr` under `--json`.

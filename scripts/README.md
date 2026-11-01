@@ -31,7 +31,26 @@ the worktree is removed and unmerged skills would reach every project.
 ./scripts/install-agent-skills.sh --claude-only  # only Claude Code plugins
 ./scripts/install-agent-skills.sh --codex-only   # only Codex (~/.codex/skills)
 ./scripts/install-agent-skills.sh --grok-only    # only Grok (~/.grok/skills + plugin)
+./scripts/install-agent-skills.sh --adopt        # also replace old copies proven shipped
 ```
+
+Codex and Grok report `installed N of M, skipped K`. A directory without
+`.nightgauge-installed` is never replaced by a plain install, so K above zero leaves
+it on its old skills: the other tools still refresh, then the run prints
+`Agent skill sync INCOMPLETE` and exits non-zero. An operator's own directory with a
+skill's name, such as `update-docs`, keeps every run in that state until it is
+renamed or removed.
+
+`--adopt` works with the default run, `--codex-only` and `--grok-only`. It replaces a
+marker-less directory only when its `SKILL.md` (for `_shared`, every file) is a blob
+in this repository's git history, and moves the old copy to
+`<skills root>.nightgauge-adopted/<UTC-stamp>/<name>`. Anything else is left alone
+and named. A shallow clone or missing history is refused with exit 1, and nothing is
+written. Delete the moved copies when you no longer want them.
+
+An install removes a directory holding the marker when its skill has left `skills/`,
+and the Grok path removes `nightgauge` plugin and marketplace entries whose path no
+longer exists.
 
 What it does:
 
