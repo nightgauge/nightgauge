@@ -141,7 +141,7 @@ expect "gate: no key skipped" false "$(gate "$(pr nokey .)" pull_request '' fals
 
 GH_OUT="$TMP/gh-output"
 GITHUB_OUTPUT="$GH_OUT" node "$CLI" gate --pr-json "$(pr out .)" --event pull_request > /dev/null
-expect "gate: writes GITHUB_OUTPUT" 1 "$(grep -c '^reason=no ANTHROPIC_API_KEY' "$GH_OUT")"
+expect "gate: writes GITHUB_OUTPUT" 1 "$(grep -c '^reason=no CLAUDE_CODE_OAUTH_TOKEN' "$GH_OUT")"
 
 node "$CLI" gate --event pull_request > /dev/null 2>&1
 expect "gate: missing --pr-json is a usage error" 2 $?
@@ -163,6 +163,9 @@ if [ -z "$STEP_RUN" ] || [ "$STEP_RUN" = "null" ] || [ "$MAX_TURNS" = "null" ]; 
 fi
 
 expect "limit: the turn limit is 80" 80 "$MAX_TURNS"
+expect "trigger: manual only" "workflow_dispatch" "$(yq '.on | keys | .[]' "$WORKFLOW")"
+expect "billing: no pay-per-use key reaches the model" 0 \
+  "$(yq "$STEP_SELECT | .env | keys | .[]" "$WORKFLOW" | grep -c ANTHROPIC_API_KEY)"
 expect "limit: one --max-turns in the workflow" 1 "$(grep -c -e '--max-turns' "$WORKFLOW")"
 
 STUBS="$TMP/stubs"
