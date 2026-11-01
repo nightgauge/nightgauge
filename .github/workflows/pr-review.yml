@@ -1,8 +1,9 @@
 name: PR Review
 
-# Severity-ranked review passes on pull requests the pipeline did not author.
-# The passes, severities, caps and identity rules are defined in
-# docs/PR_REVIEW_PASSES.md.
+# Severity-ranked review passes on one pull request, run by hand. Manual on
+# purpose: the pipeline reviews its own work locally, and an automatic model run
+# here would spend on every push. The passes, severities, caps and identity rules
+# are defined in docs/PR_REVIEW_PASSES.md.
 #
 # Shape of a run (the continuous-improvement.yml split, #1304):
 #
@@ -19,16 +20,12 @@ name: PR Review
 # ADVISORY ONLY. No job fails on a finding, and this workflow must not be a
 # required status check in any ruleset.
 #
-# Never `pull_request_target`: it would hand secrets to fork content. Fork
-# pull requests are skipped here and reviewed by a maintainer through
-# workflow_dispatch.
+# Never `pull_request_target`: it would hand secrets to fork content.
 #
 # Every script this workflow runs comes from the BASE checkout. The pull
 # request's own tree is checked out only for the model to read.
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -68,7 +65,7 @@ jobs:
       EVENT_NAME: ${{ github.event_name }}
       PIPELINE_AUTHORS: ${{ vars.NIGHTGAUGE_PIPELINE_AUTHORS }}
       # `secrets` is not one of the contexts available to a step-level `if:`.
-      HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      HAS_MODEL_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -104,7 +101,7 @@ jobs:
             --pr-json "$RUNNER_TEMP/pr.json" \
             --event "$EVENT_NAME" \
             --pipeline-authors "$PIPELINE_AUTHORS" \
-            --has-key "$HAS_API_KEY"
+            --has-key "$HAS_MODEL_TOKEN"
 
       - name: Collect the review inputs
         if: ${{ steps.gate.outputs.run == 'true' }}
@@ -184,9 +181,11 @@ jobs:
 
       - name: Run the review passes
         env:
-          # The model's whole environment: a model key and a scratch path.
-          # Deliberately NO GH_TOKEN / GITHUB_TOKEN.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The model's whole environment: a subscription token and a scratch
+          # path. Deliberately NO GH_TOKEN / GITHUB_TOKEN, and no
+          # ANTHROPIC_API_KEY: the CLI prefers a key over the token, and a key
+          # bills per use.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           FINDINGS_FILE: ${{ runner.temp }}/findings/findings.json
           # The one turn limit; docs/PR_REVIEW_PASSES.md states it too.
           REVIEW_MAX_TURNS: "80"

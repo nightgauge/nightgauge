@@ -27,6 +27,10 @@ changelog, and the release workflow refuses a tag that does not.
   Terminals the extension opens for a skill or a `nightgauge` command also get
   that binary on `PATH`, and the plugin invocation lines in the skills use the
   `/nightgauge:<name>` form.
+- A relative date in a query (`updated>3d`) means whole 24-hour days. It stepped
+  back in local calendar days, so it ran an hour long after a daylight-saving
+  change, and the SDK suite failed on a machine in a DST zone for three days after
+  each autumn change. CI runs in UTC and could not see it (#2828).
 - A pipeline run gates a tree once. `scripts/ci-local.sh` records every run in a
   ledger keyed on the exact tree and skips a repeat that already passed, saying
   what passed it (`--no-reuse` forces a run). feature-validate's CI parity phase
@@ -245,6 +249,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- PR Review no longer runs on every pull request. It is a manual
+  `workflow_dispatch` second opinion on the Claude subscription
+  (`CLAUDE_CODE_OAUTH_TOKEN`), so it adds no per-use model spend, and a red
+  advisory check can no longer stop `pr-merge` on finished work (#2828).
 - **A PR closes its issue only when every acceptance criterion is met
   (#2655).** pr-create wrote `Closes #N` whenever no criterion was outright
   unmet, so a PR whose criteria could not be verified — or an issue with none
