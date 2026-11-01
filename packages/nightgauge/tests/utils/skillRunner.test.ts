@@ -439,8 +439,7 @@ describe("skillRunner - File Discovery and Parsing", () => {
       "--add-dir",
       "/ext/dist/skills",
       "--disallowedTools",
-      "Edit(//ext/dist/skills/**),Write(//ext/dist/skills/**)," +
-        "MultiEdit(//ext/dist/skills/**),NotebookEdit(//ext/dist/skills/**)",
+      "Edit(//ext/dist/skills/**)",
     ];
 
     it("adds the tree and denies file-tool writes to it", () => {
@@ -465,15 +464,15 @@ describe("skillRunner - File Discovery and Parsing", () => {
       );
     });
 
-    it("denies the /tmp form of a tree given under /private/tmp, for every write tool", () => {
+    it("denies the /tmp form of a tree given under /private/tmp, with Edit rules only", () => {
       const realpath = (target: string): string => (target === "/tmp" ? "/private/tmp" : target);
       vi.mocked(fs.realpathSync).mockImplementation(realpath as unknown as typeof fs.realpathSync);
       const args = claudeSkillsDirArgs("/private/tmp/ext/skills/stage/SKILL.md", "/repo");
       expect(args[1]).toBe("/private/tmp/ext/skills");
-      for (const tool of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) {
-        expect(args[3]).toContain(`${tool}(//tmp/ext/skills/**)`);
-        expect(args[3]).toContain(`${tool}(//private/tmp/ext/skills/**)`);
-      }
+      expect(args[3].split(",").sort()).toEqual([
+        "Edit(//private/tmp/ext/skills/**)",
+        "Edit(//tmp/ext/skills/**)",
+      ]);
       vi.mocked(fs.realpathSync).mockImplementation(
         ((target: string) => target) as unknown as typeof fs.realpathSync
       );
