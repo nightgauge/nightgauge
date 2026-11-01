@@ -45,12 +45,19 @@ else
     echo "Merge successful. Branch now includes latest $MERGE_BASE."
 
     # Step 5: Push merged branch
-    if ! git push origin "$CURRENT_BRANCH" 2>&1; then
-      echo "ERROR: Failed to push merged branch '$CURRENT_BRANCH' to origin." >&2
-      echo "Ensure you have push access and the branch is not protected." >&2
+    PUSH_EXIT=0
+    nightgauge git push-branch 2>&1 || PUSH_EXIT=$?
+    if [ "$PUSH_EXIT" -ne 0 ]; then
+      if [ "$PUSH_EXIT" -eq 3 ]; then
+        # Exit 3 printed `[branch-forked]`: the run stops on the fork.
+        echo "ERROR: origin rejected '$CURRENT_BRANCH' and the rejection was not reconciled." >&2
+      else
+        # Exit 1 is a permission/infra error — not a conflict
+        echo "ERROR: Failed to push merged branch '$CURRENT_BRANCH' to origin." >&2
+        echo "Ensure you have push access and the branch is not protected." >&2
+      fi
       git merge --abort 2>/dev/null || true
       FRESHNESS_MERGE_STATUS="push-failed"
-      # Classify as a permission/infra error — not a conflict
       exit 1
     fi
     echo "Merged branch pushed. CI will re-run on the merged commit."

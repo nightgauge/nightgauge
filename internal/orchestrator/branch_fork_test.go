@@ -494,6 +494,34 @@ func TestReconcileSelfFork_CrissCrossIsForked(t *testing.T) {
 	}
 }
 
+// Plain merges give both tips both files, so the content test alone would call
+// this a self-fork. The history is still a criss-cross and stays a fork.
+func TestReconcileSelfFork_CrissCrossWithEqualTreesIsForked(t *testing.T) {
+	f := newForkFixture(t)
+	const branch = "fix/2749-crisscross"
+	gittest.Run(t, f.work, "checkout", "-b", "side-x", "origin/main")
+	x := commitFile(t, f.work, "x.txt", "x\n", "x")
+	gittest.Run(t, f.work, "checkout", "-b", "side-y", "origin/main")
+	y := commitFile(t, f.work, "y.txt", "y\n", "y")
+
+	gittest.Run(t, f.work, "checkout", "-b", "theirs", y)
+	gittest.Run(t, f.work, "merge", "--no-ff", "-m", "origin", x)
+	gittest.Run(t, f.work, "push", "origin", "theirs:refs/heads/"+branch)
+	gittest.Run(t, f.work, "checkout", "-b", branch, x)
+	gittest.Run(t, f.work, "merge", "--no-ff", "-m", "local", y)
+	if a, b := gittest.Run(t, f.work, "rev-parse", "HEAD^{tree}"), gittest.Run(t, f.work, "rev-parse", "theirs^{tree}"); a != b {
+		t.Fatalf("fixture trees differ: %s %s", a, b)
+	}
+
+	res := ReconcileSelfFork(context.Background(), f.work, branch)
+	if res.Outcome != SelfForkForked {
+		t.Fatalf("outcome = %q, want forked; detail=%q", res.Outcome, res.Detail)
+	}
+	if !strings.Contains(res.Detail, "criss-cross") {
+		t.Errorf("detail = %q, want it to name the criss-cross", res.Detail)
+	}
+}
+
 func TestReconcileSelfFork_CleanWhenFastForward(t *testing.T) {
 	f := newForkFixture(t)
 	const branch = "fix/2699-clean"
