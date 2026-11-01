@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Must match treeFingerprint in internal/hooks/pre_push_skip.go.
+# Must match TreeFingerprint in internal/hooks/pre_push_skip.go.
 tree_fingerprint() {
   local dir tree
   dir="$(mktemp -d)"

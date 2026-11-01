@@ -5422,6 +5422,7 @@ back to the default.
 
 **Used by:** `nightgauge workspace contract rollout`
 ([MULTI_REPO_WORKSPACE.md § Contract Rollout](MULTI_REPO_WORKSPACE.md#contract-rollout--workspace-contract-1480))
+and feature-validate Phase 2.5, which runs it as the run's one full gate (#2784)
 
 ---
 

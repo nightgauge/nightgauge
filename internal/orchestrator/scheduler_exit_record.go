@@ -103,6 +103,8 @@ func (s *Scheduler) writeStageExitRecord(
 		SizeLabel:                 sizeLabel,
 	}
 
+	rec.ReviewPhases = snap.ReviewPhases(stage)
+
 	// Snapshot the stage's post-condition gate outcome (Issue #3863). The
 	// scheduler appends the gate result to runtime.StageGateResults before this
 	// write runs (both the success-path gate and the #3835 terminal-stage

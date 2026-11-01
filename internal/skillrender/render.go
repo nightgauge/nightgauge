@@ -523,18 +523,29 @@ func render(opts Options) (*Result, error) {
 		return nil, err
 	}
 	if res.Profile != ProfileCompact || opts.SupplyIncludes {
-		body, res.SuppliedIncludes = SupplyPhaseIncludes(body, skillDir, opts.IncludeBudget)
+		body, res.SuppliedIncludes = SupplyPhaseIncludes(body, skillDir, includeBudget(opts))
 	}
 	res.Content = RewriteSkillRelativePaths(body, opts.Stage, skillDir)
 	return res, nil
 }
 
+// includeBudget resolves the budget for a render. feature-dev is the one stage
+// that gets every include (#2784): an include left as a read directive was
+// skipped by 30% of its stages, and the one the budget dropped was the review
+// phases themselves. A caller's explicit budget always wins.
+func includeBudget(opts Options) int {
+	if opts.IncludeBudget == 0 && opts.Stage == "feature-dev" {
+		return EveryPhaseInclude
+	}
+	return opts.IncludeBudget
+}
+
 // DefaultIncludeBudget is how many bytes of `_includes/` files a full render
 // supplies inline when Options.IncludeBudget is zero. It holds every include
 // feature-planning (46 KB), issue-pickup (50 KB) and pr-create (40 KB)
-// direct a phase to read; the larger feature-dev, feature-validate and
-// pr-merge sets are supplied in directive order until it is spent, and the
-// rest stay reads.
+// direct a phase to read; the larger feature-validate and pr-merge sets are
+// supplied in directive order until it is spent, and the rest stay reads.
+// feature-dev is exempt: see includeBudget.
 const DefaultIncludeBudget = 64 * 1024
 
 // EveryPhaseInclude is an Options.IncludeBudget that supplies every phase
