@@ -120,5 +120,12 @@ check "CI runs the step" "$(result has "$OUT" "ledger probe passing step")"
 OUT="$(env -u GITHUB_ACTIONS CI=true PATH="$CLEAN_PATH" NIGHTGAUGE_BIN="$TMP/bin/nightgauge" STUB_STATUS="$PASSED" bash "$GATE" --ledger-probe pass 2>&1)"
 check "a stage shell exporting CI still reuses" "$(result has "$OUT" "Gate skipped")"
 
+: > "$STUB_LOG"
+OUT="$(env -u GITHUB_ACTIONS -u NIGHTGAUGE_BIN PATH="$TMP/bin:$CLEAN_PATH" STUB_STATUS="$UNPROVEN" bash "$GATE" --ledger-probe pass 2>&1)"
+CODE=$?
+CALLS="$(cat "$STUB_LOG")"
+check "a probe with no chosen binary refuses" "$(result test "$CODE" -eq 2)"
+check "a refused probe touches no ledger" "$(result test -z "$CALLS")"
+
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

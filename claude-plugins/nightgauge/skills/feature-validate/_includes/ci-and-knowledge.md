@@ -33,7 +33,10 @@ already passed, say so and move on. Otherwise a repository with a complete local
 gate runs that gate as this phase's only command, because the discovered commands
 are a subset of it and a pass of them cannot satisfy `pre-push validate`. A
 repository with no gate falls through to the discovered commands. An older binary
-answers with neither, which also means the discovered commands.
+answers with neither, which also means the discovered commands. `gate_command`
+is a display string and is never executed: `nightgauge ci gate-run` runs each
+step as an argv. A declared gate that fails validation also goes to `gate-run`,
+which fails with the reason instead of falling back to the discovered commands.
 
 ```bash
 CI_GATE_STATUS=$(nightgauge ci gate-status --kind parity --json 2>/dev/null || \
@@ -43,6 +46,7 @@ CI_GATE_REASON=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.reason')
 CI_GATE_TREE=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.tree')
 CI_GATE_COMMAND=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.gate_command')
 CI_GATE_RECORDS_ITSELF=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.gate_records_itself')
+CI_GATE_ERROR=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.gate_error // ""')
 ```
 
 ### Step 2.5.1: Discover CI Commands from Workflow
@@ -59,8 +63,8 @@ CI_DISCOVER_RESULT=$(nightgauge ci discover-commands --json 2>/dev/null || \
 CI_PARITY_COMMANDS=()
 while IFS= read -r -d '' C; do CI_PARITY_COMMANDS+=("$C"); done \
   < <(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -j '.commands[] | ., "\u0000"' 2>/dev/null)
-if [ "$CI_GATE_REUSABLE" != "true" ] && [ -n "$CI_GATE_COMMAND" ]; then
-  CI_PARITY_COMMANDS=("$CI_GATE_COMMAND")
+if [ "$CI_GATE_REUSABLE" != "true" ] && { [ -n "$CI_GATE_COMMAND" ] || [ -n "$CI_GATE_ERROR" ]; }; then
+  CI_PARITY_COMMANDS=("nightgauge ci gate-run")
 fi
 echo "CI parity commands discovered (${#CI_PARITY_COMMANDS[@]}): ${CI_PARITY_COMMANDS[*]}"
 ```
@@ -69,8 +73,8 @@ echo "CI parity commands discovered (${#CI_PARITY_COMMANDS[@]}): ${CI_PARITY_COM
 
 Run each CI command in order. On first failure, stop and attempt auto-fix.
 
-The repository's gate can outlive a foreground shell, so when `CI_GATE_COMMAND`
-is the command, run this step as a background command and wait for it to exit,
+The repository's gate can outlive a foreground shell, so when
+`nightgauge ci gate-run` is the command, run this step as a background command and wait for it to exit,
 as Phase 2.7 does. Its log is declared at spawn so the wait reads as work
 (`_shared/LONG_RUNNING_PROCESSES.md`, #2694).
 

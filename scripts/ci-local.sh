@@ -1275,6 +1275,12 @@ if [ "$SUMMARY_PROBE" -eq 1 ]; then
 fi
 
 if [ -n "$LEDGER_PROBE" ]; then
+  # A probe runs one trivial step, so against a real binary it would record a
+  # full pass for this tree and the next real gate would skip. Harness only.
+  if [ -z "${NIGHTGAUGE_BIN+set}" ]; then
+    echo "--ledger-probe needs NIGHTGAUGE_BIN set (a stub, or empty): it would record a false pass" >&2
+    exit 2
+  fi
   gate_ledger_open
   run_step "ledger probe passing step" true
   case "$LEDGER_PROBE" in

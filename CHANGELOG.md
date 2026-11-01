@@ -22,7 +22,9 @@ changelog, and the release workflow refuses a tag that does not.
   runs the repository's local gate as its one gate, and feature-dev now runs
   focused checks only and receives all of its phase instructions. Stage exit
   records state each stage's full gates and seconds, and
-  `nightgauge exit-records gate-summary` totals them per run and stage (#2784).
+  `nightgauge exit-records gate-summary` totals them per run and stage. The new
+  `nightgauge ci gate-run` runs the gate's steps directly, never through a shell,
+  and a declared `local_gate` that fails validation now fails the phase (#2784).
 - The extension and the Go scheduler now search the same skills trees in the same
   order. `nightgauge skill roots` is the one answer, and a pipeline run's scheduler
   searches the issue's worktree as the extension does. The Claude write deny on a

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -20,8 +21,12 @@ type gateStatus struct {
 	Reusable bool   `json:"reusable"`
 	Reason   string `json:"reason"`
 	Tree     string `json:"tree"`
-	// GateCommand is the repository's complete local gate, empty when it has none.
+	// GateCommand renders the repository's complete local gate for display,
+	// empty when it has none. Never execute it: `ci gate-run` runs the gate.
 	GateCommand string `json:"gate_command"`
+	// GateError says why a declared gate cannot be used. `ci gate-run` fails with
+	// it, so a broken declaration never falls back to a lesser set of commands.
+	GateError string `json:"gate_error,omitempty"`
 	// GateRecordsItself is true when GateCommand writes its own ledger events.
 	GateRecordsItself bool   `json:"gate_records_itself"`
 	PassedStage       string `json:"passed_stage,omitempty"`
@@ -35,7 +40,9 @@ type gateStatus struct {
 func resolveGateStatus(ctx context.Context, root, kind string) gateStatus {
 	var st gateStatus
 	gate, err := contractrollout.ResolveGate(root)
-	if err == nil && !gate.Missing() {
+	if err != nil {
+		st.GateError = err.Error()
+	} else if !gate.Missing() {
 		st.GateCommand = gate.String()
 		st.GateRecordsItself = !gate.Declared
 	}
@@ -105,6 +112,39 @@ func ciGateStatusCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&kind, "kind", gateledger.KindLocalGate, "Gate kind: local-gate or parity")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
+	return cmd
+}
+
+// runRepositoryGate runs the gate of the repository at root, with each step an
+// argv. A declaration that fails validation is an error, as is having no gate.
+func runRepositoryGate(ctx context.Context, root string, stdout, stderr io.Writer) error {
+	gate, err := contractrollout.ResolveGate(root)
+	if err != nil {
+		return err
+	}
+	if gate.Missing() {
+		return fmt.Errorf("%s has no local gate", root)
+	}
+	return gate.Run(ctx, root, stdout, stderr)
+}
+
+// ciGateRunCmd implements `nightgauge ci gate-run`.
+func ciGateRunCmd() *cobra.Command {
+	var workdir string
+	cmd := &cobra.Command{
+		Use:          "gate-run",
+		Short:        "Run the repository's local gate, each step as an argv (#2784)",
+		SilenceUsage: true,
+		Example:      `  nightgauge ci gate-run`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, err := gateWorkdir(workdir)
+			if err != nil {
+				return err
+			}
+			return runRepositoryGate(cmd.Context(), root, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
 	return cmd
 }

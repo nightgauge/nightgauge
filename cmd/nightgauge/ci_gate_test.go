@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -117,6 +118,63 @@ func TestGateStatus_NamesTheRepositorysGate(t *testing.T) {
 	st = resolveGateStatus(context.Background(), root, gateledger.KindParity)
 	if st.GateCommand != "go vet ./..." || st.GateRecordsItself {
 		t.Fatalf("declared gate: %+v", st)
+	}
+}
+
+func declareGate(t *testing.T, root, config string) {
+	t.Helper()
+	dir := filepath.Join(root, ".nightgauge")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGateStatus_ReportsAnUnusableDeclaration(t *testing.T) {
+	root := gateRepo(t)
+	declareGate(t, root, "local_gate:\n  steps:\n    - [curl, http://example.invalid]\n")
+	st := resolveGateStatus(context.Background(), root, gateledger.KindParity)
+	if st.GateError == "" || st.GateCommand != "" {
+		t.Fatalf("broken declaration: %+v", st)
+	}
+	if err := runRepositoryGate(context.Background(), root, io.Discard, io.Discard); err == nil {
+		t.Fatal("gate-run accepted a broken declaration")
+	}
+}
+
+func TestGateRun_NoGateIsAnError(t *testing.T) {
+	if err := runRepositoryGate(context.Background(), gateRepo(t), io.Discard, io.Discard); err == nil {
+		t.Fatal("gate-run passed a repository with no gate")
+	}
+}
+
+// An argument's shell metacharacters stay inert: the step receives them as
+// one argument and nothing else runs.
+func TestGateRun_NeverUsesAShell(t *testing.T) {
+	root := gateRepo(t)
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "printf '%s' \"$#:$1\" > received\n"
+	if err := os.WriteFile(filepath.Join(root, "scripts", "gate.sh"), []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const arg = "x; touch injected"
+	declareGate(t, root, "local_gate:\n  steps:\n    - [sh, scripts/gate.sh, \""+arg+"\"]\n")
+	if err := runRepositoryGate(context.Background(), root, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "received"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "1:"+arg {
+		t.Fatalf("step received %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, "injected")); err == nil {
+		t.Fatal("an argument ran as shell")
 	}
 }
 

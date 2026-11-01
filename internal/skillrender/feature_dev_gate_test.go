@@ -111,7 +111,7 @@ func TestFeatureValidate_PhaseTwoFiveRunsOneGate(t *testing.T) {
 	body := string(data)
 	order := []string{
 		"nightgauge ci gate-status --kind parity --json",
-		`CI_PARITY_COMMANDS=("$CI_GATE_COMMAND")`,
+		`CI_PARITY_COMMANDS=("nightgauge ci gate-run")`,
 		"--event finish --run-id \"$CI_GATE_RUN\" --kind parity",
 		`if [ "$CI_GATE_REUSABLE" = "true" ]; then`,
 		`status: "skipped"`,

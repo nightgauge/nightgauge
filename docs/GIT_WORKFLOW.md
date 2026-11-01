@@ -1409,7 +1409,7 @@ In a pipeline run, feature-dev runs focused checks only. feature-validate's Phas
 can skip `go test` on that tree and a later push on it reuses the pass. A review
 fix changes the tree, so it is gated again. `nightgauge exit-records gate-summary`
 totals gates per stage and run. See
-[GO_BINARY.md](GO_BINARY.md#ci-gate-status-and-ci-gate-record).
+[GO_BINARY.md](GO_BINARY.md#ci-gate-status-ci-gate-run-and-ci-gate-record).
 
 ### The gate is not the loop
 

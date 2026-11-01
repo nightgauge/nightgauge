@@ -4498,7 +4498,7 @@ Each failure entry:
 `ci discover-commands` is used by `skills/nightgauge-feature-validate/SKILL.md`
 Phase 2.5.1.
 
-#### `ci gate-status` and `ci gate-record`
+#### `ci gate-status`, `ci gate-run` and `ci gate-record`
 
 One tree-keyed ledger, `gate-runs.jsonl` in the pipeline state directory, counts
 full gates and reuses a pass (#2784). `scripts/ci-local.sh` and feature-validate
@@ -4506,6 +4506,7 @@ Phase 2.5 go through these verbs; nothing writes the file by path.
 
 ```bash
 nightgauge ci gate-status --kind local-gate --json
+nightgauge ci gate-run
 RUN=$(nightgauge ci gate-record --event start --kind parity --tree "$TREE" --full)
 nightgauge ci gate-record --event finish --run-id "$RUN" --kind parity --tree "$TREE" \
   --verdict pass --full --seconds 120
@@ -4513,8 +4514,11 @@ nightgauge ci gate-record --event finish --run-id "$RUN" --kind parity --tree "$
 
 `gate-status` prints `reusable`, `reason`, `tree`, `gate_command`,
 `gate_records_itself`, and `passed_stage`, `passed_at` and `passed_seconds` when
-reusable. `gate_command` is the repository's `local_gate`, else
-`bash scripts/ci-local.sh` when that script exists.
+reusable, and `gate_error` when a declared gate fails validation. `gate_command`
+renders the repository's `local_gate`, else `bash scripts/ci-local.sh` when that
+script exists. It is for display and is never executed: arguments may hold shell
+metacharacters. `gate-run` runs each step as an argv, stops at the first failure,
+and fails on a `gate_error` or a repository with no gate.
 
 A pass is reusable only when it was full, the tree held still for the whole run,
 and no later failure or infrastructure stop landed on that tree. A `local-gate`
