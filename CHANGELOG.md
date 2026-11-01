@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The malware-scan gate now refuses input it cannot trust. A non-numeric, empty or
+  oversized `--min-scanned-mb` or `--min-signatures`, a value flag with no value
+  (which used to hang), and a `clamconf` that is missing, unparseable or names no
+  real directory all stop the scan before any artifact is read.
+- `scripts/test-malware-scan.sh` reports a local ClamAV that cannot scan a benign
+  file as could-not-run, naming the binary, instead of as a failed assertion, and
+  its real-engine arm no longer depends on the local database size.
+- `scripts/install-clamav-macos.sh` keeps the signature directory root-owned
+  outside CI, repairing an earlier install, and prints the `sudo` update command.
+  `docs/RELEASE_CHECKLIST.md` now covers `MIN_SIGNATURES` in a pin bump and what
+  to do when a clean `freshclam` still trips the floor.
 - A green PR now merges through the deterministic path instead of paying for an
   LLM stage. The extension asks the new `nightgauge pr-stage budget` for its
   timeout, so a normal merge-queue wait no longer kills the run, and a transient
