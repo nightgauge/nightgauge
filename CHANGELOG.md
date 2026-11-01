@@ -234,6 +234,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- PR Review no longer runs on every pull request. It is a manual
+  `workflow_dispatch` second opinion on the Claude subscription
+  (`CLAUDE_CODE_OAUTH_TOKEN`), so it adds no per-use model spend, and a red
+  advisory check can no longer stop `pr-merge` on finished work (#2828).
 - **A PR closes its issue only when every acceptance criterion is met
   (#2655).** pr-create wrote `Closes #N` whenever no criterion was outright
   unmet, so a PR whose criteria could not be verified — or an issue with none
