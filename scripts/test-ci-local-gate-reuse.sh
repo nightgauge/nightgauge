@@ -111,10 +111,14 @@ check "an older binary runs in full" "$(result has "$OUT" "ledger probe passing 
 check "an older binary says nothing was recorded" "$(result has "$OUT" "has no ci gate-status")"
 
 : > "$STUB_LOG"
-OUT="$(CI=true PATH="$CLEAN_PATH" NIGHTGAUGE_BIN="$TMP/bin/nightgauge" STUB_STATUS="$PASSED" bash "$GATE" --ledger-probe pass 2>&1)"
+OUT="$(GITHUB_ACTIONS=true PATH="$CLEAN_PATH" NIGHTGAUGE_BIN="$TMP/bin/nightgauge" STUB_STATUS="$PASSED" bash "$GATE" --ledger-probe pass 2>&1)"
 CALLS="$(cat "$STUB_LOG")"
 check "CI never consults the ledger" "$(result test -z "$CALLS")"
 check "CI runs the step" "$(result has "$OUT" "ledger probe passing step")"
+
+: > "$STUB_LOG"
+OUT="$(CI=true PATH="$CLEAN_PATH" NIGHTGAUGE_BIN="$TMP/bin/nightgauge" STUB_STATUS="$PASSED" bash "$GATE" --ledger-probe pass 2>&1)"
+check "a stage shell exporting CI still reuses" "$(result has "$OUT" "Gate skipped")"
 
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

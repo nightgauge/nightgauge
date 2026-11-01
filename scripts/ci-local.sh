@@ -722,14 +722,16 @@ reap_group_children() {
 # #2700): this asks whether the exact tree already passed, skips the run if so,
 # and records every run's start and finish, so a killed gate is counted too. A
 # missing or older binary means a full run and one line saying so: the safe
-# direction. CI never consults the ledger, because a runner has none to read.
+# direction. GitHub Actions never consults the ledger, because a runner has none
+# to read. Plain CI is not that test: agent stage shells export CI too, and
+# keying on it left every pipeline gate unrecorded and unreused.
 GATE_LEDGER_BIN=""
 GATE_RUN_ID=""
 GATE_TREE=""
 GATE_RUN_STARTED=0
 
 gate_ledger_open() {
-  [ -z "${CI:-}" ] || return 0
+  [ -z "${GITHUB_ACTIONS:-}" ] || return 0
   local bin status full_flag=""
   bin="${NIGHTGAUGE_BIN:-}"
   [ -n "$bin" ] && [ -x "$bin" ] || bin="$(command -v nightgauge 2>/dev/null || true)"
