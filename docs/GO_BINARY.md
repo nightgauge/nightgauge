@@ -1892,21 +1892,29 @@ nightgauge git push-branch [--json]
 
 Pushes the current branch with `git push origin HEAD:refs/heads/<branch>` and
 never forces. When the push is rejected as non-fast-forward, it checks whether
-the fork is self-inflicted: origin's origin-only commits contain no merge, and a
-three-way merge of origin's tip into the local tip is conflict-free and yields
-the local tree unchanged. That is the shape a rebased PR branch leaves. The
+the fork is self-inflicted: a three-way merge of origin's tip into the local tip
+is conflict-free and yields the local tree unchanged, whether or not origin's
+commits include merges. That is the shape a rebased PR branch leaves. The
 check compares content, not `git patch-id`, because a rebase that rewrites a
 hunk's context lines changes its patch-id. The verb then writes a commit with
 origin's tip as its first parent, the local tip as its second, and the local
 tree unchanged, moves the branch to it, and pushes again without force. If that
 push fails, the branch moves back to the original local tip. Protected branches
-(`main`, `master`, `develop`, `epic/*`) are never reconciled.
+(`main`, `master`, `develop`, `epic/*`) are never reconciled. The check uses
+`git merge-tree --write-tree`, so recovery needs git 2.38 or later; on an older
+git a rejected push exits 3 with outcome `unreconciled`. A criss-cross history
+(more than one merge base) is a fork even when the trees match.
 
 | Exit | Meaning                                                                                            |
 | ---- | -------------------------------------------------------------------------------------------------- |
 | 0    | Pushed. A recovery prints `[self-fork-recovered] origin/<b> <old>..<new>` (stderr under `--json`). |
-| 1    | Another push failure; git's stderr is passed through.                                              |
-| 3    | Genuine fork: `[branch-forked] PUSH REJECTED: …` plus the origin-only SHAs. Origin is untouched.   |
+| 1    | A failure that was not a rejection; git's stderr is passed through. Origin is untouched.           |
+| 3    | A rejected push that was not reconciled: `[branch-forked] PUSH REJECTED: …`. Origin is untouched.  |
+
+Exit 3 has two `--json` outcomes. `forked` is a genuine fork, listing the
+origin-only SHAs, or a recovery push that lost a race with origin. `unreconciled`
+means the check could not run or declined, so whether origin carries work is
+unknown.
 
 The scheduler's branch-fork pre-flight applies the same recovery before it
 blocks a stage. A run that still ends `branch_forked` has its local tip pinned

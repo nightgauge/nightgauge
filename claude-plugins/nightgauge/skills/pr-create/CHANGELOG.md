@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The stale-branch merge pushes with `nightgauge git push-branch` (#2749).** It
+  never forces, and exit 3 reports a rejected push as a fork while exit 1 keeps
+  the permission and infrastructure message.
+
 ### Fixed
 
 - **Criteria the diff answers are checked against the diff (#2665).** The

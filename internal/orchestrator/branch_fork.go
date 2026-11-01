@@ -395,30 +395,36 @@ func ReconcileSelfFork(ctx context.Context, dir, branch string) SelfForkResult {
 			return res
 		}
 	}
-	baseOut, _, err := runGit(ctx, dir, "merge-base", local, remote)
+	baseOut, _, err := runGit(ctx, dir, "merge-base", "--all", local, remote)
 	if err != nil {
 		res.Detail = fmt.Sprintf("no merge base between local %s and origin/%s %s: %v",
 			shortSHA(local), branch, shortSHA(remote), err)
 		return res
 	}
-	base := strings.TrimSpace(baseOut)
-
-	mergesOut, _, err := runGit(ctx, dir, "rev-list", "--merges", base+".."+remote)
-	if err != nil {
-		res.Detail = fmt.Sprintf("could not list origin-only commits: %v", err)
+	bases := strings.Fields(baseOut)
+	if len(bases) == 0 {
+		res.Detail = fmt.Sprintf("no merge base between local %s and origin/%s %s",
+			shortSHA(local), branch, shortSHA(remote))
 		return res
 	}
-	if m := strings.Fields(mergesOut); len(m) > 0 {
+	base := bases[0]
+	// A criss-cross is a fork whatever its trees say: a merge cannot show which
+	// side's history the branch should keep, and a false fork stops the run with
+	// its tip pinned, where a false recovery buries origin's work.
+	if len(bases) > 1 {
 		res.Outcome = SelfForkForked
-		res.Unmatched = m
-		res.Detail = fmt.Sprintf("origin/%s carries merge commit %s this run cannot prove it authored",
-			branch, shortSHA(m[0]))
+		res.Unmatched = originOnlyCommits(ctx, dir, base, local, remote)
+		res.Detail = fmt.Sprintf("origin/%s and local %s are a criss-cross with %d merge bases — a genuine fork",
+			branch, shortSHA(local), len(bases))
 		return res
 	}
 
-	mergedOut, code, mergeErr := runGit(ctx, dir, "merge-tree", "--write-tree", "--merge-base="+base, local, remote)
+	// A merge commit gets no special case: the freshness check puts them on
+	// origin routinely, and merged tree == local tree proves one adds nothing.
+	mergedOut, code, mergeErr := runGit(ctx, dir, "merge-tree", "--write-tree", local, remote)
 	if mergeErr != nil && code != 1 {
-		res.Detail = fmt.Sprintf("could not merge origin/%s into local: %v", branch, mergeErr)
+		// `merge-tree --write-tree` needs git 2.38+; an older git lands here.
+		res.Detail = fmt.Sprintf("could not merge origin/%s into local (needs git 2.38+): %v", branch, mergeErr)
 		return res
 	}
 	treeOut, _, err := runGit(ctx, dir, "rev-parse", "--verify", "--quiet", local+"^{tree}")

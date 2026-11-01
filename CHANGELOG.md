@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge git push-branch` now ends a rejected push it could not reconcile as a fork (exit 3
+  with the `[branch-forked]` marker, and `--json` outcome `unreconciled` when the check could not
+  run), so a stage can no longer carry on from an unpushed branch
+  (#2749). Self-fork recovery judges an origin merge commit by content, so a branch updated by
+  merging its base recovers, while a merge carrying work the local tree lacks, or a criss-cross
+  history, stays a fork. The verb no longer prints usage after a verdict, the freshness check's
+  best-effort pushes keep their cause but no longer emit the terminal marker, and the scheduler
+  logs why a self-fork was not recovered. `pr-create`'s stale-branch merge now pushes through the
+  verb too. Recovery needs git 2.38 or later.
 - A green PR now merges through the deterministic path instead of paying for an
   LLM stage. The extension asks the new `nightgauge pr-stage budget` for its
   timeout, so a normal merge-queue wait no longer kills the run, and a transient

@@ -10,6 +10,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **The Phase 5.5 freshness check merges the base instead of rebasing (#2699).**
+  It pushes with `nightgauge git push-branch`, never `--force-with-lease`. Phase
+  6 conflict resolution still rebases.
+- **Phase 5.5's best-effort pushes keep the terminal marker out of the transcript
+  (#2749).** A failed push still prints its cause, with the fork tokens filtered
+  out, so a stage that carries on is not classified `branch_forked`.
 - **Review-fix rounds are capped and gated (#2730).** Phase 5 asks
   `pr-stage review-gate`, fixes `hold` findings only, and wraps its one round in
   `pr-stage review-round begin|end`. Step 6.3 runs the gate before merging. Every

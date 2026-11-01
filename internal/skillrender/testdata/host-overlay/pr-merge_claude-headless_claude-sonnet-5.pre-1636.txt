@@ -1427,9 +1427,16 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
   if git merge --no-edit -m "Merge origin/$FRESHNESS_BASE into $CURRENT_BRANCH" "origin/$FRESHNESS_BASE" 2>/dev/null; then
     echo "Merge successful. Branch is now up-to-date with $FRESHNESS_BASE."
     # Plain push; push-branch never forces and recovers a self-inflicted fork.
-    if ! nightgauge git push-branch; then
+    # Best-effort: the cause is printed with the fork tokens filtered out, so a
+    # rejection here cannot stamp the `[branch-forked]` terminal marker on a
+    # stage that carries on (#2749). The filter copies the `branch_forked`
+    # clauses of internal/terminalkind/table.json.
+    PUSH_ERR=$(mktemp)
+    if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
       echo "WARNING: Failed to push merged branch. Continuing with the local merge."
+      grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
     fi
+    rm -f "$PUSH_ERR"
   else
     # Merge stopped on conflicts — check if they are resolvable.
     #
@@ -1485,7 +1492,12 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
 
       if git commit --no-edit 2>/dev/null; then
         echo "Conflict resolution successful."
-        nightgauge git push-branch || true
+        PUSH_ERR=$(mktemp)
+        if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+          echo "WARNING: Failed to push merged branch. Continuing with the local merge."
+          grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
+        fi
+        rm -f "$PUSH_ERR"
       else
         echo "ERROR: Committing the merge failed after conflict resolution."
         git merge --abort 2>/dev/null || true
@@ -1512,8 +1524,8 @@ fi
   failed. The calling phase should decide whether to abort or continue.
 
 **Safety**: Merges the base and pushes with `nightgauge git push-branch`, which
-never forces. If the push fails, the local merge is still valid for build/test
-validation.
+never forces. If the push fails, the cause is printed without the terminal
+marker, and the local merge is still valid for build/test validation.
 
 
 If `FRESHNESS_CHECK_FAILED=true`, proceed to Phase 6 anyway — the reactive

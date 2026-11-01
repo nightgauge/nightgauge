@@ -26,23 +26,30 @@ const (
 // pushBranchResult is the --json payload of `git push-branch`.
 type pushBranchResult struct {
 	Branch    string   `json:"branch"`
-	Outcome   string   `json:"outcome"` // pushed | recovered | forked | failed
+	Outcome   string   `json:"outcome"` // pushed | recovered | forked | unreconciled | failed
 	OldSHA    string   `json:"old_sha,omitempty"`
 	NewSHA    string   `json:"new_sha,omitempty"`
 	Unmatched []string `json:"unmatched,omitempty"`
 	Detail    string   `json:"detail,omitempty"`
 }
 
+// pushBranchAttempt is the push runPushBranch makes. A test replaces it to move
+// origin between the reconcile and the retry.
+var pushBranchAttempt = pushPlain
+
 // gitPushBranchCmd pushes the current branch to origin without ever forcing.
 // A non-fast-forward rejection is reconciled with ReconcileSelfFork: a
 // self-fork (a rebased PR branch whose origin copy carries no change the local
 // tree lacks) is recovered with a commit descending from origin's tip and
-// pushed plainly; a genuine fork prints [branch-forked] and exits 3.
+// pushed plainly; a genuine fork, or a rejection that could not be reconciled,
+// prints [branch-forked] and exits 3. Exit 1 is reserved for a failure that was
+// not a rejection.
 func gitPushBranchCmd() *cobra.Command {
 	var outputJSON bool
 	cmd := &cobra.Command{
-		Use:   "push-branch",
-		Short: "Push the current branch to origin, recovering a self-inflicted fork without force (#2699)",
+		Use:          "push-branch",
+		Short:        "Push the current branch to origin, recovering a self-inflicted fork without force (#2699)",
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, err := os.Getwd()
 			if err != nil {
@@ -80,7 +87,7 @@ func runPushBranch(ctx context.Context, dir string, outputJSON bool, stdout, std
 	branch := strings.TrimSpace(branchOut)
 	res := pushBranchResult{Branch: branch}
 
-	pushErr, rejected := pushPlain(ctx, dir, branch)
+	pushErr, rejected := pushBranchAttempt(ctx, dir, branch)
 	if pushErr == "" {
 		res.Outcome = "pushed"
 		return emit(res, pushBranchOK)
@@ -95,12 +102,18 @@ func runPushBranch(ctx context.Context, dir string, outputJSON bool, stdout, std
 	res.OldSHA, res.Unmatched, res.Detail = rec.RemoteSHA, rec.Unmatched, rec.Detail
 	switch rec.Outcome {
 	case orchestrator.SelfForkRecovered:
-		if again, _ := pushPlain(ctx, dir, branch); again != "" {
+		if again, againRejected := pushBranchAttempt(ctx, dir, branch); again != "" {
 			fmt.Fprint(stderr, again)
 			if err := orchestrator.RollbackSelfFork(ctx, dir, rec); err != nil {
 				fmt.Fprintf(stderr, "push-branch: could not roll back recovery commit: %v\n", err)
 			}
-			res.Outcome, res.Detail = "failed", strings.TrimSpace(again)
+			res.Detail = strings.TrimSpace(again)
+			if againRejected {
+				fmt.Fprintln(stderr, "[branch-forked] PUSH REJECTED: origin moved during recovery")
+				res.Outcome = "forked"
+				return emit(res, pushBranchForked)
+			}
+			res.Outcome = "failed"
 			return emit(res, pushBranchFailed)
 		}
 		res.Outcome, res.NewSHA = "recovered", rec.NewSHA
@@ -121,10 +134,13 @@ func runPushBranch(ctx context.Context, dir string, outputJSON bool, stdout, std
 		res.Outcome = "forked"
 		return emit(res, pushBranchForked)
 	default:
+		// The push was rejected and the reconcile produced no recovery. Whether
+		// origin carries work is unknown, but the branch is unpushed, so the run
+		// must stop here, never defer past it.
 		fmt.Fprint(stderr, pushErr)
-		fmt.Fprintf(stderr, "push-branch: could not reconcile: %s\n", rec.Detail)
-		res.Outcome = "failed"
-		return emit(res, pushBranchFailed)
+		fmt.Fprintf(stderr, "[branch-forked] PUSH REJECTED: could not reconcile: %s\n", rec.Detail)
+		res.Outcome = "unreconciled"
+		return emit(res, pushBranchForked)
 	}
 }
 
