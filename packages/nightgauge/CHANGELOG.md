@@ -29,6 +29,9 @@ and this project adheres to
 - The Output window's Overview card shows the right time for a running issue. A run
   taking over a reused slot starts from a clean record, a stage boundary no longer
   marks a live run finished, and the card's timer follows the new run.
+- Retry on a halted repository's Action Center card now resumes the repository
+  and closes the card. It used to freeze the scheduler until the daemon
+  restarted, while the status still read running (#2750).
 - The Claude plugin keeps working after an extension upgrade. Its marketplace now
   lives in global storage, and an existing install moves there with its plugin data
   intact. A plugin that failed to load is repaired on activation, or Claude Code's
