@@ -20,7 +20,6 @@ import {
   rootsFromRenderArgs,
   skillRenderStdout,
 } from "../helpers/skillRender";
-import * as path from "path";
 import type { ChildProcess } from "child_process";
 import { EventEmitter } from "events";
 import * as fs from "fs";
@@ -403,7 +402,12 @@ describe("skillRunner - File Discovery and Parsing", () => {
       vi.mocked(execFileSync).mockImplementationOnce(() => {
         throw new Error("spawn ENOENT");
       });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       expect(findSkillFile("feature-dev")).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("skill roots failed: spawn ENOENT")
+      );
+      warn.mockRestore();
     });
 
     it("renders a pinned run from its pinned root", () => {
