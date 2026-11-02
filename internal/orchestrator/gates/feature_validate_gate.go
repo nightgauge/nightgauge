@@ -3,6 +3,7 @@ package gates
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/ci"
@@ -66,10 +67,17 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 			}, KindFail, TerminalKindValidationFailed
 		}
 		var failed []string
+		capped := false
 		for _, r := range verdicts {
 			if r.Result != "pass" {
 				failed = append(failed, fmt.Sprintf("%s=%s", r.GateName, r.Result))
+				capped = capped || isReviewCapRow(r)
 			}
+		}
+		if capped {
+			// #2865: the cap says something about this issue, so it parks here
+			// rather than failing as a repository-halting validation_failed.
+			return false, "the independent review reached its round cap", failed, KindFail, TerminalKindReviewCapReached
 		}
 		if len(failed) > 0 {
 			// Real quality-gate failure — work happened and produced a failing result.
@@ -94,6 +102,21 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 		}
 		return true, "all quality gates passed", details, KindOK, ""
 	})
+}
+
+// ReviewGateName and ReviewCapMarker mirror review.GateName and review.CapMarker:
+// internal/hooks imports this package and review's tests import hooks, so this
+// package cannot import review. orchestrator's
+// TestGateTerminalKindConstantsMirrorOrchestrator pins the pairs equal.
+const (
+	ReviewGateName  = "adversarial-review"
+	ReviewCapMarker = "[review-cap-reached]"
+)
+
+// isReviewCapRow reports whether a row records a review stopped by its round cap
+// (#2865). The result stays "catch"; the row's summary carries the marker.
+func isReviewCapRow(r state.GateResult) bool {
+	return r.GateName == ReviewGateName && strings.HasPrefix(r.ErrorSummary, ReviewCapMarker)
 }
 
 // judgeGateName is the gate_name of adversarial judge rows, written by

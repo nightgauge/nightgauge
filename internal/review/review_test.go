@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -343,8 +344,22 @@ func TestCapIsPerPipelineRunAndCountsCatchesOnly(t *testing.T) {
 	if err != nil || !p.CapReached || p.Result.Verdict != "catch" {
 		t.Fatalf("round 4 must stop: %+v, %v", p, err)
 	}
-	if got := rows(t, root); got[len(got)-1].Result != "catch" {
-		t.Fatalf("the cap must leave a catch: %+v", got)
+	if len(p.Result.Fix) != 1 || p.Result.Counts.Blocker != 1 {
+		t.Fatalf("the last catch's findings must stand at the cap: %+v", p.Result)
+	}
+	got := rows(t, root)
+	if last := got[len(got)-1]; last.Result != "catch" || !strings.HasPrefix(last.ErrorSummary, CapMarker) {
+		t.Fatalf("the cap must leave a marked catch: %+v", last)
+	}
+	rec, err := LatestCap(root, s.Issue)
+	if err != nil || rec == nil {
+		t.Fatalf("no cap record: %+v, %v", rec, err)
+	}
+	if rec.Worktree != root || rec.Tree != "t3" || len(rec.Outcome.Fix) != 1 {
+		t.Fatalf("the record must name the worktree and the findings: %+v", rec)
+	}
+	if n, err := gateledger.ReviewCatches(root, s.Issue, s.PipelineRun); err != nil || n != MaxRounds {
+		t.Fatalf("the cap record must not count as a round: %d, %v", n, err)
 	}
 	s.PipelineRun = "next"
 	if p, err := Consult(s); err != nil || p.CapReached || p.Round != 1 {
@@ -549,5 +564,26 @@ func TestPassesMatchTheDoc(t *testing.T) {
 	if want := strings.TrimRight(doc[start:end], "\n") + "\n"; want != string(passesDoc) {
 		t.Fatalf("internal/review/passes.md differs from the Passes through Caps sections of "+
 			"docs/PR_REVIEW_PASSES.md. Copy them across.\nwant:\n%s", want)
+	}
+}
+
+func TestCapWithNoReadableCatchStillReports(t *testing.T) {
+	root := repo(t)
+	s := session(root, "t3")
+	for i := range MaxRounds {
+		if err := gateledger.Append(root, gateledger.Event{
+			RunID: fmt.Sprintf("c%d", i), Event: gateledger.EventFinish, Kind: gateledger.KindReview,
+			Tree: fmt.Sprintf("t%d", i), Verdict: gateledger.VerdictFail, Issue: s.Issue,
+			PipelineRun: s.PipelineRun,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := Consult(s)
+	if err != nil || !p.CapReached {
+		t.Fatalf("the cap must stop: %+v, %v", p, err)
+	}
+	if p.Result.Fix == nil || len(p.Result.Fix) != 0 {
+		t.Fatalf("an unreadable catch leaves an empty fix list, never nil: %+v", p.Result)
 	}
 }

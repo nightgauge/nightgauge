@@ -99,6 +99,9 @@ const (
 	// TerminalKindDevContextStale: FeatureDevGate found a dev-N.json that
 	// predates the stage it is judging (#2637) — a prior attempt's handoff.
 	TerminalKindDevContextStale = "dev_context_stale"
+	// TerminalKindReviewCapReached: FeatureValidateGate found the review stopped
+	// by its round cap (#2865) — one issue's outcome, not a repository's.
+	TerminalKindReviewCapReached = "review_cap_reached"
 )
 
 // GateResult is the in-process value returned by a StageGate.Verify call.

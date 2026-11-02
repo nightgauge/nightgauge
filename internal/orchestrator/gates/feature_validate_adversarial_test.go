@@ -51,3 +51,24 @@ func mustAppend(t *testing.T, ws string, issue int, gate, result, errSummary str
 		t.Fatalf("append gate metric: %v", err)
 	}
 }
+
+// TestFeatureValidateGate_ReviewCapParks: the cap is one issue's outcome, so the
+// gate must not report the repository-halting validation_failed (#2865).
+func TestFeatureValidateGate_ReviewCapParks(t *testing.T) {
+	ws := layouttest.Repo(t)
+	mustAppend(t, ws, 2865, "build", "pass", "")
+	mustAppend(t, ws, 2865, ReviewGateName, "catch", ReviewCapMarker+" review round cap of 3 reached")
+
+	res := FeatureValidateGate{}.Verify(context.Background(), 2865, ws)
+	if res.Passed || res.TerminalKind != TerminalKindReviewCapReached {
+		t.Fatalf("passed=%v kind=%q, want a failure of kind %q", res.Passed, res.TerminalKind, TerminalKindReviewCapReached)
+	}
+
+	// A later review of a new run supersedes the cap row, and an ordinary catch
+	// keeps the ordinary kind.
+	mustAppend(t, ws, 2865, ReviewGateName, "catch", "1 to fix; correctness: nil-deref")
+	res = FeatureValidateGate{}.Verify(context.Background(), 2865, ws)
+	if res.TerminalKind != TerminalKindValidationFailed {
+		t.Fatalf("kind = %q, want %q", res.TerminalKind, TerminalKindValidationFailed)
+	}
+}

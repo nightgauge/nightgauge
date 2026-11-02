@@ -1423,6 +1423,24 @@
       "rationale": "The second clause shape of the same kind: planning's plan_file exists as far as the context says but cannot be stat'ed (ENOTDIR, EACCES). Pinned separately so a clause deleted for `failed to stat` goes red on its own."
     },
     {
+      "id": "review-cap-reached-extension",
+      "input": "[review-cap-reached] feature-validate stopped at the independent review's round cap with findings standing. The code was intentionally NOT committed or pushed and stays in this run's worktree. Parking this issue for an operator.",
+      "expected": "review_cap_reached",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "HeadlessOrchestrator.verifyPostValidateState on errorCategory review-cap-reached (#2865)",
+      "rationale": "The whole text the extension reports. A cap is one issue's outcome, so this must park; reading as validation_failed is the defect that halted the repository."
+    },
+    {
+      "id": "review-cap-reached-summary",
+      "input": "[review-cap-reached] review round cap of 3 reached with defects unfixed",
+      "expected": "review_cap_reached",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "review.Consult's cap summary, which the metric row carries (#2865)",
+      "rationale": "The review's own summary reaches failure text through the validate notes, so it must name the same kind as the extension's sentence."
+    },
+    {
       "id": "dev-step-cap-reached",
       "input": "[dev-step-cap-reached] feature-dev ran 12 sub-session(s), its bound, with 3 plan task(s) still unchecked",
       "expected": "dev_step_cap_reached",

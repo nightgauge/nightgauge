@@ -341,6 +341,7 @@ export const ValidateContextSchema = z
         "mobile-mcp-tests-failed",
         "verify-ui-gate-failed",
         "gate-timeout",
+        "review-cap-reached",
       ])
       .nullish(),
     build: z

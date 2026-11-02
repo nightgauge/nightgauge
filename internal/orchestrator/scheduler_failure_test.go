@@ -20,6 +20,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
+	"github.com/nightgauge/nightgauge/internal/review"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 
@@ -2301,6 +2302,11 @@ func TestGateTerminalKindConstantsMirrorOrchestrator(t *testing.T) {
 		"PrMergeLookupFailed":         {gates.TerminalKindPrMergeLookupFailed, TerminalKindPrMergeLookupFailed},
 		"NotPipelineActionable":       {gates.TerminalKindNotPipelineActionable, TerminalKindNotPipelineActionable},
 		"DevContextStale":             {gates.TerminalKindDevContextStale, TerminalKindDevContextStale},
+		"ReviewCapReached":            {gates.TerminalKindReviewCapReached, TerminalKindReviewCapReached},
+	}
+	if gates.ReviewGateName != review.GateName || gates.ReviewCapMarker != review.CapMarker {
+		t.Errorf("gates' review mirrors drifted: %q/%q vs %q/%q",
+			gates.ReviewGateName, gates.ReviewCapMarker, review.GateName, review.CapMarker)
 	}
 	for name, p := range pairs {
 		if p[0] != p[1] {
@@ -2387,4 +2393,25 @@ func TestCLIGracefulStop_ExitZeroStillCarriesFailureText(t *testing.T) {
 				"predicate must not reintroduce)", got.ErrorText)
 		}
 	})
+}
+
+// TestFailurePausesQueue_HeldKindsStopOneIssue: under failure_mode=halt an
+// ordinary failure pauses the queue and a held kind does not (#2865).
+func TestFailurePausesQueue_HeldKindsStopOneIssue(t *testing.T) {
+	cases := []struct {
+		kind, mode string
+		want       bool
+	}{
+		{TerminalKindValidationFailed, FailureModeHalt, true},
+		{"", FailureModeHalt, true},
+		{TerminalKindReviewCapReached, FailureModeHalt, false},
+		{TerminalKindNotPipelineActionable, FailureModeHalt, false},
+		{TerminalKindArchitectureApprovalRequired, FailureModeHalt, false},
+		{TerminalKindValidationFailed, "continue-queue", false},
+	}
+	for _, c := range cases {
+		if got := failurePausesQueue(c.kind, c.mode); got != c.want {
+			t.Errorf("failurePausesQueue(%q, %q) = %v, want %v", c.kind, c.mode, got, c.want)
+		}
+	}
 }

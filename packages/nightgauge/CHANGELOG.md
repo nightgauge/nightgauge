@@ -11,6 +11,8 @@ and this project adheres to
 
 ### Fixed
 
+- A review that reaches its round cap now parks that issue instead of halting the repository
+  (#2865), and an Action Center card lists the standing findings and the worktree.
 - Pipeline PR titles from the extension's fallback path now state the change, stay within 72
   characters and carry the `(#N)` scope (#2846).
 - A merge-queue conflict now goes through conflict recovery instead of halting

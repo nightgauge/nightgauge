@@ -4556,7 +4556,8 @@ nightgauge review record --issue N --tree T --findings F --started-at S
 ```
 
 `prepare` returns `disabled`, a stored verdict (`reusable`, whose row it restores
-for a fresh worktree), `cap_reached`, or a bundle by path. The bundle is
+for a fresh worktree), `cap_reached` (with the last catch's findings in `result`
+and a ledger record naming the worktree, #2865), or a bundle by path. The bundle is
 `.nightgauge/review/<N>-*`: inside the workspace, so every adapter reaches it with
 no grant, and ignored, so it does not move the tree. `prepare` exits non-zero
 where git does not confirm that, and removes the issue's earlier bundles. The

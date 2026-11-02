@@ -655,6 +655,14 @@ const (
 	// breaker; and an uncharged retry of a stage that keeps writing nothing
 	// would loop with no cap to stop it.
 	TerminalKindDevContextStale = "dev_context_stale"
+	// TerminalKindReviewCapReached: feature-validate's independent review reached
+	// its round cap with findings standing (#2865). It parks: the fault, if any,
+	// is one issue's, so it must not stop the repository, and a retry of the same
+	// tree buys the same review. The work stays uncommitted in the run's worktree
+	// and the Action Center card names it, with the findings. It is not
+	// TerminalKindNotPipelineActionable, whose claim is that no lap can produce
+	// the deliverable and whose path labels the issue owner-action.
+	TerminalKindReviewCapReached = "review_cap_reached"
 )
 
 // TerminalKindParks reports whether the scheduler parks a failure of this
@@ -665,7 +673,8 @@ const (
 func TerminalKindParks(kind string) bool {
 	switch kind {
 	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible,
-		TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing:
+		TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing,
+		TerminalKindReviewCapReached:
 		return true
 	}
 	return false
@@ -706,6 +715,10 @@ func TerminalKindRemediation(kind string) string {
 		return "feature-dev's gate found only a prior attempt's dev-N.json, so this attempt wrote no handoff and was " +
 			"not judged on the old one; file a pipeline-gap issue with the run's evidence, delete or regenerate the " +
 			"stale dev-N.json in the pipeline state directory, " + parkedReleaseStep
+	case TerminalKindReviewCapReached:
+		return "the independent review reached its round cap with findings standing, and the work is uncommitted in " +
+			"the run's worktree; the Action Center card lists both. Finish the fixes there or narrow the issue, " +
+			parkedReleaseStep + " — a release re-runs the pipeline with a fresh round count"
 	case TerminalKindAdapterIncompatible:
 		return "the adapter's binary cannot serve this dispatch; install a version at or above the floor the refusal names " +
 			"or pin the adapter's binary to it, " + parkedReleaseStep

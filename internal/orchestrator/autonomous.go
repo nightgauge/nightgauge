@@ -3326,6 +3326,10 @@ func (as *AutonomousScheduler) releaseOperatorHoldsLocked(scope string) []string
 		if inScope && f.hold() == HoldOperatorResume {
 			released = append(released, key)
 			log.Printf("autonomous: released %s — operator resume clears the %q hold", key, f.Kind)
+			if f.Kind == TerminalKindReviewCapReached {
+				repo, number := f.Repo, f.Number
+				as.dispatchAttention(func() { as.retractReviewCap(repo, number) })
+			}
 			continue
 		}
 		kept = append(kept, f)
@@ -3905,6 +3909,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 
 	// 6. Fill slots with top candidates (safety-checked)
 	dispatched := 0
+dispatchLoop:
 	for i := 0; i < len(candidates) && dispatched < availableSlots; i++ {
 		// Stop-aware bail-out: if Stop() was called since this cycle began,
 		// abort the rest of the dispatch loop. Without this, the user's
@@ -3921,38 +3926,16 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		// paused, then #785 dispatched at 13:25:38 — same cycle. Re-check
 		// state.Status per-candidate so a Pause mid-cycle takes effect
 		// immediately.
-		as.mu.Lock()
-		stopRequested := as.stopRequested
-		statusNow := as.state.Status
-		as.mu.Unlock()
-		if stopRequested {
-			log.Printf("autonomous: stop requested mid-cycle — skipping %d remaining dispatches", len(candidates)-i)
-			break
-		}
-		if statusNow != "running" {
-			log.Printf("autonomous: status changed mid-cycle to %q — skipping %d remaining dispatches",
-				statusNow, len(candidates)-i)
-			break
-		}
-
 		item := candidates[i]
-		// Skip items already running
-		if as.isRunning(item.Repo, item.Number) {
+		switch as.dispatchStopFor(item, len(candidates)-i) {
+		case dispatchStopFleet:
+			break dispatchLoop
+		case dispatchStopRepo:
 			continue
 		}
 
-		// #1148: skip candidates in a HALTED repository. A terminal stage
-		// failure is evidence about one repo, so it stops that repo and
-		// nothing else — this `continue` is the whole difference between a
-		// repo-scoped halt and the fleet-wide pause it replaces. Runs already
-		// in flight are untouched (this loop only starts new ones), in this
-		// repo and every other.
-		as.mu.Lock()
-		haltedRepo := repoPaused(as.state, item.Repo)
-		as.mu.Unlock()
-		if haltedRepo {
-			log.Printf("autonomous: skipping %s#%d — repository halted awaiting triage (Resume %s to continue)",
-				item.Repo, item.Number, item.Repo)
+		// Skip items already running
+		if as.isRunning(item.Repo, item.Number) {
 			continue
 		}
 
@@ -4069,7 +4052,6 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 				}
 				return
 			}
-			as.safetyRails.RecordPipelineStart()
 		}
 
 		// Refine-if-slot-free, immediately before dispatch (#1514). This is
@@ -4078,6 +4060,20 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		// unrefined (with a line saying so) when they do not. A cold workspace
 		// therefore needs no backlog sweep before the pipeline is useful.
 		as.refineBeforeDispatch(ctx, graph, item)
+
+		// #2865: refinement takes minutes, so what the top of this loop read may
+		// be stale. A stopped candidate is simply not started: it stays on the
+		// board for the next cycle, charged nothing, which is why the pipeline
+		// start is counted only past this point.
+		switch as.dispatchStopFor(item, len(candidates)-i) {
+		case dispatchStopFleet:
+			break dispatchLoop
+		case dispatchStopRepo:
+			continue
+		}
+		if as.safetyRails != nil {
+			as.safetyRails.RecordPipelineStart()
+		}
 
 		as.enqueueItem(ctx, item)
 		dispatched++
@@ -5217,6 +5213,45 @@ func candidatePriorityRank(p string) int {
 }
 
 // enqueueItem adds an item to the existing scheduler's queue and starts it.
+// dispatchStop is what dispatchStopFor found.
+type dispatchStop int
+
+const (
+	dispatchClear     dispatchStop = iota
+	dispatchStopFleet              // end the dispatch loop
+	dispatchStopRepo               // skip this candidate; other repositories go on
+)
+
+// dispatchStopFor re-reads what may have stopped a dispatch since the cycle
+// began. The loop asks twice per candidate: on arrival, and after pre-dispatch
+// refinement, immediately before the run starts (#2865). remaining counts this
+// candidate and those after it.
+func (as *AutonomousScheduler) dispatchStopFor(item CandidateItem, remaining int) dispatchStop {
+	as.mu.Lock()
+	stopRequested := as.stopRequested
+	statusNow := as.state.Status
+	// #1148: a terminal stage failure is evidence about one repo, so it stops
+	// that repo and nothing else. Skipping rather than ending the loop is the
+	// whole difference between a repo-scoped halt and a fleet-wide pause. Runs
+	// already in flight are untouched: the loop only starts new ones.
+	haltedRepo := repoPaused(as.state, item.Repo)
+	as.mu.Unlock()
+	switch {
+	case stopRequested:
+		log.Printf("autonomous: stop requested mid-cycle — skipping %d remaining dispatches", remaining)
+		return dispatchStopFleet
+	case statusNow != "running":
+		log.Printf("autonomous: status changed mid-cycle to %q — skipping %d remaining dispatches",
+			statusNow, remaining)
+		return dispatchStopFleet
+	case haltedRepo:
+		log.Printf("autonomous: skipping %s#%d — repository halted awaiting triage (Resume %s to continue)",
+			item.Repo, item.Number, item.Repo)
+		return dispatchStopRepo
+	}
+	return dispatchClear
+}
+
 func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateItem) {
 	// Defense-in-depth for the self-repo guard (#292): every dispatch path
 	// funnels through here, so even a candidate that slipped past the
@@ -6100,6 +6135,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			as.recordFailureLocked(repo, issue, title, now, reason, terminalFailureKind)
 			log.Printf("autonomous: %s#%d %s — parked for an operator: no retry, no lifetime-cap increment, no cascade feed, no pause — %s",
 				repo, issue, terminalFailureKind, ParkedRemediation(terminalFailureKind, detail))
+			if terminalFailureKind == TerminalKindReviewCapReached {
+				as.dispatchAttention(func() { as.raiseReviewCapReached(repo, issue, title, detail) })
+			}
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()

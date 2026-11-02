@@ -923,6 +923,20 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "pr-create's deterministic fallback confirmed the feature branch has zero commits ahead of base (#317) — genuinely nothing to open a PR for. Deliberately NOT matched on the bare phrase `no commits ahead of`: that phrase also appears in feature-validate's unrelated lost-implementation check, which must keep its organic classification."
     },
     {
+      "id": "review-cap-reached",
+      "kind": "review_cap_reached",
+      "signal": false,
+      "clauses": [
+        [
+          "[review-cap-reached]"
+        ],
+        [
+          "review_cap_reached"
+        ]
+      ],
+      "why": "The independent review reached its round cap with findings standing (#2865). Above validation-failed because it is a narrower claim about the same stage: a cap says something about one issue, so it parks instead of halting the repository. Its producers are verifyPostValidateState and the review's own summary."
+    },
+    {
       "id": "validation-failed",
       "kind": "validation_failed",
       "signal": false,

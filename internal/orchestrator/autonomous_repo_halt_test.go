@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/review"
 )
 
 // #1148 — the halt on a terminal stage failure is scoped to the repository
@@ -234,5 +236,105 @@ func TestRepoHalt_RefusesAnUnattributedRepo(t *testing.T) {
 	}
 	if len(as.PausedReposSnapshot()) != 0 {
 		t.Errorf("empty repo produced a halt record: %v", as.PausedReposSnapshot())
+	}
+}
+
+// twoIssueRepoScheduler offers two Ready issues in one repository.
+func twoIssueRepoScheduler(t *testing.T, labels ...string) (*AutonomousScheduler, *[]string) {
+	t.Helper()
+	as, dispatched := newRepoHaltScheduler(t)
+	graph := buildTestGraph([]*depgraph.Node{
+		{Repo: "acme/web", Number: 10, Title: "first", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 2, Labels: labels},
+		{Repo: "acme/web", Number: 11, Title: "second", State: "OPEN", BoardStatus: "Ready", Priority: "P2", Size: "M", Weight: 1, Labels: []string{gh.LabelRefined}},
+	}, nil)
+	as.buildGraphFn = func(context.Context) (*depgraph.Graph, error) { return graph, nil }
+	return as, dispatched
+}
+
+// TestReviewCap_LeavesTheRepositoryDispatching is AC 1 and AC 6: a capped run
+// parks its issue, and the next issue in the same repository dispatches.
+//
+// BEHAVIOURAL RED-PROOF: drop TerminalKindReviewCapReached from TerminalKindParks
+// and the run takes the failure path: the lifetime assertion fails.
+func TestReviewCap_LeavesTheRepositoryDispatching(t *testing.T) {
+	stubReconcileGhUnreachable(t)
+	as, dispatched := twoIssueRepoScheduler(t)
+	as.state.LifetimeIssueFailures = map[string]int{}
+
+	addRunning(as, "acme/web", 10, "first")
+	detail := review.CapMarker + " feature-validate stopped at the independent review's round cap"
+	as.NotifyComplete("acme/web", 10, false, false, "", detail)
+	as.drainBackground()
+
+	key := "acme/web#10"
+	if n := as.state.LifetimeIssueFailures[key]; n != 0 {
+		t.Errorf("lifetime failures = %d, want 0: a cap is not a fault", n)
+	}
+	if _, retrying := as.retryBackoff[key]; retrying {
+		t.Error("a capped run scheduled a retry")
+	}
+	if repoPaused(as.state, "acme/web") {
+		t.Error("the capped run halted its repository")
+	}
+	if got := failedKind(t, as, "acme/web", 10); got != TerminalKindReviewCapReached {
+		t.Errorf("recorded kind = %q, want %q", got, TerminalKindReviewCapReached)
+	}
+
+	as.runCycle(context.Background())
+	as.drainBackground()
+	if !dispatchedRepoHalt(*dispatched, "acme/web#11") {
+		t.Errorf("the waiting issue did not dispatch: %v", *dispatched)
+	}
+	if dispatchedRepoHalt(*dispatched, "acme/web#10") {
+		t.Errorf("the capped issue dispatched again: %v", *dispatched)
+	}
+}
+
+// TestRepoHalt_RaisedDuringRefinementStopsThatDispatch is AC 4, AC 5 and AC 6: a
+// halt raised while the candidate is being refined stops it, charges nothing,
+// spends no rate-limit start, and leaves it to dispatch after a resume.
+//
+// BEHAVIOURAL RED-PROOF: delete the dispatchStopFor call after
+// refineBeforeDispatch in runCycle and the candidate dispatches into the halted
+// repository, failing the first assertion. Move RecordPipelineStart above that
+// call and the start-count assertion fails instead.
+func TestRepoHalt_RaisedDuringRefinementStopsThatDispatch(t *testing.T) {
+	stubReconcileGhUnreachable(t)
+	as, dispatched := twoIssueRepoScheduler(t)
+	as.safetyRails = NewSafetyRails(DefaultSafetyConfig())
+	as.config.RefinementEnabled = true
+	as.markRefinedFn = func(context.Context, string, string, int) error { return nil }
+	halted := false
+	as.refinementRunner = func(context.Context, string, string, int) error {
+		if !halted {
+			halted = true
+			as.PauseRepo("acme/web", "issue #9 failed at feature-validate", haltTagSlotFailure, 9, "feature-validate")
+		}
+		return nil
+	}
+
+	as.runCycle(context.Background())
+	as.drainBackground()
+
+	if !halted {
+		t.Fatal("refinement never ran, so this test exercised nothing")
+	}
+	if len(*dispatched) != 0 {
+		t.Fatalf("dispatched into a repository halted during refinement: %v", *dispatched)
+	}
+	if n := as.safetyRails.State().PipelineStartsThisHour; n != 0 {
+		t.Errorf("rate-limit starts = %d, want 0 for a run that never started", n)
+	}
+	if len(as.state.Failed) != 0 || as.state.LifetimeIssueFailures["acme/web#10"] != 0 {
+		t.Errorf("a stopped candidate was charged: failed=%+v", as.state.Failed)
+	}
+
+	if !as.ResumeRepo("acme/web") {
+		t.Fatal("ResumeRepo released nothing")
+	}
+	as.runCycle(context.Background())
+	as.drainBackground()
+	if !dispatchedRepoHalt(*dispatched, "acme/web#10") {
+		t.Errorf("the stopped candidate did not stay queued: %v", *dispatched)
 	}
 }
