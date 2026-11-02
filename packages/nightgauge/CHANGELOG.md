@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- A build with no bundled plugin now warns when work arrives before `system/init`, and
+  prints that warning once, not again on each subagent start. The minimum Claude CLI
+  stays 2.1.223 (#2807).
+
 - A review that reaches its round cap now parks that issue instead of halting the repository
   (#2865), and an Action Center card lists the standing findings and the worktree.
 - Pipeline PR titles from the extension's fallback path now state the change, stay within 72

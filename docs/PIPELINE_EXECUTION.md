@@ -601,7 +601,10 @@ the workspace first. A directory counts only when it holds `hooks/hooks.json`.
 The CLI replaces a same-named user-level install with the `--plugin-dir` copy and
 reports one `nightgauge` entry, with source `nightgauge@inline`, so each gate fires
 once. Claude Code 2.1.223 (the manifest floor) and 2.1.316 both report `plugins` on
-`system/init`, and so does a `--resume` run.
+`system/init`, and so does a `--resume` run. `claude_init_plugin_floor.jsonl` and
+`claude_init_plugin_user_install.jsonl` in `internal/execution/testdata` are those
+captures, each with a user-level install enabled, and a test ties the first to the
+manifest's `min_version`.
 
 The stage runner reads that event on Go `RunStage` (the `claude` and `claude-sdk`
 adapters) and on the extension's headless and resume paths. See

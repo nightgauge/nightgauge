@@ -779,6 +779,16 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 			stdoutBuf = append(stdoutBuf, line...)
 			stdoutBuf = append(stdoutBuf, '\n')
 			lineStr := string(line)
+			// A Claude stage's plugin gate (#2723) decides before anything books
+			// the line (#2807). The kill comes first and the marker is appended
+			// after wg.Wait(), as for the handshake below. Nothing after the stop
+			// is processed, so cost, budgets and the served model all stay empty.
+			if pluginGate.observeLine(streamFmt, lineStr) {
+				killProcessTreeUntilGone(cmd.Process, openCodeHandshakeKillWindow)
+			}
+			if pluginGate.stopped() {
+				return
+			}
 			// Parse NDJSON for token usage (adapter-specific format)
 			event, stepAdded := tokenAcc.ParseLine(streamFmt, lineStr)
 			if stepAdded && costCap.observe(tokenAcc) {
@@ -789,11 +799,6 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 			// event, as it arrives, never once the stage has ended.
 			if stageBudget.observe(event, stepAdded, tokenAcc) {
 				stageBudget.stop()
-			}
-			// A Claude stage's plugin gate (#2723). The kill comes first and the
-			// marker is appended after wg.Wait(), as for the handshake below.
-			if pluginGate.observe(event) {
-				killProcessTreeUntilGone(cmd.Process, openCodeHandshakeKillWindow)
 			}
 			// Nightgauge OpenCode plugin handshake (#1635): step_start is the
 			// earliest point at which a tool call could possibly exist, so

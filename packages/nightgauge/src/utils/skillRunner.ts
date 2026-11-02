@@ -6030,7 +6030,7 @@ function runStageSkillHeadlessImpl(
   // stderrBuffer because that is what classifies the failure.
   const observePluginGate = (parsed: ReturnType<typeof parseStreamJsonLine>): boolean => {
     const stop = pluginGate?.observe(parsed) ?? false;
-    const notice = parsed?.subtype === "init" || stop ? pluginGate?.notice : undefined;
+    const notice = pluginGate?.takeNotice();
     if (notice) {
       stderrBuffer = appendTail(stderrBuffer, `${notice}\n`, OUTPUT_ERROR_TAIL_MAX_CHARS);
       callbacks?.onStderr?.(`${notice}\n`);
@@ -8901,7 +8901,7 @@ export function resumeSessionWithResponse(
 
   const observePluginGate = (parsed: ReturnType<typeof parseStreamJsonLine>): boolean => {
     const stop = pluginGate.observe(parsed);
-    const notice = parsed?.subtype === "init" || stop ? pluginGate.notice : undefined;
+    const notice = pluginGate.takeNotice();
     if (notice) {
       callbacks?.onStderr?.(`${notice}\n`);
     }
