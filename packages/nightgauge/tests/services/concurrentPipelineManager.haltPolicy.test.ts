@@ -216,6 +216,7 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
         "dev_context_stale",
         "environment_halt",
         "gate_plugin_missing",
+        "review_cap_reached",
       ].sort()
     );
     for (const c of SKIP_CASES.filter((c) => c.branch === "parked")) {

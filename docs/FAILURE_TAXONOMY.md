@@ -240,6 +240,7 @@ record may carry both fields, neither, or only one.
 | `merge_conflict`                 | Conflict recovery could not land a merge-queue conflict (Issue #2841) — the operator resolves the files the halt names                                                                                                                                                                                                                                                                                                               |
 | `no_changes_produced`            | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                                                                                                                                                                                                                           |
 | `not_pipeline_actionable`        | A stage declared the issue's deliverable is not producible by any pipeline lap — counsel sign-off, an operator-only credential, a human decision (Issue #1241) — not a failure and not a deferral                                                                                                                                                                                                                                    |
+| `review_cap_reached`             | The independent review reached its round cap with findings standing; the issue parks, the repository keeps dispatching, and the work stays uncommitted in the run's worktree (Issue #2865)                                                                                                                                                                                                                                           |
 | `validation_failed`              | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                                                                                                                                                                                                                      |
 | `branch_forked`                  | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action                                                                                                                                                                                                                                                                                         |
 | `abandoned_commit`               | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191)                                                                                                                                                                                                  |
@@ -304,6 +305,7 @@ from the captures in `internal/terminalkind/testdata/opencode/`.
 | The `.env` read guard rejected a `read`  | `adapter_permission_rejected` | Parked                                                  |
 | The binary cannot serve the dispatch     | `adapter_incompatible`        | Parked                                                  |
 | A retry inherited a prior dev context    | `dev_context_stale`           | Parked                                                  |
+| The review reached its round cap         | `review_cap_reached`          | Parked                                                  |
 | The model server is not listening        | `network_unavailable`         | Generic backoff; outcome recording skipped              |
 | `ProviderModelNotFoundError`             | `model_unavailable`           | Cap recovery (below)                                    |
 | An Ollama model that is not pulled       | `model_unavailable`           | Cap recovery (below)                                    |
@@ -326,6 +328,13 @@ park held while the fleet runs. The extension-driven queue agrees: its
 queue, and a test reads `TerminalKindParks` from the Go source so the two
 cannot drift (#1753).
 
+- `review_cap_reached` (#2865): the independent review caught defects in every
+  round its cap allows. The run's work stays uncommitted in its worktree, and
+  the Action Center card lists the last catch's findings and that path, read
+  from the gate ledger. The review's metric row stays `catch`; its summary
+  carries the `[review-cap-reached]` marker `FeatureValidateGate` reads, and
+  the skill's `errorCategory: "review-cap-reached"` is the extension's signal.
+  A release re-runs the pipeline with a fresh round count.
 - `context_window_exceeded`: reload the model with a larger context, route the
   stage to a model with a larger window, or split the issue. It is not an
   agent failure. The run record carries the kind for the fit check (#1645) and
@@ -561,6 +570,7 @@ kinds that halt on purpose and say so, and the three parked kinds (#1631):
 | `dev_context_stale`              | A filed pipeline-gap and the stale handoff removed   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `environment_halt`               | The check's remedy, applied to the environment       | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `gate_plugin_missing`            | An intact bundled plugin, or a newer Claude Code     | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `review_cap_reached`             | The standing findings, fixed or the issue narrowed   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 
 The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
 derives the hold from it via `HoldForTerminalKind`, so retryability has one
@@ -704,6 +714,7 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `merge_conflict`                 | `organic` — the branch's content collided with its base                                     |
 | `no_changes_produced`            | `agent` — planning/scope failure (dispatch-eligibility gap), not the model's implementation |
 | `not_pipeline_actionable`        | non-failure — the issue is misfiled, not defective; no lifetime-cap increment, no cascade   |
+| `review_cap_reached`             | non-failure — one issue's review stopped; no lifetime-cap increment, no cascade, no pause   |
 | `validation_failed`              | `organic` — true implementation failure caught by feature-validate's own quality gate       |
 | `branch_forked`                  | `infrastructure` — the pipeline's own orphaned push (or an operator's), not the code        |
 | `worktree_uncommitted`           | recoverable — work preserved, not counted as a failure                                      |
@@ -780,6 +791,7 @@ export const TerminalFailureKindSchema = z.enum([
   "no_changes_produced", // Issue #317
   "validation_failed", // Issue #326
   "not_pipeline_actionable", // Issue #1241
+  "review_cap_reached", // Issue #2865
   "branch_forked", // Issue #163
 ]);
 

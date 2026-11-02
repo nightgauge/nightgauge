@@ -5035,6 +5035,13 @@ func maxFloat64(a, b float64) float64 {
 // rots silently if nothing exercises it. Production never reassigns this.
 var newRunID = runstate.NewRunID
 
+// failurePausesQueue reports whether a failed run pauses the queued items. A held
+// kind stops one issue, for a person, so pausing would turn it back into a
+// repository stop (#2865).
+func failurePausesQueue(terminalFailureKind, mode string) bool {
+	return mode == FailureModeHalt && HoldForTerminalKind(terminalFailureKind) == HoldNone
+}
+
 // shouldSkipBoardRevert decides whether a failed run's board Status write
 // (back to Ready/Backlog, see the call site below) must be skipped rather
 // than applied. Extracted to a pure function so #1969's new condition —
@@ -5563,7 +5570,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// orchestrator crash, not preserving a normally-handled failure.
 		if !pipelineSuccess {
 			mode := GetPipelineFailureMode(workspaceRoot)
-			if mode == FailureModeHalt {
+			if failurePausesQueue(terminalFailureKind, mode) {
 				reason := QueuePausedReason{
 					Kind:        "upstream_failure",
 					FailedRunID: FailedRunID(item.Number, snap.StartedAt),
@@ -5581,8 +5588,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						item.Number, paused, reason.FailedRunID)
 				}
 			} else {
-				log.Printf("#%d: failure_mode=%s — leaving queue running after terminal failure",
-					item.Number, mode)
+				log.Printf("#%d: failure_mode=%s, kind=%q — leaving queue running after terminal failure",
+					item.Number, mode, terminalFailureKind)
 			}
 		}
 		removeCurrentRunSidecar(workspaceRoot)

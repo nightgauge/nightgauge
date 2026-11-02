@@ -554,7 +554,10 @@ Act on the JSON:
 
 - `disabled`: the gate is off. Continue.
 - `reusable`: this tree was already reviewed. Use `result`, and run no model.
-- `cap_reached`: the last catch stands. Set `VALIDATION_STATUS="failed"`.
+- `cap_reached`: the last catch stands. Set `VALIDATION_STATUS="failed"` and
+  `ERROR_CATEGORY="review-cap-reached"`, and fix nothing more: `result.fix` is
+  what stands, not more work for this run. Commit and push stay skipped, so the
+  work stays in this worktree. The issue parks; the repository keeps dispatching.
 - Otherwise it returned a bundle. If your host has a subagent tool, start one
   non-forked subagent, with no inherited conversation, and give it only the text
   of `prompt_path`. Pass it nothing about this change. Then record its result,
@@ -584,7 +587,7 @@ Never edit the findings file. The verdict is the binary's, and it writes the one
 gate-metric row, the duration, the severity counts and any discovered work.
 
 - `pass`: continue. Findings it routed to `discovered` need nothing from you.
-- `catch` with items in `fix`: fix each one, re-run the checks they touch, and
+- `catch` with items in `fix`, and no `cap_reached`: fix each one, re-run the checks they touch, and
   go back to `review prepare`. The tree changed, so that is a new round. A later
   `pass` supersedes the catch, and after three catches in a run `prepare` stops.
 - `catch` with an empty `fix`: the review did not complete, which is not a pass.

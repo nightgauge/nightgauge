@@ -43,6 +43,11 @@ const (
 	// MaxTurns is the review's turn limit, the workflow's REVIEW_MAX_TURNS.
 	MaxTurns = 80
 
+	// CapMarker opens the summary of a review stopped by its round cap. It is the
+	// terminal-kind table's clause, and the metric row's error summary carries it,
+	// because a row's result is only ever pass or catch.
+	CapMarker = "[review-cap-reached]"
+
 	maxFindings = 30
 	maxClaim    = 300
 	maxFix      = 1000
@@ -247,10 +252,13 @@ type Session struct {
 	Now         time.Time
 }
 
+// stored is the part of an outcome the ledger keeps.
+func (o Outcome) stored() ([]byte, error) {
+	return json.Marshal(Outcome{Verdict: o.Verdict, Summary: o.Summary, Counts: o.Counts, Fix: o.Fix})
+}
+
 func (s Session) ledger(verdict string, started time.Time, out Outcome) error {
-	stored, err := json.Marshal(Outcome{
-		Verdict: out.Verdict, Summary: out.Summary, Counts: out.Counts, Fix: out.Fix,
-	})
+	stored, err := out.stored()
 	if err != nil {
 		return err
 	}
@@ -274,6 +282,57 @@ func (s Session) row(out Outcome, started time.Time) error {
 	counts := out.Counts
 	return state.AppendGateMetricDetail(s.Root, s.Issue, GateName, out.Verdict, out.Summary,
 		s.Now.UTC().Format(time.RFC3339), duration, &counts)
+}
+
+// capped reports the cap: the last catch's findings stand, and the event names
+// the worktree holding the run's uncommitted work (#2865).
+func (s Session) capped() (Outcome, error) {
+	out := Outcome{
+		Verdict: "catch", Fix: []Finding{},
+		Summary: fmt.Sprintf("%s review round cap of %d reached with defects unfixed", CapMarker, MaxRounds),
+	}
+	last, err := gateledger.LastReviewCatch(s.Root, s.Issue, s.PipelineRun)
+	if err != nil {
+		return out, err
+	}
+	if last != nil {
+		var caught Outcome
+		if err := json.Unmarshal(last.Review, &caught); err == nil && caught.Fix != nil {
+			out.Fix, out.Counts = caught.Fix, caught.Counts
+		}
+	}
+	if err := s.row(out, time.Time{}); err != nil {
+		return out, err
+	}
+	stored, err := out.stored()
+	if err != nil {
+		return out, err
+	}
+	return out, gateledger.Append(s.Root, gateledger.Event{
+		RunID: fmt.Sprintf("review-%d-%d", s.Issue, s.Now.UnixNano()),
+		Event: gateledger.EventReviewCap, Kind: gateledger.KindReview, Tree: s.Tree,
+		Issue: s.Issue, Stage: Stage, PipelineRun: s.PipelineRun, Review: stored, Worktree: s.Root,
+	})
+}
+
+// CapRecord is what a capped run leaves for the operator's card.
+type CapRecord struct {
+	Tree     string
+	Worktree string
+	Outcome  Outcome
+}
+
+// LatestCap returns the issue's newest cap record, or nil.
+func LatestCap(root string, issue int) (*CapRecord, error) {
+	ev, err := gateledger.LatestReviewCap(root, issue)
+	if err != nil || ev == nil {
+		return nil, err
+	}
+	rec := &CapRecord{Tree: ev.Tree, Worktree: ev.Worktree}
+	if err := json.Unmarshal(ev.Review, &rec.Outcome); err != nil {
+		return nil, fmt.Errorf("read the review cap record: %w", err)
+	}
+	return rec, nil
 }
 
 // Consult answers whether tree needs a review. A stored verdict is returned and
@@ -309,11 +368,8 @@ func Consult(s Session) (Prepared, error) {
 	}
 	p.Round = catches + 1
 	if catches >= MaxRounds {
-		out := Outcome{
-			Verdict: "catch", Fix: []Finding{},
-			Summary: fmt.Sprintf("review round cap of %d reached with defects unfixed", MaxRounds),
-		}
-		if err := s.row(out, time.Time{}); err != nil {
+		out, err := s.capped()
+		if err != nil {
 			return p, err
 		}
 		p.CapReached, p.Result, p.Reason = true, &out, out.Summary

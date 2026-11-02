@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A review that reaches its round cap now parks one issue instead of halting the repository (#2865).
+  The run records `review_cap_reached`, with no retry and no lifetime failure, and other issues keep
+  dispatching. Its Action Center card names the cap, lists the findings still standing and gives
+  the worktree holding the uncommitted work. Parked and held kinds also no longer pause the queue
+  under `failure_mode=halt`.
+
+- A repository halt raised during pre-dispatch refinement now stops that dispatch (#2865). The
+  scheduler checks again immediately before starting a run. The candidate stays queued, is not
+  charged a failure and spends no rate-limit start.
+
 - An issue that depends on a merged pull request now dispatches instead of waiting forever (#2854).
   The off-board dependency check can read pull requests: an open one keeps the issue blocked, one
   closed without merging blocks with a log line saying so, and a number that does not exist says

@@ -43,6 +43,9 @@ const (
 	EventStart  = "start"
 	EventFinish = "finish"
 	EventReused = "reused"
+	// EventReviewCap records a review stopped by its round cap (#2865). It is not
+	// a finish, so it counts as no round and proves nothing about a tree.
+	EventReviewCap = "review_cap"
 )
 
 // Verdicts of a finish event. Infra means a check could not run, so the run
@@ -76,6 +79,9 @@ type Event struct {
 	PipelineRun string `json:"pipeline_run,omitempty"`
 	// Review is the stored outcome of a review event, owned by internal/review.
 	Review json.RawMessage `json:"review,omitempty"`
+	// Worktree is where a capped review's uncommitted work stays (#2865). The
+	// ledger is clone-shared, so a reader outside the worktree can name it.
+	Worktree string `json:"worktree,omitempty"`
 }
 
 // Path returns the ledger path for the clone holding root.
@@ -219,6 +225,39 @@ func ReviewCatches(root string, issue int, pipelineRun string) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// LastReviewCatch returns the newest review of issue that ended in a catch during
+// one pipeline run, or nil.
+func LastReviewCatch(root string, issue int, pipelineRun string) (*Event, error) {
+	entries, err := read(root)
+	if err != nil {
+		return nil, err
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.ok && e.ev.Kind == KindReview && e.ev.Event == EventFinish &&
+			e.ev.Issue == issue && e.ev.PipelineRun == pipelineRun &&
+			e.ev.Verdict != VerdictPass {
+			return &e.ev, nil
+		}
+	}
+	return nil, nil
+}
+
+// LatestReviewCap returns the newest review-cap event of issue, or nil.
+func LatestReviewCap(root string, issue int) (*Event, error) {
+	entries, err := read(root)
+	if err != nil {
+		return nil, err
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.ok && e.ev.Kind == KindReview && e.ev.Event == EventReviewCap && e.ev.Issue == issue {
+			return &e.ev, nil
+		}
+	}
+	return nil, nil
 }
 
 func satisfies(passed, wanted string) bool {

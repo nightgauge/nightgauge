@@ -3251,6 +3251,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         errorCategory?: string | null;
       };
       const status = (parsed.validation_status ?? "").trim().toLowerCase();
+      if (status === "failed" && parsed.errorCategory === "review-cap-reached") {
+        // Stable `[review-cap-reached]` marker (#2865): the cap is one issue's
+        // outcome, so it classifies as a park, not as a repository-halting
+        // validation_failed.
+        return new Error(
+          `[review-cap-reached] feature-validate stopped at the independent review's round ` +
+            `cap with findings standing. The code was intentionally NOT committed or pushed ` +
+            `and stays in this run's worktree. Parking this issue for an operator.`
+        );
+      }
       if (status === "failed") {
         const category = parsed.errorCategory ? ` (${parsed.errorCategory})` : "";
         // Stable `[validation-failed]` marker (#326) so ClassifyTerminalKind /

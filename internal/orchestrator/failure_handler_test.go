@@ -19,8 +19,9 @@ var parkedKinds = []string{
 	TerminalKindContextWindowExceeded,
 	TerminalKindAdapterPermissionRejected,
 	TerminalKindAdapterIncompatible,
-	TerminalKindEnvironmentHalt, // #101: a broken local environment
-	TerminalKindDevContextStale, // #2637: a retry judged on a prior attempt's handoff
+	TerminalKindEnvironmentHalt,  // #101: a broken local environment
+	TerminalKindDevContextStale,  // #2637: a retry judged on a prior attempt's handoff
+	TerminalKindReviewCapReached, // #2865: the review's round cap
 }
 
 // TestParkedKinds_NoRetryNoLifetimeIncrementNoCascade drives each parked kind

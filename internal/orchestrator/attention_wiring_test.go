@@ -12,8 +12,10 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/gateledger"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
+	"github.com/nightgauge/nightgauge/internal/review"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -1501,5 +1503,77 @@ func TestGatePluginMissingParks(t *testing.T) {
 	}
 	if TerminalKindRemediation(TerminalKindGatePluginMissing) == "" {
 		t.Error("a parked kind must name the operator's next step")
+	}
+}
+
+// TestProducerReviewCapNamesTheFindingsAndTheWorktree is AC 2 and AC 3.
+func TestProducerReviewCapNamesTheFindingsAndTheWorktree(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	line := 12
+	stored, err := json.Marshal(review.Outcome{Verdict: "catch", Fix: []review.Finding{
+		{Pass: "correctness", File: "a.go", Line: &line, Claim: "nil deref on empty slice", Severity: "blocker"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateledger.Append(as.workspaceRoot, gateledger.Event{
+		RunID: "r", Event: gateledger.EventReviewCap, Kind: gateledger.KindReview, Tree: "t3",
+		Issue: 2865, Review: stored, Worktree: "/tmp/wt-2865",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	as.raiseReviewCapReached("octocat/acme", 2865, "Capped", "text")
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	r := reqs[0]
+	if !strings.Contains(r.Title, "Review cap") || r.Context.Blocker != TerminalKindReviewCapReached {
+		t.Errorf("the card must name the cap: title=%q blocker=%q", r.Title, r.Context.Blocker)
+	}
+	for _, want := range []string{"a.go:12", "nil deref on empty slice", "/tmp/wt-2865", "uncommitted"} {
+		if !strings.Contains(r.Body, want) {
+			t.Errorf("body lacks %q:\n%s", want, r.Body)
+		}
+	}
+	if strings.Contains(r.Title+r.Body, "unclassified") {
+		t.Errorf("the card reads unclassified:\n%s", r.Body)
+	}
+	assertSteerSet(t, r)
+	if r.Options[0].Verb != attention.VerbAutonomousClearIssueFailures {
+		t.Errorf("first option verb = %q", r.Options[0].Verb)
+	}
+	if then, _ := r.Options[0].Args["then"].(string); strings.Contains(then, "resume") {
+		t.Errorf("nothing is paused, so the release must not resume: %q", then)
+	}
+}
+
+// TestProducerReviewCapFallsBackToTheFailureText: a missing record still names
+// the cap.
+func TestProducerReviewCapFallsBackToTheFailureText(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.raiseReviewCapReached("octocat/acme", 2865, "Capped", "[review-cap-reached] stopped")
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 || !strings.Contains(reqs[0].Body, "[review-cap-reached] stopped") {
+		t.Fatalf("no fallback card: %+v", reqs)
+	}
+}
+
+// TestReviewCapCardRetractsOnRelease covers a release from the CLI, which never
+// touches the card.
+func TestReviewCapCardRetractsOnRelease(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.state.Failed = []FailedItem{{Repo: "octocat/acme", Number: 2865, Kind: TerminalKindReviewCapReached}}
+	as.raiseReviewCapReached("octocat/acme", 2865, "Capped", "text")
+	if len(openRequests(t, as)) != 1 {
+		t.Fatal("card not raised")
+	}
+	if cleared, _ := as.ClearIssueFailures("octocat/acme#2865"); cleared != 1 {
+		t.Fatalf("cleared %d, want 1", cleared)
+	}
+	as.drainBackground()
+	if reqs := openRequests(t, as); len(reqs) != 0 {
+		t.Fatalf("the card outlived the release: %+v", reqs)
 	}
 }

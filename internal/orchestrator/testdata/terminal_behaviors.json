@@ -237,7 +237,7 @@
     },
     {
       "name": "queue-halt-on-failure",
-      "note": "Semantics differ (Go: pause with QueuePausedReason per failure_mode config; extension: clear + autonomousPause with a suppression ladder). Parity asserts both paths react to a slot failure.",
+      "note": "Semantics differ (Go: pause with QueuePausedReason per failure_mode config; extension: clear + autonomousPause with a suppression ladder). Parity asserts both paths react to a slot failure. Held kinds pause neither path (#2865): Go checks HoldForTerminalKind, the extension its HALT_SKIP sets.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "paused := s.pauseQueuedItemsUnlocked(reason)"
@@ -594,7 +594,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "a3f33a38d9f3a4b279c6821ed24790c79463f5ca120aa4ca2ce572b4e7f8d4a1"
+      "sha256": "2064e557ab80c0eb404263f95b7948e1fbe0495195de1d15820fdfc9011a7a61"
     },
     {
       "id": "extension-runSlotPipeline-finally",

@@ -21,6 +21,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { classifyTerminalKind } from "@nightgauge/sdk";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { Logger } from "../../src/utils/logger";
 import { pipelineStateDir } from "../../src/utils/cloneLayout";
@@ -105,6 +106,20 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
     const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
     expect(result).toBeInstanceOf(Error);
     expect((result as Error).message).toContain("[validation-failed]");
+  });
+
+  // Issue #2865: the cap is one issue's outcome, so its text must classify as a
+  // park. A [validation-failed] marker here is what halted the repository.
+  it("stamps the [review-cap-reached] marker on a capped review (#2865)", () => {
+    writeValidateContext(workdir, 42, {
+      validation_status: "failed",
+      errorCategory: "review-cap-reached",
+    });
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/^\[review-cap-reached\]/);
+    expect((result as Error).message).not.toContain("[validation-failed]");
+    expect(classifyTerminalKind((result as Error).message)).toBe("review_cap_reached");
   });
 
   // The exact production scenario: a Flutter/UI validation failure whose

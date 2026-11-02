@@ -34,6 +34,7 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
+	"github.com/nightgauge/nightgauge/internal/review"
 	"github.com/nightgauge/nightgauge/internal/trace"
 )
 
@@ -55,6 +56,7 @@ const (
 	producerSafetyRailTrip      = "safety-rail-trip"
 	producerEpicIntegration     = "epic-integration"
 	producerGatePluginMissing   = "gate-plugin-missing"
+	producerReviewCap           = "review-cap"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -96,6 +98,10 @@ func keyEpicIntegration(repo string, epic int) string {
 
 func keyArchitectureApproval(repo string, issue int) string {
 	return fmt.Sprintf("%s:%s#%d", producerArchitectureApprove, repo, issue)
+}
+
+func keyReviewCap(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerReviewCap, repo, issue)
 }
 
 // keyTerminalFailure builds the sticky (producer, idempotency_key) identity
@@ -488,6 +494,70 @@ func (as *AutonomousScheduler) raiseArchitectureApproval(repo string, issue int,
 	})
 }
 
+// raiseReviewCapReached surfaces a run parked at the review's round cap (#2865):
+// what still stands and where the work is. The ledger holds both, because the
+// card is raised outside the run's worktree; without a record it falls back to
+// the failure text, so the cap is still named.
+func (as *AutonomousScheduler) raiseReviewCapReached(repo string, issue int, title, detail string) {
+	rec, err := review.LatestCap(as.steerRootFor(repo), issue)
+	if err != nil {
+		log.Printf("attention: read review cap record for %s#%d (fail-open): %v", repo, issue, err)
+	}
+	key := fmt.Sprintf("%s#%d", repo, issue)
+	fingerprint := "review-cap"
+	var body strings.Builder
+	fmt.Fprintf(&body, "The independent review of %s (%q) reached its cap of %d rounds, so the run stopped. "+
+		"This issue is parked; the rest of the repository keeps dispatching.\n\n", key, title, review.MaxRounds)
+	if rec != nil {
+		fingerprint = "review-cap:" + rec.Tree
+		writeReviewCapRecord(&body, rec)
+	} else {
+		fmt.Fprintf(&body, "No review record was found: %s\n\n", detail)
+	}
+	body.WriteString("Release re-runs the pipeline with a fresh round count. It does not resume from the worktree.")
+
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyReviewCap(repo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("Review cap reached — #%d", issue),
+		Body:           body.String(),
+		Producer:       producerReviewCap,
+		Standing:       true,
+		Fingerprint:    fingerprint,
+		Context: attention.Context{Repo: repo, Issue: issue, Stage: review.Stage,
+			Blocker: TerminalKindReviewCapReached},
+		Options: []attention.Option{
+			{ID: "release", Label: "Release the issue", Verb: attention.VerbAutonomousClearIssueFailures,
+				Args: map[string]any{"key": key, "then": "autonomous.rescan"}, Style: attention.StylePrimary},
+			noopOption("park", "Keep it parked"),
+		},
+		DefaultAction: "park",
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note what you changed before releasing the issue"},
+	})
+}
+
+// writeReviewCapRecord lists the last catch's findings and the worktree.
+func writeReviewCapRecord(b *strings.Builder, rec *review.CapRecord) {
+	if len(rec.Outcome.Fix) == 0 {
+		b.WriteString("The last review recorded no findings to fix.\n\n")
+	} else {
+		fmt.Fprintf(b, "Findings still standing, from the last finished review (%d):\n", len(rec.Outcome.Fix))
+		for _, f := range rec.Outcome.Fix {
+			where := f.File
+			if f.Line != nil {
+				where = fmt.Sprintf("%s:%d", f.File, *f.Line)
+			}
+			fmt.Fprintf(b, "- %s %s, %s: %s\n", f.Severity, f.Pass, where, f.Claim)
+		}
+		b.WriteString("\n")
+	}
+	if rec.Worktree != "" {
+		fmt.Fprintf(b, "The work is uncommitted in %s. Nothing was pushed.\n\n", rec.Worktree)
+	}
+}
+
 // keyUntrustedAuthorSkip builds the sticky (producer, idempotency_key)
 // identity for an untrusted-author skip card, keyed on repo#issue so
 // re-observation from either gate (refinement or triage-promotion) updates
@@ -802,23 +872,32 @@ func (as *AutonomousScheduler) resolveRefinementExhausted(fullRepo string, issue
 // observed set is every other open card of this producer. Listing is a local
 // store read, not a forge call, so this costs no API budget.
 func (as *AutonomousScheduler) retractArchitectureApproval(repo string, issue int) {
+	as.retractCard(producerArchitectureApprove, keyArchitectureApproval(repo, issue))
+}
+
+// retractReviewCap clears a capped issue's card once its hold is released, by
+// the card or from the CLI (#2865).
+func (as *AutonomousScheduler) retractReviewCap(repo string, issue int) {
+	as.retractCard(producerReviewCap, keyReviewCap(repo, issue))
+}
+
+func (as *AutonomousScheduler) retractCard(producer, target string) {
 	if as == nil || as.attention == nil {
 		return
 	}
-	target := keyArchitectureApproval(repo, issue)
 	reqs, err := as.attention.List(attention.ListFilter{})
 	if err != nil {
-		log.Printf("attention: retract %q list failed (fail-open): %v", producerArchitectureApprove, err)
+		log.Printf("attention: retract %q list failed (fail-open): %v", producer, err)
 		return
 	}
 	observed := make([]string, 0, len(reqs))
 	for _, r := range reqs {
-		if r.Producer != producerArchitectureApprove || r.IdempotencyKey == target {
+		if r.Producer != producer || r.IdempotencyKey == target {
 			continue
 		}
 		observed = append(observed, r.IdempotencyKey)
 	}
-	as.autoResolveAttention(producerArchitectureApprove, observed)
+	as.autoResolveAttention(producer, observed)
 }
 
 // --- Producer (unnumbered): terminal failure halt (per-issue, fleet-blocking) ---
