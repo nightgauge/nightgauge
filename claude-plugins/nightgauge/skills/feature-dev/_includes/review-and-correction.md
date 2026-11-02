@@ -34,11 +34,12 @@ quality report (the `judge` unit) after all reviewers complete.
 
 The six reviewers are the portable units declared in the skill's
 `orchestration:` frontmatter. On a provider with an orchestration capability the
-`WorkflowEngine` fans them out concurrently; on a provider without one (Copilot,
-Cursor) run the same six reviews **sequentially** in this single agent and
-aggregate the results — same reviewers, same checks, same report. Do not encode
-a provider-specific spawn mechanism here; the frontmatter is the single source
-of the fan-out intent.
+`WorkflowEngine` fans them out concurrently. On a provider without one (Copilot,
+Cursor) this phase reviews nothing: skip to Phase 6 and leave
+`SECURITY_REVIEW_RESULT=skipped`. An author reading its own diff is not a review,
+and feature-validate runs the independent one (#2839). Do not encode a
+provider-specific spawn mechanism here; the frontmatter is the single source of
+the fan-out intent.
 
 Each reviewer receives:
 

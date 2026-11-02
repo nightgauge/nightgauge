@@ -1,6 +1,10 @@
 package health
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/nightgauge/nightgauge/internal/state"
+)
 
 // AggregateGateMetrics groups entries by gate_name and computes hit rates.
 // Results are sorted by GateName for deterministic output.
@@ -10,6 +14,7 @@ func AggregateGateMetrics(entries []GateMetricsEntry) []GateMetricsAggregate {
 		skipped     int
 		invocations int
 		totalMs     float64
+		findings    state.FindingCounts
 	}
 	gates := make(map[string]*accum)
 
@@ -21,6 +26,11 @@ func AggregateGateMetrics(entries []GateMetricsEntry) []GateMetricsAggregate {
 		}
 		a.invocations++
 		a.totalMs += float64(e.DurationMs)
+		if e.Findings != nil {
+			a.findings.Blocker += e.Findings.Blocker
+			a.findings.Major += e.Findings.Major
+			a.findings.Nitpick += e.Findings.Nitpick
+		}
 		switch e.Result {
 		case "catch":
 			a.catches++
@@ -48,6 +58,7 @@ func AggregateGateMetrics(entries []GateMetricsEntry) []GateMetricsAggregate {
 			Skipped:         a.skipped,
 			HitRate:         hitRate,
 			AverageDuration: avgDuration,
+			Findings:        a.findings,
 		})
 	}
 

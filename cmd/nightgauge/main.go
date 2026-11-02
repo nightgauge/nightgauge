@@ -1081,6 +1081,7 @@ func rootCmd() *cobra.Command {
 		e2eCmd(),
 		formatCmd(),
 		gateCmd(),
+		reviewCmd(),
 		triageCmd(),
 		prStageCmd(),
 		phaseCmd(),

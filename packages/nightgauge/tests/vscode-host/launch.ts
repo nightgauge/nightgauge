@@ -137,7 +137,13 @@ async function main(): Promise<void> {
     fs.mkdirSync(path.join(userDataDir, "User"), { recursive: true });
     fs.writeFileSync(
       path.join(userDataDir, "User", "settings.json"),
-      JSON.stringify({ "nightgauge.backend.binaryPath": IPC_STUB }, null, 2)
+      // Experiments off: VS Code's own fetch to its experiment service shares the
+      // extension host's global fetch, so demo mode's no-HTTP assertion caught it.
+      JSON.stringify(
+        { "nightgauge.backend.binaryPath": IPC_STUB, "workbench.enableExperiments": false },
+        null,
+        2
+      )
     );
     let code = 0;
     try {

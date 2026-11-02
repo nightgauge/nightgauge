@@ -116,6 +116,14 @@ const GateMetricEntrySchema = z.object({
    */
   result: z.enum(["pass", "catch", "fail"]),
   duration_ms: z.number().int().min(0).nullish(),
+  /** A review's findings per severity (#2839) */
+  findings: z
+    .object({
+      blocker: z.number().int().min(0),
+      major: z.number().int().min(0),
+      nitpick: z.number().int().min(0),
+    })
+    .nullish(),
 });
 
 /**

@@ -533,64 +533,60 @@ fi
 The `PREPUSH_STATUS` variable is threaded to Phase 6 (write-validate-context)
 and recorded in `validate-{N}.json` as `pre_push_status`.
 
-### Step 2.7.3: Adversarial Review Gate (#4097)
+### Step 2.7.3: Independent Review Gate (#2839)
 
-**ON by default.** Disable only when `.nightgauge/config.yaml` sets
-`pipeline.adversarial_review.enabled: false`.
-
-Re-review the diff with **fresh eyes and no authoring context**, attacking it
-from the four `nightgauge-adversarial-review` lenses — **correctness,
-security, reuse/simplification, tests** (that skill's `#critic-lens-prompt`).
-This activates the previously-dormant critic as a default validate gate: it
-catches the quality-of-_reasoning_ defects the deterministic build/test gates
-cannot. The **judgment is the critics'**; the gate stays deterministic — the
-verdict reaches `FeatureValidateGate` via gate-metrics, per the
-"network/LLM checks are NOT StageGates" precedent in
-[docs/STAGE_GATES.md](../../../docs/STAGE_GATES.md).
-
-```bash
-ADV_ENABLED=$(yq -r '.pipeline.adversarial_review.enabled // "true"' .nightgauge/config.yaml 2>/dev/null || echo "true")
-if [ "$ADV_ENABLED" = "false" ]; then
-  echo "⏭ Adversarial review gate disabled (pipeline.adversarial_review.enabled=false)"
-fi
-```
-
-When enabled, perform the four-lens critique **yourself** (single-agent
-portability floor; reference the adversarial-review skill's critic-lens prompt).
-Fix any **real** defect found (not a nitpick) and re-review. A real finding
-whose fix lies outside this issue's acceptance criteria does not block: record
-it as discovered work per
-[Record vs. Backtrack](../../../docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work)
-and leave it out of the verdict.
+One review per tree, in a fresh context that holds only the diff, the issue and
+the working tree. You do not review this change: you start the review and act on
+its result. This is one of this stage's gates, so a provider rule against adding
+reviewers does not remove it. It applies the passes in
+[docs/PR_REVIEW_PASSES.md](../../../docs/PR_REVIEW_PASSES.md). The verdict reaches
+`FeatureValidateGate` via gate-metrics, per the "network/LLM checks are NOT
+StageGates" precedent in [docs/STAGE_GATES.md](../../../docs/STAGE_GATES.md).
+`pipeline.adversarial_review.enabled: false` turns it off.
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge discovered-work record --issue "$ISSUE_NUMBER" \
-  --source-stage feature-validate \
-  --summary "<lens>: <one-line out-of-scope defect>" \
-  --evidence "<file:line> — <what the critic observed>" \
-  --suggested-type bug --suggested-priority medium --suggested-size S \
-  --candidate-file "<file>" \
-  || echo "discovered work not recorded (non-fatal)"
+"$BINARY" review prepare --issue "$ISSUE_NUMBER" --json
 ```
 
-Then record exactly one verdict. A `catch` fails the run; it is not a log of
-what the review found. A defect fixed in the fix loop gets `pass`, and you
-describe it in the validate notes. The gate judges the latest verdict per
-`gate_name`, in file order, so a later verdict for the same gate supersedes an
-earlier one, and a `catch` no later verdict replaces stands. Judge rows are the
-exception: any failure in the latest attempt under `judges` fails the gate:
+Act on the JSON:
 
-```bash
-ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
-: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-# Only when a REAL, unfixed blocking defect remains after the fix loop (this fails the run):
-"$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate adversarial-review \
-  --result catch --error-summary "<lens>: <one-line defect>"
-# (also set VALIDATION_STATUS="failed" so commit/push is skipped)
+- `disabled`: the gate is off. Continue.
+- `reusable`: this tree was already reviewed. Use `result`, and run no model.
+- `cap_reached`: the last catch stands. Set `VALIDATION_STATUS="failed"`.
+- Otherwise it returned a bundle. If your host has a subagent tool, start one
+  non-forked subagent, with no inherited conversation, and give it only the text
+  of `prompt_path`. Pass it nothing about this change. Then record its result,
+  with `tree`, `findings_path` and `started_at` copied from the JSON, because each
+  block runs in a new shell:
 
-# Otherwise — no blocking defect remains: the change survived all four lenses with only
-# nitpicks, or the fix loop fixed what they found (describe it in the validate notes):
-"$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate adversarial-review --result pass
-```
+  ```bash
+  ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+  : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+  TREE="<tree>" FINDINGS_PATH="<findings_path>" STARTED_AT="<started_at>"
+  "$BINARY" review record --issue "$ISSUE_NUMBER" --tree "$TREE" \
+    --findings "$FINDINGS_PATH" --started-at "$STARTED_AT"
+  ```
+
+  With no subagent tool, or when the subagent left no file at `findings_path`,
+  discard that bundle and let the binary spawn the reviewer instead. It runs
+  prepare and record itself and prints the log path. That log is the review's
+  session log:
+
+  ```bash
+  ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+  : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+  "$BINARY" review run --issue "$ISSUE_NUMBER"
+  ```
+
+Never edit the findings file. The verdict is the binary's, and it writes the one
+gate-metric row, the duration, the severity counts and any discovered work.
+
+- `pass`: continue. Findings it routed to `discovered` need nothing from you.
+- `catch` with items in `fix`: fix each one, re-run the checks they touch, and
+  go back to `review prepare`. The tree changed, so that is a new round. A later
+  `pass` supersedes the catch, and after three catches in a run `prepare` stops.
+- `catch` with an empty `fix`: the review did not complete, which is not a pass.
+  Set `VALIDATION_STATUS="failed"` so commit and push are skipped, and put the
+  `summary` in the validate notes.

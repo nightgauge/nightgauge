@@ -4533,6 +4533,31 @@ Each failure entry:
 `ci discover-commands` is used by `skills/nightgauge-feature-validate/SKILL.md`
 Phase 2.5.1.
 
+#### `review prepare`, `review run` and `review record`
+
+The deterministic half of feature-validate's independent review (#2839). See
+[PR_REVIEW_PASSES.md](PR_REVIEW_PASSES.md).
+
+```bash
+nightgauge review prepare --issue N --json
+nightgauge review run --issue N
+nightgauge review record --issue N --tree T --findings F --started-at S
+```
+
+`prepare` returns `disabled`, a stored verdict (`reusable`, whose row it restores
+for a fresh worktree), `cap_reached`, or a bundle by path. The bundle is
+`.nightgauge/review/<N>-*`: inside the workspace, so every adapter reaches it with
+no grant, and ignored, so it does not move the tree. `prepare` exits non-zero
+where git does not confirm that, and removes the issue's earlier bundles. The
+review's rules are the binary's embedded `internal/review/passes.md`, written into
+the bundle. `run` spawns one headless reviewer through the stage's adapter with
+`Read,Glob,Grep,Write`, and logs to `review-<N>-<unix>.log` in the clone's logs
+directory, where it outlives the bundle. `record`
+validates the findings and prints `{verdict, summary, counts, fix, discovered}`.
+Findings for a tree that moved, a missing or rejected file and a failed spawn all
+record `catch` with no ledger event, so the next attempt reviews again. Outcomes
+live in `gate-runs.jsonl` as kind `review`, which the local-gate answers ignore.
+
 #### `ci gate-status`, `ci gate-run` and `ci gate-record`
 
 One tree-keyed ledger, `gate-runs.jsonl` in the pipeline state directory, counts

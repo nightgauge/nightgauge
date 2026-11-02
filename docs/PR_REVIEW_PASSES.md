@@ -18,26 +18,40 @@ no `ANTHROPIC_API_KEY`: the CLI would prefer it, and it bills per use.
 This file is the committed definition. The review model reads it at run time,
 and `scripts/pr-review.mjs` enforces its limits before anything is posted.
 
+`feature-validate` applies the same passes, severities and finding schema locally
+(Step 2.7.3), through `nightgauge review`. It reviews each tree once, in a fresh
+context holding only the diff, the issue and the tree. Blockers and `correctness`
+majors go to a fix loop of at most three catches per run, other majors become
+discovered work, and nitpicks are counted. A review that does not finish records a
+`catch`, never a pass. The sections below on comments and identity describe the
+manual workflow only.
+
+The binary carries its own copy of the Passes through Caps sections, as
+`internal/review/passes.md`, and writes it into each review's bundle, so a review
+works in any repository and a diff cannot edit its own reviewer's rules. Those
+sections name files in plain text rather than linking them because that copy is
+read where the links would not resolve. A test pins the copy to this file: edit
+both in the same change.
+
 ## Passes
 
 Each pass reads the diff and the files it touches, and reports concrete,
 actionable findings only. A pass does not restate what the code does and does
 not praise it.
 
-| Pass              | Asks                                                                                                                           |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `correctness`     | Does the change do what it claims? Logic errors, unhandled cases, broken contracts                                             |
-| `security`        | Does it apply [standards/security.md](../standards/security.md)? Secrets, injection, unvalidated input, over-broad permissions |
-| `plan-compliance` | Does it deliver the issue it closes, and only that? Missing criteria, scope creep                                              |
+| Pass              | Asks                                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------- |
+| `correctness`     | Does the change do what it claims? Logic errors, unhandled cases, broken contracts                   |
+| `security`        | Does it apply `standards/security.md`? Secrets, injection, unvalidated input, over-broad permissions |
+| `plan-compliance` | Does it deliver the issue it closes, and only that? Missing criteria, scope creep                    |
 
 `plan-compliance` uses the bodies of the issues the pull request closes. When
 it closes none, the pass reports nothing.
 
 ## Severity
 
-The scale is the one in
-[nightgauge-adversarial-review](../skills/nightgauge-adversarial-review/SKILL.md).
-Both use this definition.
+The scale is the one in `skills/nightgauge-adversarial-review/SKILL.md`. Both use
+this definition.
 
 | Severity  | Meaning                                                                 |
 | --------- | ----------------------------------------------------------------------- |

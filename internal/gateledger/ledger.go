@@ -32,6 +32,10 @@ const FileName = "gate-runs.jsonl"
 const (
 	KindLocalGate = "local-gate"
 	KindParity    = "parity"
+	// KindReview marks an independent code review (#2839). It shares the ledger
+	// for tree-keyed reuse, but it is not a gate of the tree's tests: Latest and
+	// UsageIn pass over it, so a review's catch cannot unprove a local-gate pass.
+	KindReview = "review"
 )
 
 // Event names.
@@ -67,6 +71,11 @@ type Event struct {
 	Issue     int    `json:"issue,omitempty"`
 	Stage     string `json:"stage,omitempty"`
 	Branch    string `json:"branch,omitempty"`
+	// PipelineRun is the run identity of a review event, which scopes its round
+	// cap. RunID identifies the ledger run, not the pipeline's.
+	PipelineRun string `json:"pipeline_run,omitempty"`
+	// Review is the stored outcome of a review event, owned by internal/review.
+	Review json.RawMessage `json:"review,omitempty"`
 }
 
 // Path returns the ledger path for the clone holding root.
@@ -154,7 +163,7 @@ func Latest(root, tree, kind string) (Answer, error) {
 		if !e.ok {
 			return Answer{Reason: "the gate ledger has an unreadable line"}, nil
 		}
-		if e.ev.Event != EventFinish || e.ev.Tree != tree {
+		if e.ev.Event != EventFinish || e.ev.Tree != tree || e.ev.Kind == KindReview {
 			continue
 		}
 		if e.ev.Verdict != VerdictPass {
@@ -170,6 +179,46 @@ func Latest(root, tree, kind string) (Answer, error) {
 		}
 	}
 	return Answer{Reason: fmt.Sprintf("no full %s pass is recorded for tree %s", kind, tree)}, nil
+}
+
+// LatestReview returns the newest finished review of tree for issue, or nil. An
+// unreadable line returns nil too, because it could be that review: the answer
+// that costs a review is the one that cannot pass a tree nothing read.
+func LatestReview(root string, issue int, tree string) (*Event, error) {
+	entries, err := read(root)
+	if err != nil {
+		return nil, err
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if !e.ok {
+			return nil, nil
+		}
+		if e.ev.Kind == KindReview && e.ev.Event == EventFinish &&
+			e.ev.Issue == issue && e.ev.Tree == tree {
+			return &e.ev, nil
+		}
+	}
+	return nil, nil
+}
+
+// ReviewCatches counts the reviews of issue that ended in a catch during one
+// pipeline run. A new run starts a new count, so a capped run cannot strand the
+// issue.
+func ReviewCatches(root string, issue int, pipelineRun string) (int, error) {
+	entries, err := read(root)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if e.ok && e.ev.Kind == KindReview && e.ev.Event == EventFinish &&
+			e.ev.Issue == issue && e.ev.PipelineRun == pipelineRun &&
+			e.ev.Verdict != VerdictPass {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func satisfies(passed, wanted string) bool {
@@ -205,7 +254,8 @@ func UsageIn(root string, issue int, stage string, from, to time.Time) (Usage, e
 	}
 	var u Usage
 	for _, e := range entries {
-		if !e.ok || e.ev.Issue != issue || (e.ev.Stage != "" && e.ev.Stage != stage) {
+		if !e.ok || e.ev.Kind == KindReview || e.ev.Issue != issue ||
+			(e.ev.Stage != "" && e.ev.Stage != stage) {
 			continue
 		}
 		ts, err := time.Parse(time.RFC3339Nano, e.ev.TS)

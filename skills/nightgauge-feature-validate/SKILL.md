@@ -6,7 +6,7 @@ description: Validate feature implementation with integration/E2E tests and manu
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.23.1"
+  version: "1.24.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -94,7 +94,7 @@ For `type:spike` issues, run `nightgauge spike materialize "$ISSUE_NUMBER" --dry
 
 ## Orchestration
 
-The `orchestration:` frontmatter models validation as an ordered pipeline — build (1.5) → tests (2) → CI-parity (2.5) — closed by an adversarial **gate** judge whose verdict is the evidence the Go `FeatureValidateGate.Verify()` loop consumes (epic #3899): a failed verdict fails validation. A `catch` fails the run and is not a log of what the review found, and the gate judges the latest verdict per `gate_name` in file order, except `judges` rows, where any failure in the latest attempt fails. Gate-metric records are part of that evidence — the verify-ui gate (2.45) and adversarial review (2.5 judge) emit `nightgauge gate record-metric` per their includes, and `gate_metrics[]` flows into the validate context (Phase 6); FeatureValidateGate treats zero records as a no-op failure. Each unit's `promptRef` is the SAME `_includes/*.md` the phases below read; the prose Workflow remains the single-agent portability floor ([docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md)).
+The `orchestration:` frontmatter models validation as an ordered pipeline — build (1.5) → tests (2) → CI-parity (2.5) — closed by the independent review (Step 2.7.3), whose verdict is the evidence the Go `FeatureValidateGate.Verify()` loop consumes (epic #3899): a failed verdict fails validation. A `catch` fails the run; a later `pass` on the fixed tree supersedes it, and the gate judges the latest verdict per `gate_name` in file order, except `judges` rows, where any failure in the latest attempt fails. Gate-metric records are part of that evidence — the verify-ui gate (2.45) and the independent review write their rows per their includes, and `gate_metrics[]` flows into the validate context (Phase 6); FeatureValidateGate treats zero records as a no-op failure. Each unit's `promptRef` is the SAME `_includes/*.md` the phases below read; the prose Workflow remains the single-agent portability floor ([docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md)).
 
 ## Gotchas
 
@@ -221,7 +221,7 @@ printf '<!-- phase:start name="verify-ui-gate" index=11 total=22 stage="feature-
 printf '<!-- phase:start name="ci-parity-check" index=12 total=22 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run this tree's one full gate: skip it when `nightgauge ci gate-status` says the tree passed, otherwise run the repository's local gate, or its CI commands when it has none. **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. The adversarial-review `gate record-metric` is emitted per the include.
+> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run this tree's one full gate: skip it when `nightgauge ci gate-status` says the tree passed, otherwise run the repository's local gate, or its CI commands when it has none. **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. Step 2.7.3 runs the independent review in a fresh context; `nightgauge review record` writes its verdict.
 
 ### Phase 2.6: Knowledge Coverage Check
 
