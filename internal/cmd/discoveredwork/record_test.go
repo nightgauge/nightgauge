@@ -397,3 +397,87 @@ func TestConsume_RefusesSymlink(t *testing.T) {
 		t.Fatalf("symlink target touched: %v", err)
 	}
 }
+
+func TestReplaceProducer(t *testing.T) {
+	const producer = "producer:independent-review"
+	ofProducer := func(summary string) Record {
+		r := validRecord(7)
+		r.SourceStage, r.Summary = producer, summary
+		return r
+	}
+	dir := t.TempDir()
+	if _, _, err := Append(dir, validRecord(7), now); err != nil {
+		t.Fatal(err)
+	}
+	summaries := func() []string {
+		t.Helper()
+		c, err := Load(dir, 7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		if c != nil {
+			for _, r := range c.Records {
+				out = append(out, r.SourceStage+"|"+r.Summary)
+			}
+		}
+		return out
+	}
+	stage := "feature-validate|" + validRecord(7).Summary
+
+	if _, err := ReplaceProducer(dir, 7, producer, []Record{ofProducer("a"), ofProducer("b"), ofProducer("a")}, now); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := summaries(), []string{stage, producer + "|a", producer + "|b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first round = %v, want %v", got, want)
+	}
+
+	bad := ofProducer("c")
+	bad.SuggestedSize = "huge"
+	stray := validRecord(7)
+	rejected, err := ReplaceProducer(dir, 7, producer, []Record{bad, ofProducer("b"), stray}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejected[0] == nil || rejected[1] != nil || rejected[2] == nil {
+		t.Fatalf("rejected = %v", rejected)
+	}
+	if got, want := summaries(), []string{stage, producer + "|b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second round = %v, want %v", got, want)
+	}
+
+	if _, err := ReplaceProducer(dir, 7, producer, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := summaries(), []string{stage}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("emptied = %v, want %v", got, want)
+	}
+}
+
+func TestReplaceProducerDeletesAnEmptiedCapture(t *testing.T) {
+	dir := t.TempDir()
+	r := validRecord(7)
+	r.SourceStage = "producer:independent-review"
+	if _, err := ReplaceProducer(dir, 7, r.SourceStage, []Record{r}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReplaceProducer(dir, 7, r.SourceStage, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "discovered-work-7.json")); !os.IsNotExist(err) {
+		t.Fatalf("capture still exists: %v", err)
+	}
+}
+
+func TestReplaceProducerRefusesAStage(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, err := Append(dir, validRecord(7), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReplaceProducer(dir, 7, "feature-validate", nil, now); err == nil {
+		t.Fatal("a stage's records were replaceable")
+	}
+	if c, err := Load(dir, 7); err != nil || len(c.Records) != 1 {
+		t.Fatalf("capture = %+v, %v", c, err)
+	}
+}

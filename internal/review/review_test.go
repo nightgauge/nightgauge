@@ -48,6 +48,11 @@ func finding(pass, severity string) string {
 		`","severity":"` + severity + `","fix":"change"}`
 }
 
+// elsewhere is finding at another line.
+func elsewhere(pass, severity string) string {
+	return strings.Replace(finding(pass, severity), `"line":1`, `"line":2`, 1)
+}
+
 func rows(t *testing.T, root string) []state.GateResult {
 	t.Helper()
 	got, err := state.ReadGateMetricsForIssue(root, 7)
@@ -118,6 +123,127 @@ func TestRoute(t *testing.T) {
 	}
 }
 
+func filed(t *testing.T, root string) []discoveredwork.Record {
+	t.Helper()
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture, err := discoveredwork.Load(dir, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capture == nil { // nothing was ever filed
+		return nil
+	}
+	return capture.Records
+}
+
+func TestDiscoveredDroppedByALaterRoundIsNotFiled(t *testing.T) {
+	root := repo(t)
+	s := session(root, "t0")
+	if _, err := Record(s, "t0", writeFindings(t,
+		finding("correctness", "blocker"), finding("security", "major")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = "t1"
+	out, err := Record(s, "t1", writeFindings(t), time.Time{})
+	if err != nil || out.Verdict != "pass" {
+		t.Fatalf("%+v, %v", out, err)
+	}
+	if got := filed(t, root); len(got) != 0 {
+		t.Fatalf("fixed work was filed: %+v", got)
+	}
+}
+
+func TestDiscoveredALaterRoundStillReportsIsFiledOnce(t *testing.T) {
+	root := repo(t)
+	s := session(root, "t0")
+	if _, err := Record(s, "t0", writeFindings(t,
+		finding("correctness", "blocker"), finding("security", "major")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = "t1"
+	out, err := Record(s, "t1", writeFindings(t, elsewhere("security", "major")), time.Time{})
+	if err != nil || len(out.Discovered) != 1 {
+		t.Fatalf("%+v, %v", out, err)
+	}
+	if got := filed(t, root); len(got) != 1 {
+		t.Fatalf("filed = %+v", got)
+	}
+}
+
+func TestUnfinishedRoundLeavesTheLastFinishedRoundsFindings(t *testing.T) {
+	root := repo(t)
+	s := session(root, "t0")
+	if _, err := Record(s, "t0", writeFindings(t,
+		finding("correctness", "blocker"), finding("security", "major")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = "t1"
+	if out, err := Record(s, "t2", writeFindings(t), time.Time{}); err != nil || out.Verdict != "catch" {
+		t.Fatalf("moved tree: %+v, %v", out, err)
+	}
+	if out, err := Record(s, "t1", filepath.Join(t.TempDir(), "missing.json"), time.Time{}); err != nil || out.Verdict != "catch" {
+		t.Fatalf("missing findings: %+v, %v", out, err)
+	}
+	if got := filed(t, root); len(got) != 1 {
+		t.Fatalf("filed = %+v", got)
+	}
+}
+
+func TestCatchesToTheCapLeaveOnlyTheLastRoundsFindings(t *testing.T) {
+	root := repo(t)
+	s := session(root, "")
+	early := strings.Replace(finding("security", "major"), "security major", "early claim", 1)
+	late := strings.Replace(early, "early claim", "late claim", 1)
+	for i, tree := range []string{"t0", "t1", "t2"} {
+		s.Tree = tree
+		other := early
+		if i == MaxRounds-1 {
+			other = late
+		}
+		if _, err := Record(s, tree, writeFindings(t, finding("correctness", "blocker"), other), time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := filed(t, root)
+	if len(got) != 1 || !strings.Contains(got[0].Summary, "late claim") {
+		t.Fatalf("filed = %+v", got)
+	}
+}
+
+func TestAnAgentsRecordSurvivesEveryRound(t *testing.T) {
+	root := repo(t)
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := discoveredwork.Append(dir, discoveredwork.Record{
+		Summary: "agent note", Evidence: []string{"a.go:1"}, SourceStage: Stage, IssueNumber: 7,
+		SuggestedType: "bug", SuggestedPriority: "low", SuggestedSize: "S",
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Record(session(root, "t0"), "t0", writeFindings(t), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := filed(t, root); len(got) != 1 || got[0].SourceStage != Stage {
+		t.Fatalf("filed = %+v", got)
+	}
+}
+
+func TestTwoPassesAtOneLocationStayTwoFindings(t *testing.T) {
+	root := repo(t)
+	if _, err := Record(session(root, "t0"), "t0", writeFindings(t,
+		finding("security", "major"), finding("plan-compliance", "major")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := filed(t, root); len(got) != 2 {
+		t.Fatalf("filed = %+v", got)
+	}
+}
+
 func TestRecordCatchThenSameTreeIsReusedAndDurationIsWritten(t *testing.T) {
 	root := repo(t)
 	s := session(root, "tree-a")
@@ -135,10 +261,8 @@ func TestRecordCatchThenSameTreeIsReusedAndDurationIsWritten(t *testing.T) {
 		*got[0].Findings != (state.FindingCounts{Blocker: 1, Major: 1, Nitpick: 1}) {
 		t.Fatalf("row = %+v", got)
 	}
-	dir, _ := layout.PipelineStateDir(root)
-	capture, err := discoveredwork.Load(dir, 7)
-	if err != nil || len(capture.Records) != 1 {
-		t.Fatalf("discovered = %+v, %v", capture, err)
+	if got := filed(t, root); len(got) != 1 {
+		t.Fatalf("discovered = %+v", got)
 	}
 
 	p, err := Consult(s)

@@ -2,7 +2,8 @@
 // found but must not do in its own run (#478, ADR 027). Stages append records
 // to discovered-work-{N}.json in the clone's pipeline state directory; the
 // #480 materializer is the only reader that turns them into issues and the
-// only deleter. pr-merge cleanup deliberately never matches the file.
+// only deleter of records it did not write; a producer may replace its own
+// before filing. pr-merge cleanup deliberately never matches the file.
 //
 // The record contract is shared with the SDK's DiscoveredWorkRecordSchema
 // (packages/nightgauge-sdk/src/context/schemas/discovered-work.ts); both
@@ -343,15 +344,11 @@ func Append(runDir string, rec Record, now time.Time) (Record, bool, error) {
 		return rec, false, err
 	}
 
-	lf, err := os.OpenFile(p+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+	unlock, err := lockCapture(p)
 	if err != nil {
-		return rec, false, fmt.Errorf("open lock: %w", err)
+		return rec, false, err
 	}
-	defer lf.Close()
-	if err := flock.Exclusive(lf, lockTimeout); err != nil && !errors.Is(err, flock.ErrUnsupported) {
-		return rec, false, fmt.Errorf("lock %s: %w", p, err)
-	}
-	defer flock.Unlock(lf) //nolint:errcheck // closing the file releases it too
+	defer unlock()
 
 	c, err := loadPath(p, rec.IssueNumber)
 	if err != nil {
@@ -366,12 +363,8 @@ func Append(runDir string, rec Record, now time.Time) (Record, bool, error) {
 		}
 	}
 	c.Records = append(c.Records, rec)
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return rec, false, fmt.Errorf("marshal: %w", err)
-	}
-	if err := atomicfile.Write(p, append(data, '\n'), 0o644); err != nil {
-		return rec, false, fmt.Errorf("write %s: %w", p, err)
+	if err := writeCapture(p, c); err != nil {
+		return rec, false, err
 	}
 	return rec, true, nil
 }
@@ -379,22 +372,19 @@ func Append(runDir string, rec Record, now time.Time) (Record, bool, error) {
 // Consume rewrites the capture file for issue keeping only the records for
 // which keep returns true, under the same lock and atomic replace as Append.
 // When nothing is kept the file is deleted. The #480 materializer is the only
-// caller: it is the capture's only deleter (ADR 027 §Lifecycle). A missing
+// caller: it is the only deleter of records it did not write (ADR 027
+// §Lifecycle). A missing
 // file is a no-op.
 func Consume(runDir string, issue int, keep func(Record) bool) error {
 	p, err := CapturePath(runDir, issue)
 	if err != nil {
 		return err
 	}
-	lf, err := os.OpenFile(p+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+	unlock, err := lockCapture(p)
 	if err != nil {
-		return fmt.Errorf("open lock: %w", err)
+		return err
 	}
-	defer lf.Close()
-	if err := flock.Exclusive(lf, lockTimeout); err != nil && !errors.Is(err, flock.ErrUnsupported) {
-		return fmt.Errorf("lock %s: %w", p, err)
-	}
-	defer flock.Unlock(lf) //nolint:errcheck // closing the file releases it too
+	defer unlock()
 
 	c, err := loadPath(p, issue)
 	if err != nil || c == nil {
@@ -406,13 +396,104 @@ func Consume(runDir string, issue int, keep func(Record) bool) error {
 			kept = append(kept, r)
 		}
 	}
-	if len(kept) == 0 {
+	c.Records = kept
+	return writeCapture(p, c)
+}
+
+// ReplaceProducer atomically swaps the records whose source_stage is producer
+// for recs, so a producer that re-judges its work each round leaves only its
+// latest judgment. Only a producer:<kebab-name> source can be replaced, never a
+// stage's records. rec.ID, rec.RecordedAt and nil target files are filled as in
+// Append. rejected is aligned with recs: an invalid record is left out and its
+// error kept there, and the rest are written. A record with an id already written
+// collapses onto it. On a non-nil error the file is untouched.
+func ReplaceProducer(runDir string, issue int, producer string, recs []Record, now time.Time) (rejected []error, err error) {
+	if !producerRe.MatchString(producer) {
+		return nil, fmt.Errorf("producer: must be producer:<kebab-name> (got %q)", producer)
+	}
+	p, err := CapturePath(runDir, issue)
+	if err != nil {
+		return nil, err
+	}
+	rejected = make([]error, len(recs))
+	valid := make([]Record, 0, len(recs))
+	seen := map[string]bool{}
+	for i, rec := range recs {
+		if rec.ID == "" {
+			rec.ID = ID(rec.SourceStage, rec.Summary)
+		}
+		if rec.RecordedAt == "" {
+			rec.RecordedAt = now.UTC().Format(time.RFC3339)
+		}
+		if rec.CandidateTargetFiles == nil {
+			rec.CandidateTargetFiles = []string{}
+		}
+		switch err := Validate(&rec); {
+		case err != nil:
+			rejected[i] = err
+		case rec.SourceStage != producer:
+			rejected[i] = fmt.Errorf("source_stage: %q is not %q", rec.SourceStage, producer)
+		case rec.IssueNumber != issue:
+			rejected[i] = fmt.Errorf("issue_number: %d is not %d", rec.IssueNumber, issue)
+		case !seen[rec.ID]:
+			seen[rec.ID] = true
+			valid = append(valid, rec)
+		}
+	}
+
+	unlock, err := lockCapture(p)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	c, err := loadPath(p, issue)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		if len(valid) == 0 {
+			return rejected, nil
+		}
+		c = &Capture{SchemaVersion: SchemaVersion, IssueNumber: issue}
+	}
+	kept := []Record{}
+	for _, r := range c.Records {
+		if r.SourceStage != producer {
+			kept = append(kept, r)
+		}
+	}
+	c.Records = append(kept, valid...)
+	if err := writeCapture(p, c); err != nil {
+		return nil, err
+	}
+	return rejected, nil
+}
+
+// lockCapture holds the capture's exclusive lock until the returned func runs.
+func lockCapture(p string) (func(), error) {
+	lf, err := os.OpenFile(p+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open lock: %w", err)
+	}
+	if err := flock.Exclusive(lf, lockTimeout); err != nil && !errors.Is(err, flock.ErrUnsupported) {
+		lf.Close()
+		return nil, fmt.Errorf("lock %s: %w", p, err)
+	}
+	return func() {
+		flock.Unlock(lf) //nolint:errcheck // closing the file releases it too
+		lf.Close()
+	}, nil
+}
+
+// writeCapture atomically replaces the file, or deletes it when c holds no record.
+func writeCapture(p string, c *Capture) error {
+	if len(c.Records) == 0 {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove %s: %w", p, err)
 		}
 		return nil
 	}
-	c.Records = kept
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)

@@ -22,9 +22,11 @@ and `scripts/pr-review.mjs` enforces its limits before anything is posted.
 (Step 2.7.3), through `nightgauge review`. It reviews each tree once, in a fresh
 context holding only the diff, the issue and the tree. Blockers and `correctness`
 majors go to a fix loop of at most three catches per run, other majors become
-discovered work, and nitpicks are counted. A review that does not finish records a
-`catch`, never a pass. The sections below on comments and identity describe the
-manual workflow only.
+discovered work, and nitpicks are counted. Each finished round replaces the
+review's discovered work with its own, so only the last finished round's findings
+are filed, and two passes at one location stay two findings. A review that does
+not finish records a `catch`, never a pass, and changes no discovered work. The
+sections below on comments and identity describe the manual workflow only.
 
 The binary carries its own copy of the Passes through Caps sections, as
 `internal/review/passes.md`, and writes it into each review's bundle, so a review
