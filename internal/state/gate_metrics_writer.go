@@ -26,6 +26,12 @@ const GateMetricsName = layout.CheckoutHealth + "/gate-metrics.jsonl"
 //     to the main clone, so it survives worktree cleanup (#2535).
 const GateMetricsHistoryName = "gate-metrics.jsonl"
 
+// JudgeGateName is the gate_name of adversarial judge rows. It mirrors
+// JUDGE_GATE_NAME in GateMetricsWriter.appendJudgeVerdicts, their only writer:
+// the gate groups these rows by attempt_id, which this writer cannot stamp, so
+// it refuses the name (#2778).
+const JudgeGateName = "judges"
+
 // AppendGateMetric appends one quality-gate record to the checkout's
 // health/gate-metrics.jsonl — the canonical signal the
 // deterministic FeatureValidateGate already consumes
@@ -55,6 +61,9 @@ func AppendGateMetricDetail(workspaceRoot string, issueNumber int, gateName, res
 	}
 	if gateName == "" {
 		return fmt.Errorf("gate metric requires a non-empty gate name")
+	}
+	if gateName == JudgeGateName {
+		return fmt.Errorf("gate name %q is reserved: judge rows are written by GateMetricsWriter.appendJudgeVerdicts", gateName)
 	}
 
 	rec := gateMetricRecord{

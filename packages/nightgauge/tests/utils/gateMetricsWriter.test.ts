@@ -22,6 +22,8 @@ import { fakeCloneLayout } from "../helpers/cloneLayout";
 vi.mock("node:fs/promises");
 
 /** Build a JudgeVerdict node for the appendJudgeVerdicts() tests. */
+const JUDGE_PHASE = "phase:run-1:0";
+
 function judgeNode(
   verdict: WorkflowJudgeVerdict,
   overrides: Partial<JudgeVerdict> = {}
@@ -30,7 +32,7 @@ function judgeNode(
     schemaVersion: WORKFLOW_SCHEMA_VERSION,
     kind: "judge",
     nodeId: "judge:run-1:0:0",
-    parentId: "phase:run-1:0",
+    parentId: JUDGE_PHASE,
     seq: 3,
     ts: "2026-02-28T10:05:00.000Z",
     status: "succeeded",
@@ -41,6 +43,27 @@ function judgeNode(
     usage: zeroUsage(),
     ...overrides,
   };
+}
+
+/** A bare stream node, carrying only what the writer reads. */
+function node(fields: { kind: string } & Record<string, unknown>): { kind: string } {
+  return fields;
+}
+
+/** A run and its phase, which owns the judges `judgeNode` builds. */
+function runNodes(runId: string): Array<Record<string, unknown> & { kind: string }> {
+  return [
+    { kind: "run", nodeId: `run:${runId}`, parentId: null, runId },
+    { kind: "phase", nodeId: JUDGE_PHASE, parentId: `run:${runId}` },
+  ];
+}
+
+/** Every row handed to fs.appendFile, across calls. */
+function writtenRows(): Array<Record<string, unknown>> {
+  return vi
+    .mocked(fs.appendFile)
+    .mock.calls.flatMap((c) => (c[1] as string).trimEnd().split("\n"))
+    .map((line) => JSON.parse(line));
 }
 
 describe("GateMetricsWriter", () => {
@@ -216,32 +239,122 @@ describe("GateMetricsWriter", () => {
         judgeNode("fail", { nodeId: "judge:run-1:0:1" }),
       ]);
 
-      expect(fs.appendFile).toHaveBeenCalledTimes(2);
-      const results = vi
-        .mocked(fs.appendFile)
-        .mock.calls.map((c) => JSON.parse((c[1] as string).trim()).result);
-      expect(results).toEqual(["pass", "fail"]);
+      expect(writtenRows().map((r) => r.result)).toEqual(["fail", "pass"]);
     });
 
-    it("stamps one attempt_id per call so the gate can tell a retry from a sibling judge", async () => {
+    it("two folds of one run share an attempt, so the first's failure stands (#2778)", async () => {
       await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
-        judgeNode("fail", { nodeId: "judge:run-1:0:0" }),
-        judgeNode("pass", { nodeId: "judge:run-1:0:1" }),
+        ...runNodes("run-1"),
+        judgeNode("fail"),
       ]);
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
+        ...runNodes("run-1"),
+        judgeNode("pass"),
+      ]);
+
+      expect(writtenRows().map((r) => [r.attempt_id, r.result])).toEqual([
+        ["run-1", "fail"],
+        ["run-1", "pass"],
+      ]);
+    });
+
+    it("gives different runs different attempts, so a retry can replace one", async () => {
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
+        ...runNodes("run-1"),
+        judgeNode("fail"),
+      ]);
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
+        ...runNodes("run-2"),
+        judgeNode("pass"),
+      ]);
+
+      expect(writtenRows().map((r) => r.attempt_id)).toEqual(["run-1", "run-2"]);
+    });
+
+    it("omits attempt_id when the stream has no run node", async () => {
       await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [judgeNode("pass")]);
 
-      const ids = vi
-        .mocked(fs.appendFile)
-        .mock.calls.map((c) => JSON.parse((c[1] as string).trim()).attempt_id);
-      expect(ids).toHaveLength(3);
-      expect(ids[0]).toEqual(expect.any(String));
-      expect(ids[1]).toBe(ids[0]);
-      expect(ids[2]).not.toBe(ids[0]);
+      expect(writtenRows()[0]).not.toHaveProperty("attempt_id");
+    });
+
+    it("takes the judges' own run when the stream also carries the pipeline's", async () => {
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
+        node({ kind: "run", nodeId: "run:3918", parentId: null, runId: "run:3918" }),
+        ...runNodes("wf-3918-feature-validate-a"),
+        judgeNode("pass"),
+      ]);
+
+      expect(writtenRows()[0].attempt_id).toBe("wf-3918-feature-validate-a");
+    });
+
+    it("omits attempt_id when the judges belong to two runs", async () => {
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
+        node({ kind: "run", nodeId: "run:a", parentId: null, runId: "a" }),
+        node({ kind: "run", nodeId: "run:b", parentId: null, runId: "b" }),
+        node({ kind: "phase", nodeId: "phase:a", parentId: "run:a" }),
+        node({ kind: "phase", nodeId: "phase:b", parentId: "run:b" }),
+        judgeNode("pass", { parentId: "phase:a" }),
+        judgeNode("pass", { parentId: "phase:b" }),
+      ]);
+
+      expect(writtenRows()[0]).not.toHaveProperty("attempt_id");
+    });
+
+    it("omits attempt_id when the run's id is empty", async () => {
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
+        ...runNodes(""),
+        judgeNode("pass"),
+      ]);
+
+      expect(writtenRows()[0]).not.toHaveProperty("attempt_id");
+    });
+
+    it("writes an attempt in exactly one append", async () => {
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
+        ...runNodes("run-1"),
+        judgeNode("pass", { nodeId: "judge:run-1:0:0" }),
+        judgeNode("fail", { nodeId: "judge:run-1:0:1" }),
+        judgeNode("pass", { nodeId: "judge:run-1:0:2" }),
+      ]);
+
+      expect(fs.appendFile).toHaveBeenCalledTimes(1);
+      // Failures lead, so a write torn anywhere cannot keep a pass and lose a fail.
+      expect(writtenRows().map((r) => r.result)).toEqual(["fail", "pass", "pass"]);
+    });
+
+    it("a failed append warns, does not throw, and is not retried row by row", async () => {
+      vi.mocked(fs.appendFile).mockRejectedValue(new Error("ENOSPC"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await expect(
+        GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
+          ...runNodes("run-1"),
+          judgeNode("pass", { nodeId: "judge:run-1:0:0" }),
+          judgeNode("fail", { nodeId: "judge:run-1:0:1" }),
+        ])
+      ).resolves.toBeUndefined();
+
+      expect(fs.appendFile).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to write judge"));
+    });
+
+    it("one invalid failing record writes nothing, not the passing rest", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
+        ...runNodes("run-1"),
+        judgeNode("pass", { nodeId: "judge:run-1:0:0" }),
+        judgeNode("fail", { nodeId: "judge:run-1:0:1", ts: 0 as unknown as string }),
+      ]);
+
+      expect(fs.appendFile).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("dropping the attempt"));
     });
 
     it("writes nothing when there are no judge verdicts", async () => {
-      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, []);
+      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, runNodes("run-1"));
       expect(fs.appendFile).not.toHaveBeenCalled();
+      expect(fs.mkdir).not.toHaveBeenCalled();
     });
 
     it("omits error_summary on a passing verdict even when a rationale is present", async () => {

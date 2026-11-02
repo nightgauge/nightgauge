@@ -364,7 +364,8 @@ export class PipelineOrchestrator {
     // `orchestration:` block. No block (or no usable units) → single-agent.
     const skill = await loadStageSkill(stage, this.config.skillsPath);
     const spec = parseOrchestrationFrontmatter(skill.skillContent, {
-      runId: `wf-${issueNumber}-${stage}`,
+      // Unique per execution: a retry is a new attempt to the gate (#2778).
+      runId: `wf-${issueNumber}-${stage}-${uuidV7()}`,
       issueNumber,
       stage,
       preferNativeOffload: prefersNativeOffload(

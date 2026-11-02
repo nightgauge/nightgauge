@@ -225,6 +225,20 @@ describe("PipelineOrchestrator.selectExecutor", () => {
       ws = await makeWorkspace(["feature-dev", "pr-create", "pr-merge"]);
     });
 
+    it("gives each execution of a stage its own runId, so a retry is a new attempt (#2778)", async () => {
+      const orch = makeOrchestrator(ws.dir, {
+        ...withBackend(),
+        orchestration: { disabled: false },
+      });
+      const first = await orch.selectExecutor("feature-dev", 42);
+      const second = await orch.selectExecutor("feature-dev", 42);
+      if (first.kind !== "workflow" || second.kind !== "workflow") {
+        throw new Error("expected workflow");
+      }
+      expect(first.spec.runId).toMatch(/^wf-42-feature-dev-/);
+      expect(second.spec.runId).not.toBe(first.spec.runId);
+    });
+
     it("a fan-out stage + adapter + bindings → WorkflowExecutor with a compiled spec", async () => {
       const orch = makeOrchestrator(ws.dir, {
         ...withBackend(),

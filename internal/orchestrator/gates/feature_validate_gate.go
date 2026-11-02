@@ -94,7 +94,7 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 			return false, te.Reason, te.Evidence, KindFail, TerminalKindValidationFailed
 		}
 
-		details := []string{fmt.Sprintf("gates=%d rows=%d", len(verdicts), len(results))}
+		details := []string{fmt.Sprintf("verdicts=%d rows=%d", len(verdicts), len(results))}
 		details = append(details, te.Evidence...)
 		details = append(details, validatePolicy.Summary()...)
 		if summary := markUnexercisedDeliverable(issueNumber, workspace); summary != "" {
@@ -119,10 +119,6 @@ func isReviewCapRow(r state.GateResult) bool {
 	return r.GateName == ReviewGateName && strings.HasPrefix(r.ErrorSummary, ReviewCapMarker)
 }
 
-// judgeGateName is the gate_name of adversarial judge rows, written by
-// GateMetricsWriter.appendJudgeVerdicts. It mirrors JUDGE_GATE_NAME there.
-const judgeGateName = "judges"
-
 // latestVerdicts reduces gate-metric rows to the verdicts the gate judges: the
 // last row per GateName, in file order, kept at that name's first position so
 // the output is deterministic. Telemetry reads every row, so this view stays
@@ -141,7 +137,7 @@ const judgeGateName = "judges"
 func latestVerdicts(results []state.GateResult) []state.GateResult {
 	var judgeAttempt string
 	for _, r := range results {
-		if r.GateName == judgeGateName && r.Result != "" {
+		if r.GateName == state.JudgeGateName && r.Result != "" {
 			judgeAttempt = r.AttemptID
 		}
 	}
@@ -152,7 +148,7 @@ func latestVerdicts(results []state.GateResult) []state.GateResult {
 		if r.Result == "" {
 			continue
 		}
-		if r.GateName == judgeGateName {
+		if r.GateName == state.JudgeGateName {
 			if judgeAttempt == "" || r.AttemptID == "" || r.AttemptID == judgeAttempt {
 				verdicts = append(verdicts, r)
 			}
