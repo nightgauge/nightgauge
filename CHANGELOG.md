@@ -21,6 +21,9 @@ changelog, and the release workflow refuses a tag that does not.
   closed without merging blocks with a log line saying so, and a number that does not exist says
   that rather than "not confirmed via GitHub". `nightgauge next` and `program status` agree.
 
+- A defect fixed during feature-validate is no longer also filed as a new issue (#2861). Each
+  finished review round now replaces the review's discovered work with its own, so only findings
+  the last finished round reports are filed, and none is lost when no later round finishes.
 - `claude plugin validate --strict` now passes on the plugin and the marketplace, and the local
   gate and CI run it (#2763). All 11 hook commands are quoted, so the plugin's hooks work from a
   path containing a space. `plugin.json` declares its license, and `model-routing-report` is now a

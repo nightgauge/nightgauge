@@ -182,6 +182,7 @@ func Count(findings []Finding) state.FindingCounts {
 
 // Route splits findings: blockers of any pass and correctness majors must be
 // fixed, other majors become discovered work, and nitpicks are only counted.
+// It compares nothing: two passes at one location stay two findings.
 func Route(findings []Finding) (fix, discovered []Finding) {
 	fix, discovered = []Finding{}, []Finding{}
 	for _, f := range findings {
@@ -195,14 +196,18 @@ func Route(findings []Finding) (fix, discovered []Finding) {
 	return fix, discovered
 }
 
+// discoveredProducer marks the review's records, apart from an agent's, so a
+// later round can replace them.
+const discoveredProducer = "producer:independent-review"
+
 // Outcome is the verdict `prepare` (on reuse) and `record` report.
 type Outcome struct {
 	Verdict string              `json:"verdict"` // pass | catch
 	Summary string              `json:"summary,omitempty"`
 	Counts  state.FindingCounts `json:"counts"`
 	Fix     []Finding           `json:"fix"`
-	// Discovered lists what was recorded as discovered work. It is not stored:
-	// a reused verdict records nothing new.
+	// Discovered lists what this round left in the capture as discovered work. It
+	// is not stored: a reused verdict records nothing new.
 	Discovered []Finding `json:"discovered,omitempty"`
 	// Warnings names work that could not be recorded.
 	Warnings []string `json:"warnings,omitempty"`
@@ -477,6 +482,11 @@ func Unfinished(s Session, started time.Time, reason string) (Outcome, error) {
 // Record validates the findings file for the tree the review read, routes it,
 // and writes the discovered work, the verdict row and the ledger event. current
 // is the tree now: a review of another tree proves nothing about this one.
+//
+// Each finished round replaces the review's records in the capture with its own,
+// so the capture always holds the latest finished round's discovered work: a
+// finding a fix removed is gone, one that survives is reported again, and a round
+// that does not finish changes nothing, whichever round turns out to be the last.
 func Record(s Session, current, findingsPath string, started time.Time) (Outcome, error) {
 	if current != s.Tree {
 		return Unfinished(s, started, fmt.Sprintf("the tree moved from %s to %s", s.Tree, current))
@@ -491,13 +501,7 @@ func Record(s Session, current, findingsPath string, started time.Time) (Outcome
 	}
 	fix, discovered := Route(findings)
 	out := Outcome{Verdict: "pass", Counts: Count(findings), Fix: fix}
-	for _, f := range discovered {
-		if err := recordDiscovered(s, f); err != nil {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("%s: %v", f.Claim, err))
-			continue
-		}
-		out.Discovered = append(out.Discovered, f)
-	}
+	out.recordDiscovered(s, discovered)
 	verdict := gateledger.VerdictPass
 	if len(fix) > 0 {
 		verdict = gateledger.VerdictFail
@@ -510,26 +514,48 @@ func Record(s Session, current, findingsPath string, started time.Time) (Outcome
 	return out, s.ledger(verdict, started, out)
 }
 
-func recordDiscovered(s Session, f Finding) error {
+// recordDiscovered replaces the review's records with this round's. A failure
+// leaves the capture as it was, with a warning: an already fixed finding may then
+// be filed, which is the safe direction.
+func (o *Outcome) recordDiscovered(s Session, discovered []Finding) {
 	dir, err := layout.PipelineStateDir(s.Root)
 	if err != nil {
-		return err
+		o.Warnings = append(o.Warnings, "discovered work: "+err.Error())
+		return
 	}
+	recs := make([]discoveredwork.Record, len(discovered))
+	for i, f := range discovered {
+		recs[i] = discoveredRecord(s, f)
+	}
+	rejected, err := discoveredwork.ReplaceProducer(dir, s.Issue, discoveredProducer, recs, s.Now)
+	if err != nil {
+		o.Warnings = append(o.Warnings, "discovered work: "+err.Error())
+		return
+	}
+	for i, f := range discovered {
+		if rejected[i] != nil {
+			o.Warnings = append(o.Warnings, fmt.Sprintf("%s: %v", f.Claim, rejected[i]))
+			continue
+		}
+		o.Discovered = append(o.Discovered, f)
+	}
+}
+
+func discoveredRecord(s Session, f Finding) discoveredwork.Record {
 	where := f.File
 	if f.Line != nil {
 		where = fmt.Sprintf("%s:%d", f.File, *f.Line)
 	}
-	_, _, err = discoveredwork.Append(dir, discoveredwork.Record{
+	return discoveredwork.Record{
 		Summary:              clip(f.Pass+": "+f.Claim, maxSummary),
 		Evidence:             []string{where + ": " + f.Claim},
-		SourceStage:          Stage,
+		SourceStage:          discoveredProducer,
 		IssueNumber:          s.Issue,
 		SuggestedType:        "bug",
 		SuggestedPriority:    "medium",
 		SuggestedSize:        "S",
 		CandidateTargetFiles: []string{f.File},
-	}, s.Now)
-	return err
+	}
 }
 
 func oneLine(s string) string { return clip(strings.Join(strings.Fields(s), " "), maxSummary) }

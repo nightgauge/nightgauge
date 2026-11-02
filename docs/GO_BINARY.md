@@ -4565,6 +4565,8 @@ the bundle. `run` spawns one headless reviewer through the stage's adapter with
 `Read,Glob,Grep,Write`, and logs to `review-<N>-<unix>.log` in the clone's logs
 directory, where it outlives the bundle. `record`
 validates the findings and prints `{verdict, summary, counts, fix, discovered}`.
+Each finished round replaces the records of `producer:independent-review` in the
+capture with its own `discovered`, so only the last finished round is filed.
 Findings for a tree that moved, a missing or rejected file and a failed spawn all
 record `catch` with no ledger event, so the next attempt reviews again. Outcomes
 live in `gate-runs.jsonl` as kind `review`, which the local-gate answers ignore.

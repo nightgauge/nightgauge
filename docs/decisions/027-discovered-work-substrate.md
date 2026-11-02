@@ -16,14 +16,14 @@ widened its own scope or dropped the observation. This ADR adds a capture substr
 work: a versioned record, a per-run file, and Go primitives that validate every record
 before it is written.
 
-| #   | Topic        | Decision                                                    | Rejected                                        |
-| --- | ------------ | ----------------------------------------------------------- | ----------------------------------------------- |
-| 1   | Substrate    | A separate per-run `discovered-work-{N}.json`               | Extending #102's finding intake                 |
-| 2   | Naming       | "discovered work": verb, file and Go package                | "discovery", "finding"                          |
-| 3   | Producers    | The six stages, or `producer:<kebab-name>`                  | Stage names only                                |
-| 4   | Lifecycle    | Append during the run; the materializer is the only deleter | pr-merge cleanup; an automatic sweep of orphans |
-| 5   | Security     | All constraints enforced at the primitive                   | Validating in the materializer                  |
-| 6   | Priority set | `critical\|high\|medium\|low`, the spike vocabulary         | `P0`–`P3`                                       |
+| #   | Topic        | Decision                                                                                | Rejected                                        |
+| --- | ------------ | --------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| 1   | Substrate    | A separate per-run `discovered-work-{N}.json`                                           | Extending #102's finding intake                 |
+| 2   | Naming       | "discovered work": verb, file and Go package                                            | "discovery", "finding"                          |
+| 3   | Producers    | The six stages, or `producer:<kebab-name>`                                              | Stage names only                                |
+| 4   | Lifecycle    | Append during the run; the materializer is the only deleter of records it did not write | pr-merge cleanup; an automatic sweep of orphans |
+| 5   | Security     | All constraints enforced at the primitive                                               | Validating in the materializer                  |
+| 6   | Priority set | `critical\|high\|medium\|low`, the spike vocabulary                                     | `P0`–`P3`                                       |
 
 ## 1. Substrate: separate per-run file
 
@@ -53,13 +53,17 @@ one bounded string, and every record stays attributable.
 
 ## 4. Lifecycle and cleanup ownership
 
+Amended by #2861: a `producer:<kebab-name>` source may replace its own records before filing,
+through `ReplaceProducer`. The independent review does this each finished round, so a finding a
+later round no longer reports is never filed. A stage's records cannot be replaced.
+
 - Stages append during the run. A record's `id` is `dw-` plus the first 12 hex characters of
   sha256(`source_stage` NUL `summary`), so a retried stage re-recording the same discovery is
   a no-op.
 - pr-merge cleanup never matches the file. A test replays the cleanup patterns and asserts
   the capture file survives.
-- The materializer (#480) is the only deleter, and deletes only after it has filed the
-  records.
+- The materializer (#480) is the only deleter of records it did not write, and deletes only
+  after it has filed them.
 - A file with no live run (no `issue-{N}.json`) or older than seven days is **reported** by
   `nightgauge discovered-work orphans` and by doctor check `orphaned_discovered_work`
   (NGD050). Nothing sweeps it: deleting it would discard the follow-ups the substrate exists
