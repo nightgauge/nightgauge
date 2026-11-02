@@ -203,7 +203,7 @@ func rankWorkOrder(ctx context.Context, client *gh.Client, programs *workorder.F
 }
 
 // blockedReasons names everything holding an item: its open blockers and
-// labels, then each dependency whose state could not be resolved.
+// labels, then each dependency that is unresolved, undelivered or nonexistent.
 func blockedReasons(it workorder.Item) string {
 	reasons := append([]string{}, it.BlockedBy...)
 	for _, u := range it.Unvalidated {
@@ -211,6 +211,12 @@ func blockedReasons(it workorder.Item) string {
 	}
 	for _, u := range it.Unresolved {
 		reasons = append(reasons, u+" (state unresolved)")
+	}
+	for _, u := range it.ClosedUnmerged {
+		reasons = append(reasons, u+" (pull request closed without merging)")
+	}
+	for _, u := range it.Nonexistent {
+		reasons = append(reasons, u+" (no issue or pull request has this number)")
 	}
 	return strings.Join(reasons, ", ")
 }

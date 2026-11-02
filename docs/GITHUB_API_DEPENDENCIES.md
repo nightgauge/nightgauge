@@ -88,7 +88,11 @@ and no issue at all. Batch readers that need only an issue's state, body,
 title or labels (`GetIssuesByNumbersWithoutRelations`: the scheduler's issue
 reader, the dependency graph's body fetch and IPC `issue.viewMany`) select no
 relationship connection, and `epic validate` selects only its sub-issues'
-`blockedBy`.
+`blockedBy`. The off-board dependency resolver reads
+`issueOrPullRequest(number:)` (`GetDependencyStates`), selecting only `state`
+and `merged`, because a dependency line may name a pull request or a number
+that does not exist; a null alias counts as missing only with a `NOT_FOUND`
+error on it (#2854).
 
 **Risk**: Critical. Removing `subIssues` breaks epic tracking entirely. The
 board would show epics with no sub-issues and 0% progress.

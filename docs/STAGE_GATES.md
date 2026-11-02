@@ -287,6 +287,13 @@ and dispatched against a contract that was never built.
   `Refs` merge leaves an issue open with its PR merged, so neither `Done` nor
   `In review` with an open PR proves the contract a dependent needs. A blocker
   parked `In review` holds its dependents until someone resolves it.
+- **A key that names a pull request** — off-board keys only, because GitHub's
+  `blockedBy` relation links issues (#2854). Merged satisfies, with no
+  validation gate: a pull request carries no program labels or marker. Open
+  blocks. Closed without merging blocks, and the log says nothing was delivered.
+- **A number that does not exist** — blocks, and the log says so. That reason
+  needs GitHub's `NOT_FOUND` on the number; a failed read stays "not confirmed
+  via GitHub".
 
 The halt path that produced the false positive is fixed the same way:
 `sidelineHalt` now checks `openPRMergeStatesForRepo` before choosing a board

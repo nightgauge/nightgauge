@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- An issue that depends on a merged pull request now dispatches instead of waiting forever (#2854).
+  The off-board dependency check can read pull requests: an open one keeps the issue blocked, one
+  closed without merging blocks with a log line saying so, and a number that does not exist says
+  that rather than "not confirmed via GitHub". `nightgauge next` and `program status` agree.
+
 - `claude plugin validate --strict` now passes on the plugin and the marketplace, and the local
   gate and CI run it (#2763). All 11 hook commands are quoted, so the plugin's hooks work from a
   path containing a space. `plugin.json` declares its license, and `model-routing-report` is now a

@@ -37,7 +37,12 @@ import (
 // mockIssueSvc implements issueGetter for testing.
 type mockIssueSvc struct {
 	issues     map[string]*types.Issue // keyed by "owner/repo#number"
-	batchCalls []mockBatchCall         // recorded GetIssuesByNumbersWithoutRelations invocations
+	batchCalls []mockBatchCall         // recorded batch read invocations
+	// depStates answers GetDependencyStates for a key that is not an issue
+	// fixture: a pull request, or a number that does not exist.
+	depStates map[string]string
+	// depStatesErr fails every GetDependencyStates.
+	depStatesErr error
 	// getErrs makes GetIssueWithRelations fail for the keyed issue with the
 	// given error.
 	getErrs map[string]error
@@ -105,6 +110,25 @@ func withRelations(issue *types.Issue, rels gh.IssueRelations) *types.Issue {
 func (m *mockIssueSvc) GetIssuesByNumbersWithoutRelations(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
 	m.batchCalls = append(m.batchCalls, mockBatchCall{owner: owner, repo: repo, numbers: append([]int(nil), numbers...)})
 	return m.batch(owner, repo, numbers), nil
+}
+
+// GetDependencyStates derives states from the issue fixtures and depStates, and
+// records the call as the issue read does.
+func (m *mockIssueSvc) GetDependencyStates(_ context.Context, owner, repo string, numbers []int) (map[int]string, error) {
+	m.batchCalls = append(m.batchCalls, mockBatchCall{owner: owner, repo: repo, numbers: append([]int(nil), numbers...)})
+	if m.depStatesErr != nil {
+		return nil, m.depStatesErr
+	}
+	out := make(map[int]string, len(numbers))
+	for n, issue := range m.batch(owner, repo, numbers) {
+		out[n] = issue.State
+	}
+	for _, n := range numbers {
+		if state, ok := m.depStates[fmt.Sprintf("%s/%s#%d", owner, repo, n)]; ok {
+			out[n] = state
+		}
+	}
+	return out, nil
 }
 
 func (m *mockIssueSvc) batch(owner, repo string, numbers []int) map[int]*types.Issue {
