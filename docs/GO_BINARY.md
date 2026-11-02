@@ -3212,6 +3212,9 @@ nightgauge pr-stage merge <issue> [--workdir W] [--json]
 # The time budget derived from pipeline.merge_queue.wait_timeout
 nightgauge pr-stage budget [--workdir W] [--json]
 
+# The PR title, capped at 72 characters; the fallback note goes to stderr
+nightgauge pr-stage title <issue> [--workdir W]
+
 # The enqueue review gate; files open findings; read `proceed` from the JSON
 nightgauge pr-stage review-gate <issue> [--workdir W] [--json]
 

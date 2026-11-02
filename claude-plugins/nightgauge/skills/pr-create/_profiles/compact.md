@@ -299,8 +299,9 @@ when `pr-{N}.json` is written in Phase 4.
 printf '<!-- phase:start name="create-pr" index=8 total=13 stage="pr-create" -->\n'
 ```
 
-Create the PR using the Go binary. The skill constructs the title, body
-(with correct closing keywords), and handles reviewer assignment with
+Create the PR using the Go binary. `"$BINARY" pr-stage title "$ISSUE_NUMBER"`
+renders `$PR_TITLE` (#2846); never compose it. The skill constructs the body
+(with correct closing keywords) and handles reviewer assignment with
 self-reviewer guard. Append `KNOWLEDGE_SECTION` to the PR body when
 non-empty. The invocation is always `"$BINARY" pr create --title "$PR_TITLE"
 --body "$PR_BODY" --head "$BRANCH_NAME" --base "$BASE_BRANCH" --json` — the

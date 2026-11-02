@@ -1,6 +1,5 @@
 # CI — build and test on isolated GitHub-hosted runners.
 name: CI
-run-name: ${{ github.event.merge_group.head_commit.message }}
 
 # The merge queue IS the gate: every change lands through it, and the commit it
 # tests is the commit that lands. The local gate has already run the suites, so

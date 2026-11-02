@@ -485,7 +485,10 @@ than producing an un-mergeable PR as a read-only or wrong user.
    ```
 
 4. **Open PR on GitHub** with:
-   - Clear title describing the change
+   - Clear title describing the change, at most 72 characters including
+     `<type>(#N): `. Pipeline PRs take the text from the `pr_summary` feature-dev
+     records in `dev-{N}.json`; without one they fall back to the issue title,
+     cut at a word boundary, and the stage log says so
    - Description of what changed and why
    - Testing steps
    - Screenshots (if applicable)

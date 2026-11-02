@@ -340,6 +340,7 @@ var narrativeFields = []string{
 	"retry_reasons",
 	"knowledge_path",
 	"architectural_constraints",
+	"pr_summary",
 	"commit_sha",
 	"created_at",
 	// What the policy did to the stage's own document, carried across the

@@ -4331,6 +4331,27 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * The title for when the binary cannot render one. It keeps the renderer's
+   * guarantees: the `(#N)` scope PR lookups key on, the 72-character cap cut at a
+   * word boundary, and no issue reference a closing keyword could act on (#2846).
+   */
+  private scopedFallbackTitle(issueNumber: number, raw: string): string {
+    const scope = `chore(#${issueNumber}): `;
+    const budget = 72 - scope.length;
+    const text = raw
+      .replace(/\s+/g, " ")
+      .replace(/#(?=\d)/g, "issue ")
+      .replace(/\bGH-(?=\d)/gi, "issue ")
+      .trim();
+    const chars = Array.from(text);
+    if (chars.length <= budget) return scope + text;
+    const head = chars.slice(0, budget + 1).join("");
+    const lastSpace = head.lastIndexOf(" ");
+    const cut = lastSpace > 0 ? head.slice(0, lastSpace) : chars.slice(0, budget).join("");
+    return scope + cut.replace(/[\s,;:-]+$/, "");
+  }
+
+  /**
    * Closing keyword for the fallback PR body, from feature-validate's verdicts.
    * Same predicate as IssueClosedBy (internal/orchestrator/stages/prcreate_ac.go,
    * #2655): `Closes` only when the verdict list is non-empty and every entry is
@@ -4365,7 +4386,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * dismissed prompt in autonomous mode, or the destructive-git hook rejecting
    * a heredoc PR body).
    *
-   * LAST-RESORT safety net: it opens a minimal PR (title from the issue, body
+   * LAST-RESORT safety net: it opens a minimal PR (title from `nightgauge
+   * pr-stage title`, the issue title if that fails, body
    * `Closes #N` only when validate met every criterion, else `Refs #N` so
    * merging leaves the issue open — #2655, #2677) purely to unblock
    * the pipeline — the rich description is the
@@ -4500,19 +4522,50 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return { created: false, reason: `branch push failed: ${stderr.slice(0, 200)}` };
     }
 
-    // 5. Open the PR. Title from the issue; minimal body with the closing
-    //    keyword. Passed as execFile args (no shell, no heredoc) so the
-    //    destructive-git hook that may have blocked the skill never applies.
+    // 5. Open the PR. Title from the binary's renderer, so this path keeps the
+    //    72-character cap and the `(#N)` scope PR lookups key on (#2846); minimal
+    //    body with the closing keyword. Passed as execFile args (no shell, no
+    //    heredoc) so the destructive-git hook that may have blocked the skill
+    //    never applies.
+    // #2506: open through the binary, never ambient `gh pr create` — the
+    // binary authors with the config-resolved identity (the pipeline App when
+    // github_auth.app is configured) and stamps forge.PipelineMarker.
+    const binary = await BinaryResolver.fromVSCode().resolve();
+    if (!binary) {
+      return {
+        created: false,
+        reason: "nightgauge binary unresolved; refusing ambient gh pr create",
+      };
+    }
     let title = `pr-create fallback for #${issueNumber}`;
     try {
       const { stdout } = await execFileAsync(
-        "gh",
-        ["issue", "view", String(issueNumber), "--json", "title", "-q", ".title", ...repoArgs],
-        { encoding: "utf-8", cwd, timeout: 30_000 }
+        binary,
+        ["pr-stage", "title", String(issueNumber), "--workdir", cwd],
+        { encoding: "utf-8", cwd, timeout: 15_000 }
       );
-      if (stdout.trim()) title = stdout.trim();
-    } catch {
-      // keep default title
+      // A binary older than the verb prints pr-stage's help and exits 0.
+      const rendered = stdout.trim();
+      if (rendered.includes("\n") || !rendered.includes(`(#${issueNumber}): `)) {
+        throw new Error("pr-stage title printed no title");
+      }
+      title = rendered;
+    } catch (titleErr) {
+      this.logger.warn("Deterministic create fallback: title verb failed; using the issue title", {
+        issueNumber,
+        error: titleErr instanceof Error ? titleErr.message : String(titleErr),
+      });
+      try {
+        const { stdout } = await execFileAsync(
+          "gh",
+          ["issue", "view", String(issueNumber), "--json", "title", "-q", ".title", ...repoArgs],
+          { encoding: "utf-8", cwd, timeout: 30_000 }
+        );
+        if (stdout.trim()) title = stdout.trim();
+      } catch {
+        // keep default title
+      }
+      title = this.scopedFallbackTitle(issueNumber, title);
     }
     const keyword = this.fallbackClosingKeyword(issueNumber, cwd);
     const verdictLine =
@@ -4526,16 +4579,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       `_Opened by the deterministic pr-create fallback (#3927) after the pr-create stage ` +
       `exited without creating a PR. The full description is normally authored by the ` +
       `pr-create stage; this is a safety-net PR to unblock the pipeline._`;
-    // #2506: open through the binary, never ambient `gh pr create` — the
-    // binary authors with the config-resolved identity (the pipeline App when
-    // github_auth.app is configured) and stamps forge.PipelineMarker.
-    const binary = await BinaryResolver.fromVSCode().resolve();
-    if (!binary) {
-      return {
-        created: false,
-        reason: "nightgauge binary unresolved; refusing ambient gh pr create",
-      };
-    }
     let repoSlug = this.repoOverride ?? "";
     if (!repoSlug) {
       try {

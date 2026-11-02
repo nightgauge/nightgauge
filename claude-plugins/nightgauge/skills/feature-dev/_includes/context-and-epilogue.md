@@ -29,6 +29,11 @@ before the context file is written.
 
 ### Step 7.1: Write dev-{N}.json inline
 
+Set `PR_SUMMARY` to one imperative line, at most 60 characters, stating what
+this change does, not the bug it answers: `drop run-name and cap PR titles at 72
+chars`. It becomes the PR title, and the squash merge copies that into `main`.
+Without it the title falls back to the issue title (#2846).
+
 All variables are set by this point. Write the context using `jq -n` for safe
 JSON construction, then validate with `jq`:
 
@@ -65,6 +70,7 @@ jq -n \
   --argjson retry_reasons "$(printf '%s\n' "${RETRY_REASONS_JSON:-[]}" | jq -c .)" \
   --argjson knowledge_path "$(if [ -n "${KNOWLEDGE_PATH:-}" ]; then echo "\"$KNOWLEDGE_PATH\""; else echo "null"; fi)" \
   --argjson architectural_constraints "$(printf '%s\n' "${ARCH_CONSTRAINTS:-null}" | jq -c 'if . == "[]" then [] elif . == null then null else . end')" \
+  --arg pr_summary "${PR_SUMMARY:-}" \
   --arg created_at "$TIMESTAMP" \
   '{
     schema_version: "1.9",
@@ -103,6 +109,7 @@ jq -n \
     retry_count: $retry_count,
     retry_reasons: $retry_reasons,
     knowledge_path: $knowledge_path,
+    pr_summary: (if $pr_summary != "" then $pr_summary else null end),
     architectural_constraints: $architectural_constraints,
     created_at: $created_at
   }' | nightgauge layout write pipeline "dev-${ISSUE_NUMBER}.json" >/dev/null

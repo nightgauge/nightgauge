@@ -86,6 +86,12 @@ export const DevContextSchema = z
      */
     knowledge_path: z.string().nullish(),
     /**
+     * One imperative line stating what changed (Issue #2846). pr-create renders
+     * it into the PR title, which the squash merge copies into main's history.
+     * Absent, the title falls back to the issue title.
+     */
+    pr_summary: z.string().nullish(),
+    /**
      * Cross-repo knowledge entries from planning context, threaded to dev
      * for implementation context (v1.6+).
      *

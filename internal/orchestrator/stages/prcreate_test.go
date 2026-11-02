@@ -311,6 +311,7 @@ type fakePRClient struct {
 	listCalls      int
 	getRepoIDCalls int
 	lastBody       string
+	lastTitle      string
 }
 
 func (f *fakePRClient) GetRepoID(_ context.Context, _, _ string) (string, error) {
@@ -324,9 +325,10 @@ func (f *fakePRClient) GetRepoID(_ context.Context, _, _ string) (string, error)
 	return f.repoID, nil
 }
 
-func (f *fakePRClient) CreatePR(_ context.Context, _, _, body, _, _ string) (*CreatedPR, error) {
+func (f *fakePRClient) CreatePR(_ context.Context, _, title, body, _, _ string) (*CreatedPR, error) {
 	f.createCalls++
 	f.lastBody = body
+	f.lastTitle = title
 	if f.createErr != nil {
 		return nil, f.createErr
 	}

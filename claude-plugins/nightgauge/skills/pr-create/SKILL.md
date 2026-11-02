@@ -344,9 +344,9 @@ when `pr-{N}.json` is written in Phase 4.
 printf '<!-- phase:start name="create-pr" index=8 total=13 stage="pr-create" -->\n'
 ```
 
-Create the PR using the Go binary. The skill constructs the title, body (with
-correct closing keywords), and handles reviewer assignment with self-reviewer
-guard. Append `KNOWLEDGE_SECTION` to the PR body when non-empty.
+Create the PR using the Go binary. `nightgauge pr-stage title` renders the title
+(#2846). The skill constructs the body (with correct closing keywords) and
+handles reviewer assignment with self-reviewer guard. Append `KNOWLEDGE_SECTION` to the PR body when non-empty.
 
 > **Read `_includes/create-and-ci.md` (same directory as this SKILL.md) now and
 > follow its instructions before continuing this phase.**
