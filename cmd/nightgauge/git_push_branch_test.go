@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -98,6 +99,117 @@ func TestRunPushBranch_GenuineForkExits3(t *testing.T) {
 	}
 	if got := strings.Fields(gittest.Run(t, work, "ls-remote", "origin", "refs/heads/fix/2699-y"))[0]; got != opSHA {
 		t.Errorf("origin moved on a genuine fork: %s", got)
+	}
+}
+
+// A rejected push that could not be reconciled (here a protected branch, which
+// is never rewritten) must exit 3 with the marker. Exit 1 would let a stage defer
+// past a branch that was never pushed.
+func TestRunPushBranch_UnreconciledRejectionExits3(t *testing.T) {
+	_, work, remote := pushBranchFixture(t, "epic/2699-z")
+	var out, errb bytes.Buffer
+	if code := runPushBranch(context.Background(), work, true, &out, &errb); code != pushBranchForked {
+		t.Fatalf("exit %d, want %d; stderr=%s", code, pushBranchForked, errb.String())
+	}
+	if !strings.Contains(errb.String(), "[branch-forked]") {
+		t.Errorf("missing marker: %s", errb.String())
+	}
+	assertOutcome(t, out.Bytes(), "unreconciled")
+	if got := gittest.Run(t, work, "ls-remote", "origin", "refs/heads/epic/2699-z"); !strings.HasPrefix(got, remote) {
+		t.Errorf("origin moved: %s, want %s", got, remote)
+	}
+}
+
+func assertOutcome(t *testing.T, data []byte, want string) {
+	t.Helper()
+	var res pushBranchResult
+	if err := json.Unmarshal(data, &res); err != nil {
+		t.Fatalf("stdout = %q: %v", data, err)
+	}
+	if res.Outcome != want {
+		t.Errorf("outcome = %q, want %q", res.Outcome, want)
+	}
+}
+
+// The real unreconcilable shape on an ordinary branch: `merge-tree --write-tree`
+// exits 129 on git older than 2.38, so the reconcile cannot run at all.
+func TestRunPushBranch_OldGitMergeTreeExits3(t *testing.T) {
+	_, work, remote := pushBranchFixture(t, "fix/2749-oldgit")
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shim := t.TempDir()
+	script := "#!/bin/sh\n[ \"$1\" = merge-tree ] && exit 129\nexec \"" + realGit + "\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shim, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var out, errb bytes.Buffer
+	if code := runPushBranch(context.Background(), work, true, &out, &errb); code != pushBranchForked {
+		t.Fatalf("exit %d, want 3; stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "[branch-forked] PUSH REJECTED: could not reconcile") {
+		t.Errorf("stderr = %q, want the marker", errb.String())
+	}
+	assertOutcome(t, out.Bytes(), "unreconciled")
+	if got := gittest.Run(t, work, "ls-remote", "origin", "refs/heads/fix/2749-oldgit"); !strings.HasPrefix(got, remote) {
+		t.Errorf("origin moved: %s, want %s", got, remote)
+	}
+}
+
+// Origin advances after a successful reconcile, so the recovery push is itself
+// rejected. That exits 3 with the marker and leaves the branch as it was.
+func TestRunPushBranch_RejectedRecoveryRetryExits3(t *testing.T) {
+	const branch = "fix/2749-race"
+	root, work, _ := pushBranchFixture(t, branch)
+	local := gittest.Run(t, work, "rev-parse", "HEAD")
+	racer := filepath.Join(root, "racer")
+	gittest.Run(t, root, "clone", "-b", branch, filepath.Join(root, "origin.git"), racer)
+
+	calls := 0
+	pushBranchAttempt = func(ctx context.Context, dir, b string) (string, bool) {
+		calls++
+		if calls == 2 {
+			if err := os.WriteFile(filepath.Join(racer, "race.go"), []byte("race\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gittest.Run(t, racer, "add", "-A")
+			gittest.Run(t, racer, "-c", "user.email=r@e", "-c", "user.name=R", "commit", "-m", "race")
+			gittest.Run(t, racer, "push", "origin", branch)
+		}
+		return pushPlain(ctx, dir, b)
+	}
+	t.Cleanup(func() { pushBranchAttempt = pushPlain })
+
+	var out, errb bytes.Buffer
+	if code := runPushBranch(context.Background(), work, true, &out, &errb); code != pushBranchForked {
+		t.Fatalf("exit %d, want 3; stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "[branch-forked] PUSH REJECTED: origin moved during recovery") {
+		t.Errorf("stderr = %q, want the marker", errb.String())
+	}
+	assertOutcome(t, out.Bytes(), "forked")
+	if got := gittest.Run(t, work, "rev-parse", "HEAD"); got != local {
+		t.Errorf("HEAD = %s, want rollback to %s", got, local)
+	}
+}
+
+// A verdict is not a usage error, so the verb must not print its usage.
+func TestGitPushBranchCmd_VerdictPrintsNoUsage(t *testing.T) {
+	_, work, _ := pushBranchFixture(t, "epic/2749-usage")
+	t.Chdir(work)
+	var out, errb bytes.Buffer
+	cmd := gitPushBranchCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&errb)
+	cmd.SetArgs([]string{})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("want a verdict error")
+	}
+	if strings.Contains(out.String()+errb.String(), "Usage:") {
+		t.Errorf("usage printed on a verdict: %s%s", out.String(), errb.String())
 	}
 }
 

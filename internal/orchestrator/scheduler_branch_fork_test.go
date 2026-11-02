@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -281,6 +283,24 @@ func TestClassifyTerminalKind_BranchForked(t *testing.T) {
 	}
 }
 
+// lockedBuffer collects log output from the scheduler's goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // newBranchForkScheduler builds the scheduler the branch-fork tests share.
 func newBranchForkScheduler(t *testing.T, root, branch string) (*Scheduler, *branchAwareStageRunner) {
 	t.Helper()
@@ -350,11 +370,19 @@ func TestScheduler_BranchForked_PinsStrandedTipAndNamesItOnTheCard(t *testing.T)
 	gittest.Run(t, root, "branch", branch)
 	tip := gittest.Run(t, root, "rev-parse", branch)
 
+	logs := &lockedBuffer{}
+	prev := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
 	s, runner := newBranchForkScheduler(t, root, branch)
 	s.runPipeline(context.Background(), types.BoardItem{Number: 2699, Repo: "nightgauge/nightgauge", ID: "item-2699"})
 
 	if got := runner.count(state.StageFeatureDev); got != 0 {
 		t.Fatalf("feature-dev dispatched %d time(s) onto a genuinely forked branch", got)
+	}
+	if got := logs.String(); !strings.Contains(got, "#2699: self-fork not recovered (forked): origin/"+branch+" carries changes") {
+		t.Errorf("log = %q, want why the self-fork was not recovered", got)
 	}
 	if got := gittest.Run(t, root, "rev-parse", "refs/nightgauge/stranded/2699"); got != tip {
 		t.Errorf("stranded ref = %s, want %s", got, tip)
