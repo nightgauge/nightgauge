@@ -44,6 +44,12 @@ const GateMetricsHistoryName = "gate-metrics.jsonl"
 // timestamp is supplied by the caller (the CLI, an I/O boundary) so this
 // function never reads the clock and stays deterministic for tests.
 func AppendGateMetric(workspaceRoot string, issueNumber int, gateName, result, errorSummary, timestamp string) error {
+	return AppendGateMetricDetail(workspaceRoot, issueNumber, gateName, result, errorSummary, timestamp, nil, nil)
+}
+
+// AppendGateMetricDetail is AppendGateMetric with the row's optional measures:
+// how long the gate ran and, for a review, its findings per severity (#2839).
+func AppendGateMetricDetail(workspaceRoot string, issueNumber int, gateName, result, errorSummary, timestamp string, durationMs *int64, findings *FindingCounts) error {
 	if result != "pass" && result != "catch" {
 		return fmt.Errorf("gate metric result must be \"pass\" or \"catch\", got %q", result)
 	}
@@ -57,6 +63,8 @@ func AppendGateMetric(workspaceRoot string, issueNumber int, gateName, result, e
 		IssueNumber:   issueNumber,
 		GateName:      gateName,
 		Result:        result,
+		DurationMs:    durationMs,
+		Findings:      findings,
 	}
 	if errorSummary != "" {
 		rec.ErrorSummary = &errorSummary

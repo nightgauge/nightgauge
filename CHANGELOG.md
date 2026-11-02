@@ -20,6 +20,7 @@ changelog, and the release workflow refuses a tag that does not.
   outright. It now runs the same conflict recovery as the Go loop, a conflict
   confined to changelogs resolves without an LLM stage on both paths, and a
   conflict recovery cannot resolve halts as `merge_conflict`, naming the files.
+- `feature-validate` now gets an independent code review: one per tree, in a fresh context that sees only the diff, the issue and the tree, through `nightgauge review prepare|run|record`. Blockers and correctness majors must be fixed, other majors become discovered work, and an unfinished review fails closed. The review's rules ship in the binary and its files live in the ignored `.nightgauge/review/`, so it works in any repository on any adapter. Gate metrics record its duration and severity counts, and feature-dev no longer reviews its own diff (#2839).
 - The malware-scan gate now refuses input it cannot trust. A non-numeric, empty or
   oversized `--min-scanned-mb` or `--min-signatures`, a value flag with no value
   (which used to hang), and a `clamconf` that is missing, unparseable or names no

@@ -54,6 +54,14 @@ export const GateMetricRecordSchema = z.object({
   duration_ms: z.number().int().min(0).nullish(),
   /** First line of error output; populated only when result="catch" */
   error_summary: z.string().nullish(),
+  /** A review's findings per severity (#2839) */
+  findings: z
+    .object({
+      blocker: z.number().int().min(0),
+      major: z.number().int().min(0),
+      nitpick: z.number().int().min(0),
+    })
+    .nullish(),
   /**
    * Groups the rows one run wrote. Only `judges` rows carry it: one run writes a
    * row per judge under that shared name, so the Go gate needs the attempt to

@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Step 2.7.3 is now the Independent Review Gate: one review per tree, in a fresh context, through `nightgauge review`. The self-critique and its hand-recorded verdict are gone (#2839).
 - Step 5.3 pushes with `nightgauge git push-branch`, which recovers a self-inflicted fork (a rebased PR branch) without force and exits 3 with `[branch-forked]` on a genuine fork (#2699).
 
 ### Fixed

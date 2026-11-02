@@ -39,9 +39,8 @@ failure mode.`,
 }
 
 // gateRecordMetricCmd runs `nightgauge gate record-metric` — the writer
-// side of the quality-gate signal. The feature-validate adversarial-review
-// phase (#4097) calls it to record the critic verdict (pass/catch) so a "catch"
-// trips the deterministic FeatureValidateGate, keeping that gate pure (no LLM/
+// side of the quality-gate signal. A skill calls it to record a verdict
+// (pass/catch) so a "catch" trips the deterministic FeatureValidateGate, keeping that gate pure (no LLM/
 // network) while the non-deterministic judgment reaches it via gate-metrics.
 //
 // Exit codes: 0 on success; 1 on invalid input / IO error.
@@ -51,6 +50,7 @@ func gateRecordMetricCmd() *cobra.Command {
 		gateName     string
 		result       string
 		errorSummary string
+		durationMs   int64
 		workdir      string
 	)
 	cmd := &cobra.Command{
@@ -59,12 +59,12 @@ func gateRecordMetricCmd() *cobra.Command {
 			" and " + layout.CloneLogsDisplay() + "/" + state.GateMetricsHistoryName,
 		Long: `Append one quality-gate record consumed by the deterministic
 FeatureValidateGate (per-checkout) and by ` + "`nightgauge health gate-metrics`" + `
-(cross-run history in the clone's logs, which survives worktree cleanup). Used by the feature-validate adversarial-review phase to
-record an LLM-critic verdict — a "catch" fails validation through the existing
-gate without putting an LLM call inside the gate itself (see docs/STAGE_GATES.md).`,
-		Example:      `  nightgauge gate record-metric --issue 4097 --gate adversarial-review --result catch --error-summary "correctness: nil-deref"`,
+(cross-run history in the clone's logs, which survives worktree cleanup). A "catch" fails validation through the existing gate without putting an LLM call
+inside the gate itself (see docs/STAGE_GATES.md). The independent review records
+its own row through ` + "`nightgauge review record`" + `.`,
+		Example:      `  nightgauge gate record-metric --issue 4097 --gate verify-ui --result catch --error-summary "login flow"`,
 		SilenceUsage: true,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			work := workdir
 			if work == "" {
 				if wd, err := os.Getwd(); err == nil {
@@ -75,7 +75,11 @@ gate without putting an LLM call inside the gate itself (see docs/STAGE_GATES.md
 				work = abs
 			}
 			ts := time.Now().UTC().Format(time.RFC3339)
-			if err := state.AppendGateMetric(work, issueNumber, gateName, result, errorSummary, ts); err != nil {
+			var duration *int64
+			if cmd.Flags().Changed("duration-ms") {
+				duration = &durationMs
+			}
+			if err := state.AppendGateMetricDetail(work, issueNumber, gateName, result, errorSummary, ts, duration, nil); err != nil {
 				fmt.Fprintf(os.Stderr, "gate record-metric: %v\n", err)
 				os.Exit(1)
 			}
@@ -86,6 +90,7 @@ gate without putting an LLM call inside the gate itself (see docs/STAGE_GATES.md
 	cmd.Flags().StringVar(&gateName, "gate", "", "Gate name, e.g. adversarial-review (required)")
 	cmd.Flags().StringVar(&result, "result", "", "Result: pass | catch (required)")
 	cmd.Flags().StringVar(&errorSummary, "error-summary", "", "Short reason when result=catch")
+	cmd.Flags().Int64Var(&durationMs, "duration-ms", 0, "How long the gate ran, in milliseconds")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (default: cwd)")
 	_ = cmd.MarkFlagRequired("issue")
 	_ = cmd.MarkFlagRequired("gate")

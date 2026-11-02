@@ -2,6 +2,8 @@
 // health data files (the checkout's .git/nightgauge-worktree/health/*.jsonl).
 package health
 
+import "github.com/nightgauge/nightgauge/internal/state"
+
 // TrendSchemaVersion is the one schema of the health series (#1898).
 const TrendSchemaVersion = "2"
 
@@ -29,6 +31,8 @@ type GateMetricsEntry struct {
 	Result     string `json:"result"` // "pass", "catch", "skip"
 	Reason     string `json:"reason"`
 	DurationMs int    `json:"duration_ms"`
+	// Findings counts a review's findings per severity (#2839).
+	Findings *state.FindingCounts `json:"findings,omitempty"`
 }
 
 // GateMetricsAggregate is the aggregated summary for one gate.
@@ -39,4 +43,6 @@ type GateMetricsAggregate struct {
 	Skipped         int     `json:"skipped"`
 	HitRate         float64 `json:"hit_rate"`
 	AverageDuration float64 `json:"average_duration_ms"`
+	// Findings totals the gate's findings per severity.
+	Findings state.FindingCounts `json:"findings"`
 }
