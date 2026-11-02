@@ -563,8 +563,27 @@ Homebrew is not used: its `clamav` 1.5.4_1 rejected every signature database on 
 `macos-26-arm64` image `20261026.0455.x`, which carries `openssl@4` 4.1.0 (#2740), and a pin means
 the scanner changes only by a reviewed edit.
 
+On a local Mac, run it as
+`sudo /usr/local/clamav/bin/freshclam --user=root`. The script keeps the database directory
+root-owned there, because a user-owned directory lets anything running as that user plant or
+allowlist signatures. With `CI=true` it gives the directory to the runner user instead: a runner
+is ephemeral and runs a plain `freshclam` unprivileged.
+
 To bump the pin, change `CLAMAV_VERSION` and `PKG_SHA256` in the script and the digest in
-`scripts/test-malware-scan.sh`, taking the digest from the release asset.
+`scripts/test-malware-scan.sh`, taking the digest from the release asset. In the same change,
+check `MIN_SIGNATURES` in `scripts/malware-scan.sh` against the new version's `Known viruses`
+count.
+
+If a clean `freshclam` still trips the floor:
+
+1. Confirm `daily`, `main` and `bytecode` are all present and its output shows no 429.
+2. Read the real `Known viruses` count from `clamscan`.
+3. Confirm ClamAV pruned signatures, from its own announcement or database history.
+4. Lower `MIN_SIGNATURES` in a reviewed PR that carries this evidence. Update the
+   `below the 3000000 floor` arms in `scripts/test-malware-scan.sh` and the 3,000,000 in
+   [ARTIFACT_VERIFICATION.md](ARTIFACT_VERIFICATION.md).
+
+Never lower the floor to get past a partial database.
 
 ## What this checklist is not
 

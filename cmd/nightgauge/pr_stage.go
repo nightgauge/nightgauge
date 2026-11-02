@@ -58,6 +58,7 @@ scheduler contract instead of maintaining a second, divergent implementation.`,
 	cmd.AddCommand(prStageCreateCmd())
 	cmd.AddCommand(prStageMergeCmd())
 	cmd.AddCommand(prStageBudgetCmd())
+	cmd.AddCommand(prStageRecoverCmd())
 	cmd.AddCommand(prStageReviewRoundCmd())
 	cmd.AddCommand(prStageReviewGateCmd())
 	cmd.AddCommand(prStageResumePointCmd())
@@ -360,6 +361,9 @@ type prStageBudgetJSON struct {
 	QueueWaitMs     int64 `json:"queue_wait_ms"`
 	CLITimeoutMs    int64 `json:"cli_timeout_ms"`
 	ClientTimeoutMs int64 `json:"client_timeout_ms"`
+	// RecoveryClientTimeoutMs bounds `pr-stage recover`: one CI wait on the new
+	// head plus one merge attempt (#2841).
+	RecoveryClientTimeoutMs int64 `json:"recovery_client_timeout_ms"`
 }
 
 // prMergeQueueWait is the resolved pipeline.merge_queue.wait_timeout.
@@ -389,9 +393,10 @@ func prMergeDefaultTimeoutSec(workspace string) int {
 func prMergeBudget(workspace string) prStageBudgetJSON {
 	cliSec := int64(prMergeDefaultTimeoutSec(workspace))
 	return prStageBudgetJSON{
-		QueueWaitMs:     prMergeQueueWait(workspace).Milliseconds(),
-		CLITimeoutMs:    cliSec * 1000,
-		ClientTimeoutMs: (cliSec + prStageClientMarginSec) * 1000,
+		QueueWaitMs:             prMergeQueueWait(workspace).Milliseconds(),
+		CLITimeoutMs:            cliSec * 1000,
+		ClientTimeoutMs:         (cliSec + prStageClientMarginSec) * 1000,
+		RecoveryClientTimeoutMs: (int64(prRecoverDefaultTimeoutSec(workspace)) + prStageClientMarginSec) * 1000,
 	}
 }
 

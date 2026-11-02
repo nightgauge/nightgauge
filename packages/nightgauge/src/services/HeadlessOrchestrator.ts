@@ -1195,6 +1195,29 @@ export function toNightgaugeAdapter(
   }
 }
 
+/** `nightgauge pr-stage recover --json` (#2841). */
+interface PrStageRecoverResult {
+  outcome: "recovered" | "rewind" | "escalated" | "unmatched";
+  reason?: string;
+  conflicting_files?: string[];
+  backtrack_signal?: PipelineFeedbackSignal;
+  max_dev_redispatch?: number;
+}
+
+/** Mirrors isQueueConflict in internal/orchestrator/recovery. */
+function isQueueConflictRefusal(reason: string): boolean {
+  const lower = reason.toLowerCase();
+  return lower.includes("merge-queue-failed") && lower.includes("merge conflict with");
+}
+
+/** `[merge-conflict]` classifies as `merge_conflict` for the card and the retro. */
+function queueConflictEscalationError(reason: string, files: string[]): Error {
+  const named = files.length > 0 ? files.join(", ") : "(could not determine conflicting files)";
+  return new Error(
+    `[merge-conflict] deterministic pr-merge refused: ${reason}; conflicting files: ${named}`
+  );
+}
+
 /**
  * Decide whether an unattended budget/ceiling escalation should proceed
  * (Issue #3851).
@@ -1339,6 +1362,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * Reset at the start of each runPipeline() call and in the finally block.
    */
   private backtrackCount = 0;
+  /** Per-run pr-merge -> feature-dev conflict rewinds (#2841). */
+  private conflictRedispatchCount = 0;
+  /**
+   * Stages a rewind must re-run although state still reads `complete`: nothing
+   * resets their status, so the resume check would skip them and the rewind
+   * would replay nothing (#2841).
+   */
+  private readonly replayStages = new Set<PipelineStage>();
   private traversedEdges: Set<string> = new Set();
 
   /**
@@ -4616,7 +4647,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     | { kind: "llm" }
     | { kind: "handled"; result: StageRunResult }
     | { kind: "deferred"; error: Error }
-    | { kind: "refused"; error: Error }
+    | { kind: "refused"; error: Error; terminalKind?: string }
+    | {
+        kind: "conflict-rewind";
+        signal: PipelineFeedbackSignal;
+        maxDevRedispatch: number;
+        reason: string;
+        files: string[];
+      }
   > {
     if (stage !== "pr-create" && stage !== "pr-merge") {
       return { kind: "llm" };
@@ -4668,6 +4706,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // pr-merge can wait out CI and then a merge queue, so the binary derives its
     // limit from pipeline.merge_queue.wait_timeout (#2730). pr-create is fast.
     let timeoutMs = 3 * 60_000;
+    let recoveryTimeoutMs = timeoutMs;
     if (stage === "pr-merge") {
       try {
         const { stdout } = await execFileAsync(
@@ -4675,7 +4714,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           ["pr-stage", "budget", "--workdir", workdir, "--json"],
           { encoding: "utf-8", cwd: workdir, timeout: 30_000 }
         );
-        timeoutMs = parsePrStageBudget(stdout).client_timeout_ms;
+        const budget = parsePrStageBudget(stdout);
+        timeoutMs = budget.client_timeout_ms;
+        recoveryTimeoutMs = budget.recovery_client_timeout_ms;
       } catch (err) {
         this.logger.warn("Deterministic pr-stage budget unavailable — running LLM path", {
           issueNumber,
@@ -4785,6 +4826,48 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Refused → a deterministic gate declined the merge (generated steering on
     // the PR head, issue 1675). Never fall through to the LLM skill, which
     // could merge the same head; fail the stage with the classified reason.
+    if (parsed.path === "refused" && stage === "pr-merge" && isQueueConflictRefusal(reason)) {
+      // A queue conflict is recoverable (#2841). The Go registry decides how;
+      // this path only reacts, and never falls through to the LLM skill.
+      const recovery = await this.recoverQueueConflict(
+        binary,
+        issueNumber,
+        reason,
+        workdir,
+        recoveryTimeoutMs
+      );
+      if (recovery.outcome === "recovered") {
+        parsed = { ...parsed, path: "merged" };
+      } else if (recovery.outcome === "rewind" && recovery.backtrack_signal) {
+        this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
+        return {
+          kind: "conflict-rewind",
+          signal: recovery.backtrack_signal,
+          maxDevRedispatch: recovery.max_dev_redispatch ?? 0,
+          reason,
+          files: recovery.conflicting_files ?? [],
+        };
+      } else {
+        const conflictErr = queueConflictEscalationError(
+          recovery.reason ? `${reason}; ${recovery.reason}` : reason,
+          recovery.conflicting_files ?? []
+        );
+        this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
+        this.logger.warn("Queue conflict not recovered — failing the stage", {
+          issueNumber,
+          outcome: recovery.outcome,
+        });
+        if (this.stateService) {
+          try {
+            await this.stateService.failStage(stage, conflictErr.message);
+          } catch {
+            // Non-critical — the caller still breaks the loop.
+          }
+        }
+        return { kind: "refused", error: conflictErr, terminalKind: "merge_conflict" };
+      }
+    }
+
     if (parsed.path === "refused") {
       const refuseErr = new Error(`deterministic ${stage} refused: ${reason}`);
       this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
@@ -10236,6 +10319,41 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Run `pr-stage recover` for a queue conflict (#2841). A verb that errors or
+   * emits non-JSON reports `escalated`: a refused head stays refused.
+   */
+  private async recoverQueueConflict(
+    binary: string,
+    issueNumber: number,
+    reason: string,
+    workdir: string,
+    timeoutMs: number
+  ): Promise<PrStageRecoverResult> {
+    const args = [
+      "pr-stage",
+      "recover",
+      String(issueNumber),
+      "--reason",
+      reason,
+      "--workdir",
+      workdir,
+      "--json",
+    ];
+    try {
+      const { stdout } = await execFileAsync(binary, args, {
+        encoding: "utf-8",
+        cwd: workdir,
+        timeout: timeoutMs,
+      });
+      return JSON.parse(stdout.trim()) as PrStageRecoverResult;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.warn("pr-stage recover failed", { issueNumber, err: detail });
+      return { outcome: "escalated", reason: `recovery could not run: ${detail}` };
+    }
+  }
+
+  /**
    * Evaluate whether a backtrack is allowed.
    *
    * Checks:
@@ -10299,6 +10417,22 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     const edgeKey = `${currentStage}->${targetStage}`;
     this.traversedEdges.add(edgeKey);
     this.backtrackCount++;
+    return this.rewindToBacktrackTarget(signal, currentStage, issueNumber, this.backtrackCount);
+  }
+
+  /**
+   * The stage-reset half of a backtrack: feedback file, replay guards, state
+   * record. Conflict rewinds call it directly because their edge is bounded by
+   * `max_dev_redispatch`, not by `max_backtracks` or the oscillation guard
+   * (#2841), mirroring RetryEngine.MaxConflictRedispatch.
+   */
+  private async rewindToBacktrackTarget(
+    signal: PipelineFeedbackSignal,
+    currentStage: PipelineStage,
+    issueNumber: number,
+    attemptNumber: number
+  ): Promise<number> {
+    const targetStage = signal.backtrack_target_stage as PipelineStage;
 
     const record: import("../schemas/pipelineState").BacktrackRecord = {
       from_stage: currentStage,
@@ -10306,7 +10440,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       signal_type: signal.signal_type,
       rationale: signal.rationale,
       timestamp: new Date().toISOString(),
-      attempt_number: this.backtrackCount,
+      attempt_number: attemptNumber,
     };
 
     // Write feedback-{N}.json for the target stage to read
@@ -10344,6 +10478,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // feature-planning and the pipeline stopped dead).
     for (const replayed of STAGE_ORDER.slice(targetIndex, currentIndex + 1)) {
       this.completedStageSet.delete(replayed);
+      this.replayStages.add(replayed);
     }
 
     // Record backtrack in pipeline state
@@ -10363,7 +10498,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       from: currentStage,
       to: targetStage,
       signalType: signal.signal_type,
-      attemptNumber: this.backtrackCount,
+      attemptNumber,
     });
 
     this.eventDispatcher.onBacktrackTriggered(record);
@@ -10856,6 +10991,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.contextAssembler.setRoutingConfig(this.config.routing ?? {});
     this.contextAssembler.setForceFullPipeline(this.config.forceFullPipeline);
     this.backtrackCount = 0; // Reset backtrack engine state (#1342)
+    this.conflictRedispatchCount = 0; // Reset the conflict rewind bound (#2841)
+    this.replayStages.clear();
     this.traversedEdges.clear(); // Reset oscillation guard (#1342)
     this.stageEscalationCounts.clear(); // Reset escalation engine (#1343)
     this.stageModelOverrides.clear(); // Reset escalation overrides (#1343)
@@ -11762,7 +11899,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           const currentState = await this.stateService.getState();
           if (currentState) {
             const stageState = currentState.stages[stage];
-            if (
+            const replaying = stageState?.status === "complete" && this.replayStages.delete(stage);
+            if (replaying) {
+              this.logger.debug("Replaying a completed stage after a rewind", { stage });
+            } else if (
               stageState?.status === "complete" ||
               stageState?.status === "skipped" ||
               stageState?.status === "deferred"
@@ -12299,9 +12439,33 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // rate-limit DEFERS (no LLM fallback, #3976).
         // ===================================================================
         const detOutcome = await this.runDeterministicPrStage(stage, issueNumber, stageStartTime);
+        if (detOutcome.kind === "conflict-rewind") {
+          if (this.conflictRedispatchCount >= detOutcome.maxDevRedispatch) {
+            failedStage = stage;
+            error = queueConflictEscalationError(
+              `${detOutcome.reason}; ${detOutcome.maxDevRedispatch} feature-dev re-dispatches did not resolve it`,
+              detOutcome.files
+            );
+            gateTerminalKind = "merge_conflict";
+            await this.stateService?.failStage(stage, error.message).catch(() => {});
+            break;
+          }
+          this.conflictRedispatchCount++;
+          stageIndex =
+            (await this.rewindToBacktrackTarget(
+              detOutcome.signal,
+              stage,
+              issueNumber,
+              this.conflictRedispatchCount
+            )) - 1;
+          continue;
+        }
         if (detOutcome.kind === "deferred" || detOutcome.kind === "refused") {
           failedStage = stage;
           error = detOutcome.error;
+          if (detOutcome.kind === "refused" && detOutcome.terminalKind) {
+            gateTerminalKind = detOutcome.terminalKind;
+          }
           break;
         }
         // The LLM pr-merge skill can merge whatever head the PR has, and it is
@@ -13616,6 +13780,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       this.cachedRoutingTelemetry = null; // Clear routing telemetry cache (#1005)
       this.completedStageSet.clear(); // Clear duplicate-prevention tracker (#698)
       this.backtrackCount = 0; // Clear backtrack engine state (#1342)
+      this.conflictRedispatchCount = 0; // Clear the conflict rewind bound (#2841)
+      this.replayStages.clear();
       this.traversedEdges.clear(); // Clear oscillation guard (#1342)
       this.stageEscalationCounts.clear(); // Clear escalation engine (#1343)
       this.stageModelOverrides.clear(); // Clear escalation overrides (#1343)

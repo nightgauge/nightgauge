@@ -91,6 +91,20 @@ func (c *Classifier) Classify(stage string, exitCode int, stderr string) Classif
 		}
 	}
 
+	// Conflict recovery gave up on a merge-queue conflict (#2841). Checked ahead
+	// of every substring ladder because the text carries a PR number and file
+	// names: a path holding `timeout`, or PR #429, must not read as network or
+	// rate-limit trouble.
+	if strings.Contains(lower, "[merge-conflict]") {
+		return Classification{
+			Category:    CatDeterministic,
+			Severity:    SevMedium,
+			Retryable:   false,
+			Escalate:    true,
+			Description: "merge conflict — requires manual resolution",
+		}
+	}
+
 	// A model request that never answered (#2176): execution.Manager's
 	// idle-stream watchdog marker. Checked before the stage-timeout marker and
 	// the network ladder. One request wedged, not the server or the issue, so

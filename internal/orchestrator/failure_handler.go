@@ -131,6 +131,11 @@ const (
 	// PR URL + failing checks so the operator can act without log
 	// archaeology. Issue #3691.
 	TerminalKindPrMergeUnmerged = "pr_merge_unmerged"
+	// TerminalKindMergeConflict is set when conflict recovery could not land a
+	// merge-queue conflict (#2841). Unlike pr_merge_unmerged it halts: the
+	// operator must resolve the named files. A conflict recovery handles never
+	// reaches this kind, so only an unresolved one charges the lifetime cap.
+	TerminalKindMergeConflict = "merge_conflict"
 	// TerminalKindRunawayProgress is set when the progress-based runaway
 	// monitor fires: the stage made no new forward-progress signal for the
 	// configured window. Same recovery path as stall_kill (30m backoff, no

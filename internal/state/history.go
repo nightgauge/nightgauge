@@ -646,6 +646,15 @@ type GateResult struct {
 	ErrorSummary string `json:"error_summary,omitempty"` // first line of error when result="catch"
 	Timestamp    string `json:"timestamp"`               // ISO 8601
 	AttemptID    string `json:"attempt_id,omitempty"`    // groups the rows of one run; judge rows only
+	// Findings counts a review's findings per severity (#2839).
+	Findings *FindingCounts `json:"findings,omitempty"`
+}
+
+// FindingCounts is a review's findings per severity.
+type FindingCounts struct {
+	Blocker int `json:"blocker"`
+	Major   int `json:"major"`
+	Nitpick int `json:"nitpick"`
 }
 
 // StageGateResult records the outcome of a stage post-condition gate (Issue

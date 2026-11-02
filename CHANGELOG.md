@@ -25,6 +25,22 @@ changelog, and the release workflow refuses a tag that does not.
   best-effort pushes keep their cause but no longer emit the terminal marker, and the scheduler
   logs why a self-fork was not recovered. `pr-create`'s stale-branch merge now pushes through the
   verb too. Recovery needs git 2.38 or later.
+- A merge-queue conflict on the VS Code path no longer halts the repository
+  outright. It now runs the same conflict recovery as the Go loop, a conflict
+  confined to changelogs resolves without an LLM stage on both paths, and a
+  conflict recovery cannot resolve halts as `merge_conflict`, naming the files.
+- `feature-validate` now gets an independent code review: one per tree, in a fresh context that sees only the diff, the issue and the tree, through `nightgauge review prepare|run|record`. Blockers and correctness majors must be fixed, other majors become discovered work, and an unfinished review fails closed. The review's rules ship in the binary and its files live in the ignored `.nightgauge/review/`, so it works in any repository on any adapter. Gate metrics record its duration and severity counts, and feature-dev no longer reviews its own diff (#2839).
+- The malware-scan gate now refuses input it cannot trust. A non-numeric, empty or
+  oversized `--min-scanned-mb` or `--min-signatures`, a value flag with no value
+  (which used to hang), and a `clamconf` that is missing, unparseable or names no
+  real directory all stop the scan before any artifact is read.
+- `scripts/test-malware-scan.sh` reports a local ClamAV that cannot scan a benign
+  file as could-not-run, naming the binary, instead of as a failed assertion, and
+  its real-engine arm no longer depends on the local database size.
+- `scripts/install-clamav-macos.sh` keeps the signature directory root-owned
+  outside CI, repairing an earlier install, and prints the `sudo` update command.
+  `docs/RELEASE_CHECKLIST.md` now covers `MIN_SIGNATURES` in a pin bump and what
+  to do when a clean `freshclam` still trips the floor.
 - A green PR now merges through the deterministic path instead of paying for an
   LLM stage. The extension asks the new `nightgauge pr-stage budget` for its
   timeout, so a normal merge-queue wait no longer kills the run, and a transient

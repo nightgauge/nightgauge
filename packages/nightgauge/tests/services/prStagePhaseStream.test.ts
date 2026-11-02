@@ -111,7 +111,8 @@ describe("createLineSplitter", () => {
 describe("parsePrStageBudget (#2730)", () => {
   it("reads the binary's budget", () => {
     const stdout =
-      '{"queue_wait_ms":5400000,"cli_timeout_ms":6000000,"client_timeout_ms":6060000}\n';
+      '{"queue_wait_ms":5400000,"cli_timeout_ms":6000000,"client_timeout_ms":6060000,' +
+      '"recovery_client_timeout_ms":6400000}\n';
     expect(parsePrStageBudget(stdout).client_timeout_ms).toBe(6060000);
   });
 
@@ -119,7 +120,8 @@ describe("parsePrStageBudget (#2730)", () => {
     // Accepting this ordering is the #2730 defect: the client kills a healthy wait.
     expect(() =>
       parsePrStageBudget(
-        '{"queue_wait_ms":5400000,"cli_timeout_ms":6000000,"client_timeout_ms":1200000}'
+        '{"queue_wait_ms":5400000,"cli_timeout_ms":6000000,"client_timeout_ms":1200000,' +
+          '"recovery_client_timeout_ms":6400000}'
       )
     ).toThrow(/invalid pr-stage budget/);
     expect(() =>

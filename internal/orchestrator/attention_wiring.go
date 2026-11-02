@@ -861,6 +861,12 @@ func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stag
 	if as.state != nil && as.state.LifetimeIssueFailures != nil {
 		lifetimeFails = as.state.LifetimeIssueFailures[key]
 	}
+	haltReason := ""
+	if as.state != nil {
+		if halt, ok := as.state.PausedRepos[repo]; ok {
+			haltReason = halt.Reason
+		}
+	}
 	as.mu.Unlock()
 	attemptsRemaining := MaxLifetimeFailuresPerIssue - lifetimeFails
 	if attemptsRemaining < 0 {
@@ -871,6 +877,10 @@ func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stag
 	b.WriteString(fmt.Sprintf("Issue #%d failed terminally at %s (%s) and halted dispatch for %s — no further issues in this repository start until it is resolved. Every OTHER repository in the workspace keeps running (#1148), and runs already in flight are untouched.\n\n", issue, stage, terminalKind, repo))
 	if terminalKind == TerminalKindAbandonedCommit {
 		b.WriteString("A recovery attempt already found committed, unmerged work on this branch (clean tree, ahead of base) but could not resume automatically. The commit is still there — retry will resume at pr-create rather than re-deriving the work from scratch.\n\n")
+	}
+	if terminalKind == TerminalKindMergeConflict && haltReason != "" {
+		// #2841: the halt reason carries the conflicting files.
+		b.WriteString(haltReason + "\n\n")
 	}
 	if terminalKind == TerminalKindCommitOrphaned {
 		b.WriteString("A killed stage's commit landed off the expected feature branch (most likely a stray `temp-pre-push-<n>` branch left over from a SIGKILL mid pre-push validation) and self-heal could not check out the feature branch to recover it. The commit itself was NOT deleted — the worktree/branch cleanup guard preserves anything ahead of the base branch. Push the stranded branch and open a PR from it by hand before retrying; a plain Retry re-dispatches into a fresh worktree and re-derives the work from scratch instead of reusing the commit.\n\n")

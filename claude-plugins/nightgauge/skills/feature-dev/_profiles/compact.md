@@ -350,8 +350,9 @@ printf '<!-- phase:start name="quality-review" index=10 total=17 stage="feature-
 **PURPOSE**: Run the 6 reviewer units declared in this skill's
 `orchestration:` frontmatter (code quality, security, test, documentation,
 performance, accessibility), aggregate findings, and set the quality-check
-result variables. On a provider without an orchestration capability, run the
-same six reviews sequentially in this agent. See
+result variables. On a provider without an orchestration capability, this
+phase reviews nothing and leaves `SECURITY_REVIEW_RESULT=skipped`; feature-validate
+runs the independent review. See
 [docs/WORKFLOW_ORCHESTRATION.md](../../../../../docs/WORKFLOW_ORCHESTRATION.md).
 
 > **Read `_includes/review-and-correction.md` now and follow its instructions before continuing this phase.**

@@ -578,12 +578,12 @@ Records land in `discovered-work-{N}.json` in the clone's pipeline state
 directory (ADR 027), outside the worktree. `nightgauge discovered-work list`
 and doctor check NGD050 surface them until the materializer files them.
 
-| Stage            | Trigger                                                         | Record, not backtrack, when                        |
-| ---------------- | --------------------------------------------------------------- | -------------------------------------------------- |
-| feature-planning | An actionable `## Out of Scope` entry (concrete follow-up work) | Always — out-of-scope work is deferrable           |
-| feature-dev      | An adjacent bug, refactor or cleanup noticed while implementing | The ACs hold without it                            |
-| feature-validate | A test that also fails on `main` (pre-existing failure)         | Always — the failure predates the change           |
-| feature-validate | An adversarial-review finding whose fix lies outside the ACs    | The finding does not break an acceptance criterion |
+| Stage            | Trigger                                                         | Record, not backtrack, when              |
+| ---------------- | --------------------------------------------------------------- | ---------------------------------------- |
+| feature-planning | An actionable `## Out of Scope` entry (concrete follow-up work) | Always — out-of-scope work is deferrable |
+| feature-dev      | An adjacent bug, refactor or cleanup noticed while implementing | The ACs hold without it                  |
+| feature-validate | A test that also fails on `main` (pre-existing failure)         | Always — the failure predates the change |
+| feature-validate | An independent-review `major` outside the `correctness` pass    | Routed by `nightgauge review record`     |
 
 ## When NOT to Emit Feedback Signals
 

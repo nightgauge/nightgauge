@@ -14,12 +14,20 @@
 # docs/RELEASE_CHECKLIST.md describes how to bump it.
 #
 # DatabaseDirectory stays unset, so freshclam, clamscan and clamconf all use the
-# compiled-in directory, and only that directory has to be made writable.
+# compiled-in directory, so only that directory's owner has to be decided.
+#
+# WHO OWNS THE DATABASE DIRECTORY
+#
+# A CI runner is ephemeral and runs freshclam unprivileged, so with CI=true the
+# directory goes to the runner user. On a long-lived machine a user-owned
+# directory lets anything running as that user plant or allowlist signatures, so
+# it stays root-owned, which also repairs an earlier install that handed it over.
 #
 # Usage:
 #   scripts/install-clamav-macos.sh
 #
-# Then put /usr/local/clamav/bin on PATH and run freshclam.
+# Then put /usr/local/clamav/bin on PATH and run freshclam: as yourself with
+# CI=true, otherwise as `sudo /usr/local/clamav/bin/freshclam --user=root`.
 #
 # Exit: 0 installed; non-zero on a failed download, a digest mismatch (nothing
 # is installed) or a failed install step.
@@ -49,8 +57,15 @@ fi
 
 sudo installer -pkg "$PKG" -target /
 sudo mkdir -p "$DBDIR"
-sudo chown "$(id -un)" "$DBDIR"
+if [ "${CI:-}" = "true" ]; then
+  sudo chown "$(id -un)" "$DBDIR"
+else
+  sudo chown -R root:wheel "$DBDIR"
+fi
 sudo cp "$PREFIX/etc/freshclam.conf.sample" "$PREFIX/etc/freshclam.conf"
 sudo sed -i '' 's/^Example/#Example/' "$PREFIX/etc/freshclam.conf"
 
 echo "Installed ClamAV $CLAMAV_VERSION to $PREFIX; database directory: $DBDIR"
+if [ "${CI:-}" != "true" ]; then
+  echo "Update signatures with: sudo $PREFIX/bin/freshclam --user=root"
+fi

@@ -23,6 +23,8 @@ type gateMetricRecord struct {
 	DurationMs      *int64  `json:"duration_ms"`
 	ErrorSummary    *string `json:"error_summary"`
 	AttemptID       string  `json:"attempt_id"`
+	// Findings counts a review's findings per severity (#2839).
+	Findings *FindingCounts `json:"findings"`
 }
 
 // ReadGateMetricsForIssue reads gate-metrics.jsonl and returns GateResult records
@@ -67,6 +69,7 @@ func ReadGateMetricsForIssue(workspaceRoot string, issueNumber int) ([]GateResul
 			Result:    raw.Result,
 			Timestamp: raw.Timestamp,
 			AttemptID: raw.AttemptID,
+			Findings:  raw.Findings,
 		}
 		if raw.DurationMs != nil {
 			gr.DurationMs = *raw.DurationMs

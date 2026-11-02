@@ -242,6 +242,7 @@ export type TerminalFailureKind =
   | "validation_failed" // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash
   | "branch_forked" // Issue #163 — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it
   | "runaway_progress" // Issue #3783 — the progress-based runaway monitor fired; treated like stall_kill (30m backoff, no lifetime-cap increment)
+  | "merge_conflict" // Issue #2841 — conflict recovery could not land a merge-queue conflict
   | "pr_merge_unmerged" // Issue #3691 — pr-merge's session exited cleanly but the PR was not actually merged
   | "blocked_dependency" // Issue #305 — the autonomous scheduler dispatched an issue whose blockedBy dependencies are still open; a non-failure deferral
   | "architecture_approval_required" // Issue #4098/#4222 — the architecture-approval gate halted the run before feature-dev for a human-owned decision
@@ -309,6 +310,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "validation_failed",
   "branch_forked",
   "runaway_progress",
+  "merge_conflict",
   "pr_merge_unmerged",
   "blocked_dependency",
   "architecture_approval_required",

@@ -155,13 +155,19 @@ function createControllableFactory() {
   return {
     factory,
     /** Terminal failure with an arbitrary error message. */
-    failIssue: (issueNumber: number, failedStage: string, errMessage: string) =>
+    failIssue: (
+      issueNumber: number,
+      failedStage: string,
+      errMessage: string,
+      terminalKind?: string
+    ) =>
       resolvers.get(issueNumber)?.({
         success: false,
         completedStages: ["issue-pickup"],
         skippedStages: [],
         deferredStages: [],
         failedStage,
+        terminalKind,
         error: new Error(errMessage),
         totalDurationMs: 10000,
       }),
@@ -255,6 +261,24 @@ describe("ConcurrentPipelineManager — repo-scoped halt (#1148)", () => {
     );
     // The fleet-wide verb is the thing being removed from this path.
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+  });
+
+  it("carries a conflict halt's kind and files to the card (#2841)", async () => {
+    const { manager, controllable } = makeManager();
+    await manager.fillSlots();
+    const message = "[merge-conflict] refused; conflicting files: src/a.ts, b.go";
+    controllable.failIssue(FAILING_ISSUE, "pr-merge", message, "merge_conflict");
+    await manager.settleForTest(FAILING_ISSUE);
+
+    expect(mockAutonomousPauseRepo).toHaveBeenCalledWith(
+      FAILING_REPO,
+      expect.stringContaining("conflicting files: src/a.ts, b.go"),
+      "haltQueueOnSlotFailure",
+      FAILING_ISSUE,
+      "pr-merge",
+      "merge_conflict",
+      expect.anything()
+    );
   });
 
   it("leaves another repository's queued work alone", async () => {

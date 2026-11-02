@@ -515,6 +515,24 @@ func TestProducerAuthFailureEmitsProvideInput(t *testing.T) {
 
 // --- Producer (unnumbered): terminal failure halt (#148) ---------------------
 
+func TestProducerTerminalFailureNamesConflictingFiles(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	reason := "haltQueueOnSlotFailure: [merge-conflict] conflicting files: internal/a.go, b.md"
+	if !as.PauseRepo("octocat/acme", reason, "haltQueueOnSlotFailure", 49, "pr-merge") {
+		t.Fatal("PauseRepo declined")
+	}
+	as.RaiseTerminalFailure("octocat/acme", 49, "pr-merge", TerminalKindMergeConflict, 0)
+
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	body := fmt.Sprintf("%+v", reqs[0])
+	if !strings.Contains(body, "internal/a.go, b.md") || !strings.Contains(body, "merge_conflict") {
+		t.Errorf("card must carry the kind and the files: %s", body)
+	}
+}
+
 func TestProducerTerminalFailureEmitsUnblockBlockingFleet(t *testing.T) {
 	as := newAttentionProducerScheduler(t)
 	as.RaiseTerminalFailure("octocat/acme", 42, "feature-dev", "validation_error", 3.25)

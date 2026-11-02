@@ -237,6 +237,7 @@ record may carry both fields, neither, or only one.
 | `dev_step_cap_reached`           | feature-dev ran as bounded sub-sessions and spent its session bound (the unchecked-task count it started with, never more than 12) with plan tasks still unchecked; the finished steps' work is on disk and a retry resumes from the next unchecked task (Issue #1651)                                                                                                                                                               |
 | `dev_step_progress_unproven`     | the feature-dev step loop could not fingerprint the work tree (git failed on it) around a sub-session that checked no plan task, so it could not prove the step made progress and stopped rather than count it; environment class, and the earlier steps' work is on disk (Issue #1651)                                                                                                                                              |
 | `adapter_auth_failed`            | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra                                                                                                                                                                                                                                                                                     |
+| `merge_conflict`                 | Conflict recovery could not land a merge-queue conflict (Issue #2841) — the operator resolves the files the halt names                                                                                                                                                                                                                                                                                                               |
 | `no_changes_produced`            | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                                                                                                                                                                                                                           |
 | `not_pipeline_actionable`        | A stage declared the issue's deliverable is not producible by any pipeline lap — counsel sign-off, an operator-only credential, a human decision (Issue #1241) — not a failure and not a deferral                                                                                                                                                                                                                                    |
 | `validation_failed`              | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                                                                                                                                                                                                                      |
@@ -700,6 +701,7 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `dev_step_cap_reached`           | `organic` — the plan outgrew the session bound; the issue's scope, not a crash              |
 | `dev_step_progress_unproven`     | `infrastructure` — git could not read the worktree; not the model or the issue              |
 | `adapter_auth_failed`            | `infrastructure` — probe starvation / credential state, not the issue                       |
+| `merge_conflict`                 | `organic` — the branch's content collided with its base                                     |
 | `no_changes_produced`            | `agent` — planning/scope failure (dispatch-eligibility gap), not the model's implementation |
 | `not_pipeline_actionable`        | non-failure — the issue is misfiled, not defective; no lifetime-cap increment, no cascade   |
 | `validation_failed`              | `organic` — true implementation failure caught by feature-validate's own quality gate       |
@@ -1401,7 +1403,9 @@ the kind **and** `mergeStateStatus=BLOCKED` in the reason. Ordered first, the
 kind wins and a correctly declined red PR is written up as "the stage reported
 success but the work never landed" — a bug report against a run that did its
 job. Ordered where it is, `merge-blocked` keeps the case and the kind rides
-along as a secondary finding.
+along as a secondary finding. `merge_conflict` is the exception: it maps to
+`merge-blocked` itself, so that extractor stands aside and the finding keeps the
+terminal reason, which names the conflicting files (#2841).
 
 The kind is read from the **threaded field**, never by regexing the joined
 evidence corpus. That corpus concatenates the terminal reason, the scoped
