@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A Go Claude stage stopped by the plugin gate now books no tokens, cost or model, including
+  from the line that stopped it, because the gate decides before the line is booked. The
+  minimum Claude CLI stays 2.1.223: a capture from that version is now in the tree, and a
+  test fails if `min_version` moves without one (#2807).
+
 - A judge's failing verdict can no longer be lost by folding a run twice or by a failed write
   (#2778). Judge rows now take their `attempt_id` from the run, so a second fold joins the attempt
   instead of replacing it, each stage execution mints its own run id so a retry is a new attempt,

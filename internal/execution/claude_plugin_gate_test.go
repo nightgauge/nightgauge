@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
@@ -65,6 +66,54 @@ func TestEvaluateClaudePluginInit(t *testing.T) {
 	}
 }
 
+// A real capture taken with --plugin-dir while a user-level nightgauge install
+// was enabled (#2723): the CLI reports the bundled copy once, so each gate fires
+// once and the stage runs.
+func TestUserLevelInstallLeavesOneNightgaugeEntry(t *testing.T) {
+	event := initEventFromFixture(t, "claude_init_plugin_user_install.jsonl")
+	loaded := 0
+	for _, p := range event.Plugins {
+		if p.Name == claudePluginName {
+			loaded++
+			if p.Source != "nightgauge@inline" {
+				t.Errorf("source = %q, want the --plugin-dir copy", p.Source)
+			}
+		}
+	}
+	if loaded != 1 {
+		t.Fatalf("capture lists %d nightgauge plugins, want 1", loaded)
+	}
+	if got := EvaluateClaudePluginInit(true, event); got.Verdict != ClaudePluginPass {
+		t.Errorf("reading = %+v, want a pass", got)
+	}
+}
+
+// The floor is only supported if a capture from it passes the gate (#2807), so
+// min_version cannot move without a capture from the new floor.
+func TestFloorCaptureBacksTheManifestFloor(t *testing.T) {
+	const name = "claude_init_plugin_floor.jsonl"
+	raw, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var init struct {
+		ClaudeCodeVersion string `json:"claude_code_version"`
+	}
+	if err := json.Unmarshal([]byte(strings.SplitN(string(raw), "\n", 2)[0]), &init); err != nil {
+		t.Fatal(err)
+	}
+	manifest, ok := adaptercompat.Get("claude-headless")
+	if !ok {
+		t.Fatal("no claude-headless manifest")
+	}
+	if init.ClaudeCodeVersion != manifest.MinVersion {
+		t.Errorf("capture is from %q, min_version is %q", init.ClaudeCodeVersion, manifest.MinVersion)
+	}
+	if got := EvaluateClaudePluginInit(true, initEventFromFixture(t, name)); got.Verdict != ClaudePluginPass {
+		t.Errorf("a bundled build on the floor reads %+v, want a pass", got)
+	}
+}
+
 // A real stream puts hook_started ahead of init, and that must not read as work.
 func TestClaudePluginGateIgnoresEventsBeforeInit(t *testing.T) {
 	g := newClaudePluginGate(true)
@@ -95,7 +144,8 @@ func TestClaudePluginGateDecidesOnce(t *testing.T) {
 
 func TestNilClaudePluginGateObservesNothing(t *testing.T) {
 	var g *claudePluginGate
-	if g.observe(&StreamEvent{Type: "assistant"}) || g.stopped() || g.version() != "" || g.notice() != "" {
+	if g.observe(&StreamEvent{Type: "assistant"}) || g.observeLine(StreamFormatClaude, workLine) ||
+		g.stopped() || g.version() != "" || g.notice() != "" {
 		t.Fatal("a nil gate, every other adapter's, must do nothing")
 	}
 }
@@ -119,6 +169,25 @@ func (a *stubClaudeAdapter) Agentic() bool   { return true }
 // A line printed only if the stage survives the gate, after a pause long enough
 // to fail the run's elapsed-time assertion.
 const lateWork = `sleep 20; echo '{"type":"result","usage":{"input_tokens":999,"output_tokens":999}}'`
+
+// workLine is an assistant event carrying usage and a model, so anything that
+// reads it books tokens and attributes the model.
+const workLine = `{"type":"assistant","message":{"id":"msg_1","model":"claude-haiku-4-5-20251001",` +
+	`"role":"assistant","content":[],"usage":{"input_tokens":7,"output_tokens":7}}}`
+
+const resultLine = `{"type":"result","subtype":"success","total_cost_usd":1,` +
+	`"usage":{"input_tokens":999,"output_tokens":999}}`
+
+func assertBookedNothing(t *testing.T, result *adapters.RunResult) {
+	t.Helper()
+	if result.InputTokens != 0 || result.OutputTokens != 0 {
+		t.Errorf("a stopped stage booked %d input and %d output tokens, want none",
+			result.InputTokens, result.OutputTokens)
+	}
+	if result.ServedModel != "" {
+		t.Errorf("ServedModel = %q, want none", result.ServedModel)
+	}
+}
 
 func runGateStage(t *testing.T, adapter *stubClaudeAdapter, pluginDir, stage string) (*adapters.RunResult, time.Duration) {
 	t.Helper()
@@ -169,9 +238,7 @@ func TestRunStageStopsABundledClaudeStageWithoutThePlugin(t *testing.T) {
 			if elapsed > 15*time.Second {
 				t.Errorf("stage ran %s, so the gate did not kill it", elapsed)
 			}
-			if result.InputTokens == 999 {
-				t.Error("the event after the stop was processed")
-			}
+			assertBookedNothing(t, result)
 			if got := terminalkind.Classify(result.Stderr); got != "gate_plugin_missing" {
 				t.Errorf("kind = %q, stderr = %q", got, result.Stderr)
 			}
@@ -179,6 +246,34 @@ func TestRunStageStopsABundledClaudeStageWithoutThePlugin(t *testing.T) {
 				t.Errorf("PluginVersion = %q, want none", result.PluginVersion)
 			}
 		})
+	}
+}
+
+// No sleep: every line is already in the pipe when the kill lands, so only the
+// gate deciding first keeps them out of the booking (#2807).
+func TestRunStageStoppedByTheGateBooksNothing(t *testing.T) {
+	emit := "echo '" + workLine + "'; echo '" + resultLine + "'"
+	for name, script := range map[string]string{
+		"lines buffered after a failed init": fixtureScript(t, "claude_init_plugin_absent.jsonl") + "; " + emit,
+		"work with no init decides the stop": emit,
+	} {
+		t.Run(name, func(t *testing.T) {
+			adapter := &stubClaudeAdapter{name: "claude", script: script}
+			result, _ := runGateStage(t, adapter, "/bundle/claude-plugins/nightgauge", "feature-dev")
+			assertBookedNothing(t, result)
+			if got := terminalkind.Classify(result.Stderr); got != "gate_plugin_missing" {
+				t.Errorf("kind = %q, stderr = %q", got, result.Stderr)
+			}
+		})
+	}
+}
+
+func TestRunStagePassingTheGateStillBooks(t *testing.T) {
+	adapter := &stubClaudeAdapter{name: "claude",
+		script: fixtureScript(t, "claude_init_plugin_present.jsonl") + "; echo '" + workLine + "'"}
+	result, _ := runGateStage(t, adapter, "/bundle/claude-plugins/nightgauge", "feature-dev")
+	if result.InputTokens == 0 || result.ServedModel == "" {
+		t.Errorf("booked %d input tokens, model %q", result.InputTokens, result.ServedModel)
 	}
 }
 

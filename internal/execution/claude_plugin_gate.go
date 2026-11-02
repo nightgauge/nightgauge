@@ -116,6 +116,17 @@ func (g *claudePluginGate) observe(event *StreamEvent) bool {
 	return g.reading.Verdict == ClaudePluginStop
 }
 
+// observeLine runs observe on a raw stream line, ahead of the stage's accumulator.
+// ParseLine books as it parses, so the gate reads through a throwaway accumulator
+// and a line that stops the stage is never booked (#2807).
+func (g *claudePluginGate) observeLine(format AdapterStreamFormat, line string) bool {
+	if g == nil || g.decided {
+		return false
+	}
+	event, _ := (&TokenAccumulator{}).ParseLine(format, line)
+	return g.observe(event)
+}
+
 // isStreamWork reports an event only a running session produces.
 func isStreamWork(event *StreamEvent) bool {
 	switch event.Type {

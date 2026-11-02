@@ -23,6 +23,49 @@ function stream(name: string) {
     .filter((m) => m !== null);
 }
 
+describe("ClaudePluginGate.takeNotice", () => {
+  it("warns once when work with no init decides a build with no bundle", () => {
+    const gate = new ClaudePluginGate(false);
+    expect(gate.observe({ type: "assistant" })).toBe(false);
+    expect(gate.takeNotice()).toContain(GATE_PLUGIN_WARNING_MARKER);
+    expect(gate.takeNotice()).toBeUndefined();
+  });
+
+  it("does not repeat the warning on a later subagent init", () => {
+    const gate = new ClaudePluginGate(false);
+    gate.observe({ type: "system", subtype: "init", initPlugins: [] });
+    expect(gate.takeNotice()).toContain(GATE_PLUGIN_WARNING_MARKER);
+    gate.observe({ type: "system", subtype: "init", initPlugins: [] });
+    expect(gate.takeNotice()).toBeUndefined();
+  });
+
+  it("emits nothing before a decision or on a pass", () => {
+    const gate = new ClaudePluginGate(true);
+    expect(gate.takeNotice()).toBeUndefined();
+    gate.observe({ type: "system", subtype: "init", initPlugins: [{ name: "nightgauge" }] });
+    expect(gate.takeNotice()).toBeUndefined();
+  });
+});
+
+describe("the floor capture (#2807)", () => {
+  it("is from min_version and passes a bundled gate", () => {
+    const name = "claude_init_plugin_floor.jsonl";
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.resolve(FIXTURES, "../../adaptercompat/manifests/claude-headless.json"),
+        "utf8"
+      )
+    );
+    const init = JSON.parse(fs.readFileSync(path.join(FIXTURES, name), "utf8").split("\n")[0]);
+    expect(init.claude_code_version).toBe(manifest.min_version);
+
+    const gate = new ClaudePluginGate(true);
+    expect(stream(name).some((m) => gate.observe(m))).toBe(false);
+    expect(gate.stopped).toBe(false);
+    expect(gate.version).toBeDefined();
+  });
+});
+
 describe("evaluateClaudePluginInit", () => {
   const cases: Array<[string, Parameters<typeof evaluateClaudePluginInit>[1], string]> = [
     ["no entry", [{ name: "cc-plugin-telemetry" }], "no nightgauge plugin"],

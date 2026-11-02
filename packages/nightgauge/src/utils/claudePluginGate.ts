@@ -76,6 +76,7 @@ export function evaluateClaudePluginInit(
 /** Applies {@link evaluateClaudePluginInit} to one stage's stream. */
 export class ClaudePluginGate {
   private reading: ClaudePluginReading | undefined;
+  private noticeTaken = false;
 
   constructor(private readonly bundled: boolean) {}
 
@@ -103,6 +104,18 @@ export class ClaudePluginGate {
   /** The plugin version to record, undefined when none loaded. */
   get version(): string | undefined {
     return this.reading?.version;
+  }
+
+  /**
+   * The {@link notice} the first time it exists, then undefined. Later inits
+   * (subagents) repeat nothing, and every decision emits, whichever message
+   * made it.
+   */
+  takeNotice(): string | undefined {
+    if (this.noticeTaken) return undefined;
+    const notice = this.notice;
+    if (notice) this.noticeTaken = true;
+    return notice;
   }
 
   /** The stderr line for this stage: the stop marker, a warning, or undefined. */
