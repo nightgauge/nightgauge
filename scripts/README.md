@@ -141,7 +141,8 @@ The Claude plugin install docs have their own gate.
 `check-plugin-install-docs.sh` requires a binary step and `nightgauge doctor`, bans
 settings-based routes, and runs the documented commands in a scratch
 `CLAUDE_CONFIG_DIR` against a temporary mirror of `HEAD`.
-`test-check-plugin-install-docs.sh` proves each arm can go red.
+`test-check-plugin-install-docs.sh` proves each arm can go red. The same script
+runs `claude plugin validate --strict` on the plugin and the marketplace.
 
 ## Project Board And Pipeline State
 

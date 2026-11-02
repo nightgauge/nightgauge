@@ -1119,7 +1119,10 @@ bash scripts/verify-release-channels.sh --channel homebrew
 #     refused move or create it where it is missing (at the latest release's
 #     commit, gh api repos/nightgauge/nightgauge/git/refs -f
 #     ref=refs/heads/stable -f sha=<sha>); the watchdog stays red and keeps one
-#     issue open until it matches.
+#     issue open until it matches. The step uses STABLE_BRANCH_TOKEN, falling
+#     back to github.token. The Stable move probe workflow reports whether
+#     github.token may update a ref across .github/workflows changes; if refused,
+#     the secret needs a fine-grained token with Contents and Workflows write.
 bash scripts/verify-release-channels.sh --channel claude-plugin
 
 # 13. Read each listing page as a user would. The listing is the extension's

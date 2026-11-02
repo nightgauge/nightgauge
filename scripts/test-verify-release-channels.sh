@@ -73,6 +73,11 @@ for arg in "$@"; do
     printf '{"object": {"sha": "%s"}}\n' "$(cat "$fake/stable.sha")"
     exit 0
     ;;
+  */git/matching-refs/heads/stable)
+    [ -e "$fake/refs-unreadable" ] && { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+    cat "$fake/matching-refs.json" 2>/dev/null || echo '[]'
+    exit 0
+    ;;
   */commits/v*) printf '{"sha": "tagsha"}\n'; exit 0 ;;
   */releases/latest) [ -e "$fake/no-release" ] && exit 1; cat "$fake/latest.json"; exit 0 ;;
   */contents/Casks/nightgauge.rb*) cat "$fake/cask.rb"; exit 0 ;;
@@ -400,6 +405,24 @@ fixture v0.7.2 0.7.2 '[]'
 touch "$FAKE/stable-missing"
 run_listing claude-plugin --issue-repo nightgauge/nightgauge
 expect "a missing stable branch is red and files one issue" 1 "does not exist" "issue create"
+
+# A 404 from a token that cannot read the repository is not a missing branch.
+fixture v0.7.2 0.7.2 '[]' '[]'
+touch "$FAKE/stable-missing" "$FAKE/refs-unreadable"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "an unreadable repository is exit 2, not MISSING" 2 "token cannot read refs" NONE
+
+fixture v0.7.2 0.7.2 '[]' '[]'
+touch "$FAKE/stable-missing"
+printf '[{"ref": "refs/heads/stable"}]\n' >"$FAKE/matching-refs.json"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "a listed stable that 404s is exit 2" 2 "reading it returned 404" NONE
+
+fixture v0.7.2 0.7.2 '[]' '[]'
+touch "$FAKE/stable-missing"
+printf '[{"ref": "refs/heads/stable-next"}]\n' >"$FAKE/matching-refs.json"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "a prefix match is not the stable branch" 1 "does not exist" "issue create"
 
 fixture v0.7.2 0.7.2 '[]' '[{"number": 9, "title": "Release channel behind: claude-plugin"}]'
 echo tagsha >"$FAKE/stable.sha"

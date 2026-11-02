@@ -17,6 +17,9 @@
 # enabled and carry every SKILL.md committed under claude-plugins/nightgauge.
 # Docs are read from the working tree; the plugin comes from HEAD.
 #
+# Validate arm: `claude plugin validate --strict` passes on the working tree's
+# plugin and on the repository root, which holds the marketplace.
+#
 # Claude Code comes from PATH, else npx at the pinned version.
 #
 # Exit codes: 0 docs hold; 1 a violation was found (each named on stderr);
@@ -178,6 +181,13 @@ check_route() {
   [ "$found" -eq "$EXPECTED" ] ||
     violation "$doc: installed plugin has $found skills, the tree has $EXPECTED"
 }
+
+# --- Validate arm -----------------------------------------------------------
+mkdir -p "$TMP/validate/config" "$TMP/validate/project" || cannot_run "cannot create a scratch directory"
+for target in "$REPO_ROOT/claude-plugins/nightgauge" "$REPO_ROOT"; do
+  claude_run "$TMP/validate" plugin validate --strict "$target" ||
+    violation "claude plugin validate --strict ${target#"$REPO_ROOT"} failed: $(cat "$TMP/out" "$TMP/err")"
+done
 
 for doc in "${COMMAND_DOCS[@]}"; do
   commands="$(doc_commands "$doc")"

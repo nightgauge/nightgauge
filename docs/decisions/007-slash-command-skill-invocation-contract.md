@@ -9,6 +9,12 @@ revised 2026-07-07, #4194)
 
 ---
 
+## Amendment (2026-11-01, #2763) — No command files remain
+
+`model-routing-report` moved to `skills/nightgauge-model-routing-report/`, and
+`claude-plugins/nightgauge/commands/` is gone. Findings below that call it the
+sole exemption are history.
+
 ## Amendment (2026-07-07, #4194) — Selective injection via `metadata.chainable`
 
 The #3876 amendment below made `disable-model-invocation: true` (DMI) a

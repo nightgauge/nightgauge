@@ -327,6 +327,18 @@ if [ "$CHANNEL" = "claude-plugin" ]; then
   grep -q 'HTTP 404' "$STABLE_ERR" && STABLE_ABSENT=1
   rm -f "$STABLE_ERR"
   if [ "$STABLE_ABSENT" -eq 1 ]; then
+    # GitHub also answers 404 for a repository the token cannot read. Only a
+    # readable listing without the ref proves the branch is gone. matching-refs
+    # is a prefix match, so look for the exact ref.
+    if ! STABLE_REFS="$(gh api "repos/$SOURCE/git/matching-refs/heads/stable" 2>/dev/null)" ||
+      ! printf '%s' "$STABLE_REFS" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      echo "ERROR: the token cannot read refs on $SOURCE, so a 404 on stable says nothing about the branch" >&2
+      exit 2
+    fi
+    if printf '%s' "$STABLE_REFS" | jq -e 'any(.[]; .ref == "refs/heads/stable")' >/dev/null; then
+      echo "ERROR: stable is listed on $SOURCE but reading it returned 404" >&2
+      exit 2
+    fi
     VERDICT=1
     REASON="the stable branch does not exist, so plugin installs at #stable fail: create it (gh api repos/$SOURCE/git/refs -f ref=refs/heads/stable -f sha=$WANT)."
     say "- verdict: MISSING. $REASON"

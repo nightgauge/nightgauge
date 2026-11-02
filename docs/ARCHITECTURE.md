@@ -91,7 +91,6 @@ nightgauge/
 ├── claude-plugins/                 # Claude Code integration
 │   └── nightgauge/                   # /nightgauge:* slash commands
 │       ├── skills/                # Skill defs = slash commands (generated from skills/)
-│       ├── commands/              # model-routing-report only (self-contained utility)
 │       └── hooks/                 # Thin shell wrappers (exec Go binary)
 ├── standards/                      # Universal coding standards
 │   ├── code-standards.md
@@ -2162,11 +2161,12 @@ Tools for backlog hygiene, project board sync, and configuration:
 
 Pipeline health monitoring and retrospective analysis:
 
-| Skill                        | Description                                                           |
-| ---------------------------- | --------------------------------------------------------------------- |
-| `nightgauge-pipeline-audit`  | Pipeline execution history analysis — tokens, cost, stage performance |
-| `nightgauge-pipeline-health` | Comprehensive health analysis across 7 dimensions with trend tracking |
-| `nightgauge-retro`           | Failure analysis with root cause categorization and recommendations   |
+| Skill                             | Description                                                           |
+| --------------------------------- | --------------------------------------------------------------------- |
+| `nightgauge-pipeline-audit`       | Pipeline execution history analysis — tokens, cost, stage performance |
+| `nightgauge-pipeline-health`      | Comprehensive health analysis across 7 dimensions with trend tracking |
+| `nightgauge-model-routing-report` | Model routing success rates, cost and threshold recommendations       |
+| `nightgauge-retro`                | Failure analysis with root cause categorization and recommendations   |
 
 #### Universal (Cross-Project)
 
@@ -2478,9 +2478,8 @@ multi-workspace scenarios.
 ### Adding a Utility Skill
 
 1. Create `skills/<skill-name>/SKILL.md`
-2. Add Claude Code wrapper in `claude-plugins/nightgauge/commands/`
-3. Register in `.claude-plugin/marketplace.json`
-4. Update skills/README.md catalog
+2. Regenerate the plugin mirror with `scripts/install-agent-skills.sh --generate-only`
+3. Update skills/README.md catalog
 
 ### Adding VSCode Extension Features
 

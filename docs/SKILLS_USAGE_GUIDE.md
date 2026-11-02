@@ -34,6 +34,7 @@ Complete reference for all Nightgauge skills — what they do, when to use them,
 | `nightgauge-test-scaffold`          | Modernization    | Safety net for refactoring                                                 | 1.2.0   | `/nightgauge:test-scaffold [options]`          |
 | `nightgauge-doc-gen`                | Documentation    | Auto-generate and update API documentation                                 | 1.1.0   | `/nightgauge:doc-gen [options]`                |
 | `nightgauge-docs-watch`             | Documentation    | Monitor Claude Code documentation changes                                  | 1.0.0   | `/nightgauge:docs-watch [options]`             |
+| `nightgauge-model-routing-report`   | Quality          | Report model routing success rates, cost and thresholds                    | 1.0.0   | `/nightgauge:model-routing-report [options]`   |
 | `nightgauge-docs-write`             | Documentation    | Write narrative documentation sections                                     | 1.1.0   | `/nightgauge:docs-write [options]`             |
 | `nightgauge-continuous-improvement` | Self-Improvement | Unified continuous improvement review                                      | 1.0.0   | `/nightgauge:continuous-improvement [options]` |
 | `pr-preflight`                      | Portable         | Universal PR pre-flight validation                                         | 1.1.0   | `/pr-preflight`                                |

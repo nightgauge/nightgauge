@@ -80,6 +80,8 @@ Plugin version gate regression suite
 Plugin has one version and valid skills
 Plugin install docs gate regression suite
 Documented plugin install works
+Plugin hooks run from a path with a space
+Stable move regression suite
 Mirror drift gate regression suite
 Agent-skill install target regression suite
 Issue-body contract gate regression suite

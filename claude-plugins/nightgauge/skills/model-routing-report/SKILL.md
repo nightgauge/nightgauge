@@ -1,8 +1,9 @@
 ---
-name: nightgauge-model-routing-report
+name: model-routing-report
 description: Generate a model routing performance report from execution history. Shows
   auto-selection success rates, cost savings, under/over routing patterns, and
-  threshold recommendations.
+  threshold recommendations. Use when tuning model routing or reviewing what it
+  cost.
 license: Apache-2.0
 metadata:
   author: nightgauge
@@ -18,7 +19,7 @@ disable-model-invocation: true
 
 ## Description
 
-This command reads execution history JSONL files, runs the
+This skill reads execution history JSONL files, runs the
 ModelPerformanceAnalyzer with auto-selection analysis, and outputs a formatted
 report.
 

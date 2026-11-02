@@ -7,7 +7,7 @@ description: Dependency Modernization Engine — safely identifies and updates o
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.3.0"
+  version: "1.3.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -23,12 +23,12 @@ orchestration:
       promptRef: SKILL.md#phase-4-staged-update-groups-deterministic
     - id: apply-updates
       role: phase-worker
-      promptRef: SKILL.md#phase-6-apply-updates-optional-conditional-on---auto-fix
+      promptRef: SKILL.md#phase-6-apply-updates-optional-auto-fix-mode
   judge:
     mode: gate
     gate: true
     quorum: 1
-    promptRef: SKILL.md#phase-6-apply-updates-optional-conditional-on---auto-fix
+    promptRef: SKILL.md#phase-6-apply-updates-optional-auto-fix-mode
 disable-model-invocation: true
 ---
 
@@ -830,7 +830,7 @@ echo "Replacement suggestions: completed"
 
 ---
 
-### Phase 6: Apply Updates (Optional, Conditional on `--auto-fix`)
+### Phase 6: Apply Updates (Optional, Auto-Fix Mode)
 
 Only runs if `--auto-fix` is set. If `--dry-run` is true (default), this phase
 is skipped entirely and the report only describes what would change.
