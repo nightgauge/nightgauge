@@ -1275,7 +1275,7 @@ type AutonomousScheduler struct {
 	// sets a private cache; the daemon replaces it with its shared one.
 	boardCache *boardcache.Cache
 
-	// resolveDepStatesFn batch-resolves the true GitHub state ("OPEN"/"CLOSED")
+	// resolveDepStatesFn batch-resolves the true GitHub state (a forge.DepState)
 	// of dependency keys ("owner/repo#number") that have NO node in the graph
 	// — the graph only builds nodes from project-board items (depgraph/
 	// builder.go), so a blockedBy/depends-on edge can point at an issue
@@ -4458,6 +4458,18 @@ func depKeyNamesNoRepository(depKey string) bool {
 	return ok && !isOwnerRepo(repo)
 }
 
+// countConfirmedDeps counts the keys resolved to something that exists; a
+// MISSING key got an answer, but not a dependency.
+func countConfirmedDeps(resolved map[string]string) int {
+	n := 0
+	for _, state := range resolved {
+		if state != forge.DepStateMissing {
+			n++
+		}
+	}
+	return n
+}
+
 // evaluateDeps scans depKeys — a node's outgoing dependency edges from
 // rawAdjacency — and reports whether any of them still blocks dispatch.
 //
@@ -4470,9 +4482,14 @@ func depKeyNamesNoRepository(depKey string) bool {
 //   - resolved[depKey] == "CLOSED" -> satisfied; keep scanning other deps.
 //   - resolved[depKey] == "OPEN"   -> BLOCKED. The blocker is real and open,
 //     it just isn't board-synced.
+//   - resolved[depKey] == "PR_MERGED" -> satisfied, with no validation gate: a
+//     pull request has no program labels or marker to read, and a line naming
+//     one asks for exactly that pull request (#2854).
+//   - resolved[depKey] == "PR_OPEN", "PR_CLOSED" or "MISSING" -> BLOCKED, with
+//     a reason naming which.
 //   - depKey absent from resolved  -> BLOCKED (fail closed). Absence means no
 //     issue-state resolver was available, the GitHub lookup for its repo
-//     failed, or the batch response simply omitted it — never guess
+//     failed, or the batch response gave no verdict — never guess
 //     "satisfied" for a blocker of unknown state (#306).
 //
 // An on-board dep is decided by its issue state, never by its board status: an
@@ -4510,6 +4527,23 @@ func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]strin
 				return depBlockResult{
 					blocked: true, blocker: depKey, offBoard: true,
 					status: "OPEN (resolved via GitHub — not on any project board)",
+				}
+			case state == forge.DepStatePRMerged:
+				continue
+			case state == forge.DepStatePROpen:
+				return depBlockResult{
+					blocked: true, blocker: depKey, offBoard: true,
+					status: "pull request still open (resolved via GitHub — not on any project board)",
+				}
+			case state == forge.DepStatePRClosed:
+				return depBlockResult{
+					blocked: true, blocker: depKey, offBoard: true,
+					status: "pull request closed without merging — nothing was delivered; failing closed, fix the dependency line",
+				}
+			case state == forge.DepStateMissing:
+				return depBlockResult{
+					blocked: true, blocker: depKey, offBoard: true,
+					status: "does not exist (no issue or pull request has this number — failing closed; fix the dependency line)",
 				}
 			}
 			// Resolved CLOSED: satisfied unless it is an unvalidated program member.
@@ -4738,7 +4772,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 				resolvedDepStates = r
 			}
 			log.Printf("autonomous: resolved %d/%d off-board dependency key(s) not on any project board: %v",
-				len(resolvedDepStates), len(keys), keys)
+				countConfirmedDeps(resolvedDepStates), len(keys), keys)
 		} else {
 			log.Printf("autonomous: WARNING no issue-state resolver wired — %d off-board dependency key(s) will fail closed (treated as blocked): %v",
 				len(keys), keys)

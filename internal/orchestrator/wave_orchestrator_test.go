@@ -67,6 +67,16 @@ func (m *mockEpicIssueSvc) GetIssuesByNumbersWithoutRelations(_ context.Context,
 	return out, nil
 }
 
+func (m *mockEpicIssueSvc) GetDependencyStates(_ context.Context, owner, repo string, numbers []int) (map[int]string, error) {
+	out := make(map[int]string, len(numbers))
+	for _, n := range numbers {
+		if issue, ok := m.issues[fmt.Sprintf("%s/%s#%d", owner, repo, n)]; ok {
+			out[n] = issue.State
+		}
+	}
+	return out, nil
+}
+
 func (m *mockEpicIssueSvc) GetEpicProgress(_ context.Context, nodeID string) (*types.EpicProgress, error) {
 	return nil, fmt.Errorf("not implemented for nodeID")
 }

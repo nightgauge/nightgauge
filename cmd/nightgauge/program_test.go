@@ -88,14 +88,14 @@ func TestPrintProgramStatus(t *testing.T) {
 		ID: "billing", Title: "Customers can pay", Selector: "program:billing",
 		Total: 4, Open: 2, Closed: 2, Validated: 1, Dispatchable: 1,
 		DispatchableRefs: []string{"o/api#1"},
-		Blocked:          []workorder.Item{{Ref: "o/api#2", Unresolved: []string{"o/core#9"}}},
+		Blocked:          []workorder.Item{{Ref: "o/api#2", Unresolved: []string{"o/core#9"}, ClosedUnmerged: []string{"o/core#10"}, Nonexistent: []string{"o/core#11"}}},
 	}})
 	out := buf.String()
 	for _, want := range []string{
 		"1. billing — Customers can pay  [program:billing]",
 		"4 issues: 2 open, 2 closed, 1 validated, 1 dispatchable",
 		"ready    o/api#1",
-		"blocked  o/api#2  (o/core#9 (state unresolved))",
+		"blocked  o/api#2  (o/core#9 (state unresolved), o/core#10 (pull request closed without merging), o/core#11 (no issue or pull request has this number))",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)

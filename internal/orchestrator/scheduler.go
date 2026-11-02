@@ -771,6 +771,9 @@ type issueGetter interface {
 	// that need only an issue's state or body. It is the scheduler's only
 	// batch read, so no batch read here can fail on a relationship list.
 	GetIssuesByNumbersWithoutRelations(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error)
+	// GetDependencyStates reads what each number is, an issue, a pull request
+	// or nothing, and where it stands, as forge.DepState values.
+	GetDependencyStates(ctx context.Context, owner, repo string, numbers []int) (map[int]string, error)
 	GetEpicProgress(ctx context.Context, epicNodeID string) (*types.EpicProgress, error)
 	GetEpicProgressByNumber(ctx context.Context, owner, repo string, number int) (*types.EpicProgress, error)
 	CloseIssue(ctx context.Context, issueID string) error
@@ -9201,11 +9204,11 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 	return key[:idx], num, true
 }
 
-// ResolveIssueStatesByKey batch-resolves the current GitHub State ("OPEN" or
-// "CLOSED") of the given graph node keys ("owner/repo#number") via
-// issueSvc.GetIssuesByNumbersWithoutRelations (State is all it reads), grouped
-// by repo so any number of keys sharing a
-// repo cost exactly ONE GraphQL round trip — the same batching discipline as
+// ResolveIssueStatesByKey batch-resolves the current GitHub state of the given
+// graph node keys ("owner/repo#number") via issueSvc.GetDependencyStates, as
+// forge.DepState values: a key may name an issue, a pull request or a number
+// that does not exist (#2854). Keys are grouped by repo so any number of keys
+// sharing a repo cost exactly ONE GraphQL round trip — the same batching discipline as
 // refreshBlockerStates above (a queue of N items spread across R repos
 // collapses from N calls to R). Used by the autonomous scheduler's
 // candidate-selection dep check to resolve "dangling" dependency edges that
@@ -9214,8 +9217,9 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 // edges exactly as dispatch does (#2573).
 //
 // Keys the resolver couldn't confirm — a malformed key, a per-repo fetch
-// error, or an issue simply absent from the batch response (deleted /
-// inaccessible) — are left OUT of the returned map. Callers must treat
+// error, or a number the batch response gave no verdict on — are left OUT of
+// the returned map. forge.DepStateMissing is a verdict, not one of these: GitHub
+// confirmed the number does not exist. Callers must treat
 // absence as "still unresolved" and apply their own fail-open/fail-closed
 // policy; this helper never guesses a state.
 //
@@ -9243,13 +9247,13 @@ func ResolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 	resolved := make(map[string]string, len(keys))
 	for repo, nums := range byRepo {
 		owner, name := splitOwnerRepo(repo)
-		issues, err := issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, nums)
+		states, err := issueSvc.GetDependencyStates(ctx, owner, name, nums)
 		if err != nil {
 			log.Printf("WARN: ResolveIssueStatesByKey: batch fetch failed for %s: %v", repo, err)
 			continue
 		}
-		for n, iss := range issues {
-			resolved[fmt.Sprintf("%s#%d", repo, n)] = iss.State
+		for n, state := range states {
+			resolved[fmt.Sprintf("%s#%d", repo, n)] = state
 		}
 	}
 	return resolved
