@@ -367,13 +367,18 @@ is **fail-closed**: only an explicit `pass` yields `result: "pass"`; both `fail`
 and `uncertain` yield `result: "fail"` (an unconfirmed claim must not slip past
 the gate). Other gates are judged on their latest row per `gate_name` (#2746),
 but `judges` rows are independent critics, not successive verdicts: every record
-one run writes shares an `attempt_id`, and the Go gate trips on any
-`result != "pass"` in the latest attempt. A later attempt replaces an earlier
+one run writes carries the `runId` of the run that owns its judges as its `attempt_id`, so a second fold
+of one run joins the attempt instead of replacing it, and the Go gate trips on
+any `result != "pass"` in the latest attempt. A later attempt replaces an earlier
 one, so a retry can clear a failure, and one judge's pass can never erase
-another's fail. A `judges` row with no `attempt_id` is never superseded. A failing record
-carries the judge's first-line `rationale` as `error_summary` for triage. The
-writer is non-critical (never throws) and validates each record through a Zod
-schema before writing.
+another's fail. A `judges` row with no `attempt_id`, written when the stream has no single owning
+run, is never superseded. A failing record carries the judge's first-line
+`rationale` as `error_summary` for triage. The writer is non-critical (never
+throws) and writes an attempt in one append: every record must pass the Zod
+schema first, and failures lead the payload, so neither a dropped row nor a torn
+write can leave a passing remainder. Each stage execution mints its own `runId`,
+so a retry is a new attempt. Only this writer may use the name: `AppendGateMetric` and
+`gate record-metric` refuse `judges`.
 
 ## Configuration knobs
 

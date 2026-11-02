@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A judge's failing verdict can no longer be lost by folding a run twice or by a failed write
+  (#2778). Judge rows now take their `attempt_id` from the run, so a second fold joins the attempt
+  instead of replacing it, each stage execution mints its own run id so a retry is a new attempt,
+  and an attempt is written in one append with failures first.
+  `gate record-metric` refuses the reserved `judges` name, and the gate's evidence now reads
+  `verdicts=N rows=M`.
+
 - A review that reaches its round cap now parks one issue instead of halting the repository (#2865).
   The run records `review_cap_reached`, with no retry and no lifetime failure, and other issues keep
   dispatching. Its Action Center card names the cap, lists the findings still standing and gives

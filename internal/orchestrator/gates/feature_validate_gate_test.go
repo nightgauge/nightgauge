@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -97,8 +98,9 @@ func TestFeatureValidateGate_JudgeVerdict_Pass(t *testing.T) {
 	ws := layouttest.Repo(t)
 	writeGateMetrics(t, ws, 3918, []map[string]any{
 		{"gate_name": "build", "result": "pass"},
-		// Byte-for-byte the record the TS writer appends for a "pass" verdict.
-		{"gate_name": "judges", "result": "pass"},
+		// The fields the gate reads from the record the TS writer appends for a
+		// "pass" verdict.
+		{"gate_name": "judges", "result": "pass", "attempt_id": "run-1"},
 	})
 
 	gr := FeatureValidateGate{}.Verify(context.Background(), 3918, ws)
@@ -107,6 +109,24 @@ func TestFeatureValidateGate_JudgeVerdict_Pass(t *testing.T) {
 	}
 	if gr.Kind != KindOK {
 		t.Fatalf("expected KindOK on an all-pass run, got %q", gr.Kind)
+	}
+}
+
+// The evidence counts collapsed verdicts and raw rows, and says which is which.
+func TestFeatureValidateGate_EvidenceNamesVerdictsAndRows(t *testing.T) {
+	ws := layouttest.Repo(t)
+	writeGateMetrics(t, ws, 3918, []map[string]any{
+		{"gate_name": "build", "result": "catch"},
+		{"gate_name": "build", "result": "pass"},
+		{"gate_name": "lint", "result": "pass"},
+	})
+
+	gr := FeatureValidateGate{}.Verify(context.Background(), 3918, ws)
+	if !gr.Passed {
+		t.Fatalf("expected pass; reason=%q evidence=%v", gr.Reason, gr.Evidence)
+	}
+	if !slices.Contains(gr.Evidence, "verdicts=2 rows=3") {
+		t.Fatalf("expected evidence to contain %q, got %v", "verdicts=2 rows=3", gr.Evidence)
 	}
 }
 
@@ -124,7 +144,7 @@ func TestFeatureValidateGate_JudgeVerdict_FailTripsGate(t *testing.T) {
 		{"gate_name": "unit-tests", "result": "pass"},
 		// The judge rejected a "done" claim — every deterministic gate passed,
 		// yet this lone fail record must still trip the gate.
-		{"gate_name": "judges", "result": "fail", "error_summary": "claimed tests pass but suite was never run"},
+		{"gate_name": "judges", "result": "fail", "attempt_id": "run-1", "error_summary": "claimed tests pass but suite was never run"},
 	})
 
 	gr := FeatureValidateGate{}.Verify(context.Background(), 3918, ws)
