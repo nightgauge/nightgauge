@@ -63,6 +63,13 @@ case "$*" in
     esac
     mkdir -p "$c/plugin/skills/a"
     [ -n "${STUB_NO_SKILLS:-}" ] || touch "$c/plugin/skills/a/SKILL.md" ;;
+  "plugin validate --strict "*)
+    if [ "${STUB_VALIDATE_FAILS:-}" = plugin ] && [[ "$4" == */claude-plugins/nightgauge ]]; then
+      echo "hooks.json: unquoted command"; exit 1
+    fi
+    if [ "${STUB_VALIDATE_FAILS:-}" = root ] && [[ "$4" != */claude-plugins/nightgauge ]]; then
+      echo "marketplace.json: invalid"; exit 1
+    fi ;;
   "plugin list --json")
     [ -f "$c/plugin/skills/a/SKILL.md" ] || [ -d "$c/plugin" ] || { echo '[]'; exit 0; }
     printf '[{"id":"nightgauge@nightgauge-plugins","enabled":%s,"installPath":"%s/plugin"}]\n' \
@@ -156,6 +163,19 @@ expect "claude unavailable is a harness error" 2 "HARNESS ERROR" STUB_BROKEN=1
 fixture
 expect "a hung claude is a harness error, not a hang" 2 "did not finish in 1s" \
   STUB_HANG=1 PLUGIN_INSTALL_TIMEOUT_SECS=1
+
+fixture
+expect "strict validation refuses the plugin" 1 "hooks.json: unquoted command" \
+  STUB_VALIDATE_FAILS=plugin
+
+fixture
+expect "strict validation refuses the marketplace" 1 "marketplace.json: invalid" \
+  STUB_VALIDATE_FAILS=root
+
+# The stub rejects any other form, so dropping --strict turns the valid case red.
+fixture
+sed -i.bak 's/plugin validate --strict/plugin validate/' "$TMP/scripts/check-plugin-install-docs.sh"
+expect "the gate must pass --strict" 1 "stub: unexpected: plugin validate"
 
 # A doc with both routes, like configs/claude/README.md.
 add_project_route() {

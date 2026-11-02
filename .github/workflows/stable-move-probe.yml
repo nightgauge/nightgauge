@@ -1,0 +1,69 @@
+# Report-only (#2763): may github.token move a ref across .github/workflows
+# changes? The release step that moves `stable` has never run, so nothing else
+# answers that. Uses a scratch ref, never `stable`, and exits 0 on any verdict:
+# read the verdict in the step summary.
+name: Stable move probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/stable-move-probe.yml
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    # A fork's token is read-only, which would answer a different question.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Probe a scratch ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRATCH: probe/stable-move-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -uo pipefail
+          report() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          TAG="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          MAIN="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          git fetch -q origin main
+          if [ -z "$TAG" ] || [ -z "$MAIN" ]; then
+            report "verdict: could-not-run (no stable tag or main commit)"
+            exit 0
+          fi
+          if git diff --quiet "$TAG" "$MAIN" -- .github/workflows; then
+            report "verdict: could-not-run (workflows do not differ between $TAG and main)"
+            exit 0
+          fi
+          BASE="$(git rev-parse "$TAG^{commit}")"
+          git merge-base --is-ancestor "$BASE" "$MAIN" || {
+            report "verdict: could-not-run ($TAG is not an ancestor of main)"
+            exit 0
+          }
+          ERR="$(mktemp)"
+          trap 'gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$SCRATCH" >/dev/null 2>&1 || true' EXIT
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/heads/$SCRATCH" \
+            -f "sha=$BASE" >/dev/null 2>"$ERR"; then
+            report "create at $TAG: $(cat "$ERR")"
+            report "verdict: could-not-run (cannot create the scratch ref)"
+            exit 0
+          fi
+          report "create at $TAG: ok"
+          if gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$SCRATCH" \
+            -f "sha=$MAIN" -F force=false >/dev/null 2>"$ERR"; then
+            report "fast-forward to main: ok"
+            report "verdict: allowed (github.token can move stable across workflow changes)"
+          else
+            report "fast-forward to main: $(cat "$ERR")"
+            report "verdict: refused (STABLE_BRANCH_TOKEN is required before the next release)"
+          fi

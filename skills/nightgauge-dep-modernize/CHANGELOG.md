@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Renamed the Phase 6 heading and its `promptRef`s. The old anchor held `---`,
+  which ended the frontmatter early at runtime and dropped the whole
+  `orchestration:` block's tail. Skill version bumped to 1.3.1 (#2763).
+
 ### Added
 
 - `orchestration:` frontmatter block (`mode: phased`) modelling modernization as

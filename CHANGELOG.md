@@ -16,6 +16,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `claude plugin validate --strict` now passes on the plugin and the marketplace, and the local
+  gate and CI run it (#2763). All 11 hook commands are quoted, so the plugin's hooks work from a
+  path containing a space. `plugin.json` declares its license, and `model-routing-report` is now a
+  canonical skill, which leaves the plugin with no `commands/` directory.
+- `nightgauge-dep-modernize` no longer loses part of its frontmatter (#2763). A `---` inside a
+  heading anchor ended the block early at runtime; a new check rejects any `---` before the closing
+  line, quoted or not.
+- The plugin version release gate no longer passes without comparing anything (#2763). A tag with
+  no stable tag below it now cannot run, unless a maintainer passes `--first-release`.
+- The `claude-plugin` release check says a `stable` branch is missing only after proving it (#2763):
+  a token that cannot read the repository exits 2 and says so.
+- A refused `stable` move now names its cause instead of implying the branch is missing (#2763). The
+  release step reads `STABLE_BRANCH_TOKEN`, falling back to `github.token`, and a new report-only
+  Stable move probe workflow tests whether `github.token` may make that move.
 - Pipeline PR titles now state the change and stay within 72 characters, including
   `<type>(#N): `, on every path that opens a PR (#2846). feature-dev records a one-line
   `pr_summary` in `dev-{N}.json`; without one the title falls back to the issue title cut at a

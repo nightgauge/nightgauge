@@ -56,19 +56,24 @@ jobs:
           git fetch --tags --force --quiet origin
           bash scripts/check-changelog.sh
       # Claude plugin contract (#2724): one version, in plugin.json, and every
-      # skill's frontmatter parses, because `claude plugin validate` is not
-      # installed here. The self-test first proves the gate can go red.
+      # skill's frontmatter parses and holds no early `---`. The self-test first
+      # proves the gate can go red.
       - name: Plugin version gate self-test
         run: bash scripts/test-check-plugin-version.sh
       - name: Plugin has one version and valid skills
         run: bash scripts/check-plugin-version.sh
-      # Install docs (#2759): the binary step is present and the documented
-      # commands install the plugin from this commit in a scratch config.
+      # Install docs (#2759): the binary step is present, the documented
+      # commands install the plugin from this commit in a scratch config, and
+      # `claude plugin validate --strict` passes (#2763).
       - name: Plugin install docs gate self-test
         run: bash scripts/test-check-plugin-install-docs.sh
       - name: Documented plugin install works
         timeout-minutes: 10
         run: bash scripts/check-plugin-install-docs.sh
+      - name: Plugin hooks run from a path with a space
+        run: bash scripts/test-plugin-hooks-path.sh
+      - name: Stable move regression suite
+        run: bash scripts/test-advance-stable.sh
       # Self-test first, same reasoning as the band-vocabulary and mirror-link
       # gates below: the validator reported a missing field once, on a file that
       # provably had it, because a frontmatter block that never closed handed the

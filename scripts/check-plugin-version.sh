@@ -12,15 +12,21 @@
 #   check-plugin-version.sh
 #       plugin.json has an X.Y.Z version; the marketplace entry has none, so
 #       there is one source of truth; every plugin skill's frontmatter parses
-#       as strict YAML (`claude plugin validate` is absent in CI, and the CLI
-#       drops an unparseable skill's whole frontmatter). Needs mikefarah yq.
+#       as strict YAML (the CLI drops an unparseable skill's whole frontmatter)
+#       and holds no `---` before its closing line (the runtime's frontmatter
+#       parser is unanchored, so one ends the block early, quoted or not).
+#       Needs mikefarah yq. `claude plugin validate --strict` runs in
+#       check-plugin-install-docs.sh.
 #   check-plugin-version.sh --tag vX.Y.Z[-rc.N]
 #       The first two arms, then compare the tag with the highest stable tag
 #       below it: a changed plugin needs a different version, and the version
-#       never goes down. A first release, with stable tags but none below it,
-#       passes; a clone with no stable tag at all could not run. An unpushed tag
-#       is read as HEAD, so this works before tagging. Needs full history and
-#       tags.
+#       never goes down. No stable tag below it means the comparison cannot run,
+#       which is exit 2, not a pass. An unpushed tag is read as HEAD, so this
+#       works before tagging. Needs full history and tags.
+#   check-plugin-version.sh --tag vX.Y.Z[-rc.N] --first-release
+#       The same, but a tag with no baseline passes. A maintainer states this by
+#       hand for a true first release; automation never passes it. With a
+#       baseline present the comparison still runs.
 #
 # Exit codes: 0 contract holds; 1 a violation was found (each named on stderr);
 # 2 usage error, or the check could not run.
@@ -34,6 +40,7 @@ PLUGIN_JSON="$PLUGIN_DIR/.claude-plugin/plugin.json"
 MARKETPLACE=".claude-plugin/marketplace.json"
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 GATE_TAG=""
+FIRST_RELEASE=0
 
 usage() {
   sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -43,6 +50,7 @@ usage() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --tag) GATE_TAG="${2:-}"; shift 2 || usage ;;
+    --first-release) FIRST_RELEASE=1; shift ;;
     -h|--help) usage ;;
     *) echo "check-plugin-version: unknown argument: $1" >&2; usage ;;
   esac
@@ -50,6 +58,9 @@ done
 
 # HARNESS ERROR: ci-local.sh reports the step as INFRASTRUCTURE, not a finding.
 cannot_run() { echo "HARNESS ERROR: check-plugin-version: $1" >&2; exit 2; }
+
+[ "$FIRST_RELEASE" -eq 0 ] || [ -n "$GATE_TAG" ] ||
+  cannot_run "--first-release needs --tag"
 
 FAIL=0
 violation() { echo "VIOLATION: $1" >&2; FAIL=1; }
@@ -89,6 +100,9 @@ if [ -z "$GATE_TAG" ]; then
   for f in "$PLUGIN_DIR"/skills/*/SKILL.md; do
     [ -f "$f" ] || continue
     SKILLS=$((SKILLS + 1))
+    while IFS= read -r hit; do
+      violation "$f:${hit%%:*}: frontmatter contains '---' before its closing line (the runtime ends the block there, quoted or not)"
+    done < <(awk 'NR == 1 { next } /^---[[:space:]]*$/ { exit } index($0, "---") { print NR ":" }' "$f")
     if ! awk 'NR == 1 { next } /^---[[:space:]]*$/ { exit } { print }' "$f" |
       yq -e '.name' >/dev/null 2>&1; then
       violation "$f: frontmatter is not valid YAML with a name (a ': ' in a plain scalar?)"
@@ -106,16 +120,17 @@ else
   [[ "$BASE" =~ $SEMVER_RE ]] || cannot_run "--tag expects vX.Y.Z[-rc.N], got '$GATE_TAG'"
 
   PREV=""
-  STABLE_TAGS=0
   while IFS= read -r t; do
     v="${t#v}"
     [[ "$v" =~ $SEMVER_RE ]] || continue
-    STABLE_TAGS=$((STABLE_TAGS + 1))
     semver_lt "$v" "$BASE" || continue
     if [ -z "$PREV" ] || semver_lt "$PREV" "$v"; then PREV="$v"; fi
   done < <(git tag -l 'v*')
-  # A tagless clone would pass vacuously, skipping the comparison entirely.
-  [ "$STABLE_TAGS" -gt 0 ] || cannot_run "no stable tag in this clone (git fetch --tags)"
+  # With no baseline the comparison below is skipped, and a skipped gate must
+  # not report OK. Tags above this one are no baseline, so count only after the
+  # filter.
+  [ -n "$PREV" ] || [ "$FIRST_RELEASE" -eq 1 ] ||
+    cannot_run "no stable tag below $GATE_TAG in this clone (git fetch --tags; --first-release for a true first release)"
 
   TARGET="HEAD"
   git rev-parse -q --verify "refs/tags/$GATE_TAG" >/dev/null && TARGET="refs/tags/$GATE_TAG"

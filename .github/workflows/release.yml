@@ -563,23 +563,16 @@ jobs:
       # never from main. After every publish step, so a failed publish leaves
       # stable alone; before the cask verification, which concerns another
       # channel and must not hold plugins back.
-      # Fast-forward only; a refused move fails here and the watchdog's
-      # claude-plugin channel stays red until a maintainer moves the branch.
+      # Fast-forward only; a refused move fails here, naming its cause, and the
+      # watchdog's claude-plugin channel stays red until a maintainer moves the
+      # branch. github.token cannot update a ref across .github/workflows changes
+      # if the stable-move probe says so; STABLE_BRANCH_TOKEN then carries that
+      # permission (docs/GIT_WORKFLOW.md).
       - name: Advance the stable branch to this release
         id: advance-stable
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          SHA="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/stable" >/dev/null 2>&1; then
-            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/stable" \
-              -f sha="$SHA" -F force=false >/dev/null
-          else
-            gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref=refs/heads/stable -f sha="$SHA" >/dev/null
-          fi
-          echo "stable is now ${GITHUB_REF_NAME} ($SHA)" >> "$GITHUB_STEP_SUMMARY"
+          GH_TOKEN: ${{ secrets.STABLE_BRANCH_TOKEN || github.token }}
+        run: bash scripts/advance-stable.sh "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
 
       # FINAL STEP. GoReleaser only PROPOSES the cask (a pull request on the
       # tap, .goreleaser.yml), so the release is not complete until that pull

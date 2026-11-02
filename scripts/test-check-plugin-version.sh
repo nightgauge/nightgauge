@@ -91,6 +91,22 @@ printf -- '---\nname: a\ndescription: User-invoked: the user types /a.\n---\n' \
   >"$TMP/claude-plugins/nightgauge/skills/a/SKILL.md"
 expect "the ': ' frontmatter that shipped in 1.24.0 fails" 1 "not valid YAML"
 
+# The runtime's parser is unanchored: any `---` before the close ends the block.
+fixture
+printf -- '---\nname: a\nref: SKILL.md#a---b\ndescription: d\n---\n' \
+  >"$TMP/claude-plugins/nightgauge/skills/a/SKILL.md"
+expect "an unquoted mid-line --- fails" 1 "SKILL.md:3: frontmatter contains '---'"
+
+fixture
+printf -- '---\nname: a\nref: "SKILL.md#a---b"\ndescription: d\n---\n' \
+  >"$TMP/claude-plugins/nightgauge/skills/a/SKILL.md"
+expect "quoting a --- does not count" 1 "frontmatter contains '---'"
+
+fixture
+printf -- '---\nname: a\ndescription: d\n---\nbody --- is fine\n---\n' \
+  >"$TMP/claude-plugins/nightgauge/skills/a/SKILL.md"
+expect "--- after the closing line passes" 0 ""
+
 fixture
 rm -rf "$TMP/claude-plugins/nightgauge/skills/a"
 expect "no skills could not run" 2 "no skills"
@@ -119,7 +135,22 @@ commit two
 expect "the version never goes down" 1 "went down" --tag v1.1.0
 
 fixture
-expect "no lower stable tag passes" 0 "" --tag v1.0.0
+expect "no baseline below the tag could not run" 2 "HARNESS ERROR" --tag v1.0.0
+
+# The vacuous pass: stable tags exist, but only at or above the one judged.
+fixture
+git -C "$TMP" tag v1.1.0
+git -C "$TMP" tag -d v1.0.0 >/dev/null
+expect "a repository tagged only at the tag could not run" 2 "HARNESS ERROR" --tag v1.1.0
+expect "--first-release opts in explicitly" 0 "" --tag v1.1.0 --first-release
+
+fixture
+touch_plugin
+commit two
+expect "--first-release cannot skip a baseline" 1 "still 1.0.0" --tag v1.1.0 --first-release
+
+fixture
+expect "--first-release needs --tag" 2 "needs --tag" --first-release
 
 # Only stable tags are a baseline: an rc of the same release is not one.
 fixture
