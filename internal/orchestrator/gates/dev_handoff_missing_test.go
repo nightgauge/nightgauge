@@ -396,6 +396,7 @@ func TestDerivedHandoff_PreservesAuthoredNarrative(t *testing.T) {
 		"build_verification":        map[string]any{"ran": true, "status": "passed"},
 		"knowledge_path":            ".nightgauge/knowledge/auth",
 		"architectural_constraints": []string{"no new deps"},
+		"pr_summary":                "state the change",
 		"retry_count":               2,
 		"retry_reasons":             []string{"flaky suite"},
 	})
@@ -412,6 +413,9 @@ func TestDerivedHandoff_PreservesAuthoredNarrative(t *testing.T) {
 	}
 	if got, _ := doc["retry_count"].(float64); got != 2 {
 		t.Errorf("retry_count = %v, want 2", doc["retry_count"])
+	}
+	if doc["pr_summary"] != "state the change" {
+		t.Errorf("pr_summary lost: %v", doc["pr_summary"])
 	}
 	if doc["architectural_constraints"] == nil {
 		t.Error("architectural_constraints lost — git cannot reconstruct these")

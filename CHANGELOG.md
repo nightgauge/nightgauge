@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Pipeline PR titles now state the change and stay within 72 characters, including
+  `<type>(#N): `, on every path that opens a PR (#2846). feature-dev records a one-line
+  `pr_summary` in `dev-{N}.json`; without one the title falls back to the issue title cut at a
+  word boundary, and the stage log says so. `nightgauge pr-stage title <N>` prints the same
+  title. Merge-queue runs no longer carry the whole commit message as their title: the
+  `run-name` line is gone from all eight workflows, and a test keeps `head_commit.message` out.
 - `nightgauge git push-branch` now ends a rejected push it could not reconcile as a fork (exit 3
   with the `[branch-forked]` marker, and `--json` outcome `unreconciled` when the check could not
   run), so a stage can no longer carry on from an unpushed branch

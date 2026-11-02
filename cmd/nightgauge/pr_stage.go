@@ -58,6 +58,7 @@ scheduler contract instead of maintaining a second, divergent implementation.`,
 	cmd.AddCommand(prStageCreateCmd())
 	cmd.AddCommand(prStageMergeCmd())
 	cmd.AddCommand(prStageBudgetCmd())
+	cmd.AddCommand(prStageTitleCmd())
 	cmd.AddCommand(prStageRecoverCmd())
 	cmd.AddCommand(prStageReviewRoundCmd())
 	cmd.AddCommand(prStageReviewGateCmd())
@@ -432,6 +433,40 @@ func prStageBudgetCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
+	return cmd
+}
+
+// prStageTitleCmd runs `nightgauge pr-stage title <issue>`: the title
+// deterministic pr-create would render, for the paths that open a PR without it
+// (#2846). The title is stdout's only content; the fallback note goes to stderr.
+func prStageTitleCmd() *cobra.Command {
+	var workdir string
+	cmd := &cobra.Command{
+		Use:          "title <issue-number>",
+		Short:        "Print the pipeline PR title, capped at 72 characters, for an issue",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issue, err := parseIssueNumberArg(args[0])
+			if err != nil {
+				return err
+			}
+			workspace, err := resolvePrStageWorkspace(workdir)
+			if err != nil {
+				return err
+			}
+			snap, err := pmstages.ReadTitleSnapshot(workspace, issue)
+			if err != nil {
+				return err
+			}
+			if note := pmstages.TitleNote(snap); note != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), note)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), pmstages.RenderTitle(snap))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
 	return cmd
 }
 

@@ -11,6 +11,8 @@ and this project adheres to
 
 ### Fixed
 
+- Pipeline PR titles from the extension's fallback path now state the change, stay within 72
+  characters and carry the `(#N)` scope (#2846).
 - A merge-queue conflict now goes through conflict recovery instead of halting
   the repository, and the halt card names the files when recovery cannot
   resolve it.

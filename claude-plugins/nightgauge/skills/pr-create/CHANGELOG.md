@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **The title comes from `nightgauge pr-stage title` (#2846).** The skill no longer composes it, so this path keeps the 72-character cap.
 - **The stale-branch merge pushes with `nightgauge git push-branch` (#2749).** It
   never forces, and exit 3 reports a rejected push as a fork while exit 1 keeps
   the permission and infrastructure message.

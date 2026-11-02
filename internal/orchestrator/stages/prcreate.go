@@ -125,6 +125,9 @@ type PRCreateSnapshot struct {
 	SecurityReview  string
 	TypeCheck       string
 	DeadCodeScanDev string
+	// PRSummary is the one-line statement of the change feature-dev recorded as
+	// pr_summary (#2846). Empty means the title falls back to the issue title.
+	PRSummary string
 
 	// Validate fields (from validate-{N}.json)
 	HasValidate bool
@@ -278,16 +281,16 @@ var knownPrefixes = []string{
 
 // RenderTitle renders a deterministic PR title from a snapshot. Format:
 //
-//	<prefix>(#N): <stripped-title>
+//	<prefix>(#N): <text>
 //
-// Where <prefix> is the conventional-commit prefix derived from issue type
-// and <stripped-title> is the issue title with any leading
-// "<knownPrefix>(<scope>)?:" segment removed. Output is byte-equal across
-// repeated calls on identical input — no time, no map iteration, no env reads.
+// Where <prefix> is the conventional-commit prefix derived from issue type and
+// <text> is what titleText resolves: the recorded summary, or the issue title,
+// fitted so the whole title stays within maxTitleRunes. Output is byte-equal
+// across repeated calls on identical input — no time, no map iteration, no env
+// reads.
 func RenderTitle(snap PRCreateSnapshot) string {
-	prefix := titlePrefix(snap.IssueType)
-	stripped := stripTitlePrefix(snap.IssueTitle)
-	return fmt.Sprintf("%s(#%d): %s", prefix, snap.IssueNumber, stripped)
+	text, _ := titleText(snap)
+	return titleScope(snap) + text
 }
 
 func titlePrefix(issueType string) string {
@@ -703,6 +706,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		ph.start("verify-pr-created")
 		ph.complete("verify-pr-created")
 		ph.start("write-context")
+		logTitleNote(snap)
 		title := RenderTitle(snap)
 		body := RenderBody(snap)
 		_ = r.writeContext(workdir, prContextPayload{
@@ -755,6 +759,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: fmt.Sprintf("%s: %s", ReasonCreateFailed, truncateErr(idErr, 200))}, nil)
 	}
 
+	logTitleNote(snap)
 	title := RenderTitle(snap)
 	body := RenderBody(snap)
 	pr, createErr := r.prClient.CreatePR(ctx, repoID, title, body, snap.Branch, snap.BaseBranch)
@@ -993,11 +998,13 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 				DeadCodeScan   string `json:"dead_code_scan"`
 			} `json:"quality_checks"`
 			KnowledgePath string `json:"knowledge_path"`
+			PRSummary     string `json:"pr_summary"`
 		}
 		if jsonErr := json.Unmarshal(data, &raw); jsonErr != nil {
 			return snap, fmt.Errorf("parse dev context: %w", jsonErr)
 		}
 		snap.HasDev = true
+		snap.PRSummary = raw.PRSummary
 		snap.FilesCreated = raw.FilesChanged.Created
 		snap.FilesModified = raw.FilesChanged.Modified
 		snap.FilesDeleted = raw.FilesChanged.Deleted

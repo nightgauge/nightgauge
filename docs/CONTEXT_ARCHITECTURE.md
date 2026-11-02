@@ -533,6 +533,7 @@ issue #1076)
 | `quality_checks.dead_code_scan`     | string | No       | Dead code scan result: `passed`, `failed`, `not_run` (v1.1+)                                                                                   |
 | `created_at`                        | string | Yes      | ISO 8601 timestamp                                                                                                                             |
 | `knowledge_path`                    | string | No       | Path to knowledge directory for this issue (v1.5+)                                                                                             |
+| `pr_summary`                        | string | No       | One imperative line stating the change; rendered into the PR title (#2846)                                                                     |
 | `cross_repo_knowledge`              | array  | No       | Cross-repo knowledge entries from planning context, threaded to dev for implementation context (v1.6+). Each entry: `{repo, path, entries[]}`. |
 | `handoff_source`                    | string | No       | Provenance of `files_changed`: `authored` (the stage wrote this file) or `derived` (git did, #1076). Absent on pre-1.9 documents (v1.9+).      |
 | `handoff_derivation`                | object | No       | Present only when `handoff_source` is `derived`: `{derived_at, reason, probe_mode, narrative_preserved}` (v1.9+).                              |
@@ -562,13 +563,13 @@ enrichment.
 
 What a derived handoff does and does not claim:
 
-| Field                | Derived value                      | Why                                                                                                       |
-| -------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `files_changed`      | git's answer, uncapped             | git is authoritative for WHAT changed, and the stage is not a witness to it                               |
-| `build_verification` | `ran: false`, `status: unverified` | Nothing here ran a build; `passed` would be a self-granted exemption                                      |
-| `tests_status`       | zeroes, empty `test_command`       | Same — feature-validate runs the suite for real, as it always did                                         |
-| `quality_checks`     | all `not_run`                      | Same                                                                                                      |
-| narrative fields     | preserved from a partial document  | `knowledge_path`, `architectural_constraints`, `retry_*`, `feedback` — git cannot reconstruct any of them |
+| Field                | Derived value                      | Why                                                                                                                     |
+| -------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `files_changed`      | git's answer, uncapped             | git is authoritative for WHAT changed, and the stage is not a witness to it                                             |
+| `build_verification` | `ran: false`, `status: unverified` | Nothing here ran a build; `passed` would be a self-granted exemption                                                    |
+| `tests_status`       | zeroes, empty `test_command`       | Same — feature-validate runs the suite for real, as it always did                                                       |
+| `quality_checks`     | all `not_run`                      | Same                                                                                                                    |
+| narrative fields     | preserved from a partial document  | `knowledge_path`, `architectural_constraints`, `pr_summary`, `retry_*`, `feedback` — git cannot reconstruct any of them |
 
 Two boundaries matter:
 

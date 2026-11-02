@@ -1,5 +1,4 @@
 name: publication-boundary
-run-name: ${{ github.event.merge_group.head_commit.message }}
 
 # Blocks private-class content from entering the tree.
 #

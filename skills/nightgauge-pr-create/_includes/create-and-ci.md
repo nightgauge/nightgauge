@@ -12,13 +12,17 @@ inline in `SKILL.md`; this file carries the procedural steps it governs.
 
 ## Phase 3: create PR via Go binary
 
-Create the PR using the Go binary. The skill constructs the title, body (with
-correct closing keywords), and handles reviewer assignment with self-reviewer
-guard. Append `KNOWLEDGE_SECTION` to the PR body when non-empty:
+Create the PR using the Go binary. The binary renders the title from the
+`pr_summary` feature-dev recorded, capped at 72 characters (#2846): never compose
+it here. The skill constructs the body (with correct closing keywords) and
+handles reviewer assignment with self-reviewer guard. Append `KNOWLEDGE_SECTION`
+to the PR body when non-empty:
 
 ```bash
 BRANCH_NAME=$(git branch --show-current)
 : "${BRANCH_NAME:?detached HEAD: check out the issue branch}"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(printf '%s' "$BRANCH_NAME" | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -52,6 +56,16 @@ if ! git push -u origin "$BRANCH_NAME" 2>&1; then
   fi
 fi
 
+PR_TITLE=$("$BINARY" pr-stage title "$ISSUE_NUMBER") || {
+  echo "ERROR: could not render the PR title for #$ISSUE_NUMBER" >&2
+  exit 1
+}
+# A binary older than the verb prints pr-stage's help and exits 0.
+case "$PR_TITLE" in
+  *"(#$ISSUE_NUMBER): "*) ;;
+  *) echo "ERROR: this nightgauge binary has no pr-stage title; update it" >&2; exit 1 ;;
+esac
+
 RESULT=$("$BINARY" pr create \
   --title "$PR_TITLE" \
   --body "$PR_BODY" \
@@ -65,7 +79,6 @@ RESULT=$("$BINARY" pr create \
 
 The skill handles:
 
-- PR title construction with correct prefix (feat/fix/docs/refactor/chore)
 - PR body with correct closing keywords (`Part of #PARENT` + `Closes #N` for
   epic sub-issues so the sub-issue auto-closes on merge, `Closes #N` for
   standalone issues)

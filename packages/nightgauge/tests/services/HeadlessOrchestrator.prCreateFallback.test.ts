@@ -47,6 +47,9 @@ const {
   commitsAhead,
   pushFails,
   createFails,
+  titleVerbFails,
+  issueTitle,
+  titleVerbOutput,
   prCreated,
   calls,
 } = vi.hoisted(() => ({
@@ -58,6 +61,9 @@ const {
   commitsAhead: { value: "2" },
   pushFails: { value: false },
   createFails: { value: false },
+  titleVerbFails: { value: false },
+  issueTitle: { value: "Add thing\n" },
+  titleVerbOutput: { value: "fix(#42): add thing\n" },
   prCreated: { value: false },
   calls: { value: [] as string[][] },
 }));
@@ -109,7 +115,14 @@ vi.mock("child_process", async () => {
     }
     // gh issue view <n> --json title -q .title
     if (cmd === "gh" && a[0] === "issue" && a[1] === "view") {
-      return Promise.resolve({ stdout: "Add thing\n", stderr: "" });
+      return Promise.resolve({ stdout: issueTitle.value, stderr: "" });
+    }
+    // nightgauge pr-stage title <n> --workdir <dir> (#2846)
+    if (cmd === "/fake/nightgauge" && a[0] === "pr-stage" && a[1] === "title") {
+      if (titleVerbFails.value) {
+        return Promise.reject(new Error("issue context missing"));
+      }
+      return Promise.resolve({ stdout: titleVerbOutput.value, stderr: "" });
     }
     // nightgauge pr create ... (#2506: never ambient gh pr create)
     if (cmd === "/fake/nightgauge" && a[0] === "pr" && a[1] === "create") {
@@ -216,6 +229,9 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     commitsAhead.value = "2";
     pushFails.value = false;
     createFails.value = false;
+    titleVerbFails.value = false;
+    issueTitle.value = "Add thing\n";
+    titleVerbOutput.value = "fix(#42): add thing\n";
     prCreated.value = false;
     calls.value = [];
   });
@@ -229,7 +245,7 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     ).toBe(1);
   });
 
-  it("uses --body (not a heredoc) and includes the closing keyword + issue title", async () => {
+  it("uses --body (not a heredoc), the closing keyword and the rendered title (#2846)", async () => {
     await callFallback();
     const create = calls.value.find(
       (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
@@ -241,7 +257,40 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     expect(body).toContain("Refs #42");
     expect(body).not.toMatch(/\bCloses #42\b/);
     const title = create![create!.indexOf("--title") + 1];
-    expect(title).toBe("Add thing");
+    expect(title).toBe("fix(#42): add thing");
+    expect(countCalls((c) => c[0] === "gh" && c[1] === "issue")).toBe(0);
+  });
+
+  it("does not take an older binary's help text for a title (#2846)", async () => {
+    titleVerbOutput.value = "Invoke the deterministic runners\n\nUsage:\n  pr-stage [command]\n";
+    await callFallback();
+    const create = calls.value.find(
+      (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
+    );
+    expect(create![create!.indexOf("--title") + 1]).toBe("chore(#42): Add thing");
+  });
+
+  it("falls back to the issue title when the title verb fails (#2846)", async () => {
+    titleVerbFails.value = true;
+    const result = await callFallback();
+    expect(result.created).toBe(true);
+    const create = calls.value.find(
+      (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
+    );
+    expect(create![create!.indexOf("--title") + 1]).toBe("chore(#42): Add thing");
+  });
+
+  it("caps and neutralizes the issue title when the title verb fails (#2846)", async () => {
+    titleVerbFails.value = true;
+    issueTitle.value = `Fixes #7 ${"word ".repeat(30)}\n`;
+    await callFallback();
+    const create = calls.value.find(
+      (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
+    );
+    const title = create![create!.indexOf("--title") + 1];
+    expect(title.startsWith("chore(#42): Fixes issue 7 word")).toBe(true);
+    expect(title.length).toBeLessThanOrEqual(72);
+    expect(title.endsWith(" word")).toBe(true);
   });
 
   it("short-circuits to created:true without pushing when an open PR already exists", async () => {

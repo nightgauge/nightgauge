@@ -139,13 +139,20 @@ repoID, title, body, head, base)`.
 ### Title template
 
 ```
-<typePrefix>(#<N>): <stripped-issue-title>
+<typePrefix>(#<N>): <text>
 ```
 
 `<typePrefix>` is derived from `issue.type` (feature → `feat`, fix → `fix`,
-docs → `docs`, …). `<stripped-issue-title>` removes any leading
-`<knownPrefix>(<scope>)?:` segment from the issue title to avoid double-
-prefixing PR titles whose issues already carry a conventional-commit prefix.
+docs → `docs`, …). `<text>` is `pr_summary` from `dev-{N}.json`, or the issue
+title when no summary was recorded. Either source goes on one line, has closing
+keywords rewritten to `Refs`, and loses any leading `<knownPrefix>(<scope>)?:`
+segment.
+
+The whole title is capped at 72 characters, counted in runes. Longer text is cut
+at the last word boundary inside the limit, with no ellipsis; a first word that
+alone exceeds it is the one case cut mid-word. Any title that does not use the
+summary unchanged writes a stage-log line. `nightgauge pr-stage title <N>` prints
+the same title for the LLM skill and the extension's last-resort fallback.
 
 ### Body template
 
