@@ -31,7 +31,10 @@
  * @see Issue #1448
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// tests/setup.ts mocks this service globally (#2893); this suite tests it.
+vi.unmock("../../src/services/AutoRetroService");
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

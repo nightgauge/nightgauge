@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- VS Code extension test files no longer fail teardown at random with `ENOTEMPTY`. A failed
+  stage's background retro used to keep writing after the test ended; the shared test setup now
+  mocks it for every file, and teardown names any retro file that still appears (#2893).
 - Stopping autonomous mode right after a resume or start now stops it. The loop used to
   claim its running state on a goroutine of its own, so a Stop that arrived first did
   nothing and the loop came up afterwards, kept running and wrote to the checkout (#2891).

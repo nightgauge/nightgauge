@@ -20,6 +20,7 @@ import type { PipelineStateService } from "../../src/services/PipelineStateServi
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
+import { AutoRetroService } from "../../src/services/AutoRetroService";
 
 vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/utils/nightgaugeConfig")>()),
@@ -293,5 +294,9 @@ describe("HeadlessOrchestrator post-merge ground-truth override (Issue #266)", (
     // fix (b): never the misattributed dollar-ceiling synthesis.
     expect(errText).not.toContain("[runaway-ceiling-exceeded]");
     expect(errText).not.toContain("exceeded ceiling ($75");
+    // The failure retro is still wired, but mocked so nothing outlives the test (#2893).
+    const retroCall = vi.mocked(AutoRetroService.runAfterFailure).mock.calls.at(-1);
+    expect(retroCall?.[1]).toBe(266);
+    expect(retroCall?.[2]).toBe("pr-merge");
   });
 });
