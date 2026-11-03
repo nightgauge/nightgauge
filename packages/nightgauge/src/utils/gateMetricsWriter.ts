@@ -16,27 +16,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import {
-  isJudgeVerdict,
-  isWorkflowRun,
-  type JudgeVerdict,
-  type WorkflowNode,
-} from "@nightgauge/sdk";
-
 import { GateMetricRecordSchema, type GateMetricRecord } from "../schemas/gateMetrics";
 import { writeFileAtomic } from "./atomicWrite";
 import { checkoutPath, isUsableWorkspaceRoot } from "./cloneLayout";
 
 /** The gate metrics file's name inside the checkout's `health/` entry. */
 const GATE_METRICS_FILE = "gate-metrics.jsonl";
-
-/**
- * Canonical gate_name for adversarial anti-hallucination judge verdicts (#3918).
- * The Go FeatureValidateGate.Verify() judges the rows of the latest attempt as a
- * set — any result other than "pass" among them trips the deterministic gate.
- * Mirrors state.JudgeGateName, which reserves the name in the Go writer (#2778).
- */
-const JUDGE_GATE_NAME = "judges" as const;
 
 /** Default retention period in days */
 const DEFAULT_RETENTION_DAYS = 90;
@@ -65,101 +50,6 @@ export class GateMetricsWriter {
       await fs.appendFile(filePath, JSON.stringify(record) + "\n", "utf-8");
     } catch (error) {
       console.warn(`[Nightgauge] Failed to write gate metric record: ${error}`);
-    }
-  }
-
-  /**
-   * Fold the adversarial judge verdicts of an orchestrated feature-validate run
-   * into the gate-metrics file as `{ gate_name: "judges", result }` records — so
-   * an anti-hallucination judge's verdict becomes deterministic gate evidence
-   * the Go `FeatureValidateGate.Verify()` already consumes, with ZERO new Go
-   * scaffolding (#3918).
-   *
-   * Verdict → result mapping (fail-closed): only an explicit `"pass"` verdict
-   * yields `result: "pass"`. Both `"fail"` and `"uncertain"` yield
-   * `result: "fail"` — an unconfirmed claim must not be allowed to slip past the
-   * deterministic gate. The Go gate trips on any `result != "pass"` in the latest
-   * attempt, so a rejected (or merely uncertain) judge verdict fails the gate.
-   *
-   * `attempt_id` is the `runId` of the run that owns the judges, reached through
-   * each judge's phase, since a shared stream also carries the pipeline's own
-   * `run` node. Every fold of one run so shares an attempt and cannot supersede
-   * another (#2778). That is how the
-   * gate tells a retry, which replaces an earlier attempt, from a sibling judge,
-   * which must not (#2746). With no owning run, or judges of several runs, the
-   * attempt is unknown and the field is omitted: such rows are never superseded,
-   * which fails closed.
-   *
-   * One invalid record writes nothing, and the rest go out in a single append
-   * with failures first, so neither a dropped row nor a torn write can leave a
-   * passing remainder without its failures (#2778).
-   *
-   * Accepts the raw `WorkflowEvent` node stream and selects judge nodes itself,
-   * so callers should hand it the run's emitted events, `run` node included. The
-   * judge's `rationale` (truncated to the first line) is carried as
-   * `error_summary` on a failing record for triage. Non-critical: never throws.
-   *
-   * @param workspaceRoot Absolute path to the repository root.
-   * @param issueNumber   Issue the run belongs to (gate records are per-issue).
-   * @param nodes          The run's node stream. Judge nodes become records, the
-   *                       `run` node names the attempt, and others are ignored.
-   */
-  static async appendJudgeVerdicts(
-    workspaceRoot: string,
-    issueNumber: number,
-    nodes: ReadonlyArray<JudgeVerdict | { kind: string }>
-  ): Promise<void> {
-    const stream = nodes as ReadonlyArray<WorkflowNode>;
-    // Non-pass rows first: a partial write can then lose a pass, never keep one
-    // while losing a failure (#2778).
-    const verdicts = stream
-      .filter(isJudgeVerdict)
-      .sort((a, b) => Number(a.verdict === "pass") - Number(b.verdict === "pass"));
-    if (verdicts.length === 0) return;
-
-    const byId = new Map(stream.map((node) => [node.nodeId, node]));
-    const runIds = new Set(
-      verdicts.map((judge) => {
-        const phase = byId.get(judge.parentId ?? "");
-        const run = phase && byId.get(phase.parentId ?? "");
-        return run && isWorkflowRun(run) ? run.runId : undefined;
-      })
-    );
-    const [runId] = runIds;
-    const attemptId = runIds.size === 1 && runId ? runId : undefined;
-
-    const lines: string[] = [];
-    for (const judge of verdicts) {
-      const passed = judge.verdict === "pass";
-      const errorSummary =
-        !passed && judge.rationale ? judge.rationale.split("\n")[0].slice(0, 500) : undefined;
-
-      const record: GateMetricRecord = {
-        schema_version: "1",
-        timestamp: judge.ts,
-        issue_number: issueNumber,
-        gate_name: JUDGE_GATE_NAME,
-        result: passed ? "pass" : "fail",
-        error_summary: errorSummary,
-        attempt_id: attemptId,
-      };
-
-      const validation = GateMetricRecordSchema.safeParse(record);
-      if (!validation.success) {
-        console.warn(
-          `[Nightgauge] Invalid judge verdict record, dropping the attempt: ${validation.error.message}`
-        );
-        return;
-      }
-      lines.push(JSON.stringify(record) + "\n");
-    }
-
-    try {
-      const filePath = this.getFilePath(workspaceRoot);
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.appendFile(filePath, lines.join(""), "utf-8");
-    } catch (error) {
-      console.warn(`[Nightgauge] Failed to write judge verdicts: ${error}`);
     }
   }
 

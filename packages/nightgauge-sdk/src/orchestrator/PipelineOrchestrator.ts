@@ -33,6 +33,9 @@ import type { WorkflowSpec } from "../cli/workflow/WorkflowSpec.js";
 import type { WorkflowExecutorBindings } from "../cli/workflow/SdkFanoutRunner.js";
 import { EphemeralTimeoutError } from "../cli/workflow/SdkFanoutExecutors.js";
 import { WorkflowExecutor, createNodeJournalFs, type JournalFs } from "./WorkflowExecutor.js";
+import { appendJudgeVerdicts } from "./judgeGateMetrics.js";
+import type { WorkflowEvent } from "../cli/workflow/WorkflowEvent.js";
+import type { WorkflowEventSink } from "../cli/workflow/WorkflowEventSink.js";
 import type { ICliAdapter } from "../cli/adapters/ICliAdapter.js";
 import { TraceRecorder } from "../events/traceRecorder.js";
 import type { TierBand } from "../eval/tierBands.js";
@@ -424,6 +427,7 @@ export class PipelineOrchestrator {
    */
   private async runStageWorkflow(
     stage: PipelineStage,
+    issueNumber: number,
     selection: Extract<ExecutorSelection, { kind: "workflow" }>,
     abortSignal: AbortSignal
   ): Promise<void> {
@@ -443,13 +447,31 @@ export class PipelineOrchestrator {
           )
         : null;
 
+    const collected: WorkflowEvent[] = [];
+    const sink: WorkflowEventSink =
+      stage === "feature-validate"
+        ? {
+            emit: (event) => {
+              // Forward first: existing consumers see the stream unchanged.
+              this.events.emit(event);
+              collected.push(event);
+            },
+          }
+        : this.events;
+
+    // True only once the workflow returned un-aborted: an interrupted run's
+    // judges are a partial set and must not form a superseding attempt.
+    let workflowReturned = false;
     this.emitter.stageStarted(stage);
     try {
       // The EventBus is itself the canonical WorkflowEventSink, so the fan-out's
       // sub-agent/judge nodes fold into the same live tree as the stage node.
-      const result = await selection.executor.execute(selection.spec, this.events, {
+      // feature-validate's stream is also kept, to fold its judges into
+      // gate-metrics below (#2880).
+      const result = await selection.executor.execute(selection.spec, sink, {
         abortSignal: abort.signal,
       });
+      workflowReturned = !abort.signal.aborted;
       // The catch below emits the one failed terminal for this throw too.
       if (result.summary.status === "failed") {
         throw new Error(`workflow stage '${stage}' failed (status=${result.summary.status})`);
@@ -461,6 +483,14 @@ export class PipelineOrchestrator {
     } finally {
       if (timeoutId !== null) clearTimeout(timeoutId);
       abortSignal.removeEventListener("abort", onStop);
+      // A judge that ran is gate evidence whether the stage passed or failed,
+      // so the fold runs on both paths. It never throws, so it cannot change
+      // the stage result (#2880). An interrupted run folds without an attempt.
+      if (collected.length > 0) {
+        await appendJudgeVerdicts(this.config.cwd, issueNumber, collected, {
+          complete: workflowReturned,
+        });
+      }
     }
   }
 
@@ -746,7 +776,7 @@ export class PipelineOrchestrator {
       // unchanged single-agent StageExecutor path.
       const selection = await this.selectExecutor(stage, issueNumber);
       if (selection.kind === "workflow") {
-        await this.runStageWorkflow(stage, selection, abortSignal);
+        await this.runStageWorkflow(stage, issueNumber, selection, abortSignal);
         return {
           stage,
           issueNumber,
@@ -859,7 +889,7 @@ export class PipelineOrchestrator {
     try {
       const selection = await this.selectExecutor(stage, issueNumber);
       if (selection.kind === "workflow") {
-        await this.runStageWorkflow(stage, selection, abortSignal);
+        await this.runStageWorkflow(stage, issueNumber, selection, abortSignal);
         return;
       }
 

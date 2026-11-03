@@ -91,7 +91,7 @@ func TestFeatureValidateGate_SkillSaidSuccessButNoMetrics(t *testing.T) {
 
 // TestFeatureValidateGate_JudgeVerdict_Pass proves a passing adversarial judge
 // verdict — written as the {gate_name:"judges", result:"pass"} record the TS
-// gateMetricsWriter.appendJudgeVerdicts() emits (#3918) — flows through the
+// the SDK appendJudgeVerdicts() emits (#3918) — flows through the
 // EXISTING r.Result != "pass" loop without tripping the gate. This is the
 // zero-Go-change contract: the judge gate is just another gate-metrics record.
 func TestFeatureValidateGate_JudgeVerdict_Pass(t *testing.T) {

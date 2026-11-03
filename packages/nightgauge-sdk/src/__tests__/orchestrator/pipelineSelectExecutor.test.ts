@@ -34,6 +34,7 @@ import { createSuccessQueryFn } from "../integration/helpers/query-mocks.js";
 import type { ICliAdapter, NightgaugeAdapter } from "../../cli/adapters/ICliAdapter.js";
 import { resolveCloneLayout } from "../../context/cloneLayout.js";
 import { initCloneRepo } from "../helpers/gitRepo.js";
+import { gateMetricsFilePath } from "../../orchestrator/judgeGateMetrics.js";
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -386,6 +387,113 @@ describe("PipelineOrchestrator.selectExecutor", () => {
       expect(result.success).toBe(false);
       expect(failedPhases).toEqual(["feature-dev"]);
       expect(failedAgents).toEqual(["feature-dev"]);
+    });
+  });
+
+  describe("feature-validate folds its judges into gate-metrics (#2880)", () => {
+    /** A fan-out SKILL.md whose phase carries an adversarial judge. */
+    const JUDGED_SKILL = FANOUT_SKILL.replace(
+      "  units:",
+      "  judge:\n    mode: merge\n    promptRef: judge.md\n  units:"
+    );
+
+    async function judgedWorkspace(stage: string): Promise<void> {
+      ws = await makeWorkspace([]);
+      await fs.writeFile(
+        path.join(ws.dir, "skills", SKILL_DIRS[stage], "SKILL.md"),
+        JUDGED_SKILL,
+        "utf-8"
+      );
+    }
+
+    async function gateRows(): Promise<Array<Record<string, unknown>>> {
+      const content = await fs.readFile(gateMetricsFilePath(ws.dir), "utf-8").catch(() => "");
+      return content
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as Record<string, unknown>);
+    }
+
+    function judgingBindings(verdict: "pass" | "fail"): WorkflowExecutorBindings {
+      return {
+        async runAgent() {
+          return { usage: usage(), terminalKind: "success" as const };
+        },
+        async runJudge() {
+          return { verdict, rationale: "claim not reproduced", usage: usage() };
+        },
+      };
+    }
+
+    it("writes a judges row per verdict, attempted under the stage's run", async () => {
+      await judgedWorkspace("feature-validate");
+      const orch = makeOrchestrator(ws.dir, {
+        workflowAdapter: fakeAdapter(),
+        workflowBindings: judgingBindings("fail"),
+        workflowJournalFs: new FakeFs(),
+        orchestration: { disabled: false },
+      });
+      const runIds: string[] = [];
+      orch.events.on("run", (e) => {
+        if (e.runId.startsWith("wf-")) runIds.push(e.runId);
+      });
+
+      await orch.runStage("feature-validate", 42);
+
+      const rows = await gateRows();
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(row).toMatchObject({
+          gate_name: "judges",
+          issue_number: 42,
+          result: "fail",
+          error_summary: "claim not reproduced",
+          attempt_id: runIds[0],
+        });
+      }
+      expect(new Set(runIds).size).toBe(1);
+    });
+
+    it("folds an interrupted run's judges without an attempt", async () => {
+      await judgedWorkspace("feature-validate");
+      const orch = makeOrchestrator(ws.dir, {
+        workflowAdapter: fakeAdapter(),
+        workflowBindings: {
+          async runAgent() {
+            return { usage: usage(), terminalKind: "success" as const };
+          },
+          async runJudge() {
+            // The stage stops while the judge is finishing.
+            await orch.stop();
+            return { verdict: "pass" as const, usage: usage() };
+          },
+        },
+        workflowJournalFs: new FakeFs(),
+        orchestration: { disabled: false },
+      });
+
+      await orch.runStage("feature-validate", 42);
+
+      const rows = await gateRows();
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(row).toMatchObject({ gate_name: "judges", result: "pass" });
+        expect(row).not.toHaveProperty("attempt_id");
+      }
+    });
+
+    it("writes no judges row for a workflow stage other than feature-validate", async () => {
+      await judgedWorkspace("feature-dev");
+      const orch = makeOrchestrator(ws.dir, {
+        workflowAdapter: fakeAdapter(),
+        workflowBindings: judgingBindings("fail"),
+        workflowJournalFs: new FakeFs(),
+        orchestration: { disabled: false },
+      });
+
+      await orch.runStage("feature-dev", 42);
+
+      expect(await gateRows()).toEqual([]);
     });
   });
 

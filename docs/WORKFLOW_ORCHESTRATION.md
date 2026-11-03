@@ -28,17 +28,17 @@ to the floor.
 
 ### Architecture at a glance
 
-| Concern                          | Owner                                                                       | Notes                                                                                 |
-| -------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Plan the run                     | engine (`selectExecutor` → `WorkflowSpec`)                                  | Always produces a provider-neutral `WorkflowSpec`                                     |
-| Canonical event tree + run-state | `WorkflowEvent` contract + `WorkflowExecutor` journal                       | `schemaVersion` 4 node tree; one append-only journal per run                          |
-| Reference execution              | `SdkFanoutRunner` (`runSdkFanout`)                                          | Universal floor; defines the contract; hard process/concurrency ceiling               |
-| `sdk-fanout` provider execution  | `SdkFanoutExecutors`                                                        | Turns Codex / Gemini / Copilot / OpenAI-compatible into runner bindings               |
-| Accelerated execution            | `adapter.runWorkflow?()`                                                    | Optional offload backend (Claude native Dynamic Workflows, research preview)          |
-| Capability declaration           | `OrchestrationCapability` on `ICliAdapter`                                  | `native-workflow` \| `sdk-fanout` (replaced the dead 4-boolean `AdapterCapabilities`) |
-| Backend resolution + durability  | `WorkflowExecutor`                                                          | Native vs floor, budget, quota gate, journal, cross-process resume                    |
-| Selection / routing              | `PipelineOrchestrator.selectExecutor` + `AutoProviderRouter`                | One selection point; workflow sub-score in the router                                 |
-| Anti-hallucination gating        | `GateMetricsWriter.appendJudgeVerdicts` → Go `FeatureValidateGate.Verify()` | Judge verdicts become gate evidence; any failure in the latest attempt trips the gate |
+| Concern                          | Owner                                                         | Notes                                                                                 |
+| -------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Plan the run                     | engine (`selectExecutor` → `WorkflowSpec`)                    | Always produces a provider-neutral `WorkflowSpec`                                     |
+| Canonical event tree + run-state | `WorkflowEvent` contract + `WorkflowExecutor` journal         | `schemaVersion` 4 node tree; one append-only journal per run                          |
+| Reference execution              | `SdkFanoutRunner` (`runSdkFanout`)                            | Universal floor; defines the contract; hard process/concurrency ceiling               |
+| `sdk-fanout` provider execution  | `SdkFanoutExecutors`                                          | Turns Codex / Gemini / Copilot / OpenAI-compatible into runner bindings               |
+| Accelerated execution            | `adapter.runWorkflow?()`                                      | Optional offload backend (Claude native Dynamic Workflows, research preview)          |
+| Capability declaration           | `OrchestrationCapability` on `ICliAdapter`                    | `native-workflow` \| `sdk-fanout` (replaced the dead 4-boolean `AdapterCapabilities`) |
+| Backend resolution + durability  | `WorkflowExecutor`                                            | Native vs floor, budget, quota gate, journal, cross-process resume                    |
+| Selection / routing              | `PipelineOrchestrator.selectExecutor` + `AutoProviderRouter`  | One selection point; workflow sub-score in the router                                 |
+| Anti-hallucination gating        | SDK `appendJudgeVerdicts` → Go `FeatureValidateGate.Verify()` | Judge verdicts become gate evidence; any failure in the latest attempt trips the gate |
 
 ## The `OrchestrationCapability` seam
 
@@ -356,9 +356,10 @@ authenticated.
 ## Anti-hallucination gating: judge → gate
 
 Adversarial judge verdicts become **deterministic gate evidence** with zero new
-Go scaffolding. `GateMetricsWriter.appendJudgeVerdicts`
-(`packages/nightgauge/src/utils/gateMetricsWriter.ts`) folds the
-`JudgeVerdict` nodes of an orchestrated `feature-validate` run into
+Go scaffolding. The SDK's `appendJudgeVerdicts`
+(`packages/nightgauge-sdk/src/orchestrator/judgeGateMetrics.ts`), called by
+`PipelineOrchestrator.runStageWorkflow` once the stage ends (passed or failed),
+folds the `JudgeVerdict` nodes of an orchestrated `feature-validate` run into
 the checkout's `health/gate-metrics.jsonl`
 (`nightgauge layout path checkout health/gate-metrics.jsonl`) as
 `{ gate_name: "judges", result, attempt_id }` records, which the Go
