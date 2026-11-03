@@ -60,5 +60,14 @@ check "a failing run clears the record" "no" "$(recorded)"
 STUB_EDIT=tracked.txt bash "$SCRIPT" 20m .logs/pass.tree >/dev/null 2>&1
 check "an edit during the run records nothing" "no" "$(recorded)"
 
+echo tracked.txt >> .git/info/exclude
+echo ignored > tracked-twin.txt
+echo tracked-twin.txt >> .git/info/exclude
+listed="$(git ls-tree -r --name-only "$(bash "$SCRIPT" --fingerprint)")"
+check "a tracked file matching an exclude stays in the tree" \
+  "yes" "$(grep -qx tracked.txt <<<"$listed" && echo yes || echo no)"
+check "an untracked file matching an exclude stays out" \
+  "no" "$(grep -qx tracked-twin.txt <<<"$listed" && echo yes || echo no)"
+
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
