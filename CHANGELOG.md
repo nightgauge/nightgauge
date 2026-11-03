@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Judge verdicts from an orchestrated `feature-validate` run are now written to
+  `health/gate-metrics.jsonl` by the SDK pipeline orchestrator, so `FeatureValidateGate`
+  sees them. The fold previously had no caller and no judge row was ever recorded. A run that
+  is interrupted before it returns records its judges outside any attempt, so a partial
+  all-pass set cannot replace an earlier failing attempt.
+
 - A review that reaches its round cap on an unchanged tree now writes its cap record, so
   the operator's card lists the findings still standing and names the worktree instead of
   "No review record was found". Each cap gets its own card fingerprint, so a later cap

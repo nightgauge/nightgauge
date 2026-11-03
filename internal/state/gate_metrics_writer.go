@@ -27,7 +27,8 @@ const GateMetricsName = layout.CheckoutHealth + "/gate-metrics.jsonl"
 const GateMetricsHistoryName = "gate-metrics.jsonl"
 
 // JudgeGateName is the gate_name of adversarial judge rows. It mirrors
-// JUDGE_GATE_NAME in GateMetricsWriter.appendJudgeVerdicts, their only writer:
+// JUDGE_GATE_NAME in the SDK's appendJudgeVerdicts
+// (packages/nightgauge-sdk/src/orchestrator/judgeGateMetrics.ts), their only writer:
 // the gate groups these rows by attempt_id, which this writer cannot stamp, so
 // it refuses the name (#2778).
 const JudgeGateName = "judges"
@@ -63,7 +64,7 @@ func AppendGateMetricDetail(workspaceRoot string, issueNumber int, gateName, res
 		return fmt.Errorf("gate metric requires a non-empty gate name")
 	}
 	if gateName == JudgeGateName {
-		return fmt.Errorf("gate name %q is reserved: judge rows are written by GateMetricsWriter.appendJudgeVerdicts", gateName)
+		return fmt.Errorf("gate name %q is reserved: judge rows are written by the SDK appendJudgeVerdicts", gateName)
 	}
 
 	rec := gateMetricRecord{
