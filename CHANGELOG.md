@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The PR review no longer discards every finding when one field is too long. An
+  over-long `claim` or `fix` is shortened with a `[truncated]` marker, a finding with an
+  over-long file path is dropped on its own, and the posted comment says which (#2819).
 - Approving an architecture gate now re-queues the issue. Approval by the Action Center card, a
   directly applied label or an approval file moves the open issue to Ready on every board that
   carries it, unless a run is active or a PR of its own exists. A failed board write is logged and

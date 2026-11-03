@@ -6,7 +6,9 @@
 // content with no forge token; everything it writes passes through `render`
 // here before the post job, which holds `pull-requests: write`, publishes it.
 // The rules are closed: exact keys, bounded sizes, path and credential-shape
-// checks, and a finding cap. Anything else is rejected and nothing is posted.
+// checks, and a finding cap. Anything else is rejected and nothing is posted,
+// except length: an over-long claim or fix is truncated with a marker, and a
+// finding whose file path is over-long is dropped alone. The comment says so.
 //
 // Usage:
 //   node scripts/pr-review.mjs gate --pr-json <file> --event <name>
@@ -134,12 +136,11 @@ function runGate(flags) {
   return 0;
 }
 
-function checkString(errors, where, value, max, { singleLine }) {
+function checkString(errors, where, value, { singleLine }) {
   if (typeof value !== "string" || value.trim() === "") {
     errors.push(`${where}: must be a non-empty string`);
     return;
   }
-  if (value.length > max) errors.push(`${where}: ${value.length} characters, over ${max}`);
   if (singleLine && /[\r\n]/.test(value)) errors.push(`${where}: must be one line`);
 }
 
@@ -179,7 +180,7 @@ export function validate(doc) {
     if (!SEVERITIES.includes(f.severity)) {
       errors.push(`${at}.severity: must be one of ${SEVERITIES.join(", ")}`);
     }
-    checkString(errors, `${at}.file`, f.file, MAX_PATH_CHARS, { singleLine: true });
+    checkString(errors, `${at}.file`, f.file, { singleLine: true });
     if (typeof f.file === "string") {
       if (f.file.startsWith("/") || /^[A-Za-z]:/.test(f.file) || f.file.includes("\\")) {
         errors.push(`${at}.file: must be a repository-relative path`);
@@ -189,8 +190,8 @@ export function validate(doc) {
     if (f.line !== null && !(Number.isInteger(f.line) && f.line >= 1)) {
       errors.push(`${at}.line: must be a positive integer or null`);
     }
-    checkString(errors, `${at}.claim`, f.claim, MAX_CLAIM_CHARS, { singleLine: true });
-    checkString(errors, `${at}.fix`, f.fix, MAX_FIX_CHARS, { singleLine: false });
+    checkString(errors, `${at}.claim`, f.claim, { singleLine: true });
+    checkString(errors, `${at}.fix`, f.fix, { singleLine: false });
     for (const key of ["file", "claim", "fix"]) {
       if (typeof f[key] === "string" && CREDENTIAL_SHAPES.some((re) => re.test(f[key]))) {
         errors.push(`${at}.${key}: contains a credential-shaped string`);
@@ -198,6 +199,43 @@ export function validate(doc) {
     }
   });
   return errors;
+}
+
+export const TRUNCATED_MARK = " … [truncated]";
+
+/**
+ * Fit a validated document to the per-field length limits. An over-long claim
+ * or fix is truncated to its limit, ending in TRUNCATED_MARK; a finding whose
+ * file path is over-long is dropped, since a shortened path names the wrong
+ * file. Run after validate(), so the credential check saw the full strings.
+ * Notices name findings by their original index. The input is not mutated.
+ * @returns {{ doc: object, notices: string[] }}
+ */
+export function fitToLimits(doc) {
+  const notices = [];
+  const findings = [];
+  const fit = (value, max) => value.slice(0, max - TRUNCATED_MARK.length) + TRUNCATED_MARK;
+  doc.findings.forEach((f, i) => {
+    const at = `findings[${i}]`;
+    if (f.file.length > MAX_PATH_CHARS) {
+      notices.push(
+        `Dropped: ${at} (file path ${f.file.length} characters, limit ${MAX_PATH_CHARS}).`
+      );
+      return;
+    }
+    const out = { ...f };
+    for (const [key, max] of [
+      ["claim", MAX_CLAIM_CHARS],
+      ["fix", MAX_FIX_CHARS],
+    ]) {
+      if (f[key].length > max) {
+        notices.push(`Shortened to fit: ${at}.${key} (${f[key].length} characters, limit ${max}).`);
+        out[key] = fit(f[key], max);
+      }
+    }
+    findings.push(out);
+  });
+  return { doc: { ...doc, findings }, notices };
 }
 
 // Model text is posted verbatim otherwise: neutralize HTML (including a forged
@@ -218,7 +256,8 @@ function escapeCode(value) {
  * Render a validated findings document as the comment body.
  * @returns {string}
  */
-export function render(doc) {
+export function render(input) {
+  const { doc, notices } = fitToLimits(input);
   const rank = (f) => SEVERITIES.indexOf(f.severity);
   const sorted = doc.findings
     .map((f, i) => ({ f, i }))
@@ -250,6 +289,7 @@ export function render(doc) {
       lines.push("", `${omitted} more nitpick${omitted === 1 ? "" : "s"} omitted.`);
     }
   }
+  if (notices.length > 0) lines.push("", `_${escapeText(notices.join(" "))}_`);
   lines.push(
     "",
     "_Advisory review of a pull request the pipeline did not author; it does not block " +
@@ -277,8 +317,10 @@ function main(argv) {
     case "gate":
       return runGate(flags);
     case "validate": {
-      const { errors } = loadValid(positional[0]);
-      return errors.length ? report(errors) : 0;
+      const { doc, errors } = loadValid(positional[0]);
+      if (errors.length) return report(errors);
+      for (const n of fitToLimits(doc).notices) process.stderr.write(`pr-review: notice: ${n}\n`);
+      return 0;
     }
     case "render": {
       if (!flags.author || !flags.reviewer) {
