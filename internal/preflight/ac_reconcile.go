@@ -90,9 +90,8 @@ type acCriterion struct {
 }
 
 // checkboxRE mirrors the SDK parser: `-`/`*` bullets, any indentation,
-// `[ ]` / `[x]` / `[X]` states. The SDK bounds the text capture at 4096
-// chars defensively; RE2 caps repeat counts at 1000 and guarantees linear
-// time regardless, so the Go port bounds in code instead (see parseACs).
+// `[ ]` / `[x]` / `[X]` states. Both parsers capture unbounded text and cap
+// it in code at maxACText characters (see capACText).
 var checkboxRE = regexp.MustCompile(`^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+(.+?)[ \t]*$`)
 
 // numberedRE matches a numbered list item (`1.` or `1)`) indented at most
@@ -178,29 +177,85 @@ func stripDetailsBlocks(lines []string) []string {
 	return out
 }
 
+// bulletRE matches a plain bullet item (`-`, `*` or `+`) indented at most
+// three spaces. Group 1 is the marker prefix (the item's content column),
+// group 2 the text. Plain bullets count as criteria only inside a criteria
+// section (#2906); checkbox bullets are matched by checkboxRE first.
+var bulletRE = regexp.MustCompile(`^([ ]{0,3}[-*+][ \t]+)(.+?)[ \t]*$`)
+
+// emptyBoxRE matches bullet text that is only a checkbox, which checkboxRE
+// rejects for want of text; it is not a plain bullet item either.
+var emptyBoxRE = regexp.MustCompile(`^\[[ xX]\][ \t]*$`)
+
+// listMarkerRE matches any list-item line at any indentation. A line it
+// matches is never a wrapped continuation of the item above.
+var listMarkerRE = regexp.MustCompile(`^[ \t]*(\d{1,3}[.)]|[-*+])[ \t]+\S`)
+
+// acSectionNames are the headings, matched whole, that open a criteria
+// section besides any heading containing "acceptance criteria" (#2906
+// ADR-001). A whole-heading match keeps "Post-merge verification notes" from
+// opening one.
+var acSectionNames = map[string]bool{
+	"acceptance":         true,
+	"verification":       true,
+	"done when":          true,
+	"definition of done": true,
+}
+
+// isACSectionHeading reports whether a heading's text opens a criteria
+// section: it contains "acceptance criteria", or, lowercased with a trailing
+// `:` removed, equals one of acSectionNames. The SDK mirrors this.
+func isACSectionHeading(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if strings.Contains(t, "acceptance criteria") {
+		return true
+	}
+	t = strings.TrimSpace(strings.TrimRight(t, ":# \t"))
+	return acSectionNames[t]
+}
+
+// maxACText caps criterion text in runes. The SDK caps the same number of
+// code points, so both parsers keep the same criteria and the same text.
+const maxACText = 4096
+
+// capACText truncates s to maxACText runes without splitting a character.
+func capACText(s string) string {
+	n := 0
+	for i := range s {
+		if n == maxACText {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
 // parseACs extracts acceptance criteria from an issue body in document
-// order: checkbox bullets anywhere, plus numbered items inside an
-// "Acceptance Criteria" heading section. It ignores <details> blocks (see
-// stripDetailsBlocks), fenced code blocks and repeated criteria. State is
-// informational — satisfaction is verified against the working tree, not the
-// box; a numbered item without a box is
-// unchecked.
+// order: checkbox bullets anywhere, plus numbered and plain bulleted items
+// inside a criteria section (see isACSectionHeading). It ignores <details>
+// blocks (see stripDetailsBlocks), fenced code blocks and repeated criteria.
+// State is informational — satisfaction is verified against the working
+// tree, not the box; an item without a box is unchecked.
 //
-// A numbered line indented to the content column of the numbered criterion
-// above it (`1. Do X:` then `   1. sub`) continues that item under
-// CommonMark, so it is a sub-step and not a criterion. The column ends at a
-// heading, or at a non-blank line indented less than it that is not a
-// numbered item.
+// A list line indented to the content column of the section item above it
+// (`1. Do X:` then `   1. sub`) continues that item under CommonMark, so it
+// is a sub-step and not a criterion. The column ends at a heading, or at a
+// non-blank line indented less than it that is not a section item. A
+// non-blank line that is not a list item, indented at or past the column
+// and directly under the item's text (no blank line or sub-step between),
+// is a wrapped continuation and joins the item's text (#2906).
 func parseACs(body string) []acCriterion {
 	var out []acCriterion
 	seen := map[string]bool{}
 	sectionLevel := 0 // heading level of the open AC section; 0 = none
 	inFence := false
-	itemCol := 0 // content column of the open numbered criterion; 0 = none
+	itemCol := 0  // content column of the open section item; 0 = none
+	joinIdx := -1 // index in out of the item a wrapped line joins; -1 = none
 	for _, line := range stripDetailsBlocks(strings.Split(body, "\n")) {
 		line = strings.TrimRight(line, "\r")
 		if acFenceRE.MatchString(line) {
 			inFence = !inFence
+			joinIdx = -1
 			continue
 		}
 		if inFence {
@@ -208,51 +263,70 @@ func parseACs(body string) []acCriterion {
 		}
 		if h := headingRE.FindStringSubmatch(line); h != nil {
 			level := len(h[1])
-			if strings.Contains(strings.ToLower(h[2]), "acceptance criteria") {
+			if isACSectionHeading(h[2]) {
 				sectionLevel = level
 			} else if sectionLevel > 0 && level <= sectionLevel {
 				sectionLevel = 0
 			}
-			itemCol = 0
+			itemCol, joinIdx = 0, -1
 			continue
 		}
-		var numbered []string
-		if sectionLevel > 0 {
-			numbered = numberedRE.FindStringSubmatch(line)
+		checkbox := checkboxRE.FindStringSubmatch(line)
+		var item []string
+		if sectionLevel > 0 && checkbox == nil {
+			item = numberedRE.FindStringSubmatch(line)
+			if item == nil {
+				item = bulletRE.FindStringSubmatch(line)
+				// An empty checkbox (`- [ ]`) is not a plain bullet.
+				if item != nil && emptyBoxRE.MatchString(item[2]) {
+					item = nil
+				}
+			}
 			// A marker with only whitespace after it is not an item: the SDK
 			// matches against the right-trimmed line and misses it (#2684).
-			if numbered != nil && strings.TrimSpace(numbered[2]) == "" {
-				numbered = nil
+			if item != nil && strings.TrimSpace(item[2]) == "" {
+				item = nil
 			}
 		}
+		trimmed := strings.TrimSpace(line)
 		indent := len(line) - len(strings.TrimLeft(line, " \t"))
-		if numbered != nil {
+		if item != nil {
 			if itemCol > 0 && indent >= itemCol {
+				joinIdx = -1
 				continue // a sub-step of the criterion above
 			}
-			itemCol = len(numbered[1])
-		} else if strings.TrimSpace(line) != "" && indent < itemCol {
-			itemCol = 0
+			itemCol = len(item[1])
+		} else if trimmed == "" {
+			joinIdx = -1
+		} else if indent < itemCol {
+			itemCol, joinIdx = 0, -1
+		} else if checkbox == nil && joinIdx >= 0 && itemCol > 0 && !listMarkerRE.MatchString(line) {
+			joined := out[joinIdx].text + " " + trimmed
+			joined = capACText(joined)
+			delete(seen, NormalizeACText(out[joinIdx].text))
+			out[joinIdx].text = joined
+			seen[NormalizeACText(joined)] = true
+			continue
+		} else if listMarkerRE.MatchString(line) {
+			joinIdx = -1
 		}
 		var text, box string
-		if m := checkboxRE.FindStringSubmatch(line); m != nil {
-			box, text = m[1], m[2]
-		} else if numbered != nil {
-			box, text = " ", numbered[2]
+		if checkbox != nil {
+			box, text = checkbox[1], checkbox[2]
+		} else if item != nil {
+			box, text = " ", item[2]
 			if b := leadingBoxRE.FindStringSubmatch(text); b != nil {
 				box, text = b[1], b[2]
 			}
 		} else {
 			continue
 		}
+		joinIdx = -1
 		text = strings.TrimSpace(text)
 		if text == "" {
 			continue
 		}
-		// Defensive cap mirroring the SDK's {1,4096} bound.
-		if len(text) > 4096 {
-			text = text[:4096]
-		}
+		text = capACText(text)
 		key := NormalizeACText(text)
 		if seen[key] {
 			continue
@@ -261,6 +335,9 @@ func parseACs(body string) []acCriterion {
 		state := "unchecked"
 		if box != " " {
 			state = "checked"
+		}
+		if item != nil {
+			joinIdx = len(out)
 		}
 		out = append(out, acCriterion{index: len(out), text: text, state: state})
 	}

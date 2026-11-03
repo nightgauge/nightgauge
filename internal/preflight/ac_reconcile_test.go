@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
@@ -17,6 +18,22 @@ func writeTreeFile(t *testing.T, root, rel, content string) {
 	}
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestParseACs_LongTextCappedByRune pins the parity cap (#2906): an
+// over-long criterion is kept and truncated to maxACText runes, never
+// dropped and never split mid-character. The SDK test asserts the same.
+func TestParseACs_LongTextCappedByRune(t *testing.T) {
+	long := strings.Repeat("é", maxACText+10)
+	got := parseACs("## Verification\n\n- " + long + "\n- [ ] " + strings.Repeat("ü", maxACText+10) + "\n")
+	if len(got) != 2 {
+		t.Fatalf("want 2 criteria, got %d", len(got))
+	}
+	for _, c := range got {
+		if n := utf8.RuneCountInString(c.text); n != maxACText || !utf8.ValidString(c.text) {
+			t.Errorf("criterion %d: %d runes, valid=%v; want %d valid runes", c.index, n, utf8.ValidString(c.text), maxACText)
+		}
 	}
 }
 
@@ -298,6 +315,23 @@ func TestParseACs_Forms(t *testing.T) {
 		{"first item at 3 spaces counts", "## Acceptance Criteria\n   1. lone\n", []string{"lone"}},
 		{"unindented line ends the item", "## Acceptance Criteria\n1. a\nNotes:\n   1. b\n", []string{"a", "b"}},
 		{"heading ends the item", "## Acceptance Criteria\n1. a\n### More\n   1. b\n", []string{"a", "b"}},
+		// #2906: wider section names, plain bullets, wrapped continuation lines.
+		{"verification numbered", "## Verification\n\n1. one\n2. two\n", []string{"one", "two"}},
+		{"done when bulleted", "## Done when\n- first\n* second\n+ third\n", []string{"first", "second", "third"}},
+		{"acceptance colon numbered", "### Acceptance:\n1. x\n2) y\n", []string{"x", "y"}},
+		{"definition of done", "## Definition of Done\n- shipped\n", []string{"shipped"}},
+		{"bullets in acceptance criteria", "## Acceptance Criteria\n- a\n  - sub\n- b\n", []string{"a", "b"}},
+		{"post-merge verification notes is not a section", "## Post-merge verification notes\n1. no\n- no\n", nil},
+		{"bullets outside section ignored", "## Summary\n- not\n- criteria\n", nil},
+		{"wrapped line joins", "## Verification\n1. starts here and\n   ends here.\n2. next\n",
+			[]string{"starts here and ends here.", "next"}},
+		{"paragraph after blank line does not join", "## Verification\n1. a\n\n   later para\n2. b\n",
+			[]string{"a", "b"}},
+		{"sub-step continuation does not join", "## Acceptance Criteria\n1. Do X:\n   1. sub that\n      wraps\n2. Do Y\n",
+			[]string{"Do X:", "Do Y"}},
+		{"deep marker does not join", "## Acceptance Criteria\n1. Do X:\n    1. sub\n2. Do Y\n",
+			[]string{"Do X:", "Do Y"}},
+		{"unindented line does not join", "## Verification\n1. a\nNotes here\n", []string{"a"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -357,11 +391,33 @@ func TestParseACs_NestedDetails(t *testing.T) {
 	}
 }
 
+// TestParseACs_G1Fixture is the #2906 regression: the clean-install G1
+// fixture states its criteria under `## Verification` as a numbered list
+// whose first item wraps. Read from the repository file so fixture drift
+// breaks this test.
+func TestParseACs_G1Fixture(t *testing.T) {
+	raw, err := os.ReadFile("../../tests/clean-install/issue.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := parseACs(string(raw))
+	if len(got) != 3 {
+		t.Fatalf("got %d criteria, want 3: %+v", len(got), got)
+	}
+	if want := "the `TypeError` and the `RangeError`."; !strings.HasSuffix(got[0].text, want) {
+		t.Errorf("criterion 1 = %q, want suffix %q", got[0].text, want)
+	}
+	if !strings.HasPrefix(got[1].text, "`npm test` passes") || !strings.HasPrefix(got[2].text, "`README.md` lists") {
+		t.Errorf("criteria 2-3 = %q, %q", got[1].text, got[2].text)
+	}
+}
+
 // TestParseACs_ParityFixture shares its body with the SDK parser's parity
 // test: a fence, nested <details>, a 4-space sub-step and a duplicate.
 func TestParseACs_ParityFixture(t *testing.T) {
-	got := parseACs("## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n")
-	if len(got) != 2 || got[0].text != "first" || got[1].text != "second" || got[1].index != 1 {
-		t.Errorf("got %+v, want first and second", got)
+	got := parseACs("## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n## Verification\n- third that\n  wraps\n")
+	if len(got) != 3 || got[0].text != "first" || got[1].text != "second" || got[1].index != 1 ||
+		got[2].text != "third that wraps" {
+		t.Errorf("got %+v, want first, second and third that wraps", got)
 	}
 }

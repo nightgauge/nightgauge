@@ -172,6 +172,9 @@ printf '<!-- phase:start name="ac-reconcile" index=2 total=13 stage="feature-pla
   scope to the unsatisfied / undetectable subset.
 - otherwise → continue normal planning.
 
+`--notify-empty` comments once on an issue with no recognisable criteria, so
+the gap surfaces now rather than as `Refs #N` at pr-create (#2906).
+
 Consumes zero LLM tokens. Skip cleanly when the binary is missing.
 
 ```bash
@@ -211,6 +214,7 @@ if [ -n "$BINARY" ] && [ -s "$ISSUE_BODY_FILE" ]; then
     --workdir "$(pwd)" \
     --body-file "$ISSUE_BODY_FILE" \
     --out "$AC_RECONCILE_FILE" \
+    --notify-empty ${REPO:+--repo "$REPO"} \
     || echo "AC reconcile failed (non-fatal); continuing"
 fi
 rm -f "$ISSUE_BODY_FILE"

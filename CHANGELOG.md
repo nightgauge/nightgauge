@@ -20,6 +20,16 @@ changelog, and the release workflow refuses a tag that does not.
   (`.gitignore`, `.git/info/exclude`, `core.excludesFile`). They no longer read
   as deleted in review diffs, and the tree fingerprint no longer varies between
   clones with different local excludes.
+- An issue that states its criteria under `## Verification`, `## Acceptance`, `## Done when`
+  or `## Definition of Done`, as a numbered or bulleted list, now yields acceptance criteria,
+  so a pull request that meets them writes `Closes #N` and the issue closes on merge. A
+  criterion that wraps onto an indented second line is read whole. Release gate G1's fixture
+  issue was merging with `Refs` and staying open.
+- Feature planning now comments once on an issue with no recognisable acceptance criteria
+  (`nightgauge preflight ac-reconcile --notify-empty`), so the gap surfaces before development
+  instead of as a `Refs` line at `pr-create`.
+- The G1 clean-install report reads the PR from `pr-{N}.json` and names its real number and
+  merge state instead of `none`.
 - Judge verdicts from an orchestrated `feature-validate` run are now written to
   `health/gate-metrics.jsonl` by the SDK pipeline orchestrator, so `FeatureValidateGate`
   sees them. The fold previously had no caller and no judge row was ever recorded. A run that
