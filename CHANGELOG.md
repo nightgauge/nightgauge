@@ -16,6 +16,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The architecture-release tests no longer fail intermittently when the held
+  issue's background board read reaches the test's fixture forge.
 - A reviewed or gated tree now keeps tracked files that match an ignore rule
   (`.gitignore`, `.git/info/exclude`, `core.excludesFile`). They no longer read
   as deleted in review diffs, and the tree fingerprint no longer varies between
