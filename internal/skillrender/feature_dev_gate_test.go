@@ -142,3 +142,38 @@ func TestFeatureValidateCompact_NamesTheOneGate(t *testing.T) {
 		t.Error("compact Phase 2.5 does not name the gate-status check")
 	}
 }
+
+// #2818: Step 6.4 enforces what it calls blocking.
+func TestFeatureDev_StepSixFourEnforces(t *testing.T) {
+	dir := filepath.Join(realSkillsRoot(t), "nightgauge-feature-dev")
+	read := func(rel string) string {
+		data, err := os.ReadFile(filepath.Join(dir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	inc := read("_includes/review-and-correction.md")
+	if !strings.Contains(inc, `.status == "passed" or (.status == "skipped" and .ran == false)`) {
+		t.Error("Step 6.4 lacks the strict build predicate")
+	}
+	if strings.Contains(inc, `!= "failed"`) {
+		t.Error("Step 6.4 still accepts any non-failed status")
+	}
+	start, end := strings.Index(inc, "### Step 6.2"), strings.Index(inc, "## Phase 6.5")
+	if start < 0 || end < start {
+		t.Fatal("Steps 6.2-6.4 not found")
+	}
+	section := inc[start:end]
+	if regexp.MustCompile(`(?m)^\s*npm test\s*$`).MatchString(section) {
+		t.Error("Steps 6.2-6.4 run an unguarded npm test")
+	}
+	if !regexp.MustCompile(`bash -c "\$FOCUSED_TESTS" \\\n\s*\|\| \{[^}]*exit 1; \}`).MatchString(section) {
+		t.Error("focused tests have no guarded command")
+	}
+	for _, rel := range []string{"SKILL.md", "_profiles/compact.md"} {
+		if !strings.Contains(read(rel), "skipped` with") {
+			t.Errorf("%s does not state the skipped/no-build-system rule", rel)
+		}
+	}
+}
