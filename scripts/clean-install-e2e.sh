@@ -248,6 +248,8 @@ BIN_PATH="$(jq -r '.binary.path // "?"' "$REPORT")"
 BIN_VERSION_SEEN="$(jq -r '.binary.version // "?"' "$REPORT")"
 OUTCOME="$(jq -r '.run.history.outcome // .run.terminalOutcome // "?"' "$REPORT")"
 PR_URL="$(jq -r '.run.prUrl // ""' "$REPORT")"
+PR_NUMBER="$(jq -r '.run.prNumber // ""' "$REPORT")"
+PR_RECORDED_STATE="$(jq -r '.run.prStatus // ""' "$REPORT")"
 COST="$(jq -r '.run.history.estimatedCostUsd // .run.totalCostUsd // 0' "$REPORT")"
 DURATION_MS="$(jq -r '.run.history.totalDurationMs // 0' "$REPORT")"
 PR_STATE="n/a"; PR_MERGE_SHA="n/a"; ISSUE_STATE="n/a"
@@ -262,6 +264,12 @@ if [[ "$SMOKE" == "0" ]]; then
   check "PR exists on the throwaway repo" "$([[ -n "$PR_URL" ]] && echo 1 || echo 0)" "${PR_URL:-none}"
   check "PR is MERGED (forge says so)" "$([[ "$PR_STATE" == "MERGED" ]] && echo 1 || echo 0)" "$PR_STATE"
   check "issue is CLOSED" "$([[ "$ISSUE_STATE" == "CLOSED" ]] && echo 1 || echo 0)" "#$ISSUE_NUM $ISSUE_STATE"
+fi
+# The summary falls back to the state the pipeline recorded (pr-{N}.json)
+# when the forge could not be asked; the MERGED check above stays forge-only.
+PR_STATE_SHOWN="$PR_STATE"
+if [[ "$PR_STATE" == "n/a" || "$PR_STATE" == "UNKNOWN" ]] && [[ -n "$PR_RECORDED_STATE" ]]; then
+  PR_STATE_SHOWN="$(tr '[:lower:]' '[:upper:]' <<<"$PR_RECORDED_STATE") (recorded)"
 fi
 [[ "$CONTAINER_RC" == "0" ]] || FAILED=1
 
@@ -280,7 +288,7 @@ cat <<TABLE
 | Binary version            | $BIN_VERSION_SEEN |
 | Throwaway repo            | $REPO |
 | Run outcome               | $OUTCOME |
-| PR                        | ${PR_URL:-none} ($PR_STATE, merge $PR_MERGE_SHA) |
+| PR                        | ${PR_NUMBER:+#$PR_NUMBER }${PR_URL:-none} ($PR_STATE_SHOWN, merge $PR_MERGE_SHA) |
 | Issue                     | $ISSUE_STATE |
 | Cost / duration           | ${COST} USD / $((DURATION_MS / 1000)) s |
 | Findings                  | $(( $(jq -r '.findings | length' "$REPORT") + $([[ -f "$OUT_DIR/findings.txt" ]] && wc -l < "$OUT_DIR/findings.txt" || echo 0) )) (report.json + findings.txt) |
