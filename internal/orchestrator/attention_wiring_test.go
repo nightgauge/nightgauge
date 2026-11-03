@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/nightgauge/nightgauge/internal/trust"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/gateledger"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/review"
@@ -1575,5 +1578,84 @@ func TestReviewCapCardRetractsOnRelease(t *testing.T) {
 	as.drainBackground()
 	if reqs := openRequests(t, as); len(reqs) != 0 {
 		t.Fatalf("the card outlived the release: %+v", reqs)
+	}
+}
+
+// TestReviewCapOnAnUnchangedTreeFillsTheCard drives the real path (#2876): three
+// catches, a consult of the third tree, then the card.
+func TestReviewCapOnAnUnchangedTreeFillsTheCard(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	root := as.workspaceRoot
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	findings := filepath.Join(t.TempDir(), "findings.json")
+	body := `{"schema":1,"findings":[{"pass":"correctness","file":"a.go","line":12,` +
+		`"claim":"nil deref on empty slice","severity":"blocker","fix":"guard it"}]}`
+	if err := os.WriteFile(findings, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := review.Session{Root: root, Issue: 2876, PipelineRun: "run", Now: time.Unix(1000, 0)}
+	for _, tree := range []string{"t0", "t1", "t2"} {
+		s.Tree = tree
+		if _, err := review.Record(s, tree, findings, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Tree = "t2"
+	if p, err := review.Consult(s); err != nil || !p.CapReached {
+		t.Fatalf("the unchanged tree must cap: %+v, %v", p, err)
+	}
+
+	as.raiseReviewCapReached("octocat/acme", 2876, "Capped", "text")
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	for _, want := range []string{"a.go:12", "nil deref on empty slice", root} {
+		if !strings.Contains(reqs[0].Body, want) {
+			t.Errorf("body lacks %q:\n%s", want, reqs[0].Body)
+		}
+	}
+	if strings.Contains(reqs[0].Body, "No review record was found") {
+		t.Errorf("the card fell back:\n%s", reqs[0].Body)
+	}
+}
+
+// TestReviewCapAfterReleaseRaisesANewCard: a later cap after an operator resolution must not match the
+// released card's fingerprint (#2876).
+func TestReviewCapAfterReleaseRaisesANewCard(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	appendCap := func(runID string) {
+		stored, err := json.Marshal(review.Outcome{Verdict: "catch", Fix: []review.Finding{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := gateledger.Append(as.workspaceRoot, gateledger.Event{
+			RunID: runID, Event: gateledger.EventReviewCap, Kind: gateledger.KindReview, Tree: "t2",
+			Issue: 2865, Review: stored, Worktree: "/tmp/wt",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendCap("review-2865-1")
+	as.raiseReviewCapReached("octocat/acme", 2865, "Capped", "text")
+	first := openRequests(t, as)
+	if len(first) != 1 {
+		t.Fatalf("first cap raised %d cards, want 1", len(first))
+	}
+	if _, err := as.attention.Resolve(
+		context.Background(), first[0].ID, "park", "operator", "", "", nil,
+	); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	appendCap("review-2865-2")
+	as.raiseReviewCapReached("octocat/acme", 2865, "Capped", "text")
+	if reqs := openRequests(t, as); len(reqs) != 1 {
+		t.Fatalf("the second cap must raise one card, got %d", len(reqs))
 	}
 }

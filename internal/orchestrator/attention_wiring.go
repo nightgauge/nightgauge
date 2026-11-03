@@ -505,12 +505,14 @@ func (as *AutonomousScheduler) raiseReviewCapReached(repo string, issue int, tit
 		log.Printf("attention: read review cap record for %s#%d (fail-open): %v", repo, issue, err)
 	}
 	key := fmt.Sprintf("%s#%d", repo, issue)
-	fingerprint := "review-cap"
+	// Each cap has its own fingerprint, so a cap after a release raises a new
+	// card instead of matching the released one (#2876).
+	fingerprint := fmt.Sprintf("review-cap:fallback:%d", time.Now().UnixNano())
 	var body strings.Builder
 	fmt.Fprintf(&body, "The independent review of %s (%q) reached its cap of %d rounds, so the run stopped. "+
 		"This issue is parked; the rest of the repository keeps dispatching.\n\n", key, title, review.MaxRounds)
 	if rec != nil {
-		fingerprint = "review-cap:" + rec.Tree
+		fingerprint = "review-cap:" + rec.RunID
 		writeReviewCapRecord(&body, rec)
 	} else {
 		fmt.Fprintf(&body, "No review record was found: %s\n\n", detail)

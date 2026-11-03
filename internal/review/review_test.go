@@ -587,3 +587,67 @@ func TestCapWithNoReadableCatchStillReports(t *testing.T) {
 		t.Fatalf("an unreadable catch leaves an empty fix list, never nil: %+v", p.Result)
 	}
 }
+
+// TestThirdCatchThenSameTreeReachesTheCap: a third catch that leaves the tree
+// unchanged must still write the cap record, not reuse the catch (#2876).
+func TestThirdCatchThenSameTreeReachesTheCap(t *testing.T) {
+	root := repo(t)
+	s := session(root, "")
+	for _, tree := range []string{"t0", "t1", "t2"} {
+		s.Tree = tree
+		if p, err := Consult(s); err != nil || p.CapReached {
+			t.Fatalf("%s: capped early: %+v, %v", tree, p, err)
+		}
+		if _, err := Record(s, tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Tree = "t2"
+	p, err := Consult(s)
+	if err != nil || !p.CapReached || p.Reusable || p.Result.Verdict != "catch" {
+		t.Fatalf("the unchanged tree must stop at the cap: %+v, %v", p, err)
+	}
+	if len(p.Result.Fix) != 1 {
+		t.Fatalf("the third catch's findings must stand: %+v", p.Result)
+	}
+	rec, err := LatestCap(root, s.Issue)
+	if err != nil || rec == nil {
+		t.Fatalf("no cap record: %+v, %v", rec, err)
+	}
+	if rec.Tree != "t2" || rec.Worktree != root || len(rec.Outcome.Fix) != 1 || rec.RunID == "" {
+		t.Fatalf("the record must name the tree, worktree, findings and run: %+v", rec)
+	}
+	if n, err := gateledger.ReviewCatches(root, s.Issue, s.PipelineRun); err != nil || n != MaxRounds {
+		t.Fatalf("the cap record must not count as a round: %d, %v", n, err)
+	}
+}
+
+// TestReuseBelowTheCapAndPassAtTheCap: a stored catch below the cap and a
+// stored pass at the cap are both reused, with no cap record.
+func TestReuseBelowTheCapAndPassAtTheCap(t *testing.T) {
+	root := repo(t)
+	s := session(root, "t0")
+	if _, err := Record(s, "t0", writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := Consult(s); err != nil || !p.Reusable || p.CapReached || p.Result.Verdict != "catch" {
+		t.Fatalf("below the cap a stored catch reuses: %+v, %v", p, err)
+	}
+	for _, tree := range []string{"t1", "t2"} {
+		s.Tree = tree
+		if _, err := Record(s, tree, writeFindings(t, finding("security", "blocker")), time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Tree = "t3"
+	if _, err := Record(s, "t3", writeFindings(t), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Consult(s)
+	if err != nil || !p.Reusable || p.CapReached || p.Result.Verdict != "pass" {
+		t.Fatalf("a stored pass at the cap reuses: %+v, %v", p, err)
+	}
+	if rec, err := LatestCap(root, s.Issue); err != nil || rec != nil {
+		t.Fatalf("no cap record expected: %+v, %v", rec, err)
+	}
+}
