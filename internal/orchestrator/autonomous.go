@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/nightgauge/nightgauge/internal/trust"
 	"log"
@@ -1035,7 +1036,10 @@ type AutonomousScheduler struct {
 	// the sequence move and reports the state as it actually is, rather than
 	// waiting out its deadline on a transition that already happened.
 	runningSeq uint64
-	stopCh     chan struct{} // signals dispatch loop only — one reader
+	// loopDone is closed when the loop goroutine Start spawned returns
+	// (#2891). Replaced per Start under mu; nil until the first Start.
+	loopDone chan struct{}
+	stopCh   chan struct{} // signals dispatch loop only — one reader
 
 	// Background-goroutine lifecycle (#428). Every detached spawn in this file
 	// goes through goTracked so in-flight work can be cancelled and joined.
@@ -1574,32 +1578,30 @@ func NewAutonomousScheduler(
 	return as
 }
 
+// ErrAlreadyRunning is returned by Run and Start when the loop is already up.
+var ErrAlreadyRunning = errors.New("autonomous scheduler is already running")
+
 // Run starts the autonomous scheduler loop. It blocks until the context is
 // cancelled, Stop() is called, the budget is exhausted, or all items complete.
+//
+// Run claims `running` on the caller's goroutine, so `go Run(ctx)` leaves a
+// window in which the loop has not claimed it yet and Stop() is a no-op
+// (#2891). Callers that spawn the loop use Start, which closes that window.
 func (as *AutonomousScheduler) Run(ctx context.Context) error {
-	// Catch panics so an unexpected crash is logged to autonomous-exits.jsonl
-	// rather than silently killing the goroutine and leaving the UI stuck in
-	// RUNNING state forever.
-	defer func() {
-		if r := recover(); r != nil {
-			stack := string(debug.Stack())
-			if len(stack) > 4096 {
-				stack = stack[:4096]
-			}
-			panicMsg := fmt.Sprintf("%v", r)
-			log.Printf("autonomous: PANIC: %s\n%s", panicMsg, stack)
-			as.mu.Lock()
-			as.state.Status = "crashed"
-			as.setRunningLocked(false)
-			as.mu.Unlock()
-			as.writeCrashExitEvent(panicMsg, stack)
-		}
-	}()
-
 	as.mu.Lock()
+	err := as.claimRunLocked()
+	as.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return as.runLoop(ctx)
+}
+
+// claimRunLocked marks the loop running and resets the start-of-run state.
+// Caller holds as.mu.
+func (as *AutonomousScheduler) claimRunLocked() error {
 	if as.running {
-		as.mu.Unlock()
-		return fmt.Errorf("autonomous scheduler is already running")
+		return ErrAlreadyRunning
 	}
 	as.setRunningLocked(true)
 	as.stopRequested = false
@@ -1633,7 +1635,30 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 	// independent of whether the fleet is dispatching or halted.
 	as.state.RestartedFromRunning = false
 	as.fireStatusChangeLocked()
-	as.mu.Unlock()
+	return nil
+}
+
+// runLoop is the body of Run after the claim.
+func (as *AutonomousScheduler) runLoop(ctx context.Context) error {
+	// Catch panics so an unexpected crash is logged to autonomous-exits.jsonl
+	// rather than silently killing the goroutine and leaving the UI stuck in
+	// RUNNING state forever.
+	defer func() {
+		if r := recover(); r != nil {
+			stack := string(debug.Stack())
+			if len(stack) > 4096 {
+				stack = stack[:4096]
+			}
+			panicMsg := fmt.Sprintf("%v", r)
+			log.Printf("autonomous: PANIC: %s\n%s", panicMsg, stack)
+			as.mu.Lock()
+			as.state.Status = "crashed"
+			as.setRunningLocked(false)
+			as.mu.Unlock()
+			as.writeCrashExitEvent(panicMsg, stack)
+		}
+	}()
+
 	as.persistState()
 
 	// Run config-coherence validation at startup and persist any warnings.
@@ -2739,6 +2764,8 @@ func (as *AutonomousScheduler) Shutdown(grace time.Duration) {
 // that flag, runCycle would keep calling onDispatch for every candidate in its
 // already-built list — emitting autonomous.dispatch events to the TypeScript
 // extension after the user pressed "Stop Autonomous".
+//
+// Stop signals and returns; WaitStopped is the join for a loop Start spawned.
 func (as *AutonomousScheduler) Stop() {
 	as.mu.Lock()
 	defer as.mu.Unlock()

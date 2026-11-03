@@ -524,13 +524,11 @@ func (s *Server) resumeAndEnsureRunning(ctx context.Context) error {
 	// A fleet resume clears every repo-scoped halt too, so the Repositories
 	// view's per-row halt badges must be told (#1148 visibility).
 	s.emitRepoHaltChanged()
-	if !s.autonomousScheduler.IsRunning() {
-		runCtx := detachedRunCtx(ctx)
-		go func() {
-			if err := s.autonomousScheduler.Run(runCtx); err != nil {
-				log.Printf("autonomous scheduler exited: %v", err)
-			}
-		}()
+	// Start claims the loop before it returns, so a Stop that follows reaches
+	// it (#2891); an already-running loop is the goal state.
+	if err := s.autonomousScheduler.Start(detachedRunCtx(ctx)); err != nil &&
+		!errors.Is(err, orchestrator.ErrAlreadyRunning) {
+		return err
 	}
 	return nil
 }
@@ -571,13 +569,11 @@ func (s *Server) resumeRepoAndEnsureRunning(ctx context.Context, repo string) er
 	}
 	s.autonomousScheduler.ResumeRepo(repo)
 	s.emitRepoHaltChanged()
-	if !s.autonomousScheduler.IsRunning() {
-		runCtx := detachedRunCtx(ctx)
-		go func() {
-			if err := s.autonomousScheduler.Run(runCtx); err != nil {
-				log.Printf("autonomous scheduler exited: %v", err)
-			}
-		}()
+	// Start claims the loop before it returns, so a Stop that follows reaches
+	// it (#2891); an already-running loop is the goal state.
+	if err := s.autonomousScheduler.Start(detachedRunCtx(ctx)); err != nil &&
+		!errors.Is(err, orchestrator.ErrAlreadyRunning) {
+		return err
 	}
 	return nil
 }
