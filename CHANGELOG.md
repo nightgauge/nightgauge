@@ -24,6 +24,9 @@ changelog, and the release workflow refuses a tag that does not.
   then a warning names it; an item in a halted repository holds none. The extension starts
   daemon-added queue items without waiting for another event, and the `no effective slots
 available` log line reports `pending` and `reserved` counts (#2717).
+- feature-dev's Step 6.4 gate now fails a build that reports no status and accepts `skipped`
+  only when no build system exists, and a failing focused test now stops the stage (#2818).
+
 - VS Code extension test files no longer fail teardown at random with `ENOTEMPTY`. A failed
   stage's background retro used to keep writing after the test ended; the shared test setup now
   mocks it for every file, and teardown names any retro file that still appears (#2893).
