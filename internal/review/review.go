@@ -317,6 +317,8 @@ func (s Session) capped() (Outcome, error) {
 
 // CapRecord is what a capped run leaves for the operator's card.
 type CapRecord struct {
+	// RunID identifies this cap; the operator's card is fingerprinted by it.
+	RunID    string
 	Tree     string
 	Worktree string
 	Outcome  Outcome
@@ -328,7 +330,7 @@ func LatestCap(root string, issue int) (*CapRecord, error) {
 	if err != nil || ev == nil {
 		return nil, err
 	}
-	rec := &CapRecord{Tree: ev.Tree, Worktree: ev.Worktree}
+	rec := &CapRecord{RunID: ev.RunID, Tree: ev.Tree, Worktree: ev.Worktree}
 	if err := json.Unmarshal(ev.Review, &rec.Outcome); err != nil {
 		return nil, fmt.Errorf("read the review cap record: %w", err)
 	}
@@ -337,34 +339,42 @@ func LatestCap(root string, issue int) (*CapRecord, error) {
 
 // Consult answers whether tree needs a review. A stored verdict is returned and
 // re-recorded, because the metric row lives in the checkout and a retry in a
-// fresh worktree would otherwise have none. Past the cap, the last catch stands.
+// fresh worktree would otherwise have none. Past the cap, the last catch stands,
+// even on a tree whose catch is stored; only a stored pass is reused there.
 func Consult(s Session) (Prepared, error) {
 	p := Prepared{Tree: s.Tree}
+	catches, err := gateledger.ReviewCatches(s.Root, s.Issue, s.PipelineRun)
+	if err != nil {
+		return p, err
+	}
 	stored, err := gateledger.LatestReview(s.Root, s.Issue, s.Tree)
 	if err != nil {
 		return p, err
 	}
+	var reuse *Outcome
 	if stored != nil {
 		var out Outcome
 		if err := json.Unmarshal(stored.Review, &out); err == nil && out.Verdict != "" {
-			if err := s.row(out, time.Time{}); err != nil {
-				return p, err
-			}
-			if err := gateledger.Append(s.Root, gateledger.Event{
-				RunID: fmt.Sprintf("review-%d-%d", s.Issue, s.Now.UnixNano()),
-				Event: gateledger.EventReused, Kind: gateledger.KindReview, Tree: s.Tree,
-				Issue: s.Issue, Stage: Stage, PipelineRun: s.PipelineRun,
-			}); err != nil {
-				return p, err
-			}
-			p.Reusable, p.Result = true, &out
-			p.Reason = fmt.Sprintf("tree %s was already reviewed: %s", s.Tree, out.Verdict)
-			return p, nil
+			reuse = &out
 		}
 	}
-	catches, err := gateledger.ReviewCatches(s.Root, s.Issue, s.PipelineRun)
-	if err != nil {
-		return p, err
+	// The cap applies before a stored catch is reused: a third catch that left
+	// the tree unchanged must still write the cap record (#2876). A stored pass
+	// is not capped, so it still reuses.
+	if reuse != nil && (catches < MaxRounds || reuse.Verdict == "pass") {
+		if err := s.row(*reuse, time.Time{}); err != nil {
+			return p, err
+		}
+		if err := gateledger.Append(s.Root, gateledger.Event{
+			RunID: fmt.Sprintf("review-%d-%d", s.Issue, s.Now.UnixNano()),
+			Event: gateledger.EventReused, Kind: gateledger.KindReview, Tree: s.Tree,
+			Issue: s.Issue, Stage: Stage, PipelineRun: s.PipelineRun,
+		}); err != nil {
+			return p, err
+		}
+		p.Reusable, p.Result = true, reuse
+		p.Reason = fmt.Sprintf("tree %s was already reviewed: %s", s.Tree, reuse.Verdict)
+		return p, nil
 	}
 	p.Round = catches + 1
 	if catches >= MaxRounds {

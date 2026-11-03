@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A review that reaches its round cap on an unchanged tree now writes its cap record, so
+  the operator's card lists the findings still standing and names the worktree instead of
+  "No review record was found". Each cap gets its own card fingerprint, so a later cap
+  raises a new card after the last one was resolved (#2876).
 - The PR review no longer discards every finding when one field is too long. An
   over-long `claim` or `fix` is shortened with a `[truncated]` marker, a finding with an
   over-long file path is dropped on its own, and the posted comment says which (#2819).
