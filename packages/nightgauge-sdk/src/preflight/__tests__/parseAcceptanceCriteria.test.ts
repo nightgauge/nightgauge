@@ -263,4 +263,19 @@ describe("parseAcceptanceCriteria", () => {
     expect(got[1].text.startsWith("`npm test` passes")).toBe(true);
     expect(got[2].text.startsWith("`README.md` lists")).toBe(true);
   });
+
+  it("stays linear on long whitespace runs (CodeQL js/polynomial-redos)", () => {
+    const run = "\t".repeat(50_000);
+    const body = [
+      `## Verification${run}:${run}`,
+      `* [ ]${run}x${run}`,
+      `1.${run}y${run}`,
+      `-${run}z${run}`,
+      `- [ ]${run}`,
+    ].join("\n");
+    const start = Date.now();
+    const got = parseAcceptanceCriteria(body).map((a) => a.text);
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(got).toEqual(["x", "y", "z"]);
+  });
 });

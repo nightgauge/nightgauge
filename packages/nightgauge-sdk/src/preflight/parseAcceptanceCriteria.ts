@@ -18,7 +18,7 @@ function capText(s: string): string {
   return cps.length > MAX_AC_TEXT ? cps.slice(0, MAX_AC_TEXT).join("") : s;
 }
 
-const CHECKBOX_RE = /^[-*][ \t]+\[([ xX])\][ \t]+(.+)$/;
+const CHECKBOX_RE = /^[-*][ \t]+\[([ xX])\][ \t]+([^ \t].*)$/;
 
 /**
  * Numbered list item (`1.` or `1)`) indented at most three spaces. Group 1 is
@@ -27,7 +27,7 @@ const CHECKBOX_RE = /^[-*][ \t]+\[([ xX])\][ \t]+(.+)$/;
  * section, and one at or past the previous item's content column is a nested
  * sub-step, not a criterion (#2684).
  */
-const NUMBERED_RE = /^( {0,3}\d{1,3}[.)][ \t]+)(.+)$/;
+const NUMBERED_RE = /^( {0,3}\d{1,3}[.)][ \t]+)([^ \t].*)$/;
 
 /**
  * Code-fence open/close line. Lines inside a fence are example text: a `#`
@@ -50,7 +50,7 @@ const HEADING_RE = /^ {0,3}(#{1,6})[ \t]+(.*)$/;
  * is the marker prefix (the item's content column), group 2 the text. Counts
  * only inside a criteria section (#2906); checkboxes are matched first.
  */
-const BULLET_RE = /^( {0,3}[-*+][ \t]+)(.+)$/;
+const BULLET_RE = /^( {0,3}[-*+][ \t]+)([^ \t].*)$/;
 
 /** Bullet text that is only a checkbox (`- [ ]`): not a plain bullet item. */
 const EMPTY_BOX_RE = /^\[[ xX]\][ \t]*$/;
@@ -69,7 +69,11 @@ const AC_SECTION_NAMES = new Set(["acceptance", "verification", "done when", "de
 function isACSectionHeading(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (t.includes("acceptance criteria")) return true;
-  return AC_SECTION_NAMES.has(t.replace(/[:#\s]+$/, "").trim());
+  // Strip trailing `:`/`#`/whitespace with a loop: the regex `/[:#\s]+$/` is
+  // polynomial on long runs of those characters (CodeQL js/polynomial-redos).
+  let end = t.length;
+  while (end > 0 && (t[end - 1] === ":" || t[end - 1] === "#" || /\s/.test(t[end - 1]))) end--;
+  return AC_SECTION_NAMES.has(t.slice(0, end));
 }
 
 /** Line opening a collapsed `<details>` block; an inline mention does not. */
