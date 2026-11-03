@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Approving an architecture gate now re-queues the issue. Approval by the Action Center card, a
+  directly applied label or an approval file moves the open issue to Ready on every board that
+  carries it, unless a run is active or a PR of its own exists. A failed board write is logged and
+  retried on the next reconcile, never reported as a release. The card no longer adds a queue item.
+  A pending queue item no longer stalls the board scan: it holds a slot for at most two minutes,
+  then a warning names it; an item in a halted repository holds none. The extension starts
+  daemon-added queue items without waiting for another event, and the `no effective slots
+available` log line reports `pending` and `reserved` counts (#2717).
 - VS Code extension test files no longer fail teardown at random with `ENOTEMPTY`. A failed
   stage's background retro used to keep writing after the test ended; the shared test setup now
   mocks it for every file, and teardown names any retro file that still appears (#2893).

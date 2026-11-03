@@ -624,6 +624,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private queuedRemoteRunIds = new Set<string>();
   private queuedRemoteRunIdsAt = Number.NEGATIVE_INFINITY;
   /**
+   * The debounced fill a queue state with pending items schedules (#2717).
+   * A Go-side add (the daemon's QueueAddItem) announces itself only through
+   * queue.changed, never through the extension's onItemAdded, so without this
+   * wake the item sat pending while the daemon reserved a slot for it.
+   */
+  private pendingFillTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
    * TOMBSTONES: platform runs cancelled before their slot opened (#2344).
    *
    * A cancel can reach a remote run anywhere between the queue and its slot:
@@ -4641,7 +4648,39 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     for (const item of state.items ?? []) if (item.remoteRunId) ids.add(item.remoteRunId);
     this.queuedRemoteRunIds = ids;
     this.noteHeldRemoteRuns();
+    this.wakeFillForPending(state);
   }
+
+  /**
+   * Schedule the debounced fill when a queue state carries a pending item and
+   * a slot is free (#2717). Every add, extension-side or Go-side, announces a
+   * queue change, so both reach fillSlots on this one path; fillSlots' own
+   * isFilling guard keeps concurrent fills apart. A paused queue, a queue with
+   * autoStart off, or a manager shutting down does not fill — the same gates
+   * the onItemAdded fill applies.
+   */
+  private wakeFillForPending(
+    state: NonNullable<Awaited<ReturnType<IssueQueueService["getQueue"]>>>
+  ): void {
+    if (this.isShuttingDown || this.windowEnding) return;
+    if (state.status === "paused") return;
+    if (!(state.items ?? []).some((item) => item.status === "pending")) return;
+    if (this.queueService.getConfig?.().autoStart === false) return;
+    if (this.availableSlotCount <= 0) return;
+    if (this.pendingFillTimer) clearTimeout(this.pendingFillTimer);
+    this.pendingFillTimer = setTimeout(() => {
+      this.pendingFillTimer = null;
+      if (this.availableSlotCount <= 0) return;
+      this.fillSlots().catch((err) => {
+        this.logger.warn("fillSlots after a queue change failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, ConcurrentPipelineManager.PENDING_FILL_DEBOUNCE_MS);
+  }
+
+  /** Coalesces a burst of queue changes into one fill, as onItemAdded does. */
+  private static readonly PENDING_FILL_DEBOUNCE_MS = 100;
 
   /**
    * Read the queue once, so the runs it carries are listed as held (#2357):
@@ -4984,6 +5023,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   dispose(): void {
     this.isShuttingDown = true;
+    if (this.pendingFillTimer) {
+      clearTimeout(this.pendingFillTimer);
+      this.pendingFillTimer = null;
+    }
     if (this.throttleLiftTimer) {
       clearTimeout(this.throttleLiftTimer);
       this.throttleLiftTimer = null;

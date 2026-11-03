@@ -500,6 +500,8 @@ function buildHandlers(state) {
     // A window closing hands its queue back (#2396). The demo dispatches
     // nothing, so it neither drops nor keeps an item.
     "queue.dropProcessing": () => ({ dropped: 0, kept: 0 }),
+    // The demo dispatches nothing: a fill asks for work and gets none (#2717).
+    "queue.dequeueIndependent": () => [],
     "queue.list": () => ({
       schema_version: "1",
       status: state.queue.length ? "active" : "idle",
