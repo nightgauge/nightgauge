@@ -638,6 +638,9 @@ describe("ConcurrentPipelineManager", () => {
       await vi.advanceTimersByTimeAsync(150);
 
       expect(fill).toHaveBeenCalledTimes(1);
+      // The timer starts fillSlots without awaiting it; settle that dispatch
+      // before reading slot state, or the assertion races it under load.
+      await fill.mock.results[0].value;
       expect(queue.dequeueIndependent).toHaveBeenLastCalledWith(2, [{ repo: "", number: 1 }]);
       expect(mgr.getActiveSlots().length).toBeGreaterThan(1);
       mgr.dispose();
@@ -651,6 +654,7 @@ describe("ConcurrentPipelineManager", () => {
       emit({ status: "waiting", items: [pendingItem(2), pendingItem(3)] });
       await vi.advanceTimersByTimeAsync(150);
       expect(fill).toHaveBeenCalledTimes(1);
+      await fill.mock.results[0].value;
       mgr.dispose();
     });
 
