@@ -1671,6 +1671,7 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 		// failure accounting, the cascade feed, and its OWN board revert to
 		// a run whose merge already landed — #1650's exact repro.
 		merged := false
+		terminalKind = resumeNoOpKind(runtime, success)
 		if !success && runtime != nil {
 			snap := runtime.Snapshot()
 			merged = snap.MergedCommitSha != ""
@@ -3330,6 +3331,10 @@ func (as *AutonomousScheduler) releaseOperatorHoldsLocked(scope string) []string
 			if f.Kind == TerminalKindReviewCapReached {
 				repo, number := f.Repo, f.Number
 				as.dispatchAttention(func() { as.retractReviewCap(repo, number) })
+			}
+			if f.Kind == TerminalKindResumeNoOp {
+				repo, number := f.Repo, f.Number
+				as.dispatchAttention(func() { as.retractResumeNoOp(repo, number) })
 			}
 			continue
 		}
@@ -5389,6 +5394,11 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 	}
 	as.state.Running = filtered
 
+	if success && terminalFailureKind == TerminalKindResumeNoOp {
+		success = false
+		failureDetail = "the run resumed at pr-merge, found the PR already merged and left the issue open"
+	}
+
 	if success {
 		as.state.Completed = append(as.state.Completed, CompletedItem{
 			Repo:        repo,
@@ -6144,6 +6154,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				repo, issue, terminalFailureKind, ParkedRemediation(terminalFailureKind, detail))
 			if terminalFailureKind == TerminalKindReviewCapReached {
 				as.dispatchAttention(func() { as.raiseReviewCapReached(repo, issue, title, detail) })
+			}
+			if terminalFailureKind == TerminalKindResumeNoOp {
+				as.dispatchAttention(func() { as.raiseResumeNoOp(repo, issue, title) })
+				as.goTrackedBoardOp(func(genCtx context.Context) { as.moveParkedToBacklog(genCtx, repo, issue) })
 			}
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)
@@ -8105,6 +8119,55 @@ func (as *AutonomousScheduler) architectureApprovalFileGranted(repo string, issu
 	return json.Unmarshal(b, &v) == nil && v.Approved
 }
 
+// resumeNoOpKind names a run that resumed at pr-merge, did no work and left the
+// issue open (#2878). It parks at once: Ready was withheld, so no second run
+// would ever come. A closed issue was simply finished and has no kind.
+func resumeNoOpKind(runtime *state.RuntimeState, success bool) string {
+	if success && runtime != nil {
+		if snap := runtime.Snapshot(); snap.MergeNoOp && snap.ReadyWithheld {
+			return TerminalKindResumeNoOp
+		}
+	}
+	return ""
+}
+
+// moveParkedToBacklog moves a parked issue to Backlog. The Failed entry is what
+// holds it, so a failed move leaves the park standing.
+func (as *AutonomousScheduler) moveParkedToBacklog(parent context.Context, repo string, issue int) {
+	owner, repoName := splitOwnerRepo(repo)
+	var projectNum int
+	var ownerType gh.OwnerType
+	as.mu.Lock()
+	for _, rc := range as.repos {
+		if rc.Owner == owner && rc.Name == repoName && rc.Project > 0 {
+			projectNum, ownerType = rc.Project, rc.OwnerType
+			break
+		}
+	}
+	as.mu.Unlock()
+	if projectNum == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
+	defer cancel()
+	if err := as.projectService(owner, projectNum, ownerType).MoveStatus(ctx, owner, repoName, issue, "Backlog"); err != nil {
+		log.Printf("autonomous: could not move parked %s#%d to Backlog: %v", repo, issue, err)
+	}
+}
+
+// parkedOnBoard names what parks an issue on the board: an excluded label or
+// Backlog. Such an issue stays out of re-admission (#2878); the next reconcile
+// after the park is lifted re-admits it.
+func (as *AutonomousScheduler) parkedOnBoard(node *depgraph.Node) (string, bool) {
+	if label, excluded := excludedLabelMatch(node.Labels, resolvedExcludeLabels(as.config.ExcludeLabels)); excluded {
+		return fmt.Sprintf("label %q", label), true
+	}
+	if strings.EqualFold(node.BoardStatus, "Backlog") {
+		return "Backlog", true
+	}
+	return "", false
+}
+
 func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 	// Resolved before the lock: config.Load reads the filesystem, and the
 	// architecture-approval hold below needs the same label name the gate
@@ -8136,6 +8199,11 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 			// expected and transient.
 			if ts, ok := as.recentClosures[key]; ok && time.Since(ts) < 60*time.Second {
 				log.Printf("autonomous: skipping re-admit for %s — closed %v ago (within 60s race guard window)", key, time.Since(ts).Round(time.Second))
+				kept = append(kept, c)
+				continue
+			}
+			if why, parked := as.parkedOnBoard(node); parked {
+				log.Printf("autonomous: keeping completed %s — still OPEN but parked by %s", key, why)
 				kept = append(kept, c)
 				continue
 			}
@@ -8201,6 +8269,11 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 					repo, number := f.Repo, f.Number
 					as.dispatchAttention(func() { as.retractArchitectureApproval(repo, number) })
 				}
+			}
+			if why, parked := as.parkedOnBoard(node); parked {
+				log.Printf("autonomous: keeping failed %s — still OPEN but parked by %s", key, why)
+				keptFailed = append(keptFailed, f)
+				continue
 			}
 			// Still open and not held — re-admit for potential retry.
 			readmittedFailed++

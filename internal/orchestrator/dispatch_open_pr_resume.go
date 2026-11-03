@@ -41,7 +41,8 @@ func preservedWorkResumeIndex(ctx context.Context, stages []state.PipelineStage,
 // from that PR when the worktree that held it is gone. It returns 0 — run
 // every stage, today's behavior — when there is no dispatched PR, the route
 // has no pr-merge stage, or the PR cannot be confirmed OPEN on this issue's
-// own branch. A local pr-{N}.json naming a PR wins: it came from the run.
+// own branch. The forge decides, not a local pr-{N}.json: that file outlives
+// the merge (#2878), and ResolvePreservedResume retires a merged run's files.
 func dispatchedPRResumeIndex(ctx context.Context, stages []state.PipelineStage, workspaceRoot, repo string, issueNumber, openPRNumber int) int {
 	if openPRNumber <= 0 {
 		return 0
@@ -60,13 +61,13 @@ func dispatchedPRResumeIndex(ctx context.Context, stages []state.PipelineStage, 
 	if path == "" {
 		return 0
 	}
-	if loadPRNumberForRecovery(workspaceRoot, issueNumber) > 0 {
-		return idx
-	}
 	branch, ok := confirmOpenIssuePR(ctx, repo, issueNumber, openPRNumber)
 	if !ok {
 		log.Printf("#%d: dispatched with PR #%d but it is not an open PR on this issue's branch — running every stage", issueNumber, openPRNumber)
 		return 0
+	}
+	if loadPRNumberForRecovery(workspaceRoot, issueNumber) == openPRNumber {
+		return idx
 	}
 	data, err := json.MarshalIndent(map[string]interface{}{
 		"issue_number": issueNumber,

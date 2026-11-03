@@ -630,6 +630,7 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   architecture_approval_required: "human-decision-required",
   not_pipeline_actionable: "human-decision-required",
   review_cap_reached: "human-decision-required",
+  resume_no_op: "human-decision-required",
   blocked_outcome_hold: "human-decision-required",
 
   // Dispatched over an open dependency edge: a scheduler decision, not a stage

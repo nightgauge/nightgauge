@@ -204,7 +204,7 @@ func TestCheckEpicCompletion_LatchesTheCheckpoint(t *testing.T) {
 		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: true, EpicNumber: 77}
 	}
 
-	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/r", Number: 5}, 0)
+	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/r", Number: 5}, 0, false)
 
 	st := as.safetyRails.State()
 	if !st.PausedForCheckpoint {
@@ -235,7 +235,7 @@ func TestCheckEpicCompletion_NamesACrossRepoEpicInItsOwnRepository(t *testing.T)
 		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: true,
 			EpicNumber: 20, EpicRepo: "example-org/platform"}
 	}
-	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "example-org/app", Number: 21}, 0)
+	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "example-org/app", Number: 21}, 0, false)
 
 	st := as.safetyRails.State()
 	if st.LastEpicRepo != "example-org/platform" || st.LastEpicNumber != 20 {
@@ -249,7 +249,7 @@ func TestCheckEpicCompletion_NamesACrossRepoEpicInItsOwnRepository(t *testing.T)
 		_ hooks.PostMergeInput) hooks.PostMergeResult {
 		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: true, EpicNumber: 30}
 	}
-	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "example-org/app", Number: 31}, 0)
+	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "example-org/app", Number: 31}, 0, false)
 	if st := as.safetyRails.State(); st.LastEpicRepo != "example-org/app" || st.LastEpicNumber != 30 {
 		t.Errorf("checkpoint recorded %s#%d, want example-org/app#30", st.LastEpicRepo, st.LastEpicNumber)
 	}
@@ -285,7 +285,7 @@ func TestCheckEpicCompletion_ReadyToShipNamesTheEpicInItsOwnRepository(t *testin
 		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: true, EpicNumber: 20, EpicRepo: "o/platform"}
 	}
 
-	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/app", Number: 21}, 0)
+	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/app", Number: 21}, 0, false)
 
 	deadline := time.After(60 * time.Second)
 	for {
@@ -319,7 +319,7 @@ func TestCheckEpicCompletion_DoesNotLatchWithoutAutoClose(t *testing.T) {
 		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: false}
 	}
 
-	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/r", Number: 5}, 0)
+	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/r", Number: 5}, 0, false)
 
 	if as.safetyRails.State().PausedForCheckpoint {
 		t.Error("the fleet paused on a merge that closed no epic")

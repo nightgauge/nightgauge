@@ -27,6 +27,11 @@ changelog, and the release workflow refuses a tag that does not.
   minimum Claude CLI stays 2.1.223: a capture from that version is now in the tree, and a
   test fails if `min_version` moves without one (#2807).
 
+- An issue left open by a `Refs` merge now re-plans its remaining criteria instead of
+  re-dispatching to `pr-merge` every two minutes. A `pr-merge` resume needs a PR the forge
+  reads as OPEN, a resumed run that merged nothing no longer writes Ready and parks the
+  issue in Backlog with an attention card, labelled or Backlog issues are not
+  re-admitted, and the partial-delivery comment is posted once per merged PR (#2878).
 - A judge's failing verdict can no longer be lost by folding a run twice or by a failed write
   (#2778). Judge rows now take their `attempt_id` from the run, so a second fold joins the attempt
   instead of replacing it, each stage execution mints its own run id so a retry is a new attempt,

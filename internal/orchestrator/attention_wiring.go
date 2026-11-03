@@ -57,6 +57,7 @@ const (
 	producerEpicIntegration     = "epic-integration"
 	producerGatePluginMissing   = "gate-plugin-missing"
 	producerReviewCap           = "review-cap"
+	producerResumeNoOp          = "resume-no-op"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -536,6 +537,42 @@ func (as *AutonomousScheduler) raiseReviewCapReached(repo string, issue int, tit
 		ExpiresAt:     standingExpiry(),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Note what you changed before releasing the issue"},
 	})
+}
+
+// keyResumeNoOp is the sticky identity of an issue's no-op merge card.
+func keyResumeNoOp(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerResumeNoOp, repo, issue)
+}
+
+// raiseResumeNoOp surfaces an issue parked after a resumed run merged nothing
+// (#2878). Standing like the review cap: the hold lasts until an operator
+// releases it, and the release retracts the card.
+func (as *AutonomousScheduler) raiseResumeNoOp(repo string, issue int, title string) {
+	key := fmt.Sprintf("%s#%d", repo, issue)
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyResumeNoOp(repo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("No-op merge — #%d", issue),
+		Body: fmt.Sprintf("A run of %s (%q) resumed at pr-merge, found the PR already merged and did no work. "+
+			"This issue is parked in Backlog; the rest of the repository keeps dispatching.\n\n"+
+			"%s", key, title, TerminalKindRemediation(TerminalKindResumeNoOp)),
+		Producer: producerResumeNoOp,
+		Standing: true,
+		Context:  attention.Context{Repo: repo, Issue: issue, Stage: "pr-merge", Blocker: TerminalKindResumeNoOp},
+		Options: []attention.Option{
+			{ID: "release", Label: "Release the issue", Verb: attention.VerbAutonomousClearIssueFailures,
+				Args: map[string]any{"key": key, "then": "autonomous.rescan"}, Style: attention.StylePrimary},
+			noopOption("park", "Keep it parked"),
+		},
+		DefaultAction: "park",
+		ExpiresAt:     standingExpiry(),
+	})
+}
+
+// retractResumeNoOp clears the card once the hold is released.
+func (as *AutonomousScheduler) retractResumeNoOp(repo string, issue int) {
+	as.retractCard(producerResumeNoOp, keyResumeNoOp(repo, issue))
 }
 
 // writeReviewCapRecord lists the last catch's findings and the worktree.

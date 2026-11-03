@@ -668,6 +668,11 @@ const (
 	// TerminalKindNotPipelineActionable, whose claim is that no lap can produce
 	// the deliverable and whose path labels the issue owner-action.
 	TerminalKindReviewCapReached = "review_cap_reached"
+	// TerminalKindResumeNoOp: a run resumed at pr-merge, found the PR
+	// already merged, did no work and left the issue open (#2878). A run reports
+	// the kind with success and the report parks the issue: Ready was withheld,
+	// so no further dispatch would come.
+	TerminalKindResumeNoOp = "resume_no_op"
 )
 
 // TerminalKindParks reports whether the scheduler parks a failure of this
@@ -679,7 +684,7 @@ func TerminalKindParks(kind string) bool {
 	switch kind {
 	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible,
 		TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing,
-		TerminalKindReviewCapReached:
+		TerminalKindReviewCapReached, TerminalKindResumeNoOp:
 		return true
 	}
 	return false
@@ -724,6 +729,10 @@ func TerminalKindRemediation(kind string) string {
 		return "the independent review reached its round cap with findings standing, and the work is uncommitted in " +
 			"the run's worktree; the Action Center card lists both. Finish the fixes there or narrow the issue, " +
 			parkedReleaseStep + " — a release re-runs the pipeline with a fresh round count"
+	case TerminalKindResumeNoOp:
+		return "a run resumed at pr-merge and found the PR already merged, so nothing was delivered; check the " +
+			"issue's remaining acceptance criteria and its stale pr-N.json in the pipeline state directory, " +
+			parkedReleaseStep + ", then move the issue from Backlog to Ready to re-run it"
 	case TerminalKindAdapterIncompatible:
 		return "the adapter's binary cannot serve this dispatch; install a version at or above the floor the refusal names " +
 			"or pin the adapter's binary to it, " + parkedReleaseStep

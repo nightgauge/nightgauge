@@ -21,7 +21,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { Logger } from "../../src/utils/logger";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, rmSync } from "fs";
 
 vi.mock("../../src/utils/skillRunner", () => ({
   hasActiveProcess: vi.fn().mockReturnValue(false),
@@ -43,6 +43,7 @@ vi.mock("fs", async () => {
     readFileSync: vi.fn().mockReturnValue("{}"),
     writeFileSync: vi.fn(),
     mkdirSync: vi.fn(),
+    rmSync: vi.fn(),
   };
 });
 
@@ -170,10 +171,28 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
       .mockResolvedValue(value);
   }
 
+  /** Stub the forge's answer for the recorded PR (#2878). */
+  function stubForgeState(orchestrator: HeadlessOrchestrator, value: string | null) {
+    return vi
+      .spyOn(
+        orchestrator as unknown as { forgePrState(n: number): Promise<string | null> },
+        "forgePrState"
+      )
+      .mockResolvedValue(value);
+  }
+
+  /** Stub the forge's answer for the issue (#2878). */
+  function stubIssueOpen(orchestrator: HeadlessOrchestrator, value: boolean) {
+    return vi
+      .spyOn(orchestrator as unknown as { issueIsOpen(n: number): Promise<boolean> }, "issueIsOpen")
+      .mockResolvedValue(value);
+  }
+
   function makeOrchestrator(state: unknown, currentFingerprint: string | null = FP) {
     const mockState = createMockStateService(state);
     const orchestrator = new HeadlessOrchestrator(mockState, logger, { contextFileWaitMs: 0 });
     stubFingerprint(orchestrator, currentFingerprint);
+    stubForgeState(orchestrator, "OPEN");
     return { orchestrator, mockState };
   }
 
@@ -289,6 +308,161 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
 
     expect(mockState.skipStage).not.toHaveBeenCalled();
     expect(mockState.completeStage).not.toHaveBeenCalled();
+  });
+
+  describe("pr-{N}.json outlives the merge (Issue #2878)", () => {
+    const recorded = { issue_number: 1431, pr_number: 1447, status: "open", ac_fingerprint: FP };
+
+    it("re-plans a merged PR and retires the delivered run's files", async () => {
+      withPrContext(recorded);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
+      stubForgeState(orchestrator, "MERGED");
+      stubIssueOpen(orchestrator, true);
+      await detect(orchestrator, 1431);
+      expect(mockState.skipStage).not.toHaveBeenCalled();
+      expect(mockState.completeStage).not.toHaveBeenCalled();
+      const removed = vi.mocked(rmSync).mock.calls.map(([p]) => String(p));
+      expect(removed.some((p) => p.endsWith("pr-1431.json"))).toBe(true);
+      expect(removed.some((p) => p.endsWith("dev-1431.json"))).toBe(true);
+      expect(
+        (orchestrator as unknown as { replayStages: Set<string> }).replayStages.has("issue-pickup")
+      ).toBe(true);
+    });
+
+    it("finishes at pr-merge when the merge closed the issue", async () => {
+      withPrContext(recorded);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
+      stubForgeState(orchestrator, "MERGED");
+      stubIssueOpen(orchestrator, false);
+      await detect(orchestrator, 1431);
+      expect(mockState.completeStage).toHaveBeenCalledWith("pr-create");
+      const removed = vi.mocked(rmSync).mock.calls.map(([p]) => String(p));
+      expect(removed.some((p) => p.endsWith("dev-1431.json"))).toBe(false);
+    });
+
+    it("keeps the files of a PR closed without merging", async () => {
+      withPrContext(recorded);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
+      stubForgeState(orchestrator, "CLOSED");
+      await detect(orchestrator, 1431);
+      expect(mockState.skipStage).not.toHaveBeenCalled();
+      expect(rmSync).not.toHaveBeenCalled();
+      expect(
+        (orchestrator as unknown as { replayStages: Set<string> }).replayStages.has("issue-pickup")
+      ).toBe(true);
+    });
+
+    it("runs every stage and keeps the files when the forge cannot answer", async () => {
+      withPrContext(recorded);
+      const { orchestrator, mockState } = makeOrchestrator(freshState(1431));
+      stubForgeState(orchestrator, null);
+      await detect(orchestrator, 1431);
+      expect(mockState.skipStage).not.toHaveBeenCalled();
+      expect(rmSync).not.toHaveBeenCalled();
+      expect(
+        (orchestrator as unknown as { replayStages: Set<string> }).replayStages.has("issue-pickup")
+      ).toBe(true);
+    });
+
+    describe("state remembers pr-create completing", () => {
+      const replayed = (orchestrator: HeadlessOrchestrator) =>
+        (orchestrator as unknown as { replayStages: Set<string> }).replayStages;
+      const resumed = (orchestrator: HeadlessOrchestrator) =>
+        (orchestrator as unknown as { resumedAtPrMerge: boolean }).resumedAtPrMerge;
+
+      function remembered() {
+        const state = freshState(1431) as unknown as {
+          stages: Record<string, { status: string }>;
+        };
+        state.stages["pr-create"] = { status: "complete" };
+        return state;
+      }
+
+      it("resumes at pr-merge only when the forge reads the PR open", async () => {
+        withPrContext(recorded);
+        const { orchestrator } = makeOrchestrator(remembered());
+        await detect(orchestrator, 1431);
+        expect(resumed(orchestrator)).toBe(true);
+        expect(replayed(orchestrator).size).toBe(0);
+        expect(rmSync).not.toHaveBeenCalled();
+      });
+
+      it("retires a merged PR on an open issue and queues every stage", async () => {
+        withPrContext(recorded);
+        const { orchestrator } = makeOrchestrator(remembered());
+        stubForgeState(orchestrator, "MERGED");
+        stubIssueOpen(orchestrator, true);
+        await detect(orchestrator, 1431);
+        expect(resumed(orchestrator)).toBe(false);
+        expect(replayed(orchestrator).has("feature-planning")).toBe(true);
+        expect(replayed(orchestrator).has("pr-merge")).toBe(true);
+        const removed = vi.mocked(rmSync).mock.calls.map(([p]) => String(p));
+        expect(removed.some((p) => p.endsWith("pr-1431.json"))).toBe(true);
+        expect(removed.some((p) => p.endsWith("dev-1431.json"))).toBe(true);
+      });
+
+      it("finishes at pr-merge when the merge closed the issue (#500)", async () => {
+        withPrContext(recorded);
+        const { orchestrator } = makeOrchestrator(remembered());
+        stubForgeState(orchestrator, "MERGED");
+        stubIssueOpen(orchestrator, false);
+        await detect(orchestrator, 1431);
+        expect(resumed(orchestrator)).toBe(true);
+        expect(replayed(orchestrator).size).toBe(0);
+        expect(rmSync).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ["closed", "CLOSED", recorded],
+        ["unreadable", null, recorded],
+        ["unnamed", "OPEN", { issue_number: 1431, status: "open" }],
+      ])("runs every stage and keeps the files on a %s PR", async (_, forgeState, context) => {
+        withPrContext(context);
+        const { orchestrator } = makeOrchestrator(remembered());
+        stubForgeState(orchestrator, forgeState);
+        await detect(orchestrator, 1431);
+        expect(resumed(orchestrator)).toBe(false);
+        expect(replayed(orchestrator).has("feature-planning")).toBe(true);
+        expect(rmSync).not.toHaveBeenCalled();
+      });
+
+      describe("the #500 restore of a merged PR", () => {
+        function restoreMerged(orchestrator: HeadlessOrchestrator) {
+          withPrContext(null);
+          const assembler = (
+            orchestrator as unknown as {
+              contextAssembler: {
+                generateDeterministicContext: (s: string, n: number) => Promise<unknown>;
+              };
+            }
+          ).contextAssembler;
+          vi.spyOn(assembler, "generateDeterministicContext").mockImplementation(async () => {
+            withPrContext({ issue_number: 1431, pr_number: 1447, status: "merged" });
+            return { generated: true };
+          });
+        }
+
+        it("re-plans instead of finishing the run when the issue is open", async () => {
+          const { orchestrator, mockState } = makeOrchestrator(remembered());
+          restoreMerged(orchestrator);
+          stubIssueOpen(orchestrator, true);
+          await detect(orchestrator, 1431);
+          expect(mockState.completeStage).not.toHaveBeenCalled();
+          expect(replayed(orchestrator).has("feature-planning")).toBe(true);
+          expect(rmSync).toHaveBeenCalled();
+        });
+
+        it("completes pr-merge when the issue is closed or unreadable", async () => {
+          const { orchestrator, mockState } = makeOrchestrator(remembered());
+          restoreMerged(orchestrator);
+          stubIssueOpen(orchestrator, false);
+          await detect(orchestrator, 1431);
+          expect(mockState.completeStage).toHaveBeenCalledWith("pr-merge");
+          expect(replayed(orchestrator).size).toBe(0);
+          expect(rmSync).not.toHaveBeenCalled();
+        });
+      });
+    });
   });
 
   it("does not skip anything when the PR context is unreadable", async () => {
@@ -465,6 +639,7 @@ describe("HeadlessOrchestrator — resume at pr-merge when an open PR exists (Is
         const { service, stages } = createGoFaithfulStateService(1501);
         const orchestrator = new HeadlessOrchestrator(service, logger, { contextFileWaitMs: 0 });
         stubFingerprint(orchestrator, FP);
+        stubForgeState(orchestrator, "OPEN");
         return { orchestrator, service, stages };
       }
 

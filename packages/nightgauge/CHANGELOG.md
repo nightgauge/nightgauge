@@ -18,6 +18,9 @@ and this project adheres to
   prints that warning once, not again on each subagent start. The minimum Claude CLI
   stays 2.1.223 (#2807).
 
+- An issue left open by a `Refs` merge now re-plans its remaining criteria instead of looping on
+  `pr-merge`: a resume needs a PR the forge reads as OPEN, and a resumed run that merges nothing
+  parks the issue (#2878).
 - A review that reaches its round cap now parks that issue instead of halting the repository
   (#2865), and an Action Center card lists the standing findings and the worktree.
 - Pipeline PR titles from the extension's fallback path now state the change, stay within 72

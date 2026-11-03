@@ -2,11 +2,13 @@ package hooks
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -16,6 +18,13 @@ type recordingCommenter struct {
 	body    string
 	calls   int
 	err     error
+	// trusted is what TrustedComments returns; readErr fails the read.
+	trusted []trust.Comment
+	readErr error
+}
+
+func (c *recordingCommenter) TrustedComments(context.Context, string, string, int) ([]trust.Comment, error) {
+	return c.trusted, c.readErr
 }
 
 func (c *recordingCommenter) AddComment(_ context.Context, subjectID, body string) error {
@@ -223,8 +232,81 @@ func TestUnmetCriteriaIgnoresIndentedStatusLine(t *testing.T) {
 }
 
 func TestRemainderCommentCannotCarryValidationMarker(t *testing.T) {
-	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")})
+	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")}, true)
 	if forge.HasValidationMarker(body) {
 		t.Fatalf("remainder comment carries a validation marker: %q", body)
+	}
+}
+
+// partialRun drives the partial-delivery path with the given input tweaks.
+func partialRun(t *testing.T, commenter *recordingCommenter, labels []string, tweak func(*PostMergeInput)) (PostMergeResult, *mockBoardSyncer) {
+	t.Helper()
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#600": {NodeID: "I_node600", Number: 600, State: "OPEN", Labels: labels},
+	}}
+	board := &mockBoardSyncer{}
+	input := PostMergeInput{
+		IssueNumber: 600, RepositoryOwner: "nightgauge", RepositoryName: "nightgauge",
+		ProjectNumber: 6, PRNumber: 77, Remainder: commenter,
+		ExcludeLabels: []string{"blocked"},
+	}
+	if tweak != nil {
+		tweak(&input)
+	}
+	verifier := &mockPRVerifierWithMerge{state: "MERGED", sha: "abc", mergedAt: "2026-10-26T00:00:00Z", body: partialBody}
+	res := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{},
+		&mockEpicAutoCloser{result: &gh.AutoCloseSingleResult{Status: "skipped"}}, verifier, board, input)
+	return res, board
+}
+
+// TestPartialDeliveryCommentOncePerPR (#2878): the second run for one PR posts
+// nothing, another PR posts, and a failed read posts anyway.
+func TestPartialDeliveryCommentOncePerPR(t *testing.T) {
+	first := &recordingCommenter{}
+	if res, _ := partialRun(t, first, nil, nil); res.RemainderComment != "posted" || first.calls != 1 {
+		t.Fatalf("first run: comment=%q calls=%d", res.RemainderComment, first.calls)
+	}
+	stored := []trust.Comment{{Body: first.body}}
+
+	second := &recordingCommenter{trusted: stored}
+	if res, _ := partialRun(t, second, nil, nil); res.RemainderComment != "present" || second.calls != 0 {
+		t.Errorf("same PR again: comment=%q calls=%d, want present and no post", res.RemainderComment, second.calls)
+	}
+	other := &recordingCommenter{trusted: stored}
+	partialRun(t, other, nil, func(in *PostMergeInput) { in.PRNumber = 78 })
+	if other.calls != 1 {
+		t.Errorf("another PR must post: calls=%d", other.calls)
+	}
+	unread := &recordingCommenter{trusted: stored, readErr: errors.New("boom")}
+	if res, _ := partialRun(t, unread, nil, nil); unread.calls != 1 || res.Failed {
+		t.Errorf("failed read: calls=%d failed=%v, want a post and no failure", unread.calls, res.Failed)
+	}
+}
+
+// TestPartialDeliveryReadyWithheld (#2878): a run that merged nothing, or an
+// excluded label, keeps the issue out of Ready; a real merge still writes it.
+func TestPartialDeliveryReadyWithheld(t *testing.T) {
+	cases := []struct {
+		name      string
+		labels    []string
+		already   bool
+		wantReady bool
+	}{
+		{name: "real merge", wantReady: true},
+		{name: "run merged nothing", already: true},
+		{name: "excluded label, any case", labels: []string{"Blocked"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			commenter := &recordingCommenter{}
+			res, board := partialRun(t, commenter, tc.labels, func(in *PostMergeInput) { in.AlreadyMerged = tc.already })
+			wrote := board.called
+			if wrote != tc.wantReady || res.ReadyWithheld == tc.wantReady {
+				t.Errorf("Ready written=%v withheld=%v, want written=%v", wrote, res.ReadyWithheld, tc.wantReady)
+			}
+			if got := strings.Contains(commenter.body, "back in Ready"); got != tc.wantReady {
+				t.Errorf("comment claims Ready=%v, want %v: %s", got, tc.wantReady, commenter.body)
+			}
+		})
 	}
 }

@@ -184,6 +184,20 @@ describe("HeadlessOrchestrator context handoff validation (Issue #2499)", () => 
     vi.mocked(readFileSync).mockReturnValue("{}");
   });
 
+  // These runs resume on a recorded PR, which the forge must read open (#2878).
+  beforeEach(() => {
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as {
+        forgePrState(n: number): Promise<string | null>;
+      },
+      "forgePrState"
+    ).mockResolvedValue("OPEN");
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as { readMergedPrNumber(n: number): number },
+      "readMergedPrNumber"
+    ).mockReturnValue(999);
+  });
+
   it("allows pipeline to continue when context file contains valid JSON", async () => {
     const mockState = createMockStateService();
     // contextFileWaitMs: 0 skips polling loop so tests run instantly

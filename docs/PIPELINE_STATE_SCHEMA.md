@@ -194,7 +194,7 @@ the discovery regex and the atomic-write contract. This section documents the
 | Totals         | `inputTokens`, `outputTokens`, `totalCostUsd`, `authoritativeChangeClass`, `actualLinesChanged`                                                                                                                                                                                                                                                                                                                                                        |
 | Progress       | `completedStages`, `supersededStages`, `skippedStages`, `phaseHistory`, `supersededPhaseHistory`, `stageErrors`, `retryCount`, `escalationHistory`, `ralphIterations`                                                                                                                                                                                                                                                                                  |
 | Per-stage maps | `stageModes`, `stageAdapters`, `stageModels`, `stageServedModels`, `stageOpenCodeSessions`, `stageModelIdentities`, `stageEndpointFailovers`, `stageContexts`, `stageEfforts`, `stageThinking`, `stageServedEfforts`, `stageServedThinking`, `stagePluginVersions`, `stageModelSelectionModes`, `stageExecutionPaths`, `stagePuntReasons`, `stageGateResults`, `stageAnomalies`, `stageRecoveryAttempts`, `stageOutputTails`, `terminatingStageTokens` |
-| Outcome        | `gateResults`, `prUrl`, `mergedPr`, `mergedCommitSha`, `mergedAt`, `partialDelivery`, `mainCheckVerdict`, `mainCheckFailing`, `license`, `licenseExpiredMidRun`, `toolCalls`, `modelRefusalFallbacks`                                                                                                                                                                                                                                                  |
+| Outcome        | `gateResults`, `prUrl`, `mergedPr`, `mergeNoOp`, `resumedAtMerge`, `readyWithheld`, `mergedCommitSha`, `mergedAt`, `partialDelivery`, `mainCheckVerdict`, `mainCheckFailing`, `license`, `licenseExpiredMidRun`, `toolCalls`, `modelRefusalFallbacks`                                                                                                                                                                                                  |
 | Lineage        | `lastLineage`, `stageLineages`, `handoffEvents`                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 `lastLineage`, `stageLineages` and `handoffEvents` are the session lineage
@@ -229,6 +229,10 @@ on the merge commit went green (#2055) — `green` | `red` | `pending` (bounded 
 checks still running) | `no_checks` (none appeared within the grace) | `error` |
 `skipped` — and the distinct failing check names when red. Only `green` means
 main passed.
+
+`mergeNoOp` is set when a run that resumed at pr-merge (`resumedAtMerge`) found the PR already
+merged, so it did no work. `readyWithheld` is set when a partial delivery stays out of Ready
+(#2878).
 
 `mergedPr` is the run's PR number once the forge confirms it merged (#2730). The
 run stays registered through its post-merge follow-up, still at stage `pr-merge`,

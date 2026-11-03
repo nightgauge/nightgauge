@@ -509,6 +509,11 @@ export interface RequestedPin {
 
 export interface PipelineRunResult {
   success: boolean;
+  /**
+   * pr-merge found the PR already merged, so this run merged nothing (#2878).
+   * The autonomous scheduler parks the issue with an attention card.
+   */
+  mergeNoOp?: boolean;
   completedStages: PipelineStage[];
   skippedStages: PipelineStage[];
   /** Stages deferred for human action (e.g., pr-merge awaiting review) */
@@ -1552,6 +1557,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private prMergedGroundTruth = false;
   /**
+   * Set when a run that resumed at pr-merge finds the PR `already-merged`: it
+   * did no work (#2878). Tells the post-merge hook not to write Ready, and the
+   * scheduler to park the issue if it stays open. Reset at every runPipeline() entry.
+   */
+  private mergeNoOp = false;
+  /** This run skipped forward to pr-merge. Reset at every runPipeline() entry. */
+  private resumedAtPrMerge = false;
+  /**
    * Estimator input snapshot pinned at pipeline start (#198): calibration
    * table, labels/title, and performance mode as-of run start. Reused for
    * every estimate and post-run comparison in the run. Reset per run.
@@ -1751,6 +1764,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * out of 'running'. Telemetry is fire-and-forget and never blocks the run.
    */
   private firePipelineComplete(result: PipelineRunResult, issueNumber?: number): void {
+    result.mergeNoOp = this.mergeNoOp;
     // #1127: the run is terminal and every post-run `setMeta` enrichment (the
     // health score among them) has already landed. Announce that before any
     // other completion work so the notifiers render their card from the state
@@ -3952,6 +3966,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
   private async invokePostMergeHook(issueNumber: number): Promise<void> {
     const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+    // Only the hook's own answer proves the issue stayed open (#2878), so no
+    // path out of here may leave the flag set without it.
+    const alreadyMerged = this.mergeNoOp;
+    this.mergeNoOp = false;
     try {
       const resolver = BinaryResolver.fromVSCode();
       const binary = await resolver.resolve();
@@ -3996,6 +4014,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       if (prNumber > 0) {
         args.splice(4, 0, "--pr", String(prNumber));
       }
+      if (alreadyMerged) {
+        args.push("--already-merged");
+      }
 
       // The hook now waits out the merge commit's check runs on the base
       // branch (#1249): up to its own 20-minute budget, so main's run is
@@ -4011,6 +4032,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         issueNumber,
         result: stdout.trim(),
       });
+      // A no-op that closed the issue finished it; only one left open parks.
+      this.mergeNoOp = alreadyMerged && this.hookWithheldReady(stdout);
     } catch (err) {
       this.logger.warn("Post-merge hook failed (non-blocking)", {
         issueNumber,
@@ -4966,6 +4989,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
     const created = stage === "pr-create" && parsed.path === "created";
     const merged = stage === "pr-merge" && parsed.path === "merged";
+    if (merged && reason === "already-merged" && this.resumedAtPrMerge) {
+      this.mergeNoOp = true;
+    }
     if (created || merged) {
       this.stageExecutionPaths.set(stage, { path: "deterministic" });
       if (this.stateService) {
@@ -5852,11 +5878,34 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return false;
     }
 
+    // pr-{N}.json outlives the merge, so "open" there may be history: a `Refs`
+    // merge re-dispatched at pr-merge forever (#2878). Only the forge's OPEN
+    // resumes. MERGED on an open issue retires the delivered run's files, so the
+    // remainder re-plans; on any other issue the merge landed and only pr-merge's
+    // no-op is left (#500). Any other answer leaves them and runs every stage.
+    const forgeState = await this.forgePrState(prNumber);
+    if (forgeState !== "OPEN") {
+      this.logger.info(`Resume-at-pr-merge: PR #${prNumber} is not open on the forge`, {
+        issueNumber,
+        forgeState,
+      });
+      if (forgeState !== "MERGED") {
+        this.replayEveryStage();
+        return false;
+      }
+      if (await this.issueIsOpen(issueNumber)) {
+        this.retireDeliveredRun(issueNumber);
+        return false;
+      }
+    }
+
     // An open PR proves delivery only of the criteria it was built against
     // (#2623). When the issue's criteria changed since, re-plan: pr-create
     // then reuses the open PR and records the new fingerprint.
     let fingerprintProblem = "";
-    if (!recordedFingerprint) {
+    if (forgeState !== "OPEN") {
+      // Merged on a closed issue: the criteria are settled, nothing re-plans.
+    } else if (!recordedFingerprint) {
       fingerprintProblem = "no fingerprint recorded";
     } else {
       const current = await this.currentAcFingerprint(issueNumber);
@@ -5904,6 +5953,59 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.eventDispatcher.onStageSkipped("feature-planning", reason);
 
     return true;
+  }
+
+  /**
+   * Queue every stage to run again, whatever state remembers of it. The rewind's
+   * idiom (#1142): a stage that completes twice must clear its #698 guard.
+   */
+  private replayEveryStage(): void {
+    for (const stage of STAGE_ORDER) {
+      this.completedStageSet.delete(stage);
+      this.replayStages.add(stage);
+    }
+  }
+
+  /** A merged PR's files describe delivered work: retire them and re-plan (#2878). */
+  private retireDeliveredRun(issueNumber: number): void {
+    fs.rmSync(this.getContextPath("pr", issueNumber), { force: true });
+    fs.rmSync(this.getContextPath("dev", issueNumber), { force: true });
+    this.replayEveryStage();
+  }
+
+  /** Whether the forge reads the issue OPEN. An unreadable state is not. */
+  private async issueIsOpen(issueNumber: number): Promise<boolean> {
+    const state = await getIssueState(
+      issueNumber,
+      this.getPersistentRoot(),
+      this.logger,
+      this.repoOverride
+    );
+    return state === "OPEN";
+  }
+
+  /** Whether the post-merge hook's JSON says Ready was withheld. */
+  private hookWithheldReady(stdout: string): boolean {
+    try {
+      return (JSON.parse(stdout) as { readyWithheld?: boolean }).readyWithheld === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The PR's state on the forge, upper-cased, or null when it cannot be read. */
+  private async forgePrState(prNumber: number): Promise<string | null> {
+    try {
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["pr", "view", String(prNumber), "--json", "state", "-q", ".state", ...this.ghRepoArgs()],
+        { encoding: "utf-8", cwd: this.getWorkingDirectory(), timeout: 15_000 }
+      );
+      return stdout.trim().toUpperCase() || null;
+    } catch (err) {
+      this.logger.warn("Resume-at-pr-merge: could not read PR state", { prNumber, err });
+      return null;
+    }
   }
 
   /**
@@ -6047,12 +6149,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     //
     // An open PR recorded on disk is proof the work shipped, whatever state
     // remembers — as long as the issue's acceptance criteria are unchanged
-    // since it opened (#2623). Skip forward to pr-merge on that evidence alone. This is a
-    // purely local decision on purpose — a speculative forge query on every
-    // pipeline start would spend API budget on the overwhelmingly common
-    // case of a brand-new issue with no PR (#1428).
+    // since it opened (#2623) and the forge still reads it OPEN (#2878). Only a
+    // recorded open PR reaches the forge: a query on every pipeline start would
+    // spend API budget on the overwhelmingly common case of a brand-new issue
+    // with no PR (#1428).
     // ===================================================================
     if (prCreateState?.status !== "complete" && (await this.resumeAtPrMerge(issueNumber))) {
+      this.resumedAtPrMerge = true;
       return;
     }
 
@@ -6064,7 +6167,28 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     }
 
     // Check if the pr context file is missing (worktree was cleaned up)
-    if (fs.existsSync(prContextPath)) return; // Already have context, resume will work
+    if (fs.existsSync(prContextPath)) {
+      // State's memory of pr-create proves no more than pr-{N}.json does, so the
+      // forge decides here too (#2878). OPEN resumes at pr-merge. MERGED on an
+      // open issue leaves a remainder to plan; on any other issue the merge
+      // landed and only pr-merge's no-op is left (#500). Any other answer, or no
+      // recorded PR, runs every stage and keeps the files.
+      const prNumber = this.readMergedPrNumber(issueNumber);
+      const forgeState = prNumber > 0 ? await this.forgePrState(prNumber) : null;
+      if (forgeState === "MERGED" && (await this.issueIsOpen(issueNumber))) {
+        this.retireDeliveredRun(issueNumber);
+      } else if (forgeState === "OPEN" || forgeState === "MERGED") {
+        this.resumedAtPrMerge = true;
+      } else {
+        this.logger.info("Resume at pr-merge refused: the forge does not read the PR open", {
+          issueNumber,
+          prNumber,
+          forgeState,
+        });
+        this.replayEveryStage();
+      }
+      return;
+    }
 
     this.logger.info(
       "Detected pr-create complete but pr context missing — checking for existing PR",
@@ -6084,6 +6208,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // pr-merge failed when it actually succeeded.
       const restoredContext = JSON.parse(fs.readFileSync(prContextPath, "utf-8"));
       if (restoredContext.status === "merged") {
+        // A merged PR on an open issue is a partial delivery, not #500's lost
+        // exit code: completing pr-merge here would end the run with the
+        // remainder unworked (#2878).
+        if (await this.issueIsOpen(issueNumber)) {
+          this.retireDeliveredRun(issueNumber);
+          return;
+        }
         this.logger.info(
           "PR is already merged on GitHub — marking pr-merge as complete to skip re-run",
           { issueNumber, prNumber: restoredContext.pr_number }
@@ -11175,6 +11306,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.auditCorrelationId = crypto.randomUUID();
     this.blockedTerminalState = null;
     this.prMergedGroundTruth = false;
+    this.mergeNoOp = false;
+    this.resumedAtPrMerge = false;
     this.estimatorSnapshot = null;
 
     // RECEIVE OR MINT (ADR-017 Decision 10, #370).
@@ -11977,14 +12110,19 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           const currentState = await this.stateService.getState();
           if (currentState) {
             const stageState = currentState.stages[stage];
-            const replaying = stageState?.status === "complete" && this.replayStages.delete(stage);
-            if (replaying) {
-              this.logger.debug("Replaying a completed stage after a rewind", { stage });
-            } else if (
+            // A prior resume leaves stages skipped, and retiring a merged run
+            // queues them too (#2878), so any settled status can be replayed.
+            const settled =
               stageState?.status === "complete" ||
               stageState?.status === "skipped" ||
-              stageState?.status === "deferred"
-            ) {
+              stageState?.status === "deferred";
+            const replaying = settled && this.replayStages.delete(stage);
+            if (replaying) {
+              this.logger.debug("Replaying a settled stage", {
+                stage,
+                status: stageState?.status,
+              });
+            } else if (settled) {
               // Verify context file exists for completed stages that produce
               // output context. If the file was deleted, re-run the stage
               // instead of skipping — otherwise the next stage will fail its

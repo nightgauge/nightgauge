@@ -91,6 +91,15 @@ type RuntimeState struct {
 	// run stays registered through its post-merge follow-up, still reading
 	// stage pr-merge, so this is what tells the two apart. Zero until then.
 	MergedPR int `json:"mergedPr,omitempty"`
+	// MergeNoOp is set when a run that resumed at pr-merge found the PR already
+	// merged, so it did no work at all (#2878). A full run whose PR was merged
+	// by someone else delivered work and does not set it.
+	MergeNoOp bool `json:"mergeNoOp,omitempty"`
+	// ResumedAtMerge is set when the run skipped forward to pr-merge (#2878).
+	ResumedAtMerge bool `json:"resumedAtMerge,omitempty"`
+	// ReadyWithheld is set when a partial delivery must stay out of Ready
+	// (#2878): completion writes Backlog rather than In Review.
+	ReadyWithheld bool `json:"readyWithheld,omitempty"`
 
 	// Process tracking
 	PID         int    `json:"pid,omitempty"`
@@ -1352,6 +1361,28 @@ func (rs *RuntimeState) SetMergedPR(pr int) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.MergedPR = pr
+}
+
+// SetMergeNoOp records that this run resumed at pr-merge and found the PR
+// already merged (#2878). A run that did not resume there is not a no-op.
+func (rs *RuntimeState) SetMergeNoOp() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.MergeNoOp = rs.ResumedAtMerge
+}
+
+// SetResumedAtMerge records that the run skipped forward to pr-merge (#2878).
+func (rs *RuntimeState) SetResumedAtMerge() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.ResumedAtMerge = true
+}
+
+// SetReadyWithheld records that a partial delivery stays out of Ready (#2878).
+func (rs *RuntimeState) SetReadyWithheld() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.ReadyWithheld = true
 }
 
 func (rs *RuntimeState) SetWorktree(worktreeDir string) {
@@ -3214,6 +3245,9 @@ func (rs *RuntimeState) Snapshot() *RuntimeState {
 func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 	snap := &RuntimeState{
 		MergedPR:                 rs.MergedPR,
+		MergeNoOp:                rs.MergeNoOp,
+		ResumedAtMerge:           rs.ResumedAtMerge,
+		ReadyWithheld:            rs.ReadyWithheld,
 		Repo:                     rs.Repo,
 		IssueNumber:              rs.IssueNumber,
 		ItemID:                   rs.ItemID,

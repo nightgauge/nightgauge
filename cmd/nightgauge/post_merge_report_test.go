@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
@@ -203,5 +205,38 @@ func TestPostMergeCardIsActionable(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"options": [`) {
 		t.Errorf("options did not marshal as an array:\n%s", raw)
+	}
+}
+
+// TestReportSurvivalFinalized pins the finalize line's stream (#2878): under
+// --json the extension parses stdout as one document, so a stray line there
+// breaks the hook's only signal. Plain mode keeps it on stdout.
+func TestReportSurvivalFinalized(t *testing.T) {
+	res := survival.SweepResult{
+		Finalized: 2,
+		ByVerdict: map[survival.Verdict]int{survival.Verdict("survived"): 2},
+	}
+	const want = "Post-merge: finalized 2 due survival record(s): map[survived:2]\n"
+
+	tests := []struct {
+		name       string
+		outputJSON bool
+		wantStdout string
+		wantStderr string
+	}{
+		{name: "json keeps stdout one document", outputJSON: true, wantStderr: want},
+		{name: "plain reports on stdout", outputJSON: false, wantStdout: want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			reportSurvivalFinalized(&stdout, &stderr, tt.outputJSON, res)
+			if got := stdout.String(); got != tt.wantStdout {
+				t.Errorf("stdout = %q, want %q", got, tt.wantStdout)
+			}
+			if got := stderr.String(); got != tt.wantStderr {
+				t.Errorf("stderr = %q, want %q", got, tt.wantStderr)
+			}
+		})
 	}
 }

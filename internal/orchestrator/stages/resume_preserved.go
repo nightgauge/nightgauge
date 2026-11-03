@@ -36,14 +36,19 @@ type IssueBodyReader func(ctx context.Context, issueNumber int) (string, error)
 // reports no resume and leaves the tree as found, so the run takes the normal
 // route.
 //
-// dev-{N}.json is checked first and the forge last: a brand-new issue, the
-// overwhelmingly common dispatch, must cost no API call (#1428).
+// dev-{N}.json is checked first: a brand-new issue, the overwhelmingly common
+// dispatch, must cost no API call (#1428). A recorded PR that has merged retires
+// the run's files: its work is delivered, whatever the branch still holds, so a
+// partial delivery's next run re-plans the remainder (#2878).
 func ResolvePreservedResume(ctx context.Context, workdir string, issueNumber int, readBody IssueBodyReader) PreservedResume {
 	no := func(format string, args ...any) PreservedResume {
 		return PreservedResume{Reason: fmt.Sprintf(format, args...)}
 	}
 	if _, err := os.Stat(pipelineContextPath(workdir, fmt.Sprintf("dev-%d.json", issueNumber))); err != nil {
 		return no("no dev-%d.json", issueNumber)
+	}
+	if why := retireMergedRun(ctx, workdir, issueNumber); why != "" {
+		return no("%s", why)
 	}
 	branch, err := gitOutput(ctx, workdir, "symbolic-ref", "--short", "HEAD")
 	if err != nil {
@@ -87,6 +92,56 @@ func ResolvePreservedResume(ctx context.Context, workdir string, issueNumber int
 		return no("preserved commit %s does not merge cleanly", commit)
 	}
 	return PreservedResume{Resume: true, Reason: "restored preserved work", RestoredCommit: commit}
+}
+
+// prStateOnForge reads a PR's state. A seam for tests.
+var prStateOnForge = func(ctx context.Context, workdir string, prNumber int) (string, error) {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "view", fmt.Sprint(prNumber), "--json", "state", "-q", ".state")
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// issueOpenOnForge says whether the forge reads the issue OPEN. A seam for tests.
+var issueOpenOnForge = func(ctx context.Context, workdir string, issueNumber int) bool {
+	cmd := exec.CommandContext(ctx, "gh", "issue", "view", fmt.Sprint(issueNumber), "--json", "state", "-q", ".state")
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	return err == nil && strings.EqualFold(strings.TrimSpace(string(out)), "OPEN")
+}
+
+// retireMergedRun says why a recorded PR rules out a resume, or "" when none
+// does. An unreadable state rules it out and removes nothing; a MERGED one
+// rules it out and, on an open issue, removes pr-{N}.json and dev-{N}.json, which
+// describe delivered work. On any other issue pr-merge's no-op still needs them.
+func retireMergedRun(ctx context.Context, workdir string, issueNumber int) string {
+	prPath := pipelineContextPath(workdir, fmt.Sprintf("pr-%d.json", issueNumber))
+	data, err := readFile(prPath)
+	if err != nil {
+		return ""
+	}
+	var rec struct {
+		PRNumber int `json:"pr_number"`
+	}
+	if json.Unmarshal(data, &rec) != nil || rec.PRNumber <= 0 {
+		return ""
+	}
+	state, err := prStateOnForge(ctx, workdir, rec.PRNumber)
+	if err != nil {
+		return fmt.Sprintf("cannot read PR #%d: %v", rec.PRNumber, err)
+	}
+	if !strings.EqualFold(state, "MERGED") {
+		return ""
+	}
+	if !issueOpenOnForge(ctx, workdir, issueNumber) {
+		return fmt.Sprintf("PR #%d already merged", rec.PRNumber)
+	}
+	for _, p := range []string{prPath, pipelineContextPath(workdir, fmt.Sprintf("dev-%d.json", issueNumber))} {
+		if err := os.Remove(p); err != nil {
+			log.Printf("resume: could not remove %s: %v", p, err)
+		}
+	}
+	return fmt.Sprintf("PR #%d already merged", rec.PRNumber)
 }
 
 func gitOutput(ctx context.Context, workdir string, args ...string) (string, error) {

@@ -1872,7 +1872,14 @@ export async function initializeServices(
         );
         if (completedTarget) {
           IpcClient.getInstance()
-            .autonomousComplete(completedTarget.owner, completedTarget.repo, issueNumber, true)
+            .autonomousComplete(
+              completedTarget.owner,
+              completedTarget.repo,
+              issueNumber,
+              true,
+              false,
+              result.mergeNoOp ? "resume_no_op" : undefined
+            )
             .catch(() => {
               // Non-critical — autonomous scheduler may not be running
             });
