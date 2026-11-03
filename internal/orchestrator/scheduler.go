@@ -2804,19 +2804,21 @@ func (s *Scheduler) queueContainsUnlocked(repo string, issueNumber int) bool {
 	return false
 }
 
-// QueuePendingCount returns the number of items in the queue with status "pending".
-// Used by the autonomous scheduler to reserve slots for queued items before
-// dispatching candidates from the project board (#3532).
-func (s *Scheduler) QueuePendingCount() int {
+// QueuePendingItems returns a snapshot of the queue's items with status
+// "pending". The autonomous scheduler reserves board-scan slots for them so
+// fillSlots is not crowded out (#3532), and reads Repo and AddedAt to bound
+// that reservation (#2717): a pending item in a halted repository, or one no
+// fillSlots has taken within pendingReservationTTL, reserves nothing.
+func (s *Scheduler) QueuePendingItems() []QueueItem {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	count := 0
+	var out []QueueItem
 	for _, item := range s.queue {
 		if item.Status == "pending" {
-			count++
+			out = append(out, item)
 		}
 	}
-	return count
+	return out
 }
 
 // queueItemRemoteRunID returns the RemoteRunID for a queued issue, or "" when not found.

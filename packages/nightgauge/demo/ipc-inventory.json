@@ -86,7 +86,7 @@
         "repos": [
           "lanternworks/harbor-api"
         ],
-        "since": "2026-10-18T14:21:11.176Z"
+        "since": "2026-11-03T09:56:59.858Z"
       },
       "paramsShape": {
         "repos": [
@@ -159,12 +159,8 @@
         "demo mode > the start signal plays the scenario",
         "demo mode > the Pipeline tree's active stage walks every stage in order"
       ],
-      "sampleParams": {
-        "root": "<workspace>"
-      },
-      "paramsShape": {
-        "root": "string"
-      }
+      "sampleParams": {},
+      "paramsShape": {}
     },
     {
       "method": "config.tierAudit",
@@ -360,8 +356,8 @@
         "demo mode > the Runs, Cost and Trends tabs render the daemon's platform data"
       ],
       "sampleParams": {
-        "startDate": "2026-10-11",
-        "endDate": "2026-10-18"
+        "startDate": "2026-10-27",
+        "endDate": "2026-11-03"
       },
       "paramsShape": {
         "endDate": "string",
@@ -424,6 +420,25 @@
       }
     },
     {
+      "method": "queue.dequeueIndependent",
+      "resultType": "IpcQueueItem[]",
+      "client": "generated",
+      "surfaces": [
+        "activation > deferred startup work settles without a new unhandled rejection",
+        "demo workspace > each file-backed dashboard tab renders a populated row"
+      ],
+      "sampleParams": {
+        "maxSlots": 3,
+        "runningItems": [],
+        "dispatch": "dequeue-1"
+      },
+      "paramsShape": {
+        "dispatch": "string",
+        "maxSlots": "number",
+        "runningItems": []
+      }
+    },
+    {
       "method": "queue.dropProcessing",
       "resultType": "QueueDropProcessingResult",
       "client": "generated",
@@ -476,7 +491,8 @@
       "surfaces": [
         "activation > deferred startup work settles without a new unhandled rejection",
         "ipc inventory > tree view nightgauge.pipelineView",
-        "demo mode > the Runs, Cost and Trends tabs render the daemon's platform data"
+        "demo workspace > each file-backed dashboard tab renders a populated row",
+        "demo mode > the start signal plays the scenario"
       ],
       "sampleParams": {
         "root": "<workspace>"

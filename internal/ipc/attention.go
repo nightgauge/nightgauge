@@ -435,7 +435,7 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 			s.configuredRepos())
 
 	case attention.VerbIssueApproveArchitecture:
-		return s.approveArchitecture(ctx, key, repo, owner, name, issue)
+		return s.approveArchitecture(ctx, repo, owner, name, issue)
 
 	case attention.VerbDoctorApplyRemedy:
 		return attention.ExecuteDoctorApplyRemedy(ctx, sweep.DoctorRemedies{WorkspaceRoot: s.workspaceRootPath()}, req, opt)
@@ -656,10 +656,14 @@ func (s *Server) closeIssueBestEffort(ctx context.Context, owner, repo string, n
 // (LabelService.Create returns an existing label untouched), which matters
 // because a repo that has never gated before has no such label yet.
 //
-// After labelling, the issue is requeued through the same tail as the other
-// override verbs — the gate is only re-evaluated on the next run, so approving
-// without requeuing would leave the issue sidelined in "In review" forever.
-func (s *Server) approveArchitecture(ctx context.Context, key, repo, owner, name string, issue int) error {
+// After labelling, the card asks the autonomous scheduler for the same release
+// the reconcile performs when it sees the label or an approval file itself
+// (#2717): that release moves the issue to Ready on every board carrying it,
+// and Ready is the re-queue. It neither clears the issue's failures nor adds a
+// queue item — a Go-side queue item is what stalled the board scan in #2717,
+// and dropping the Failed entry here would take away the retry a failed board
+// write needs.
+func (s *Server) approveArchitecture(ctx context.Context, repo, owner, name string, issue int) error {
 	if owner == "" || name == "" || issue == 0 {
 		return fmt.Errorf("issue.approveArchitecture: owner/repo/issueNumber required")
 	}
@@ -691,9 +695,26 @@ func (s *Server) approveArchitecture(ctx context.Context, key, repo, owner, name
 		return fmt.Errorf("apply %q to #%d: %w", label, issue, err)
 	}
 
-	log.Printf("attention: architecture approval granted for %s#%d (label %q) — clearing cooldown and requeuing",
+	return s.releaseApprovedArchitecture(ctx, repo, issue, label)
+}
+
+// releaseApprovedArchitecture is approveArchitecture's tail once the label is
+// on the issue: it hands the issue to the shared architecture-hold release and
+// wakes the scheduler so the release runs now rather than on the next tick.
+func (s *Server) releaseApprovedArchitecture(ctx context.Context, repo string, issue int, label string) error {
+	if s.autonomousScheduler == nil {
+		log.Printf("attention: architecture approval granted for %s#%d (label %q) — no autonomous scheduler is running; the next reconcile moves it to Ready",
+			repo, issue, label)
+		return nil
+	}
+	if !s.autonomousScheduler.ReleaseArchitectureHold(repo, issue) {
+		log.Printf("attention: architecture approval granted for %s#%d (label %q) — no architecture hold is recorded for it; the label stands for the next run's gate",
+			repo, issue, label)
+		return nil
+	}
+	log.Printf("attention: architecture approval granted for %s#%d (label %q) — releasing the hold; the issue moves to Ready",
 		repo, issue, label)
-	return s.redispatchAfterOverride(ctx, key, repo, issue, "")
+	return s.applyThenAction(ctx, thenAutonomousRescan, repo)
 }
 
 // --- small arg helpers (opt.Args round-trips through JSON: numbers are float64) ---
