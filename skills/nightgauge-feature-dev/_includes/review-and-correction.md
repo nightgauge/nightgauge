@@ -146,10 +146,16 @@ For each issue found in Phase 5:
 
 ### Step 6.2: Re-run Tests
 
-After fixes:
+After fixes, run the tests covering what you changed, with a guard that stops
+the stage on failure. Scope the command to the touched packages or paths, never
+the repository's complete gate:
 
 ```bash
-npm test
+# e.g. FOCUSED_TESTS="go test ./internal/build/..." or
+#      FOCUSED_TESTS="npm test -w packages/nightgauge-sdk"
+FOCUSED_TESTS="<scoped test command for the touched packages>"
+bash -c "$FOCUSED_TESTS" \
+  || { echo "ERROR: focused tests failed. Fix them before feature-validate."; exit 1; }
 ```
 
 ### Step 6.3: Run Formatter
@@ -169,15 +175,20 @@ Run the build, the tests covering what you changed, and the formatter's check.
 These are **blocking**: feature-dev MUST NOT report success if any of them
 fails, because a swallowed failure is how a broken PR reached `pr-create` in
 #2779. Run `nightgauge build run --json` when Step 4.1.5 predates your last
-edit, and scope the tests to the touched packages or paths.
+edit. The test arm is the guarded Step 6.2 run; the formatter arm is Step 6.3.
+
+The build passes only on `passed`, or on `skipped` with `ran: false` (no build
+system exists). Any other status, a missing status or empty output fails
+(`-s` makes empty output a `null` that fails instead of no result that passes).
 
 The repository's complete gate is **feature-validate's**, once per tree. Do not
 run it here, under any name: on #2700 and #2724 repeated gates took a run past
 four hours (#2784).
 
 ```bash
-nightgauge build run --json | jq -e '.status != "failed"' >/dev/null \
-  || { echo "ERROR: build failed. Fix it before feature-validate."; exit 1; }
+nightgauge build run --json \
+  | jq -se '.[0] | .status == "passed" or (.status == "skipped" and .ran == false)' >/dev/null \
+  || { echo "ERROR: build did not pass (status must be passed, or skipped with no build system). Fix it before feature-validate."; exit 1; }
 ```
 
 If the formatter's check still fails after Step 6.3, the drift is likely in a

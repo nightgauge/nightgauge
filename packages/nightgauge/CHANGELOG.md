@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- "Approve & re-queue" on an architecture-approval card now moves the issue to Ready, so it
+  dispatches. Queue items the daemon adds now start without waiting for another event (#2717).
+
 - A stage stopped by its runtime cap is now reported as that, naming the cap, its value and the
   elapsed time, instead of as a stall (#2812).
 

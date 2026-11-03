@@ -19,6 +19,22 @@ changelog, and the release workflow refuses a tag that does not.
 - The PR review no longer discards every finding when one field is too long. An
   over-long `claim` or `fix` is shortened with a `[truncated]` marker, a finding with an
   over-long file path is dropped on its own, and the posted comment says which (#2819).
+- Approving an architecture gate now re-queues the issue. Approval by the Action Center card, a
+  directly applied label or an approval file moves the open issue to Ready on every board that
+  carries it, unless a run is active or a PR of its own exists. A failed board write is logged and
+  retried on the next reconcile, never reported as a release. The card no longer adds a queue item.
+  A pending queue item no longer stalls the board scan: it holds a slot for at most two minutes,
+  then a warning names it; an item in a halted repository holds none. The extension starts
+  daemon-added queue items without waiting for another event, and the `no effective slots
+available` log line reports `pending` and `reserved` counts (#2717).
+- feature-dev's Step 6.4 gate now fails a build that reports no status and accepts `skipped`
+  only when no build system exists, and a failing focused test now stops the stage (#2818).
+- VS Code extension test files no longer fail teardown at random with `ENOTEMPTY`. A failed
+  stage's background retro used to keep writing after the test ended; the shared test setup now
+  mocks it for every file, and teardown names any retro file that still appears (#2893).
+- Stopping autonomous mode right after a resume or start now stops it. The loop used to
+  claim its running state on a goroutine of its own, so a Stop that arrived first did
+  nothing and the loop came up afterwards, kept running and wrote to the checkout (#2891).
 - A stage stopped at `pipeline.stage_hard_caps` or `pipeline.stage_time_caps` now records
   `stage_cap_kill` in its exit record and `gate_reason`, and its failure report names the cap, its
   value and the elapsed time. Idle kills still read `stall_kill`, and retry and backoff are

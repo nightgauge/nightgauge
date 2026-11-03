@@ -11,7 +11,7 @@
  * @see Issue #1621 - Git worktree-based concurrent pipeline execution
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock vscode
 vi.mock("vscode", () => ({
@@ -579,6 +579,109 @@ describe("ConcurrentPipelineManager", () => {
 
       // The slot names no repository here; behavior.test covers one that does.
       expect(drainMock).toHaveBeenCalledWith(100, undefined);
+    });
+  });
+
+  describe("Go-side queue adds wake fillSlots (#2717)", () => {
+    // A daemon QueueAddItem announces itself only through queue.changed, never
+    // through onItemAdded. Before #2717 that change recorded remote run ids
+    // and nothing else, so the item sat pending while the daemon reserved a
+    // slot for it.
+    type QueueListener = (state: any) => void;
+
+    function managerWithQueueEvents(config: { autoStart?: boolean } = {}) {
+      let listener: QueueListener | undefined;
+      const queue = {
+        ...createMockQueueService(),
+        onQueueChanged: vi.fn((cb: QueueListener) => {
+          listener = cb;
+          return { dispose: vi.fn() };
+        }),
+        getConfig: vi.fn().mockReturnValue({ autoStart: config.autoStart ?? true }),
+      };
+      const orch = createMockOrchestratorFactory();
+      const mgr = new ConcurrentPipelineManager(
+        "/test-repo",
+        queue as any,
+        orch.factory,
+        createMockLogger() as any,
+        { maxConcurrent: 3 }
+      );
+      return { mgr, queue, emit: (state: any) => listener?.(state) };
+    }
+
+    const pendingItem = (issueNumber: number) => ({
+      issueNumber,
+      repo: "o/r",
+      title: `Issue ${issueNumber}`,
+      position: issueNumber,
+      status: "pending",
+      addedAt: new Date().toISOString(),
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("starts a pending Go-side item within one debounce cycle, with one run active", async () => {
+      vi.useFakeTimers();
+      const { mgr, queue, emit } = managerWithQueueEvents();
+      queue.dequeueIndependent.mockResolvedValueOnce([pendingItem(1)]);
+      await mgr.fillSlots();
+      expect(mgr.getActiveSlots()).toHaveLength(1);
+
+      queue.dequeueIndependent.mockResolvedValueOnce([pendingItem(2), pendingItem(3)]);
+      const fill = vi.spyOn(mgr, "fillSlots");
+      emit({ status: "waiting", items: [pendingItem(2), pendingItem(3)] });
+      expect(fill).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(150);
+
+      expect(fill).toHaveBeenCalledTimes(1);
+      // The timer starts fillSlots without awaiting it; settle that dispatch
+      // before reading slot state, or the assertion races it under load.
+      await fill.mock.results[0].value;
+      expect(queue.dequeueIndependent).toHaveBeenLastCalledWith(2, [{ repo: "", number: 1 }]);
+      expect(mgr.getActiveSlots().length).toBeGreaterThan(1);
+      mgr.dispose();
+    });
+
+    it("coalesces a burst of queue changes into one fill", async () => {
+      vi.useFakeTimers();
+      const { mgr, emit } = managerWithQueueEvents();
+      const fill = vi.spyOn(mgr, "fillSlots");
+      emit({ status: "waiting", items: [pendingItem(2)] });
+      emit({ status: "waiting", items: [pendingItem(2), pendingItem(3)] });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(fill).toHaveBeenCalledTimes(1);
+      await fill.mock.results[0].value;
+      mgr.dispose();
+    });
+
+    it("does not fill a paused queue, with autoStart off, or with no pending item", async () => {
+      vi.useFakeTimers();
+      const paused = managerWithQueueEvents();
+      const off = managerWithQueueEvents({ autoStart: false });
+      const fills = [vi.spyOn(paused.mgr, "fillSlots"), vi.spyOn(off.mgr, "fillSlots")];
+
+      paused.emit({ status: "paused", items: [pendingItem(2)] });
+      off.emit({ status: "waiting", items: [pendingItem(2)] });
+      paused.emit({ status: "processing", items: [{ ...pendingItem(4), status: "processing" }] });
+      await vi.advanceTimersByTimeAsync(150);
+
+      for (const fill of fills) expect(fill).not.toHaveBeenCalled();
+      paused.mgr.dispose();
+      off.mgr.dispose();
+    });
+
+    it("cancels a scheduled fill on dispose", async () => {
+      vi.useFakeTimers();
+      const { mgr, emit } = managerWithQueueEvents();
+      const fill = vi.spyOn(mgr, "fillSlots");
+      emit({ status: "waiting", items: [pendingItem(2)] });
+      mgr.dispose();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(fill).not.toHaveBeenCalled();
     });
   });
 

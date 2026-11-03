@@ -19,6 +19,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+// tests/setup.ts mocks this service globally (#2893); this suite tests it.
+vi.unmock("../../src/services/AutoRetroService");
 vi.mock("node:fs/promises");
 
 // Hoist IPC mocks so they are available inside vi.mock factories

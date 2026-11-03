@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
@@ -150,5 +154,47 @@ func TestAttentionResolveRejectsUnknownOption(t *testing.T) {
 	resRaw, _ := json.Marshal(AttentionResolveParams{ID: id, OptionID: "smuggled"})
 	if _, err := s.handleAttentionResolve(context.Background(), resRaw); err == nil {
 		t.Fatal("expected rejection of an undeclared option id")
+	}
+}
+
+// The Approve & re-queue card hands the issue to the shared architecture-hold
+// release (#2717): it adds no Go-side queue item (one that never woke
+// fillSlots stalled the fleet) and keeps the Failed entry, now ReleasePending,
+// so the release can retry a failed board write.
+func TestReleaseApprovedArchitecture_UsesSharedReleaseAndAddsNoQueueItem(t *testing.T) {
+	root := layouttest.Repo(t)
+	statePath, err := orchestrator.AutonomousStatePath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := orchestrator.AutonomousState{Failed: []orchestrator.FailedItem{{
+		Repo: "o/r", Number: 7, Kind: orchestrator.TerminalKindArchitectureApprovalRequired, AttemptCount: 1,
+	}}}
+	b, _ := json.Marshal(seed)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A configured board with no forge client: the release cannot read the
+	// PR list, so it keeps the entry pending instead of dropping it.
+	as := orchestrator.NewAutonomousScheduler(nil, nil,
+		[]depgraph.RepoConfig{{Owner: "o", Name: "r", Project: 3}}, nil,
+		orchestrator.DefaultAutonomousConfig(), root)
+	t.Cleanup(func() { as.Shutdown(time.Second) })
+	sched := orchestrator.NewScheduler(nil, orchestrator.SchedulerConfig{WorkspaceRoot: root})
+	s := &Server{autonomousScheduler: as, scheduler: sched, writer: io.Discard, workspaceRoot: root}
+
+	if err := s.releaseApprovedArchitecture(context.Background(), "o/r", 7, "approved:architecture"); err != nil {
+		t.Fatalf("releaseApprovedArchitecture: %v", err)
+	}
+
+	if n := len(sched.QueuePendingItems()); n != 0 {
+		t.Errorf("queue has %d pending items, want 0 — Ready on the board is the re-queue", n)
+	}
+	failed := as.Status().Failed
+	if len(failed) != 1 || !failed[0].ReleasePending {
+		t.Fatalf("Failed = %+v, want the hold kept as ReleasePending for the shared release", failed)
 	}
 }

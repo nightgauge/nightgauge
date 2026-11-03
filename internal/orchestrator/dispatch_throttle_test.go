@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -302,5 +303,90 @@ func TestScheduler_WaitForThrottleRoom(t *testing.T) {
 	d.Set(throttleAt(2, nil), true)
 	if got := s.waitForThrottleRoom(context.Background(), 2); got != 1 {
 		t.Fatalf("cap 2 with 1 running: room = %d, want 1", got)
+	}
+}
+
+// Pending queue items reserve board-scan slots only while fillSlots can still
+// take them (#2717): fresh, and in a repository that is not halted. With one
+// run and a ceiling of 3, two stuck items used to stop the whole fleet.
+func TestAutonomousScheduler_PendingReservationIsBoundedAndHaltAware(t *testing.T) {
+	newScheduler := func(items ...QueueItem) *AutonomousScheduler {
+		return &AutonomousScheduler{
+			trustGateOverride: allWritersGate(),
+			config:            AutonomousConfig{MaxConcurrent: 3},
+			state:             &AutonomousState{Running: []RunningItem{{Repo: "o/a", Number: 1}}},
+			rescanCh:          make(chan struct{}, 1),
+			scheduler:         &Scheduler{queue: items},
+		}
+	}
+	now := time.Now().UTC()
+	fresh := func(repo string, n int) QueueItem {
+		return QueueItem{Repo: repo, IssueNumber: n, Status: "pending", AddedAt: now}
+	}
+	stale := func(repo string, n int) QueueItem {
+		return QueueItem{Repo: repo, IssueNumber: n, Status: "pending", AddedAt: now.Add(-2 * pendingReservationTTL)}
+	}
+
+	t.Run("fresh items reserve their slots", func(t *testing.T) {
+		as := newScheduler(fresh("o/a", 2), fresh("o/b", 3))
+		got := as.slotAvailability()
+		if got.available != 0 || got.pending != 2 || got.reserved != 2 {
+			t.Fatalf("slots = %+v, want 0 available, 2 pending, 2 reserved", got)
+		}
+	})
+
+	t.Run("expired items give the slots back and are named once", func(t *testing.T) {
+		buf := withCapturedLog(t)
+		as := newScheduler(stale("o/a", 2), stale("o/b", 3))
+		got := as.slotAvailability()
+		if got.available != 2 || got.pending != 2 || got.reserved != 0 {
+			t.Fatalf("slots = %+v, want 2 available, 2 pending, 0 reserved", got)
+		}
+		for _, item := range []string{"o/a#2", "o/b#3"} {
+			if n := strings.Count(buf.String(), "pending queue item "+item+" has not been taken"); n != 1 {
+				t.Errorf("warnings naming %s = %d, want 1; log %q", item, n, buf.String())
+			}
+		}
+		as.slotAvailability()
+		if n := strings.Count(buf.String(), "has not been taken"); n != 2 {
+			t.Errorf("warnings after a second cycle = %d, want still 2 (deduplicated)", n)
+		}
+	})
+
+	t.Run("an item in a halted repository reserves nothing", func(t *testing.T) {
+		as := newScheduler(fresh("o/halted", 2))
+		as.state.PausedRepos = map[string]*RepoPauseRecord{"o/halted": {Repo: "o/halted"}}
+		if got := as.slotAvailability(); got.available != 2 || got.reserved != 0 || got.pending != 1 {
+			t.Fatalf("slots = %+v, want 2 available, 0 reserved, 1 pending", got)
+		}
+	})
+
+	t.Run("non-pending items are not counted", func(t *testing.T) {
+		as := newScheduler(QueueItem{Repo: "o/a", IssueNumber: 2, Status: "processing", AddedAt: now})
+		if got := as.slotAvailability(); got.available != 2 || got.pending != 0 {
+			t.Fatalf("slots = %+v, want 2 available, 0 pending", got)
+		}
+	})
+}
+
+// The `no effective slots available` line reports the pending queue items and
+// how many held a slot, so a stall behind queue reservations is visible in the
+// log rather than reading as "running=1" with nothing else to go on (#2717).
+func TestRunCycle_NoSlotsLogReportsPendingCount(t *testing.T) {
+	eval := &fakeBaselineEvaluator{green: map[string]bool{}}
+	now := time.Now().UTC()
+	as := newBaselineSweepScheduler(t, eval,
+		QueueItem{Repo: "acme/web", IssueNumber: 2, Status: "pending", AddedAt: now},
+		QueueItem{Repo: "acme/web", IssueNumber: 3, Status: "pending", AddedAt: now},
+	)
+	as.config.MaxConcurrent = 3
+	as.state.Running = []RunningItem{{Repo: "acme/web", Number: 1, Title: "busy"}}
+	buf := withCapturedLog(t)
+
+	as.runCycle(context.Background())
+	as.drainBackground()
+
+	if !strings.Contains(buf.String(), "running=1, pending=2, reserved=2), skipping graph build") {
+		t.Fatalf("no-slots log does not report the pending count; got %q", buf.String())
 	}
 }

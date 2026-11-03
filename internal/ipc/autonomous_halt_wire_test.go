@@ -56,14 +56,10 @@ func newHaltedServer(t *testing.T, state orchestrator.AutonomousState) (*Server,
 		// it is alive — a loop that survives its test keeps writing to the
 		// process-wide logger and races the next test's log capture, which is
 		// how main went red at d9818067 (TestNotifyComplete_DiagnosesAnUnregisteredServedModel).
-		as.Stop()
-		deadline := time.Now().Add(10 * time.Second)
-		for as.IsRunning() && time.Now().Before(deadline) {
-			time.Sleep(20 * time.Millisecond)
-		}
-		if as.IsRunning() {
-			t.Errorf("the autonomous dispatch loop is still running after Stop(); a leaked loop races later tests' log capture")
-		}
+		// WaitStopped joins the loop goroutine, so its last write lands before
+		// t.TempDir removes the checkout (#2891); then drain the status-change
+		// emits complete() spawned.
+		stopAndJoinLoop(t, as, 10*time.Second)
 	})
 	return server, as, ctx
 }

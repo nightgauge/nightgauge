@@ -529,6 +529,8 @@ what changed and the formatter MUST pass before proceeding. These checks are
 Swallowing failures here lets a broken PR through to `pr-create`, where CI
 catches it and blocks the merge. See issue #2779 for the incident that motivated
 this gate. The repository's complete gate belongs to feature-validate (#2784).
+The build must report `passed`, or `skipped` with no build system; a missing
+status fails. The focused tests run under their own guarded command in Step 6.2.
 
 > **Read `_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 

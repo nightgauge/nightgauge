@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/nightgauge/nightgauge/internal/trust"
 	"log"
@@ -276,6 +277,14 @@ type FailedItem struct {
 	// flag holds the entry for an operator (HoldOperatorResume) instead of
 	// letting the reconcile re-admit it into the same denial (#1756).
 	RetryCapped bool `json:"retryCapped,omitempty"`
+
+	// ReleasePending marks a HoldArchitectureApproval entry whose approval has
+	// landed but whose move back to Ready has not (#2717). The entry stays in
+	// the Failed list until every board carrying the issue reads Ready, so a
+	// failed board write is retried on the next reconcile instead of leaving
+	// the approved issue parked in In progress or In review, where the
+	// scheduler never dispatches it. See releaseArchitectureHold.
+	ReleasePending bool `json:"releasePending,omitempty"`
 }
 
 // hold returns the human act this entry waits for: the hold its Kind names
@@ -1035,7 +1044,10 @@ type AutonomousScheduler struct {
 	// the sequence move and reports the state as it actually is, rather than
 	// waiting out its deadline on a transition that already happened.
 	runningSeq uint64
-	stopCh     chan struct{} // signals dispatch loop only — one reader
+	// loopDone is closed when the loop goroutine Start spawned returns
+	// (#2891). Replaced per Start under mu; nil until the first Start.
+	loopDone chan struct{}
+	stopCh   chan struct{} // signals dispatch loop only — one reader
 
 	// Background-goroutine lifecycle (#428). Every detached spawn in this file
 	// goes through goTracked so in-flight work can be cancelled and joined.
@@ -1173,6 +1185,23 @@ type AutonomousScheduler struct {
 	// Key: "repo#number". Not persisted — intentionally resets on restart
 	// (the guard window is short and the race window vanishes after a cold start).
 	recentClosures map[string]time.Time
+
+	// expiredPendingWarned records which pending queue items have already been
+	// warned about as expired reservations (#2717), keyed by
+	// "repo#number@addedAt", so the warning fires once per item, not once per
+	// cycle. Guarded by mu; not persisted.
+	expiredPendingWarned map[string]bool
+
+	// architectureReleaseInFlight marks the issues ("repo#number") whose
+	// architecture-hold release board move is running (#2717), so a reconcile
+	// that fires while the move is in flight does not start a second one.
+	// Guarded by mu; not persisted — a restart re-derives it from the
+	// ReleasePending entries the next reconcile reads.
+	architectureReleaseInFlight map[string]bool
+
+	// releaseMoveStatus overrides the architecture release's board write in
+	// tests; nil writes through projectService.
+	releaseMoveStatus func(ctx context.Context, owner, repoName string, project int, ownerType gh.OwnerType, issue int, status string) error
 
 	// refinementSem limits concurrent refinements (buffered channel as semaphore).
 	refinementSem chan struct{}
@@ -1574,32 +1603,30 @@ func NewAutonomousScheduler(
 	return as
 }
 
+// ErrAlreadyRunning is returned by Run and Start when the loop is already up.
+var ErrAlreadyRunning = errors.New("autonomous scheduler is already running")
+
 // Run starts the autonomous scheduler loop. It blocks until the context is
 // cancelled, Stop() is called, the budget is exhausted, or all items complete.
+//
+// Run claims `running` on the caller's goroutine, so `go Run(ctx)` leaves a
+// window in which the loop has not claimed it yet and Stop() is a no-op
+// (#2891). Callers that spawn the loop use Start, which closes that window.
 func (as *AutonomousScheduler) Run(ctx context.Context) error {
-	// Catch panics so an unexpected crash is logged to autonomous-exits.jsonl
-	// rather than silently killing the goroutine and leaving the UI stuck in
-	// RUNNING state forever.
-	defer func() {
-		if r := recover(); r != nil {
-			stack := string(debug.Stack())
-			if len(stack) > 4096 {
-				stack = stack[:4096]
-			}
-			panicMsg := fmt.Sprintf("%v", r)
-			log.Printf("autonomous: PANIC: %s\n%s", panicMsg, stack)
-			as.mu.Lock()
-			as.state.Status = "crashed"
-			as.setRunningLocked(false)
-			as.mu.Unlock()
-			as.writeCrashExitEvent(panicMsg, stack)
-		}
-	}()
-
 	as.mu.Lock()
+	err := as.claimRunLocked()
+	as.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return as.runLoop(ctx)
+}
+
+// claimRunLocked marks the loop running and resets the start-of-run state.
+// Caller holds as.mu.
+func (as *AutonomousScheduler) claimRunLocked() error {
 	if as.running {
-		as.mu.Unlock()
-		return fmt.Errorf("autonomous scheduler is already running")
+		return ErrAlreadyRunning
 	}
 	as.setRunningLocked(true)
 	as.stopRequested = false
@@ -1633,7 +1660,30 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 	// independent of whether the fleet is dispatching or halted.
 	as.state.RestartedFromRunning = false
 	as.fireStatusChangeLocked()
-	as.mu.Unlock()
+	return nil
+}
+
+// runLoop is the body of Run after the claim.
+func (as *AutonomousScheduler) runLoop(ctx context.Context) error {
+	// Catch panics so an unexpected crash is logged to autonomous-exits.jsonl
+	// rather than silently killing the goroutine and leaving the UI stuck in
+	// RUNNING state forever.
+	defer func() {
+		if r := recover(); r != nil {
+			stack := string(debug.Stack())
+			if len(stack) > 4096 {
+				stack = stack[:4096]
+			}
+			panicMsg := fmt.Sprintf("%v", r)
+			log.Printf("autonomous: PANIC: %s\n%s", panicMsg, stack)
+			as.mu.Lock()
+			as.state.Status = "crashed"
+			as.setRunningLocked(false)
+			as.mu.Unlock()
+			as.writeCrashExitEvent(panicMsg, stack)
+		}
+	}()
+
 	as.persistState()
 
 	// Run config-coherence validation at startup and persist any warnings.
@@ -2739,6 +2789,8 @@ func (as *AutonomousScheduler) Shutdown(grace time.Duration) {
 // that flag, runCycle would keep calling onDispatch for every candidate in its
 // already-built list — emitting autonomous.dispatch events to the TypeScript
 // extension after the user pressed "Stop Autonomous".
+//
+// Stop signals and returns; WaitStopped is the join for a loop Start spawned.
 func (as *AutonomousScheduler) Stop() {
 	as.mu.Lock()
 	defer as.mu.Unlock()
@@ -3769,11 +3821,12 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	// Building the graph costs GraphQL quota. When no effective slots remain
 	// (considering both the global cap and any per-repo caps), skip the build
 	// entirely. When a pipeline finishes, TriggerRescan fires immediately.
-	availableSlots := as.effectiveAvailableSlots()
+	slots := as.slotAvailability()
+	availableSlots := slots.available
 	if availableSlots <= 0 {
 		as.mu.Lock()
-		log.Printf("autonomous: no effective slots available (MaxConcurrent=%d, ceiling=%d, running=%d), skipping graph build",
-			as.config.MaxConcurrent, as.dispatchCeilingLocked(), len(as.state.Running))
+		log.Printf("autonomous: no effective slots available (MaxConcurrent=%d, ceiling=%d, running=%d, pending=%d, reserved=%d), skipping graph build",
+			as.config.MaxConcurrent, as.dispatchCeilingLocked(), len(as.state.Running), slots.pending, slots.reserved)
 		as.mu.Unlock()
 		as.persistState()
 		if as.onCycleComplete != nil {
@@ -6348,7 +6401,8 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// (~$5 / ~13 min per cycle, observed in a production autonomous run)
 		// until the lifetime cap trips the whole scheduler. Human approval — the
 		// `approved:architecture` label or an approval file — is the way back
-		// in, and moving the issue to Ready re-queues it.
+		// in: releaseArchitectureHold moves the issue to Ready, which re-queues
+		// it (#2717).
 		if terminalFailureKind == TerminalKindArchitectureApprovalRequired {
 			detail := failureDetail
 			if detail == "" {
@@ -7528,10 +7582,36 @@ func (as *AutonomousScheduler) hasDispatchHeadroom() (bool, string) {
 	return true, ""
 }
 
+// pendingReservationTTL bounds how long a pending queue item may hold a
+// board-scan slot (#2717). fillSlots takes a Go-side item within one debounce
+// window of the queue.changed event that announces it, so an item still
+// pending after several windows is not about to be taken; reserving its slot
+// for longer only stalls the board scan, which is what kept the whole fleet
+// idle behind two approval queue items in #2717.
+const pendingReservationTTL = 2 * time.Minute
+
+// slotAvailability is effectiveAvailableSlots' answer with the reservation
+// counts the `no effective slots available` log reports (#2717).
+type slotAvailability struct {
+	available int
+	// pending is every pending queue item; reserved is the subset that held a
+	// slot (fresh and in a repository that is not halted).
+	pending  int
+	reserved int
+}
+
 // effectiveAvailableSlots returns how many additional pipelines can be
-// dispatched right now, considering both the global MaxConcurrent ceiling
-// (held to the workspace throttle when it applies, #2352) and any per-repo
-// caps. Returns 0 when all effective capacity is consumed.
+// dispatched right now. See slotAvailability.
+//
+// Must be called without as.mu held.
+func (as *AutonomousScheduler) effectiveAvailableSlots() int {
+	return as.slotAvailability().available
+}
+
+// slotAvailability computes the dispatchable slots, considering both the
+// global MaxConcurrent ceiling (held to the workspace throttle when it
+// applies, #2352) and any per-repo caps, less the slots reserved for pending
+// queue items. available is 0 when all effective capacity is consumed.
 //
 // When every active repo has an explicit cap, the per-repo sum is the binding
 // limit (e.g. MaxConcurrent=3 but only one repo with cap=1 means at most 1
@@ -7539,29 +7619,72 @@ func (as *AutonomousScheduler) hasDispatchHeadroom() (bool, string) {
 // only constraint — that repo can absorb any remaining global capacity.
 //
 // Must be called without as.mu held.
-func (as *AutonomousScheduler) effectiveAvailableSlots() int {
+func (as *AutonomousScheduler) slotAvailability() slotAvailability {
+	var pendingItems []QueueItem
+	if as.scheduler != nil {
+		// Read before as.mu: the queue has its own lock and is never read
+		// under the autonomous one.
+		pendingItems = as.scheduler.QueuePendingItems()
+	}
+
 	as.mu.Lock()
 	globalAvail := as.dispatchCeilingLocked() - len(as.state.Running)
 	repos := as.repos
+	reserved := as.pendingReservationsLocked(pendingItems, time.Now())
 	as.mu.Unlock()
 
+	res := slotAvailability{pending: len(pendingItems), reserved: reserved}
 	if globalAvail <= 0 {
-		return 0
+		return res
 	}
 
 	// Reserve slots for items already sitting in the explicit queue — they are
 	// about to be dispatched by fillSlots and should not be crowded out by
 	// board-scan candidates in the same runCycle (#3532).
-	if as.scheduler != nil {
-		pending := as.scheduler.QueuePendingCount()
-		if pending > 0 {
-			globalAvail -= pending
-			if globalAvail <= 0 {
-				return 0
-			}
-		}
+	globalAvail -= reserved
+	if globalAvail <= 0 {
+		return res
 	}
+	res.available = as.repoBoundSlots(repos, globalAvail)
+	return res
+}
 
+// pendingReservationsLocked counts the pending queue items that hold a
+// board-scan slot (#2717). An item reserves nothing when the fleet or its
+// repository is halted — fillSlots will not take it, so the slot would sit
+// idle until the halt lifts — or when it has been pending longer than
+// pendingReservationTTL; the first time an item expires, a warning names it.
+//
+// Caller MUST hold as.mu.
+func (as *AutonomousScheduler) pendingReservationsLocked(items []QueueItem, now time.Time) int {
+	if len(items) == 0 || machineHalted(as.state) {
+		return 0
+	}
+	reserved := 0
+	for _, it := range items {
+		if repoPaused(as.state, it.Repo) {
+			continue
+		}
+		age := now.Sub(it.AddedAt)
+		if !it.AddedAt.IsZero() && age > pendingReservationTTL {
+			key := fmt.Sprintf("%s#%d@%d", it.Repo, it.IssueNumber, it.AddedAt.UnixNano())
+			if !as.expiredPendingWarned[key] {
+				if as.expiredPendingWarned == nil {
+					as.expiredPendingWarned = make(map[string]bool)
+				}
+				as.expiredPendingWarned[key] = true
+				log.Printf("autonomous: WARNING pending queue item %s#%d has not been taken for %s (limit %s) — releasing its slot reservation to the board scan",
+					it.Repo, it.IssueNumber, age.Round(time.Second), pendingReservationTTL)
+			}
+			continue
+		}
+		reserved++
+	}
+	return reserved
+}
+
+// repoBoundSlots applies the per-repo caps to globalAvail.
+func (as *AutonomousScheduler) repoBoundSlots(repos []depgraph.RepoConfig, globalAvail int) int {
 	if len(repos) == 0 {
 		// No repos configured — global ceiling is the only constraint.
 		return globalAvail
@@ -7931,6 +8054,10 @@ func (as *AutonomousScheduler) recordFailureLocked(repo string, number int, titl
 			// The cap branch sets it again after this write; any other
 			// attempt is not at a cap.
 			f.RetryCapped = false
+			// A new attempt's outcome supersedes an earlier approval's
+			// pending board move (#2717): a fresh architecture halt waits
+			// for a fresh approval.
+			f.ReleasePending = false
 			if f.AttemptCount < 1 {
 				// Legacy entry without count — treat as one prior attempt.
 				f.AttemptCount = 1
@@ -8251,6 +8378,14 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 			continue
 		}
 		if strings.EqualFold(node.State, "OPEN") {
+			if f.hold() == HoldArchitectureApproval && f.ReleasePending {
+				// The release was observed on an earlier pass (or asked for
+				// by the card) and its board move has not landed: keep the
+				// entry and retry the move (#2717).
+				heldFailed++
+				keptFailed = append(keptFailed, as.continueArchitectureReleaseLocked(f, "retrying the Ready move"))
+				continue
+			}
 			if hold := f.hold(); hold != HoldNone {
 				released, why := as.holdReleased(f, node, approvalLabel)
 				if !released {
@@ -8261,14 +8396,18 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 					log.Printf("autonomous: holding %s — %s (%s) awaits %s, not the rescan", key, f.Kind, hold, why)
 					continue
 				}
-				log.Printf("autonomous: releasing %s — %s hold cleared: %s", key, hold, why)
 				if hold == HoldArchitectureApproval {
-					// The card's lifetime is the hold's (#2577): once the
-					// approval lands it asks for nothing, so it must not
-					// wait for the run to succeed before it is retracted.
-					repo, number := f.Repo, f.Number
-					as.dispatchAttention(func() { as.retractArchitectureApproval(repo, number) })
+					// The approved issue sits in In progress or In review,
+					// statuses the scheduler never dispatches, so dropping
+					// the entry here would leave it parked forever (#2717).
+					// The shared release keeps the entry until the issue is
+					// back in Ready on every board that carries it.
+					log.Printf("autonomous: approval landed for %s — %s hold: %s; moving it to Ready", key, hold, why)
+					heldFailed++
+					keptFailed = append(keptFailed, as.beginArchitectureReleaseLocked(f))
+					continue
 				}
+				log.Printf("autonomous: releasing %s — %s hold cleared: %s", key, hold, why)
 			}
 			if why, parked := as.parkedOnBoard(node); parked {
 				log.Printf("autonomous: keeping failed %s — still OPEN but parked by %s", key, why)

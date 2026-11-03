@@ -5391,13 +5391,10 @@ func (s *Server) registerMethods() {
 		if !s.autonomousScheduler.ResumeUnlessMachineHalted() {
 			log.Printf("autonomous: started with a machine-raised halt still in force — no dispatch until an explicit resume")
 		}
-		if !s.autonomousScheduler.IsRunning() {
-			// No goroutine running (fresh server start or prior completion).
-			go func() {
-				if err := s.autonomousScheduler.Run(ctx); err != nil {
-					log.Printf("autonomous scheduler exited: %v", err)
-				}
-			}()
+		// Start claims the loop synchronously (#2891); already running is fine.
+		if err := s.autonomousScheduler.Start(ctx); err != nil &&
+			!errors.Is(err, orchestrator.ErrAlreadyRunning) {
+			return nil, err
 		}
 		// Wait for the loop to actually come up, then report what was
 		// observed (#494). A flat sleep here was a guess about how long
