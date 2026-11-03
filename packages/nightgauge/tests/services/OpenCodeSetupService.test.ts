@@ -67,8 +67,9 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 const INSTALL_SCRIPT = path.join(REPO_ROOT, "scripts", "install-agent-skills.sh");
 const PLUGIN_SRC = path.join(REPO_ROOT, "internal", "execution", "opencodeplugin", "plugin");
 
-function makeContext(extensionPath: string, state: Record<string, unknown> = {}) {
+function makeContext(extensionPath: string, state: Record<string, unknown> = {}, version?: string) {
   return {
+    ...(version ? { extension: { packageJSON: { version } } } : {}),
     globalState: {
       get: vi.fn((key: string, def?: unknown) => (key in state ? state[key] : def)),
       update: vi.fn(async (key: string, value: unknown) => {
@@ -138,7 +139,7 @@ describe("OpenCodeSetupService", () => {
     );
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ng-opencode-setup-"));
     extensionPath = path.join(tmp, "ext");
-    writeFixtureSkills(path.join(extensionPath, "dist", "claude-plugins", "nightgauge", "skills"));
+    writeFixtureSkills(path.join(extensionPath, "dist", "skills"));
     fs.cpSync(PLUGIN_SRC, path.join(extensionPath, "dist", "opencode-plugin"), { recursive: true });
     xdg = path.join(tmp, "xdg");
     root = path.join(xdg, "opencode");
@@ -324,5 +325,54 @@ describe("OpenCodeSetupService", () => {
         }
       });
     }
+  });
+
+  describe("installed version stamp (#2762)", () => {
+    const KEY = "nightgauge.opencodeSetup.installedVersion";
+
+    async function installAt(version: string, choice: string): Promise<Record<string, unknown>> {
+      const state: Record<string, unknown> = {};
+      vi.mocked(vscode.window.showInformationMessage).mockResolvedValueOnce(choice as never);
+      await new OpenCodeSetupService(makeContext(extensionPath, state, version)).showSetupPrompt();
+      return state;
+    }
+
+    it("stamps the version, then re-syncs on upgrade with autoPrompt off, keeping the plugin", async () => {
+      const state = await installAt("1.0.0", "Install with Plugin");
+      expect(state[KEY]).toBe("1.0.0");
+      const skill = path.join(root, "skills", "nightgauge-issue-create", "SKILL.md");
+      write(skill, "stale\n");
+      fs.rmSync(path.join(root, "plugins", "nightgauge"), { recursive: true });
+      vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+        get: vi.fn().mockReturnValue(false),
+      } as never);
+      vi.mocked(vscode.window.showInformationMessage).mockClear();
+
+      await new OpenCodeSetupService(
+        makeContext(extensionPath, state, "2.0.0")
+      ).checkAndPromptSetup();
+
+      expect(state[KEY]).toBe("2.0.0");
+      expect(fs.readFileSync(skill, "utf8")).toContain("name: nightgauge-issue-create");
+      expect(fs.existsSync(path.join(root, "plugins", "nightgauge"))).toBe(true);
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining("updated its OpenCode skills to 2.0.0")
+      );
+    });
+
+    it("does nothing when the stamp matches", async () => {
+      const state = await installAt("2.0.0", "Install");
+      const skill = path.join(root, "skills", "nightgauge-issue-create", "SKILL.md");
+      write(skill, "kept\n");
+      vi.mocked(vscode.window.showInformationMessage).mockClear();
+      vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as never);
+
+      await new OpenCodeSetupService(
+        makeContext(extensionPath, state, "2.0.0")
+      ).checkAndPromptSetup();
+
+      expect(fs.readFileSync(skill, "utf8")).toBe("kept\n");
+      expect(fs.existsSync(path.join(root, "plugins"))).toBe(false);
+    });
   });
 });

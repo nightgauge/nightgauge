@@ -496,6 +496,62 @@ describe("PluginSetupService", () => {
       expect(vscode.window.showErrorMessage).toHaveBeenCalledTimes(1);
     });
 
+    describe("showSetupPrompt always offers install or update (#2762)", () => {
+      beforeEach(() => {
+        mockConfigBridge.isInitialized.mockReturnValue(true);
+        mockConfigBridge.getUI.mockReturnValue({ plugins: { auto_prompt: false } });
+      });
+
+      it("offers an update for an installed plugin with autoPrompt off and dismissed", async () => {
+        const vscode = await import("vscode");
+        dismissed = true;
+        vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
+          "Update Plugins" as never
+        );
+        scriptClaude({ plugins: HEALTHY, marketplacePath: "/src/nightgauge" });
+
+        await (await makeService()).showSetupPrompt();
+
+        expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+          "Update the Nightgauge Claude Code plugin?",
+          expect.objectContaining({ modal: true }),
+          "Update Plugins",
+          "Later"
+        );
+        expect(cliCalls("plugin marketplace update")).toEqual([
+          ["plugin", "marketplace", "update", "nightgauge-plugins"],
+        ]);
+        expect(cliCalls("plugin update")).toEqual([["plugin", "update", PLUGIN_ID]]);
+      });
+
+      it("offers an install for an absent plugin with autoPrompt off", async () => {
+        const vscode = await import("vscode");
+        vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as never);
+        scriptClaude({ plugins: [], marketplacePath: "/src/nightgauge" });
+
+        await (await makeService()).showSetupPrompt();
+
+        expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+          expect.stringContaining("not installed"),
+          "Install Plugins",
+          "Later",
+          "Don't Show Again"
+        );
+        expect(cliCalls("plugin update")).toEqual([]);
+      });
+
+      it("Later changes nothing", async () => {
+        const vscode = await import("vscode");
+        vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Later" as never);
+        scriptClaude({ plugins: HEALTHY, marketplacePath: "/src/nightgauge" });
+
+        await (await makeService()).showSetupPrompt();
+
+        expect(cliCalls("plugin marketplace update")).toEqual([]);
+        expect(cliCalls("plugin update")).toEqual([]);
+      });
+    });
+
     it("repairs and surfaces a failure with autoPrompt off", async () => {
       const vscode = await import("vscode");
       vi.mocked(vscode.window.showErrorMessage).mockResolvedValue(undefined as never);

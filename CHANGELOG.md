@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Codex, Grok and OpenCode skills installed by the VS Code extension now match the ones
+  `scripts/install-agent-skills.sh` installs: every skill, `name:` matching its directory, no
+  `disable-model-invocation`, and links that resolve. The extension installed them from the
+  Claude plugin mirror and renamed the directories only. An extension upgrade now re-syncs
+  installed skills on activation (#2762).
+- `Nightgauge: Setup Codex Commands` is now `Nightgauge: Setup Codex Skills` and no longer
+  copies commands into `~/.codex/commands/`, which Codex does not read; each called
+  `scripts/run-stage.sh`, which the VSIX does not ship. Use `$nightgauge-issue-pickup`.
+  Packaging now fails when a bundled resource names a script the VSIX lacks (#2762).
+- `Nightgauge: Setup Codex Skills`, `Setup Grok Skills` and `Setup Claude Code Plugins` now
+  always offer to install or update, as `Setup OpenCode Skills` does, even with
+  `nightgauge.plugins.autoPrompt` off (#2762).
 - An issue that states its criteria under `## Verification`, `## Acceptance`, `## Done when`
   or `## Definition of Done`, as a numbered or bulleted list, now yields acceptance criteria,
   so a pull request that meets them writes `Closes #N` and the issue closes on merge. A

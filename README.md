@@ -209,24 +209,24 @@ VS Code extension activate path install the same tree.
 
 ### OpenAI Codex CLI (Beta Adapter)
 
-Codex support is available through both slash commands and the unified stage
-runner.
+Codex support is available through skills and the unified stage runner.
 
-Install Codex assets (commands + skills):
+Install Codex skills into `~/.codex/skills/` from a checkout, or with
+`Nightgauge: Setup Codex Skills` in VS Code (both install the same tree):
 
 ```bash
 ./scripts/install-agent-skills.sh --codex-only
 ```
 
-Slash commands are defined in `.codex/commands/` and invoked as `/<name>`:
+Codex loads each skill and exposes it as `$<skill-name>`:
 
 ```text
-/nightgauge-issue-pickup 42
-/nightgauge-feature-planning 42
-/nightgauge-feature-dev 42
-/nightgauge-feature-validate 42
-/nightgauge-pr-create 42
-/nightgauge-pr-merge 42
+$nightgauge-issue-pickup 42
+$nightgauge-feature-planning 42
+$nightgauge-feature-dev 42
+$nightgauge-feature-validate 42
+$nightgauge-pr-create 42
+$nightgauge-pr-merge 42
 ```
 
 Run stages directly with the unified stage runner:
@@ -256,7 +256,7 @@ Migration note:
 - All six pipeline stage entry points are available via
   `scripts/run-stage.sh codex <stage> <issue>`; Codex remains beta while the
   complete live-provider matrix is expanded
-- Matching Codex slash commands are available via `.codex/commands/*.md`
+- Every pipeline skill is available in Codex as `$nightgauge-<name>`
 - Queue/project-sync and some plugin-level automations remain Claude-first
 - The Codex adapter depends on built SDK output:
   `npm run -w @nightgauge/sdk build`

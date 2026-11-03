@@ -245,7 +245,7 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
     },
     {
       command: "nightgauge.setupCodex",
-      title: "Nightgauge: Setup Codex Commands",
+      title: "Nightgauge: Setup Codex Skills",
       icon: "$(terminal)",
     },
     {

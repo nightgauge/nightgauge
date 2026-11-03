@@ -20,6 +20,11 @@
  *   - any symlink at a path this service writes through is refused;
  *   - the plugin is opt-in: with it present, OpenCode npm-installs
  *     @opencode-ai/plugin into the config root on its next start.
+ *
+ * The skills are the VSIX's canonical tree (dist/skills), the one the script
+ * installs from skills/ (#2762). An upgrade re-syncs an existing install on
+ * activation, keeping the plugin when it is installed, whatever
+ * `plugins.autoPrompt` says: that setting governs install offers only.
  */
 
 import * as vscode from "vscode";
@@ -28,9 +33,14 @@ import * as path from "path";
 import * as os from "os";
 import { execFile } from "child_process";
 import { getPrefixedMainChannel } from "../utils/logger";
-import { resolveBundledSkillsDir } from "./bundledSkills";
+import {
+  resolveBundledSkillsDir,
+  stampInstalledVersion,
+  staleInstalledVersion,
+} from "./bundledSkills";
 
 const NAMESPACE = "nightgauge-";
+const TARGET = "opencode";
 
 export function openCodeRoot(): string {
   const xdg = process.env.XDG_CONFIG_HOME;
@@ -260,8 +270,18 @@ export class OpenCodeSetupService implements vscode.Disposable {
     this.outputChannel = getPrefixedMainChannel("opencode-setup");
   }
 
-  /** Activation: prompt once, only when opencode is on PATH and nothing is installed. */
+  /**
+   * Activation: re-sync an install a different extension version made, then
+   * prompt once, only when opencode is on PATH and nothing is installed.
+   */
   async checkAndPromptSetup(): Promise<void> {
+    const staleVersion = staleInstalledVersion(this.context, TARGET, this.skillsInstalled());
+    if (staleVersion) {
+      const withPlugin = fs.existsSync(path.join(openCodeRoot(), "plugins", "nightgauge.js"));
+      this.outputChannel.appendLine(`Re-syncing OpenCode skills to extension ${staleVersion}...`);
+      await this.installAssets(withPlugin, staleVersion);
+      return;
+    }
     const autoPrompt = vscode.workspace
       .getConfiguration("nightgauge")
       .get<boolean>("plugins.autoPrompt", true);
@@ -336,15 +356,16 @@ export class OpenCodeSetupService implements vscode.Disposable {
     });
   }
 
-  private async installAssets(withPlugin: boolean): Promise<void> {
-    this.outputChannel.show(true);
-    this.outputChannel.appendLine("Starting OpenCode skill installation...\n");
+  /** A re-sync to `resyncVersion` does not open the output channel. */
+  private async installAssets(withPlugin: boolean, resyncVersion?: string): Promise<void> {
+    if (!resyncVersion) {
+      this.outputChannel.show(true);
+      this.outputChannel.appendLine("Starting OpenCode skill installation...\n");
+    }
     try {
       const skillsSrc = resolveBundledSkillsDir(this.context.extensionPath);
       if (!skillsSrc) {
-        throw new Error(
-          "No bundled skills found (dist/claude-plugins/nightgauge/skills or dist/skills)."
-        );
+        throw new Error("No bundled skills found (dist/skills).");
       }
       const root = openCodeRoot();
       const pluginSrc = withPlugin
@@ -352,12 +373,15 @@ export class OpenCodeSetupService implements vscode.Disposable {
         : undefined;
       const result = installOpenCodeTree({ skillsSrc, root, pluginSrc });
       await this.context.globalState.update(OpenCodeSetupService.INSTALLED_KEY, true);
+      await stampInstalledVersion(this.context, TARGET);
       const what = `${result.skills} skills and ${result.skills} commands${
         result.plugin ? " and the plugin" : ""
       }`;
       this.outputChannel.appendLine(`✓ Synced ${what} to ${root}`);
       vscode.window.showInformationMessage(
-        `Nightgauge OpenCode skills installed (${what}). Try /nightgauge-issue-create.`
+        resyncVersion
+          ? `Nightgauge updated its OpenCode skills to ${resyncVersion} (${what}).`
+          : `Nightgauge OpenCode skills installed (${what}). Try /nightgauge-issue-create.`
       );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

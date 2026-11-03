@@ -40,15 +40,6 @@ vi.mock("util", () => ({
   promisify: vi.fn(() => mockExecAsync),
 }));
 
-const REQUIRED_COMMANDS = [
-  "nightgauge-issue-pickup.md",
-  "nightgauge-feature-planning.md",
-  "nightgauge-feature-dev.md",
-  "nightgauge-feature-validate.md",
-  "nightgauge-pr-create.md",
-  "nightgauge-pr-merge.md",
-];
-
 describe("CodexSetupService bundled skills", () => {
   let tmpRoot: string;
   let extensionPath: string;
@@ -67,37 +58,13 @@ describe("CodexSetupService bundled skills", () => {
     prevCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
 
-    const commandsDir = path.join(extensionPath, "resources", "codex", "commands");
-    fs.mkdirSync(commandsDir, { recursive: true });
-    for (const file of REQUIRED_COMMANDS) {
-      fs.writeFileSync(path.join(commandsDir, file), `# ${file}\n`);
-    }
-
-    const pluginSkills = path.join(
-      extensionPath,
-      "dist",
-      "claude-plugins",
-      "nightgauge",
-      "skills",
-      "issue-create"
-    );
-    fs.mkdirSync(path.join(pluginSkills, "_includes"), { recursive: true });
-    fs.writeFileSync(path.join(pluginSkills, "SKILL.md"), "# issue-create\n");
-    fs.writeFileSync(path.join(pluginSkills, "_includes", "environment-and-content.md"), "# env\n");
-    fs.mkdirSync(
-      path.join(extensionPath, "dist", "claude-plugins", "nightgauge", "skills", "_shared"),
-      { recursive: true }
-    );
+    const bundledSkill = path.join(extensionPath, "dist", "skills", "nightgauge-issue-create");
+    fs.mkdirSync(path.join(bundledSkill, "_includes"), { recursive: true });
+    fs.writeFileSync(path.join(bundledSkill, "SKILL.md"), "# issue-create\n");
+    fs.writeFileSync(path.join(bundledSkill, "_includes", "environment-and-content.md"), "# env\n");
+    fs.mkdirSync(path.join(extensionPath, "dist", "skills", "_shared"), { recursive: true });
     fs.writeFileSync(
-      path.join(
-        extensionPath,
-        "dist",
-        "claude-plugins",
-        "nightgauge",
-        "skills",
-        "_shared",
-        "PREFLIGHT.md"
-      ),
+      path.join(extensionPath, "dist", "skills", "_shared", "PREFLIGHT.md"),
       "# preflight\n"
     );
 
@@ -110,7 +77,7 @@ describe("CodexSetupService bundled skills", () => {
     ).workspaceFolders = [{ uri: { fsPath: workspaceRoot } }] as never;
     mockExecAsync.mockResolvedValue({ stdout: "codex 1.0.0", stderr: "" });
     vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
-      "Install Codex Commands" as never
+      "Install Codex Skills" as never
     );
   });
 
@@ -172,7 +139,7 @@ describe("CodexSetupService bundled skills", () => {
       expect.stringContaining("installed 1 of 2, skipped 1")
     );
     expect(vscode.window.showInformationMessage).not.toHaveBeenCalledWith(
-      expect.stringContaining("commands installed")
+      expect.stringContaining("skills installed")
     );
     expect(fs.readFileSync(path.join(stale, "SKILL.md"), "utf8")).toBe("# stale\n");
     // Setup stays recorded, so activation does not re-prompt on every start.
@@ -259,14 +226,36 @@ describe("copySkillsTree counts and retired skills (#2739)", () => {
     expect(fs.existsSync(path.join(linked, "SKILL.md"))).toBe(true);
   });
 
-  it("keeps a marked skill under its restored name when the source is the mirror", async () => {
-    const mirror = path.join(tmpRoot, "mirror");
-    skill(mirror, "issue-create");
-    skill(dest, "nightgauge-retro", true);
-    skill(mirror, "retro");
+  it("installs each skill under its own name and never renames a short one (#2762)", async () => {
+    // The plugin mirror's short names were once renamed to nightgauge-*
+    // without touching SKILL.md; a canonical tree needs no rename at all.
+    skill(source, "issue-create");
+    const warn = vi.fn();
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    const result = await copySkillsTree(mirror, dest, vi.fn(), { prune: true });
+    const result = await copySkillsTree(source, dest, warn, { prune: false });
     expect(result).toEqual({ installed: 2, total: 2, skipped: 0, removed: 0 });
+    expect(fs.readdirSync(dest).sort()).toEqual(["nightgauge-issue-create", "nightgauge-retro"]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("issue-create is not a Nightgauge"));
+  });
+
+  it("leaves a skill's top-level CHANGELOG.md and tests/ behind, as the bundle does", async () => {
+    const root = path.join(source, "nightgauge-retro");
+    fs.writeFileSync(path.join(root, "CHANGELOG.md"), "# changes");
+    fs.mkdirSync(path.join(root, "tests"));
+    fs.writeFileSync(path.join(root, "tests", "case.md"), "case");
+    fs.mkdirSync(path.join(root, "_includes", "tests"), { recursive: true });
+    fs.writeFileSync(path.join(root, "_includes", "CHANGELOG.md"), "nested");
+    fs.writeFileSync(path.join(root, "_includes", "tests", "kept.md"), "nested");
+    fs.mkdirSync(path.join(source, "_shared"));
+    fs.writeFileSync(path.join(source, "_shared", "CHANGELOG.md"), "shared");
+    const { copySkillsTree } = await import("../../src/services/bundledSkills");
+    await copySkillsTree(source, dest, vi.fn(), { prune: false });
+    const out = path.join(dest, "nightgauge-retro");
+    expect(fs.existsSync(path.join(out, "CHANGELOG.md"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "tests"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "_includes", "CHANGELOG.md"))).toBe(true);
+    expect(fs.existsSync(path.join(out, "_includes", "tests", "kept.md"))).toBe(true);
+    expect(fs.existsSync(path.join(dest, "_shared", "CHANGELOG.md"))).toBe(true);
   });
 
   it("does not prune without the option, or from an empty source", async () => {
@@ -282,13 +271,13 @@ describe("copySkillsTree counts and retired skills (#2739)", () => {
     expect(fs.existsSync(path.join(dest, "nightgauge-backlog-audit"))).toBe(true);
   });
 
-  it("treats only the dist/skills subset as incomplete", async () => {
-    const { isCompleteBundledSource } = await import("../../src/services/bundledSkills");
+  it("resolves dist/skills only, never the Claude plugin mirror (#2762)", async () => {
+    const { resolveBundledSkillsDir } = await import("../../src/services/bundledSkills");
     const ext = path.join(tmpRoot, "ext");
-    expect(isCompleteBundledSource(ext, path.join(ext, "dist", "skills"))).toBe(false);
-    expect(
-      isCompleteBundledSource(ext, path.join(ext, "dist", "claude-plugins", "nightgauge", "skills"))
-    ).toBe(true);
+    skill(path.join(ext, "dist", "claude-plugins", "nightgauge", "skills"), "issue-create");
+    expect(resolveBundledSkillsDir(ext)).toBeNull();
+    skill(path.join(ext, "dist", "skills"), "nightgauge-issue-create");
+    expect(resolveBundledSkillsDir(ext)).toBe(path.join(ext, "dist", "skills"));
   });
 });
 
@@ -384,18 +373,17 @@ describe("copySkillsTree containment and ownership", () => {
   });
 
   it("installs only SKILL.md directories and _shared/", async () => {
-    // The plugin-mirror layout the VSIX ships: short names, installed under
-    // the restored nightgauge- prefix, so a directory without a SKILL.md file
-    // would land as nightgauge-<name> in every user's skills directory.
-    const mirror = path.join(tmpRoot, "mirror");
-    write(path.join(mirror, "issue-create", "SKILL.md"), "# issue-create\n");
-    write(path.join(mirror, "_shared", "PREFLIGHT.md"), "# preflight\n");
-    write(path.join(mirror, "templates", "README.md"), "# templates\n");
-    fs.mkdirSync(path.join(mirror, "broken", "SKILL.md"), { recursive: true });
-    write(path.join(mirror, "README.md"), "# mirror\n");
+    // The canonical layout: skills/templates has no SKILL.md, and a directory
+    // without a SKILL.md file must not land in every user's skills directory.
+    const tree = path.join(tmpRoot, "tree");
+    write(path.join(tree, "nightgauge-issue-create", "SKILL.md"), "# issue-create\n");
+    write(path.join(tree, "_shared", "PREFLIGHT.md"), "# preflight\n");
+    write(path.join(tree, "templates", "README.md"), "# templates\n");
+    fs.mkdirSync(path.join(tree, "nightgauge-broken", "SKILL.md"), { recursive: true });
+    write(path.join(tree, "README.md"), "# tree\n");
 
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    const result = await copySkillsTree(mirror, dest, vi.fn(), { prune: false });
+    const result = await copySkillsTree(tree, dest, vi.fn(), { prune: false });
 
     expect(result.installed).toBe(2);
     expect(fs.readdirSync(dest).sort()).toEqual(["_shared", "nightgauge-issue-create"]);

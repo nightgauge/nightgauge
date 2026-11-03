@@ -310,6 +310,18 @@ If you have questions about this migration, please open an issue with the
 
 ---
 
+## Extension Codex Commands → Codex Skills
+
+**Status**: Removed in #2762
+
+`Nightgauge: Setup Codex Commands` copied six command files into
+`~/.codex/commands/`. Codex does not read that directory, and each file called
+`scripts/run-stage.sh`, which the VSIX does not ship. The command is now
+`Nightgauge: Setup Codex Skills` and installs only `~/.codex/skills/`, the tree
+`scripts/install-agent-skills.sh --codex-only` installs. Invoke a stage as
+`$nightgauge-issue-pickup`. Old `~/.codex/commands/nightgauge-*.md` files carry
+no install marker, so Nightgauge leaves them in place; delete them by hand.
+
 ## Codex/Gemini Wrapper Scripts → Unified Stage Runner
 
 **Status**: Removed in #1804 (commit `ea074442`,
