@@ -72,10 +72,7 @@ func TestAutonomousResume_StartsGoroutineWhenNotRunning(t *testing.T) {
 		// Wait for the spawned goroutine to drain. Without this, the test
 		// process leaks the autonomous scheduler goroutine into subsequent
 		// tests, producing intermittent failures from shared state.
-		deadline := time.Now().Add(2 * time.Second)
-		for as.IsRunning() && time.Now().Before(deadline) {
-			time.Sleep(20 * time.Millisecond)
-		}
+		stopAndJoinLoop(t, as, 2*time.Second)
 	})
 
 	if _, err := handler(ctx, nil); err != nil {
@@ -115,10 +112,7 @@ func TestAutonomousResume_NoGoroutineLeakWhenAlreadyRunning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		cancel()
-		deadline := time.Now().Add(2 * time.Second)
-		for as.IsRunning() && time.Now().Before(deadline) {
-			time.Sleep(20 * time.Millisecond)
-		}
+		stopAndJoinLoop(t, as, 2*time.Second)
 	})
 
 	if _, err := startHandler(ctx, nil); err != nil {

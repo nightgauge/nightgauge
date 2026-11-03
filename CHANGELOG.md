@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Stopping autonomous mode right after a resume or start now stops it. The loop used to
+  claim its running state on a goroutine of its own, so a Stop that arrived first did
+  nothing and the loop came up afterwards, kept running and wrote to the checkout (#2891).
 - A stage stopped at `pipeline.stage_hard_caps` or `pipeline.stage_time_caps` now records
   `stage_cap_kill` in its exit record and `gate_reason`, and its failure report names the cap, its
   value and the elapsed time. Idle kills still read `stall_kill`, and retry and backoff are
