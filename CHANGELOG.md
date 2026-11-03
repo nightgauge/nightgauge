@@ -28,6 +28,10 @@ changelog, and the release workflow refuses a tag that does not.
 - `Nightgauge: Setup Codex Skills`, `Setup Grok Skills` and `Setup Claude Code Plugins` now
   always offer to install or update, as `Setup OpenCode Skills` does, even with
   `nightgauge.plugins.autoPrompt` off (#2762).
+- A reviewed or gated tree now keeps tracked files that match an ignore rule
+  (`.gitignore`, `.git/info/exclude`, `core.excludesFile`). They no longer read
+  as deleted in review diffs, and the tree fingerprint no longer varies between
+  clones with different local excludes.
 - An issue that states its criteria under `## Verification`, `## Acceptance`, `## Done when`
   or `## Definition of Done`, as a numbered or bulleted list, now yields acceptance criteria,
   so a pull request that meets them writes `Closes #N` and the issue closes on merge. A
@@ -38,7 +42,6 @@ changelog, and the release workflow refuses a tag that does not.
   instead of as a `Refs` line at `pr-create`.
 - The G1 clean-install report reads the PR from `pr-{N}.json` and names its real number and
   merge state instead of `none`.
-
 - Judge verdicts from an orchestrated `feature-validate` run are now written to
   `health/gate-metrics.jsonl` by the SDK pipeline orchestrator, so `FeatureValidateGate`
   sees them. The fold previously had no caller and no judge row was ever recorded. A run that

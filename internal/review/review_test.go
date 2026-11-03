@@ -447,6 +447,26 @@ func TestBundleHoldsUncommittedWorkAndNoFindingsFile(t *testing.T) {
 	}
 }
 
+// A tracked file matching a local exclude must not read as deleted (#2889).
+func TestBundleKeepsTrackedExcludedFiles(t *testing.T) {
+	s := bundleRepo(t, true)
+	if err := os.WriteFile(filepath.Join(s.Root, ".git", "info", "exclude"), []byte("a.txt\n.gitignore\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Tree = fingerprint(t, s.Root)
+	b, err := BuildBundle(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff, _ := os.ReadFile(b.DiffPath)
+	if strings.Contains(string(diff), "deleted file mode") {
+		t.Fatalf("a tracked excluded file reads as deleted: %s", diff)
+	}
+	if !strings.Contains(string(diff), "+two") {
+		t.Fatalf("diff missed uncommitted work: %s", diff)
+	}
+}
+
 // Reuse rests on this: a bundle that moved the tree would make every review the
 // review of a tree nobody can ask about again, and record would call it moved.
 func TestBundleDoesNotMoveTheTree(t *testing.T) {

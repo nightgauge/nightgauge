@@ -56,8 +56,12 @@ func decideGoTestSkip(ctx context.Context, runner CmdRunner, workDir string) (bo
 }
 
 // TreeFingerprint hashes the working tree through a scratch index, leaving the
-// real index alone. scripts/ci-local-go-test.sh computes the same tree;
-// scripts/test-ci-local-go-pass-stamp.sh pins that they agree.
+// real index alone. The scratch index is seeded from HEAD first: staged into an
+// empty index, `add -A` would apply ignore rules to tracked files too and drop
+// any tracked file that matches .gitignore, info/exclude or core.excludesFile
+// (#2889). An unborn HEAD keeps the empty index. scripts/ci-local-go-test.sh
+// computes the same tree; scripts/test-ci-local-go-pass-stamp.sh pins that they
+// agree.
 func TreeFingerprint(ctx context.Context, runner CmdRunner, workDir string) (string, error) {
 	dir, err := os.MkdirTemp("", "ng-pre-push-tree-")
 	if err != nil {
@@ -65,6 +69,11 @@ func TreeFingerprint(ctx context.Context, runner CmdRunner, workDir string) (str
 	}
 	defer os.RemoveAll(dir)
 	indexEnv := "GIT_INDEX_FILE=" + filepath.Join(dir, "index")
+	if _, err := runner.Run(ctx, workDir, "git", "rev-parse", "-q", "--verify", "HEAD^{tree}"); err == nil {
+		if out, err := runner.Run(ctx, workDir, "env", indexEnv, "git", "read-tree", "HEAD"); err != nil {
+			return "", fmt.Errorf("read-tree: %v: %s", err, truncateStr(strings.TrimSpace(string(out)), 200))
+		}
+	}
 	if out, err := runner.Run(ctx, workDir, "env", indexEnv, "git", "add", "-A", "--", "."); err != nil {
 		return "", fmt.Errorf("stage: %v: %s", err, truncateStr(strings.TrimSpace(string(out)), 200))
 	}
