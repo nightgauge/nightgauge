@@ -50,7 +50,7 @@ vi.mock("../../src/utils/skillRunner", () => ({
 // BinaryResolver returns a fake path so runDeterministicPrStage dispatches to the
 // child_process stub below.
 vi.mock("../../src/services/BinaryResolver", () => ({
-  BinaryResolver: { fromVSCode: () => ({ resolve: async () => "/fake/nightgauge" }) },
+  BinaryResolver: { fromVSCode: () => ({ resolve: async () => binaryPath.value }) },
 }));
 
 // Mutable state shared between the hoisted mock factory and the tests.
@@ -64,7 +64,12 @@ const {
   prStageBudget,
   prStageRecover,
   prStageMergeQueue,
+  prForgeState,
+  binaryPath,
 } = vi.hoisted(() => ({
+  // #2878: the forge's answer to the resume's PR-state check.
+  prForgeState: { value: "OPEN" },
+  binaryPath: { value: "/fake/nightgauge" as string | null },
   // #2841: what `pr-stage recover` answers, one entry per call; a null entry
   // makes the verb fail.
   prStageRecover: { value: [] as Array<Record<string, unknown> | null> },
@@ -198,8 +203,13 @@ vi.mock("child_process", async () => {
       });
     }
 
-    // #2841: a rewind replays feature-dev and feature-validate.
-    if (isBinary && a[0] === "gate" && (a[2] === "feature-dev" || a[2] === "feature-validate")) {
+    // #2841: a rewind replays feature-dev and feature-validate; #2878: a retired
+    // run replays everything from issue-pickup.
+    if (
+      isBinary &&
+      a[0] === "gate" &&
+      ["issue-pickup", "feature-planning", "feature-dev", "feature-validate"].includes(a[2])
+    ) {
       return Promise.resolve({
         stdout: JSON.stringify({
           stage: a[2],
@@ -212,11 +222,23 @@ vi.mock("child_process", async () => {
       });
     }
 
+    // #2878: the hook withholds Ready on a no-op that left the issue open.
+    if (isBinary && a[0] === "hook") {
+      return Promise.resolve({
+        stdout: JSON.stringify({ readyWithheld: a.includes("--already-merged") }),
+        stderr: "",
+      });
+    }
+
     if (isBinary && a[0] === "epic") {
       return Promise.resolve({ stdout: "{}", stderr: "" });
     }
 
     if (a[0] === "pr") {
+      // The resume's forge check (#2878).
+      if (a.includes("-q") && a.includes(".state")) {
+        return Promise.resolve({ stdout: prForgeState.value, stderr: "" });
+      }
       // Pre-merge branch-behind guard reads mergeStateStatus; CLEAN → proceed.
       if (a.includes("-q") && a.includes(".mergeStateStatus")) {
         return Promise.resolve({ stdout: "CLEAN", stderr: "" });
@@ -225,6 +247,11 @@ vi.mock("child_process", async () => {
         stdout: JSON.stringify({ state: "MERGED", statusCheckRollup: [] }),
         stderr: "",
       });
+    }
+
+    // resolvePostMergeNwo
+    if (a[0] === "repo" && a.includes('.owner.login + "/" + .name')) {
+      return Promise.resolve({ stdout: "TestOrg/test-repo", stderr: "" });
     }
 
     // resolveRunRepoSlug: gh repo view --json nameWithOwner -q .nameWithOwner
@@ -433,6 +460,8 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     prStageMergeQueue.value = [];
     prStagePhaseLines.value = [];
     gatePrMergePassed.value = true;
+    prForgeState.value = "OPEN";
+    binaryPath.value = "/fake/nightgauge";
     // Reset to the deterministic-success defaults each test.
     prStageCreate.value = {
       stage: "pr-create",
@@ -629,6 +658,100 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
 
     expect(context).toHaveBeenCalledWith(300);
     expect(notifyPrMerged).toHaveBeenCalledWith(999);
+  });
+
+  it("pr-merge: a run resumed at pr-merge that finds it already merged is a no-op (#2878)", async () => {
+    mockSkillSuccess();
+    const run = async () => {
+      const state = createMockStateService("pr-merge");
+      const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+      orchestrator.setWorktreeOverride(WORKTREE);
+      return orchestrator.runPipeline(300);
+    };
+
+    expect((await run()).mergeNoOp).toBe(false);
+
+    prStageMerge.value = { ...prStageMerge.value, reason: "already-merged" };
+    expect((await run()).mergeNoOp).toBe(true);
+  });
+
+  describe("a resume on a remembered pr-create (#2878)", () => {
+    function resumed(stages: Record<string, { status: string }> = {}) {
+      const state = createMockStateService("pr-merge");
+      const remembered = makeState("pr-merge");
+      vi.mocked(state.getState).mockResolvedValue({
+        ...remembered,
+        stages: { ...remembered.stages, ...stages },
+      } as never);
+      const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+      orchestrator.setWorktreeOverride(WORKTREE);
+      vi.spyOn(
+        orchestrator as unknown as { issueIsOpen(n: number): Promise<boolean> },
+        "issueIsOpen"
+      ).mockResolvedValue(true);
+      return { state, orchestrator };
+    }
+
+    function startedStages(state: PipelineStateService) {
+      return vi.mocked(state.startStage).mock.calls.map(([stage]) => stage);
+    }
+
+    it("replays planning from a skipped state when the PR merged", async () => {
+      mockSkillSuccess();
+      prForgeState.value = "MERGED";
+      const { state, orchestrator } = resumed({ "feature-planning": { status: "skipped" } });
+      await orchestrator.runPipeline(300);
+      expect(startedStages(state)).toContain("feature-planning");
+    });
+
+    it("replays a stage left deferred when the PR merged", async () => {
+      mockSkillSuccess();
+      prForgeState.value = "MERGED";
+      const { state, orchestrator } = resumed({ "feature-dev": { status: "deferred" } });
+      await orchestrator.runPipeline(300);
+      expect(startedStages(state)).toContain("feature-dev");
+    });
+
+    it("still goes straight to pr-merge when the PR is open", async () => {
+      mockSkillSuccess();
+      const { state, orchestrator } = resumed({ "feature-planning": { status: "skipped" } });
+      await orchestrator.runPipeline(300);
+      expect(startedStages(state)).not.toContain("feature-planning");
+    });
+  });
+
+  describe("the post-merge hook's early returns (#2878)", () => {
+    type Hookable = {
+      mergeNoOp: boolean;
+      invokePostMergeHook(n: number): Promise<void>;
+      resolvePostMergeNwo(n: number): Promise<{ owner: string; repo: string }>;
+    };
+
+    function orchestratorWithNoOp() {
+      const orchestrator = new HeadlessOrchestrator(
+        createMockStateService("pr-merge"),
+        mockLogger,
+        {
+          contextFileWaitMs: 0,
+        }
+      ) as unknown as Hookable;
+      orchestrator.mergeNoOp = true;
+      return orchestrator;
+    }
+
+    it("does not park when the binary cannot be resolved", async () => {
+      const orchestrator = orchestratorWithNoOp();
+      binaryPath.value = null;
+      await orchestrator.invokePostMergeHook(300);
+      expect(orchestrator.mergeNoOp).toBe(false);
+    });
+
+    it("does not park when the owner cannot be resolved", async () => {
+      const orchestrator = orchestratorWithNoOp();
+      vi.spyOn(orchestrator, "resolvePostMergeNwo").mockResolvedValue({ owner: "", repo: "" });
+      await orchestrator.invokePostMergeHook(300);
+      expect(orchestrator.mergeNoOp).toBe(false);
+    });
   });
 
   it("pr-merge: no budget means no timed run, so it is a runner error (#2730)", async () => {

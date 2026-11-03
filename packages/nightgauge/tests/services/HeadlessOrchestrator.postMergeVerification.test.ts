@@ -251,6 +251,20 @@ describe("HeadlessOrchestrator post-merge verification (Issue #3132)", () => {
     vi.useRealTimers();
   });
 
+  // These runs resume on a recorded PR, which the forge must read open (#2878).
+  beforeEach(() => {
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as {
+        forgePrState(n: number): Promise<string | null>;
+      },
+      "forgePrState"
+    ).mockResolvedValue("OPEN");
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as { readMergedPrNumber(n: number): number },
+      "readMergedPrNumber"
+    ).mockReturnValue(999);
+  });
+
   it("first-attempt failure logs WARN (not ERROR) with auto-recovery wording", async () => {
     const mockState = createMockStateService();
     const orchestrator = new HeadlessOrchestrator(mockState, mockLogger, {

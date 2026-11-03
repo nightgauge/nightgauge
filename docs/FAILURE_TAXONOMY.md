@@ -242,6 +242,7 @@ record may carry both fields, neither, or only one.
 | `no_changes_produced`            | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                                                                                                                                                                                                                           |
 | `not_pipeline_actionable`        | A stage declared the issue's deliverable is not producible by any pipeline lap — counsel sign-off, an operator-only credential, a human decision (Issue #1241) — not a failure and not a deferral                                                                                                                                                                                                                                    |
 | `review_cap_reached`             | The independent review reached its round cap with findings standing; the issue parks, the repository keeps dispatching, and the work stays uncommitted in the run's worktree (Issue #2865)                                                                                                                                                                                                                                           |
+| `resume_no_op`                   | A run resumed at pr-merge, found the PR already merged, did no work and left the issue open; it parks in Backlog and the repository keeps dispatching (Issue #2878)                                                                                                                                                                                                                                                                  |
 | `validation_failed`              | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                                                                                                                                                                                                                      |
 | `branch_forked`                  | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action                                                                                                                                                                                                                                                                                         |
 | `abandoned_commit`               | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191)                                                                                                                                                                                                  |
@@ -307,6 +308,7 @@ from the captures in `internal/terminalkind/testdata/opencode/`.
 | The binary cannot serve the dispatch     | `adapter_incompatible`        | Parked                                                  |
 | A retry inherited a prior dev context    | `dev_context_stale`           | Parked                                                  |
 | The review reached its round cap         | `review_cap_reached`          | Parked                                                  |
+| A resumed run merged nothing             | `resume_no_op`                | Parked                                                  |
 | The model server is not listening        | `network_unavailable`         | Generic backoff; outcome recording skipped              |
 | `ProviderModelNotFoundError`             | `model_unavailable`           | Cap recovery (below)                                    |
 | An Ollama model that is not pulled       | `model_unavailable`           | Cap recovery (below)                                    |
@@ -328,6 +330,12 @@ park held while the fleet runs. The extension-driven queue agrees: its
 `HALT_SKIP_PARKED` set keeps a park from halting the rest of the repository's
 queue, and a test reads `TerminalKindParks` from the Go source so the two
 cannot drift (#1753).
+
+- `resume_no_op` (#2878): a run that resumed at pr-merge reports the kind with
+  success when it found the PR already merged and the issue stayed open. Ready was
+  withheld, so no repeat would come: the report parks the issue in Backlog with an
+  Action Center card. A full run whose PR merged elsewhere is not a no-op. A release
+  clears the hold; move the issue to Ready to re-run it.
 
 - `review_cap_reached` (#2865): the independent review caught defects in every
   round its cap allows. The run's work stays uncommitted in its worktree, and

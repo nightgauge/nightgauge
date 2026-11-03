@@ -290,6 +290,20 @@ describe("HeadlessOrchestrator pre-merge branch-behind guard (Issue #3782)", () 
     return orchestrator.runPipeline(3782);
   }
 
+  // These runs resume on a recorded PR, which the forge must read open (#2878).
+  beforeEach(() => {
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as {
+        forgePrState(n: number): Promise<string | null>;
+      },
+      "forgePrState"
+    ).mockResolvedValue("OPEN");
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as { readMergedPrNumber(n: number): number },
+      "readMergedPrNumber"
+    ).mockReturnValue(999);
+  });
+
   it("behind-clean: auto-rebases and lets skill run", async () => {
     mergeStateStatus.value = "BEHIND";
 

@@ -311,3 +311,60 @@ func TestRunPostMerge_NilRuntimeEvaluatesOnceAndWritesNoBreadcrumb(t *testing.T)
 		}
 	}
 }
+
+// TestRunPostMerge_NoOpRunWithholdsReady (#2878): a run that merged nothing asks
+// the hook to withhold Ready, and a withheld Ready is not re-written at
+// completion. A nil runtime is a real merge seen late, so it never asks.
+func TestRunPostMerge_NoOpRunWithholdsReady(t *testing.T) {
+	root := layouttest.Repo(t)
+	s := newBreadcrumbScheduler(t, root, root)
+	var got []bool
+	s.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
+		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer, in hooks.PostMergeInput) hooks.PostMergeResult {
+		got = append(got, in.AlreadyMerged)
+		return hooks.PostMergeResult{PartialDelivery: true, ReadyWithheld: in.AlreadyMerged}
+	}
+	item := types.BoardItem{Number: breadcrumbIssue, Repo: breadcrumbTargetRepo}
+
+	s.runPostMerge(context.Background(), item, nil, 931)
+
+	real := &state.RuntimeState{}
+	s.runPostMerge(context.Background(), item, real, 931)
+	if !real.Snapshot().PartialDelivery {
+		t.Error("a real Refs merge must keep the hook's Ready at completion (#2706)")
+	}
+
+	noOp := &state.RuntimeState{}
+	noOp.SetResumedAtMerge()
+	noOp.SetMergeNoOp()
+	s.runPostMerge(context.Background(), item, noOp, 931)
+	if snap := noOp.Snapshot(); snap.PartialDelivery || !snap.ReadyWithheld {
+		t.Errorf("a no-op run must withhold Ready at completion: %+v", snap)
+	}
+	if len(got) != 3 || got[0] || got[1] || !got[2] {
+		t.Errorf("AlreadyMerged per call = %v, want [false false true]", got)
+	}
+}
+
+// TestRunPostMerge_WiresTheRemainderComment (#2878): the scheduler's path posts
+// the partial-delivery comment too, not only the CLI and extension path.
+func TestRunPostMerge_WiresTheRemainderComment(t *testing.T) {
+	root := layouttest.Repo(t)
+	s := newBreadcrumbScheduler(t, root, root)
+	s.trustGate = allWritersGate()
+	s.mainCheckReaderFn = func(*gh.Client) hooks.MainCheckReader { return nil }
+	if s.client == nil {
+		s.client = &gh.Client{}
+	}
+	var wired bool
+	s.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
+		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer, in hooks.PostMergeInput) hooks.PostMergeResult {
+		wired = in.Remainder != nil
+		return hooks.PostMergeResult{}
+	}
+	item := types.BoardItem{Number: breadcrumbIssue, Repo: breadcrumbTargetRepo}
+	s.runPostMerge(context.Background(), item, nil, 931)
+	if !wired {
+		t.Error("the scheduler left PostMergeInput.Remainder nil, so a partial delivery posts no comment")
+	}
+}

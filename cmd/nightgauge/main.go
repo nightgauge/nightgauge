@@ -7086,6 +7086,7 @@ func hookPostMergeCmd() *cobra.Command {
 		prNumber      int
 		workdir       string
 		mainCheckWait time.Duration
+		alreadyMerged bool
 		outputJSON    bool
 	)
 
@@ -7159,8 +7160,11 @@ cause the command to exit non-zero.`,
 				// (#2574) Comment the validation marker on a green merge so
 				// the issue's program dependents are released.
 				ValidationMarks: hookValidationMarks{Gate: markerTrustGate(client, workdir), issues: issueSvc},
-				// (#2595) Name the remainder on an issue whose PR said Refs.
-				Remainder: issueSvc,
+				// (#2595) Name the remainder on an issue whose PR said Refs,
+				// once per PR (#2878).
+				Remainder:     hookValidationMarks{Gate: markerTrustGate(client, workdir), issues: issueSvc},
+				AlreadyMerged: alreadyMerged,
+				ExcludeLabels: hookExcludeLabels(cfg),
 			})
 			reportMainChecks(workdir, ownerPart, repoPart, issueNumber, prNumber, result)
 
@@ -7209,8 +7213,7 @@ cause the command to exit non-zero.`,
 				case finErr != nil:
 					fmt.Fprintf(os.Stderr, "Warning: post-merge survival finalize failed: %v\n", finErr)
 				case finRes.Finalized > 0:
-					fmt.Printf("Post-merge: finalized %d due survival record(s): %v\n",
-						finRes.Finalized, finRes.ByVerdict)
+					reportSurvivalFinalized(os.Stdout, os.Stderr, outputJSON, finRes.SweepResult)
 				}
 			}
 
@@ -7273,7 +7276,7 @@ cause the command to exit non-zero.`,
 					fmt.Printf("  - %s\n", task)
 				}
 			case "partial_delivery":
-				fmt.Printf("PR #%d does not close issue #%d (Refs, not Closes) — left open and returned to Ready; %d unmet criteria named.\n",
+				fmt.Printf("PR #%d does not close issue #%d (Refs, not Closes) — left open; %d unmet criteria named.\n",
 					prNumber, issueNumber, len(result.UnmetCriteria))
 			case "pr_verify_error", "pr_not_merged", "issue_fetch_error", "auto_close_error":
 				// Already reported to stderr above, in both output modes.
@@ -7291,6 +7294,7 @@ cause the command to exit non-zero.`,
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "GitHub Project number for board sync (optional)")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "PR number to verify is MERGED before closing issue (optional; 0 skips verification, and skips the survival capture that needs its merge SHA)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Root of the survival journal (default: current directory). Set this when the process cwd is a transient worktree.")
+	cmd.Flags().BoolVar(&alreadyMerged, "already-merged", false, "The caller's run found the PR merged and merged nothing itself: a partial delivery stays out of Ready (#2878)")
 	cmd.Flags().DurationVar(&mainCheckWait, "main-check-wait", hooks.DefaultMainCheckTimeout, "How long to wait for the merge commit's check runs on the base branch to conclude before recording the verdict (0 = one immediate read, no wait). Requires --pr.")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	_ = cmd.MarkFlagRequired("issue") // cobra MarkFlagRequired never errors for known flags
@@ -10211,6 +10215,15 @@ func resolveProjectNumber(cfg *config.Config, explicitProject bool, projectNumbe
 		SharedBoard: projectNumber,
 		StartDir:    startDir,
 	})
+}
+
+// hookExcludeLabels resolves autonomous.exclude_labels for the post-merge hook.
+// A config that failed to load leaves cfg nil and resolves to the defaults.
+func hookExcludeLabels(cfg *config.Config) []string {
+	if cfg == nil {
+		return config.DefaultExcludeLabels
+	}
+	return cfg.Autonomous.ResolvedExcludeLabels()
 }
 
 // hookBoardProject picks the board `hook post-merge` syncs. An explicit

@@ -25,7 +25,7 @@ func TestCheckEpicCompletion_BlockedIntegrationRaisesCardAndCloseResolvesIt(t *t
 	}
 	item := types.BoardItem{Repo: "o/r", Number: 2099}
 
-	s.checkEpicCompletion(context.Background(), item, 0)
+	s.checkEpicCompletion(context.Background(), item, 0, false)
 	reqs := openRunRequests(t, s)
 	if len(reqs) != 1 || reqs[0].Producer != producerEpicIntegration || reqs[0].Context.Issue != 2085 {
 		t.Fatalf("cards = %+v, want one epic-integration card for #2085", reqs)
@@ -33,14 +33,14 @@ func TestCheckEpicCompletion_BlockedIntegrationRaisesCardAndCloseResolvesIt(t *t
 	assertSteerSet(t, reqs[0])
 
 	result = hooks.PostMergeResult{IssueClosed: true, AutoClosed: true, EpicNumber: 2085, EpicRepo: "o/r"}
-	s.checkEpicCompletion(context.Background(), item, 0)
+	s.checkEpicCompletion(context.Background(), item, 0, false)
 	if reqs := openRunRequests(t, s); len(reqs) != 0 {
 		t.Errorf("card still open after the epic closed: %+v", reqs)
 	}
 
 	result = hooks.PostMergeResult{IssueClosed: true, EpicNumber: 2085, EpicRepo: "o/r",
 		Integration: &gh.EpicIntegration{Outcome: gh.IntegrationPending}}
-	s.checkEpicCompletion(context.Background(), item, 0)
+	s.checkEpicCompletion(context.Background(), item, 0, false)
 	if reqs := openRunRequests(t, s); len(reqs) != 0 {
 		t.Errorf("pending integration raised a card: %+v", reqs)
 	}

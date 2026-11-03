@@ -27,7 +27,7 @@ import (
 //
 // prNumber is the GitHub PR number associated with the merge (0 = unknown,
 // which skips the PR-state guard in EvaluatePostMerge).
-func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardItem, prNumber int) hooks.PostMergeResult {
+func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardItem, prNumber int, alreadyMerged bool) hooks.PostMergeResult {
 	ownerPart, repoPart := splitOwnerRepo(item.Repo)
 	epicSvc := gh.NewEpicService(s.client)
 	epicSvc.SetCheckoutResolver(s.EpicCheckout)
@@ -52,6 +52,8 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		RepositoryName:  repoPart,
 		ProjectNumber:   s.projectNumber,
 		PRNumber:        prNumber,
+		AlreadyMerged:   alreadyMerged,
+		ExcludeLabels:   s.ExcludeLabels(),
 	}
 	// (#1249) Wire the check reader so the hook observes main after the merge.
 	// Through the seam, not gh.NewCIService directly: the CI service speaks REST
@@ -65,7 +67,9 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		// through the eligibility gate's trusted-comment filter, so the
 		// issue's program dependents are released.
 		if s.trustGate != nil {
-			input.ValidationMarks = validationMarks{Gate: s.trustGate, issues: gh.NewIssueService(s.client)}
+			marks := validationMarks{Gate: s.trustGate, issues: gh.NewIssueService(s.client)}
+			input.ValidationMarks = marks
+			input.Remainder = marks // the partial-delivery comment, once per PR (#2878)
 		}
 	}
 	result := evaluate(ctx, s.issueSvc, s.issueSvc, epicSvc, prVerifier, boardSvc, input)

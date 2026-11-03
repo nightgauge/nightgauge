@@ -243,6 +243,7 @@ export type TerminalFailureKind =
   | "dev_step_progress_unproven" // Issue #1651 — the feature-dev step loop could not fingerprint the work tree around a sub-session that checked no plan task, so it could not prove the step made progress and stopped; environment class, the earlier steps' work is on disk
   | "adapter_auth_failed" // Issue #312 — adapter auth pre-flight failed (probe timed out after retry, or definitively logged out); retryable infra
   | "no_changes_produced" // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for (e.g. a dispatched human-only issue)
+  | "resume_no_op" // Issue #2878 — a run that resumed at pr-merge found the PR already merged, did no work and left the issue open; one issue is parked, the repository keeps dispatching
   | "review_cap_reached" // Issue #2865 — the independent review reached its round cap with findings standing; one issue is parked, the repository keeps dispatching, and the work stays uncommitted in the run's worktree
   | "validation_failed" // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash
   | "branch_forked" // Issue #163 — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it
@@ -314,6 +315,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "adapter_auth_failed",
   "no_changes_produced",
   "review_cap_reached",
+  "resume_no_op",
   "validation_failed",
   "branch_forked",
   "runaway_progress",

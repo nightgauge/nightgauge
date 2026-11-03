@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 )
 
 // epicReasonSuffix renders the epic service's discriminator when there is one.
@@ -117,4 +119,15 @@ func reportMainChecks(workdir, owner, repo string, issueNumber, prNumber int, re
 	if note := hooks.ReportMainChecks(attention.New(root), owner, repo, result.BaseRef, issueNumber, prNumber, *result.MainChecks); note != "" {
 		fmt.Fprintf(os.Stderr, "Post-merge: %s\n", note)
 	}
+}
+
+// reportSurvivalFinalized reports the due survival records the hook finalized.
+// With --json the line goes to stderr: stdout stays one document because the
+// extension parses it (#2878).
+func reportSurvivalFinalized(stdout, stderr io.Writer, outputJSON bool, res survival.SweepResult) {
+	out := stdout
+	if outputJSON {
+		out = stderr
+	}
+	fmt.Fprintf(out, "Post-merge: finalized %d due survival record(s): %v\n", res.Finalized, res.ByVerdict)
 }

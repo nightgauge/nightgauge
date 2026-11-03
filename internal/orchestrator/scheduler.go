@@ -5978,6 +5978,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		if i := dispatchedPRResumeIndex(ctx, stages, workspaceRoot, item.Repo, item.Number, item.OpenPRNumber); i > 0 {
 			log.Printf("#%d: skipping %v — %s", item.Number, stages[:i], dispatchedPRResumeReason)
 			stageIdx = i
+			runtime.SetResumedAtMerge()
 		}
 	}
 	if stageIdx > 0 {
@@ -8862,6 +8863,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	}
 
 	completionStatus := completionBoardStatus(reconciledArm, issueClosedNow, runtime.Snapshot().PartialDelivery)
+	completionStatus = withheldCompletionStatus(completionStatus, runtime.Snapshot().ReadyWithheld)
 	log.Printf("#%d: pipeline complete — resolved terminal board status %s (arm %s: %s%s)",
 		item.Number, completionStatus, reconciledArm, reconciledArm.completionReason(),
 		map[bool]string{true: "; the issue is CLOSED on the forge, so the run is done, not in review"}[issueClosedNow])
@@ -11287,11 +11289,18 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 // runtime because that run's record has already ended — so the breadcrumb is
 // skipped and everything else runs exactly as it does for a live run.
 func (s *Scheduler) runPostMerge(ctx context.Context, item types.BoardItem, runtime *state.RuntimeState, mergedPRNumber int) hooks.PostMergeResult {
-	pmResult := s.checkEpicCompletion(ctx, item, mergedPRNumber)
+	// A nil runtime is the recheck sweep: a real merge seen late, not a no-op.
+	alreadyMerged := runtime != nil && runtime.Snapshot().MergeNoOp
+	pmResult := s.checkEpicCompletion(ctx, item, mergedPRNumber, alreadyMerged)
 
-	// (#2706) completion must not overwrite the hook's Ready on a `Refs` merge.
+	// (#2706) completion must not overwrite the hook's Ready on a `Refs` merge,
+	// and must not write the Ready the hook withheld (#2878).
 	if runtime != nil && pmResult.PartialDelivery {
-		runtime.SetPartialDelivery()
+		if pmResult.ReadyWithheld {
+			runtime.SetReadyWithheld()
+		} else {
+			runtime.SetPartialDelivery()
+		}
 	}
 
 	// (#4133) Persist the post-merge ground-truth breadcrumb onto runtime state
@@ -11466,6 +11475,9 @@ func (s *Scheduler) tryDeterministicPRMerge(
 	}
 	if detErr == nil && detResult.Path == pmstages.PathMerged {
 		runtime.SetMergedPR(detResult.PRNumber)
+		if detResult.Reason == pmstages.ReasonAlreadyMerged {
+			runtime.SetMergeNoOp()
+		}
 		runtime.RecordExecutionPath(stage, "deterministic")
 		log.Printf("#%d: pr-merge deterministic path: %s (PR #%d, %s, %dms)",
 			item.Number, detResult.Path, detResult.PRNumber, detResult.Reason, detResult.DurationMs)

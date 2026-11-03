@@ -399,3 +399,13 @@ func branchPrLandedOnForge(ctx context.Context, issueNumber int, repo, branch st
 		issueNumber, repo, branch, len(prs))
 	return reconcileNone
 }
+
+// withheldCompletionStatus keeps a partial delivery that must stay out of Ready
+// off In Review too (#2878): the issue is open and parked, and an operator's
+// Done or Backlog reading of it should not be overwritten by a review column.
+func withheldCompletionStatus(status state.BoardStatus, withheld bool) state.BoardStatus {
+	if withheld && status != state.StatusDone {
+		return state.StatusBacklog
+	}
+	return status
+}
