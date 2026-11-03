@@ -161,6 +161,8 @@ func TestTreeFingerprintMatchesCILocal(t *testing.T) {
 	dir := skipFixture(t)
 	write(t, dir, "pkg/a.go", "package pkg\n\nvar X = 1\n")
 	write(t, dir, "untracked.txt", "new\n")
+	write(t, dir, "ignored.txt", "new\n")
+	excludeFile(t, dir, "docs/a.md", "ignored.txt")
 
 	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "ci-local-go-test.sh"))
 	if err != nil {
@@ -178,5 +180,55 @@ func TestTreeFingerprintMatchesCILocal(t *testing.T) {
 	}
 	if strings.TrimSpace(string(out)) != got {
 		t.Errorf("bash %s, go %s", out, got)
+	}
+}
+
+func treeFiles(t *testing.T, dir, tree string) []string {
+	t.Helper()
+	return strings.Fields(runGit(t, dir, "ls-tree", "-r", "--name-only", tree))
+}
+
+func hasFile(files []string, name string) bool {
+	for _, f := range files {
+		if f == name {
+			return true
+		}
+	}
+	return false
+}
+
+func excludeFile(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	write(t, dir, ".git/info/exclude", strings.Join(names, "\n")+"\n")
+}
+
+// A tracked file that matches an ignore rule is still part of the tree (#2889).
+func TestTreeFingerprintKeepsTrackedIgnoredFiles(t *testing.T) {
+	dir := skipFixture(t)
+	write(t, dir, "untracked.md", "new\n")
+	excludeFile(t, dir, "docs/a.md", "untracked.md")
+	tree, err := TreeFingerprint(context.Background(), &ExecCmdRunner{}, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := treeFiles(t, dir, tree)
+	if !hasFile(files, "docs/a.md") {
+		t.Errorf("tracked excluded file dropped from tree: %v", files)
+	}
+	if hasFile(files, "untracked.md") {
+		t.Errorf("untracked excluded file entered the tree: %v", files)
+	}
+}
+
+func TestTreeFingerprintUnbornHead(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+	write(t, dir, "a.txt", "a\n")
+	tree, err := TreeFingerprint(context.Background(), &ExecCmdRunner{}, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFile(treeFiles(t, dir, tree), "a.txt") {
+		t.Errorf("unborn HEAD tree missed a.txt")
 	}
 }

@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A reviewed or gated tree now keeps tracked files that match an ignore rule
+  (`.gitignore`, `.git/info/exclude`, `core.excludesFile`). They no longer read
+  as deleted in review diffs, and the tree fingerprint no longer varies between
+  clones with different local excludes.
 - Judge verdicts from an orchestrated `feature-validate` run are now written to
   `health/gate-metrics.jsonl` by the SDK pipeline orchestrator, so `FeatureValidateGate`
   sees them. The fold previously had no caller and no judge row was ever recorded. A run that
