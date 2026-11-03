@@ -82,8 +82,8 @@ rejected.
 }
 ```
 
-- `file` is a repository-relative path. It is not absolute and has no `..`
-  segment.
+- `file` is a repository-relative path of at most 300 characters. It is not
+  absolute and has no `..` segment.
 - `line` is a positive integer, or `null` for a finding about the whole file.
 - `claim` is one line of at most 300 characters.
 - `fix` is at most 1000 characters.
@@ -97,8 +97,9 @@ rejected.
 | ----------------- | ----- | --------------------------------------------------------- |
 | Findings per file | 30    | More is rejected; nothing is posted                       |
 | Nitpicks shown    | 5     | The rest are counted in an "N more nitpicks omitted" line |
-| `claim` length    | 300   | Longer is rejected                                        |
-| `fix` length      | 1000  | Longer is rejected                                        |
+| `claim` length    | 300   | Longer is truncated with a marker; the comment says so    |
+| `fix` length      | 1000  | Longer is truncated with a marker; the comment says so    |
+| `file` length     | 300   | Longer drops that finding only; the comment says so       |
 | Turns per review  | 80    | Reaching it stops the review; the job fails, no comment   |
 
 ## Turn limit

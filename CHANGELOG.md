@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The PR review no longer discards every finding when one field is too long. An
+  over-long `claim` or `fix` is shortened with a `[truncated]` marker, a finding with an
+  over-long file path is dropped on its own, and the posted comment says which (#2819).
 - A stage stopped at `pipeline.stage_hard_caps` or `pipeline.stage_time_caps` now records
   `stage_cap_kill` in its exit record and `gate_reason`, and its failure report names the cap, its
   value and the elapsed time. Idle kills still read `stall_kill`, and retry and backoff are

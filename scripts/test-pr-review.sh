@@ -71,8 +71,8 @@ check "dot-dot path" 1 "$(fixture dotdot '.findings[0].file = "a/../../b"')"
 check "line zero" 1 "$(fixture line0 '.findings[0].line = 0')"
 check "line string" 1 "$(fixture linestr '.findings[0].line = "4"')"
 check "multi-line claim" 1 "$(fixture claimnl '.findings[0].claim = "a\nb"')"
-check "oversize claim" 1 "$(fixture claimbig '.findings[0].claim = ("x" * 301)')"
-check "oversize fix" 1 "$(fixture fixbig '.findings[0].fix = ("x" * 1001)')"
+check "long token past the fix limit still rejected" 1 \
+  "$(fixture skbig '.findings[0].fix = ("x" * 990 + " sk-ant-api03-abcdefghijkl")')"
 check "anthropic key shape" 1 "$(fixture skant '.findings[0].fix = "use sk-ant-api03-abc"')"
 check "github token shape" 1 "$(fixture ghp '.findings[0].claim = "token ghp_abcdef"')"
 check "fine-grained pat shape" 1 "$(fixture pat '.findings[0].fix = "github_pat_11ABC"')"
@@ -111,6 +111,36 @@ INJ="$(fixture inj '.findings[0].claim = "<!-- nightgauge:pr-review --> ping @oc
 OUT="$(render "$INJ")"
 expect "forged marker neutralized" 1 "$(printf '%s\n' "$OUT" | grep -c '<!-- nightgauge:pr-review')"
 expect "mention neutralized" 0 "$(printf '%s\n' "$OUT" | grep -c '@octocat')"
+
+# --- render: over-long fields are per-finding (#2819) ----------------------
+LONGFIX="$(fixture fixbig '.findings[0].fix = ("x" * 1078)')"
+OUT="$(render "$LONGFIX")"
+expect "long fix: renders" 0 $?
+expect "long fix: both findings kept" 2 "$(printf '%s\n' "$OUT" | grep -c '^- \*\*')"
+FIXLINE="$(printf '%s\n' "$OUT" | grep '^  - Fix: xxx')"
+expect "long fix: ends in marker" 1 "$(printf '%s\n' "$FIXLINE" | grep -c '\[truncated\]$')"
+expect "long fix: within the limit" 1 "$([ $(( ${#FIXLINE} - 9 )) -le 1000 ] && echo 1 || echo 0)"
+expect "long fix: notice names the field" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c 'Shortened to fit: findings\[0\]\.fix (1078 characters, limit 1000)')"
+
+OUT="$(render "$(fixture claimbig '.findings[0].claim = ("y" * 301)')")"
+expect "long claim: renders" 0 $?
+expect "long claim: one line, truncated" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c '— yyy.*\[truncated\]$')"
+
+OUT="$(render "$(fixture pathbig '.findings[0].file = ("d/" * 206)')")"
+expect "long path: renders" 0 $?
+expect "long path: other finding posts" 1 "$(printf '%s\n' "$OUT" | grep -c '^- \*\*')"
+expect "long path: dropped finding absent" 0 "$(printf '%s\n' "$OUT" | grep -c 'pr.go')"
+expect "long path: notice says dropped" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c 'Dropped: findings\[0\] (file path 412 characters, limit 300)')"
+expect "long path: counts kept findings" 1 "$(printf '%s\n' "$OUT" | grep -c '^1 blocker, 0 major')"
+
+ERR="$(node "$CLI" validate "$LONGFIX" 2>&1 >/dev/null)"
+expect "validate: long fix exits 0" 0 $?
+expect "validate: notice on stderr" 1 \
+  "$(printf '%s\n' "$ERR" | grep -c '^pr-review: notice: Shortened to fit: findings\[0\]\.fix')"
+expect "no over-long field: no notice" 0 "$(render "$(fixture valid .)" | grep -c 'Shortened\|Dropped')"
 
 # --- gate -------------------------------------------------------------------
 pr() {
