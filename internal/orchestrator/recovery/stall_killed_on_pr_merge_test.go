@@ -31,6 +31,14 @@ func TestAction_StallKilledOnPRMerge_Matches_AndRecovers(t *testing.T) {
 	}
 }
 
+// A cap kill on pr-merge recovers the way a stall does (#2812).
+func TestAction_StallKilledOnPRMerge_MatchesStageCapKill(t *testing.T) {
+	a := NewStallKilledOnPRMerge(&fakePRMergeRunner{})
+	if !a.Matches(StageFailure{Stage: state.StagePRMerge, TerminalKind: "stage_cap_kill", PRNumber: 200}) {
+		t.Error("a stage_cap_kill on pr-merge must match")
+	}
+}
+
 func TestAction_StallKilledOnPRMerge_NoMatch_FallsThrough(t *testing.T) {
 	a := NewStallKilledOnPRMerge(&fakePRMergeRunner{})
 	cases := []struct {

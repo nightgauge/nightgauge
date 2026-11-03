@@ -7,6 +7,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
 
 // SkillExitedWithoutMerging recovers from the canonical "pr-merge skill
@@ -40,9 +41,9 @@ func (a *SkillExitedWithoutMerging) Matches(failure StageFailure) bool {
 	if failure.GateKind != gates.KindNoOp {
 		return false
 	}
-	// Exclude stall_kill — StallKilledOnPRMerge is the more specific action
+	// Exclude stall-shaped kills — StallKilledOnPRMerge is the more specific action
 	// for that case (registered first in Default()).
-	if failure.TerminalKind == "stall_kill" {
+	if terminalkind.IsStallShapedKill(failure.TerminalKind) {
 		return false
 	}
 	return failure.PRNumber > 0

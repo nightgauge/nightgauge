@@ -92,7 +92,10 @@ const HALT_SKIP_ENVIRONMENTAL: ReadonlySet<string> = new Set([
   // short per-issue backoff, no lifetime-cap increment, no pause.
   "model_stream_stalled",
 ]);
-const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set(["stall_kill"]);
+const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set([
+  "stall_kill",
+  "stage_cap_kill", // #2812 — a stage stopped at its runtime cap; recovers like a stall
+]);
 
 /**
  * The parked kinds (#1631, #1753): the next attempt on the same model and

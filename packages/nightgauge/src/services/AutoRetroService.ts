@@ -69,7 +69,7 @@ import { pluginHint } from "../utils/pluginHint";
  * Categories added in #3204 (signal-first classifier):
  *
  *   - `stall-kill` — skillRunner forcibly terminated the stage for idle
- *     timeout or hard-cap. The agent went silent (often Bash hang, infinite
+ *     timeout. The agent went silent (often Bash hang, infinite
  *     tool loop, or stop-hook deadlock). Distinguished from `timeout`, which
  *     historically conflated with skillRunner kills.
  *   - `cost-cap` — skillRunner forcibly terminated the stage for crossing
@@ -530,6 +530,9 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   stall_kill: "stall-kill",
   subagent_crash: "stall-kill",
   runaway_progress: "stall-kill",
+  // A stage that ran out of time rather than one that went silent (#2812). The
+  // remedy is its scope or its cap.
+  stage_cap_kill: "timeout",
 
   // Nightgauge's OWN configured ceilings tripped. Actionable in config.
   budget_exceeded: "budget-exceeded",
@@ -665,7 +668,19 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
  * use `text`.
  */
 const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | null> = [
-  // skillRunner stall-kill log line, idle OR hard-cap.
+  // Stage stopped at its runtime cap (#2812). Ahead of the stall extractor:
+  // skillRunner's structured logs still carry the `stallKilled` flag on this kill.
+  ({ text }) => {
+    if (/\[stage-cap-killed\]\s+\S+\s+terminated/i.test(text)) {
+      return {
+        category: "timeout",
+        evidence: "skillRunner stopped the stage at its stage_hard_caps or stage_time_caps limit",
+        severityHint: "medium",
+      };
+    }
+    return null;
+  },
+  // skillRunner idle stall-kill log line.
   ({ text }) => {
     if (
       /Stage terminated due to stall detection auto-kill/i.test(text) ||
@@ -675,7 +690,7 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
     ) {
       return {
         category: "stall-kill",
-        evidence: "skillRunner forcibly terminated the stage for idle/hard-cap stall",
+        evidence: "skillRunner forcibly terminated the stage for an idle stall",
         severityHint: "medium",
       };
     }
@@ -1881,7 +1896,7 @@ export class AutoRetroService {
       timeout: "Pipeline terminated after exceeding configured time limit",
       "validation-failure": "Pipeline blocked by failing tests, type errors, or build failure",
       "stall-kill":
-        "skillRunner forcibly terminated the stage: subagent went silent past the idle or hard-cap threshold",
+        "skillRunner forcibly terminated the stage: subagent went silent past the idle threshold",
       "cost-cap":
         "skillRunner forcibly terminated the stage: per-stage cost cap exceeded before BudgetEnforcer grace-out",
       "infrastructure-outage":

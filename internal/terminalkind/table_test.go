@@ -229,6 +229,10 @@ var packageLiteralAllowlist = map[string]bool{
 	"@":                 true,
 	"~":                 true,
 	"cost-cap-exceeded": true,
+	// The two kind NAMES IsStallShapedKill compares a resolved kind against.
+	// Kinds, not failure-text markers: no input is matched against them.
+	"stall_kill":     true,
+	"stage_cap_kill": true,
 	// predicates.go — the one predicate NAME, which table.json references as
 	// `@mentions_registry_model` and Parse refuses to accept without.
 	"mentions_registry_model":                               true,
@@ -810,5 +814,17 @@ func TestOpenCodeTextPartDoesNotClassify(t *testing.T) {
 					"must not reach a kind that parks the issue:\n%s", got, part)
 			}
 		})
+	}
+}
+
+// The stall path covers a cap kill and nothing wider (#2812).
+func TestIsStallShapedKill(t *testing.T) {
+	for kind, want := range map[string]bool{
+		"stall_kill": true, "stage_cap_kill": true,
+		"runaway_progress": false, "budget_exceeded": false, "": false,
+	} {
+		if got := IsStallShapedKill(kind); got != want {
+			t.Errorf("IsStallShapedKill(%q) = %v, want %v", kind, got, want)
+		}
 	}
 }

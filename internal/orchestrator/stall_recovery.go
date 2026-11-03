@@ -35,6 +35,20 @@ const StallRetriedOutcome = "STALL_RETRIED"
 // underlying issue remains agent-class even after the first retry consumed.
 const StallKilledAfterRetryCategory = "stall-killed-after-retry"
 
+// StageCapKilledAfterRetryCategory is the same category for a stage stopped at
+// its runtime cap twice in one run (#2812). A category that said "stall" would
+// repeat the mislabel in the field health scoring reads.
+const StageCapKilledAfterRetryCategory = "stage-cap-killed-after-retry"
+
+// killedAfterRetryCategory names the failure_category for a second kill of the
+// given stall-shaped kind.
+func killedAfterRetryCategory(kind string) string {
+	if kind == TerminalKindStageCapKill {
+		return StageCapKilledAfterRetryCategory
+	}
+	return StallKilledAfterRetryCategory
+}
+
 // stallRecoveryRationalePrefix appears in every scheduler-synthesized
 // feedback signal so audits can distinguish synthetic from agent-emitted
 // signals.

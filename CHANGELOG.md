@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A stage stopped at `pipeline.stage_hard_caps` or `pipeline.stage_time_caps` now records
+  `stage_cap_kill` in its exit record and `gate_reason`, and its failure report names the cap, its
+  value and the elapsed time. Idle kills still read `stall_kill`, and retry and backoff are
+  unchanged. A second cap kill in a run now has the failure category
+  `stage-cap-killed-after-retry` (#2812).
+
 - A Go Claude stage stopped by the plugin gate now books no tokens, cost or model, including
   from the line that stopped it, because the gate decides before the line is booked. The
   minimum Claude CLI stays 2.1.223: a capture from that version is now in the tree, and a
