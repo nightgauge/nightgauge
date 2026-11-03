@@ -110,10 +110,7 @@ func TestAutonomousStop_ReportsObservedState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		cancel()
-		deadline := time.Now().Add(5 * time.Second)
-		for as.IsRunning() && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
-		}
+		stopAndJoinLoop(t, as, 5*time.Second)
 	})
 
 	if _, err := startHandler(ctx, nil); err != nil {
@@ -183,10 +180,7 @@ func TestAutonomousStop_DeadlineReportsActualState(t *testing.T) {
 	t.Cleanup(func() {
 		close(release)
 		cancel()
-		deadline := time.Now().Add(5 * time.Second)
-		for as.IsRunning() && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
-		}
+		stopAndJoinLoop(t, as, 5*time.Second)
 	})
 
 	if _, err := startHandler(ctx, nil); err != nil {
