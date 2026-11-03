@@ -831,6 +831,23 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "Zombie-run guard (#252). `[stage-no-output-timeout]` is the first-output watchdog killing a stage that never produced any session output; its producer is HeadlessOrchestrator. It is transient-stall shaped: retry with backoff is the right recovery and it should not count against the lifetime failure cap. This row carried a second clause until #470 retired it — #427 had deleted its only producer, so it could no longer match anything."
     },
     {
+      "id": "stage-cap-kill",
+      "kind": "stage_cap_kill",
+      "signal": false,
+      "clauses": [
+        [
+          "[stage-cap-killed]"
+        ],
+        [
+          "exceeded stage_hard_cap"
+        ],
+        [
+          "exceeded stage_time_cap"
+        ]
+      ],
+      "why": "A stage stopped at `pipeline.stage_hard_caps` or `pipeline.stage_time_caps` (#2812). It was working and ran out of time, so it reads differently from an idle kill and recovers exactly like one. MUST precede stall-kill. The clauses are the exact producer wordings, not bare `hard cap`, so an idle kill's stderr tail or report text that merely names a cap stays stall_kill."
+    },
+    {
       "id": "stall-kill",
       "kind": "stall_kill",
       "signal": false,
@@ -855,9 +872,6 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
         ],
         [
           "exceeded stall idle threshold"
-        ],
-        [
-          "exceeded stage_hard_cap"
         ],
         [
           "hard cap"

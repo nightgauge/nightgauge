@@ -213,6 +213,43 @@ func TestStallRecovery_SecondStallIsTerminal(t *testing.T) {
 	}
 }
 
+// A stage stopped at its cap takes the same first retry and books its own kind
+// and category on the second kill (#2812).
+func TestStallRecovery_SecondCapKillBooksStageCapKill(t *testing.T) {
+	stubReconcileGhUnreachable(t)
+	root := gitWorkspace(t)
+	enableAdaptiveStallRecovery(t, root)
+
+	runner := newStallStageRunner(map[state.PipelineStage]int{
+		state.StageFeatureDev: 5,
+	}, "[stage-cap-killed] feature-dev terminated: reached pipeline.stage_hard_caps=2700000ms after 2700s")
+
+	s := buildStallTestScheduler(t, root, runner)
+	s.retryEngine = NewRetryEngine(RetryConfig{
+		MaxBacktracks:          2,
+		MaxEscalationsPerStage: 0,
+		OscillationDetection:   true,
+	})
+
+	item := types.BoardItem{Number: 7012, Repo: "nightgauge/test", ID: "item-7012"}
+	s.runPipeline(context.Background(), item)
+
+	if got := runner.callCount[state.StageFeatureDev]; got != 2 {
+		t.Errorf("feature-dev call count = %d, want 2 (initial + retry, no third)", got)
+	}
+	records := readDailyJSONLRecords(t, root)
+	if len(records) == 0 {
+		t.Fatal("no run record written")
+	}
+	rec := records[len(records)-1]
+	if rec.TerminalFailureKind != TerminalKindStageCapKill {
+		t.Errorf("terminal_failure_kind = %q, want stage_cap_kill", rec.TerminalFailureKind)
+	}
+	if got := rec.Stages[string(state.StageFeatureDev)].FailureCategory; got != StageCapKilledAfterRetryCategory {
+		t.Errorf("failure_category = %q, want %q", got, StageCapKilledAfterRetryCategory)
+	}
+}
+
 // TestStallRecovery_DisabledFlagDoesNotRetry verifies that explicitly
 // disabling the flag in YAML opts out of recovery: the stall-kill
 // terminates the run immediately without writing feedback-{N}.json.

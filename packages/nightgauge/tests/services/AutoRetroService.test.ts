@@ -555,6 +555,19 @@ describe("AutoRetroService", () => {
   // ===========================================================================
 
   describe("classifyFailure (structured signals — #3204)", () => {
+    it('classifies a cap kill as "timeout" even with the stallKilled flag in the log', () => {
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text:
+            '{"stallKilled":true}\n[stage-cap-killed] feature-dev terminated: ' +
+            "reached pipeline.stage_hard_caps=2700000ms after 2700s",
+          sourcesAnalyzed: ["session_log"],
+        },
+        "feature-dev"
+      );
+      expect(findings[0].category).toBe("timeout");
+    });
+
     it('classifies as "stall-kill" on the skillRunner kill log line', () => {
       const findings = AutoRetroService.classifyFailure(
         {

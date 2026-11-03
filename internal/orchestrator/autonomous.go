@@ -619,6 +619,7 @@ func isTransientRevertKind(kind string) bool {
 	switch kind {
 	case TerminalKindStallKill,
 		TerminalKindRunawayProgress,
+		TerminalKindStageCapKill,
 		TerminalKindStreamIdleTimeout,
 		TerminalKindRateLimitQuotaExhausted,
 		TerminalKindApiOverloaded,
@@ -5728,12 +5729,18 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// this branch, two stall-kills on the same issue exhaust
 		// MaxLifetimeFailuresPerIssue (=2) and require manual triage every
 		// time — which defeats the purpose of autonomous mode.
-		if terminalFailureKind == TerminalKindStallKill || terminalFailureKind == TerminalKindRunawayProgress {
-			as.recordFailureLocked(repo, issue, title, now,
-				"stall-killed (transient) — will retry after backoff", terminalFailureKind)
-			as.scheduleRetryLocked(key, terminalFailureKind, "stage stalled and was killed", time.Now().Add(stallKillBackoff))
-			log.Printf("autonomous: stall-kill for %s — transient, retry in %v (no lifetime-cap increment)",
-				key, stallKillBackoff)
+		if terminalFailureKind == TerminalKindStallKill || terminalFailureKind == TerminalKindRunawayProgress ||
+			terminalFailureKind == TerminalKindStageCapKill {
+			failureNote, retryReason, logLabel := "stall-killed (transient) — will retry after backoff",
+				"stage stalled and was killed", "stall-kill"
+			if terminalFailureKind == TerminalKindStageCapKill {
+				failureNote, retryReason, logLabel = "stage-cap-killed (transient) — will retry after backoff",
+					"stage reached its runtime cap and was killed", "stage-cap-kill"
+			}
+			as.recordFailureLocked(repo, issue, title, now, failureNote, terminalFailureKind)
+			as.scheduleRetryLocked(key, terminalFailureKind, retryReason, time.Now().Add(stallKillBackoff))
+			log.Printf("autonomous: %s for %s — transient, retry in %v (no lifetime-cap increment)",
+				logLabel, key, stallKillBackoff)
 			as.persistStateLocked()
 			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {

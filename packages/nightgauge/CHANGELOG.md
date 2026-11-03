@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- A stage stopped by its runtime cap is now reported as that, naming the cap, its value and the
+  elapsed time, instead of as a stall (#2812).
+
 - A build with no bundled plugin now warns when work arrives before `system/init`, and
   prints that warning once, not again on each subagent start. The minimum Claude CLI
   stays 2.1.223 (#2807).

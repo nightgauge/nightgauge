@@ -45,6 +45,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { BinaryResolver } from "./BinaryResolver";
 import { moveToInReviewIfPRBacked } from "../utils/inReviewGuard";
+import { describeStageCapKill, isStageCapCeiling } from "../utils/killCeiling";
 import { IpcClient } from "./IpcClient";
 import {
   parsePrStageBudget,
@@ -880,20 +881,44 @@ export function composeStallKilledError(
   durationMs: number,
   upstreamError: Error | undefined
 ): Error {
+  const stallExplanation =
+    `[stall-killed] ${stage} terminated: subagent process exceeded stall kill threshold. ` +
+    `The process ran for ${Math.round(durationMs / 1000)}s without completing. ` +
+    `Configure pipeline.stall_kill_multiplier or pipeline.stage_hard_caps to adjust (0 to disable).`;
+  return withUpstreamSignal(stallExplanation, upstreamError);
+}
+
+/**
+ * Build the synthetic Error for a stage stopped at `stage_hard_caps` or
+ * `stage_time_caps` (#2812). The stage was working and ran out of time, so the
+ * report names the cap, its value and the elapsed time. It keeps the upstream
+ * markers for the same reason {@link composeStallKilledError} does.
+ *
+ * @internal Exported for testing only.
+ */
+export function composeStageCapKilledError(
+  stage: string,
+  durationMs: number,
+  killCeiling: string | undefined,
+  killCeilingValue: string | undefined,
+  upstreamError: Error | undefined
+): Error {
+  const capExplanation =
+    `${describeStageCapKill(stage, durationMs, killCeiling, killCeilingValue)}. ` +
+    `The stage was stopped by its runtime limit. ` +
+    `Reduce the stage's scope or raise the cap (0 to disable).`;
+  return withUpstreamSignal(capExplanation, upstreamError);
+}
+
+function withUpstreamSignal(explanation: string, upstreamError: Error | undefined): Error {
   const upstreamMarker = upstreamError?.message?.trim() ?? "";
   const carriesRecognizedMarker =
     upstreamMarker.length > 0 &&
     (upstreamMarker.includes("[rate-limit-quota-exhausted]") ||
       upstreamMarker.includes("rate-limit-quota-exhausted") ||
       /stream\s+idle\s+timeout/i.test(upstreamMarker));
-  const stallExplanation =
-    `[stall-killed] ${stage} terminated: subagent process exceeded stall kill threshold. ` +
-    `The process ran for ${Math.round(durationMs / 1000)}s without completing. ` +
-    `Configure pipeline.stall_kill_multiplier or pipeline.stage_hard_caps to adjust (0 to disable).`;
   return new Error(
-    carriesRecognizedMarker
-      ? `${stallExplanation}\nUpstream signal: ${upstreamMarker}`
-      : stallExplanation
+    carriesRecognizedMarker ? `${explanation}\nUpstream signal: ${upstreamMarker}` : explanation
   );
 }
 
@@ -16948,14 +16973,34 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // (also empty in this path). Compose the original marker text
             // into the synthetic message so downstream regex still matches.
             if (result.stallKilled) {
-              this.logger.error("Stage terminated due to stall detection auto-kill", {
-                stage,
-                durationMs,
-                stallKilled: true,
-                stall_indicator: true, // Issue #2871 — distinct field for dashboard filtering
-              });
+              // A cap kill logs neither stall field: AutoRetroService matches
+              // both in the log text (#2812).
+              const stageCapKilled = isStageCapCeiling(result.killCeiling);
+              if (stageCapKilled) {
+                this.logger.error("Stage terminated at its runtime cap", {
+                  stage,
+                  durationMs,
+                  killCeiling: result.killCeiling,
+                  killCeilingValue: result.killCeilingValue,
+                });
+              } else {
+                this.logger.error("Stage terminated due to stall detection auto-kill", {
+                  stage,
+                  durationMs,
+                  stallKilled: true,
+                  stall_indicator: true, // Issue #2871 — distinct field for dashboard filtering
+                });
+              }
 
-              const stallError = composeStallKilledError(stage, durationMs, result.error);
+              const stallError = stageCapKilled
+                ? composeStageCapKilledError(
+                    stage,
+                    durationMs,
+                    result.killCeiling,
+                    result.killCeilingValue,
+                    result.error
+                  )
+                : composeStallKilledError(stage, durationMs, result.error);
 
               if (this.stateService) {
                 try {

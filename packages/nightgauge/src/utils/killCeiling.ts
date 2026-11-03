@@ -92,6 +92,32 @@ export function usdLimit(usd: number): string {
 }
 
 /**
+ * Whether a ceiling name is a stage runtime cap, as opposed to an idle or
+ * progress kill. Such a kill reads as a cap and books `stage_cap_kill` (#2812).
+ */
+export function isStageCapCeiling(name: string | undefined): boolean {
+  return name === "stage-hard-cap" || name === "stage-time-cap";
+}
+
+/**
+ * The first sentence of a cap kill's report: the cap, its value and the elapsed
+ * time. Callers guarantee `killCeiling` passed {@link isStageCapCeiling}.
+ */
+export function describeStageCapKill(
+  stage: string,
+  durationMs: number,
+  killCeiling: string | undefined,
+  killCeilingValue: string | undefined
+): string {
+  const configKey =
+    killCeiling === "stage-time-cap" ? "pipeline.stage_time_caps" : "pipeline.stage_hard_caps";
+  return (
+    `[stage-cap-killed] ${stage} terminated: reached ${configKey}=${killCeilingValue ?? "unknown"} ` +
+    `after ${Math.round(durationMs / 1000)}s`
+  );
+}
+
+/**
  * Flatten a ceiling into the single `kill_ceiling_value` record field.
  *
  * Kept as one field (rather than two more IPC parameters) because limit and

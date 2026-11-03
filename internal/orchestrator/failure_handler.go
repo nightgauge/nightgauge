@@ -141,6 +141,11 @@ const (
 	// configured window. Same recovery path as stall_kill (30m backoff, no
 	// lifetime-cap increment, board→Ready). Issue #3783.
 	TerminalKindRunawayProgress = "runaway_progress"
+	// TerminalKindStageCapKill is set when a stage is stopped at
+	// pipeline.stage_hard_caps or pipeline.stage_time_caps. Same recovery as
+	// stall_kill, through terminalkind.IsStallShapedKill, but the stage reached
+	// a limit rather than going idle, so the two are counted apart. Issue #2812.
+	TerminalKindStageCapKill = "stage_cap_kill"
 	// TerminalKindApiOverloaded is set when the Anthropic API returns a 529
 	// "Overloaded" response — the service was momentarily at capacity. Surfaced
 	// by the Claude CLI as a result envelope with `is_error:true` and the
@@ -1145,5 +1150,5 @@ func IsWarningOnlyQuotaDetail(detail string) bool {
 // warning. It is booked as a stall (#2711), but quota is still under pressure:
 // a stronger tier spends more of the bucket that just warned.
 func IsWarningOnlyQuotaStall(kind, detail string) bool {
-	return kind == TerminalKindStallKill && IsWarningOnlyQuotaDetail(detail)
+	return terminalkind.IsStallShapedKill(kind) && IsWarningOnlyQuotaDetail(detail)
 }

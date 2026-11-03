@@ -58,6 +58,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/terminalkind"
 	"github.com/nightgauge/nightgauge/internal/trace"
 	"github.com/nightgauge/nightgauge/internal/workorder"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -7925,7 +7926,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// are NEVER retried — operator's per-stage cap contract takes
 			// precedence. See ADR-004.
 			stallErrMsg := stageFailureText(err, result)
-			isStallKill := ResolveTerminalKind(gateRan, gateRes.TerminalKind, stallErrMsg) == TerminalKindStallKill
+			stallKind := ResolveTerminalKind(gateRan, gateRes.TerminalKind, stallErrMsg)
+			isStallKill := terminalkind.IsStallShapedKill(stallKind)
 			isCostCapKill := HasCostCapKillMarker(stallErrMsg)
 			softQuotaStall := isStallKill && IsWarningOnlyQuotaDetail(stallErrMsg)
 			if isStallKill && !isCostCapKill {
@@ -8039,10 +8041,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					// correctly. Then fall through to the terminal path
 					// (skipping model escalation — escalation on a re-stall
 					// after a re-plan retry is double-spend).
-					stageFailureCategories[string(stage)] = StallKilledAfterRetryCategory
-					terminalFailureKind = TerminalKindStallKill
+					afterRetryCategory := killedAfterRetryCategory(stallKind)
+					stageFailureCategories[string(stage)] = afterRetryCategory
+					terminalFailureKind = stallKind
 					log.Printf("#%d: stall-kill after retry — marking stage %s as %s",
-						item.Number, stage, StallKilledAfterRetryCategory)
+						item.Number, stage, afterRetryCategory)
 					// stallErrMsg, not `%v` of err: in CLI mode err is nil, so
 					// the old form persisted the literal "exit 1: <nil>" — the
 					// exact string #533 exists to remove — on the one path this
@@ -8064,7 +8067,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 								"error":            stallErrMsg,
 								"exit_code":        exitCode,
 								"model":            model,
-								"failure_category": StallKilledAfterRetryCategory,
+								"failure_category": afterRetryCategory,
 							},
 							SchemaVersion: "1",
 						})

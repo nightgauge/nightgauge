@@ -162,7 +162,7 @@ func TestClassifyTerminalKind(t *testing.T) {
 			TerminalKindStallKill,
 		},
 		{"ipc_stall_idle_threshold", "exceeded stall idle threshold (1200s without output)", TerminalKindStallKill},
-		{"ipc_stall_hard_cap", "exceeded stage_hard_cap (4800s total runtime)", TerminalKindStallKill},
+		{"ipc_stall_hard_cap", "exceeded stage_hard_cap (4800s total runtime)", TerminalKindStageCapKill},
 		{"ipc_cost_cap_marker", "[cost-cap-exceeded] pr-create terminated ($5.20 ≥ $5.00 cap)", TerminalKindBudgetExceeded},
 		{"budget_pipeline", "pipeline_budget_exceeded: 12345 > 10000", TerminalKindBudgetExceeded},
 		{"budget_stage", "stage_budget_exceeded for feature-dev", TerminalKindBudgetExceeded},

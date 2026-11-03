@@ -273,6 +273,11 @@ func TestGateReasonWhenNoGate(t *testing.T) {
 			want: "gate not run: stage exited 137 before its post-condition check (oom_killed)",
 		},
 		{
+			name: "non-zero exit, stage cap",
+			rec:  StageExitRecord{Stage: "feature-dev", ExitCode: code(143), TerminalKind: "stage_cap_kill"},
+			want: "gate not run: stage exited 143 before its post-condition check (stage_cap_kill)",
+		},
+		{
 			name: "non-zero exit, unclassified",
 			rec:  StageExitRecord{Stage: "issue-pickup", ExitCode: code(-1)},
 			want: "gate not run: stage exited -1 before its post-condition check (unclassified)",

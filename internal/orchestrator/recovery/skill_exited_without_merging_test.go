@@ -58,6 +58,7 @@ func TestAction_SkillExitedWithoutMerging_NoMatch_FallsThrough(t *testing.T) {
 		{"gate is OK (skill exit was not no-op)", StageFailure{Stage: state.StagePRMerge, GateKind: gates.KindOK, PRNumber: 1}},
 		{"missing PR number", StageFailure{Stage: state.StagePRMerge, GateKind: gates.KindNoOp, PRNumber: 0}},
 		{"stall-kill belongs to stall-killed action", StageFailure{Stage: state.StagePRMerge, GateKind: gates.KindNoOp, PRNumber: 1, TerminalKind: "stall_kill"}},
+		{"cap kill belongs to stall-killed action", StageFailure{Stage: state.StagePRMerge, GateKind: gates.KindNoOp, PRNumber: 1, TerminalKind: "stage_cap_kill"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

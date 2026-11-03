@@ -218,6 +218,7 @@ record may carry both fields, neither, or only one.
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `operator_stop`                  | The **scheduler** killed the stage — an operator pressed Stop, or a cancel tore the run down (Issue #1487). Derived structurally from `execution.Manager`'s own `Cancelled` flag and the scheduler's `stopRequested`, never from error text: a SIGTERM'd process exits 143 with its own last words, which describe nothing about why it died. Exempt from the per-issue lifetime failure cap and from the cascading-failures breaker |
 | `stall_kill`                     | Subagent exceeded `stall_kill_multiplier × stall_thresholds` and was forcibly killed                                                                                                                                                                                                                                                                                                                                                 |
+| `stage_cap_kill`                 | Stage stopped at `pipeline.stage_hard_caps` or `stage_time_caps`. Recovers like `stall_kill`, including `failure_category: stage-cap-killed-after-retry` on a second kill (#2812)                                                                                                                                                                                                                                                    |
 | `budget_exceeded`                | Pipeline-level or per-stage **token** budget ceiling tripped (with grace buffer applied)                                                                                                                                                                                                                                                                                                                                             |
 | `validation_error`               | Context schema validation failed terminally (e.g., missing output context for the stage)                                                                                                                                                                                                                                                                                                                                             |
 | `subagent_crash`                 | Subagent process exited non-zero with no recovery path (model escalation exhausted)                                                                                                                                                                                                                                                                                                                                                  |
@@ -695,6 +696,7 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | -------------------------------- | ------------------------------------------------------------------------------------------- |
 | `operator_stop`                  | `infrastructure` — ours, and deliberate; never the issue's                                  |
 | `stall_kill`                     | `agent` — transient runtime issue                                                           |
+| `stage_cap_kill`                 | `agent` — transient runtime issue, same as `stall_kill`                                     |
 | `budget_exceeded`                | `agent` — call-pattern under operator control                                               |
 | `validation_error`               | `infrastructure` — pipeline contract failed                                                 |
 | `subagent_crash`                 | `organic` — implementation failure, full weight                                             |
@@ -770,6 +772,7 @@ V3) so legacy records remain valid — there is no migration step.
 // packages/nightgauge/src/schemas/executionHistory.ts
 export const TerminalFailureKindSchema = z.enum([
   "stall_kill",
+  "stage_cap_kill",
   "budget_exceeded",
   "validation_error",
   "subagent_crash",

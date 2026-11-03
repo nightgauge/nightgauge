@@ -279,7 +279,8 @@ FILE="$(nightgauge layout path pipeline "exit-records/$DAY.jsonl")"
 # All SIGKILL exits today
 jq -c 'select(.signal == "SIGKILL")' "$FILE"
 
-# Stall-kill rate today (% of all stages that ended in stall_kill)
+# Stall-kill rate today (% of all stages that ended in stall_kill).
+# A stage stopped at its runtime cap is stage_cap_kill and is not counted here (#2812).
 TOTAL=$(wc -l < "$FILE")
 STALL=$(jq -c 'select(.terminal_kind == "stall_kill")' "$FILE" | wc -l)
 echo "scale=2; $STALL/$TOTAL*100" | bc

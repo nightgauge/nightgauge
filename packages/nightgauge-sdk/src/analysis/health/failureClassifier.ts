@@ -186,7 +186,10 @@ export function classifyFailureCategory(
     // Stall-killed after adaptive retry exhausted (Issue #3005). The first
     // stall already consumed its rewind slot; a second stall is terminal but
     // the underlying cause is still agent-class.
-    t.includes("stall-killed-after-retry")
+    t.includes("stall-killed-after-retry") ||
+    // Stopped at the stage's runtime cap (#2812): stall-class by recovery.
+    t.includes("[stage-cap-killed]") ||
+    t.includes("stage-cap-killed-after-retry")
   ) {
     return "agent";
   }
@@ -211,6 +214,7 @@ export function classifyFailureCategory(
  */
 export type TerminalFailureKind =
   | "stall_kill"
+  | "stage_cap_kill" // Issue #2812 — stopped at stage_hard_caps or stage_time_caps; recovers like stall_kill
   | "budget_exceeded"
   | "validation_error"
   | "subagent_crash"
@@ -282,6 +286,7 @@ export type TerminalFailureKind =
  */
 export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "stall_kill",
+  "stage_cap_kill", // Issue #2812 — stopped at stage_hard_caps or stage_time_caps; recovers like stall_kill
   "budget_exceeded",
   "validation_error",
   "subagent_crash",

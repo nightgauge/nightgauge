@@ -32,6 +32,7 @@ import {
 import type { StallEvent } from "../schemas/stallEvents";
 import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipelineState";
 import { precomputeCalibratedStallThresholds } from "../utils/nightgaugeConfig";
+import { describeStageCapKill, isStageCapCeiling } from "../utils/killCeiling";
 import type { Logger } from "../utils/logger";
 import type { IpcClient } from "./IpcClient";
 
@@ -565,6 +566,16 @@ export class SkillRunner {
                 }
                 if (shippedPartially) {
                   errorText += ` — PR #${shippedPRNumber} shipped, advancing to pr-merge`;
+                }
+              } else if (result.stallKilled && isStageCapCeiling(result.killCeiling)) {
+                errorText = describeStageCapKill(
+                  stage,
+                  durationMs,
+                  result.killCeiling,
+                  result.killCeilingValue
+                );
+                if (result.error?.message) {
+                  errorText += `\nUpstream signal: ${result.error.message}`;
                 }
               } else if (result.stallKilled) {
                 errorText = `[stall-killed] ${stage} terminated`;

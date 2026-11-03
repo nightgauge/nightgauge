@@ -1931,6 +1931,51 @@
       "signal": ""
     },
     {
+      "input": "[stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[STAGE-CAP-KILLED]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "exceeded stage_hard_cap",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: exceeded stage_hard_cap",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "EXCEEDED STAGE_HARD_CAP",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "exceeded stage_time_cap",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: exceeded stage_time_cap",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "EXCEEDED STAGE_TIME_CAP",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -2032,21 +2077,6 @@
     },
     {
       "input": "EXCEEDED STALL IDLE THRESHOLD",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "exceeded stage_hard_cap",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "exit 1: exceeded stage_hard_cap",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "EXCEEDED STAGE_HARD_CAP",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -2961,6 +2991,11 @@
       "signal": ""
     },
     {
+      "input": "[merge-conflict] | [stage-cap-killed]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
       "input": "[merge-conflict] | [stall-killed]",
       "kind": "merge_conflict",
       "signal": ""
@@ -3217,6 +3252,11 @@
     },
     {
       "input": "stage_budget_exceeded: | stage-no-output-timeout",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [stage-cap-killed]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -3481,6 +3521,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | [stage-cap-killed]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | [stall-killed]",
       "kind": "network_unavailable",
       "signal": ""
@@ -3737,6 +3782,11 @@
     },
     {
       "input": "adapter_incompatible | stage-no-output-timeout",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [stage-cap-killed]",
       "kind": "adapter_incompatible",
       "signal": ""
     },
@@ -4001,6 +4051,11 @@
       "signal": ""
     },
     {
+      "input": "[model-stream-stalled] | [stage-cap-killed]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[model-stream-stalled] | [stall-killed]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -4257,6 +4312,11 @@
     },
     {
       "input": "stream idle timeout | stage-no-output-timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | [stage-cap-killed]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -4521,6 +4581,11 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "overloaded | [stage-cap-killed]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "overloaded | [stall-killed]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -4777,6 +4842,11 @@
     },
     {
       "input": "socket connection was closed | stage-no-output-timeout",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | [stage-cap-killed]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -5041,6 +5111,11 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[rate-limit-quota-exhausted] | [stage-cap-killed]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | [stall-killed]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
@@ -5297,6 +5372,11 @@
     },
     {
       "input": "[adapter-auth-failed] | stage-no-output-timeout",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [stage-cap-killed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
     },
@@ -5561,6 +5641,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[environment-halt] | [stage-cap-killed]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[environment-halt] | [stall-killed]",
       "kind": "environment_halt",
       "signal": "environment_halt"
@@ -5817,6 +5902,11 @@
     },
     {
       "input": "[gate-plugin-missing] | stage-no-output-timeout",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [stage-cap-killed]",
       "kind": "gate_plugin_missing",
       "signal": "gate_plugin_missing"
     },
@@ -6081,6 +6171,11 @@
       "signal": ""
     },
     {
+      "input": "ai_apicallerror context_length_exceeded | [stage-cap-killed]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded | [stall-killed]",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -6337,6 +6432,11 @@
     },
     {
       "input": "not_found_error model | stage-no-output-timeout",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | [stage-cap-killed]",
       "kind": "model_unavailable",
       "signal": ""
     },
@@ -6601,6 +6701,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | [stage-cap-killed]",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | [stall-killed]",
       "kind": "issue_closed",
       "signal": ""
@@ -6857,6 +6962,11 @@
     },
     {
       "input": "[blocked-dependency] | stage-no-output-timeout",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | [stage-cap-killed]",
       "kind": "blocked_dependency",
       "signal": ""
     },
@@ -7121,6 +7231,11 @@
       "signal": "architecture_approval_required"
     },
     {
+      "input": "architecture approval required | [stage-cap-killed]",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
       "input": "architecture approval required | [stall-killed]",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
@@ -7377,6 +7492,11 @@
     },
     {
       "input": "github-quota-low | stage-no-output-timeout",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "github-quota-low | [stage-cap-killed]",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
     },
@@ -7641,6 +7761,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "github-network-outage | [stage-cap-killed]",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
       "input": "github-network-outage | [stall-killed]",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
@@ -7897,6 +8022,11 @@
     },
     {
       "input": "secondary rate limit | stage-no-output-timeout",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [stage-cap-killed]",
       "kind": "github_rate_limited",
       "signal": ""
     },
@@ -8161,6 +8291,11 @@
       "signal": ""
     },
     {
+      "input": "[pr-merge-unmerged | [stage-cap-killed]",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
       "input": "[pr-merge-unmerged | [stall-killed]",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -8417,6 +8552,11 @@
     },
     {
       "input": "[stage:worktree-containment] | stage-no-output-timeout",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | [stage-cap-killed]",
       "kind": "containment_breach",
       "signal": ""
     },
@@ -8681,6 +8821,11 @@
       "signal": ""
     },
     {
+      "input": "[not-pipeline-actionable] | [stage-cap-killed]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[not-pipeline-actionable] | [stall-killed]",
       "kind": "not_pipeline_actionable",
       "signal": ""
@@ -8937,6 +9082,11 @@
     },
     {
       "input": "[dev-produced-no-changes] | stage-no-output-timeout",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | [stage-cap-killed]",
       "kind": "dev_produced_no_changes",
       "signal": ""
     },
@@ -9201,6 +9351,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | [stage-cap-killed]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
       "input": "[dev-handoff-missing] | [stall-killed]",
       "kind": "dev_handoff_missing",
       "signal": ""
@@ -9457,6 +9612,11 @@
     },
     {
       "input": "[dev-step-cap-reached] | stage-no-output-timeout",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [stage-cap-killed]",
       "kind": "dev_step_cap_reached",
       "signal": ""
     },
@@ -9721,6 +9881,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-progress-unproven] | [stage-cap-killed]",
+      "kind": "dev_step_progress_unproven",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-progress-unproven] | [stall-killed]",
       "kind": "dev_step_progress_unproven",
       "signal": ""
@@ -9977,6 +10142,11 @@
     },
     {
       "input": "invalid auth method | stage-no-output-timeout",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [stage-cap-killed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -10241,6 +10411,11 @@
       "signal": ""
     },
     {
+      "input": "premature turn end | [stage-cap-killed]",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
       "input": "premature turn end | [stall-killed]",
       "kind": "premature_turn_end",
       "signal": ""
@@ -10497,6 +10672,11 @@
     },
     {
       "input": "worktree_uncommitted | stage-no-output-timeout",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | [stage-cap-killed]",
       "kind": "worktree_uncommitted",
       "signal": ""
     },
@@ -10761,6 +10941,11 @@
       "signal": ""
     },
     {
+      "input": "budget_ceiling_hit | [stage-cap-killed]",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
       "input": "budget_ceiling_hit | [stall-killed]",
       "kind": "budget_ceiling_hit",
       "signal": ""
@@ -11017,6 +11202,11 @@
     },
     {
       "input": "[runaway-progress-exceeded] | stage-no-output-timeout",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | [stage-cap-killed]",
       "kind": "runaway_progress",
       "signal": ""
     },
@@ -11281,6 +11471,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | [stage-cap-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -11537,6 +11732,11 @@
     },
     {
       "input": "[cost-cap-exceeded] | stage-no-output-timeout",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | [stage-cap-killed]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -11801,6 +12001,11 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | [stage-cap-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -11888,6 +12093,271 @@
     {
       "input": "stage-no-output-timeout | subagent crash",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[stage-cap-killed] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[stage-cap-killed] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[stage-cap-killed] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[stage-cap-killed] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[stage-cap-killed] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[stage-cap-killed] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[stage-cap-killed] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "[stage-cap-killed] | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "[stage-cap-killed] | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "[stage-cap-killed] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [dev-step-progress-unproven]",
+      "kind": "dev_step_progress_unproven",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | premature turn end",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | worktree_uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | budget_ceiling_hit",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [runaway-progress-exceeded]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [runaway-ceiling-exceeded]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | stage-no-output-timeout",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [stall-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | pipeline_budget_exceeded",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | schema validation",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [no-changes-produced]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [review-cap-reached]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [validation-failed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [validation-inconclusive]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [branch-forked]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [commit-orphaned]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [adapter-permission-rejected]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [permission-denied]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | stage_context_unreadable",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | dev_build_verification_missing",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | dev_build_verification_failed",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [dev-context-stale]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | dev_tests_failed",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | pr_merge_lookup_failed",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | subagent crash",
+      "kind": "stage_cap_kill",
       "signal": ""
     },
     {
@@ -12063,6 +12533,11 @@
     {
       "input": "[stall-killed] | stage-no-output-timeout",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
       "signal": ""
     },
     {
@@ -12326,6 +12801,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -12583,6 +13063,11 @@
     {
       "input": "schema validation | stage-no-output-timeout",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
       "signal": ""
     },
     {
@@ -12846,6 +13331,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -13103,6 +13593,11 @@
     {
       "input": "[review-cap-reached] | stage-no-output-timeout",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
       "signal": ""
     },
     {
@@ -13366,6 +13861,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-failed] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[validation-failed] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -13623,6 +14123,11 @@
     {
       "input": "[validation-inconclusive] | stage-no-output-timeout",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
       "signal": ""
     },
     {
@@ -13886,6 +14391,11 @@
       "signal": ""
     },
     {
+      "input": "[branch-forked] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[branch-forked] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -14143,6 +14653,11 @@
     {
       "input": "[commit-orphaned] | stage-no-output-timeout",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
       "signal": ""
     },
     {
@@ -14406,6 +14921,11 @@
       "signal": ""
     },
     {
+      "input": "[adapter-permission-rejected] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[adapter-permission-rejected] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -14663,6 +15183,11 @@
     {
       "input": "[permission-denied] | stage-no-output-timeout",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
       "signal": ""
     },
     {
@@ -14926,6 +15451,11 @@
       "signal": ""
     },
     {
+      "input": "stage_context_unreadable | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "stage_context_unreadable | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -15183,6 +15713,11 @@
     {
       "input": "dev_build_verification_missing | stage-no-output-timeout",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
       "signal": ""
     },
     {
@@ -15446,6 +15981,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_failed | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_failed | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -15703,6 +16243,11 @@
     {
       "input": "[dev-context-stale] | stage-no-output-timeout",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[dev-context-stale] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
       "signal": ""
     },
     {
@@ -15966,6 +16511,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -16226,6 +16776,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -16483,6 +17038,11 @@
     {
       "input": "subagent crash | stage-no-output-timeout",
       "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
       "signal": ""
     },
     {
