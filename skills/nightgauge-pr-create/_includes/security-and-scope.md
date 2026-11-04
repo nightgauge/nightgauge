@@ -146,11 +146,13 @@ if [ "$SECURITY_CRITICAL" -gt 0 ]; then
   echo ""
   echo "After fixing: git add -p && git commit --amend"
   # Record the stop so the orchestrator does not open a fallback PR (#2677).
+  # The runner exports NIGHTGAUGE_BIN without putting it on PATH (#2840).
   jq -n --arg gate security_scan \
     --arg reason "$SECURITY_CRITICAL critical secret finding(s) in the changed files" \
     --arg head_sha "$(git rev-parse HEAD)" --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{gate: $gate, reason: $reason, head_sha: $head_sha, created_at: $created_at}' \
-    | nightgauge layout write pipeline "pr-create-gate-stop-${ISSUE_NUMBER}.json" >/dev/null
+    | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-create-gate-stop-${ISSUE_NUMBER}.json" >/dev/null \
+    || echo "ERROR: could not record the security_scan gate stop" >&2
   exit 1
 
 elif [ "$SECURITY_WARNINGS" -gt 0 ]; then

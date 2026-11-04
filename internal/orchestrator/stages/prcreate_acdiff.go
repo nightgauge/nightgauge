@@ -348,6 +348,8 @@ var (
 	acGoRunRE     = regexp.MustCompile(`(?:^|\s)-(?:test\.)?run(?:=|\s+)(?:'([^']*)'|"([^"]*)"|([^\s` + "`" + `]+))`)
 	acGoTestDefRE = regexp.MustCompile(`^func (Test\w*)\(`)
 	acChangelogRE = regexp.MustCompile(`(?i)\bchange ?log\b`)
+	// acChangelogFileRE matches a changelog file's base name.
+	acChangelogFileRE = regexp.MustCompile(`(?i)^change_?log(\..*)?$`)
 )
 
 // VerifyACAgainstDiff answers one criterion from the diff and the stage's
@@ -768,6 +770,39 @@ func acSection(c acClause, diffed []string, d *ACDiff) (string, string, bool) {
 	return ACUnmet, fmt.Sprintf("%s adds no line under %s", acList(diffed, 3), acHeadingList(c.Headings, true)), true
 }
 
+// acTokenScope picks the changed files that may answer a token clause naming
+// no diffed file (#2840). A changelog line restating a criterion is not
+// evidence the criterion holds, so changelogs answer only a clause about the
+// changelog: one whose prose says so, one naming a changelog file, or any
+// clause of a change that touches nothing but changelogs. A clause naming
+// other files, none of them diffed, is about those files, and a token in some
+// unrelated changed file proves nothing about them: no scope.
+func acTokenScope(c acClause, d *ACDiff) []string {
+	about := acChangelogRE.MatchString(c.Prose)
+	for _, p := range c.Paths {
+		if acChangelogFileRE.MatchString(filepath.Base(p)) {
+			about = true
+		}
+	}
+	if len(c.Paths) > 0 && !about {
+		return nil
+	}
+	var scope, changelogs []string
+	for _, p := range d.sortedPaths() {
+		if acChangelogFileRE.MatchString(filepath.Base(p)) {
+			changelogs = append(changelogs, p)
+			if !about {
+				continue
+			}
+		}
+		scope = append(scope, p)
+	}
+	if len(scope) == 0 {
+		return changelogs
+	}
+	return scope
+}
+
 // acTokens: every named token appears in the added lines (of the named
 // diffed files, when any), or in their post-change content provided the diff
 // adds at least one of the tokens. Tokens absent from both are unmet only
@@ -779,7 +814,10 @@ func acTokens(c acClause, diffed []string, d *ACDiff) (string, string, bool) {
 	}
 	scope := diffed
 	if len(scope) == 0 {
-		scope = d.sortedPaths()
+		scope = acTokenScope(c, d)
+		if len(scope) == 0 {
+			return "", "", false
+		}
 	}
 	var ev, missing []string
 	added := 0
