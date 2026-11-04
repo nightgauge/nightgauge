@@ -4,10 +4,9 @@
 
 **Product**: Nightgauge — AI-powered Issue-to-PR pipeline.
 
-**Architecture**: Three-layer stack: portable Skills (SKILL.md), TypeScript SDK
-(`packages/nightgauge-sdk/`), and VSCode Extension
-(`packages/nightgauge/`). Six pipeline stages execute as isolated
-subagents with JSON context handoff files.
+**Architecture**: Three-layer stack: portable Skills (SKILL.md), a TypeScript
+SDK, and a VSCode Extension, over a Go deterministic layer. Six pipeline
+stages execute as isolated subagents with JSON context handoff files.
 
 **Execution model**: Each pipeline stage runs in a fresh conversation. Context
 is passed exclusively through JSON files in the clone's pipeline state
@@ -16,9 +15,8 @@ history. Every stage reads its predecessor's context file
 and writes its own.
 
 **Configuration**: 6-tier config system — built-in defaults → global config →
-project config → local config → env vars → CLI flags. Schema defined in
-`packages/nightgauge/src/config/schema.ts`. Documentation in
-`docs/CONFIGURATION.md`.
+project config → local config → env vars → CLI flags. Reference:
+[docs/CONFIGURATION.md](../../docs/CONFIGURATION.md).
 
 **Standards**: Code standards in `docs/CODE_STANDARDS.md`. Security rules in
 `standards/security.md`. Testing patterns in `docs/TESTING.md`. Git workflow in
@@ -161,10 +159,10 @@ attempt to populate that section itself; leave the placeholder from
 
 Pipeline skills read configuration from `.nightgauge/config.yaml`.
 
-**Full reference**: See `docs/CONFIGURATION.md` for the complete configuration
-guide including the 6-tier precedence chain, all config options, and examples.
-
-**Schema definition**: `packages/nightgauge/src/config/schema.ts`
+**Full reference**: See [docs/CONFIGURATION.md](../../docs/CONFIGURATION.md)
+for the complete configuration guide including the 6-tier precedence chain, all
+config options, and examples. `nightgauge config show` prints the resolved
+configuration for the current repository.
 
 **Key config sections by stage**:
 
@@ -342,7 +340,7 @@ Three-layer check:
 3. **Project environment** — the checks the project declares under
    `preflight.environment` (#101); opt-in, silent when none are declared
 
-The binary discovery cascade below is **provider-neutral** (#4029): it works
+The binary discovery cascade below is **provider-neutral** (issue 4029): it works
 identically under every adapter (Claude, Codex, Gemini, …) and references no
 VSCode-extension-specific path. The host that spawns the skill (the VSCode
 extension's `skillRunner`, or the Go `nightgauge` binary in auto/CLI mode)
@@ -352,7 +350,7 @@ this cascade honors first. The remaining steps (PATH, the development-only repo
 or terminal invocation.
 
 This intentionally **diverges** from
-`claude-plugins/nightgauge/hooks/lib/guard.sh` (#3262 → #4029): guard.sh is
+`claude-plugins/nightgauge/hooks/lib/guard.sh` (issue 3262 → issue 4029): guard.sh is
 Claude-Code-only and retains a trailing `~/.vscode/extensions/...` glob to serve
 the standalone-terminal-Claude case (where no host exports `NIGHTGAUGE_BIN`).
 Skills must stay portable Markdown and cannot reference that VSCode-only path —
@@ -366,11 +364,11 @@ the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
 After the cascade resolves `$BINARY`, the preflight prepends
 `dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
 invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (#3262).
+failing with "command not found" (issue 3262).
 
 ```bash
 # Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
-# bin → gated canonical-repo bin → ~/go/bin). No VSCode-extension path — see #4029.
+# bin → gated canonical-repo bin → ~/go/bin). No VSCode-extension path — see issue 4029.
 # Repo bins need NIGHTGAUGE_DEV_REPO_BIN=1 and a verified core checkout (#2758).
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
@@ -396,7 +394,7 @@ if [ -z "$BINARY" ]; then
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (#3262).
+# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -406,7 +404,7 @@ export PATH="$(dirname "$BINARY"):$PATH"
 # concurrent sessions/workspaces owned by different GitHub users each use their
 # own token. GH_TOKEN outranks GITHUB_TOKEN and the gh keyring. Only resolve when
 # unset (an upstream env value — e.g. the VSCode extension's terminal env —
-# wins); never fail preflight over it. Mirrors hooks/lib/guard.sh (sync, #3262).
+# wins); never fail preflight over it. Mirrors hooks/lib/guard.sh (sync, issue 3262).
 if [ -z "${GH_TOKEN:-}" ]; then
   IB_REPO_TOKEN="$("$BINARY" forge auth token 2>/dev/null || true)"
   if [ -n "$IB_REPO_TOKEN" ]; then
@@ -906,13 +904,13 @@ done
 One session makes one fix. After it pushes, Step 5 hands the PR back to the
 orchestrator: the deterministic pr-merge runner waits for CI and merges or
 enqueues. If CI fails again, the orchestrator runs this skill again. It stops
-after `pr.auto_fix_max_attempts` sessions (default 2, lowered in #3108;
+after `pr.auto_fix_max_attempts` sessions (default 2, lowered in issue 3108;
 `NIGHTGAUGE_PR_AUTO_FIX_MAX_ATTEMPTS` overrides it) and fails the stage with
 `auto-fix-exhausted`. Do not count attempts or poll CI here (#2504).
 
 #### Step 0: Fast-Path Merge State Check
 
-Before each fix iteration, check whether the PR already merged out-of-band (e.g. a previous attempt's push triggered a successful CI run that auto-merged, or a teammate manually merged). This is the cheapest possible deterministic guard against the failure mode in #3108: the LLM kept iterating on E2E selectors after the PR had already merged, burning ~$8 in the 60s after the work shipped.
+Before each fix iteration, check whether the PR already merged out-of-band (e.g. a previous attempt's push triggered a successful CI run that auto-merged, or a teammate manually merged). This is the cheapest possible deterministic guard against the failure mode in issue 3108: the LLM kept iterating on E2E selectors after the PR had already merged, burning ~$8 in the 60s after the work shipped.
 
 ```bash
 BINARY="${NIGHTGAUGE_BIN:-}"
@@ -1025,9 +1023,18 @@ deterministic retry of a purely transient failure.
 
 #### Step 1: Fetch Failure Logs
 
-Use `$HOOKS_DIR/fetch-ci-failure-logs.sh "$PR_NUMBER"` to retrieve logs. Parse
-`total_failures`, `logs_fetched`, and extract first failure's `name`, `logs`,
-and `logs_url` from the JSON result.
+Find the failed workflow run for the PR, then fetch its logs with the binary.
+`ci logs` takes a run ID, not a PR number:
+
+```bash
+FAILED_RUN=$("$BINARY" pr ci-wait "$PR_NUMBER" --timeout 1 --json 2>/dev/null \
+  | jq -r '[.checks[] | select(.conclusion == "FAILURE")][0].detailsUrl // empty' \
+  | grep -oE '/runs/[0-9]+' | grep -oE '[0-9]+')
+[ -n "$FAILED_RUN" ] && CI_LOGS=$("$BINARY" ci logs "$FAILED_RUN" --json)
+```
+
+The JSON carries `runId`, `status`, `url` and `content` (the failure log text).
+Take the failing check's `name` from the `ci-wait` checks list above.
 
 #### Step 2: Classify Failure Type
 
@@ -1132,7 +1139,7 @@ plainly. Example output:
 
 This step is the highest-leverage addition to auto-fix: a deterministic check
 that prevents the LLM from chasing inherited failures it has no signal to
-recognize. Reference: #3662 (Flutter PR #218 burned $12 hitting `num_turns: 40`
+recognize. Reference: issue 3662 (Flutter PR #218 burned $12 hitting `num_turns: 40`
 on a stack of 22 pre-existing failures it could not have known were not its).
 
 #### Step 3: Generate Fix (Probabilistic - AI)

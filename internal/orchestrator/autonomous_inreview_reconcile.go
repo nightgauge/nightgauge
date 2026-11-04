@@ -23,11 +23,11 @@ const maxInReviewRecoveryAttempts = 2
 // pr-merge failed (or never completed), the issue went to "In review", and then
 // a sibling PR advanced the base — so the branch is now stale/conflicting.
 //
-// Such an issue is invisible to normal scheduling: isWorkCompleteStatus treats
-// "In review" as done (so it never blocks), and isDispatchableStatus rejects it
-// (so it's never retried). It therefore sits forever while keeping its parent
-// epic open, silently deadlocking every downstream wave that blocks on that
-// epic. See #3894.
+// Such an issue is invisible to normal scheduling: isDispatchableStatus rejects
+// it (so it's never retried), and its open state blocks every dependent
+// (#2706). It therefore sits forever while keeping its parent epic open,
+// silently deadlocking every downstream wave that blocks on that epic. See
+// #3894.
 //
 // Recovery reuses the normal flow: move the issue back to "Ready" so the next
 // dispatch re-runs pr-merge, whose existing rebase-on-conflict path freshens the

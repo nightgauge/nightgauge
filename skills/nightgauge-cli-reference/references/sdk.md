@@ -1,7 +1,7 @@
 # `@nightgauge/sdk` reference
 
 TypeScript orchestration library used by the VSCode extension and CI. Source of
-truth for the import surface: `packages/nightgauge-sdk/src/index.ts`.
+truth for the import surface: the package's main export (`@nightgauge/sdk`).
 
 ## CLI entry points (CI/CD)
 

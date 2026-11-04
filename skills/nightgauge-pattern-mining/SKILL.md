@@ -49,8 +49,7 @@ Received from feature-planning as Task subagent arguments:
 
 ## Output
 
-Returns JSON matching `PatternMiningResultSchema` from
-`packages/nightgauge-sdk/src/context/schemas/pattern-mining.ts`.
+Returns JSON matching `PatternMiningResultSchema`.
 
 See [docs/PATTERN_MINING.md](../../docs/PATTERN_MINING.md) for full schema
 documentation.
@@ -166,8 +165,8 @@ For each set of matching files, analyze patterns:
 
 ### Phase 5: Output Formatting
 
-Assemble the JSON output matching `PatternMiningResultSchema` from
-`packages/nightgauge-sdk/src/context/schemas/pattern-mining.ts`.
+Assemble the JSON output matching `PatternMiningResultSchema` (fields in
+[docs/PATTERN_MINING.md](../../docs/PATTERN_MINING.md)).
 
 #### pattern_classifications Field
 
@@ -228,7 +227,6 @@ Generate 1-5 recommendations based on the strongest patterns found:
 
 ## References
 
-- **Schema**: `packages/nightgauge-sdk/src/context/schemas/pattern-mining.ts`
 - **Documentation**: `docs/PATTERN_MINING.md`
 - **Config**: `.nightgauge/pattern-mining-config.yaml`
 - **Consumer**: `skills/nightgauge-feature-planning/SKILL.md` (Phase 3.0.5)

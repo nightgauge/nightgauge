@@ -2,10 +2,10 @@
 
 Pipeline skills read configuration from `.nightgauge/config.yaml`.
 
-**Full reference**: See `docs/CONFIGURATION.md` for the complete configuration
-guide including the 6-tier precedence chain, all config options, and examples.
-
-**Schema definition**: `packages/nightgauge/src/config/schema.ts`
+**Full reference**: See [docs/CONFIGURATION.md](../../docs/CONFIGURATION.md)
+for the complete configuration guide including the 6-tier precedence chain, all
+config options, and examples. `nightgauge config show` prints the resolved
+configuration for the current repository.
 
 **Key config sections by stage**:
 

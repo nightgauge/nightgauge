@@ -92,8 +92,8 @@ set test status to "passed" with note.
 ### Step 1.7.3: preexisting_failures Entry Structure
 
 Each entry appended to `PREEXISTING_FAILURES` must conform to
-`PreexistingFailureSchema` (defined in
-`packages/nightgauge-sdk/src/context/schemas/validate.ts`):
+`PreexistingFailureSchema` (see
+[docs/CONTEXT_ARCHITECTURE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONTEXT_ARCHITECTURE.md)):
 
 ```json
 {

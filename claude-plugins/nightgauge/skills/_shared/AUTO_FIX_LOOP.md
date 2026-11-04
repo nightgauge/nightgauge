@@ -42,13 +42,13 @@ done
 One session makes one fix. After it pushes, Step 5 hands the PR back to the
 orchestrator: the deterministic pr-merge runner waits for CI and merges or
 enqueues. If CI fails again, the orchestrator runs this skill again. It stops
-after `pr.auto_fix_max_attempts` sessions (default 2, lowered in #3108;
+after `pr.auto_fix_max_attempts` sessions (default 2, lowered in issue 3108;
 `NIGHTGAUGE_PR_AUTO_FIX_MAX_ATTEMPTS` overrides it) and fails the stage with
 `auto-fix-exhausted`. Do not count attempts or poll CI here (#2504).
 
 #### Step 0: Fast-Path Merge State Check
 
-Before each fix iteration, check whether the PR already merged out-of-band (e.g. a previous attempt's push triggered a successful CI run that auto-merged, or a teammate manually merged). This is the cheapest possible deterministic guard against the failure mode in #3108: the LLM kept iterating on E2E selectors after the PR had already merged, burning ~$8 in the 60s after the work shipped.
+Before each fix iteration, check whether the PR already merged out-of-band (e.g. a previous attempt's push triggered a successful CI run that auto-merged, or a teammate manually merged). This is the cheapest possible deterministic guard against the failure mode in issue 3108: the LLM kept iterating on E2E selectors after the PR had already merged, burning ~$8 in the 60s after the work shipped.
 
 ```bash
 BINARY="${NIGHTGAUGE_BIN:-}"
@@ -161,9 +161,18 @@ deterministic retry of a purely transient failure.
 
 #### Step 1: Fetch Failure Logs
 
-Use `$HOOKS_DIR/fetch-ci-failure-logs.sh "$PR_NUMBER"` to retrieve logs. Parse
-`total_failures`, `logs_fetched`, and extract first failure's `name`, `logs`,
-and `logs_url` from the JSON result.
+Find the failed workflow run for the PR, then fetch its logs with the binary.
+`ci logs` takes a run ID, not a PR number:
+
+```bash
+FAILED_RUN=$("$BINARY" pr ci-wait "$PR_NUMBER" --timeout 1 --json 2>/dev/null \
+  | jq -r '[.checks[] | select(.conclusion == "FAILURE")][0].detailsUrl // empty' \
+  | grep -oE '/runs/[0-9]+' | grep -oE '[0-9]+')
+[ -n "$FAILED_RUN" ] && CI_LOGS=$("$BINARY" ci logs "$FAILED_RUN" --json)
+```
+
+The JSON carries `runId`, `status`, `url` and `content` (the failure log text).
+Take the failing check's `name` from the `ci-wait` checks list above.
 
 #### Step 2: Classify Failure Type
 
@@ -268,7 +277,7 @@ plainly. Example output:
 
 This step is the highest-leverage addition to auto-fix: a deterministic check
 that prevents the LLM from chasing inherited failures it has no signal to
-recognize. Reference: #3662 (Flutter PR #218 burned $12 hitting `num_turns: 40`
+recognize. Reference: issue 3662 (Flutter PR #218 burned $12 hitting `num_turns: 40`
 on a stack of 22 pre-existing failures it could not have known were not its).
 
 #### Step 3: Generate Fix (Probabilistic - AI)

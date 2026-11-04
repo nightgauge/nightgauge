@@ -203,6 +203,10 @@ jobs:
         run: bash scripts/test-mirror-link-check.sh
       - name: Mirror link integrity
         run: python3 scripts/check-mirror-links.py
+      # #2764: Claude Code never expands `<!-- include: -->`, so the generator
+      # does; this proves it still does, and that a missing target fails it.
+      - name: Mirror include expansion regression suite
+        run: bash scripts/test-mirror-includes.sh
       # CLA gate regression suite (#976): .github/scripts/cla-check.test.mjs
       # existed but no workflow, npm script or ci-local.sh step ever ran it, so
       # it was structurally incapable of going red. It spawns the real

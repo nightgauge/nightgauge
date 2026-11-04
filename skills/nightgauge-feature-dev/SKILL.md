@@ -175,8 +175,9 @@ schema documentation.
 
 ## Gotchas
 
-- **Never run bare `vitest`.** Use `npx -w packages/nightgauge vitest run` —
-  bare `vitest` mis-resolves the workspace and can hang in watch mode.
+- **Never run bare `vitest`.** Use the repository's documented test command in
+  single-run mode (`vitest run`, scoped to the touched workspace) — bare
+  `vitest` mis-resolves the workspace and can hang in watch mode.
 - **Build before tests.** A build step MUST run before the suite — unit tests can
   pass while the build is broken, masking a defect feature-validate would catch
   later.

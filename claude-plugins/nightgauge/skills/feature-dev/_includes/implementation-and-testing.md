@@ -171,7 +171,7 @@ Prefer a mutation that **compiles**: a revert that only breaks the build proves
 the tests failed to compile, not that they failed. Record the literal
 before/after result in the dev context notes — it is the evidence feature-validate
 and the retro path read. Full class:
-[Vacuous Assertion](../../../../../docs/FAILURE_TAXONOMY.md#vacuous-assertion-the-test-that-cannot-go-red).
+[Vacuous Assertion](https://github.com/nightgauge/nightgauge/blob/main/docs/FAILURE_TAXONOMY.md#vacuous-assertion-the-test-that-cannot-go-red).
 
 ### Step 4.1.5: Run Build Before Tests
 

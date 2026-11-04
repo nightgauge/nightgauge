@@ -284,21 +284,18 @@ if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
-BODY_CONTENT=$(cat "$ISSUE_BODY_FILE" 2>/dev/null || echo "")
-SCAFFOLD_RESULT=$(ISSUE_NUMBER="$ISSUE_NUMBER" TITLE="$ISSUE_TITLE" IS_EPIC="$IS_EPIC" \
-  BODY_CONTENT="$BODY_CONTENT" \
-  node --input-type=module 2>/dev/null <<'NODEEOF' || echo '{"success":false,"error":"SDK scaffold failed"}')
-import { KnowledgeService } from './packages/nightgauge-sdk/dist/index.js';
-const svc = new KnowledgeService(process.cwd());
-const r = await svc.scaffoldForIssue(
-  parseInt(process.env.ISSUE_NUMBER || '0'),
-  process.env.TITLE || '',
-  process.env.BODY_CONTENT || '',
-  process.env.IS_EPIC === 'true'
-);
-process.stdout.write(JSON.stringify(r));
-NODEEOF
+# Acceptance-criteria checkboxes from the body seed PRD.md.
+CRITERIA_ARGS=()
+while IFS= read -r line; do
+  [ -n "$line" ] && CRITERIA_ARGS+=(--criteria "$line")
+done < <(sed -n 's/^- \[ \] //p' "$ISSUE_BODY_FILE" 2>/dev/null)
 rm -f "$ISSUE_BODY_FILE"
+if SCAFFOLD_RESULT=$("$BINARY" knowledge scaffold --issue-number "$ISSUE_NUMBER" \
+  --title "$ISSUE_TITLE" "${CRITERIA_ARGS[@]}" --json 2>/dev/null); then
+  SCAFFOLD_RESULT=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -c '. + {success: true}')
+else
+  SCAFFOLD_RESULT='{"success":false,"error":"knowledge scaffold failed"}'
+fi
 
 SCAFFOLD_SUCCESS=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.success // false')
 KNOWLEDGE_PATH=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.knowledge_path // empty')
@@ -371,9 +368,7 @@ jq . "$MANIFEST_PATH" > /dev/null || {
 echo "Manifest written: $MANIFEST_PATH"
 ```
 
-The manifest schema (`CreationManifestSchema`) is defined in
-`packages/nightgauge-sdk/src/context/schemas/creation-manifest.ts` and
-documented in [docs/ISSUE_AUDIT.md](../../../docs/ISSUE_AUDIT.md). Each entry
+The manifest schema (`CreationManifestSchema`) is documented in [docs/ISSUE_AUDIT.md](../../../docs/ISSUE_AUDIT.md). Each entry
 records: `repo`, `number`, `type`, `priority`, `size`, `status`,
 `parent_epic` (sub-issues only), `sub_issues` (epic only), `blocked_by`,
 `body_sections`, `component_labels`, `knowledge_path`, `spike_artifact`

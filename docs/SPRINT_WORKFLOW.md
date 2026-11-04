@@ -109,25 +109,22 @@ When `/nightgauge-issue-pickup` runs with sprint auto-assign enabled:
 3. **Get Current Iteration** - Find the iteration containing today's date
 4. **Assign Iteration** - Set the iteration field on the project item
 
-### Deterministic Hook Script
+### Deterministic Assignment
 
-Sprint assignment uses `sync-project-iteration.sh`, a deterministic shell
-script:
+The Go binary sets the iteration field by title:
 
 ```bash
-# Assign current iteration (default)
-./claude-plugins/nightgauge/hooks/lib/sync-project-iteration.sh 90
-
-# Assign next iteration
-./claude-plugins/nightgauge/hooks/lib/sync-project-iteration.sh 90 @next
-
-# Clear iteration
-./claude-plugins/nightgauge/hooks/lib/sync-project-iteration.sh 90 none
+nightgauge project sync-iteration 90 "Sprint 5"
 ```
+
+The verb takes an explicit iteration title; it does not resolve the current
+iteration from today's date. The pipeline's issue-pickup stage therefore does
+not assign a sprint itself. The steps above describe the VS Code extension's
+`ProjectIterationService`.
 
 **Why Deterministic?**
 
-- Fixed input→output mapping: `@current` → current iteration ID
+- Fixed input→output mapping: iteration title → iteration ID
 - No interpretation needed
 - Predictable, testable behavior
 - Zero LLM tokens consumed

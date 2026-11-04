@@ -236,6 +236,15 @@ PY
     # The same pass fixes sibling-skill references: `../nightgauge-issue-audit/`
     # names a directory that exists canonically but not in the mirror, where the
     # prefix has been stripped to `issue-audit/`.
+    #
+    # Include directives are expanded first (#2764), while every link is still
+    # canonical. Claude Code loads a plugin skill as-is and never expands
+    # `<!-- include: -->`, so run interactively each directive reached the
+    # model as a literal comment. The pipeline renders dist/skills, not this
+    # mirror, so expanding here cannot move an overlay. A missing target fails
+    # the generator, as it fails `skillrender.ExpandIncludes`.
+    python3 "$REPO_ROOT/scripts/lib/mirror_includes.py" \
+      --dest "$dest" --name "$name" --skills-src "$SKILLS_SRC"
     python3 "$REPO_ROOT/scripts/lib/mirror_links.py" --dest "$dest" --name "$name"
     count=$((count + 1))
   done

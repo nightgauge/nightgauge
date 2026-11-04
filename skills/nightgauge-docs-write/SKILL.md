@@ -55,7 +55,7 @@ self-contained and does not write pipeline context files.
 
 # Specify source files explicitly
 /nightgauge:docs-write --target docs/ARCHITECTURE.md --section "Pipeline Lifecycle" \
-  --source "packages/nightgauge-sdk/src/pipeline/**/*.ts"
+  --source "src/pipeline/**/*.ts"
 
 # Preview generated content without writing
 /nightgauge:docs-write --target docs/ARCHITECTURE.md --section "Pipeline Lifecycle" --dry-run
@@ -207,9 +207,9 @@ List the files that will be read:
 
 ```
 Source files to read:
-  packages/nightgauge-sdk/src/pipeline/PipelineOrchestrator.ts
-  packages/nightgauge-sdk/src/pipeline/ContextManager.ts
-  packages/nightgauge-sdk/src/pipeline/stages/FeatureDevStage.ts
+  src/pipeline/PipelineOrchestrator.ts
+  src/pipeline/ContextManager.ts
+  src/pipeline/stages/FeatureDevStage.ts
   ...
 ```
 
@@ -263,9 +263,9 @@ List the detected patterns and representative files:
 
 ```
 Architecture patterns detected:
-  ✓ event-system    — packages/nightgauge-sdk/src/pipeline/PipelineOrchestrator.ts, ...
-  ✓ service-pattern — packages/nightgauge-sdk/src/services/KnowledgeService.ts, ...
-  ✓ config-system   — packages/nightgauge/src/config/schema.ts, ...
+  ✓ event-system    — src/pipeline/PipelineOrchestrator.ts, ...
+  ✓ service-pattern — src/services/KnowledgeService.ts, ...
+  ✓ config-system   — src/config/schema.ts, ...
   ✗ auth-security   — not detected
 ```
 
@@ -588,7 +588,7 @@ From the written section, extract all backtick-quoted names that look like:
 - Class names (`PipelineOrchestrator`, `ContextManager`)
 - Method names (`runPipeline`, `loadContext`)
 - Type names (`PipelineStage`, `StageResult`)
-- File paths (`packages/nightgauge-sdk/src/...`)
+- File paths (`src/...`)
 
 #### Step 6.2: Verify Each Reference
 
@@ -604,8 +604,8 @@ Report any references that could NOT be found:
 
 ```
 Accuracy Check:
-  ✓ PipelineOrchestrator — found in packages/nightgauge-sdk/src/pipeline/PipelineOrchestrator.ts
-  ✓ runPipeline — found in packages/nightgauge-sdk/src/pipeline/PipelineOrchestrator.ts
+  ✓ PipelineOrchestrator — found in src/pipeline/PipelineOrchestrator.ts
+  ✓ runPipeline — found in src/pipeline/PipelineOrchestrator.ts
   ⚠ StageRunner — NOT FOUND in source files
 ```
 

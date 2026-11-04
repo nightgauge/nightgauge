@@ -223,34 +223,19 @@ If `action == "ready-to-close"`:
 ```bash
 EPIC_NUMBER=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.epicNumber')
 EPIC_TITLE=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.title')
-HOOKS_DIR="${CLAUDE_PLUGIN_ROOT:-claude-plugins/nightgauge}/hooks/lib"
-
-# a. Classify summary tier (deterministic, no AI tokens)
-if [ ! -x "$HOOKS_DIR/classify-epic-summary-tier.sh" ]; then
-  echo "WARNING: Optional hook script not found: $HOOKS_DIR/classify-epic-summary-tier.sh. Summary tier classification will be skipped." >&2
-  TIER="none"
-else
-  TIER_RESULT=$("$HOOKS_DIR/classify-epic-summary-tier.sh" "$EPIC_NUMBER") || true
-  TIER=$(printf '%s\n' "$TIER_RESULT" | jq -r '.tier // "none"')
-fi
-
-# b. Generate summary if tier is not "none"
-SUMMARY=""
-if [ "${TIER:-none}" != "none" ]; then
-  if [ ! -x "$HOOKS_DIR/generate-epic-summary.sh" ]; then
-    echo "WARNING: Optional hook script not found: $HOOKS_DIR/generate-epic-summary.sh. Epic summary generation will be skipped." >&2
-  else
-    SUMMARY=$("$HOOKS_DIR/generate-epic-summary.sh" "$EPIC_NUMBER" "$TIER") || true
-  fi
-fi
+# a+b. Classify the tier and generate the summary in one deterministic call
+#      (no AI tokens). Tiers: minimal, standard, detailed.
+SUMMARY_JSON=$(nightgauge epic summary "$EPIC_NUMBER" --json 2>/dev/null || echo '{}')
+TIER=$(printf '%s\n' "$SUMMARY_JSON" | jq -r '.tier // "minimal"')
+SUMMARY=$(printf '%s\n' "$SUMMARY_JSON" | jq -r '.summary // empty')
 
 # c. Post summary as issue comment (if generated)
 if [ -n "$SUMMARY" ]; then
   gh issue comment "$EPIC_NUMBER" --body "$SUMMARY" 2>/dev/null || true
 fi
 
-# d. For full tier: commit summary to docs/epics/{N}-{slug}.md
-if [ "${TIER:-none}" = "full" ] && [ -n "$SUMMARY" ]; then
+# d. For the detailed tier: commit summary to docs/epics/{N}-{slug}.md
+if [ "$TIER" = "detailed" ] && [ -n "$SUMMARY" ]; then
   SLUG=$(echo "$EPIC_TITLE" | tr '[:upper:]' '[:lower:]' | \
     sed 's/[^a-z0-9 -]//g' | tr ' ' '-' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | \
     cut -c1-40 | sed 's/-$//')

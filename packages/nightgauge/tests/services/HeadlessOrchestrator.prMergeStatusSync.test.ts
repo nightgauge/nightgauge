@@ -63,17 +63,24 @@ describe("pr-merge stage sync", () => {
     expect(board).toBe("Ready");
   });
 
+  it("writes Ready itself when the hook could not resolve a board", async () => {
+    board = "In review";
+    readState.mockResolvedValue("OPEN");
+    await makeSync().sync("pr-merge");
+    expect(board).toBe("Ready");
+  });
+
   it("ends Done after a Closes merge closes the issue", async () => {
     readState.mockResolvedValue("CLOSED");
     await makeSync().sync("pr-merge");
     expect(board).toBe("Done");
   });
 
-  it("writes nothing and raises no card when the state is unreadable", async () => {
+  it("writes nothing and raises the card when the state is unreadable", async () => {
     readState.mockResolvedValue(null);
     const { orchestrator, sync } = makeSync();
     await sync("pr-merge");
     expect(writeStatus).not.toHaveBeenCalled();
-    expect(orchestrator.raiseBoardStatusWriteFailed).not.toHaveBeenCalled();
+    expect(orchestrator.raiseBoardStatusWriteFailed).toHaveBeenCalledWith(ISSUE, "pr-merge");
   });
 });
