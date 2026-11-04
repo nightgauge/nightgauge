@@ -274,3 +274,111 @@ diff --git a/x_test.go b/x_test.go
 		t.Error("an empty diff must give no checker")
 	}
 }
+
+// #2916 (ac46da49): a `-run` pattern selecting existing tests, and a
+// changelog entry under `## [Unreleased]`.
+const acDiff2916 = `diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,0 +5,2 @@
++- The architecture-release tests no longer fail intermittently when the held
++  issue's background board read reaches the test's fixture forge.
+diff --git a/internal/orchestrator/autonomous_architecture_release_test.go b/internal/orchestrator/autonomous_architecture_release_test.go
+--- a/internal/orchestrator/autonomous_architecture_release_test.go
++++ b/internal/orchestrator/autonomous_architecture_release_test.go
+@@ -3,0 +4,2 @@
++		case strings.Contains(string(body), "projectV2("):
++			_, _ = io.WriteString(w, ` + "`" + `{"errors":[{"message":"board read not served by the release fixture"}]}` + "`" + `)
+`
+
+const acChangelog2916 = "# Changelog\n\n## [Unreleased]\n\n" +
+	"- The architecture-release tests no longer fail intermittently when the held\n" +
+	"  issue's background board read reaches the test's fixture forge.\n\n## [0.8.0] - 2026-11-04\n"
+
+// #2912 (4cdeaef9): the script hunks; `git add -A` predates the diff.
+const acDiff2912 = `diff --git a/scripts/ci-local-go-test.sh b/scripts/ci-local-go-test.sh
+--- a/scripts/ci-local-go-test.sh
++++ b/scripts/ci-local-go-test.sh
+@@ -1 +1,2 @@
+-# Must match TreeFingerprint in internal/hooks/pre_push_skip.go.
++# Must match TreeFingerprint in internal/hooks/pre_push_skip.go. The scratch
++# index starts from HEAD so tracked files matching an ignore rule stay (#2889).
+@@ -4,0 +6,3 @@
++  if git rev-parse -q --verify 'HEAD^{tree}' >/dev/null 2>&1; then
++    GIT_INDEX_FILE="$dir/index" git read-tree HEAD || { rm -rf "$dir"; return 1; }
++  fi
+`
+
+const acScript2912 = "# Must match TreeFingerprint in internal/hooks/pre_push_skip.go. The scratch\n" +
+	"# index starts from HEAD so tracked files matching an ignore rule stay (#2889).\n" +
+	"tree_fingerprint() {\n  local dir\n  dir=$(mktemp -d)\n" +
+	"  if git rev-parse -q --verify 'HEAD^{tree}' >/dev/null 2>&1; then\n" +
+	"    GIT_INDEX_FILE=\"$dir/index\" git read-tree HEAD || { rm -rf \"$dir\"; return 1; }\n  fi\n" +
+	"  GIT_INDEX_FILE=\"$dir/index\" git add -A\n}\n"
+
+func TestVerifyACAgainstDiff_Issue2917(t *testing.T) {
+	const runAC = "`go test ./internal/orchestrator -run 'TestArchitecture' -race -count=200` passes on the branch, and the command and result are recorded in the PR"
+	const tokenAC = "The scratch index starts from `HEAD` (`git read-tree HEAD`) before `git add -A`, in `TreeFingerprint` and in `scripts/ci-local-go-test.sh`"
+	const changelogAC = "A changelog entry under `## [Unreleased]`"
+	relTest := "internal/orchestrator/autonomous_architecture_release_test.go"
+	d2916 := func() *ACDiff {
+		return memDiff(acDiff2916, map[string]string{
+			"CHANGELOG.md": acChangelog2916,
+			relTest:        "package orchestrator\n\nfunc TestArchitectureRelease_HoldsIssue(t *testing.T) {\n",
+		})
+	}
+	d2912 := func(script string) *ACDiff {
+		return memDiff(acDiff2912, map[string]string{"scripts/ci-local-go-test.sh": script})
+	}
+	misplaced := memDiff(`diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,0 +7 @@
++- an entry in the wrong section
+`, map[string]string{"CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n\n## [0.8.0]\n\n- an entry in the wrong section\n"})
+	passed := ACTestState{Passed: true, Source: "feature-validate unit tests"}
+	cases := []struct {
+		name, text string
+		d          *ACDiff
+		tests      ACTestState
+		want       string
+	}{
+		{"run pattern met", runAC, d2916(), passed, ACMet},
+		{"run pattern, run failed", runAC, d2916(), ACTestState{}, ACUnmet},
+		{"run pattern matches nothing", "`go test ./x -run 'TestNoSuch'` passes", d2916(), passed, ACUnmet},
+		{"run unquoted", "`go test ./internal/orchestrator -run TestArchitecture` passes", d2916(), passed, ACMet},
+		{"run equals", "`go test ./internal/orchestrator -run=TestArchitecture` passes", d2916(), passed, ACMet},
+		{"run subtest pattern", "`go test ./x -run 'TestArchitecture/hold'` passes", d2916(), passed, ACMet},
+		{"name outside -run still required", "`TestMissing` passes via `go test -run TestMissing`", d2916(), passed, ACUnmet},
+		{"run invalid regex", "`go test ./x -run 'Test(['` passes", d2916(), passed, ""},
+		{"token pre-existing in file", tokenAC, d2912(acScript2912), passed, ACMet},
+		{"token absent from file", tokenAC, d2912(strings.Replace(acScript2912, "git add -A", "git add .", 1)), passed, ACUnmet},
+		{"tokens all pre-existing", "`scripts/ci-local-go-test.sh` runs `git add -A`", d2912(acScript2912), passed, ""},
+		{"changelog met 2916", changelogAC, d2916(), passed, ACMet},
+		{"changelog met 2912", changelogAC, memDiff(`diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,0 +5,4 @@
++- A reviewed or gated tree now keeps tracked files that match an ignore rule
++  (`+"`.gitignore`, `.git/info/exclude`, `core.excludesFile`"+`). They no longer read
++  as deleted in review diffs, and the tree fingerprint no longer varies between
++  clones with different local excludes.
+`, map[string]string{"CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n\n- A reviewed\n"}), passed, ACMet},
+		{"changelog not in diff", changelogAC, d2912(acScript2912), passed, ACUnmet},
+		{"changelog wrong heading", changelogAC, misplaced, passed, ACUnmet},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := VerifyACAgainstDiff(c.text, c.d, c.tests)
+			if c.want == "" {
+				if ok {
+					t.Errorf("got %+v, want not diff-checkable", got)
+				}
+				return
+			}
+			if !ok || got.Status != c.want {
+				t.Errorf("got %+v ok=%v, want %s", got, ok, c.want)
+			}
+		})
+	}
+}
