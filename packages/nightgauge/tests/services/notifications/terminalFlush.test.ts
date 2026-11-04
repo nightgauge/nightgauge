@@ -169,6 +169,7 @@ describe("terminal flush — a late-written field reaches both cards (#1127)", (
     );
 
     svc.onPipelineStart({ issueNumber: ISSUE, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: ISSUE, stage: "feature-planning" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     // The outcome write: terminal, but health has not been evaluated yet.
@@ -195,6 +196,7 @@ describe("terminal flush — a late-written field reaches both cards (#1127)", (
     );
 
     svc.onPipelineStart({ issueNumber: ISSUE, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: ISSUE, stage: "feature-planning" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     svc.onPipelineUpdate({ issueNumber: ISSUE, state: terminalState() });
@@ -223,6 +225,7 @@ describe("terminal flush — a late-written field reaches both cards (#1127)", (
       logger as never
     );
     discord.onPipelineStart({ issueNumber: ISSUE, stage: "issue-pickup" });
+    discord.onPipelineStart({ issueNumber: ISSUE, stage: "feature-planning" });
     await vi.waitFor(() => expect(discordCalls).toHaveBeenCalledTimes(1));
     discord.onPipelineUpdate({ issueNumber: ISSUE, state: terminalState() });
     await vi.waitFor(() => expect(discordCalls).toHaveBeenCalledTimes(2));
@@ -241,6 +244,7 @@ describe("terminal flush — a late-written field reaches both cards (#1127)", (
       logger as never
     );
     slack.onPipelineStart({ issueNumber: ISSUE, stage: "issue-pickup" });
+    slack.onPipelineStart({ issueNumber: ISSUE, stage: "feature-planning" });
     await vi.waitFor(() => expect(slackCalls).toHaveBeenCalledTimes(1));
     slack.onPipelineUpdate({ issueNumber: ISSUE, state: terminalState() });
     await vi.waitFor(() => expect(slackCalls).toHaveBeenCalledTimes(2));
@@ -263,6 +267,7 @@ describe("terminal flush — a late-written field reaches both cards (#1127)", (
       logger as never
     );
     svc.onPipelineStart({ issueNumber: ISSUE, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: ISSUE, stage: "feature-planning" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     svc.onPipelineUpdate({ issueNumber: ISSUE, state: terminalState() });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));

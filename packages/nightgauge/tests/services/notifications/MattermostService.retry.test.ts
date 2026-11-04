@@ -97,6 +97,7 @@ describe("MattermostService.retry — in-flight POST retries (FETCH_RETRY_DELAYS
 
     await service.initialize();
     stageStartHandler!({ stage: "issue-pickup", issueNumber: 42 });
+    stageStartHandler!({ stage: "feature-planning", issueNumber: 42 });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -114,6 +115,7 @@ describe("MattermostService.retry — in-flight POST retries (FETCH_RETRY_DELAYS
 
     await service.initialize();
     stageStartHandler!({ stage: "issue-pickup", issueNumber: 42 });
+    stageStartHandler!({ stage: "feature-planning", issueNumber: 42 });
     await vi.advanceTimersByTimeAsync(0);
 
     // After 0ms advance: first attempt fired, retry pending
@@ -137,6 +139,7 @@ describe("MattermostService.retry — in-flight POST retries (FETCH_RETRY_DELAYS
 
     await service.initialize();
     stageStartHandler!({ stage: "issue-pickup", issueNumber: 42 });
+    stageStartHandler!({ stage: "feature-planning", issueNumber: 42 });
 
     await vi.advanceTimersByTimeAsync(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -156,6 +159,7 @@ describe("MattermostService.retry — in-flight POST retries (FETCH_RETRY_DELAYS
 
     await service.initialize();
     stageStartHandler!({ stage: "issue-pickup", issueNumber: 42 });
+    stageStartHandler!({ stage: "feature-planning", issueNumber: 42 });
 
     await vi.advanceTimersByTimeAsync(0 + 200 + 800);
 
@@ -181,6 +185,7 @@ describe("MattermostService.retry — final PATCH retries (FINAL_PATCH_RETRY_DEL
     fetchMock.mockResolvedValueOnce(jsonResponse({ id: `post-${issueNumber}` }));
     await service.initialize();
     stageStartHandler!({ stage: "issue-pickup", issueNumber });
+    stageStartHandler!({ stage: "feature-planning", issueNumber });
     await vi.advanceTimersByTimeAsync(0);
   }
 

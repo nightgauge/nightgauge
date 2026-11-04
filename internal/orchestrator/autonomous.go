@@ -1161,6 +1161,10 @@ type AutonomousScheduler struct {
 	// is what made a retrying run indistinguishable from an idle one.
 	retryBackoff map[string]retryPlan
 
+	// blockedFindingLogged de-duplicates the blocked-finding skip log (#2914):
+	// key "repo#number" -> the finding identity last logged. Guarded by mu.
+	blockedFindingLogged map[string]string
+
 	// conflictRestartCount tracks how many times each issue hit the legacy
 	// fresh-branch conflict-restart path. As of #4072 the primary conflict path
 	// is the BRANCH-PRESERVING conflict-recovery loop: pr-merge captures the
@@ -4882,6 +4886,9 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// auto-resolve retracts cards for issues that closed or moved.
 	var selfRepoObserved []string
 
+	blockedFindingSeen := make(map[string]bool)
+	defer as.forgetClearedBlockedFindings(blockedFindingSeen)
+
 	var candidates []CandidateItem
 	for key, node := range g.Nodes {
 		// Skip nodes not in the filtered repo set (--repos restriction).
@@ -4920,6 +4927,17 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		if hold, held := humanHeldSet[key]; held {
 			bump("human-hold:" + hold)
 			log.Printf("autonomous: skipping %s — held for a human decision, awaiting %s; no rescan releases it", key, hold)
+			continue
+		}
+
+		// Skip issues with an unresolved out-of-scope finding (#2914). Pickup
+		// would defer them for zero tokens, but each lap still dispatched a run
+		// and posted a chat message. Re-read every pass, so clearing the
+		// finding re-admits the issue on the next cycle.
+		if rec, found := as.blockedFindingFor(node.Repo, node.Number); found {
+			blockedFindingSeen[key] = true
+			bump("blocked-finding")
+			as.noteBlockedFindingSkip(key, rec)
 			continue
 		}
 

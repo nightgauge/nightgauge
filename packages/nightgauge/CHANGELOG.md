@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- Discord, Slack and Mattermost no longer post a message for a run that defers at
+  issue-pickup. The message is posted once the run reaches a later stage; a pickup
+  failure still notifies (#2914).
 - "Approve & re-queue" on an architecture-approval card now moves the issue to Ready, so it
   dispatches. Queue items the daemon adds now start without waiting for another event (#2717).
 

@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- An issue with an unresolved blocked finding is no longer dispatched every
+  autonomous cycle: the candidate filter skips it, logs the skip once per
+  finding, and re-admits it on the next cycle after `blocked.clearFinding`.
+  Discord, Slack and Mattermost no longer post a message for a run that defers
+  at issue-pickup; a run posts once it reaches a later stage, and a pickup
+  failure still notifies (#2914).
 - The architecture-release tests no longer fail intermittently when the held
   issue's background board read reaches the test's fixture forge.
 - A reviewed or gated tree now keeps tracked files that match an ignore rule
