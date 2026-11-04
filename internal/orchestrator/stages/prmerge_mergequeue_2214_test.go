@@ -25,6 +25,9 @@ type queueGh struct {
 	queueCalls  int
 	gotStatus   github.MergeQueueStatus
 	gotOpts     github.MergeQueueWaitOptions
+	// reachQueue, when set, fires opts.OnQueued as a real queue would once
+	// the PR is enqueued (#2770).
+	reachQueue bool
 }
 
 func (q *queueGh) MergeQueueStatus(_ context.Context, _ int) (github.MergeQueueStatus, error) {
@@ -46,6 +49,9 @@ func (q *queueGh) EnqueueAndWait(_ context.Context, st github.MergeQueueStatus, 
 	q.queueCalls++
 	q.gotStatus = st
 	q.gotOpts = opts
+	if q.reachQueue && opts.OnQueued != nil {
+		opts.OnQueued(st)
+	}
 	return q.final, q.waitErr
 }
 

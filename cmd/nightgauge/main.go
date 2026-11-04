@@ -68,6 +68,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/pipeline"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	ibqueue "github.com/nightgauge/nightgauge/internal/queue"
+	"github.com/nightgauge/nightgauge/internal/queuewait"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"github.com/nightgauge/nightgauge/internal/scan"
@@ -7887,6 +7888,12 @@ func prMergeCmd() *cobra.Command {
 				return err
 			}
 
+			if issueNumber > 0 {
+				// The queue wait a budgeted pr-merge stage spends after its PR
+				// is enqueued is not the stage's work (#2770): record it so the
+				// stage's wall-clock budget leaves it out.
+				defer recordPRMergeQueueWait(&svc.QueueWait, issueNumber)()
+			}
 			sha, err := svc.MergePRWithStrategy(cmd.Context(), pr.NodeID, strategy)
 			if err != nil {
 				return fmt.Errorf("merge PR #%d in %s/%s: %w", number, ownerPart, repoPart, enrichError(err))
@@ -7929,6 +7936,21 @@ func prMergeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "Bypass the blockedBy pre-merge guard")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
+}
+
+// recordPRMergeQueueWait sets opts.OnQueued to open this process's
+// queue-wait interval for issue and returns the func that closes it, to run
+// when the merge call returns (#2770).
+func recordPRMergeQueueWait(opts *gh.MergeQueueWaitOptions, issue int) func() {
+	root, err := os.Getwd()
+	if err != nil {
+		return func() {}
+	}
+	begin, end := queuewait.Track(root, issue, func(err error) {
+		fmt.Fprintf(os.Stderr, "WARNING: %v\n", err)
+	})
+	opts.OnQueued = func(gh.MergeQueueStatus) { begin() }
+	return end
 }
 
 func prCIWaitCmd() *cobra.Command {

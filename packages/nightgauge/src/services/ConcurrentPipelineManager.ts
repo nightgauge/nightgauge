@@ -98,6 +98,28 @@ const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * #2770: a `runaway_progress` kill recovers like a stall on the Go side
+ * (30-minute backoff, no lifetime-cap increment), and the monitor that raises
+ * it can be wrong, so one kill must not halt the repository. It is NOT in
+ * HALT_SKIP_TRANSIENT_STALL because it also skips the lifetime cap: skipped
+ * unconditionally, an issue the monitor keeps killing would retry forever.
+ * So the halt is skipped for the first CAP - 1 consecutive runaway kills of an
+ * issue and applies on the CAP-th; any other outcome of that issue resets the
+ * count. The count is in memory: a window reload is an operator action.
+ */
+export const RUNAWAY_CONSECUTIVE_RETRY_CAP = 3;
+
+/** The issue's consecutive runaway-kill count after an outcome of `kind`. */
+export function nextRunawayStreak(previous: number, kind: string | undefined): number {
+  return kind === "runaway_progress" ? previous + 1 : 0;
+}
+
+/** Whether a runaway kill at `streak` in a row skips the halt. */
+export function runawayKillSkipsHalt(streak: number): boolean {
+  return streak > 0 && streak < RUNAWAY_CONSECUTIVE_RETRY_CAP;
+}
+
+/**
  * The parked kinds (#1631, #1753): the next attempt on the same model and
  * adapter meets the same condition unchanged, so Go's `TerminalKindParks`
  * schedules no retry, charges no lifetime failure, feeds no cascade breaker,
@@ -716,6 +738,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * (the #100 / #243 flake class).
    */
   private readonly lifecyclePromises = new Map<string, Promise<PipelineRunResult>>();
+  /** Consecutive runaway kills per {@link slotKey} (#2770). */
+  private readonly runawayStreaks = new Map<string, number>();
   private worktreeManager: WorktreeManager;
   private maxConcurrent: number;
   /**
@@ -2242,6 +2266,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
       pipelineResult = result;
       pipelineSucceeded = result.success;
+      this.recordRunawayStreak(
+        slot,
+        result.success ? undefined : classifyTerminalKind(result.error?.message ?? "")
+      );
       pipelineDeferred = result.deferred ?? false;
       isAlreadyResolved = result.outcomeType === "already-resolved";
 
@@ -3057,6 +3085,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     return false;
   }
 
+  /** Track the issue's consecutive runaway kills across its outcomes (#2770). */
+  private recordRunawayStreak(slot: PipelineSlot, kind: string | undefined): void {
+    const key = slotKey(slot.repo, slot.issueNumber);
+    const streak = nextRunawayStreak(this.runawayStreaks.get(key) ?? 0, kind);
+    if (streak === 0) this.runawayStreaks.delete(key);
+    else this.runawayStreaks.set(key, streak);
+  }
+
   private async haltQueueOnSlotFailure(
     slot: PipelineSlot,
     pipelineResult: PipelineRunResult | undefined
@@ -3234,9 +3270,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // Show a non-blocking warning toast instead so the user is aware, then
       // let autonomous continue working on other ready issues uninterrupted.
       // Runaway-ceiling kills (#3508) resolve to stall_kill in the table and are
-      // covered by the same set: no queue halt, no autonomous pause, 30m backoff
-      // via the Go layer.
-      const isStallKill = haltKind !== undefined && HALT_SKIP_TRANSIENT_STALL.has(haltKind);
+      // covered by the same set. Progress-based runaway kills keep their own
+      // kind, runaway_progress, and skip the halt only below
+      // RUNAWAY_CONSECUTIVE_RETRY_CAP kills in a row (#2770).
+      const isStallKill =
+        haltKind !== undefined &&
+        (HALT_SKIP_TRANSIENT_STALL.has(haltKind) ||
+          (haltKind === "runaway_progress" &&
+            runawayKillSkipsHalt(
+              this.runawayStreaks.get(slotKey(slot.repo, slot.issueNumber)) ?? 0
+            )));
       if (isStallKill) {
         const failedStage = pipelineResult?.failedStage ?? "unknown";
         this.logger.info(

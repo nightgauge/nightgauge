@@ -27,6 +27,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
 	"github.com/nightgauge/nightgauge/internal/preflight"
+	"github.com/nightgauge/nightgauge/internal/queuewait"
 )
 
 // PRMergePath is the outcome of a deterministic pr-merge attempt.
@@ -595,7 +596,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		ph.complete("ci-gate")
 		ph.skip("freshness-check")
 		ph.start("merge")
-		return finish(r.awaitMergeQueue(ctx, ph, mq, prNumber, snap, queueStatus), nil)
+		return finish(r.awaitMergeQueue(ctx, ph, mq, workdir, issueNumber, prNumber, snap, queueStatus), nil)
 	}
 
 	// Settle the snapshot: the mergeability wait (#1933) and the CI wait (#297)
@@ -693,7 +694,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// or be rejected (GraphQL), so enqueue and wait for the queue's verdict.
 	if mq != nil {
 		ph.start("merge")
-		return finish(r.awaitMergeQueue(ctx, ph, mq, prNumber, snap, queueStatus), nil)
+		return finish(r.awaitMergeQueue(ctx, ph, mq, workdir, issueNumber, prNumber, snap, queueStatus), nil)
 	}
 
 	// Issue the merge. Idempotent at the GitHub level: re-issuing on an
@@ -794,10 +795,20 @@ func (r *DeterministicRunner) detectMergeQueue(ctx context.Context, gh ghClient,
 // queue's outcome (#2214). MERGED → PathMerged. Every other outcome is
 // PathRefused: a failed merge group is a CI failure on the merge-group
 // commit, and a queue wait is never handed to the LLM skill.
-func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmitter, mq mergeQueueClient, prNumber int, snap PRViewSnapshot, st github.MergeQueueStatus) PRMergeResult {
+//
+// The wait after the PR reaches the queue is recorded for issueNumber
+// (#2770), the same record `nightgauge pr merge --issue` writes, so a
+// wall-clock budget running over this wait leaves it out.
+func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmitter, mq mergeQueueClient, workdir string, issueNumber, prNumber int, snap PRViewSnapshot, st github.MergeQueueStatus) PRMergeResult {
 	log.Printf("pr-merge: PR #%d targets %s, which requires a merge queue — enqueueing and waiting up to %s",
 		prNumber, st.BaseRef, r.QueueWaitTimeout())
-	final, err := mq.EnqueueAndWait(ctx, st, r.queueWait)
+	opts := r.queueWait
+	if issueNumber > 0 && workdir != "" {
+		begin, end := queuewait.Track(workdir, issueNumber, func(err error) { log.Printf("pr-merge: %v", err) })
+		opts.OnQueued = func(github.MergeQueueStatus) { begin() }
+		defer end()
+	}
+	final, err := mq.EnqueueAndWait(ctx, st, opts)
 	if err == nil && final.State == "MERGED" {
 		ph.complete("merge")
 		ph.skipOffPath()

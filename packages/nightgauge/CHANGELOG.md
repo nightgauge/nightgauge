@@ -11,6 +11,13 @@ and this project adheres to
 
 ### Fixed
 
+- A pr-merge stage the extension runs no longer has its merge-queue wait counted against its
+  wall-clock budget (#2770).
+- A runaway-progress kill shows a warning and retries instead of halting the repository queue. The
+  third consecutive runaway kill of the same issue still halts it (#2770).
+- Churn kills are recorded as `progress-churn-tools` in the stage-exit record, whatever deferral
+  expired behind them (#2770).
+
 - On activation the extension links `~/.nightgauge/bin/nightgauge` to its bundled binary, so
   the Claude plugin's hooks and terminals find the binary from VS Code, Insiders, VSCodium,
   Cursor or Windsurf (#2765).

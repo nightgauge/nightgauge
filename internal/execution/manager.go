@@ -533,8 +533,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	trackLiveStage(execution)
 
 	// The wall clock runs from the spawn. It is the smaller of the stage
-	// budget and opts.Timeout; nothing extends it.
+	// budget and opts.Timeout. Only pr-merge's recorded merge-queue wait is
+	// left out of it (#2770); opts.Timeout still bounds the stage.
 	stageBudget := newStageBudgetEnforcer(budget, StreamFormatForAdapter(adapter.Name()), opts.Timeout)
+	stageBudget.excluded = stageBudgetExclusion(opts.Stage, opts.IssueNumber, worktreeDir)
 	stageBudget.arm(cmd.Process, execution.done)
 
 	// Idle-stream watchdog (#2176): a stage dispatched to a declared model

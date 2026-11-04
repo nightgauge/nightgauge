@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- pr-merge's wall-clock stage budget no longer counts the time its PR waits in the merge queue,
+  so a stage is not killed while the queue tests its merge group. `nightgauge pr merge --issue N`
+  records the wait after enqueue in `queue-wait-<N>.json`; both budget enforcers leave it out, and
+  the new `nightgauge pr-stage queue-wait` verb reports it. Time before the enqueue still counts. A
+  wait left open by a dead writer adds nothing, and the excluded time never exceeds elapsed
+  time (#2770).
+- A `runaway_progress` kill no longer halts the repository queue. The halt is skipped for the first
+  two consecutive runaway kills of an issue and applies on the third (#2770).
+- A churn kill is recorded as `progress-churn-tools` even when a background-task deferral expired
+  behind it, and a declared progress log that was deleted no longer makes a kill read as an expired
+  external-progress deferral (#2770).
+
 - The Claude plugin's hooks no longer fail open silently when the `nightgauge` binary is missing.
   A new SessionStart hook shows one warning per session, and the workflow and prompt-sanitization
   gates deny tool calls in a repository that opted in with `.nightgauge/config.yaml`. The unused
