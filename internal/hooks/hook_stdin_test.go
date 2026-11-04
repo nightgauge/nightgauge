@@ -20,6 +20,7 @@ func TestEvaluateFormatFromHook_FormatsAbsolutePathFromPayload(t *testing.T) {
 	}
 
 	workdir := t.TempDir()
+	optIn(t, workdir)
 	target := filepath.Join(workdir, "messy.go")
 	const unformatted = "package main\nfunc  main( ){}\n"
 	if err := os.WriteFile(target, []byte(unformatted), 0o644); err != nil {
@@ -46,6 +47,7 @@ func TestEvaluateFormatFromHook_FormatsAbsolutePathFromPayload(t *testing.T) {
 
 func TestEvaluateFormatFromHook_RejectsPathsOutsideWorkdir(t *testing.T) {
 	workdir := t.TempDir()
+	optIn(t, workdir)
 	outside := filepath.Join(t.TempDir(), "elsewhere.go")
 	if err := os.WriteFile(outside, []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -185,11 +187,40 @@ func TestPostToolUseDecodersReadTheCurrentPayloadShape(t *testing.T) {
 		t.Skip("gofmt not available")
 	}
 	workdir := t.TempDir()
+	optIn(t, workdir)
 	target := filepath.Join(workdir, "messy.go")
 	if err := os.WriteFile(target, []byte("package main\nfunc  main( ){}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if res := evaluateFormatFromHook(payload("Edit", target, ""), workdir); !res.Formatted {
 		t.Errorf("format did not read the current payload: %+v", res)
+	}
+}
+
+// TestEvaluateFormatFromHook_SkipsRepositoriesThatDidNotOptIn: the plugin is
+// user-scoped, so format-on-save must leave a file alone in a repository with
+// no .nightgauge/config.yaml (#2765). Removing the RepoOptedIn check in
+// evaluateFormatFromHook turns this red.
+func TestEvaluateFormatFromHook_SkipsRepositoriesThatDidNotOptIn(t *testing.T) {
+	if _, err := exec.LookPath("gofmt"); err != nil {
+		t.Skip("gofmt not available")
+	}
+	workdir := gittestRepo(t)
+	target := filepath.Join(workdir, "messy.go")
+	const unformatted = "package main\nfunc  main( ){}\n"
+	if err := os.WriteFile(target, []byte(unformatted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(`{"tool_name":"Write","tool_input":{"file_path":` + strconv.Quote(target) + `}}`)
+
+	if res := evaluateFormatFromHook(payload, workdir); res.Formatted {
+		t.Fatalf("format-on-save ran in a repository that never opted in: %+v", res)
+	}
+	after, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != unformatted {
+		t.Fatalf("file in a non-opted-in repository was rewritten:\n%s", after)
 	}
 }

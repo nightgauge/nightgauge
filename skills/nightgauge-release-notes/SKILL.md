@@ -50,12 +50,12 @@ honor the 500-char limit before finishing.
 
 ## Invocation
 
-| Tool        | Command                                                   |
-| ----------- | --------------------------------------------------------- |
-| Claude Code | `/nightgauge:release-notes <epic> [options]`              |
-| Copilot     | Invoke via Agent Skills extension                         |
-| Cursor      | Run via Agent Skills or direct SKILL.md                   |
-| Standalone  | `claude --skill skills/nightgauge-release-notes/SKILL.md` |
+| Tool        | Command                                      |
+| ----------- | -------------------------------------------- |
+| Claude Code | `/nightgauge:release-notes <epic> [options]` |
+| Copilot     | Invoke via Agent Skills extension            |
+| Cursor      | Run via Agent Skills or direct SKILL.md      |
+| Headless    | `claude -p "/nightgauge:release-notes"`      |
 
 ## Arguments
 

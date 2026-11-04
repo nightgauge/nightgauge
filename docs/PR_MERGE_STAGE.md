@@ -99,6 +99,14 @@ extension logs `pr-stage <stage> spawned pid=<pid> issue=#<N>` at spawn, and a
 signal death is reported as `pr-stage killed by signal <SIGNAL>`, so a kill can be
 attributed. If the budget verb fails, the stage is a `runner-error`.
 
+The stage's wall-clock budget (`pipeline.stage_budgets`) does not count the time
+its PR waits in the merge queue (#2770). `nightgauge pr merge --issue N` and the
+deterministic runner's queue wait record that time in `queue-wait-<N>.json`, from
+the moment the PR reaches the queue to the moment the merge call returns, and both
+wall-clock enforcers leave it out. Time before the enqueue, such as review fixes,
+still counts. See
+[GUARDRAILS_AND_BUDGETS.md](GUARDRAILS_AND_BUDGETS.md#per-stage-non-usd-budgets-1652).
+
 ### Bounded mergeability wait (Issue #1933)
 
 GitHub computes `mergeable` **asynchronously** and answers `UNKNOWN` for the

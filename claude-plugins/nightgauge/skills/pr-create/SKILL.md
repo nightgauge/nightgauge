@@ -16,8 +16,67 @@ outputs:
 disable-model-invocation: true
 ---
 
-<!-- include: ../_shared/PIPELINE_CONTEXT.md -->
-<!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
+## System Context
+
+**Product**: Nightgauge — AI-powered Issue-to-PR pipeline.
+
+**Architecture**: Three-layer stack: portable Skills (SKILL.md), a TypeScript
+SDK, and a VSCode Extension, over a Go deterministic layer. Six pipeline
+stages execute as isolated subagents with JSON context handoff files.
+
+**Execution model**: Each pipeline stage runs in a fresh conversation. Context
+is passed exclusively through JSON files in the clone's pipeline state
+directory (`nightgauge layout path pipeline`) — never through conversation
+history. Every stage reads its predecessor's context file
+and writes its own.
+
+**Configuration**: 6-tier config system — built-in defaults → global config →
+project config → local config → env vars → CLI flags. Reference:
+[docs/CONFIGURATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md).
+
+**Standards**: Code standards in `docs/CODE_STANDARDS.md`. Security rules in
+`standards/security.md`. Testing patterns in `docs/TESTING.md`. Git workflow in
+`docs/GIT_WORKFLOW.md`.
+
+**Critical rules**: Never push to main. Never hardcode secrets. Never downgrade
+versions. Pre-submission validation is mandatory.
+
+## Autonomy Contract
+
+This run is autonomous. No human is watching, and nobody can answer a
+question mid-stage. `AskUserQuestion` is disabled — and _behaving_ as if it
+were available is the same failure.
+
+- **Proceed without asking** for any reversible action that follows from the
+  stage's task. If a decision is genuinely undecidable from the issue, the
+  context files, and the repo, fail fast with a clear error — never pause to
+  ask, and never silently pick between materially different product
+  directions.
+- **Never end a turn on a promise.** Before ending your turn, check your last
+  paragraph: if it is a plan, a question, a list of next steps, or a promise
+  about work not yet done ("I'll now…", "Next, I will…"), do that work now
+  with tool calls instead of describing it. A turn that ends on stated intent
+  with no corresponding tool call is recorded as a `premature_turn_end` stage
+  failure, not a success.
+- **Do not stop because the session feels long.** End the turn only when the
+  stage's output contract is satisfied (its context file and phase markers
+  are written) or you are genuinely blocked — and a genuine block is reported
+  as an explicit failure, never as an open question.
+- **Never end a turn with background work outstanding.** There is no "await
+  and resume" — your turn ending IS stage completion, and the pipeline
+  advances immediately. If you started something in the background, block on
+  it and read its result before you finish. "I'll wait for that to complete
+  rather than poll, and pick the pipeline back up once it lands" is not a
+  handoff; it is the stage reporting success on work it never saw (#202).
+- **Work only inside the worktree you were given.** Never delegate the
+  stage's implementation to a subagent running under worktree isolation, and
+  never `cd` outside your workspace to edit files. Only your own worktree is
+  read by later stages: on #202 a subagent wrote the entire fix into
+  `.claude/worktrees/agent-<id>`, so the stage passed, the branch stayed
+  empty, and the work was invisible to every stage after it. A gate now fails
+  the stage when this happens — but the run is dead either way, so do the work
+  where you stand.
+
 
 # PR Create
 
@@ -85,7 +144,7 @@ authoritative output of the materializer.
 This skill intentionally declares **no** `orchestration:` frontmatter block. PR
 creation is a **single-agent deterministic phase** by design — it is never
 fanned out (epic #3899,
-[docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md) §Safety &
+[docs/WORKFLOW_ORCHESTRATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/WORKFLOW_ORCHESTRATION.md) §Safety &
 guardrails). The capability-routed `WorkflowEngine` runs it as one deterministic
 phase node alongside the orchestrated stages.
 
@@ -132,9 +191,193 @@ any other output for that phase.
 
 ### Phase 0: Environment Preflight
 
-<!-- include: ../_shared/PREFLIGHT.md -->
+### Phase 0: Environment Preflight
 
-<!-- include: ../_shared/REPO_IDENTITY_CHECK.md -->
+**PURPOSE**: Verify the nightgauge binary is available and the environment
+is healthy before executing any pipeline stage. Skills halt immediately with
+actionable instructions when this check fails.
+
+Three-layer check:
+
+1. **Binary discovery** — shell-level, runs before invoking the binary
+2. **Doctor check** — binary-level, full environment health via `doctor --json`
+3. **Project environment** — the checks the project declares under
+   `preflight.environment` (#101); opt-in, silent when none are declared
+
+The binary discovery cascade below is **provider-neutral** (issue 4029): it works
+identically under every adapter (Claude, Codex, Gemini, …) and references no
+VSCode-extension-specific path. The host that spawns the skill (the VSCode
+extension's `skillRunner`, or the Go `nightgauge` binary in auto/CLI mode)
+resolves the binary authoritatively and exports `NIGHTGAUGE_BIN`, which
+this cascade honors first. The remaining steps (PATH, the development-only repo
+`bin/` and worktree canonical-repo `bin/`, `~/go/bin`) are fallbacks for direct
+or terminal invocation.
+
+This intentionally **diverges** from
+`claude-plugins/nightgauge/hooks/lib/guard.sh` (issue 3262 → issue 4029): guard.sh is
+Claude-Code-only and retains a trailing `~/.vscode/extensions/...` glob to serve
+the standalone-terminal-Claude case (where no host exports `NIGHTGAUGE_BIN`).
+Skills must stay portable Markdown and cannot reference that VSCode-only path —
+so the shared resolution order (`NIGHTGAUGE_BIN` → PATH → gated repo → gated
+canonical → `~/go/bin`) stays in sync, and only guard.sh carries the extra Claude-only
+fallback. The `nightgauge preflight skill-portability` gate enforces that
+no skill reintroduces a `.vscode/extensions` path, and that every cascade keeps
+the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
+`bin/nightgauge` must never run.
+
+After the cascade resolves `$BINARY`, the preflight prepends
+`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
+invocations later in the same skill body resolve through PATH rather than
+failing with "command not found" (issue 3262).
+
+```bash
+# Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
+# bin → gated canonical-repo bin → ~/go/bin). No VSCode-extension path — see issue 4029.
+# Repo bins need NIGHTGAUGE_DEV_REPO_BIN=1 and a verified core checkout (#2758).
+BINARY="${NIGHTGAUGE_BIN:-}"
+[ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
+[ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
+fi
+[ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
+if [ -z "$BINARY" ]; then
+  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH or ~/go/bin" >&2
+  echo "" >&2
+  echo "Install via: go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest" >&2
+  echo "Or download from: https://github.com/nightgauge/nightgauge/releases" >&2
+  echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
+  exit 1
+fi
+# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
+export PATH="$(dirname "$BINARY"):$PATH"
+
+# Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
+# authenticates as the *current repo's* configured user instead of the machine-
+# global `gh auth` active account. `forge auth token` resolves per-repo (config
+# github_user/token → GITHUB_TOKEN → `gh auth token --user <github_user>`), so
+# concurrent sessions/workspaces owned by different GitHub users each use their
+# own token. GH_TOKEN outranks GITHUB_TOKEN and the gh keyring. Only resolve when
+# unset (an upstream env value — e.g. the VSCode extension's terminal env —
+# wins); never fail preflight over it. Mirrors hooks/lib/guard.sh (sync, issue 3262).
+if [ -z "${GH_TOKEN:-}" ]; then
+  IB_REPO_TOKEN="$("$BINARY" forge auth token 2>/dev/null || true)"
+  if [ -n "$IB_REPO_TOKEN" ]; then
+    export GH_TOKEN="$IB_REPO_TOKEN"
+    export GITHUB_TOKEN="${GITHUB_TOKEN:-$IB_REPO_TOKEN}"
+  fi
+  unset IB_REPO_TOKEN
+fi
+
+# Layer 2: full environment health check via doctor --json
+DOCTOR_RESULT=$("$BINARY" doctor --json 2>/dev/null)
+DOCTOR_EXIT=$?
+if [ "$DOCTOR_EXIT" -eq 2 ]; then
+  echo "ERROR: Environment check failed — nightgauge doctor reports broken environment." >&2
+  FAILED_CHECKS=$(printf '%s\n' "$DOCTOR_RESULT" | jq -r '.failed_checks[]? // empty' 2>/dev/null)
+  if [ -n "$FAILED_CHECKS" ]; then
+    echo "Failing check(s): $(echo "$FAILED_CHECKS" | tr '\n' ',' | sed 's/,$//')" >&2
+  fi
+  printf '%s\n' "$DOCTOR_RESULT" | jq -r '.errors[]' >&2 2>/dev/null || true
+  INSTALL_MSG=$(printf '%s\n' "$DOCTOR_RESULT" | jq -r '.install_instructions // empty' 2>/dev/null)
+  [ -n "$INSTALL_MSG" ] && echo "$INSTALL_MSG" >&2
+  exit 1
+fi
+if [ "$DOCTOR_EXIT" -eq 1 ]; then
+  echo "WARNING: Environment has non-critical issues:" >&2
+  printf '%s\n' "$DOCTOR_RESULT" | jq -r '.warnings[]' >&2 2>/dev/null || true
+  # Continue — warnings do not block skill execution
+fi
+
+# Layer 3: project-declared environment checks (preflight.environment, #101).
+# Opt-in: with none declared this prints nothing and continues. The verb
+# writes one `[environment-halt]` line per failed check, with its remedy.
+if ! "$BINARY" preflight environment >/dev/null; then
+  echo "[environment-halt] Project environment check failed — fix the environment, not the code." >&2
+  exit 1
+fi
+```
+
+**Exit codes from `nightgauge doctor`**:
+
+| Code | Meaning                         | Skill behavior                          |
+| ---- | ------------------------------- | --------------------------------------- |
+| 0    | Healthy                         | Continue                                |
+| 1    | Degraded (warnings only)        | Continue with warning printed to stderr |
+| 2    | Broken (required checks failed) | Halt immediately with error details     |
+
+**Layer 3** halts the stage when any check declared under
+`preflight.environment` in the workspace's `.nightgauge/config.yaml` fails
+(exit 1) or the declaration is invalid (exit 2). The failure is in the
+operator's environment, not the code: do not edit code to work around it, do
+not run the remedy yourself, and end the stage. The pipeline records it as
+`environment_halt` and holds the issue for an operator.
+
+Do not theorize about the cause beyond what is printed here — the failing
+check name (`failed_checks`) and its `.errors[]` message are the complete
+diagnosis (#277).
+
+
+### Repo Identity Assertion (HARD GATE — non-recoverable)
+
+If the `NIGHTGAUGE_TARGET_REPO` environment variable is set, the orchestrator
+has pinned the exact repo this stage must run in. Verify the current repository
+matches **before doing any work**:
+
+```bash
+if [ -n "$NIGHTGAUGE_TARGET_REPO" ]; then
+  # Derive this checkout's identity from its own git remote. The question
+  # is "which repository is this working directory?", and the remote answers
+  # it exactly — locally, with no API call. This used to shell out to the
+  # GitHub CLI for the same string, spending a request per stage on every
+  # repo in the workspace, invisible to `nightgauge api-usage`.
+  ACTUAL_REPO=$(git remote get-url origin 2>/dev/null \
+    | sed -E 's#^git@[^:]+:#-#; s#^https?://[^/]+/#-#; s#^-##; s#\.git$##')
+  if [ -n "$ACTUAL_REPO" ] && [ "$ACTUAL_REPO" != "$NIGHTGAUGE_TARGET_REPO" ]; then
+    echo "[repo-mismatch] FATAL: repository identity assertion failed"
+    echo "  Expected: $NIGHTGAUGE_TARGET_REPO"
+    echo "  Actual:   $ACTUAL_REPO"
+    echo "  CWD:      $(pwd)"
+    echo ""
+    echo "The orchestrator expected this stage to run in $NIGHTGAUGE_TARGET_REPO"
+    echo "but the working directory belongs to $ACTUAL_REPO."
+    exit 1
+  fi
+fi
+```
+
+**This is a terminal, non-recoverable stop condition. If the check prints
+`[repo-mismatch]` and exits 1, you MUST immediately end the stage with a failure.**
+
+Specifically, on a mismatch you must NOT:
+
+- `cd` into a different directory, switch worktrees, or `gh repo set-default` to
+  "make it match" — the orchestrator owns CWD; second-guessing it corrupts state.
+- Continue to later phases, create or push a branch, or open a PR — every
+  downstream artifact would land in the wrong repo.
+- Ask the user a question (`AskUserQuestion`) — autonomous runs have no human at
+  the prompt; the question is auto-dismissed and you would proceed on a guess.
+- Write a context/assessment file that claims success.
+
+The correct and ONLY action is to stop now and let the stage exit non-zero. This
+is a configuration fault in repo routing (the orchestrator set the wrong
+`NIGHTGAUGE_TARGET_REPO` for this worktree); it is fixed upstream in the
+orchestrator, never worked around inside the stage. The `[repo-mismatch]` marker
+is how the pipeline classifies and surfaces it.
+
+This check is a no-op — and the stage proceeds normally — when
+`NIGHTGAUGE_TARGET_REPO` is unset (e.g. manual single-stage CLI
+invocations) or already matches the current repo.
+
 
 ---
 
@@ -294,7 +537,113 @@ classification that allows the orchestrator to route remediation.
 This phase is especially critical in batch scenarios where a sibling sub-issue
 may have merged into the base branch while this branch was being implemented.
 
-<!-- include: ../_shared/STALE_BRANCH_MERGE.md -->
+### Proactive Main Branch Merge
+
+**PURPOSE**: Merge the latest base branch into the feature branch **before**
+creating the PR. This ensures code is always tested against the latest base
+branch state, prevents creating PRs with stale code that will fail to merge,
+and catches conflicts early with a clear outcome classification.
+
+**WHEN**: Run after preflight checks (clean working tree confirmed) and before
+security re-scan (which will scan the merged state). Critical during epic batch
+processing where sibling sub-issues may merge while this branch is being worked
+on.
+
+**Relation to `FRESHNESS_CHECK.md`**: both fragments merge the base (never
+rebase), preserving both lineages so a PR branch's origin tip stays an ancestor
+(#2699). This one runs before the PR exists and fails the stage on conflict;
+`FRESHNESS_CHECK.md` is the best-effort pre-build check in feature-validate and
+pr-merge.
+
+```bash
+# Step 1: Determine base branch (already resolved in Phase 2)
+# BASE_BRANCH is set by Phase 1 / Phase 2; fall back to main if unset
+MERGE_BASE="${BASE_BRANCH:-main}"
+CURRENT_BRANCH=$(git branch --show-current)
+
+echo "Phase 2.3: Checking freshness against origin/$MERGE_BASE..."
+
+# Step 2: Fetch latest state of the base branch
+git fetch origin "$MERGE_BASE" 2>/dev/null
+
+# Step 3: Count commits on base NOT yet in our branch
+BEHIND_COUNT=$(git rev-list --count "HEAD..origin/$MERGE_BASE" 2>/dev/null || echo "0")
+
+if [ "$BEHIND_COUNT" -eq 0 ]; then
+  echo "Branch is up-to-date with origin/$MERGE_BASE — no merge needed."
+  FRESHNESS_MERGE_PERFORMED=false
+  FRESHNESS_MERGE_STATUS="up-to-date"
+else
+  echo "Branch is $BEHIND_COUNT commit(s) behind origin/$MERGE_BASE. Merging..."
+
+  # Step 4: Attempt merge (preserve both lineages; safe for batch scenarios)
+  MERGE_MSG="Merge origin/${MERGE_BASE} into ${CURRENT_BRANCH}"
+  if git merge "origin/$MERGE_BASE" --no-edit -m "$MERGE_MSG" 2>&1; then
+    FRESHNESS_MERGE_PERFORMED=true
+    FRESHNESS_MERGE_STATUS="merged"
+    echo "Merge successful. Branch now includes latest $MERGE_BASE."
+
+    # Step 5: Push merged branch
+    PUSH_EXIT=0
+    nightgauge git push-branch 2>&1 || PUSH_EXIT=$?
+    if [ "$PUSH_EXIT" -ne 0 ]; then
+      if [ "$PUSH_EXIT" -eq 3 ]; then
+        # Exit 3 printed `[branch-forked]`: the run stops on the fork.
+        echo "ERROR: origin rejected '$CURRENT_BRANCH' and the rejection was not reconciled." >&2
+      else
+        # Exit 1 is a permission/infra error — not a conflict
+        echo "ERROR: Failed to push merged branch '$CURRENT_BRANCH' to origin." >&2
+        echo "Ensure you have push access and the branch is not protected." >&2
+      fi
+      git merge --abort 2>/dev/null || true
+      FRESHNESS_MERGE_STATUS="push-failed"
+      exit 1
+    fi
+    echo "Merged branch pushed. CI will re-run on the merged commit."
+
+  else
+    # Step 6: Merge failed — detect conflicts and classify outcome
+    CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+    echo "" >&2
+    echo "ERROR: Merge conflicts detected." >&2
+    echo "Conflicting files: ${CONFLICT_FILES:-<none detected>}" >&2
+    echo "" >&2
+    echo "Outcome: stale-branch-merge-conflict" >&2
+    echo "" >&2
+    echo "The feature branch is behind origin/$MERGE_BASE and has merge conflicts." >&2
+    echo "This PR will not be created until conflicts are resolved." >&2
+    echo "" >&2
+    echo "To fix:" >&2
+    echo "  1. git fetch origin $MERGE_BASE" >&2
+    echo "  2. git merge origin/$MERGE_BASE" >&2
+    echo "  3. Resolve conflicts manually" >&2
+    echo "  4. git add <resolved-files> && git commit" >&2
+    echo "  5. Re-run the pipeline" >&2
+
+    # Abort the failed merge to restore clean working tree
+    git merge --abort 2>/dev/null || true
+
+    FRESHNESS_MERGE_PERFORMED=false
+    FRESHNESS_MERGE_STATUS="conflict"
+    exit 1
+  fi
+fi
+```
+
+**Output variables** (available to downstream phases):
+
+- `FRESHNESS_MERGE_PERFORMED` — `true` if a merge was performed, `false` if
+  branch was already up-to-date
+- `FRESHNESS_MERGE_STATUS` — `up-to-date` | `merged` | `conflict` |
+  `push-failed`
+
+**Failure outcome**: When conflicts are detected, the stage exits with status 1
+and emits `stale-branch-merge-conflict` to stderr. The Go binary's failure
+classifier recognizes this string and maps it to `CatStaleBranchMergeConflict`.
+
+**Safety**: Uses standard `git merge` (not `--force`). If push fails, the
+merge is aborted to leave the working tree clean for the next attempt.
+
 
 **Failure outcome**: When conflicts are detected, the stage exits with status 1.
 The Go binary's failure classifier maps `stale-branch-merge-conflict` in stderr
@@ -510,7 +859,111 @@ printf '<!-- phase:start name="write-context" index=11 total=13 stage="pr-create
 printf '<!-- phase:start name="self-assessment" index=12 total=13 stage="pr-create" -->\n'
 ```
 
-<!-- include: ../_shared/SELF_ASSESSMENT_EPILOGUE.md -->
+### Self-Assessment Epilogue
+
+**PURPOSE**: Evaluate whether this skill's instructions matched reality during
+this execution. This phase is **non-blocking** — skip entirely if any main phase
+failed. A perfectly working skill produces **no output** from this phase.
+
+> See [docs/SKILL_SELF_ASSESSMENT.md](https://github.com/nightgauge/nightgauge/blob/main/docs/SKILL_SELF_ASSESSMENT.md) for
+> the full strategy, synthesis algorithm, and integration architecture.
+
+#### When to Skip
+
+- Any prior phase exited with an error before completing
+- The skill was cancelled or timed out
+- Running in `--dry-run` mode
+
+#### Step 1: Evaluate Execution Friction
+
+Review the execution that just completed. Answer these questions honestly:
+
+1. **Command failures**: Did any command, script, or binary call in the skill
+   instructions fail? (e.g., script not found, wrong flags, missing binary)
+2. **Workarounds**: Did you have to deviate from the skill instructions to
+   accomplish the goal? (e.g., used `gh` directly because a referenced script
+   didn't exist, skipped a step that referenced a nonexistent file)
+3. **Stale references**: Did any file path, function name, API endpoint, or tool
+   referenced in the instructions not exist in the current codebase?
+4. **Unclear instructions**: Were any instructions ambiguous enough that you had
+   to guess at the intended behavior?
+5. **Missing instructions**: Was there a significant step you had to figure out
+   on your own that should have been documented in this skill?
+
+**If ALL answers are "no" — write nothing and complete the skill normally.** The
+goal is silence when everything works.
+
+#### Step 2: Write Assessment Record
+
+Only if friction was detected in Step 1. Write a single JSON file,
+`assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json` in the clone's pipeline state
+directory, through the binary (JSON on stdin; never a direct file write):
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+{ ... the record below ... }
+JSON
+```
+
+The assessment record MUST follow this schema:
+
+```json
+{
+  "schema_version": "1",
+  "skill": "{STAGE_NAME}",
+  "skill_file": "skills/nightgauge-{STAGE_NAME}/SKILL.md",
+  "issue_number": 42,
+  "timestamp": "2026-03-10T14:30:00Z",
+  "friction": [
+    {
+      "type": "command_failure",
+      "severity": "high",
+      "description": "hooks/lib/add-to-project.sh not found — script was deleted",
+      "skill_line_hint": "claude-plugins/nightgauge/hooks/lib/add-to-project.sh <issue-number>",
+      "actual_resolution": "Used gh api graphql to add issue to project board directly",
+      "suggested_fix": "Replace with: nightgauge project add <issue-number>"
+    }
+  ]
+}
+```
+
+**Friction types**: `command_failure`, `workaround`, `stale_reference`,
+`unclear_instruction`, `missing_instruction`
+
+**Severity levels**:
+
+- `high` — instruction is **broken**. Required manual workaround to complete.
+- `medium` — instruction is **misleading**. Agent adapted without user help.
+- `low` — instruction is **suboptimal**. No functional impact.
+
+**Rules**:
+
+- **One record per execution** — multiple friction items go in the `friction`
+  array, not separate files.
+- **Be specific** — quote the exact instruction text that was wrong. Not "some
+  commands didn't work" but "Step 5.2 calls `hooks/lib/add-to-project.sh` but
+  this script was deleted in commit 65915701."
+- **Suggest the fix** — every finding MUST include `suggested_fix` with the
+  concrete SKILL.md change needed. Not "update the docs" but "replace
+  `hooks/lib/add-to-project.sh <N>` with `nightgauge project add <N>`."
+- **Don't invent friction** — only report issues you actually encountered during
+  this execution. Do not speculate about potential problems.
+
+#### Step 3: Validate and Complete
+
+```bash
+# Validate JSON if written
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
+if [ -f "$ASSESSMENT_FILE" ]; then
+  python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
+    echo "WARNING: Assessment record is not valid JSON" >&2
+fi
+```
+
 
 ---
 

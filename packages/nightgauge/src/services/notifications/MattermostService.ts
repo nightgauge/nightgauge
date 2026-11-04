@@ -29,6 +29,7 @@ import { Logger } from "../../utils/logger";
 import { SecretStorageService, SECRET_KEYS } from "../SecretStorageService";
 import type { Notifier, PipelineEventContext } from "./types";
 import { NotifierStatusTracker } from "./NotifierStatusTracker";
+import { PickupStartGate } from "./pickupStartGate";
 import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey, warnMissingCredentialOnce } from "./credentials";
 import {
   DEBOUNCE_MS,
@@ -138,11 +139,19 @@ export function parseWebhookUrl(url: string): { baseUrl: string; token: string }
 
 // ─── MattermostService ──────────────────────────────────────────────────────
 
+/** A held issue-pickup start: what is needed to create the post later. */
+interface HeldPickupStart {
+  stateService?: PipelineStateService;
+  startTime: number;
+}
+
 export class MattermostService implements Notifier, vscode.Disposable {
   // Every per-run map is keyed by slotKey(repoSlug, issueNumber), not the bare
   // issue number: two repositories can run the same issue number concurrently
   // and must not share a run, subscription, post or debounce timer (#2408).
   private readonly runs = new Map<string, ActiveRun>();
+  /** issue-pickup starts held until the run proceeds or finalizes (#2914). */
+  private readonly pickupGate = new PickupStartGate<HeldPickupStart>();
   private readonly patcher = new DebouncedPatcher();
   private readonly slotDisposables = new Map<string, vscode.Disposable[]>();
   private readonly pendingRepoSlugs = new Map<string, string>();
@@ -250,6 +259,8 @@ export class MattermostService implements Notifier, vscode.Disposable {
     if (run?.isFinal && !run.finalFlushed && run.finalSnapshot) {
       void this.handleRunFinalized(run.finalSnapshot, repoSlug);
     }
+    // A pickup start still held at teardown never proceeded: no post.
+    this.pickupGate.drop(key);
   }
 
   /**
@@ -281,11 +292,29 @@ export class MattermostService implements Notifier, vscode.Disposable {
     const key = slotKey(slotRepo, issueNumber);
 
     if (stage !== "issue-pickup") {
+      // The first later stage proves the run got past pickup: post now (#2914).
+      const held = this.pickupGate.release(key);
+      if (held && !this.runs.has(key)) {
+        await this.createRunMessage(issueNumber, key, held);
+      }
       this.scheduleUpdate(key);
       return;
     }
 
     this.flushStaleRuns(key);
+
+    // Hold the start: a run that defers at pickup must post nothing (#2914).
+    this.pickupGate.hold(key, { stateService, startTime: Date.now() });
+  }
+
+  /** Create the pipeline post for a run whose pickup start was held. */
+  private async createRunMessage(
+    issueNumber: number,
+    key: string,
+    held: HeldPickupStart
+  ): Promise<void> {
+    const { stateService } = held;
+    const effectiveStateService = stateService ?? this.pipelineStateService;
 
     const config = this.getMattermostConfig();
     if (!config?.enabled) return;
@@ -320,7 +349,7 @@ export class MattermostService implements Notifier, vscode.Disposable {
       baseUrl: parsed.baseUrl,
       hookPath: `/hooks/${parsed.token}`,
       postId: "",
-      startTime: Date.now(),
+      startTime: held.startTime,
       costUsd: 0,
       stageStartTimes: new Map(),
       isFinal: false,
@@ -430,6 +459,18 @@ export class MattermostService implements Notifier, vscode.Disposable {
    */
   private async handleRunFinalized(state: PipelineStateSnapshot, repo?: string): Promise<void> {
     const key = slotKey(repo, state.issue_number);
+    if (!this.runs.has(key) && this.pickupGate.has(key)) {
+      // Finalized with only the pickup start held: a deferred run posts
+      // nothing; any other outcome (a pickup failure) still notifies (#2914).
+      const held = this.pickupGate.settle(key, state.outcome_type);
+      if (!held) {
+        this.logger.debug("MattermostService: deferred at pickup — no post", {
+          issueNumber: state.issue_number,
+        });
+        return;
+      }
+      await this.createRunMessage(state.issue_number, key, held);
+    }
     const run = this.runs.get(key);
     if (!run || run.finalFlushed) return;
     if (run.editMode === "post-only") return;
@@ -711,5 +752,6 @@ export class MattermostService implements Notifier, vscode.Disposable {
     for (const d of this.disposables) d.dispose();
     this.disposables = [];
     this.runs.clear();
+    this.pickupGate.clear();
   }
 }

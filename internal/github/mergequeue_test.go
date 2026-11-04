@@ -431,3 +431,91 @@ func TestClassifyEnqueueReadiness(t *testing.T) {
 		}
 	}
 }
+
+// onQueuedRecorder counts OnQueued calls and remembers the status reads
+// served when the first one fired (#2770).
+type onQueuedRecorder struct {
+	calls       int
+	readsAtCall int
+}
+
+func (r *onQueuedRecorder) hook(qs *queueServer) func(MergeQueueStatus) {
+	return func(MergeQueueStatus) {
+		r.calls++
+		if r.calls == 1 {
+			qs.mu.Lock()
+			r.readsAtCall = qs.reads
+			qs.mu.Unlock()
+		}
+	}
+}
+
+// TestOnQueued_FiresOnceForAQueuedPR: enqueued, then several polls see the
+// entry; the hook fires once, at the enqueue, before the queue wait.
+func TestOnQueued_FiresOnceForAQueuedPR(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{
+		prNode("OPEN", true, false, nil, ""),
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg1"), ""),
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg1"), ""),
+		prNode("MERGED", true, false, nil, "landed1"),
+	}}
+	svc := newQueuePRService(t, qs)
+	rec := &onQueuedRecorder{}
+	svc.QueueWait.OnQueued = rec.hook(qs)
+	if _, err := svc.MergePRWithStrategy(context.Background(), "PR_1", "SQUASH"); err != nil {
+		t.Fatalf("MergePRWithStrategy: %v", err)
+	}
+	if rec.calls != 1 {
+		t.Fatalf("OnQueued fired %d times, want once", rec.calls)
+	}
+	if rec.readsAtCall != qs.readsAtEnqueue {
+		t.Errorf("OnQueued fired after %d status reads, want at the enqueue (%d)", rec.readsAtCall, qs.readsAtEnqueue)
+	}
+}
+
+func TestOnQueued_FiresForAnAlreadyQueuedPR(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{
+		prNode("OPEN", true, true, entry("QUEUED", "mg1"), ""),
+		prNode("MERGED", true, false, nil, "landed1"),
+	}}
+	svc := newQueuePRService(t, qs)
+	rec := &onQueuedRecorder{}
+	svc.QueueWait.OnQueued = rec.hook(qs)
+	if _, err := svc.MergePRWithStrategy(context.Background(), "PR_1", "SQUASH"); err != nil {
+		t.Fatalf("MergePRWithStrategy: %v", err)
+	}
+	if rec.calls != 1 {
+		t.Fatalf("OnQueued fired %d times, want once", rec.calls)
+	}
+}
+
+// TestOnQueued_NeverFiresForAPRThatDidNotReachTheQueue is AC 3: a PR closed
+// during the readiness wait, one that never became ready, one with red
+// checks, and one whose enqueue was rejected fire nothing.
+func TestOnQueued_NeverFiresForAPRThatDidNotReachTheQueue(t *testing.T) {
+	closed := readiness("MERGEABLE", "PENDING")
+	closed["state"] = "CLOSED"
+	cases := map[string]struct {
+		statuses   []map[string]any
+		enqueueErr string
+	}{
+		"closed during readiness": {statuses: []map[string]any{readiness("MERGEABLE", "PENDING"), closed}},
+		"never ready":             {statuses: []map[string]any{readiness("UNKNOWN", "")}},
+		"red checks":              {statuses: []map[string]any{readiness("MERGEABLE", "FAILURE")}},
+		"enqueue rejected":        {statuses: []map[string]any{prNode("OPEN", true, false, nil, "")}, enqueueErr: "boom"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			qs := &queueServer{statuses: tc.statuses, enqueueErr: tc.enqueueErr}
+			svc := newQueuePRService(t, qs)
+			svc.QueueWait.ReadyTimeout = 20 * time.Millisecond
+			svc.QueueWait.ReadyPollInterval = time.Millisecond
+			rec := &onQueuedRecorder{}
+			svc.QueueWait.OnQueued = rec.hook(qs)
+			_, _ = svc.MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+			if rec.calls != 0 {
+				t.Fatalf("OnQueued fired %d times for a PR that never reached the queue", rec.calls)
+			}
+		})
+	}
+}

@@ -76,6 +76,12 @@ func newReleaseFixture(t *testing.T, repos []depgraph.RepoConfig) *releaseFixtur
 			_, _ = w.Write(b)
 		case strings.Contains(string(body), "pullRequests("):
 			_, _ = io.WriteString(w, openPRPageJSON(f.openPRs, false, ""))
+		case strings.Contains(string(body), "projectV2("):
+			// holdIssue's onPipelineComplete schedules a best-effort
+			// moveIssueToInProgress whose board read races drainBackground's
+			// cancel. Answer it with a GraphQL error so it logs and returns
+			// either way; release assertions read only releaseMoveStatus.
+			_, _ = io.WriteString(w, `{"errors":[{"message":"board read not served by the release fixture"}]}`)
 		default:
 			t.Errorf("unexpected forge request: %s", body)
 			_, _ = io.WriteString(w, `{"errors":[{"message":"unexpected"}]}`)

@@ -171,6 +171,9 @@ printf '<!-- phase:start name="ac-reconcile" index=2 total=13 stage="feature-pla
   scope to the unsatisfied / undetectable subset.
 - otherwise → continue normal planning.
 
+`--notify-empty` comments once on an issue with no recognisable criteria, so
+the gap surfaces now rather than as `Refs #N` at pr-create (#2906).
+
 Consumes zero LLM tokens. Skip cleanly when the binary is missing.
 
 ```bash
@@ -210,6 +213,7 @@ if [ -n "$BINARY" ] && [ -s "$ISSUE_BODY_FILE" ]; then
     --workdir "$(pwd)" \
     --body-file "$ISSUE_BODY_FILE" \
     --out "$AC_RECONCILE_FILE" \
+    --notify-empty ${REPO:+--repo "$REPO"} \
     || echo "AC reconcile failed (non-fatal); continuing"
 fi
 rm -f "$ISSUE_BODY_FILE"
@@ -402,8 +406,8 @@ directory) with:
         "category": "TypeScript",
         "pattern": "flexEnum for enum coercion",
         "evidence": [
-          "packages/nightgauge-sdk/src/context/schemas/helpers.ts:35",
-          "packages/nightgauge-sdk/src/context/schemas/validate.ts:20"
+          "src/context/schemas/helpers.ts:35",
+          "src/context/schemas/validate.ts:20"
         ],
         "frequency": 3,
         "example_implementations": ["ChangeTypeSchema", "RoutingPathSchema"]
@@ -428,8 +432,8 @@ directory) with:
   Do NOT use `naming`, `structural`, `interface`, or `idiomatic` as substitutes.
 
   `pattern_mining_results` may be `null` when pattern mining was skipped — this
-  is valid. Source of truth for the schema:
-  `packages/nightgauge-sdk/src/context/schemas/planning.ts`.
+  is valid. Schema reference:
+  [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md).
 
 - `complexity_assessment` — use **exactly** these field names (values from Phase
   2):

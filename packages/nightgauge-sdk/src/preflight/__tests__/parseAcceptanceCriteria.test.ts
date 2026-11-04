@@ -4,6 +4,15 @@ import { describe, expect, it } from "vitest";
 import { parseAcceptanceCriteria } from "../parseAcceptanceCriteria.js";
 
 describe("parseAcceptanceCriteria", () => {
+  it("keeps an over-long criterion, capped at 4096 code points like Go (#2906)", () => {
+    const long = "é".repeat(4106);
+    const got = parseAcceptanceCriteria(
+      `## Verification\n\n- ${long}\n- [ ] ${"ü".repeat(4106)}\n`
+    );
+    expect(got).toHaveLength(2);
+    for (const c of got) expect(Array.from(c.text)).toHaveLength(4096);
+  });
+
   it("returns [] for empty input", () => {
     expect(parseAcceptanceCriteria("")).toEqual([]);
   });
@@ -203,10 +212,70 @@ describe("parseAcceptanceCriteria", () => {
 
   it("matches Go's TestParseACs_ParityFixture", () => {
     const body =
-      "## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n";
+      "## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n## Verification\n- third that\n  wraps\n";
     expect(parseAcceptanceCriteria(body).map((a) => [a.index, a.text])).toEqual([
       [0, "first"],
       [1, "second"],
+      [2, "third that wraps"],
     ]);
+  });
+
+  // #2906: mirrors the Go TestParseACs_Forms cases for wider section names,
+  // plain bullets and wrapped continuation lines.
+  it.each([
+    ["verification numbered", "## Verification\n\n1. one\n2. two\n", ["one", "two"]],
+    [
+      "done when bulleted",
+      "## Done when\n- first\n* second\n+ third\n",
+      ["first", "second", "third"],
+    ],
+    ["acceptance colon numbered", "### Acceptance:\n1. x\n2) y\n", ["x", "y"]],
+    ["definition of done", "## Definition of Done\n- shipped\n", ["shipped"]],
+    ["bullets in acceptance criteria", "## Acceptance Criteria\n- a\n  - sub\n- b\n", ["a", "b"]],
+    ["post-merge verification notes", "## Post-merge verification notes\n1. no\n- no\n", []],
+    ["bullets outside section", "## Summary\n- not\n- criteria\n", []],
+    [
+      "wrapped line joins",
+      "## Verification\n1. starts here and\n   ends here.\n2. next\n",
+      ["starts here and ends here.", "next"],
+    ],
+    ["paragraph after blank line", "## Verification\n1. a\n\n   later para\n2. b\n", ["a", "b"]],
+    [
+      "sub-step continuation",
+      "## Acceptance Criteria\n1. Do X:\n   1. sub that\n      wraps\n2. Do Y\n",
+      ["Do X:", "Do Y"],
+    ],
+    ["deep marker", "## Acceptance Criteria\n1. Do X:\n    1. sub\n2. Do Y\n", ["Do X:", "Do Y"]],
+    ["unindented line", "## Verification\n1. a\nNotes here\n", ["a"]],
+    ["empty checkbox is not a bullet", "## Acceptance Criteria\n- [x] done\n- [ ]\n", ["done"]],
+  ])("%s (#2906)", (_name, body, want) => {
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(want);
+  });
+
+  it("parses the G1 fixture's Verification section into three criteria (#2906)", () => {
+    const body = readFileSync(
+      join(__dirname, "..", "..", "..", "..", "..", "tests", "clean-install", "issue.md"),
+      "utf8"
+    );
+    const got = parseAcceptanceCriteria(body);
+    expect(got).toHaveLength(3);
+    expect(got[0].text.endsWith("the `TypeError` and the `RangeError`.")).toBe(true);
+    expect(got[1].text.startsWith("`npm test` passes")).toBe(true);
+    expect(got[2].text.startsWith("`README.md` lists")).toBe(true);
+  });
+
+  it("stays linear on long whitespace runs (CodeQL js/polynomial-redos)", () => {
+    const run = "\t".repeat(50_000);
+    const body = [
+      `## Verification${run}:${run}`,
+      `* [ ]${run}x${run}`,
+      `1.${run}y${run}`,
+      `-${run}z${run}`,
+      `- [ ]${run}`,
+    ].join("\n");
+    const start = Date.now();
+    const got = parseAcceptanceCriteria(body).map((a) => a.text);
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(got).toEqual(["x", "y", "z"]);
   });
 });

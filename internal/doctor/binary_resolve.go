@@ -17,6 +17,7 @@ const (
 	StepPath             ResolveBinaryStep = "PATH"
 	StepRepoBin          ResolveBinaryStep = "repo_bin"
 	StepCanonicalRepoBin ResolveBinaryStep = "canonical_repo_bin"
+	StepUserShim         ResolveBinaryStep = "user_shim"
 	StepVSCodeExtension  ResolveBinaryStep = "vscode_extension"
 	StepGoBin            ResolveBinaryStep = "go_bin"
 )
@@ -319,7 +320,15 @@ func isPlainDirName(name string) bool {
 	return !strings.ContainsAny(name, `/\`) && !strings.Contains(name, "..")
 }
 
-// ResolveBinary walks the same six-step cascade documented in
+// UserShimPath is the per-user shim the VS Code extension links to its own
+// bundled binary on activation (#2765): ~/.nightgauge/bin/nightgauge. It is
+// the one stable location that works from any editor running the extension
+// and from any terminal.
+func UserShimPath(home string) string {
+	return filepath.Join(home, ".nightgauge", "bin", "nightgauge")
+}
+
+// ResolveBinary walks the same seven-step cascade documented in
 // claude-plugins/nightgauge/hooks/lib/guard.sh (#3234, #4029, #277):
 //
 //  0. $NIGHTGAUGE_BIN
@@ -328,6 +337,8 @@ func isPlainDirName(name string) bool {
 //     repoBinTrusted accepts the root
 //  3. <canonical-repo-root>/bin/nightgauge (git rev-parse --git-common-dir),
 //     under the same gate
+//
+// 3a. ~/.nightgauge/bin/nightgauge — the extension-written shim (#2765)
 //  4. ~/.vscode/extensions/nightgauge.nightgauge-*/dist/bin/nightgauge
 //     — the bundle VS Code RECORDS as installed (#356), falling back to the
 //     first glob match when there is no usable record
@@ -368,6 +379,13 @@ func ResolveBinary() ResolvedBinary {
 			if repoBinTrusted(canonicalRepo) {
 				return ResolvedBinary{Path: filepath.Join(canonicalRepo, "bin", "nightgauge"), Step: StepCanonicalRepoBin, Bundles: bundles}
 			}
+		}
+	}
+
+	// 3a. The per-user shim the extension writes on activation (#2765).
+	if home != "" {
+		if shim := UserShimPath(home); isExecutable(shim) {
+			return ResolvedBinary{Path: shim, Step: StepUserShim, Bundles: bundles}
 		}
 	}
 

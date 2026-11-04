@@ -952,8 +952,8 @@ gh auth login
 - **Feature Assessment Engine:** [skills/nightgauge-release-watch/assessment-engine.md](assessment-engine.md)
 - **Assessment Template:** [skills/nightgauge-release-watch/assessments/TEMPLATE.md](assessments/TEMPLATE.md)
 - **Issue-Create SKILL.md:** [skills/nightgauge-issue-create/SKILL.md](../issue-create/SKILL.md)
-- **Configuration Reference:** [docs/CONFIGURATION.md](../../../../docs/CONFIGURATION.md)
-- **Project Board Sync:** [docs/PROJECT_SETUP.md](../../../../docs/PROJECT_SETUP.md)
+- **Configuration Reference:** [docs/CONFIGURATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md)
+- **Project Board Sync:** [docs/PROJECT_SETUP.md](https://github.com/nightgauge/nightgauge/blob/main/docs/PROJECT_SETUP.md)
 
 ---
 

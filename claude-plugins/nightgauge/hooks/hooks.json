@@ -119,6 +119,17 @@
 
     "SessionStart": [
       {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/binary-check.sh\"",
+            "timeout": 5,
+            "statusMessage": "Checking for the Nightgauge binary..."
+          }
+        ]
+      },
+      {
         "matcher": "resume|compact",
         "hooks": [
           {

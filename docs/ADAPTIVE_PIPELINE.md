@@ -281,6 +281,13 @@ and the kill marker `[runaway-progress-exceeded]` is emitted. The Go
 `failure_handler.go` maps this to `TerminalKindRunawayProgress` — same recovery
 path as stall-kill (30m backoff, board→Ready, no lifetime-failure-cap increment).
 
+The extension does not halt the repository queue on a runaway kill (#2770): the
+monitor can be wrong, and one false kill paused every other ready issue. Because
+the kind also skips the lifetime cap, the skip is bounded: the halt is skipped for
+the first two consecutive runaway kills of an issue and applies on the third
+(`RUNAWAY_CONSECUTIVE_RETRY_CAP = 3`). Any other outcome of that issue resets the
+count. The count is held in memory, so a window reload resets it.
+
 ### Work-in-Progress Preservation (Issue #128)
 
 `feature-dev` never commits — the commit lives in `feature-validate` Phase 5

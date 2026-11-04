@@ -779,7 +779,7 @@ runner from `--runs-on` (pass `--runs-on self-hosted` when the
 organization's private repositories must use self-hosted runners). The
 verb warns when the repository's Actions policy would reject the workflow
 — see
-[docs/GO_BINARY.md → Setup Operations](../../../../docs/GO_BINARY.md#setup-operations)
+[docs/GO_BINARY.md → Setup Operations](https://github.com/nightgauge/nightgauge/blob/main/docs/GO_BINARY.md#setup-operations)
 for the schema, exit codes, and template provenance.
 
 ```bash

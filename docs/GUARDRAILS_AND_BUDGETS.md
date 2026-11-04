@@ -132,6 +132,19 @@ pipeline:
   mid-run; for them only the turn count and the wall clock do.
 - **Wall clock.** It runs from spawn until the stage is reaped, so a child
   that closes its output and keeps running is still stopped.
+- **pr-merge's merge-queue wait is not counted (#2770).** Once pr-merge's PR
+  reaches the merge queue, the wait is the queue's CI run on the merge-group
+  commit, not the stage's work. `nightgauge pr merge --issue N` records it in
+  `queue-wait-<N>.json` under the pipeline state directory: an interval opens
+  when the PR is enqueued (or first seen queued) and closes when the merge call
+  returns. When the wall clock fires, the executor subtracts the recorded wait
+  since spawn and re-arms for the rest; the editor's enforcer asks
+  `nightgauge pr-stage queue-wait <N> --since-ms <spawn>` for the same number.
+  Review-fix time before the enqueue still counts. Each interval carries its
+  writer's pid and process start time; an interval left open by a writer that
+  died, or whose pid now belongs to another process, adds nothing, and the
+  excluded time never exceeds elapsed time. A record that cannot be read
+  excludes nothing. The stage timeout is not extended.
 - **On a breach** the manager sends SIGTERM to the stage's process group,
   SIGKILL after 10s, checks once the stage is reaped that no member of the
   group is left, and ends the stage's stderr with

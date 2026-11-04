@@ -539,9 +539,9 @@ One review per tree, in a fresh context that holds only the diff, the issue and
 the working tree. You do not review this change: you start the review and act on
 its result. This is one of this stage's gates, so a provider rule against adding
 reviewers does not remove it. It applies the passes in
-[docs/PR_REVIEW_PASSES.md](../../../../../docs/PR_REVIEW_PASSES.md). The verdict reaches
+[docs/PR_REVIEW_PASSES.md](https://github.com/nightgauge/nightgauge/blob/main/docs/PR_REVIEW_PASSES.md). The verdict reaches
 `FeatureValidateGate` via gate-metrics, per the "network/LLM checks are NOT
-StageGates" precedent in [docs/STAGE_GATES.md](../../../../../docs/STAGE_GATES.md).
+StageGates" precedent in [docs/STAGE_GATES.md](https://github.com/nightgauge/nightgauge/blob/main/docs/STAGE_GATES.md).
 `pipeline.adversarial_review.enabled: false` turns it off.
 
 ```bash

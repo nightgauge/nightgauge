@@ -48,7 +48,7 @@ Write a concise plan that includes:
 - Risks and mitigations
 - Explicit out-of-scope items. Record each **actionable** entry (concrete
   follow-up work) as discovered work per
-  [Record vs. Backtrack](../../../../../docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work),
+  [Record vs. Backtrack](https://github.com/nightgauge/nightgauge/blob/main/docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work),
   and append the printed `dw-` id to the plan entry so the two cross-reference.
   Pure boundary statements ("no UI changes") and work already tracked by an
   issue are not recorded.

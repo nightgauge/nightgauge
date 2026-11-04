@@ -325,6 +325,10 @@ describe("PluginSetupService", () => {
     let extensionPath: string;
     let stablePath: string;
     let dismissed: boolean;
+    // globalState, kept across makeService() calls so a stamp outlives an activation.
+    let state: Map<string, unknown>;
+    const DISMISSED_KEY = "nightgauge.pluginSetup.dismissed";
+    const STAMP_KEY = "nightgauge.pluginSetup.installedVersion";
 
     const makeService = async () => {
       const { PluginSetupService } = await import("../../src/services/PluginSetupService");
@@ -333,8 +337,16 @@ describe("PluginSetupService", () => {
         globalStorageUri: { fsPath: path.join(tmp, "globalStorage") },
         extension: { packageJSON: { version: "2.0.0" } },
         globalState: {
-          get: vi.fn((_key: string, fallback: boolean) => dismissed || fallback),
-          update: vi.fn(),
+          get: vi.fn((key: string, fallback?: unknown) =>
+            key === DISMISSED_KEY
+              ? dismissed || fallback
+              : state.has(key)
+                ? state.get(key)
+                : fallback
+          ),
+          update: vi.fn(async (key: string, value: unknown) => {
+            state.set(key, value);
+          }),
         },
       } as never);
     };
@@ -344,6 +356,7 @@ describe("PluginSetupService", () => {
       extensionPath = path.join(tmp, "extensions", "nightgauge-2.0.0");
       stablePath = path.join(tmp, "globalStorage", "claude-marketplace");
       dismissed = false;
+      state = new Map();
       const dist = path.join(extensionPath, "dist");
       fs.mkdirSync(path.join(dist, ".claude-plugin"), { recursive: true });
       fs.mkdirSync(path.join(dist, "claude-plugins", "nightgauge"), { recursive: true });
@@ -496,6 +509,62 @@ describe("PluginSetupService", () => {
       expect(vscode.window.showErrorMessage).toHaveBeenCalledTimes(1);
     });
 
+    describe("showSetupPrompt always offers install or update (#2762)", () => {
+      beforeEach(() => {
+        mockConfigBridge.isInitialized.mockReturnValue(true);
+        mockConfigBridge.getUI.mockReturnValue({ plugins: { auto_prompt: false } });
+      });
+
+      it("offers an update for an installed plugin with autoPrompt off and dismissed", async () => {
+        const vscode = await import("vscode");
+        dismissed = true;
+        vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
+          "Update Plugins" as never
+        );
+        scriptClaude({ plugins: HEALTHY, marketplacePath: "/src/nightgauge" });
+
+        await (await makeService()).showSetupPrompt();
+
+        expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+          "Update the Nightgauge Claude Code plugin?",
+          expect.objectContaining({ modal: true }),
+          "Update Plugins",
+          "Later"
+        );
+        expect(cliCalls("plugin marketplace update")).toEqual([
+          ["plugin", "marketplace", "update", "nightgauge-plugins"],
+        ]);
+        expect(cliCalls("plugin update")).toEqual([["plugin", "update", PLUGIN_ID]]);
+      });
+
+      it("offers an install for an absent plugin with autoPrompt off", async () => {
+        const vscode = await import("vscode");
+        vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as never);
+        scriptClaude({ plugins: [], marketplacePath: "/src/nightgauge" });
+
+        await (await makeService()).showSetupPrompt();
+
+        expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+          expect.stringContaining("not installed"),
+          "Install Plugins",
+          "Later",
+          "Don't Show Again"
+        );
+        expect(cliCalls("plugin update")).toEqual([]);
+      });
+
+      it("Later changes nothing", async () => {
+        const vscode = await import("vscode");
+        vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Later" as never);
+        scriptClaude({ plugins: HEALTHY, marketplacePath: "/src/nightgauge" });
+
+        await (await makeService()).showSetupPrompt();
+
+        expect(cliCalls("plugin marketplace update")).toEqual([]);
+        expect(cliCalls("plugin update")).toEqual([]);
+      });
+    });
+
     it("repairs and surfaces a failure with autoPrompt off", async () => {
       const vscode = await import("vscode");
       vi.mocked(vscode.window.showErrorMessage).mockResolvedValue(undefined as never);
@@ -630,24 +699,152 @@ describe("PluginSetupService", () => {
       expect(cliCalls("plugin install")).toEqual([["plugin", "install", PLUGIN_ID]]);
     });
 
-    it("refreshes the registered stable copy after a recopy", async () => {
-      scriptClaude({ plugins: HEALTHY, marketplacePath: stablePath });
+    describe("version stamp and re-sync (#2762)", () => {
+      it("re-syncs an unstamped plugin on the stable copy once, then stamps it", async () => {
+        scriptClaude({ plugins: HEALTHY, marketplacePath: stablePath });
 
-      await (await makeService()).checkAndPromptSetup();
+        await (await makeService()).checkAndPromptSetup();
 
-      expect(cliCalls("plugin marketplace update")).toHaveLength(1);
-      expect(cliCalls("plugin update")).toEqual([["plugin", "update", PLUGIN_ID]]);
-    });
+        expect(cliCalls("plugin marketplace update")).toEqual([
+          ["plugin", "marketplace", "update", "nightgauge-plugins"],
+        ]);
+        expect(cliCalls("plugin update")).toEqual([["plugin", "update", PLUGIN_ID]]);
+        expect(state.get(STAMP_KEY)).toBe("2.0.0");
+      });
 
-    it("does not refresh when the stable copy did not change", async () => {
-      scriptClaude({ plugins: HEALTHY, marketplacePath: stablePath });
-      await (await makeService()).checkAndPromptSetup();
-      mockExecFile.mockClear();
+      it("does not re-sync while the stamp matches", async () => {
+        state.set(STAMP_KEY, "2.0.0");
+        scriptClaude({ plugins: HEALTHY, marketplacePath: stablePath });
 
-      await (await makeService()).checkAndPromptSetup();
+        await (await makeService()).checkAndPromptSetup();
 
-      expect(cliCalls("plugin marketplace update")).toEqual([]);
-      expect(cliCalls("plugin update")).toEqual([]);
+        expect(cliCalls("plugin marketplace update")).toEqual([]);
+        expect(cliCalls("plugin update")).toEqual([]);
+      });
+
+      it("re-syncs when the stamp names another version", async () => {
+        state.set(STAMP_KEY, "1.0.0");
+        scriptClaude({ plugins: HEALTHY, marketplacePath: stablePath });
+
+        await (await makeService()).checkAndPromptSetup();
+
+        expect(cliCalls("plugin update")).toEqual([["plugin", "update", PLUGIN_ID]]);
+        expect(state.get(STAMP_KEY)).toBe("2.0.0");
+      });
+
+      it("leaves the stamp unset when the update fails, so the next activation retries", async () => {
+        scriptClaude({ plugins: HEALTHY, marketplacePath: stablePath });
+        const scripted = mockExecFile.getMockImplementation()!;
+        mockExecFile.mockImplementation(async (file: string, args: string[]) => {
+          if (args.join(" ") === `plugin update ${PLUGIN_ID}`) {
+            throw new Error("update refused");
+          }
+          return scripted(file, args);
+        });
+
+        await (await makeService()).checkAndPromptSetup();
+        expect(state.has(STAMP_KEY)).toBe(false);
+
+        mockExecFile.mockClear();
+        mockExecFile.mockImplementation(scripted);
+        await (await makeService()).checkAndPromptSetup();
+
+        expect(cliCalls("plugin update")).toEqual([["plugin", "update", PLUGIN_ID]]);
+        expect(state.get(STAMP_KEY)).toBe("2.0.0");
+      });
+
+      it("re-syncs with autoPrompt off and the install prompt dismissed", async () => {
+        dismissed = true;
+        mockConfigBridge.isInitialized.mockReturnValue(true);
+        mockConfigBridge.getUI.mockReturnValue({ plugins: { auto_prompt: false } });
+        scriptClaude({ plugins: HEALTHY, marketplacePath: stablePath });
+
+        await (await makeService()).checkAndPromptSetup();
+
+        expect(cliCalls("plugin update")).toEqual([["plugin", "update", PLUGIN_ID]]);
+        expect(state.get(STAMP_KEY)).toBe("2.0.0");
+      });
+
+      it("never re-syncs a disabled plugin", async () => {
+        scriptClaude({ plugins: DISABLED, marketplacePath: stablePath });
+
+        await (await makeService()).checkAndPromptSetup();
+
+        expect(cliCalls("plugin update")).toEqual([]);
+        expect(state.has(STAMP_KEY)).toBe(false);
+      });
+
+      it("stamps after a successful install", async () => {
+        const vscode = await import("vscode");
+        vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
+          "Install Plugins" as never
+        );
+        vi.mocked(vscode.window.withProgress).mockImplementation((_options, task) =>
+          task({ report: vi.fn() }, {} as never)
+        );
+        scriptClaude({ plugins: [] });
+
+        await (await makeService()).checkAndPromptSetup();
+
+        expect(state.get(STAMP_KEY)).toBe("2.0.0");
+      });
+
+      it("does not stamp when the install fails", async () => {
+        const vscode = await import("vscode");
+        vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
+          "Install Plugins" as never
+        );
+        vi.mocked(vscode.window.showErrorMessage).mockResolvedValue(undefined as never);
+        vi.mocked(vscode.window.withProgress).mockImplementation((_options, task) =>
+          task({ report: vi.fn() }, {} as never)
+        );
+        scriptClaude({ plugins: [] });
+        const scripted = mockExecFile.getMockImplementation()!;
+        mockExecFile.mockImplementation(async (file: string, args: string[]) => {
+          if (args[1] === "install") {
+            throw new Error("install refused");
+          }
+          return scripted(file, args);
+        });
+
+        await (await makeService()).checkAndPromptSetup();
+
+        expect(state.has(STAMP_KEY)).toBe(false);
+      });
+
+      it("stamps after a successful update from the setup command", async () => {
+        const vscode = await import("vscode");
+        vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
+          "Update Plugins" as never
+        );
+        state.set(STAMP_KEY, "1.0.0");
+        scriptClaude({ plugins: HEALTHY, marketplacePath: "/src/nightgauge" });
+
+        await (await makeService()).showSetupPrompt();
+
+        expect(state.get(STAMP_KEY)).toBe("2.0.0");
+      });
+
+      it("does not stamp when the update from the setup command fails", async () => {
+        const vscode = await import("vscode");
+        vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
+          "Update Plugins" as never
+        );
+        vi.mocked(vscode.window.showErrorMessage).mockResolvedValue(undefined as never);
+        state.set(STAMP_KEY, "1.0.0");
+        scriptClaude({ plugins: HEALTHY, marketplacePath: "/src/nightgauge" });
+        const scripted = mockExecFile.getMockImplementation()!;
+        mockExecFile.mockImplementation(async (file: string, args: string[]) => {
+          if (args.join(" ") === `plugin update ${PLUGIN_ID}`) {
+            throw new Error("update refused");
+          }
+          return scripted(file, args);
+        });
+
+        await (await makeService()).showSetupPrompt();
+
+        expect(state.get(STAMP_KEY)).toBe("1.0.0");
+      });
     });
   });
 

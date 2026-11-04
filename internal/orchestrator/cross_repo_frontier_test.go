@@ -86,7 +86,6 @@ func TestEvaluateDeps_ProgramValidationGate(t *testing.T) {
 		nodes       []*depgraph.Node
 		resolved    map[string]string
 		validation  map[string]ValidationState
-		prBacked    map[string]bool
 		wantBlocked bool
 		wantMarker  bool // the reason names the missing marker
 	}{
@@ -113,9 +112,8 @@ func TestEvaluateDeps_ProgramValidationGate(t *testing.T) {
 			wantBlocked: false,
 		},
 		{
-			name:        "program blocker in review with an open PR does not release",
+			name:        "open program blocker in review does not release",
 			nodes:       []*depgraph.Node{{Repo: "o/a", Number: 7, State: "OPEN", BoardStatus: "In review", Labels: program}},
-			prBacked:    map[string]bool{dep: true},
 			wantBlocked: true,
 		},
 		{

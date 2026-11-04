@@ -11,6 +11,42 @@ and this project adheres to
 
 ### Fixed
 
+- Stages the extension runs, and the daemon it starts, no longer inherit `CLAUDECODE` and
+  `CLAUDE_*` variables from the Claude Code session that launched the editor. Auth, the plugin
+  root, the thinking escape hatch and the account home still arrive (#2848).
+- A pr-merge stage the extension runs no longer has its merge-queue wait counted against its
+  wall-clock budget (#2770).
+- A runaway-progress kill shows a warning and retries instead of halting the repository queue. The
+  third consecutive runaway kill of the same issue still halts it (#2770).
+- Churn kills are recorded as `progress-churn-tools` in the stage-exit record, whatever deferral
+  expired behind them (#2770).
+
+- On activation the extension links `~/.nightgauge/bin/nightgauge` to its bundled binary, so
+  the Claude plugin's hooks and terminals find the binary from VS Code, Insiders, VSCodium,
+  Cursor or Windsurf (#2765).
+
+- Codex, Grok and OpenCode skills the extension installs now match the ones
+  `scripts/install-agent-skills.sh` installs, and an extension upgrade re-syncs them on
+  activation, whatever `nightgauge.plugins.autoPrompt` says (#2762).
+
+- `Nightgauge: Setup Codex Commands` is now `Nightgauge: Setup Codex Skills`. It installs
+  `~/.codex/skills/` only; the old command files called a script the extension does not ship,
+  and Codex does not read `~/.codex/commands/`. Invoke stages as `$nightgauge-issue-pickup`
+  (#2762).
+
+- The Codex, Grok and Claude Code setup commands now always offer to install or update,
+  even with `nightgauge.plugins.autoPrompt` off (#2762).
+
+- The Claude Code plugin is updated again on activation after an extension upgrade or an
+  earlier failed update, until the update succeeds (#2762).
+
+## [0.8.0] - 2026-11-04
+
+### Fixed
+
+- Discord, Slack and Mattermost no longer post a message for a run that defers at
+  issue-pickup. The message is posted once the run reaches a later stage; a pickup
+  failure still notifies (#2914).
 - "Approve & re-queue" on an architecture-approval card now moves the issue to Ready, so it
   dispatches. Queue items the daemon adds now start without waiting for another event (#2717).
 
@@ -106,8 +142,9 @@ and this project adheres to
   background task or foreground tool call no longer counts toward the idle budgets, and a kill
   that followed only an `allowed_warning` is booked as a stall, with no global cooldown.
 - **A `Refs #N` merge no longer leaves the issue open but Done (#2706).** The pr-merge status
-  sync writes Done only for a closed issue, so the post-merge hook's Ready stands. A failed
-  run's In review park no longer overwrites the scheduler's Ready.
+  sync writes Done only for a closed issue and Ready for an open one, and an unreadable issue
+  state raises the board-status card. A failed run's In review park no longer overwrites the
+  scheduler's Ready.
 - **Post-pipeline verification no longer closes an issue for another repository's closer
   (#2687).** A merged PR body or main commit saying `Fixes other/repo#N`, or that issue's URL,
   no longer closes this repository's #N, and an issue URL counts only on github.com, as on
@@ -1516,7 +1553,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nightgauge/nightgauge/compare/v0.6.0...v0.7.0

@@ -704,6 +704,15 @@ func TestResolveBinary_GuardShParity(t *testing.T) {
 			},
 		},
 		{
+			name: "user_shim",
+			setup: func(t *testing.T) string {
+				isolateCascade(t)
+				fake := UserShimPath(os.Getenv("HOME"))
+				writeFakeBinary(t, fake)
+				return fake
+			},
+		},
+		{
 			name: "vscode_extension",
 			setup: func(t *testing.T) string {
 				isolateCascade(t)
@@ -1002,7 +1011,6 @@ func guardShResolve(t *testing.T, guardPath string) string {
 	cmd := exec.Command(bashBinPath, "-c", `source "$1"; echo "$NIGHTGAUGE_BINARY"`, "guard.sh", guardPath)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(),
-		"NIGHTGAUGE_HOOK_BLOCKING=false",
 		"HOME="+os.Getenv("HOME"),
 		"PATH="+shPath,
 		"LC_ALL=C",
@@ -1044,7 +1052,6 @@ printf '%s' "$_ng_recorded_dir"`
 		"PATH=/usr/bin:/bin",
 		"LC_ALL=" + locale,
 		"NIGHTGAUGE_BIN=" + stub,
-		"NIGHTGAUGE_HOOK_BLOCKING=false",
 		"NIGHTGAUGE_HOOK_LOG=" + filepath.Join(t.TempDir(), "hook-warnings.log"),
 	}
 	var stdout, stderr bytes.Buffer
@@ -1093,7 +1100,6 @@ func TestGuardShSideChannelSwallowsUnwritableLog(t *testing.T) {
 		"PATH=/usr/bin:/bin",
 		"LC_ALL=C",
 		"NIGHTGAUGE_BIN=" + stub,
-		"NIGHTGAUGE_HOOK_BLOCKING=false",
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -1387,7 +1393,7 @@ type precedenceCase struct {
 }
 
 // precedenceCases enumerates every ADJACENT pair in the cascade plus one
-// end-to-end case with all six steps satisfiable. Shared by the Go-side
+// end-to-end case with all seven steps satisfiable. Shared by the Go-side
 // precedence test and the guard.sh parity test so a reorder in EITHER
 // implementation fails CI.
 func precedenceCases() []precedenceCase {
@@ -1491,6 +1497,43 @@ func precedenceCases() []precedenceCase {
 			},
 		},
 		{
+			name:     "canonical_repo_bin_beats_user_shim",
+			higher:   StepCanonicalRepoBin,
+			lower:    StepUserShim,
+			needsGit: true,
+			setup: func(t *testing.T) (string, string) {
+				isolateCascade(t)
+				shim := UserShimPath(os.Getenv("HOME"))
+				writeFakeBinary(t, shim)
+				repo := newGitRepo(t)
+				canonicalBin := filepath.Join(repo, "bin", "nightgauge")
+				writeFakeBinary(t, canonicalBin)
+				markCoreCheckout(t, repo)
+				worktreeDir := filepath.Join(realPath(t, t.TempDir()), "worktree")
+				if out, err := gittest.Command(repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
+					t.Skipf("git worktree add failed (environment limitation): %v: %s", err, out)
+				}
+				t.Chdir(worktreeDir)
+				return canonicalBin, shim
+			},
+		},
+		{
+			// #2765: the shim is the stable location; a VS Code bundle on
+			// disk must not shadow it.
+			name:   "user_shim_beats_vscode_extension",
+			higher: StepUserShim,
+			lower:  StepVSCodeExtension,
+			setup: func(t *testing.T) (string, string) {
+				isolateCascade(t)
+				home := os.Getenv("HOME")
+				bundleBin := newVSCodeBundle(t, home, "0.1.2000000000")
+				writeExtensionsIndex(t, home, bundleDirPrefix+"0.1.2000000000")
+				shim := UserShimPath(home)
+				writeFakeBinary(t, shim)
+				return shim, bundleBin
+			},
+		},
+		{
 			name:   "vscode_extension_beats_go_bin",
 			higher: StepVSCodeExtension,
 			lower:  StepGoBin,
@@ -1514,6 +1557,7 @@ func precedenceCases() []precedenceCase {
 				goBin := newGoBin(t, home)
 				newVSCodeBundle(t, home, "0.1.2000000000")
 				writeExtensionsIndex(t, home, bundleDirPrefix+"0.1.2000000000")
+				writeFakeBinary(t, UserShimPath(home))
 				repo := newGitRepo(t)
 				writeFakeBinary(t, filepath.Join(repo, "bin", "nightgauge"))
 				t.Chdir(repo)
@@ -1543,6 +1587,8 @@ func markCoreCheckout(t *testing.T, dir string) {
 	// into .git during t.TempDir cleanup: "unlinkat .git: directory not empty" (#2759).
 	runGit(t, dir, "config", "maintenance.auto", "false")
 	runGit(t, dir, "config", "gc.auto", "0")
+	// If a writer still outlives the test, fail naming what it left in .git (#2786).
+	gittest.ReportWritersOnCleanup(t, dir)
 }
 
 func writeCoreGoMod(t *testing.T, dir, moduleLine string) {
@@ -1595,6 +1641,7 @@ func TestRepoBinGate(t *testing.T) {
 				runGit(t, repo, "commit", "--allow-empty", "-m", "init")
 				if tc.origin != "" {
 					runGit(t, repo, "remote", "add", "origin", tc.origin)
+					gittest.ReportWritersOnCleanup(t, repo)
 				}
 				writeCoreGoMod(t, repo, tc.module)
 				repoBin := filepath.Join(repo, "bin", "nightgauge")
@@ -1644,7 +1691,7 @@ func TestForeignRepoBinaryNeverExecuted(t *testing.T) {
 		t.Skip("bash and git required")
 	}
 	guardPath := guardShPath(t)
-	prePush := filepath.Join(filepath.Dir(guardPath), "..", "pre-push-validate.sh")
+	prePush := installedPrePushHook(t, guardPath)
 
 	planted := func(t *testing.T) (repo, marker string) {
 		t.Helper()
@@ -1714,23 +1761,34 @@ func TestForeignRepoBinaryNeverExecuted(t *testing.T) {
 	}
 }
 
-// TestPrePushHookBlockMatchesReferenceCopy keeps the installed hook, which only
-// exists as a Go string, on the gated block the tests above execute.
-func TestPrePushHookBlockMatchesReferenceCopy(t *testing.T) {
-	hooksDir := filepath.Join(filepath.Dir(guardShPath(t)), "..")
-	reference, err := os.ReadFile(filepath.Join(hooksDir, "pre-push-validate.sh"))
+// installedPrePushHook writes the git pre-push hook `nightgauge pre-push
+// install` ships to a temp file and returns its path. The script exists only
+// as the prePushHookScript literal in cmd/nightgauge/cmd_pre_push.go, which
+// this package cannot import, so it is read from that source file: the arms
+// above then execute the shipped bytes, not a hand-kept copy (#2764).
+func installedPrePushHook(t *testing.T, guardPath string) string {
+	t.Helper()
+	src := filepath.Join(filepath.Dir(guardPath), "..", "..", "..", "..", "cmd", "nightgauge", "cmd_pre_push.go")
+	data, err := os.ReadFile(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := string(reference)
-	block := ref[strings.Index(ref, "BINARY=$(command -v"):strings.Index(ref, "exec \"$BINARY\"")]
-	installed, err := os.ReadFile(filepath.Join(hooksDir, "..", "..", "..", "cmd", "nightgauge", "cmd_pre_push.go"))
-	if err != nil {
+	const open = "const prePushHookScript = `"
+	text := string(data)
+	start := strings.Index(text, open)
+	if start < 0 {
+		t.Fatalf("%s carries no prePushHookScript literal", src)
+	}
+	body := text[start+len(open):]
+	end := strings.Index(body, "`")
+	if end < 0 || !strings.Contains(body[:end], devRepoBinEnv) {
+		t.Fatalf("prePushHookScript is unterminated or lacks the %s gate", devRepoBinEnv)
+	}
+	path := filepath.Join(t.TempDir(), "pre-push")
+	if err := os.WriteFile(path, []byte(body[:end]), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(installed), block) || !strings.Contains(block, devRepoBinEnv) {
-		t.Errorf("cmd_pre_push.go does not carry the gated block:\n%s", block)
-	}
+	return path
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

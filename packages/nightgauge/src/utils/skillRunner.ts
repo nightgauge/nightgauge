@@ -111,6 +111,7 @@ import {
   getStageBudgetResolver,
   resolveStageBudgets,
   stageBudgetErrorMessage,
+  queueWaitExcludedMs,
   stageBudgetUnresolvedMessage,
   terminateStageProcessTree,
   type StageBudgetBreach,
@@ -251,6 +252,7 @@ import {
   type AutoRouterOptions,
 } from "./resolvers/adapterResolver";
 import { resolveMainRepoRoot } from "./adaptiveBudgetLoader";
+import { withoutLaunchingSessionEnv } from "./launchingSessionEnv";
 
 // Re-export for consumers
 export type { ParsedTokenUsage, RateLimitEventData } from "./tokenParser";
@@ -3989,9 +3991,10 @@ export function resolveTokenForSubprocess(
  * reproducing on CLI 2.1.186 — three multi-turn replay runs with thinking
  * enabled (up to 26 turns / 9 replayed blocks) completed without a 400; see
  * docs/PIPELINE_EXECUTION.md § Spawn Environment Inheritance. Every Claude
- * spawn spreads `...process.env` first, so an operator on an older CLI can
- * restore the workaround without a rebuild: export
- * CLAUDE_CODE_DISABLE_THINKING=1.
+ * spawn starts from the host env less the launching session's residue
+ * (withoutLaunchingSessionEnv, #2848), which keeps this name as an explicit
+ * exception, so an operator on an older CLI can restore the workaround without
+ * a rebuild: export CLAUDE_CODE_DISABLE_THINKING=1.
  * Mirrors the Go adapters (claude.go / claude_sdk.go).
  */
 
@@ -5722,7 +5725,7 @@ function runStageSkillHeadlessImpl(
   // run-identity reconcile below is a DELETION, and a spread cannot express one
   // (see #370 / ADR-017).
   const spawnEnv: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...withoutLaunchingSessionEnv(),
     // Export the resolved Go binary (NIGHTGAUGE_BIN + PATH prepend) so
     // skill subprocesses discover it under any adapter without a
     // VSCode-extension-specific glob (Issue #4029). Spread before the other
@@ -6442,6 +6445,18 @@ function runStageSkillHeadlessImpl(
   const stageBudgetEnforcer = new StageBudgetEnforcer({
     format: adapter === "claude" ? "claude" : "sdk",
     onBreach: (breach: StageBudgetBreach) => stopStageForBudget(stageBudgetErrorMessage(breach)),
+    // pr-merge's wait after its PR reached the merge queue is the queue's CI
+    // run, not the stage's work (#2770): the wall clock leaves out what the
+    // stage's own `nightgauge pr merge --issue` recorded.
+    ...(stage === "pr-merge" &&
+    issueNumber &&
+    issueNumber > 0 &&
+    isUsableWorkspaceRoot(workspaceRoot)
+      ? {
+          excludedMs: (sinceMs: number) =>
+            queueWaitExcludedMs(skillBinary(), workspaceRoot, issueNumber, sinceMs),
+        }
+      : {}),
   });
   stageBudgetEnforcer.start();
   const armStageBudget = (budgets: StageBudgets, logWarnings: boolean): void => {
@@ -8852,7 +8867,7 @@ export function resumeSessionWithResponse(
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      ...process.env,
+      ...withoutLaunchingSessionEnv(),
       ...stageCIEnv(),
     },
   });
@@ -9627,7 +9642,7 @@ export function runStageSkillInteractive(
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      ...process.env,
+      ...withoutLaunchingSessionEnv(),
       ...autoAcceptEnv,
     },
   });

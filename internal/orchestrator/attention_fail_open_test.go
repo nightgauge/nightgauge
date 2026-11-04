@@ -39,8 +39,10 @@ func TestScanEntryPointsFailOpenBehindABusyStore(t *testing.T) {
 	}
 
 	inVerb, release := make(chan struct{}), make(chan struct{})
-	defer close(release)
 	resolved := make(chan error, 1)
+	// Release the verb and wait for Resolve to finish writing before the
+	// test returns, so it cannot race t.TempDir's cleanup of the store.
+	defer func() { close(release); <-resolved }()
 	go func() {
 		_, err := store.Resolve(context.Background(), id, "go", "tester", "", "", verbExecutorFunc(func(context.Context) error {
 			close(inVerb)

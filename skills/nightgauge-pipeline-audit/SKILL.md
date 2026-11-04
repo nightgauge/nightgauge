@@ -47,12 +47,12 @@ results into human-readable findings.
 
 ## Invocation
 
-| Tool        | Command                                                    |
-| ----------- | ---------------------------------------------------------- |
-| Claude Code | `/nightgauge:pipeline-audit [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                          |
-| Cursor      | Run via Agent Skills or direct SKILL.md                    |
-| Standalone  | `claude --skill skills/nightgauge-pipeline-audit/SKILL.md` |
+| Tool        | Command                                  |
+| ----------- | ---------------------------------------- |
+| Claude Code | `/nightgauge:pipeline-audit [options]`   |
+| Copilot     | Invoke via Agent Skills extension        |
+| Cursor      | Run via Agent Skills or direct SKILL.md  |
+| Headless    | `claude -p "/nightgauge:pipeline-audit"` |
 
 ## Arguments
 

@@ -9,12 +9,11 @@ from GitHub issue to merged PR with automated quality enforcement at every step.
 Traditional AI coding assistants rely on the LLM to _choose_ to follow best
 practices. Nightgauge uses **Claude Code hooks** to _enforce_ them:
 
-| Traditional AI           | Nightgauge                              |
-| ------------------------ | --------------------------------------- |
-| LLM might format code    | Hooks **always** format code            |
-| LLM might check versions | Hooks **block** commits on mismatch     |
-| LLM might follow plan    | Hooks **verify** plan completion        |
-| Context lost on resume   | Hooks **restore** context automatically |
+| Traditional AI         | Nightgauge                              |
+| ---------------------- | --------------------------------------- |
+| LLM might format code  | Hooks **always** format code            |
+| LLM might follow plan  | Hooks **verify** plan completion        |
+| Context lost on resume | Hooks **restore** context automatically |
 
 This enforcement needs the `nightgauge` binary: see
 [Install the Binary](#install-the-binary-required). Without it, binary-backed
@@ -123,8 +122,18 @@ claude -p "Show me the /nightgauge:issue-pickup help"
 ## Binary Resolution
 
 Hooks and skills resolve `nightgauge` in this order: `NIGHTGAUGE_BIN`, `PATH`,
-the VS Code extension bundle (hooks only; skill hosts export `NIGHTGAUGE_BIN`
+the per-user shim `~/.nightgauge/bin/nightgauge`, the VS Code extension bundle
+(the shim and the bundle are hooks only; skill hosts export `NIGHTGAUGE_BIN`
 instead), then `~/go/bin`.
+
+The extension links the shim to its own bundled binary each time it activates,
+in any editor that runs it: VS Code, Insiders, VSCodium, Cursor or Windsurf.
+Hooks therefore find the binary whichever editor installed it. To use the same
+binary from a terminal, add the shim's directory to `PATH`:
+
+```bash
+export PATH="$HOME/.nightgauge/bin:$PATH"
+```
 
 A repository's `bin/nightgauge` is never run by default, because this plugin
 loads in every repository. Maintainers opt in with `NIGHTGAUGE_DEV_REPO_BIN=1`,
@@ -193,6 +202,38 @@ automatically:
 | **Workflow Gates**    | `PreToolUse`   | Block dangerous operations                 |
 | **Completion Verify** | `Stop`         | Ensure tasks complete before stopping      |
 | **Context Restore**   | `SessionStart` | Restore plan/issue context on resume       |
+| **Binary Check**      | `SessionStart` | Warn once when the binary is missing       |
+
+### Hook Scope
+
+The plugin is installed per user, so its hooks run in every repository you open.
+A repository **opts in** to Nightgauge by committing `.nightgauge/config.yaml`.
+In a worktree, the file in the canonical checkout also counts.
+
+| Hook                                      | Where it acts                                                                                 |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Destructive-git, force-push, secret gates | Every repository                                                                              |
+| Careful and stage gates                   | Every repository                                                                              |
+| Completion verify (`Stop`)                | Opted-in repositories only                                                                    |
+| Auto-format (`PostToolUse`)               | Opted-in repositories only                                                                    |
+| Prompt sanitization (`PreToolUse:Task`)   | Warns in other repositories. Opted in, it uses `sanitization.mode`, which defaults to `block` |
+
+Completion verify never blocks a stop twice in a row. When Claude Code reports
+`stop_hook_active`, the hook lets the session stop.
+
+### When the Binary Is Missing
+
+Each hook declares what it does when no `nightgauge` binary resolves. No hook
+writes to stderr or exits non-zero in that case.
+
+| Hook                               | Behaviour without the binary                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------- |
+| Binary check (`SessionStart`)      | Shows one warning per session saying the gates are not running and how to install |
+| Workflow gate, prompt sanitization | Denies the tool call in an opted-in repository. Skips it elsewhere                |
+| All other hooks, including `Stop`  | Skip silently and log `[hook-skipped]` to `~/.nightgauge/hook-warnings.log`       |
+
+The `Stop` hook skips because blocking a stop without the binary would trap the
+session.
 
 ### Workflow Gates (PreToolUse)
 

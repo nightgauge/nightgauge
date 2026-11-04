@@ -343,6 +343,13 @@ var (
 	acGoTestRE    = regexp.MustCompile(`\bTest[A-Z0-9_]\w*`)
 	acPyTestRE    = regexp.MustCompile(`\btest_\w+`)
 	acJSTestRE    = regexp.MustCompile(`^(?:it|test|describe)\((["'])(.+)["']\)?$`)
+	// acGoRunRE matches a `go test -run` argument, quoted or not: a regex
+	// selecting tests, not the name of one test that must exist.
+	acGoRunRE     = regexp.MustCompile(`(?:^|\s)-(?:test\.)?run(?:=|\s+)(?:'([^']*)'|"([^"]*)"|([^\s` + "`" + `]+))`)
+	acGoTestDefRE = regexp.MustCompile(`^func (Test\w*)\(`)
+	acChangelogRE = regexp.MustCompile(`(?i)\bchange ?log\b`)
+	// acChangelogFileRE matches a changelog file's base name.
+	acChangelogFileRE = regexp.MustCompile(`(?i)^change_?log(\..*)?$`)
 )
 
 // VerifyACAgainstDiff answers one criterion from the diff and the stage's
@@ -389,6 +396,11 @@ func verifyACClause(c acClause, d *ACDiff, tests ACTestState) (string, string, b
 		return acScope(c, d)
 	case acUnchangedRE.MatchString(c.Prose):
 		return acUnchanged(c, d)
+	case acChangelogRE.MatchString(c.Prose) && len(c.Paths) == 0 && len(c.Headings) > 0:
+		return acChangelog(c, d)
+	}
+	if pattern, ok := acRunPattern(c); ok {
+		return acRunTest(pattern, d, tests)
 	}
 	if name, re, ok := acTestName(c); ok {
 		return acTest(name, re, d, tests)
@@ -555,6 +567,103 @@ func acHeadingList(hs []acHeading, chain bool) string {
 	return strings.Join(parts, ", ")
 }
 
+// acChangelog: a pathless changelog criterion with a heading means the root
+// CHANGELOG.md, which must be in the diff with an added line under it.
+func acChangelog(c acClause, d *ACDiff) (string, string, bool) {
+	const path = "CHANGELOG.md"
+	if _, ok := d.Files[path]; !ok {
+		return ACUnmet, "`" + path + "` is not in the diff", true
+	}
+	return acSection(c, []string{path}, d)
+}
+
+// acRunPattern returns the `-run` argument when it is the only place the
+// clause names a Go test. A name also given outside `-run` is a required
+// definition and stays with acTestName.
+func acRunPattern(c acClause) (string, bool) {
+	m := acGoRunRE.FindStringSubmatch(c.Raw)
+	if m == nil {
+		return "", false
+	}
+	if acGoTestRE.MatchString(acGoRunRE.ReplaceAllString(c.Raw, " ")) {
+		return "", false
+	}
+	return m[1] + m[2] + m[3], true
+}
+
+// acRunTest: the `-run` pattern's top-level element must match a Go test
+// defined on the branch, and the stage's test run must have passed.
+func acRunTest(pattern string, d *ACDiff, tests ACTestState) (string, string, bool) {
+	top, _, _ := strings.Cut(pattern, "/")
+	re, err := regexp.Compile(top)
+	if err != nil || top == "" {
+		return "", "", false
+	}
+	name, loc, ok := d.findGoTest(re)
+	if !ok {
+		return ACUnmet, fmt.Sprintf("`-run` pattern `%s` matches no test defined on the branch", pattern), true
+	}
+	if !tests.Passed {
+		src := tests.Source
+		if src == "" {
+			src = "no recorded test run"
+		}
+		return ACUnmet, fmt.Sprintf("`-run` pattern `%s` matches `%s` at `%s`, but the test run did not pass (%s)", pattern, name, loc, src), true
+	}
+	return ACMet, fmt.Sprintf("`-run` pattern `%s` matches `%s` at `%s`, passed in %s", pattern, name, loc, tests.Source), true
+}
+
+// findGoTest finds a Go test definition whose name re matches: in added
+// lines, in the branch content of diffed test files, then via git grep.
+func (d *ACDiff) findGoTest(re *regexp.Regexp) (string, string, bool) {
+	hit := func(text string) (string, bool) {
+		m := acGoTestDefRE.FindStringSubmatch(text)
+		if m != nil && re.MatchString(m[1]) {
+			return m[1], true
+		}
+		return "", false
+	}
+	paths := d.sortedPaths()
+	for _, p := range paths {
+		for _, l := range d.Files[p].Added {
+			if n, ok := hit(l.Text); ok {
+				return n, fmt.Sprintf("%s:%d", p, l.N), true
+			}
+		}
+	}
+	for _, p := range paths {
+		if !strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		for i, l := range d.lines(p) {
+			if n, ok := hit(l); ok {
+				return n, fmt.Sprintf("%s:%d", p, i+1), true
+			}
+		}
+	}
+	if d.Workdir == "" {
+		return "", "", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), acDiffTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.quotePath=false", "-c", "submodule.recurse=false", "grep", "-n", "-E", "--untracked", "-e", `^func Test[A-Za-z0-9_]*\(`, "--", "*_test.go")
+	cmd.Dir = d.Workdir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		if n, ok := hit(parts[2]); ok {
+			return n, parts[0] + ":" + parts[1], true
+		}
+	}
+	return "", "", false
+}
+
 // acTestName finds a named test: Go `TestX`, Python `test_x`, or a quoted
 // `it("…")` / `test("…")` title.
 func acTestName(c acClause) (string, *regexp.Regexp, bool) {
@@ -661,42 +770,99 @@ func acSection(c acClause, diffed []string, d *ACDiff) (string, string, bool) {
 	return ACUnmet, fmt.Sprintf("%s adds no line under %s", acList(diffed, 3), acHeadingList(c.Headings, true)), true
 }
 
+// acTokenScope picks the changed files that may answer a token clause naming
+// no diffed file (#2840). A changelog line restating a criterion is not
+// evidence the criterion holds, so changelogs answer only a clause about the
+// changelog: one whose prose says so, one naming a changelog file, or any
+// clause of a change that touches nothing but changelogs. A clause naming
+// other files, none of them diffed, is about those files, and a token in some
+// unrelated changed file proves nothing about them: no scope.
+func acTokenScope(c acClause, d *ACDiff) []string {
+	about := acChangelogRE.MatchString(c.Prose)
+	for _, p := range c.Paths {
+		if acChangelogFileRE.MatchString(filepath.Base(p)) {
+			about = true
+		}
+	}
+	if len(c.Paths) > 0 && !about {
+		return nil
+	}
+	var scope, changelogs []string
+	for _, p := range d.sortedPaths() {
+		if acChangelogFileRE.MatchString(filepath.Base(p)) {
+			changelogs = append(changelogs, p)
+			if !about {
+				continue
+			}
+		}
+		scope = append(scope, p)
+	}
+	if len(scope) == 0 {
+		return changelogs
+	}
+	return scope
+}
+
 // acTokens: every named token appears in the added lines (of the named
-// diffed files, when any). Missing tokens are unmet only when the clause
-// names a diffed file; otherwise the clause may be about something else.
+// diffed files, when any), or in their post-change content provided the diff
+// adds at least one of the tokens. Tokens absent from both are unmet only
+// when the clause names a diffed file; otherwise the clause may be about
+// something else. A clause whose tokens all predate the diff is undecided.
 func acTokens(c acClause, diffed []string, d *ACDiff) (string, string, bool) {
 	if len(c.Tokens) == 0 {
 		return "", "", false
 	}
 	scope := diffed
 	if len(scope) == 0 {
-		scope = d.sortedPaths()
-	}
-	var lines []acDiffLine
-	var where []string
-	for _, p := range scope {
-		for _, l := range d.Files[p].Added {
-			lines = append(lines, l)
-			where = append(where, p)
+		scope = acTokenScope(c, d)
+		if len(scope) == 0 {
+			return "", "", false
 		}
 	}
-	missing := acMissingTokens(c.Tokens, lines)
+	var ev, missing []string
+	added := 0
+	for _, tok := range c.Tokens {
+		if loc, ok := acAddedToken(tok, scope, d); ok {
+			ev = append(ev, fmt.Sprintf("adds `%s` at `%s`", tok, loc))
+			added++
+		} else if loc, ok := acPresentToken(tok, scope, d); ok {
+			ev = append(ev, fmt.Sprintf("keeps `%s` already at `%s`", tok, loc))
+		} else {
+			missing = append(missing, tok)
+		}
+	}
 	if len(missing) > 0 {
 		if len(diffed) == 0 {
 			return "", "", false
 		}
 		return ACUnmet, fmt.Sprintf("the %s diff does not add %s", acList(diffed, 3), acList(missing, 5)), true
 	}
-	var ev []string
-	for _, tok := range c.Tokens {
-		for i, l := range lines {
+	if added == 0 {
+		return "", "", false
+	}
+	return ACMet, "the diff " + strings.Join(ev, ", "), true
+}
+
+func acAddedToken(tok string, scope []string, d *ACDiff) (string, bool) {
+	for _, p := range scope {
+		for _, l := range d.Files[p].Added {
 			if strings.Contains(l.Text, tok) {
-				ev = append(ev, fmt.Sprintf("`%s` at `%s:%d`", tok, where[i], l.N))
-				break
+				return fmt.Sprintf("%s:%d", p, l.N), true
 			}
 		}
 	}
-	return ACMet, "the diff adds " + strings.Join(ev, ", "), true
+	return "", false
+}
+
+func acPresentToken(tok string, scope []string, d *ACDiff) (string, bool) {
+	for _, p := range scope {
+		for i, l := range d.lines(p) {
+			if strings.Contains(l, tok) {
+				return fmt.Sprintf("%s:%d", p, i+1), true
+			}
+		}
+	}
+	return "", false
 }
 
 func acMissingTokens(tokens []string, lines []acDiffLine) []string {

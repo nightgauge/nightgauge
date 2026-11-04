@@ -26,6 +26,7 @@
  * @see internal/execution/stage_budget.go
  */
 
+import { execFile } from "child_process";
 import { listProcessTree } from "./processTree";
 
 /** The reason a stage stopped at a stage budget stamps, before ":<dimension>". */
@@ -135,6 +136,13 @@ export interface StageBudgetEnforcerOptions {
   onBreach: (breach: StageBudgetBreach) => void;
   /** The clock; a test may replace it. */
   now?: () => number;
+  /**
+   * The time inside [sinceMs, nowMs] the wall clock leaves out: pr-merge's
+   * recorded merge-queue wait (#2770), which the binary reports. Asked only
+   * when the wall-clock timer fires; the timer is then re-armed for what is
+   * left. A rejected or invalid answer leaves nothing out.
+   */
+  excludedMs?: (sinceMs: number, nowMs: number) => Promise<number>;
 }
 
 function nonNegative(n: unknown): number {
@@ -157,6 +165,9 @@ export class StageBudgetEnforcer {
   private peak = 0;
   private startedAt: number | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  /** True while a fired wall clock is asking for its excluded time. */
+  private checkingWallClock = false;
+  private disarmed = false;
   private breachValue: StageBudgetBreach | undefined;
   private readonly now: () => number;
 
@@ -186,6 +197,7 @@ export class StageBudgetEnforcer {
 
   /** Stop the wall clock: the stage has ended. */
   disarm(): void {
+    this.disarmed = true;
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
   }
@@ -326,17 +338,45 @@ export class StageBudgetEnforcer {
     this.checkTurns(false);
   }
 
-  private armWallClock(): void {
-    if (this.timer !== undefined || this.startedAt === undefined || !this.limits) return;
+  private armWallClock(excludedMs = 0): void {
+    if (this.timer !== undefined || this.checkingWallClock || this.disarmed) return;
+    if (this.startedAt === undefined || !this.limits) return;
     const limit = this.limits.maxWallClockMs;
     if (!(limit > 0)) return;
-    const remaining = Math.max(0, limit - (this.now() - this.startedAt));
+    const remaining = Math.max(0, limit - (this.now() - this.startedAt - excludedMs));
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      const elapsed = this.now() - (this.startedAt ?? this.now());
-      this.record({ dimension: "wall_clock", observed: elapsed, ceiling: limit });
+      void this.wallClockFired(limit);
     }, remaining);
     if (typeof this.timer.unref === "function") this.timer.unref();
+  }
+
+  /**
+   * The wall clock's timer fired. The counted time is elapsed time less what
+   * `excludedMs` leaves out (never more than elapsed); under the limit the
+   * timer is re-armed for the rest, else the breach records the counted time.
+   */
+  private async wallClockFired(limit: number): Promise<void> {
+    const startedAt = this.startedAt ?? this.now();
+    let excluded = 0;
+    if (this.options.excludedMs) {
+      this.checkingWallClock = true;
+      try {
+        excluded = nonNegative(await this.options.excludedMs(startedAt, this.now()));
+      } catch {
+        excluded = 0;
+      } finally {
+        this.checkingWallClock = false;
+      }
+    }
+    if (this.disarmed || this.breachValue) return;
+    const elapsed = this.now() - startedAt;
+    const counted = elapsed - Math.min(excluded, elapsed);
+    if (counted < limit) {
+      this.armWallClock(elapsed - counted);
+      return;
+    }
+    this.record({ dimension: "wall_clock", observed: counted, ceiling: limit });
   }
 
   private checkTokens(): void {
@@ -454,4 +494,49 @@ export async function terminateStageProcessTree(
     );
   }
   return { pids: [...known], survivors };
+}
+
+/**
+ * The merge-queue wait the binary has recorded for `issue` since `sinceMs`
+ * (`nightgauge pr-stage queue-wait`, #2770), in milliseconds. The exclusion
+ * arithmetic lives in the binary; this only asks. Asynchronous, because the
+ * extension host must never block on a subprocess (#2884).
+ */
+export function queueWaitExcludedMs(
+  binary: string,
+  workspaceRoot: string,
+  issue: number,
+  sinceMs: number,
+  run: ExecFileRunner = defaultExecFile
+): Promise<number> {
+  const args = [
+    "pr-stage",
+    "queue-wait",
+    String(issue),
+    "--since-ms",
+    String(Math.floor(sinceMs)),
+    "--workdir",
+    workspaceRoot,
+    "--json",
+  ];
+  return run(binary, args).then((stdout) => {
+    const parsed = JSON.parse(stdout) as { excluded_ms?: unknown };
+    return nonNegative(parsed.excluded_ms);
+  });
+}
+
+/** Runs a binary and resolves with its stdout. */
+export type ExecFileRunner = (binary: string, args: string[]) => Promise<string>;
+
+const QUEUE_WAIT_LOOKUP_TIMEOUT_MS = 10_000;
+
+function defaultExecFile(binary: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      binary,
+      args,
+      { encoding: "utf-8", timeout: QUEUE_WAIT_LOOKUP_TIMEOUT_MS },
+      (err, stdout) => (err ? reject(err) : resolve(stdout))
+    );
+  });
 }

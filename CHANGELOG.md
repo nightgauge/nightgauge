@@ -16,6 +16,120 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A doctor test whose repository has an `origin` now fails its cleanup by naming what is still
+  writing `.git` (each leftover entry with size and mtime, `gc.pid` and `gc.log` contents, and the
+  likely writer: `git gc`, `git maintenance` or a held lock) instead of a bare
+  `unlinkat .git: directory not empty`. The new `gittest.ReportWritersOnCleanup` helper reports
+  without retrying, so a recurrence stays red. The background-writer disarm itself landed in
+  #2787 and #2788 (#2786).
+- Stages and the daemon no longer inherit `CLAUDECODE` and `CLAUDE_*` variables from the Claude
+  Code session that launched the editor, so a run no longer depends on how the editor was
+  started. `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_PLUGIN_ROOT`, `CLAUDE_CODE_DISABLE_THINKING`,
+  `CLAUDE_CONFIG_DIR` and everything Nightgauge sets for a stage still arrive (#2848).
+
+- A pr-create secret-scan stop now records itself when `nightgauge` is not on `PATH`, so the
+  orchestrator no longer opens a fallback PR for a change that leaked a secret. A post-merge
+  issue close now finds the PR number itself and passes `--pr`, so a `Refs #N` PR keeps its
+  issue open. The acceptance-criterion check no longer marks a criterion met from tokens that
+  appear only in a changelog line or in a file the criterion does not name (#2840).
+
+- pr-merge's wall-clock stage budget no longer counts the time its PR waits in the merge queue,
+  so a stage is not killed while the queue tests its merge group. `nightgauge pr merge --issue N`
+  records the wait after enqueue in `queue-wait-<N>.json`; both budget enforcers leave it out, and
+  the new `nightgauge pr-stage queue-wait` verb reports it. Time before the enqueue still counts. A
+  wait left open by a dead writer adds nothing, and the excluded time never exceeds elapsed
+  time (#2770).
+- A `runaway_progress` kill no longer halts the repository queue. The halt is skipped for the first
+  two consecutive runaway kills of an issue and applies on the third (#2770).
+- A churn kill is recorded as `progress-churn-tools` even when a background-task deferral expired
+  behind it, and a declared progress log that was deleted no longer makes a kill read as an expired
+  external-progress deferral (#2770).
+
+- The Claude plugin's hooks no longer fail open silently when the `nightgauge` binary is missing.
+  A new SessionStart hook shows one warning per session, and the workflow and prompt-sanitization
+  gates deny tool calls in a repository that opted in with `.nightgauge/config.yaml`. The unused
+  `NIGHTGAUGE_HOOK_BLOCKING` variable is removed (#2765).
+- The Stop hook and format-on-save now act only in repositories that opted in with
+  `.nightgauge/config.yaml`, and the Stop hook no longer blocks a stop while `stop_hook_active` is
+  set, so it cannot loop. Prompt sanitization warns in other repositories and defaults to `block`
+  in opted-in ones, as ADR-021 states. It also blocks when the config fails to load (#2765).
+- Hooks and `nightgauge doctor` now find the binary at `~/.nightgauge/bin/nightgauge`, which the
+  extension links on activation in any editor (#2765).
+
+- The merge-queue `lint` check no longer runs out of time. Its three slowest
+  self-tests now run as parallel jobs, each with at least twice its measured
+  run time, and the required `lint` check fails when any of them fails (#2923).
+
+- Codex, Grok and OpenCode skills installed by the VS Code extension now match the ones
+  `scripts/install-agent-skills.sh` installs: every skill, `name:` matching its directory, no
+  `disable-model-invocation`, and links that resolve. The extension installed them from the
+  Claude plugin mirror and renamed the directories only. An extension upgrade now re-syncs
+  installed skills on activation (#2762).
+- `Nightgauge: Setup Codex Commands` is now `Nightgauge: Setup Codex Skills` and no longer
+  copies commands into `~/.codex/commands/`, which Codex does not read; each called
+  `scripts/run-stage.sh`, which the VSIX does not ship. Use `$nightgauge-issue-pickup`.
+  Packaging now fails when a bundled resource names a script the VSIX lacks (#2762).
+- `Nightgauge: Setup Codex Skills`, `Setup Grok Skills` and `Setup Claude Code Plugins` now
+  always offer to install or update, as `Setup OpenCode Skills` does, even with
+  `nightgauge.plugins.autoPrompt` off (#2762).
+- The Claude Code plugin now records the extension version it was last installed or updated
+  to. An extension upgrade, or an earlier update that failed, updates the plugin again on the
+  next activation. Before, the update ran only in the one activation that refreshed the
+  marketplace copy, so a failed update was never retried (#2762).
+- pr-create's acceptance-criteria check no longer marks met criteria unmet. A
+  `go test -run` argument is treated as a pattern matched against defined tests;
+  a named token already in the changed file counts when the diff adds another of
+  the clause's tokens; and a changelog criterion with no path reads
+  `CHANGELOG.md` (#2917).
+- Plugin skills run interactively in Claude Code now carry their shared procedure. The
+  generator expands each `<!-- include: -->` directive, which Claude Code never did, so a
+  session read a literal comment where the steps should have been (#2764).
+- Links in the shipped plugin skills and in the VSIX's bundled skills now open. A link to
+  the repository's `docs/` becomes a GitHub URL: `main` for the plugin, the release tag for
+  the VSIX and for Codex, Grok and OpenCode installs. `check-mirror-links.py --root` fails
+  any relative link that leaves the shipped tree (#2764).
+- Epic completion summaries and CI auto-fix log fetching call `nightgauge epic summary` and
+  `nightgauge ci logs`; the scripts they called were deleted, so both steps did nothing.
+  issue-pickup no longer runs a sprint assignment step, which called a deleted script and
+  never assigned anything (#2764).
+- Shipped skills no longer tell a model to run commands against `packages/nightgauge`, a path
+  only this repository has, and list `claude -p "/nightgauge:<name>"` instead of the
+  nonexistent `claude --skill`. `nightgauge preflight skill-portability` now fails a
+  `$HOOKS_DIR` call to a missing hook, a `packages/nightgauge` path, or `claude --skill`,
+  and `--skills-root` checks the built bundle (#2764).
+- The plugin README no longer claims a hook blocks commits on a version mismatch (#2764).
+
+### Removed
+
+- `claude-plugins/nightgauge/hooks/pre-push-validate.sh`, a hand-kept copy of the git
+  pre-push hook that `nightgauge pre-push install` writes. It was never a Claude hook (#2764).
+
+## [0.8.0] - 2026-11-04
+
+### Fixed
+
+- An issue with an unresolved blocked finding is no longer dispatched every
+  autonomous cycle: the candidate filter skips it, logs the skip once per
+  finding, and re-admits it on the next cycle after `blocked.clearFinding`.
+  Discord, Slack and Mattermost no longer post a message for a run that defers
+  at issue-pickup; a run posts once it reaches a later stage, and a pickup
+  failure still notifies (#2914).
+- The architecture-release tests no longer fail intermittently when the held
+  issue's background board read reaches the test's fixture forge.
+- A reviewed or gated tree now keeps tracked files that match an ignore rule
+  (`.gitignore`, `.git/info/exclude`, `core.excludesFile`). They no longer read
+  as deleted in review diffs, and the tree fingerprint no longer varies between
+  clones with different local excludes.
+- An issue that states its criteria under `## Verification`, `## Acceptance`, `## Done when`
+  or `## Definition of Done`, as a numbered or bulleted list, now yields acceptance criteria,
+  so a pull request that meets them writes `Closes #N` and the issue closes on merge. A
+  criterion that wraps onto an indented second line is read whole. Release gate G1's fixture
+  issue was merging with `Refs` and staying open.
+- Feature planning now comments once on an issue with no recognisable acceptance criteria
+  (`nightgauge preflight ac-reconcile --notify-empty`), so the gap surfaces before development
+  instead of as a `Refs` line at `pr-create`.
+- The G1 clean-install report reads the PR from `pr-{N}.json` and names its real number and
+  merge state instead of `none`.
 - Judge verdicts from an orchestrated `feature-validate` run are now written to
   `health/gate-metrics.jsonl` by the SDK pipeline orchestrator, so `FeatureValidateGate`
   sees them. The fold previously had no caller and no judge row was ever recorded. A run that
@@ -322,8 +436,9 @@ available` log line reports `pending` and `reserved` counts (#2717).
   kill that followed only a warning is booked as a stall and does not retry on a stronger model.
   A global cooldown to `resetsAt` now requires a hard signal.
 - **A `Refs #N` merge now leaves the issue open and Ready (#2706).** The pipeline's pr-merge
-  status sync writes Done only for a closed issue, and completion keeps the hook's Ready, so the
-  scheduler dispatches the remainder. `nightgauge hook post-merge` resolves the repository's
+  status sync writes Done only for a closed issue and Ready for an open one, even when the hook
+  could not resolve a board, so the scheduler dispatches the remainder. An unreadable issue state
+  raises the board-status card instead of passing silently. `nightgauge hook post-merge` resolves the repository's
   board when `--project` is omitted, and warns on stderr when it cannot, instead of skipping the
   sync silently. A failed run's In review park now uses the new
   `project sync-status --only-from "In progress"`, so it never overwrites the scheduler's Ready.
@@ -8173,7 +8288,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nightgauge/nightgauge/compare/v0.6.0...v0.7.0

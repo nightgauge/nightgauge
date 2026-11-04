@@ -13,10 +13,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Must match TreeFingerprint in internal/hooks/pre_push_skip.go.
+# Must match TreeFingerprint in internal/hooks/pre_push_skip.go. The scratch
+# index starts from HEAD so tracked files matching an ignore rule stay (#2889).
 tree_fingerprint() {
   local dir tree
   dir="$(mktemp -d)"
+  if git rev-parse -q --verify 'HEAD^{tree}' >/dev/null 2>&1; then
+    GIT_INDEX_FILE="$dir/index" git read-tree HEAD || { rm -rf "$dir"; return 1; }
+  fi
   GIT_INDEX_FILE="$dir/index" git add -A -- . || { rm -rf "$dir"; return 1; }
   tree="$(GIT_INDEX_FILE="$dir/index" git write-tree)" || { rm -rf "$dir"; return 1; }
   rm -rf "$dir"

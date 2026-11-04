@@ -452,6 +452,14 @@ jobs:
       - name: Build
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm run build
+      # #2764: an installed VSIX carries dist/skills and nothing beside it, so a
+      # relative link out of that tree (../../docs/...) is dead for every user.
+      # The bundler rewrites those to GitHub URLs; this fails any it missed.
+      - name: Built skill bundle links stay inside dist/skills
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        run: >
+          python3 scripts/check-mirror-links.py
+          --mirror packages/nightgauge/dist/skills --root packages/nightgauge/dist/skills
       # #499: tsconfig.json covers src/** only, vitest transforms through
       # esbuild (transpile-only), and eslint has no `project` for tests — so
       # tests/** and the Playwright fixtures were typechecked by nothing.

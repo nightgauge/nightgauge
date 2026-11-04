@@ -1278,8 +1278,10 @@ nightgauge project set-field <issue-number> --start-date 2026-05-01 --target-dat
 # Move issue to a status column
 nightgauge project move-status <issue-number> <status>
 
-# Sync issue status field (idempotent)
-nightgauge project sync-status <issue-number> <status>
+# Sync issue status field (idempotent). --only-from <status> writes only when
+# the issue holds that status; otherwise, or when the current status is
+# unreadable, it writes nothing and exits non-zero ("yielding <status>").
+nightgauge project sync-status <issue-number> <status> [--only-from <status>]
 
 # List project board items
 nightgauge board list [--status Ready] [--owner ORG] [--project N] [--json]
@@ -3211,6 +3213,10 @@ nightgauge pr-stage merge <issue> [--workdir W] [--json]
 
 # The time budget derived from pipeline.merge_queue.wait_timeout
 nightgauge pr-stage budget [--workdir W] [--json]
+
+# The merge-queue wait recorded for the issue since a Unix-ms instant (#2770);
+# the wall-clock budget leaves it out. --json prints {"excluded_ms": n}
+nightgauge pr-stage queue-wait <issue> --since-ms <ms> [--workdir W] [--json]
 
 # The PR title, capped at 72 characters; the fallback note goes to stderr
 nightgauge pr-stage title <issue> [--workdir W]
@@ -5171,7 +5177,9 @@ which Claude Code reports as a _non-blocking_ error — the #354 shape exactly.
 Two rules, and one test that enforces them:
 
 - **stdout** carries only the hook's JSON. `guard.sh` diagnostics
-  (`[hook-skipped]`, `[hook-blocked]`, `[stale-binary]`) never go there.
+  (`[hook-skipped]`, `[hook-denied]`, `[stale-binary]`) never go there. The
+  `announce` and `gate` missing-binary policies print hook JSON there, a
+  `systemMessage` or a PreToolUse deny, and nothing else (#2765).
 - **stderr is not a free channel either.** The Claude CLI surfaces hook stderr
   to the parent agent as a `stop-hook-error` notification regardless of exit
   code, and those notifications have caused agents to abort turns (#3262). So

@@ -533,8 +533,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	trackLiveStage(execution)
 
 	// The wall clock runs from the spawn. It is the smaller of the stage
-	// budget and opts.Timeout; nothing extends it.
+	// budget and opts.Timeout. Only pr-merge's recorded merge-queue wait is
+	// left out of it (#2770); opts.Timeout still bounds the stage.
 	stageBudget := newStageBudgetEnforcer(budget, StreamFormatForAdapter(adapter.Name()), opts.Timeout)
+	stageBudget.excluded = stageBudgetExclusion(opts.Stage, opts.IssueNumber, worktreeDir)
 	stageBudget.arm(cmd.Process, execution.done)
 
 	// Idle-stream watchdog (#2176): a stage dispatched to a declared model
@@ -1844,9 +1846,39 @@ func runKnowledgeDir(workspaceRoot, worktreeDir string) string {
 	return config.KnowledgeBaseDir(worktreeDir)
 }
 
+// keptSessionEnv are the CLAUDE_* names a stage needs on purpose, so the
+// launching-session rule leaves them inherited: the stage's auth, its plugin
+// root, the documented thinking escape hatch, the operator's account home and
+// the operator's Bedrock or Vertex provider selection.
+// The TypeScript twin is KEPT_SESSION_ENV in
+// packages/nightgauge/src/utils/launchingSessionEnv.ts; change both together.
+var keptSessionEnv = map[string]bool{
+	"CLAUDE_CODE_OAUTH_TOKEN":       true,
+	"CLAUDE_PLUGIN_ROOT":            true,
+	"CLAUDE_CODE_DISABLE_THINKING":  true,
+	"CLAUDE_CONFIG_DIR":             true,
+	"CLAUDE_CODE_USE_BEDROCK":       true,
+	"CLAUDE_CODE_USE_VERTEX":        true,
+	"CLAUDE_CODE_SKIP_BEDROCK_AUTH": true,
+	"CLAUDE_CODE_SKIP_VERTEX_AUTH":  true,
+}
+
+// launchingSessionEnv reports whether a host variable is residue of the Claude
+// Code session that launched the editor or the binary (#2848): CLAUDECODE, or
+// any CLAUDE_* name outside keptSessionEnv. A stage must not depend on how its
+// host was started, so these are never inherited. The rule reads only the name.
+// Its TypeScript twin is isLaunchingSessionEnv; change both together.
+func launchingSessionEnv(key string) bool {
+	if key == "CLAUDECODE" {
+		return true
+	}
+	return strings.HasPrefix(key, "CLAUDE_") && !keptSessionEnv[key]
+}
+
 // composeStageEnv builds the environment a stage subprocess actually receives:
-// the host environment less the variables the adapter withholds, plus the
-// adapter's own exports, plus the run-scoped exports the manager owns.
+// the host environment less the launching session's residue and the variables
+// the adapter withholds, plus the adapter's own exports, plus the run-scoped
+// exports the manager owns.
 //
 // Extracted from RunStage for the same reason buildRunOptions was. This env IS
 // the interface between this process and the child; inline in a function whose
@@ -1862,16 +1894,17 @@ func composeStageEnv(base []string, withhold func(key string) bool, adapterEnv m
 	// value is read or logged. Removal, not an empty value, because a reader
 	// may test presence. The adapter's exports come after, so an export whose
 	// name the adapter withholds from the host still arrives.
-	if withhold != nil {
-		kept := env[:0:0]
-		for _, kv := range env {
-			key, _, _ := strings.Cut(kv, "=")
-			if !withhold(key) {
-				kept = append(kept, kv)
-			}
+	// The launching session's residue (#2848) is withheld by the same rule for
+	// every adapter, in the same pass.
+	kept := env[:0:0]
+	for _, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		if launchingSessionEnv(key) || (withhold != nil && withhold(key)) {
+			continue
 		}
-		env = kept
+		kept = append(kept, kv)
 	}
+	env = kept
 	// Upserted, not appended: an export replaces the host's value of the same
 	// name rather than landing beside it with precedence left to the reader.
 	// The opencode adapter re-points XDG_CONFIG_HOME, GH_CONFIG_DIR and

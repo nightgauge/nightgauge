@@ -76,6 +76,18 @@ fi
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
 ISSUE_CLOSED=false
 ISSUE_KEPT_OPEN=false
+# Each block runs in a fresh shell, so PR_NUMBER is derived here: the
+# environment, then pr-{N}.json, then the branch's (merged) PR (#2840).
+PR_NUMBER="${PR_NUMBER:-}"
+if [ -z "$PR_NUMBER" ] && [ -n "$BINARY" ]; then
+  PR_NUMBER=$(jq -r '.pr_number // empty' \
+    "$("$BINARY" layout path pipeline "pr-${ISSUE_NUMBER}.json" 2>/dev/null)" 2>/dev/null || echo "")
+  case "$PR_NUMBER" in '' | *[!0-9]*) PR_NUMBER="" ;; esac
+  if [ -z "$PR_NUMBER" ]; then
+    PR_NUMBER=$("$BINARY" pr view --json 2>/dev/null | jq -r '.number // empty' 2>/dev/null || echo "")
+  fi
+fi
+case "$PR_NUMBER" in '' | *[!0-9]*) PR_NUMBER="" ;; esac
 if [ -n "$BINARY" ]; then
   # --pr makes the binary read the merged PR's body: a `Refs #N` PR delivered
   # only part of the issue, so it stays open and the post-merge hook returns it

@@ -18,7 +18,7 @@
 | Bare `nightgauge` calls inside skill bodies               | Fixed          | This PR — preflight prepends `dirname($BINARY)` to `PATH` after resolution   |
 | User `~/.claude/settings.json` Stop hooks                 | Not registered | No change required (user-owned scope)                                        |
 | Project `.claude/settings.json` Stop hooks                | Not registered | No change required                                                           |
-| Other plugin hooks (`pre-push-validate.sh`, etc.)         | Not Stop-event | Not in scope (don't fire at the Stop event)                                  |
+| Other plugin hooks (`careful-gate.sh`, etc.)              | Not Stop-event | Not in scope (don't fire at the Stop event)                                  |
 
 ## 1. Plugin Stop Hook (`stop-verification.sh` → `lib/guard.sh`)
 
@@ -47,9 +47,20 @@ notifications across five stages, occasionally causing the LLM to interpret
 **This PR**: Adds an `NIGHTGAUGE_HOOK_SILENT` env var (default `true`)
 that routes the skip notice to a side-channel log file
 (`~/.nightgauge/hook-warnings.log`, overridable via
-`NIGHTGAUGE_HOOK_LOG`) instead of stderr. The blocking-error path
-(`NIGHTGAUGE_HOOK_BLOCKING=true`) keeps stderr output because that's
-the legitimate user-facing diagnostic AC3 requires preserving.
+`NIGHTGAUGE_HOOK_LOG`) instead of stderr.
+
+**#2765** replaced the old blocking-error path, an environment variable
+nothing set whose exit 1 Claude Code does not treat as blocking, with a
+per-wrapper policy. Each wrapper sets `NIGHTGAUGE_HOOK_ON_MISSING_BINARY`
+before it sources `guard.sh`:
+
+| Policy           | Wrappers                                 | Without the binary                                                                                    |
+| ---------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `skip` (default) | all others, including stop-verification  | `[hook-skipped]` side-channel line, exit 0                                                            |
+| `announce`       | `binary-check.sh` (SessionStart)         | one `{"systemMessage": ...}` line on stdout, exit 0                                                   |
+| `gate`           | `workflow-gate.sh`, `prompt-sanitize.sh` | in an opted-in repository, a PreToolUse deny on stdout plus `[hook-denied]`, exit 0; elsewhere `skip` |
+
+None of them writes to stderr, so none raises a `stop-hook-error`.
 
 ## 2. Skill Phase 0 Preflight (`skills/_shared/PREFLIGHT.md` + Inline Copies)
 
@@ -160,10 +171,10 @@ For completeness:
 | `stop-verification.sh` | Stop         | **Yes**        |
 | `inject-context.sh`    | SessionStart | No             |
 
-Other plugin scripts that source `guard.sh` but are not registered as Claude
-Code hooks (e.g. `pre-push-validate.sh`) still inherit the new silent-by-
-default behavior; they cannot leak into subagent transcripts because they're
-git hooks, not Claude hooks.
+The git pre-push hook that `nightgauge pre-push install` writes is not a
+Claude Code hook and does not source `guard.sh`, so it cannot leak into
+subagent transcripts. Its only source is the `prePushHookScript` literal in
+`cmd/nightgauge/cmd_pre_push.go`.
 
 ## 7. Verification Protocol (AC2)
 
@@ -203,11 +214,11 @@ debugging hooks.
 
 Producers, all in `claude-plugins/nightgauge/hooks/lib/guard.sh`:
 
-| Marker           | Written when                                                                                                                                                        |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[hook-skipped]` | the binary could not be resolved and the hook is non-blocking — it exits 0 without running                                                                          |
-| `[hook-blocked]` | the binary could not be resolved and the hook is load-bearing (`NIGHTGAUGE_HOOK_BLOCKING=true`) — mirrored here, but stderr stays loud because the user must see it |
-| `[stale-binary]` | step 4 resolved an extension bundle VSCode's install record does not confirm (#356)                                                                                 |
+| Marker           | Written when                                                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `[hook-skipped]` | the binary could not be resolved and the hook skipped (`skip`, `announce`, or `gate` outside an opted-in repository). It exits 0 without running |
+| `[hook-denied]`  | the binary could not be resolved and a `gate` hook denied the tool call in an opted-in repository (#2765)                                        |
+| `[stale-binary]` | step 4 resolved an extension bundle VSCode's install record does not confirm (#356)                                                              |
 
 Nothing else writes to this file, and a healthy machine writes nothing at all
 — these hooks run on every tool call, so a per-call line would be noise. The

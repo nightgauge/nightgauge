@@ -19,6 +19,7 @@ import {
   type StableMarketplace,
 } from "./stableMarketplace";
 import { setPluginState } from "../utils/pluginHint";
+import { stampInstalledVersion, staleInstalledVersion } from "./bundledSkills";
 
 const execFileAsync = promisify(execFile);
 
@@ -159,6 +160,9 @@ export class PluginSetupService implements vscode.Disposable {
   // State key for "don't show again"
   private static readonly DISMISSED_KEY = "nightgauge.pluginSetup.dismissed";
 
+  // Version-stamp target: globalState key nightgauge.pluginSetup.installedVersion.
+  private static readonly STAMP_TARGET = "plugin";
+
   constructor(
     context: vscode.ExtensionContext,
     marketplace: MarketplaceConfig = DEFAULT_MARKETPLACE
@@ -188,7 +192,7 @@ export class PluginSetupService implements vscode.Disposable {
         this.outputChannel.appendLine(`WARNING: ${message}`)
       );
       status = await this.repairIfNeeded(status, stable);
-      await this.refreshIfRecopied(status, stable);
+      await this.resyncIfStale(status, stable);
       if (status.plugin === "unknown") {
         this.reportUnreadable(status);
       }
@@ -353,12 +357,25 @@ export class PluginSetupService implements vscode.Disposable {
       });
   }
 
-  /** Tell Claude Code the registered copy changed. A failure here costs freshness only. */
-  private async refreshIfRecopied(
+  /**
+   * Bring an installed plugin up to this extension's version (#2762). The stamp
+   * records the version the plugin was last updated to, so an upgrade, a stamp
+   * older than this code, or an earlier update that failed all re-sync here.
+   * A failure leaves the stamp alone, so the next activation tries again.
+   */
+  private async resyncIfStale(
     status: PluginStatus,
     stable: StableMarketplace | undefined
   ): Promise<void> {
-    if (!stable?.recopied || status.marketplacePath !== stable.path) {
+    if (
+      !stable ||
+      status.marketplacePath !== stable.path ||
+      !staleInstalledVersion(
+        this.context,
+        PluginSetupService.STAMP_TARGET,
+        status.plugin === "enabled"
+      )
+    ) {
       return;
     }
     try {
@@ -369,6 +386,7 @@ export class PluginSetupService implements vscode.Disposable {
         this.marketplace.marketplaceName,
       ]);
       await execFileAsync("claude", ["plugin", "update", this.pluginId()]);
+      await stampInstalledVersion(this.context, PluginSetupService.STAMP_TARGET);
     } catch (error) {
       this.logCliFailure("plugin update", error);
     }
@@ -475,6 +493,7 @@ export class PluginSetupService implements vscode.Disposable {
       }
 
       setPluginState("enabled");
+      await stampInstalledVersion(this.context, PluginSetupService.STAMP_TARGET);
       this.outputChannel.appendLine("All plugins installed successfully!");
       this.outputChannel.appendLine("\nAvailable commands:");
       this.outputChannel.appendLine("  /nightgauge:issue-pickup     - Pick up an issue");
@@ -515,11 +534,68 @@ export class PluginSetupService implements vscode.Disposable {
   }
 
   /**
-   * Manually trigger the setup prompt
+   * The `nightgauge.setupPlugins` command: always offers to install or update,
+   * whatever `plugins.autoPrompt` or an earlier "Don't Show Again" says (#2762).
+   * The activation path, checkAndPromptSetup(), is the one autoPrompt governs.
    */
   async showSetupPrompt(): Promise<void> {
     await this.resetDismissed();
-    await this.checkAndPromptSetup();
+    const config = getPluginConfig();
+    this.marketplace.repoUrl = config.marketplaceUrl;
+
+    let status = await this.getPluginStatus();
+    if (!status.claudeCliAvailable) {
+      await this.promptClaudeCliInstall();
+      return;
+    }
+    const stable = ensureStableMarketplace(this.context, (message) =>
+      this.outputChannel.appendLine(`WARNING: ${message}`)
+    );
+    status = await this.repairIfNeeded(status, stable);
+    if (status.plugin === "absent") {
+      await this.promptPluginInstall(status);
+      return;
+    }
+
+    const selection = await vscode.window.showInformationMessage(
+      "Update the Nightgauge Claude Code plugin?",
+      {
+        modal: true,
+        detail:
+          "Refreshes the Nightgauge marketplace and updates the installed plugin " +
+          "to the copy bundled with this extension.",
+      },
+      "Update Plugins",
+      "Later"
+    );
+    if (selection === "Update Plugins") {
+      await this.updatePlugins();
+    }
+  }
+
+  /** Refresh the registered marketplace and update the installed plugin. */
+  private async updatePlugins(): Promise<void> {
+    this.outputChannel.show(true);
+    try {
+      await execFileAsync("claude", [
+        "plugin",
+        "marketplace",
+        "update",
+        this.marketplace.marketplaceName,
+      ]);
+      for (const plugin of this.marketplace.plugins) {
+        await execFileAsync("claude", ["plugin", "update", this.pluginId(plugin)]);
+        this.outputChannel.appendLine(`✓ ${plugin} updated`);
+      }
+      await stampInstalledVersion(this.context, PluginSetupService.STAMP_TARGET);
+      vscode.window.showInformationMessage(
+        "Nightgauge plugins updated. Restart Claude Code sessions to load them."
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.outputChannel.appendLine(`✗ Update failed: ${errorMessage}`);
+      vscode.window.showErrorMessage(`Failed to update plugins: ${errorMessage}`);
+    }
   }
 
   /**

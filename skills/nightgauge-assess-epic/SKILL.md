@@ -41,12 +41,12 @@ no multi-issue pipeline run (#366).
 
 ## Invocation
 
-| Tool        | Command                                                 |
-| ----------- | ------------------------------------------------------- |
-| Claude Code | `/nightgauge:assess-epic <epic-number>`                 |
-| Copilot     | Invoke via Agent Skills extension                       |
-| Cursor      | Run via Agent Skills or direct SKILL.md                 |
-| Standalone  | `claude --skill skills/nightgauge-assess-epic/SKILL.md` |
+| Tool        | Command                                 |
+| ----------- | --------------------------------------- |
+| Claude Code | `/nightgauge:assess-epic <epic-number>` |
+| Copilot     | Invoke via Agent Skills extension       |
+| Cursor      | Run via Agent Skills or direct SKILL.md |
+| Headless    | `claude -p "/nightgauge:assess-epic"`   |
 
 ## Arguments
 

@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 // Regression coverage for #354.
@@ -353,3 +355,41 @@ func flagNameFor(cmdName string) string {
 	}
 	return ""
 }
+
+// TestResolveSanitizationMode_FollowsOptIn pins #2765 / ADR-021: a repository
+// that never opted in warns, an opted-in one gets the BLOCK default when it
+// configures nothing, keeps an explicit mode, and blocks on a config it cannot
+// load. Pre-#2765 every row below except "explicit warn" returned warn.
+func TestResolveSanitizationMode_FollowsOptIn(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cases := []struct {
+		name   string
+		config *string
+		want   config.SanitizationMode
+	}{
+		{"not opted in", nil, config.SanitizationModeWarn},
+		{"opted in, no sanitization block", sanitizeConfigText("owner: acme\n"), config.SanitizationModeBlock},
+		{"opted in, explicit warn", sanitizeConfigText("owner: acme\nsanitization:\n  mode: warn\n"), config.SanitizationModeWarn},
+		{"opted in, unreadable config", sanitizeConfigText("sanitization: [unterminated\n"), config.SanitizationModeBlock},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.config != nil {
+				path := config.ProjectConfigPath(dir)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(*tc.config), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Chdir(dir)
+			if got := resolveSanitizationMode(); got != tc.want {
+				t.Fatalf("resolveSanitizationMode() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func sanitizeConfigText(s string) *string { return &s }

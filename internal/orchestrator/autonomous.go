@@ -1161,6 +1161,10 @@ type AutonomousScheduler struct {
 	// is what made a retrying run indistinguishable from an idle one.
 	retryBackoff map[string]retryPlan
 
+	// blockedFindingLogged de-duplicates the blocked-finding skip log (#2914):
+	// key "repo#number" -> the finding identity last logged. Guarded by mu.
+	blockedFindingLogged map[string]string
+
 	// conflictRestartCount tracks how many times each issue hit the legacy
 	// fresh-branch conflict-restart path. As of #4072 the primary conflict path
 	// is the BRANCH-PRESERVING conflict-recovery loop: pr-merge captures the
@@ -4318,10 +4322,6 @@ type CandidateItem struct {
 	OpenPRNumber int
 }
 
-// isWorkCompleteStatus returns true when the board status says the issue's
-// pipeline work is waiting on review. Currently this covers "In review". It
-// is not evidence of anything a dependent can use: evaluateDeps keys on issue
-// state, and an OPEN issue in this status still blocks (#2706).
 // repoContribution is one repo's contribution to a prioritize pass: how many
 // graph nodes it owns, how many are open, and how many survived every gate to
 // become dispatchable.
@@ -4367,6 +4367,10 @@ func (as *AutonomousScheduler) logRepoContributions(contrib map[string]*repoCont
 	}
 }
 
+// isWorkCompleteStatus returns true when the board status says the issue's
+// pipeline work is waiting on review. Currently this covers "In review". It
+// is not evidence of anything a dependent can use: evaluateDeps keys on issue
+// state, and an OPEN issue in this status still blocks (#2706).
 func isWorkCompleteStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
 	return s == "in review"
@@ -4882,6 +4886,9 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// auto-resolve retracts cards for issues that closed or moved.
 	var selfRepoObserved []string
 
+	blockedFindingSeen := make(map[string]bool)
+	defer as.forgetClearedBlockedFindings(blockedFindingSeen)
+
 	var candidates []CandidateItem
 	for key, node := range g.Nodes {
 		// Skip nodes not in the filtered repo set (--repos restriction).
@@ -4920,6 +4927,17 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		if hold, held := humanHeldSet[key]; held {
 			bump("human-hold:" + hold)
 			log.Printf("autonomous: skipping %s — held for a human decision, awaiting %s; no rescan releases it", key, hold)
+			continue
+		}
+
+		// Skip issues with an unresolved out-of-scope finding (#2914). Pickup
+		// would defer them for zero tokens, but each lap still dispatched a run
+		// and posted a chat message. Re-read every pass, so clearing the
+		// finding re-admits the issue on the next cycle.
+		if rec, found := as.blockedFindingFor(node.Repo, node.Number); found {
+			blockedFindingSeen[key] = true
+			bump("blocked-finding")
+			as.noteBlockedFindingSkip(key, rec)
 			continue
 		}
 
@@ -6776,10 +6794,9 @@ func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo 
 // moveIssueToInProgress moves a sidelined issue's board status to "In
 // progress" — the truthful state when no PR backs it (e.g. the
 // architecture-approval gate halted before feature-dev ever ran). Modeled
-// after moveIssueToDone/moveIssueToInReview. Unlike "In review" this status
-// is never treated as satisfying a blockedBy edge (isWorkCompleteStatus only
-// matches "in review"), so dependents correctly stay blocked. Best-effort: a
-// network failure logs a warning.
+// after moveIssueToDone/moveIssueToInReview. No board status satisfies a
+// blockedBy edge, so dependents stay blocked while the issue is open (#2706).
+// Best-effort: a network failure logs a warning.
 func (as *AutonomousScheduler) moveIssueToInProgress(parent context.Context, repo string, issue int, reason string) {
 	owner, repoName := splitOwnerRepo(repo)
 	var projectNum int

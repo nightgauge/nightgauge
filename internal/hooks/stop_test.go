@@ -445,3 +445,71 @@ func TestParsePlanFile_RecordsFenceIndentAndHeadings(t *testing.T) {
 		t.Errorf("Tasks =\n%+v\nwant\n%+v", status.Tasks, want)
 	}
 }
+
+// writeIncompletePlan opts dir in (unless optedIn is false), puts it on an
+// issue branch and writes an issue plan with one open task.
+func writeIncompletePlan(t *testing.T, dir string, optedIn bool) {
+	t.Helper()
+	planDir := layouttest.PlansDir(t, dir)
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setupFakeBranch(t, dir, "feat/77-claude-stop")
+	if err := os.WriteFile(filepath.Join(planDir, "77-claude-stop.md"), []byte("# Plan\n\n- [ ] Open work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if optedIn {
+		optIn(t, dir)
+	}
+}
+
+// TestEvaluateClaudeStopHook pins the #2765 scope: the Claude Stop hook blocks
+// only in an opted-in repository, and never while stop_hook_active is set.
+func TestEvaluateClaudeStopHook(t *testing.T) {
+	t.Run("opted in with open tasks blocks", func(t *testing.T) {
+		dir := t.TempDir()
+		writeIncompletePlan(t, dir, true)
+		out, err := EvaluateClaudeStopHook(dir, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(out, &got); err != nil || got["decision"] != "block" {
+			t.Fatalf("want a block decision, got %q (err %v)", out, err)
+		}
+	})
+
+	t.Run("not opted in emits nothing even with a stray PLAN.md", func(t *testing.T) {
+		dir := t.TempDir()
+		layouttest.Init(t, dir)
+		if err := os.WriteFile(filepath.Join(dir, "PLAN.md"), []byte("- [ ] a\n- [ ] b\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if base, _ := EvaluateStopHookOutput(dir); len(base) == 0 {
+			t.Fatal("premise: the unscoped evaluator blocks on this PLAN.md")
+		}
+		out, err := EvaluateClaudeStopHook(dir, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out) != 0 {
+			t.Fatalf("a repository without .nightgauge/config.yaml must never be blocked, got %q", out)
+		}
+	})
+
+	t.Run("stop_hook_active emits nothing but still writes the sentinel", func(t *testing.T) {
+		dir := t.TempDir()
+		writeIncompletePlan(t, dir, true)
+		out, err := EvaluateClaudeStopHook(dir, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out) != 0 {
+			t.Fatalf("stop_hook_active must not block again (loop guard), got %q", out)
+		}
+		sentinel := filepath.Join(layouttest.PipelineDir(t, dir), "stop-hook-status-77.json")
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("the scheduler's recovery sentinel must still be written: %v", err)
+		}
+	})
+}

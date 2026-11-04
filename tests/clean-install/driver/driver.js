@@ -332,26 +332,45 @@ async function watchRun(locations, issueNumber, wallClockMs, costCapUsd) {
     history = findHistoryRecord(historyDir, issueNumber);
   }
 
-  // The per-run snapshot is removed once the run latches terminal, so the last
-  // poll can predate the fields pr-merge writes (prUrl, mergedCommitSha). The
-  // survival record (pipeline/survival-records.jsonl) is written by the merge
-  // itself and names the PR and merge commit, so it is the durable evidence.
+  // pr-create writes pr-{N}.json (pr_number, pr_url, status) and pr-merge
+  // updates it, so it is the first PR evidence (#2906). The per-run snapshot
+  // is removed once the run latches terminal, so the last poll can predate
+  // the fields pr-merge writes (prUrl, mergedCommitSha); the survival record
+  // (pipeline/survival-records.jsonl) is written by the merge itself and
+  // names the PR and merge commit.
+  const prContext = findPrContext(pipelineDir, issueNumber);
   const survival = findSurvivalRecord(pipelineDir, issueNumber);
   const prUrl =
+    (prContext && prContext.pr_url) ||
     (runtime && runtime.prUrl) ||
     (survival && survival.repo && survival.pr_number
       ? `https://github.com/${survival.repo}/pull/${survival.pr_number}`
       : undefined);
+  const prNumber =
+    (prContext && prContext.pr_number) ||
+    (survival && survival.pr_number) ||
+    prNumberFromUrl(prUrl);
+  const prStatus = (prContext && prContext.status) || (survival ? "merged" : undefined);
   const mergedCommitSha =
     (runtime && runtime.mergedCommitSha) || (survival && survival.merge_commit_sha);
+  const prEvidence =
+    prContext && prContext.pr_url
+      ? "pr-context"
+      : runtime && runtime.prUrl
+        ? "runtime"
+        : survival
+          ? "survival-record"
+          : "none";
 
   report.run = {
     runId: runtime && runtime.runId,
     runtimeFile,
     terminalOutcome: runtime && runtime.terminalOutcome,
     prUrl,
+    prNumber,
+    prStatus,
     mergedCommitSha,
-    prEvidence: runtime && runtime.prUrl ? "runtime" : survival ? "survival-record" : "none",
+    prEvidence,
     totalCostUsd: runtime && runtime.totalCostUsd,
     startedAt: runtime && runtime.startedAt,
     terminalAt: runtime && runtime.terminalAt,
@@ -386,11 +405,11 @@ async function watchRun(locations, issueNumber, wallClockMs, costCapUsd) {
     )}`
   );
   assert(
-    "run record carries a PR (runtime prUrl or survival record)",
+    "run record carries a PR (pr-{N}.json, runtime prUrl or survival record)",
     Boolean(prUrl),
     prUrl
-      ? `${prUrl} (${report.run.prEvidence})`
-      : "none in runtime snapshot or survival-records.jsonl"
+      ? `#${prNumber} ${prUrl} (${prStatus || "state unknown"}, ${prEvidence})`
+      : `none in pr-${issueNumber}.json, runtime snapshot or survival-records.jsonl`
   );
   const cost = Number(
     (history && history.tokens && history.tokens.estimated_cost_usd) ||
@@ -400,6 +419,18 @@ async function watchRun(locations, issueNumber, wallClockMs, costCapUsd) {
   assert("recorded cost is non-zero", cost > 0, `${cost} USD`);
   const duration = Number((history && history.total_duration_ms) || 0);
   assert("recorded duration is non-zero", duration > 0, `${duration} ms`);
+}
+
+/** The PR context pr-create writes and pr-merge updates (pr-{N}.json). */
+function findPrContext(pipelineDir, issueNumber) {
+  const ctx = readJson(path.join(pipelineDir, `pr-${issueNumber}.json`));
+  return ctx && typeof ctx === "object" && ctx.pr_url ? ctx : undefined;
+}
+
+/** The trailing number of a `.../pull/N` URL, or undefined. */
+function prNumberFromUrl(url) {
+  const m = /\/pull\/(\d+)\b/.exec(url || "");
+  return m ? Number(m[1]) : undefined;
 }
 
 /** The survival record the merge writes (kind=survival, one line per merged PR). */

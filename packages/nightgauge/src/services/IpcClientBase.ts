@@ -33,6 +33,7 @@ import { redactSecrets } from "../utils/redaction";
 import type { SanitizationMode } from "../config/schema";
 import { logDiagnosticMirror } from "../utils/logger";
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
+import { withoutLaunchingSessionEnv } from "../utils/launchingSessionEnv";
 import {
   readPlatformUrlOverride,
   PLATFORM_URL_ENV_VAR,
@@ -2153,7 +2154,9 @@ export abstract class IpcClientBase implements vscode.Disposable {
     }
     this.log("Starting Go backend: " + this.binaryPath + " " + args.join(" "));
 
-    const env = { ...process.env };
+    // The daemon starts clean of the launching session's residue (#2848),
+    // so every stage it spawns does too.
+    const env = withoutLaunchingSessionEnv();
     // Always use the resolved token — config-based tokens take priority over
     // the GITHUB_TOKEN env var (which is step 3 in the priority chain).
     // When the token was resolved from the env var itself, this is a no-op.

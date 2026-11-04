@@ -84,12 +84,12 @@ analysis, and optional automated remediation.
 
 ## Invocation
 
-| Tool           | Command                                                   |
-| -------------- | --------------------------------------------------------- |
-| Claude Code    | `/nightgauge:product-audit [options]`                     |
-| GitHub Copilot | Invoke via Agent Skills extension                         |
-| Cursor         | Run via Agent Skills or direct SKILL.md                   |
-| Standalone     | `claude --skill skills/nightgauge-product-audit/SKILL.md` |
+| Tool           | Command                                 |
+| -------------- | --------------------------------------- |
+| Claude Code    | `/nightgauge:product-audit [options]`   |
+| GitHub Copilot | Invoke via Agent Skills extension       |
+| Cursor         | Run via Agent Skills or direct SKILL.md |
+| Headless       | `claude -p "/nightgauge:product-audit"` |
 
 ## Arguments
 
@@ -428,8 +428,9 @@ message. Each subagent writes its findings to
 2. If `--quick` and coverage reports exist and are fresh (< 24h), use cached.
    Otherwise run coverage (with timeout):
    ```bash
-   timeout 90 npx -w packages/nightgauge vitest run --coverage --reporter=json 2>/dev/null
-   timeout 90 npx -w @nightgauge/sdk vitest run --coverage --reporter=json 2>/dev/null
+   # Use the project's detected test command (Phase 1) in single-run mode with
+   # coverage, once per workspace that has tests. Example for a vitest workspace:
+   timeout 90 npx -w <workspace> vitest run --coverage --reporter=json 2>/dev/null
    ```
 3. Parse coverage reports for files below threshold:
    ```bash
@@ -771,8 +772,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run Product Audit
         run: |
-          claude --skill skills/nightgauge-product-audit/SKILL.md \
-            --ci --threshold ${{ github.event.inputs.threshold || '75' }} \
+          claude -p "/nightgauge:product-audit --ci --threshold ${{ github.event.inputs.threshold || '75' }}" \
             --output-format json
       - name: Upload Audit Report
         if: always()

@@ -36,19 +36,31 @@ Both copy only what is inside SKILLS: a symlink is installed only when it
 resolves to a regular file inside the tree, and it lands as a regular file. A
 link that escapes the tree (to ~/.ssh, say), dangles, or names a directory is
 skipped and named in a warning. Warnings go to stderr.
+
+Neither copies a skill's top-level CHANGELOG.md or tests/ (#2762): the VSIX
+bundle (packages/nightgauge/scripts/bundle-marketplace.sh) leaves them out,
+and both installers must produce the same tree.
 """
 
 import argparse
 import os
+import posixpath
 import shutil
 import stat
 import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from mirror_links import SKILLS_REL, release_ref, rewrite_identity_dir  # noqa: E402
+
 INSTALL_MARKER = ".nightgauge-installed"
 ADOPTED_SUFFIX = ".nightgauge-adopted"
 EXIT_SKIPPED = 3
+# Top-level entries of a skill directory that no install ships. The Go half is
+# skillrender.BundleExcludes; the extension's is SKILL_EXCLUDES in bundledSkills.ts.
+SKILL_EXCLUDES = frozenset({"CHANGELOG.md", "tests"})
 GIT_LOCATION_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
 INSTALL_MARKER_TEXT = (
     "Installed by Nightgauge, which replaces this directory when it installs "
@@ -105,12 +117,12 @@ def resolve_contained(path, root, label):
     return real, st
 
 
-def copy_contained(source_dir, target_dir, root, label):
+def copy_contained(source_dir, target_dir, root, label, exclude=frozenset()):
     """Copy a real directory's contents into target_dir (which exists). The
     marker name belongs to the installer, so a source entry by that name is
-    never copied over it."""
+    never copied over it. Names in exclude are skipped at this level only."""
     for name in sorted(os.listdir(source_dir)):
-        if name == INSTALL_MARKER:
+        if name == INSTALL_MARKER or name in exclude:
             continue
         entry = resolve_contained(os.path.join(source_dir, name), root, label)
         if entry is None:
@@ -122,6 +134,11 @@ def copy_contained(source_dir, target_dir, root, label):
             copy_contained(real, target, root, label)
         else:
             shutil.copy2(real, target)
+
+
+def skill_excludes(name):
+    """_shared ships whole; a skill directory ships without SKILL_EXCLUDES."""
+    return frozenset() if name == "_shared" else SKILL_EXCLUDES
 
 
 def is_real_dir(path):
@@ -245,6 +262,16 @@ def summary(label, installed, total, skipped, adopted, removed):
     return line
 
 
+def contain_links(target, rel, ref):
+    """Turn links that leave the installed tree into GitHub URLs (#2764).
+
+    An installed skill has no `docs/` beside it, so `../../docs/X.md` is dead.
+    This is the rewrite bundle-marketplace.sh applies to dist/skills, so the
+    extension and this script still install the same bytes.
+    """
+    rewrite_identity_dir(target, posixpath.join(SKILLS_REL, rel.replace(os.sep, "/")), ref)
+
+
 def install(args):
     root = os.path.realpath(args.source)
     checkout = os.path.realpath(args.checkout)
@@ -260,6 +287,7 @@ def install(args):
     aside_root = os.path.join(real_dest + ADOPTED_SUFFIX,
                               time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
     os.makedirs(args.dest, exist_ok=True)
+    ref = release_ref(root)
     eligible = set()
     installed = skipped = adopted = 0
     for name in sorted(os.listdir(root)):
@@ -300,7 +328,8 @@ def install(args):
         # as Nightgauge's next time.
         with open(os.path.join(target, INSTALL_MARKER), "w", encoding="utf-8") as f:
             f.write(INSTALL_MARKER_TEXT)
-        copy_contained(entry[0], target, root, args.label)
+        copy_contained(entry[0], target, root, args.label, skill_excludes(name))
+        contain_links(target, name, ref)
         installed += 1
     # With no eligible source the tree is broken, not empty of skills: pruning
     # against it would delete every Nightgauge skill.
@@ -321,7 +350,9 @@ def copy(args):
     if os.path.lexists(args.to_dir):
         shutil.rmtree(args.to_dir)
     os.makedirs(args.to_dir)
-    copy_contained(source, args.to_dir, root, args.label)
+    copy_contained(source, args.to_dir, root, args.label,
+                   skill_excludes(os.path.basename(source)))
+    contain_links(args.to_dir, os.path.relpath(source, root), release_ref(root))
     return 0
 
 

@@ -194,7 +194,8 @@ export interface ProgressMonitorConfig {
    * the last productive signal: a full `ci-local.sh` takes ~20 minutes, so a
    * gate started after a few minutes of rebasing outlived the
    * `externalProgressCeilingMs` window and was killed mid-run on #1501.
-   * Default 2_700_000 (45 minutes). 0 removes the per-task bound, leaving
+   * Default {@link DEFAULT_BACKGROUND_TASK_CEILING_MS} (90 minutes, Issue
+   * #2694). 0 removes the per-task bound, leaving
    * background tasks under `externalProgressCeilingMs` like other sources.
    */
   backgroundTaskCeilingMs?: number;
@@ -520,6 +521,16 @@ export class ProgressMonitor {
    * clock moves by the outage; the activity clock restarts, because a shift
    * alone could leave a clock already stale before the outage only seconds of
    * window. Each restore therefore grants one activity window.
+   *
+   * A flapping connection cannot chain those windows into an immortal stage
+   * (#2773 review). With the default OfflineManager (a 60 s health check,
+   * offline after 3 consecutive failures) a resume is followed by at least
+   * three online minutes, in which kill checks run, before the next outage can
+   * be declared: one tick to fail into `degraded`, two more to reach
+   * `offline`. That outlasts the window a restore grants under the default
+   * `no_progress_window_ms` (2 minutes), so the window expires between
+   * outages. A slower health check or a wider window can shift that, and the
+   * stage hard cap, which no restore moves, still bounds the stage.
    */
   resumeAfterOffline(offlineMs: number): void {
     const now = Date.now();
@@ -638,10 +649,12 @@ export class ProgressMonitor {
     }
 
     const external = this.config.externalProgressCeilingMs;
+    // Sources live now (#2773 review): a declared log that has vanished no
+    // longer counts, just as a reaped pid does not.
     const hadSource =
       this.backgroundTasks > 0 ||
       this.inFlightToolCalls > 0 ||
-      this.declaredLogs.size > 0 ||
+      [...this.declaredLogs.keys()].some((path) => this.probe.fileSize(path) !== null) ||
       [...this.declaredPids.keys()].some((pid) => this.probe.isProcessAlive(pid));
     if (external > 0 && msSinceLastProgress > external && hadSource) {
       return {
@@ -692,7 +705,12 @@ export class ProgressMonitor {
 
     for (const [path, lastSize] of [...this.declaredLogs]) {
       const size = this.probe.fileSize(path);
-      if (size === null) continue;
+      if (size === null) {
+        // Gone — drop it, as a reaped pid is dropped (#2773 review).
+        this.declaredLogs.delete(path);
+        this.liveCheckLogSizes.delete(path);
+        continue;
+      }
       if (size > lastSize) {
         this.declaredLogs.set(path, size);
         reasons.push(`progress log ${path} grew by ${size - lastSize}B`);
@@ -870,10 +888,11 @@ export class ProgressMonitor {
       // tool count alone; the live child is the discriminator (#1488).
       !external.active;
 
-    // Only the two kills below can follow an expired deferral (Issue #2694).
-    const expired = windowExceeded ? this.expiredDeferral(msSinceLastProgress) : undefined;
-
+    // Only the kills below can follow an expired deferral (Issue #2694). It
+    // probes pids and logs, so it is computed at a kill site, not every tick
+    // (#2773 review).
     if (churnDetected && !this.config.observeOnly) {
+      const expired = this.expiredDeferral(msSinceLastProgress);
       return {
         shouldKill: true,
         shouldWarn: false,
@@ -883,7 +902,10 @@ export class ProgressMonitor {
           `(threshold: ${this.config.churnToolThreshold}, Issue #3851)` +
           (expired ? `; ${expired.sentence}` : ""),
         msSinceLastProgress,
-        ceiling: expired?.ceiling ?? {
+        // A churn kill is recorded as churn, with its tool-count limit, even
+        // when a deferral expired behind it (#2773 review): the tool count is
+        // what fired. The expired deferral is named in the reason.
+        ceiling: {
           name: "progress-churn-tools",
           limit: `${this.config.churnToolThreshold} tools`,
           derivation:
@@ -946,6 +968,7 @@ export class ProgressMonitor {
       };
     }
 
+    const expired = this.expiredDeferral(msSinceLastProgress);
     const reason =
       `No productive progress (commit / new file / phase / CI) for ` +
       `${Math.round(msSinceLastProgress / 1000)}s ` +

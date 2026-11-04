@@ -23,10 +23,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
+  # The three slowest self-tests run in their own jobs, in parallel, in the
+  # merge queue only (#2923). Run in this job they took it to 13-17 minutes
+  # against a 20-minute limit, and a slow runner cancelled the merge. Measured
+  # merge-group p95 over 10 runs: this job ~7.5 min, mirror drift 136s,
+  # ci-local concurrency 171s, install targets 303s. Each limit is >=2x p95.
+  lint-core:
+    name: lint core
     runs-on: ubuntu-latest
-    # The steps total about 15 minutes on a good run, so a 15-minute budget
-    # cancels the job in whichever step is running when it expires (#2759).
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -165,21 +169,6 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           NIGHTGAUGE_ACTION_PIN_CACHE: ${{ runner.temp }}/action-pins.json
         run: python3 scripts/check-action-pins.py
-      # Proves the gate below still FAILS CLOSED rather than passing vacuously
-      # — the defect #539 exists to fix — and that it fails only on the
-      # invariant it names (#546). Without this step, reverting the gate to
-      # `git diff --exit-code` or to `exit 0` produces a fully green build,
-      # which is #529 all over again.
-      - name: Mirror drift gate self-test
-        if: ${{ github.event_name != 'pull_request' }}
-        run: bash scripts/test-mirror-drift-gate.sh
-      # The local gate's own concurrency and failure-reporting contract (#1983).
-      # Runs here too because the helpers it asserts are what every other step's
-      # failure is read through, and because a gate that reports a red it cannot
-      # explain trains people to dismiss reds.
-      - name: ci-local.sh concurrency and failure-reporting contract
-        if: ${{ github.event_name != 'pull_request' }}
-        run: bash scripts/test-ci-local-concurrency.sh
       # The local gate's change-scoping contract (#1985). `--changed` can remove
       # the two Go suites from a local run, and this is what holds the rule that
       # a skipped step is reported as a third state and never as a pass. CI is
@@ -196,9 +185,6 @@ jobs:
       # When the gate reuses a passed tree, and what every run records (#2784).
       - name: ci-local.sh gate ledger reuse
         run: bash scripts/test-ci-local-gate-reuse.sh
-      - name: Agent-skill install target regression suite
-        if: ${{ github.event_name != 'pull_request' }}
-        run: bash scripts/test-install-agent-skills-targets.sh
       # Read-only, and free to sit anywhere in this job: `--check-mirror`
       # regenerates into a temp destination and compares the two trees — paths,
       # contents, symlink targets and the executable bit git tracks — so it
@@ -217,6 +203,10 @@ jobs:
         run: bash scripts/test-mirror-link-check.sh
       - name: Mirror link integrity
         run: python3 scripts/check-mirror-links.py
+      # #2764: Claude Code never expands `<!-- include: -->`, so the generator
+      # does; this proves it still does, and that a missing target fails it.
+      - name: Mirror include expansion regression suite
+        run: bash scripts/test-mirror-includes.sh
       # CLA gate regression suite (#976): .github/scripts/cla-check.test.mjs
       # existed but no workflow, npm script or ci-local.sh step ever ran it, so
       # it was structurally incapable of going red. It spawns the real
@@ -243,6 +233,93 @@ jobs:
       # run ci-local.sh, which is exactly why nothing noticed before.
       - name: ci-local.sh step inventory
         run: bash scripts/test-ci-local-inventory.sh
+
+  # Proves the mirror drift gate (`install-agent-skills.sh --check-mirror` in
+  # lint core) still FAILS CLOSED rather than passing vacuously — the defect
+  # #539 exists to fix — and that it fails only on the invariant it names
+  # (#546). Without it, reverting the gate to `git diff --exit-code` or to
+  # `exit 0` produces a fully green build, which is #529 all over again.
+  mirror-drift-suite:
+    name: "lint suite: mirror drift"
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Mirror drift gate self-test
+        run: bash scripts/test-mirror-drift-gate.sh
+
+  # The local gate's own concurrency and failure-reporting contract (#1983).
+  # Runs here too because the helpers it asserts are what every other step's
+  # failure is read through, and because a gate that reports a red it cannot
+  # explain trains people to dismiss reds.
+  ci-local-contract-suite:
+    name: "lint suite: ci-local concurrency"
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci
+      - name: ci-local.sh concurrency and failure-reporting contract
+        run: bash scripts/test-ci-local-concurrency.sh
+
+  install-targets-suite:
+    name: "lint suite: agent-skill install targets"
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Agent-skill install target regression suite
+        run: bash scripts/test-install-agent-skills-targets.sh
+
+  # The required `lint` context (.github/rulesets/main-branch.json only records
+  # the live ruleset). It passes only when every job above succeeded or was
+  # skipped: the suites skip on pull_request. `!cancelled()` and not a bare
+  # `needs:`, which would turn a failed job into a skipped `lint`, and a
+  # skipped required check reads as success.
+  lint:
+    name: lint
+    needs: [lint-core, mirror-drift-suite, ci-local-contract-suite, install-targets-suite]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every lint job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          failed=$(jq -r 'to_entries[]
+            | select(.value.result != "success" and .value.result != "skipped")
+            | "\(.key): \(.value.result)"' <<<"$RESULTS")
+          if [ -n "$failed" ]; then
+            { echo "### lint failed"; echo; printf '%s\n' "$failed" | sed 's/^/- /'; } \
+              >> "$GITHUB_STEP_SUMMARY"
+            printf 'lint job did not pass:\n%s\n' "$failed" >&2
+            exit 1
+          fi
+          echo "every lint job passed or was skipped"
 
   link-check:
     # Validates cross-document reference integrity across root *.md + docs/**

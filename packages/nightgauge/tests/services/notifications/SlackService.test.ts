@@ -161,10 +161,35 @@ describe("SlackService — delivery", () => {
     delete process.env.SLACK_BOT_TOKEN;
   });
 
+  // #2914: a run that defers at issue-pickup must post nothing.
+  it("makes no request when a pickup-only run finalizes deferred", async () => {
+    const fetchMock = slackOk();
+    const svc = newService(fetchMock, logger, undefined, makeState(42, "deferred"));
+    svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineUpdate({ issueNumber: 42, state: makeState(42, "deferred") });
+    svc.onPipelineFinal({ issueNumber: 42, state: makeState(42, "deferred") });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fetchMock).not.toHaveBeenCalled();
+    svc.dispose();
+  });
+
+  it("still posts once when pickup itself fails", async () => {
+    const fetchMock = slackOk();
+    const svc = newService(fetchMock, logger, undefined, makeState(42, "failed"));
+    svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineFinal({ issueNumber: 42, state: makeState(42, "failed") });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    const posts = fetchMock.mock.calls.filter((c: unknown[]) => methodOf(c) === "chat.postMessage");
+    expect(posts).toHaveLength(1);
+    svc.dispose();
+  });
+
   it("posts via chat.postMessage with the bot token when a run starts", async () => {
     const fetchMock = slackOk();
     const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
 
     const call = fetchMock.mock.calls[0];
@@ -194,6 +219,7 @@ describe("SlackService — delivery", () => {
     const fetchMock = slackOk();
     const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
 
     const posted = logger.info.mock.calls.find((c: unknown[]) =>
@@ -209,6 +235,7 @@ describe("SlackService — delivery", () => {
     const fetchMock = slackOk();
     const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     svc.onPipelineUpdate({ issueNumber: 42, state: makeState(42, "productive") });
@@ -228,6 +255,7 @@ describe("SlackService — delivery", () => {
     const fetchMock = slackOk({ ok: false, error: "channel_not_found" });
     const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await vi.waitFor(() => expect(logger.warn).toHaveBeenCalled());
 
     const warned = JSON.stringify(logger.warn.mock.calls);
@@ -245,6 +273,7 @@ describe("SlackService — delivery", () => {
     const fetchMock = slackOk({ ok: false, error: "missing_scope" });
     const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await vi.waitFor(() => expect(logger.warn).toHaveBeenCalled());
 
     const warned = JSON.stringify(logger.warn.mock.calls);
@@ -257,6 +286,7 @@ describe("SlackService — delivery", () => {
     const fetchMock = slackOk({ ok: true });
     const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     // An intermediate update must not post in post-only mode.
@@ -281,6 +311,7 @@ describe("SlackService — delivery", () => {
       const fetchMock = slackOk();
       const svc = newService(fetchMock, logger, bridge);
       svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+      svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
       await new Promise((r) => setTimeout(r, 20));
       expect(fetchMock, label).not.toHaveBeenCalled();
       svc.dispose();
@@ -297,6 +328,7 @@ describe("SlackService — delivery", () => {
     const fetchMock = slackOk();
     const svc = newService(fetchMock, logger, slackConfigBridge());
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(authOf(fetchMock.mock.calls[0])).toBe(`Bearer ${BOT_TOKEN}`);
     svc.dispose();
@@ -314,6 +346,7 @@ describe("SlackService — delivery", () => {
       slackConfigBridge({ bot_token_env: "xoxb-" + TOKEN_TAIL })
     );
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await new Promise((r) => setTimeout(r, 20));
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -336,6 +369,7 @@ describe("SlackService — delivery", () => {
       const fetchMock = slackOk();
       const svc = newService(fetchMock, logger, bridge);
       svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+      svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
       await new Promise((r) => setTimeout(r, 20));
 
       expect(fetchMock, label).not.toHaveBeenCalled();
@@ -351,6 +385,7 @@ describe("SlackService — delivery", () => {
     const fetchMock = slackOk();
     const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(authOf(fetchMock.mock.calls[0])).toBe(`Bearer ${BOT_TOKEN}`);
     svc.dispose();
@@ -361,6 +396,7 @@ describe("SlackService — delivery", () => {
     const fetchMock = slackOk();
     const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchMock).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
@@ -375,6 +411,7 @@ describe("SlackService — delivery", () => {
     await expect(
       (async () => {
         svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+        svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
         await new Promise((r) => setTimeout(r, 1500));
       })()
     ).resolves.toBeUndefined();
@@ -389,6 +426,7 @@ describe("SlackService — delivery", () => {
     });
     const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    svc.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     await new Promise((r) => setTimeout(r, 1500));
 
     const logged = JSON.stringify([
@@ -462,7 +500,9 @@ describe("SlackService — same issue number in two repositories (#2408)", () =>
     for (const d of a.disposers) expect(d).not.toHaveBeenCalled();
 
     a.stageStart[0]({ stage: "issue-pickup", issueNumber: 21 });
+    a.stageStart[0]({ stage: "feature-planning", issueNumber: 21 });
     b.stageStart[0]({ stage: "issue-pickup", issueNumber: 21 });
+    b.stageStart[0]({ stage: "feature-planning", issueNumber: 21 });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls.map(methodOf)).toEqual(["chat.postMessage", "chat.postMessage"]);
 
@@ -480,6 +520,7 @@ describe("SlackService — same issue number in two repositories (#2408)", () =>
 
     svc.subscribeToSlot(21, a.svc as never);
     a.stageStart[0]({ stage: "issue-pickup", issueNumber: 21 });
+    a.stageStart[0]({ stage: "feature-planning", issueNumber: 21 });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     svc.unsubscribeFromSlot(21);

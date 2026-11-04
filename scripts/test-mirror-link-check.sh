@@ -142,6 +142,36 @@ else
   ok "(f) nonexistent mirror directory is an error, not a pass"
 fi
 
+# --- (g) an existing target outside the shipped root is caught (#2764) -----
+# `../../../../docs/GO_BINARY.md` resolves on a checkout (the seed copies
+# docs/), so an existence-only gate passes it. An installed plugin carries
+# claude-plugins/nightgauge/ alone, so the link is dead on every user's machine.
+seed
+TARGET="$TMP/$MIRROR_REL/pipeline-audit/SKILL.md"
+printf '\n[go](../../../../docs/GO_BINARY.md)\n' >>"$TARGET"
+run_gate
+if grep -qF "outside the shipped root" <<<"$OUT" &&
+  grep -qF "pipeline-audit/SKILL.md: ../../../../docs/GO_BINARY.md" <<<"$OUT"; then
+  ok "(g) existing target outside the plugin root is reported"
+else
+  nope "(g) gate passed a link that escapes the shipped root; gate said:"
+  echo "$OUT" | tail -10
+fi
+rm -rf "$TMP"
+
+# --- (h) an absolute URL is not a relative link and passes -----------------
+# The generator's fix for (g) is a GitHub URL; the gate must accept it.
+seed
+TARGET="$TMP/$MIRROR_REL/pipeline-audit/SKILL.md"
+printf '\n[go](https://github.com/nightgauge/nightgauge/blob/main/docs/GO_BINARY.md)\n' >>"$TARGET"
+run_gate
+if grep -qF "Mirror link check passed" <<<"$OUT"; then
+  ok "(h) an absolute GitHub URL passes"
+else
+  nope "(h) gate rejected an absolute URL"
+fi
+rm -rf "$TMP"
+
 echo ""
 echo "-------------------------------------------------------------------------"
 if [ "$FAIL" -eq 0 ]; then

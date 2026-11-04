@@ -42,15 +42,6 @@ vi.mock("util", () => ({
   promisify: vi.fn(() => mockExecAsync),
 }));
 
-const REQUIRED_COMMANDS = [
-  "nightgauge-issue-pickup.md",
-  "nightgauge-feature-planning.md",
-  "nightgauge-feature-dev.md",
-  "nightgauge-feature-validate.md",
-  "nightgauge-pr-create.md",
-  "nightgauge-pr-merge.md",
-];
-
 const BUNDLED = "# issue-create (bundled)\n";
 const WORKSPACE = "# issue-create (workspace)\n";
 
@@ -88,13 +79,9 @@ describe("CodexSetupService skill source", () => {
     prevCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
 
-    for (const file of REQUIRED_COMMANDS) {
-      write(path.join(extensionPath, "resources", "codex", "commands", file), `# ${file}\n`);
-    }
-
-    // The fake bundle: the plugin mirror layout the VSIX ships.
-    const bundle = path.join(extensionPath, "dist", "claude-plugins", "nightgauge", "skills");
-    write(path.join(bundle, "issue-create", "SKILL.md"), BUNDLED);
+    // The fake bundle: the canonical tree the VSIX ships under dist/skills.
+    const bundle = path.join(extensionPath, "dist", "skills");
+    write(path.join(bundle, "nightgauge-issue-create", "SKILL.md"), BUNDLED);
     write(path.join(bundle, "_shared", "PREFLIGHT.md"), "# preflight\n");
 
     // The trusted workspace: a skill of its own, and one that shadows a
@@ -130,7 +117,7 @@ describe("CodexSetupService skill source", () => {
   it("default install copies the bundle's skills and not the workspace's", async () => {
     const vscode = await import("vscode");
     vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
-      "Install Codex Commands" as never
+      "Install Codex Skills" as never
     );
 
     await (await makeService()).checkAndPromptSetup();
@@ -142,27 +129,19 @@ describe("CodexSetupService skill source", () => {
     expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
   });
 
-  it("default install copies the bundled Codex commands, never the workspace's", async () => {
-    // Every Codex session loads ~/.codex/commands, so a workspace's
-    // .codex/commands must not reach it: neither its text nor a link it holds.
-    const secret = path.join(tmpRoot, "secret.txt");
-    write(secret, "# a local secret\n");
-    for (const file of REQUIRED_COMMANDS) {
-      write(path.join(workspaceRoot, ".codex", "commands", file), "# FROM WORKSPACE\n");
-    }
-    const linked = path.join(workspaceRoot, ".codex", "commands", "nightgauge-pr-merge.md");
-    fs.rmSync(linked);
-    fs.symlinkSync(secret, linked);
+  it("writes nothing to ~/.codex/commands, which Codex never reads (#2762)", async () => {
+    // The old command files called scripts/run-stage.sh, which the VSIX does
+    // not ship. A workspace's .codex/commands must not reach it either.
+    write(path.join(workspaceRoot, ".codex", "commands", "nightgauge-pr-merge.md"), "# ws\n");
     const vscode = await import("vscode");
     vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
-      "Install Codex Commands" as never
+      "Install Codex Skills" as never
     );
 
     await (await makeService()).checkAndPromptSetup();
 
-    for (const file of REQUIRED_COMMANDS) {
-      expect(fs.readFileSync(path.join(codexHome, "commands", file), "utf8")).toBe(`# ${file}\n`);
-    }
+    expect(fs.existsSync(path.join(skillsDest, "nightgauge-issue-create", "SKILL.md"))).toBe(true);
+    expect(fs.existsSync(path.join(codexHome, "commands"))).toBe(false);
   });
 
   it("the development command refuses an untrusted workspace", async () => {
