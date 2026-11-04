@@ -200,11 +200,10 @@ func isEpicNode(n *depgraph.Node) bool {
 }
 
 // dispatchable mirrors the REAL autonomous dispatch gate so the watchdog cannot
-// drift from it (#4073 review). It reuses the package-local helpers
-// isDispatchableStatus (Ready/Todo/To Do, or Backlog under pickup) and
-// isWorkCompleteStatus (an "In review" dep — PR up, awaiting merge — does NOT
-// block downstream work), and applies the same parent-epic blockedBy cascade the
-// dispatcher does (unless disabled).
+// drift from it (#4073 review). It reuses the package-local helper
+// isDispatchableStatus (Ready/Todo/To Do, or Backlog under pickup) and applies
+// the same parent-epic blockedBy cascade the dispatcher does (unless disabled).
+// An OPEN dep blocks whatever its board status (#2706).
 func dispatchable(n *depgraph.Node, adj map[string][]string, graph *depgraph.Graph, pickupBacklog, disableEpicCascade bool) bool {
 	if n == nil || !strings.EqualFold(n.State, "OPEN") {
 		return false
