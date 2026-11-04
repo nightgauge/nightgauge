@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The merge-queue `lint` check no longer runs out of time. Its three slowest
+  self-tests now run as parallel jobs, each with at least twice its measured
+  run time, and the required `lint` check fails when any of them fails (#2923).
+
 - Codex, Grok and OpenCode skills installed by the VS Code extension now match the ones
   `scripts/install-agent-skills.sh` installs: every skill, `name:` matching its directory, no
   `disable-model-invocation`, and links that resolve. The extension installed them from the
