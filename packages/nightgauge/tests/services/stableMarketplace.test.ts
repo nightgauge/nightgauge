@@ -74,8 +74,7 @@ describe("stableMarketplace", () => {
 
     const second = ensureStableMarketplace(contextFor("1.0.0"));
 
-    expect(first?.recopied).toBe(true);
-    expect(second?.recopied).toBe(false);
+    expect(second?.path).toBe(first?.path);
     expect(fs.readFileSync(skill(second!.path), "utf8")).toBe("local");
   });
 
@@ -86,7 +85,8 @@ describe("stableMarketplace", () => {
 
     const second = ensureStableMarketplace(contextFor("2.0.0"));
 
-    expect(second?.recopied).toBe(true);
+    expect(fs.readFileSync(skill(second!.path), "utf8")).toBe("two");
+    expect(fs.readFileSync(path.join(second!.path, ".nightgauge-version"), "utf8")).toBe("2.0.0\n");
     expect(fs.readdirSync(storage)).toEqual(["claude-marketplace"]);
   });
 

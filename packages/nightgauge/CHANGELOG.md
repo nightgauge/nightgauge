@@ -23,6 +23,9 @@ and this project adheres to
 - The Codex, Grok and Claude Code setup commands now always offer to install or update,
   even with `nightgauge.plugins.autoPrompt` off (#2762).
 
+- The Claude Code plugin is updated again on activation after an extension upgrade or an
+  earlier failed update, until the update succeeds (#2762).
+
 ## [0.8.0] - 2026-11-04
 
 ### Fixed
