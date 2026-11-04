@@ -27,6 +27,19 @@ export const GATE_METRICS_FILE = "gate-metrics.jsonl";
  */
 export const JUDGE_GATE_NAME = "judges" as const;
 
+/**
+ * `error_summary` prefix of the row an interrupted run writes when it stopped
+ * before it returned, so the gate cannot read missing judges as passed.
+ */
+export const JUDGES_INTERRUPTED_MARKER = "[judges-interrupted]";
+
+/**
+ * `error_summary` prefix of the passing row a complete attempt with no judge
+ * verdict writes over an earlier judges row, closing that attempt so an earlier
+ * interrupted marker or failure no longer reads as the latest attempt.
+ */
+export const JUDGES_NONE_MARKER = "[judges-none]";
+
 /** One judge row, as the gate-metrics readers accept it. */
 const JudgeGateRecordSchema = z.object({
   schema_version: z.literal("1"),
@@ -67,7 +80,13 @@ export function gateMetricsFilePath(cwd: string): string {
  * Pass `complete: false` when the run was interrupted (aborted, timed out or
  * threw) before it returned. Its judges are then written without `attempt_id`:
  * a partial set whose finished judges all passed must never supersede an
- * earlier failing attempt.
+ * earlier failing attempt. Every interrupted run also writes one failing
+ * {@link JUDGES_INTERRUPTED_MARKER} row, so judges that never ran are not read
+ * as passed.
+ * Its `attempt_id` is `options.attemptId` when the caller knows the attempt,
+ * else the sole distinct `runId` among the stream's `run` nodes, so a later
+ * complete attempt can supersede it; with none or several it is omitted and the
+ * row trips the gate for good, which fails closed.
  *
  * @param cwd         Any path inside the checkout whose gate-metrics to write.
  * @param issueNumber Issue the run belongs to.
@@ -77,14 +96,24 @@ export async function appendJudgeVerdicts(
   cwd: string,
   issueNumber: number,
   nodes: ReadonlyArray<WorkflowNode | { kind: string }>,
-  options: { complete?: boolean } = {}
+  options: { complete?: boolean; attemptId?: string } = {}
 ): Promise<void> {
   try {
     const stream = nodes as ReadonlyArray<WorkflowNode>;
     const verdicts = stream
       .filter(isJudgeVerdict)
       .sort((a, b) => Number(a.verdict === "pass") - Number(b.verdict === "pass"));
-    if (verdicts.length === 0) return;
+    // An interrupted run's judges are a partial set: whatever finished, the
+    // marker says the rest never ran, so its passes cannot pass the gate.
+    if (options.complete === false) {
+      await appendInterruptedMarker(cwd, issueNumber, stream, options.attemptId);
+    }
+    if (verdicts.length === 0) {
+      if (options.complete !== false && options.attemptId) {
+        await appendNoJudgesRow(cwd, issueNumber, options.attemptId);
+      }
+      return;
+    }
 
     const byId = new Map(stream.map((node) => [node.nodeId, node]));
     const runIds = new Set(
@@ -120,10 +149,83 @@ export async function appendJudgeVerdicts(
       lines.push(JSON.stringify(record) + "\n");
     }
 
-    const filePath = gateMetricsFilePath(cwd);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.appendFile(filePath, lines.join(""), "utf-8");
+    await appendLines(cwd, lines);
   } catch (error) {
     console.warn(`[Nightgauge] Failed to write judge verdicts: ${error}`);
   }
+}
+
+/** Write the failing marker row of a run interrupted before it returned. */
+async function appendInterruptedMarker(
+  cwd: string,
+  issueNumber: number,
+  stream: ReadonlyArray<WorkflowNode>,
+  knownAttemptId: string | undefined
+): Promise<void> {
+  // A run node is emitted once per state change, so count distinct ids.
+  const runIds = new Set(stream.filter(isWorkflowRun).map((run) => run.runId));
+  const [onlyRunId] = runIds;
+  const inferred = runIds.size === 1 && onlyRunId ? onlyRunId : undefined;
+  const record: JudgeGateRecord = {
+    schema_version: "1",
+    timestamp: new Date().toISOString(),
+    issue_number: issueNumber,
+    gate_name: JUDGE_GATE_NAME,
+    result: "fail",
+    error_summary: `${JUDGES_INTERRUPTED_MARKER} feature-validate workflow stopped before every judge returned a verdict`,
+    attempt_id: knownAttemptId || inferred,
+  };
+  const validation = JudgeGateRecordSchema.safeParse(record);
+  if (!validation.success) {
+    console.warn(
+      `[Nightgauge] Invalid interrupted-judges record, not written: ${validation.error.message}`
+    );
+    return;
+  }
+  await appendLines(cwd, [JSON.stringify(record) + "\n"]);
+}
+
+/**
+ * Close a complete attempt that judged nothing, but only over an earlier judges
+ * row for the issue: an issue never judged needs no row, and the gate already
+ * reads its absence as "no judges".
+ */
+async function appendNoJudgesRow(
+  cwd: string,
+  issueNumber: number,
+  attemptId: string
+): Promise<void> {
+  let existing: string;
+  try {
+    existing = await fs.readFile(gateMetricsFilePath(cwd), "utf-8");
+  } catch {
+    return;
+  }
+  const judged = existing.split("\n").some((line) => {
+    try {
+      const row = JSON.parse(line) as { gate_name?: unknown; issue_number?: unknown };
+      return row.gate_name === JUDGE_GATE_NAME && row.issue_number === issueNumber;
+    } catch {
+      return false;
+    }
+  });
+  if (!judged) return;
+  const record: JudgeGateRecord = {
+    schema_version: "1",
+    timestamp: new Date().toISOString(),
+    issue_number: issueNumber,
+    gate_name: JUDGE_GATE_NAME,
+    result: "pass",
+    error_summary: `${JUDGES_NONE_MARKER} feature-validate attempt completed with no judge verdict`,
+    attempt_id: attemptId,
+  };
+  if (!JudgeGateRecordSchema.safeParse(record).success) return;
+  await appendLines(cwd, [JSON.stringify(record) + "\n"]);
+}
+
+/** Append `lines` to the checkout's gate-metrics file in one write. */
+async function appendLines(cwd: string, lines: string[]): Promise<void> {
+  const filePath = gateMetricsFilePath(cwd);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.appendFile(filePath, lines.join(""), "utf-8");
 }

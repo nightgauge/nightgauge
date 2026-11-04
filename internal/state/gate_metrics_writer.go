@@ -33,6 +33,12 @@ const GateMetricsHistoryName = "gate-metrics.jsonl"
 // it refuses the name (#2778).
 const JudgeGateName = "judges"
 
+// JudgesInterruptedMarker prefixes the error_summary of the failing judges row
+// written when a feature-validate run stopped before its judges returned. It
+// mirrors JUDGES_INTERRUPTED_MARKER in the SDK's judgeGateMetrics.ts; the gate
+// releases the marker once a later attempt records a quality-gate verdict (#2880).
+const JudgesInterruptedMarker = "[judges-interrupted]"
+
 // AppendGateMetric appends one quality-gate record to the checkout's
 // health/gate-metrics.jsonl — the canonical signal the
 // deterministic FeatureValidateGate already consumes

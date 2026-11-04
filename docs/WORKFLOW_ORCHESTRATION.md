@@ -373,7 +373,23 @@ of one run joins the attempt instead of replacing it, and the Go gate trips on
 any `result != "pass"` in the latest attempt. A later attempt replaces an earlier
 one, so a retry can clear a failure, and one judge's pass can never erase
 another's fail. A `judges` row with no `attempt_id`, written when the stream has no single owning
-run, is never superseded. A failing record carries the judge's first-line
+run, is never superseded. A run interrupted (aborted, timed out or thrown)
+before it returned has judges that never ran, whatever finished: the writer
+records one failing row whose `error_summary` starts with `[judges-interrupted]`,
+so the gate trips instead of reading the partial set as passed. That row carries
+the attempt's own `runId` from the orchestrator (else the sole distinct `runId`
+among the stream's `run` nodes), so a later complete attempt can supersede it;
+with none it has no `attempt_id` and stands. A complete attempt that judged nothing (a
+judge-less workflow run or a single-agent retry) writes one passing row whose
+`error_summary` starts with `[judges-none]` under its own attempt, but only when
+the issue already has a `judges` row, so a retry can clear an earlier marker.
+The gate does not depend on that close: it also releases a `[judges-interrupted]`
+row once any later row, in file order, records a verdict for a gate other than
+`judges` (build, lint, test). Every completion path writes those rows, including
+a single-agent or orchestration-disabled run, so any completed retry clears the
+marker. Later `judges` rows alone do not, and a marker with no later attempt
+still fails.
+A failing record carries the judge's first-line
 `rationale` as `error_summary` for triage. The writer is non-critical (never
 throws) and writes an attempt in one append: every record must pass the Zod
 schema first, and failures lead the payload, so neither a dropped row nor a torn

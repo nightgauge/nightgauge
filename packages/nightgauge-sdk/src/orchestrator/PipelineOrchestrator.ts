@@ -485,10 +485,13 @@ export class PipelineOrchestrator {
       abortSignal.removeEventListener("abort", onStop);
       // A judge that ran is gate evidence whether the stage passed or failed,
       // so the fold runs on both paths. It never throws, so it cannot change
-      // the stage result (#2880). An interrupted run folds without an attempt.
-      if (collected.length > 0) {
+      // the stage result (#2880). An interrupted run folds without an attempt,
+      // and one stopped before any node still leaves the interrupted marker.
+      // A complete attempt that judged nothing closes an earlier judges attempt.
+      if (stage === "feature-validate") {
         await appendJudgeVerdicts(this.config.cwd, issueNumber, collected, {
           complete: workflowReturned,
+          attemptId: selection.spec.runId,
         });
       }
     }
@@ -804,6 +807,14 @@ export class PipelineOrchestrator {
         abortSignal,
       })) {
         messages.push(message);
+      }
+      // A single-agent retry judges nothing, so it closes any earlier judges
+      // attempt (an interrupted marker included) instead of leaving it latest.
+      if (stage === "feature-validate") {
+        await appendJudgeVerdicts(this.config.cwd, issueNumber, [], {
+          complete: true,
+          attemptId: `sa-${issueNumber}-${stage}-${uuidV7()}`,
+        });
       }
 
       return {

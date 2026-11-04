@@ -20,7 +20,12 @@ changelog, and the release workflow refuses a tag that does not.
   `health/gate-metrics.jsonl` by the SDK pipeline orchestrator, so `FeatureValidateGate`
   sees them. The fold previously had no caller and no judge row was ever recorded. A run that
   is interrupted before it returns records its judges outside any attempt, so a partial
-  all-pass set cannot replace an earlier failing attempt.
+  all-pass set cannot replace an earlier failing attempt. An interrupted run now always
+  records a failing `[judges-interrupted]` row, so the gate no longer reads it
+  as a run with no judges. A later attempt that judges nothing, single-agent included,
+  closes that marker with a passing `[judges-none]` row, and the gate itself ignores the
+  marker once any later attempt records a build, lint or test result, so a completed retry
+  clears it by any path (#2880).
 
 - A review that reaches its round cap on an unchanged tree now writes its cap record, so
   the operator's card lists the findings still standing and names the worktree instead of
