@@ -38,6 +38,7 @@ import {
 } from "./notifications/credentials";
 import type { Notifier, PipelineEventContext } from "./notifications/types";
 import { NotifierStatusTracker } from "./notifications/NotifierStatusTracker";
+import { PickupStartGate } from "./notifications/pickupStartGate";
 import { getBranchDisplayText } from "../views/dashboard/DashboardComponents";
 import {
   DEBOUNCE_MS,
@@ -883,6 +884,12 @@ export function formatLimitsValue(meta: PipelineStateSnapshot["pipeline_meta"]):
 
 // ─── DiscordService ───────────────────────────────────────────────────────────
 
+/** A held issue-pickup start: what is needed to create the embed later. */
+interface HeldPickupStart {
+  stateService?: PipelineStateService;
+  startTime: number;
+}
+
 export class DiscordService implements Notifier, vscode.Disposable {
   /**
    * One entry per active pipeline run, keyed by `slotKey(repoSlug, issueNumber)`.
@@ -892,6 +899,8 @@ export class DiscordService implements Notifier, vscode.Disposable {
    * same key.
    */
   private readonly runs = new Map<string, ActiveRun>();
+  /** issue-pickup starts held until the run proceeds or finalizes (#2914). */
+  private readonly pickupGate = new PickupStartGate<HeldPickupStart>();
 
   /** Debounce / final-PATCH retry timers (one per issue). Shared with
    *  Mattermost / future notifiers via `notifications/transport.ts`. */
@@ -1046,6 +1055,8 @@ export class DiscordService implements Notifier, vscode.Disposable {
     if (run?.isFinal && !run.finalFlushed && run.finalSnapshot) {
       void this.handleRunFinalized(run.finalSnapshot, repoSlug);
     }
+    // A pickup start still held at teardown never proceeded: no message.
+    this.pickupGate.drop(key);
   }
 
   // ─── Fetch helpers ──────────────────────────────────────────────────────────
@@ -1067,6 +1078,11 @@ export class DiscordService implements Notifier, vscode.Disposable {
     const key = slotKey(repoSlugForKey, issueNumber);
 
     if (stage !== "issue-pickup") {
+      // The first later stage proves the run got past pickup: post now (#2914).
+      const held = this.pickupGate.release(key);
+      if (held && !this.runs.has(key)) {
+        await this.createRunMessage(issueNumber, key, held);
+      }
       // Non-first stage: update the existing embed
       this.scheduleUpdate(key);
       return;
@@ -1076,6 +1092,19 @@ export class DiscordService implements Notifier, vscode.Disposable {
     // transition from "Running…" to their final state before we create
     // the new embed for this issue.
     this.flushStaleRuns(key);
+
+    // Hold the start: a run that defers at pickup must post nothing (#2914).
+    this.pickupGate.hold(key, { stateService, startTime: Date.now() });
+  }
+
+  /** Create the pipeline embed for a run whose pickup start was held. */
+  private async createRunMessage(
+    issueNumber: number,
+    key: string,
+    held: HeldPickupStart
+  ): Promise<void> {
+    const { stateService } = held;
+    const effectiveStateService = stateService ?? this.pipelineStateService;
 
     const config = this.getDiscordConfig();
     if (!config?.enabled) return;
@@ -1123,7 +1152,7 @@ export class DiscordService implements Notifier, vscode.Disposable {
       webhookId: parsed.id,
       webhookToken: parsed.token,
       messageId: "", // filled in after POST
-      startTime: Date.now(),
+      startTime: held.startTime,
       costUsd: 0,
       stageStartTimes: new Map(),
       isFinal: false,
@@ -1244,6 +1273,18 @@ export class DiscordService implements Notifier, vscode.Disposable {
    */
   private async handleRunFinalized(state: PipelineStateSnapshot, repoSlug?: string): Promise<void> {
     const key = slotKey(repoSlug, state.issue_number);
+    if (!this.runs.has(key) && this.pickupGate.has(key)) {
+      // Finalized with only the pickup start held: a deferred run posts
+      // nothing; any other outcome (a pickup failure) still notifies (#2914).
+      const held = this.pickupGate.settle(key, state.outcome_type);
+      if (!held) {
+        this.logger.debug("DiscordService: deferred at pickup — no message", {
+          issueNumber: state.issue_number,
+        });
+        return;
+      }
+      await this.createRunMessage(state.issue_number, key, held);
+    }
     const run = this.runs.get(key);
     if (!run || run.finalFlushed) return;
 
@@ -2018,5 +2059,6 @@ export class DiscordService implements Notifier, vscode.Disposable {
     for (const d of this.disposables) d.dispose();
     this.disposables = [];
     this.runs.clear();
+    this.pickupGate.clear();
   }
 }

@@ -108,8 +108,11 @@ describe("DiscordService slot keying (#2408)", () => {
     for (const d of platform.disposers) expect(d).not.toHaveBeenCalled();
 
     platform.handlers.stageStart({ stage: "issue-pickup", issueNumber: ISSUE } as never);
+
+    platform.handlers.stageStart({ stage: "feature-planning", issueNumber: ISSUE } as never);
     await vi.waitFor(() => expect(posts()).toHaveLength(1));
     app.handlers.stageStart({ stage: "issue-pickup", issueNumber: ISSUE } as never);
+    app.handlers.stageStart({ stage: "feature-planning", issueNumber: ISSUE } as never);
     await vi.waitFor(() => expect(posts()).toHaveLength(2));
 
     const links = posts().map((c) =>
@@ -156,6 +159,8 @@ describe("DiscordService slot keying (#2408)", () => {
     expect(slot.disposers.slice(0, 4).every((d) => d.mock.calls.length === 1)).toBe(true);
 
     slot.handlers.stageStart({ stage: "issue-pickup", issueNumber: ISSUE } as never);
+
+    slot.handlers.stageStart({ stage: "feature-planning", issueNumber: ISSUE } as never);
     await vi.waitFor(() => expect(posts()).toHaveLength(1));
     svc.unsubscribeFromSlot(ISSUE);
     for (const d of slot.disposers.slice(4)) expect(d).toHaveBeenCalledTimes(1);

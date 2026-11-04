@@ -301,6 +301,7 @@ describe("MattermostService lifecycle", () => {
     fetchMock.mockResolvedValueOnce(initialResp);
     await service.initialize();
     stageStartHandler!({ stage: "issue-pickup", issueNumber });
+    stageStartHandler!({ stage: "feature-planning", issueNumber });
     await vi.advanceTimersByTimeAsync(0);
   }
 
@@ -308,6 +309,24 @@ describe("MattermostService lifecycle", () => {
     stateChangedHandler!(makeState(issueNumber, outcomeType));
     await vi.advanceTimersByTimeAsync(0);
   }
+
+  // #2914: a run that defers at issue-pickup must post nothing.
+  it("makes no request when a pickup-only run finalizes deferred", async () => {
+    pss.getState.mockResolvedValue(makeState(42));
+    await service.initialize();
+    stageStartHandler!({ stage: "issue-pickup", issueNumber: 42 });
+    await vi.advanceTimersByTimeAsync(0);
+    await markFinal(42, "deferred");
+    service.onPipelineFinal({ issueNumber: 42, state: makeState(42, "deferred") });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("posts exactly once when the run proceeds past pickup", async () => {
+    await simulateIssuePickup(42);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock.mock.calls.filter((c: any[]) => c[1]?.method === "POST")).toHaveLength(1);
+  });
 
   it("captures the post id from a json response and edits in place", async () => {
     await simulateIssuePickup(42);
@@ -444,6 +463,7 @@ describe("MattermostService lifecycle", () => {
     pss.getState.mockResolvedValue(makeState(42));
     await service.initialize();
     stageStartHandler!({ stage: "issue-pickup", issueNumber: 42 });
+    stageStartHandler!({ stage: "feature-planning", issueNumber: 42 });
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -466,6 +486,7 @@ describe("MattermostService dispatcher integration", () => {
     const dispatcher = new NotificationDispatcher([mm], logger as never);
     await dispatcher.initialize();
     dispatcher.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    dispatcher.onPipelineStart({ issueNumber: 42, stage: "feature-planning" });
     dispatcher.onPipelineUpdate({ issueNumber: 42 });
     dispatcher.dispose();
 
@@ -541,8 +562,10 @@ describe("MattermostService slot keying (#2408)", () => {
     fetchMock.mockResolvedValueOnce(postResponse("post-a"));
     fetchMock.mockResolvedValueOnce(postResponse("post-b"));
     a.stageStart!({ stage: "issue-pickup", issueNumber: 21 });
+    a.stageStart!({ stage: "feature-planning", issueNumber: 21 });
     await vi.advanceTimersByTimeAsync(0);
     b.stageStart!({ stage: "issue-pickup", issueNumber: 21 });
+    b.stageStart!({ stage: "feature-planning", issueNumber: 21 });
     await vi.advanceTimersByTimeAsync(0);
 
     // Two separate runs, hence two separate posts.
@@ -563,6 +586,7 @@ describe("MattermostService slot keying (#2408)", () => {
     service.subscribeToSlot(21, a as never);
     fetchMock.mockResolvedValueOnce(postResponse("post-1"));
     a.stageStart!({ stage: "issue-pickup", issueNumber: 21 });
+    a.stageStart!({ stage: "feature-planning", issueNumber: 21 });
     await vi.advanceTimersByTimeAsync(0);
 
     const runs = (service as unknown as { runs: Map<string, { postId: string }> }).runs;
