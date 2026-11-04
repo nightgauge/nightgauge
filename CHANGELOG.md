@@ -28,6 +28,10 @@ changelog, and the release workflow refuses a tag that does not.
 - `Nightgauge: Setup Codex Skills`, `Setup Grok Skills` and `Setup Claude Code Plugins` now
   always offer to install or update, as `Setup OpenCode Skills` does, even with
   `nightgauge.plugins.autoPrompt` off (#2762).
+- The Claude Code plugin now records the extension version it was last installed or updated
+  to. An extension upgrade, or an earlier update that failed, updates the plugin again on the
+  next activation. Before, the update ran only in the one activation that refreshed the
+  marketplace copy, so a failed update was never retried (#2762).
 - pr-create's acceptance-criteria check no longer marks met criteria unmet. A
   `go test -run` argument is treated as a pattern matched against defined tests;
   a named token already in the changed file counts when the diff adds another of

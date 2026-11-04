@@ -24,8 +24,6 @@ type MarketplaceContext = Pick<vscode.ExtensionContext, "extensionPath" | "globa
 export interface StableMarketplace {
   /** Directory holding `.claude-plugin/marketplace.json`. */
   path: string;
-  /** True when this call replaced the copy, so a registered source has changed. */
-  recopied: boolean;
 }
 
 function readStamp(dir: string): string | undefined {
@@ -37,17 +35,16 @@ function readStamp(dir: string): string | undefined {
 }
 
 /** Replace `target` with `staged`. A concurrent window may land the same version first. */
-function swapIn(staged: string, target: string, version: string): boolean {
+function swapIn(staged: string, target: string, version: string): void {
   const displaced = `${staged}.old`;
   if (fs.existsSync(target)) {
     fs.renameSync(target, displaced);
   }
   try {
     fs.renameSync(staged, target);
-    return true;
   } catch (error) {
     if (readStamp(target) === version) {
-      return false;
+      return;
     }
     if (fs.existsSync(displaced) && !fs.existsSync(target)) {
       fs.renameSync(displaced, target);
@@ -81,7 +78,7 @@ export function ensureStableMarketplace(
     const target = path.join(root, STABLE_DIR);
     const version = context.extension.packageJSON.version;
     if (readStamp(target) === version) {
-      return { path: target, recopied: false };
+      return { path: target };
     }
 
     fs.mkdirSync(root, { recursive: true });
@@ -96,7 +93,8 @@ export function ensureStableMarketplace(
     }
     fs.writeFileSync(path.join(staged, VERSION_STAMP), `${version}\n`);
 
-    return { path: target, recopied: swapIn(staged, target, version) };
+    swapIn(staged, target, version);
+    return { path: target };
   } catch (error) {
     warn(
       `Could not copy the bundled marketplace to global storage: ${
