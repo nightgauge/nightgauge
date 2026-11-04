@@ -28,6 +28,24 @@ changelog, and the release workflow refuses a tag that does not.
 - `Nightgauge: Setup Codex Skills`, `Setup Grok Skills` and `Setup Claude Code Plugins` now
   always offer to install or update, as `Setup OpenCode Skills` does, even with
   `nightgauge.plugins.autoPrompt` off (#2762).
+- pr-create's acceptance-criteria check no longer marks met criteria unmet. A
+  `go test -run` argument is treated as a pattern matched against defined tests;
+  a named token already in the changed file counts when the diff adds another of
+  the clause's tokens; and a changelog criterion with no path reads
+  `CHANGELOG.md` (#2917).
+
+## [0.8.0] - 2026-11-04
+
+### Fixed
+
+- An issue with an unresolved blocked finding is no longer dispatched every
+  autonomous cycle: the candidate filter skips it, logs the skip once per
+  finding, and re-admits it on the next cycle after `blocked.clearFinding`.
+  Discord, Slack and Mattermost no longer post a message for a run that defers
+  at issue-pickup; a run posts once it reaches a later stage, and a pickup
+  failure still notifies (#2914).
+- The architecture-release tests no longer fail intermittently when the held
+  issue's background board read reaches the test's fixture forge.
 - A reviewed or gated tree now keeps tracked files that match an ignore rule
   (`.gitignore`, `.git/info/exclude`, `core.excludesFile`). They no longer read
   as deleted in review diffs, and the tree fingerprint no longer varies between
@@ -8194,7 +8212,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nightgauge/nightgauge/compare/v0.6.0...v0.7.0

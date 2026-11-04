@@ -50,6 +50,7 @@ import { SecretStorageService, SECRET_KEYS } from "../SecretStorageService";
 import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey, warnMissingCredentialOnce } from "./credentials";
 import type { Notifier, PipelineEventContext } from "./types";
 import { NotifierStatusTracker } from "./NotifierStatusTracker";
+import { PickupStartGate } from "./pickupStartGate";
 import {
   DEBOUNCE_MS,
   DebouncedPatcher,
@@ -222,12 +223,21 @@ function toSlackAttachment(att: RunAttachment): RunAttachment & { mrkdwn_in: str
 
 // ─── SlackService ───────────────────────────────────────────────────────────
 
+/** A held issue-pickup start: what is needed to post the run later. */
+interface HeldPickupStart {
+  stateService: PipelineStateService;
+  repoSlug?: string;
+  startTime: number;
+}
+
 export class SlackService implements Notifier, vscode.Disposable {
   // Every per-run map is keyed by slotKey(repoSlug, issueNumber), not the bare
   // issue number: two repositories' issues with the same number run
   // concurrently in two slots and must not share a message, a subscription,
   // a pending slug or a debounce timer (#2408).
   private readonly runs = new Map<string, ActiveRun>();
+  /** issue-pickup starts held until the run proceeds or finalizes (#2914). */
+  private readonly pickupGate = new PickupStartGate<HeldPickupStart>();
   private readonly patcher = new DebouncedPatcher();
   private readonly slotDisposables = new Map<string, vscode.Disposable[]>();
   private readonly pendingRepoSlugs = new Map<string, string>();
@@ -335,6 +345,8 @@ export class SlackService implements Notifier, vscode.Disposable {
     if (run?.isFinal && !run.finalFlushed && run.finalSnapshot) {
       void this.handleRunFinalized(run.finalSnapshot, repoSlug);
     }
+    // A pickup start still held at teardown never proceeded: no message.
+    this.pickupGate.drop(key);
   }
 
   dispose(): void {
@@ -346,6 +358,7 @@ export class SlackService implements Notifier, vscode.Disposable {
     this.slotDisposables.clear();
     this.patcher.dispose();
     this.runs.clear();
+    this.pickupGate.clear();
     this.pendingRepoSlugs.clear();
   }
 
@@ -358,6 +371,29 @@ export class SlackService implements Notifier, vscode.Disposable {
     repoSlug?: string
   ): Promise<void> {
     const key = slotKey(repoSlug, issueNumber);
+    const effectiveStateService = stateService ?? this.pipelineStateService;
+    if (stage === "issue-pickup" && !this.runs.has(key)) {
+      // Hold the start: a run that defers at pickup must post nothing (#2914).
+      this.pickupGate.hold(key, {
+        stateService: effectiveStateService,
+        repoSlug,
+        startTime: Date.now(),
+      });
+      return;
+    }
+    // The first later stage proves the run got past pickup: post now.
+    const held = this.pickupGate.release(key);
+    if (held && !this.runs.has(key)) {
+      await this.startRun(
+        issueNumber,
+        held.stateService,
+        "issue-pickup",
+        held.repoSlug,
+        held.startTime
+      );
+      // A failed post retains no run; do not post a second time.
+      if (!this.runs.has(key)) return;
+    }
     const existing = this.runs.get(key);
     if (existing) {
       existing.stageStartTimes.set(stage, Date.now());
@@ -365,14 +401,15 @@ export class SlackService implements Notifier, vscode.Disposable {
       this.scheduleUpdate(key);
       return;
     }
-    await this.startRun(issueNumber, stateService ?? this.pipelineStateService, stage, repoSlug);
+    await this.startRun(issueNumber, effectiveStateService, stage, repoSlug);
   }
 
   private async startRun(
     issueNumber: number,
     stateService: PipelineStateService,
     stage: PipelineStage,
-    ctxRepo?: string
+    ctxRepo?: string,
+    startTime: number = Date.now()
   ): Promise<void> {
     const key = slotKey(ctxRepo, issueNumber);
     const config = this.getSlackConfig();
@@ -405,9 +442,9 @@ export class SlackService implements Notifier, vscode.Disposable {
       channel,
       ts: "",
       editMode: "edit",
-      startTime: Date.now(),
+      startTime,
       costUsd: state?.tokens?.estimated_cost_usd ?? 0,
-      stageStartTimes: new Map([[stage, Date.now()]]),
+      stageStartTimes: new Map([[stage, startTime]]),
       isFinal: false,
       finalFlushed: false,
       stateService,
@@ -492,6 +529,24 @@ export class SlackService implements Notifier, vscode.Disposable {
    */
   private async handleRunFinalized(state: PipelineStateSnapshot, repoSlug?: string): Promise<void> {
     const key = slotKey(repoSlug, state.issue_number);
+    if (!this.runs.has(key) && this.pickupGate.has(key)) {
+      // Finalized with only the pickup start held: a deferred run posts
+      // nothing; any other outcome (a pickup failure) still notifies (#2914).
+      const held = this.pickupGate.settle(key, state.outcome_type);
+      if (!held) {
+        this.logger.debug("SlackService: deferred at pickup — no message", {
+          issueNumber: state.issue_number,
+        });
+        return;
+      }
+      await this.startRun(
+        state.issue_number,
+        held.stateService,
+        "issue-pickup",
+        held.repoSlug,
+        held.startTime
+      );
+    }
     const run = this.runs.get(key);
     if (!run || run.finalFlushed) return;
     if (run.editMode === "post-only") return;

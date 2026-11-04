@@ -242,9 +242,11 @@ clause decides.
 | ---------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | scope      | "no file other than `X`", "only `X` changes"  | every changed file is a named path, or under a named `dir/`                                                                                                 |
 | unchanged  | "unchanged", "not modified"                   | a named path is not in the diff; for named headings, the diff deletes nothing and adds nothing under any heading not qualified by "existing"                |
+| changelog  | "changelog" plus a `## …` heading, no path    | `CHANGELOG.md` is in the diff and an added line sits beneath the heading; unmet when `CHANGELOG.md` is not in the diff                                      |
+| run        | `go test -run 'P'` (quoted or not)            | `P`'s top-level element matches a Go test defined on the branch and the test run passed; a name also given outside `-run` uses the test rule instead        |
 | test       | `TestX`, `test_x`, `` `it("…")` ``            | the test is defined on the branch and the stage's test run passed (feature-validate, else a clean feature-dev run); evidence cites the test and `file:line` |
 | section    | a diffed path plus backticked `## …` headings | an added line in that file sits beneath the headings and carries the clause's code spans and `#NNN` refs                                                    |
-| token/file | code spans and `#NNN` refs                    | every one appears in the added lines (of the named diffed file, when one is named)                                                                          |
+| token/file | code spans and `#NNN` refs                    | every one appears in the added lines or the post-change file (of the named diffed file, when one is named), and at least one is in the added lines          |
 
 A missing token is `unmet` only when the clause names a diffed file. With no
 diffed file named, the clause is skipped, because it may be about something
