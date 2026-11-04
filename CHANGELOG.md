@@ -29,6 +29,9 @@ changelog, and the release workflow refuses a tag that does not.
   isolation. The machine-state check watches only what Nightgauge installs
   there, so Claude Code or Codex refreshing its own files does not fail it.
 
+- The Claude plugin's version is now 1.27.0, so installed plugins receive the plugin changes
+  made since v0.8.0, and the v0.8.1 release candidates pass the staging plugin-version gate
+  (#2945).
 - A doctor test whose repository has an `origin` now fails its cleanup by naming what is still
   writing `.git` (each leftover entry with size and mtime, `gc.pid` and `gc.log` contents, and the
   likely writer: `git gc`, `git maintenance` or a held lock) instead of a bare
