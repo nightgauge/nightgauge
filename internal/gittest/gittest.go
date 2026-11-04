@@ -160,11 +160,12 @@ func envTail() []string {
 // core.hooksPath and internal/git still fails, while internal/gittest passes:
 // a guard that is green about its own commands says nothing about the tree.
 //
-// Only the ambient-config keys are set here. The gc/maintenance disarming in
-// Env() is deliberately NOT applied process-wide: it exists to stop background
-// writes racing t.TempDir() cleanup for repos this package creates, and
-// forcing it onto every child of the code under test would change the
-// behaviour being tested rather than isolate it.
+// It also applies Env()'s background-writer disarm (configBlock: gc.auto=0,
+// gc.autoDetach=false, maintenance.auto=false, core.fsmonitor=false) to the
+// process. A detached gc or maintenance forked by a plain exec.Command in the
+// code under test otherwise outlives the test and races t.TempDir() cleanup
+// (#1293, #2759). Pair it with ReportWritersOnCleanup on fixtures whose
+// cleanup has failed before, so a recurrence names its writer.
 //
 // Test-only. Never call this from production code — respecting the operator's
 // git configuration is correct behaviour outside a test binary.
