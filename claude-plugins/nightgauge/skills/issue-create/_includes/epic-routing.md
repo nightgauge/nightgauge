@@ -58,7 +58,7 @@ phase still reads from the workspace yaml. **Project numbers are NOT read from
 `repositories[].project_number`** — that field is routing-manifest scaffolding
 input only, never an independent authority for "which board does this repo
 use?" (see the "Single-resolver contract" in
-[docs/MULTI_REPO_WORKSPACE.md](../../../../../docs/MULTI_REPO_WORKSPACE.md)).
+[docs/MULTI_REPO_WORKSPACE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/MULTI_REPO_WORKSPACE.md)).
 Instead, resolve each repository's project number with the single
 authoritative resolver:
 
@@ -212,7 +212,7 @@ sub-issues for parallel execution potential:
 parallel_eligible: true
 depends_on: []
 file_ownership:
-  - packages/nightgauge-sdk/src/agent-teams/types.ts
+  - src/agent-teams/types.ts
 estimated_complexity: medium
 teammate_model_suggestion: sonnet
 -->

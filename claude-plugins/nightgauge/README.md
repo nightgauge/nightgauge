@@ -9,12 +9,11 @@ from GitHub issue to merged PR with automated quality enforcement at every step.
 Traditional AI coding assistants rely on the LLM to _choose_ to follow best
 practices. Nightgauge uses **Claude Code hooks** to _enforce_ them:
 
-| Traditional AI           | Nightgauge                              |
-| ------------------------ | --------------------------------------- |
-| LLM might format code    | Hooks **always** format code            |
-| LLM might check versions | Hooks **block** commits on mismatch     |
-| LLM might follow plan    | Hooks **verify** plan completion        |
-| Context lost on resume   | Hooks **restore** context automatically |
+| Traditional AI         | Nightgauge                              |
+| ---------------------- | --------------------------------------- |
+| LLM might format code  | Hooks **always** format code            |
+| LLM might follow plan  | Hooks **verify** plan completion        |
+| Context lost on resume | Hooks **restore** context automatically |
 
 This enforcement needs the `nightgauge` binary: see
 [Install the Binary](#install-the-binary-required). Without it, binary-backed

@@ -1688,7 +1688,7 @@ func TestForeignRepoBinaryNeverExecuted(t *testing.T) {
 		t.Skip("bash and git required")
 	}
 	guardPath := guardShPath(t)
-	prePush := filepath.Join(filepath.Dir(guardPath), "..", "pre-push-validate.sh")
+	prePush := installedPrePushHook(t, guardPath)
 
 	planted := func(t *testing.T) (repo, marker string) {
 		t.Helper()
@@ -1758,23 +1758,34 @@ func TestForeignRepoBinaryNeverExecuted(t *testing.T) {
 	}
 }
 
-// TestPrePushHookBlockMatchesReferenceCopy keeps the installed hook, which only
-// exists as a Go string, on the gated block the tests above execute.
-func TestPrePushHookBlockMatchesReferenceCopy(t *testing.T) {
-	hooksDir := filepath.Join(filepath.Dir(guardShPath(t)), "..")
-	reference, err := os.ReadFile(filepath.Join(hooksDir, "pre-push-validate.sh"))
+// installedPrePushHook writes the git pre-push hook `nightgauge pre-push
+// install` ships to a temp file and returns its path. The script exists only
+// as the prePushHookScript literal in cmd/nightgauge/cmd_pre_push.go, which
+// this package cannot import, so it is read from that source file: the arms
+// above then execute the shipped bytes, not a hand-kept copy (#2764).
+func installedPrePushHook(t *testing.T, guardPath string) string {
+	t.Helper()
+	src := filepath.Join(filepath.Dir(guardPath), "..", "..", "..", "..", "cmd", "nightgauge", "cmd_pre_push.go")
+	data, err := os.ReadFile(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := string(reference)
-	block := ref[strings.Index(ref, "BINARY=$(command -v"):strings.Index(ref, "exec \"$BINARY\"")]
-	installed, err := os.ReadFile(filepath.Join(hooksDir, "..", "..", "..", "cmd", "nightgauge", "cmd_pre_push.go"))
-	if err != nil {
+	const open = "const prePushHookScript = `"
+	text := string(data)
+	start := strings.Index(text, open)
+	if start < 0 {
+		t.Fatalf("%s carries no prePushHookScript literal", src)
+	}
+	body := text[start+len(open):]
+	end := strings.Index(body, "`")
+	if end < 0 || !strings.Contains(body[:end], devRepoBinEnv) {
+		t.Fatalf("prePushHookScript is unterminated or lacks the %s gate", devRepoBinEnv)
+	}
+	path := filepath.Join(t.TempDir(), "pre-push")
+	if err := os.WriteFile(path, []byte(body[:end]), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(installed), block) || !strings.Contains(block, devRepoBinEnv) {
-		t.Errorf("cmd_pre_push.go does not carry the gated block:\n%s", block)
-	}
+	return path
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

@@ -26,7 +26,7 @@
 - **Write your handoff/context file before exiting — even on failure.** Pipeline
   stages that exit without their `{stage}-{N}.json` in the clone's pipeline
   state directory (`nightgauge layout path pipeline`) force the orchestrator
-  onto a repo-blind deterministic fallback that may misreport state (#3114). Do not rely on the fallback.
+  onto a repo-blind deterministic fallback that may misreport state (issue 3114). Do not rely on the fallback.
 - **An assertion that cannot go red is decoration.** A test that passes both
   before and after a fix constrains nothing — a regression test written for an
   SSH-push bug asserted "a push succeeds with no auth configured" and passed

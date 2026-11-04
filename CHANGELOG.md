@@ -75,6 +75,28 @@ changelog, and the release workflow refuses a tag that does not.
   a named token already in the changed file counts when the diff adds another of
   the clause's tokens; and a changelog criterion with no path reads
   `CHANGELOG.md` (#2917).
+- Plugin skills run interactively in Claude Code now carry their shared procedure. The
+  generator expands each `<!-- include: -->` directive, which Claude Code never did, so a
+  session read a literal comment where the steps should have been (#2764).
+- Links in the shipped plugin skills and in the VSIX's bundled skills now open. A link to
+  the repository's `docs/` becomes a GitHub URL: `main` for the plugin, the release tag for
+  the VSIX and for Codex, Grok and OpenCode installs. `check-mirror-links.py --root` fails
+  any relative link that leaves the shipped tree (#2764).
+- Epic completion summaries and CI auto-fix log fetching call `nightgauge epic summary` and
+  `nightgauge ci logs`; the scripts they called were deleted, so both steps did nothing.
+  issue-pickup no longer runs a sprint assignment step, which called a deleted script and
+  never assigned anything (#2764).
+- Shipped skills no longer tell a model to run commands against `packages/nightgauge`, a path
+  only this repository has, and list `claude -p "/nightgauge:<name>"` instead of the
+  nonexistent `claude --skill`. `nightgauge preflight skill-portability` now fails a
+  `$HOOKS_DIR` call to a missing hook, a `packages/nightgauge` path, or `claude --skill`,
+  and `--skills-root` checks the built bundle (#2764).
+- The plugin README no longer claims a hook blocks commits on a version mismatch (#2764).
+
+### Removed
+
+- `claude-plugins/nightgauge/hooks/pre-push-validate.sh`, a hand-kept copy of the git
+  pre-push hook that `nightgauge pre-push install` writes. It was never a Claude hook (#2764).
 
 ## [0.8.0] - 2026-11-04
 

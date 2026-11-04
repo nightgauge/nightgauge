@@ -107,7 +107,7 @@ If prerequisites fail, stop with exact remediation command.
      `- [ ] <owner>/<repo>#<n> — <title>` once created, or as titled bullets
      when the epic body is written before Phase 3 creates them.
    - **Recommendations** (`spike`): the fenced `yaml recommendations` block
-     required by [docs/SPIKE_CONTRACT.md](../../../../../docs/SPIKE_CONTRACT.md).
+     required by [docs/SPIKE_CONTRACT.md](https://github.com/nightgauge/nightgauge/blob/main/docs/SPIKE_CONTRACT.md).
      Phase 2.X scaffolds this automatically.
    - **Verification** (every type): how a reviewer holding the tree and the
      command tells pass from fail without asking the author — one bullet per
@@ -137,7 +137,7 @@ If prerequisites fail, stop with exact remediation command.
    - do NOT mix broad implementation work into the same issue
    - The deliverable artifact at `docs/spikes/<N>-*.md` MUST contain a single
      fenced `yaml recommendations` block per
-     [docs/SPIKE_CONTRACT.md](../../../../../docs/SPIKE_CONTRACT.md). The block lists
+     [docs/SPIKE_CONTRACT.md](https://github.com/nightgauge/nightgauge/blob/main/docs/SPIKE_CONTRACT.md). The block lists
      each follow-up with stable kebab-case `id`, `action`
      (`adopt`/`defer`/`skip`), `title`, `type`, `priority`, `size`, optional
      `labels`, optional `body`, and optional `depends_on`. The post-merge

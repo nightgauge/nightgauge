@@ -54,8 +54,8 @@ Extract from issue body:
 When the Go binary is on PATH, derive the routing decision through a single
 verb call. The verb wraps the canonical `routing.Derive` function and emits
 the same fields the rest of this phase consumes — see
-[docs/GO_BINARY.md](../../../../../docs/GO_BINARY.md#issue-operations) and audit row
-**B4** in [docs/SKILL_DETERMINISM_AUDIT.md](../../../../../docs/SKILL_DETERMINISM_AUDIT.md).
+[docs/GO_BINARY.md](https://github.com/nightgauge/nightgauge/blob/main/docs/GO_BINARY.md#issue-operations) and audit row
+**B4** in [docs/SKILL_DETERMINISM_AUDIT.md](https://github.com/nightgauge/nightgauge/blob/main/docs/SKILL_DETERMINISM_AUDIT.md).
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"

@@ -74,7 +74,7 @@ if ! git archive HEAD skills | tar -x -C "$SANDBOX"; then
   exit 1
 fi
 cp scripts/install-agent-skills.sh "$SANDBOX/scripts/"
-cp scripts/lib/mirror_links.py scripts/lib/install_skill_tree.py "$SANDBOX/scripts/lib/"
+cp scripts/lib/mirror_links.py scripts/lib/mirror_includes.py scripts/lib/install_skill_tree.py "$SANDBOX/scripts/lib/"
 INSTALLER="$SANDBOX/scripts/install-agent-skills.sh"
 
 # PATH with the real claude/codex/grok CLIs stripped so the installer cannot
@@ -418,10 +418,16 @@ else
     nope "(j1) --adopt exited 0 with a locally edited directory left behind"
   else
     root="$HOME_J1/.codex/skills"
+    # The install turns links out of skills/ into GitHub URLs (#2764), so the
+    # expected copy is the canonical file through that same rewrite.
+    j_want="$TMP/j-want"
+    rm -rf "$j_want" && mkdir -p "$j_want" && cp "$SBJ/skills/nightgauge-retro/SKILL.md" "$j_want/"
+    python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import mirror_links as m; m.rewrite_identity_dir(sys.argv[2], "skills/nightgauge-retro", m.release_ref(sys.argv[3]))' \
+      "$SBJ/scripts/lib" "$j_want" "$SBJ/skills"
     aside="$(find "$root.nightgauge-adopted" -type f -path '*/nightgauge-retro/SKILL.md' 2>/dev/null)"
     shared_aside="$(find "$root.nightgauge-adopted" -type f -path '*/_shared/PREFLIGHT.md' 2>/dev/null)"
     if [ -f "$root/nightgauge-retro/$MARKER" ] &&
-      cmp -s "$root/nightgauge-retro/SKILL.md" "$SBJ/skills/nightgauge-retro/SKILL.md" &&
+      cmp -s "$root/nightgauge-retro/SKILL.md" "$j_want/SKILL.md" &&
       [ -n "$aside" ] && cmp -s "$aside" "$j_old" &&
       [ -f "$root/_shared/$MARKER" ] && [ -n "$shared_aside" ] &&
       [ "$(cat "$root/nightgauge-issue-create/SKILL.md")" = "my edit" ] &&

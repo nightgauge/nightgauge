@@ -185,9 +185,11 @@ Record each call as: `{method, path, authType, file, line}`.
 
 ```bash
 # Search IPC client and direct fetch calls
-grep -rn "platform\." packages/nightgauge/src/ \
+# EXT_SRC is the extension repository's source directory (e.g. src/).
+EXT_SRC="${EXT_SRC:-src}"
+grep -rn "platform\." "$EXT_SRC" \
   --include="*.ts" | grep -v "node_modules"
-grep -rn "fetch\(" packages/nightgauge/src/ \
+grep -rn "fetch\(" "$EXT_SRC" \
   --include="*.ts" | grep -v "node_modules"
 ```
 

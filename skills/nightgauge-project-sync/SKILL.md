@@ -44,12 +44,12 @@ many issues that need to be synced to the Nightgauge project board.
 
 ## Invocation
 
-| Tool        | Command                                                  |
-| ----------- | -------------------------------------------------------- |
-| Claude Code | `/nightgauge:project-sync [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                        |
-| Cursor      | Run via Agent Skills or direct SKILL.md                  |
-| Standalone  | `claude --skill skills/nightgauge-project-sync/SKILL.md` |
+| Tool        | Command                                 |
+| ----------- | --------------------------------------- |
+| Claude Code | `/nightgauge:project-sync [options]`    |
+| Copilot     | Invoke via Agent Skills extension       |
+| Cursor      | Run via Agent Skills or direct SKILL.md |
+| Headless    | `claude -p "/nightgauge:project-sync"`  |
 
 ## Arguments
 

@@ -77,12 +77,12 @@ strangler fig pattern).
 
 ## Invocation
 
-| Tool        | Command                                                      |
-| ----------- | ------------------------------------------------------------ |
-| Claude Code | `/nightgauge:refactor-rewrite [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                            |
-| Cursor      | Run via Agent Skills or direct SKILL.md                      |
-| Standalone  | `claude --skill skills/nightgauge-refactor-rewrite/SKILL.md` |
+| Tool        | Command                                    |
+| ----------- | ------------------------------------------ |
+| Claude Code | `/nightgauge:refactor-rewrite [options]`   |
+| Copilot     | Invoke via Agent Skills extension          |
+| Cursor      | Run via Agent Skills or direct SKILL.md    |
+| Headless    | `claude -p "/nightgauge:refactor-rewrite"` |
 
 ## Arguments
 

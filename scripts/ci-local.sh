@@ -465,6 +465,8 @@ REQUIRED_FILES=(
   scripts/install-agent-skills.sh
   scripts/test-mirror-link-check.sh
   scripts/check-mirror-links.py
+  scripts/test-mirror-includes.sh
+  scripts/lib/mirror_includes.py
   scripts/check-go-test-skips.py
   scripts/go-test-skip-allowlist.txt
   scripts/go-test-json-echo.py
@@ -1784,6 +1786,16 @@ run_step "skill bundle (dist/skills)" \
   go run ./cmd/nightgauge preflight skill-bundle \
   --skills-root packages/nightgauge/dist/skills --source-root skills
 
+# 7a2. The built bundle stays self-contained and portable (#2764): an installed
+# VSIX carries dist/skills alone, so a relative link out of it is dead, and
+# skill text naming packages/nightgauge or a deleted hook breaks elsewhere.
+run_step "skill bundle links stay inside dist/skills" \
+  python3 scripts/check-mirror-links.py \
+  --mirror packages/nightgauge/dist/skills --root packages/nightgauge/dist/skills
+run_step "skill bundle portability (dist/skills)" \
+  go run ./cmd/nightgauge preflight skill-portability \
+  --skills-root packages/nightgauge/dist/skills
+
 # 7b. Phase markers ↔ PHASE_REGISTRY drift check
 # Runs after the SDK build so the script can import PHASE_REGISTRY from
 # the workspace package. Catches the class of registry↔skill marker drift
@@ -1915,6 +1927,12 @@ run_step "Plugin skills mirror in sync" \
 run_step "Mirror link gate regression suite" \
   bash scripts/test-mirror-link-check.sh
 run_step "Mirror link integrity" python3 scripts/check-mirror-links.py
+
+# 11d. Mirror include expansion (#2764) — Claude Code loads a plugin skill as-is
+#      and never expands `<!-- include: -->`, so the generator does. 11b proves
+#      the mirror matches the generator; this proves the generator expands.
+run_step "Mirror include expansion regression suite" \
+  bash scripts/test-mirror-includes.sh
 
 # Collect every concurrent step before summarising. Placed HERE, at the very
 # end, so a grouped step overlaps the entire serial remainder rather than just
