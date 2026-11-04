@@ -34,15 +34,17 @@ func snapshotTree(t *testing.T, dir string) map[string]fileStamp {
 // TestResumedLoopStoppedAndWaitedLeavesCheckoutUntouched pins #2891: a resume
 // spawned the loop with `go Run`, so an immediate Stop() found running=false,
 // did nothing, and the loop came up afterwards and wrote state.json while
-// t.TempDir was removing the checkout.
+// t.TempDir was removing the checkout. The snapshot is taken only after
+// Resume's goTracked background spawns drain, so a halt-card retraction still
+// in flight cannot land between the two snapshots (#2934).
 func TestResumedLoopStoppedAndWaitedLeavesCheckoutUntouched(t *testing.T) {
 	server, as, ctx := newHaltedServer(t, haltedState())
 	if err := server.resumeAndEnsureRunning(ctx); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	as.Stop()
-	if !as.WaitStopped(5 * time.Second) {
-		t.Fatal("WaitStopped timed out")
+	stopAndJoinLoop(t, as, 5*time.Second)
+	if t.Failed() {
+		t.FailNow()
 	}
 	if as.IsRunning() {
 		t.Fatal("loop running after Stop+WaitStopped")
@@ -55,6 +57,9 @@ func TestResumedLoopStoppedAndWaitedLeavesCheckoutUntouched(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if as.IsRunning() {
 		t.Fatal("a loop came up after Stop+WaitStopped returned")
+	}
+	if n := as.BackgroundInFlight(); n != 0 {
+		t.Errorf("%d background goroutines spawned after Stop+WaitStopped+drain", n)
 	}
 	after := snapshotTree(t, dir)
 	for p, b := range before {
