@@ -258,6 +258,36 @@ describe("appendJudgeVerdicts", () => {
     expect(String(written[1].error_summary).startsWith(JUDGES_NONE_MARKER)).toBe(true);
   });
 
+  it("a complete attempt with no verdict never closes a real failing judges attempt", async () => {
+    await appendJudgeVerdicts(dir, 3918, [...runNodes("run-1"), judgeNode("fail")]);
+    await appendJudgeVerdicts(dir, 3918, [], { complete: true, attemptId: "sa-2" });
+    const written = await rows();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({ result: "fail", attempt_id: "run-1" });
+  });
+
+  it("a marker after a real failing attempt cannot let a no-verdict attempt close it", async () => {
+    await appendJudgeVerdicts(dir, 3918, [...runNodes("run-0"), judgeNode("fail")]);
+    await appendJudgeVerdicts(dir, 3918, [], { complete: false, attemptId: "run-1" });
+    await appendJudgeVerdicts(dir, 3918, [], { complete: true, attemptId: "sa-2" });
+    expect(await rows()).toHaveLength(2);
+  });
+
+  it("an interrupted run drops judges the abort cut off, writing only the marker", async () => {
+    await appendJudgeVerdicts(
+      dir,
+      3918,
+      [...runNodes("run-1"), judgeNode("uncertain", { status: "failed" })],
+      { complete: false }
+    );
+    const written = await rows();
+    expect(written).toHaveLength(1);
+    expect(String(written[0].error_summary).startsWith(JUDGES_INTERRUPTED_MARKER)).toBe(true);
+    await appendJudgeVerdicts(dir, 3918, [...runNodes("run-2"), judgeNode("pass")]);
+    const after = await rows();
+    expect(after[1]).toMatchObject({ result: "pass", attempt_id: "run-2" });
+  });
+
   it("a complete attempt with no verdict writes nothing for an issue never judged", async () => {
     await appendJudgeVerdicts(dir, 3918, [], { complete: true, attemptId: "sa-1" });
     expect(await rows()).toEqual([]);

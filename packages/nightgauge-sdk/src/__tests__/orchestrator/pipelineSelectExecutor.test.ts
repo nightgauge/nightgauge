@@ -30,7 +30,7 @@ import {
   type WorkflowExecutorBindings,
   type WorkflowAgentUsage,
 } from "../../cli/workflow/index.js";
-import { createSuccessQueryFn } from "../integration/helpers/query-mocks.js";
+import { createFailureQueryFn, createSuccessQueryFn } from "../integration/helpers/query-mocks.js";
 import type { ICliAdapter, NightgaugeAdapter } from "../../cli/adapters/ICliAdapter.js";
 import { resolveCloneLayout } from "../../context/cloneLayout.js";
 import { initCloneRepo } from "../helpers/gitRepo.js";
@@ -540,6 +540,65 @@ describe("PipelineOrchestrator.selectExecutor", () => {
       expect(rows[1]).toMatchObject({ gate_name: "judges", result: "pass" });
       expect(String(rows[1].attempt_id)).toMatch(/^sa-42-feature-validate-/);
       expect(String(rows[1].error_summary).startsWith(JUDGES_NONE_MARKER)).toBe(true);
+    });
+
+    it("a streamed single-agent retry also supersedes an earlier interrupted marker", async () => {
+      await judgedWorkspace("feature-validate");
+      await appendJudgeVerdicts(ws.dir, 42, [], { complete: false, attemptId: "wf-old" });
+      const orch = makeOrchestrator(ws.dir, { orchestration: { disabled: true } });
+
+      for await (const _message of orch.runStageStreaming("feature-validate", 42)) {
+        // drain
+      }
+
+      const rows = await gateRows();
+      expect(rows).toHaveLength(2);
+      expect(String(rows[1].attempt_id)).toMatch(/^sa-42-feature-validate-/);
+      expect(String(rows[1].error_summary).startsWith(JUDGES_NONE_MARKER)).toBe(true);
+    });
+
+    it("a single-agent run ending on an error result leaves the interrupted marker", async () => {
+      await judgedWorkspace("feature-validate");
+      await appendJudgeVerdicts(ws.dir, 42, [], { complete: false, attemptId: "wf-old" });
+      const orch = new PipelineOrchestrator(createFailureQueryFn(), {
+        cwd: ws.dir,
+        skillsPath: path.join(ws.dir, "skills"),
+        contextPath: resolveCloneLayout(ws.dir).pipeline,
+        orchestration: { disabled: true },
+      });
+
+      await orch.runStage("feature-validate", 42);
+
+      const rows = await gateRows();
+      expect(rows).toHaveLength(1);
+      expect(String(rows[0].error_summary).startsWith(JUDGES_INTERRUPTED_MARKER)).toBe(true);
+    });
+
+    it("a failed fan-out with no verdict leaves the interrupted marker", async () => {
+      // A fan-out with no judge whose units fail returns un-aborted as "failed".
+      ws = await makeWorkspace(["feature-validate"]);
+      await appendJudgeVerdicts(ws.dir, 42, [], { complete: false, attemptId: "wf-old" });
+      const orch = makeOrchestrator(ws.dir, {
+        workflowAdapter: fakeAdapter(),
+        workflowBindings: {
+          async runAgent(): Promise<never> {
+            throw new Error("unit crashed");
+          },
+          async runJudge() {
+            return { verdict: "pass" as const, rationale: "unused", usage: usage() };
+          },
+        },
+        workflowJournalFs: new FakeFs(),
+        orchestration: { disabled: false },
+      });
+
+      const result = await orch.runStage("feature-validate", 42);
+
+      expect(result.success).toBe(false);
+
+      const rows = await gateRows();
+      expect(rows).toHaveLength(1);
+      expect(String(rows[0].error_summary).startsWith(JUDGES_INTERRUPTED_MARKER)).toBe(true);
     });
 
     it("writes no judges row for a workflow stage other than feature-validate", async () => {

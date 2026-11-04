@@ -36,7 +36,8 @@ export const JUDGES_INTERRUPTED_MARKER = "[judges-interrupted]";
 /**
  * `error_summary` prefix of the passing row a complete attempt with no judge
  * verdict writes over an earlier judges row, closing that attempt so an earlier
- * interrupted marker or failure no longer reads as the latest attempt.
+ * interrupted marker no longer reads as the latest attempt. It never closes
+ * over a real judge failure.
  */
 export const JUDGES_NONE_MARKER = "[judges-none]";
 
@@ -100,8 +101,12 @@ export async function appendJudgeVerdicts(
 ): Promise<void> {
   try {
     const stream = nodes as ReadonlyArray<WorkflowNode>;
+    // An interrupted run's judges the abort cut off carry status "failed"
+    // without having judged anything; the marker already records them, and as
+    // attempt-less fail rows they would trip the gate for good (#2880).
     const verdicts = stream
       .filter(isJudgeVerdict)
+      .filter((judge) => options.complete !== false || judge.status !== "failed")
       .sort((a, b) => Number(a.verdict === "pass") - Number(b.verdict === "pass"));
     // An interrupted run's judges are a partial set: whatever finished, the
     // marker says the rest never ran, so its passes cannot pass the gate.
@@ -188,7 +193,9 @@ async function appendInterruptedMarker(
 /**
  * Close a complete attempt that judged nothing, but only over an earlier judges
  * row for the issue: an issue never judged needs no row, and the gate already
- * reads its absence as "no judges".
+ * reads its absence as "no judges". It never closes over a real failure: when
+ * the latest judges attempt (as the Go gate reads it) holds a failing row other
+ * than an interrupted marker, that failure stands and nothing is written.
  */
 async function appendNoJudgesRow(
   cwd: string,
@@ -201,15 +208,28 @@ async function appendNoJudgesRow(
   } catch {
     return;
   }
-  const judged = existing.split("\n").some((line) => {
+  const rows = existing.split("\n").flatMap((line) => {
     try {
-      const row = JSON.parse(line) as { gate_name?: unknown; issue_number?: unknown };
-      return row.gate_name === JUDGE_GATE_NAME && row.issue_number === issueNumber;
+      const row = JSON.parse(line) as Partial<JudgeGateRecord>;
+      return row.gate_name === JUDGE_GATE_NAME && row.issue_number === issueNumber ? [row] : [];
     } catch {
-      return false;
+      return [];
     }
   });
-  if (!judged) return;
+  if (rows.length === 0) return;
+  // The latest attempt that actually judged: markers are skipped, so a marker
+  // that followed a real failing attempt cannot hide it. That attempt, plus
+  // every attempt-less row (with no attempt id, every row), must hold no real
+  // failure.
+  const isMarker = (row: Partial<JudgeGateRecord>): boolean =>
+    (row.error_summary ?? "").startsWith(JUDGES_INTERRUPTED_MARKER);
+  const judgedRows = rows.filter((row) => !isMarker(row));
+  const latest = judgedRows[judgedRows.length - 1]?.attempt_id;
+  const considered = latest
+    ? judgedRows.filter((row) => !row.attempt_id || row.attempt_id === latest)
+    : judgedRows;
+  const realFailure = considered.some((row) => row.result !== "pass");
+  if (realFailure) return;
   const record: JudgeGateRecord = {
     schema_version: "1",
     timestamp: new Date().toISOString(),

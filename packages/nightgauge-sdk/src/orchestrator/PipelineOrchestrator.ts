@@ -462,6 +462,12 @@ export class PipelineOrchestrator {
     // True only once the workflow returned un-aborted: an interrupted run's
     // judges are a partial set and must not form a superseding attempt.
     let workflowReturned = false;
+    // A quota-deferred or skipped fan-out ran no judge, so it is no attempt at
+    // all: folding it would close an earlier interrupted marker (#2880).
+    let deferred = false;
+    // A failed fan-out is no clean attempt: with no verdict it must not write
+    // the passing no-judges row that closes an earlier interrupted marker.
+    let failed = false;
     this.emitter.stageStarted(stage);
     try {
       // The EventBus is itself the canonical WorkflowEventSink, so the fan-out's
@@ -472,6 +478,8 @@ export class PipelineOrchestrator {
         abortSignal: abort.signal,
       });
       workflowReturned = !abort.signal.aborted;
+      deferred = result.quotaDeferred || result.summary.status === "skipped";
+      failed = result.summary.status === "failed";
       // The catch below emits the one failed terminal for this throw too.
       if (result.summary.status === "failed") {
         throw new Error(`workflow stage '${stage}' failed (status=${result.summary.status})`);
@@ -488,10 +496,11 @@ export class PipelineOrchestrator {
       // the stage result (#2880). An interrupted run folds without an attempt,
       // and one stopped before any node still leaves the interrupted marker.
       // A complete attempt that judged nothing closes an earlier judges attempt.
-      if (stage === "feature-validate") {
+      if (stage === "feature-validate" && !deferred) {
         await appendJudgeVerdicts(this.config.cwd, issueNumber, collected, {
           complete: workflowReturned,
-          attemptId: selection.spec.runId,
+          // Without an attempt id a complete run with no verdict writes no row.
+          attemptId: failed ? undefined : selection.spec.runId,
         });
       }
     }
@@ -808,14 +817,7 @@ export class PipelineOrchestrator {
       })) {
         messages.push(message);
       }
-      // A single-agent retry judges nothing, so it closes any earlier judges
-      // attempt (an interrupted marker included) instead of leaving it latest.
-      if (stage === "feature-validate") {
-        await appendJudgeVerdicts(this.config.cwd, issueNumber, [], {
-          complete: true,
-          attemptId: `sa-${issueNumber}-${stage}-${uuidV7()}`,
-        });
-      }
+      await this.closeSingleAgentJudges(stage, issueNumber, messages);
 
       return {
         stage,
@@ -906,7 +908,8 @@ export class PipelineOrchestrator {
 
       const { prompt, skillDir, allowedTools } = await this.stageSkill(stage, issueNumber);
 
-      yield* this.executor.execute({
+      const streamed: SDKMessage[] = [];
+      for await (const message of this.executor.execute({
         stage,
         issueNumber,
         prompt,
@@ -919,10 +922,36 @@ export class PipelineOrchestrator {
         skillDir,
         ...(allowedTools !== undefined && { allowedTools }),
         abortSignal,
-      });
+      })) {
+        streamed.push(message);
+        yield message;
+      }
+      await this.closeSingleAgentJudges(stage, issueNumber, streamed);
     } finally {
       release();
     }
+  }
+
+  /**
+   * A single-agent feature-validate that ended on a successful result judges
+   * nothing, so it closes an earlier interrupted judges marker instead of
+   * leaving it latest. An error result (max turns, budget) or no result at all
+   * is no completed attempt and leaves the marker standing, failing closed. Both
+   * `runStage` and `runStageStreaming` call it, so the two paths behind the one
+   * selection point record the same evidence (#2880).
+   */
+  private async closeSingleAgentJudges(
+    stage: PipelineStage,
+    issueNumber: number,
+    messages: ReadonlyArray<SDKMessage>
+  ): Promise<void> {
+    if (stage !== "feature-validate") return;
+    const last = [...messages].reverse().find((message) => message.type === "result");
+    if (!last || last.type !== "result" || last.subtype !== "success" || last.is_error) return;
+    await appendJudgeVerdicts(this.config.cwd, issueNumber, [], {
+      complete: true,
+      attemptId: `sa-${issueNumber}-${stage}-${uuidV7()}`,
+    });
   }
 
   /**

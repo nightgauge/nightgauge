@@ -140,8 +140,8 @@ func isReviewCapRow(r state.GateResult) bool {
 // state.JudgesInterruptedMarker) is released when any later row, in file
 // order, carries a Result under a GateName that is neither empty nor judges.
 // The SDK writes the marker after the interrupted attempt's own rows, so such
-// a row comes from a later attempt, and every completion path writes those
-// quality-gate rows whether or not it ran judges (#2880). A released marker
+// a row comes from a later attempt (in practice the adversarial-review row the
+// review gate records), whether or not it ran judges (#2880). A released marker
 // takes part in neither the attempt selection nor the verdicts. Later judges
 // rows do not release it: a partial run's judges must not clear it.
 func latestVerdicts(results []state.GateResult) []state.GateResult {

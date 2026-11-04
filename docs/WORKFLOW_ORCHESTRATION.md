@@ -382,16 +382,20 @@ among the stream's `run` nodes), so a later complete attempt can supersede it;
 with none it has no `attempt_id` and stands. A complete attempt that judged nothing (a
 judge-less workflow run or a single-agent retry) writes one passing row whose
 `error_summary` starts with `[judges-none]` under its own attempt, but only when
-the issue already has a `judges` row, so a retry can clear an earlier marker.
+the issue already has a `judges` row and its latest judges attempt holds no
+failure other than a marker, so a retry can clear an earlier marker but never a
+real failing judge. An interrupted run drops judges the abort cut off (status
+`failed`), since the marker already records them.
 The gate does not depend on that close: it also releases a `[judges-interrupted]`
 row once any later row, in file order, records a verdict for a gate other than
-`judges` (build, lint, test). Every completion path writes those rows, including
-a single-agent or orchestration-disabled run, so any completed retry clears the
-marker. Later `judges` rows alone do not, and a marker with no later attempt
+`judges`. In practice that is the `adversarial-review` row the review gate
+records (or a `verify-ui` row), so a retry that records no such row leaves the
+marker standing, which fails closed. Later `judges` rows alone do not, and a marker with no later attempt
 still fails.
 A failing record carries the judge's first-line
 `rationale` as `error_summary` for triage. The writer is non-critical (never
-throws) and writes an attempt in one append: every record must pass the Zod
+throws) and writes an attempt's judge rows in one append (an interrupted run's
+marker goes out first, separately): every record must pass the Zod
 schema first, and failures lead the payload, so neither a dropped row nor a torn
 write can leave a passing remainder. Each stage execution mints its own `runId`,
 so a retry is a new attempt. Only this writer may use the name: `AppendGateMetric` and
