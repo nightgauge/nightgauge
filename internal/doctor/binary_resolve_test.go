@@ -1587,6 +1587,8 @@ func markCoreCheckout(t *testing.T, dir string) {
 	// into .git during t.TempDir cleanup: "unlinkat .git: directory not empty" (#2759).
 	runGit(t, dir, "config", "maintenance.auto", "false")
 	runGit(t, dir, "config", "gc.auto", "0")
+	// If a writer still outlives the test, fail naming what it left in .git (#2786).
+	gittest.ReportWritersOnCleanup(t, dir)
 }
 
 func writeCoreGoMod(t *testing.T, dir, moduleLine string) {
@@ -1639,6 +1641,7 @@ func TestRepoBinGate(t *testing.T) {
 				runGit(t, repo, "commit", "--allow-empty", "-m", "init")
 				if tc.origin != "" {
 					runGit(t, repo, "remote", "add", "origin", tc.origin)
+					gittest.ReportWritersOnCleanup(t, repo)
 				}
 				writeCoreGoMod(t, repo, tc.module)
 				repoBin := filepath.Join(repo, "bin", "nightgauge")
