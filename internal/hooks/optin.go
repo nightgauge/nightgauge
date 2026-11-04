@@ -8,7 +8,8 @@ import (
 )
 
 // RepoOptedIn reports whether the repository holding workdir opted in to
-// Nightgauge: its committed project config (config.ProjectConfigPath) exists.
+// Nightgauge: its committed project config (config.ProjectConfigPath) exists,
+// or the legacy `.nightgauge/config.json` that config.Load still falls back to.
 //
 // The Claude plugin is user-scoped, so its hooks run in every repository the
 // user opens. Hooks that change behaviour rather than guard against damage
@@ -33,9 +34,14 @@ func RepoOptedIn(workdir string) bool {
 		workdir = wd
 	}
 	for _, root := range optInRoots(workdir) {
-		info, err := os.Stat(config.ProjectConfigPath(root))
-		if err == nil && info.Mode().IsRegular() {
-			return true
+		for _, path := range []string{
+			config.ProjectConfigPath(root),
+			filepath.Join(root, ".nightgauge", "config.json"),
+		} {
+			info, err := os.Stat(path)
+			if err == nil && info.Mode().IsRegular() {
+				return true
+			}
 		}
 	}
 	return false

@@ -47,6 +47,20 @@ func TestRepoOptedIn(t *testing.T) {
 		}
 	})
 
+	t.Run("legacy config.json opts in", func(t *testing.T) {
+		repo := gittest.InitRepo(t, t.TempDir(), "-q")
+		legacy := filepath.Join(repo, ".nightgauge", "config.json")
+		if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(legacy, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !RepoOptedIn(repo) {
+			t.Fatal("a repository configured by the legacy config.json must be opted in")
+		}
+	})
+
 	t.Run("local-tier config alone does not opt in", func(t *testing.T) {
 		repo := gittest.InitRepo(t, t.TempDir(), "-q")
 		local := config.LocalConfigPath(repo)

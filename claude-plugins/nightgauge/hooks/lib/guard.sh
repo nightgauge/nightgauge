@@ -274,7 +274,8 @@ _ng_repo_bin_trusted() {
 }
 
 # _ng_repo_opted_in succeeds when the repository holding the working directory
-# opted in to Nightgauge: .nightgauge/config.yaml is a regular file at the git
+# opted in to Nightgauge: .nightgauge/config.yaml (or the legacy config.json
+# the loader still reads) is a regular file at the git
 # toplevel (the directory itself outside git) or at a worktree's canonical
 # checkout. Same rule as RepoOptedIn in internal/hooks/optin.go (#2765); it
 # lives here because the `gate` policy must decide without the binary.
@@ -282,11 +283,11 @@ _ng_repo_opted_in() {
   local top common
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
   [ -n "$top" ] || top="$(pwd)"
-  [ -f "$top/.nightgauge/config.yaml" ] && return 0
+  [ -f "$top/.nightgauge/config.yaml" ] || [ -f "$top/.nightgauge/config.json" ] && return 0
   common="$(git rev-parse --git-common-dir 2>/dev/null)" || return 1
   [ -n "$common" ] || return 1
   common="$(cd "$common/.." 2>/dev/null && pwd)" || return 1
-  [ -f "$common/.nightgauge/config.yaml" ]
+  [ -f "$common/.nightgauge/config.yaml" ] || [ -f "$common/.nightgauge/config.json" ]
 }
 
 # 2-3. Same-repo build, then the canonical repo when invoked from a worktree
