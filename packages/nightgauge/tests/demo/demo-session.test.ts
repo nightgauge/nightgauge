@@ -99,6 +99,12 @@ describe("demo session plan", () => {
       p.env.NIGHTGAUGE_DEMO_IPC_LOG,
       p.env.NIGHTGAUGE_CONFIG_HOME,
       p.env.NIGHTGAUGE_STATE_HOME,
+      // Activation re-syncs skills into these; never the operator's (#2935).
+      p.env.HOME,
+      p.env.CODEX_HOME,
+      p.env.GROK_HOME,
+      p.env.XDG_CONFIG_HOME,
+      p.env.CLAUDE_CONFIG_DIR,
     ]) {
       expect(file.startsWith(home + path.sep), file).toBe(true);
     }

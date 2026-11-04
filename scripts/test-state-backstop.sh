@@ -26,6 +26,15 @@
 #      list runs to most of a megabyte, and this suite's own matcher still
 #      finds that line in the output that size (#2360). Deterministic: no
 #      load needed.
+#  13-17. Agent homes (#2935): untouched → 0; a changed file under each of
+#      ~/.codex/skills, ~/.grok/skills, ~/.config/opencode (skills, the
+#      _shared/ includes, plugins/nightgauge/), ~/.claude/plugins → 1 named
+#      "changed"; a skill added under ~/.codex/skills → 1 named;
+#      an agent root absent before and after → 0; one removed → 1; a
+#      nightgauge plugin entry re-pointed → 1; the agents' own writes (store/,
+#      .system/, node_modules/, timestamps) → 0; a re-sync through a
+#      symlinked agent home → 1; an agent home created mid-run holding only
+#      the agent's own files → 0; a leak through an exported CODEX_HOME → 1.
 #
 # Run: bash scripts/test-state-backstop.sh
 # Also run by scripts/ci-local.sh.
@@ -55,12 +64,29 @@ fixture() {
   printf 'legacy-id\n' >"$home/.nightgauge/machine-id"
   printf 'claim\n' >"$home/$STATE_REL/serve/claim-1.json"
   printf 'id\n' >"$home/$STATE_REL/machine-id"
+  local d
+  for d in .codex/skills .grok/skills .config/opencode/skills; do
+    mkdir -p "$home/$d/nightgauge-x"
+    printf 'skill\n' >"$home/$d/nightgauge-x/SKILL.md"
+  done
+  mkdir -p "$home/.codex/skills/_shared" "$home/.config/opencode/skills/_shared" \
+    "$home/.config/opencode/plugins/nightgauge"
+  printf 'inc\n' >"$home/.codex/skills/_shared/inc.md"
+  printf 'inc\n' >"$home/.config/opencode/skills/_shared/inc.md"
+  printf 'lib\n' >"$home/.config/opencode/plugins/nightgauge/lib.js"
+  mkdir -p "$home/.claude/plugins"
+  printf '{"version":2,"plugins":{"nightgauge@ng":[{"scope":"user","version":"1.0.0","lastUpdated":"t0"}]}}\n' \
+    >"$home/.claude/plugins/installed_plugins.json"
   printf '%s\n' "$home"
 }
 
 # run_arm <home> <mutation> : snapshot, mutate, compare. Echoes output; returns rc.
 run_arm() {
   local home="$1" mutation="$2"
+  # An operator's exported agent-home overrides are watched too; keep them
+  # out of the arms, except the one ARM_CODEX_HOME sets.
+  unset GROK_HOME XDG_CONFIG_HOME CLAUDE_CONFIG_DIR
+  if [ -n "${ARM_CODEX_HOME:-}" ]; then export CODEX_HOME="$ARM_CODEX_HOME"; else unset CODEX_HOME; fi
   HOME="$home" NIGHTGAUGE_STATE_HOME="${ARM_STATE_OVERRIDE:-}" bash "$BACKSTOP" snapshot "$home.before" || return 2
   (cd "$home" && eval "$mutation")
   HOME="$home" bash "$BACKSTOP" snapshot "$home.after" || return 2
@@ -124,6 +150,66 @@ h="$(fixture override)"
 ARM_STATE_OVERRIDE="$TMP/elsewhere"
 expect "an override does not move the watched STATE" 1 "removed: $h/$STATE_REL/machine-id" "$h" "rm $STATE_REL/machine-id"
 unset ARM_STATE_OVERRIDE
+
+for f in .codex/skills/nightgauge-x/SKILL.md .grok/skills/nightgauge-x/SKILL.md \
+  .config/opencode/skills/nightgauge-x/SKILL.md .codex/skills/_shared/inc.md \
+  .config/opencode/skills/_shared/inc.md .config/opencode/plugins/nightgauge/lib.js; do
+  h="$(fixture "agent-changed-${f//\//_}")"
+  expect "a changed file under an agent home fails, named: $f" 1 "changed: $h/$f" "$h" "printf 'synced\n' > $f"
+done
+
+h="$(fixture agent-claude-version)"
+expect "a re-pointed nightgauge plugin version fails, named" 1 \
+  "changed: $h/.claude/plugins/installed_plugins.json#nightgauge@ng" "$h" \
+  "sed -i.bak 's/1.0.0/9.9.9/' .claude/plugins/installed_plugins.json"
+
+# Claude Code and Codex rewrite their own files whenever a session starts;
+# a pipeline slot starts one while the gate runs. None of it is Nightgauge's.
+h="$(fixture agent-tool-owned)"
+expect "writes the agents make to their own files pass" 0 "as the run found them" "$h" \
+  "mkdir -p .claude/plugins/store .codex/skills/.system/x .config/opencode/node_modules && \
+   printf x > .claude/plugins/store/a.json && printf x > .codex/skills/.system/x/SKILL.md && \
+   printf x > .config/opencode/node_modules/m.js && printf x > .codex/skills/my-own/SKILL.md 2>/dev/null; \
+   sed -i.bak 's/t0/t1/' .claude/plugins/installed_plugins.json && rm .claude/plugins/installed_plugins.json.bak"
+
+# A dotfiles setup links an agent home from elsewhere; a re-sync through the
+# link must still fail.
+h="$(fixture agent-symlinked)"
+mv "$h/.config/opencode" "$TMP/opencode-dotfiles-$$"
+ln -s "$TMP/opencode-dotfiles-$$" "$h/.config/opencode"
+expect "a re-sync through a symlinked agent home fails, named" 1 \
+  "changed: $h/.config/opencode/skills/nightgauge-x/SKILL.md" "$h" \
+  "printf 'synced\\n' > .config/opencode/skills/nightgauge-x/SKILL.md"
+
+# An exported CODEX_HOME is the operator's real install: a leak there fails.
+h="$(fixture agent-override)"
+mkdir -p "$TMP/codex-override-$$/skills/nightgauge-x"
+printf 'skill\n' >"$TMP/codex-override-$$/skills/nightgauge-x/SKILL.md"
+ARM_CODEX_HOME="$TMP/codex-override-$$"
+expect "a leak through an exported CODEX_HOME fails, named" 1 \
+  "changed: $TMP/codex-override-$$/skills/nightgauge-x/SKILL.md" "$h" \
+  "printf 'synced\\n' > $TMP/codex-override-$$/skills/nightgauge-x/SKILL.md"
+unset ARM_CODEX_HOME
+
+# An agent creating its home mid-run for its own files is not a leak.
+h="$(fixture agent-created-own)"
+rm -rf "$h/.codex" "$h/.claude"
+expect "an agent home created mid-run with only the agent's files passes" 0 "as the run found them" "$h" \
+  "mkdir -p .codex/skills/.system/x .claude/plugins && printf x > .codex/skills/.system/x/SKILL.md && \
+   printf '{\"plugins\":{}}' > .claude/plugins/installed_plugins.json"
+
+h="$(fixture agent-untouched)"
+expect "untouched agent homes pass, named in the success line" 0 "$h/.claude/plugins are as the run found them" "$h" ":"
+
+h="$(fixture agent-added)"
+expect "a skill added under ~/.codex/skills fails, named" 1 "added:   $h/.codex/skills/nightgauge-y" "$h" "mkdir .codex/skills/nightgauge-y"
+
+h="$(fixture agent-absent)"
+rm -rf "$h/.grok"
+expect "an agent home absent before and after passes" 0 "as the run found them" "$h" ":"
+
+h="$(fixture agent-gone)"
+expect "a removed agent home fails" 1 "the directory itself is gone" "$h" "rm -rf .grok/skills"
 
 # 12 (#2360). compare() asked "is this removed path also added?" by piping the
 # added list into grep -q under pipefail. With a list this size, grep matches

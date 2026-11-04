@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The local gate's VS Code host smoke tests no longer re-sync the worktree's
+  skills into your real `~/.codex/skills`, `~/.grok/skills` and
+  `~/.config/opencode` (#2935). Each test window now runs under a scratch
+  `HOME` with scratch `CODEX_HOME`, `GROK_HOME`, `XDG_CONFIG_HOME` and
+  `CLAUDE_CONFIG_DIR`, and the vitest tier overrides the same variables. The
+  gate's final machine-state check now also watches those agent homes and
+  `~/.claude/plugins`, so a future leak fails the gate and names the path.
+  The test windows run with `--use-mock-keychain` on macOS and
+  `--password-store=basic` on Linux, so the scratch `HOME` raises no
+  "Keychain Not Found" dialog. `npm run demo` gets the same
+  isolation. The machine-state check watches only what Nightgauge installs
+  there, so Claude Code or Codex refreshing its own files does not fail it.
+
 - A doctor test whose repository has an `origin` now fails its cleanup by naming what is still
   writing `.git` (each leftover entry with size and mtime, `gc.pid` and `gc.log` contents, and the
   likely writer: `git gc`, `git maintenance` or a held lock) instead of a bare
