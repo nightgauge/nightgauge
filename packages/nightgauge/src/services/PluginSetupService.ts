@@ -515,11 +515,67 @@ export class PluginSetupService implements vscode.Disposable {
   }
 
   /**
-   * Manually trigger the setup prompt
+   * The `nightgauge.setupPlugins` command: always offers to install or update,
+   * whatever `plugins.autoPrompt` or an earlier "Don't Show Again" says (#2762).
+   * The activation path, checkAndPromptSetup(), is the one autoPrompt governs.
    */
   async showSetupPrompt(): Promise<void> {
     await this.resetDismissed();
-    await this.checkAndPromptSetup();
+    const config = getPluginConfig();
+    this.marketplace.repoUrl = config.marketplaceUrl;
+
+    let status = await this.getPluginStatus();
+    if (!status.claudeCliAvailable) {
+      await this.promptClaudeCliInstall();
+      return;
+    }
+    const stable = ensureStableMarketplace(this.context, (message) =>
+      this.outputChannel.appendLine(`WARNING: ${message}`)
+    );
+    status = await this.repairIfNeeded(status, stable);
+    if (status.plugin === "absent") {
+      await this.promptPluginInstall(status);
+      return;
+    }
+
+    const selection = await vscode.window.showInformationMessage(
+      "Update the Nightgauge Claude Code plugin?",
+      {
+        modal: true,
+        detail:
+          "Refreshes the Nightgauge marketplace and updates the installed plugin " +
+          "to the copy bundled with this extension.",
+      },
+      "Update Plugins",
+      "Later"
+    );
+    if (selection === "Update Plugins") {
+      await this.updatePlugins();
+    }
+  }
+
+  /** Refresh the registered marketplace and update the installed plugin. */
+  private async updatePlugins(): Promise<void> {
+    this.outputChannel.show(true);
+    try {
+      await execFileAsync("claude", [
+        "plugin",
+        "marketplace",
+        "update",
+        this.marketplace.marketplaceName,
+      ]);
+      for (const plugin of this.marketplace.plugins) {
+        await execFileAsync("claude", ["plugin", "update", this.pluginId(plugin)]);
+        this.outputChannel.appendLine(`✓ ${plugin} updated`);
+      }
+      vscode.window.showInformationMessage(
+        "Nightgauge plugins updated. Restart Claude Code sessions to load them."
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.outputChannel.appendLine(`✗ Update failed: ${errorMessage}`);
+      vscode.window.showErrorMessage(`Failed to update plugins: ${errorMessage}`);
+    }
   }
 
   /**

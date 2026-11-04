@@ -9,6 +9,20 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Codex, Grok and OpenCode skills the extension installs now match the ones
+  `scripts/install-agent-skills.sh` installs, and an extension upgrade re-syncs them on
+  activation, whatever `nightgauge.plugins.autoPrompt` says (#2762).
+
+- `Nightgauge: Setup Codex Commands` is now `Nightgauge: Setup Codex Skills`. It installs
+  `~/.codex/skills/` only; the old command files called a script the extension does not ship,
+  and Codex does not read `~/.codex/commands/`. Invoke stages as `$nightgauge-issue-pickup`
+  (#2762).
+
+- The Codex, Grok and Claude Code setup commands now always offer to install or update,
+  even with `nightgauge.plugins.autoPrompt` off (#2762).
+
 ## [0.8.0] - 2026-11-04
 
 ### Fixed

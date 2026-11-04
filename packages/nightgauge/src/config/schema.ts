@@ -2814,7 +2814,7 @@ export type UIWarningsConfig = z.infer<typeof UIWarningsConfigSchema>;
  * Plugins configuration
  *
  * @behavior
- * - `auto_prompt`: Auto-prompt to install Claude plugins, Codex commands, and Grok skills
+ * - `auto_prompt`: Auto-prompt to install Claude plugins and Codex, Grok and OpenCode skills
  * - `marketplace_url`: Git URL for plugin marketplace
  */
 export const UIPluginsConfigSchema = z.object({

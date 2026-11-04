@@ -272,7 +272,7 @@
       },
       {
         "command": "nightgauge.setupCodex",
-        "title": "Nightgauge: Setup Codex Commands",
+        "title": "Nightgauge: Setup Codex Skills",
         "icon": "$(terminal)"
       },
       {
@@ -1543,7 +1543,7 @@
         "nightgauge.plugins.autoPrompt": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically prompt to install Claude plugins, Codex commands, and Grok skills on startup"
+          "description": "Automatically prompt to install Claude plugins and Codex, Grok and OpenCode skills on startup. Installed skills re-sync after an extension upgrade either way."
         },
         "nightgauge.plugins.marketplaceUrl": {
           "type": "string",

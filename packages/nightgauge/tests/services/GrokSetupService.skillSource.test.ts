@@ -81,9 +81,9 @@ describe("GrokSetupService skill source", () => {
     prevGrokHome = process.env.GROK_HOME;
     process.env.GROK_HOME = grokHome;
 
-    // The fake bundle: the plugin mirror layout the VSIX ships.
-    const bundle = path.join(extensionPath, "dist", "claude-plugins", "nightgauge", "skills");
-    write(path.join(bundle, "issue-create", "SKILL.md"), BUNDLED);
+    // The fake bundle: the canonical tree the VSIX ships under dist/skills.
+    const bundle = path.join(extensionPath, "dist", "skills");
+    write(path.join(bundle, "nightgauge-issue-create", "SKILL.md"), BUNDLED);
     write(path.join(bundle, "_shared", "PREFLIGHT.md"), "# preflight\n");
 
     // The trusted workspace: a skill of its own, and one that shadows a

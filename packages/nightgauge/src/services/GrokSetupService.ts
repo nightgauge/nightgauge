@@ -3,8 +3,13 @@
  *
  * Installs the Nightgauge plugin via `grok plugin` when possible, and always
  * copies bundled skills into ~/.grok/skills so Grok works even if plugin
- * install is flaky. The workspace's `skills/` is used only by the separate
- * development command, installSkillsFromWorkspace().
+ * install is flaky. The skills are the VSIX's canonical tree (dist/skills),
+ * the one `scripts/install-agent-skills.sh` installs (#2762). The workspace's
+ * `skills/` is used only by the separate development command,
+ * installSkillsFromWorkspace().
+ *
+ * An upgrade re-syncs installed skills on activation, whatever
+ * `plugins.autoPrompt` says: that setting governs install offers only.
  */
 
 import * as vscode from "vscode";
@@ -19,14 +24,17 @@ import { getPrefixedMainChannel } from "../utils/logger";
 import {
   copySkillsTree,
   installWorkspaceSkills,
-  isCompleteBundledSource,
   reportSkillCopy,
   resolveBundledSkillsDir,
+  stampInstalledVersion,
+  staleInstalledVersion,
 } from "./bundledSkills";
 import { ensureStableMarketplace } from "./stableMarketplace";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
+
+const TARGET = "grok";
 
 const DEFAULT_MARKETPLACE_URL = "https://github.com/nightgauge/nightgauge.git";
 
@@ -58,7 +66,18 @@ export class GrokSetupService implements vscode.Disposable {
     this.outputChannel = getPrefixedMainChannel("grok-setup");
   }
 
+  /**
+   * Activation: re-sync installed skills a different extension version
+   * installed, then offer an install when `plugins.autoPrompt` allows it.
+   */
   async checkAndPromptSetup(): Promise<void> {
+    const staleVersion = staleInstalledVersion(this.context, TARGET, this.skillsInstalled());
+    if (staleVersion) {
+      this.outputChannel.appendLine(`Re-syncing Grok skills to extension ${staleVersion}...`);
+      await this.resyncSkills(staleVersion);
+      return;
+    }
+
     const autoPrompt = vscode.workspace
       .getConfiguration("nightgauge")
       .get<boolean>("plugins.autoPrompt", true);
@@ -81,32 +100,53 @@ export class GrokSetupService implements vscode.Disposable {
       return;
     }
 
+    await this.prompt(false);
+  }
+
+  /**
+   * The `nightgauge.setupGrok` command: always offers to install or update,
+   * whatever `plugins.autoPrompt` or an earlier "Don't Show Again" says.
+   */
+  async showSetupPrompt(): Promise<void> {
+    await this.context.globalState.update(GrokSetupService.DISMISSED_KEY, false);
+    const status = await this.getStatus();
+    if (!status.grokCliAvailable) {
+      vscode.window.showInformationMessage(
+        "The `grok` CLI was not found on PATH. Install Grok, then run " +
+          "'Nightgauge: Setup Grok Skills' again. Nothing was written."
+      );
+      return;
+    }
+    await this.prompt(status.nightgaugeInstalled);
+  }
+
+  private async prompt(installed: boolean): Promise<void> {
+    const action = installed ? "Update" : "Install";
     const selection = await vscode.window.showInformationMessage(
-      "Nightgauge skills are not installed for Grok. Install them now?",
-      { modal: true },
-      "Install",
+      installed
+        ? "Update the Nightgauge Grok skills to this extension's version?"
+        : "Nightgauge skills are not installed for Grok. Install them now?",
+      {
+        modal: true,
+        detail:
+          `Copies the skills bundled with this extension into ${path.join(grokHome(), "skills")} ` +
+          "and installs the Nightgauge Grok plugin. Only directories Nightgauge installed " +
+          "are replaced.",
+      },
+      action,
       "Later",
       "Don't Show Again"
     );
 
-    if (selection === "Install") {
+    if (selection === action) {
       await this.installAssets();
     } else if (selection === "Don't Show Again") {
       await this.context.globalState.update(GrokSetupService.DISMISSED_KEY, true);
     }
   }
 
-  async showSetupPrompt(): Promise<void> {
-    await this.context.globalState.update(GrokSetupService.DISMISSED_KEY, false);
-    await this.checkAndPromptSetup();
-  }
-
   private skillsInstalled(): boolean {
-    const dest = path.join(grokHome(), "skills");
-    return (
-      fs.existsSync(path.join(dest, "nightgauge-issue-create", "SKILL.md")) ||
-      fs.existsSync(path.join(dest, "issue-create", "SKILL.md"))
-    );
+    return fs.existsSync(path.join(grokHome(), "skills", "nightgauge-issue-create", "SKILL.md"));
   }
 
   private async getStatus(): Promise<{
@@ -172,17 +212,34 @@ export class GrokSetupService implements vscode.Disposable {
     const dest = path.join(grokHome(), "skills");
     const source = resolveBundledSkillsDir(this.context.extensionPath);
     if (!source) {
-      throw new Error(
-        "No bundled Grok skills found (dist/claude-plugins/nightgauge/skills or dist/skills)."
-      );
+      throw new Error("No bundled Grok skills found (dist/skills).");
     }
     const result = await copySkillsTree(
       source,
       dest,
       (message) => this.outputChannel.appendLine(`WARNING: ${message}`),
-      { prune: isCompleteBundledSource(this.context.extensionPath, source) }
+      { prune: true }
     );
-    return reportSkillCopy("Grok", result, this.outputChannel);
+    const complete = reportSkillCopy("Grok", result, this.outputChannel);
+    await stampInstalledVersion(this.context, TARGET);
+    return complete;
+  }
+
+  /**
+   * Activation re-sync of installed skills, without opening the output
+   * channel. The Grok plugin is not reinstalled: its marketplace is the stable
+   * copy ensureStableMarketplace() keeps at this extension's version.
+   */
+  private async resyncSkills(version: string): Promise<void> {
+    try {
+      if (await this.copySkills()) {
+        vscode.window.showInformationMessage(`Nightgauge updated its Grok skills to ${version}.`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.outputChannel.appendLine(`✗ Re-sync failed: ${errorMessage}`);
+      vscode.window.showErrorMessage(`Failed to update Grok skills: ${errorMessage}`);
+    }
   }
 
   /**

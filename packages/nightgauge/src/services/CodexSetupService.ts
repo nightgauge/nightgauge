@@ -1,10 +1,15 @@
 /**
- * CodexSetupService - Codex CLI command/skill installation management
+ * CodexSetupService - Codex CLI skill installation management
  *
- * Installs Nightgauge Codex slash commands into ~/.codex/commands and copies
- * skills into ~/.codex/skills, both from the VSIX bundle. A workspace's
- * `.codex/commands/` is never copied, and its `skills/` is used only by the
- * separate development command, installSkillsFromWorkspace().
+ * Copies the VSIX's canonical skills (dist/skills) into ~/.codex/skills, which
+ * Codex loads and exposes as `$<skill-name>`: the tree
+ * `scripts/install-agent-skills.sh` installs. Codex does not read
+ * ~/.codex/commands, so nothing is installed there (#2762). A workspace's
+ * `skills/` is used only by the separate development command,
+ * installSkillsFromWorkspace().
+ *
+ * An upgrade re-syncs installed skills on activation, whatever
+ * `plugins.autoPrompt` says: that setting governs install offers only.
  */
 
 import * as vscode from "vscode";
@@ -17,25 +22,24 @@ import { getPrefixedMainChannel } from "../utils/logger";
 import {
   copySkillsTree,
   installWorkspaceSkills,
-  isCompleteBundledSource,
   reportSkillCopy,
   resolveBundledSkillsDir,
+  stampInstalledVersion,
+  staleInstalledVersion,
 } from "./bundledSkills";
 
 const execAsync = promisify(exec);
+
+const TARGET = "codex";
+const ENTRY_SKILL = "nightgauge-issue-pickup";
 
 function codexHome(): string {
   return process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 }
 
-const REQUIRED_COMMANDS = [
-  "nightgauge-issue-pickup.md",
-  "nightgauge-feature-planning.md",
-  "nightgauge-feature-dev.md",
-  "nightgauge-feature-validate.md",
-  "nightgauge-pr-create.md",
-  "nightgauge-pr-merge.md",
-] as const;
+function codexSkillsDir(): string {
+  return path.join(codexHome(), "skills");
+}
 
 export class CodexSetupService implements vscode.Disposable {
   private static readonly DISMISSED_KEY = "nightgauge.codexSetup.dismissed";
@@ -51,7 +55,18 @@ export class CodexSetupService implements vscode.Disposable {
     this.outputChannel = getPrefixedMainChannel("codex-setup");
   }
 
+  /**
+   * Activation: re-sync installed skills a different extension version
+   * installed, then offer an install when `plugins.autoPrompt` allows it.
+   */
   async checkAndPromptSetup(): Promise<void> {
+    const staleVersion = staleInstalledVersion(this.context, TARGET, this.skillsInstalled());
+    if (staleVersion) {
+      this.outputChannel.appendLine(`Re-syncing Codex skills to extension ${staleVersion}...`);
+      await this.installAssets(staleVersion);
+      return;
+    }
+
     const autoPrompt = vscode.workspace
       .getConfiguration("nightgauge")
       .get<boolean>("plugins.autoPrompt", true);
@@ -71,108 +86,111 @@ export class CodexSetupService implements vscode.Disposable {
       return;
     }
 
-    if (status.commandsInstalled) {
+    if (status.skillsInstalled) {
       await this.context.globalState.update(CodexSetupService.INSTALLED_KEY, true);
       return;
     }
 
+    await this.prompt(false);
+  }
+
+  /**
+   * The `nightgauge.setupCodex` command: always offers to install or update,
+   * whatever `plugins.autoPrompt` or an earlier "Don't Show Again" says.
+   */
+  async showSetupPrompt(): Promise<void> {
+    await this.context.globalState.update(CodexSetupService.DISMISSED_KEY, false);
+    const status = await this.getStatus();
+    if (!status.codexCliAvailable) {
+      vscode.window.showInformationMessage(
+        "The `codex` CLI was not found on PATH. Install Codex, then run " +
+          "'Nightgauge: Setup Codex Skills' again. Nothing was written."
+      );
+      return;
+    }
+    await this.prompt(status.skillsInstalled);
+  }
+
+  private async prompt(installed: boolean): Promise<void> {
+    const action = installed ? "Update Codex Skills" : "Install Codex Skills";
     const selection = await vscode.window.showInformationMessage(
-      "Nightgauge Codex slash commands are not installed. Install them now?",
-      { modal: true },
-      "Install Codex Commands",
+      installed
+        ? "Update the Nightgauge Codex skills to this extension's version?"
+        : "Nightgauge Codex skills are not installed. Install them now?",
+      {
+        modal: true,
+        detail:
+          `Copies the skills bundled with this extension into ${codexSkillsDir()}. ` +
+          "Only directories Nightgauge installed are replaced.",
+      },
+      action,
       "Later",
       "Don't Show Again"
     );
 
-    if (selection === "Install Codex Commands") {
+    if (selection === action) {
       await this.installAssets();
     } else if (selection === "Don't Show Again") {
       await this.context.globalState.update(CodexSetupService.DISMISSED_KEY, true);
     }
   }
 
-  async showSetupPrompt(): Promise<void> {
-    await this.context.globalState.update(CodexSetupService.DISMISSED_KEY, false);
-    await this.checkAndPromptSetup();
+  private skillsInstalled(): boolean {
+    return fs.existsSync(path.join(codexSkillsDir(), ENTRY_SKILL, "SKILL.md"));
   }
 
   private async getStatus(): Promise<{
     codexCliAvailable: boolean;
-    commandsInstalled: boolean;
+    skillsInstalled: boolean;
   }> {
-    let codexCliAvailable: boolean;
     try {
       await execAsync("codex --version");
-      codexCliAvailable = true;
     } catch {
-      return { codexCliAvailable: false, commandsInstalled: false };
+      return { codexCliAvailable: false, skillsInstalled: false };
     }
-
-    const commandsDir = path.join(codexHome(), "commands");
-    const commandsInstalled = REQUIRED_COMMANDS.every((file) =>
-      fs.existsSync(path.join(commandsDir, file))
-    );
-
-    return { codexCliAvailable, commandsInstalled };
+    return { codexCliAvailable: true, skillsInstalled: this.skillsInstalled() };
   }
 
   /**
-   * The VSIX bundle's command definitions, never a workspace's
-   * `.codex/commands/`: every Codex session loads ~/.codex/commands.
+   * Install from the VSIX bundle only, never the workspace: the development
+   * source is installSkillsFromWorkspace(). A re-sync to `resyncVersion` does
+   * not open the output channel.
    */
-  private resolveCommandsSourceDir(): string | null {
-    const bundledSource = path.join(this.context.extensionPath, "resources", "codex", "commands");
-    return fs.existsSync(bundledSource) ? bundledSource : null;
-  }
-
-  private async installAssets(): Promise<void> {
-    this.outputChannel.show(true);
-    this.outputChannel.appendLine("Starting Codex asset installation...\n");
+  private async installAssets(resyncVersion?: string): Promise<void> {
+    if (!resyncVersion) {
+      this.outputChannel.show(true);
+      this.outputChannel.appendLine("Starting Codex skill installation...\n");
+    }
 
     try {
-      const sourceCommandsDir = this.resolveCommandsSourceDir();
-      if (!sourceCommandsDir) {
-        throw new Error("No bundled Codex commands found (resources/codex/commands).");
+      const source = resolveBundledSkillsDir(this.context.extensionPath);
+      if (!source) {
+        throw new Error("No bundled Codex skills found (dist/skills).");
       }
-
-      const commandsDest = path.join(codexHome(), "commands");
-      await fs.promises.mkdir(commandsDest, { recursive: true });
-
-      for (const file of REQUIRED_COMMANDS) {
-        await fs.promises.copyFile(
-          path.join(sourceCommandsDir, file),
-          path.join(commandsDest, file)
-        );
-      }
-
-      // Skill sync reads the VSIX bundle only, never the workspace: the
-      // development source is installSkillsFromWorkspace().
-      const sourceSkillsDir = resolveBundledSkillsDir(this.context.extensionPath);
-      let skillsComplete = true;
-      if (sourceSkillsDir) {
-        const result = await copySkillsTree(
-          sourceSkillsDir,
-          path.join(codexHome(), "skills"),
-          (message) => this.outputChannel.appendLine(`WARNING: ${message}`),
-          { prune: isCompleteBundledSource(this.context.extensionPath, sourceSkillsDir) }
-        );
-        skillsComplete = reportSkillCopy("Codex", result, this.outputChannel);
-      }
+      const dest = codexSkillsDir();
+      const result = await copySkillsTree(
+        source,
+        dest,
+        (message) => this.outputChannel.appendLine(`WARNING: ${message}`),
+        { prune: true }
+      );
+      const complete = reportSkillCopy("Codex", result, this.outputChannel);
 
       await this.context.globalState.update(CodexSetupService.INSTALLED_KEY, true);
+      await stampInstalledVersion(this.context, TARGET);
+      this.outputChannel.appendLine(`✓ Destination: ${dest}`);
 
-      this.outputChannel.appendLine("✓ Codex commands installed");
-      this.outputChannel.appendLine(`✓ Destination: ${commandsDest}`);
-
-      if (skillsComplete) {
+      if (complete) {
         vscode.window.showInformationMessage(
-          "Nightgauge Codex commands installed. Try /nightgauge-issue-pickup."
+          resyncVersion
+            ? `Nightgauge updated its Codex skills to ${resyncVersion}.`
+            : `Nightgauge Codex skills installed. Try $${ENTRY_SKILL}.`
         );
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.outputChannel.appendLine(`✗ Installation failed: ${errorMessage}`);
-      vscode.window.showErrorMessage(`Failed to install Codex commands: ${errorMessage}`);
+      vscode.window.showErrorMessage(`Failed to install Codex skills: ${errorMessage}`);
     }
   }
 
@@ -181,7 +199,7 @@ export class CodexSetupService implements vscode.Disposable {
    * `skills/`, behind workspace trust and a modal confirmation.
    */
   async installSkillsFromWorkspace(): Promise<void> {
-    await installWorkspaceSkills("Codex", path.join(codexHome(), "skills"), this.outputChannel);
+    await installWorkspaceSkills("Codex", codexSkillsDir(), this.outputChannel);
   }
 
   dispose(): void {

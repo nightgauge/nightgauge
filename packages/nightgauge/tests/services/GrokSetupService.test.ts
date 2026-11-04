@@ -40,12 +40,18 @@ vi.mock("util", () => ({
   promisify: vi.fn(() => mockExecAsync),
 }));
 
-function makeMockContext(extensionPath: string, overrides?: { dismissed?: boolean }) {
+function makeMockContext(
+  extensionPath: string,
+  overrides?: { dismissed?: boolean; installedVersion?: string }
+) {
   return {
     globalState: {
       get: vi.fn((key: string, defaultValue?: unknown) => {
         if (key === "nightgauge.grokSetup.dismissed") {
           return overrides?.dismissed ?? defaultValue ?? false;
+        }
+        if (key === "nightgauge.grokSetup.installedVersion") {
+          return overrides?.installedVersion ?? defaultValue;
         }
         if (key === "nightgauge.grokSetup.installed") {
           return defaultValue ?? false;
@@ -149,39 +155,19 @@ describe("GrokSetupService", () => {
     );
   });
 
-  it("Install copies bundled plugin skills into GROK_HOME", async () => {
+  it("Install copies the bundled canonical skills into GROK_HOME", async () => {
     const vscode = await import("vscode");
     vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Install" as never);
 
-    const pluginSkills = path.join(
-      extensionPath,
-      "dist",
-      "claude-plugins",
-      "nightgauge",
-      "skills",
-      "issue-create"
-    );
-    fs.mkdirSync(path.join(pluginSkills, "_includes"), { recursive: true });
-    fs.writeFileSync(path.join(pluginSkills, "SKILL.md"), "# issue-create\n");
-    fs.writeFileSync(path.join(pluginSkills, "_includes", "environment-and-content.md"), "# env\n");
-    fs.mkdirSync(
-      path.join(extensionPath, "dist", "claude-plugins", "nightgauge", "skills", "_shared"),
-      {
-        recursive: true,
-      }
-    );
+    const bundled = path.join(extensionPath, "dist", "skills");
+    fs.mkdirSync(path.join(bundled, "nightgauge-issue-create", "_includes"), { recursive: true });
+    fs.writeFileSync(path.join(bundled, "nightgauge-issue-create", "SKILL.md"), "# issue-create\n");
     fs.writeFileSync(
-      path.join(
-        extensionPath,
-        "dist",
-        "claude-plugins",
-        "nightgauge",
-        "skills",
-        "_shared",
-        "PREFLIGHT.md"
-      ),
-      "# preflight\n"
+      path.join(bundled, "nightgauge-issue-create", "_includes", "environment-and-content.md"),
+      "# env\n"
     );
+    fs.mkdirSync(path.join(bundled, "_shared"), { recursive: true });
+    fs.writeFileSync(path.join(bundled, "_shared", "PREFLIGHT.md"), "# preflight\n");
     fs.mkdirSync(path.join(extensionPath, "dist", ".claude-plugin"), { recursive: true });
     fs.writeFileSync(
       path.join(extensionPath, "dist", ".claude-plugin", "marketplace.json"),
@@ -246,5 +232,161 @@ describe("GrokSetupService", () => {
       "add",
       "https://github.com/nightgauge/nightgauge.git",
     ]);
+  });
+
+  describe("installed version stamp (#2762)", () => {
+    const skillFile = () => path.join(grokHome, "skills", "nightgauge-issue-create", "SKILL.md");
+
+    function bundle(content: string): void {
+      const dir = path.join(extensionPath, "dist", "skills", "nightgauge-issue-create");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "SKILL.md"), content);
+    }
+
+    /** An install an older extension made: marked, so a re-sync may replace it. */
+    function installed(content: string): void {
+      const dir = path.dirname(skillFile());
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "SKILL.md"), content);
+      fs.writeFileSync(path.join(dir, ".nightgauge-installed"), "x");
+    }
+
+    function autoPrompt(value: boolean): Promise<void> {
+      return import("vscode").then((vscode) => {
+        vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+          get: vi.fn().mockReturnValue(value),
+        } as never);
+      });
+    }
+
+    it("stamps the extension version after an install", async () => {
+      const vscode = await import("vscode");
+      vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Install" as never);
+      bundle("# v2\n");
+      const context = makeMockContext(extensionPath);
+
+      const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+      await new GrokSetupService(context as never).checkAndPromptSetup();
+
+      expect(fs.readFileSync(skillFile(), "utf8")).toBe("# v2\n");
+      expect(context.globalState.update).toHaveBeenCalledWith(
+        "nightgauge.grokSetup.installedVersion",
+        "2.0.0"
+      );
+    });
+
+    it("re-syncs skills another version installed, with autoPrompt off", async () => {
+      const vscode = await import("vscode");
+      await autoPrompt(false);
+      bundle("# v2\n");
+      installed("# v1\n");
+      const context = makeMockContext(extensionPath, { installedVersion: "1.0.0" });
+
+      const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+      await new GrokSetupService(context as never).checkAndPromptSetup();
+
+      expect(fs.readFileSync(skillFile(), "utf8")).toBe("# v2\n");
+      expect(context.globalState.update).toHaveBeenCalledWith(
+        "nightgauge.grokSetup.installedVersion",
+        "2.0.0"
+      );
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        "Nightgauge updated its Grok skills to 2.0.0."
+      );
+    });
+
+    it("re-syncs an install older than the stamp itself", async () => {
+      await autoPrompt(false);
+      bundle("# v2\n");
+      installed("# v1\n");
+
+      const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+      await new GrokSetupService(makeMockContext(extensionPath) as never).checkAndPromptSetup();
+
+      expect(fs.readFileSync(skillFile(), "utf8")).toBe("# v2\n");
+    });
+
+    it("leaves skills this version installed alone", async () => {
+      const vscode = await import("vscode");
+      await autoPrompt(false);
+      bundle("# v2\n");
+      installed("# kept\n");
+      const context = makeMockContext(extensionPath, { installedVersion: "2.0.0" });
+
+      const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+      await new GrokSetupService(context as never).checkAndPromptSetup();
+
+      expect(fs.readFileSync(skillFile(), "utf8")).toBe("# kept\n");
+      expect(context.globalState.update).not.toHaveBeenCalled();
+      expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
+    });
+
+    it("never installs unasked: no skills means no re-sync", async () => {
+      await autoPrompt(false);
+      bundle("# v2\n");
+
+      const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+      await new GrokSetupService(makeMockContext(extensionPath) as never).checkAndPromptSetup();
+
+      expect(fs.existsSync(skillFile())).toBe(false);
+    });
+  });
+
+  describe("showSetupPrompt() (#2762)", () => {
+    it("offers an install with autoPrompt off and after Don't Show Again", async () => {
+      const vscode = await import("vscode");
+      vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+        get: vi.fn().mockReturnValue(false),
+      } as never);
+      vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as never);
+
+      const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+      const context = makeMockContext(extensionPath, { dismissed: true });
+      await new GrokSetupService(context as never).showSetupPrompt();
+
+      expect(context.globalState.update).toHaveBeenCalledWith(
+        "nightgauge.grokSetup.dismissed",
+        false
+      );
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining("not installed for Grok"),
+        expect.objectContaining({ modal: true }),
+        "Install",
+        "Later",
+        "Don't Show Again"
+      );
+    });
+
+    it("offers an update when the skills are installed", async () => {
+      const vscode = await import("vscode");
+      vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as never);
+      const dir = path.join(grokHome, "skills", "nightgauge-issue-create");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "SKILL.md"), "# x\n");
+
+      const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+      await new GrokSetupService(makeMockContext(extensionPath) as never).showSetupPrompt();
+
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining("Update the Nightgauge Grok skills"),
+        expect.objectContaining({ modal: true }),
+        "Update",
+        "Later",
+        "Don't Show Again"
+      );
+    });
+
+    it("says the CLI is missing instead of prompting", async () => {
+      const vscode = await import("vscode");
+      mockExecAsync.mockRejectedValue(new Error("command not found: grok"));
+
+      const { GrokSetupService } = await import("../../src/services/GrokSetupService");
+      await new GrokSetupService(makeMockContext(extensionPath) as never).showSetupPrompt();
+
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledTimes(1);
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining("`grok` CLI was not found")
+      );
+    });
   });
 });

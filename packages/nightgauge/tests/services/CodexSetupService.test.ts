@@ -1,7 +1,7 @@
 /**
  * Unit tests for CodexSetupService.ts
  *
- * Tests Codex CLI detection, command installation, and prompt dismissal.
+ * Tests Codex CLI detection, skill install prompts, and prompt dismissal.
  *
  * @see Issue #2446 - Add tests for untested VSCode services
  */
@@ -80,6 +80,10 @@ describe("CodexSetupService", () => {
     resetMainChannelForTests();
     // Default: codex CLI available
     mockExecAsync.mockResolvedValue({ stdout: "codex 1.0.0", stderr: "" });
+    // Default: nothing installed. The fs mock is module-wide, so a test that
+    // marks the skills installed must not leak into the next one.
+    const fs = await import("fs");
+    vi.mocked(fs.existsSync).mockReturnValue(false);
 
     // Reset vscode mocks to defaults
     const vscode = await import("vscode");
@@ -130,9 +134,8 @@ describe("CodexSetupService", () => {
       expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
     });
 
-    it("updates INSTALLED_KEY and returns when all commands are already installed", async () => {
+    it("updates INSTALLED_KEY and returns when the skills are already installed", async () => {
       const fs = await import("fs");
-      // All 6 required command files exist
       vi.mocked(fs.existsSync).mockReturnValue(true);
 
       const mockContext = makeMockContext();
@@ -150,7 +153,7 @@ describe("CodexSetupService", () => {
       expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
     });
 
-    it.skip("shows prompt when codex is available and commands are not installed", async () => {
+    it("shows prompt when codex is available and skills are not installed", async () => {
       const vscode = await import("vscode");
       vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as never);
 
@@ -162,41 +165,13 @@ describe("CodexSetupService", () => {
       expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
         expect.stringContaining("not installed"),
         expect.objectContaining({ modal: true }),
-        "Install Codex Commands",
+        "Install Codex Skills",
         "Later",
         "Don't Show Again"
       );
     });
 
-    it.skip('calls installAssets when user selects "Install Codex Commands"', async () => {
-      const vscode = await import("vscode");
-      vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
-        "Install Codex Commands" as never
-      );
-
-      const fs = await import("fs");
-      // Commands dir exists so resolveCommandsSourceDir finds the bundled source
-      vi.mocked(fs.existsSync).mockImplementation((p: import("node:fs").PathLike) => {
-        const pathStr = p.toString();
-        // Bundled resources dir exists; command files do not (so prompt fires)
-        return pathStr.endsWith("/resources/codex/commands");
-      });
-
-      const mockContext = makeMockContext();
-      const { CodexSetupService } = await import("../../src/services/CodexSetupService");
-      const service = new CodexSetupService(mockContext as never);
-
-      await service.checkAndPromptSetup();
-
-      expect(fs.promises.mkdir).toHaveBeenCalled();
-      expect(fs.promises.copyFile).toHaveBeenCalled();
-      expect(mockContext.globalState.update).toHaveBeenCalledWith(
-        "nightgauge.codexSetup.installed",
-        true
-      );
-    });
-
-    it.skip('sets DISMISSED_KEY when user selects "Don\'t Show Again"', async () => {
+    it('sets DISMISSED_KEY when user selects "Don\'t Show Again"', async () => {
       const vscode = await import("vscode");
       vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
         "Don't Show Again" as never
@@ -214,7 +189,7 @@ describe("CodexSetupService", () => {
       );
     });
 
-    it.skip('does nothing when user selects "Later"', async () => {
+    it('does nothing when user selects "Later"', async () => {
       const vscode = await import("vscode");
       vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Later" as never);
 
@@ -229,39 +204,59 @@ describe("CodexSetupService", () => {
   });
 
   describe("showSetupPrompt()", () => {
-    it.skip("resets dismissed state before checking setup", async () => {
+    it("resets dismissed and offers an install even with autoPrompt off (#2762)", async () => {
       const vscode = await import("vscode");
+      vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+        get: vi.fn().mockReturnValue(false),
+      } as never);
       vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as never);
 
-      // Use a dynamic context so that update() mutates the state read by get()
-      const state: Record<string, unknown> = {
-        "nightgauge.codexSetup.dismissed": true,
-      };
-      const mockContext = {
-        globalState: {
-          get: vi.fn((key: string, defaultValue?: unknown) =>
-            key in state ? state[key] : defaultValue
-          ),
-          update: vi.fn((key: string, value: unknown) => {
-            state[key] = value;
-            return Promise.resolve();
-          }),
-        },
-        extensionPath: "/extension",
-      };
-
+      const mockContext = makeMockContext({ dismissed: true });
       const { CodexSetupService } = await import("../../src/services/CodexSetupService");
-      const service = new CodexSetupService(mockContext as never);
+      await new CodexSetupService(mockContext as never).showSetupPrompt();
 
-      await service.showSetupPrompt();
-
-      // First call should reset dismissed to false
       expect(mockContext.globalState.update).toHaveBeenCalledWith(
         "nightgauge.codexSetup.dismissed",
         false
       );
-      // Then checkAndPromptSetup runs — prompt should fire (codex available, no commands)
-      expect(vscode.window.showInformationMessage).toHaveBeenCalled();
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining("not installed"),
+        expect.objectContaining({ modal: true }),
+        "Install Codex Skills",
+        "Later",
+        "Don't Show Again"
+      );
+    });
+
+    it("offers an update when the skills are already installed", async () => {
+      const vscode = await import("vscode");
+      const fs = await import("fs");
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as never);
+
+      const { CodexSetupService } = await import("../../src/services/CodexSetupService");
+      await new CodexSetupService(makeMockContext() as never).showSetupPrompt();
+
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining("Update"),
+        expect.objectContaining({ modal: true }),
+        "Update Codex Skills",
+        "Later",
+        "Don't Show Again"
+      );
+    });
+
+    it("says the CLI is missing instead of prompting", async () => {
+      const vscode = await import("vscode");
+      mockExecAsync.mockRejectedValue(new Error("command not found: codex"));
+
+      const { CodexSetupService } = await import("../../src/services/CodexSetupService");
+      await new CodexSetupService(makeMockContext() as never).showSetupPrompt();
+
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledTimes(1);
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining("`codex` CLI was not found")
+      );
     });
   });
 
