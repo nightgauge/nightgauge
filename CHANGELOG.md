@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The Claude plugin's hooks no longer fail open silently when the `nightgauge` binary is missing.
+  A new SessionStart hook shows one warning per session, and the workflow and prompt-sanitization
+  gates deny tool calls in a repository that opted in with `.nightgauge/config.yaml`. The unused
+  `NIGHTGAUGE_HOOK_BLOCKING` variable is removed (#2765).
+- The Stop hook and format-on-save now act only in repositories that opted in with
+  `.nightgauge/config.yaml`, and the Stop hook no longer blocks a stop while `stop_hook_active` is
+  set, so it cannot loop. Prompt sanitization warns in other repositories and defaults to `block`
+  in opted-in ones, as ADR-021 states. It also blocks when the config fails to load (#2765).
+- Hooks and `nightgauge doctor` now find the binary at `~/.nightgauge/bin/nightgauge`, which the
+  extension links on activation in any editor (#2765).
+
 - The merge-queue `lint` check no longer runs out of time. Its three slowest
   self-tests now run as parallel jobs, each with at least twice its measured
   run time, and the required `lint` check fails when any of them fails (#2923).

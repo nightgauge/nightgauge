@@ -14,6 +14,11 @@
 #   3. $CANONICAL_REPO/bin/nightgauge — the canonical repo when invoked
 #      from inside a git worktree (`git rev-parse --git-common-dir` → `.git`
 #      of the parent worktree). Development only, see below.
+#   3a. ~/.nightgauge/bin/nightgauge — the per-user shim (#2765). The
+#      extension links it to its own bundled binary on every activation, in
+#      whichever editor runs the extension, so hooks resolve from VS Code,
+#      VSCodium, Cursor, Windsurf, Insiders and any terminal alike. No
+#      editor-specific path is needed to find it.
 #   4. ~/.vscode/extensions/nightgauge.nightgauge-[0-9]*/dist/bin/nightgauge
 #      — the binary that ships with the VSCode extension. Every user of the
 #      extension has a current copy here, so this is the most reliable
@@ -73,26 +78,32 @@
 #
 # Sync contract with skills/_shared/PREFLIGHT.md (#3262 → #4029): the SHARED
 # resolution order ($NIGHTGAUGE_BIN → PATH → gated repo → gated canonical →
-# ~/go/bin) stays mirrored in both. This file INTENTIONALLY diverges by keeping step 4
-# (the ~/.vscode/extensions glob): guard.sh is Claude-Code-only and must serve
-# the standalone-terminal-Claude case where no host exports $NIGHTGAUGE_BIN.
+# ~/go/bin) stays mirrored in both. This file INTENTIONALLY diverges by keeping
+# step 3a (the per-user shim) and step 4 (the ~/.vscode/extensions glob):
+# guard.sh is Claude-Code-only and must serve the standalone-terminal-Claude
+# case where no host exports $NIGHTGAUGE_BIN.
 # Skills must stay portable Markdown (Claude/Codex/Cursor/Gemini) and therefore
 # OMIT that VSCode-extension-specific path — the `nightgauge preflight
 # skill-portability` gate enforces it. When changing a SHARED step here, mirror
 # it in PREFLIGHT.md; the vscode glob is the sole guard.sh-only fallback.
 #
-# Skip-or-fail policy:
-#   - When the binary cannot be resolved, behavior depends on the calling
-#     hook's `NIGHTGAUGE_HOOK_BLOCKING` setting (set BEFORE sourcing):
-#       - `true`  → exit 1 with the error message on stderr (load-bearing,
-#                   e.g. file protection — a missing protector is a real
-#                   safety violation that the user MUST see).
-#       - `false` (default) → write a `[hook-skipped]` line to the side-
-#                   channel log file and exit 0. Stop verification, format-
-#                   on-save, etc. are best-effort observers; their failure
-#                   must not block the assistant turn AND must not surface
-#                   to the parent agent as a `stop-hook-error` notification
-#                   (#3262).
+# Missing-binary policy (#2765): each wrapper declares what it does when no
+# binary resolves by setting `NIGHTGAUGE_HOOK_ON_MISSING_BINARY` BEFORE
+# sourcing this file. Every policy exits 0 and writes nothing to stderr on the
+# default path, so none of them surfaces as a `stop-hook-error` (#3262).
+#   - `skip` (default; an unknown value also means skip) → `[hook-skipped]`
+#     side-channel line, exit 0. Best-effort observers: format-on-save,
+#     version-check, test-quality, notify, skill-usage-log, inject-context,
+#     check-dependencies, and stop-verification, which must skip because
+#     blocking a stop without the binary would trap the session.
+#   - `announce` → print ONE `{"systemMessage": ...}` line on stdout and exit
+#     0. Used only by the SessionStart hook binary-check.sh, so the user sees
+#     one visible warning per session that the gates are not running.
+#   - `gate` → in a repository that opted in (`_ng_repo_opted_in`), print a
+#     PreToolUse deny decision on stdout and exit 0 (`[hook-denied]` in the
+#     side-channel log). Claude Code only blocks a PreToolUse call on a deny
+#     decision or exit 2, never on exit 1. Elsewhere it behaves like `skip`.
+#     Used by workflow-gate and prompt-sanitize.
 #
 # Silent-by-default rationale (#3262): the Claude CLI surfaces hook stderr
 # to the parent agent as a `stop-hook-error` notification regardless of exit
@@ -113,10 +124,10 @@
 # is the canonical Go-side implementation of this same cascade (used by
 # `nightgauge doctor`'s binary self-check), and
 # internal/doctor/binary_resolve_test.go pins the five filesystem-based steps
-# below against this file's resolution order. If you change a step here,
+# below (plus the step-3a shim) against this file's resolution order. If you change a step here,
 # update binary_resolve.go and its parity test in the same PR.
 
-NIGHTGAUGE_HOOK_BLOCKING="${NIGHTGAUGE_HOOK_BLOCKING:-false}"
+NIGHTGAUGE_HOOK_ON_MISSING_BINARY="${NIGHTGAUGE_HOOK_ON_MISSING_BINARY:-skip}"
 NIGHTGAUGE_HOOK_SILENT="${NIGHTGAUGE_HOOK_SILENT:-true}"
 NIGHTGAUGE_HOOK_LOG="${NIGHTGAUGE_HOOK_LOG:-$HOME/.nightgauge/hook-warnings.log}"
 
@@ -262,6 +273,22 @@ _ng_repo_bin_trusted() {
   return 1
 }
 
+# _ng_repo_opted_in succeeds when the repository holding the working directory
+# opted in to Nightgauge: .nightgauge/config.yaml is a regular file at the git
+# toplevel (the directory itself outside git) or at a worktree's canonical
+# checkout. Same rule as RepoOptedIn in internal/hooks/optin.go (#2765); it
+# lives here because the `gate` policy must decide without the binary.
+_ng_repo_opted_in() {
+  local top common
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+  [ -n "$top" ] || top="$(pwd)"
+  [ -f "$top/.nightgauge/config.yaml" ] && return 0
+  common="$(git rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [ -n "$common" ] || return 1
+  common="$(cd "$common/.." 2>/dev/null && pwd)" || return 1
+  [ -f "$common/.nightgauge/config.yaml" ]
+}
+
 # 2-3. Same-repo build, then the canonical repo when invoked from a worktree
 #      (`git rev-parse --git-common-dir` returns its .git). Development only.
 if [ -z "$NIGHTGAUGE_BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
@@ -277,6 +304,12 @@ if [ -z "$NIGHTGAUGE_BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
       fi
     fi
   fi
+fi
+
+# 3a. Per-user shim written by the extension on activation (#2765).
+if [ -z "$NIGHTGAUGE_BINARY" ] && [ -f "$HOME/.nightgauge/bin/nightgauge" ] && \
+  [ -x "$HOME/.nightgauge/bin/nightgauge" ]; then
+  NIGHTGAUGE_BINARY="$HOME/.nightgauge/bin/nightgauge"
 fi
 
 # 4. VSCode extension-bundled binary (every extension user has a fresh copy).
@@ -349,20 +382,26 @@ if [ -z "$NIGHTGAUGE_BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ]; then
 fi
 
 if [ -z "$NIGHTGAUGE_BINARY" ] || [ ! -x "$NIGHTGAUGE_BINARY" ]; then
-  if [ "$NIGHTGAUGE_HOOK_BLOCKING" = "true" ]; then
-    # Load-bearing hook: stderr stays loud regardless of silent mode — the
-    # user MUST see this. Mirror to the side-channel log too so the diagnostic
-    # is preserved if the user later wants to inspect hook history.
-    echo "ERROR: nightgauge binary not found." >&2
-    echo "  This hook is marked as load-bearing — refusing to run without the binary." >&2
-    echo "  Build with:    go build -o bin/nightgauge ./cmd/nightgauge" >&2
-    echo "  Or install:    go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest" >&2
-    echo "  Or add the binary to your PATH." >&2
-    _log_to_side_channel "[hook-blocked] nightgauge binary not found — load-bearing hook refused to run"
-    exit 1
-  fi
+  _ng_install_hint="Install it with 'go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest', put it on PATH, or open a workspace with the Nightgauge extension, which links ~/.nightgauge/bin/nightgauge."
+  case "$NIGHTGAUGE_HOOK_ON_MISSING_BINARY" in
+    announce)
+      # The one visible warning per session. A fixed string, so no JSON
+      # escaping is needed; stdout only (#3262).
+      printf '{"systemMessage":"Nightgauge: the nightgauge binary was not found, so the Nightgauge hooks are NOT enforcing their gates in this session. %s"}\n' "$_ng_install_hint"
+      _log_to_side_channel "[hook-skipped] nightgauge binary not found — announced to the session"
+      exit 0
+      ;;
+    gate)
+      if _ng_repo_opted_in; then
+        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Nightgauge: this repository opted in (.nightgauge/config.yaml), but the nightgauge binary was not found, so its safety gate cannot run. %s"}}\n' "$_ng_install_hint"
+        _log_to_side_channel "[hook-denied] nightgauge binary not found — gate denied the tool call in an opted-in repository"
+        exit 0
+      fi
+      ;;
+  esac
+  unset _ng_install_hint
 
-  # Non-blocking graceful skip: route the diagnostic to the side-channel log
+  # Graceful skip: route the diagnostic to the side-channel log
   # (silent default) or stderr (verbose mode). Stderr would surface to the
   # parent agent as a `stop-hook-error` notification (#3262) — the silent
   # path eliminates that noise while preserving the diagnostic for users who

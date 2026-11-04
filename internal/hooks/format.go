@@ -160,6 +160,12 @@ func evaluateFormatFromHook(inputJSON []byte, workdir string) FormatResult {
 		return FormatResult{Formatted: false}
 	}
 
+	// The plugin is user-scoped: rewriting files in a repository that never
+	// opted in to Nightgauge is not this hook's call to make (#2765).
+	if !RepoOptedIn(workdir) {
+		return FormatResult{Formatted: false}
+	}
+
 	var toolInput FormatToolInput
 	if err := json.Unmarshal(input.ToolInput, &toolInput); err != nil || toolInput.FilePath == "" {
 		return FormatResult{Formatted: false}

@@ -45,8 +45,8 @@ while IFS= read -r cmd; do
   fi
 done <<<"$COMMANDS"
 
-[ "$COUNT" -eq 11 ] || {
-  echo "FAIL: expected the 11 hook commands, found $COUNT"
+[ "$COUNT" -eq 12 ] || {
+  echo "FAIL: expected the 12 hook commands, found $COUNT"
   FAIL=$((FAIL + 1))
 }
 echo "=== $COUNT commands, $FAIL failed ==="

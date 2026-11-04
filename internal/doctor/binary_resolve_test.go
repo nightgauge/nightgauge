@@ -704,6 +704,15 @@ func TestResolveBinary_GuardShParity(t *testing.T) {
 			},
 		},
 		{
+			name: "user_shim",
+			setup: func(t *testing.T) string {
+				isolateCascade(t)
+				fake := UserShimPath(os.Getenv("HOME"))
+				writeFakeBinary(t, fake)
+				return fake
+			},
+		},
+		{
 			name: "vscode_extension",
 			setup: func(t *testing.T) string {
 				isolateCascade(t)
@@ -1002,7 +1011,6 @@ func guardShResolve(t *testing.T, guardPath string) string {
 	cmd := exec.Command(bashBinPath, "-c", `source "$1"; echo "$NIGHTGAUGE_BINARY"`, "guard.sh", guardPath)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(),
-		"NIGHTGAUGE_HOOK_BLOCKING=false",
 		"HOME="+os.Getenv("HOME"),
 		"PATH="+shPath,
 		"LC_ALL=C",
@@ -1044,7 +1052,6 @@ printf '%s' "$_ng_recorded_dir"`
 		"PATH=/usr/bin:/bin",
 		"LC_ALL=" + locale,
 		"NIGHTGAUGE_BIN=" + stub,
-		"NIGHTGAUGE_HOOK_BLOCKING=false",
 		"NIGHTGAUGE_HOOK_LOG=" + filepath.Join(t.TempDir(), "hook-warnings.log"),
 	}
 	var stdout, stderr bytes.Buffer
@@ -1093,7 +1100,6 @@ func TestGuardShSideChannelSwallowsUnwritableLog(t *testing.T) {
 		"PATH=/usr/bin:/bin",
 		"LC_ALL=C",
 		"NIGHTGAUGE_BIN=" + stub,
-		"NIGHTGAUGE_HOOK_BLOCKING=false",
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -1387,7 +1393,7 @@ type precedenceCase struct {
 }
 
 // precedenceCases enumerates every ADJACENT pair in the cascade plus one
-// end-to-end case with all six steps satisfiable. Shared by the Go-side
+// end-to-end case with all seven steps satisfiable. Shared by the Go-side
 // precedence test and the guard.sh parity test so a reorder in EITHER
 // implementation fails CI.
 func precedenceCases() []precedenceCase {
@@ -1491,6 +1497,43 @@ func precedenceCases() []precedenceCase {
 			},
 		},
 		{
+			name:     "canonical_repo_bin_beats_user_shim",
+			higher:   StepCanonicalRepoBin,
+			lower:    StepUserShim,
+			needsGit: true,
+			setup: func(t *testing.T) (string, string) {
+				isolateCascade(t)
+				shim := UserShimPath(os.Getenv("HOME"))
+				writeFakeBinary(t, shim)
+				repo := newGitRepo(t)
+				canonicalBin := filepath.Join(repo, "bin", "nightgauge")
+				writeFakeBinary(t, canonicalBin)
+				markCoreCheckout(t, repo)
+				worktreeDir := filepath.Join(realPath(t, t.TempDir()), "worktree")
+				if out, err := gittest.Command(repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
+					t.Skipf("git worktree add failed (environment limitation): %v: %s", err, out)
+				}
+				t.Chdir(worktreeDir)
+				return canonicalBin, shim
+			},
+		},
+		{
+			// #2765: the shim is the stable location; a VS Code bundle on
+			// disk must not shadow it.
+			name:   "user_shim_beats_vscode_extension",
+			higher: StepUserShim,
+			lower:  StepVSCodeExtension,
+			setup: func(t *testing.T) (string, string) {
+				isolateCascade(t)
+				home := os.Getenv("HOME")
+				bundleBin := newVSCodeBundle(t, home, "0.1.2000000000")
+				writeExtensionsIndex(t, home, bundleDirPrefix+"0.1.2000000000")
+				shim := UserShimPath(home)
+				writeFakeBinary(t, shim)
+				return shim, bundleBin
+			},
+		},
+		{
 			name:   "vscode_extension_beats_go_bin",
 			higher: StepVSCodeExtension,
 			lower:  StepGoBin,
@@ -1514,6 +1557,7 @@ func precedenceCases() []precedenceCase {
 				goBin := newGoBin(t, home)
 				newVSCodeBundle(t, home, "0.1.2000000000")
 				writeExtensionsIndex(t, home, bundleDirPrefix+"0.1.2000000000")
+				writeFakeBinary(t, UserShimPath(home))
 				repo := newGitRepo(t)
 				writeFakeBinary(t, filepath.Join(repo, "bin", "nightgauge"))
 				t.Chdir(repo)
