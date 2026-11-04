@@ -382,3 +382,60 @@ func TestVerifyACAgainstDiff_Issue2917(t *testing.T) {
 		})
 	}
 }
+
+// TestVerifyACAgainstDiff_Issue2840: tokens found only in a changed file the
+// criterion is not about (a changelog line restating it, or some other file
+// when the criterion names undiffed files) must not mark it met.
+func TestVerifyACAgainstDiff_Issue2840(t *testing.T) {
+	changelogOnly := memDiff(`diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,0 +5 @@
++- The FrobnicateWidget helper now retries once.
+diff --git a/internal/w.go b/internal/w.go
+--- a/internal/w.go
++++ b/internal/w.go
+@@ -1,0 +2 @@
++func Other() {}
+`, map[string]string{
+		"CHANGELOG.md":  "# Changelog\n\n## [Unreleased]\n\n- The FrobnicateWidget helper now retries once.\n",
+		"internal/w.go": "package w\nfunc Other() {}\n",
+	})
+	docsOnly := memDiff(`diff --git a/docs/y.md b/docs/y.md
+--- a/docs/y.md
++++ b/docs/y.md
+@@ -1,0 +2 @@
++Call FrobnicateWidget to retry.
+`, map[string]string{"docs/y.md": "# Y\nCall FrobnicateWidget to retry.\n"})
+	source := memDiff(`diff --git a/internal/w.go b/internal/w.go
+--- a/internal/w.go
++++ b/internal/w.go
+@@ -1,0 +2 @@
++func FrobnicateWidget() {}
+`, map[string]string{"internal/w.go": "package w\nfunc FrobnicateWidget() {}\n"})
+	passed := ACTestState{Passed: true, Source: "unit tests"}
+	cases := []struct {
+		name, text string
+		d          *ACDiff
+		want       string
+	}{
+		{"pathless token only in changelog", "The `FrobnicateWidget` helper retries once", changelogOnly, ""},
+		{"named undiffed path, token elsewhere", "`internal/x.go` calls `FrobnicateWidget`", docsOnly, ""},
+		{"pathless token in source", "The `FrobnicateWidget` helper retries once", source, ACMet},
+		{"changelog clause token in changelog", "The changelog mentions `FrobnicateWidget`", changelogOnly, ACMet},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := VerifyACAgainstDiff(c.text, c.d, passed)
+			if c.want == "" {
+				if ok && got.Status == ACMet {
+					t.Errorf("got %+v, want not met", got)
+				}
+				return
+			}
+			if !ok || got.Status != c.want {
+				t.Errorf("got %+v ok=%v, want %s", got, ok, c.want)
+			}
+		})
+	}
+}
