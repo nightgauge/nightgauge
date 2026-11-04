@@ -14,6 +14,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- pr-create's acceptance-criteria check no longer marks met criteria unmet. A
+  `go test -run` argument is treated as a pattern matched against defined tests;
+  a named token already in the changed file counts when the diff adds another of
+  the clause's tokens; and a changelog criterion with no path reads
+  `CHANGELOG.md` (#2917).
+
 ## [0.8.0] - 2026-11-04
 
 ### Fixed
