@@ -18,7 +18,8 @@ import (
 // it, so a retry in a reused worktree can clear an earlier attempt's "catch"
 // by re-running the gate (#2746). The "judges" gate is an aggregate of
 // independent critics, so its verdict is the whole of its latest attempt: any
-// non-pass row in that attempt trips this gate.
+// non-pass row in that attempt trips this gate. An interrupted-judges marker
+// stands until a later attempt, by any path, records a quality-gate verdict.
 //
 // Unlike the per-stage skill output, the gate-metrics file is the canonical
 // signal for build/lint/test results — it is what the existing scheduler
@@ -134,18 +135,38 @@ func isReviewCapRow(r state.GateResult) bool {
 // Every row of the latest attempt stands, and an older attempt's rows drop out.
 // A row with no AttemptID cannot be placed in an attempt, so it always stands,
 // and a latest row with no AttemptID keeps every judge row. Doubt fails closed.
+//
+// An interrupted marker (a judges row whose ErrorSummary starts with
+// state.JudgesInterruptedMarker) is released when any later row, in file
+// order, carries a Result under a GateName that is neither empty nor judges.
+// The SDK writes the marker after the interrupted attempt's own rows, so such
+// a row comes from a later attempt (in practice the adversarial-review row the
+// review gate records), whether or not it ran judges (#2880). A released marker
+// takes part in neither the attempt selection nor the verdicts. Later judges
+// rows do not release it: a partial run's judges must not clear it.
 func latestVerdicts(results []state.GateResult) []state.GateResult {
+	lastGateRow := -1
+	for i, r := range results {
+		if r.Result != "" && r.GateName != "" && r.GateName != state.JudgeGateName {
+			lastGateRow = i
+		}
+	}
+	released := func(i int, r state.GateResult) bool {
+		return i < lastGateRow && r.GateName == state.JudgeGateName &&
+			strings.HasPrefix(r.ErrorSummary, state.JudgesInterruptedMarker)
+	}
+
 	var judgeAttempt string
-	for _, r := range results {
-		if r.GateName == state.JudgeGateName && r.Result != "" {
+	for i, r := range results {
+		if r.GateName == state.JudgeGateName && r.Result != "" && !released(i, r) {
 			judgeAttempt = r.AttemptID
 		}
 	}
 
 	verdicts := make([]state.GateResult, 0, len(results))
 	position := make(map[string]int, len(results))
-	for _, r := range results {
-		if r.Result == "" {
+	for i, r := range results {
+		if r.Result == "" || released(i, r) {
 			continue
 		}
 		if r.GateName == state.JudgeGateName {
