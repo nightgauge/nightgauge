@@ -1721,6 +1721,79 @@ func TestComposeStageEnv_AdapterExportReplacesTheInheritedValue(t *testing.T) {
 	}
 }
 
+// TestComposeStageEnv_StripsLaunchingSessionEnv pins #2848 at the env the
+// child receives: a host started from a Claude Code session carries that
+// session's CLAUDECODE / CLAUDE_* residue, and no stage may inherit it, while
+// the kept names keep the host's values and the adapter's exports still arrive.
+func TestComposeStageEnv_StripsLaunchingSessionEnv(t *testing.T) {
+	inherited := []string{
+		"PATH=/usr/bin",
+		"CLAUDECODE=1",
+		"CLAUDE_EFFORT=high",
+		"CLAUDE_CODE_SESSION_ID=x",
+		"CLAUDE_CODE_ENTRYPOINT=cli",
+		"CLAUDE_CODE_OAUTH_TOKEN=tok",
+		"CLAUDE_PLUGIN_ROOT=/plugin",
+		"CLAUDE_CODE_DISABLE_THINKING=0",
+		"CLAUDE_CONFIG_DIR=/home/op/.claude",
+		"CLAUDE_CODE_USE_BEDROCK=1",
+		"ANTHROPIC_MODEL=m",
+	}
+	env := composeStageEnv(inherited, nil, map[string]string{
+		"CLAUDE_CODE_DISABLE_THINKING": "1",
+		"NIGHTGAUGE_STAGE":             "feature-dev",
+	}, "", "")
+
+	for _, k := range []string{"CLAUDECODE", "CLAUDE_EFFORT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT"} {
+		if v, ok := lookupEnv(env, k); ok {
+			t.Errorf("%s inherited as %q; launching-session residue must not reach a stage", k, v)
+		}
+	}
+	for k, want := range map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN":      "tok",
+		"CLAUDE_PLUGIN_ROOT":           "/plugin",
+		"CLAUDE_CONFIG_DIR":            "/home/op/.claude",
+		"CLAUDE_CODE_USE_BEDROCK":      "1",
+		"CLAUDE_CODE_DISABLE_THINKING": "1",
+		"NIGHTGAUGE_STAGE":             "feature-dev",
+		"ANTHROPIC_MODEL":              "m",
+	} {
+		if v, ok := lookupEnv(env, k); !ok || v != want {
+			t.Errorf("%s = %q (present=%v), want %q", k, v, ok, want)
+		}
+	}
+	if v, ok := lookupEnv(env, "PATH"); !ok || !strings.Contains(v, "/usr/bin") {
+		t.Errorf("PATH = %q (present=%v), want the inherited entry preserved", v, ok)
+	}
+}
+
+// TestLaunchingSessionEnv pins the name rule; the TypeScript twin's test
+// (launchingSessionEnv.test.ts) pins the same cases.
+func TestLaunchingSessionEnv(t *testing.T) {
+	for key, want := range map[string]bool{
+		"CLAUDECODE":                    true,
+		"CLAUDE_EFFORT":                 true,
+		"CLAUDE_CODE_SESSION_ID":        true,
+		"CLAUDE_CODE_ENTRYPOINT":        true,
+		"CLAUDE_CODE_OAUTH_TOKEN":       false,
+		"CLAUDE_PLUGIN_ROOT":            false,
+		"CLAUDE_CODE_DISABLE_THINKING":  false,
+		"CLAUDE_CONFIG_DIR":             false,
+		"CLAUDE_CODE_USE_BEDROCK":       false,
+		"CLAUDE_CODE_USE_VERTEX":        false,
+		"CLAUDE_CODE_SKIP_BEDROCK_AUTH": false,
+		"CLAUDE_CODE_SKIP_VERTEX_AUTH":  false,
+		"CLAUDE":                        false,
+		"CLAUDEX":                       false,
+		"ANTHROPIC_API_KEY":             false,
+		"PATH":                          false,
+	} {
+		if got := launchingSessionEnv(key); got != want {
+			t.Errorf("launchingSessionEnv(%q) = %v, want %v", key, got, want)
+		}
+	}
+}
+
 // chatOnlyAdapter is a stand-in for an adapter without an agentic tool loop.
 // No built-in adapter is chat-only since #2128 removed lm-studio and ollama,
 // so the truth-gate is exercised through this wrapper.

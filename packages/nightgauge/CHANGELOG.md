@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- Stages the extension runs, and the daemon it starts, no longer inherit `CLAUDECODE` and
+  `CLAUDE_*` variables from the Claude Code session that launched the editor. Auth, the plugin
+  root, the thinking escape hatch and the account home still arrive (#2848).
 - A pr-merge stage the extension runs no longer has its merge-queue wait counted against its
   wall-clock budget (#2770).
 - A runaway-progress kill shows a warning and retries instead of halting the repository queue. The
