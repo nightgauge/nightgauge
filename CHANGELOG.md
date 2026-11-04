@@ -22,6 +22,12 @@ changelog, and the release workflow refuses a tag that does not.
   `unlinkat .git: directory not empty`. The new `gittest.ReportWritersOnCleanup` helper reports
   without retrying, so a recurrence stays red. The background-writer disarm itself landed in
   #2787 and #2788 (#2786).
+- A pr-create secret-scan stop now records itself when `nightgauge` is not on `PATH`, so the
+  orchestrator no longer opens a fallback PR for a change that leaked a secret. A post-merge
+  issue close now finds the PR number itself and passes `--pr`, so a `Refs #N` PR keeps its
+  issue open. The acceptance-criterion check no longer marks a criterion met from tokens that
+  appear only in a changelog line or in a file the criterion does not name (#2840).
+
 - pr-merge's wall-clock stage budget no longer counts the time its PR waits in the merge queue,
   so a stage is not killed while the queue tests its merge group. `nightgauge pr merge --issue N`
   records the wait after enqueue in `queue-wait-<N>.json`; both budget enforcers leave it out, and
