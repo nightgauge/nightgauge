@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-04
+
 ### Fixed
 
 - Discord, Slack and Mattermost no longer post a message for a run that defers at
@@ -1519,7 +1521,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nightgauge/nightgauge/compare/v0.6.0...v0.7.0
