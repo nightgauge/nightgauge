@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A doctor test whose repository has an `origin` now fails its cleanup by naming what is still
+  writing `.git` (each leftover entry with size and mtime, `gc.pid` and `gc.log` contents, and the
+  likely writer: `git gc`, `git maintenance` or a held lock) instead of a bare
+  `unlinkat .git: directory not empty`. The new `gittest.ReportWritersOnCleanup` helper reports
+  without retrying, so a recurrence stays red. The background-writer disarm itself landed in
+  #2787 and #2788 (#2786).
 - Stages and the daemon no longer inherit `CLAUDECODE` and `CLAUDE_*` variables from the Claude
   Code session that launched the editor, so a run no longer depends on how the editor was
   started. `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_PLUGIN_ROOT`, `CLAUDE_CODE_DISABLE_THINKING`,
