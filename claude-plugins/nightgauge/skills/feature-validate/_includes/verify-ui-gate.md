@@ -14,7 +14,7 @@ when that phase fires.
 **Contract**: browser-driven counterpart to Phase 2.4's mobile-mcp gate — same
 shape (detect → start → drive → gate → teardown), different runtime (a real
 browser via the Playwright CLI (`@playwright/cli`), chained into
-`nightgauge-verify-ui` rather than driven inline). See [docs/GATE_RELAXATION.md](../../../../../docs/GATE_RELAXATION.md)
+`nightgauge-verify-ui` rather than driven inline). See [docs/GATE_RELAXATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/GATE_RELAXATION.md)
 for the shared change classifier this phase's trigger reuses, and
 [skills/nightgauge-verify-ui/SKILL.md](../../verify-ui/SKILL.md)
 for the flow-driving mechanics (console-error and Core Web Vitals assertions

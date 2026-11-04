@@ -70,9 +70,8 @@ and snippets live in the `references/` files — read the one you need on demand
 
 These references mirror `--help` output. To check a command is current, run
 `nightgauge <group> --help` (or `nightgauge forge <group> --help`) and
-reconcile. For the SDK, the source of truth is
-`packages/nightgauge-sdk/src/index.ts`. Treat any drift as a bug to fix
-here.
+reconcile. For the SDK, the source of truth is the export surface of the
+published `@nightgauge/sdk` package. Treat any drift as a bug to fix here.
 
 ## Gotchas
 

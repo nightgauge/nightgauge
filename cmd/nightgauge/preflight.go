@@ -971,6 +971,7 @@ func preflightSkillPortabilityCmd() *cobra.Command {
 	var (
 		jsonOutput bool
 		root       string
+		skillsRoot string
 	)
 	cmd := &cobra.Command{
 		Use:   "skill-portability",
@@ -983,6 +984,11 @@ the Codex, Gemini, Copilot and Cursor adapters, which never populate the
 VSCode extensions directory. Provider-neutral discovery
 ($NIGHTGAUGE_BIN → PATH → repo bin → canonical-repo bin → ~/go/bin) is
 the contract — see skills/_shared/PREFLIGHT.md (#4029).
+
+It also fails a $HOOKS_DIR/<file> call naming a file the plugin's hooks
+directory lacks, a packages/nightgauge[-sdk]/ path (absent from every
+repository but this one), and the nonexistent "claude --skill" flag (#2764).
+--skills-root scans a built bundle such as packages/nightgauge/dist/skills.
 
 The Claude-only claude-plugins/.../guard.sh intentionally keeps that glob
 (it is not a skill) and is NOT scanned by this gate.
@@ -997,7 +1003,8 @@ Exit codes:
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := preflight.RunSkillPortabilityCheck(cmd.Context(), preflight.SkillPortabilityOptions{
-				Root: root,
+				Root:      root,
+				SkillsDir: skillsRoot,
 			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "preflight skill-portability: %v\n", err)
@@ -1018,6 +1025,7 @@ Exit codes:
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
 	cmd.Flags().StringVar(&root, "root", "", "Repository root (default: current working directory)")
+	cmd.Flags().StringVar(&skillsRoot, "skills-root", "", "Skill tree to scan, relative to --root (default: skills)")
 	return cmd
 }
 

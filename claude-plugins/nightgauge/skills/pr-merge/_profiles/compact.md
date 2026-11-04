@@ -29,7 +29,7 @@ prior pipeline context for history and validation, all in the clone's pipeline
 state directory: `nightgauge layout path pipeline issue-{N}.json`,
 `nightgauge layout path pipeline planning-{N}.json`,
 `nightgauge layout path pipeline dev-{N}.json`.
-Full schema: [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHITECTURE.md).
+Full schema: [docs/CONTEXT_ARCHITECTURE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONTEXT_ARCHITECTURE.md).
 
 ## Gotchas
 

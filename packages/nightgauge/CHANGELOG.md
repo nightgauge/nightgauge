@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- Stages the extension runs, and the daemon it starts, no longer inherit `CLAUDECODE` and
+  `CLAUDE_*` variables from the Claude Code session that launched the editor. Auth, the plugin
+  root, the thinking escape hatch and the account home still arrive (#2848).
 - A pr-merge stage the extension runs no longer has its merge-queue wait counted against its
   wall-clock budget (#2770).
 - A runaway-progress kill shows a warning and retries instead of halting the repository queue. The
@@ -139,8 +142,9 @@ and this project adheres to
   background task or foreground tool call no longer counts toward the idle budgets, and a kill
   that followed only an `allowed_warning` is booked as a stall, with no global cooldown.
 - **A `Refs #N` merge no longer leaves the issue open but Done (#2706).** The pr-merge status
-  sync writes Done only for a closed issue, so the post-merge hook's Ready stands. A failed
-  run's In review park no longer overwrites the scheduler's Ready.
+  sync writes Done only for a closed issue and Ready for an open one, and an unreadable issue
+  state raises the board-status card. A failed run's In review park no longer overwrites the
+  scheduler's Ready.
 - **Post-pipeline verification no longer closes an issue for another repository's closer
   (#2687).** A merged PR body or main commit saying `Fixes other/repo#N`, or that issue's URL,
   no longer closes this repository's #N, and an issue URL counts only on github.com, as on

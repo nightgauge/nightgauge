@@ -152,7 +152,7 @@ the repository's complete gate:
 
 ```bash
 # e.g. FOCUSED_TESTS="go test ./internal/build/..." or
-#      FOCUSED_TESTS="npm test -w packages/nightgauge-sdk"
+#      FOCUSED_TESTS="npm test -w packages/<touched-package>"
 FOCUSED_TESTS="<scoped test command for the touched packages>"
 bash -c "$FOCUSED_TESTS" \
   || { echo "ERROR: focused tests failed. Fix them before feature-validate."; exit 1; }
@@ -213,7 +213,7 @@ fragile half-finished implementation.
 
 An adjacent bug, refactor or cleanup noticed while implementing is not
 implemented here and is not dropped. Apply the rule in
-[Record vs. Backtrack](../../../../../docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work):
+[Record vs. Backtrack](https://github.com/nightgauge/nightgauge/blob/main/docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work):
 if this issue's acceptance criteria hold without it, record it and continue.
 Recorded work does not count toward the `SCOPE_DISCOVERED` file threshold.
 

@@ -1328,6 +1328,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // shared freshness check moving from rebase + force-push to merging the base.
 // All four captures were re-pinned for #2758: every changed line is the gated
 // repository rung replacing the two ungated ones, and the matching wording.
+// All four captures were re-pinned for #2764: every changed line drops a
+// packages/nightgauge path or a deleted $HOOKS_DIR script from shipped text.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which

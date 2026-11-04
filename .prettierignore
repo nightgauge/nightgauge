@@ -22,6 +22,11 @@ internal/doctor/testdata/vscode-bundles/extensions-index-large.json
 # The pre-fix skill render (#337) is a verbatim capture of what the model was
 # handed. Reformatting it would rewrite the artifact under test.
 internal/skillrender/testdata/dead-include/pr-merge.pre-fix.rendered.md
+# Generated plugin skills mirror (#2764). Its bytes are the generator's: the
+# drift gate (install-agent-skills.sh --check-mirror) compares them exactly, and
+# expanded includes and rewritten link URLs are not Prettier-stable, so
+# formatting it would make the two gates disagree. Format skills/ instead.
+claude-plugins/nightgauge/skills/
 # Embedded templates emitted byte-for-byte by `nightgauge setup scaffold-tooling`
 internal/setup/templates/
 # Markdown files with template syntax (Handlebars, etc.)

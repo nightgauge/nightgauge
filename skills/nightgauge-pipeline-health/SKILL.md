@@ -62,12 +62,12 @@ Pipeline health is complementary to pipeline audit — not a replacement:
 
 ## Invocation
 
-| Tool        | Command                                                     |
-| ----------- | ----------------------------------------------------------- |
-| Claude Code | `/nightgauge:pipeline-health [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                           |
-| Cursor      | Run via Agent Skills or direct SKILL.md                     |
-| Standalone  | `claude --skill skills/nightgauge-pipeline-health/SKILL.md` |
+| Tool        | Command                                   |
+| ----------- | ----------------------------------------- |
+| Claude Code | `/nightgauge:pipeline-health [options]`   |
+| Copilot     | Invoke via Agent Skills extension         |
+| Cursor      | Run via Agent Skills or direct SKILL.md   |
+| Headless    | `claude -p "/nightgauge:pipeline-health"` |
 
 ## Arguments
 

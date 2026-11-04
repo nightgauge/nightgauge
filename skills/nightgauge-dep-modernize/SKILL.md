@@ -80,12 +80,12 @@ This skill follows the **deterministic vs probabilistic** principle:
 
 ## Invocation
 
-| Tool        | Command                                                   |
-| ----------- | --------------------------------------------------------- |
-| Claude Code | `/nightgauge:dep-modernize [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                         |
-| Cursor      | Run via Agent Skills or direct SKILL.md                   |
-| Standalone  | `claude --skill skills/nightgauge-dep-modernize/SKILL.md` |
+| Tool        | Command                                 |
+| ----------- | --------------------------------------- |
+| Claude Code | `/nightgauge:dep-modernize [options]`   |
+| Copilot     | Invoke via Agent Skills extension       |
+| Cursor      | Run via Agent Skills or direct SKILL.md |
+| Headless    | `claude -p "/nightgauge:dep-modernize"` |
 
 ## Arguments
 

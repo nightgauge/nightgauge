@@ -354,3 +354,123 @@ BINARY="${NIGHTGAUGE_BIN:-}"
 		}
 	}
 }
+
+// checksOf runs the gate over root and returns the Check of every finding.
+func checksOf(t *testing.T, opts SkillPortabilityOptions) []string {
+	t.Helper()
+	res, err := RunSkillPortabilityCheck(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var checks []string
+	for _, f := range res.Findings {
+		checks = append(checks, f.Check)
+	}
+	return checks
+}
+
+// writeHook creates <root>/claude-plugins/nightgauge/hooks/<rel>.
+func writeHook(t *testing.T, root, rel string) {
+	t.Helper()
+	path := filepath.Join(root, "claude-plugins", "nightgauge", "hooks", rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSkillPortability_HooksDirReference pins #2764's dead-hook class: a
+// `[ -x ]`-guarded call to a deleted script degraded to a warning and the step
+// did nothing. A call naming a hook that exists, in hooks/ or hooks/lib/, passes.
+func TestSkillPortability_HooksDirReference(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want []string
+	}{
+		{"deleted script", `"$HOOKS_DIR/classify-epic-summary-tier.sh" "$N"`, []string{CheckHooksDirReference}},
+		{"braced, sentence end", "Uses ${HOOKS_DIR}/sync-project-iteration.sh.", []string{CheckHooksDirReference}},
+		{"existing hook", `"$HOOKS_DIR/notify.sh" done`, nil},
+		{"existing lib hook", `. "$HOOKS_DIR/guard.sh"`, nil},
+		{"existing hook, sentence end", "Call $HOOKS_DIR/notify.sh.", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeHook(t, root, "notify.sh")
+			writeHook(t, root, "lib/guard.sh")
+			writeSkillFile(t, root, "_shared/X.md", tc.line+"\n")
+			got := checksOf(t, SkillPortabilityOptions{Root: root})
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("checks = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSkillPortability_SourceRepoPath pins #2764: shipped skills run in any
+// repository, where packages/nightgauge[-sdk]/ does not exist. A changelog
+// quotes history and the exemption table covers named lines only.
+func TestSkillPortability_SourceRepoPath(t *testing.T) {
+	exemptLine := "- [ ] VSCode extension (`packages/nightgauge/`) — UI changes?"
+	cases := []struct {
+		name, rel, line string
+		want            []string
+	}{
+		{"workspace flag", "nightgauge-feature-dev/SKILL.md", "Use `npx -w packages/nightgauge vitest run`", []string{CheckSourceRepoPath}},
+		{"sdk path", "_shared/C.md", "Schema: `packages/nightgauge-sdk/src/config.ts`", []string{CheckSourceRepoPath}},
+		{"extension src path", "_shared/C.md", "Schema: `packages/nightgauge/src/config/schema.ts`", []string{CheckSourceRepoPath}},
+		{"changelog", "nightgauge-pr-merge/CHANGELOG.md", "moved packages/nightgauge-sdk/src/x.ts", nil},
+		{"exempt line", "nightgauge-release-watch/assessments/TEMPLATE.md", exemptLine, nil},
+		{"exempt line, other file", "nightgauge-retro/SKILL.md", exemptLine, []string{CheckSourceRepoPath}},
+		{"generic path", "_shared/C.md", "Edit `src/config/schema.ts`", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeSkillFile(t, root, tc.rel, tc.line+"\n")
+			got := checksOf(t, SkillPortabilityOptions{Root: root})
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("checks = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSkillPortability_ClaudeSkillFlag pins #2764: `claude --skill` is not a
+// Claude Code flag.
+func TestSkillPortability_ClaudeSkillFlag(t *testing.T) {
+	root := t.TempDir()
+	writeSkillFile(t, root, "nightgauge-retro/SKILL.md",
+		"| Standalone | `claude --skill skills/nightgauge-retro/SKILL.md` |\n"+
+			"| Headless | `claude -p \"/nightgauge:retro\"` |\n")
+	got := checksOf(t, SkillPortabilityOptions{Root: root})
+	if strings.Join(got, ",") != CheckClaudeSkillFlag {
+		t.Fatalf("checks = %v, want [%s]", got, CheckClaudeSkillFlag)
+	}
+}
+
+// TestSkillPortability_SkillsDirScansBundle covers --skills-root: a built
+// bundle is scanned in place of skills/, with findings named relative to Root.
+func TestSkillPortability_SkillsDirScansBundle(t *testing.T) {
+	root := t.TempDir()
+	writeSkillFile(t, root, "nightgauge-retro/SKILL.md", "clean\n")
+	bundle := filepath.Join(root, "dist", "skills", "nightgauge-retro", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(bundle), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bundle, []byte("see packages/nightgauge-sdk/src/x.ts\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := RunSkillPortabilityCheck(context.Background(),
+		SkillPortabilityOptions{Root: root, SkillsDir: filepath.Join("dist", "skills")})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Findings) != 1 || res.Findings[0].Check != CheckSourceRepoPath ||
+		res.Findings[0].SkillFile != filepath.Join("dist", "skills", "nightgauge-retro", "SKILL.md") {
+		t.Fatalf("findings = %+v", res.Findings)
+	}
+}

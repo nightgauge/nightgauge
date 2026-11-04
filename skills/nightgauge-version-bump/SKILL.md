@@ -60,12 +60,12 @@ deploy). The skill never commits, pushes, or submits to stores.
 
 ## Invocation
 
-| Tool        | Command                                                  |
-| ----------- | -------------------------------------------------------- |
-| Claude Code | `/nightgauge:version-bump <epic> [options]`              |
-| Copilot     | Invoke via Agent Skills extension                        |
-| Cursor      | Run via Agent Skills or direct SKILL.md                  |
-| Standalone  | `claude --skill skills/nightgauge-version-bump/SKILL.md` |
+| Tool        | Command                                     |
+| ----------- | ------------------------------------------- |
+| Claude Code | `/nightgauge:version-bump <epic> [options]` |
+| Copilot     | Invoke via Agent Skills extension           |
+| Cursor      | Run via Agent Skills or direct SKILL.md     |
+| Headless    | `claude -p "/nightgauge:version-bump"`      |
 
 ## Arguments
 

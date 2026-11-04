@@ -36,12 +36,12 @@ deprecation, improvement) and scores pipeline relevance based on affected areas
 
 ## Invocation
 
-| Tool        | Command                                                   |
-| ----------- | --------------------------------------------------------- |
-| Claude Code | `/nightgauge:release-watch [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                         |
-| Cursor      | Run via Agent Skills or direct SKILL.md                   |
-| Standalone  | `claude --skill skills/nightgauge-release-watch/SKILL.md` |
+| Tool        | Command                                 |
+| ----------- | --------------------------------------- |
+| Claude Code | `/nightgauge:release-watch [options]`   |
+| Copilot     | Invoke via Agent Skills extension       |
+| Cursor      | Run via Agent Skills or direct SKILL.md |
+| Headless    | `claude -p "/nightgauge:release-watch"` |
 
 ## Arguments
 

@@ -12,8 +12,15 @@ a file that exists? — so it fails against a mirror the drift gate calls clean.
 WHAT IS CHECKED
 Every relative markdown link target in `claude-plugins/nightgauge/skills/**/*.md`
 outside fenced/inline code, resolved against the file's own directory, must name
-an existing path in this repository. Absolute URLs, `mailto:`, page anchors and
-image assets are not this gate's business.
+an existing path INSIDE THE SHIPPED ROOT (#2764). Existing is not enough: an
+installed plugin carries `claude-plugins/nightgauge/` and nothing else, so a
+link that resolves to this repository's `docs/` passes on a checkout and is dead
+on every user's machine. The generator turns such targets into GitHub URLs; this
+gate fails any that slipped through. `--root` names the shipped root (default:
+the mirror's parent, the plugin directory); the VSIX bundle is checked with
+`--mirror packages/nightgauge/dist/skills --root packages/nightgauge/dist/skills`.
+Absolute URLs, `mailto:`, page anchors and image assets are not this gate's
+business.
 
 Links that deliberately do not name a file here — a placeholder a reader will
 create, or template prose emitted into a CONSUMING repository — are listed in
@@ -21,7 +28,7 @@ EXEMPT, keyed by (file, exact target) so an exemption cannot leak. Keep that lis
 short and justified; a wildcard would make this gate as vacuous as the one it
 supplements.
 
-Run: python3 scripts/check-mirror-links.py [--mirror DIR]
+Run: python3 scripts/check-mirror-links.py [--mirror DIR] [--root DIR]
 Wired into .github/workflows/lint.yml and scripts/ci-local.sh.
 """
 
@@ -38,6 +45,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from mirror_links import (  # noqa: E402
     MIRROR_REL,
     is_relative_target,
+    short_name,
     iter_links,
     split_fragment,
 )
@@ -61,7 +69,22 @@ EXEMPT = {
     ("smart-setup/SKILL.md", "docs/SECURITY_AND_ERROR_HANDLING.md"),
     ("smart-setup/SKILL.md", "docs/CODE_STANDARDS.md"),
     ("smart-setup/SKILL.md", "docs/TESTING.md"),
+    # The same placeholder as above, in the canonical layout of dist/skills.
+    (
+        "release-watch/auto-issue-creation.md",
+        "../nightgauge-release-watch/assessments/[feature-name].md",
+    ),
 }
+
+
+def exempt_key(mirror_rel: str, target: str) -> tuple[str, str]:
+    """Key a link for EXEMPT under the plugin's short skill directory name.
+
+    dist/skills keeps canonical `nightgauge-<name>` directories; folding the
+    prefix lets one exemption cover both shipped trees for the same file.
+    """
+    head, _, rest = mirror_rel.partition("/")
+    return (posixpath.join(short_name(head), rest) if rest else mirror_rel, target)
 
 # Binary assets are out of scope for a reference-integrity gate, matching
 # .markdown-link-check.json.
@@ -81,6 +104,11 @@ def main(argv: list[str]) -> int:
         default=None,
         help="mirror directory to check (default: the committed mirror)",
     )
+    parser.add_argument(
+        "--root",
+        default=None,
+        help="shipped root every relative link must stay inside (default: the mirror's parent)",
+    )
     args = parser.parse_args(argv)
 
     root = repo_root()
@@ -88,9 +116,14 @@ def main(argv: list[str]) -> int:
     if not os.path.isdir(mirror):
         print(f"x mirror directory not found: {mirror}", file=sys.stderr)
         return 1
+    shipped = os.path.realpath(args.root or os.path.dirname(os.path.abspath(mirror)))
+    if not os.path.isdir(shipped):
+        print(f"x shipped root not found: {shipped}", file=sys.stderr)
+        return 1
 
     checked = 0
     dead: list[str] = []
+    escaped: list[str] = []
     for dirpath, _dirs, files in os.walk(mirror):
         for fname in sorted(files):
             if not fname.endswith(".md"):
@@ -107,7 +140,7 @@ def main(argv: list[str]) -> int:
                 if not is_relative_target(target):
                     continue
                 path, _fragment = split_fragment(target)
-                if not path or (mirror_rel, target) in EXEMPT:
+                if not path or exempt_key(mirror_rel, target) in EXEMPT:
                     continue
                 if path.lower().endswith(ASSET_SUFFIXES):
                     continue
@@ -115,19 +148,29 @@ def main(argv: list[str]) -> int:
                 resolved = posixpath.normpath(
                     posixpath.join(os.path.dirname(full).replace(os.sep, "/"), path)
                 )
-                if not os.path.exists(resolved):
+                real = os.path.realpath(resolved)
+                if real != shipped and not real.startswith(shipped + os.sep):
+                    escaped.append(f"  {rel}: {target}")
+                elif not os.path.exists(resolved):
                     dead.append(f"  {rel}: {target}")
 
     print("")
     print("-" * 73)
-    if not dead:
+    if not dead and not escaped:
         print(f"+ Mirror link check passed - {checked} relative links, all resolve.")
         return 0
 
-    print(f"x Mirror link check found {len(dead)} dead relative links:")
-    for line in dead:
-        print(line)
-    print("")
+    if dead:
+        print(f"x Mirror link check found {len(dead)} dead relative links:")
+        for line in dead:
+            print(line)
+        print("")
+    if escaped:
+        print(f"x Mirror link check found {len(escaped)} relative links outside the shipped root")
+        print(f"  ({shipped}); an installed copy has nothing there:")
+        for line in escaped:
+            print(line)
+        print("")
     print("These files are GENERATED. Fix the canonical source under skills/ or the")
     print("link rewrite in scripts/lib/mirror_links.py, then regenerate with:")
     print("  bash scripts/install-agent-skills.sh --generate-only")
