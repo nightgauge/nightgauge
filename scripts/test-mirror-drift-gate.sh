@@ -66,6 +66,8 @@ cd "$(git rev-parse --show-toplevel)" || {
 GATE="scripts/install-agent-skills.sh"
 # The generator delegates mirror link re-basing to this helper (#831).
 HELPER="scripts/lib/mirror_links.py"
+# ...and include expansion to this one (#2764), which imports the first.
+INCLUDES_HELPER="scripts/lib/mirror_includes.py"
 MIRROR="claude-plugins/nightgauge/skills"
 PASS=0
 FAIL=0
@@ -314,7 +316,16 @@ build_template() {
   mkdir -p "$TEMPLATE/$(dirname "$HELPER")"
   cp "$HELPER" "$TEMPLATE/$HELPER" ||
     harness_error "could not overlay the working-tree copy of $HELPER"
+  cp "$INCLUDES_HELPER" "$TEMPLATE/$INCLUDES_HELPER" ||
+    harness_error "could not overlay the working-tree copy of $INCLUDES_HELPER"
   fixture_git "initialise the fixture repository" -C "$TEMPLATE" init -q
+  # No background gc in the fixture (#2764). When the working-tree generator
+  # differs from HEAD's, the normalise commit below writes a few hundred loose
+  # objects and git detaches `gc --auto`, which packs and deletes the loose
+  # object directories while seed_repo's `cp -a` is still reading them. Every
+  # arm then died "could not copy the fixture template", 0 of 24 asserted.
+  fixture_git "disable auto gc in the fixture" -C "$TEMPLATE" config gc.auto 0
+  fixture_git "disable auto maintenance in the fixture" -C "$TEMPLATE" config maintenance.auto false
   fixture_git "stage the fixture" -C "$TEMPLATE" add -A
   template_commit "fixture"
   # Normalise: regenerate and commit whatever HEAD was missing, so each case
@@ -496,12 +507,15 @@ expect_gate nonzero "mirror file missing from the committed tree is caught" \
 # still present but the canonical source is gone, so the temp regeneration
 # omits it and the gate must report an extra path in the mirror. A gate that
 # only asked "is everything I generated present?" would pass this.
+# The file is one no skill includes: since #2764 the generator expands includes
+# and refuses a missing target, so deleting an included file fails earlier, for
+# a reason this arm is not testing.
 arm 'b2' 'A mirror file the generator no longer produces is caught'
 seed_repo
-git -C "$TMP" rm -q "skills/_shared/GOTCHAS.md"
-fixture_commit "remove a canonical shared include"
+git -C "$TMP" rm -q "skills/_shared/RETROSPECTIVE_FEEDBACK.md"
+fixture_commit "remove a canonical shared file no skill includes"
 expect_gate nonzero "mirror file deleted by regeneration is caught" \
-  "$MIRROR/_shared/GOTCHAS.md"
+  "$MIRROR/_shared/RETROSPECTIVE_FEEDBACK.md"
 
 # ── (c) A canonical-only edit with no regeneration is caught ────────────────
 # The everyday failure: someone edits `skills/` and forgets to regenerate.

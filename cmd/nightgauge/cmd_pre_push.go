@@ -162,25 +162,11 @@ func prePushJSONExit(result hooks.PrePushResult) error {
 	return nil
 }
 
-func prePushInstallCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "install",
-		Short: "Install git pre-push hook",
-		Long:  "Creates .git/hooks/pre-push that calls nightgauge pre-push validate before each push.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			workDir, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
-			}
-
-			hookDir := filepath.Join(workDir, ".git", "hooks")
-			if err := os.MkdirAll(hookDir, 0o755); err != nil {
-				return fmt.Errorf("create hooks directory: %w", err)
-			}
-
-			hookPath := filepath.Join(hookDir, "pre-push")
-
-			hookScript := `#!/bin/bash
+// prePushHookScript is the git pre-push hook `pre-push install` writes. It is
+// the only copy: internal/doctor's TestForeignRepoBinaryNeverExecuted extracts
+// it from this file and executes it, so the binary cascade it runs is the one
+// that ships (#2758, #2764).
+const prePushHookScript = `#!/bin/bash
 # Installed by 'nightgauge pre-push install'
 # Runs pre-push merge validation gate before each push.
 
@@ -205,7 +191,26 @@ fi
 
 exec "$BINARY" pre-push validate "$ISSUE"
 `
-			if err := os.WriteFile(hookPath, []byte(hookScript), 0o755); err != nil {
+
+func prePushInstallCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install git pre-push hook",
+		Long:  "Creates .git/hooks/pre-push that calls nightgauge pre-push validate before each push.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workDir, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+
+			hookDir := filepath.Join(workDir, ".git", "hooks")
+			if err := os.MkdirAll(hookDir, 0o755); err != nil {
+				return fmt.Errorf("create hooks directory: %w", err)
+			}
+
+			hookPath := filepath.Join(hookDir, "pre-push")
+
+			if err := os.WriteFile(hookPath, []byte(prePushHookScript), 0o755); err != nil {
 				return fmt.Errorf("write pre-push hook: %w", err)
 			}
 

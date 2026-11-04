@@ -39,12 +39,12 @@ detection with automatic sub-issue expansion via `EpicBatchAssessor`.
 
 ## Invocation
 
-| Tool        | Command                                           |
-| ----------- | ------------------------------------------------- |
-| Claude Code | `/nightgauge:queue <args>`                        |
-| Copilot     | Invoke via Agent Skills extension                 |
-| Cursor      | Run via Agent Skills or direct SKILL.md           |
-| Standalone  | `claude --skill skills/nightgauge-queue/SKILL.md` |
+| Tool        | Command                                 |
+| ----------- | --------------------------------------- |
+| Claude Code | `/nightgauge:queue <args>`              |
+| Copilot     | Invoke via Agent Skills extension       |
+| Cursor      | Run via Agent Skills or direct SKILL.md |
+| Headless    | `claude -p "/nightgauge:queue"`         |
 
 ## Arguments
 

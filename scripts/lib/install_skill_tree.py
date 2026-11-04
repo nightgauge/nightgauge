@@ -44,11 +44,16 @@ and both installers must produce the same tree.
 
 import argparse
 import os
+import posixpath
 import shutil
 import stat
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from mirror_links import SKILLS_REL, release_ref, rewrite_identity_dir  # noqa: E402
 
 INSTALL_MARKER = ".nightgauge-installed"
 ADOPTED_SUFFIX = ".nightgauge-adopted"
@@ -257,6 +262,16 @@ def summary(label, installed, total, skipped, adopted, removed):
     return line
 
 
+def contain_links(target, rel, ref):
+    """Turn links that leave the installed tree into GitHub URLs (#2764).
+
+    An installed skill has no `docs/` beside it, so `../../docs/X.md` is dead.
+    This is the rewrite bundle-marketplace.sh applies to dist/skills, so the
+    extension and this script still install the same bytes.
+    """
+    rewrite_identity_dir(target, posixpath.join(SKILLS_REL, rel.replace(os.sep, "/")), ref)
+
+
 def install(args):
     root = os.path.realpath(args.source)
     checkout = os.path.realpath(args.checkout)
@@ -272,6 +287,7 @@ def install(args):
     aside_root = os.path.join(real_dest + ADOPTED_SUFFIX,
                               time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
     os.makedirs(args.dest, exist_ok=True)
+    ref = release_ref(root)
     eligible = set()
     installed = skipped = adopted = 0
     for name in sorted(os.listdir(root)):
@@ -313,6 +329,7 @@ def install(args):
         with open(os.path.join(target, INSTALL_MARKER), "w", encoding="utf-8") as f:
             f.write(INSTALL_MARKER_TEXT)
         copy_contained(entry[0], target, root, args.label, skill_excludes(name))
+        contain_links(target, name, ref)
         installed += 1
     # With no eligible source the tree is broken, not empty of skills: pruning
     # against it would delete every Nightgauge skill.
@@ -335,6 +352,7 @@ def copy(args):
     os.makedirs(args.to_dir)
     copy_contained(source, args.to_dir, root, args.label,
                    skill_excludes(os.path.basename(source)))
+    contain_links(args.to_dir, os.path.relpath(source, root), release_ref(root))
     return 0
 
 

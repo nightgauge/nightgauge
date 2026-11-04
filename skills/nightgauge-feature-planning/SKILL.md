@@ -406,8 +406,8 @@ directory) with:
         "category": "TypeScript",
         "pattern": "flexEnum for enum coercion",
         "evidence": [
-          "packages/nightgauge-sdk/src/context/schemas/helpers.ts:35",
-          "packages/nightgauge-sdk/src/context/schemas/validate.ts:20"
+          "src/context/schemas/helpers.ts:35",
+          "src/context/schemas/validate.ts:20"
         ],
         "frequency": 3,
         "example_implementations": ["ChangeTypeSchema", "RoutingPathSchema"]
@@ -432,8 +432,8 @@ directory) with:
   Do NOT use `naming`, `structural`, `interface`, or `idiomatic` as substitutes.
 
   `pattern_mining_results` may be `null` when pattern mining was skipped — this
-  is valid. Source of truth for the schema:
-  `packages/nightgauge-sdk/src/context/schemas/planning.ts`.
+  is valid. Schema reference:
+  [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md).
 
 - `complexity_assessment` — use **exactly** these field names (values from Phase
   2):

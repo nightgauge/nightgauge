@@ -169,7 +169,7 @@ promoting a CI check on `main` when `main`'s recent runs of that check are
 failing. Runs after Phase 2.7 (size-gate) so size rejections short-circuit
 before the network call.
 
-See [docs/FAILURE_TAXONOMY.md](../../../../../docs/FAILURE_TAXONOMY.md) for the
+See [docs/FAILURE_TAXONOMY.md](https://github.com/nightgauge/nightgauge/blob/main/docs/FAILURE_TAXONOMY.md) for the
 `[baseline-ci-deferred]` infrastructure pattern and Issue #3004 for the full
 design rationale.
 
@@ -280,8 +280,7 @@ fi
 When the gate decides to defer:
 
 - The Go binary inserts/updates the queue item as `paused` with
-  `pausedReason.kind = "baseline_ci_red"` (queue schema 2.2; see
-  `packages/nightgauge/src/types/queue.ts`).
+  `pausedReason.kind = "baseline_ci_red"` (queue schema 2.2).
 - `signal=deferred` is printed to stdout so the orchestrator short-circuits
   remaining stages, mirroring the AC reconciliation `signal=verify-and-close`
   pattern from feature-planning.
@@ -311,7 +310,7 @@ of the baseline-CI gate (Phase 2.8): a controlled hold, **not** a pipeline
 failure. Runs after Phase 2.8 so both preflight holds resolve before issue
 analysis.
 
-See [docs/FAILURE_TAXONOMY.md](../../../../../docs/FAILURE_TAXONOMY.md) for the
+See [docs/FAILURE_TAXONOMY.md](https://github.com/nightgauge/nightgauge/blob/main/docs/FAILURE_TAXONOMY.md) for the
 `[blocked-dependency]` infrastructure pattern and Issue #231 for the design
 rationale.
 
@@ -416,7 +415,7 @@ When the gate decides to defer:
 
 - The Go binary inserts/updates the queue item as `paused` with
   `pausedReason.kind = "blocked_dependency"` and `blockingIssues` (queue schema
-  2.3; see `packages/nightgauge/src/types/queue.ts`).
+  2.3).
 - `signal=deferred` is printed to stdout so the orchestrator short-circuits
   remaining stages, exactly mirroring Phase 2.8.
 - `deps-gate promote` (run on a sweep, and the autonomous cascade on blocker

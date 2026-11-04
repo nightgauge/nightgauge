@@ -556,8 +556,8 @@ git push -u origin <branch-name>
 Offer self-assignment only when the configured forge exposes an assignment
 command. The provider-neutral `forge issue edit` command edits by node ID and
 does not support `--add-assignee`; do not pass GitHub CLI-only flags to it.
-Optional date and sprint fields: Read `skills/_shared/DATE_AUTOMATION.md` and
-`skills/_shared/SPRINT_ASSIGNMENT.md` when the project uses them.
+Optional date fields: Read `skills/_shared/DATE_AUTOMATION.md` when the project
+uses them.
 
 ---
 

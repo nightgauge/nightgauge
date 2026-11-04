@@ -212,7 +212,7 @@ sub-issues for parallel execution potential:
 parallel_eligible: true
 depends_on: []
 file_ownership:
-  - packages/nightgauge-sdk/src/agent-teams/types.ts
+  - src/agent-teams/types.ts
 estimated_complexity: medium
 teammate_model_suggestion: sonnet
 -->

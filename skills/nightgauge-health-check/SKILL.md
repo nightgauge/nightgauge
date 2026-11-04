@@ -49,12 +49,12 @@ scoring.
 
 ## Invocation
 
-| Tool        | Command                                                  |
-| ----------- | -------------------------------------------------------- |
-| Claude Code | `/nightgauge:health-check [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                        |
-| Cursor      | Run via Agent Skills or direct SKILL.md                  |
-| Standalone  | `claude --skill skills/nightgauge-health-check/SKILL.md` |
+| Tool        | Command                                 |
+| ----------- | --------------------------------------- |
+| Claude Code | `/nightgauge:health-check [options]`    |
+| Copilot     | Invoke via Agent Skills extension       |
+| Cursor      | Run via Agent Skills or direct SKILL.md |
+| Headless    | `claude -p "/nightgauge:health-check"`  |
 
 ## Arguments
 

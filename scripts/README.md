@@ -81,12 +81,20 @@ the mirror. `scripts/lib/mirror_links.py` re-bases both during generation, using
 only path arithmetic — so the generator emits identical output whether it writes
 the real mirror or the temp directory `--check-mirror` compares against.
 
+An installed copy carries no `docs/` at all, so a target outside the shipped
+tree becomes a GitHub URL: `blob/main` in the mirror, and the release tag (or
+`main`) in `dist/skills` and in Codex, Grok and OpenCode installs (#2764).
+Before that, `scripts/lib/mirror_includes.py` expands each `<!-- include: -->`
+directive into the mirror, because Claude Code loads a plugin skill without
+expanding it; `scripts/test-mirror-includes.sh` covers it.
+
 Two gates, asking different questions:
 
 | Gate                                     | Question                                  |
 | ---------------------------------------- | ----------------------------------------- |
 | `install-agent-skills.sh --check-mirror` | Does the mirror equal generator output?   |
 | `check-mirror-links.py`                  | Does each mirrored link name a real file? |
+| `check-mirror-links.py --root DIR`       | ...inside the tree that actually ships?   |
 
 Only the second can see this class. The drift gate compares the mirror against
 the generator's own output, so while the generator copied links verbatim both

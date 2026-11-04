@@ -352,10 +352,6 @@ does not support `--add-assignee`; do not pass GitHub CLI-only flags to it.
 
 ---
 
-<!-- include: ../_shared/SPRINT_ASSIGNMENT.md -->
-
----
-
 ### Phase 7: Output Summary
 
 ```bash

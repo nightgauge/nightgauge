@@ -18,7 +18,7 @@
 | Bare `nightgauge` calls inside skill bodies               | Fixed          | This PR — preflight prepends `dirname($BINARY)` to `PATH` after resolution   |
 | User `~/.claude/settings.json` Stop hooks                 | Not registered | No change required (user-owned scope)                                        |
 | Project `.claude/settings.json` Stop hooks                | Not registered | No change required                                                           |
-| Other plugin hooks (`pre-push-validate.sh`, etc.)         | Not Stop-event | Not in scope (don't fire at the Stop event)                                  |
+| Other plugin hooks (`careful-gate.sh`, etc.)              | Not Stop-event | Not in scope (don't fire at the Stop event)                                  |
 
 ## 1. Plugin Stop Hook (`stop-verification.sh` → `lib/guard.sh`)
 
@@ -160,10 +160,10 @@ For completeness:
 | `stop-verification.sh` | Stop         | **Yes**        |
 | `inject-context.sh`    | SessionStart | No             |
 
-Other plugin scripts that source `guard.sh` but are not registered as Claude
-Code hooks (e.g. `pre-push-validate.sh`) still inherit the new silent-by-
-default behavior; they cannot leak into subagent transcripts because they're
-git hooks, not Claude hooks.
+The git pre-push hook that `nightgauge pre-push install` writes is not a
+Claude Code hook and does not source `guard.sh`, so it cannot leak into
+subagent transcripts. Its only source is the `prePushHookScript` literal in
+`cmd/nightgauge/cmd_pre_push.go`.
 
 ## 7. Verification Protocol (AC2)
 

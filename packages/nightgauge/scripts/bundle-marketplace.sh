@@ -78,6 +78,12 @@ if [ ! -d "$SHARED_DIR" ]; then
 fi
 mkdir -p "$SKILLS_DIR/_shared"
 rsync -a --delete "$SHARED_DIR/" "$SKILLS_DIR/_shared/"
+# Links that leave dist/skills (../../docs/...) name nothing in an installed
+# VSIX, so they become GitHub URLs (#2764). A release build pins them to its
+# tag, so a user reads the docs of the version they run; any other build
+# points at main. check-mirror-links.py --root dist/skills enforces this.
+LINK_REF="$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null || echo main)"
+python3 "$REPO_ROOT/scripts/lib/mirror_links.py" --identity --dest "$SKILLS_DIR" --ref "$LINK_REF"
 
 # 4. Bundle the Nightgauge OpenCode plugin (#1635) so OpenCodeSetupService can
 #    install it from the VSIX, never from a network fetch (#1671). Same two

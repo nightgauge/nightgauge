@@ -152,7 +152,7 @@ the repository's complete gate:
 
 ```bash
 # e.g. FOCUSED_TESTS="go test ./internal/build/..." or
-#      FOCUSED_TESTS="npm test -w packages/nightgauge-sdk"
+#      FOCUSED_TESTS="npm test -w packages/<touched-package>"
 FOCUSED_TESTS="<scoped test command for the touched packages>"
 bash -c "$FOCUSED_TESTS" \
   || { echo "ERROR: focused tests failed. Fix them before feature-validate."; exit 1; }

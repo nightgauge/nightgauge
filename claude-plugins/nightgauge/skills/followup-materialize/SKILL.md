@@ -26,8 +26,8 @@ records already filed, comments on an open issue with the same title instead
 of duplicating it, files the rest with `type:*`, Priority, Size,
 Status=Backlog and a `Discovered in #N (run R, stage S)` line, and removes
 handled records from the capture. See
-[docs/SELF_IMPROVEMENT_BOUNDARIES.md](../../../../docs/SELF_IMPROVEMENT_BOUNDARIES.md)
-Rule 5 and [docs/CONFIGURATION.md](../../../../docs/CONFIGURATION.md).
+[docs/SELF_IMPROVEMENT_BOUNDARIES.md](https://github.com/nightgauge/nightgauge/blob/main/docs/SELF_IMPROVEMENT_BOUNDARIES.md)
+Rule 5 and [docs/CONFIGURATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md).
 
 ## Invocation
 
