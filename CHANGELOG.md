@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Stages and the daemon no longer inherit `CLAUDECODE` and `CLAUDE_*` variables from the Claude
+  Code session that launched the editor, so a run no longer depends on how the editor was
+  started. `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_PLUGIN_ROOT`, `CLAUDE_CODE_DISABLE_THINKING`,
+  `CLAUDE_CONFIG_DIR` and everything Nightgauge sets for a stage still arrive (#2848).
+
 - A pr-create secret-scan stop now records itself when `nightgauge` is not on `PATH`, so the
   orchestrator no longer opens a fallback PR for a change that leaked a secret. A post-merge
   issue close now finds the PR number itself and passes `--pr`, so a `Refs #N` PR keeps its

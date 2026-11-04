@@ -323,6 +323,7 @@ import {
 } from "../utils/PhaseTimeoutManager";
 import { TelemetryService } from "./TelemetryService";
 import { pluginHint } from "../utils/pluginHint";
+import { withoutLaunchingSessionEnv } from "../utils/launchingSessionEnv";
 
 /**
  * Result of a full pipeline run
@@ -8692,7 +8693,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   ): Promise<void> {
     const workspaceRoot = this.getWorkingDirectory();
     // Resolve GITHUB_TOKEN for Go binary (VSCode doesn't inherit shell env)
-    const execEnv = { ...process.env };
+    const execEnv = withoutLaunchingSessionEnv();
     if (!execEnv.GITHUB_TOKEN) {
       try {
         const { stdout: tokenRaw } = await execFileAsync("gh", ["auth", "token"], {
@@ -9302,7 +9303,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   ): Promise<CompletionReconciliationResult> {
     const workspaceRoot = this.getWorkingDirectory();
     // Resolve GITHUB_TOKEN for Go binary (VSCode doesn't inherit shell env)
-    const execEnv = { ...process.env };
+    const execEnv = withoutLaunchingSessionEnv();
     if (!execEnv.GITHUB_TOKEN) {
       try {
         const { stdout: tokenRaw } = await execFileAsync("gh", ["auth", "token"], {
