@@ -117,8 +117,14 @@ func ResolveBlogWatch(cfg *Config) BlogWatchConfig {
 //
 // A security control that logs and proceeds is not a control. `warn` remains
 // the documented opt-out for a repository still calibrating its rules, and
-// `disabled` for one that has decided the gate is not for it — but neither is
-// what an unconfigured workspace gets.
+// `disabled` for one that has decided the gate is not for it.
+//
+// Scope (#2765): this default applies to a repository that opted in with a
+// committed .nightgauge/config.yaml and has no `sanitization.mode`, and to an
+// opted-in repository whose config fails to load. The user-scoped Claude
+// plugin also runs in repositories that never opted in; there the hook
+// (resolveSanitizationMode in cmd/nightgauge/hookoutput.go) warns instead of
+// blocking.
 const DefaultSanitizationMode = SanitizationModeBlock
 
 // ResolvedMode returns the effective sanitization mode: the Mode field when

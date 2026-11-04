@@ -173,3 +173,20 @@ func TestHookStopVerifyEmitEventPrintsNothing(t *testing.T) {
 		t.Errorf("--emit-event wrote %q to stdout; it must record the verdict, not print it", captured.String())
 	}
 }
+
+// TestStopHookActive: the Stop payload flag that keeps stop-verify from
+// looping (#2765). Anything but a well-formed `true` reads as false.
+func TestStopHookActive(t *testing.T) {
+	cases := map[string]bool{
+		`{"hook_event_name":"Stop","stop_hook_active":true}`:  true,
+		`{"hook_event_name":"Stop","stop_hook_active":false}`: false,
+		`{"hook_event_name":"Stop"}`:                          false,
+		``:                                                    false,
+		`{not json`:                                           false,
+	}
+	for payload, want := range cases {
+		if got := stopHookActive([]byte(payload)); got != want {
+			t.Errorf("stopHookActive(%q) = %v, want %v", payload, got, want)
+		}
+	}
+}

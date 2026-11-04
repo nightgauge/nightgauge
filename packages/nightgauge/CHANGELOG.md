@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- On activation the extension links `~/.nightgauge/bin/nightgauge` to its bundled binary, so
+  the Claude plugin's hooks and terminals find the binary from VS Code, Insiders, VSCodium,
+  Cursor or Windsurf (#2765).
+
 - Codex, Grok and OpenCode skills the extension installs now match the ones
   `scripts/install-agent-skills.sh` installs, and an extension upgrade re-syncs them on
   activation, whatever `nightgauge.plugins.autoPrompt` says (#2762).

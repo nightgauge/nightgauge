@@ -6753,6 +6753,18 @@ func hookExternalDirectoryGateCmd() *cobra.Command {
 	}
 }
 
+// stopHookActive reports the Stop payload's `stop_hook_active` flag. A
+// missing, empty or malformed payload reads as false.
+func stopHookActive(payload []byte) bool {
+	var input struct {
+		StopHookActive bool `json:"stop_hook_active"`
+	}
+	if len(payload) == 0 || json.Unmarshal(payload, &input) != nil {
+		return false
+	}
+	return input.StopHookActive
+}
+
 // stopVerifyEmitBound bounds the --emit-event path's own evaluation. That
 // path runs detached, inside a process the OpenCode plugin spawned and then
 // let go of (#1810): nothing upstream is still holding a timer that could
@@ -6778,6 +6790,10 @@ Output format conforms to Claude Code's canonical Stop hook contract:
   - All tasks complete  → silent (no stdout, exit 0) — Claude Code accepts the stop
   - Tasks incomplete    → {"decision":"block","reason":"..."} (exit 0) — Claude Code keeps the agent working
 
+Scope (#2765): the hook acts only in a repository that opted in with
+.nightgauge/config.yaml, and emits no block when the stdin payload carries
+"stop_hook_active": true, so a Stop hook can never keep a session looping.
+
 The legacy ` + "`" + `{"ok":...,"reason":...}` + "`" + ` shape was non-conformant and caused
 Claude Code to fire a spurious "stop-hook-error" notification on every stage
 exit (see #3605 retro). The sentinel file at
@@ -6792,7 +6808,7 @@ internal and unaffected by this output-format change.`,
 			if emitEvent {
 				return emitStopVerifyEvent(workdir, sessionID, childSession)
 			}
-			out, err := hooks.EvaluateStopHookOutput(workdir)
+			out, err := hooks.EvaluateClaudeStopHook(workdir, stopHookActive(readHookInput(cmd)))
 			if err != nil {
 				return err
 			}

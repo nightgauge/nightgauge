@@ -5171,7 +5171,9 @@ which Claude Code reports as a _non-blocking_ error — the #354 shape exactly.
 Two rules, and one test that enforces them:
 
 - **stdout** carries only the hook's JSON. `guard.sh` diagnostics
-  (`[hook-skipped]`, `[hook-blocked]`, `[stale-binary]`) never go there.
+  (`[hook-skipped]`, `[hook-denied]`, `[stale-binary]`) never go there. The
+  `announce` and `gate` missing-binary policies print hook JSON there, a
+  `systemMessage` or a PreToolUse deny, and nothing else (#2765).
 - **stderr is not a free channel either.** The Claude CLI surfaces hook stderr
   to the parent agent as a `stop-hook-error` notification regardless of exit
   code, and those notifications have caused agents to abort turns (#3262). So
