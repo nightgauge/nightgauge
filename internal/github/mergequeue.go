@@ -82,6 +82,27 @@ type MergeQueueWaitOptions struct {
 	// DefaultMergeabilityPollInterval.
 	ReadyTimeout      time.Duration
 	ReadyPollInterval time.Duration
+	// OnQueued, when set, is called once per wait with the status of a PR
+	// that reached the queue: after its enqueue succeeded, or on the first
+	// poll that observes its entry (#2770). It never fires for a PR that left
+	// OPEN, failed readiness or was never enqueued, so a caller timing the
+	// queue wait starts its clock only once the queue owns the PR.
+	OnQueued func(MergeQueueStatus)
+}
+
+// onQueuedOnce wraps o.OnQueued so it fires at most once.
+func (o MergeQueueWaitOptions) onQueuedOnce() MergeQueueWaitOptions {
+	if o.OnQueued == nil {
+		return o
+	}
+	fire, fired := o.OnQueued, false
+	o.OnQueued = func(st MergeQueueStatus) {
+		if !fired {
+			fired = true
+			fire(st)
+		}
+	}
+	return o
 }
 
 func (o MergeQueueWaitOptions) withDefaults() MergeQueueWaitOptions {
@@ -568,10 +589,13 @@ func ClassifyMergeQueue(st MergeQueueStatus, seenEntry bool, absentPolls, grace 
 // MergeQueueUnmergeable, a MERGEABLE PR is re-enqueued, and an UNKNOWN one
 // stays pending. The deadline bounds the whole wait.
 func (q *MergeQueue) Wait(ctx context.Context, prID string, initial MergeQueueStatus, opts MergeQueueWaitOptions) (MergeQueueStatus, error) {
-	opts = opts.withDefaults()
+	opts = opts.withDefaults().onQueuedOnce()
 	deadline := q.now().Add(opts.Timeout)
 	last := initial
 	seenEntry := initial.InQueue
+	if initial.InQueue && opts.OnQueued != nil {
+		opts.OnQueued(initial)
+	}
 	headOID := initial.EntryHeadOID
 	absent := 0
 	blockedUnmergeable := false
@@ -607,6 +631,9 @@ func (q *MergeQueue) Wait(ctx context.Context, prID string, initial MergeQueueSt
 				}
 			} else {
 				if st.InQueue {
+					if opts.OnQueued != nil {
+						opts.OnQueued(st)
+					}
 					seenEntry = true
 					absent = 0
 					blockedUnmergeable = st.EntryState == "UNMERGEABLE" && st.Mergeable != "CONFLICTING"
@@ -652,6 +679,7 @@ func (q *MergeQueue) EnqueueAndWait(ctx context.Context, status MergeQueueStatus
 	if status.State == "MERGED" {
 		return status, nil
 	}
+	opts = opts.onQueuedOnce()
 	if !status.InQueue {
 		ready, err := q.WaitReady(ctx, status, opts)
 		if err != nil {
@@ -668,6 +696,9 @@ func (q *MergeQueue) EnqueueAndWait(ctx context.Context, status MergeQueueStatus
 				return status, &MergeQueueError{PRNumber: status.Number, Kind: MergeQueueNotReady, Detail: "mergeability not yet computed", Cause: err}
 			}
 			return status, err
+		}
+		if opts.OnQueued != nil {
+			opts.OnQueued(status)
 		}
 	}
 	return q.Wait(ctx, status.PRID, status, opts)

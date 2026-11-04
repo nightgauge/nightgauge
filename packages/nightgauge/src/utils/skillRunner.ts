@@ -111,6 +111,7 @@ import {
   getStageBudgetResolver,
   resolveStageBudgets,
   stageBudgetErrorMessage,
+  queueWaitExcludedMs,
   stageBudgetUnresolvedMessage,
   terminateStageProcessTree,
   type StageBudgetBreach,
@@ -6442,6 +6443,18 @@ function runStageSkillHeadlessImpl(
   const stageBudgetEnforcer = new StageBudgetEnforcer({
     format: adapter === "claude" ? "claude" : "sdk",
     onBreach: (breach: StageBudgetBreach) => stopStageForBudget(stageBudgetErrorMessage(breach)),
+    // pr-merge's wait after its PR reached the merge queue is the queue's CI
+    // run, not the stage's work (#2770): the wall clock leaves out what the
+    // stage's own `nightgauge pr merge --issue` recorded.
+    ...(stage === "pr-merge" &&
+    issueNumber &&
+    issueNumber > 0 &&
+    isUsableWorkspaceRoot(workspaceRoot)
+      ? {
+          excludedMs: (sinceMs: number) =>
+            queueWaitExcludedMs(skillBinary(), workspaceRoot, issueNumber, sinceMs),
+        }
+      : {}),
   });
   stageBudgetEnforcer.start();
   const armStageBudget = (budgets: StageBudgets, logWarnings: boolean): void => {

@@ -12,6 +12,7 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
+	"github.com/nightgauge/nightgauge/internal/queuewait"
 	"github.com/spf13/cobra"
 )
 
@@ -58,6 +59,7 @@ scheduler contract instead of maintaining a second, divergent implementation.`,
 	cmd.AddCommand(prStageCreateCmd())
 	cmd.AddCommand(prStageMergeCmd())
 	cmd.AddCommand(prStageBudgetCmd())
+	cmd.AddCommand(prStageQueueWaitCmd())
 	cmd.AddCommand(prStageTitleCmd())
 	cmd.AddCommand(prStageRecoverCmd())
 	cmd.AddCommand(prStageReviewRoundCmd())
@@ -432,6 +434,57 @@ func prStageBudgetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
+	return cmd
+}
+
+// prStageQueueWaitJSON is the wire shape of `pr-stage queue-wait`.
+type prStageQueueWaitJSON struct {
+	ExcludedMs int64 `json:"excluded_ms"`
+}
+
+// prStageQueueWaitCmd runs `nightgauge pr-stage queue-wait <issue> --since-ms
+// <unix-ms>`: the merge-queue wait recorded for issue since the given instant,
+// which a wall-clock budget leaves out of pr-merge's elapsed time (#2770). The
+// arithmetic lives in internal/queuewait; the editor's enforcer asks here
+// instead of re-deriving it. An unreadable record reports 0.
+func prStageQueueWaitCmd() *cobra.Command {
+	var workdir string
+	var sinceMs int64
+	var outputJSON bool
+	cmd := &cobra.Command{
+		Use:          "queue-wait <issue-number>",
+		Short:        "Report the merge-queue wait recorded for an issue's pr-merge since an instant",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issue, err := parseIssueNumberArg(args[0])
+			if err != nil {
+				return err
+			}
+			if sinceMs <= 0 {
+				return fmt.Errorf("--since-ms must be a positive Unix time in milliseconds")
+			}
+			workspace, err := resolvePrStageWorkspace(workdir)
+			if err != nil {
+				return err
+			}
+			excluded := queuewait.ExcludedFor(workspace, issue, time.UnixMilli(sinceMs), time.Now())
+			if outputJSON {
+				data, err := json.Marshal(prStageQueueWaitJSON{ExcludedMs: excluded.Milliseconds()})
+				if err != nil {
+					return fmt.Errorf("marshal pr-stage queue-wait: %w", err)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), string(data))
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "merge-queue wait since %s: %s\n",
+				time.UnixMilli(sinceMs).UTC().Format(time.RFC3339), excluded)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
+	cmd.Flags().Int64Var(&sinceMs, "since-ms", 0, "Start of the window, Unix milliseconds (the stage's spawn)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
 	return cmd
 }
