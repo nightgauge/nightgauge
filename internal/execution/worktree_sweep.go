@@ -3,6 +3,7 @@ package execution
 import (
 	"errors"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"log"
 	"os"
 	"os/exec"
@@ -620,6 +621,10 @@ func blockingChanges(worktreePath string) ([]string, error) {
 // delete another run's half-built `worktrees/<id>` entry and fail its
 // `git worktree add`.
 func reclaimWorktree(repoRoot string, wt worktreeRecord, keepBranch bool) error {
+	// Record the removal first (#2701); see layout.RemovalLedgerName.
+	if err := layout.RecordWorktreeRemoval(wt.Path); err != nil {
+		log.Printf("[WARN] worktree sweep: %v", err)
+	}
 	if err := gitworktree.Do(repoRoot, func(g *gitworktree.Session) error {
 		out, err := g.Remove(wt.Path)
 		if err == nil {
