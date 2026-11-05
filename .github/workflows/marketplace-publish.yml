@@ -7,8 +7,10 @@
 # and its release.yml provenance attestation, checks version and channel,
 # verifies the PAT, publishes, and confirms each registry lists the version on
 # every target (#1769). It builds nothing, so the registries serve
-# the same SHA-256 the release records. It is re-runnable on its own and never
-# touches the GitHub Release or the Homebrew tap. Run release.yml first.
+# the same SHA-256 the release records. It refuses a release that is still a
+# draft or is not covered by a clean VirusTotal scan (release-scan-gate.sh
+# verify, #2946). It is re-runnable on its own and never touches the GitHub
+# Release or the Homebrew tap. Run release.yml first.
 #
 # Dispatch it ON THE TAG, never from a branch:
 #
@@ -165,6 +167,17 @@ jobs:
       # is compiled, packaged, rescanned or re-attested here. release.yml
       # packages with the same channel resolver (marketplace-channel.sh), so
       # the pre-release flag vsce bakes in at package time is already right.
+      # Registries move only from a published, scan-clean release (#2946). The
+      # release must no longer be a draft, and its vt-scan-report.json must say
+      # clean and cover checksums.txt and every digest it lists. The next step
+      # pins each VSIX to checksums.txt, so the bytes published below are bytes
+      # VirusTotal found clean. Fails before a single registry call.
+      - name: Require a published, scan-clean release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: bash scripts/release-scan-gate.sh verify "$TAG"
+
       - name: Download the release's VSIXs and checksums
         working-directory: packages/nightgauge
         env:

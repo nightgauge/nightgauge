@@ -97,6 +97,13 @@ homebrew_casks:
       branch: "cask-{{ .Version }}"
       pull_request:
         enabled: true
+        # The GitHub Release is a DRAFT until VirusTotal finds every file clean
+        # (#2946), so the cask opens as a DRAFT pull request: its URLs point at
+        # the final tag, but a draft PR cannot be merged. release.yml marks it
+        # ready (scripts/verify-release-channels.sh --release) only after
+        # `release-scan-gate.sh verify` proves the release published and
+        # scan-clean. A cask that points at a draft is never mergeable.
+        draft: true
         base:
           owner: nightgauge
           name: homebrew-tap
@@ -125,6 +132,16 @@ release:
   github:
     owner: nightgauge
     name: nightgauge
+  # Nothing is public before the multi-engine scan is clean (#2946). GoReleaser
+  # creates a DRAFT; release.yml attaches the remaining assets, runs
+  # scripts/release-scan-gate.sh scan on the draft's own bytes, and only that
+  # script publishes it (`gh release edit --draft=false --latest`).
+  draft: true
+  # A re-run while the release is still a draft (a failed scan, a spent
+  # VirusTotal quota) replaces that draft instead of creating a second one.
+  # A PUBLISHED release is never touched: release.yml's release-state step
+  # skips GoReleaser entirely for it.
+  replace_existing_draft: true
 
 # NOTE: manifest.json (consumed by the SDK postinstall for SHA256 verification)
 # is derived from GoReleaser's own checksums.txt, so GoReleaser cannot attach it

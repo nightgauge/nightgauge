@@ -59,7 +59,7 @@ CURL_STUB
     echo "fake='$FAKE'"
     cat <<'GH_STUB'
 case "$1 $2" in
-"pr close" | "issue create" | "issue edit" | "issue close")
+"pr close" | "pr ready" | "issue create" | "issue edit" | "issue close")
   echo "$*" >>"$fake/writes.log"
   exit 0
   ;;
@@ -89,18 +89,24 @@ exit 1
 GH_STUB
   } >"$FAKE/bin/gh"
   chmod +x "$FAKE/bin/gh"
+  # release-scan-gate.sh verify (#2946): exits with $FAKE/gate-rc (default 0)
+  # and logs its arguments, so a case can assert the gate ran and was obeyed.
+  printf '#!/usr/bin/env bash\necho "gate $*" >>"%s/gate.log"\nexit "$(cat "%s/gate-rc" 2>/dev/null || echo 0)"\n' \
+    "$FAKE" "$FAKE" >"$FAKE/bin/scan-gate"
+  chmod +x "$FAKE/bin/scan-gate"
 }
 
-# pr <number> <head-ref> [<head-repo>]
+# pr <number> <head-ref> [<head-repo>] [<draft>]
 pr() {
-  printf '{"number": %s, "head": {"ref": "%s", "repo": {"full_name": "%s"}}}' \
-    "$1" "$2" "${3:-nightgauge/homebrew-tap}"
+  printf '{"number": %s, "draft": %s, "head": {"ref": "%s", "repo": {"full_name": "%s"}}}' \
+    "$1" "${4:-false}" "$2" "${3:-nightgauge/homebrew-tap}"
 }
 
 OUT=""
 RC=0
 run() {
-  OUT="$(env -u GITHUB_STEP_SUMMARY PATH="$FAKE/bin:$PATH" bash "$SCRIPT" --channel homebrew "$@" 2>&1)"
+  OUT="$(env -u GITHUB_STEP_SUMMARY PATH="$FAKE/bin:$PATH" RELEASE_SCAN_GATE="$FAKE/bin/scan-gate" \
+    bash "$SCRIPT" --channel homebrew "$@" 2>&1)"
   RC=$?
 }
 
@@ -192,6 +198,36 @@ expect "superseded PRs are only reported without the flag" 0 "superseded cask PR
 fixture v0.4.4 0.4.3 "[$(pr 17 cask-0.4.4), $(pr 99 cask-9.9.9 attacker/homebrew-tap)]"
 run --release --version 0.4.4 --close-superseded
 expect "fork PRs are ignored" 0 "cask-0.4.4" NONE
+
+# 9b. The scan gate (#2946): release mode verifies the release first, then
+#     marks the draft cask PR ready -- and only then.
+fixture v0.4.4 0.4.3 "[$(pr 17 cask-0.4.4 nightgauge/homebrew-tap true)]"
+run --release --version 0.4.4
+expect "a scan-clean release readies its draft cask PR" 0 "marked the draft cask PR nightgauge/homebrew-tap#17 ready" "pr ready 17"
+if grep -qx "gate verify v0.4.4 -R nightgauge/nightgauge" "$FAKE/gate.log" 2>/dev/null; then
+  echo "PASS: the scan gate verified the release whose cask it readied"; PASS=$((PASS + 1))
+else
+  echo "FAIL: the scan gate did not verify v0.4.4: $(cat "$FAKE/gate.log" 2>/dev/null)"; FAIL=$((FAIL + 1))
+fi
+fixture v0.4.4 0.4.3 "[$(pr 17 cask-0.4.4 nightgauge/homebrew-tap true)]"
+echo 1 >"$FAKE/gate-rc"
+run --release --version 0.4.4 --close-superseded
+expect "a draft or unscanned release is refused" 1 "refusing to ready its cask"
+case "$(cat "$FAKE/writes.log")" in
+*"pr "*) echo "FAIL: a cask PR was touched for an unscanned release"; FAIL=$((FAIL + 1)) ;;
+*) echo "PASS: an unscanned release touches no cask PR"; PASS=$((PASS + 1)) ;;
+esac
+fixture v0.4.4 0.4.3 "[$(pr 17 cask-0.4.4 nightgauge/homebrew-tap true)]"
+echo 2 >"$FAKE/gate-rc"
+run --release --version 0.4.4
+expect "a scan gate that cannot decide is exit 2" 2 "refusing to ready its cask"
+fixture v0.4.4 0.4.3 "[$(pr 17 cask-0.4.4)]"
+run --version 0.4.4
+if [ -s "$FAKE/gate.log" ]; then
+  echo "FAIL: watchdog mode ran the scan gate"; FAIL=$((FAIL + 1))
+else
+  echo "PASS: watchdog mode does not run the scan gate"; PASS=$((PASS + 1))
+fi
 
 # 10. Semver, not string order: 0.10.0 is newer than 0.9.0.
 fixture v0.10.0 0.10.0 "[$(pr 20 cask-0.9.0)]"
