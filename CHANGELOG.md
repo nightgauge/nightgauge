@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The VSIX's skills match their source again, so release candidates pass staging. Skill
+  bundles and installs now leave test material out at any depth (`tests/`, `__tests__/`,
+  `*.test.ts`, `*.test.js`), not only a skill's top-level `tests/`; the extension package
+  had dropped `nightgauge-product-audit/__tests__` after the bundle shipped it. The local
+  gate now checks the files `vsce` would package against skill source (#2948).
 - The local gate's VS Code host smoke tests no longer re-sync the worktree's
   skills into your real `~/.codex/skills`, `~/.grok/skills` and
   `~/.config/opencode` (#2935). Each test window now runs under a scratch

@@ -112,7 +112,13 @@ func TestBundleShipsEverySkillFile(t *testing.T) {
 			t.Errorf("bundle lacks %s: %v", name, err)
 		}
 	}
-	for _, name := range []string{"nightgauge-feature-dev/CHANGELOG.md", "nightgauge-pattern-mining/tests"} {
+	for _, name := range []string{
+		"nightgauge-feature-dev/CHANGELOG.md",
+		"nightgauge-pattern-mining/tests",
+		// .vscodeignore drops *.test.ts from the VSIX, so a bundle that
+		// carried these failed staging's skill-bundle preflight (#2948).
+		"nightgauge-product-audit/__tests__",
+	} {
 		if _, err := os.Stat(filepath.Join(bundle, name)); err == nil {
 			t.Errorf("bundle ships excluded %s", name)
 		}
@@ -193,6 +199,32 @@ func TestPackagingWorkflowsCheckTheExtractedBundle(t *testing.T) {
 		verify := strings.Index(text, "- name: Verify VSIX contents")
 		if build < 0 || build > verify {
 			t.Errorf("%s must build the runner's binary before Verify VSIX contents", wf)
+		}
+	}
+}
+
+func TestBundleExcluded(t *testing.T) {
+	for _, tc := range []struct {
+		rel   string
+		isDir bool
+		want  bool
+	}{
+		{"CHANGELOG.md", false, true},
+		{"docs/CHANGELOG.md", false, false},
+		{"tests", true, true},
+		{"flows/tests", true, true},
+		{"__tests__", true, true},
+		{"src/__tests__", true, true},
+		{"x.test.ts", false, true},
+		{"lib/x.test.js", false, true},
+		{"x.test.md", false, false},
+		{"src/foo.ts", false, false},
+		{"README.md", false, false},
+		{"tests", false, false},
+		{"src", true, false},
+	} {
+		if got := BundleExcluded(tc.rel, tc.isDir); got != tc.want {
+			t.Errorf("BundleExcluded(%q, %v) = %v, want %v", tc.rel, tc.isDir, got, tc.want)
 		}
 	}
 }

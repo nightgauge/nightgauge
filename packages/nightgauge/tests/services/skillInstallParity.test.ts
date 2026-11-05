@@ -20,7 +20,7 @@ import * as path from "node:path";
 
 vi.mock("vscode", () => ({ window: {}, workspace: {} }));
 
-import { copySkillsTree } from "../../src/services/bundledSkills";
+import { copySkillsTree, isSkillExcluded } from "../../src/services/bundledSkills";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 const SKILLS = path.join(REPO_ROOT, "skills");
@@ -137,14 +137,35 @@ describe("extension and script skill installs are identical (#2762)", () => {
     expect(fs.existsSync(path.join(extensionTree, "_shared"))).toBe(true);
   });
 
-  it("leaves no skill CHANGELOG.md or tests/ in either install", () => {
-    for (const rel of extensionFiles.keys()) {
-      const [, top] = rel.split(path.sep);
-      expect(
-        rel.split(path.sep)[0] !== "_shared" && ["CHANGELOG.md", "tests"].includes(top),
-        rel
-      ).toBe(false);
+  it("leaves no skill CHANGELOG.md or test material in either install", () => {
+    for (const tree of [extensionFiles, scriptFiles]) {
+      for (const rel of tree.keys()) {
+        const [skill, ...rest] = rel.split(path.sep);
+        if (skill === "_shared") {
+          continue;
+        }
+        const dirs = rest.slice(0, -1);
+        const shipped =
+          !isSkillExcluded(rest.join("/"), false) &&
+          dirs.every((_, i) => !isSkillExcluded(dirs.slice(0, i + 1).join("/"), true));
+        expect(shipped, rel).toBe(true);
+      }
     }
+    // .vscodeignore drops *.test.ts from the VSIX; shipping these failed staging (#2948).
+    expect(fs.existsSync(path.join(extensionTree, "nightgauge-product-audit", "__tests__"))).toBe(
+      false
+    );
+  });
+
+  it("isSkillExcluded drops test material at any depth and only a top-level CHANGELOG.md", () => {
+    expect(isSkillExcluded("CHANGELOG.md", false)).toBe(true);
+    expect(isSkillExcluded("docs/CHANGELOG.md", false)).toBe(false);
+    expect(isSkillExcluded("src/__tests__", true)).toBe(true);
+    expect(isSkillExcluded("flows/tests", true)).toBe(true);
+    expect(isSkillExcluded("src/b.test.js", false)).toBe(true);
+    expect(isSkillExcluded("a.test.ts", false)).toBe(true);
+    expect(isSkillExcluded("a.test.md", false)).toBe(false);
+    expect(isSkillExcluded("src/foo.ts", false)).toBe(false);
   });
 
   it("gives every skill a name: matching its directory and no disable-model-invocation", () => {

@@ -5,16 +5,33 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 )
 
-// BundleExcludes are the entries at the top of a skill directory that the
-// bundle does not ship. It is the Go half of the rsync excludes in
-// packages/nightgauge/scripts/bundle-marketplace.sh, pinned by
-// TestBundleShipsEverySkillFile, which runs that script.
-var BundleExcludes = map[string]bool{"CHANGELOG.md": true, "tests": true}
+// BundleExcluded reports whether an entry of a skill directory stays out of
+// every bundle and install. rel is the entry's path inside the skill
+// directory, slash-separated. The rule: a top-level CHANGELOG.md, any
+// directory named tests or __tests__, and any file ending in .test.ts or
+// .test.js, at any depth. Test material never ships, so .vscodeignore's
+// **/*.test.ts cannot drop a file the bundle carries (#2948).
+//
+// It is the Go half of the rsync excludes in
+// packages/nightgauge/scripts/bundle-marketplace.sh, is_excluded in
+// scripts/lib/install_skill_tree.py and isSkillExcluded in the extension's
+// bundledSkills.ts. TestBundleShipsEverySkillFile runs the script against it.
+func BundleExcluded(rel string, isDir bool) bool {
+	if rel == "CHANGELOG.md" {
+		return true
+	}
+	name := path.Base(rel)
+	if isDir {
+		return name == "tests" || name == "__tests__"
+	}
+	return strings.HasSuffix(name, ".test.ts") || strings.HasSuffix(name, ".test.js")
+}
 
 // sharedDirName is the sibling of the skill directories that every skill
 // includes from. The bundle carries all of it, without excludes.
@@ -82,19 +99,19 @@ func DiffBundleFiles(sourceRoot, bundleRoot string) ([]BundleFileDiff, error) {
 // does not exist holds no files; the caller's other side then reports them all.
 func shippedFiles(dir string, applyExcludes bool) (map[string]bool, error) {
 	files := map[string]bool{}
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			if path == dir && errors.Is(err, fs.ErrNotExist) {
+			if p == dir && errors.Is(err, fs.ErrNotExist) {
 				return fs.SkipAll
 			}
 			return err
 		}
-		rel, err := filepath.Rel(dir, path)
+		rel, err := filepath.Rel(dir, p)
 		if err != nil {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if applyExcludes && BundleExcludes[strings.SplitN(rel, "/", 2)[0]] {
+		if applyExcludes && rel != "." && BundleExcluded(rel, d.IsDir()) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}

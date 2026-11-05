@@ -31,14 +31,29 @@ const NAMESPACE = "nightgauge-";
 const UNPREFIXED = new Set(["_shared", "smart-setup", "update-docs", "pr-preflight"]);
 const SHARED_DIR = "_shared";
 
+const TEST_DIRS: ReadonlySet<string> = new Set(["tests", "__tests__"]);
+const TEST_FILE_SUFFIXES = [".test.ts", ".test.js"];
+
 /**
- * Top-level entries of a skill directory that no install ships. The bundle
- * (scripts/bundle-marketplace.sh) leaves them out, and so do
- * scripts/lib/install_skill_tree.py (SKILL_EXCLUDES) and the Go
- * skillrender.BundleExcludes, so every installer produces the same tree.
+ * Whether an entry of a skill directory stays out of every install: a
+ * top-level CHANGELOG.md, and test material at any depth (tests/, __tests__/,
+ * *.test.ts, *.test.js). `rel` is slash-separated inside the skill directory.
+ * The bundle (scripts/bundle-marketplace.sh), scripts/lib/install_skill_tree.py
+ * (is_excluded) and the Go skillrender.BundleExcluded apply the same rule, so
+ * every installer produces the same tree (#2948).
  */
-const SKILL_EXCLUDES: ReadonlySet<string> = new Set(["CHANGELOG.md", "tests"]);
-const NO_EXCLUDES: ReadonlySet<string> = new Set();
+export function isSkillExcluded(rel: string, isDir: boolean): boolean {
+  if (rel === "CHANGELOG.md") {
+    return true;
+  }
+  const name = rel.slice(rel.lastIndexOf("/") + 1);
+  if (isDir) {
+    return TEST_DIRS.has(name);
+  }
+  return TEST_FILE_SUFFIXES.some((suffix) => name.endsWith(suffix));
+}
+
+type SkillExcluded = (rel: string, isDir: boolean) => boolean;
 
 /**
  * Written into every directory copySkillsTree installs. A name, generic
@@ -285,28 +300,34 @@ async function holdsMarker(target: string): Promise<boolean> {
 /**
  * Copy a real directory's contents; links to files inside `root` land as
  * regular files. The marker name belongs to copySkillsTree, so a source
- * entry by that name is never copied over it. Names in `exclude` are skipped
- * at this level only.
+ * entry by that name is never copied over it. `excluded(rel, isDir)`, when
+ * given, drops entries at any depth; `rel` is relative to the copy's start.
  */
 async function copyContained(
   sourceDir: string,
   targetDir: string,
   root: string,
   warn: SkillCopyWarn,
-  exclude: ReadonlySet<string> = NO_EXCLUDES
+  excluded?: SkillExcluded,
+  prefix = ""
 ): Promise<void> {
   await fs.promises.mkdir(targetDir, { recursive: true });
   for (const name of await fs.promises.readdir(sourceDir)) {
-    if (name === INSTALL_MARKER || exclude.has(name)) {
+    if (name === INSTALL_MARKER) {
       continue;
     }
     const entry = await resolveContained(path.join(sourceDir, name), root, warn);
     if (!entry) {
       continue;
     }
+    const isDir = entry.stats.isDirectory();
+    const rel = prefix + name;
+    if (excluded?.(rel, isDir)) {
+      continue;
+    }
     const target = path.join(targetDir, name);
-    if (entry.stats.isDirectory()) {
-      await copyContained(entry.realPath, target, root, warn);
+    if (isDir) {
+      await copyContained(entry.realPath, target, root, warn, excluded, rel + "/");
     } else {
       await fs.promises.copyFile(entry.realPath, target);
     }
@@ -315,7 +336,7 @@ async function copyContained(
 
 /**
  * Copy each SKILL.md directory (and `_shared/`) from sourceDir into destDir
- * under its own name, without a skill's top-level CHANGELOG.md or tests/:
+ * under its own name, without what isSkillExcluded drops from a skill:
  * the tree `install-agent-skills.sh` writes from the same canonical source.
  *
  * Refuses (throws) when the source and destination overlap. A skill is
@@ -369,8 +390,8 @@ export async function copySkillsTree(
     await fs.promises.rm(target, { recursive: true, force: true });
     await fs.promises.mkdir(target);
     await fs.promises.writeFile(path.join(target, INSTALL_MARKER), INSTALL_MARKER_TEXT);
-    const exclude = name === SHARED_DIR ? NO_EXCLUDES : SKILL_EXCLUDES;
-    await copyContained(entryPath, target, root, warn, exclude);
+    const excluded = name === SHARED_DIR ? undefined : isSkillExcluded;
+    await copyContained(entryPath, target, root, warn, excluded);
     result.installed += 1;
   }
   if (options.prune && result.total > 0) {

@@ -238,14 +238,18 @@ describe("copySkillsTree counts and retired skills (#2739)", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("issue-create is not a Nightgauge"));
   });
 
-  it("leaves a skill's top-level CHANGELOG.md and tests/ behind, as the bundle does", async () => {
+  it("leaves a skill's top-level CHANGELOG.md and test material behind, as the bundle does", async () => {
     const root = path.join(source, "nightgauge-retro");
     fs.writeFileSync(path.join(root, "CHANGELOG.md"), "# changes");
     fs.mkdirSync(path.join(root, "tests"));
     fs.writeFileSync(path.join(root, "tests", "case.md"), "case");
     fs.mkdirSync(path.join(root, "_includes", "tests"), { recursive: true });
     fs.writeFileSync(path.join(root, "_includes", "CHANGELOG.md"), "nested");
-    fs.writeFileSync(path.join(root, "_includes", "tests", "kept.md"), "nested");
+    fs.writeFileSync(path.join(root, "_includes", "tests", "dropped.md"), "nested");
+    fs.mkdirSync(path.join(root, "src", "__tests__"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src", "__tests__", "a.test.ts"), "test");
+    fs.writeFileSync(path.join(root, "src", "b.test.js"), "test");
+    fs.writeFileSync(path.join(root, "src", "c.ts"), "code");
     fs.mkdirSync(path.join(source, "_shared"));
     fs.writeFileSync(path.join(source, "_shared", "CHANGELOG.md"), "shared");
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
@@ -254,7 +258,10 @@ describe("copySkillsTree counts and retired skills (#2739)", () => {
     expect(fs.existsSync(path.join(out, "CHANGELOG.md"))).toBe(false);
     expect(fs.existsSync(path.join(out, "tests"))).toBe(false);
     expect(fs.existsSync(path.join(out, "_includes", "CHANGELOG.md"))).toBe(true);
-    expect(fs.existsSync(path.join(out, "_includes", "tests", "kept.md"))).toBe(true);
+    expect(fs.existsSync(path.join(out, "_includes", "tests"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "src", "__tests__"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "src", "b.test.js"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "src", "c.ts"))).toBe(true);
     expect(fs.existsSync(path.join(dest, "_shared", "CHANGELOG.md"))).toBe(true);
   });
 
