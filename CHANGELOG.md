@@ -21,6 +21,19 @@ changelog, and the release workflow refuses a tag that does not.
   `*.test.ts`, `*.test.js`), not only a skill's top-level `tests/`; the extension package
   had dropped `nightgauge-product-audit/__tests__` after the bundle shipped it. The local
   gate now checks the files `vsce` would package against skill source (#2948).
+- The local gate's VS Code host smoke tests no longer re-sync the worktree's
+  skills into your real `~/.codex/skills`, `~/.grok/skills` and
+  `~/.config/opencode` (#2935). Each test window now runs under a scratch
+  `HOME` with scratch `CODEX_HOME`, `GROK_HOME`, `XDG_CONFIG_HOME` and
+  `CLAUDE_CONFIG_DIR`, and the vitest tier overrides the same variables. The
+  gate's final machine-state check now also watches those agent homes and
+  `~/.claude/plugins`, so a future leak fails the gate and names the path.
+  The test windows run with `--use-mock-keychain` on macOS and
+  `--password-store=basic` on Linux, so the scratch `HOME` raises no
+  "Keychain Not Found" dialog. `npm run demo` gets the same
+  isolation. The machine-state check watches only what Nightgauge installs
+  there, so Claude Code or Codex refreshing its own files does not fail it.
+
 - The Claude plugin's version is now 1.27.0, so installed plugins receive the plugin changes
   made since v0.8.0, and the v0.8.1 release candidates pass the staging plugin-version gate
   (#2945).

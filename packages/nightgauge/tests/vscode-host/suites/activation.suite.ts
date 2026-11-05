@@ -8,6 +8,8 @@
  */
 
 import * as assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { suite, test } from "../harness.js";
 import { outputChannelErrorsSince, processFaults } from "../observe.js";
@@ -76,6 +78,73 @@ suite("activation", () => {
     );
   });
 
+  test("activation's skill re-sync stays off the real agent homes (#2935)", () => {
+    // launch.ts seeds the same Nightgauge install twice: under the fake HOME
+    // (standing in for the developer's real ~/.codex, ~/.grok, ~/.config and
+    // ~/.claude) and under the agent-home overrides. A fresh user-data dir has
+    // no install stamp, so activation re-syncs whatever it resolves.
+    const fakeHome = requiredEnv("NIGHTGAUGE_HOST_FAKE_HOME");
+    const agentHomes = requiredEnv("NIGHTGAUGE_HOST_AGENT_HOMES");
+    const sentinel = requiredEnv("NIGHTGAUGE_HOST_AGENT_SENTINEL");
+    const skills = ["nightgauge-issue-pickup", "nightgauge-issue-create"];
+
+    const realRoots = [
+      path.join(fakeHome, ".codex", "skills"),
+      path.join(fakeHome, ".grok", "skills"),
+      path.join(fakeHome, ".config", "opencode"),
+      path.join(fakeHome, ".claude", "plugins"),
+    ];
+    const expected = new Set([
+      ...[realRoots[0], realRoots[1], path.join(realRoots[2], "skills")].flatMap((root) =>
+        skills.flatMap((skill) =>
+          ["SKILL.md", ".nightgauge-installed"].map((file) => path.join(root, skill, file))
+        )
+      ),
+      path.join(realRoots[3], "installed_plugins.json"),
+    ]);
+    const touched: string[] = [];
+    for (const file of realRoots.flatMap(filesUnder)) {
+      if (!expected.has(file)) {
+        touched.push(`added: ${file}`);
+      } else if (fs.readFileSync(file, "utf8") !== sentinel) {
+        touched.push(`changed: ${file}`);
+      }
+    }
+    for (const file of expected) {
+      if (!fs.existsSync(file)) touched.push(`removed: ${file}`);
+    }
+    // A re-sync writes hundreds of files; the reporter drops an oversized
+    // message entirely, so name the first few and count the rest.
+    const shown = 10;
+    assert.equal(
+      touched.length,
+      0,
+      "Activation wrote to the agent homes under HOME instead of the CODEX_HOME / GROK_HOME / " +
+        "XDG_CONFIG_HOME overrides: on a developer machine that is their real install.\n  " +
+        touched.slice(0, shown).join("\n  ") +
+        (touched.length > shown ? `\n  ...and ${touched.length - shown} more` : "")
+    );
+
+    // Not vacuous: the re-sync did run, against the overrides. Codex, Grok and
+    // OpenCode re-sync without their CLI on PATH.
+    const resynced = [
+      path.join(agentHomes, "codex", "skills"),
+      path.join(agentHomes, "grok", "skills"),
+      path.join(agentHomes, "config", "opencode", "skills"),
+    ].filter((root) =>
+      skills.some((skill) => {
+        const file = path.join(root, skill, "SKILL.md");
+        return fs.existsSync(file) && fs.readFileSync(file, "utf8") !== sentinel;
+      })
+    );
+    assert.equal(
+      resynced.length,
+      3,
+      `Expected activation to re-sync the seeded installs under ${agentHomes}; only ` +
+        `${JSON.stringify(resynced)} were. Without that, the check above proves nothing.`
+    );
+  });
+
   test("no output channel recorded an error during startup", () => {
     const errors = outputChannelErrorsSince(activationStartedAt);
     assert.deepEqual(
@@ -93,3 +162,20 @@ suite("activation", () => {
     assert.ok(root.length > 0);
   });
 });
+
+function requiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is not set: run the tier through tests/vscode-host/launch.ts`);
+  }
+  return value;
+}
+
+/** Every regular file under `root`, recursively; none when it is absent. */
+function filesUnder(root: string): string[] {
+  if (!fs.existsSync(root)) return [];
+  return fs
+    .readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(entry.parentPath, entry.name));
+}
