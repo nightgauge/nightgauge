@@ -10,6 +10,25 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { Logger } from "../../src/utils/logger";
 
+// #2693 — hermetic: no case may spawn a process. Offline, the real inner run
+// shelled out to `gh`/`git` and blew the timeout; any spawn now fails loudly.
+function throwingChildProcess(original: Record<string, unknown>) {
+  const fns = ["exec", "execSync", "execFile", "execFileSync", "spawn", "spawnSync", "fork"];
+  const mocked: Record<string, unknown> = { ...original };
+  for (const fn of fns) {
+    mocked[fn] = vi.fn(() => {
+      throw new Error(`hermetic test: child_process.${fn} called`);
+    });
+  }
+  return { ...mocked, default: mocked };
+}
+vi.mock("child_process", async (importOriginal) =>
+  throwingChildProcess(await importOriginal<Record<string, unknown>>())
+);
+vi.mock("node:child_process", async (importOriginal) =>
+  throwingChildProcess(await importOriginal<Record<string, unknown>>())
+);
+
 function createMockLogger(): Logger {
   return {
     info: vi.fn(),
@@ -22,6 +41,7 @@ function createMockLogger(): Logger {
 describe("HeadlessOrchestrator.runPipeline — duplicate dispatch refusal (#188)", () => {
   afterEach(() => {
     (HeadlessOrchestrator as any).activePipelineIssues.clear();
+    vi.restoreAllMocks();
   });
 
   it("refuses when the issue already has a pipeline in flight on ANOTHER instance", async () => {
@@ -55,20 +75,29 @@ describe("HeadlessOrchestrator.runPipeline — duplicate dispatch refusal (#188)
 
   it("does not refuse a different issue", async () => {
     (HeadlessOrchestrator as any).activePipelineIssues.add(233);
-    // Registry check for a different issue passes through to the inner run —
-    // assert only the registry gate here (the inner run is exercised by the
-    // existing pipeline test suites): remove 234 immediately by observing
-    // that the guard did not produce the refusal error.
-    const orch = new HeadlessOrchestrator(null, createMockLogger());
-    const result = await orch.runPipeline(234).catch((err: Error) => ({
-      success: false,
+    let registeredDuringRun = false;
+    const success = {
+      success: true,
       completedStages: [],
       skippedStages: [],
       deferredStages: [],
-      error: err,
       totalDurationMs: 0,
-    }));
-    expect(result.error?.message ?? "").not.toContain("Duplicate dispatch refused");
+    };
+    // Stub the inner run: this case asserts only the registry gate.
+    const inner = vi
+      .spyOn(HeadlessOrchestrator.prototype as any, "runPipelineInner")
+      .mockImplementation(async () => {
+        registeredDuringRun = (HeadlessOrchestrator as any).activePipelineIssues.has(234);
+        return success;
+      });
+    const orch = new HeadlessOrchestrator(null, createMockLogger());
+
+    const result = await orch.runPipeline(234);
+
+    expect(inner).toHaveBeenCalledTimes(1);
+    expect(inner.mock.calls[0][0]).toBe(234);
+    expect(result).toBe(success);
+    expect(registeredDuringRun).toBe(true);
     // finally-cleanup: 234 must not linger in the registry.
     expect((HeadlessOrchestrator as any).activePipelineIssues.has(234)).toBe(false);
   });
