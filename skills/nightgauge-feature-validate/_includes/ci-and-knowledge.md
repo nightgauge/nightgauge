@@ -84,7 +84,17 @@ call orphans it instead. The `gate-background` hook denies both forms (#2953).
 declared at spawn so the wait reads as work
 (`_shared/LONG_RUNNING_PROCESSES.md`, #2694).
 
+The full gate runs the unit suite, so its result is the unit result. Its log
+is kept as `gate-{N}.log` in the pipeline state directory, and
+`UNIT_TESTS_LOG` and, from its Go `--- PASS` / `--- FAIL` lines, the
+`UNIT_TESTS_*` result and counts are set from it for Step 6.1. pr-create reads that log's `--- PASS` / `--- FAIL` lines to answer a
+criterion naming a test, and the gate ledger's pass for this tree when the
+block is missing. A gate started in the background and polled still leaves
+both, so its result reaches the PR (#2941).
+
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 CI_PARITY_PASSED=true
 CI_PARITY_FAILED_CMD=""
 CI_PARITY_FAILED_OUTPUT=""
@@ -105,13 +115,32 @@ function run_ci_parity() {
     echo "Running: $CMD"
     # A command may be a multi-line block; run it through a shell, as CI does.
     CI_PARITY_LOG=$(mktemp "${TMPDIR:-/tmp}/ci-parity-XXXXXX")
+    IS_GATE=false
+    if [ "$CMD" = "nightgauge ci gate-run" ]; then
+      # The gate's log outlives the step: pr-create reads its per-test lines (#2941).
+      IS_GATE=true
+      CI_PARITY_LOG="$(nightgauge layout path pipeline "gate-${ISSUE_NUMBER}.log")"
+    fi
     bash -c "$CMD" >"$CI_PARITY_LOG" 2>&1 &
     CI_PARITY_PID=$!
     echo "NIGHTGAUGE_PROGRESS: {\"pid\": $CI_PARITY_PID, \"log\": \"$CI_PARITY_LOG\", \"label\": \"ci parity\"}"
     wait "$CI_PARITY_PID"
     EXIT_CODE=$?
     OUTPUT=$(tail -c 65536 "$CI_PARITY_LOG")
-    rm -f "$CI_PARITY_LOG"
+    if [ "$IS_GATE" = "true" ]; then
+      UNIT_TESTS_LOG="$CI_PARITY_LOG"
+      # Counts come from Go's own result lines; a gate with none leaves the
+      # unit block to the earlier phases (a zero count reads inconclusive).
+      GATE_TESTS_RUN=$(grep -cE '^[[:space:]]*--- (PASS|FAIL): ' "$CI_PARITY_LOG" || true)
+      if [ "${GATE_TESTS_RUN:-0}" -gt 0 ]; then
+        UNIT_TESTS_RAN=true
+        UNIT_TESTS_PASSED=$([ $EXIT_CODE -eq 0 ] && echo true || echo false)
+        UNIT_TESTS_RUN_COUNT=$GATE_TESTS_RUN
+        UNIT_TESTS_PASSED_COUNT=$(grep -cE '^[[:space:]]*--- PASS: ' "$CI_PARITY_LOG" || true)
+      fi
+    else
+      rm -f "$CI_PARITY_LOG"
+    fi
     if [ $EXIT_CODE -eq 0 ]; then STATUS=passed; REASON=""
     elif [ $EXIT_CODE -eq 127 ]; then STATUS=skipped; REASON="command not found"
     else STATUS=failed; REASON=""

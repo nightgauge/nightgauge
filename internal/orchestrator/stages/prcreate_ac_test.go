@@ -645,6 +645,14 @@ func TestACTestState_UnverifiedSuiteOutranksValidatePass(t *testing.T) {
 	if !deliverable.Apply(doc, f) {
 		t.Fatal("setup: Apply did not supersede the passed verdict")
 	}
+	// The branch really adds the suite: a finding naming a file the diff does
+	// not add is dropped as stale (#2941).
+	if err := os.MkdirAll(filepath.Join(dir, "e2e"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "e2e", "widget.spec.ts"), []byte("test('w', () => {})\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	p := pipelineContextPath(dir, "validate-42.json")
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)

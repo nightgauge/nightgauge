@@ -265,6 +265,40 @@ func FindingFromArtifact(doc map[string]any) Finding {
 	return f
 }
 
+// Recheck re-derives a persisted finding against fresh facts: an artifact
+// stays only while keep accepts its path and no tier able to run it ran in
+// ran. Tiers and their reasons shrink to what the remaining artifacts need.
+func (f Finding) Recheck(keep func(path string) bool, ran Execution) Finding {
+	if !f.Detected() {
+		return f
+	}
+	var artifacts []TestArtifact
+	for _, a := range f.Artifacts {
+		tiers := tiersFor(a.Path)
+		if len(tiers) == 0 {
+			tiers = a.Tiers
+		}
+		cand := TestArtifact{Path: a.Path, Tiers: tiers}
+		if !keep(a.Path) || cand.exercised(ran) {
+			continue
+		}
+		artifacts = append(artifacts, cand)
+	}
+	if len(artifacts) == 0 {
+		return Finding{}
+	}
+	out := Finding{Artifacts: artifacts, Tiers: Tiers(artifacts), SupersededStatus: f.SupersededStatus}
+	for _, t := range out.Tiers {
+		if r, ok := f.TierReasons[t]; ok {
+			if out.TierReasons == nil {
+				out.TierReasons = map[Tier]string{}
+			}
+			out.TierReasons[t] = r
+		}
+	}
+	return out
+}
+
 // toStrings reads a string list that may arrive in either of two shapes.
 //
 // Apply writes `[]string`; a JSON decode of the same document yields `[]any`.

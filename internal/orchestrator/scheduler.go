@@ -7047,8 +7047,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		deterministicMerged, detMergePRState, mergeRateLimited, mergeRefusal := s.tryDeterministicPRMerge(ctx, stage, runtime, item, workspaceRoot)
 		deterministicCreated := false
 		createRateLimited := false
+		var createRefusal error
 		if !deterministicMerged && !mergeRateLimited && mergeRefusal == nil {
-			deterministicCreated, createRateLimited = s.tryDeterministicPRCreate(ctx, stage, runtime, item, workspaceRoot)
+			deterministicCreated, createRateLimited, createRefusal = s.tryDeterministicPRCreate(ctx, stage, runtime, item, workspaceRoot)
 		}
 		// Deterministic-first hook for issue-pickup (#1904): every adapter
 		// takes it; the skill runs only when it punts.
@@ -7073,6 +7074,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// hand the head to the LLM skill.
 			result = &StageRunResult{ExitCode: 1}
 			stageRunErr = mergeRefusal
+		case createRefusal != nil:
+			// A branch level with its base (#2941): the criteria are settled
+			// and the LLM path must not open the empty PR.
+			result = &StageRunResult{ExitCode: 1}
+			stageRunErr = createRefusal
 		case prStageRateLimited:
 			result = &StageRunResult{ExitCode: 1}
 			stageRunErr = fmt.Errorf("github-quota-low: %s deterministic path rate-limited; deferring until GitHub bucket reset (LLM fallback skipped to avoid quota/token burn) [#3976]", stage)
@@ -11739,15 +11745,19 @@ func parsePRURL(prURL string) (owner, repo string, number int, err error) {
 // GitHub rate limit (the runner wraps the in-process client error, so we
 // substring-match the rate-limit signal in the reason). As with pr-merge, the
 // caller must defer rather than run the LLM path on a rate-limit punt. #3976.
+//
+// The third return value is non-nil when the run must end here, with neither a
+// PR nor the LLM path: a branch with no diff against its base (#2941). It
+// carries the terminal text settleNoDiffRun chose.
 func (s *Scheduler) tryDeterministicPRCreate(
 	ctx context.Context,
 	stage state.PipelineStage,
 	runtime *state.RuntimeState,
 	item types.BoardItem,
 	workspaceRoot string,
-) (bool, bool) {
+) (bool, bool, error) {
 	if stage != state.StagePRCreate || s.prCreateRunner == nil {
-		return false, false
+		return false, false, nil
 	}
 
 	// Read stage context from the directory the run's stages actually executed
@@ -11780,7 +11790,14 @@ func (s *Scheduler) tryDeterministicPRCreate(
 		// execution_path unset; the post-cooldown retry records it accurately.
 		log.Printf("#%d: pr-create deterministic path rate-limited (%s) — deferring (no LLM fallback) until GitHub bucket resets [#3976]",
 			item.Number, detResult.Reason)
-		return false, true
+		return false, true, nil
+	}
+	if detErr == nil && detResult.Path == pmstages.CreatePathPunt && detResult.Reason == pmstages.ReasonNoDiffAgainstBase {
+		// The LLM path would open the empty PR the deterministic path just
+		// declined (#2942), so the run ends here with the criteria settled.
+		runtime.RecordExecutionPath(stage, "deterministic")
+		runtime.RecordStagePuntReason(stage, detResult.Reason)
+		return false, false, s.settleNoDiffRun(ctx, item, detResult)
 	}
 	if detErr == nil && detResult.Path == pmstages.CreatePathCreated {
 		runtime.RecordExecutionPath(stage, "deterministic")
@@ -11810,7 +11827,7 @@ func (s *Scheduler) tryDeterministicPRCreate(
 				SchemaVersion: "1",
 			})
 		}
-		return true, false
+		return true, false, nil
 	}
 
 	runtime.RecordExecutionPath(stage, "llm")
@@ -11830,7 +11847,34 @@ func (s *Scheduler) tryDeterministicPRCreate(
 	}
 	runtime.RecordStagePuntReason(stage, puntReason)
 	s.emitStagePunt(ctx, runtime, stage, item.Number, puntReason)
-	return false, false
+	return false, false, nil
+}
+
+// settleNoDiffRun ends a pr-create whose branch is level with its base
+// (#2941). It comments the criteria on the issue and closes it when every one
+// is met; otherwise the comment names what is unmet and the returned text
+// parks the issue, which the autonomous scheduler moves to Backlog so it
+// cannot loop through Ready. A comment or close that fails leaves the issue
+// open and parked: closing on an unrecorded verdict is the worse error.
+func (s *Scheduler) settleNoDiffRun(ctx context.Context, item types.BoardItem, res pmstages.PRCreateResult) error {
+	closeIt, comment := pmstages.NoDiffOutcome(item.Number, res.Branch, res.BaseBranch, res.ACVerdicts)
+	closed := false
+	if s.client != nil && item.NodeID != "" {
+		if err := gh.NewIssueService(s.client).AddComment(ctx, item.NodeID, comment); err != nil {
+			log.Printf("#%d: pr-create no-diff: could not comment the criteria: %v", item.Number, err)
+			closeIt = false
+		}
+		if closeIt && s.issueSvc != nil {
+			if err := s.issueSvc.CloseIssue(ctx, item.NodeID); err != nil {
+				log.Printf("#%d: pr-create no-diff: could not close the issue: %v", item.Number, err)
+			} else {
+				closed = true
+			}
+		}
+	}
+	detail := pmstages.NoDiffTerminalDetail(item.Number, res.Branch, res.BaseBranch, closed, len(pmstages.OpenACs(res.ACVerdicts)))
+	log.Printf("#%d: pr-create deterministic path: %s", item.Number, detail)
+	return errors.New(detail)
 }
 
 // commitSHASuffix renders " (<sha>)" for a non-empty commit SHA, so the

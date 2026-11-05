@@ -16,6 +16,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The full gate's log is kept as `gate-{N}.log` and named in `unit_tests.log`,
+  and its Go result lines set the unit result, so a gate started in the
+  background still reaches pr-create. A criterion asking for a command and its
+  result in the PR body records both in its verdict's `evidence` (#2941).
 - **A `catch` fails the run; it is not a log of findings (#2746).** A defect
   fixed in the fix loop gets `pass` and is described in the validate notes, and
   the gate judges the latest verdict per `gate_name`, so a retry's verdict

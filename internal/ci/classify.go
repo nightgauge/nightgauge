@@ -163,12 +163,33 @@ func ChangedFilesAgainstDefaultBaseResolved(workdir string) (files []string, res
 	return nil, false
 }
 
+// AddedFilesAgainstDefaultBase lists only the files the checked-out branch
+// adds relative to the first of DefaultDiffBases that resolves
+// (`--diff-filter=A`). A file that already exists on the base is not here, so a
+// modified test is never reported as one this change introduced (#2941).
+// Fail-safe like ChangedFilesAgainstDefaultBase: no resolvable base is nil.
+func AddedFilesAgainstDefaultBase(workdir string) []string {
+	for _, base := range DefaultDiffBases {
+		files, err := diffNames(workdir, base, "HEAD", "--diff-filter=A")
+		if err != nil {
+			continue
+		}
+		return files
+	}
+	return nil
+}
+
 // ChangedFilesFromGit returns the files changed between base and head via
 // `git diff --name-only base...head`. The three-dot form lists changes on head
 // since its merge-base with base — matching how the CI gate compares a PR head
 // against its target branch. workdir is the repo root ("" = current dir).
 func ChangedFilesFromGit(workdir, base, head string) ([]string, error) {
-	cmd := exec.Command("git", "diff", "--name-only", base+"..."+head)
+	return diffNames(workdir, base, head)
+}
+
+func diffNames(workdir, base, head string, extra ...string) ([]string, error) {
+	args := append([]string{"diff", "--name-only"}, extra...)
+	cmd := exec.Command("git", append(args, base+"..."+head)...)
 	if workdir != "" {
 		cmd.Dir = workdir
 	}

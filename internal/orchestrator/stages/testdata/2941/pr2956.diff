@@ -1,0 +1,361 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e6922d7ba..2754b8cbb 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -33,6 +33,19 @@ changelog, and the release workflow refuses a tag that does not.
+ 
+ ### Fixed
+ 
++- The full local gate is no longer thrown away after twenty minutes. A foreground Bash
++  call is killed at twice its timeout, and the core gate runs longer, so a new
++  `nightgauge hook gate-background` PreToolUse check in the Claude Code plugin now denies
++  starting `scripts/ci-local.sh`, `nightgauge ci gate-run`, `nightgauge pre-push validate`
++  or the declared gate unless the call sets `run_in_background: true` with a `timeout` of
++  at least the gate's limit (`hooks.pre_push.timeout_seconds`), and denies a `&` inside
++  the call. The deny reason says how to start the gate. The feature-validate gate steps
++  and `_shared/LONG_RUNNING_PROCESSES.md` state the same rule, and a test keeps them saying it.
++- `scripts/credential-scan.sh` scans what this branch would publish: HEAD's history, plus
++  modified, staged and untracked files that are not gitignored. It no longer reads every
++  `origin/*` ref, so another branch's fixtures cannot fail this branch's gate, and a
++  credential in a new file fails the local gate before it reaches CI. CI's credential-scan
++  workflow now runs the same script; bare `gitleaks git` read every ref.
+ - The VSIX's skills match their source again, so release candidates pass staging. Skill
+   bundles and installs now leave test material out at any depth (`tests/`, `__tests__/`,
+   `*.test.ts`, `*.test.js`), not only a skill's top-level `tests/`; the extension package
+diff --git a/claude-plugins/nightgauge/hooks/hooks.json b/claude-plugins/nightgauge/hooks/hooks.json
+index 1a8c6efd4..7f5fb8275 100644
+--- a/claude-plugins/nightgauge/hooks/hooks.json
++++ b/claude-plugins/nightgauge/hooks/hooks.json
+@@ -76,6 +76,12 @@
+             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stage-gate.sh\"",
+             "timeout": 5,
+             "statusMessage": "Checking pipeline-stage guardrail..."
++          },
++          {
++            "type": "command",
++            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/gate-background.sh\"",
++            "timeout": 5,
++            "statusMessage": "Checking how the local gate is started..."
+           }
+         ]
+       },
+diff --git a/internal/hooks/gate_background.go b/internal/hooks/gate_background.go
+new file mode 100644
+index 000000000..c177e17df
+--- /dev/null
++++ b/internal/hooks/gate_background.go
+@@ -0,0 +1,205 @@
++package hooks
++
++import (
++	"encoding/json"
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++
++	"github.com/nightgauge/nightgauge/internal/config"
++	"github.com/nightgauge/nightgauge/internal/contractrollout"
++)
++
++// EvaluateGateBackground is the PreToolUse:Bash check that refuses to start
++// the full local gate in a way that cannot finish (#2953).
++//
++// A foreground Bash call is killed at twice its timeout (1200 s by default),
++// and the core gate takes 1,100-1,800 s, so a foreground gate is discarded
++// after twenty minutes. A `&` inside a foreground call does not help: the
++// process is orphaned and nothing waits for it. The only form that finishes
++// is the Bash tool's own `run_in_background: true` with a `timeout` at least
++// the gate's limit (hooks.pre_push.timeout_seconds, else its default).
++//
++// It is not stage-scoped: an interactive session hits the same kill. It fails
++// open on any parse error so it can never wedge a session.
++func EvaluateGateBackground(inputJSON []byte) GateDecision {
++	var input GateInput
++	if err := json.Unmarshal(inputJSON, &input); err != nil {
++		return Allow()
++	}
++	workDir := input.Cwd
++	if workDir == "" {
++		workDir, _ = os.Getwd()
++	}
++	return evaluateGateBackground(input, gateLimitSeconds(workDir), declaredGateSteps(workDir))
++}
++
++// gateLimitSeconds resolves the gate's limit, falling back to the default.
++func gateLimitSeconds(workDir string) int {
++	cfg, err := config.Load(workDir)
++	if err != nil {
++		return config.DefaultPrePushTimeoutSeconds
++	}
++	return config.ResolvePrePushTimeoutSeconds(cfg)
++}
++
++// declaredGateSteps returns the repository's declared gate when it is a
++// single step, the only form a single command can start. A multi-step gate is
++// started through `nightgauge ci gate-run`, which is matched by name.
++func declaredGateSteps(workDir string) []string {
++	gate, err := contractrollout.ResolveGate(workDir)
++	if err != nil || len(gate.Steps) != 1 {
++		return nil
++	}
++	return gate.Steps[0]
++}
++
++func evaluateGateBackground(input GateInput, limitSeconds int, declared []string) GateDecision {
++	if input.ToolName != "Bash" {
++		return Allow()
++	}
++	var ti BashToolInput
++	if err := json.Unmarshal(input.ToolInput, &ti); err != nil || ti.Command == "" {
++		return Allow()
++	}
++	gate := ""
++	for _, seg := range ExpandWrappers(SplitSegments(ti.Command)) {
++		if name := gateStartName(seg.CommandArgv(), declared); name != "" {
++			gate = name
++			break
++		}
++	}
++	if gate == "" {
++		return Allow()
++	}
++
++	requiredMs := limitSeconds * 1000
++	if limitSeconds <= 0 {
++		requiredMs = maxBackgroundTimeoutMs
++	}
++	if requiredMs > maxBackgroundTimeoutMs {
++		requiredMs = maxBackgroundTimeoutMs
++	}
++	var problem string
++	switch {
++	case hasBackgroundAmpersand(ti.Command):
++		problem = "a `&` inside the call orphans the gate; nothing waits for it"
++	case !ti.RunInBackground:
++		problem = "it is a foreground call, which is killed at twice its timeout (1200 s by default)"
++	case ti.Timeout < requiredMs:
++		problem = fmt.Sprintf("its timeout is %d ms, below the gate's limit of %d ms", ti.Timeout, requiredMs)
++	default:
++		return Allow()
++	}
++	return Block(fmt.Sprintf(
++		"the full local gate (%s) cannot finish as started: %s. Start it with the Bash tool's "+
++			"`run_in_background: true` and `timeout: %d` (ms, the gate's limit from "+
++			"hooks.pre_push.timeout_seconds), with no `&`, and wait for its completion "+
++			"notification. Never run `gate_command` directly: run `nightgauge ci gate-run` (#2953).",
++		gate, problem, requiredMs))
++}
++
++// maxBackgroundTimeoutMs is the Bash tool's ceiling for a background timeout.
++const maxBackgroundTimeoutMs = 7_200_000
++
++// shellNames are interpreters whose first non-flag argument is the script run.
++var shellNames = map[string]bool{"bash": true, "sh": true, "zsh": true}
++
++// launcherNames run the next word as the command.
++var launcherNames = map[string]bool{"nohup": true, "exec": true, "time": true, "nice": true, "setsid": true}
++
++// gateStartName names the gate the argv starts, or "" when it starts none.
++// Only command position counts: `cat scripts/ci-local.sh` is not a start.
++func gateStartName(argv, declared []string) string {
++	if len(argv) == 0 {
++		return ""
++	}
++	if len(declared) > 0 && hasArgvPrefix(argv, declared) {
++		return strings.Join(declared, " ")
++	}
++	for len(argv) > 1 && launcherNames[baseName(argv[0])] {
++		argv = argv[1:]
++	}
++	run := argv
++	if shellNames[baseName(run[0])] {
++		run = run[1:]
++		for len(run) > 0 && strings.HasPrefix(run[0], "-") && run[0] != "-c" {
++			run = run[1:]
++		}
++	}
++	if len(run) > 0 && isGateScript(run[0]) {
++		return contractrollout.DefaultGateScript
++	}
++	if len(argv) >= 3 && isNightgaugeBinary(argv[0]) {
++		switch argv[1] + " " + argv[2] {
++		case "ci gate-run", "pre-push validate":
++			return "nightgauge " + argv[1] + " " + argv[2]
++		}
++	}
++	return ""
++}
++
++func isGateScript(word string) bool {
++	return filepath.Clean(word) == contractrollout.DefaultGateScript
++}
++
++// isNightgaugeBinary accepts the binary by name or path, and the variables
++// the skills resolve it into ($BINARY, $NIGHTGAUGE_BIN).
++func isNightgaugeBinary(word string) bool {
++	if baseName(word) == "nightgauge" {
++		return true
++	}
++	switch strings.Trim(word, "{}$") {
++	case "BINARY", "NIGHTGAUGE_BIN":
++		return true
++	}
++	return false
++}
++
++func hasArgvPrefix(argv, prefix []string) bool {
++	if len(argv) < len(prefix) {
++		return false
++	}
++	for i, w := range prefix {
++		if argv[i] != w {
++			return false
++		}
++	}
++	return true
++}
++
++// hasBackgroundAmpersand reports a top-level `&` that backgrounds a process.
++// `&&`, `>&`, `&>` and `2>&1` are not backgrounding; quoted text and
++// here-document bodies never count.
++func hasBackgroundAmpersand(cmd string) bool {
++	s := stripHeredocs(cmd)
++	var quote byte
++	for i := 0; i < len(s); i++ {
++		c := s[i]
++		if quote != 0 {
++			if c == quote {
++				quote = 0
++			} else if c == '\\' && quote == '"' {
++				i++
++			}
++			continue
++		}
++		switch c {
++		case '\'', '"':
++			quote = c
++		case '\\':
++			i++
++		case '&':
++			if i+1 < len(s) && (s[i+1] == '&' || s[i+1] == '>') {
++				i++
++				continue
++			}
++			if i > 0 && (s[i-1] == '>' || s[i-1] == '<') {
++				continue
++			}
++			return true
++		}
++	}
++	return false
++}
+diff --git a/internal/hooks/gate_background_test.go b/internal/hooks/gate_background_test.go
+new file mode 100644
+index 000000000..b2e1c3456
+--- /dev/null
++++ b/internal/hooks/gate_background_test.go
+@@ -0,0 +1,60 @@
++package hooks
++
++import (
++	"encoding/json"
++	"strings"
++	"testing"
++)
++
++func gateInput(t *testing.T, tool string, ti map[string]any) GateInput {
++	t.Helper()
++	raw, err := json.Marshal(ti)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return GateInput{ToolName: tool, ToolInput: raw}
++}
++
++func TestGateBackground(t *testing.T) {
++	const limit = 1800
++	for _, tc := range []struct {
++		name     string
++		tool     string
++		input    map[string]any
++		limit    int
++		declared []string
++		block    bool
++	}{
++		{"foreground ci-local denied", "Bash", map[string]any{"command": "bash scripts/ci-local.sh"}, limit, nil, true},
++		{"foreground gate-run denied", "Bash", map[string]any{"command": "nightgauge ci gate-run"}, limit, nil, true},
++		{"foreground pre-push via $BINARY denied", "Bash", map[string]any{"command": `"$BINARY" pre-push validate 7 --target main`}, limit, nil, true},
++		{"background short timeout denied", "Bash", map[string]any{"command": "bash scripts/ci-local.sh", "run_in_background": true, "timeout": 600000}, limit, nil, true},
++		{"background adequate timeout allowed", "Bash", map[string]any{"command": "bash scripts/ci-local.sh 2>&1 | tee /tmp/g.log", "run_in_background": true, "timeout": 1800000}, limit, nil, false},
++		{"unrelated command allowed", "Bash", map[string]any{"command": "go test ./internal/hooks/"}, limit, nil, false},
++		{"ampersand in foreground denied", "Bash", map[string]any{"command": "nohup bash scripts/ci-local.sh > /tmp/g.log 2>&1 &"}, limit, nil, true},
++		{"ampersand even with background flag denied", "Bash", map[string]any{"command": "./scripts/ci-local.sh &", "run_in_background": true, "timeout": 1800000}, limit, nil, true},
++		{"configured limit raises the bar", "Bash", map[string]any{"command": "nightgauge ci gate-run", "run_in_background": true, "timeout": 1800000}, 3600, nil, true},
++		{"no limit needs the ceiling", "Bash", map[string]any{"command": "nightgauge ci gate-run", "run_in_background": true, "timeout": 7200000}, 0, nil, false},
++		{"declared gate denied", "Bash", map[string]any{"command": "make verify"}, limit, []string{"make", "verify"}, true},
++		{"cat of the script allowed", "Bash", map[string]any{"command": "cat scripts/ci-local.sh"}, limit, nil, false},
++		{"grep for the script allowed", "Bash", map[string]any{"command": "grep -n ci-local.sh scripts/ci-local.sh"}, limit, nil, false},
++		{"quoted mention allowed", "Bash", map[string]any{"command": `echo "run bash scripts/ci-local.sh &"`}, limit, nil, false},
++		{"non-Bash tool allowed", "Read", map[string]any{"file_path": "scripts/ci-local.sh"}, limit, nil, false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			got := evaluateGateBackground(gateInput(t, tc.tool, tc.input), tc.limit, tc.declared)
++			if (got.Decision == "block") != tc.block {
++				t.Fatalf("decision = %+v, want block=%v", got, tc.block)
++			}
++			if tc.block && !strings.Contains(got.Reason, "run_in_background: true") {
++				t.Errorf("deny reason does not say how to start the gate: %s", got.Reason)
++			}
++		})
++	}
++}
++
++func TestGateBackground_BadJSONAllowed(t *testing.T) {
++	if d := EvaluateGateBackground([]byte("{not json")); d.Decision != "allow" {
++		t.Fatalf("bad JSON must fail open, got %+v", d)
++	}
++}
+diff --git a/scripts/ci-local.sh b/scripts/ci-local.sh
+index ff0b9e31e..a66722be3 100755
+--- a/scripts/ci-local.sh
++++ b/scripts/ci-local.sh
+@@ -440,6 +440,8 @@ REQUIRED_FILES=(
+   scripts/check-md-links.sh
+   scripts/test-check-md-links.sh
+   scripts/test-credential-scan-rules.sh
++  scripts/test-credential-scan.sh
++  scripts/credential-scan.sh
+   scripts/check-decisions-index.sh
+   scripts/test-check-decisions-index.sh
+   scripts/check-agent-guidance.sh
+@@ -1646,6 +1648,7 @@ run_step "credential scan (tree + full history)" bash scripts/credential-scan.sh
+ # 5a-ii. The custom .gitleaks.toml rules fire on what they exist for and stay
+ #     quiet on secret references (#1770). Fixtures are built at run time.
+ run_step "Credential-scan rules regression suite" bash scripts/test-credential-scan-rules.sh
++run_step "Credential-scan scope regression suite" bash scripts/test-credential-scan.sh
+ 
+ # 5b. Publication boundary self-test — proves the guard still fails closed
+ #     (mirrors .github/workflows/publication-boundary.yml's second step).
+diff --git a/skills/_shared/LONG_RUNNING_PROCESSES.md b/skills/_shared/LONG_RUNNING_PROCESSES.md
+index ae6f87eeb..43d85c001 100644
+--- a/skills/_shared/LONG_RUNNING_PROCESSES.md
++++ b/skills/_shared/LONG_RUNNING_PROCESSES.md
+@@ -50,6 +50,17 @@ A stage that loops on `ls`/`cat` with nothing declared is still killed at the
+ window, which is the whole point: the declaration is what separates "waiting on
+ real work" from "spinning".
+ 
++### A wait longer than the foreground limit runs in the background
++
++A foreground Bash call is killed at twice its timeout: 1200 s with the default
++600 s timeout. Any command that can run longer — the full local gate above all —
++is started with the Bash tool's `run_in_background: true` and a `timeout` (in
++milliseconds) at least as long as the command's own limit, then waited on
++through its completion notification. Never put `&` inside a foreground call: the
++process is orphaned, nothing waits for it, and its result is never read. For the
++gate the limit is `hooks.pre_push.timeout_seconds` × 1000 (1,800,000 by default),
++and the `gate-background` hook denies any other way of starting it (#2953).
++
+ ### The other answer: do not wait at all
+ 
+ Declaring is for a wait that has to happen in this stage. When the wait belongs

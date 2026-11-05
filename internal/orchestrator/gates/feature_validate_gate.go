@@ -198,6 +198,13 @@ func latestVerdicts(results []state.GateResult) []state.GateResult {
 // checked out. It returns a one-line summary for the gate details, or "" when
 // there is nothing to report.
 //
+// Two inputs keep it from accusing a run that did its work (#2941). Only files
+// the branch ADDS count: a test that already exists on the base was not built
+// by this change, so a modified test is never "added but never executed". And
+// a `unit_tests` block that does not say it ran is first checked against the
+// gate ledger: a full local-gate pass on this tree ran the unit suite, even
+// when the stage started the gate in the background and wrote no result.
+//
 // Every failure path is silent and non-blocking. This check exists to stop a
 // run from claiming more than it did — it must never become a new way for a
 // run to die, or the next person to hit it will route around it, which is how
@@ -207,19 +214,28 @@ func markUnexercisedDeliverable(issueNumber int, workspace string) string {
 	if err != nil {
 		return ""
 	}
-	changed := ci.ChangedFilesAgainstDefaultBase(workspace)
-	if len(changed) == 0 {
-		// No computable diff means no evidence, and no evidence must not read
-		// as an accusation.
-		return ""
+	var summaries []string
+	confirmed := false
+	if ans, ok := deliverable.LedgerUnitPass(context.Background(), workspace); ok {
+		if confirmed = deliverable.ConfirmUnitFromLedger(doc, ans); confirmed {
+			summaries = append(summaries, "unit tests confirmed by the gate ledger: "+ans.Reason)
+		}
 	}
 
-	finding := deliverable.Derive(doc, changed)
-	if !deliverable.Apply(doc, finding) {
+	applied := false
+	// No computable diff means no evidence, and no evidence must not read as
+	// an accusation.
+	if added := ci.AddedFilesAgainstDefaultBase(workspace); len(added) > 0 {
+		finding := deliverable.Derive(doc, added)
+		if applied = deliverable.Apply(doc, finding); applied {
+			summaries = append(summaries, finding.Summary())
+		}
+	}
+	if !confirmed && !applied {
 		return ""
 	}
 	if err := deliverable.WriteValidateContext(workspace, issueNumber, doc); err != nil {
 		return ""
 	}
-	return finding.Summary()
+	return strings.Join(summaries, "; ")
 }

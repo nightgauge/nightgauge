@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/gateledger"
 )
 
 // goTestPassRecord is written by scripts/ci-local-go-test.sh after `go test`
@@ -55,35 +57,8 @@ func decideGoTestSkip(ctx context.Context, runner CmdRunner, workDir string) (bo
 	return true, fmt.Sprintf("ci-local already passed go test on tree %s", got)
 }
 
-// TreeFingerprint hashes the working tree through a scratch index, leaving the
-// real index alone. The scratch index is seeded from HEAD first: staged into an
-// empty index, `add -A` would apply ignore rules to tracked files too and drop
-// any tracked file that matches .gitignore, info/exclude or core.excludesFile
-// (#2889). An unborn HEAD keeps the empty index. scripts/ci-local-go-test.sh
-// computes the same tree; scripts/test-ci-local-go-pass-stamp.sh pins that they
-// agree.
+// TreeFingerprint names the working tree the way the gate ledger keys it:
+// gateledger.Fingerprint, run through runner.
 func TreeFingerprint(ctx context.Context, runner CmdRunner, workDir string) (string, error) {
-	dir, err := os.MkdirTemp("", "ng-pre-push-tree-")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(dir)
-	indexEnv := "GIT_INDEX_FILE=" + filepath.Join(dir, "index")
-	if _, err := runner.Run(ctx, workDir, "git", "rev-parse", "-q", "--verify", "HEAD^{tree}"); err == nil {
-		if out, err := runner.Run(ctx, workDir, "env", indexEnv, "git", "read-tree", "HEAD"); err != nil {
-			return "", fmt.Errorf("read-tree: %v: %s", err, truncateStr(strings.TrimSpace(string(out)), 200))
-		}
-	}
-	if out, err := runner.Run(ctx, workDir, "env", indexEnv, "git", "add", "-A", "--", "."); err != nil {
-		return "", fmt.Errorf("stage: %v: %s", err, truncateStr(strings.TrimSpace(string(out)), 200))
-	}
-	out, err := runner.Run(ctx, workDir, "env", indexEnv, "git", "write-tree")
-	if err != nil {
-		return "", fmt.Errorf("write-tree: %v: %s", err, truncateStr(strings.TrimSpace(string(out)), 200))
-	}
-	tree := strings.TrimSpace(string(out))
-	if tree == "" {
-		return "", fmt.Errorf("write-tree came back empty")
-	}
-	return tree, nil
+	return gateledger.Fingerprint(ctx, runner.Run, workDir)
 }

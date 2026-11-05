@@ -94,17 +94,29 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 				cands = append(cands, ACVerdict{Status: r.Status, Source: ACSourceDiff, Evidence: r.Evidence, Step: r.Step})
 			}
 		}
-		if val, ok := matched[i]; ok {
-			v := ACVerdict{Status: NormalizeACStatus(val.Status), Source: ACSourceValidate, Evidence: strings.TrimSpace(val.Evidence)}
-			if v.Status == ACNotVerifiable && negativeEvidenceRE.MatchString(v.Evidence) {
-				v.Status = ACUnmet
+		val, hasVal := matched[i]
+		var valV ACVerdict
+		if hasVal {
+			valV = ACVerdict{Status: NormalizeACStatus(val.Status), Source: ACSourceValidate, Evidence: strings.TrimSpace(val.Evidence)}
+			if valV.Status == ACNotVerifiable && negativeEvidenceRE.MatchString(valV.Evidence) {
+				valV.Status = ACUnmet
 			}
-			cands = append(cands, v)
+		}
+		bodyEvidence := len(validate) > 0 && acAsksForPRBody(text)
+		if bodyEvidence {
+			valV, hasVal = acPRBodyVerdict(valV, hasVal)
+		}
+		if hasVal {
+			cands = append(cands, valV)
 		}
 
 		v := ACVerdict{Status: ACNotVerifiable, Source: ACSourceNone, Evidence: "no rule or verdict could check this criterion"}
 		if r, ok := firstACStatus(cands, ACUnmet); ok {
 			v = r
+		} else if bodyEvidence && valV.Status == ACMet {
+			// The criterion asks for its evidence in the PR body: cite the
+			// recorded command and result, which the body then carries.
+			v = valV
 		} else if r, ok := firstACStatus(cands, ACMet); ok {
 			v = r
 		} else if len(cands) > 0 {
@@ -208,6 +220,48 @@ func firstACStatus(cands []ACVerdict, status string) (ACVerdict, bool) {
 		}
 	}
 	return ACVerdict{}, false
+}
+
+// acPRBodyRE matches a criterion that asks for evidence in the PR body: "the
+// command and its result are in the PR body".
+var acPRBodyRE = regexp.MustCompile(`(?i)\b(?:in|to|into) the (?:PR|pull request) (?:body|description)\b`)
+
+// acResultEvidenceRE matches evidence that records a command's result, not
+// only that something was looked at: a zero exit status, Go's `ok  <pkg>`
+// line, a `--- PASS` line, or a pass count. A bare "pass" or "ok" is not a
+// result shape: "tests did not pass" carries both words.
+var acResultEvidenceRE = regexp.MustCompile(`(?i)\bexit(?:ed|s)?\s*(?:code\s*|status\s*)?(?:=\s*)?0\b|\bok\s+\S+/\S+|--- PASS:|\b[1-9]\d*\s+passed\b`)
+
+// acFailureEvidenceRE matches evidence that records a failure. Evidence that
+// carries one is never promoted, whatever result shape it also holds.
+var acFailureEvidenceRE = regexp.MustCompile(`(?i)\bFAIL(?:ED|S|URE)?\b|\bdid not\b|\bnot (?:pass|succeed)|\bexit(?:ed|s)?\s*(?:code\s*|status\s*)?(?:=\s*)?[1-9]\d*\b|\b[1-9]\d*\s+failed\b`)
+
+// ACNoRecordedEvidence is the reason a PR-body criterion is unmet when
+// feature-validate recorded nothing for it to carry (#2941).
+const ACNoRecordedEvidence = "feature-validate recorded no command and result for this criterion"
+
+func acAsksForPRBody(text string) bool {
+	return acPRBodyRE.MatchString(acCodeSpanRE.ReplaceAllString(text, " "))
+}
+
+// acPRBodyVerdict judges feature-validate's verdict on a criterion that asks
+// for a command and its result in the PR body (#2941). pr-create writes the
+// body and carries the verdict's evidence beside the criterion, so the part
+// feature-validate could not check itself (what the body will say) is done
+// here: a not_verifiable verdict whose evidence records a result becomes met.
+// No verdict, or evidence recording no result, is unmet with that reason —
+// the body would carry nothing. An unmet verdict stays unmet.
+func acPRBodyVerdict(v ACVerdict, ok bool) (ACVerdict, bool) {
+	if !ok || v.Evidence == "" || !acResultEvidenceRE.MatchString(v.Evidence) || acFailureEvidenceRE.MatchString(v.Evidence) {
+		if ok && v.Status == ACUnmet {
+			return v, true
+		}
+		return ACVerdict{Status: ACUnmet, Source: ACSourceValidate, Evidence: ACNoRecordedEvidence}, true
+	}
+	if v.Status == ACNotVerifiable {
+		v.Status = ACMet
+	}
+	return v, true
 }
 
 // negativeEvidenceRE matches validate evidence that says the criterion is
