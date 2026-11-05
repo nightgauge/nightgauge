@@ -51,6 +51,30 @@ func (p *PRConfig) ResolveCICheckTimeout() time.Duration {
 	return 0
 }
 
+// DefaultPRMergeCIWait is the floor of an ordinary pr-merge CI wait.
+const DefaultPRMergeCIWait = 20 * time.Minute
+
+// ResolvePRMergeCIWait is the budget for one pr-merge CI wait: the largest of
+// the merge-queue wait plus ten minutes, DefaultPRMergeCIWait and
+// pr.ci_check_timeout. The pr-merge verb and the branch-out-of-date recovery
+// both use it, so a head updated during recovery waits as long as a fresh push
+// does (#2980). Safe on a nil receiver.
+func (c *Config) ResolvePRMergeCIWait() time.Duration {
+	var pipeline *PipelineConfig
+	var pr *PRConfig
+	if c != nil {
+		pipeline, pr = c.Pipeline, c.PR
+	}
+	wait := pipeline.ResolveMergeQueueWaitTimeout() + 10*time.Minute
+	if wait < DefaultPRMergeCIWait {
+		wait = DefaultPRMergeCIWait
+	}
+	if ci := pr.ResolveCICheckTimeout(); ci > wait {
+		wait = ci
+	}
+	return wait
+}
+
 func positiveEnvInt(key string) int {
 	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
 	if err != nil || n <= 0 {

@@ -7,20 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
-)
-
-// DefaultRebaseCIPolls / DefaultRebaseCIPollInterval bound the post-rebase CI
-// wait. The action runs inside the scheduler's per-repo merge lock (held for
-// the whole pr-merge stage scope, see scheduler.go getMergeLock), so the budget
-// is deliberately tight: a never-green rebased head must not head-of-line block
-// the rest of the wave's merges. Mirrors DefaultECPolls / DefaultECPollInterval
-// in stages/prmerge.go.
-const (
-	DefaultRebaseCIPolls        = 10
-	DefaultRebaseCIPollInterval = 30 * time.Second
 )
 
 // BranchOutOfDate fetches origin/main, rebases the PR branch, and force-pushes
@@ -50,11 +41,26 @@ type BranchOutOfDate struct {
 // Default() pins this to the scheduler's existing instance; Execute guards it
 // with FollowUpHumanTriageRequired.
 func NewBranchOutOfDate(runner pmstages.PRMergeRunner) *BranchOutOfDate {
-	return &BranchOutOfDate{
-		runner:       runner,
-		pollInterval: DefaultRebaseCIPollInterval,
-		pollMax:      DefaultRebaseCIPolls,
+	return (&BranchOutOfDate{runner: runner}).WithCIWait(config.DefaultPRMergeCIWait)
+}
+
+// WithCIWait sizes the post-update CI wait to d, polled every
+// github.DefaultCIPollInterval. Default() passes config.ResolvePRMergeCIWait so
+// the wait matches an ordinary pr-merge CI wait (#2980): core CI takes 15 to 25
+// minutes, and a shorter wait booked a resolved conflict as a failure. The merge
+// lock is yielded for the wait (StageFailure.YieldMergeLock).
+func (a *BranchOutOfDate) WithCIWait(d time.Duration) *BranchOutOfDate {
+	return a.withPolling(github.DefaultCIPollInterval, d)
+}
+
+// withPolling sets the interval and enough polls to cover d (at least one).
+func (a *BranchOutOfDate) withPolling(interval, d time.Duration) *BranchOutOfDate {
+	a.pollInterval = interval
+	a.pollMax = int((d + interval - 1) / interval)
+	if a.pollMax < 1 {
+		a.pollMax = 1
 	}
+	return a
 }
 
 // Name implements RecoveryAction.
@@ -351,9 +357,14 @@ func (a *BranchOutOfDate) Execute(ctx context.Context, failure StageFailure) Rec
 // returns ok=true once every check is green; otherwise it returns a terminal
 // RecoveryResult (ok=false) describing why recovery is declined: a failing
 // check, context cancellation, or budget exhaustion while still in flight. The
-// budget (DefaultRebaseCIPolls × DefaultRebaseCIPollInterval) is bounded so a
-// never-green head cannot hang the scheduler under the per-repo merge lock.
+// budget (see WithCIWait) matches an ordinary pr-merge CI wait. The merge lock
+// is yielded for the wait and re-taken before returning, so the repository's
+// other merges proceed meanwhile (#2980); failure and cancellation return at once.
 func (a *BranchOutOfDate) waitForCI(ctx context.Context, failure StageFailure, evidence []string) (RecoveryResult, bool) {
+	if failure.YieldMergeLock != nil {
+		relock := failure.YieldMergeLock()
+		defer relock()
+	}
 	for poll := 0; poll < a.pollMax; poll++ {
 		select {
 		case <-ctx.Done():

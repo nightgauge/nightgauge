@@ -8139,6 +8139,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					Repo:           item.Repo,
 					AttemptOrdinal: recoveryAttemptsThisRun + 1,
 				}
+				if heldMergeLock != nil {
+					// A CI wait on an updated head yields the lock (#2980).
+					failure.YieldMergeLock = func() func() {
+						lock := heldMergeLock
+						releaseMergeLock()
+						return func() {
+							lock.Lock()
+							heldMergeLock = lock
+						}
+					}
+				}
 				if gateRan {
 					failure.GateName = gateRes.GateName
 					failure.GateKind = gateRes.Kind
