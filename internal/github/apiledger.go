@@ -89,13 +89,14 @@ type APILedgerRecord struct {
 	Caller string `json:"caller,omitempty"`
 	Status int    `json:"status"`
 	// Cost is points billed, derived from the drop in X-RateLimit-Remaining
-	// since this process's previous call on the same resource. Zero for the
-	// first call on a resource (no baseline) and for a 304 served from cache
+	// since this process's previous call in the same bucket — the same
+	// Identity, Kind and Reset (#2692). Zero for the first call in a bucket
+	// (no baseline; a changed reset or identity starts a new bucket) and for a 304 served from cache
 	// (which never left the machine). Negative drops mean the window reset
 	// between calls and are reported as 0 rather than as a bogus refund.
 	Cost int `json:"cost"`
 	// SincePrevMs is the wall time between this process's previous priced
-	// call on the same resource and this one. It is the honest qualifier on
+	// call in the same bucket and this one. It is the honest qualifier on
 	// Cost.
 	//
 	// Cost is a delta of a counter the whole ACCOUNT shares — every process,
@@ -113,6 +114,10 @@ type APILedgerRecord struct {
 	SincePrevMs int64 `json:"since_prev_ms,omitempty"`
 	Remaining   int   `json:"remaining"`
 	Reset       int64 `json:"reset,omitempty"`
+	// Limit is the bucket's ceiling (X-RateLimit-Limit), so a reader can judge
+	// each bucket against its own limit; App installations can exceed 5,000.
+	// Zero on records written before #2692; readers default it.
+	Limit int `json:"limit,omitempty"`
 	// HeaderObserved is true exactly when this request's response carried a
 	// parseable X-RateLimit-Remaining header — independent of Cost and
 	// Cached. A cached (304) hit legitimately costs 0 points (Cost is the
@@ -213,8 +218,25 @@ type apiLedger struct {
 	now    func() time.Time
 	f      *os.File
 	enc    *json.Encoder
-	prev   map[string]int       // resource -> last observed Remaining
-	prevAt map[string]time.Time // resource -> when that Remaining was observed
+	prev   map[ledgerBucketKey]int       // bucket -> last observed Remaining
+	prevAt map[ledgerBucketKey]time.Time // bucket -> when that Remaining was observed
+}
+
+// ledgerBucketKey names one rate-limit bucket: whose credential spent it, which
+// resource pool, and the window that pool resets at. One process can draw from
+// two buckets of the same resource (two App installations, or a window that
+// rolled), and each counts down from its own ceiling. Pricing a request against
+// another bucket's last Remaining books the gap between the two as spend
+// (#2692), so the baseline is kept per bucket and a request whose bucket has no
+// prior observation costs 0.
+type ledgerBucketKey struct {
+	Identity string
+	Kind     string
+	Reset    int64
+}
+
+func bucketKeyOf(rec APILedgerRecord) ledgerBucketKey {
+	return ledgerBucketKey{Identity: rec.Identity, Kind: rec.Kind, Reset: rec.Reset}
 }
 
 var (
@@ -386,7 +408,7 @@ func openAPILedger() *apiLedger {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil
 	}
-	l := &apiLedger{path: path, segmented: !explicitPath, prev: map[string]int{}, prevAt: map[string]time.Time{}}
+	l := &apiLedger{path: path, segmented: !explicitPath, prev: map[ledgerBucketKey]int{}, prevAt: map[ledgerBucketKey]time.Time{}}
 	if err := l.open(); err != nil {
 		return nil
 	}
@@ -472,17 +494,29 @@ func (l *apiLedger) record(rec APILedgerRecord, remainingHdr string) {
 			rec.Remaining = n
 			rec.HeaderObserved = true
 			now := time.Now()
-			if prev, ok := l.prev[rec.Kind]; ok && prev >= n {
+			if l.prev == nil {
+				l.prev = map[ledgerBucketKey]int{}
+			}
+			if l.prevAt == nil {
+				l.prevAt = map[ledgerBucketKey]time.Time{}
+			}
+			key := bucketKeyOf(rec)
+			if prev, ok := l.prev[key]; ok && prev >= n {
 				rec.Cost = prev - n
-				if at, ok := l.prevAt[rec.Kind]; ok {
+				if at, ok := l.prevAt[key]; ok {
 					rec.SincePrevMs = now.Sub(at).Milliseconds()
 				}
 			}
-			l.prev[rec.Kind] = n
-			if l.prevAt == nil {
-				l.prevAt = map[string]time.Time{}
+			l.prev[key] = n
+			l.prevAt[key] = now
+			// A bucket whose window has passed never prices another request;
+			// dropping it keeps a long-lived daemon's map bounded.
+			for k := range l.prev {
+				if k.Reset != 0 && k.Reset < now.Unix() && k != key {
+					delete(l.prev, k)
+					delete(l.prevAt, k)
+				}
 			}
-			l.prevAt[rec.Kind] = now
 		}
 	}
 	// Every checkout of a clone appends to the same ledger segment, so the
@@ -493,18 +527,34 @@ func (l *apiLedger) record(rec APILedgerRecord, remainingHdr string) {
 	l.rotateIfFull()
 }
 
-// previousRemaining reports this process's last observed Remaining for a
-// rate-limit resource. A `gh` subprocess never tells us which pool it drew
-// from, so the only honest way to name the resource is to see which one moved
-// (see ghSubprocessResource).
-func (l *apiLedger) previousRemaining(kind string) (int, bool) {
+// freshestBaseline returns the most recently observed bucket of one resource
+// and reset window, whatever identity spent it. A `gh` subprocess cannot say
+// which credential it used, so it joins the bucket the freshest in-process or
+// subprocess observation names (#2692); keying it apart would price each `gh`
+// call against the previous one alone and book every in-process call between
+// them as `gh` cost.
+func (l *apiLedger) freshestBaseline(kind string, reset int64) (ledgerBucketKey, int, bool) {
 	if l == nil {
-		return 0, false
+		return ledgerBucketKey{}, 0, false
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	n, ok := l.prev[kind]
-	return n, ok
+	var best ledgerBucketKey
+	var bestAt time.Time
+	found := false
+	for k := range l.prev {
+		if k.Kind != kind || k.Reset != reset {
+			continue
+		}
+		at := l.prevAt[k]
+		if !found || at.After(bestAt) {
+			best, bestAt, found = k, at, true
+		}
+	}
+	if !found {
+		return ledgerBucketKey{}, 0, false
+	}
+	return best, l.prev[best], true
 }
 
 // rotateIfFull shifts the numbered backups up and reopens a fresh file once

@@ -74,7 +74,7 @@ func apiBudgetFindings(workspaceRoot string, now time.Time) ([]Finding, string) 
 	// error to anyone who checks it. The REST traffic is reported separately.
 	detail := fmt.Sprintf("%d GraphQL point(s) over %d GraphQL request(s) in the last hour (%.0f/h of %d)%s%s%s",
 		w.Points, w.GraphQLCalls, w.PointsPerHour(), github.GraphQLHourlyLimit,
-		restSuffix(w), cachedSuffix(w), remainingSuffix(w))
+		restSuffix(w), cachedSuffix(w), remainingSuffix(w)) + bucketSuffix(w)
 	evidence := func(state string) map[string]string {
 		return map[string]string{
 			"state":           state,
@@ -101,14 +101,24 @@ func apiBudgetFindings(workspaceRoot string, now time.Time) ([]Finding, string) 
 			ev, []string{"exhausted"}, inspect)}, detail
 
 	case w.OverIdleBudget():
+		// Judged per bucket (#2692): parallel buckets each count down from
+		// their own ceiling, so the finding names the one under pressure.
+		b, _ := w.HottestBucket()
+		rate := b.ProjectedPerHour(w.Since, w.Until)
+		ev := evidence("high")
+		ev["points_per_hour"] = fmt.Sprintf("%.0f", rate)
+		ev["hourly_limit"] = fmt.Sprint(b.Limit)
+		ev["identity"] = b.Identity
+		ev["reset"] = fmt.Sprint(b.Reset)
 		return []Finding{newFinding(check, code, SeverityWarning,
-			fmt.Sprintf("github-api-budget-high: %.0f GraphQL points/hour projected", w.PointsPerHour()),
-			fmt.Sprintf("%.0f GraphQL points/hour projected — past %.0f%% of the %d/hour "+
-				"quota, which one open workspace can exhaust on its own. Top spender(s): %s. Run "+
-				"`nightgauge api-usage --since 1h --by op` to see which query is repeating",
-				w.PointsPerHour(), github.IdleBudgetWarnFraction*100, github.GraphQLHourlyLimit,
+			fmt.Sprintf("github-api-budget-high: %.0f GraphQL points/hour projected on %s", rate, b.Identity),
+			fmt.Sprintf("%.0f GraphQL points/hour projected on the %s bucket of identity %s — past "+
+				"%.0f%% of that bucket's %d/hour quota, which one open workspace can exhaust on its "+
+				"own. Top spender(s): %s. Run `nightgauge api-usage --since 1h --by op` to see "+
+				"which query is repeating",
+				rate, b.Resource, b.Identity, github.IdleBudgetWarnFraction*100, b.Limit,
 				topCallerList(w)),
-			evidence("high"), []string{"high"}, inspect)}, detail
+			ev, []string{"high"}, inspect)}, detail
 	}
 
 	return nil, detail + "; top: " + topCallerList(w)
@@ -124,6 +134,25 @@ func restSuffix(w github.LedgerWindow) string {
 		return ""
 	}
 	return fmt.Sprintf(", plus %d REST request(s) on the separate core quota", rest)
+}
+
+// bucketSuffix lists each GraphQL bucket's drain (high - low remaining), so
+// parallel buckets read as separate budgets rather than one sum.
+func bucketSuffix(w github.LedgerWindow) string {
+	var parts []string
+	for _, b := range w.Buckets {
+		if isGraphQLBucket(b) {
+			parts = append(parts, fmt.Sprintf("%s reset %d drained %d of %d", b.Identity, b.Reset, b.Drain, b.Limit))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "; buckets: " + strings.Join(parts, ", ")
+}
+
+func isGraphQLBucket(b github.LedgerBucket) bool {
+	return b.Resource == github.GraphQLResource || strings.HasPrefix(b.Resource, github.GraphQLResource+"_")
 }
 
 func cachedSuffix(w github.LedgerWindow) string {

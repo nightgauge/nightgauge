@@ -65,7 +65,11 @@ changelog, and the release workflow refuses a tag that does not.
   criterion instead of a separate one (2-3 space indent) or dropped (4+ spaces)
   (#2972). pr-create no longer verdicts each sub-bullet on its own, so a met
   delivery closes its issue instead of merging as `Refs`.
-
+- The API ledger no longer books the gap between two rate-limit buckets as
+  spend. Cost is now the drop within one identity, resource and reset window,
+  and `nightgauge doctor` (NGD008) and `nightgauge api-usage` judge each
+  bucket against its own limit, so parallel buckets no longer raise a false
+  budget warning (#2692).
 - The local gate no longer fails offline (#2693). The markdown link check reads
   "could not resolve host" as a dead link only when a control host
   (`MD_LINK_CHECK_CONTROL_URL`, default `https://github.com`) still resolves;

@@ -1112,6 +1112,11 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 						ledgerRec.Reset = n
 					}
 				}
+				if v := resp.Header.Get("X-RateLimit-Limit"); v != "" {
+					if n, cerr := strconv.Atoi(v); cerr == nil {
+						ledgerRec.Limit = n
+					}
+				}
 			}
 			ledger.record(ledgerRec, remaining)
 		}()

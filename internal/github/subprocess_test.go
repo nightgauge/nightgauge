@@ -105,7 +105,7 @@ func TestRunGhSubprocess_RecordsLedgerEntry(t *testing.T) {
 
 	// Seed a graphql baseline so the drop is observable, exactly as a prior
 	// in-process call would have left it.
-	activeAPILedger().record(APILedgerRecord{Kind: "graphql"}, "3200")
+	activeAPILedger().record(APILedgerRecord{Kind: "graphql", Reset: 222}, "3200")
 
 	out, err := RunGhSubprocess(context.Background(), "", "version")
 	if err != nil {
@@ -244,11 +244,11 @@ func TestGhSubprocessResource(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			l := &apiLedger{prev: map[string]int{}, prevAt: map[string]time.Time{}}
+			l := &apiLedger{prev: map[ledgerBucketKey]int{}, prevAt: map[ledgerBucketKey]time.Time{}}
 			for k, v := range tc.prev {
-				l.prev[k] = v
+				l.prev[ledgerBucketKey{Kind: k}] = v
 			}
-			got, res := ghSubprocessResource(snap, l, tc.args)
+			got, _, res := ghSubprocessResource(snap, l, tc.args)
 			if got != tc.want {
 				t.Fatalf("resource = %q, want %q", got, tc.want)
 			}
@@ -256,5 +256,38 @@ func TestGhSubprocessResource(t *testing.T) {
 				t.Errorf("returned the wrong resource's budget: %d", res.Remaining)
 			}
 		})
+	}
+}
+
+// A baseline from another reset window is another bucket: it must not decide
+// which pool moved (#2692).
+func TestGhSubprocessResourceIgnoresOtherBucket(t *testing.T) {
+	snap := map[string]ghRateLimitResource{
+		"core":    {Remaining: 4000, Reset: 200},
+		"graphql": {Remaining: 3000, Reset: 200},
+	}
+	l := &apiLedger{prev: map[ledgerBucketKey]int{{Kind: "graphql", Reset: 100}: 4900}}
+	if got, _, _ := ghSubprocessResource(snap, l, []string{"api", "repos/o/r"}); got != "core" {
+		t.Fatalf("resource = %q, want core (fallback; the graphql baseline is another bucket)", got)
+	}
+}
+
+// An in-process call between two `gh` calls advances the bucket's baseline,
+// so the second `gh` call is charged only its own drop, not the in-process
+// spend before it (#2692).
+func TestGhSubprocessSharesInProcessBaseline(t *testing.T) {
+	l := &apiLedger{prev: map[ledgerBucketKey]int{}, prevAt: map[ledgerBucketKey]time.Time{}}
+	inproc := ledgerBucketKey{Identity: "app:x", Kind: "graphql", Reset: 500}
+	l.prev[inproc] = 4000 // the in-process call's observation, after the first gh call
+	l.prevAt[inproc] = time.Now()
+	l.prev[ledgerBucketKey{Kind: "graphql", Reset: 500}] = 4900 // the earlier gh call
+	l.prevAt[ledgerBucketKey{Kind: "graphql", Reset: 500}] = time.Now().Add(-time.Minute)
+	snap := map[string]ghRateLimitResource{"graphql": {Remaining: 3990, Reset: 500}}
+	kind, identity, _ := ghSubprocessResource(snap, l, []string{"pr", "view"})
+	if kind != "graphql" || identity != "app:x" {
+		t.Fatalf("got (%q, %q), want graphql priced against the in-process baseline app:x", kind, identity)
+	}
+	if prev := l.prev[ledgerBucketKey{Identity: identity, Kind: kind, Reset: 500}]; prev-3990 != 10 {
+		t.Errorf("gh call would be charged %d, want 10", prev-3990)
 	}
 }

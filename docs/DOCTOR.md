@@ -419,7 +419,10 @@ the quota. Manual `wait`: wait for the reset, and find the heavy caller with
 **GitHub API budget near exhaustion.** `github_api_budget` · `warning`.
 
 From the local API ledger: a quota hit zero recently (which presents as an idle
-queue), or the projected GraphQL points per hour are past the threshold. Manual
+queue), or some GraphQL bucket's projected drain per hour is past the threshold
+of that bucket's own limit. A bucket is one identity, resource and reset
+window; parallel buckets are judged separately, never summed, and the finding
+names the bucket under pressure. Manual
 `inspect`: find the repeating caller with `nightgauge api-usage`; reduce polling
 or wait.
 
