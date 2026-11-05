@@ -107,6 +107,28 @@ describe("getStallIdleMs (#3484)", () => {
     expect(getStallIdleMs("/test/workspace")).toBeUndefined();
   });
 
+  // Parity with internal/config/stall_idle_ms_2714_test.go (#2714): the same
+  // YAML text yields 480000 ms in both readers.
+  it("reads the integer form the Go loader also accepts", () => {
+    vi.mocked(resolveConfigPathSync).mockReturnValue({
+      path: "/test/workspace/.nightgauge/config.yaml",
+      exists: true,
+      isLegacy: false,
+    });
+    readFileSyncUtf8.mockReturnValue("pipeline:\n  stall_idle_ms: 480000\n");
+    expect(getStallIdleMs("/test/workspace")).toBe(480000);
+  });
+
+  it("does not read a unit string such as 8m as a number", () => {
+    vi.mocked(resolveConfigPathSync).mockReturnValue({
+      path: "/test/workspace/.nightgauge/config.yaml",
+      exists: true,
+      isLegacy: false,
+    });
+    readFileSyncUtf8.mockReturnValue("pipeline:\n  stall_idle_ms: 8m\n");
+    expect(getStallIdleMs("/test/workspace")).toBeUndefined();
+  });
+
   it("accepts 0 as a valid value (disables idle kill)", () => {
     process.env.NIGHTGAUGE_PIPELINE_STALL_IDLE_MS = "0";
     vi.mocked(resolveConfigPathSync).mockReturnValue({

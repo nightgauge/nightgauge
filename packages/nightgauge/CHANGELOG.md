@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- An integer `pipeline.stall_idle_ms` no longer makes the `nightgauge` binary
+  fail to load the config; both readers now accept the same integer
+  milliseconds (#2714).
+
 - The duplicate-dispatch test no longer spawns `gh` or `git`, so it passes
   offline (#2693).
 - Installed Codex, Grok and OpenCode skills no longer carry skill test files (`__tests__/`,

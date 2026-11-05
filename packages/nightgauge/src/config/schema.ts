@@ -714,7 +714,9 @@ export const PipelineConfigSchema = z.object({
    * computed `stall_threshold × stall_kill_multiplier` value as the idle-kill
    * gate. Returns undefined when unset, preserving the existing multiplier-
    * derived behavior. Set to 480000 (8 min) to cap the default 20-min idle
-   * kill on feature-validate.
+   * kill on feature-validate. Accepted form: a non-negative integer of
+   * milliseconds; a unit string such as `8m` is rejected by both the Go and
+   * the TypeScript reader (#2714).
    *
    * @env NIGHTGAUGE_PIPELINE_STALL_IDLE_MS
    * @see Issue #3484 — Fix model stall after tool result

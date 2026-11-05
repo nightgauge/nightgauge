@@ -2360,6 +2360,10 @@ the multiplier system.
 
 When unset (the default), the multiplier-derived value is used unchanged.
 
+The value is a non-negative YAML integer of milliseconds. The Go binary and the
+extension read the same value; a unit string such as `8m` is rejected, and the
+Go config load names `pipeline.stall_idle_ms` in its error.
+
 | Option          | Type    | Default     | Range | Description                                         |
 | --------------- | ------- | ----------- | ----- | --------------------------------------------------- |
 | `stall_idle_ms` | integer | `undefined` | 0+    | Absolute idle threshold (ms). Overrides multiplier. |
