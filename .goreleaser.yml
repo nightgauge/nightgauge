@@ -13,6 +13,12 @@ version: 2
 
 project_name: nightgauge
 
+# #2721: a snapshot (staging RC) CLI reports the bare version, the same string
+# the VSIX-bundled CLI reports, so doctor NGD001 does not call an RC install a
+# stale binary. GoReleaser's default appends `-SNAPSHOT-<shortcommit>`.
+snapshot:
+  version_template: "{{ .Version }}"
+
 before:
   hooks:
     - go mod tidy

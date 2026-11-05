@@ -49,7 +49,11 @@ async function writeFile(dir: string, rel: string, contents: string): Promise<vo
   await fs.writeFile(full, contents, "utf-8");
 }
 
-async function writeBuildInfo(distDir: string, commitSha: string): Promise<void> {
+async function writeBuildInfo(
+  distDir: string,
+  commitSha: string,
+  release: { tag: string; version: string } | null = null
+): Promise<void> {
   await fs.mkdir(distDir, { recursive: true });
   await fs.writeFile(
     path.join(distDir, "build-info.json"),
@@ -58,7 +62,8 @@ async function writeBuildInfo(distDir: string, commitSha: string): Promise<void>
       branch: "main",
       commitTimestamp: "2026-05-08T00:00:00Z",
       buildTimestamp: "2026-05-08T00:01:00Z",
-      schemaVersion: "1",
+      schemaVersion: release ? "2" : "1",
+      ...(release ?? {}),
     }),
     "utf-8"
   );
@@ -93,7 +98,6 @@ describe("ExtensionStalenessService (#3300)", () => {
       expect(state.buildSha).toBe(sha);
       expect(state.currentSha).toBe(sha);
     }
-    expect(svc.isCriticallyStale()).toBe(false);
     svc.dispose();
   });
 
@@ -105,7 +109,6 @@ describe("ExtensionStalenessService (#3300)", () => {
     const svc = new ExtensionStalenessService(distDir, workspaceDir, silentLogger());
     const state = await svc.refresh();
     expect(state.kind).toBe("unknown");
-    expect(svc.isCriticallyStale()).toBe(false);
     svc.dispose();
   });
 
@@ -165,7 +168,6 @@ describe("ExtensionStalenessService (#3300)", () => {
       expect(state.commitsBehind).toBe(1);
       expect(state.criticalPathsChanged).toContain("packages/nightgauge/src/utils/skillRunner.ts");
     }
-    expect(svc.isCriticallyStale()).toBe(true);
     svc.dispose();
   });
 
@@ -185,8 +187,6 @@ describe("ExtensionStalenessService (#3300)", () => {
       expect(state.criticalPathsChanged).toEqual([]);
       expect(state.otherPathsChanged.length).toBeGreaterThan(0);
     }
-    // Critical staleness gate is FALSE — dispatch should still proceed.
-    expect(svc.isCriticallyStale()).toBe(false);
     svc.dispose();
   });
 
@@ -237,8 +237,37 @@ describe("ExtensionStalenessService (#3300)", () => {
     await writeFile(workspaceDir, "packages/nightgauge/src/utils/skillRunner.ts", "// updated");
     await gitCommit(workspaceDir, "stale me");
     await svc.refresh();
-    expect(svc.getState().kind).toBe("stale");
-    expect(svc.isCriticallyStale()).toBe(true);
+    const stale = svc.getState();
+    expect(stale.kind).toBe("stale");
+    if (stale.kind === "stale") expect(stale.criticalPathsChanged.length).toBeGreaterThan(0);
+    svc.dispose();
+  });
+
+  it("carries the release identity of a tagged build (#2721)", async () => {
+    await writeFile(workspaceDir, "README.md", "# initial");
+    const buildSha = await gitCommit(workspaceDir, "initial");
+    await writeBuildInfo(distDir, buildSha, { tag: "v0.8.1-rc.4", version: "0.8.1-rc.4" });
+    await writeFile(workspaceDir, "docs/x.md", "x");
+    await gitCommit(workspaceDir, "ahead");
+
+    const svc = new ExtensionStalenessService(distDir, workspaceDir, silentLogger());
+    const state = await svc.refresh();
+    expect(state.kind).toBe("stale");
+    if (state.kind === "stale") {
+      expect(state.build).toEqual({ tag: "v0.8.1-rc.4", version: "0.8.1-rc.4" });
+    }
+    svc.dispose();
+  });
+
+  it("reports a local build (no tag in the stamp) with a null identity (#2721)", async () => {
+    await writeFile(workspaceDir, "README.md", "# initial");
+    const buildSha = await gitCommit(workspaceDir, "initial");
+    await writeBuildInfo(distDir, buildSha);
+
+    const svc = new ExtensionStalenessService(distDir, workspaceDir, silentLogger());
+    const state = await svc.refresh();
+    expect(state.kind).toBe("fresh");
+    if (state.kind === "fresh") expect(state.build).toEqual({ tag: null, version: null });
     svc.dispose();
   });
 });

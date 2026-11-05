@@ -140,15 +140,21 @@ jobs:
       - name: Stamp build provenance
         env:
           BUILD_BRANCH: ${{ github.ref_name }}
+          # #2721: a stamp carrying `tag` is a CI-built release candidate or
+          # release, so the staleness item never offers a local rebuild.
+          BUILD_TAG: ${{ steps.version.outputs.tag }}
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           DIST=packages/nightgauge/dist
           cat > "$DIST/build-info.json" <<EOF
           {
             "commitSha": "$(git rev-parse HEAD)",
             "branch": "$BUILD_BRANCH",
+            "tag": "$BUILD_TAG",
+            "version": "$BUILD_VERSION",
             "commitTimestamp": "$(git log -1 --format=%cI HEAD)",
             "buildTimestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "schemaVersion": "1"
+            "schemaVersion": "2"
           }
           EOF
           bash packages/nightgauge/scripts/check-build-info.sh "$DIST/build-info.json"
