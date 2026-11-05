@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGraphQLOpFromQuery(t *testing.T) {
@@ -80,7 +81,7 @@ func TestAPILedgerCostIsDropInRemaining(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	l := &apiLedger{f: f, enc: json.NewEncoder(f), prev: map[string]int{}}
+	l := &apiLedger{f: f, enc: json.NewEncoder(f)}
 
 	// First call on a resource has no baseline, so it cannot claim a cost.
 	l.record(APILedgerRecord{Kind: "graphql"}, "4900")
@@ -119,7 +120,7 @@ func TestAPILedgerRecordSetsHeaderObserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	l := &apiLedger{f: f, enc: json.NewEncoder(f), prev: map[string]int{}}
+	l := &apiLedger{f: f, enc: json.NewEncoder(f)}
 
 	l.record(APILedgerRecord{Kind: "graphql"}, "4900")
 	l.record(APILedgerRecord{Kind: "graphql"}, "")
@@ -174,7 +175,7 @@ func withTestLedger(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("create ledger: %v", err)
 	}
-	testLedgerOverride.Store(&apiLedger{path: path, f: f, enc: json.NewEncoder(f), prev: map[string]int{}})
+	testLedgerOverride.Store(&apiLedger{path: path, f: f, enc: json.NewEncoder(f)})
 	t.Cleanup(func() {
 		testLedgerOverride.Store((*apiLedger)(nil))
 		f.Close()
@@ -263,7 +264,7 @@ func TestLedgerWriteFailureNeverBreaksTheRequest(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	f.Close() // every subsequent write fails
-	testLedgerOverride.Store(&apiLedger{path: f.Name(), f: f, enc: json.NewEncoder(f), prev: map[string]int{}})
+	testLedgerOverride.Store(&apiLedger{path: f.Name(), f: f, enc: json.NewEncoder(f)})
 	t.Cleanup(func() { testLedgerOverride.Store((*apiLedger)(nil)) })
 
 	body, err := c.restGet(context.Background(), "/repos/o/r")
@@ -317,6 +318,60 @@ func TestIsPassThroughFrame(t *testing.T) {
 				verb = "attributed"
 			}
 			t.Errorf("isPassThroughFrame(%q) = %v, want %v — it should be %s (%s)", tc.fn, got, tc.skip, verb, tc.why)
+		}
+	}
+}
+
+// One process alternating between two buckets of one identity must price each
+// request within its own bucket, never the gap between the two (#2692).
+func TestAPILedgerCostIsPerBucket(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	l := &apiLedger{f: f, enc: json.NewEncoder(f)}
+	r1, r2 := time.Now().Add(time.Hour).Unix(), time.Now().Add(50*time.Minute).Unix()
+	rec := func(reset int64) APILedgerRecord {
+		return APILedgerRecord{Kind: "graphql", Identity: "app:x", Reset: reset}
+	}
+	l.record(rec(r1), "4860")
+	l.record(rec(r2), "4788")
+	l.record(rec(r1), "4850")
+	l.record(rec(r2), "4780")
+	l.record(rec(r1), "4840")
+	f.Close()
+
+	costs := ledgerCosts(t, path)
+	want := []int{0, 0, 10, 8, 10}
+	sum := 0
+	for i := range want {
+		sum += costs[i]
+		if costs[i] != want[i] {
+			t.Errorf("record %d cost = %d, want %d", i, costs[i], want[i])
+		}
+	}
+	if sum != 28 {
+		t.Errorf("total cost = %d, want 28", sum)
+	}
+}
+
+// A changed reset or a different identity is a new bucket and costs 0.
+func TestAPILedgerNewBucketCostsZero(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	l := &apiLedger{f: f, enc: json.NewEncoder(f)}
+	reset := time.Now().Add(time.Hour).Unix()
+	l.record(APILedgerRecord{Kind: "graphql", Identity: "app:x", Reset: reset}, "4900")
+	l.record(APILedgerRecord{Kind: "graphql", Identity: "app:x", Reset: reset + 3600}, "4800")
+	l.record(APILedgerRecord{Kind: "graphql", Identity: "user:y", Reset: reset}, "4700")
+	f.Close()
+	for i, c := range ledgerCosts(t, path) {
+		if c != 0 {
+			t.Errorf("record %d cost = %d, want 0 (new bucket)", i, c)
 		}
 	}
 }
