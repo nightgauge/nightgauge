@@ -66,7 +66,11 @@ changelog, and the release workflow refuses a tag that does not.
   and `nightgauge doctor` (NGD008) and `nightgauge api-usage` judge each
   bucket against its own limit, so parallel buckets no longer raise a false
   budget warning (#2692).
-
+- The local gate no longer fails offline (#2693). The markdown link check reads
+  "could not resolve host" as a dead link only when a control host
+  (`MD_LINK_CHECK_CONTROL_URL`, default `https://github.com`) still resolves;
+  otherwise it reports a resolver outage as `HARNESS ERROR`, an infrastructure
+  failure, instead of dozens of dead links.
 - `npm run test:host` no longer fails with `Cannot find module '<scratch>/workspace'` when
   started from a VS Code extension host: the launcher drops an inherited
   `ELECTRON_RUN_AS_NODE` (and `VSCODE_*`) before starting VS Code (#2743).

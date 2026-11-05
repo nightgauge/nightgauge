@@ -24,9 +24,9 @@
 #   4. A closed local port            -> exit 0, counted
 #      `unreachable-from-runner`.
 #
-# Cases 5-12 cover answered statuses (#1404, #2317), the Marketplace ignore
+# Cases 5-13 cover answered statuses (#1404, #2317), the Marketplace ignore
 # (#1767), an unchecked file (#2379), and a throttled link and a re-probe's
-# local write error (#1768).
+# local write error (#1768), and a resolver outage vs. a dead host (#2693).
 #
 # Prove it can go red by removing the re-probe: cases 3 and 4 then exit 1.
 #
@@ -201,7 +201,9 @@ check "the summary names the dead relative link" \
   "$(grep -qF 'nope-does-not-exist.md' "$TMP/out" && echo 0 || echo 1)"
 
 # --- Case 2: an unresolvable external host is fatal --------------------------
-run_gate nxdomain.md
+# The control host is pinned to localhost (hosts file, no DNS) so this case
+# does not depend on the runner resolving github.com (#2693).
+MD_LINK_CHECK_CONTROL_URL="http://localhost:${PORT}/x" run_gate nxdomain.md
 RC=$?
 check "an unresolvable external host exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
 check "an unresolvable host is classed dead, naming the resolve failure" \
@@ -426,6 +428,26 @@ check "a re-probe that hits a local write error does not fail the gate" \
   "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
 check "the link is classed by the server's 504, not by curl exit 23" \
   "$(grep -qF 'Link classes: 0 dead, 0 unreachable-from-runner, 1 alive-after-reprobe' "$TMP/out" && grep -qF '(HTTP 504)' "$TMP/out" && ! grep -qF 'curl exit 23' "$TMP/out" && echo 0 || echo 1)"
+
+# --- Case 13: a resolver outage is not a dead link (#2693) -------------------
+printf '# case 13\n\n[one](https://nightgauge-a.invalid/)\n[two](https://nightgauge-b.invalid/)\n' \
+  > "$FIX/two-nxdomain.md"
+MD_LINK_CHECK_CONTROL_URL="http://localhost:${PORT}/x" run_gate nxdomain.md
+RC=$?
+check "13a: exit 6 while the control resolves exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "13a: and is classed dead, naming the resolve failure" \
+  "$(grep -qF 'Link classes: 1 dead' "$TMP/out" && grep -qF 'could not resolve host' "$TMP/out" && echo 0 || echo 1)"
+check "13a: as an assertion failure" \
+  "$([ "$(classify_failure "$TMP/out" "$RC")" = assert ] && echo 0 || echo 1)"
+MD_LINK_CHECK_CONTROL_URL="https://nightgauge-control.invalid/" run_gate two-nxdomain.md
+RC=$?
+check "13b: exit 6 while the control fails too is unreachable, not dead" \
+  "$(grep -qF 'Link classes: 0 dead, 2 unreachable-from-runner' "$TMP/out" && echo 0 || echo 1)"
+check "13b: says HARNESS ERROR, classed infrastructure" \
+  "$(grep -qF 'HARNESS ERROR' "$TMP/out" && [ "$(classify_failure "$TMP/out" "$RC")" = infra ] && echo 0 || echo 1)"
+check "13b: never reports dead links or a pass" \
+  "$(grep -qE 'found dead links|check passed' "$TMP/out" && echo 1 || echo 0)"
+check "13b: exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="

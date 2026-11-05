@@ -11,6 +11,8 @@ and this project adheres to
 
 ### Fixed
 
+- The duplicate-dispatch test no longer spawns `gh` or `git`, so it passes
+  offline (#2693).
 - Installed Codex, Grok and OpenCode skills no longer carry skill test files (`__tests__/`,
   `*.test.ts`, `*.test.js` and nested `tests/`), matching the skills the extension
   packages (#2948).
