@@ -193,7 +193,9 @@ required checks already passed on. Run every test before the merge and merge
 with confidence: the full suites do not re-run on push to `main`. What still
 runs there is CodeQL (code scanning needs a default-branch baseline) and one
 cheap `cache-warm` job that saves the Go, npm and Playwright caches PR runs
-restore. After the merge, verify what is actually meaningful:
+restore, plus `main-build.yml`, the RC build-and-verify under a synthetic
+version that publishes nothing (#2952). After the merge, verify what is
+actually meaningful:
 
 ```bash
 scripts/post-merge-check.sh <merge-sha>   # repo defaults to this checkout's origin
@@ -226,7 +228,13 @@ For the merge commit of a merged pull request it verifies three things:
    baseline for the Security tab and for pull requests' "new alerts"
    comparison, but they analyse the same tree with the same queries as the
    PR's own CodeQL run, which is required and already passed. A running or
-   failed CodeQL on the merge commit is reported, never `1` or `2`.
+   failed CodeQL on the merge commit is reported, never `1` or `2`. A failed
+   `main-build.yml` run is `1` like any other check. Its concurrency group
+   cancels an older run when the next merge lands; that cancel is reported as
+   `INFO` and names the newer commit to judge, but only when the same workflow
+   has a later push run on the base branch at a descendant commit. Otherwise,
+   or when that cannot be read, a cancel stays `1`. The compiled
+   `nightgauge ci checks-complete` applies the same rule.
 
 If the trees differ, which the strict policy prevents (so it means a ruleset
 bypass such as `--admin`), the PR run is not evidence about the landed tree.
@@ -1001,6 +1009,13 @@ bash scripts/check-plugin-version.sh --tag v0.2.0
 
 # 1. Ensure main is up to date
 git checkout main && git pull origin main
+
+# 1a. Tag an RC only from a commit whose main-build.yml run is green (#2952).
+#     That workflow runs staging's whole build on every push to main, so a
+#     release-path defect is already known. A run cancelled by a newer push is
+#     not green: tag the newer commit once its run is.
+gh run list --workflow=main-build.yml --commit "$(git rev-parse HEAD)" \
+  --limit 1 --json conclusion --jq '.[0].conclusion'   # latest run; must print: success
 
 # 2. Create an RC tag (annotated)
 git tag -a v0.2.0-rc.1 -m "Release candidate 1 for 0.2.0

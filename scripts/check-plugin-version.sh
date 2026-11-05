@@ -22,7 +22,8 @@
 #       below it: a changed plugin needs a different version, and the version
 #       never goes down. No stable tag below it means the comparison cannot run,
 #       which is exit 2, not a pass. An unpushed tag is read as HEAD, so this
-#       works before tagging. Needs full history and tags.
+#       works before tagging; main-build.yml passes its unpushed synthetic
+#       vX.Y.Z-main.g<sha> this way (#2952). Needs full history and tags.
 #   check-plugin-version.sh --tag vX.Y.Z[-rc.N] --first-release
 #       The same, but a tag with no baseline passes. A maintainer states this by
 #       hand for a true first release; automation never passes it. With a

@@ -1,0 +1,55 @@
+# Main build — the RC build-and-verify on every push to main (#2952).
+#
+# PR CI and the merge queue never build a VSIX or run the release-tag checks,
+# so both v0.8.1 RCs failed in staging on defects that had sat on main for
+# hours. This runs staging.yml's job itself (workflow_call, not a copy) on each
+# push to main under a synthetic version X.Y.(Z+1)-main.g<sha7>, which sorts
+# below the next real release. It publishes NOTHING: no tag, no release, no
+# registry, no Homebrew. Artifacts are kept 3 days.
+#
+# No secrets are passed: signing no-ops and the Developer-ID assertion is
+# informational, exactly as on a fork. An RC tag still proves signing.
+#
+# Never a PR or merge-queue check (push to main only). A newer push cancels an
+# older run; scripts/post-merge-check.sh reports that cancel as INFO and names
+# the newer commit to judge. Tag an RC only from a commit whose run here is
+# green (docs/GIT_WORKFLOW.md § Cutting a Release).
+name: Main build
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version:
+    name: Synthetic version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Derive X.Y.(Z+1)-main.g<sha7>
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="$(bash scripts/main-build-version.sh)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Main build version: $VERSION"
+
+  build:
+    needs: version
+    uses: ./.github/workflows/staging.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      retention-days: 3

@@ -14,6 +14,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- The release build now runs on every push to `main` (#2952), so a release-path
+  defect fails at the merge that caused it instead of at the next RC tag. A new
+  `main-build.yml` calls `staging.yml` itself under a synthetic version
+  `X.Y.(Z+1)-main.g<sha7>`, from `scripts/main-build-version.sh`, that sorts
+  below the next release. It runs the plugin-version gate, packages and checks
+  every VSIX, scans with ClamAV and builds the GoReleaser snapshot. It
+  publishes nothing, passes no secrets, keeps artifacts 3 days, and is never a
+  pull request or merge-queue check; a newer push cancels an older run. Tag an
+  RC only from a commit whose main build is green. `post-merge-check.sh` and
+  `nightgauge ci checks-complete` read
+  a failed main build as red, and reports a run cancelled by a newer push on a
+  descendant commit as `INFO`, naming that commit.
+
 ### Security
 
 - A release is no longer public until VirusTotal finds every file in it clean

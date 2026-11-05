@@ -48,6 +48,16 @@
 # check alone, a failure re-run green, or a same-name success from another
 # app or workflow leaves it RED. A commit with no merged PR is never relaxed.
 #
+# A cancel by a newer push (#2952): a push workflow with cancel-in-progress
+# cancels its run on a merge commit when the next merge lands. On a merged
+# PR's merge commit whose tree matches the PR head, a `cancelled` GitHub
+# Actions check run is dropped and reported as INFO when its workflow run was
+# a `push` on the base branch and the same workflow has a later push run on
+# that branch whose commit descends from this one. Judge that commit instead.
+# Any lookup that cannot be read drops nothing, so the cancel stays RED. A
+# failure is never relaxed: a failed main build on the merge commit is RED.
+# The binary's evaluator applies the same rule (github.NewerPushCancelsFor).
+#
 # If the trees differ (a ruleset bypass, or a branch without the strict
 # policy) the PR run is not evidence about the landed tree, so the merge commit
 # must carry every required check itself, the pre-#2055 rule, and CodeQL there
@@ -289,6 +299,44 @@ supersede() {
   jq -c --argjson wf "$wf" "$SUPERSEDE" <<<"$checks" 2>/dev/null || printf '%s\n' "$checks"
 }
 
+# supersede_by_newer_push <sha> <checks> — sets NEWER_CHECKS to <checks> with
+# every cancelled check run dropped whose workflow run a newer push cancelled
+# (#2952, see the header), and appends one line per dropped run to NEWER_INFO.
+# Called directly, not in a command substitution, so both globals survive.
+# Every unreadable lookup or failed filter drops nothing for that run.
+NEWER_CHECKS=""
+NEWER_INFO=()
+# shellcheck disable=SC2016 # jq program, not shell
+CANCELLED_IN_SUITE='[ .[] | select((.status == "completed" and .conclusion == "cancelled" and .app == "github-actions" and .suite == $s) | not) ]'
+supersede_by_newer_push() {
+  local sha="$1" checks="$2" suites runs suite line wf event created branch newer cand cmp names kept
+  NEWER_CHECKS="$checks"
+  suites=$(jq -r '[ .[] | select(.status == "completed" and .conclusion == "cancelled" and .app == "github-actions" and .suite != null) | .suite | tostring ] | unique | .[]' <<<"$checks" 2>/dev/null) || return 0
+  [[ -n "$suites" ]] || return 0
+  runs=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$sha&per_page=100" \
+    --jq '.workflow_runs[] | select(.check_suite_id != null and .workflow_id != null) | [(.check_suite_id | tostring), (.workflow_id | tostring), (.event // ""), (.created_at // ""), (.head_branch // "")] | @tsv' 2>/dev/null) || return 0
+  for suite in $suites; do
+    [[ "$suite" =~ ^[0-9]+$ ]] || continue
+    line=$(awk -F'\t' -v s="$suite" '$1 == s { print; exit }' <<<"$runs")
+    [[ -n "$line" ]] || continue
+    IFS=$'\t' read -r _ wf event created branch <<<"$line"
+    [[ "$event" == push && "$branch" == "$BASE_REF" && "$wf" =~ ^[0-9]+$ &&
+      "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || continue
+    newer=$(gh api "repos/$REPO/actions/workflows/$wf/runs?branch=$BASE_REF&event=push&per_page=20" \
+      --jq ".workflow_runs[] | select((.created_at // \"\") > \"$created\" and .head_sha != \"$sha\") | .head_sha" 2>/dev/null) || continue
+    for cand in $newer; do
+      [[ "$cand" =~ ^[0-9a-f]{40}$ ]] || continue
+      cmp=$(gh api "repos/$REPO/compare/$sha...$cand" --jq '.status' 2>/dev/null) || continue
+      [[ "$cmp" == ahead ]] || continue
+      names=$(jq -r --argjson s "$suite" '[ .[] | select(.status == "completed" and .conclusion == "cancelled" and .app == "github-actions" and .suite == $s) | .name ] | join(", ")' <<<"$NEWER_CHECKS" 2>/dev/null) || break
+      kept=$(jq -c --argjson s "$suite" "$CANCELLED_IN_SUITE" <<<"$NEWER_CHECKS" 2>/dev/null) || break
+      NEWER_CHECKS="$kept"
+      NEWER_INFO+=("merge commit ${sha:0:8}: $names cancelled by a newer push; judge ${cand:0:8}")
+      break
+    done
+  done
+}
+
 # read_checks <sha> — every check-run and commit status on <sha>, as one JSON
 # array. `gh api --paginate --jq` runs the jq program once PER PAGE, so a
 # whole-document program such as `.check_runs | length` prints one number per
@@ -498,12 +546,15 @@ head_j=$(printf '%s' "$head_checks" | jq -c --argjson req "$REQ" "$JUDGE")
 merge_checks=$(read_checks "$SHA") || { printf '%s\n' "$merge_checks"; exit 2; }
 merge_checks=$(supersede "$FULL_SHA" "$merge_checks")
 merge_seen=$(jq 'length' <<<"$merge_checks")
+supersede_by_newer_push "$FULL_SHA" "$merge_checks"
+merge_checks="$NEWER_CHECKS"
 codeql_checks=$(jq -c "$CODEQL [ .[] | select(codeql) ]" <<<"$merge_checks")
 merge_checks=$(jq -c "$CODEQL [ .[] | select(codeql | not) ]" <<<"$merge_checks")
 merge_j=$(printf '%s' "$merge_checks" | jq -c --argjson req null "$JUDGE")
 merge_total=$(jq '.total' <<<"$merge_j")
 codeql_j=$(printf '%s' "$codeql_checks" | jq -c --argjson req null "$JUDGE")
-info=()
+# Not "${NEWER_INFO[@]}": bash 3.2 under `set -u` rejects an empty array.
+info=(${NEWER_INFO[@]+"${NEWER_INFO[@]}"})
 [[ $(jq '.failed | length' <<<"$codeql_j") -gt 0 ]] &&
   info+=("merge commit ${SHA:0:8}: CodeQL did not pass: $(jq -r '[ .[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | "\(.name) (\(.conclusion // "?"))" ] | join(", ")' <<<"$codeql_checks") (informational: the PR's required CodeQL run analysed this same tree; this run is the default-branch baseline)")
 [[ $(jq '.pending | length' <<<"$codeql_j") -gt 0 ]] &&

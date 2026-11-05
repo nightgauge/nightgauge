@@ -8336,6 +8336,8 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 			// #2430: check identity for a cancelled duplicate, read only
 			// when one exists; post-merge observation only.
 			ev.MergeSuites = gh.SuiteWorkflowsFor(ctx, reader, owner, repo, sha, checks)
+			// #2952: a run a newer push on the base branch cancelled.
+			ev.NewerPushCancels = gh.NewerPushCancelsFor(ctx, reader, owner, repo, sha, prov, checks, runs)
 		}
 		if ev.PRHeadIsEvidence() {
 			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {

@@ -207,6 +207,10 @@ type MergeEvidence struct {
 	// supersedes nothing.
 	MergeSuites map[int64]int64
 	HeadSuites  map[int64]int64
+	// NewerPushCancels maps each merge-commit check suite a newer push on the
+	// base branch cancelled to that newer commit (NewerPushCancelsFor,
+	// #2952). Applied only when the trees match; nil drops nothing.
+	NewerPushCancels map[int64]string
 	// Now is the evaluation time, for MergeCommitCheckGrace.
 	Now time.Time
 	// NoPushWorkflows is true only when the workflows at the merge commit were
@@ -442,6 +446,10 @@ func EvaluateMergedCommit(e MergeEvidence) (ChecksCompleteVerdict, []string) {
 	// analysed this same tree. Its presence still proves the push workflows
 	// were created, so it ends the empty-list grace.
 	anyPushCheck := len(e.MergeChecks) > 0
+	// #2952: a run a newer push cancelled tested nothing; the newer commit is
+	// judged instead. Still counts above as proof the push workflows exist.
+	var newerInfo []string
+	e.MergeChecks, e.Runs, newerInfo = dropCancelledByNewerPush(e.MergeChecks, e.Runs, e.NewerPushCancels, p.MergeSHA)
 	pushChecks, codeql := splitCodeQL(e.MergeChecks)
 	var pushRuns []WorkflowRunSummary
 	if e.Runs != nil {
@@ -468,7 +476,7 @@ func EvaluateMergedCommit(e MergeEvidence) (ChecksCompleteVerdict, []string) {
 	for _, r := range mergeReasons {
 		reasons = append(reasons, fmt.Sprintf("merge commit %s: %s", shortRef(p.MergeSHA), r))
 	}
-	info := codeQLInfo(codeql, p.MergeSHA)
+	info := append(newerInfo, codeQLInfo(codeql, p.MergeSHA)...)
 	switch {
 	case headVerdict == ChecksNotYet || mergeVerdict == ChecksNotYet:
 		return ChecksNotYet, append(reasons, info...)
