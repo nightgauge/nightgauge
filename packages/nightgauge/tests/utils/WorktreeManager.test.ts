@@ -23,6 +23,7 @@ const { execAsyncMock, execFileAsyncMock, fsMock } = vi.hoisted(() => ({
     rm: vi.fn().mockResolvedValue(undefined),
     readFile: vi.fn().mockResolvedValue(""),
     writeFile: vi.fn().mockResolvedValue(undefined),
+    appendFile: vi.fn().mockResolvedValue(undefined),
     readdir: vi.fn().mockResolvedValue([]),
     cp: vi.fn().mockResolvedValue(undefined),
   },
@@ -699,6 +700,42 @@ describe("WorktreeManager", () => {
   });
 
   describe("cleanup", () => {
+    it("records the removal in the base's ledger before removing (#2701)", async () => {
+      const order: string[] = [];
+      fsMock.appendFile.mockImplementationOnce(async () => {
+        order.push("ledger");
+      });
+      execAsyncMock.mockImplementation((cmd: string) => {
+        if (cmd.includes("worktree remove")) order.push("remove");
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+      vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_500);
+
+      await manager.cleanup(42);
+
+      expect(fsMock.appendFile).toHaveBeenCalledWith(
+        "/state/worktrees/abc123def456/.removed-worktrees",
+        "1700000000\trepo-issue-42\n",
+        { mode: 0o600 }
+      );
+      expect(order).toEqual(["ledger", "remove"]);
+      vi.mocked(Date.now).mockRestore();
+    });
+
+    it("still removes the worktree when the ledger cannot be written (#2701)", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      fsMock.appendFile.mockRejectedValueOnce(new Error("EROFS"));
+
+      await manager.cleanup(42);
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("could not record removal"));
+      expect(execAsyncMock).toHaveBeenCalledWith(
+        expect.stringContaining("git worktree remove"),
+        expect.anything()
+      );
+      warn.mockRestore();
+    });
+
     it("removes worktree with force flag", async () => {
       await manager.cleanup(42);
 
@@ -797,6 +834,7 @@ describe("WorktreeManager", () => {
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("preserving worktree for issue #42")
       );
+      expect(fsMock.appendFile).not.toHaveBeenCalled();
       expect(execAsyncMock).not.toHaveBeenCalledWith(
         expect.stringContaining("worktree remove"),
         expect.anything()

@@ -65,6 +65,13 @@ changelog, and the release workflow refuses a tag that does not.
   criterion instead of a separate one (2-3 space indent) or dropped (4+ spaces)
   (#2972). pr-create no longer verdicts each sub-bullet on its own, so a met
   delivery closes its issue instead of merging as `Refs`.
+- `scripts/ci-local.sh` no longer fails its state backstop when another
+  pipeline run cleans up its own worktree mid-gate (#2701). Each pipeline
+  removal path (scheduler cleanup, `worktree sweep`, the extension) now
+  records the worktree in its base's append-only `.removed-worktrees` ledger
+  before removing it, and the backstop lists such a removal as information.
+  Any removal the ledger does not name, freshly, still fails.
+
 - The API ledger no longer books the gap between two rate-limit buckets as
   spend. Cost is now the drop within one identity, resource and reset window,
   and `nightgauge doctor` (NGD008) and `nightgauge api-usage` judge each
