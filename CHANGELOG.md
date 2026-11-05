@@ -14,6 +14,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- `nightgauge doctor` NGD001 no longer reports a release-candidate install as a
+  stale binary: the RC tarball CLI and the VSIX-bundled CLI now report the same
+  version string. It never offers `make build-cli` for a release binary (#2721).
+- The extension staleness item no longer offers a local `dev-install.sh`
+  rebuild on a CI-built release candidate or release; it shows the installed
+  version and how far the workspace is ahead of it (#2721).
+
 ### Added
 
 - `pipeline-audit` now reports the platform's inquiry scorecard (#2911). The

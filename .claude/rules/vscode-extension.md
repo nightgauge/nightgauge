@@ -22,8 +22,9 @@ binary changes while autonomous mode is running (operator rule, 2026-07-18):
    `current-run.json` (which carries the live `run_id` and pid; each checkout
    has its own, at `nightgauge layout path checkout current-run.json`) as the
    authority on what is actually running.
-3. Then rebuild + install (`packages/nightgauge/scripts/dev-install.sh`)
-   and reload the window.
+3. Then install the release candidate (the staging VSIX and CLI tarball the
+   merge produced) and reload the window. `packages/nightgauge/scripts/dev-install.sh`
+   is the contributor's local build, not the maintainer flow (#2721).
 
 Never reload over a live run — the swept run records no terminal outcome and
 recycles as an unlabeled failure (see the #252 zombie-run retro).
