@@ -2,6 +2,9 @@ package github
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -304,7 +307,7 @@ func TestPRService_CreatePR_Error(t *testing.T) {
 func TestPRService_MergePR_UsesSquashByDefault(t *testing.T) {
 	response := `{"data":{"mergePullRequest":{"pullRequest":{"id":"PR_ID","state":"MERGED"}}}}`
 
-	client, cleanup := mockGraphQLServer(t, response)
+	client, cleanup := mergeMockServer(t, response)
 	defer cleanup()
 
 	svc := NewPRService(client)
@@ -321,7 +324,7 @@ func TestPRService_MergePRWithStrategy(t *testing.T) {
 		t.Run(strategy, func(t *testing.T) {
 			response := `{"data":{"mergePullRequest":{"pullRequest":{"id":"PR_ID","state":"MERGED"}}}}`
 
-			client, cleanup := mockGraphQLServer(t, response)
+			client, cleanup := mergeMockServer(t, response)
 			defer cleanup()
 
 			svc := NewPRService(client)
@@ -736,4 +739,20 @@ func TestPRService_CreatePR_UnstampedBodyIsNotLabelled(t *testing.T) {
 	if len(pr.Labels) != 0 || len(*seen) != 1 {
 		t.Errorf("interactive PR must not be labelled: labels=%v calls=%v", pr.Labels, *seen)
 	}
+}
+
+// mergeMockServer serves the squash-source read (#2728) and answers every
+// other request with mergeResponse.
+func mergeMockServer(t *testing.T, mergeResponse string) (*Client, func()) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(string(b), "prSquashSource") {
+			_, _ = w.Write([]byte(`{"data":{"node":{"number":1,"title":"t","commits":{"nodes":[]}}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(mergeResponse))
+	}))
+	return NewClientWithURL("tok", srv.URL), srv.Close
 }
