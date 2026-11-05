@@ -1571,13 +1571,66 @@ func splitContexts(out []byte, into []string) []string {
 // never needs any branch checked out), and the LOCAL branch/worktree is
 // reclaimed by the post-merge worktree sweep once the worktree is no longer
 // active.
+//
+// The squash subject and body are passed explicitly (#2728), built by
+// github.SquashCommitMessage from the PR title and its non-WIP commits: left
+// to the repository defaults, a sole WIP-preservation commit would become the
+// subject on main and carry its Nightgauge-WIP trailer there. A failed read
+// of the PR fails the merge; it never falls back to the bare merge.
 func (c *execGhClient) Merge(ctx context.Context, prNumber int) error {
-	_, err := github.RunGhSubprocess(ctx, c.workdir,
-		"pr", "merge", fmt.Sprintf("%d", prNumber), "--squash")
+	headline, body, err := c.squashMessage(ctx, prNumber)
+	if err != nil {
+		return err
+	}
+	_, err = github.RunGhSubprocess(ctx, c.workdir,
+		"pr", "merge", fmt.Sprintf("%d", prNumber), "--squash", "--subject", headline, "--body", body)
 	if err != nil {
 		return normalizeGhError(err)
 	}
 	return nil
+}
+
+// squashMessage reads the PR's title and commits with `gh pr view` and builds
+// the squash commit (#2728).
+func (c *execGhClient) squashMessage(ctx context.Context, prNumber int) (string, string, error) {
+	out, err := github.RunGhSubprocess(ctx, c.workdir, "pr", "view", strconv.Itoa(prNumber), "--json", "number,title,commits")
+	if err != nil {
+		return "", "", normalizeGhError(err)
+	}
+	return parseSquashView(out)
+}
+
+// parseSquashView builds the squash commit from `gh pr view --json
+// number,title,commits` output.
+func parseSquashView(out []byte) (string, string, error) {
+	var raw struct {
+		Number  int    `json:"number"`
+		Title   string `json:"title"`
+		Commits []struct {
+			MessageHeadline string `json:"messageHeadline"`
+			MessageBody     string `json:"messageBody"`
+		} `json:"commits"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return "", "", fmt.Errorf("parse gh pr view JSON: %w", err)
+	}
+	msgs := make([]string, 0, len(raw.Commits))
+	for _, cm := range raw.Commits {
+		msgs = append(msgs, cm.MessageHeadline+"\n\n"+cm.MessageBody)
+	}
+	h, b := github.SquashCommitMessage(raw.Title, raw.Number, msgs)
+	return h, b, nil
+}
+
+// checkSquashDefaults reports whether the repository's squash defaults are
+// PR_TITLE/PR_BODY over `gh api` (#2728). It reads only.
+func (c *execGhClient) checkSquashDefaults(ctx context.Context) (bool, error) {
+	out, err := github.RunGhSubprocess(ctx, c.workdir, "api", "repos/{owner}/{repo}",
+		"--jq", "[.squash_merge_commit_title, .squash_merge_commit_message] | join(\" \")")
+	if err != nil {
+		return false, normalizeGhError(err)
+	}
+	return strings.TrimSpace(string(out)) == github.SquashTitlePRTitle+" "+github.SquashMessagePRBody, nil
 }
 
 // PRBody implements prBodyClient.
@@ -1649,6 +1702,9 @@ func (c *execGhClient) MergeQueueStatus(ctx context.Context, prNumber int) (gith
 // EnqueueAndWait implements mergeQueueClient: the GraphQL enqueuePullRequest
 // mutation, then a bounded poll of the PR's queue entry (#2214).
 func (c *execGhClient) EnqueueAndWait(ctx context.Context, st github.MergeQueueStatus, opts github.MergeQueueWaitOptions) (github.MergeQueueStatus, error) {
+	if opts.CheckSquashDefaults == nil {
+		opts.CheckSquashDefaults = c.checkSquashDefaults
+	}
 	return github.NewMergeQueue(c.graphQL).EnqueueAndWait(ctx, st, opts)
 }
 

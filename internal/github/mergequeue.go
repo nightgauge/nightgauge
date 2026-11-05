@@ -88,6 +88,11 @@ type MergeQueueWaitOptions struct {
 	// OPEN, failed readiness or was never enqueued, so a caller timing the
 	// queue wait starts its clock only once the queue owns the PR.
 	OnQueued func(MergeQueueStatus)
+	// CheckSquashDefaults, when set, runs before an enqueue and reports
+	// whether the repository's squash defaults are PR_TITLE/PR_BODY (#2728).
+	// The queue takes no headline, so these defaults decide the squash subject
+	// on the base branch. It reads only; it never changes repository settings.
+	CheckSquashDefaults func(ctx context.Context) (prTitled bool, err error)
 }
 
 // onQueuedOnce wraps o.OnQueued so it fires at most once.
@@ -164,6 +169,10 @@ const (
 	// MergeQueueChecksFailed: the PR's own checks are red, so it was not
 	// enqueued (#2584).
 	MergeQueueChecksFailed = "checks_failed"
+	// MergeQueueSquashDefaults: the repository's squash defaults are not
+	// PR_TITLE/PR_BODY (or could not be read) and the PR carries a WIP-preservation commit, so
+	// it was not enqueued (#2728).
+	MergeQueueSquashDefaults = "squash_defaults"
 )
 
 // MergeQueueError is the classified failure of a queued merge. It names the
@@ -189,6 +198,11 @@ func (e *MergeQueueError) Error() string {
 		}
 	case MergeQueueChecksFailed:
 		fmt.Fprintf(&b, "merge queue: PR #%d checks failed; not enqueued", e.PRNumber)
+	case MergeQueueSquashDefaults:
+		fmt.Fprintf(&b, "merge queue: PR #%d carries a WIP-preservation commit and the repository squash defaults "+
+			"are not PR_TITLE/PR_BODY; not enqueued (an admin sets squash_merge_commit_title=PR_TITLE and "+
+			"squash_merge_commit_message=PR_BODY: gh api -X PATCH repos/{owner}/{repo} "+
+			"-f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY)", e.PRNumber)
 	case MergeQueueTimeout:
 		fmt.Fprintf(&b, "merge queue: PR #%d not merged before the queue wait budget expired", e.PRNumber)
 	case MergeQueueClosed:
@@ -751,6 +765,9 @@ func (q *MergeQueue) EnqueueAndWait(ctx context.Context, status MergeQueueStatus
 		}
 	}
 	if !status.InQueue && status.State == "OPEN" {
+		if err := q.guardSquashDefaults(ctx, status, opts); err != nil {
+			return status, err
+		}
 		if err := q.enqueueRetrying(ctx, status); err != nil {
 			if strings.Contains(err.Error(), enqueueNotReadyMessage) {
 				return status, &MergeQueueError{PRNumber: status.Number, Kind: MergeQueueNotReady, Detail: "mergeability not yet computed", Cause: err}

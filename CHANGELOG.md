@@ -24,6 +24,13 @@ changelog, and the release workflow refuses a tag that does not.
   `merge_queue_enqueue_failed`, instead of `subagent_crash`. It is not charged
   as a fault, and the in-review reconcile moves a CLEAN, green PR that ended
   this way back to Ready so pr-merge runs again (#2729).
+- Squash merges through `nightgauge pr merge` and the pr-merge stage now use the
+  PR title as the commit subject, so a PR whose only commit is a
+  WIP-preservation commit no longer lands that `wip(...)` subject or its
+  `Nightgauge-WIP` trailer on `main` (#2728). On a merge-queue base,
+  where GitHub uses the repository's squash defaults, a PR carrying a
+  WIP-preservation commit is refused with the remedy unless those defaults are
+  PR title / PR body; nightgauge reads them and never changes them.
 - Acceptance-criteria parsing (Go `preflight ac-reconcile` and the SDK's
   `parseAcceptanceCriteria`) now closes a code fence only on a CommonMark closer:
   the same character, at least as long as the opener, with nothing after it. A
