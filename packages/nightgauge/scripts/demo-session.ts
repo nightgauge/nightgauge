@@ -60,7 +60,7 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { redateWorkspace } from "../demo/workspace-dates";
 import { placeCloneData } from "../demo/workspace-clone";
-import { agentHomeEnv, secretStoreArgs } from "../tests/launcher/hostIsolation";
+import { agentHomeEnv, isInheritedHostVar, secretStoreArgs } from "../tests/launcher/hostIsolation";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGE_ROOT = path.resolve(here, "..");
@@ -266,7 +266,7 @@ export function prepareDemoSession(
 export function sessionEnv(base: NodeJS.ProcessEnv, plan: DemoSessionPlan): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
-    if (value === undefined || key.startsWith("VSCODE_") || key === "ELECTRON_RUN_AS_NODE") {
+    if (value === undefined || isInheritedHostVar(key)) {
       continue;
     }
     env[key] = value;

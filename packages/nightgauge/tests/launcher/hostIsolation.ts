@@ -44,3 +44,25 @@ export function secretStoreArgs(platform: NodeJS.Platform = process.platform): s
   if (platform === "linux") args.push("--password-store=basic");
   return args;
 }
+
+/**
+ * True for an inherited variable a launched window must not see:
+ * `ELECTRON_RUN_AS_NODE` makes Electron start as plain Node (#2743), and a
+ * `VSCODE_*` key such as `VSCODE_IPC_HOOK_CLI` hands the launch to the
+ * calling VS Code instance.
+ */
+export function isInheritedHostVar(key: string): boolean {
+  return key === "ELECTRON_RUN_AS_NODE" || key.startsWith("VSCODE_");
+}
+
+/**
+ * Deletes every {@link isInheritedHostVar} key from `env` in place and
+ * returns the removed names, sorted. `@vscode/test-electron`'s `runTests`
+ * spawns VS Code with `{ ...process.env, ...extensionTestsEnv }`, so the
+ * launcher must scrub its own `process.env`, not only the env it passes.
+ */
+export function scrubInheritedHostEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  const removed = Object.keys(env).filter(isInheritedHostVar).sort();
+  for (const key of removed) delete env[key];
+  return removed;
+}

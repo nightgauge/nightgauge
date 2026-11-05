@@ -35,7 +35,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
 import { ACQUIRE_ATTEMPTS, acquireVSCode } from "../launcher/acquireVSCode";
-import { agentHomeEnv, secretStoreArgs } from "../launcher/hostIsolation";
+import { agentHomeEnv, scrubInheritedHostEnv, secretStoreArgs } from "../launcher/hostIsolation";
 import {
   buildInventory,
   driftProblems,
@@ -111,6 +111,11 @@ function requireFile(file: string, remedy: string): void {
 }
 
 async function main(): Promise<void> {
+  // runTests spawns VS Code with this process.env merged in (#2743).
+  const scrubbed = scrubInheritedHostEnv();
+  if (scrubbed.length > 0) {
+    console.log(`[host] dropped inherited ${scrubbed.join(", ")} before starting VS Code`);
+  }
   requireFile(
     EXTENSION_BUNDLE,
     "Run `npm run -w packages/nightgauge build` first — the host loads the real bundle, not src/."
