@@ -33,9 +33,9 @@ changelog, and the release workflow refuses a tag that does not.
   publishes nothing, passes no secrets, keeps artifacts 3 days, and is never a
   pull request or merge-queue check; a newer push cancels an older run. Tag an
   RC only from a commit whose main build is green. `post-merge-check.sh` and
-  `nightgauge ci checks-complete` read
-  a failed main build as red, and reports a run cancelled by a newer push on a
-  descendant commit as `INFO`, naming that commit.
+  `nightgauge ci checks-complete` read a failed main build as red, and report a
+  run cancelled by a newer push on a descendant commit as `INFO`, naming that
+  commit.
 
 ### Security
 
