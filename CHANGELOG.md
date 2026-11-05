@@ -61,6 +61,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The API ledger no longer books the gap between two rate-limit buckets as
+  spend. Cost is now the drop within one identity, resource and reset window,
+  and `nightgauge doctor` (NGD008) and `nightgauge api-usage` judge each
+  bucket against its own limit, so parallel buckets no longer raise a false
+  budget warning (#2692).
+
 - `npm run test:host` no longer fails with `Cannot find module '<scratch>/workspace'` when
   started from a VS Code extension host: the launcher drops an inherited
   `ELECTRON_RUN_AS_NODE` (and `VSCODE_*`) before starting VS Code (#2743).

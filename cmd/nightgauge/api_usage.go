@@ -32,8 +32,13 @@ type apiUsageRecord struct {
 	Cost        int    `json:"cost"`
 	SincePrevMs int64  `json:"since_prev_ms"`
 	Remaining   int    `json:"remaining"`
-	Cached      bool   `json:"cached"`
-	DurationMs  int64  `json:"duration_ms"`
+	// Reset, Limit and HeaderObserved name the rate-limit bucket a record
+	// drew from and whether its Remaining is real (#2692).
+	Reset          int64 `json:"reset"`
+	Limit          int   `json:"limit"`
+	HeaderObserved bool  `json:"header_observed"`
+	Cached         bool  `json:"cached"`
+	DurationMs     int64 `json:"duration_ms"`
 	// Identity is whose bucket paid (#2087). Absent in older files; read
 	// through github.LedgerIdentity so those count as "unknown".
 	Identity string `json:"identity"`
@@ -140,6 +145,7 @@ segment per UTC day beside that name, so log retention can drop old days).`,
 				}
 				byIdentity, _, _ := groupAPIUsage(recs, "identity")
 				payload["by_identity"] = byIdentity
+				payload["buckets"] = apiUsageBuckets(recs)
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(payload)
 			}
 			printAPIUsage(cmd.OutOrStdout(), recs, groups, total, unattributed, byWhat, top, since)
@@ -420,17 +426,20 @@ func toLedgerRecords(recs []apiUsageRecord) []github.APILedgerRecord {
 	out := make([]github.APILedgerRecord, len(recs))
 	for i, r := range recs {
 		out[i] = github.APILedgerRecord{
-			TS:        r.TS,
-			Kind:      r.Kind,
-			Method:    r.Method,
-			Path:      r.Path,
-			Op:        r.Op,
-			Caller:    r.Caller,
-			Status:    r.Status,
-			Cost:      r.Cost,
-			Remaining: r.Remaining,
-			Cached:    r.Cached,
-			Identity:  r.Identity,
+			TS:             r.TS,
+			Kind:           r.Kind,
+			Method:         r.Method,
+			Path:           r.Path,
+			Op:             r.Op,
+			Caller:         r.Caller,
+			Status:         r.Status,
+			Cost:           r.Cost,
+			Remaining:      r.Remaining,
+			Reset:          r.Reset,
+			Limit:          r.Limit,
+			HeaderObserved: r.HeaderObserved,
+			Cached:         r.Cached,
+			Identity:       r.Identity,
 		}
 	}
 	return out
@@ -480,10 +489,34 @@ func printAPIBudget(w io.Writer, recs []apiUsageRecord, since time.Duration) {
 		fmt.Fprintf(w, "  Remaining (observed): %d pts (lowest bucket: %s)\n\n", remaining,
 			github.LedgerIdentity(lw.LowWaterIdentity))
 	}
-	fmt.Fprintf(w, "  A ProjectV2 board read costs ~%d pts per %d-item page.\n",
+	printAPIBuckets(w, lw.Buckets, "  Per bucket (each against its own limit):")
+	fmt.Fprintf(w, "\n  A ProjectV2 board read costs ~%d pts per %d-item page.\n",
 		github.BoardReadPointsPerPage, github.BoardReadItemsPerPage)
 	fmt.Fprintf(w, "  What's left affords ~%d more page(s) (~%d items) before the hour resets.\n",
 		pages, items)
+}
+
+// apiUsageBuckets lists every rate-limit bucket (identity, resource, reset)
+// in the records. Parallel buckets are separate budgets: their drains are
+// listed side by side, never summed against one limit (#2692).
+func apiUsageBuckets(recs []apiUsageRecord) []github.LedgerBucket {
+	b := github.SummarizeWindow(toLedgerRecords(recs), time.Time{}, time.Time{}).Buckets
+	if b == nil {
+		b = []github.LedgerBucket{}
+	}
+	return b
+}
+
+func printAPIBuckets(w io.Writer, buckets []github.LedgerBucket, header string) {
+	if len(buckets) == 0 {
+		return
+	}
+	fmt.Fprintln(w, header)
+	fmt.Fprintf(w, "  %-28s %-18s %11s %6s %6s %6s %6s\n", "identity", "resource", "reset", "drain", "low", "limit", "calls")
+	for _, b := range buckets {
+		fmt.Fprintf(w, "  %-28s %-18s %11d %6d %6d %6d %6d\n",
+			b.Identity, b.Resource, b.Reset, b.Drain, b.Low, b.Limit, b.Calls)
+	}
 }
 
 func printAPIUsage(w io.Writer, recs []apiUsageRecord, groups []apiUsageGroup, total, unattributed int, by string, top int, since time.Duration) {
@@ -517,6 +550,7 @@ func printAPIUsage(w io.Writer, recs []apiUsageRecord, groups []apiUsageGroup, t
 	for _, g := range byIdentity {
 		fmt.Fprintf(w, "  %-28s %6d pts  %5d calls\n", g.Key, g.Points, g.Calls)
 	}
+	printAPIBuckets(w, apiUsageBuckets(recs), "\nBuckets (drain = high - low remaining):")
 	if gets > 0 {
 		fmt.Fprintf(w, "\nConditional GETs served from cache: %d/%d (%.0f%% free)\n",
 			cached, gets, float64(cached)/float64(gets)*100)

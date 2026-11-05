@@ -6224,6 +6224,17 @@ is how a script asks for the same thing, and it includes `graphql_mutation`
 because mutations bill to the same pool. The human report prints an unfiltered
 per-resource table instead, which is honest because it labels each pool.
 
+**Never sum parallel buckets.** One process can draw from two buckets of the
+same resource — the same identity with different `reset` windows, or two
+identities. Cost is the drop in `remaining` within one identity + resource +
+reset bucket; a request in a bucket with no prior observation (a new reset or
+identity) costs 0, so the gap between two buckets is never booked as spend
+(#2692). Each bucket's drain is its high minus low observed `remaining`, which
+is correct even for records an older writer priced across buckets. The human
+report and `--budget` list one row per bucket (identity, resource, reset,
+drain, low, limit, calls) against that bucket's own `limit`, and `--json`
+carries them as `buckets`.
+
 **Read the whole SET, not the live file.** The window anyone opens this report
 for is the busy one, and a busy hour is the hour that rotates: a reader that
 opens only the day's segment reports a sudden collapse in spending at exactly

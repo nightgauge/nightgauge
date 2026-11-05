@@ -128,7 +128,7 @@ func TestAPIBudgetHighIdleSpendWarns(t *testing.T) {
 	root := layouttest.Repo(t)
 	now := time.Now()
 	writeLedger(t, root,
-		rec(now, 55*time.Minute, "boardcache.Refresh", 1600, 3400),
+		rec(now, 55*time.Minute, "boardcache.Refresh", 1600, 5000),
 		rec(now, 5*time.Minute, "boardcache.Refresh", 1500, 1900),
 	)
 	fs, _ := apiBudgetFindings(root, now)
@@ -183,5 +183,53 @@ func TestTopCallerListWithNoPricedCalls(t *testing.T) {
 	got := topCallerList(github.LedgerWindow{})
 	if !strings.Contains(got, "none attributed") {
 		t.Errorf("topCallerList(empty) = %q, want an explicit no-attribution string", got)
+	}
+}
+
+func bucketRec(now time.Time, ago time.Duration, reset int64, limit, cost, remaining int) github.APILedgerRecord {
+	r := rec(now, ago, "boardcache.Refresh", cost, remaining)
+	r.Identity, r.Reset, r.Limit = "app:x", reset, limit
+	return r
+}
+
+// Two parallel buckets each draining under the warn fraction must not sum into
+// a false NGD008, even when the old writer inflated Cost across them (#2692).
+func TestAPIBudgetParallelBucketsAreJudgedSeparately(t *testing.T) {
+	root := layouttest.Repo(t)
+	now := time.Now()
+	r1, r2 := now.Add(5*time.Minute).Unix(), now.Add(10*time.Minute).Unix()
+	var recs []github.APILedgerRecord
+	rem1, rem2 := 4860, 4788
+	for i := 0; i < 40; i++ {
+		ago := time.Duration(50-i) * time.Minute
+		recs = append(recs, bucketRec(now, ago, r1, 5000, 2000, rem1), bucketRec(now, ago, r2, 5000, 2000, rem2))
+		rem1, rem2 = rem1-20, rem2-20
+	}
+	writeLedger(t, root, recs...)
+	if fs, detail := apiBudgetFindings(root, now); len(fs) != 0 {
+		t.Fatalf("parallel buckets under the fraction produced %s (detail %q)", findingsText(fs), detail)
+	}
+}
+
+// One hot bucket fires NGD008 and the finding names it; a 12,500 limit is
+// honoured rather than the 5,000 default.
+func TestAPIBudgetHotBucketIsNamed(t *testing.T) {
+	root := layouttest.Repo(t)
+	now := time.Now()
+	reset := now.Add(5 * time.Minute).Unix()
+	writeLedger(t, root,
+		bucketRec(now, 50*time.Minute, reset, 5000, 0, 5000),
+		bucketRec(now, 1*time.Minute, reset, 5000, 0, 1000),
+	)
+	fs, _ := apiBudgetFindings(root, now)
+	if len(fs) != 1 || !strings.Contains(findingsText(fs), "app:x") {
+		t.Fatalf("hot bucket: got %s, want NGD008 naming app:x", findingsText(fs))
+	}
+	writeLedger(t, root,
+		bucketRec(now, 50*time.Minute, reset, 12500, 0, 12500),
+		bucketRec(now, 1*time.Minute, reset, 12500, 0, 8500),
+	)
+	if fs, _ := apiBudgetFindings(root, now); len(fs) != 0 {
+		t.Fatalf("4000 drained of a 12500 bucket is under the fraction; got %s", findingsText(fs))
 	}
 }

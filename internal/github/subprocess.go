@@ -146,9 +146,11 @@ func recordGhSubprocess(ctx context.Context, caller string, args []string, ok bo
 	}
 	remaining := ""
 	if snap, err := ghRateLimitSnapshot(ctx); err == nil {
-		kind, res := ghSubprocessResource(snap, ledger, args)
+		kind, identity, res := ghSubprocessResource(snap, ledger, args)
 		rec.Kind = kind
+		rec.Identity = identity
 		rec.Reset = res.Reset
+		rec.Limit = res.Limit
 		remaining = strconv.Itoa(res.Remaining)
 	}
 	ledger.record(rec, remaining)
@@ -217,10 +219,14 @@ func ghRateLimitSnapshot(ctx context.Context) (map[string]ghRateLimitResource, e
 // a cached/failed call that spent nothing) the drop tells us nothing, so the
 // subcommand shape decides — and the record's cost is zero either way, so the
 // only thing riding on the fallback is which pool gets a baseline.
-func ghSubprocessResource(snap map[string]ghRateLimitResource, ledger *apiLedger, args []string) (string, ghRateLimitResource) {
+//
+// The identity returned is the bucket's freshest observed spender (see
+// apiLedger.freshestBaseline), so the record is priced against the baseline
+// in-process calls also advance; "" when the bucket has no baseline yet.
+func ghSubprocessResource(snap map[string]ghRateLimitResource, ledger *apiLedger, args []string) (string, string, ghRateLimitResource) {
 	bestKind, bestDrop := "", 0
 	for kind, res := range snap {
-		prev, ok := ledger.previousRemaining(kind)
+		_, prev, ok := ledger.freshestBaseline(kind, res.Reset)
 		if !ok {
 			continue
 		}
@@ -228,14 +234,16 @@ func ghSubprocessResource(snap map[string]ghRateLimitResource, ledger *apiLedger
 			bestKind, bestDrop = kind, drop
 		}
 	}
-	if bestKind != "" {
-		return bestKind, snap[bestKind]
+	kind := bestKind
+	if kind == "" {
+		kind = ghLikelyResource(args)
+		if _, ok := snap[kind]; !ok {
+			kind = "core"
+		}
 	}
-	kind := ghLikelyResource(args)
-	if res, ok := snap[kind]; ok {
-		return kind, res
-	}
-	return "core", snap["core"]
+	res := snap[kind]
+	key, _, _ := ledger.freshestBaseline(kind, res.Reset)
+	return kind, key.Identity, res
 }
 
 // ghLikelyResource guesses the pool from the subcommand shape. `gh api
