@@ -46,8 +46,13 @@
 #                         pull request for --version is expected: pass when the
 #                         tap already serves --version OR that pull request is
 #                         open, fail only when neither holds (nothing was
-#                         proposed). Without --release (watchdog mode) only
-#                         the tap's default branch counts. For a listing
+#                         proposed). For the cask, --release first requires
+#                         `release-scan-gate.sh verify` to pass (the release
+#                         is published and scan-clean, #2946), then marks a
+#                         draft cask pull request ready; it refuses (exit 1)
+#                         for a draft or unscanned release. Without --release
+#                         (watchdog mode) only the tap's default branch
+#                         counts. For a listing
 #                         channel, --release passes when --version is listed
 #                         on every target (a newer version may be listed too);
 #                         without it, every target's newest version must BE
@@ -371,6 +376,22 @@ if [ "$CHANNEL" != "homebrew" ]; then
   exit "$VERDICT"
 fi
 
+# --- The scan gate: no cask may be readied for an unscanned release (#2946) -----
+# The cask pull request opens as a DRAFT while the GitHub Release is still a
+# draft. Release mode marks it ready only for a published release that
+# release-scan-gate.sh verify finds covered by a clean VirusTotal scan, and
+# refuses otherwise, so a cask that points at a draft is never mergeable.
+if [ "$RELEASE_MODE" -eq 1 ]; then
+  SCAN_GATE="${RELEASE_SCAN_GATE:-$(dirname "$0")/release-scan-gate.sh}"
+  bash "$SCAN_GATE" verify "v$VERSION" -R "$SOURCE"
+  GATE_RC=$?
+  if [ "$GATE_RC" -ne 0 ]; then
+    echo "::error::v$VERSION is not a published, scan-clean release (release-scan-gate.sh verify exit $GATE_RC): refusing to ready its cask." >&2
+    [ "$GATE_RC" -eq 1 ] && exit 1
+    exit 2
+  fi
+fi
+
 # --- The channel: what the tap's default branch actually serves ------------------
 if ! CASK="$(gh api -H "Accept: application/vnd.github.raw" "repos/$TAP/contents/Casks/nightgauge.rb?ref=main")"; then
   echo "ERROR: cannot read Casks/nightgauge.rb on $TAP main" >&2
@@ -393,17 +414,18 @@ fi
 if ! OPEN_CASKS="$(printf '%s' "$PULLS" | jq -r --arg tap "$TAP" '
     .[] | select(.head.repo.full_name == $tap)
         | select(.head.ref | test("^cask-[0-9]+\\.[0-9]+\\.[0-9]+$"))
-        | "\(.number) \(.head.ref | ltrimstr("cask-"))"')"; then
+        | "\(.number) \(.head.ref | ltrimstr("cask-")) \(.draft // false)"')"; then
   echo "ERROR: unparseable pull request list from $TAP" >&2
   exit 2
 fi
 
 PROPOSED_PR=""
+PROPOSED_DRAFT=false
 NEWEST="$SERVED"
 if semver_lt "$NEWEST" "$VERSION"; then NEWEST="$VERSION"; fi
-while read -r num ver; do
+while read -r num ver draft; do
   [ -n "$num" ] || continue
-  [ "$ver" = "$VERSION" ] && PROPOSED_PR="$num"
+  [ "$ver" = "$VERSION" ] && { PROPOSED_PR="$num"; PROPOSED_DRAFT="$draft"; }
   if semver_lt "$NEWEST" "$ver"; then NEWEST="$ver"; fi
 done <<<"$OPEN_CASKS"
 
@@ -412,7 +434,7 @@ say "- tap \`main\` serves: \`$SERVED\` ($TAP)"
 
 # --- Supersede: an older proposal can never be the one to merge ------------------
 SUPERSEDED=""
-while read -r num ver; do
+while read -r num ver _; do
   [ -n "$num" ] || continue
   semver_lt "$ver" "$NEWEST" || continue
   if [ "$CLOSE_SUPERSEDED" -eq 1 ]; then
@@ -433,7 +455,14 @@ VERDICT=0
 if [ "$SERVED" = "$VERSION" ]; then
   CURRENT=1
   say "- verdict: current"
+elif [ "$RELEASE_MODE" -eq 1 ] && [ -n "$PROPOSED_PR" ] && [ "$PROPOSED_DRAFT" = "true" ] &&
+  ! gh pr ready "$PROPOSED_PR" -R "$TAP" >/dev/null; then
+  VERDICT=1
+  REASON="the scan-clean release $VERSION cannot be proposed: marking the draft cask PR $TAP#$PROPOSED_PR ready failed (the token needs pull_requests: write)."
+  say "- verdict: BEHIND. $REASON"
+  echo "::error::$REASON" >&2
 elif [ "$RELEASE_MODE" -eq 1 ] && [ -n "$PROPOSED_PR" ]; then
+  [ "$PROPOSED_DRAFT" = "true" ] && say "- marked the draft cask PR $TAP#$PROPOSED_PR ready: $VERSION is published and scan-clean"
   say "- verdict: proposed. The release is NOT complete until $TAP#$PROPOSED_PR (cask-$VERSION) is merged; the release watchdog goes red until it is."
   echo "::warning::brew still serves $SERVED. Merge $TAP#$PROPOSED_PR (cask-$VERSION) to finish the $VERSION release." >&2
 else

@@ -1516,6 +1516,20 @@ run_group "sign-macos-binaries.sh regression suite" \
 run_group "malware-scan.sh regression suite" \
   bash scripts/test-malware-scan.sh
 
+# 1b2c'. VirusTotal release gate (#2946) — vt-scan.sh and release-scan-gate.sh,
+#       which hold a GitHub Release as a draft until every file in it, and every
+#       binary and JS bundle inside its VSIXs and tarballs, scans clean. Both
+#       suites run offline against a local stand-in for the VirusTotal v3 API
+#       (scripts/testdata/vt-scan/stub-api.py) and a stub `gh`, so no arm needs
+#       a key or reaches VirusTotal. The failure they guard is a gate that
+#       passes when it should not: every arm that is not a parsed, clean
+#       report must keep the draft, and the second suite is the offline proof
+#       of AC7's two paths (a forced detection stays a draft; clean publishes).
+run_group "vt-scan.sh regression suite" \
+  bash scripts/test-vt-scan.sh
+run_group "release-scan-gate.sh draft-hold harness" \
+  bash scripts/test-release-scan-gate.sh
+
 # 1b2d. check-shipped-code.sh regression suite (#2320, #2321) — the scan of
 #       what the VSIX ships for the shapes a static malware scanner matches on
 #       (a fetch piped into a shell, a base64 decode). The scan itself runs

@@ -14,6 +14,23 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Security
+
+- A release is no longer public until VirusTotal finds every file in it clean
+  (#2946). `release.yml` now creates a draft GitHub Release and a draft
+  Homebrew cask pull request, then scans the draft's own assets, plus every
+  binary and JS bundle inside each VSIX and tarball, with the free VirusTotal
+  API. Only a clean scan publishes it. One engine flagging a file malicious or
+  suspicious, any crowdsourced YARA match, or a Code insights verdict other
+  than benign keeps the draft and fails the run, naming the file, its sha256
+  and the engine or rule; so does a missing `VT_API_KEY` or any API error. The
+  per-file record, `vt-scan-report.json`, is attached to the release. The
+  `stable` branch, the cask, the VS Code Marketplace and Open VSX move only
+  from a published release whose record is clean, and a re-run of a published
+  release uploads nothing. The manual VirusTotal URL submission in the release
+  steps is gone; the release owner now adds a `VT_API_KEY` secret to the
+  `production` environment.
+
 ### Fixed
 
 - The full local gate is no longer thrown away after twenty minutes. A foreground Bash

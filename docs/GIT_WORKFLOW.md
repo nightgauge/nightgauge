@@ -952,15 +952,24 @@ main ──●──●──●──●──●──
    `GORELEASER_CURRENT_TAG`; without that pin the rc tag on the same commit
    wins git's version sort — #1296)
 7. Push the tag: `git push origin v0.2.0`
-8. `release.yml` runs → builds, creates the GitHub Release with attested
-   assets, opens the Homebrew cask PR (gated by the `production` environment)
-   and closes older cask PRs as superseded. **Merge the cask PR** after
-   checking its sha256s against the release's `checksums.txt`: until it
-   merges, `brew` serves the previous version and `release-watchdog.yml` is
-   red (`scripts/verify-release-channels.sh`)
+8. `release.yml` runs (gated by the `production` environment) → builds,
+   creates a **draft** GitHub Release with attested assets and a **draft**
+   Homebrew cask PR, then scans the draft with VirusTotal
+   (`scripts/release-scan-gate.sh scan`, #2946): every asset, and every binary
+   and JS bundle inside each VSIX and tarball, by its exact downloaded bytes.
+   Only a clean scan publishes the release. Any finding, API error or missing
+   `VT_API_KEY` leaves a draft and fails the run. After publishing, the
+   `channels` job checks the published report (`release-scan-gate.sh verify`),
+   advances `stable`, marks the cask PR ready and closes older cask PRs as
+   superseded. **Merge the cask PR** after checking its sha256s against the
+   release's `checksums.txt`: until it merges, `brew` serves the previous
+   version and `release-watchdog.yml` is red
+   (`scripts/verify-release-channels.sh`). A re-run of an already published
+   release uploads nothing; it runs the `channels` job alone
 9. `gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both`
-   → promotes the release's own per-target VSIXs to the VS Code Marketplace
-   and Open VSX after verifying each against `checksums.txt` and its
+   → requires a published, scan-clean release, then promotes the release's
+   own per-target VSIXs to the VS Code Marketplace and Open VSX after
+   verifying each against `checksums.txt` and its
    `release.yml` attestation (every version publishes on the release channel),
    then fails unless each registry lists the version on every target within
    10 minutes. `release-watchdog.yml` re-checks both listings daily
@@ -1025,77 +1034,44 @@ gh release view v0.2.0 --json assets --jq '.assets[].name'
 gh release download v0.2.0 -p 'nightgauge-darwin-arm64-*.vsix' -D /tmp/rel
 gh attestation verify /tmp/rel/nightgauge-darwin-arm64-*.vsix --owner nightgauge
 
-# 9a. Multi-engine scan BEFORE any registry sees the files. release.yml's
-#     ClamAV step is one engine; a registry reviewer reads VirusTotal, where
-#     an archive has been flagged on some builds and not on near-identical
-#     others while every file inside it was clean. So it is checked per
-#     release, never assumed. Every report lives at
-#     https://www.virustotal.com/gui/file/<sha256>, the sha256 from
-#     checksums.txt.
-gh release download v0.4.0 -p '*.vsix' -p '*.tar.gz' -p 'checksums.txt' -D /tmp/rel
-(cd /tmp/rel && shasum -a 256 -c checksums.txt --ignore-missing)
-
-#     Submit by URL, not by upload. Paste each release asset's public download
-#     URL (each VSIX, each tarball) at https://www.virustotal.com/gui/home/url;
-#     VirusTotal fetches the file and files its report under the file's
-#     sha256. A free account's web uploader stops at about 3 MB, below every
-#     release file, and a free account's API key cannot submit files, so the
-#     URL route is the default:
-gh release view v0.4.0 --json assets --jq '.assets[] | select(.name | test("\\.(vsix|tar\\.gz)$")) | .url'
-
-#     The bare binaries: once a tarball's report exists, look its binary up by
-#     sha256 at https://www.virustotal.com/gui/file/<sha256>. VirusTotal may
-#     or may not have extracted it; "Item not found" means it did not.
-for t in /tmp/rel/*.tar.gz; do tar -xOzf "$t" nightgauge | shasum -a 256; done
-
-#     The two JS bundles are scanned as files of their own (#2322).
-#     VirusTotal does not report every file it unpacks from a VSIX, so a
-#     clean VSIX report says nothing about dist/extension.cjs, the largest
-#     code file in the package, or dist/sdk-cli.cjs. Both are the same bytes
-#     in every target VSIX; assert that, then look each up by sha256:
-for f in extension.cjs sdk-cli.cjs; do
-  n=$(for v in /tmp/rel/*.vsix; do unzip -p "$v" "extension/dist/$f" | shasum -a 256; done | sort -u | wc -l)
-  [ "$n" -eq 1 ] || { echo "dist/$f differs between the target VSIXs: submit each copy"; break; }
-  unzip -p "$(ls /tmp/rel/*.vsix | head -1)" "extension/dist/$f" > "/tmp/rel/$f"
-  shasum -a 256 "/tmp/rel/$f"     # its report: https://www.virustotal.com/gui/file/<sha256>
-done
-
-#     A bundle lookup that says "Item not found" needs the file hosted at a
-#     URL: the release owner puts both in a secret gist they create and
-#     submits each raw URL as above. The bundles are built from this open
-#     tree, so hosting them discloses nothing new. Direct submission through
-#     the API is only for an owner whose key is allowed to submit files; the
-#     key comes from the release session's environment, never a file or log:
-curl -s https://www.virustotal.com/api/v3/files -H "x-apikey: $VT_API_KEY" -F file=@/tmp/rel/extension.cjs
-
-#     Who submits: the owner has authorized the release session to submit
-#     the release URLs to VirusTotal itself (browser automation) and read the
-#     reports, so it does that rather than handing the URLs over. The owner's
-#     part is only what a session cannot do: a reCAPTCHA, which only a human
-#     completes, or a refused permission. Then the owner does that part; the
-#     session neither works around it nor skips the file.
-
-#     Record three things from EVERY report (each VSIX, each binary, each
-#     bundle) beside its URL: the engine detection count, the Code insights
-#     verdict, and the name of every community YARA rule that matched (the
-#     report's "Crowdsourced YARA rules" section; THOR is one such source).
-#     With a key, the same three are in the file object:
-curl -s "https://www.virustotal.com/api/v3/files/<sha256>" -H "x-apikey: $VT_API_KEY" | jq '.data.attributes |
-  {detections: (.last_analysis_stats.malicious + .last_analysis_stats.suspicious),
-   code_insights: .crowdsourced_ai_results, yara: [.crowdsourced_yara_results[]?.rule_name]}'
-
-#     Then decide:
-#     - Any engine detection stops the release: do not publish that file;
-#       remove the asset and cut the next patch.
-#     - A Code insights verdict of "Suspicious", or any YARA rule match, stops
-#       the release for an owner decision before step 10. Quote the verdict
-#       text and the rule names in that request; the owner decides whether to
-#       publish, fix first, or file a false-positive report.
+# 9a. Read the VirusTotal scan record. release.yml scanned the DRAFT release
+#     before publishing it (#2946): every asset, plus every binary (ELF,
+#     Mach-O or PE, or the exec bit) and every JS bundle inside each VSIX and
+#     tarball, deduplicated by sha256, through the free VirusTotal API. The
+#     record is vt-scan-report.json, attached to the release and kept as the
+#     run's `vt-scan-report` artifact. Per file it gives the engine counts and
+#     the engines that flagged it, the Code insights verdict ("not-produced"
+#     when VirusTotal makes none for that file type, ELF among them), and every
+#     crowdsourced YARA rule that matched. Each report is also at
+#     https://www.virustotal.com/gui/file/<sha256>.
+gh release download v0.4.0 -p vt-scan-report.json -D /tmp/rel
+jq -r '.status, (.files[] | "\(.sha256)  \(.file)  \(.malicious)/\(.suspicious)  \(.code_insights | tostring)  \([.yara[].rule_name] | join(","))")' /tmp/rel/vt-scan-report.json
+bash scripts/release-scan-gate.sh verify v0.4.0 -R nightgauge/nightgauge   # exit 0
+#
+#     The gate holds the release as a draft when:
+#     - one or more engines report any file malicious or suspicious;
+#     - any crowdsourced YARA rule matches;
+#     - a Code insights verdict is present and is not benign;
+#     - VT_API_KEY is missing, or the API errors, times out, answers in an
+#       unknown shape or runs out of quota (4/min, 500/day on the free key).
+#     The failed run names each file, its sha256 and the engine or rule.
+#     A finding is an owner decision: fix and cut the next patch, or file a
+#     false-positive report with the vendor and decide whether to publish the
+#     draft by hand. Nothing else publishes it. A harness error is re-run
+#     with `gh run rerun <run-id> --failed`, which reuses the draft.
+#
+#     VT_API_KEY is a production-environment secret: a free VirusTotal
+#     account's API key (profile → API key). The free public API accepts file
+#     submissions (https://docs.virustotal.com/reference/public-vs-premium-api,
+#     https://docs.virustotal.com/reference/files-scan), so no paid plan is
+#     needed. Set it with: gh secret set VT_API_KEY --env production
+#     The key reaches curl only through a config on stdin, never argv or logs.
 
 # 10. Publish to the registries — ON THE TAG, never from a branch. The run
 #     verifies VSCE_PAT / OVSX_PAT, downloads the release's VSIXs, checks each
 #     against checksums.txt and its release.yml attestation, checks version and
-#     channel, and publishes those exact files. It builds nothing. The `production` environment refuses
+#     channel, and publishes those exact files. It builds nothing, and refuses
+#     a draft or a release without a clean scan record. The `production` environment refuses
 #     a branch ref, and the workflow refuses anything that is not vX.Y.Z.
 gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both
 gh run watch
@@ -1111,8 +1087,10 @@ bash scripts/verify-release-channels.sh --channel marketplace
 bash scripts/verify-release-channels.sh --channel open-vsx
 
 # 12. Bring every other channel to the same version the same day. release.yml
-#     opened the Homebrew cask pull request: check its sha256s against the
+#     opened the Homebrew cask pull request as a draft and marked it ready once
+#     the release was published and scan-clean: check its sha256s against the
 #     release's checksums.txt, merge it, and confirm the tap serves the version.
+#     Never merge a cask PR that is still a draft: it points at a draft release.
 bash scripts/verify-release-channels.sh --channel homebrew
 #     release.yml fast-forwards the release-owned `stable` branch, which is what
 #     installed Claude plugins follow. Never move it by hand except to repair a

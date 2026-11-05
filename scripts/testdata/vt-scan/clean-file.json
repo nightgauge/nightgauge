@@ -1,0 +1,25 @@
+{
+  "data": {
+    "type": "file",
+    "id": "REPLACED_BY_STUB",
+    "attributes": {
+      "last_analysis_stats": {
+        "malicious": 0,
+        "suspicious": 0,
+        "undetected": 62,
+        "harmless": 0,
+        "timeout": 0,
+        "type-unsupported": 14
+      },
+      "crowdsourced_ai_results": [
+        {
+          "id": "REPLACED_BY_STUB",
+          "category": "code_insight",
+          "source": "Code Insight",
+          "verdict": "benign",
+          "analysis": "The script reads its configuration and writes a report."
+        }
+      ]
+    }
+  }
+}
