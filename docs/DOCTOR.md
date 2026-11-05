@@ -155,21 +155,21 @@ Outcomes are `fixed`, `still-present`, `skipped` (no consent, or manual),
 `blocked`, `conflict`, and `stale` (IPC and cards only: the fingerprint is not in
 the current scan).
 
-| Verb                  | Used by                | What it does                                                     |
-| --------------------- | ---------------------- | ---------------------------------------------------------------- |
-| `worktree.sweep`      | NGD017                 | Removes only this finding's worktree, honouring live runs        |
-| `stash.sweep`         | NGD019                 | Restores only the named stash onto its landed branch, clean tree |
-| `branch.delete`       | NGD018                 | Compare-and-delete at the scanned tip                            |
-| `wip.prune`           | NGD020                 | Prunes a preserved-WIP ref whose content has landed              |
-| `process.terminate`   | NGD021                 | SIGTERM to the single pid, re-verified as your nightgauge binary |
-| `serve_lease.reclaim` | NGD022                 | Stops the wedged pid holding the scheduler lease                 |
-| `compose.cleanup`     | NGD016                 | Tears down the orphaned compose stack                            |
-| `outcome.init`        | NGD014, NGD033         | Writes the baseline complexity model (0600, directory 0700)      |
-| `survival.sweep`      | NGD026                 | Finalizes due survival records                                   |
-| `binary.build_cli`    | NGD001                 | Runs `make build-cli` in the source checkout                     |
-| `github.auth_refresh` | NGD006, NGD034, NGD041 | `gh auth refresh -h github.com -s <scopes>`                      |
-| `automation.restart`  | NGD029                 | Starts the autonomous scheduler through the running daemon       |
-| `layout.migrate`      | NGD044                 | Moves per-clone and machine state to ADR-024; never overwrites   |
+| Verb                  | Used by                | What it does                                                              |
+| --------------------- | ---------------------- | ------------------------------------------------------------------------- |
+| `worktree.sweep`      | NGD017                 | Removes only this finding's worktree, honouring live runs                 |
+| `stash.sweep`         | NGD019                 | Restores only the named stash onto its landed branch, clean tree          |
+| `branch.delete`       | NGD018                 | Compare-and-delete at the scanned tip                                     |
+| `wip.prune`           | NGD020                 | Prunes a preserved-WIP ref whose content has landed                       |
+| `process.terminate`   | NGD021                 | SIGTERM to the single pid, re-verified as your nightgauge binary          |
+| `serve_lease.reclaim` | NGD022                 | Stops the wedged pid holding the scheduler lease                          |
+| `compose.cleanup`     | NGD016                 | Tears down the orphaned compose stack                                     |
+| `outcome.init`        | NGD014, NGD033         | Writes the baseline complexity model (0600, directory 0700)               |
+| `survival.sweep`      | NGD026                 | Finalizes due survival records                                            |
+| `binary.build_cli`    | NGD001                 | Runs `make build-cli` in the source checkout (never for a release binary) |
+| `github.auth_refresh` | NGD006, NGD034, NGD041 | `gh auth refresh -h github.com -s <scopes>`                               |
+| `automation.restart`  | NGD029                 | Starts the autonomous scheduler through the running daemon                |
+| `layout.migrate`      | NGD044                 | Moves per-clone and machine state to ADR-024; never overwrites            |
 
 `repo.init` (NGD010, NGD011) is declared but deliberately not registered: the
 command is interactive, so `--fix` reports it `blocked` and names the command to
@@ -357,7 +357,11 @@ path, the resolving step and the binary's version.
 - **Not found:** manual `install` (`go install` or the releases page).
 - **Stale** (the resolved binary reports a different version than the recorded
   install): inside a nightgauge source checkout, `auto` `build` runs
-  `make build-cli`; elsewhere, manual `reinstall`. An unversioned build (`dev`)
+  `make build-cli`; elsewhere, or when the resolved binary reports a release
+  version (`0.8.0`, `0.8.0-rc.3`, `0.8.1-main.g<sha>`), manual `reinstall`. A
+  release binary was built by CI, not from the checkout, so a rebuild is never
+  offered for it. The RC tarball's CLI and the VSIX-bundled CLI report the same
+  version string, so an RC install is not stale (#2721). An unversioned build (`dev`)
   cannot be compared and is only noted; so is a mismatch while
   `NIGHTGAUGE_BINARY_ISOLATED=1` declares the PATH binary deliberately isolated.
   Versions that carry a commit hash (git describe `-g<hash>` or a Go

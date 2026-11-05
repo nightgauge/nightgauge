@@ -351,14 +351,18 @@ jobs:
         run: npm run build
 
       # Legacy issues 3300 / 3650: stamp build provenance so ExtensionStalenessService
-      # can detect when the running extension is behind workspace HEAD and
-      # refuse autonomous dispatch on critical-path drift. Stamping happens
+      # can report when the running extension is behind workspace HEAD
+      # (informational only; no dispatch is refused). Stamping happens
       # AFTER `npm run build` so dist/ already exists in its final shape, and
       # the helper script asserts the file is parseable JSON before we
       # continue — a missing stamp is a hard fail, not a silent skip.
       - name: Stamp build provenance
         env:
           BUILD_BRANCH: ${{ github.ref_name }}
+          # #2721: a stamp carrying `tag` is a CI-built release candidate or
+          # release, so the staleness item never offers a local rebuild.
+          BUILD_TAG: ${{ steps.version.outputs.tag }}
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           DIST=packages/nightgauge/dist
           BUILD_SHA=$(git rev-parse HEAD)
@@ -368,9 +372,11 @@ jobs:
           {
             "commitSha": "$BUILD_SHA",
             "branch": "$BUILD_BRANCH",
+            "tag": "$BUILD_TAG",
+            "version": "$BUILD_VERSION",
             "commitTimestamp": "$COMMIT_TIMESTAMP",
             "buildTimestamp": "$BUILD_TIMESTAMP",
-            "schemaVersion": "1"
+            "schemaVersion": "2"
           }
           EOF_BUILD_INFO
           echo "Stamped: $BUILD_SHA ($BUILD_BRANCH @ $COMMIT_TIMESTAMP)"

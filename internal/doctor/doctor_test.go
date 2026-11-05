@@ -732,7 +732,7 @@ func TestGitHubFindings(t *testing.T) {
 	})
 	t.Run("stale binary remedy", func(t *testing.T) {
 		p := binaryProbe{found: true, resolved: ResolvedBinary{Path: "/a/bin/nightgauge", Step: StepRepoBin},
-			resolvedVersion: "nightgauge v0.1.0", recordedPath: "/b/nightgauge", recordedVersion: "nightgauge v0.2.0",
+			resolvedVersion: "nightgauge v0.1.0-3-gabc1234", recordedPath: "/b/nightgauge", recordedVersion: "nightgauge v0.2.0",
 			stale: "stale binary: diverges"}
 		checkout := t.TempDir()
 		writeFile := func(name, body string) {
@@ -759,6 +759,12 @@ func TestGitHubFindings(t *testing.T) {
 		if r := f.Remedies[0]; r.Kind != RemedyAuto || r.Verb != verbBuildCLI || !strings.Contains(r.Preview, "make build-cli") {
 			t.Errorf("in the checkout the remedy is auto make build-cli, got %+v", r)
 		}
+		rc := p
+		rc.resolvedVersion = "nightgauge 0.8.0-rc.3"
+		fs, _ = binaryFindings(rc, root)
+		if r := fs[0].Remedies[0]; r.Kind != RemedyManual || r.Verb == verbBuildCLI {
+			t.Errorf("a release binary is never rebuilt from the checkout (#2721), got %+v", r)
+		}
 		bundled := p
 		bundled.resolved.Step = StepVSCodeExtension
 		fs, _ = binaryFindings(bundled, root)
@@ -777,6 +783,28 @@ func TestGitHubFindings(t *testing.T) {
 }
 
 func first(fs []Finding, _ string) []Finding { return fs }
+
+func TestIsReleaseVersion(t *testing.T) {
+	for line, want := range map[string]bool{
+		"nightgauge 0.8.0-rc.3":                          true,
+		"nightgauge v0.8.0":                              true,
+		"0.8.1-main.g3d5dba3":                            true,
+		"nightgauge v0.7.2-70-g0a198e35":                 false,
+		"nightgauge v0.7.2-70-g0a198e35-dirty":           false,
+		"nightgauge dev":                                 false,
+		"nightgauge dev+abc1234":                         false,
+		"nightgauge 0.7.3-0.20261027102022-0a198e354e6e": false,
+		"nightgauge 0.8.0-rc.3-SNAPSHOT-3d5dba31":        false,
+		"": false,
+	} {
+		if got := isReleaseVersion(line); got != want {
+			t.Errorf("isReleaseVersion(%q) = %v, want %v", line, got, want)
+		}
+	}
+	if !sameBuild("nightgauge 0.8.0-rc.3", "nightgauge 0.8.0-rc.3") {
+		t.Error("matching RC version strings are the same build")
+	}
+}
 
 func TestSameBuild(t *testing.T) {
 	describe := "nightgauge v0.7.2-70-g0a198e35"

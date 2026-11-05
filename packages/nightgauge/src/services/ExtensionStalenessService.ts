@@ -8,8 +8,10 @@
  * per failure (#3204, #3220, #3230). This service closes that gap by:
  *
  *   1. Reading `dist/build-info.json` (stamped at build time by
- *      `scripts/dev-install.sh` and the release workflow) to know what
- *      commit the running extension was built from.
+ *      `scripts/dev-install.sh` for a contributor's local build, and by the
+ *      staging and release workflows for a CI build) to know what commit the
+ *      running extension was built from. A CI stamp also carries `tag` and
+ *      `version`; a stamp with a `tag` is a tagged build (#2721).
  *   2. Running `git rev-parse HEAD` against the workspace to know what
  *      commit is currently checked out.
  *   3. If they differ, running `git diff --name-only <build>..<head>` to
@@ -19,12 +21,15 @@
  *      (skillRunner, monitoringResolver, AutoRetroService, plugin hooks, Go
  *      orchestrator).
  *
+ * Classification is informational: no dispatch is ever refused (#3532).
+ *
  * Consumers:
  *   - Status bar (`ExtensionStalenessStatusItem`) shows a warning when stale —
  *     critical staleness shows $(warning) with file count, non-critical shows a
- *     muted $(warning). No dispatch is ever blocked (#3532).
- *   - The `nightgauge.refreshExtensionFromMain` command kicks off the
- *     dev-install + reload-window sequence.
+ *     muted $(warning). A tagged build shows its installed version and the
+ *     workspace's distance from it instead.
+ *   - The `nightgauge.refreshExtensionFromMain` command (git pull +
+ *     dev-install.sh) is offered only on a local build, never on a tagged one.
  *
  * @see Issue #3300 — Extension staleness detection.
  */
@@ -44,7 +49,8 @@ const RECHECK_INTERVAL_MS = 5 * 60_000;
 /**
  * Critical paths — files where stale code is known to cause cost-burn or
  * incorrect dispatch. When the workspace HEAD has commits that touch ANY of
- * these paths and the running build doesn't, dispatch is refused.
+ * these paths and the running build doesn't, the status item highlights it.
+ * Nothing is refused on the strength of it (#3532).
  *
  * Each entry is a path prefix (no globbing) — `git diff --name-only` results
  * are tested with `startsWith`. Wide prefixes are intentional (e.g. all of
@@ -73,18 +79,29 @@ export const CRITICAL_PATHS: readonly string[] = [
 export interface BuildInfo {
   commitSha: string;
   branch: string;
+  /** Release tag a CI build was stamped from; null for a local build. */
+  tag: string | null;
+  /** Release version a CI build was stamped with; null for a local build. */
+  version: string | null;
   commitTimestamp: string;
   buildTimestamp: string;
   schemaVersion: string;
 }
 
+/** Release identity of the running build. Both null on a local build. */
+export interface BuildIdentity {
+  tag: string | null;
+  version: string | null;
+}
+
 export type StalenessState =
-  | { kind: "fresh"; buildSha: string; currentSha: string }
+  | { kind: "fresh"; buildSha: string; currentSha: string; build: BuildIdentity }
   | { kind: "unknown"; reason: string }
   | {
       kind: "stale";
       buildSha: string;
       currentSha: string;
+      build: BuildIdentity;
       commitsBehind: number;
       criticalPathsChanged: readonly string[];
       otherPathsChanged: readonly string[];
@@ -105,14 +122,6 @@ export class ExtensionStalenessService implements vscode.Disposable {
   /** Most-recent staleness assessment. May be stale until first refresh completes. */
   getState(): StalenessState {
     return this.state;
-  }
-
-  /**
-   * True when stale AND any changed file matches CRITICAL_PATHS. This is the
-   * gate ConcurrentPipelineManager consults before dispatching new slots.
-   */
-  isCriticallyStale(): boolean {
-    return this.state.kind === "stale" && this.state.criticalPathsChanged.length > 0;
   }
 
   /** Begin periodic checks. Runs an initial check immediately. */
@@ -152,8 +161,9 @@ export class ExtensionStalenessService implements vscode.Disposable {
     if (!currentSha) {
       return { kind: "unknown", reason: "git rev-parse HEAD failed" };
     }
+    const build: BuildIdentity = { tag: buildInfo.tag, version: buildInfo.version };
     if (currentSha === buildInfo.commitSha) {
-      return { kind: "fresh", buildSha: buildInfo.commitSha, currentSha };
+      return { kind: "fresh", buildSha: buildInfo.commitSha, currentSha, build };
     }
 
     // If the build SHA doesn't exist in this workspace's git history the
@@ -182,6 +192,7 @@ export class ExtensionStalenessService implements vscode.Disposable {
       kind: "stale",
       buildSha: buildInfo.commitSha,
       currentSha,
+      build,
       commitsBehind,
       criticalPathsChanged,
       otherPathsChanged,
@@ -196,6 +207,8 @@ export class ExtensionStalenessService implements vscode.Disposable {
       return {
         commitSha: parsed.commitSha,
         branch: parsed.branch ?? "unknown",
+        tag: nonEmpty(parsed.tag),
+        version: nonEmpty(parsed.version),
         commitTimestamp: parsed.commitTimestamp ?? "unknown",
         buildTimestamp: parsed.buildTimestamp ?? "unknown",
         schemaVersion: parsed.schemaVersion ?? "1",
@@ -267,7 +280,9 @@ export class ExtensionStalenessService implements vscode.Disposable {
 function isSameState(a: StalenessState, b: StalenessState): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "fresh" && b.kind === "fresh") {
-    return a.buildSha === b.buildSha && a.currentSha === b.currentSha;
+    return (
+      a.buildSha === b.buildSha && a.currentSha === b.currentSha && sameBuild(a.build, b.build)
+    );
   }
   if (a.kind === "unknown" && b.kind === "unknown") {
     return a.reason === b.reason;
@@ -276,11 +291,20 @@ function isSameState(a: StalenessState, b: StalenessState): boolean {
     return (
       a.buildSha === b.buildSha &&
       a.currentSha === b.currentSha &&
+      sameBuild(a.build, b.build) &&
       a.commitsBehind === b.commitsBehind &&
       a.criticalPathsChanged.length === b.criticalPathsChanged.length
     );
   }
   return false;
+}
+
+function sameBuild(a: BuildIdentity, b: BuildIdentity): boolean {
+  return a.tag === b.tag && a.version === b.version;
+}
+
+function nonEmpty(v: unknown): string | null {
+  return typeof v === "string" && v.trim() !== "" ? v : null;
 }
 
 function summarize(s: StalenessState): Record<string, unknown> {
