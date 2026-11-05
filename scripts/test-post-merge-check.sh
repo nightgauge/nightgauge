@@ -89,6 +89,8 @@ while [ $# -gt 0 ]; do
   */status*) endpoint=status ;;
   */pulls*) endpoint=pulls ;;
   */actions/runs*) endpoint=runs ;;
+  */actions/workflows/*/runs*) endpoint=workflow-runs ;;
+  */compare/*) endpoint=compare ;;
   */rules/branches/*) endpoint=rules ;;
   */protection/*) endpoint=protection ;;
   */commits/*) endpoint=commit ;;
@@ -554,6 +556,65 @@ expect "tree equal but the required set is unreadable: NOT-YET" 2 "could not be 
 stub_gh "$PUSH_GREEN"
 rm "$FAKE_BIN/pages/rules.1.json"
 expect "no merged PR and the required set is unreadable: NOT-YET, never green" 2 "could not be read"
+
+# #2952: the main build on every push to main. A failure on the merge commit
+# is RED like any other check. cancel-in-progress cancels it when the next
+# merge lands; that cancel is INFO only when the same workflow has a later push
+# run on the base branch at a commit that descends from this one.
+NEWER_SHA=c0ffee0000000000000000000000000000000000
+main_build_run() {
+  printf '{"name": "build / Build all artifacts (no publish)", "status": "completed", "conclusion": "%s", "app": {"slug": "github-actions"}, "check_suite": {"id": 7}, "head_sha": "%s"}' "$1" "$MERGE_SHA"
+}
+# stub_main_build <conclusion> [<event>] [<compare-status>] [<newer-runs>] —
+# after stub_gh/stub_pr: the merge commit's suite 7 is a run of workflow 300
+# (event push unless named, on main); the workflow's push runs on main are
+# <newer-runs> (default: a later one at $NEWER_SHA plus this one); compare
+# answers <compare-status> (default ahead; "none" leaves it unreadable).
+stub_main_build() {
+  printf '{"workflow_runs": [{"check_suite_id": 7, "workflow_id": 300, "event": "%s", "created_at": "2026-11-05T10:00:00Z", "head_branch": "main"}]}\n' \
+    "${2:-push}" >"$FAKE_BIN/pages/runs.1.json"
+  local newer="${4:-}"
+  [ -n "$newer" ] || newer="{\"head_sha\": \"$NEWER_SHA\", \"created_at\": \"2026-11-05T10:05:00Z\"}, {\"head_sha\": \"$MERGE_SHA\", \"created_at\": \"2026-11-05T10:00:00Z\"}"
+  printf '{"workflow_runs": [%s]}\n' "$newer" >"$FAKE_BIN/pages/workflow-runs.1.json"
+  local cmp="${3:-ahead}"
+  [ "$cmp" = none ] || printf '{"status": "%s"}\n' "$cmp" >"$FAKE_BIN/pages/compare.1.json"
+}
+stub_gh "{\"check_runs\": [$(main_build_run failure)]}"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+stub_main_build failure
+expect "main build: a failure on the merge commit is RED" 1 "Build all artifacts"
+stub_gh "{\"check_runs\": [$(main_build_run cancelled)]}"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+stub_main_build cancelled
+expect "main build: cancelled by a newer push on a descendant commit: GREEN with INFO" 0 "cancelled by a newer push; judge c0ffee00"
+stub_gh "{\"check_runs\": [$(main_build_run cancelled)]}"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+stub_main_build cancelled push ahead "{\"head_sha\": \"$MERGE_SHA\", \"created_at\": \"2026-11-05T10:00:00Z\"}"
+expect "main build: cancelled with no later run: RED" 1 "Build all artifacts"
+stub_gh "{\"check_runs\": [$(main_build_run cancelled)]}"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+stub_main_build cancelled push ahead "{\"head_sha\": \"$NEWER_SHA\", \"created_at\": \"2026-11-05T09:55:00Z\"}"
+expect "main build: a newer push run created earlier is not later: RED" 1 "Build all artifacts"
+stub_gh "{\"check_runs\": [$(main_build_run cancelled)]}"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+stub_main_build cancelled push diverged
+expect "main build: the later run is not on a descendant commit: RED" 1 "Build all artifacts"
+stub_gh "{\"check_runs\": [$(main_build_run cancelled)]}"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+stub_main_build cancelled push none
+expect "main build: compare unreadable, nothing dropped: RED" 1 "Build all artifacts"
+stub_gh "{\"check_runs\": [$(main_build_run cancelled)]}"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+stub_main_build cancelled workflow_dispatch
+expect "main build: a cancelled non-push run is not relaxed: RED" 1 "Build all artifacts"
+stub_gh "{\"check_runs\": [$(main_build_run cancelled)]}"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+stub_main_build cancelled
+rm "$FAKE_BIN/pages/workflow-runs.1.json"
+expect "main build: the workflow's runs unreadable, nothing dropped: RED" 1 "Build all artifacts"
+stub_gh "{\"check_runs\": [$(main_build_run cancelled)]}"
+stub_main_build cancelled
+expect "main build: a commit with no merged PR is never relaxed: RED" 1 "Build all artifacts"
 
 # (h) #1540: when a `nightgauge` binary CAN be resolved, the script must
 # delegate to it entirely and never touch its own gh/jq fallback logic — the
