@@ -243,6 +243,13 @@ operations:
     security: user_jwt
     upstream: declared
 
+  - id: inquiry.scorecard
+    go_name: OpInquiryScorecard
+    method: GET
+    path: /v1/inquiry/scorecard
+    security: user_jwt
+    upstream: declared
+
   - id: pipeline-ingestEvent
     go_name: OpPipelineIngestEvent
     method: POST

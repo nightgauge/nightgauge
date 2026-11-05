@@ -2355,6 +2355,34 @@ func (s *Server) registerMethods() {
 		return s.getAnalyticsSvc().GetUsageSummary(ctx)
 	}
 
+	// platform.getInquiryScorecard reads the platform's inquiry scorecard
+	// (#2911). The route takes a session only, and the daemon is the one
+	// process that holds it, so the CLI reads the scorecard through here.
+	//
+	//ipc:method platformGetInquiryScorecard params:PlatformInquiryScorecardParams result:unknown
+	s.methods["platform.getInquiryScorecard"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		pc := s.getPlatformClient()
+		if pc == nil {
+			return nil, errors.New(ErrMsgPlatformNotConfigured)
+		}
+		var p PlatformInquiryScorecardParams
+		if len(params) > 0 && string(params) != "null" {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("invalid params: %w", err)
+			}
+		}
+		sc, err := pc.ReadInquiryScorecard(ctx, platform.InquiryScorecardQuery{
+			Window: p.Window, Floor: p.Floor, MinSample: p.MinSample,
+		})
+		if errors.Is(err, platform.ErrNoSession) {
+			return nil, errors.New(ErrMsgPlatformNotSignedIn)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return sc, nil
+	}
+
 	//ipc:method platformGetCostAnalytics params:PlatformCostAnalyticsParams result:CostAnalyticsResult
 	s.methods["platform.getCostAnalytics"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		if s.getAnalyticsSvc() == nil {

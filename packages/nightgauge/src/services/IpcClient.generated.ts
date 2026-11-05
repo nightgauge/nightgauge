@@ -391,6 +391,10 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<UsageSummaryResult>('platform.getUsageSummary');
   }
 
+  async platformGetInquiryScorecard(window?: string, floor?: unknown, minSample?: unknown): Promise<unknown> {
+    return this.call<unknown>('platform.getInquiryScorecard', { window, floor, minSample });
+  }
+
   async platformGetCostAnalytics(startDate?: string, endDate?: string): Promise<CostAnalyticsResult> {
     return this.call<CostAnalyticsResult>('platform.getCostAnalytics', { startDate, endDate });
   }

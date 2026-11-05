@@ -1006,6 +1006,24 @@ type PlatformCostAnalyticsParams struct {
 	EndDate string `json:"endDate,omitempty"`
 }
 
+// PlatformInquiryScorecardParams are parameters for platform.getInquiryScorecard
+// (#2911). An unset field is not sent, so the platform applies its default.
+type PlatformInquiryScorecardParams struct {
+	// Window is a day count such as "30d".
+	Window string `json:"window,omitempty"`
+	// Floor is the impact ratio under which a class is weak, 0..1.
+	Floor *float64 `json:"floor,omitempty"`
+	// MinSample is the fewest answers a class needs to be judged weak.
+	MinSample *int `json:"minSample,omitempty"`
+}
+
+// The messages platform.getInquiryScorecard refuses with. They cross the
+// socket as text, so the CLI tells the cases apart by them.
+const (
+	ErrMsgPlatformNotConfigured = "platform client not configured"
+	ErrMsgPlatformNotSignedIn   = "not signed in to the platform"
+)
+
 // PlatformAnalyticsRunsParams are parameters for platform.getAnalyticsRuns.
 //
 // Cursor and Limit are the only parameters GET /v1/analytics/runs declares.

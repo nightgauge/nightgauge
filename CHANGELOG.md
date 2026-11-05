@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- `pipeline-audit` now reports the platform's inquiry scorecard (#2911). The
+  new `nightgauge inquiry scorecard [--window 30d] [--floor F] [--min-sample N]
+[--json]` reads `GET /v1/inquiry/scorecard` through the running daemon, which
+  holds the signed-in session, over the new IPC method
+  `platform.getInquiryScorecard`. It exits 3 when no daemon is reachable, 4
+  when no platform is configured and 5 when not signed in, and the audit skips
+  its section with that reason. Every number shown is the platform's; core
+  computes none of them.
 - The release build now runs on every push to `main` (#2952), so a release-path
   defect fails at the merge that caused it instead of at the next RC tag. A new
   `main-build.yml` calls `staging.yml` itself under a synthetic version
