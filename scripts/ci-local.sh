@@ -1786,6 +1786,11 @@ run_step "skill bundle (dist/skills)" \
   go run ./cmd/nightgauge preflight skill-bundle \
   --skills-root packages/nightgauge/dist/skills --source-root skills
 
+# 7a1. The skills a VSIX would carry (#2948). .vscodeignore drops files after
+# 7a looks, so this lists the packaged files with `vsce ls` (no VSIX built) and
+# runs the same preflight on exactly that subset of dist/skills.
+run_step "VSIX skill file list (vsce ls)" bash scripts/check-vsix-skill-files.sh
+
 # 7a2. The built bundle stays self-contained and portable (#2764): an installed
 # VSIX carries dist/skills alone, so a relative link out of it is dead, and
 # skill text naming packages/nightgauge or a deleted hook breaks elsewhere.

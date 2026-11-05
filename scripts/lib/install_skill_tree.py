@@ -58,9 +58,8 @@ from mirror_links import SKILLS_REL, release_ref, rewrite_identity_dir  # noqa: 
 INSTALL_MARKER = ".nightgauge-installed"
 ADOPTED_SUFFIX = ".nightgauge-adopted"
 EXIT_SKIPPED = 3
-# Top-level entries of a skill directory that no install ships. The Go half is
-# skillrender.BundleExcludes; the extension's is SKILL_EXCLUDES in bundledSkills.ts.
-SKILL_EXCLUDES = frozenset({"CHANGELOG.md", "tests"})
+TEST_DIRS = frozenset({"tests", "__tests__"})
+TEST_FILE_SUFFIXES = (".test.ts", ".test.js")
 GIT_LOCATION_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
 INSTALL_MARKER_TEXT = (
     "Installed by Nightgauge, which replaces this directory when it installs "
@@ -117,28 +116,47 @@ def resolve_contained(path, root, label):
     return real, st
 
 
-def copy_contained(source_dir, target_dir, root, label, exclude=frozenset()):
+def is_excluded(rel, is_dir):
+    """True for an entry of a skill directory that no install ships: a
+    top-level CHANGELOG.md, and test material at any depth (tests/, __tests__/,
+    *.test.ts, *.test.js). rel is slash-separated inside the skill directory.
+    The Go half is skillrender.BundleExcluded; the extension's is
+    isSkillExcluded in bundledSkills.ts (#2948)."""
+    if rel == "CHANGELOG.md":
+        return True
+    name = rel.rsplit("/", 1)[-1]
+    if is_dir:
+        return name in TEST_DIRS
+    return name.endswith(TEST_FILE_SUFFIXES)
+
+
+def copy_contained(source_dir, target_dir, root, label, excluded=None, prefix=""):
     """Copy a real directory's contents into target_dir (which exists). The
     marker name belongs to the installer, so a source entry by that name is
-    never copied over it. Names in exclude are skipped at this level only."""
+    never copied over it. excluded(rel, is_dir), when given, drops entries at
+    any depth; rel is relative to the directory the copy started at."""
     for name in sorted(os.listdir(source_dir)):
-        if name == INSTALL_MARKER or name in exclude:
+        if name == INSTALL_MARKER:
             continue
         entry = resolve_contained(os.path.join(source_dir, name), root, label)
         if entry is None:
             continue
         real, st = entry
+        is_dir = stat.S_ISDIR(st.st_mode)
+        rel = prefix + name
+        if excluded is not None and excluded(rel, is_dir):
+            continue
         target = os.path.join(target_dir, name)
-        if stat.S_ISDIR(st.st_mode):
+        if is_dir:
             os.mkdir(target)
-            copy_contained(real, target, root, label)
+            copy_contained(real, target, root, label, excluded, rel + "/")
         else:
             shutil.copy2(real, target)
 
 
 def skill_excludes(name):
-    """_shared ships whole; a skill directory ships without SKILL_EXCLUDES."""
-    return frozenset() if name == "_shared" else SKILL_EXCLUDES
+    """_shared ships whole; a skill directory ships without is_excluded."""
+    return None if name == "_shared" else is_excluded
 
 
 def is_real_dir(path):

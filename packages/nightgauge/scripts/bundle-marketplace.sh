@@ -59,8 +59,10 @@ for skill in nightgauge-issue-pickup nightgauge-feature-planning \
   fi
 done
 # A whole skill ships, not a list of its sidecars: a list dropped _overlays/ and
-# would have dropped verify-ui's flows/. Only CHANGELOG.md and tests/ stay
-# behind; skillrender.BundleExcludes is the Go half of this rule and
+# would have dropped verify-ui's flows/. A top-level CHANGELOG.md and test
+# material at any depth (tests/, __tests__/, *.test.ts, *.test.js) stay behind,
+# so .vscodeignore never drops a file the bundle carries (#2948).
+# skillrender.BundleExcluded is the Go half of this rule and
 # scripts/lib/install_skill_tree.py the script installer's. Starting from an
 # empty directory drops a skill that left skills/.
 rm -rf "$SKILLS_DIR"
@@ -69,7 +71,8 @@ for src in "$REPO_ROOT/skills"/*/; do
   skill="$(basename "$src")"
   [ "$skill" != "_shared" ] || continue
   [ -f "$src/SKILL.md" ] || continue
-  rsync -a --exclude=/CHANGELOG.md --exclude=/tests/ "$src" "$SKILLS_DIR/$skill/"
+  rsync -a --exclude=/CHANGELOG.md --exclude=tests/ --exclude=__tests__/ \
+    --exclude='*.test.ts' --exclude='*.test.js' "$src" "$SKILLS_DIR/$skill/"
 done
 # Copy shared includes so <!-- include: ../_shared/... --> directives resolve
 if [ ! -d "$SHARED_DIR" ]; then

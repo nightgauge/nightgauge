@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The VSIX's skills match their source again, so release candidates pass staging. Skill
+  bundles and installs now leave test material out at any depth (`tests/`, `__tests__/`,
+  `*.test.ts`, `*.test.js`), not only a skill's top-level `tests/`; the extension package
+  had dropped `nightgauge-product-audit/__tests__` after the bundle shipped it. The local
+  gate now checks the files `vsce` would package against skill source (#2948).
 - The Claude plugin's version is now 1.27.0, so installed plugins receive the plugin changes
   made since v0.8.0, and the v0.8.1 release candidates pass the staging plugin-version gate
   (#2945).

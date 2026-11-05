@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- Installed Codex, Grok and OpenCode skills no longer carry skill test files (`__tests__/`,
+  `*.test.ts`, `*.test.js` and nested `tests/`), matching the skills the extension
+  packages (#2948).
 - Stages the extension runs, and the daemon it starts, no longer inherit `CLAUDECODE` and
   `CLAUDE_*` variables from the Claude Code session that launched the editor. Auth, the plugin
   root, the thinking escape hatch and the account home still arrive (#2848).

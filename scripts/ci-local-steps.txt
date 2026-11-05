@@ -63,6 +63,7 @@ ESLint
 Prettier format:check
 npm run build (all workspaces)
 skill bundle (dist/skills)
+VSIX skill file list (vsce ls)
 skill bundle links stay inside dist/skills
 skill bundle portability (dist/skills)
 Phase markers ↔ PHASE_REGISTRY
