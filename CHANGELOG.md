@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Acceptance-criteria parsing (Go `preflight ac-reconcile` and the SDK's
+  `parseAcceptanceCriteria`) now closes a code fence only on a CommonMark closer:
+  the same character, at least as long as the opener, with nothing after it. A
+  longer or mismatched fence in an issue body no longer hides every criterion
+  after it (#2727).
 - `nightgauge doctor` NGD001 no longer reports a release-candidate install as a
   stale binary: the RC tarball CLI and the VSIX-bundled CLI now report the same
   version string. It never offers `make build-cli` for a release binary (#2721).
