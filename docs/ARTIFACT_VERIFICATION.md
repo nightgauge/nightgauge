@@ -104,6 +104,18 @@ An SPDX SBOM is also attached to each release.
 - **ClamAV** over every `.vsix` and every built binary, once, in `release.yml`, before attestation. `marketplace-publish.yml`
   publishes those same scanned files and builds nothing (#2151). The
   JSON report is retained as a run artifact. See `scripts/malware-scan.sh`.
+- **VirusTotal**, multi-engine, over the release itself while it is still a
+  draft (#2946). `release.yml` creates a draft GitHub Release, attaches every
+  asset, then `scripts/release-scan-gate.sh` downloads the draft's own bytes
+  and submits every asset plus every binary and JS bundle inside each `.vsix`
+  and tarball to the VirusTotal API (`scripts/vt-scan.sh`). The release is
+  published only when no engine flags any file malicious or suspicious, no
+  crowdsourced YARA rule matches, and no Code insights verdict other than
+  benign is present. Anything else, including an API error or a missing key,
+  leaves the draft. The per-file record, `vt-scan-report.json`, is attached to
+  the release. The Homebrew cask, the Marketplace and Open VSX move only after
+  `release-scan-gate.sh verify` finds that record clean and covering every
+  digest in `checksums.txt`.
 - **`govulncheck`** over the Go module graph, gating on reachable
   vulnerabilities.
 - **`npm audit`** over the JavaScript tree bundled into the extension.
