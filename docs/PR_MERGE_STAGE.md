@@ -201,6 +201,24 @@ with `merge-ec-timeout` rather than self-reporting `merged` (#4070). It never
 claims a merge it did not observe; the canonical `verifyPRMerged` checkpoint is
 the sole MERGED authority.
 
+### Squash commit subject (#2728)
+
+A direct squash passes the subject and body explicitly: `<PR title> (#N)` and
+the messages of the PR's non-WIP commits (`gh pr merge --subject --body`,
+GraphQL `commitHeadline`/`commitBody`). A sole WIP-preservation commit therefore
+never becomes the subject, and no `Nightgauge-WIP` trailer reaches the base.
+`enqueuePullRequest` takes no headline, so the queue uses the repository's
+squash defaults. Before an enqueue the runner reads them; it never changes
+them. Unless they are `squash_merge_commit_title=PR_TITLE` and
+`squash_merge_commit_message=PR_BODY`, a PR carrying a WIP-preservation commit
+is refused with `squash_defaults` and the remedy; other PRs enqueue. A
+repository admin sets the defaults once:
+
+```bash
+gh api -X PATCH repos/{owner}/{repo} \
+  -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY
+```
+
 ### Merge-queue-protected base branches (#2214)
 
 When the PR's base branch requires GitHub's merge queue, a direct merge is not

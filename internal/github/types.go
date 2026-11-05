@@ -473,6 +473,10 @@ type CreatePullRequestInput struct {
 type MergePullRequestInput struct {
 	PullRequestID graphql.ID     `json:"pullRequestId"`
 	MergeMethod   graphql.String `json:"mergeMethod"`
+	// CommitHeadline / CommitBody set the squash commit explicitly (#2728),
+	// so a WIP-preservation commit never becomes the subject on the base.
+	CommitHeadline *graphql.String `json:"commitHeadline,omitempty"`
+	CommitBody     *graphql.String `json:"commitBody,omitempty"`
 }
 
 type DeleteRefInput struct {
