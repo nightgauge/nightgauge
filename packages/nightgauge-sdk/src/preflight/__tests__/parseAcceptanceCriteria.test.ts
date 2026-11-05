@@ -212,16 +212,53 @@ describe("parseAcceptanceCriteria", () => {
 
   it("matches Go's TestParseACs_ParityFixture", () => {
     const body =
-      "## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n## Verification\n- third that\n  wraps\n";
+      "## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n## Verification\n- third that\n  wraps\n## Acceptance Criteria\n- [ ] box covers both cases:\n  - case a\n  - case b\n- [ ] last\n";
     expect(parseAcceptanceCriteria(body).map((a) => [a.index, a.text])).toEqual([
       [0, "first"],
       [1, "second"],
       [2, "third that wraps"],
+      [3, "box covers both cases: case a case b"],
+      [4, "last"],
     ]);
   });
 
   // #2906: mirrors the Go TestParseACs_Forms cases for wider section names,
   // plain bullets and wrapped continuation lines.
+  it.each([
+    [
+      "checkbox sub-bullets 2 spaces join (#2972)",
+      "## Acceptance Criteria\n- [ ] one\n- [ ] two\n- [ ] `scripts/test-check-md-links.sh` covers both cases:\n  - case a\n  - case b\n- [ ] four\n",
+      ["one", "two", "`scripts/test-check-md-links.sh` covers both cases: case a case b", "four"],
+    ],
+    [
+      "checkbox sub-bullets 4 spaces join (#2972)",
+      "## Acceptance Criteria\n- [ ] one\n- [ ] two\n- [ ] `scripts/test-check-md-links.sh` covers both cases:\n    - case a\n    - case b\n- [ ] four\n",
+      ["one", "two", "`scripts/test-check-md-links.sh` covers both cases: case a case b", "four"],
+    ],
+    [
+      "checkbox numbered sub-line joins",
+      "## Acceptance Criteria\n- [ ] parent\n  1. step\n2. next\n",
+      ["parent step", "next"],
+    ],
+    [
+      "checkbox sub-bullet after blank joins",
+      "## Acceptance Criteria\n- [ ] parent\n\n  - more\n",
+      ["parent more"],
+    ],
+    [
+      "checkbox sub-bullet outside section joins",
+      "## Notes\n- [ ] parent\n  - more\n- plain\n",
+      ["parent more"],
+    ],
+    [
+      "indented checkbox stays own criterion",
+      "## Acceptance Criteria\n- [ ] parent\n  - [ ] child\n    - deep\n",
+      ["parent", "child deep"],
+    ],
+  ])("checkbox sub-bullets: %s", (_name, body, want) => {
+    expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(want);
+  });
+
   it.each([
     ["verification numbered", "## Verification\n\n1. one\n2. two\n", ["one", "two"]],
     [

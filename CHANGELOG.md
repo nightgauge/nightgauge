@@ -61,6 +61,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A plain sub-bullet under a checkbox acceptance criterion is now part of that
+  criterion instead of a separate one (2-3 space indent) or dropped (4+ spaces)
+  (#2972). pr-create no longer verdicts each sub-bullet on its own, so a met
+  delivery closes its issue instead of merging as `Refs`.
+
 - The local gate no longer fails offline (#2693). The markdown link check reads
   "could not resolve host" as a dead link only when a control host
   (`MD_LINK_CHECK_CONTROL_URL`, default `https://github.com`) still resolves;
