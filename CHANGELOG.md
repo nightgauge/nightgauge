@@ -33,6 +33,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The pr-merge wall-clock budget tests and the `autonomous.stop` test no longer fail under
+  `go test -race` on a loaded machine (#2950, #2909). The queue-wait interval is written with
+  explicit timestamps before the enforcer arms, upper bounds that measured the scheduler are
+  replaced by the breach's recorded `Observed` and excluded time, and the stop test's
+  deadline is a minute away from the 250 ms cycle it checks.
 - The full local gate is no longer thrown away after twenty minutes. A foreground Bash
   call is killed at twice its timeout, and the core gate runs longer, so a new
   `nightgauge hook gate-background` PreToolUse check in the Claude Code plugin now denies
