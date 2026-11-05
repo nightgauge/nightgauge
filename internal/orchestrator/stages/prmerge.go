@@ -134,6 +134,10 @@ const (
 	// ReasonMergeQueueEnqueueFailed is recorded (with PathRefused) when the
 	// enqueuePullRequest mutation itself failed.
 	ReasonMergeQueueEnqueueFailed = "merge-queue-enqueue-failed"
+	// ReasonMergeQueueEnqueueExhausted (PathRefused): the enqueue still failed
+	// transiently after every retry (#2729). Only this reason maps to the
+	// non-fault merge_queue_enqueue_failed terminal kind.
+	ReasonMergeQueueEnqueueExhausted = "merge-queue-enqueue-exhausted"
 	// ReasonReviewFixNeeded (PathPunt) hands a hold finding to the LLM stage for
 	// one fix round (#2730).
 	ReasonReviewFixNeeded = "review-fix-needed"
@@ -842,6 +846,8 @@ func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmit
 		} else {
 			res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueFailed, truncateErr(err, 500))
 		}
+	case errors.Is(err, github.ErrEnqueueRetriesExhausted):
+		res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueEnqueueExhausted, truncateErr(err, 300))
 	case errors.As(err, &qe):
 		res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueFailed, truncateErr(err, 500))
 	default:

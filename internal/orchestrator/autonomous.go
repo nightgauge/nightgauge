@@ -6462,7 +6462,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
-		if terminalFailureKind == TerminalKindPrMergeUnmerged {
+		if terminalFailureKind == TerminalKindPrMergeUnmerged || terminalFailureKind == TerminalKindMergeQueueEnqueueFailed {
 			detail := failureDetail
 			if detail == "" {
 				detail = "pr-merge: PR was not merged"

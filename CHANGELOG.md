@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A transient GitHub error (a gateway 502/503/504, a generic GraphQL failure, a
+  dropped connection) on merge-queue enqueue no longer fails pr-merge outright.
+  The enqueue is retried with backoff (2s, 4s, 8s), and before each retry the PR
+  is re-read so a write that landed behind a lost response is not sent twice.
+  An enqueue that still fails gets its own terminal kind,
+  `merge_queue_enqueue_failed`, instead of `subagent_crash`. It is not charged
+  as a fault, and the in-review reconcile moves a CLEAN, green PR that ended
+  this way back to Ready so pr-merge runs again (#2729).
 - Squash merges through `nightgauge pr merge` and the pr-merge stage now use the
   PR title as the commit subject, so a PR whose only commit is a
   WIP-preservation commit no longer lands that `wip(...)` subject or its
