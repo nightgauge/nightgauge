@@ -14,6 +14,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- `nightgauge doctor` NGD001 no longer reports a release-candidate install as a
+  stale binary: the RC tarball CLI and the VSIX-bundled CLI now report the same
+  version string. It never offers `make build-cli` for a release binary (#2721).
+- The extension staleness item no longer offers a local `dev-install.sh`
+  rebuild on a CI-built release candidate or release; it shows the installed
+  version and how far the workspace is ahead of it (#2721).
+
 ### Added
 
 - `pipeline-audit` now reports the platform's inquiry scorecard (#2911). The
@@ -61,6 +70,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A plain sub-bullet under a checkbox acceptance criterion is now part of that
+  criterion instead of a separate one (2-3 space indent) or dropped (4+ spaces)
+  (#2972). pr-create no longer verdicts each sub-bullet on its own, so a met
+  delivery closes its issue instead of merging as `Refs`.
 - `scripts/ci-local.sh` no longer fails its state backstop when another
   pipeline run cleans up its own worktree mid-gate (#2701). Each pipeline
   removal path (scheduler cleanup, `worktree sweep`, the extension) now

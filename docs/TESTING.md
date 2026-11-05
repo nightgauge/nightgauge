@@ -70,7 +70,9 @@ window, so the Playwright flow above does not reach them, and neither does
 The loop that does is human-in-the-loop, and it works: the Claude usage meter
 rendering incorrectly was caught this way, and no suite would have caught it.
 
-1. Land the change and **rebuild the VSIX** (`dev-install.sh`).
+1. Land the change and **install the release candidate** the merge produced:
+   stop admitting work, let running runs drain, install the staging VSIX, then
+   reload. `dev-install.sh` is a contributor's local build, not this step.
 2. **Say so explicitly, and name what to look at** — which view, the expected
    state, and what would count as wrong. "Rebuilt, please check" is not
    actionable; the operator should not have to reverse-engineer the intent of

@@ -3,6 +3,11 @@
  * workspace and prompts the user to reload the window. Triggered by the
  * status-bar staleness UI (#3300).
  *
+ * This is the contributor's local-build path. The status item offers it only
+ * when the running extension is a local build; a tagged (CI-built release
+ * candidate or release) build is never offered it, because it would replace
+ * the CI build with a local one (#2721).
+ *
  * The command intentionally does NOT auto-reload — the user may have
  * unsaved work in other files. It opens an integrated terminal, runs the
  * commands, and then offers the reload prompt.

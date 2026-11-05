@@ -14,7 +14,10 @@ and this project adheres to
 - An integer `pipeline.stall_idle_ms` no longer makes the `nightgauge` binary
   fail to load the config; both readers now accept the same integer
   milliseconds (#2714).
-
+- On a release candidate or release, the staleness status item shows the
+  installed version and the workspace's distance from it, and no longer offers
+  "Refresh extension", which would have replaced the CI build with a local one
+  (#2721).
 - The duplicate-dispatch test no longer spawns `gh` or `git`, so it passes
   offline (#2693).
 - Installed Codex, Grok and OpenCode skills no longer carry skill test files (`__tests__/`,

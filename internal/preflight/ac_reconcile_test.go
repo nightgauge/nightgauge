@@ -298,6 +298,20 @@ func TestParseACs_Forms(t *testing.T) {
 			[]string{"live"}},
 		{"unterminated details kept", "<details>\n- [ ] kept\n", []string{"kept"}},
 		{"text after closing tag kept", "<details>\n- [ ] archived\n</details>\n- [ ] live\n", []string{"live"}},
+		{"checkbox sub-bullets 2 spaces join (#2972)", "## Acceptance Criteria\n- [ ] one\n- [ ] two\n" +
+			"- [ ] `scripts/test-check-md-links.sh` covers both cases:\n  - case a\n  - case b\n- [ ] four\n",
+			[]string{"one", "two", "`scripts/test-check-md-links.sh` covers both cases: case a case b", "four"}},
+		{"checkbox sub-bullets 4 spaces join (#2972)", "## Acceptance Criteria\n- [ ] one\n- [ ] two\n" +
+			"- [ ] `scripts/test-check-md-links.sh` covers both cases:\n    - case a\n    - case b\n- [ ] four\n",
+			[]string{"one", "two", "`scripts/test-check-md-links.sh` covers both cases: case a case b", "four"}},
+		{"checkbox numbered sub-line joins", "## Acceptance Criteria\n- [ ] parent\n  1. step\n2. next\n",
+			[]string{"parent step", "next"}},
+		{"checkbox sub-bullet after blank joins", "## Acceptance Criteria\n- [ ] parent\n\n  - more\n",
+			[]string{"parent more"}},
+		{"checkbox sub-bullet outside section joins", "## Notes\n- [ ] parent\n  - more\n- plain\n",
+			[]string{"parent more"}},
+		{"indented checkbox stays own criterion", "## Acceptance Criteria\n- [ ] parent\n  - [ ] child\n    - deep\n",
+			[]string{"parent", "child deep"}},
 		{"numbered with box", "## Acceptance Criteria\n1. [x] done\n2. [ ] todo\n", []string{"done", "todo"}},
 		{"fenced comment does not close section", "## Acceptance Criteria\n1. first:\n   ```sh\n   # run it\n   1. output line\n   - [ ] example box\n   ```\n2. second\n",
 			[]string{"first:", "second"}},
@@ -415,9 +429,10 @@ func TestParseACs_G1Fixture(t *testing.T) {
 // TestParseACs_ParityFixture shares its body with the SDK parser's parity
 // test: a fence, nested <details>, a 4-space sub-step and a duplicate.
 func TestParseACs_ParityFixture(t *testing.T) {
-	got := parseACs("## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n## Verification\n- third that\n  wraps\n")
-	if len(got) != 3 || got[0].text != "first" || got[1].text != "second" || got[1].index != 1 ||
-		got[2].text != "third that wraps" {
-		t.Errorf("got %+v, want first, second and third that wraps", got)
+	got := parseACs("## Acceptance Criteria\n1. first\n   ```sh\n   # comment\n   1. output\n   ```\n    1. sub-step\n<details>\n- [ ] outer\n<details>\n- [ ] inner\n</details>\n- [ ] after inner\n</details>\n2. second\n- [ ]  first\n## Verification\n- third that\n  wraps\n## Acceptance Criteria\n- [ ] box covers both cases:\n  - case a\n  - case b\n- [ ] last\n")
+	if len(got) != 5 || got[0].text != "first" || got[1].text != "second" || got[1].index != 1 ||
+		got[2].text != "third that wraps" || got[3].text != "box covers both cases: case a case b" ||
+		got[4].text != "last" {
+		t.Errorf("got %+v, want first, second, third that wraps, box covers both cases: case a case b, last", got)
 	}
 }

@@ -217,8 +217,11 @@ func binaryFindings(p binaryProbe, checkout string) ([]Finding, string) {
 	}
 	remedy := install
 	remedy.ID, remedy.Summary = "reinstall", "Reinstall nightgauge so the hooks resolve the current build"
-	// A rebuild changes what hooks run only when a repo step resolved them.
-	if checkout != "" && (p.resolved.Step == StepRepoBin || p.resolved.Step == StepCanonicalRepoBin) {
+	// A rebuild changes what hooks run only when a repo step resolved them. A
+	// release-versioned binary was not built from this checkout, so rebuilding
+	// would replace a CI build with a local one (#2721).
+	if checkout != "" && (p.resolved.Step == StepRepoBin || p.resolved.Step == StepCanonicalRepoBin) &&
+		!isReleaseVersion(p.resolvedVersion) {
 		remedy = Remedy{ID: "build", Kind: RemedyAuto, Verb: verbBuildCLI, Verify: check, Reversible: true,
 			Summary: "Rebuild the CLI from this source checkout with `make build-cli`",
 			Preview: "make build-cli in " + checkout + " (rewrites " + filepath.Join(checkout, "bin", "nightgauge") + ")"}
@@ -622,6 +625,25 @@ const binaryIsolatedEnv = "NIGHTGAUGE_BINARY_ISOLATED"
 func isUnversionedBuild(versionLine string) bool {
 	v := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(versionLine), "nightgauge"))
 	return v == "dev" || strings.HasPrefix(v, "dev+")
+}
+
+// releaseVersionRe matches a CI release version: semver with an optional
+// `-rc.N` or `-main.g<sha>` pre-release (#2721, #2952).
+var releaseVersionRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:-rc\.\d+|-main\.g[0-9a-f]{7,40})?$`)
+
+// isReleaseVersion reports whether a `nightgauge version` first line names a
+// CI-built release or release candidate, not a describe, dirty, dev,
+// pseudo-version or GoReleaser -SNAPSHOT- build.
+func isReleaseVersion(versionLine string) bool {
+	line := strings.TrimSpace(versionLine)
+	if f := strings.Fields(line); len(f) > 0 && f[0] == "nightgauge" {
+		f = f[1:]
+		if len(f) == 0 {
+			return false
+		}
+		line = f[0]
+	}
+	return releaseVersionRe.MatchString(line)
 }
 
 // A `nightgauge version` line can name its commit in two stamped forms:
