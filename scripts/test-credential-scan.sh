@@ -5,7 +5,8 @@
 # changed but not yet committed. This suite builds a throwaway repository and
 # proves that a key on ANOTHER ref does not fail this branch's scan, that a
 # key in an untracked, staged or modified file does, and that a gitignored
-# file is never read. Fake keys are built at run time from pieces, so no
+# file is never read. It also checks the workflow triggers (#2958): every
+# pushed branch except main and merge-queue refs is scanned. Fake keys are built at run time from pieces, so no
 # committed file holds a string the scanner matches.
 #
 # Run: bash scripts/test-credential-scan.sh
@@ -114,6 +115,30 @@ git -C "$REPO" -c user.name=t -c user.email=t@example.com commit -q -m add
 git -C "$REPO" rm -q old.txt
 git -C "$REPO" -c user.name=t -c user.email=t@example.com commit -q -m remove
 expect 1 "a key deleted from HEAD but in its history fails"
+
+# Workflow triggers (#2958): a pushed branch is public, PR or not, so the
+# workflow must scan every pushed branch except main and merge-queue refs.
+WF=.github/workflows/credential-scan.yml
+if ! command -v yq >/dev/null 2>&1; then
+  echo "HARNESS ERROR: yq is not installed, so the trigger checks could not run."
+  exit 2
+fi
+check() {
+  if [ "$2" = "$3" ]; then
+    PASS=$((PASS + 1))
+    echo "  ok   $1"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL $1 (got '$2', want '$3')"
+  fi
+}
+check "push trigger exists" "$(yq '.on | has("push")' "$WF")" true
+check "push has no branch allow-list" "$(yq '.on.push | has("branches")' "$WF")" false
+check "push ignores only main and merge-queue refs" \
+  "$(yq -o=json -I=0 '.on.push.branches-ignore' "$WF")" '["main","gh-readonly-queue/**"]'
+check "pull_request trigger exists" "$(yq '.on | has("pull_request")' "$WF")" true
+check "scan step runs the shared script" \
+  "$(yq '[.jobs.gitleaks.steps[] | select(.run == "bash scripts/credential-scan.sh")] | length' "$WF")" 1
 
 echo ""
 echo "$PASS passed, $FAIL failed"
