@@ -6639,6 +6639,7 @@ func hookCmd() *cobra.Command {
 		hookSkillUsageCmd(),
 		hookCarefulGateCmd(),
 		hookStageGateCmd(),
+		hookGateBackgroundCmd(),
 		hookClaudeStatusLineCmd(),
 		hookExternalDirectoryGateCmd(),
 	)
@@ -6739,6 +6740,17 @@ func hookStageGateCmd() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return printPreToolUse(hooks.EvaluateStageGate(readHookInput(cmd)))
+		},
+	}
+}
+
+func hookGateBackgroundCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "gate-background",
+		Short:        "Deny a full local gate started in the foreground or with a short timeout (PreToolUse:Bash, reads JSON from stdin)",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return printPreToolUse(hooks.EvaluateGateBackground(readHookInput(cmd)))
 		},
 	}
 }

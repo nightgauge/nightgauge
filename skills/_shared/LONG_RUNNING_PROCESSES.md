@@ -50,6 +50,17 @@ A stage that loops on `ls`/`cat` with nothing declared is still killed at the
 window, which is the whole point: the declaration is what separates "waiting on
 real work" from "spinning".
 
+### A wait longer than the foreground limit runs in the background
+
+A foreground Bash call is killed at twice its timeout: 1200 s with the default
+600 s timeout. Any command that can run longer — the full local gate above all —
+is started with the Bash tool's `run_in_background: true` and a `timeout` (in
+milliseconds) at least as long as the command's own limit, then waited on
+through its completion notification. Never put `&` inside a foreground call: the
+process is orphaned, nothing waits for it, and its result is never read. For the
+gate the limit is `hooks.pre_push.timeout_seconds` × 1000 (1,800,000 by default),
+and the `gate-background` hook denies any other way of starting it (#2953).
+
 ### The other answer: do not wait at all
 
 Declaring is for a wait that has to happen in this stage. When the wait belongs

@@ -30,6 +30,10 @@ type GateInput struct {
 // BashToolInput is the parsed tool_input for Bash tool calls.
 type BashToolInput struct {
 	Command string `json:"command"`
+	// RunInBackground and Timeout (milliseconds) are the Bash tool's own
+	// background flag and limit (#2953).
+	RunInBackground bool `json:"run_in_background"`
+	Timeout         int  `json:"timeout"`
 }
 
 // FileToolInput is the parsed tool_input for Edit/Write tool calls.
