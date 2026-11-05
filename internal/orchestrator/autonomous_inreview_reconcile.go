@@ -70,11 +70,12 @@ func (as *AutonomousScheduler) reconcileStuckInReviewPRs(ctx context.Context, gr
 				continue // no open PR for this issue — leave it alone
 			}
 			mergeState := pr.MergeState
-			if !strings.EqualFold(mergeState, "BEHIND") && !strings.EqualFold(mergeState, "DIRTY") {
+			key := fmt.Sprintf("%s#%d", node.Repo, node.Number)
+			if !strings.EqualFold(mergeState, "BEHIND") && !strings.EqualFold(mergeState, "DIRTY") &&
+				!as.isEnqueueFailedCleanPR(node.Repo, node.Number, mergeState, pr) {
 				continue // CLEAN/BLOCKED/UNSTABLE/etc — not the stale/conflict case
 			}
 
-			key := fmt.Sprintf("%s#%d", node.Repo, node.Number)
 			as.mu.Lock()
 			if as.inReviewRecoveryAttempts == nil {
 				as.inReviewRecoveryAttempts = map[string]int{}
@@ -597,4 +598,26 @@ func (as *AutonomousScheduler) projectForRepo(owner, repoName string) (int, gh.O
 		}
 	}
 	return 0, ""
+}
+
+// isEnqueueFailedCleanPR reports whether a CLEAN PR with no failed checks was
+// parked by an enqueue that exhausted its transient retries (#2729). Nothing
+// about such a PR needs a human: re-running pr-merge enqueues it. Any other
+// CLEAN PR is left alone, because its last run ended for a reason the
+// reconcile cannot judge.
+func (as *AutonomousScheduler) isEnqueueFailedCleanPR(repo string, number int, mergeState string, pr openPR) bool {
+	if !strings.EqualFold(mergeState, "CLEAN") || len(pr.FailedChecks) > 0 {
+		return false
+	}
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	if as.state == nil {
+		return false
+	}
+	for _, f := range as.state.Failed {
+		if f.Repo == repo && f.Number == number {
+			return f.Kind == TerminalKindMergeQueueEnqueueFailed
+		}
+	}
+	return false
 }
