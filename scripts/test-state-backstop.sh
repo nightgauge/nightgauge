@@ -35,6 +35,12 @@
 #      .system/, node_modules/, timestamps) → 0; a re-sync through a
 #      symlinked agent home → 1; an agent home created mid-run holding only
 #      the agent's own files → 0; a leak through an exported CODEX_HOME → 1.
+#  18-22. Pipeline worktree removals (#2701): a worktree the pipeline's cleanup
+#      recorded in worktrees/<hash>/.removed-worktrees during the run → 0,
+#      listed as information; one removed with no ledger line → 1; a ledger
+#      line older than the snapshot → 1; a line naming another worktree → 1;
+#      a recorded worktree plus an unrelated STATE path removed → 1, naming
+#      only the unrelated path as failing.
 #
 # Run: bash scripts/test-state-backstop.sh
 # Also run by scripts/ci-local.sh.
@@ -210,6 +216,37 @@ expect "an agent home absent before and after passes" 0 "as the run found them" 
 
 h="$(fixture agent-gone)"
 expect "a removed agent home fails" 1 "the directory itself is gone" "$h" "rm -rf .grok/skills"
+
+# 18-22 (#2701). A concurrent run's cleanup removes its own worktree mid-gate,
+# recording it first in the base's removal ledger; nothing else is excused.
+L="$STATE_REL/worktrees/abc/.removed-worktrees"
+wt() { mkdir -p "$1/$STATE_REL/worktrees/abc/repo-issue-1" "$1/$STATE_REL/worktrees/abc/repo-issue-2"; }
+h="$(fixture wt-marked)"; wt "$h"
+expect "a worktree the pipeline recorded removing passes, listed" 0 \
+  "    removed: $h/$STATE_REL/worktrees/abc/repo-issue-1" "$h" \
+  "printf '%s\\trepo-issue-1\\n' \"\$(date +%s)\" >> $L; rm -rf $STATE_REL/worktrees/abc/repo-issue-1"
+h="$(fixture wt-unmarked)"; wt "$h"
+expect "a worktree removed with no ledger line fails, named" 1 \
+  "removed: $h/$STATE_REL/worktrees/abc/repo-issue-1" "$h" "rm -rf $STATE_REL/worktrees/abc/repo-issue-1"
+h="$(fixture wt-stale)"; wt "$h"
+expect "a ledger line older than the snapshot fails" 1 \
+  "removed: $h/$STATE_REL/worktrees/abc/repo-issue-1" "$h" \
+  "printf '100\\trepo-issue-1\\n' >> $L; rm -rf $STATE_REL/worktrees/abc/repo-issue-1"
+h="$(fixture wt-other)"; wt "$h"
+expect "a ledger line naming another worktree fails" 1 \
+  "removed: $h/$STATE_REL/worktrees/abc/repo-issue-1" "$h" \
+  "printf '%s\\trepo-issue-2\\n' \"\$(date +%s)\" >> $L; rm -rf $STATE_REL/worktrees/abc/repo-issue-1"
+h="$(fixture wt-mixed)"; wt "$h"
+out="$(run_arm "$h" "printf '%s\\trepo-issue-1\\n' \"\$(date +%s)\" >> $L; rm -rf $STATE_REL/worktrees/abc/repo-issue-1; rm $STATE_REL/serve/claim-1.json" 2>&1)"
+rc=$?
+fails="$(sed -n '/removed paths from/,/^  (information)/p' <<<"$out")"
+if [ "$rc" -ne 1 ]; then
+  bad "a recorded worktree plus an unrelated removal fails (exit $rc, want 1)" "$out"
+elif ! names "$fails" "removed: $h/$STATE_REL/serve/claim-1.json" || names "$fails" "repo-issue-1"; then
+  bad "a recorded worktree plus an unrelated removal names only the unrelated path as failing" "$out"
+else
+  ok "a recorded worktree plus an unrelated removal fails, naming only the unrelated path"
+fi
 
 # 12 (#2360). compare() asked "is this removed path also added?" by piping the
 # added list into grep -q under pipefail. With a list this size, grep matches

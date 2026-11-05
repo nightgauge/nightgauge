@@ -61,6 +61,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `scripts/ci-local.sh` no longer fails its state backstop when another
+  pipeline run cleans up its own worktree mid-gate (#2701). Each pipeline
+  removal path (scheduler cleanup, `worktree sweep`, the extension) now
+  records the worktree in its base's append-only `.removed-worktrees` ledger
+  before removing it, and the backstop lists such a removal as information.
+  Any removal the ledger does not name, freshly, still fails.
 - An integer `pipeline.stall_idle_ms` (for example `480000`) no longer breaks
   `nightgauge config show` and every other Go config load. Go now reads the key
   as integer milliseconds, like the extension, and rejects a unit string such

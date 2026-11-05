@@ -28,6 +28,14 @@
 #     ~/.nightgauge/state on macOS, ~/.local/state/nightgauge on Linux): paths
 #     only, three levels deep, so a pipeline worktree's checkout is never
 #     walked. A REMOVED path fails; an added one is printed as information.
+#     One exception (#2701): a pipeline worktree, worktrees/<hash>/<name>,
+#     that the pipeline's own cleanup removed during the run. Every removal
+#     path (Go CleanupWorktree and the worktree sweep, the extension's
+#     WorktreeManager.cleanup) first appends "<epoch-seconds>\t<name>" to
+#     the append-only ledger worktrees/<hash>/.removed-worktrees. The removal
+#     is excused, and printed as information, only when that ledger holds a
+#     line naming exactly <name> with an epoch no older than the snapshot's
+#     start. Anything else removed, ledger or not, still fails.
 #   - the agent homes the extension installs skills into (#2935):
 #     ~/.codex/skills, ~/.grok/skills, ~/.config/opencode and
 #     ~/.claude/plugins. Only Nightgauge's part of each, held to the legacy
@@ -244,6 +252,7 @@ snapshot() { # snapshot <dir>
   legacy="$(legacy_root)"
   state="$(default_state_root)"
   mkdir -p "$dir" || return 2
+  date +%s >"$dir/started"
   printf '%s\n' "$legacy" >"$dir/legacy.root"
   printf '%s\n' "$state" >"$dir/state.root"
   list_strict "$legacy" state >"$dir/legacy.list"
@@ -289,6 +298,27 @@ compare_strict() {
   return 1
 }
 
+# pipeline_removed <state> <started> <removed-paths>: print the removed paths
+# the pipeline's cleanup recorded in its removal ledger at or after <started>
+# (see the header). An empty <started> excuses nothing.
+pipeline_removed() {
+  local state="$1" started="$2" rel hash name ledger
+  [ -n "$started" ] || return 0
+  while IFS= read -r rel; do
+    case "$rel" in worktrees/*/*) ;; *) continue ;; esac
+    hash="${rel#worktrees/}"
+    name="${hash#*/}"
+    hash="${hash%%/*}"
+    case "$name" in */* | .removed-worktrees | "") continue ;; esac
+    ledger="$state/worktrees/$hash/.removed-worktrees"
+    [ -f "$ledger" ] || continue
+    LC_ALL=C awk -F '\t' -v n="$name" -v s="$started" \
+      '$2 == n && $1 ~ /^[0-9]+$/ && $1 + 0 >= s + 0 { found = 1 } END { exit !found }' "$ledger" &&
+      printf '%s\n' "$rel"
+  done <<<"$3"
+  return 0
+}
+
 compare() { # compare <before> <after>
   local before="$1" after="$2" legacy state fail=0 removed added f root roots=""
   legacy="$(cat "$before/legacy.root")"
@@ -305,6 +335,13 @@ compare() { # compare <before> <after>
 
   # Default STATE: a removed path fails; an added one is information.
   removed="$(LC_ALL=C comm -23 "$before/state.list" "$after/state.list" | grep -vx ABSENT || true)"
+  local started="" excused=""
+  [ -f "$before/started" ] && started="$(cat "$before/started")"
+  if [ -n "$removed" ]; then
+    excused="$(pipeline_removed "$state" "$started" "$removed")"
+    [ -n "$excused" ] &&
+      removed="$(LC_ALL=C comm -23 <(printf '%s\n' "$removed") <(printf '%s\n' "$excused") | grep -v '^$' || true)"
+  fi
   added="$(LC_ALL=C comm -13 "$before/state.list" "$after/state.list" | grep -vx ABSENT || true)"
   if [ "$(head -1 "$before/state.list")" != "ABSENT" ] && [ "$(head -1 "$after/state.list")" = "ABSENT" ]; then
     fail=1
@@ -313,6 +350,10 @@ compare() { # compare <before> <after>
     fail=1
     echo "✗ the gate run removed paths from the machine-state directory $state:"
     printf '%s\n' "$removed" | sed "s|^|    removed: $state/|"
+  fi
+  if [ -n "$excused" ]; then
+    echo "  (information) pipeline worktrees removed by the pipeline's cleanup during the run:"
+    printf '%s\n' "$excused" | sed "s|^|    removed: $state/|"
   fi
   if [ -n "$added" ]; then
     echo "  (information) paths added to $state during the run:"
