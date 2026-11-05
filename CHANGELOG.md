@@ -70,6 +70,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A plain sub-bullet under a checkbox acceptance criterion is now part of that
+  criterion instead of a separate one (2-3 space indent) or dropped (4+ spaces)
+  (#2972). pr-create no longer verdicts each sub-bullet on its own, so a met
+  delivery closes its issue instead of merging as `Refs`.
 - `scripts/ci-local.sh` no longer fails its state backstop when another
   pipeline run cleans up its own worktree mid-gate (#2701). Each pipeline
   removal path (scheduler cleanup, `worktree sweep`, the extension) now

@@ -191,6 +191,10 @@ var emptyBoxRE = regexp.MustCompile(`^\[[ xX]\][ \t]*$`)
 // matches is never a wrapped continuation of the item above.
 var listMarkerRE = regexp.MustCompile(`^[ \t]*(\d{1,3}[.)]|[-*+])[ \t]+\S`)
 
+// listPrefixRE matches a list line's indentation, marker and the whitespace
+// after it: the text a sub-bullet loses when it joins its checkbox (#2972).
+var listPrefixRE = regexp.MustCompile(`^[ \t]*(\d{1,3}[.)]|[-*+])[ \t]+`)
+
 // acSectionNames are the headings, matched whole, that open a criteria
 // section besides any heading containing "acceptance criteria" (#2906
 // ADR-001). A whole-heading match keeps "Post-merge verification notes" from
@@ -244,6 +248,12 @@ func capACText(s string) string {
 // non-blank line that is not a list item, indented at or past the column
 // and directly under the item's text (no blank line or sub-step between),
 // is a wrapped continuation and joins the item's text (#2906).
+//
+// A checkbox line opens a checkbox column: the column of its `[`. A plain or
+// numbered list line (not a checkbox) indented at or past that column, at any
+// depth and across blank lines, is part of the checkbox criterion: its text,
+// marker removed, joins the criterion with one space (#2972). The column ends
+// at a heading, a fence, a new checkbox, or a non-blank line indented less.
 func parseACs(body string) []acCriterion {
 	var out []acCriterion
 	seen := map[string]bool{}
@@ -251,11 +261,13 @@ func parseACs(body string) []acCriterion {
 	inFence := false
 	itemCol := 0  // content column of the open section item; 0 = none
 	joinIdx := -1 // index in out of the item a wrapped line joins; -1 = none
+	boxCol := 0   // content column of the open checkbox criterion
+	boxIdx := -1  // index in out of the checkbox a sub-bullet joins; -1 = none
 	for _, line := range stripDetailsBlocks(strings.Split(body, "\n")) {
 		line = strings.TrimRight(line, "\r")
 		if acFenceRE.MatchString(line) {
 			inFence = !inFence
-			joinIdx = -1
+			joinIdx, boxIdx = -1, -1
 			continue
 		}
 		if inFence {
@@ -268,10 +280,29 @@ func parseACs(body string) []acCriterion {
 			} else if sectionLevel > 0 && level <= sectionLevel {
 				sectionLevel = 0
 			}
-			itemCol, joinIdx = 0, -1
+			itemCol, joinIdx, boxIdx = 0, -1, -1
 			continue
 		}
 		checkbox := checkboxRE.FindStringSubmatch(line)
+		lineIndent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if checkbox == nil && boxIdx >= 0 && strings.TrimSpace(line) != "" {
+			if lineIndent < boxCol {
+				boxIdx = -1
+			} else if listMarkerRE.MatchString(line) {
+				sub := strings.TrimSpace(listPrefixRE.ReplaceAllString(line, ""))
+				if !emptyBoxRE.MatchString(sub) {
+					joined := capACText(out[boxIdx].text + " " + sub)
+					delete(seen, NormalizeACText(out[boxIdx].text))
+					out[boxIdx].text = joined
+					seen[NormalizeACText(joined)] = true
+					continue
+				}
+			}
+		}
+		if checkbox != nil {
+			boxCol = len(listPrefixRE.FindString(line))
+			boxIdx = -1
+		}
 		var item []string
 		if sectionLevel > 0 && checkbox == nil {
 			item = numberedRE.FindStringSubmatch(line)
@@ -329,6 +360,14 @@ func parseACs(body string) []acCriterion {
 		text = capACText(text)
 		key := NormalizeACText(text)
 		if seen[key] {
+			if checkbox != nil {
+				for i := range out {
+					if NormalizeACText(out[i].text) == key {
+						boxIdx = i
+						break
+					}
+				}
+			}
 			continue
 		}
 		seen[key] = true
@@ -338,6 +377,9 @@ func parseACs(body string) []acCriterion {
 		}
 		if item != nil {
 			joinIdx = len(out)
+		}
+		if checkbox != nil {
+			boxIdx = len(out)
 		}
 		out = append(out, acCriterion{index: len(out), text: text, state: state})
 	}
