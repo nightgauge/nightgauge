@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The full local gate is no longer thrown away after twenty minutes. A foreground Bash
+  call is killed at twice its timeout, and the core gate runs longer, so a new
+  `nightgauge hook gate-background` PreToolUse check in the Claude Code plugin now denies
+  starting `scripts/ci-local.sh`, `nightgauge ci gate-run`, `nightgauge pre-push validate`
+  or the declared gate unless the call sets `run_in_background: true` with a `timeout` of
+  at least the gate's limit (`hooks.pre_push.timeout_seconds`), and denies a `&` inside
+  the call. The deny reason says how to start the gate. The feature-validate gate steps
+  and `_shared/LONG_RUNNING_PROCESSES.md` state the same rule, and a test keeps them saying it.
+- `scripts/credential-scan.sh` scans what this branch would publish: HEAD's history, plus
+  modified, staged and untracked files that are not gitignored. It no longer reads every
+  `origin/*` ref, so another branch's fixtures cannot fail this branch's gate, and a
+  credential in a new file fails the local gate before it reaches CI. CI's credential-scan
+  workflow now runs the same script; bare `gitleaks git` read every ref.
 - The VSIX's skills match their source again, so release candidates pass staging. Skill
   bundles and installs now leave test material out at any depth (`tests/`, `__tests__/`,
   `*.test.ts`, `*.test.js`), not only a skill's top-level `tests/`; the extension package

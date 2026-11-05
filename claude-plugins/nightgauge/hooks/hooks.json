@@ -76,6 +76,12 @@
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stage-gate.sh\"",
             "timeout": 5,
             "statusMessage": "Checking pipeline-stage guardrail..."
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/gate-background.sh\"",
+            "timeout": 5,
+            "statusMessage": "Checking how the local gate is started..."
           }
         ]
       },

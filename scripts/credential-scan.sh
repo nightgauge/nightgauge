@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# Credential scan over COMMITTED content — the working tree and all history.
+# Credential scan over what this branch would publish: HEAD's history plus the
+# files changed but not yet committed (modified, staged and untracked, never
+# gitignored). CI runs this same script, so one definition decides the scope.
 #
 # Run: bash scripts/credential-scan.sh
+#
+# Why HEAD and not every origin/* ref (#2953): the allowlist is HEAD's
+# .gitleaksignore, so scanning another branch applies the wrong allowlist and one
+# branch's fixtures turn every other branch's gate red. Each branch is scanned
+# by its own PR. Why uncommitted files: feature-validate runs the gate before it
+# commits, so a new file would otherwise first be scanned in CI.
 #
 # Why `gitleaks git` and not `gitleaks dir`:
 #
@@ -39,14 +47,29 @@ if ! command -v gitleaks >/dev/null 2>&1; then
   exit 2
 fi
 
-echo "Scanning all commits (history is the publication surface, not just HEAD)…"
-# HEAD plus every branch pushed to origin: what CI scans (its checkout fetches
-# all branches) and what is published. Not `--all`: a worktree shares refs
-# with every local branch in the clone, and another session's unpushed branch
-# is neither published nor seen by CI (#2075).
-if gitleaks git --no-banner --redact --log-opts="HEAD --remotes=origin"; then
+echo "Scanning HEAD's history (history is the publication surface, not just the tree)…"
+FAILED=0
+gitleaks git --no-banner --redact --log-opts="HEAD" || FAILED=1
+
+# Uncommitted work: stage everything into a COPY of the index, so the real
+# index is untouched and `git add -A` skips gitignored files, then scan that
+# copy against HEAD.
+if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+  echo "Scanning uncommitted changes (modified, staged and untracked; not gitignored)…"
+  SCAN_INDEX="$(mktemp)"
+  trap 'rm -f "$SCAN_INDEX"' EXIT
+  INDEX_PATH="$(git rev-parse --git-path index)"
+  if [ -f "$INDEX_PATH" ]; then cp "$INDEX_PATH" "$SCAN_INDEX"; else rm -f "$SCAN_INDEX"; fi
+  if ! GIT_INDEX_FILE="$SCAN_INDEX" git add -A; then
+    echo "HARNESS ERROR: could not stage uncommitted files into a scratch index."
+    exit 2
+  fi
+  GIT_INDEX_FILE="$SCAN_INDEX" gitleaks git --no-banner --redact --pre-commit --staged || FAILED=1
+fi
+
+if [ "$FAILED" -eq 0 ]; then
   echo ""
-  echo "✓ no credentials in the tree or in any commit"
+  echo "✓ no credentials in HEAD's history or in uncommitted changes"
   exit 0
 fi
 
@@ -61,6 +84,8 @@ If this is a REAL credential:
 
 If this is a test fixture or a documentation example, add its FINGERPRINT to
 .gitleaksignore with a one-line rationale. Do not add a path glob, and do not
-disable the rule.
+disable the rule. An uncommitted file has no commit fingerprint yet: build such
+fixtures at run time from fake pieces, as scripts/test-credential-scan-rules.sh
+does.
 EOF
 exit 1
