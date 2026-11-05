@@ -390,6 +390,12 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 	// the prune exists precisely to collect the registration the manual
 	// removal orphaned, and a concurrent `git worktree add` that lands between
 	// those two steps is the run that dies on the half-built-entry window.
+	//
+	// Record the removal first (#2701): a gate run's state backstop excuses a
+	// worktree only when its base's ledger names it.
+	if err := layout.RecordWorktreeRemoval(worktreeDir); err != nil {
+		log.Printf("[WARN] worktree teardown: %v", err)
+	}
 	return gitworktree.Do(repoRoot, func(wt *gitworktree.Session) error {
 		output, err := wt.Remove(worktreeDir)
 		if err == nil {

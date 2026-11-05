@@ -733,6 +733,11 @@ export class WorktreeManager {
       }
     }
 
+    // Record the removal before making it (#2701): the gate's state backstop
+    // excuses a pipeline worktree only when its base's append-only ledger
+    // names it. Same format as the Go writer, layout.RecordWorktreeRemoval.
+    await recordWorktreeRemoval(worktreePath);
+
     // Remove the worktree (--force handles dirty working directories)
     try {
       await execAsync(`git worktree remove "${worktreePath}" --force`, {
@@ -1160,5 +1165,27 @@ export class WorktreeManager {
         }`
       );
     }
+  }
+}
+
+/** The append-only removal ledger in a worktree's base (#2701). */
+export const REMOVAL_LEDGER_NAME = ".removed-worktrees";
+
+/**
+ * Append "<epoch-seconds>\t<name>\n" for the worktree to its base's removal
+ * ledger. Never throws: a missing line leaves the backstop red, which is the
+ * conservative outcome.
+ */
+async function recordWorktreeRemoval(worktreePath: string): Promise<void> {
+  const ledger = path.join(path.dirname(worktreePath), REMOVAL_LEDGER_NAME);
+  const line = `${Math.floor(Date.now() / 1000)}\t${path.basename(worktreePath)}\n`;
+  try {
+    await fs.appendFile(ledger, line, { mode: 0o600 });
+  } catch (error) {
+    console.warn(
+      `[WorktreeManager] could not record removal of ${worktreePath} in ${ledger}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
 }
