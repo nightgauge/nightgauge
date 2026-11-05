@@ -585,6 +585,24 @@ If a clean `freshclam` still trips the floor:
 
 Never lower the floor to get past a partial database.
 
+## The VirusTotal draft gate
+
+`release.yml` publishes a release only after `scripts/release-scan-gate.sh scan`
+finds every file in the draft clean on VirusTotal (#2946). Before a tag:
+
+- The `production` environment has `VT_API_KEY`, a free VirusTotal account's
+  API key. Without it the preflight fails before the build.
+- The free key's quota fits: about 130 requests per release (about 40 unique
+  files, roughly 3 requests each) against 500 a day, so plan at most three
+  full scans of releases a day.
+
+After the run, read `vt-scan-report.json` as in
+[GIT_WORKFLOW.md step 9a](GIT_WORKFLOW.md#cutting-a-release--step-by-step).
+A finding leaves the draft for an owner decision. Never publish a draft with
+`gh release edit --draft=false` to get past a harness error: re-run the scan.
+`bash scripts/test-vt-scan.sh` and `bash scripts/test-release-scan-gate.sh`
+exercise every path offline.
+
 ## What this checklist is not
 
 - It is not the current channel policy. This file records the first Marketplace

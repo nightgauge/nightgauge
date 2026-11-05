@@ -39,4 +39,8 @@ regexes = [
   # string next to "key" as a generic-api-key.
   '''938e44a9b13926f9da3b21203557da335705a46b13fd3d39fd0b3a745935dfe0''',
   '''ff41728112fa8992d3dcb21dfcbe66bf552359da6804b1a65d72f9af7f833743''',
+  # scripts/test-vt-scan.sh and scripts/test-release-scan-gate.sh hand this
+  # stub VirusTotal key to a local stub server and grep every output for it
+  # to prove the real key never leaks (#2946). It is not a credential.
+  '''StubKey0123456789LeakCanaryAbCdEf0123456789''',
 ]

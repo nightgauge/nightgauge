@@ -6,9 +6,28 @@
 #   - Homebrew cask auto-bumped in nightgauge/homebrew-tap
 #   - Versioned per-target .vsix files (attached to the GitHub Release)
 #
+# NOTHING IS PUBLIC BEFORE THE MULTI-ENGINE SCAN IS CLEAN (#2946). GoReleaser
+# creates a DRAFT release and a DRAFT cask pull request. Every asset is
+# attached to the draft, then scripts/release-scan-gate.sh downloads the
+# draft's own bytes, unpacks every VSIX and tarball, and scans the assets plus
+# every binary and JS bundle inside them with VirusTotal. Only a clean scan
+# publishes the release. Any finding, error or missing VT_API_KEY leaves a
+# draft and fails the run; the report is on the draft and in the run's
+# artifacts (docs/GIT_WORKFLOW.md step 9a).
+#
+# Three jobs:
+#   state     Is the release absent, a draft, or already published?
+#   release   Absent or draft only: build, draft, attach, scan, publish. It
+#             never runs against a published release, so a re-run cannot
+#             upload to one.
+#   channels  Only from a published, scan-clean release: advance `stable`, mark
+#             the cask pull request ready. Idempotent, so a re-run of a
+#             published release runs this job alone.
+#
 # The VS Code Marketplace publish is NOT part of this run: it is the separate,
-# re-runnable marketplace-publish.yml dispatch, which rebuilds the VSIXs from
-# the tag and verifies VSCE_PAT before publishing. One publish path, on demand.
+# re-runnable marketplace-publish.yml dispatch, which downloads the release's
+# VSIXs (#2151), requires the release to be published and scan-clean, and
+# verifies VSCE_PAT before publishing. One publish path, on demand.
 #
 # Version is derived from the tag itself (not commit count).
 # The Go binary and VSIX share the same version string.
@@ -18,6 +37,8 @@
 #   2. Release tag (v0.2.0)  → this workflow builds & publishes
 #
 # Prerequisites:
+#   - VT_API_KEY secret in the `production` environment: a free VirusTotal
+#     account's API key (docs/GIT_WORKFLOW.md). Without it nothing publishes.
 #   - HOMEBREW_TAP_GITHUB_TOKEN secret in the `production` environment
 #     (PAT with contents:write on nightgauge/homebrew-tap)
 #   - nightgauge/homebrew-tap repository must exist
@@ -44,7 +65,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Re-run safety (#2946). A release that is already published must never get
+  # another upload, so the build-and-publish job is skipped for it and only
+  # the idempotent channel steps run. Draft releases are visible only to a
+  # token that can write contents, hence the write scope on a read.
+  state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # read draft releases
+    outputs:
+      published: ${{ steps.state.outputs.published }}
+    steps:
+      - name: Release state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if JSON="$(gh release view "$TAG" -R "$REPO" --json isDraft 2>"$RUNNER_TEMP/view.err")"; then
+            DRAFT="$(jq -r '.isDraft | tostring' <<<"$JSON")"
+          elif grep -qi 'release not found' "$RUNNER_TEMP/view.err"; then
+            DRAFT="absent"
+          else
+            echo "::error::cannot read release $TAG: $(cat "$RUNNER_TEMP/view.err")"
+            exit 1
+          fi
+          case "$DRAFT" in
+          false) echo "published=true" >>"$GITHUB_OUTPUT"
+                 echo "::notice::$TAG is already published: skipping build, upload, scan and publish; running only the channel steps." ;;
+          true | absent) echo "published=false" >>"$GITHUB_OUTPUT"
+                 echo "$TAG release state: ${DRAFT/true/draft}" ;;
+          *) echo "::error::cannot tell whether $TAG is a draft ('$DRAFT')"; exit 1 ;;
+          esac
+
   release:
+    needs: state
+    if: ${{ needs.state.outputs.published != 'true' }}
     # macos-latest, not ubuntu: Apple `codesign` runs only on macOS. macOS
     # still cross-compiles linux/amd64 (CGO_ENABLED=0). Proven on the rc
     # channel first (v0.4.4-rc.2) before this workflow adopted it.
@@ -55,7 +114,11 @@ jobs:
     # private would bill macOS at 10x the Linux rate, and a larger runner such
     # as macos-14-xlarge is billed even when public.
     runs-on: macos-latest
-    timeout-minutes: 40
+    # About 25 minutes of build, plus the VirusTotal scan: about 40 unique
+    # files (v0.8.0: 11 assets, 6 binaries, 7 JS bundles, 17 exec-bit scripts
+    # inside the VSIXs and tarballs), roughly 3 requests each, at the free
+    # key's 4 requests/min. That is about 130 of the 500 requests a day.
+    timeout-minutes: 120
     environment: production
 
     permissions:
@@ -64,6 +127,25 @@ jobs:
       attestations: write # artifact attestations
 
     steps:
+      # `state` ran first, but a `gh run rerun --failed` reuses its old answer.
+      # Ask again: this job must never run against a published release.
+      - name: Refuse a published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if DRAFT="$(gh release view "$TAG" -R "$REPO" --json isDraft --jq '.isDraft' 2>"$RUNNER_TEMP/view.err")"; then
+            if [ "$DRAFT" != "true" ]; then
+              echo "::error::$TAG is already published. Nothing is uploaded to a public release; re-run all jobs so only the channel steps run."
+              exit 1
+            fi
+          elif ! grep -qi 'release not found' "$RUNNER_TEMP/view.err"; then
+            echo "::error::cannot read release $TAG: $(cat "$RUNNER_TEMP/view.err")"
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -150,8 +232,17 @@ jobs:
         id: preflight
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # Presence only: the key itself is set on the scan step alone.
+          VT_API_KEY_SET: ${{ secrets.VT_API_KEY != '' }}
         run: |
           set -euo pipefail
+
+          # The release publishes only after a clean VirusTotal scan (#2946).
+          # Without the key it would build for half an hour and stop at draft.
+          if [ "$VT_API_KEY_SET" != "true" ]; then
+            echo "::error::VT_API_KEY is not set in the production environment. Nothing can be scanned, so nothing may publish. Add a free VirusTotal account's API key (docs/GIT_WORKFLOW.md § Cutting a Release)."
+            exit 1
+          fi
 
           # Homebrew degrades gracefully: without a tap token, skip that pipe
           # rather than fail the release after the GitHub Release already exists.
@@ -485,7 +576,7 @@ jobs:
 
       # Every step below addresses the release by the triggering tag. Prove
       # GoReleaser created THAT release before attaching anything to it.
-      - name: Verify GoReleaser released the triggering tag
+      - name: Verify GoReleaser drafted the triggering tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
@@ -493,13 +584,13 @@ jobs:
           set -euo pipefail
           # Captured, then compared: `gh … | grep -qx` under pipefail can read
           # a match as a miss when gh takes SIGPIPE (#2360).
-          RELEASED_TAG="$(gh release view "$TAG" --json tagName --jq .tagName || true)"
-          if [ "$RELEASED_TAG" != "$TAG" ]; then
-            echo "::error::GoReleaser did not create a GitHub Release for '$TAG' (#1296). Releases present:"
+          RELEASED="$(gh release view "$TAG" --json tagName,isDraft --jq '"\(.tagName) \(.isDraft)"' || true)"
+          if [ "$RELEASED" != "$TAG true" ]; then
+            echo "::error::GoReleaser did not create a DRAFT GitHub Release for '$TAG' (#1296, #2946): got '${RELEASED:-none}'. Releases present:"
             gh release list --limit 5
             exit 1
           fi
-          echo "GitHub Release $TAG exists"
+          echo "Draft GitHub Release $TAG exists"
 
       - name: Add VSIX checksums
         run: |
@@ -558,10 +649,60 @@ jobs:
         with:
           subject-path: packages/nightgauge/*.vsix
 
+      # THE GATE (#2946). Scan the draft's own downloaded bytes -- every asset,
+      # and every binary and JS bundle inside each VSIX and tarball -- with
+      # VirusTotal, and publish the release only when every file is clean. A
+      # finding, an API error, a timeout or a spent quota leaves the draft and
+      # fails the run. The key is set on this step alone and reaches curl only
+      # through a config on stdin. A re-run reuses the draft.
+      - name: VirusTotal scan of the draft; publish only when clean
+        # ~40 unique files x ~3 requests = ~130 requests at 4/min, about 33
+        # minutes (see the job's timeout note); 80 leaves room for slow analyses.
+        timeout-minutes: 80
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          bash scripts/release-scan-gate.sh scan "$TAG" \
+            --report "$RUNNER_TEMP/vt-scan-report.json"
+
+      - name: Upload VirusTotal scan report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vt-scan-report
+          path: ${{ runner.temp }}/vt-scan-report.json
+          if-no-files-found: warn
+
+  # Every channel moves only from a published, scan-clean release (#2946). Runs
+  # after `release` published, or alone when `state` found the release already
+  # published (a re-run). Each step is idempotent.
+  channels:
+    needs: [state, release]
+    if: ${{ !cancelled() && needs.state.result == 'success' && (needs.release.result == 'success' || (needs.release.result == 'skipped' && needs.state.outputs.published == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: write # advance-stable.sh moves the stable branch
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Require a published, scan-clean release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: bash scripts/release-scan-gate.sh verify "$TAG"
+
       # Claude plugin channel (#2724): the marketplace is installed at #stable,
       # which only this step moves, so plugins reach users with a release and
       # never from main. After every publish step, so a failed publish leaves
-      # stable alone; before the cask verification, which concerns another
+      # stable alone; before the cask step, which concerns another
       # channel and must not hold plugins back.
       # Fast-forward only; a refused move fails here, naming its cause, and the
       # watchdog's claude-plugin channel stays red until a maintainer moves the
@@ -574,20 +715,22 @@ jobs:
           GH_TOKEN: ${{ secrets.STABLE_BRANCH_TOKEN || github.token }}
         run: bash scripts/advance-stable.sh "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
 
-      # FINAL STEP. GoReleaser only PROPOSES the cask (a pull request on the
-      # tap, .goreleaser.yml), so the release is not complete until that pull
-      # request merges. Prove it was proposed, close every older cask PR as
-      # superseded so the queue cannot pile up (#1874: seven sat open), and
-      # name the one to merge. The daily release watchdog stays red until the
-      # tap's main serves this version.
-      - name: Homebrew cask proposed; close superseded cask PRs
+      # FINAL STEP. GoReleaser only PROPOSES the cask, as a DRAFT pull request
+      # on the tap (.goreleaser.yml), so the release is not complete until that
+      # pull request merges. verify-release-channels.sh --release re-runs
+      # release-scan-gate.sh verify, marks the draft cask PR ready, closes
+      # every older cask PR as superseded so the queue cannot pile up (#1874:
+      # seven sat open), and names the one to merge. The daily release
+      # watchdog stays red until the tap's main serves this version.
+      - name: Homebrew cask ready; close superseded cask PRs
         # Runs after a refused stable move too: the release is already out.
         if: ${{ !cancelled() && steps.advance-stable.conclusion != 'skipped' }}
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          VERSION="${TAG#v}"
           if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
             echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set; the cask was not proposed (see Preflight)."
             exit 0
