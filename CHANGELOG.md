@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Security
 
+- Every pushed branch is now credential-scanned, not only branches with a pull
+  request (#2958). `credential-scan.yml` runs on push to any branch except
+  `main` (the merge queue already scans what lands) and scans that branch's own
+  history against its own `.gitleaksignore`. Since #2953 a branch pushed
+  without a PR was public but never scanned.
 - A release is no longer public until VirusTotal finds every file in it clean
   (#2946). `release.yml` now creates a draft GitHub Release and a draft
   Homebrew cask pull request, then scans the draft's own assets, plus every
