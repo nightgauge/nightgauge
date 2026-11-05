@@ -53,6 +53,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `npm run test:host` no longer fails with `Cannot find module '<scratch>/workspace'` when
+  started from a VS Code extension host: the launcher drops an inherited
+  `ELECTRON_RUN_AS_NODE` (and `VSCODE_*`) before starting VS Code (#2743).
 - pr-create no longer turns a complete delivery into `Refs #N` on false unmet verdicts
   (#2941). A test file that already exists on the base is never reported as added but
   never executed: the feature-validate gate counts only files the branch adds, and
