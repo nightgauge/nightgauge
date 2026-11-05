@@ -1,0 +1,63 @@
+{
+  "scorecard": {
+    "window": "30d",
+    "windowStart": "2026-10-06T00:00:00.000Z",
+    "windowEnd": "2026-11-05T00:00:00.000Z",
+    "floor": 0.3,
+    "minSample": 5,
+    "overall": {
+      "answers": 42,
+      "impacted": 18,
+      "unattributed": 6,
+      "none": 18,
+      "impactRatio": 0.4286,
+      "byChange": { "plan": 10, "scope": 5, "kill": 3 }
+    },
+    "byClass": [
+      {
+        "class": "scope",
+        "answers": 20,
+        "impacted": 12,
+        "unattributed": 2,
+        "none": 6,
+        "impactRatio": 0.6,
+        "byChange": { "plan": 7, "scope": 5 }
+      },
+      {
+        "class": "preference",
+        "answers": 12,
+        "impacted": 2,
+        "unattributed": 2,
+        "none": 8,
+        "impactRatio": 0.1667,
+        "byChange": { "plan": 2 }
+      }
+    ],
+    "medianTimeToAnswerSeconds": null,
+    "sets": {
+      "total": 30,
+      "answered": 22,
+      "waived": 6,
+      "scored": 24,
+      "byWaiveReason": { "low_value": 4, "timeout": 2 },
+      "waiveRate": 0.2,
+      "skipRate": 0.0667,
+      "questionSkipRate": 0.1
+    },
+    "kills": { "count": 3, "spendAvoidedUsd": 12.5 },
+    "unattributedTargets": 2,
+    "historyComparison": {
+      "coldStart": { "sets": 10, "answers": 14, "impactRatio": 0.3571 },
+      "historyRich": { "sets": 12, "answers": 28, "impactRatio": 0.4643 }
+    },
+    "weakClasses": [
+      {
+        "class": "preference",
+        "answers": 12,
+        "impactRatio": 0.1667,
+        "floor": 0.3,
+        "recommendation": "cut"
+      }
+    ]
+  }
+}

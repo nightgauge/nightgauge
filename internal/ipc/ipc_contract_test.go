@@ -142,6 +142,7 @@ var contractTestedMethods = map[string]bool{
 	"platform.createPortalSession": true,
 	"platform.getTeamMembers":      true,
 	"platform.getUsageSummary":     true,
+	"platform.getInquiryScorecard": true,
 	"platform.healthCheck":         true,
 	"platform.syncTelemetry":       true,
 	"platform.license":             true,
@@ -1267,6 +1268,12 @@ func TestContract_Platform(t *testing.T) {
 			"eventType": "test_event",
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.submitAnalytics")
+	})
+
+	t.Run("platform.getInquiryScorecard/registered", func(t *testing.T) {
+		h.bind(t)
+		id := h.sendRequest("platform.getInquiryScorecard", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.getInquiryScorecard")
 	})
 
 	t.Run("platform.getUsageSummary/registered", func(t *testing.T) {

@@ -1075,6 +1075,7 @@ func rootCmd() *cobra.Command {
 		exitRecordsCmd(),
 		traceCmd(),
 		attentionCmd(),
+		inquiryCmd(),
 		budgetStatsCmd(),
 		apiUsageCmd(),
 		docsCmd(),

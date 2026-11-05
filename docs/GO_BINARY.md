@@ -6141,6 +6141,20 @@ computes hit rates. Output is deterministically sorted by gate name.
 ]
 ```
 
+### Inquiry Scorecard (Issue #2911)
+
+```bash
+nightgauge inquiry scorecard                 # human summary, platform default window
+nightgauge inquiry scorecard --window 7d --json
+```
+
+Reads the platform's inquiry scorecard (`GET /v1/inquiry/scorecard`) through
+the running daemon, since the route takes a signed-in session and only the
+daemon holds one. `--json` prints the platform's object unchanged; the summary
+formats its numbers and computes none. Exit codes: `0` read (or no answers in
+the window), `1` platform error, `3` no daemon reachable, `4` no platform
+configured, `5` not signed in.
+
 ### API Usage — The GitHub Request Ledger (Issue #843, always-on in #1347)
 
 ```bash

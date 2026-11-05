@@ -6,7 +6,7 @@ description: Analyze pipeline execution history for efficiency insights - comput
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.4.0"
+  version: "1.5.0"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task
@@ -536,6 +536,29 @@ assessment records:
 
 Gracefully skip if no assessments directory exists.
 
+#### Step 3.13: Inquiry Scorecard (Platform, Optional)
+
+The inquiry scorecard is computed by the platform, not by this skill. Read it
+through the daemon, which holds the signed-in session:
+
+```bash
+SCORECARD=$(nightgauge inquiry scorecard --json 2>/tmp/inquiry-scorecard.err)
+SCORECARD_EXIT=$?
+```
+
+- Non-zero exit (1 platform error, 3 daemon unreachable, 4 no platform
+  configured, 5 not signed in): skip the section with one line quoting the
+  first line of stderr, and set `inquiry_scorecard` to `null`.
+- `overall.answers == 0` and `byClass` empty: skip with "no inquiry answers in
+  window" and set `inquiry_scorecard` to `null`.
+- Otherwise copy the object into `inquiry_scorecard` unchanged and render the
+  section from it: window, overall impact ratio and counts, per-class table,
+  median time to answer, set waive/skip rates, kills and spend avoided,
+  cold-start vs history-rich, and weak classes with their recommendation.
+
+Display only the platform's numbers. Do not compute, derive or re-round any
+of them, and say in the section that they are the platform's.
+
 ---
 
 ### Phase 4: Generate Findings (Probabilistic)
@@ -720,6 +743,7 @@ Assemble the full report:
     "retry_cost_premium_pct": "number",
     "flagged_stages": ["string (stages with retry rate > 20%)"]
   },
+  "inquiry_scorecard": { "...": "platform scorecard object, or null" },
   "trends": {
     "cost_trend": "decreasing | stable | increasing",
     "efficiency_trend": "improving | stable | degrading",
@@ -1051,6 +1075,7 @@ The full JSON report follows this structure:
     "retry_cost_premium_pct": "number",
     "flagged_stages": ["string (stages with retry rate > 20%)"]
   },
+  "inquiry_scorecard": "object | null (the platform's scorecard, unchanged; null when skipped)",
   "trends": {
     "cost_trend": "string (decreasing | stable | increasing)",
     "efficiency_trend": "string (improving | stable | degrading)",
