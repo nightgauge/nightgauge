@@ -98,4 +98,4 @@ Mirror link integrity
 Mirror include expansion regression suite
 OpenCode integration (opencode_integration tag)
 VSCode host smoke tests
-machine state untouched by the run (~/.nightgauge, default STATE)
+machine state untouched by the run (~/.nightgauge, default STATE, agent homes)

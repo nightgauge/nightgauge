@@ -1974,7 +1974,7 @@ fi
 
 # LAST: nothing above changed the developer's machine state (#2311). The
 # before-listing was recorded ahead of the first step.
-run_step "machine state untouched by the run (~/.nightgauge, default STATE)" \
+run_step "machine state untouched by the run (~/.nightgauge, default STATE, agent homes)" \
   bash scripts/state-backstop.sh verify "$BACKSTOP_DIR/before" "$BACKSTOP_DIR/after"
 BACKSTOP_DONE=1
 

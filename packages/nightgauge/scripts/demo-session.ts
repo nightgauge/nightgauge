@@ -60,6 +60,7 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { redateWorkspace } from "../demo/workspace-dates";
 import { placeCloneData } from "../demo/workspace-clone";
+import { agentHomeEnv, secretStoreArgs } from "../tests/launcher/hostIsolation";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGE_ROOT = path.resolve(here, "..");
@@ -202,6 +203,9 @@ export function planDemoSession(options: DemoSessionOptions): DemoSessionPlan {
       NIGHTGAUGE_CONFIG_HOME: path.join(home, "config"),
       NIGHTGAUGE_STATE_HOME: path.join(home, "state"),
       NIGHTGAUGE_SKIP_AUTH_PREFLIGHT: "1",
+      // And off the operator's agent installs: activation re-syncs skills
+      // into whatever HOME and the agent-home overrides resolve to (#2935).
+      ...agentHomeEnv(path.join(home, "home"), path.join(home, "agent-homes")),
     },
     args: [
       workspace,
@@ -215,6 +219,7 @@ export function planDemoSession(options: DemoSessionOptions): DemoSessionPlan {
       "--disable-workspace-trust",
       "--skip-welcome",
       "--skip-release-notes",
+      ...secretStoreArgs(),
     ],
     startFile,
     eventLog,
@@ -237,6 +242,8 @@ export function prepareDemoSession(
   redateWorkspace(plan.workspace, epochMs);
   placeCloneData(plan.workspace);
   fs.mkdirSync(plan.extensionsDir, { recursive: true });
+  // The scratch HOME the window runs under (#2935); it has to exist.
+  if (plan.env.HOME) fs.mkdirSync(plan.env.HOME, { recursive: true });
   fs.mkdirSync(path.dirname(plan.settingsFile), { recursive: true });
   let existing: Record<string, unknown> = {};
   if (fs.existsSync(plan.settingsFile)) {
