@@ -278,6 +278,11 @@ type WorkflowRunSummary struct {
 	// that created them (DropSupersededCancelled).
 	CheckSuiteID int64 `json:"checkSuiteId,omitempty"`
 	WorkflowID   int64 `json:"workflowId,omitempty"`
+	// Event, HeadBranch and CreatedAt identify a run a newer push on the
+	// base branch cancelled (NewerPushCancelsFor, #2952).
+	Event      string    `json:"event,omitempty"`
+	HeadBranch string    `json:"headBranch,omitempty"`
+	CreatedAt  time.Time `json:"createdAt,omitempty"`
 }
 
 // GetWorkflowRunsForRef returns the workflow runs attached to sha via the
@@ -298,21 +303,17 @@ func (s *CIService) GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha 
 				HeadSHA      string `json:"head_sha"`
 				CheckSuiteID int64  `json:"check_suite_id"`
 				WorkflowID   int64  `json:"workflow_id"`
+				Event        string `json:"event"`
+				HeadBranch   string `json:"head_branch"`
+				CreatedAt    string `json:"created_at"`
 			} `json:"workflow_runs"`
 		}
 		if err := json.NewDecoder(body).Decode(&page); err != nil {
 			return fmt.Errorf("decode workflow runs: %w", err)
 		}
 		for _, r := range page.WorkflowRuns {
-			runs = append(runs, WorkflowRunSummary{
-				ID:           r.ID,
-				Name:         r.Name,
-				Status:       strings.ToUpper(r.Status),
-				Conclusion:   strings.ToUpper(r.Conclusion),
-				HeadSHA:      r.HeadSHA,
-				CheckSuiteID: r.CheckSuiteID,
-				WorkflowID:   r.WorkflowID,
-			})
+			runs = append(runs, toWorkflowRunSummary(r.ID, r.Name, r.Status, r.Conclusion, r.HeadSHA,
+				r.CheckSuiteID, r.WorkflowID, r.Event, r.HeadBranch, r.CreatedAt))
 		}
 		return nil
 	})
@@ -320,6 +321,25 @@ func (s *CIService) GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha 
 		return nil, fmt.Errorf("fetch workflow runs: %w", err)
 	}
 	return runs, nil
+}
+
+// toWorkflowRunSummary normalises one actions/runs entry. An unparseable
+// created_at stays zero, which NewerPushCancelsFor treats as unknown.
+func toWorkflowRunSummary(id int64, name, status, conclusion, headSHA string, suite, workflow int64,
+	event, branch, created string) WorkflowRunSummary {
+	at, _ := time.Parse(time.RFC3339, created)
+	return WorkflowRunSummary{
+		ID:           id,
+		Name:         name,
+		Status:       strings.ToUpper(status),
+		Conclusion:   strings.ToUpper(conclusion),
+		HeadSHA:      headSHA,
+		CheckSuiteID: suite,
+		WorkflowID:   workflow,
+		Event:        event,
+		HeadBranch:   branch,
+		CreatedAt:    at,
+	}
 }
 
 // CrossCheckWorkflowRuns compares the check-runs rollup against the per-run

@@ -117,12 +117,16 @@ touch_plugin
 commit two
 expect "changed plugin with the same version fails" 1 "still 1.0.0" --tag v1.1.0
 expect "an rc finds the same defect" 1 "still 1.0.0" --tag v1.1.0-rc.1
+# #2952: the main build runs the gate on every push with an unpushed synthetic
+# tag, so the defect fails at the merge that made it.
+expect "a main build's synthetic tag finds the same defect" 1 "still 1.0.0" --tag v1.0.1-main.gabc1234
 
 fixture
 touch_plugin
 set_version 1.1.0
 commit two
 expect "changed plugin with a bump passes" 0 "" --tag v1.1.0
+expect "a synthetic main tag passes after the bump" 0 "v1.0.1-main.g0123456" --tag v1.0.1-main.g0123456
 
 fixture
 echo x >"$TMP/other.txt"

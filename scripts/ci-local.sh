@@ -420,6 +420,8 @@ REQUIRED_FILES=(
   scripts/check-visibility-prose.py
   scripts/test-workflow-refs-check.sh
   scripts/test-marketplace-channel.sh
+  scripts/main-build-version.sh
+  scripts/test-main-build-version.sh
   scripts/test-vsix-host-target.sh
   packages/nightgauge/scripts/vsix-host-target.sh
   scripts/test-verify-release-channels.sh
@@ -1727,6 +1729,7 @@ run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility
 # a gate nothing exercises degrades into an unconditional pass.
 run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
 run_group "Marketplace channel regression suite" bash scripts/test-marketplace-channel.sh
+run_group "Main build version regression suite" bash scripts/test-main-build-version.sh
 run_group "VSIX host-target regression suite" bash scripts/test-vsix-host-target.sh
 run_group "Release channel verification regression suite" bash scripts/test-verify-release-channels.sh
 run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
