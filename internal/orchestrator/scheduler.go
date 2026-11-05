@@ -6022,6 +6022,23 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 	}
+	// A re-dispatch reuses the surviving worktree as it was, so a blocker that
+	// has since merged stays invisible and the run re-blocks on landed work
+	// (#2897). Merge the base in before the first stage. This runs after the
+	// preserved-resume decision, which counts the branch's own commits, and is
+	// skipped at a pr-merge resume, whose stage owns bringing an open PR up to
+	// date. A fresh worktree is level with its base, so it costs one fetch.
+	if stageIdx < len(stages) && runtime.WorktreeDir != "" && stages[stageIdx] != state.StagePRMerge {
+		if _, reason := refreshRunBase(ctx, item.Number, runtime.WorktreeDir); reason != "" {
+			_, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stages[stageIdx], tracer,
+				"base-refresh", reason)
+			terminalFailureKind = TerminalKindMergeConflict
+			return
+		}
+	}
+	// One blocked-outcome re-check per run (#2897), so a blocker that stays
+	// closed cannot re-run a stage forever.
+	blockerRechecked := false
 
 	// Endpoint-aware OpenCode dispatch (#1679): the slot a stage holds on a
 	// declared endpoint, the endpoints it has lost, and how often it has
@@ -8292,6 +8309,31 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// substitution is sticky for the rest of the run; the retry below
 			// re-dispatches this stage and the model resolution picks it up.
 			failText := stageFailureText(err, result)
+			// A stage that declared the issue blocked on a now-closed issue or
+			// PR may have judged a base from before it merged (#2897): refresh
+			// once and re-run the stage on the newer base.
+			if !blockerRechecked && runtime.WorktreeDir != "" && IsStageDeclaredBlockedOutcome(failText) {
+				recheck := recheckBlockedOutcome(ctx, item.Repo, item.Number, runtime.WorktreeDir, failText)
+				if recheck.Ran {
+					blockerRechecked = true
+				}
+				if recheck.ConflictReason != "" {
+					runtime.SetStageError(stage, recheck.ConflictReason)
+					s.emitStateChanged(item.Repo, item.Number, runtime)
+					log.Printf("#%d: stage %s blocked, and the base refresh conflicts: %s", item.Number, stage, recheck.ConflictReason)
+					terminalFailureKind = TerminalKindMergeConflict
+					return
+				}
+				if recheck.Rerun {
+					continue
+				}
+				if recheck.Note != "" {
+					failText += recheck.Note
+					if err != nil {
+						err = fmt.Errorf("%w%s", err, recheck.Note)
+					}
+				}
+			}
 			resolvedFailureKind := ResolveTerminalKind(gateRan, gateRes.TerminalKind, failText)
 			modelRejected := resolvedFailureKind == TerminalKindModelUnavailable
 			// Auth-shaped failure (#591): the adapter CLI itself is not logged

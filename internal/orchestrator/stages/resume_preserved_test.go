@@ -185,3 +185,46 @@ func TestResolvePreservedResume_ConflictingWipLeavesTheTreeAsFound(t *testing.T)
 		t.Fatalf("left the tree dirty:\n%s", status)
 	}
 }
+
+// withResumeContext writes the context a killed run leaves behind into dir.
+func withResumeContext(t *testing.T, dir string) {
+	t.Helper()
+	writeFileT(t, pipelineContextPath(dir, "dev-42.json"), "{}\n")
+	rec, err := json.Marshal(preflight.ACReconcileResult{ACFingerprint: preflight.ACFingerprint(resumeIssueBody)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFileT(t, pipelineContextPath(dir, "ac-reconcile-42.json"), string(rec))
+}
+
+// The base refresh (#2897) runs after the resume decision, and the next
+// dispatch decides again on the refreshed tree: a branch with its own commits
+// is still a resume after a merge commit, and a fast-forwarded empty branch is
+// still not one.
+func TestResolvePreservedResume_SurvivesABaseRefresh(t *testing.T) {
+	t.Run("own commits stay a resume", func(t *testing.T) {
+		upstream, clone := baseRefreshRepos(t)
+		withResumeContext(t, clone)
+		commitFile(t, clone, "work.txt", "work\n")
+		advanceUpstream(t, upstream, "blocker.txt", "landed\n")
+		if res, err := RefreshResumedBase(context.Background(), clone, 42); err != nil || !res.Advanced() {
+			t.Fatalf("refresh = %+v, %v", res, err)
+		}
+		got := ResolvePreservedResume(context.Background(), clone, 42, bodyReader(resumeIssueBody))
+		if !got.Resume {
+			t.Fatalf("want a resume after the merge, got %+v", got)
+		}
+	})
+	t.Run("an empty branch stays a full run", func(t *testing.T) {
+		upstream, clone := baseRefreshRepos(t)
+		withResumeContext(t, clone)
+		advanceUpstream(t, upstream, "blocker.txt", "landed\n")
+		if res, err := RefreshResumedBase(context.Background(), clone, 42); err != nil || !res.Advanced() {
+			t.Fatalf("refresh = %+v, %v", res, err)
+		}
+		got := ResolvePreservedResume(context.Background(), clone, 42, bodyReader(resumeIssueBody))
+		if got.Resume {
+			t.Fatalf("a fast-forward must not read as dev work, got %+v", got)
+		}
+	})
+}
