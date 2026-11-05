@@ -301,7 +301,7 @@ caller DEFERS instead of running the LLM into an exhausted bucket (#3976).`,
 	cmd.Flags().StringVar(&repo, "repo", "", "Target repository as owner/name (informational; merge reads pr-{N}.json)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
-	cmd.Flags().IntVar(&timeoutSec, "timeout", prMergeCITimeoutSec, "Overall timeout in seconds (0 = no CLI timeout). When unset, raised to cover pipeline.merge_queue.wait_timeout plus 10m (#2214)")
+	cmd.Flags().IntVar(&timeoutSec, "timeout", int(config.DefaultPRMergeCIWait.Seconds()), "Overall timeout in seconds (0 = no CLI timeout). When unset, raised to cover pipeline.merge_queue.wait_timeout plus 10m (#2214)")
 	return cmd
 }
 
@@ -351,9 +351,6 @@ func prStageContext(cmd *cobra.Command, timeoutSec int) (context.Context, contex
 	return context.WithTimeout(base, time.Duration(timeoutSec)*time.Second)
 }
 
-// prMergeCITimeoutSec is the pr-merge verb's default ceiling for a CI wait.
-const prMergeCITimeoutSec = 1200
-
 // prStageClientMarginSec is how far the caller's kill sits past the CLI's own
 // timeout, so the CLI's context always fires first and returns a structured
 // result instead of dying to SIGKILL (#2730).
@@ -378,16 +375,15 @@ func prMergeQueueWait(workspace string) time.Duration {
 	return pipeline.ResolveMergeQueueWaitTimeout()
 }
 
-// prMergeDefaultTimeoutSec returns the pr-merge verb's default --timeout. A
-// merge-queue wait (#2214) runs up to pipeline.merge_queue.wait_timeout, so the
-// CLI ceiling must not cut it short at the plain CI-wait default: it is the
-// larger of the two, with ten minutes' margin over the queue wait.
+// prMergeDefaultTimeoutSec returns the pr-merge verb's default --timeout:
+// config.ResolvePRMergeCIWait, which covers a merge-queue wait (#2214) with ten
+// minutes' margin and never drops below the plain CI-wait floor.
 func prMergeDefaultTimeoutSec(workspace string) int {
-	queue := int((prMergeQueueWait(workspace) + 10*time.Minute).Seconds())
-	if queue > prMergeCITimeoutSec {
-		return queue
+	cfg, err := config.Load(workspace)
+	if err != nil {
+		cfg = nil
 	}
-	return prMergeCITimeoutSec
+	return int(cfg.ResolvePRMergeCIWait().Seconds())
 }
 
 // prMergeBudget derives every pr-merge time limit from the one resolved queue

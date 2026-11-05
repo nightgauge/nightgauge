@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -657,4 +658,122 @@ func TestSummarizeChecks_EmptyIsPending(t *testing.T) {
 	if got := summarizeChecks([]statusCheckRollupEntry{}); got != checksPending {
 		t.Errorf("empty rollup must be pending, got %v", got)
 	}
+}
+
+// pendingThenGh stubs the check rollup: PENDING for pending polls, then final.
+func pendingThenGh(t *testing.T, pending int, final string) *int {
+	t.Helper()
+	polls := 0
+	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+		polls++
+		if polls <= pending {
+			return []byte(`{"statusCheckRollup":[{"name":"build","status":"IN_PROGRESS","conclusion":""}]}`), nil
+		}
+		return []byte(`{"statusCheckRollup":[{"name":"build","status":"COMPLETED","conclusion":"` + final + `"}]}`), nil
+	})
+	return &polls
+}
+
+func behindFailure() StageFailure {
+	return StageFailure{
+		Stage: state.StagePRMerge, GateKind: gates.KindNoOp, PRNumber: 100,
+		Workspace: "/tmp/work", Reason: "dirty-merge-state: BEHIND",
+	}
+}
+
+// TestBranchOutOfDate_WaitsOutSlowCI replays #2977: CI on the updated head stays
+// in flight past the old ten-poll budget, then passes, and the PR merges.
+func TestBranchOutOfDate_WaitsOutSlowCI(t *testing.T) {
+	stubExecGit(t, func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
+	polls := pendingThenGh(t, 12, "SUCCESS")
+	runner := &fakePRMergeRunner{res: pmstages.PRMergeResult{
+		Path: pmstages.PathMerged, PRNumber: 100, PRState: "MERGED", Reason: pmstages.ReasonCleanMerged,
+	}}
+	a := NewBranchOutOfDate(runner).withPolling(time.Millisecond, 20*time.Millisecond)
+	res := a.Execute(context.Background(), behindFailure())
+	if !res.Recovered {
+		t.Fatalf("Recovered=false after %d polls: %q", *polls, res.Reason)
+	}
+	if *polls <= 10 {
+		t.Fatalf("polls = %d, want more than the old ten-poll budget", *polls)
+	}
+}
+
+// TestBranchOutOfDate_SlowCIThenFailureDeclines: a failing check after a long
+// pending run still declines to triage without merging.
+func TestBranchOutOfDate_SlowCIThenFailureDeclines(t *testing.T) {
+	stubExecGit(t, func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
+	pendingThenGh(t, 12, "FAILURE")
+	runner := &countingPRMergeRunner{}
+	a := NewBranchOutOfDate(runner).withPolling(time.Millisecond, 20*time.Millisecond)
+	res := a.Execute(context.Background(), behindFailure())
+	if res.Recovered || res.FollowUp != FollowUpHumanTriageRequired {
+		t.Fatalf("got Recovered=%v FollowUp=%q, want declined to triage", res.Recovered, res.FollowUp)
+	}
+	if !strings.Contains(res.Reason, "CI failed on rebased head") {
+		t.Errorf("Reason = %q, want a CI failure", res.Reason)
+	}
+	if runner.calls != 0 {
+		t.Errorf("runner called %d times, want 0", runner.calls)
+	}
+}
+
+// TestBranchOutOfDate_DefaultBudgetMatchesPRMergeWait pins the default budget to
+// the ordinary pr-merge CI wait rather than the old five minutes.
+func TestBranchOutOfDate_DefaultBudgetMatchesPRMergeWait(t *testing.T) {
+	a := NewBranchOutOfDate(&fakePRMergeRunner{})
+	if a.pollInterval != 30*time.Second || a.pollMax != 40 {
+		t.Fatalf("default = %d polls x %v, want 40 x 30s", a.pollMax, a.pollInterval)
+	}
+	a.WithCIWait((&config.Config{}).ResolvePRMergeCIWait())
+	if got := time.Duration(a.pollMax) * a.pollInterval; got != 100*time.Minute {
+		t.Fatalf("resolved budget = %v, want 100m", got)
+	}
+}
+
+type countingPRMergeRunner struct{ calls int }
+
+func (c *countingPRMergeRunner) Run(context.Context, int, string, string) (pmstages.PRMergeResult, error) {
+	c.calls++
+	return pmstages.PRMergeResult{}, nil
+}
+
+// TestBranchOutOfDate_YieldsMergeLockDuringCIWait: the wait releases the merge
+// lock while checks are pending and re-takes it before merging (#2980).
+func TestBranchOutOfDate_YieldsMergeLockDuringCIWait(t *testing.T) {
+	stubExecGit(t, func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
+	held := true
+	heldDuringPoll := false
+	polls := 0
+	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+		polls++
+		if held {
+			heldDuringPoll = true
+		}
+		if polls <= 2 {
+			return []byte(`{"statusCheckRollup":[{"name":"build","status":"IN_PROGRESS","conclusion":""}]}`), nil
+		}
+		return []byte(`{"statusCheckRollup":[{"name":"build","status":"COMPLETED","conclusion":"SUCCESS"}]}`), nil
+	})
+	heldAtMerge := false
+	runner := &lockCheckingRunner{held: &held, heldAtMerge: &heldAtMerge}
+	f := behindFailure()
+	f.YieldMergeLock = func() func() { held = false; return func() { held = true } }
+	a := NewBranchOutOfDate(runner).withPolling(time.Millisecond, 20*time.Millisecond)
+	if res := a.Execute(context.Background(), f); !res.Recovered {
+		t.Fatalf("Recovered=false: %q", res.Reason)
+	}
+	if heldDuringPoll {
+		t.Error("merge lock held while CI was polled")
+	}
+	if !heldAtMerge {
+		t.Error("merge lock not re-taken before merge")
+	}
+}
+
+type lockCheckingRunner struct{ held, heldAtMerge *bool }
+
+func (r *lockCheckingRunner) Run(context.Context, int, string, string) (pmstages.PRMergeResult, error) {
+	*r.heldAtMerge = *r.held
+	return pmstages.PRMergeResult{Path: pmstages.PathMerged, PRNumber: 100, PRState: "MERGED", Reason: pmstages.ReasonCleanMerged}, nil
 }

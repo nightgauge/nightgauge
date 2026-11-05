@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"time"
 
 	gitpkg "github.com/nightgauge/nightgauge/internal/git"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
@@ -40,6 +41,12 @@ type ChangelogUnionMerge struct {
 // NewChangelogUnionMerge builds the step over the shared merge runner.
 func NewChangelogUnionMerge(runner pmstages.PRMergeRunner) *ChangelogUnionMerge {
 	return &ChangelogUnionMerge{runner: runner, ci: NewBranchOutOfDate(runner)}
+}
+
+// WithCIWait sizes the CI wait on the updated head, as BranchOutOfDate.WithCIWait.
+func (a *ChangelogUnionMerge) WithCIWait(d time.Duration) *ChangelogUnionMerge {
+	a.ci.WithCIWait(d)
+	return a
 }
 
 // Attempt tries the merge. handled=false means the caller continues to the

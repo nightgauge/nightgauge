@@ -70,6 +70,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- pr-merge no longer books a resolved conflict as a failure while CI is still
+  running (#2980). After updating an out-of-date or conflicting branch, the
+  recovery waited only five minutes for the new head's CI, and core CI takes 15
+  to 25. It now waits as long as an ordinary pr-merge CI wait (the merge-queue
+  wait plus ten minutes, at least 20 minutes, or `pr.ci_check_timeout` when
+  larger), and releases the repository's merge lock while it waits, re-taking
+  it before the merge. A failing check still declines at once. `pr-stage
+recover`'s default timeout grows to match.
+
 - A plain sub-bullet under a checkbox acceptance criterion is now part of that
   criterion instead of a separate one (2-3 space indent) or dropped (4+ spaces)
   (#2972). pr-create no longer verdicts each sub-bullet on its own, so a met
