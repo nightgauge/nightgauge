@@ -73,9 +73,15 @@ echo "CI parity commands discovered (${#CI_PARITY_COMMANDS[@]}): ${CI_PARITY_COM
 
 Run each CI command in order. On first failure, stop and attempt auto-fix.
 
-The repository's gate can outlive a foreground shell, so when
-`nightgauge ci gate-run` is the command, run this step as a background command and wait for it to exit,
-as Phase 2.7 does. Its log is declared at spawn so the wait reads as work
+When `nightgauge ci gate-run` is the command, start this step with the Bash
+tool's `run_in_background: true` and a `timeout` of at least the gate's limit in
+milliseconds (`hooks.pre_push.timeout_seconds` × 1000; 1,800,000 by default),
+then wait for its completion notification. Why: a foreground call is killed at
+twice its timeout (1200 s by default), and the gate takes longer, so a
+foreground gate is discarded after twenty minutes. A `&` inside a foreground
+call orphans it instead. The `gate-background` hook denies both forms (#2953).
+`gate_command` is never run directly: run `nightgauge ci gate-run`. Its log is
+declared at spawn so the wait reads as work
 (`_shared/LONG_RUNNING_PROCESSES.md`, #2694).
 
 ```bash
@@ -446,9 +452,14 @@ validation left — failures that would otherwise be caught during `pr-create` o
 ### Step 2.7.1: Resolve Binary and Run Gate
 
 Pass no timeout flag: the verb resolves `hooks.pre_push.timeout_seconds`, then
-its default, which covers the repository's suite. That limit can exceed a
-foreground shell's 10-minute cap, so run this step as a background command and
-wait for it to exit before continuing.
+its default, which covers the repository's suite. That limit exceeds what a
+foreground call survives, so start this step with the Bash tool's
+`run_in_background: true` and a `timeout` of at least that limit in milliseconds
+(`hooks.pre_push.timeout_seconds` × 1000; 1,800,000 by default), and wait for its
+completion notification before continuing. Why: a foreground call is killed at
+twice its timeout (1200 s by default), so a foreground gate is discarded after
+twenty minutes; a `&` inside a foreground call orphans it. The `gate-background`
+hook denies both forms (#2953). `gate_command` is never run directly.
 
 Exit 3 means a limit expired, not that an assertion failed. If the reason names
 the gate's limit, do not edit code: raise the limit it names. If it names Go's
