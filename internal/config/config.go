@@ -1378,10 +1378,10 @@ type PipelineConfig struct {
 	// is an error, which the merged view cannot tell apart.
 	WorktreeBase string `yaml:"worktree_base,omitempty" json:"worktreeBase,omitempty"`
 
-	// StallIdleMs is the absolute idle-kill threshold in milliseconds. When set,
-	// overrides the computed threshold×multiplier value. Mirrors the TypeScript
-	// pipeline.stall_idle_ms field (Issue #3484).
-	StallIdleMs YAMLDuration `yaml:"stall_idle_ms,omitempty" json:"stallIdleMs,omitempty"`
+	// StallIdleMs is the absolute idle-kill threshold: a non-negative YAML
+	// integer of milliseconds, the one form the TypeScript reader also accepts
+	// (#2714). When set, overrides the computed threshold×multiplier value.
+	StallIdleMs StallIdleMs `yaml:"stall_idle_ms,omitempty" json:"stallIdleMs,omitempty"`
 
 	// StageModels is the operator's explicit per-stage model routing: stage
 	// name → tier (haiku|sonnet|opus|fable). Honored in the manual and hybrid
@@ -1619,6 +1619,28 @@ type StageBudget struct {
 	// and cache writes, summed over the stream. Cache reads do not count.
 	MaxTokens int `yaml:"max_tokens,omitempty" json:"maxTokens,omitempty"`
 }
+
+// StallIdleMs is pipeline.stall_idle_ms: a non-negative integer of
+// milliseconds. It is not a YAMLDuration, which refuses a bare number and would
+// read one as nanoseconds; a unit string such as "8m" is rejected because the
+// TypeScript reader cannot read it (#2714).
+type StallIdleMs int64
+
+// UnmarshalYAML reads a non-negative integer of milliseconds.
+func (m *StallIdleMs) UnmarshalYAML(value *yaml.Node) error {
+	var n int64
+	if value.Kind != yaml.ScalarNode || value.Tag != "!!int" || value.Decode(&n) != nil {
+		return fmt.Errorf("pipeline.stall_idle_ms %q: want integer milliseconds, e.g. 480000", value.Value)
+	}
+	if n < 0 {
+		return fmt.Errorf("pipeline.stall_idle_ms %d: must not be negative", n)
+	}
+	*m = StallIdleMs(n)
+	return nil
+}
+
+// Duration returns the threshold as a time.Duration.
+func (m StallIdleMs) Duration() time.Duration { return time.Duration(m) * time.Millisecond }
 
 // StageBudgetUnlimited is the one value that lifts a stage budget.
 const StageBudgetUnlimited = -1

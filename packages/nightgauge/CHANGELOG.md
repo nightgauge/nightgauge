@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- An integer `pipeline.stall_idle_ms` no longer makes the `nightgauge` binary
+  fail to load the config; both readers now accept the same integer
+  milliseconds (#2714).
 - On a release candidate or release, the staleness status item shows the
   installed version and the workspace's distance from it, and no longer offers
   "Refresh extension", which would have replaced the CI build with a local one

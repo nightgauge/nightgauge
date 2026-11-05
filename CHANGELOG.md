@@ -80,6 +80,10 @@ changelog, and the release workflow refuses a tag that does not.
   records the worktree in its base's append-only `.removed-worktrees` ledger
   before removing it, and the backstop lists such a removal as information.
   Any removal the ledger does not name, freshly, still fails.
+- An integer `pipeline.stall_idle_ms` (for example `480000`) no longer breaks
+  `nightgauge config show` and every other Go config load. Go now reads the key
+  as integer milliseconds, like the extension, and rejects a unit string such
+  as `8m` with an error naming the key (#2714).
 
 - The API ledger no longer books the gap between two rate-limit buckets as
   spend. Cost is now the drop within one identity, resource and reset window,

@@ -439,7 +439,7 @@ export function getStallIdleMs(workspaceRoot?: string): number | undefined {
       }
 
       if (inPipeline) {
-        const match = trimmed.match(/^stall_idle_ms:\s*(\d+)/);
+        const match = trimmed.match(/^stall_idle_ms:\s*(\d+)\s*(?:#.*)?$/);
         if (match) {
           const parsed = Number.parseInt(match[1], 10);
           if (!Number.isNaN(parsed) && parsed >= 0) {
