@@ -123,6 +123,31 @@ describe("parseAcceptanceCriteria", () => {
       "```\nx\n```\n<details>\n- [ ] archived\n</details>\n- [ ] live\n",
       ["live"],
     ],
+    [
+      "longer backtick fence holds a shorter one (#2727)",
+      "## Acceptance Criteria\n- [ ] one\n````md\n```\n- [ ] phantom\n````\n- [ ] two\n- [ ] three\n",
+      ["one", "two", "three"],
+    ],
+    [
+      "tilde fence holds a backtick line (#2727)",
+      "## Acceptance Criteria\n- [ ] one\n~~~\n```\n- [ ] phantom\n~~~\n- [ ] two\n- [ ] three\n",
+      ["one", "two", "three"],
+    ],
+    [
+      "closer with trailing text does not close (#2727)",
+      "## Acceptance Criteria\n```\n```x\n- [ ] phantom\n```\n- [ ] real\n",
+      ["real"],
+    ],
+    [
+      "longer closer closes (#2727)",
+      "## Acceptance Criteria\n```\n- [ ] phantom\n````\n- [ ] real\n",
+      ["real"],
+    ],
+    [
+      "archive after nested-fence block still dropped (#2727)",
+      "````\n```\n````\n<details>\n- [ ] archived\n</details>\n- [ ] live\n",
+      ["live"],
+    ],
     ["unterminated details kept", "<details>\n- [ ] kept\n", ["kept"]],
   ])("mirrors Go fence-aware <details> handling: %s", (_name, body, want) => {
     expect(parseAcceptanceCriteria(body).map((a) => a.text)).toEqual(want);
