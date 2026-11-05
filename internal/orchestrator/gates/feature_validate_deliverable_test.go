@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/gateledger"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -212,5 +213,75 @@ func TestFeatureValidateGate_QualityFailureTakesPrecedence(t *testing.T) {
 	}
 	if got := readValidateArtifact(t, ws, 152)["validation_status"]; got != "failed" {
 		t.Fatalf("failure verdict must be preserved, got %v", got)
+	}
+}
+
+// #2941: a test that exists on the base and is only modified was not built by
+// this change, so it is never "added but never executed".
+func TestFeatureValidateGate_ModifiedTestIsNotAdded(t *testing.T) {
+	ws := initRepo(t)
+	gittest.Run(t, ws, "checkout", "-b", "seed")
+	commitOnBranch(t, ws, "feat/2941", map[string]string{"internal/ipc/stop_test.go": "package ipc\n"})
+	gittest.Run(t, ws, "checkout", "main")
+	gittest.Run(t, ws, "merge", "-q", "feat/2941")
+	commitOnBranch(t, ws, "feat/2941-again", map[string]string{"internal/ipc/stop_test.go": "package ipc\n\n// changed\n"})
+	writeGateMetrics(t, ws, 2941, []map[string]any{{"gate_name": "build", "result": "pass"}})
+	art := passingArtifact()
+	art["unit_tests"] = map[string]any{"ran": false, "passed": false}
+	writeValidateArtifact(t, ws, 2941, art)
+
+	if gr := (FeatureValidateGate{}).Verify(context.Background(), 2941, ws); !gr.Passed {
+		t.Fatalf("expected pass; reason=%q", gr.Reason)
+	}
+	doc := readValidateArtifact(t, ws, 2941)
+	if _, present := doc["unverified_deliverable"]; present || doc["validation_status"] != "passed" {
+		t.Fatalf("a modified test was reported as added: %v", doc)
+	}
+}
+
+// #2941: a full local-gate pass recorded in the ledger for this tree means the
+// unit suite ran, even when the stage started the gate in the background and
+// wrote no unit result. An added unit test is then exercised.
+func TestFeatureValidateGate_LedgerPassConfirmsUnitRun(t *testing.T) {
+	ws := initRepo(t)
+	commitOnBranch(t, ws, "feat/2941", map[string]string{"internal/ipc/new_test.go": "package ipc\n"})
+	writeGateMetrics(t, ws, 2941, []map[string]any{{"gate_name": "build", "result": "pass"}})
+	art := passingArtifact()
+	art["unit_tests"] = map[string]any{"ran": false, "passed": false}
+	writeValidateArtifact(t, ws, 2941, art)
+	tree, err := gateledger.Fingerprint(context.Background(), gateledger.ExecRunner, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateledger.Append(ws, gateledger.Event{RunID: "r1", Event: gateledger.EventFinish,
+		Kind: gateledger.KindLocalGate, Tree: tree, Verdict: gateledger.VerdictPass, Full: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	gr := FeatureValidateGate{}.Verify(context.Background(), 2941, ws)
+	if !gr.Passed {
+		t.Fatalf("expected pass; reason=%q", gr.Reason)
+	}
+	doc := readValidateArtifact(t, ws, 2941)
+	unit, _ := doc["unit_tests"].(map[string]any)
+	if unit["ran"] != true || unit["passed"] != true || unit["source"] != "gate-ledger" || unit["tree"] != tree {
+		t.Fatalf("unit_tests = %v, want ran/passed from the gate ledger", unit)
+	}
+	if _, present := doc["unverified_deliverable"]; present {
+		t.Fatal("an added unit test the ledger shows ran was reported never executed")
+	}
+	if !strings.Contains(strings.Join(gr.Evidence, " "), "confirmed by the gate ledger") {
+		t.Errorf("gate evidence should name the confirmation: %v", gr.Evidence)
+	}
+
+	// A different tree's pass proves nothing about this one.
+	writeValidateArtifact(t, ws, 2941, art)
+	if err := os.WriteFile(filepath.Join(ws, "internal/ipc/new_test.go"), []byte("package ipc\n// moved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, ws, "commit", "-qam", "move")
+	FeatureValidateGate{}.Verify(context.Background(), 2941, ws)
+	if got := readValidateArtifact(t, ws, 2941)["validation_status"]; got != "passed_unverified" {
+		t.Fatalf("a pass for another tree confirmed this one: validation_status=%v", got)
 	}
 }

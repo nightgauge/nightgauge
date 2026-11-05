@@ -46,6 +46,14 @@ write the key `acceptance_criteria`, a `verdict` field, or 1-based indexes.
 - `not_verifiable`: it cannot be judged from the diff (an operator action,
   a post-merge observation).
 
+A criterion that asks for a command and its result in the PR body is answered
+by `evidence`: run the command and record it with its result, for example
+`go test ./internal/ipc -run 'TestX' -count=50: ok internal/ipc 119.1s`.
+pr-create writes the body and carries that evidence beside the criterion; a
+verdict with no command and result is reported unmet with "feature-validate
+recorded no command and result for this criterion" (#2941). Do not write that
+the result "will be in the PR body" in place of the result.
+
 The issue closes only when every criterion resolves `met` (#2655), and an
 `unmet` from any source wins. So do not mark a criterion `unmet` because it is
 hard to verify, and do not mark it `met` on intent. A `met` from pr-create's
@@ -114,6 +122,7 @@ jq -n \
   --arg unit_tests_framework "${UNIT_TEST_FRAMEWORK:-}" \
   --argjson unit_tests_run_count "${UNIT_TESTS_RUN_COUNT:-0}" \
   --argjson unit_tests_passed_count "${UNIT_TESTS_PASSED_COUNT:-0}" \
+  --arg unit_tests_log "${UNIT_TESTS_LOG:-}" \
   --argjson integration_tests_ran "${INTEGRATION_TESTS_RAN:-false}" \
   --argjson integration_tests_passed "${INTEGRATION_TESTS_PASSED:-false}" \
   --arg integration_tests_framework "${INTEGRATION_TEST_FRAMEWORK:-}" \
@@ -179,7 +188,7 @@ jq -n \
       p10_baseline_ms: $min_dur_p10,
       warning: (if $min_dur_warning != "" then $min_dur_warning else null end)
     } else null end),
-    unit_tests: { ran: $unit_tests_ran, passed: $unit_tests_passed, framework: $unit_tests_framework, tests_run: $unit_tests_run_count, tests_passed: $unit_tests_passed_count },
+    unit_tests: ({ ran: $unit_tests_ran, passed: $unit_tests_passed, framework: $unit_tests_framework, tests_run: $unit_tests_run_count, tests_passed: $unit_tests_passed_count } + (if $unit_tests_log != "" then {log: $unit_tests_log} else {} end)),
     integration_tests: { ran: $integration_tests_ran, passed: $integration_tests_passed, framework: $integration_tests_framework, tests_run: $integration_tests_run_count, tests_passed: $integration_tests_passed_count },
     e2e_tests: { ran: $e2e_ran, passed: $e2e_passed, framework: $e2e_framework, reason: $e2e_reason },
     mobile_mcp: (if $mobile_mcp_active then {

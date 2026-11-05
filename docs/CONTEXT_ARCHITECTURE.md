@@ -677,6 +677,8 @@ issue #1608)
 | `integration_tests.framework`              | string | No       | Test framework used                                                                                 |
 | `integration_tests.tests_run`              | number | No       | Number of tests run                                                                                 |
 | `unit_tests`                               | object | No       | Unit test results (v1.2+, same shape as integration_tests)                                          |
+| `unit_tests.log`                           | string | No       | Path of the full gate's log; pr-create reads its Go `--- PASS`/`--- FAIL` lines (#2941)             |
+| `unit_tests.source`                        | string | No       | `gate-ledger` when the gate set ran/passed from a ledger pass on the tree in `unit_tests.tree`      |
 | `e2e_tests`                                | object | No       | E2E test results                                                                                    |
 | `e2e_tests.ran`                            | bool   | Yes      | Whether E2E tests were run                                                                          |
 | `e2e_tests.passed`                         | bool   | Yes      | Whether tests passed                                                                                |

@@ -33,6 +33,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- pr-create no longer turns a complete delivery into `Refs #N` on false unmet verdicts
+  (#2941). A test file that already exists on the base is never reported as added but
+  never executed: the feature-validate gate counts only files the branch adds, and
+  pr-create drops a stored finding the diff does not support. When feature-validate's
+  unit result is missing, a full local-gate pass recorded in the gate ledger for the
+  tree confirms it, and the Validation section says so. A criterion naming a test is
+  answered by that test's own `--- PASS` / `--- FAIL` line in the gate log
+  feature-validate names in `unit_tests.log`. A criterion asking for a command and its
+  result in the PR body is met when feature-validate recorded them, which the body
+  carries, and otherwise unmet with "feature-validate recorded no command and result
+  for this criterion". A bound such as "a version above `1.26.0`" is compared with the
+  values the named file's diff adds instead of being required as text. A token a
+  named file lacks is looked for in the rest of the diff, and a symbol such as
+  `skillrender.BundleExcludes` is found where its package's diff changes it. A branch
+  with no diff against its base, such as a re-run whose work is already on `main`,
+  opens no PR: the issue gets a comment with each criterion's evidence and is closed
+  when every one is met, or is told what is unmet and moved to Backlog.
+
 - The pr-merge wall-clock budget tests and the `autonomous.stop` test no longer fail under
   `go test -race` on a loaded machine (#2950, #2909). The queue-wait interval is written with
   explicit timestamps before the enforcer arms, upper bounds that measured the scheduler are

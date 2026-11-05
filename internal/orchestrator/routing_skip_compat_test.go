@@ -81,7 +81,7 @@ func TestRoutingSkipLists_CompatibleWithDeterministicArms(t *testing.T) {
 				t.Fatalf("scheduler honours a skip of pr-create/pr-merge: %v", skips)
 			}
 			rs.BeginStage(state.StagePRCreate)
-			created, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs,
+			created, _, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs,
 				types.BoardItem{Number: 1, Repo: "owner/repo"}, "/tmp")
 			if reason := rs.StagePuntReasons[string(state.StagePRCreate)]; strings.HasPrefix(reason, "missing-") {
 				t.Fatalf("skip list %v punts pr-create with %q", skip, reason)
@@ -112,7 +112,7 @@ func TestDocsOnlyRoute_ReachesDeterministicPRCreate(t *testing.T) {
 		rs.SkipStage(st)
 	}
 	rs.BeginStage(state.StagePRCreate)
-	created, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs,
+	created, _, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs,
 		types.BoardItem{Number: 1, Repo: "owner/repo"}, "/tmp")
 	if !created {
 		t.Fatalf("docs-only route punted pr-create: %q", rs.StagePuntReasons[string(state.StagePRCreate)])
