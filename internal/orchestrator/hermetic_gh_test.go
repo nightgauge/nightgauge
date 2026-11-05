@@ -14,6 +14,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
+	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 )
 
 // TestMain replaces the package's `gh` seam for the whole test binary before a
@@ -48,6 +49,10 @@ func TestMain(m *testing.M) {
 	// TestScheduler_NonTerminalReconcile_OwnRunPrOpen_FailurePreserved in CI.
 	gittest.IsolateProcess()
 	reconcileExecGh = refuseUnstubbedGh
+	// The base refresh (#2897) fetches origin in every run worktree; a fixture
+	// whose origin is a real URL would reach the network. A test that wants a
+	// refresh says what it did.
+	refreshResumedBase = refuseUnstubbedRefresh
 	finalizeDueSurvivalRecords = refuseUnstubbedSurvivalSweep
 	// Never publish the endpoint slot ledger into the real home (#1679); a
 	// test that checks publication points it at its own temp dir.
@@ -180,4 +185,10 @@ func stubSurvivalSweepNoForge(t *testing.T) {
 	stubSurvivalSweep(t, func(context.Context, string, time.Time, int) (gh.FinalizeResult, error) {
 		return gh.FinalizeResult{}, nil
 	})
+}
+
+// refuseUnstubbedRefresh is the package default for refreshResumedBase: the run
+// logs a skipped refresh and continues on the tree as found.
+func refuseUnstubbedRefresh(context.Context, string, int) (pmstages.BaseRefresh, error) {
+	return pmstages.BaseRefresh{}, fmt.Errorf("refreshResumedBase not stubbed in this test")
 }

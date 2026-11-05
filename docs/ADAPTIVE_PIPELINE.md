@@ -321,3 +321,21 @@ triage. Only work the pipeline destroyed is work the pipeline preserves.
 This is the safety net that makes the whole class of guard kill non-destructive
 regardless of how the guards are tuned — a mis-tuned kill costs a retry, never
 the work.
+
+### Resumed Worktree Base Refresh (Issue #2897)
+
+A re-dispatch in the Go scheduler reuses the surviving run worktree. Before the
+first stage runs, the scheduler fetches `origin/<base>`, logs how many commits
+the branch is behind, and merges the base in place with `--autostash`, so
+uncommitted work is kept. The merge fast-forwards a branch with no commits of
+its own, so the next preserved-resume decision does not count a merge commit as
+dev work. It never rebases or pushes. Conflicts only in `CHANGELOG.md` files are
+resolved as a union. Any other conflict, or an uncommitted file the base also
+changed, aborts the merge and ends the run `merge_conflict`, naming the files. A
+failed fetch is logged and the run continues. A pr-merge resume is skipped,
+because that stage brings an open PR up to date itself.
+
+When a stage declares the issue blocked and names an issue or PR the forge now
+reads closed, the scheduler refreshes the base once. If the base advanced, the
+stage runs again on it. If not, the verdict stands, with a note that the
+re-check ran. This happens at most once per run.

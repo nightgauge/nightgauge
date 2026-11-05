@@ -38,6 +38,14 @@ changelog, and the release workflow refuses a tag that does not.
   explicit timestamps before the enforcer arms, upper bounds that measured the scheduler are
   replaced by the breach's recorded `Observed` and excluded time, and the stop test's
   deadline is a minute away from the 250 ms cycle it checks.
+- A re-dispatched issue now sees work that merged since its last run (#2897). The
+  Go scheduler used to resume a surviving worktree as it was, so a blocker that
+  had since merged to `main` stayed invisible and the run stopped as blocked
+  again. Before the first stage, it now fetches `origin/<base>`, logs how far
+  behind the branch is, and merges the base in, keeping uncommitted work. A
+  conflicting merge stops the run as `merge_conflict` and names the files. When
+  a stage reports the issue blocked on an issue or PR that is now closed, the
+  scheduler refreshes the base once and re-runs the stage if the base moved.
 - The full local gate is no longer thrown away after twenty minutes. A foreground Bash
   call is killed at twice its timeout, and the core gate runs longer, so a new
   `nightgauge hook gate-background` PreToolUse check in the Claude Code plugin now denies
