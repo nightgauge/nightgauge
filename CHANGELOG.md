@@ -18,6 +18,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A stage that stalled after a soft quota warning keeps its model tier even when
+  its stderr happens to contain `status=limited`; only skillRunner's own
+  limited-quota kill marker now cancels the warning-only guard. Stage-cap kills
+  also report raw output idle in the kill marker and `<stage>-stalled.log`,
+  instead of the live-work clock that read ~0 during background work.
 - A transient GitHub error (a gateway 502/503/504, a generic GraphQL failure, a
   dropped connection) on merge-queue enqueue no longer fails pr-merge outright.
   The enqueue is retried with backoff (2s, 4s, 8s), and before each retry the PR

@@ -214,7 +214,7 @@ import {
 import { isCostAwareRoutingEnabled, getCostPerSuccessContext } from "./costAwareRouting";
 import { withBehavioralPreamble } from "./behavioralPreamble";
 import type { KillCeiling } from "./killCeiling";
-import { formatKillCeilingValue, msLimit } from "./killCeiling";
+import { formatKillCeilingValue, killReportIdleMs, msLimit } from "./killCeiling";
 import {
   ProgressMonitor,
   applyBackgroundTaskEvent,
@@ -7165,10 +7165,13 @@ function runStageSkillHeadlessImpl(
       // `[rate-limit-quota-exhausted]` marker (#3386), `[stall-killed]`
       // marker, and any other diagnostic context the autonomous Go
       // scheduler classifies on were all lost between TS and Go (#3406).
+      // A cap kill is not an idle kill: report raw output silence, not the
+      // live-work clock that would show ~0 during background work (#2737).
+      const reportedOutputIdleMs = killReportIdleMs(killCeiling.name, idleMs, softIdleMs);
       const killMarker =
         `[skillRunner] Stage ${killReason} — ` +
         `forcibly terminating process after ${formatElapsed(elapsed)} ` +
-        `(idle for ${formatElapsed(softIdleMs)}).\n`;
+        `(idle for ${formatElapsed(reportedOutputIdleMs)}).\n`;
       stderrBuffer = appendTail(stderrBuffer, killMarker, OUTPUT_ERROR_TAIL_MAX_CHARS);
       callbacks?.onStderr?.(killMarker);
 
@@ -7182,7 +7185,7 @@ function runStageSkillHeadlessImpl(
           `stage: ${stage}`,
           `issue: ${issueNumber}`,
           `elapsed: ${formatElapsed(elapsed)}`,
-          `idle: ${formatElapsed(softIdleMs)}`,
+          `idle: ${formatElapsed(reportedOutputIdleMs)}`,
           `kill_reason: ${killReason}`,
           `kill_path: ${
             hardCapReached
