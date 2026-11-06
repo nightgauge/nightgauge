@@ -7,6 +7,7 @@ import {
   applyDeliverablePolicy,
   canonicalSchemaVersion,
   deliverableKindForStage,
+  misplacedACVerdicts,
   POLICY_MARKER_FIELD,
   POLICY_VERSION,
   stampPolicyMarker,
@@ -287,5 +288,52 @@ describe("schema_version is asserted, not authored (#1177)", () => {
     expect(deliverableKindForStage("feature-dev")).toBe("dev");
     expect(deliverableKindForStage("feature-validate")).toBe("validate");
     expect(deliverableKindForStage("pr-create")).toBeUndefined();
+  });
+});
+
+// #2671 / #3013: mirrors Go TestApplyPolicy_ACVerdictKey.
+describe("AC verdict key (#2671)", () => {
+  const verdict = [{ index: 1, verdict: "met" }];
+  const good = [{ index: 0, text: "x", status: "met", evidence: "e" }];
+  const cases: Array<[string, Record<string, unknown>, string[]]> = [
+    [
+      "wrong key",
+      { acceptance_criteria: verdict },
+      ["validate.acceptance_criteria.verdicts_under_wrong_key"],
+    ],
+    [
+      "wrong key alongside",
+      { acceptance_criteria: verdict, acceptance_criteria_verdicts: good },
+      ["validate.acceptance_criteria.verdicts_under_wrong_key"],
+    ],
+    [
+      "verdict field",
+      { acceptance_criteria_verdicts: verdict },
+      ["validate.acceptance_criteria_verdicts.verdict_field"],
+    ],
+    ["string list", { acceptance_criteria: ["a", "b"] }, []],
+    ["correct shape", { acceptance_criteria_verdicts: good }, []],
+  ];
+  for (const [name, doc, rules] of cases) {
+    it(name, () => {
+      const out = applyDeliverablePolicy("validate", doc);
+      const fatal = out.notes.filter((n) => n.disposition === "fatal");
+      expect(fatal.map((n) => n.rule)).toEqual(rules);
+      expect(out.ok).toBe(rules.length === 0);
+      for (const n of fatal) {
+        expect(
+          n.detail.includes("acceptance_criteria_verdicts") || n.detail.includes("status")
+        ).toBe(true);
+      }
+    });
+  }
+
+  it("uses Go's detail strings verbatim", () => {
+    expect(misplacedACVerdicts({ acceptance_criteria: [...verdict, ...verdict] })).toEqual([
+      "acceptance_criteria carries 2 verdict entries; verdicts belong under acceptance_criteria_verdicts as {index, text, status, evidence}",
+    ]);
+    expect(misplacedACVerdicts({ acceptance_criteria_verdicts: verdict })).toEqual([
+      "acceptance_criteria_verdicts[0] uses verdict; the field is status",
+    ]);
   });
 });
