@@ -43,6 +43,10 @@ import (
 //     pure-analysis stages (issue-pickup, feature-planning) that never author
 //     commits — defense in depth against committing hallucinated changes.
 //     feature-validate is exempt from this tier because it legitimately commits.
+//
+// Separately, pr-create may not start the full local gate (#2989): feature-validate's
+// gate already satisfies the once-before-push rule, and PR CI plus pr-merge check
+// the tree pr-create's base merge produces.
 func EvaluateStageGate(inputJSON []byte) GateDecision {
 	return evaluateStageGate(inputJSON, os.Getenv("NIGHTGAUGE_STAGE"))
 }
@@ -59,6 +63,11 @@ var forgeFencedStages = map[string]bool{
 var commitFencedStages = map[string]bool{
 	"issue-pickup":     true,
 	"feature-planning": true,
+}
+
+// gateFencedStages may not start the full local gate (#2989).
+var gateFencedStages = map[string]bool{
+	"pr-create": true,
 }
 
 // evaluateStageGate is the pure, testable core: it takes the stage explicitly so
@@ -102,6 +111,14 @@ func evaluateStageGate(inputJSON []byte, stage string) GateDecision {
 			approvalLabel, reason))
 	}
 
+	if gateFencedStages[stage] {
+		if reason := gateStartReason(segments); reason != "" {
+			return Block(fmt.Sprintf(
+				"the %s stage must not run the full local gate — blocked: %s. feature-validate's gate already satisfies the once-before-push rule; push the Phase 2.3 base merge straight away — PR CI and pr-merge check the merged tree (#2989).",
+				stage, reason))
+		}
+	}
+
 	if !forgeFencedStages[stage] && !commitFencedStages[stage] {
 		return Allow() // not a fenced stage → only the merge-bypass ban applies
 	}
@@ -121,6 +138,17 @@ func evaluateStageGate(inputJSON []byte, stage string) GateDecision {
 		}
 	}
 	return Allow()
+}
+
+// gateStartReason names the first segment that starts the full local gate in
+// command position, or "" when none does.
+func gateStartReason(segments []Segment) string {
+	for _, seg := range segments {
+		if name := gateStartName(seg.CommandArgv(), nil); name != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 // adminMergeBypassReason returns a short reason when any segment runs a

@@ -203,5 +203,22 @@ if [[ -d "$USER_DIR/logs" ]]; then
   find "$OUT/vscode-logs" -type f -name 'exthost.log' -print0 2>/dev/null \
     | while IFS= read -r -d '' f; do echo "== $f (errors)"; grep -aiE 'error|nightgauge' "$f" | tail -n 40; done
 fi
+# Bundle-read evidence (#2722): the stage must have read its skills from the
+# installed extension's dist/skills, granted per-stage, not via a user-level
+# additionalDirectories entry. The host turns these two counts into G1 rows.
+if [[ "${E2E_SMOKE:-0}" != "1" ]]; then
+  BUNDLE_SKILLS="$EXT_DIR/$REL/dist/skills/"
+  USER_ADDITIONAL_DIRS=0
+  if [[ -f "$HOME/.claude/settings.json" ]]; then
+    USER_ADDITIONAL_DIRS="$(jq '.permissions.additionalDirectories // [] | length' "$HOME/.claude/settings.json" 2>/dev/null || echo -1)"
+  fi
+  # Only a tool call that reads under the bundle (Read, Grep/Glob, Bash) counts;
+  # a transcript line that merely mentions the path (a grant) is not a read.
+  BUNDLE_SKILL_READS="$("$(dirname "$0")/count-bundle-skill-reads.sh" \
+    "$HOME/.claude/projects" "$BUNDLE_SKILLS" 2>/dev/null || echo 0)"
+  jq -n --argjson u "${USER_ADDITIONAL_DIRS:-0}" --argjson r "${BUNDLE_SKILL_READS:-0}" --arg p "$BUNDLE_SKILLS" \
+    '{user_additional_dirs: $u, bundle_skill_reads: $r, bundle_skills_path: $p}' > "$OUT/bundle-read.json"
+  cat "$OUT/bundle-read.json"
+fi
 [[ -f "$CLEAN_INSTALL_REPORT" ]] || { echo "ERROR: the driver never wrote its report — VS Code exited without running it"; exit 1; }
 python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print('driver status:', r['status']); sys.exit(0 if r['status']=='pass' else 1)" "$CLEAN_INSTALL_REPORT"

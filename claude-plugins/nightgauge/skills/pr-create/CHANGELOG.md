@@ -17,6 +17,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The stage never runs the full local gate (#2989).** After the Phase 2.3
+  base merge it pushes straight away; `feature-validate`'s gate satisfies the
+  once-before-push rule, and the stage fence refuses a gate start here.
 - **Criteria the diff answers are checked against the diff (#2665).** The
   deterministic runner resolves each acceptance criterion from the branch diff
   as well as the tree re-run and the validate verdict, so a diff-checkable

@@ -28,9 +28,9 @@ row; `main` moves.
 
 ### The one gate that matters
 
-| #   | Gate                                                                                                                                                                                                                 | State                                                                                                                                                                                             |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. See _The clean-machine install gate_ below. | **Done — #1137.** Walked on the release commit `e6e98c76` on 2026-09-02: packaged VSIX, bare container, fixture issue → merged PR, unattended. See _Findings from the release-commit walk_ below. |
+| #   | Gate                                                                                                                                                                                                                                                                                                                                              | State                                                                                                                                                                                             |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. For a release the evidence is `gh workflow run clean-install-e2e.yml -f rc_tag=vX.Y.Z-rc.N`, which tests that RC's own VSIX. See _The clean-machine install gate_ below. | **Done — #1137.** Walked on the release commit `e6e98c76` on 2026-09-02: packaged VSIX, bare container, fixture issue → merged PR, unattended. See _Findings from the release-commit walk_ below. |
 
 The pipeline has proven itself end to end on a real repository — an
 M-sized feature issue went pickup → plan → dev → validate → PR → merge
@@ -351,6 +351,19 @@ the repo and a release, and then left to whoever remembered it.
 
 This is the procedure. Run it against the packaged artifact, never a dev
 install (`scripts/dev-install.sh` is explicitly not a release-validation path).
+
+The automated gate (`.github/workflows/clean-install-e2e.yml`) has two forms.
+A scheduled or plain dispatch packages the VSIX from the tree, which proves the
+tree, not a build any user receives. Release evidence is the RC form:
+`gh workflow run clean-install-e2e.yml -f rc_tag=vX.Y.Z-rc.N` downloads the
+`linux-x64` VSIX from that tag's successful staging run (`rc-artifacts-<tag>`),
+checks the tag's tree out beside the dispatch-ref harness (the skill-bundle
+source and the plugin-install check read it), runs the staging integrity checks on it, and
+names it in the run summary's _Artifact tested_ row. If the artifact is missing
+or expired (14-day retention) the run fails; it never falls back to the tree.
+Re-run staging for the tag first. The same run also asserts a stage read its
+skills from the installed bundle, and validates the cached plugin copy that
+`claude plugin install` writes.
 
 ### The steps
 

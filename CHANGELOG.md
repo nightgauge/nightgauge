@@ -14,6 +14,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- The clean-install release gate (G1) can now test a release candidate's own
+  VSIX: dispatch `clean-install-e2e.yml` with `rc_tag=vX.Y.Z-rc.N`. The run
+  summary names the artifact tested, the VSIX runs the same integrity checks as
+  staging, the run asserts a stage read its skills from the installed bundle, and
+  the cached copy from `claude plugin install` is checked for hooks and broken
+  links. A missing RC artifact fails the run instead of testing the tree (#2722).
+
 ### Fixed
 
 - A feature-validate push refused for authentication is no longer reported as
@@ -22,6 +31,10 @@ changelog, and the release workflow refuses a tag that does not.
   `push_status: "auth_failed"` in its context, the run halts with that marker
   (classified `git_transport_auth_failed`), and the failure comment tells you
   to fix the git credentials instead of reviewing tests (#2742).
+- pr-create no longer re-runs the ~30-minute full local gate after merging the
+  base branch. The skill says to push the merge straight away, and the stage
+  fence refuses `bash scripts/ci-local.sh` and `nightgauge ci gate-run` in
+  pr-create; feature-validate's gate already covers the push (#2989).
 - A pipeline run that backtracked and then merged is now booked as a success.
   Rewinds now drop the stages they are about to re-run from the run's
   bookkeeping, and the completion check counts distinct stages instead of
