@@ -509,7 +509,14 @@ REQUIRED_NPM_SCRIPTS=(
   test
 )
 
+# Tools a step needs that npm ci does not provide. Absent, a step failed late
+# and read as a finding about the change (#2801). Listed in docs/GIT_WORKFLOW.md.
+REQUIRED_TOOLS=(git node npm npx jq perl python3 yq)
+
 MISSING=()
+for t in "${REQUIRED_TOOLS[@]}"; do
+  command -v "$t" >/dev/null || MISSING+=("missing required tool: $t")
+done
 for path in "${REQUIRED_FILES[@]}"; do
   [ -e "$path" ] || MISSING+=("missing required file: $path")
 done
@@ -536,7 +543,8 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
     echo "script that a step below invokes. A missing one used to make its step"
     echo "disappear from the gate silently (#983); it is now a hard failure."
     echo "Restore the path, or delete its step AND its entry in"
-    echo "scripts/ci-local-steps.txt together."
+    echo "scripts/ci-local-steps.txt together. A missing tool is a prerequisite:"
+    echo "install it (docs/GIT_WORKFLOW.md#mandatory-local-ci-validation-never-skip)."
   } >&2
   exit 1
 fi

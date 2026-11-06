@@ -1328,6 +1328,14 @@ consistency:
 catching environment differences, not for running tests you skipped locally.
 Every push that fails CI wastes time and pollutes the PR with fix-up commits.
 
+**Prerequisites.** `scripts/ci-local.sh` needs `npm ci` run in the worktree,
+`git`, `node`/`npm`/`npx`, `jq`, `perl`, mikefarah `yq`, and a `python3` with
+`.github/requirements-ci.txt` installed. Its preflight names any missing tool
+and exits before the first step. The plugin install docs gate also needs
+network access for `npx @anthropic-ai/claude-code@<max_tested>`, the version
+`internal/adaptercompat/manifests/claude-headless.json` pins, unless that
+version of `claude` is on `PATH`.
+
 > **Pre-commit hook**: The repository's pre-commit hook automatically validates
 > generated files on every `git commit`. If you see a hook error, run the
 > suggested command, re-stage the file, and commit again. The hook is installed

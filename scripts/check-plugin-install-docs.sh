@@ -9,8 +9,8 @@
 # Live arm: takes the `claude plugin marketplace add` and `claude plugin install`
 # lines from each doc's fenced bash blocks and runs them, in that doc's order,
 # in a scratch CLAUDE_CONFIG_DIR. The user and `--scope project` routes each get
-# their own, and the project route must write the .claude/settings.json it tells
-# readers to commit. Only the exact documented forms are accepted;
+# their own, and the project route must write .claude/settings.json enabling the
+# plugin. Only the exact documented forms are accepted;
 # nothing from a doc reaches a shell. A git `insteadOf` points the GitHub URL at
 # a temporary bare clone whose `stable` is HEAD, so this proves the commands and
 # the committed tree, not that the public `stable` ref exists. The plugin must be
@@ -24,7 +24,8 @@
 # Validate arm: `claude plugin validate --strict` passes on the working tree's
 # plugin and on the repository root, which holds the marketplace.
 #
-# Claude Code comes from PATH, else npx at the pinned version.
+# Claude Code runs at max_tested from internal/adaptercompat/manifests/
+# claude-headless.json: PATH claude only when it reports that version, else npx.
 #
 # Exit codes: 0 docs hold; 1 a violation was found (each named on stderr);
 # 2 the check could not run.
@@ -34,7 +35,7 @@ set -uo pipefail
 REPO_ROOT="${CHECK_PLUGIN_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO_ROOT" || exit 2
 
-CLAUDE_CODE_VERSION="2.1.316"
+MANIFEST="internal/adaptercompat/manifests/claude-headless.json"
 PLUGIN_ID="nightgauge@nightgauge-plugins"
 URL="https://github.com/nightgauge/nightgauge.git"
 INSTALL_DOCS=(README.md claude-plugins/nightgauge/README.md docs/GETTING_STARTED.md)
@@ -90,15 +91,22 @@ doc_commands() {
 
 command -v jq >/dev/null || cannot_run "jq is required"
 command -v perl >/dev/null || cannot_run "perl is required"
+CLAUDE_CODE_VERSION="$(jq -r '.max_tested // empty' "$MANIFEST" 2>/dev/null)"
+[ -n "$CLAUDE_CODE_VERSION" ] || cannot_run "cannot read max_tested from $MANIFEST"
 CLAUDE=()
-if command -v claude >/dev/null && claude --version </dev/null >/dev/null 2>&1; then
+CLAUDE_SOURCE=""
+if command -v claude >/dev/null &&
+  claude --version </dev/null 2>/dev/null | grep -qF -- "$CLAUDE_CODE_VERSION"; then
   CLAUDE=(claude)
+  CLAUDE_SOURCE="PATH claude"
 elif command -v npx >/dev/null &&
   npx --yes "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" --version </dev/null >/dev/null 2>&1; then
   CLAUDE=(npx --yes "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION")
+  CLAUDE_SOURCE="npx"
 else
-  cannot_run "neither claude nor npx @anthropic-ai/claude-code@$CLAUDE_CODE_VERSION can run"
+  cannot_run "neither claude $CLAUDE_CODE_VERSION on PATH nor npx @anthropic-ai/claude-code@$CLAUDE_CODE_VERSION can run"
 fi
+echo "check-plugin-install-docs: Claude Code $CLAUDE_CODE_VERSION via $CLAUDE_SOURCE"
 
 EXPECTED="$(git ls-tree -r --name-only HEAD claude-plugins/nightgauge/skills | grep -c '/SKILL\.md$')"
 [ "$EXPECTED" -gt 0 ] || cannot_run "no SKILL.md committed under claude-plugins/nightgauge/skills"
@@ -180,6 +188,9 @@ check_route() {
     return 0
   fi
   install_path="$(printf '%s' "$entry" | jq -r '.installPath // empty')"
+  # An empty path would glob under / and report a count, not the real fault.
+  [ -n "$install_path" ] && [ -d "$install_path" ] ||
+    cannot_run "plugin list --json gave $PLUGIN_ID no installPath"
   for f in "$install_path"/skills/*/SKILL.md; do
     [ -f "$f" ] && found=$((found + 1))
   done
@@ -239,5 +250,5 @@ if [ "$FAIL" -ne 0 ]; then
   echo "check-plugin-install-docs: FAILED" >&2
   exit 1
 fi
-echo "check-plugin-install-docs: OK (${#COMMAND_DOCS[@]} docs, $EXPECTED skills)"
+echo "check-plugin-install-docs: OK (Claude Code $CLAUDE_CODE_VERSION, ${#COMMAND_DOCS[@]} docs, $EXPECTED skills)"
 exit 0

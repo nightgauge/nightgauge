@@ -43,7 +43,7 @@ $INSTALL
 write_stub() {
   cat >"$TMP/bin/claude" <<'STUB'
 #!/usr/bin/env bash
-[ "${1:-}" = "--version" ] && { [ -z "${STUB_BROKEN:-}" ]; exit; }
+[ "${1:-}" = "--version" ] && { [ -z "${STUB_BROKEN:-}" ] || exit 1; echo "${STUB_VERSION:-9.9.9} (Claude Code)"; exit 0; }
 c="$CLAUDE_CONFIG_DIR"
 [ -z "${STUB_HANG:-}" ] || exec sleep 30
 case "$*" in
@@ -78,8 +78,12 @@ case "$*" in
     fi ;;
   "plugin list --json")
     [ -f "$c/plugin/skills/a/SKILL.md" ] || [ -d "$c/plugin" ] || { echo '[]'; exit 0; }
-    printf '[{"id":"nightgauge@nightgauge-plugins","enabled":%s,"installPath":"%s/plugin"}]\n' \
-      "${STUB_ENABLED:-true}" "$c" ;;
+    if [ -n "${STUB_NO_INSTALL_PATH:-}" ]; then
+      printf '[{"id":"nightgauge@nightgauge-plugins","enabled":true}]\n'
+    else
+      printf '[{"id":"nightgauge@nightgauge-plugins","enabled":%s,"installPath":"%s/plugin"}]\n' \
+        "${STUB_ENABLED:-true}" "$c"
+    fi ;;
   *) echo "stub: unexpected: $*"; exit 1 ;;
 esac
 STUB
@@ -92,7 +96,8 @@ fixture() {
   [ -n "$TMP" ] && rm -rf "$TMP"
   TMP="$(mktemp -d)" || { echo "HARNESS ERROR: mktemp failed."; exit 2; }
   mkdir -p "$TMP/scripts" "$TMP/docs" "$TMP/bin" "$TMP/configs/claude" \
-    "$TMP/claude-plugins/nightgauge/skills/a"
+    "$TMP/claude-plugins/nightgauge/skills/a" "$TMP/internal/adaptercompat/manifests"
+  echo '{"max_tested":"9.9.9"}' >"$TMP/internal/adaptercompat/manifests/claude-headless.json"
   cp "$GATE" "$TMP/scripts/"
   echo x >"$TMP/claude-plugins/nightgauge/skills/a/SKILL.md"
   for d in README.md claude-plugins/nightgauge/README.md docs/GETTING_STARTED.md \
@@ -226,6 +231,22 @@ expect "mistyped scope" 1 "undocumented install form"
 fixture
 echo '{"extraKnownMarketplaces": {}}' >"$TMP/configs/claude/settings.json"
 expect "shipped settings marketplace" 1 "configs/claude/settings.json: documents a settings-based"
+
+fixture
+expect "the run names the manifest's Claude Code version" 0 "Claude Code 9.9.9 via PATH claude"
+
+# A PATH claude at another version is not the pinned one: fall back to npx.
+fixture
+expect "PATH claude at another version falls back to npx" 2 "@anthropic-ai/claude-code@9.9.9" \
+  STUB_VERSION=1.0.0
+
+fixture
+rm "$TMP/internal/adaptercompat/manifests/claude-headless.json"
+expect "missing manifest pin is a harness error" 2 "HARNESS ERROR.*cannot read max_tested"
+
+fixture
+expect "no installPath is a harness error, not a violation" 2 "HARNESS ERROR.*no installPath" \
+  STUB_NO_INSTALL_PATH=1
 
 echo "check-plugin-install-docs suite: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
