@@ -3338,6 +3338,57 @@ export function claudeSkillsDirArgs(skillPath: string, cwd: string | undefined):
   return ["--add-dir", root, "--disallowedTools", deny.join(",")];
 }
 
+/** Variable a stage is handed the run's knowledge base in, as KnowledgeDirEnvVar in Go. */
+export const KNOWLEDGE_DIR_ENV_VAR = "NIGHTGAUGE_KNOWLEDGE_DIR";
+
+/**
+ * The run's knowledge base: the MAIN checkout's `.nightgauge/knowledge`,
+ * absolute — the twin of config.KnowledgeBaseDir in Go (#2798). A worktree
+ * resolves to its main checkout through the in-tree marker or the recorded
+ * worktree, else through git's common dir; a main checkout or a non-git dir
+ * resolves to itself. `""` when there is no workspace root.
+ */
+export function stageKnowledgeDir(workspaceRoot: string | undefined): string {
+  if (!workspaceRoot) return "";
+  const norm = path.resolve(workspaceRoot);
+  let root = resolveMainRepoRoot(norm);
+  if (root === norm) {
+    try {
+      const out = execFileSync(
+        "git",
+        ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+        { cwd: norm, encoding: "utf-8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }
+      );
+      const [gitDir, commonDir] = String(out ?? "")
+        .trim()
+        .split("\n");
+      if (gitDir && commonDir && path.resolve(gitDir) !== path.resolve(commonDir)) {
+        root = path.dirname(path.resolve(commonDir));
+      }
+    } catch {
+      // Not a checkout, or git unavailable: the dir itself, as KnowledgeBaseDir.
+    }
+  }
+  return path.join(root, ".nightgauge", "knowledge");
+}
+
+/**
+ * Claude flags that make the knowledge base a working directory, so a stage in
+ * a worktree can write PRD/decisions/lessons into the main checkout (#2798).
+ * The twin of claudeKnowledgeDirArgs in internal/execution/adapters/claude.go.
+ */
+export function claudeKnowledgeDirArgs(knowledgeDir: string): string[] {
+  return knowledgeDir ? ["--add-dir", knowledgeDir] : [];
+}
+
+/** `env` with the knowledge-dir variable set to `dir`, or removed when `dir` is empty. */
+function interactiveKnowledgeEnv(env: NodeJS.ProcessEnv, dir: string): NodeJS.ProcessEnv {
+  const out = { ...env };
+  if (dir) out[KNOWLEDGE_DIR_ENV_VAR] = dir;
+  else delete out[KNOWLEDGE_DIR_ENV_VAR];
+  return out;
+}
+
 /** Top-level system symlinks a path is reached through, as openCodeSystemAliases. */
 const SYSTEM_PATH_ALIASES = ["/tmp"];
 
@@ -4995,6 +5046,7 @@ function runStageSkillHeadlessImpl(
       "--allowedTools",
       allAllowedTools.join(","),
       ...claudeSkillsDirArgs(renderedSkillPath, workspaceRoot),
+      ...claudeKnowledgeDirArgs(stageKnowledgeDir(workspaceRoot)),
       ...claudePluginDirArgs(claudePlugin.dir),
     ];
 
@@ -5724,6 +5776,7 @@ function runStageSkillHeadlessImpl(
   // Composed as a named object rather than inline in the spawn call because the
   // run-identity reconcile below is a DELETION, and a spread cannot express one
   // (see #370 / ADR-017).
+  const knowledgeDir = stageKnowledgeDir(workspaceRoot);
   const spawnEnv: NodeJS.ProcessEnv = {
     ...withoutLaunchingSessionEnv(),
     // Export the resolved Go binary (NIGHTGAUGE_BIN + PATH prepend) so
@@ -5771,6 +5824,8 @@ function runStageSkillHeadlessImpl(
     // `nightgauge knowledge stamp --stage` builds its provenance actor from
     // NIGHTGAUGE_DISPATCH_MODEL and fails without it (#2576).
     ...(launchedModel ? { NIGHTGAUGE_DISPATCH_MODEL: launchedModel } : {}),
+    // The run's knowledge base, at parity with the Go adapters (#2798).
+    ...(knowledgeDir ? { [KNOWLEDGE_DIR_ENV_VAR]: knowledgeDir } : {}),
     NIGHTGAUGE_STAGE: stage,
   };
 
@@ -5788,6 +5843,10 @@ function runStageSkillHeadlessImpl(
   // this child's provenance actor when no model was launched here (#2576).
   if (!launchedModel) {
     delete spawnEnv.NIGHTGAUGE_DISPATCH_MODEL;
+  }
+  // And for the knowledge base: never an outer run's (#2798).
+  if (!knowledgeDir) {
+    delete spawnEnv[KNOWLEDGE_DIR_ENV_VAR];
   }
 
   // The OpenCode stage's inherited overrides and foreign credentials go, and a
@@ -9605,6 +9664,8 @@ export function runStageSkillInteractive(
   // Get auth provider from config (Issue #511)
   const authProvider = getAuthProvider(workspaceRoot);
 
+  const interactiveKnowledgeDir = stageKnowledgeDir(workspaceRoot);
+
   // Build CLI arguments for interactive mode
   // NO -p flag (keeps stdin open for conversation)
   // NO --output-format stream-json (raw text output)
@@ -9614,6 +9675,7 @@ export function runStageSkillInteractive(
     "--allowedTools",
     allInteractiveAllowedTools.join(","),
     ...claudeSkillsDirArgs(skillData.skillPath, workspaceRoot),
+    ...claudeKnowledgeDirArgs(interactiveKnowledgeDir),
     // No stream here, so this path passes the flag with no init check (#2723).
     ...claudePluginDirArgs(resolveClaudePlugin().dir),
   ];
@@ -9645,7 +9707,7 @@ export function runStageSkillInteractive(
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      ...withoutLaunchingSessionEnv(),
+      ...interactiveKnowledgeEnv(withoutLaunchingSessionEnv(), interactiveKnowledgeDir),
       ...autoAcceptEnv,
     },
   });

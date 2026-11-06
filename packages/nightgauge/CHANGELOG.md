@@ -11,6 +11,11 @@ and this project adheres to
 
 ### Fixed
 
+- Claude stages launched from the VS Code extension can now write to the main
+  checkout's knowledge base from a worktree without a user-level permission rule:
+  they get `--add-dir <main checkout>/.nightgauge/knowledge` and
+  `NIGHTGAUGE_KNOWLEDGE_DIR`, as Go-launched stages already did (#2798).
+
 - `nightgauge autonomous status` no longer reads "Running" while a repository
   halt stops dispatch: the headline counts halted repositories and lists each
   one, plus issues awaiting architecture approval, live and from the state

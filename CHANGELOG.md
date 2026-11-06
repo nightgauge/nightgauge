@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Claude stages launched from the VS Code extension can now write to the main
+  checkout's knowledge base from a worktree without a user-level permission rule:
+  they get `--add-dir <main checkout>/.nightgauge/knowledge` and
+  `NIGHTGAUGE_KNOWLEDGE_DIR`, as Go-launched stages already did (#2798).
+
 - A run the architecture-approval gate holds is no longer reported as a failed
   run. Local history and the platform push record it as `cancelled` with
   `outcome_type: awaiting_approval`, keeping its terminal kind, and it stays out
