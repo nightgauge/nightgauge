@@ -129,16 +129,23 @@ check "a refused probe touches no ledger" "$(result test -z "$CALLS")"
 
 # A nightgauge installed beside yq (a brew cask) hides yq with it. The probe runs
 # no tool-dependent step, so the tool preflight must not refuse it (#2801).
-NO_YQ_PATH=""
+# Shadow CLEAN_PATH with every executable but yq: removing whole directories
+# would also remove bash where yq lives in /usr/bin (ubuntu-latest).
+mkdir -p "$TMP/noyq"
 IFS=: read -r -a CLEAN_DIRS <<<"$CLEAN_PATH"
 for dir in "${CLEAN_DIRS[@]}"; do
-  [ -x "$dir/yq" ] || NO_YQ_PATH="$NO_YQ_PATH${NO_YQ_PATH:+:}$dir"
+  for exe in "$dir"/*; do
+    name="${exe##*/}"
+    [ "$name" = yq ] && continue
+    [ -x "$exe" ] && [ ! -d "$exe" ] && [ ! -e "$TMP/noyq/$name" ] && ln -s "$exe" "$TMP/noyq/$name"
+  done
 done
 SAVED_PATH="$CLEAN_PATH"
-CLEAN_PATH="$NO_YQ_PATH"
+CLEAN_PATH="$TMP/noyq"
 run "$TMP/bin/nightgauge" "$PASSED" --ledger-probe pass
 CLEAN_PATH="$SAVED_PATH"
 check "a probe with no yq on PATH still runs" "$CODE"
+check "the yq-less probe reached reuse" "$(result has "$OUT" "Gate skipped: tree t1 already passed")"
 check "a probe never reports a missing tool" "$(result test -n "$(has "$OUT" "missing required tool" || echo none)")"
 
 echo "passed=$PASS failed=$FAIL"

@@ -511,7 +511,7 @@ REQUIRED_NPM_SCRIPTS=(
 
 # Tools a step needs that npm ci does not provide. Absent, a step failed late
 # and read as a finding about the change (#2801). Listed in docs/GIT_WORKFLOW.md.
-REQUIRED_TOOLS=(git node npm npx jq perl python3 yq)
+REQUIRED_TOOLS=(git go make node npm npx jq perl python3 yq)
 
 MISSING=()
 # The probe modes run no tool-dependent step, and the reuse harness hides every
