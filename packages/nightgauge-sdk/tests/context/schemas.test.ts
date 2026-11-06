@@ -535,6 +535,18 @@ describe("Context Schemas", () => {
   });
 
   describe("ValidateContextSchema", () => {
+    it("accepts push_status auth_failed with push_error and rejects unknown values (#2742)", () => {
+      const base = { schema_version: "2.7", issue_number: 1, validation_status: "passed" };
+      expect(
+        ValidateContextSchema.safeParse({
+          ...base,
+          push_status: "auth_failed",
+          push_error: "[push-auth-failed] PUSH REFUSED: x",
+        }).success
+      ).toBe(true);
+      expect(ValidateContextSchema.safeParse({ ...base, push_status: "nope" }).success).toBe(false);
+    });
+
     it("should validate a v1.0 validate context", () => {
       const validValidate = {
         schema_version: "1.0" as const,

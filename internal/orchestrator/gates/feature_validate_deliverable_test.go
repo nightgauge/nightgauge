@@ -285,3 +285,28 @@ func TestFeatureValidateGate_LedgerPassConfirmsUnitRun(t *testing.T) {
 		t.Fatalf("a pass for another tree confirmed this one: validation_status=%v", got)
 	}
 }
+
+// #2742: a refused push halts the gate under the credential kind even when
+// every quality gate passed, so the Go scheduler cannot advance to pr-create.
+func TestFeatureValidateGate_RefusedPushHaltsAsAuthFailure(t *testing.T) {
+	ws := initRepo(t)
+	commitOnBranch(t, ws, "feat/2742", map[string]string{"internal/auth/token.go": "package auth\n"})
+	writeGateMetrics(t, ws, 2742, []map[string]any{{"gate_name": "build", "result": "pass"}})
+
+	art := passingArtifact()
+	art["issue_number"] = 2742
+	art["push_status"] = "auth_failed"
+	art["push_error"] = "[push-auth-failed] invalid auth method"
+	writeValidateArtifact(t, ws, 2742, art)
+
+	gr := FeatureValidateGate{}.Verify(context.Background(), 2742, ws)
+	if gr.Passed {
+		t.Fatal("a refused push must not pass the gate")
+	}
+	if gr.TerminalKind != TerminalKindGitTransportAuthFailed {
+		t.Fatalf("terminal kind = %q, want %q", gr.TerminalKind, TerminalKindGitTransportAuthFailed)
+	}
+	if !strings.Contains(gr.Reason, "[push-auth-failed]") {
+		t.Fatalf("reason must carry the marker, got %q", gr.Reason)
+	}
+}

@@ -108,6 +108,27 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
     expect((result as Error).message).toContain("[validation-failed]");
   });
 
+  // Issue #2742 (the #2706 specimen): tests passed, the push was refused for
+  // auth. The halt must name the push, never a test failure.
+  it("stamps the [push-auth-failed] marker when push_status is auth_failed (#2742)", () => {
+    writeValidateContext(workdir, 42, {
+      validation_status: "passed",
+      push_status: "auth_failed",
+      push_error: "[push-auth-failed] PUSH REFUSED: Permission denied (publickey).",
+    });
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/^\[push-auth-failed\]/);
+    expect((result as Error).message).not.toContain("[validation-failed]");
+    expect(classifyTerminalKind((result as Error).message)).toBe("git_transport_auth_failed");
+  });
+
+  it("prefers the push marker over a failed verdict (#2742)", () => {
+    writeValidateContext(workdir, 42, { validation_status: "failed", push_status: "auth_failed" });
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
+    expect((result as Error).message).toMatch(/^\[push-auth-failed\]/);
+  });
+
   // Issue #2865: the cap is one issue's outcome, so its text must classify as a
   // park. A [validation-failed] marker here is what halted the repository.
   it("stamps the [review-cap-reached] marker on a capped review (#2865)", () => {

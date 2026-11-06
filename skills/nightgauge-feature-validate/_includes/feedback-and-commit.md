@@ -483,9 +483,14 @@ Branch on the exit code:
   decide which side survives. The marker classifies the run as `branch_forked`
   (#163); the scheduler pins the local tip at `refs/nightgauge/stranded/<N>`
   before cleanup and names it on the Action Center card.
-- **1 — any failure other than a rejection.** Classify git's stderr, printed by the binary:
-  - **Non-recoverable** (auth denied, protected branch): stop and report. Do
-    NOT write context — the pipeline cannot proceed without a push.
+- **4 — auth refused** (#2742). The remote refused this machine's credentials;
+  the binary printed `[push-auth-failed] PUSH REFUSED: <reason>`. No rerun
+  clears it. Write `validate-{N}.json` anyway, with the real
+  `validation_status` from the checks above plus `push_status: "auth_failed"`
+  and `push_error` (the marker line), then end the stage. Never withhold the
+  context: without it the orchestrator reports the run as failed tests.
+- **1 — any other failure.** Classify git's stderr, printed by the binary:
+  - **Non-recoverable** (protected branch): stop and report.
   - **Transient network failure** (DNS, timeout): continue to write context,
     but set `PUSH_STATUS="deferred"` and include a note in the summary.
 

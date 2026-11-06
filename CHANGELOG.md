@@ -85,6 +85,12 @@ files over 32 MB (#3011). Its changes ship in this release and are listed below.
 - The Claude plugin's version is now 1.28.0, so installed plugins receive the plugin changes
   made since v0.8.1 (#2989's pr-create skill change), and `main`'s release-path build passes
   its plugin-version check again.
+- A feature-validate push refused for authentication is no longer reported as
+  failed tests. `nightgauge git push-branch` now exits 4 and prints
+  `[push-auth-failed]` on a credential refusal; feature-validate records
+  `push_status: "auth_failed"` in its context, the run halts with that marker
+  (classified `git_transport_auth_failed`), and the failure comment tells you
+  to fix the git credentials instead of reviewing tests (#2742).
 - pr-create no longer re-runs the ~30-minute full local gate after merging the
   base branch. The skill says to push the merge straight away, and the stage
   fence refuses `bash scripts/ci-local.sh` and `nightgauge ci gate-run` in
