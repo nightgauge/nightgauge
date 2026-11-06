@@ -26,7 +26,9 @@
 # WHAT COUNTS AS A FINDING (exit 1)
 #
 #   - one or more engines report the file `malicious` or `suspicious`;
-#   - any crowdsourced YARA rule matches;
+#   - any crowdsourced YARA rule matches, except a rule in YARA_ALLOWLIST,
+#     matched by rule name and source. An allowlisted match is recorded under
+#     `yara_allowlisted` and named in the summary line, not counted;
 #   - a Code insights verdict is present and is not `benign`.
 #
 # VirusTotal does not produce Code insights for every file type (ELF binaries
@@ -77,6 +79,12 @@ LARGE_FILE_BYTES=33554432 # 32 MB: above this, POST /files refuses the upload.
 # VirusTotal answers GET /files/upload_url with a URL on this host. It is the
 # only origin besides the API's own that may receive the key.
 VT_UPLOAD_ORIGIN="https://bigfiles.virustotal.com"
+# Crowdsourced YARA rules that are recorded but never count as a finding, as
+# "rule_name|source", matched exactly. Owner decision (#3019): InQuest's
+# Windows_API_Function rule matches every Go binary (os.ReadFile, os.WriteFile)
+# and describes itself as "not an indication of malicious behavior". Adding an
+# entry here is a reviewed change to the release policy.
+YARA_ALLOWLIST=("Windows_API_Function|https://github.com/InQuest/yara-rules-vt")
 FILES=()
 
 WORK=""
@@ -227,6 +235,8 @@ for sha in $UNIQUE; do
   echo "  uploaded $path ($sha)"
 done
 
+ALLOW_JSON="$(printf '%s\n' "${YARA_ALLOWLIST[@]}" | jq -R . | jq -sc .)"
+
 # --- 2. Per file: wait for the analysis, then read the file object -----------
 FINDINGS=0
 while IFS=$'\t' read -r sha aid; do
@@ -277,12 +287,14 @@ while IFS=$'\t' read -r sha aid; do
     ' "$BODY" 2>/dev/null)" ||
     harness "file object for $path ($sha) has YARA or Code insights results in an unknown shape"
 
-  entry="$(jq -cn \
+  entry="$(jq -cn --argjson allow "$ALLOW_JSON" \
     --arg file "$path" --arg sha "$sha" --argjson size "$size" --argjson files "$paths_json" \
     --argjson an "$analysis" --argjson at "$attrs" '
     {file: $file, files: $files, sha256: $sha, size: $size,
      malicious: $an.malicious, suspicious: $an.suspicious, engines: $an.engines,
-     yara: $at.yara, code_insights: $at.code_insights}
+     yara: [$at.yara[] | select(("\(.rule_name)|\(.source)" | IN($allow[])) | not)],
+     yara_allowlisted: [$at.yara[] | select("\(.rule_name)|\(.source)" | IN($allow[]))],
+     code_insights: $at.code_insights}
     | .findings = (
         [.engines[] | "engine \(.engine): \(.category) \(.result // "")"]
         + (if (.malicious + .suspicious) > 0 and (.engines | length) == 0
@@ -294,11 +306,15 @@ while IFS=$'\t' read -r sha aid; do
   ENTRIES="$(jq -c --argjson e "$entry" '. + [$e]' <<<"$ENTRIES")"
 
   n="$(jq -r '.findings | length' <<<"$entry")"
+  allowed="$(jq -r '[.yara_allowlisted[] | "\(.rule_name) (\(.source))"] | join(", ")' <<<"$entry")"
   if [ "$n" -gt 0 ]; then
     FINDINGS=$((FINDINGS + n))
     jq -r --arg f "$path" --arg s "$sha" '.findings[] | "::error::\($f) (\($s)): \(.)"' <<<"$entry"
+    [ -z "$allowed" ] || echo "  $path ($sha): YARA allowlisted: $allowed"
   else
-    echo "  clean $path ($sha): 0 malicious, 0 suspicious, no YARA, Code insights $(jq -r 'if (.code_insights | type) == "string" then .code_insights else "benign" end' <<<"$entry")"
+    yara_note="no YARA"
+    [ -z "$allowed" ] || yara_note="YARA allowlisted: $allowed"
+    echo "  clean $path ($sha): 0 malicious, 0 suspicious, $yara_note, Code insights $(jq -r 'if (.code_insights | type) == "string" then .code_insights else "benign" end' <<<"$entry")"
   fi
 done <"$ANALYSES"
 

@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The release scan gate no longer holds a release for InQuest's informational
+  `Windows_API_Function` YARA rule, which matches every Go binary. The rule is
+  matched by name and source, still recorded in the report under
+  `yara_allowlisted` and named in the summary line; every other finding still
+  blocks (#3019).
 - A feature-validate artifact that records its acceptance-criteria verdicts
   under `acceptance_criteria[].verdict` now fails the extension's deliverable
   policy, as it already did in Go (#3013). The stage is re-asked to move them

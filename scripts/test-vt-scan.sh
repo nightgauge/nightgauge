@@ -64,6 +64,10 @@ YARA="$(art yara.js 'payload VT-STUB-YARA')"
 AISUSP="$(art ai.js 'payload VT-STUB-AI-SUSP')"
 AIABSENT="$(art elf.bin 'payload VT-STUB-AI-ABSENT')"
 AIODD="$(art odd.js 'payload VT-STUB-AI-ODD')"
+WINAPI="$(art winapi.bin 'payload VT-STUB-WINAPI-INQUEST')"
+WINAPI_YARA="$(art winapi-yara.bin 'payload VT-STUB-WINAPI-INQUEST VT-STUB-YARA')"
+WINAPI_ELSE="$(art winapi-else.bin 'payload VT-STUB-WINAPI-ELSEWHERE')"
+WINAPI_MAL="$(art winapi-mal.bin 'payload VT-STUB-WINAPI-INQUEST VT-STUB-MALICIOUS')"
 MAL_SHA="$(shasum -a 256 "$MAL" | cut -d' ' -f1)"
 
 REPORT="$WORK/report.json"
@@ -123,6 +127,20 @@ scan -- "$YARA"
 expect "a YARA match -> exit 1, naming the rule" 1 "YARA rule Stub_Forced_Rule (stub_rules)"
 scan -- "$AISUSP"
 expect "Code insights suspicious -> exit 1" 1 "Code insights (Code Insight): suspicious"
+
+# 6a-6d. The allowlisted YARA rule (#3019): recorded, never counted; nothing else exempt.
+scan -- "$WINAPI"
+expect "allowlisted YARA rule alone -> exit 0, named" 0 "YARA allowlisted: Windows_API_Function (https://github.com/InQuest/yara-rules-vt)"
+jq -e '.status == "clean" and .files[0].yara == [] and .files[0].findings == []
+  and .files[0].yara_allowlisted[0].rule_name == "Windows_API_Function"' "$REPORT" >/dev/null &&
+  ok "allowlisted match recorded under yara_allowlisted, not as a finding" ||
+  bad "allowlisted report: got $(jq -c '.files[0]' "$REPORT" 2>/dev/null)"
+scan -- "$WINAPI_YARA"
+expect "allowlisted rule plus another rule -> exit 1" 1 "YARA rule Stub_Forced_Rule (stub_rules)"
+scan -- "$WINAPI_ELSE"
+expect "allowlisted rule name from another source -> exit 1" 1 "YARA rule Windows_API_Function (Windows_API_Function)"
+scan -- "$WINAPI_MAL"
+expect "allowlisted rule plus a malicious engine -> exit 1" 1 "engine StubEngineA: malicious"
 
 # 7. Absent Code insights is not a verdict: exit 0, recorded as not-produced.
 scan -- "$AIABSENT"
