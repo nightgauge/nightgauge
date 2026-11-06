@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
 
 // Exit codes of `git push-branch`, a contract feature-validate Step 5.3 and
@@ -21,12 +22,21 @@ const (
 	pushBranchOK     = 0
 	pushBranchFailed = 1
 	pushBranchForked = 3
+	// pushBranchAuthFailed: the remote refused the machine's credentials
+	// (#2742). The branch is unpushed and no rerun clears it; the stage
+	// records push_status "auth_failed" instead of a test verdict.
+	pushBranchAuthFailed = 4
 )
+
+// pushAuthFailedMarker opens the stderr line of an auth refusal. The
+// terminal-kind table's git-transport-auth-failed rule matches it, so the
+// recorded kind does not depend on which free-text line wins (#2742).
+const pushAuthFailedMarker = "[push-auth-failed]"
 
 // pushBranchResult is the --json payload of `git push-branch`.
 type pushBranchResult struct {
 	Branch    string   `json:"branch"`
-	Outcome   string   `json:"outcome"` // pushed | recovered | forked | unreconciled | failed
+	Outcome   string   `json:"outcome"` // pushed | recovered | forked | unreconciled | auth_failed | failed
 	OldSHA    string   `json:"old_sha,omitempty"`
 	NewSHA    string   `json:"new_sha,omitempty"`
 	Unmatched []string `json:"unmatched,omitempty"`
@@ -43,7 +53,7 @@ var pushBranchAttempt = pushPlain
 // tree lacks) is recovered with a commit descending from origin's tip and
 // pushed plainly; a genuine fork, or a rejection that could not be reconciled,
 // prints [branch-forked] and exits 3. Exit 1 is reserved for a failure that was
-// not a rejection.
+// not a rejection; exit 4 is a credential refusal, stamped [push-auth-failed].
 func gitPushBranchCmd() *cobra.Command {
 	var outputJSON bool
 	cmd := &cobra.Command{
@@ -94,7 +104,13 @@ func runPushBranch(ctx context.Context, dir string, outputJSON bool, stdout, std
 	}
 	if !rejected {
 		fmt.Fprint(stderr, pushErr)
-		res.Outcome, res.Detail = "failed", strings.TrimSpace(pushErr)
+		res.Detail = strings.TrimSpace(pushErr)
+		if isPushAuthFailure(pushErr) {
+			fmt.Fprintf(stderr, "%s PUSH REFUSED: %s\n", pushAuthFailedMarker, firstLine(res.Detail))
+			res.Outcome = "auth_failed"
+			return emit(res, pushBranchAuthFailed)
+		}
+		res.Outcome = "failed"
 		return emit(res, pushBranchFailed)
 	}
 
@@ -174,4 +190,11 @@ func shortCommit(sha string) string {
 		return sha[:8]
 	}
 	return sha
+}
+
+// isPushAuthFailure reports whether git's push stderr is a credential refusal.
+// It reuses the terminal-kind table's git-transport-auth-failed vocabulary, so
+// the exit code and the recorded kind judge the same evidence.
+func isPushAuthFailure(gitStderr string) bool {
+	return terminalkind.RuleFires("git-transport-auth-failed", gitStderr)
 }

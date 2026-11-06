@@ -3346,8 +3346,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       const parsed = JSON.parse(fs.readFileSync(ctxPath, "utf-8")) as {
         validation_status?: string;
         errorCategory?: string | null;
+        push_status?: string;
+        push_error?: string;
       };
       const status = (parsed.validation_status ?? "").trim().toLowerCase();
+      if ((parsed.push_status ?? "").trim().toLowerCase() === "auth_failed") {
+        // Stable `[push-auth-failed]` marker (#2742), checked before the
+        // failed branch: the remote refused the credentials, so whatever the
+        // test verdict was, a test failure is not the cause.
+        const detail = parsed.push_error ? ` Push error: ${parsed.push_error}` : "";
+        return new Error(
+          `[push-auth-failed] feature-validate could not push: the remote refused this ` +
+            `machine's git credentials (validation_status="${status || "unknown"}").${detail} ` +
+            `Fix the git credentials and re-queue; tests and acceptance criteria are not the cause.`
+        );
+      }
       if (status === "failed" && parsed.errorCategory === "review-cap-reached") {
         // Stable `[review-cap-reached]` marker (#2865): the cap is one issue's
         // outcome, so it classifies as a park, not as a repository-halting

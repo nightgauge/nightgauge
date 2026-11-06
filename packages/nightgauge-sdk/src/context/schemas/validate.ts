@@ -318,6 +318,14 @@ export const ValidateContextSchema = z
       "inconclusive",
     ] as const).nullish(),
     /**
+     * Outcome of Step 5.3's `git push-branch` (optional, Issue #2742). `auth_failed`
+     * (push-branch exit 4) makes verifyPostValidateState halt with the
+     * `[push-auth-failed]` marker, whatever `validation_status` says.
+     */
+    push_status: z.enum(["pushed", "deferred", "auth_failed"]).nullish(),
+    /** The `[push-auth-failed]` line push-branch printed, when push_status is set. */
+    push_error: z.string().nullish(),
+    /**
      * Explicit failure category for hard-gate failures (v2.1, Issue #3041).
      *
      * MUST stay a superset of every `ERROR_CATEGORY="..."` the feature-validate

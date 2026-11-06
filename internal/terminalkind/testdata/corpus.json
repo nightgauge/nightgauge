@@ -451,6 +451,24 @@
       "rationale": "THE #878 ROW. The composed reason carries BOTH the cause and the symptom, and the symptom phrase is a clause of premature-turn-end. Whichever rule sits earlier wins the whole string, so ordering is the entire fix: a credential-less push booked as a turn-end tells the retro path the agent gave up when in fact the machine had no credential, and routes recovery at the agent instead of at the environment."
     },
     {
+      "id": "git-transport-auth-push-auth-failed-marker",
+      "input": "[push-auth-failed] PUSH REFUSED: remote: Invalid username or token. Password authentication is not supported for Git operations.",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "`nightgauge git push-branch` exit 4, carried by verifyPostValidateState into the feature-validate slot error (#2742)",
+      "rationale": "The marker is the stable signal: the push-branch verb has already decided this is a credential refusal, so the kind must not depend on whether git's own wording happens to contain one of the free-text terms."
+    },
+    {
+      "id": "order-push-auth-marker-beats-stale-pre-push-blocked",
+      "input": "Result: BLOCKED \u2014 2 checks failed\n[push-auth-failed] PUSH REFUSED: fatal: unable to access 'https://example.org/o/r.git/': The requested URL returned error: 403",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "A feature-validate run whose earlier `nightgauge pre-push validate` printed a BLOCKED summary before the push was refused (#2742, the #2706 specimen)",
+      "rationale": "THE #2742 RETRO ROW. The run's terminal failure is the refused push, not the earlier pre-push summary. The bare 403 alone is deliberately unmatched by this rule (GitHub's throttle code), so only the marker can carry the classification here."
+    },
+    {
       "id": "git-transport-auth-ssh-publickey",
       "input": "git@example.org: Permission denied (publickey).\nfatal: Could not read from remote repository.",
       "expected": "git_transport_auth_failed",

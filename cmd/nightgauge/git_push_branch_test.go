@@ -240,3 +240,40 @@ func TestRunPushBranch_JSONRecoveryKeepsMarkerOnStderr(t *testing.T) {
 		t.Errorf("stderr = %q, want the [self-fork-recovered] marker", errb.String())
 	}
 }
+
+// A credential refusal exits 4 with the [push-auth-failed] marker, so
+// feature-validate records push_status "auth_failed" instead of reporting a
+// test failure (#2742). A non-auth failure keeps exit 1.
+func TestRunPushBranch_AuthRefusalExits4WithMarker(t *testing.T) {
+	_, work, _ := pushBranchFixture(t, "fix/2742-auth")
+	gittest.Run(t, work, "checkout", "-b", "fresh-auth")
+	orig := pushBranchAttempt
+	t.Cleanup(func() { pushBranchAttempt = orig })
+
+	pushBranchAttempt = func(context.Context, string, string) (string, bool) {
+		return "git@example.org: Permission denied (publickey).\nfatal: Could not read from remote repository.\n", false
+	}
+	var out, errb bytes.Buffer
+	if code := runPushBranch(context.Background(), work, true, &out, &errb); code != pushBranchAuthFailed {
+		t.Fatalf("auth refusal exit %d, want %d; stderr=%s", code, pushBranchAuthFailed, errb.String())
+	}
+	if !strings.Contains(errb.String(), "[push-auth-failed] PUSH REFUSED: git@example.org: Permission denied (publickey).") {
+		t.Errorf("stderr = %q, want the [push-auth-failed] marker line", errb.String())
+	}
+	var res pushBranchResult
+	if err := json.Unmarshal(out.Bytes(), &res); err != nil || res.Outcome != "auth_failed" {
+		t.Errorf("stdout = %q (%v), want outcome auth_failed", out.String(), err)
+	}
+
+	pushBranchAttempt = func(context.Context, string, string) (string, bool) {
+		return "fatal: unable to access 'https://example.org/r.git/': Could not resolve host: example.org\n", false
+	}
+	errb.Reset()
+	out.Reset()
+	if code := runPushBranch(context.Background(), work, false, &out, &errb); code != pushBranchFailed {
+		t.Errorf("network failure exit %d, want %d", code, pushBranchFailed)
+	}
+	if strings.Contains(errb.String(), "[push-auth-failed]") {
+		t.Errorf("network failure stamped the auth marker: %q", errb.String())
+	}
+}

@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A feature-validate push refused for authentication is no longer reported as
+  failed tests. `nightgauge git push-branch` now exits 4 and prints
+  `[push-auth-failed]` on a credential refusal; feature-validate records
+  `push_status: "auth_failed"` in its context, the run halts with that marker
+  (classified `git_transport_auth_failed`), and the failure comment tells you
+  to fix the git credentials instead of reviewing tests (#2742).
 - A pipeline run that backtracked and then merged is now booked as a success.
   Rewinds now drop the stages they are about to re-run from the run's
   bookkeeping, and the completion check counts distinct stages instead of
