@@ -354,3 +354,54 @@ func TestReconcileThenRefresh_BehindPRIsDispatchedNextFreshCycle(t *testing.T) {
 		})
 	}
 }
+
+// TestIsEnqueueFailedCleanPR: the reconcile recovers a CLEAN, green PR only
+// when its last run ended with an exhausted enqueue (#2729).
+func TestIsEnqueueFailedCleanPR(t *testing.T) {
+	const repo = "nightgauge/acmeapp-platform"
+	cases := []struct {
+		name       string
+		kind       string
+		mergeState string
+		failed     []string
+		want       bool
+	}{
+		{"clean green enqueue-failed", TerminalKindMergeQueueEnqueueFailed, "CLEAN", nil, true},
+		{"clean green other kind", TerminalKindPrMergeUnmerged, "CLEAN", nil, false},
+		{"clean with failed check", TerminalKindMergeQueueEnqueueFailed, "CLEAN", []string{"ci"}, false},
+		{"blocked enqueue-failed", TerminalKindMergeQueueEnqueueFailed, "BLOCKED", nil, false},
+		{"no failure record", "", "CLEAN", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			as := &AutonomousScheduler{state: &AutonomousState{}}
+			if tc.kind != "" {
+				as.state.Failed = []FailedItem{{Repo: repo, Number: 43, Kind: tc.kind}}
+			}
+			got := as.isEnqueueFailedCleanPR(repo, 43, tc.mergeState, openPR{Number: 64, MergeState: tc.mergeState, FailedChecks: tc.failed})
+			if got != tc.want {
+				t.Fatalf("isEnqueueFailedCleanPR = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReconcileStuckInReview_EnqueueFailedCleanPR_RespectsCap: a recovered
+// enqueue-failed PR is still bounded by maxInReviewRecoveryAttempts.
+func TestReconcileStuckInReview_EnqueueFailedCleanPR_RespectsCap(t *testing.T) {
+	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte(`[{"number":64,"headRefName":"feat/43-x","mergeStateStatus":"CLEAN"}]`), nil
+	})
+	key := "nightgauge/acmeapp-platform#43"
+	as := &AutonomousScheduler{
+		state:                    &AutonomousState{Failed: []FailedItem{{Repo: "nightgauge/acmeapp-platform", Number: 43, Kind: TerminalKindMergeQueueEnqueueFailed}}},
+		inReviewRecoveryAttempts: map[string]int{key: maxInReviewRecoveryAttempts},
+	}
+	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
+		key: {Repo: "nightgauge/acmeapp-platform", Number: 43, State: "OPEN", BoardStatus: "In review"},
+	}}
+	as.reconcileStuckInReviewPRs(context.Background(), g)
+	if as.inReviewRecoveryAttempts[key] != maxInReviewRecoveryAttempts || g.Nodes[key].BoardStatus != "In review" {
+		t.Fatalf("capped PR must be left alone: attempts=%d status=%s", as.inReviewRecoveryAttempts[key], g.Nodes[key].BoardStatus)
+	}
+}

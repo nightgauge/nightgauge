@@ -136,6 +136,12 @@ const (
 	// operator must resolve the named files. A conflict recovery handles never
 	// reaches this kind, so only an unresolved one charges the lifetime cap.
 	TerminalKindMergeConflict = "merge_conflict"
+	// TerminalKindMergeQueueEnqueueFailed is set when pr-merge's enqueue still
+	// failed after its transient-error retries (#2729). The PR is green and
+	// unmerged, so it is routed like TerminalKindPrMergeUnmerged (non-fault,
+	// sidelined to In review), and the in-review reconcile moves a CLEAN, green
+	// PR with this kind back to Ready.
+	TerminalKindMergeQueueEnqueueFailed = "merge_queue_enqueue_failed"
 	// TerminalKindRunawayProgress is set when the progress-based runaway
 	// monitor fires: the stage made no new forward-progress signal for the
 	// configured window. Same recovery path as stall_kill (30m backoff, no

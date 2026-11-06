@@ -64,6 +64,15 @@
       "rationale": "The escalation HeadlessOrchestrator writes when conflict recovery gives up (#2841). The file list is free text, so a path holding `timeout` must not move it to another kind."
     },
     {
+      "id": "synthetic-merge-queue-enqueue-exhausted",
+      "input": "deterministic pr-merge refused: merge-queue-enqueue-exhausted: enqueue pull request: failed after 4 attempts: enqueue retries exhausted: HTTP 502 Bad Gateway: i/o timeout",
+      "expected": "merge_queue_enqueue_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/orchestrator/stages/prmerge.go: awaitMergeQueue (#2729)",
+      "rationale": "An enqueue that exhausted its transient retries. The cause names a gateway status and a timeout; it must not read as network_unavailable or fall through to subagent_crash, or a green PR is stranded in In review."
+    },
+    {
       "id": "captured-api-overloaded",
       "input": "API Error: Overloaded",
       "expected": "api_overloaded",

@@ -3,6 +3,7 @@ package stages
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -269,5 +270,20 @@ func TestRun_MergeQueueNonConflict_KeepsReason(t *testing.T) {
 				t.Errorf("MergeQueueStatus called %d times; a non-unmergeable outcome must not re-read", q.statusCalls)
 			}
 		})
+	}
+}
+
+// An enqueue that exhausted its transient retries gets its own reason, so only
+// it maps to the non-fault merge_queue_enqueue_failed kind (#2729).
+func TestRun_MergeQueueEnqueueRetriesExhausted(t *testing.T) {
+	q := &queueGh{
+		fakeGh: fakeGh{preMerge: cleanOpen},
+		status: github.MergeQueueStatus{PRID: "PR_1", State: "OPEN", QueueRequired: true},
+		waitErr: fmt.Errorf("enqueue pull request: failed after 4 attempts: %w: %w",
+			github.ErrEnqueueRetriesExhausted, errors.New("HTTP 502")),
+	}
+	res, _ := newQueueRunner(q).Run(context.Background(), 7, "", "")
+	if res.Path != PathRefused || !strings.HasPrefix(res.Reason, ReasonMergeQueueEnqueueExhausted) {
+		t.Errorf("res = %+v, want refused merge-queue-enqueue-exhausted", res)
 	}
 }

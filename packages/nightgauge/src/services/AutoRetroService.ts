@@ -625,6 +625,7 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // Conflict recovery gave up: the PR cannot merge until the files the terminal
   // reason names are resolved (#2841).
   merge_conflict: "merge-blocked",
+  merge_queue_enqueue_failed: "merge-blocked",
 
   // A person owns the next move.
   architecture_approval_required: "human-decision-required",

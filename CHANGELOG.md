@@ -14,6 +14,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-05
+
 ### Fixed
 
 - A stage that stalled after a soft quota warning keeps its model tier even when
@@ -21,6 +23,14 @@ changelog, and the release workflow refuses a tag that does not.
   limited-quota kill marker now cancels the warning-only guard. Stage-cap kills
   also report raw output idle in the kill marker and `<stage>-stalled.log`,
   instead of the live-work clock that read ~0 during background work.
+- A transient GitHub error (a gateway 502/503/504, a generic GraphQL failure, a
+  dropped connection) on merge-queue enqueue no longer fails pr-merge outright.
+  The enqueue is retried with backoff (2s, 4s, 8s), and before each retry the PR
+  is re-read so a write that landed behind a lost response is not sent twice.
+  An enqueue that still fails gets its own terminal kind,
+  `merge_queue_enqueue_failed`, instead of `subagent_crash`. It is not charged
+  as a fault, and the in-review reconcile moves a CLEAN, green PR that ended
+  this way back to Ready so pr-merge runs again (#2729).
 - Squash merges through `nightgauge pr merge` and the pr-merge stage now use the
   PR title as the commit subject, so a PR whose only commit is a
   WIP-preservation commit no longer lands that `wip(...)` subject or its
@@ -8462,7 +8472,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
