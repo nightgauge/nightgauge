@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A feature-validate artifact that records its acceptance-criteria verdicts
+  under `acceptance_criteria[].verdict` now fails the extension's deliverable
+  policy, as it already did in Go (#3013). The stage is re-asked to move them
+  under `acceptance_criteria_verdicts`; if it does not, the stage fails instead
+  of having a synthetic artifact written over it, so a fully verified change no
+  longer opens a PR that says `Refs` instead of `Closes`.
+
 - Releases publish again: the VirusTotal scan gate accepts the large-file
   upload host `bigfiles.virustotal.com`, and still refuses any other upload URL
   before the API key is sent.

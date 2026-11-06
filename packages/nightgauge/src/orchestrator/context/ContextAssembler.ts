@@ -34,9 +34,10 @@ import {
   deliverableKindForStage,
   stampPolicyMarker,
   summarizePolicy,
+  type PolicyNote,
   type PolicyOutcome,
 } from "@nightgauge/sdk";
-import { type ZodSchema, type ZodError } from "zod";
+import { type ZodSchema } from "zod";
 import type { Logger } from "../../utils/logger";
 import type {
   RepositoryContextLoader,
@@ -61,6 +62,40 @@ import { BinaryResolver } from "../../services/BinaryResolver";
 import { STAGE_OUTPUT_CONTEXT_TYPE } from "./stageContextFiles";
 
 /** One open blockedBy dependency discovered by the deterministic check (#189). */
+/**
+ * A stage deliverable the policy rejected and no re-ask repaired (#3013).
+ * Typed so recovery can tell "the subagent wrote a wrong file" from "the
+ * subagent wrote no file": only the latter may be synthesized.
+ */
+export class DeliverableContractError extends Error {
+  constructor(
+    message: string,
+    readonly stage: PipelineStage,
+    readonly contextPath: string,
+    readonly notes: readonly PolicyNote[]
+  ) {
+    super(message);
+    this.name = "DeliverableContractError";
+  }
+}
+
+/** Repair-prompt instructions for a policy-fatal deliverable (#3013). */
+function formatPolicyNotesForPrompt(kind: string, policy: PolicyOutcome): string {
+  const lines = [
+    "The context file violates the deliverable contract:",
+    ...summarizePolicy(policy).map((l) => `  - ${l}`),
+  ];
+  if (kind === "validate" && policy.notes.some((n) => n.rule.includes("acceptance_criteria"))) {
+    lines.push(
+      "",
+      "Acceptance-criteria verdicts belong ONLY under acceptance_criteria_verdicts as",
+      "[{index, text, status, evidence}] with status one of met | unmet | not_verifiable.",
+      "Move every verdict there and remove verdict/status fields from acceptance_criteria."
+    );
+  }
+  return lines.join("\n");
+}
+
 export interface OpenDependencyRef {
   number: number;
   title?: string;
@@ -513,7 +548,44 @@ export class ContextAssembler {
               `${stage} deliverable does not match the contract and no total repair exists: ` +
               `${contextPath}\n${detail}`;
             this.logger.error(msg, { stage, issueNumber, contextPath });
-            return { error: new Error(msg) };
+
+            // #3013: re-ask the stage with the policy notes before giving up.
+            // A policy-fatal deliverable used to return here, before the
+            // repair block below, so nothing ever asked the writer to fix it.
+            const existing = this.stageRepairAttempts.get(stage);
+            const used = existing?.attempts_count ?? 0;
+            if (repairConfig?.enabled && used < repairConfig.max_attempts) {
+              const repair = await this.attemptContextSchemaRepair(
+                stage,
+                issueNumber,
+                schema,
+                formatPolicyNotesForPrompt(kind, policy),
+                contextPath,
+                used + 1
+              );
+              this.stageRepairAttempts.set(stage, {
+                attempted: true,
+                succeeded: repair.succeeded,
+                attempts_count: used + 1,
+              });
+              if (repair.succeeded) {
+                this.logger.info("Deliverable policy repair: succeeded — contract restored", {
+                  stage,
+                  issueNumber,
+                  attempt: used + 1,
+                });
+                return { error: null };
+              }
+              this.logger.warn("Deliverable policy repair: failed", {
+                stage,
+                issueNumber,
+                attempt: used + 1,
+                repairErrors: repair.errorSummary,
+              });
+            }
+            return {
+              error: new DeliverableContractError(msg, stage, contextPath, policy.notes),
+            };
           }
           if (policy.changed) {
             stampPolicyMarker(policy, new Date());
@@ -578,7 +650,7 @@ export class ContextAssembler {
               stage,
               issueNumber,
               schema,
-              result.error,
+              formatZodErrorsForPrompt(result.error),
               contextPath,
               currentAttempts + 1
             );
@@ -676,16 +748,19 @@ export class ContextAssembler {
   // ---------------------------------------------------------------------------
 
   /**
-   * Attempt to repair a context file by re-invoking the stage with Zod error
-   * details appended to the original skill prompt.
+   * Attempt to repair a context file by re-invoking the stage with the given
+   * fix instructions (Zod errors, or deliverable-policy notes) appended to the
+   * original skill prompt. The rewrite must pass both the deliverable policy
+   * and the schema: a re-asked file that is still policy-fatal is not repaired.
    *
    * @see Issue #2552 — Pipeline context schema self-correction
+   * @see Issue #3013 — policy-fatal deliverables are re-asked too
    */
   private async attemptContextSchemaRepair(
     stage: PipelineStage,
     issueNumber: number,
     schema: ZodSchema,
-    zodError: ZodError,
+    errorInstructions: string,
     contextPath: string,
     attemptNumber: number
   ): Promise<{ succeeded: boolean; errorSummary?: string }> {
@@ -701,7 +776,6 @@ export class ContextAssembler {
       }
 
       // Step 2: Build repair prompt by appending error-fix instructions
-      const errorInstructions = formatZodErrorsForPrompt(zodError);
       const repairSuffix =
         `\n\n---\n` +
         `CONTEXT SCHEMA REPAIR ATTEMPT (attempt ${attemptNumber})\n\n` +
@@ -785,6 +859,18 @@ export class ContextAssembler {
           succeeded: false,
           errorSummary: `Repaired file is invalid JSON: ${err instanceof Error ? err.message : String(err)}`,
         };
+      }
+
+      const repairKind = deliverableKindForStage(stage);
+      if (repairKind) {
+        const repairedPolicy = applyDeliverablePolicy(repairKind, repairedParsed);
+        if (!repairedPolicy.ok) {
+          return {
+            succeeded: false,
+            errorSummary: `Still violates the deliverable contract: ${summarizePolicy(repairedPolicy).join("; ")}`,
+          };
+        }
+        repairedParsed = repairedPolicy.doc;
       }
 
       const repairedResult = schema.safeParse(repairedParsed);

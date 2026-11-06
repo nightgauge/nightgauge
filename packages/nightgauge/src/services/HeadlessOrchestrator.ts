@@ -69,6 +69,7 @@ import type {
 import { SkillLoader } from "../orchestrator/skills/SkillLoader";
 import {
   ContextAssembler,
+  DeliverableContractError,
   STAGE_OUTPUT_CONTEXT_TYPE,
   STAGE_OUTPUT_SCHEMA,
   STAGE_INPUT_PREREQUISITES,
@@ -9264,6 +9265,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       "pr-create",
     ];
     if (!recoverableStages.includes(stage)) {
+      return { recovered: false, error: originalError };
+    }
+
+    // #3013: the generator exists for a file the subagent did NOT write. A
+    // validate artifact the policy rejected is a wrong file, and synthesizing
+    // over it drops acceptance_criteria_verdicts — pr-create then writes Refs.
+    if (originalError instanceof DeliverableContractError && stage === "feature-validate") {
+      this.logger.error(
+        "feature-validate deliverable violates the contract and was not repaired — refusing to synthesize over it",
+        { issueNumber, contextPath: originalError.contextPath }
+      );
       return { recovered: false, error: originalError };
     }
 
