@@ -14,6 +14,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-05
+
 ### Fixed
 
 - A transient GitHub error (a gateway 502/503/504, a generic GraphQL failure, a
@@ -8465,7 +8467,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
