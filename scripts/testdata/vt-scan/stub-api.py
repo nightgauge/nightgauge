@@ -12,6 +12,9 @@ VSIX or tarball can carry a "detection" through extraction unchanged:
   VT-STUB-MALICIOUS    one engine reports malicious
   VT-STUB-SUSPICIOUS   one engine reports suspicious
   VT-STUB-YARA         one crowdsourced YARA rule matches
+  VT-STUB-WINAPI-INQUEST    InQuest's Windows_API_Function rule matches
+  VT-STUB-WINAPI-ELSEWHERE  the same rule name from another source matches
+(YARA markers combine: each appends one match.)
   VT-STUB-AI-SUSP      Code insights verdict "suspicious"
   VT-STUB-AI-ABSENT    no crowdsourced_ai_results field
   VT-STUB-AI-ODD       crowdsourced_ai_results in an unknown shape
@@ -50,14 +53,29 @@ def file_object(sha, content):
     attrs = doc["data"]["attributes"]
     doc["data"]["id"] = sha
     attrs["crowdsourced_ai_results"][0]["id"] = sha
+    yara = []
     if b"VT-STUB-YARA" in content:
-        attrs["crowdsourced_yara_results"] = [
+        yara.append(
             {
                 "rule_name": "Stub_Forced_Rule",
                 "ruleset_name": "stub_rules",
                 "source": "https://example.invalid/stub-rules",
             }
-        ]
+        )
+    for marker, source in (
+        (b"VT-STUB-WINAPI-INQUEST", "https://github.com/InQuest/yara-rules-vt"),
+        (b"VT-STUB-WINAPI-ELSEWHERE", "https://example.invalid/fork-rules"),
+    ):
+        if marker in content:
+            yara.append(
+                {
+                    "rule_name": "Windows_API_Function",
+                    "ruleset_name": "Windows_API_Function",
+                    "source": source,
+                }
+            )
+    if yara:
+        attrs["crowdsourced_yara_results"] = yara
     if b"VT-STUB-AI-SUSP" in content:
         attrs["crowdsourced_ai_results"][0]["verdict"] = "suspicious"
     if b"VT-STUB-AI-ABSENT" in content:

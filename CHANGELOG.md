@@ -14,6 +14,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- The release scan gate no longer holds a release for InQuest's informational
+  `Windows_API_Function` YARA rule, which matches every Go binary. The rule is
+  matched by name and source, still recorded in the report under
+  `yara_allowlisted` and named in the summary line; every other finding still
+  blocks (#3019).
+
 ## [0.8.2] - 2026-11-06
 
 0.8.1 was tagged but never published, because the release gate could not scan
