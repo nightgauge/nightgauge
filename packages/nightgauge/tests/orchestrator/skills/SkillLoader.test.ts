@@ -53,8 +53,17 @@ describe("SkillLoader.resolveLocalSkillPath", () => {
 
     const result = loader.resolveLocalSkillPath("feature-dev");
 
-    expect(mockFindSkillFile).toHaveBeenCalledWith("feature-dev");
+    expect(mockFindSkillFile).toHaveBeenCalledWith("feature-dev", undefined);
     expect(result).toBe("/skills/feature-dev/SKILL.md");
+  });
+
+  it("forwards the pinned root to findSkillFile (#2799)", () => {
+    mockFindSkillFile.mockReturnValue("/pinned/wt/skills/feature-dev/SKILL.md");
+    const loader = new SkillLoader(makeLogger());
+
+    loader.loadSkillContent("feature-dev", "/pinned/wt");
+
+    expect(mockFindSkillFile).toHaveBeenCalledWith("feature-dev", "/pinned/wt");
   });
 
   it("returns null when findSkillFile returns null", () => {
