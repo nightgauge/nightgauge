@@ -95,8 +95,11 @@ CLAUDE_CODE_VERSION="$(jq -r '.max_tested // empty' "$MANIFEST" 2>/dev/null)"
 [ -n "$CLAUDE_CODE_VERSION" ] || cannot_run "cannot read max_tested from $MANIFEST"
 CLAUDE=()
 CLAUDE_SOURCE=""
-if command -v claude >/dev/null &&
-  claude --version </dev/null 2>/dev/null | grep -qF -- "$CLAUDE_CODE_VERSION"; then
+PATH_CLAUDE_VERSION=""
+command -v claude >/dev/null &&
+  PATH_CLAUDE_VERSION="$(claude --version </dev/null 2>/dev/null)"
+PATH_CLAUDE_VERSION="${PATH_CLAUDE_VERSION%%[[:space:]]*}"
+if [ -n "$PATH_CLAUDE_VERSION" ] && [ "$PATH_CLAUDE_VERSION" = "$CLAUDE_CODE_VERSION" ]; then
   CLAUDE=(claude)
   CLAUDE_SOURCE="PATH claude"
 elif command -v npx >/dev/null &&
