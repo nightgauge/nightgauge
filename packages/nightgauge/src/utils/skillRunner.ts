@@ -3432,13 +3432,17 @@ function resolvedPath(target: string): string {
  * which need the PATH rather than the composed text. The stage-execution paths
  * do NOT use this — they pass `resolveSkillRoots()` to the binary and take the
  * resolved path back from the render envelope, so location is answered once.
+ *
+ * @param workspaceRoot - The run's pinned root (its worktree). Omitted, the
+ *   roots fall back to the first workspace folder, which is only right for a
+ *   caller with no pinned run (#2799).
  */
-export function findSkillFile(stage: PipelineStage): string | null {
+export function findSkillFile(stage: PipelineStage, workspaceRoot?: string): string | null {
   const skillDir = STAGE_TO_SKILL_DIR[stage];
 
   let roots: string[];
   try {
-    roots = resolveSkillRoots();
+    roots = resolveSkillRoots(workspaceRoot);
   } catch (err) {
     // Keep the null contract for schema repair and SkillLoader, but name the
     // cause: a broken binary is not a missing skill.

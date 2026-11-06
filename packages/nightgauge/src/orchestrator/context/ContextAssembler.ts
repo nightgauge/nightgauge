@@ -690,8 +690,9 @@ export class ContextAssembler {
     attemptNumber: number
   ): Promise<{ succeeded: boolean; errorSummary?: string }> {
     try {
-      // Step 1: Read the original skill file content via SkillLoader
-      const skillResult = this.skillLoader?.loadSkillContent(stage);
+      // Step 1: Read the original skill file content via SkillLoader, from the
+      // run's pinned root rather than the first workspace folder (#2799).
+      const skillResult = this.skillLoader?.loadSkillContent(stage, this.workspaceRootProvider());
       if (!skillResult) {
         this.logger.warn("Context schema repair: skill file not found, skipping repair", {
           stage,

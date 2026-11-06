@@ -23,6 +23,9 @@ changelog, and the release workflow refuses a tag that does not.
   `preflight skill-includes` now resolves a shared overlay's include directives
   against each stage skill directory, as rendering does, so it no longer passes
   a dead one or flags a working one (#2800).
+- Context-schema repair reads the stage's `SKILL.md` from the run's pinned
+  worktree instead of the first workspace folder, so a pinned run repairs
+  against the skill it actually ran (#2799).
 - Claude stages launched from the VS Code extension can now write to the main
   checkout's knowledge base from a worktree without a user-level permission rule:
   they get `--add-dir <main checkout>/.nightgauge/knowledge` and

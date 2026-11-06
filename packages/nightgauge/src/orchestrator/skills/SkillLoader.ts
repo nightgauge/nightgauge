@@ -46,10 +46,11 @@ export class SkillLoader {
    * fallback in the caller (e.g., schema repair skips if skill not found).
    *
    * @param stage - Pipeline stage identifier (e.g., "feature-dev")
+   * @param workspaceRoot - The run's pinned root; omitted, the first workspace folder (#2799)
    * @returns Absolute path to the skill file, or null if not found
    */
-  resolveLocalSkillPath(stage: PipelineStage): string | null {
-    return findSkillFile(stage);
+  resolveLocalSkillPath(stage: PipelineStage, workspaceRoot?: string): string | null {
+    return findSkillFile(stage, workspaceRoot);
   }
 
   /**
@@ -59,10 +60,11 @@ export class SkillLoader {
    * can handle missing skills without throwing.
    *
    * @param stage - Pipeline stage identifier
+   * @param workspaceRoot - The run's pinned root; omitted, the first workspace folder (#2799)
    * @returns Skill content and path, or null if unavailable
    */
-  loadSkillContent(stage: PipelineStage): SkillLoadResult | null {
-    const skillPath = this.resolveLocalSkillPath(stage);
+  loadSkillContent(stage: PipelineStage, workspaceRoot?: string): SkillLoadResult | null {
+    const skillPath = this.resolveLocalSkillPath(stage, workspaceRoot);
     if (!skillPath) {
       this.logger.warn("SkillLoader: skill file not found", { stage });
       return null;
