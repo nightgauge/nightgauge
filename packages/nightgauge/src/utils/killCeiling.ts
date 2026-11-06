@@ -57,7 +57,7 @@ export type KillCeilingName =
   | "stage-time-cap"
   /** skillRunner: idle past the quota fast-fail budget after a rate-limit signal. */
   | "quota-fast-fail-idle"
-  /** skillRunner: idle past `stallKillMs` with no subprocess output. */
+  /** skillRunner: idle past `stallKillMs` with no output or live work within its ceiling. */
   | "stall-idle";
 
 /**
@@ -97,6 +97,19 @@ export function usdLimit(usd: number): string {
  */
 export function isStageCapCeiling(name: string | undefined): boolean {
   return name === "stage-hard-cap" || name === "stage-time-cap";
+}
+
+/**
+ * The idle figure a kill report prints. Soft kills use the live-work clock
+ * (#2711) that drove them. A stage cap is not an idle kill, so that clock would
+ * hide real output silence; cap kills report raw output idle (#2737).
+ */
+export function killReportIdleMs(
+  ceiling: KillCeilingName,
+  rawIdleMs: number,
+  softIdleMs: number
+): number {
+  return isStageCapCeiling(ceiling) ? rawIdleMs : softIdleMs;
 }
 
 /**

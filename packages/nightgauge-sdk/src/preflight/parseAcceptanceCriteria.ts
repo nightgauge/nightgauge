@@ -30,10 +30,42 @@ const CHECKBOX_RE = /^[-*][ \t]+\[([ xX])\][ \t]+([^ \t].*)$/;
 const NUMBERED_RE = /^( {0,3}\d{1,3}[.)][ \t]+)([^ \t].*)$/;
 
 /**
- * Code-fence open/close line. Lines inside a fence are example text: a `#`
- * comment is not a heading and a `1.` line is not a criterion.
+ * Code-fence line: optional indent, then a run of three or more backticks or
+ * tildes. Lines inside a fence are example text: a `#` comment is not a
+ * heading and a `1.` line is not a criterion.
  */
-const FENCE_RE = /^[ \t]*(`{3,}|~{3,})/;
+const FENCE_RE = /^[ \t]*(`{3,}|~{3,})(.*)$/;
+
+/**
+ * Open code-fence state: the opener's character and run length (0 = none).
+ * Per CommonMark, only a run of the same character at least as long as the
+ * opener, followed by whitespace alone, closes it; any other fence-like line
+ * inside is content (#2727). Mirrors Go's acFence.
+ */
+class FenceState {
+  private char = "";
+  private len = 0;
+
+  get open(): boolean {
+    return this.len > 0;
+  }
+
+  /** Advance over `line`; true when it opens or closes a fence. */
+  step(line: string): boolean {
+    const m = FENCE_RE.exec(line.replace(/\r$/, ""));
+    if (!m) return false;
+    if (this.len === 0) {
+      this.char = m[1][0];
+      this.len = m[1].length;
+      return true;
+    }
+    if (m[1][0] === this.char && m[1].length >= this.len && m[2].trim() === "") {
+      this.len = 0;
+      return true;
+    }
+    return false;
+  }
+}
 
 /** Optional `[ ]` / `[x]` at the start of a numbered item's text. */
 const LEADING_BOX_RE = /^\[([ xX])\][ \t]+(.+)$/;
@@ -95,18 +127,10 @@ const DETAILS_CLOSE_ALL_RE = /<\/details>/gi;
  */
 function stripDetailsBlocks(lines: string[]): string[] {
   const out: string[] = [];
-  let fence = "";
+  const fence = new FenceState();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const trimmed = line.trim();
-    if (fence !== "") {
-      if (trimmed.startsWith(fence)) fence = "";
-      out.push(line);
-      continue;
-    }
-    if (trimmed.startsWith("```")) fence = "```";
-    else if (trimmed.startsWith("~~~")) fence = "~~~";
-    if (fence !== "" || !DETAILS_OPEN_RE.test(line)) {
+    if (fence.step(line) || fence.open || !DETAILS_OPEN_RE.test(line)) {
       out.push(line);
       continue;
     }
@@ -162,19 +186,18 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
   const seen = new Set<string>();
   const normalize = (text: string): string => text.split(/\s+/).join(" ");
   let sectionLevel = 0;
-  let inFence = false;
+  const fence = new FenceState();
   let itemCol = 0; // content column of the open section item; 0 = none
   let joinIdx = -1; // index in out of the item a wrapped line joins; -1 = none
   let boxCol = 0; // content column of the open checkbox criterion
   let boxIdx = -1; // index in out of the checkbox a sub-bullet joins; -1 = none
   for (const rawLine of stripDetailsBlocks(body.split(/\r?\n/))) {
-    if (FENCE_RE.test(rawLine)) {
-      inFence = !inFence;
+    if (fence.step(rawLine)) {
       joinIdx = -1;
       boxIdx = -1;
       continue;
     }
-    if (inFence) continue;
+    if (fence.open) continue;
     const heading = HEADING_RE.exec(rawLine);
     if (heading) {
       const level = heading[1].length;

@@ -23,8 +23,35 @@ changelog, and the release workflow refuses a tag that does not.
   the cached copy from `claude plugin install` is checked for hooks and broken
   links. A missing RC artifact fails the run instead of testing the tree (#2722).
 
+## [0.8.1] - 2026-11-05
+
 ### Fixed
 
+- A stage that stalled after a soft quota warning keeps its model tier even when
+  its stderr happens to contain `status=limited`; only skillRunner's own
+  limited-quota kill marker now cancels the warning-only guard. Stage-cap kills
+  also report raw output idle in the kill marker and `<stage>-stalled.log`,
+  instead of the live-work clock that read ~0 during background work.
+- A transient GitHub error (a gateway 502/503/504, a generic GraphQL failure, a
+  dropped connection) on merge-queue enqueue no longer fails pr-merge outright.
+  The enqueue is retried with backoff (2s, 4s, 8s), and before each retry the PR
+  is re-read so a write that landed behind a lost response is not sent twice.
+  An enqueue that still fails gets its own terminal kind,
+  `merge_queue_enqueue_failed`, instead of `subagent_crash`. It is not charged
+  as a fault, and the in-review reconcile moves a CLEAN, green PR that ended
+  this way back to Ready so pr-merge runs again (#2729).
+- Squash merges through `nightgauge pr merge` and the pr-merge stage now use the
+  PR title as the commit subject, so a PR whose only commit is a
+  WIP-preservation commit no longer lands that `wip(...)` subject or its
+  `Nightgauge-WIP` trailer on `main` (#2728). On a merge-queue base,
+  where GitHub uses the repository's squash defaults, a PR carrying a
+  WIP-preservation commit is refused with the remedy unless those defaults are
+  PR title / PR body; nightgauge reads them and never changes them.
+- Acceptance-criteria parsing (Go `preflight ac-reconcile` and the SDK's
+  `parseAcceptanceCriteria`) now closes a code fence only on a CommonMark closer:
+  the same character, at least as long as the opener, with nothing after it. A
+  longer or mismatched fence in an issue body no longer hides every criterion
+  after it (#2727).
 - `nightgauge doctor` NGD001 no longer reports a release-candidate install as a
   stale binary: the RC tarball CLI and the VSIX-bundled CLI now report the same
   version string. It never offers `make build-cli` for a release binary (#2721).
@@ -78,6 +105,15 @@ changelog, and the release workflow refuses a tag that does not.
   `production` environment.
 
 ### Fixed
+
+- pr-merge no longer books a resolved conflict as a failure while CI is still
+  running (#2980). After updating an out-of-date or conflicting branch, the
+  recovery waited only five minutes for the new head's CI, and core CI takes 15
+  to 25. It now waits as long as an ordinary pr-merge CI wait (the merge-queue
+  wait plus ten minutes, at least 20 minutes, or `pr.ci_check_timeout` when
+  larger), and releases the repository's merge lock while it waits, re-taking
+  it before the merge. A failing check still declines at once. `pr-stage
+recover`'s default timeout grows to match.
 
 - A plain sub-bullet under a checkbox acceptance criterion is now part of that
   criterion instead of a separate one (2-3 space indent) or dropped (4+ spaces)
@@ -8445,7 +8481,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1

@@ -88,6 +88,11 @@ type MergeQueueWaitOptions struct {
 	// OPEN, failed readiness or was never enqueued, so a caller timing the
 	// queue wait starts its clock only once the queue owns the PR.
 	OnQueued func(MergeQueueStatus)
+	// CheckSquashDefaults, when set, runs before an enqueue and reports
+	// whether the repository's squash defaults are PR_TITLE/PR_BODY (#2728).
+	// The queue takes no headline, so these defaults decide the squash subject
+	// on the base branch. It reads only; it never changes repository settings.
+	CheckSquashDefaults func(ctx context.Context) (prTitled bool, err error)
 }
 
 // onQueuedOnce wraps o.OnQueued so it fires at most once.
@@ -164,6 +169,10 @@ const (
 	// MergeQueueChecksFailed: the PR's own checks are red, so it was not
 	// enqueued (#2584).
 	MergeQueueChecksFailed = "checks_failed"
+	// MergeQueueSquashDefaults: the repository's squash defaults are not
+	// PR_TITLE/PR_BODY (or could not be read) and the PR carries a WIP-preservation commit, so
+	// it was not enqueued (#2728).
+	MergeQueueSquashDefaults = "squash_defaults"
 )
 
 // MergeQueueError is the classified failure of a queued merge. It names the
@@ -189,6 +198,11 @@ func (e *MergeQueueError) Error() string {
 		}
 	case MergeQueueChecksFailed:
 		fmt.Fprintf(&b, "merge queue: PR #%d checks failed; not enqueued", e.PRNumber)
+	case MergeQueueSquashDefaults:
+		fmt.Fprintf(&b, "merge queue: PR #%d carries a WIP-preservation commit and the repository squash defaults "+
+			"are not PR_TITLE/PR_BODY; not enqueued (an admin sets squash_merge_commit_title=PR_TITLE and "+
+			"squash_merge_commit_message=PR_BODY: gh api -X PATCH repos/{owner}/{repo} "+
+			"-f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY)", e.PRNumber)
 	case MergeQueueTimeout:
 		fmt.Fprintf(&b, "merge queue: PR #%d not merged before the queue wait budget expired", e.PRNumber)
 	case MergeQueueClosed:
@@ -401,6 +415,66 @@ func (q *MergeQueue) Enqueue(ctx context.Context, prID string) error {
 		return fmt.Errorf("enqueue pull request: %w", err)
 	}
 	return nil
+}
+
+// ErrEnqueueRetriesExhausted marks an enqueue that still failed transiently
+// after every retry (#2729). pr-merge maps only this error to the non-fault
+// merge_queue_enqueue_failed kind; a permanent rejection keeps its own path.
+var ErrEnqueueRetriesExhausted = errors.New("enqueue retries exhausted")
+
+// maxEnqueueRetries bounds the retries of a transient enqueue failure (#2729).
+const maxEnqueueRetries = 3
+
+// enqueueRetryBase is the first backoff delay; each retry doubles it.
+const enqueueRetryBase = 2 * time.Second
+
+// isTransientForgeErr reports whether err is a forge-side hiccup worth
+// retrying: a gateway status, GitHub's generic GraphQL failure, or a dropped
+// connection. Rate limits are excluded (the client and pr-merge handle them),
+// as is the not-ready rejection (#2584 waits for readiness instead).
+func isTransientForgeErr(err error) bool {
+	if err == nil || isRateLimited(err) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, enqueueNotReadyMessage) {
+		return false
+	}
+	for _, s := range []string{
+		"502", "503", "504", "bad gateway", "service unavailable", "gateway timeout",
+		"something went wrong while executing your query",
+		"timeout", "timed out", "connection reset", "connection refused", "eof",
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// enqueueRetrying enqueues st's PR, retrying a transient failure with
+// exponential backoff (#2729). Before each retry it re-reads the PR: a write
+// can land behind a dropped response, so a PR already queued or merged counts
+// as enqueued and no second mutation is sent.
+func (q *MergeQueue) enqueueRetrying(ctx context.Context, st MergeQueueStatus) error {
+	err := q.Enqueue(ctx, st.PRID)
+	delay := enqueueRetryBase
+	for attempt := 1; err != nil && isTransientForgeErr(err) && attempt <= maxEnqueueRetries; attempt++ {
+		log.Printf("merge queue: transient enqueue failure for PR #%d (attempt %d/%d), retrying in %s: %v",
+			st.Number, attempt, maxEnqueueRetries+1, delay, err)
+		if serr := q.sleep(ctx, delay); serr != nil {
+			return err
+		}
+		delay *= 2
+		if cur, serr := q.StatusByID(ctx, st.PRID); serr == nil && (cur.InQueue || cur.State == "MERGED") {
+			return nil
+		}
+		err = q.Enqueue(ctx, st.PRID)
+		if err != nil && attempt == maxEnqueueRetries && isTransientForgeErr(err) {
+			return fmt.Errorf("enqueue pull request: failed after %d attempts: %w: %w", maxEnqueueRetries+1, ErrEnqueueRetriesExhausted, err)
+		}
+	}
+	return err
 }
 
 // enqueueNotReadyMessage is GitHub's rejection of an enqueue issued before
@@ -691,7 +765,10 @@ func (q *MergeQueue) EnqueueAndWait(ctx context.Context, status MergeQueueStatus
 		}
 	}
 	if !status.InQueue && status.State == "OPEN" {
-		if err := q.Enqueue(ctx, status.PRID); err != nil {
+		if err := q.guardSquashDefaults(ctx, status, opts); err != nil {
+			return status, err
+		}
+		if err := q.enqueueRetrying(ctx, status); err != nil {
 			if strings.Contains(err.Error(), enqueueNotReadyMessage) {
 				return status, &MergeQueueError{PRNumber: status.Number, Kind: MergeQueueNotReady, Detail: "mergeability not yet computed", Cause: err}
 			}

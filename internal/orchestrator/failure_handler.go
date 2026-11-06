@@ -136,6 +136,12 @@ const (
 	// operator must resolve the named files. A conflict recovery handles never
 	// reaches this kind, so only an unresolved one charges the lifetime cap.
 	TerminalKindMergeConflict = "merge_conflict"
+	// TerminalKindMergeQueueEnqueueFailed is set when pr-merge's enqueue still
+	// failed after its transient-error retries (#2729). The PR is green and
+	// unmerged, so it is routed like TerminalKindPrMergeUnmerged (non-fault,
+	// sidelined to In review), and the in-review reconcile moves a CLEAN, green
+	// PR with this kind back to Ready.
+	TerminalKindMergeQueueEnqueueFailed = "merge_queue_enqueue_failed"
 	// TerminalKindRunawayProgress is set when the progress-based runaway
 	// monitor fires: the stage made no new forward-progress signal for the
 	// configured window. Same recovery path as stall_kill (30m backoff, no
@@ -1147,12 +1153,18 @@ func DemoteWarningOnlyQuotaKind(kind, detail string) (string, bool) {
 // text of a genuine exhaustion that merely quotes it.
 const softQuotaKillMarker = "after rate_limit_event (status=allowed_warning"
 
+// limitedQuotaKillMarker is the same skillRunner.ts marker naming a hard
+// status=limited. The veto is anchored to it because detail also carries the
+// stage's stderr tail, and agent output that merely contains status=limited
+// must not disable the warning-only guard (#2737).
+const limitedQuotaKillMarker = "after rate_limit_event (status=limited"
+
 // IsWarningOnlyQuotaDetail reports whether detail carries skillRunner's kill
-// marker for a stage that stopped after a soft quota warning, with no
-// status=limited alongside it.
+// marker for a stage that stopped after a soft quota warning, and no
+// skillRunner marker for a status=limited event.
 func IsWarningOnlyQuotaDetail(detail string) bool {
 	return strings.Contains(detail, softQuotaKillMarker) &&
-		!strings.Contains(detail, "status=limited")
+		!strings.Contains(detail, limitedQuotaKillMarker)
 }
 
 // IsWarningOnlyQuotaStall reports a stall kill that followed a soft quota

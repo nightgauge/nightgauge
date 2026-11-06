@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
@@ -37,10 +36,10 @@ type prRecoverResultJSON struct {
 	MaxDevRedispatch int             `json:"max_dev_redispatch"`
 }
 
-// prRecoverDefaultTimeoutSec covers one CI wait on the new head plus one merge.
+// prRecoverDefaultTimeoutSec covers one CI wait on the new head plus one merge,
+// each sized by config.ResolvePRMergeCIWait (#2980).
 func prRecoverDefaultTimeoutSec(workspace string) int {
-	ciWait := time.Duration(recovery.DefaultRebaseCIPolls) * recovery.DefaultRebaseCIPollInterval
-	return prMergeDefaultTimeoutSec(workspace) + int(ciWait.Seconds())
+	return 2 * prMergeDefaultTimeoutSec(workspace)
 }
 
 // runPrStageRecover runs the shared registry for a refused pr-merge. try is the

@@ -49,8 +49,16 @@ func (f *queueMergeForge) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		return n
 	}
+	if strings.HasPrefix(r.URL.Path, "/repos/") { // squash defaults already PR_TITLE/PR_BODY (#2728)
+		_ = json.NewEncoder(w).Encode(map[string]any{"squash_merge_commit_title": "PR_TITLE", "squash_merge_commit_message": "PR_BODY"})
+		return
+	}
 	var data any
 	switch {
+	case strings.Contains(q, "prSquashSource"):
+		data = map[string]any{"node": map[string]any{"number": 24, "title": "t",
+			"baseRepository": map[string]any{"name": "widget", "owner": map[string]any{"login": "acme"}},
+			"commits":        map[string]any{"nodes": []any{}}}}
 	case strings.Contains(q, "enqueuePullRequest"):
 		f.mu.Lock()
 		f.enqueuedAt = time.Now()

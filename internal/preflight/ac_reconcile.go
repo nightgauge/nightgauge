@@ -106,10 +106,39 @@ var numberedRE = regexp.MustCompile(`^([ ]{0,3}\d{1,3}[.)][ \t]+)(.+?)[ \t]*$`)
 // numbered item's text.
 var leadingBoxRE = regexp.MustCompile(`^\[([ xX])\][ \t]+(.+)$`)
 
-// acFenceRE matches a code-fence open/close line, as acparse's fenceRe and
+// acFenceRE matches a code-fence line: optional indent, then a run of three
+// or more backticks or tildes, as acparse's fenceRe and
 // internal/docs/checklinks.go do. Lines inside a fence are example text:
 // a `#` comment there is not a heading and a `1.` line is not a criterion.
-var acFenceRE = regexp.MustCompile("^[ \\t]*(`{3,}|~{3,})")
+var acFenceRE = regexp.MustCompile("^[ \\t]*(`{3,}|~{3,})(.*)$")
+
+// acFence is the open code fence's opener: its character and run length; a
+// zero length means no fence is open. Per CommonMark, only a line holding a
+// run of the same character at least as long as the opener, followed by
+// whitespace alone, closes it; any other fence-like line inside is content
+// (#2727). The SDK's FenceState mirrors this.
+type acFence struct {
+	char byte
+	n    int
+}
+
+// step advances the fence state over line and reports whether line opens or
+// closes a fence.
+func (f *acFence) step(line string) bool {
+	m := acFenceRE.FindStringSubmatch(strings.TrimRight(line, "\r"))
+	if m == nil {
+		return false
+	}
+	if f.n == 0 {
+		f.char, f.n = m[1][0], len(m[1])
+		return true
+	}
+	if m[1][0] == f.char && len(m[1]) >= f.n && strings.TrimSpace(m[2]) == "" {
+		f.n = 0
+		return true
+	}
+	return false
+}
 
 // headingRE matches an ATX Markdown heading and captures its level marks
 // and text.
@@ -132,23 +161,10 @@ var detailsCloseRE = regexp.MustCompile(`(?i)</details>`)
 // an archive (#2679). The SDK's stripDetailsBlocks mirrors this.
 func stripDetailsBlocks(lines []string) []string {
 	out := make([]string, 0, len(lines))
-	fence := ""
+	var fence acFence
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
-		trimmed := strings.TrimSpace(line)
-		if fence != "" {
-			if strings.HasPrefix(trimmed, fence) {
-				fence = ""
-			}
-			out = append(out, line)
-			continue
-		}
-		if strings.HasPrefix(trimmed, "```") {
-			fence = "```"
-		} else if strings.HasPrefix(trimmed, "~~~") {
-			fence = "~~~"
-		}
-		if fence != "" || !detailsOpenRE.MatchString(line) {
+		if fence.step(line) || fence.n > 0 || !detailsOpenRE.MatchString(line) {
 			out = append(out, line)
 			continue
 		}
@@ -258,19 +274,18 @@ func parseACs(body string) []acCriterion {
 	var out []acCriterion
 	seen := map[string]bool{}
 	sectionLevel := 0 // heading level of the open AC section; 0 = none
-	inFence := false
+	var fence acFence
 	itemCol := 0  // content column of the open section item; 0 = none
 	joinIdx := -1 // index in out of the item a wrapped line joins; -1 = none
 	boxCol := 0   // content column of the open checkbox criterion
 	boxIdx := -1  // index in out of the checkbox a sub-bullet joins; -1 = none
 	for _, line := range stripDetailsBlocks(strings.Split(body, "\n")) {
 		line = strings.TrimRight(line, "\r")
-		if acFenceRE.MatchString(line) {
-			inFence = !inFence
+		if fence.step(line) {
 			joinIdx, boxIdx = -1, -1
 			continue
 		}
-		if inFence {
+		if fence.n > 0 {
 			continue
 		}
 		if h := headingRE.FindStringSubmatch(line); h != nil {

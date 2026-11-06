@@ -83,6 +83,13 @@
       "why": "Conflict recovery could not land a merge-queue conflict (#2841). HeadlessOrchestrator stamps the marker on the escalation, which names the conflicting files. First in the ladder because those file names and the refusal text are free-form: a path holding `timeout` or `network` must not reclassify a conflict."
     },
     {
+      "id": "merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": false,
+      "clauses": [["merge-queue-enqueue-exhausted"]],
+      "why": "pr-merge's enqueue still failed after its transient-error retries (#2729); a permanent enqueue rejection keeps the `merge-queue-enqueue-failed` reason and its existing path. Matched before the network, timeout and crash heuristics because the wrapped forge cause is free text (`502`, `timeout`, `connection reset`) and must not move a green, unmerged PR to a retryable or crash kind."
+    },
+    {
       "id": "stamped-stage-stop",
       "kind": "budget_exceeded",
       "signal": false,

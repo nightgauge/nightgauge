@@ -24,6 +24,15 @@ type queueServer struct {
 	readsAtEnqueue int
 	directMerge    int
 	checks         []map[string]any
+	// commitMessages are the PR's commit messages for the squash source
+	// query (#2728); nil serves one ordinary commit.
+	commitMessages []string
+	// squashTitle/squashMessage are the repository's squash defaults served
+	// by REST GET; patchStatus, when non-zero, fails the PATCH with it.
+	squashTitle, squashMessage string
+	patchStatus                int
+	patched                    int
+	mergeInput                 map[string]any
 }
 
 func prNode(state string, queueEnabled, inQueue bool, entry map[string]any, mergeOID string) map[string]any {
@@ -68,15 +77,42 @@ func entry(state, head string) map[string]any {
 
 func (qs *queueServer) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Query string `json:"query"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
 		qs.mu.Lock()
 		defer qs.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/repos/") {
+			if r.Method == http.MethodPatch {
+				qs.patched++
+				if qs.patchStatus != 0 {
+					w.WriteHeader(qs.patchStatus)
+					_, _ = w.Write([]byte(`{"message":"Must have admin rights"}`))
+					return
+				}
+				qs.squashTitle, qs.squashMessage = SquashTitlePRTitle, SquashMessagePRBody
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"full_name": "o/r",
+				"squash_merge_commit_title": qs.squashTitle, "squash_merge_commit_message": qs.squashMessage})
+			return
+		}
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
 		var data any
 		switch {
+		case strings.Contains(req.Query, "prSquashSource"):
+			msgs := qs.commitMessages
+			if msgs == nil {
+				msgs = []string{"fix: real change\n\nexplanation"}
+			}
+			nodes := make([]any, 0, len(msgs))
+			for _, m := range msgs {
+				nodes = append(nodes, map[string]any{"commit": map[string]any{"message": m}})
+			}
+			data = map[string]any{"node": map[string]any{"number": 42, "title": "fix the thing",
+				"baseRepository": map[string]any{"name": "r", "owner": map[string]any{"login": "o"}},
+				"commits":        map[string]any{"nodes": nodes}}}
 		case strings.Contains(req.Query, "enqueuePullRequest"):
 			qs.enqueued++
 			qs.readsAtEnqueue = qs.reads
@@ -87,6 +123,7 @@ func (qs *queueServer) handler(t *testing.T) http.HandlerFunc {
 			data = map[string]any{"enqueuePullRequest": map[string]any{"mergeQueueEntry": map[string]any{"state": "QUEUED", "position": 1}}}
 		case strings.Contains(req.Query, "mergePullRequest"):
 			qs.directMerge++
+			qs.mergeInput, _ = req.Variables["input"].(map[string]any)
 			data = map[string]any{"mergePullRequest": map[string]any{"pullRequest": map[string]any{"mergeCommit": map[string]any{"oid": "direct123"}}}}
 		case strings.Contains(req.Query, "contexts("):
 			data = map[string]any{"node": map[string]any{"baseRepository": map[string]any{"object": map[string]any{
@@ -109,7 +146,9 @@ func newQueuePRService(t *testing.T, qs *queueServer) *PRService {
 	srv := httptest.NewServer(qs.handler(t))
 	t.Cleanup(srv.Close)
 	svc := NewPRService(NewClientWithURL("tok", srv.URL))
-	svc.QueueWait = MergeQueueWaitOptions{Timeout: 2 * time.Second, PollInterval: time.Millisecond}
+	// 10s, not 2s: the test client paces requests at 1/s past a burst of 5,
+	// and the squash-defaults check before an enqueue adds three (#2728).
+	svc.QueueWait = MergeQueueWaitOptions{Timeout: 10 * time.Second, PollInterval: time.Millisecond}
 	return svc
 }
 
@@ -517,5 +556,79 @@ func TestOnQueued_NeverFiresForAPRThatDidNotReachTheQueue(t *testing.T) {
 				t.Fatalf("OnQueued fired %d times for a PR that never reached the queue", rec.calls)
 			}
 		})
+	}
+}
+
+// wipMessage is a WIP-preservation commit as preserveWorkInProgress writes it.
+const wipMessage = "wip(feature-dev): preserve work in progress\n\nRefs: #42\n\nNightgauge-WIP: feature-dev"
+
+func TestMergePRWithStrategy_SoleWIPCommit_SquashesWithPRTitle(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{prNode("OPEN", false, false, nil, "")},
+		commitMessages: []string{wipMessage}}
+	if _, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH"); err != nil {
+		t.Fatalf("MergePRWithStrategy: %v", err)
+	}
+	if got := qs.mergeInput["commitHeadline"]; got != "fix the thing (#42)" {
+		t.Errorf("commitHeadline = %v, want the PR title", got)
+	}
+	body, ok := qs.mergeInput["commitBody"].(string)
+	if !ok || strings.Contains(body, "Nightgauge-WIP") || strings.Contains(body, "wip(") {
+		t.Errorf("commitBody = %q, want no WIP commit content", body)
+	}
+}
+
+func TestMergePRWithStrategy_Merge_NoHeadline(t *testing.T) {
+	qs := &queueServer{statuses: []map[string]any{prNode("OPEN", false, false, nil, "")}}
+	if _, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "MERGE"); err != nil {
+		t.Fatalf("MergePRWithStrategy: %v", err)
+	}
+	if _, set := qs.mergeInput["commitHeadline"]; set {
+		t.Errorf("MERGE strategy sent commitHeadline: %v", qs.mergeInput)
+	}
+}
+
+func queuedToMerged() []map[string]any {
+	return []map[string]any{
+		prNode("OPEN", true, false, nil, ""),
+		prNode("OPEN", true, true, entry("AWAITING_CHECKS", "mg1"), ""),
+		prNode("MERGED", true, false, nil, "landed1"),
+	}
+}
+
+func TestMergeQueue_DefaultsAlreadySet_EnqueuesWithoutPatch(t *testing.T) {
+	qs := &queueServer{statuses: queuedToMerged(), commitMessages: []string{wipMessage},
+		squashTitle: SquashTitlePRTitle, squashMessage: SquashMessagePRBody}
+	if _, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH"); err != nil {
+		t.Fatalf("MergePRWithStrategy: %v", err)
+	}
+	if qs.patched != 0 || qs.enqueued != 1 {
+		t.Errorf("patched=%d enqueued=%d, want 0/1", qs.patched, qs.enqueued)
+	}
+}
+
+func TestMergeQueue_DefaultsNotPRTitled_SoleWIPCommit_RefusesWithoutPatch(t *testing.T) {
+	qs := &queueServer{statuses: queuedToMerged(), commitMessages: []string{wipMessage},
+		squashTitle: "COMMIT_OR_PR_TITLE", squashMessage: "COMMIT_MESSAGES"}
+	_, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
+	var mqe *MergeQueueError
+	if !errors.As(err, &mqe) || mqe.Kind != MergeQueueSquashDefaults {
+		t.Fatalf("err = %v, want squash_defaults MergeQueueError", err)
+	}
+	if qs.enqueued != 0 || qs.patched != 0 {
+		t.Errorf("enqueued=%d patched=%d, want no enqueue and no settings change", qs.enqueued, qs.patched)
+	}
+	if !strings.Contains(err.Error(), "squash_merge_commit_title=PR_TITLE") {
+		t.Errorf("error %q does not name the operator remedy", err)
+	}
+}
+
+func TestMergeQueue_DefaultsNotPRTitled_NoWIPCommit_EnqueuesWithoutPatch(t *testing.T) {
+	qs := &queueServer{statuses: queuedToMerged(),
+		squashTitle: "COMMIT_OR_PR_TITLE", squashMessage: "COMMIT_MESSAGES"}
+	if _, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH"); err != nil {
+		t.Fatalf("MergePRWithStrategy: %v", err)
+	}
+	if qs.enqueued != 1 || qs.patched != 0 {
+		t.Errorf("enqueued=%d patched=%d, want 1/0", qs.enqueued, qs.patched)
 	}
 }

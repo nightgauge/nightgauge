@@ -40,3 +40,29 @@ func TestPRConfigResolveCICheckTimeout(t *testing.T) {
 		t.Fatalf("env: got %v", got)
 	}
 }
+
+func TestResolvePRMergeCIWait(t *testing.T) {
+	queue := func(d time.Duration) *Config {
+		return &Config{Pipeline: &PipelineConfig{MergeQueue: &MergeQueueConfig{WaitTimeout: YAMLDuration(d)}}}
+	}
+	cases := []struct {
+		name string
+		cfg  *Config
+		env  string
+		want time.Duration
+	}{
+		{"nil config", nil, "", 100 * time.Minute},
+		{"queue 30m", queue(30 * time.Minute), "", 40 * time.Minute},
+		{"queue 5m hits floor", queue(5 * time.Minute), "", DefaultPRMergeCIWait},
+		{"ci_check_timeout above", &Config{PR: &PRConfig{CICheckTimeout: 7200}}, "", 2 * time.Hour},
+		{"env ci timeout", queue(5 * time.Minute), "3600", time.Hour},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("NIGHTGAUGE_PR_CI_CHECK_TIMEOUT", tc.env)
+			if got := tc.cfg.ResolvePRMergeCIWait(); got != tc.want {
+				t.Errorf("ResolvePRMergeCIWait() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
