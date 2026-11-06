@@ -25,6 +25,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The Claude plugin's version is now 1.28.0, so installed plugins receive the plugin changes
+  made since v0.8.1 (#2989's pr-create skill change), and `main`'s release-path build passes
+  its plugin-version check again.
 - A feature-validate push refused for authentication is no longer reported as
   failed tests. `nightgauge git push-branch` now exits 4 and prints
   `[push-auth-failed]` on a credential refusal; feature-validate records
