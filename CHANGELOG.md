@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- "Unblocked by #N", "undepends on #N" and other spellings that glue a
+  dependency keyword onto a preceding word no longer declare a dependency on
+  #N (#2712).
 - A relative link from a skill's supporting file into another skill or
   `_shared/` (such as `../../nightgauge-verify-ui/SKILL.md`) now points at the
   real file once the include is inlined into a stage prompt, and
