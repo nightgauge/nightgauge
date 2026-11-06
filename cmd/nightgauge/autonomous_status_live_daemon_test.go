@@ -124,7 +124,7 @@ func TestAutonomousStatusLiveHumanSaysSafeWithNoRuns(t *testing.T) {
 // A real server always answers the summary, so the failed-summary arm is pinned
 // at the functions that render it.
 func TestLiveStatusWithUnansweredSummaryIsNeverSafe(t *testing.T) {
-	line := liveAutonomousModeLine("stopped", ipc.RunningPipelinesResult{}, false)
+	line := liveAutonomousModeLine("stopped", 0, ipc.RunningPipelinesResult{}, false)
 	if line != "Autonomous Mode: Stopped — reload safety unknown" {
 		t.Errorf("line = %q", line)
 	}

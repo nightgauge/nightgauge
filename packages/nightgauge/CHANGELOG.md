@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- `nightgauge autonomous status` no longer reads "Running" while a repository
+  halt stops dispatch: the headline counts halted repositories and lists each
+  one, plus issues awaiting architecture approval, live and from the state
+  file; `--json` adds `haltedRepos` and `architectureApprovalParked` (#2748).
+
 ## [0.8.1] - 2026-11-05
 
 ### Fixed

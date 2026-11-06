@@ -14,6 +14,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- `nightgauge autonomous status` no longer reads "Running" while a repository
+  halt stops dispatch. The headline gains `(N repositories halted)`, a
+  `Halted repositories` section names each repo's issue, stage, reason and
+  time, and an `Awaiting architecture approval` section lists issues parked
+  In progress by that gate. Both work live and from the state file (labelled
+  `(from state file)`), and `--json` carries `haltedRepos` and
+  `architectureApprovalParked`, `[]` when empty. With no state file, status
+  says halt state is unknown.
+
 ### Changed
 
 - The clean-install release gate (G1) can now test a release candidate's own
