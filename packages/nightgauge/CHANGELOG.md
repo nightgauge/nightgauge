@@ -9,6 +9,11 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-06
+
+0.8.1 was tagged but never published, because the release gate could not scan
+files over 32 MB (#3011). Its changes ship in this release and are listed below.
+
 ### Fixed
 
 - When an issue re-runs with nothing left to build, the extension no longer
@@ -26,8 +31,6 @@ and this project adheres to
   halt stops dispatch: the headline counts halted repositories and lists each
   one, plus issues awaiting architecture approval, live and from the state
   file; `--json` adds `haltedRepos` and `architectureApprovalParked` (#2748).
-
-## [0.8.1] - 2026-11-05
 
 ### Fixed
 
@@ -1585,8 +1588,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.1...HEAD
-[0.8.1]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.1
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
