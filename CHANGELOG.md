@@ -36,6 +36,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The Claude plugin's version is now 1.28.0, so installed plugins receive the plugin changes
+  made since v0.8.1 (#2989's pr-create skill change), and `main`'s release-path build passes
+  its plugin-version check again.
 - pr-create no longer re-runs the ~30-minute full local gate after merging the
   base branch. The skill says to push the merge straight away, and the stage
   fence refuses `bash scripts/ci-local.sh` and `nightgauge ci gate-run` in
