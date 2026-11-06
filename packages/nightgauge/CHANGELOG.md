@@ -11,6 +11,12 @@ and this project adheres to
 
 ### Fixed
 
+- When an issue re-runs with nothing left to build, the extension no longer
+  opens and merges an empty pull request. The fallback checks that the branch's
+  tree differs from its base, not just that it has commits ahead. A
+  `no-diff-against-base` result from the deterministic pr-create now ends the
+  run (issue closed, or parked in Backlog) instead of running the LLM
+  pr-create skill (#3012).
 - Claude stages launched from the VS Code extension can now write to the main
   checkout's knowledge base from a worktree without a user-level permission rule:
   they get `--add-dir <main checkout>/.nightgauge/knowledge` and

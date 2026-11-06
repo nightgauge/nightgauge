@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge pr-stage create` now settles a branch with no diff against its
+  base the way the scheduler does: it comments the acceptance criteria, closes
+  the issue when every one is met, and reports `settled`, `issue_closed` and
+  `terminal_detail` in its JSON. Post-merge no longer sends an issue back to
+  Ready when its `Refs` pull request changed no files; it parks the issue in
+  Backlog and says so in the remainder comment (#3012).
 - A relative link from a skill's supporting file into another skill or
   `_shared/` (such as `../../nightgauge-verify-ui/SKILL.md`) now points at the
   real file once the include is inlined into a stage prompt, and
