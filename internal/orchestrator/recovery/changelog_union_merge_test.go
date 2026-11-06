@@ -39,6 +39,11 @@ func stubMerge(t *testing.T, res *gitpkg.BaseMergeResult, err error) *[]string {
 
 func stubGreenBranch(t *testing.T) {
 	t.Helper()
+	stubGreenBranchRollup(t, `{"statusCheckRollup":[{"conclusion":"SUCCESS"}]}`)
+}
+
+func stubGreenBranchRollup(t *testing.T, rollup string) {
+	t.Helper()
 	stubExecGit(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		if args[0] == "rev-parse" && len(args) > 1 && args[1] == "--abbrev-ref" {
 			return []byte("feat/x\n"), nil
@@ -49,8 +54,20 @@ func stubGreenBranch(t *testing.T) {
 		return nil, nil
 	})
 	stubExecGh(t, func(context.Context, ...string) ([]byte, error) {
-		return []byte(`{"statusCheckRollup":[{"conclusion":"SUCCESS"}]}`), nil
+		return []byte(rollup), nil
 	})
+}
+
+// TestChangelogUnionMerge_GreenRollupWithCLARecovers replays PR #3016's rollup
+// (green check runs plus a `cla` commit status) through the recovery (#3026).
+func TestChangelogUnionMerge_GreenRollupWithCLARecovers(t *testing.T) {
+	stubGreenBranchRollup(t, pr3016Rollup())
+	stubMerge(t, &gitpkg.BaseMergeResult{Outcome: gitpkg.BaseMergeMerged}, nil)
+	step := NewChangelogUnionMerge(&fakePRMergeRunner{res: pmstages.PRMergeResult{Path: pmstages.PathMerged, PRNumber: 7}})
+	res, handled, _ := step.Attempt(context.Background(), queueFailure(t.TempDir()), "act")
+	if !handled || !res.Recovered {
+		t.Fatalf("handled=%v recovered=%v (%+v)", handled, res.Recovered, res)
+	}
 }
 
 func TestChangelogUnionMerge_Outcomes(t *testing.T) {

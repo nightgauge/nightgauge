@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Conflict recovery now judges commit statuses such as `cla` by their state, so a
+  PR whose checks are all green is recognised on the first poll instead of waiting
+  out the full CI budget and being booked as failed. When the wait does give up,
+  its message names the checks still pending (#3026).
+
 - The base-branch freshness check in feature-validate and pr-merge no longer
   aborts a merge that is already open. A merge of the base whose every path
   is resolved and staged, as feature-dev leaves it, is committed and pushed, so the remote

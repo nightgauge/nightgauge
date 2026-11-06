@@ -76,10 +76,17 @@ func (a *CICheckTransientlyFailed) Matches(failure StageFailure) bool {
 		strings.Contains(combined, "checks failed")
 }
 
-// statusCheckRollupEntry mirrors the subset of the gh JSON we consume.
+// statusCheckRollupEntry mirrors the subset of the gh JSON we consume. The
+// rollup is a union: a CheckRun carries name/status/conclusion, while a
+// StatusContext (a commit status such as `cla`) carries context/state and no
+// conclusion (#3026).
 type statusCheckRollupEntry struct {
+	TypeName    string `json:"__typename"`
 	Name        string `json:"name"`
+	Status      string `json:"status"`
 	Conclusion  string `json:"conclusion"`
+	Context     string `json:"context"`
+	State       string `json:"state"`
 	WorkflowRun struct {
 		DatabaseID int64 `json:"databaseId"`
 		Workflow   struct {
@@ -87,6 +94,62 @@ type statusCheckRollupEntry struct {
 		} `json:"workflow"`
 	} `json:"workflowRun"`
 	DetailsURL string `json:"detailsUrl"`
+}
+
+// label names the row for messages: a check run's name, else a status's context.
+func (e statusCheckRollupEntry) label() string {
+	if e.Name != "" {
+		return e.Name
+	}
+	if e.Context != "" {
+		return e.Context
+	}
+	return "<unnamed>"
+}
+
+// isStatusContext reports whether the row is a commit status. A row without
+// __typename that has a state but no conclusion is treated as one.
+func (e statusCheckRollupEntry) isStatusContext() bool {
+	if e.TypeName != "" {
+		return e.TypeName == "StatusContext"
+	}
+	return e.State != "" && e.Conclusion == ""
+}
+
+// verdict classifies one row: a commit status by its state, a check run by
+// its conclusion.
+func (e statusCheckRollupEntry) verdict() checksState {
+	if e.isStatusContext() {
+		switch strings.ToUpper(e.State) {
+		case "SUCCESS":
+			return checksGreen
+		case "FAILURE", "ERROR":
+			return checksFailed
+		default:
+			// PENDING / EXPECTED / empty — not reported yet.
+			return checksPending
+		}
+	}
+	switch strings.ToUpper(e.Conclusion) {
+	case "FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED":
+		return checksFailed
+	case "SUCCESS", "NEUTRAL", "SKIPPED":
+		return checksGreen
+	default:
+		// "" / PENDING / QUEUED / IN_PROGRESS / EXPECTED / WAITING — in flight.
+		return checksPending
+	}
+}
+
+// isFailing is the transient-failure classifier's narrow failing predicate:
+// FAILURE/ERROR, read from state for a commit status, conclusion otherwise.
+func (e statusCheckRollupEntry) isFailing() bool {
+	v := e.Conclusion
+	if e.isStatusContext() {
+		v = e.State
+	}
+	v = strings.ToUpper(v)
+	return v == "FAILURE" || v == "ERROR"
 }
 
 type prChecksSnapshot struct {
@@ -116,7 +179,7 @@ func (a *CICheckTransientlyFailed) Execute(ctx context.Context, failure StageFai
 	// 2. Require exactly one FAILURE/ERROR check.
 	var failed []statusCheckRollupEntry
 	for _, e := range snap.StatusCheckRollup {
-		if e.Conclusion == "FAILURE" || e.Conclusion == "ERROR" {
+		if e.isFailing() {
 			failed = append(failed, e)
 		}
 	}
