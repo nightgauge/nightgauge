@@ -14,6 +14,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- A feature-validate artifact that records its acceptance-criteria verdicts
+  under `acceptance_criteria[].verdict` now fails the extension's deliverable
+  policy, as it already did in Go (#3013). The stage is re-asked to move them
+  under `acceptance_criteria_verdicts`; if it does not, the stage fails instead
+  of having a synthetic artifact written over it, so a fully verified change no
+  longer opens a PR that says `Refs` instead of `Closes`.
+
 ## [0.8.2] - 2026-11-06
 
 0.8.1 was tagged but never published, because the release gate could not scan
