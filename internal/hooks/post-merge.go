@@ -195,6 +195,10 @@ type PostMergeResult struct {
 	// ReadyWithheld is set on a partial delivery that must not return to Ready:
 	// the run merged nothing, or the issue carries an excluded label (#2878).
 	ReadyWithheld bool `json:"readyWithheld,omitempty"`
+	// EmptyDelivery is set on a partial delivery whose merged PR is known to
+	// have changed no files (#3012). Ready is withheld and the row parks in
+	// Backlog: re-running an issue whose last PR delivered nothing loops.
+	EmptyDelivery bool `json:"emptyDelivery,omitempty"`
 	// RemainderComment reports the comment naming the remainder: "posted",
 	// "present" when this PR's comment already exists, "failed", or empty when
 	// no commenter was wired.
@@ -707,6 +711,10 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 		BaseRef:         merge.BaseRef,
 		MergedBy:        merge.MergedBy,
 		ReadyWithheld:   readyWithheld(input, issue.Labels),
+		EmptyDelivery:   merge.ChangedFilesKnown && merge.ChangedFiles == 0,
+	}
+	if out.EmptyDelivery {
+		out.ReadyWithheld = true
 	}
 	fmt.Fprintf(os.Stderr, "Post-merge: PR #%d does not close issue #%d — leaving it open (partial delivery)\n", input.PRNumber, input.IssueNumber)
 	defer func() {
@@ -721,6 +729,14 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 			out.Error = err.Error()
 		}
 	}
+	if boardSvc != nil && input.ProjectNumber > 0 && out.EmptyDelivery {
+		fmt.Fprintf(os.Stderr, "Post-merge: PR #%d changed no files — parking #%d in Backlog instead of Ready\n", input.PRNumber, input.IssueNumber)
+		if err := boardSvc.SyncStatus(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, "Backlog"); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to Backlog failed for #%d: %v\n", input.IssueNumber, err)
+			out.Failed = true
+			out.Error = err.Error()
+		}
+	}
 
 	if input.Remainder != nil {
 		if remainderCommentPosted(ctx, input) {
@@ -728,7 +744,7 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 			out.RemainderComment = "present"
 			return out
 		}
-		if err := input.Remainder.AddComment(ctx, issue.NodeID, remainderComment(input.PRNumber, out.UnmetCriteria, !out.ReadyWithheld)); err != nil {
+		if err := input.Remainder.AddComment(ctx, issue.NodeID, remainderComment(input.PRNumber, out.UnmetCriteria, !out.ReadyWithheld, out.EmptyDelivery)); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge remainder comment failed for #%d: %v\n", input.IssueNumber, err)
 			out.RemainderComment = "failed"
 			out.Failed = true
@@ -781,10 +797,14 @@ func remainderCommentPosted(ctx context.Context, input PostMergeInput) bool {
 	return false
 }
 
-func remainderComment(prNumber int, unmet []string, backInReady bool) string {
+func remainderComment(prNumber int, unmet []string, backInReady, empty bool) string {
 	var b strings.Builder
 	b.WriteString(remainderMarker(prNumber) + "\n")
-	b.WriteString(fmt.Sprintf("PR #%d merged part of this issue and referenced it with `Refs`, so the issue stays open", prNumber))
+	if empty {
+		b.WriteString(fmt.Sprintf("PR #%d referenced this issue with `Refs` but changed no files, so it delivered nothing. The issue stays open and waits in Backlog for a human instead of returning to Ready", prNumber))
+	} else {
+		b.WriteString(fmt.Sprintf("PR #%d merged part of this issue and referenced it with `Refs`, so the issue stays open", prNumber))
+	}
 	if backInReady {
 		b.WriteString(" and is back in Ready")
 	}

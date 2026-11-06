@@ -957,6 +957,66 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     expect(payload.stageExecutionPaths?.["pr-merge"]).toBe("deterministic");
   });
 
+  // #3012: a no-diff punt was settled by the verb; the run ends with its
+  // verdict and the LLM skill (which would open an empty PR) never runs.
+  describe("a no-diff-against-base punt settles instead of running the LLM (#3012)", () => {
+    const runNoDiff = async (extra: Record<string, unknown>) => {
+      prStageCreate.value = {
+        stage: "pr-create",
+        path: "punt",
+        pr_number: 0,
+        reason: "no-diff-against-base",
+        rate_limited: false,
+        duration_ms: 3,
+        ...extra,
+      } as typeof prStageCreate.value;
+      mockSkillSuccess(); // must NOT be invoked
+      const state = createMockStateService("pr-create");
+      const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+      orchestrator.setWorktreeOverride(WORKTREE);
+      const result = await orchestrator.runPipeline(300);
+      const skillStages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+      return { result, state, skillStages };
+    };
+
+    it("closed: fails pr-create with the issue_closed detail and skips the skill", async () => {
+      const detail = "issue_closed: pr-create found branch b level with main [#2941]";
+      const { result, state, skillStages } = await runNoDiff({
+        settled: true,
+        issue_closed: true,
+        terminal_detail: detail,
+      });
+      expect(skillStages).not.toContain("pr-create");
+      expect(skillStages).not.toContain("pr-merge");
+      expect(prStageCalls.value.some((c) => c.verb === "merge")).toBe(false);
+      expect(result.success).toBe(false);
+      expect(vi.mocked(state.failStage)).toHaveBeenCalledWith("pr-create", detail);
+    });
+
+    it("open: fails pr-create with the not-pipeline-actionable detail", async () => {
+      const detail =
+        "[not-pipeline-actionable] pr-create: branch b has no diff against main [#2941]";
+      const { result, state, skillStages } = await runNoDiff({
+        settled: true,
+        issue_closed: false,
+        terminal_detail: detail,
+      });
+      expect(skillStages).not.toContain("pr-create");
+      expect(result.success).toBe(false);
+      expect(vi.mocked(state.failStage)).toHaveBeenCalledWith("pr-create", detail);
+    });
+
+    it("unsettled (older binary): still skips the skill and parks", async () => {
+      const { result, state, skillStages } = await runNoDiff({});
+      expect(skillStages).not.toContain("pr-create");
+      expect(result.success).toBe(false);
+      expect(vi.mocked(state.failStage)).toHaveBeenCalledWith(
+        "pr-create",
+        expect.stringContaining("[not-pipeline-actionable]")
+      );
+    });
+  });
+
   // ── Queue conflict recovery (#2841) ─────────────────────────────────────
   //
   // Red-proof: restoring the old `refused` branch (delete the conflict arm of

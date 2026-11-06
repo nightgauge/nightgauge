@@ -232,7 +232,7 @@ func TestUnmetCriteriaIgnoresIndentedStatusLine(t *testing.T) {
 }
 
 func TestRemainderCommentCannotCarryValidationMarker(t *testing.T) {
-	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")}, true)
+	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")}, true, false)
 	if forge.HasValidationMarker(body) {
 		t.Fatalf("remainder comment carries a validation marker: %q", body)
 	}
@@ -306,6 +306,48 @@ func TestPartialDeliveryReadyWithheld(t *testing.T) {
 			}
 			if got := strings.Contains(commenter.body, "back in Ready"); got != tc.wantReady {
 				t.Errorf("comment claims Ready=%v, want %v: %s", got, tc.wantReady, commenter.body)
+			}
+		})
+	}
+}
+
+// #3012: a Refs merge known to have changed no files delivered nothing, so it
+// parks in Backlog instead of looping through Ready. An unknown count keeps
+// the Ready move.
+func TestPartialDeliveryEmptyMergeParksInBacklog(t *testing.T) {
+	cases := []struct {
+		name       string
+		files      int
+		known      bool
+		wantStatus string
+		wantEmpty  bool
+	}{
+		{name: "zero files known", files: 0, known: true, wantStatus: "Backlog", wantEmpty: true},
+		{name: "two files", files: 2, known: true, wantStatus: "Ready"},
+		{name: "count unknown", files: 0, known: false, wantStatus: "Ready"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			board := &mockBoardSyncer{}
+			commenter := &recordingCommenter{}
+			input := PostMergeInput{
+				IssueNumber: 600, RepositoryOwner: "nightgauge", RepositoryName: "nightgauge",
+				ProjectNumber: 6, PRNumber: 77, Remainder: commenter,
+			}
+			issue := &types.Issue{NodeID: "I_node600", Number: 600, State: "OPEN"}
+			merge := gh.PRMergeInfo{SHA: "abc", Body: partialBody, ChangedFiles: tc.files, ChangedFilesKnown: tc.known}
+			res := partialDelivery(context.Background(), board, input, issue, merge)
+			if board.syncs != 1 || board.calledWith.status != tc.wantStatus {
+				t.Errorf("board synced %d time(s), last to %q; want once to %s", board.syncs, board.calledWith.status, tc.wantStatus)
+			}
+			if res.EmptyDelivery != tc.wantEmpty || res.ReadyWithheld != tc.wantEmpty {
+				t.Errorf("EmptyDelivery=%v ReadyWithheld=%v, want %v", res.EmptyDelivery, res.ReadyWithheld, tc.wantEmpty)
+			}
+			if got := strings.Contains(commenter.body, "changed no files"); got != tc.wantEmpty {
+				t.Errorf("comment names empty delivery=%v, want %v: %s", got, tc.wantEmpty, commenter.body)
+			}
+			if strings.Contains(commenter.body, "back in Ready") == tc.wantEmpty {
+				t.Errorf("comment Ready claim wrong: %s", commenter.body)
 			}
 		})
 	}

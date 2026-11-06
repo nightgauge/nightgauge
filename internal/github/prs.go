@@ -53,6 +53,11 @@ type PRMergeInfo struct {
 	// Body is the PR body as merged (#2595). Post-merge reads its closing
 	// keyword: a PR that says `Refs #N` delivered only part of the issue.
 	Body string
+	// ChangedFiles is the merged PR's changed-file count (#3012), meaningful
+	// only when ChangedFilesKnown. Post-merge refuses to send a known 0-file
+	// merge back to Ready: an empty PR delivered nothing, so re-running it loops.
+	ChangedFiles      int
+	ChangedFilesKnown bool
 }
 
 // GetPRMergeInfo fetches the merge breadcrumb of a merged PR. Satisfies
@@ -62,7 +67,12 @@ func (s *PRService) GetPRMergeInfo(ctx context.Context, owner, repo string, numb
 	if err != nil {
 		return PRMergeInfo{}, err
 	}
-	return PRMergeInfo{SHA: pr.MergeCommitSHA, MergedAt: pr.MergedAt, BaseRef: pr.BaseRef, MergedBy: pr.MergedBy, Body: pr.Body}, nil
+	info := PRMergeInfo{SHA: pr.MergeCommitSHA, MergedAt: pr.MergedAt, BaseRef: pr.BaseRef, MergedBy: pr.MergedBy, Body: pr.Body}
+	if pr.ChangedFiles != nil {
+		info.ChangedFiles = *pr.ChangedFiles
+		info.ChangedFilesKnown = true
+	}
+	return info, nil
 }
 
 // GetPR fetches a single pull request with review and check status.
@@ -105,6 +115,10 @@ func (s *PRService) GetPR(ctx context.Context, owner, repo string, number int) (
 		Additions:        int(pr.Additions),
 		Deletions:        int(pr.Deletions),
 		MergedAt:         string(pr.MergedAt),
+	}
+	if pr.ChangedFiles != nil {
+		n := int(*pr.ChangedFiles)
+		result.ChangedFiles = &n
 	}
 	if pr.MergeCommit != nil {
 		result.MergeCommitSHA = string(pr.MergeCommit.OID)

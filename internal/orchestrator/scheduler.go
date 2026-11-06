@@ -11874,22 +11874,15 @@ func (s *Scheduler) tryDeterministicPRCreate(
 // cannot loop through Ready. A comment or close that fails leaves the issue
 // open and parked: closing on an unrecorded verdict is the worse error.
 func (s *Scheduler) settleNoDiffRun(ctx context.Context, item types.BoardItem, res pmstages.PRCreateResult) error {
-	closeIt, comment := pmstages.NoDiffOutcome(item.Number, res.Branch, res.BaseBranch, res.ACVerdicts)
-	closed := false
-	if s.client != nil && item.NodeID != "" {
-		if err := gh.NewIssueService(s.client).AddComment(ctx, item.NodeID, comment); err != nil {
-			log.Printf("#%d: pr-create no-diff: could not comment the criteria: %v", item.Number, err)
-			closeIt = false
-		}
-		if closeIt && s.issueSvc != nil {
-			if err := s.issueSvc.CloseIssue(ctx, item.NodeID); err != nil {
-				log.Printf("#%d: pr-create no-diff: could not close the issue: %v", item.Number, err)
-			} else {
-				closed = true
-			}
-		}
+	var commenter NoDiffCommenter
+	if s.client != nil {
+		commenter = gh.NewIssueService(s.client)
 	}
-	detail := pmstages.NoDiffTerminalDetail(item.Number, res.Branch, res.BaseBranch, closed, len(pmstages.OpenACs(res.ACVerdicts)))
+	var closer NoDiffCloser
+	if s.issueSvc != nil {
+		closer = s.issueSvc
+	}
+	detail, _ := SettleNoDiff(ctx, commenter, closer, item.NodeID, item.Number, res)
 	log.Printf("#%d: pr-create deterministic path: %s", item.Number, detail)
 	return errors.New(detail)
 }

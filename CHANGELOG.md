@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge pr-stage create` now settles a branch with no diff against its
+  base the way the scheduler does: it comments the acceptance criteria, closes
+  the issue when every one is met, and reports `settled`, `issue_closed` and
+  `terminal_detail` in its JSON. Post-merge no longer sends an issue back to
+  Ready when its `Refs` pull request changed no files; it parks the issue in
+  Backlog and says so in the remainder comment (#3012).
 - Releases publish again: the VirusTotal scan gate accepts the large-file
   upload host `bigfiles.virustotal.com`, and still refuses any other upload URL
   before the API key is sent.
