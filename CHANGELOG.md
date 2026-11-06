@@ -14,6 +14,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-06
+
+0.8.1 was tagged but never published, because the release gate could not scan
+files over 32 MB (#3011). Its changes ship in this release and are listed below.
+
 ### Fixed
 
 - A relative link from a skill's supporting file into another skill or
@@ -71,8 +76,6 @@ changelog, and the release workflow refuses a tag that does not.
   bookkeeping, and the completion check counts distinct stages instead of
   adding array lengths, so a stage that ran twice no longer marks a merged run
   failed, and a duplicate can no longer hide a stage that never ran (#2991).
-
-## [0.8.1] - 2026-11-05
 
 ### Fixed
 
@@ -8530,8 +8533,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.1...HEAD
-[0.8.1]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.1
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
