@@ -19,6 +19,11 @@ changelog, and the release workflow refuses a tag that does not.
 - Context-schema repair reads the stage's `SKILL.md` from the run's pinned
   worktree instead of the first workspace folder, so a pinned run repairs
   against the skill it actually ran (#2799).
+- Claude stages launched from the VS Code extension can now write to the main
+  checkout's knowledge base from a worktree without a user-level permission rule:
+  they get `--add-dir <main checkout>/.nightgauge/knowledge` and
+  `NIGHTGAUGE_KNOWLEDGE_DIR`, as Go-launched stages already did (#2798).
+
 - `nightgauge doctor` no longer hangs when `origin` accepts the connection and
   never responds. The worktree scan's `git fetch` now times out after 60
   seconds and falls back to the local ref.
