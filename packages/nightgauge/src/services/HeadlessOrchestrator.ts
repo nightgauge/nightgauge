@@ -1660,7 +1660,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.skillLoader = new SkillLoader(logger);
     this.contextAssembler = new ContextAssembler(
       logger,
-      () => this.getWorkingDirectory(),
+      () => this.pinnedWorkspaceRoot ?? this.getWorkingDirectory(),
       null, // contextLoader set later via setContextLoader()
       this.skillLoader,
       // ADR-017 step 3: the assembler's schema-repair re-invocation is part
