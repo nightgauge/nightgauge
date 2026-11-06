@@ -277,3 +277,24 @@ func TestRunPushBranch_AuthRefusalExits4WithMarker(t *testing.T) {
 		t.Errorf("network failure stamped the auth marker: %q", errb.String())
 	}
 }
+
+// A credential git echoes back in an auth refusal is redacted from the echo,
+// the marker line and the JSON detail (#2742).
+func TestRunPushBranch_AuthRefusalRedactsCredential(t *testing.T) {
+	_, work, _ := pushBranchFixture(t, "fix/2742-redact")
+	gittest.Run(t, work, "checkout", "-b", "fresh-redact")
+	orig := pushBranchAttempt
+	t.Cleanup(func() { pushBranchAttempt = orig })
+
+	const tok = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"
+	pushBranchAttempt = func(context.Context, string, string) (string, bool) {
+		return "remote: Invalid username or password.\nfatal: Authentication failed for 'https://x-access-token:" + tok + "@github.com/o/r.git/'\n", false
+	}
+	var out, errb bytes.Buffer
+	if code := runPushBranch(context.Background(), work, true, &out, &errb); code != pushBranchAuthFailed {
+		t.Fatalf("exit %d, want %d; stderr=%s", code, pushBranchAuthFailed, errb.String())
+	}
+	if strings.Contains(errb.String(), tok) || strings.Contains(out.String(), tok) {
+		t.Errorf("credential leaked: stderr=%q stdout=%q", errb.String(), out.String())
+	}
+}

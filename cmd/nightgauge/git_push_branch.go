@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nightgauge/nightgauge/internal/credshape"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
@@ -103,9 +104,16 @@ func runPushBranch(ctx context.Context, dir string, outputJSON bool, stdout, std
 		return emit(res, pushBranchOK)
 	}
 	if !rejected {
+		authFailed := isPushAuthFailure(pushErr)
+		if authFailed {
+			// The echo and the marker line travel into validate-{N}.json and
+			// the issue's failure comment, so redact any credential git echoed
+			// back before either is written.
+			pushErr = credshape.RedactEgress(pushErr)
+		}
 		fmt.Fprint(stderr, pushErr)
 		res.Detail = strings.TrimSpace(pushErr)
-		if isPushAuthFailure(pushErr) {
+		if authFailed {
 			fmt.Fprintf(stderr, "%s PUSH REFUSED: %s\n", pushAuthFailedMarker, firstLine(res.Detail))
 			res.Outcome = "auth_failed"
 			return emit(res, pushBranchAuthFailed)
