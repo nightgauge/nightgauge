@@ -569,6 +569,12 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
       FRESHNESS_CHECK_FAILED=true
     fi
   fi
+elif git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  # Not behind, but a merge is still open (unmerged paths, or its commit failed
+  # above). The base is in, yet the tree is not committed: report it (#2755).
+  echo "A merge is still in progress (MERGE_HEAD $(git rev-parse --short MERGE_HEAD)). Leaving it untouched."
+  echo "FRESHNESS_CHECK_FAILED=true"
+  FRESHNESS_CHECK_FAILED=true
 else
   echo "Branch is up-to-date with origin/$FRESHNESS_BASE."
 fi

@@ -242,6 +242,34 @@ func TestRealGit_FreshnessCheck_OpenMergeSurvives(t *testing.T) {
 				t.Errorf("a failed commit must report FRESHNESS_CHECK_FAILED=true:\n%s", out)
 			}
 		})
+		t.Run("open merge on a branch not behind base/"+sh, func(t *testing.T) {
+			ws, stub := openMergeRepo(t)
+			// Bring the base in for good, then leave an unrelated merge open on
+			// conflicts: the branch is level with base yet not committable.
+			gittest.Run(t, ws, "branch", "side", "HEAD")
+			stageOpenMerge(t, ws, "resolved\n")
+			gittest.Run(t, ws, "commit", "-q", "--no-edit")
+			gittest.Run(t, ws, "checkout", "-q", "side")
+			if err := os.WriteFile(filepath.Join(ws, "f.txt"), []byte("side\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gittest.Run(t, ws, "commit", "-q", "-am", "side")
+			gittest.Run(t, ws, "checkout", "-q", testBranch)
+			_ = gittest.Command(ws, "merge", "side").Run() // conflicts by construction
+			if unmergedEntries(ws) == "" {
+				t.Fatal("expected an unresolved conflict")
+			}
+			out, err := runSkillBlock(t, sh, ws, stub, block)
+			if err != nil {
+				t.Fatalf("%s: %v\n%s", sh, err, out)
+			}
+			if !mergeHeadOpen(ws) {
+				t.Fatalf("the open merge was aborted (MERGE_HEAD gone)\n%s", out)
+			}
+			if !strings.Contains(out, "FRESHNESS_CHECK_FAILED=true") {
+				t.Errorf("an open merge on a fresh branch must report FRESHNESS_CHECK_FAILED=true:\n%s", out)
+			}
+		})
 	}
 }
 
