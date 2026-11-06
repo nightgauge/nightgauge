@@ -516,7 +516,7 @@ func buildOrphanDoneEvent(snap *state.RuntimeState, now time.Time) (platform.Pip
 		// 42h-elapsed-timer symptom this reconciler fixes).
 		TotalDurationMs: int(totalDuration.Milliseconds()),
 		StagesRun:       stagesRun,
-	}, now)
+	}, false, now)
 	// The interrupted run's snapshot keeps its visibility (#2400), so its
 	// terminal event is private when the run was.
 	event.Visibility = snap.Visibility
