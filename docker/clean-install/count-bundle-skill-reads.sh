@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Count Read tool calls into the installed bundle's dist/skills (#2722).
+# Count tool calls that read the installed bundle's dist/skills (#2722).
 #
 # Usage: count-bundle-skill-reads.sh <projects_dir> <bundle_skills_path>
-# Prints one integer: the number of transcript tool_use entries named "Read"
-# whose input.file_path starts with <bundle_skills_path>. A transcript line
-# that merely mentions the path (a grant, a listing, prose) is not a read.
+# Prints one integer: the number of transcript tool_use entries that open a
+# file under <bundle_skills_path>: a Read whose input.file_path, or a
+# Grep/Glob whose input.path, starts with it, or a Bash call whose
+# input.command names it. Stages read their non-inlined includes with any of
+# these tools, so counting Read alone fails correct runs. A transcript line
+# that is not a tool call (a grant, a listing, a tool result, prose) never
+# counts.
 # A missing or empty projects dir prints 0.
 set -uo pipefail
 
@@ -20,6 +24,10 @@ fi
 # make cat read stdin (xargs would on GNU).
 find "$PROJECTS" -type f -name '*.jsonl' -exec cat {} + 2>/dev/null \
   | jq -R --arg p "$BUNDLE" 'fromjson? | .message.content? | arrays | .[]
-      | select(.type? == "tool_use" and .name? == "Read")
-      | select((.input.file_path? // "") | startswith($p))' 2>/dev/null \
+      | select(.type? == "tool_use")
+      | select(
+          ((.name? == "Read") and ((.input.file_path? // "") | startswith($p)))
+          or ((.name? == "Grep" or .name? == "Glob")
+              and ((.input.path? // "") | startswith($p)))
+          or ((.name? == "Bash") and ((.input.command? // "") | contains($p))))' 2>/dev/null \
   | jq -s 'length'

@@ -212,8 +212,8 @@ if [[ "${E2E_SMOKE:-0}" != "1" ]]; then
   if [[ -f "$HOME/.claude/settings.json" ]]; then
     USER_ADDITIONAL_DIRS="$(jq '.permissions.additionalDirectories // [] | length' "$HOME/.claude/settings.json" 2>/dev/null || echo -1)"
   fi
-  # Only a Read tool call whose file_path is under the bundle counts; a
-  # transcript line that merely mentions the path (a grant) is not a read.
+  # Only a tool call that reads under the bundle (Read, Grep/Glob, Bash) counts;
+  # a transcript line that merely mentions the path (a grant) is not a read.
   BUNDLE_SKILL_READS="$("$(dirname "$0")/count-bundle-skill-reads.sh" \
     "$HOME/.claude/projects" "$BUNDLE_SKILLS" 2>/dev/null || echo 0)"
   jq -n --argjson u "${USER_ADDITIONAL_DIRS:-0}" --argjson r "${BUNDLE_SKILL_READS:-0}" --arg p "$BUNDLE_SKILLS" \
