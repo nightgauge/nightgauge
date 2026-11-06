@@ -44,6 +44,9 @@ files over 32 MB (#3011). Its changes ship in this release and are listed below.
 - Releases publish again: the VirusTotal scan gate accepts the large-file
   upload host `bigfiles.virustotal.com`, and still refuses any other upload URL
   before the API key is sent.
+- "Unblocked by #N", "undepends on #N" and other spellings that glue a
+  dependency keyword onto a preceding word no longer declare a dependency on
+  #N (#2712).
 - A relative link from a skill's supporting file into another skill or
   `_shared/` (such as `../../nightgauge-verify-ui/SKILL.md`) now points at the
   real file once the include is inlined into a stage prompt, and
