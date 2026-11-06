@@ -222,7 +222,10 @@ type PullRequest struct {
 	IsDraft          bool     `json:"isDraft"`
 	Additions        int      `json:"additions"`
 	Deletions        int      `json:"deletions"`
-	CreatedAt        string   `json:"createdAt"`
+	// ChangedFiles is the PR's changed-file count; nil when GitHub did not
+	// report one (#3012). Internal: not part of the shared JSON contract.
+	ChangedFiles *int   `json:"-"`
+	CreatedAt    string `json:"createdAt"`
 	// MergeCommitSHA is the OID of the squashed/merge commit on the base branch,
 	// populated only once the PR is MERGED (empty otherwise). It is the
 	// post-merge ground-truth breadcrumb the survival-feedback loop keys on

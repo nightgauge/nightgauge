@@ -2,7 +2,9 @@ package gates
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -45,6 +47,20 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 			evidence := append([]string{}, validatePolicy.Summary()...)
 			return false, "validate context does not match the expected schema and no total repair exists",
 				evidence, KindFail, TerminalKindValidationError
+		}
+
+		// #2742: a push the remote refused is a credential fault, whatever the
+		// test verdict says. Mirror verifyPostValidateState: book it under the
+		// `[push-auth-failed]` marker before any quality-gate row is judged, so
+		// a passed-but-unpushed run cannot advance and a failed one is not
+		// reported as failed tests.
+		if pushErr, refused := pushAuthFailed(workspace, issueNumber); refused {
+			evidence := []string{"push_status=auth_failed"}
+			if pushErr != "" {
+				evidence = append(evidence, pushErr)
+			}
+			return false, "[push-auth-failed] feature-validate could not push: the remote refused " +
+				"this machine's git credentials", evidence, KindFail, TerminalKindGitTransportAuthFailed
 		}
 
 		results, err := state.ReadGateMetricsForIssue(workspace, issueNumber)
@@ -238,4 +254,25 @@ func markUnexercisedDeliverable(issueNumber int, workspace string) string {
 		return ""
 	}
 	return strings.Join(summaries, "; ")
+}
+
+// pushAuthFailed reports whether validate-{N}.json records a push the remote
+// refused (`push_status: "auth_failed"`, #2742), with the recorded error line.
+// An unreadable or absent file is not a refusal; other checks own that case.
+func pushAuthFailed(workspace string, issueNumber int) (string, bool) {
+	data, err := os.ReadFile(contextFilePath(workspace, "validate", issueNumber))
+	if err != nil {
+		return "", false
+	}
+	var doc struct {
+		PushStatus string `json:"push_status"`
+		PushError  string `json:"push_error"`
+	}
+	if json.Unmarshal(data, &doc) != nil {
+		return "", false
+	}
+	if !strings.EqualFold(strings.TrimSpace(doc.PushStatus), "auth_failed") {
+		return "", false
+	}
+	return doc.PushError, true
 }

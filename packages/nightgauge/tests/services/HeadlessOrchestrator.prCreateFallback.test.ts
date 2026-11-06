@@ -45,6 +45,7 @@ const {
   branchName,
   preExistingPrs,
   commitsAhead,
+  diffExit,
   pushFails,
   createFails,
   titleVerbFails,
@@ -59,6 +60,8 @@ const {
   branchName: { value: "feat/42-add-thing" },
   preExistingPrs: { value: [] as Array<{ number: number }> },
   commitsAhead: { value: "2" },
+  // `git diff --quiet origin/<base> HEAD` exit: 1 = trees differ (#3012).
+  diffExit: { value: 1 as number },
   pushFails: { value: false },
   createFails: { value: false },
   titleVerbFails: { value: false },
@@ -103,6 +106,11 @@ vi.mock("child_process", async () => {
     // git rev-list --count origin/main..HEAD
     if (cmd === "git" && a[0] === "rev-list") {
       return Promise.resolve({ stdout: `${commitsAhead.value}\n`, stderr: "" });
+    }
+    // git diff --quiet origin/main HEAD → exit 0 equal, 1 differ (#3012)
+    if (cmd === "git" && a[0] === "diff" && a[1] === "--quiet") {
+      if (diffExit.value === 0) return Promise.resolve({ stdout: "", stderr: "" });
+      return Promise.reject(Object.assign(new Error("diff"), { code: diffExit.value }));
     }
     // git push -u origin <branch>
     if (cmd === "git" && a[0] === "push") {
@@ -191,6 +199,7 @@ describe("execution_path attribution when the fallback recovers (#122)", () => {
     branchName.value = "feat/42-add-thing";
     preExistingPrs.value = [];
     commitsAhead.value = "2";
+    diffExit.value = 1;
     pushFails.value = false;
     createFails.value = false;
     prCreated.value = false;
@@ -227,6 +236,7 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     branchName.value = "feat/42-add-thing";
     preExistingPrs.value = [];
     commitsAhead.value = "2";
+    diffExit.value = 1;
     pushFails.value = false;
     createFails.value = false;
     titleVerbFails.value = false;
@@ -234,6 +244,29 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     titleVerbOutput.value = "fix(#42): add thing\n";
     prCreated.value = false;
     calls.value = [];
+  });
+
+  // #3012: a re-run Refs branch is commits ahead of base with an equal tree.
+  it("opens no PR when the branch is commits ahead but its tree equals base (#3012)", async () => {
+    commitsAhead.value = "3";
+    diffExit.value = 0;
+    const result = await callFallback();
+    expect(result.created).toBe(false);
+    expect(result.reason).toContain("[no-changes-produced]");
+    expect(result.reason).toMatch(/no diff against main/);
+    expect(countCalls((c) => c[0] === "git" && c[1] === "push")).toBe(0);
+    expect(
+      countCalls((c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create")
+    ).toBe(0);
+  });
+
+  it("opens no PR and stamps no marker when the tree diff is inconclusive (#3012)", async () => {
+    diffExit.value = 128;
+    const result = await callFallback();
+    expect(result.created).toBe(false);
+    expect(result.reason).not.toContain("[no-changes-produced]");
+    expect(result.reason).toMatch(/could not confirm .* has a diff/);
+    expect(countCalls((c) => c[0] === "git" && c[1] === "push")).toBe(0);
   });
 
   it("pushes the branch and opens a PR when commits exist and no PR is present", async () => {
@@ -387,6 +420,7 @@ function resetMocks() {
   branchName.value = "feat/42-add-thing";
   preExistingPrs.value = [];
   commitsAhead.value = "2";
+  diffExit.value = 1;
   pushFails.value = false;
   createFails.value = false;
   prCreated.value = false;

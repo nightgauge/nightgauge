@@ -46,6 +46,10 @@ const (
 	// because its Claude plugin did not load (#2723). Exact parity with the Go
 	// scheduler's skip in scheduler.go.
 	outcomeSkipGatePluginMissing
+	// outcomeSkipAwaitingApproval: the architecture-approval gate held the run
+	// for a human (#2756). A deliberate pause is not a failure. Exact parity
+	// with the Go scheduler's skip in scheduler.go.
+	outcomeSkipAwaitingApproval
 )
 
 // String names the decision for logs. Distinct strings per state so a log line
@@ -62,6 +66,8 @@ func (d outcomeDecision) String() string {
 		return "skip-environment-halt"
 	case outcomeSkipGatePluginMissing:
 		return "skip-gate-plugin-missing"
+	case outcomeSkipAwaitingApproval:
+		return "skip-awaiting-approval"
 	default:
 		return "unset"
 	}
@@ -93,6 +99,9 @@ func learningOutcomeFor(
 	// result means this follows any change there instead of drifting from it.
 	if record.OutcomeType == orchestrator.OutcomeTypeDeferred {
 		return learning.Outcome{}, outcomeSkipDeferred
+	}
+	if record.OutcomeType == orchestrator.OutcomeTypeAwaitingApproval {
+		return learning.Outcome{}, outcomeSkipAwaitingApproval
 	}
 	if record.TerminalFailureKind == orchestrator.TerminalKindNetworkUnavailable {
 		return learning.Outcome{}, outcomeSkipNetworkUnavailable

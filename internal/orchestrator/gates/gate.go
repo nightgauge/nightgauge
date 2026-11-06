@@ -102,6 +102,11 @@ const (
 	// TerminalKindReviewCapReached: FeatureValidateGate found the review stopped
 	// by its round cap (#2865) — one issue's outcome, not a repository's.
 	TerminalKindReviewCapReached = "review_cap_reached"
+
+	// TerminalKindGitTransportAuthFailed is the kind a refused feature-validate
+	// push books (#2742); it matches internal/terminalkind's
+	// git-transport-auth-failed rule.
+	TerminalKindGitTransportAuthFailed = "git_transport_auth_failed"
 )
 
 // GateResult is the in-process value returned by a StageGate.Verify call.

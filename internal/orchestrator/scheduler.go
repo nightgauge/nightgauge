@@ -5450,7 +5450,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// Total run duration + outcome so the platform transitions the live
 			// row from 'running' to complete/failed (#1047). Copy the bool so the
 			// pointer doesn't alias the loop/closure variable.
-			doneSuccess := pipelineSuccess
+			// An approval hold is a non-failure (#2756): never a red row.
+			doneSuccess := pipelineSuccess || IsNonFailureTerminalKind(terminalFailureKind)
 			totalDurationMs := 0
 			if !snap.StartedAt.IsZero() {
 				totalDurationMs = int(time.Since(snap.StartedAt).Milliseconds())
@@ -5556,6 +5557,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		case TerminalKindGatePluginMissing:
 			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — stage stopped before any work)",
 				item.Number, TerminalKindGatePluginMissing)
+		case TerminalKindArchitectureApprovalRequired:
+			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — awaiting human approval, not a failure)",
+				item.Number, TerminalKindArchitectureApprovalRequired)
 		default:
 			// recordOutcome re-resolves the prediction from the run's worktree
 			// before writing the row (#994) — the values here were read at
@@ -10626,6 +10630,8 @@ func (s *Scheduler) recordV2History(
 	// to history is the single source of truth for both sinks.
 	now := time.Now()
 	record := hw.BuildV2Record(snap, success, errMsg, input, now)
+	// #2756: an architecture-approval hold is a non-failure.
+	ApplyNonFailureOutcome(&record)
 
 	// Attach gate results (best-effort — missing file is not an error) and the
 	// predicted-vs-actual routing decisions from recordOutcome.
@@ -11868,22 +11874,15 @@ func (s *Scheduler) tryDeterministicPRCreate(
 // cannot loop through Ready. A comment or close that fails leaves the issue
 // open and parked: closing on an unrecorded verdict is the worse error.
 func (s *Scheduler) settleNoDiffRun(ctx context.Context, item types.BoardItem, res pmstages.PRCreateResult) error {
-	closeIt, comment := pmstages.NoDiffOutcome(item.Number, res.Branch, res.BaseBranch, res.ACVerdicts)
-	closed := false
-	if s.client != nil && item.NodeID != "" {
-		if err := gh.NewIssueService(s.client).AddComment(ctx, item.NodeID, comment); err != nil {
-			log.Printf("#%d: pr-create no-diff: could not comment the criteria: %v", item.Number, err)
-			closeIt = false
-		}
-		if closeIt && s.issueSvc != nil {
-			if err := s.issueSvc.CloseIssue(ctx, item.NodeID); err != nil {
-				log.Printf("#%d: pr-create no-diff: could not close the issue: %v", item.Number, err)
-			} else {
-				closed = true
-			}
-		}
+	var commenter NoDiffCommenter
+	if s.client != nil {
+		commenter = gh.NewIssueService(s.client)
 	}
-	detail := pmstages.NoDiffTerminalDetail(item.Number, res.Branch, res.BaseBranch, closed, len(pmstages.OpenACs(res.ACVerdicts)))
+	var closer NoDiffCloser
+	if s.issueSvc != nil {
+		closer = s.issueSvc
+	}
+	detail, _ := SettleNoDiff(ctx, commenter, closer, item.NodeID, item.Number, res)
 	log.Printf("#%d: pr-create deterministic path: %s", item.Number, detail)
 	return errors.New(detail)
 }

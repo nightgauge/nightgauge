@@ -6,7 +6,7 @@ description: Validate feature implementation with integration/E2E tests and manu
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.24.0"
+  version: "1.25.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -482,6 +482,8 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
     # stage that carries on (#2749). The filter copies the `branch_forked`
     # clauses of internal/terminalkind/table.json.
     PUSH_ERR=$(mktemp)
+    # Exit 4 is a credential refusal (#2742): its `[push-auth-failed]` line
+    # passes the filter, so a later push surfaces the same cause.
     if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
       echo "WARNING: Failed to push merged branch. Continuing with the local merge."
       grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true

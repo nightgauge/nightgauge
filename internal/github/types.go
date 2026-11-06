@@ -561,6 +561,8 @@ type pullRequestQuery struct {
 			ReviewDecision   graphql.String
 			Additions        graphql.Int
 			Deletions        graphql.Int
+			// ChangedFiles is a pointer so an absent count reads as unknown (#3012).
+			ChangedFiles *graphql.Int
 			// MergedAt + MergeCommit are populated only once the PR is MERGED —
 			// the post-merge ground-truth breadcrumb (#4133). MergeCommit is a
 			// pointer because it is null on un-merged PRs.

@@ -546,3 +546,44 @@ describe("postFailureComment — runaway kill (Issue #2694)", () => {
     expect(cmd).toContain("The PR was created");
   });
 });
+
+describe("postFailureComment — push auth refusal (Issue #2742)", () => {
+  beforeEach(() => {
+    execMock.mockReset();
+    execMock.mockImplementation((_cmd: string, _opts: unknown, cb: Function) => {
+      cb(null, "", "");
+    });
+  });
+
+  async function comment(message: string): Promise<string> {
+    execMock.mockClear();
+    await postFailureComment({
+      issueNumber: 2706,
+      result: makeResult({
+        budgetExceeded: false,
+        failedStage: "feature-validate",
+        error: new Error(message),
+      } as Partial<PipelineRunResult>),
+      state: null,
+      cwd: "/tmp/repo",
+      logger,
+    });
+    return execMock.mock.calls[0][0];
+  }
+
+  it("names the push/auth cause and never claims the tests failed", async () => {
+    const cmd = await comment(
+      '[push-auth-failed] feature-validate could not push: the remote refused this machine\'s git credentials (validation_status="passed").'
+    );
+    expect(cmd).toContain("Push refused for authentication");
+    expect(cmd).not.toContain("did not pass tests");
+  });
+
+  it("keeps the validation-failed text for a genuine test failure", async () => {
+    const cmd = await comment(
+      '[validation-failed] feature-validate reported validation_status="failed".'
+    );
+    expect(cmd).toContain("did not pass tests");
+    expect(cmd).not.toContain("Push refused for authentication");
+  });
+});

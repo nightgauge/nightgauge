@@ -149,7 +149,7 @@ func RunSkillIncludesCheck(_ context.Context, opts SkillIncludesOptions) (*Skill
 			continue
 		}
 		content := string(data)
-		dir := skillDirFor(path)
+		dirs := skillDirsFor(path)
 		for _, loc := range skillrender.IncludePattern.FindAllStringSubmatchIndex(content, -1) {
 			directive := content[loc[0]:loc[1]]
 			target := strings.TrimSpace(content[loc[2]:loc[3]])
@@ -158,43 +158,96 @@ func RunSkillIncludesCheck(_ context.Context, opts SkillIncludesOptions) (*Skill
 			// of the file carrying the directive. For a directive inside
 			// _includes/ those differ by one level, and resolving against the
 			// wrong one reports a path the composer would never try.
-			resolved := filepath.Join(dir, target)
-			if info, statErr := os.Stat(resolved); statErr == nil && !info.IsDir() {
-				continue
+			// A shared overlay resolves against every stage skill directory
+			// it is composed into, so it is dead when any of them fails.
+			seen := map[string]bool{}
+			for _, dir := range dirs {
+				resolved := filepath.Join(dir, target)
+				if seen[resolved] {
+					continue
+				}
+				seen[resolved] = true
+				if info, statErr := os.Stat(resolved); statErr == nil && !info.IsDir() {
+					continue
+				}
+				result.Findings = append(result.Findings, SkillDeadInclude{
+					File:      relOrAbs(root, path),
+					Line:      strings.Count(content[:loc[0]], "\n") + 1,
+					Target:    target,
+					Resolved:  relOrAbs(root, resolved),
+					Directive: directive,
+				})
 			}
-			result.Findings = append(result.Findings, SkillDeadInclude{
-				File:      relOrAbs(root, path),
-				Line:      strings.Count(content[:loc[0]], "\n") + 1,
-				Target:    target,
-				Resolved:  relOrAbs(root, resolved),
-				Directive: directive,
-			})
 		}
 	}
 
 	return result, nil
 }
 
-// skillDirFor returns the directory a directive in path resolves against —
-// the composer's `skillDir`, i.e. the directory holding the owning SKILL.md.
-// For a SKILL.md that is its own directory; for a supporting file it is the
-// nearest ancestor containing a SKILL.md. A _shared/ file has no owning skill
-// (the composer never expands one), so its own directory is used.
-func skillDirFor(path string) string {
+// skillDirsFor returns the directories a directive in path resolves against —
+// the composer's `skillDir`. For a SKILL.md that is its own directory; for a
+// supporting file it is the nearest ancestor containing a SKILL.md. A shared
+// overlay under <tree>/_shared/_overlays/ is injected into each stage body
+// before composeIncludes runs, so its directives resolve against every stage
+// skill directory present in the tree (#2800). Any other _shared/ file is never
+// expanded by the composer, so its own directory is used.
+func skillDirsFor(path string) []string {
 	dir := filepath.Dir(path)
 	if filepath.Base(path) == "SKILL.md" {
-		return dir
+		return []string{dir}
+	}
+	if tree, ok := sharedOverlayTree(dir); ok {
+		var dirs []string
+		// The core tree names stage directories nightgauge-<stage>; the plugin
+		// mirror drops the prefix (feature-dev), so try both forms.
+		for _, name := range skillrender.StageSkillDirs {
+			for _, cand := range []string{name, strings.TrimPrefix(name, "nightgauge-")} {
+				stageDir := filepath.Join(tree, cand)
+				if _, err := os.Stat(filepath.Join(stageDir, "SKILL.md")); err == nil {
+					dirs = append(dirs, stageDir)
+				}
+			}
+		}
+		sort.Strings(dirs)
+		// No stage composes the overlay in this tree, so none of its
+		// directives is ever resolved; its own directory is never the base.
+		return compactStrings(dirs)
 	}
 	for cur := dir; ; {
 		if _, err := os.Stat(filepath.Join(cur, "SKILL.md")); err == nil {
-			return cur
+			return []string{cur}
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
-			return dir
+			return []string{dir}
 		}
 		cur = parent
 	}
+}
+
+// sharedOverlayTree reports the skill tree holding dir when dir is
+// <tree>/_shared/_overlays or a directory beneath it.
+func sharedOverlayTree(dir string) (string, bool) {
+	for cur := dir; ; {
+		if filepath.Base(cur) == "_overlays" && filepath.Base(filepath.Dir(cur)) == "_shared" {
+			return filepath.Dir(filepath.Dir(cur)), true
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", false
+		}
+		cur = parent
+	}
+}
+
+func compactStrings(sorted []string) []string {
+	out := sorted[:0]
+	for i, s := range sorted {
+		if i == 0 || s != sorted[i-1] {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // isScannedSkillFile reports whether a .md path is in scope: a SKILL.md, or a

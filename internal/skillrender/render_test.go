@@ -1330,6 +1330,8 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // repository rung replacing the two ungated ones, and the matching wording.
 // All four captures were re-pinned for #2764: every changed line drops a
 // packages/nightgauge path or a deleted $HOOKS_DIR script from shipped text.
+// The pr-merge capture was re-pinned for #2742: the two added lines are the
+// freshness check noting push-branch's exit-4 credential refusal.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which

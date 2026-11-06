@@ -64,6 +64,10 @@ YARA="$(art yara.js 'payload VT-STUB-YARA')"
 AISUSP="$(art ai.js 'payload VT-STUB-AI-SUSP')"
 AIABSENT="$(art elf.bin 'payload VT-STUB-AI-ABSENT')"
 AIODD="$(art odd.js 'payload VT-STUB-AI-ODD')"
+WINAPI="$(art winapi.bin 'payload VT-STUB-WINAPI-INQUEST')"
+WINAPI_YARA="$(art winapi-yara.bin 'payload VT-STUB-WINAPI-INQUEST VT-STUB-YARA')"
+WINAPI_ELSE="$(art winapi-else.bin 'payload VT-STUB-WINAPI-ELSEWHERE')"
+WINAPI_MAL="$(art winapi-mal.bin 'payload VT-STUB-WINAPI-INQUEST VT-STUB-MALICIOUS')"
 MAL_SHA="$(shasum -a 256 "$MAL" | cut -d' ' -f1)"
 
 REPORT="$WORK/report.json"
@@ -123,6 +127,20 @@ scan -- "$YARA"
 expect "a YARA match -> exit 1, naming the rule" 1 "YARA rule Stub_Forced_Rule (stub_rules)"
 scan -- "$AISUSP"
 expect "Code insights suspicious -> exit 1" 1 "Code insights (Code Insight): suspicious"
+
+# 6a-6d. The allowlisted YARA rule (#3019): recorded, never counted; nothing else exempt.
+scan -- "$WINAPI"
+expect "allowlisted YARA rule alone -> exit 0, named" 0 "YARA allowlisted: Windows_API_Function (https://github.com/InQuest/yara-rules-vt)"
+jq -e '.status == "clean" and .files[0].yara == [] and .files[0].findings == []
+  and .files[0].yara_allowlisted[0].rule_name == "Windows_API_Function"' "$REPORT" >/dev/null &&
+  ok "allowlisted match recorded under yara_allowlisted, not as a finding" ||
+  bad "allowlisted report: got $(jq -c '.files[0]' "$REPORT" 2>/dev/null)"
+scan -- "$WINAPI_YARA"
+expect "allowlisted rule plus another rule -> exit 1" 1 "YARA rule Stub_Forced_Rule (stub_rules)"
+scan -- "$WINAPI_ELSE"
+expect "allowlisted rule name from another source -> exit 1" 1 "YARA rule Windows_API_Function (Windows_API_Function)"
+scan -- "$WINAPI_MAL"
+expect "allowlisted rule plus a malicious engine -> exit 1" 1 "engine StubEngineA: malicious"
 
 # 7. Absent Code insights is not a verdict: exit 0, recorded as not-produced.
 scan -- "$AIABSENT"
@@ -187,6 +205,32 @@ expect "over 32 MB -> exit 0 via upload_url" 0 "every file clean"
 grep -q '^GET /api/v3/files/upload_url' "$STATE/requests.log" && grep -q '^large ' "$STATE/uploads.log" &&
   ok "over 32 MB uploaded through upload_url" ||
   bad "over 32 MB: requests $(tr '\n' ' ' <"$STATE/requests.log")"
+
+# 16a. Any other upload URL is refused before anything is posted with the key.
+for u in http://bigfiles.virustotal.com/upload http://www.virustotal.com/upload \
+  https://bigfiles.virustotal.com.example.net/upload \
+  https://bigfiles.virustotal.com@example.net/upload https://example.net/upload; do
+  printf '%s\n' "$u" >"$STATE/upload-url"
+  scan -- "$BIG"
+  expect "upload_url $u -> exit 2" 2 "HARNESS ERROR: upload_url for"
+  grep -q '^POST' "$STATE/requests.log" &&
+    bad "upload_url $u: a POST was sent" || ok "upload_url $u: nothing posted"
+done
+
+# 16b. The large-file host is accepted. A refused proxy keeps the POST offline,
+# so curl fails after the origin check passed; the token stays out of output.
+printf '%s\n' "https://bigfiles.virustotal.com/_ah/upload/stub-token/" >"$STATE/upload-url"
+scan https_proxy=http://127.0.0.1:1 HTTPS_PROXY=http://127.0.0.1:1 NO_PROXY= no_proxy= \
+  ALL_PROXY= all_proxy= -- "$BIG"
+expect "upload_url on bigfiles.virustotal.com -> origin accepted" 2 "curl exit"
+if grep -qF "is not on" <<<"$OUT"; then
+  bad "bigfiles.virustotal.com upload_url was refused"
+elif grep -qF "stub-token" <<<"$OUT"; then
+  bad "the upload URL's token appears in output"
+else
+  ok "bigfiles.virustotal.com accepted; token not printed"
+fi
+rm -f "$STATE/upload-url"
 
 # 17. The key never appears in any output or report written above.
 if grep -qF "$KEY" "$ALL_OUT"; then

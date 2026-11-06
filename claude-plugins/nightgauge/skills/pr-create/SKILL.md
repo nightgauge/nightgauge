@@ -635,6 +635,9 @@ else
       if [ "$PUSH_EXIT" -eq 3 ]; then
         # Exit 3 printed `[branch-forked]`: the run stops on the fork.
         echo "ERROR: origin rejected '$CURRENT_BRANCH' and the rejection was not reconciled." >&2
+      elif [ "$PUSH_EXIT" -eq 4 ]; then
+        # Exit 4 printed `[push-auth-failed]`: credentials refused (#2742).
+        echo "ERROR: origin refused this machine's credentials for '$CURRENT_BRANCH'; fix git auth." >&2
       else
         # Exit 1 is a permission/infra error — not a conflict
         echo "ERROR: Failed to push merged branch '$CURRENT_BRANCH' to origin." >&2

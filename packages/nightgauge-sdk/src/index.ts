@@ -74,6 +74,7 @@ export {
   applyDeliverablePolicy,
   stampPolicyMarker,
   summarizePolicy,
+  misplacedACVerdicts,
   canonicalSchemaVersion,
   deliverableKindForStage,
   POLICY_VERSION,

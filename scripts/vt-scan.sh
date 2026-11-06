@@ -26,7 +26,9 @@
 # WHAT COUNTS AS A FINDING (exit 1)
 #
 #   - one or more engines report the file `malicious` or `suspicious`;
-#   - any crowdsourced YARA rule matches;
+#   - any crowdsourced YARA rule matches, except a rule in YARA_ALLOWLIST,
+#     matched by rule name and source. An allowlisted match is recorded under
+#     `yara_allowlisted` and named in the summary line, not counted;
 #   - a Code insights verdict is present and is not `benign`.
 #
 # VirusTotal does not produce Code insights for every file type (ELF binaries
@@ -49,6 +51,13 @@
 # Usage:
 #   VT_API_KEY=... scripts/vt-scan.sh --report <out.json> [--api-base URL] FILE...
 #
+# UPLOAD ORIGINS
+#
+# A file over 32 MB is posted to the URL GET /files/upload_url returns. The key
+# goes with it, so that URL must be on the API's own origin or on
+# https://bigfiles.virustotal.com; any other URL is a HARNESS ERROR before the
+# key is sent.
+#
 # Environment (all optional except VT_API_KEY):
 #   VT_API_BASE            API root. Default https://www.virustotal.com/api/v3.
 #                          Overridden only by the offline test suites.
@@ -67,6 +76,15 @@ MIN_INTERVAL="${VT_MIN_INTERVAL:-15}"
 ANALYSIS_TIMEOUT="${VT_ANALYSIS_TIMEOUT:-1800}"
 HTTP_TIMEOUT="${VT_HTTP_TIMEOUT:-600}"
 LARGE_FILE_BYTES=33554432 # 32 MB: above this, POST /files refuses the upload.
+# VirusTotal answers GET /files/upload_url with a URL on this host. It is the
+# only origin besides the API's own that may receive the key.
+VT_UPLOAD_ORIGIN="https://bigfiles.virustotal.com"
+# Crowdsourced YARA rules that are recorded but never count as a finding, as
+# "rule_name|source", matched exactly. Owner decision (#3019): InQuest's
+# Windows_API_Function rule matches every Go binary (os.ReadFile, os.WriteFile)
+# and describes itself as "not an indication of malicious behavior". Adding an
+# entry here is a reviewed change to the release policy.
+YARA_ALLOWLIST=("Windows_API_Function|https://github.com/InQuest/yara-rules-vt")
 FILES=()
 
 WORK=""
@@ -155,7 +173,12 @@ vt_request() {
     curl -K - -sS -X "$method" --max-time "$HTTP_TIMEOUT" \
       -o "$BODY" -w '%{http_code}' "$@" "$url" 2>"$WORK/curl.err")"
   local rc=$?
-  local where="${url#"$API_ORIGIN"}"
+  local where
+  case "$url" in
+  "$API_ORIGIN"/*) where="${url#"$API_ORIGIN"}" ;;
+  # An upload URL carries a one-time token in its path: report only its origin.
+  *) where="$(sed -E 's#^(https?://[^/]+).*#\1#' <<<"$url")" ;;
+  esac
   where="${where%%\?*}"
   if [ "$rc" -ne 0 ]; then
     harness "$method $where: curl exit $rc ($(head -c 200 "$WORK/curl.err" | tr '\n' ' '))"
@@ -198,10 +221,11 @@ for sha in $UNIQUE; do
   if [ "$size" -gt "$LARGE_FILE_BYTES" ]; then
     vt_request GET "$API_BASE/files/upload_url"
     target="$(jq -r 'if (.data | type) == "string" then .data else empty end' "$BODY")"
-    # The key goes to this URL, so it must be the API's own host.
+    # The key goes to this URL, so it must be the API's own host or
+    # VirusTotal's large-file upload host. The trailing / refuses lookalikes.
     case "$target" in
-    "$API_ORIGIN"/*) ;;
-    *) harness "upload_url for $path is not on $API_ORIGIN" ;;
+    "$API_ORIGIN"/* | "$VT_UPLOAD_ORIGIN"/*) ;;
+    *) harness "upload_url for $path is not on $API_ORIGIN or $VT_UPLOAD_ORIGIN" ;;
     esac
   fi
   vt_request POST "$target" -F "file=@\"$path\""
@@ -210,6 +234,8 @@ for sha in $UNIQUE; do
   printf '%s\t%s\n' "$sha" "$aid" >>"$ANALYSES"
   echo "  uploaded $path ($sha)"
 done
+
+ALLOW_JSON="$(printf '%s\n' "${YARA_ALLOWLIST[@]}" | jq -R . | jq -sc .)"
 
 # --- 2. Per file: wait for the analysis, then read the file object -----------
 FINDINGS=0
@@ -261,12 +287,14 @@ while IFS=$'\t' read -r sha aid; do
     ' "$BODY" 2>/dev/null)" ||
     harness "file object for $path ($sha) has YARA or Code insights results in an unknown shape"
 
-  entry="$(jq -cn \
+  entry="$(jq -cn --argjson allow "$ALLOW_JSON" \
     --arg file "$path" --arg sha "$sha" --argjson size "$size" --argjson files "$paths_json" \
     --argjson an "$analysis" --argjson at "$attrs" '
     {file: $file, files: $files, sha256: $sha, size: $size,
      malicious: $an.malicious, suspicious: $an.suspicious, engines: $an.engines,
-     yara: $at.yara, code_insights: $at.code_insights}
+     yara: [$at.yara[] | select(("\(.rule_name)|\(.source)" | IN($allow[])) | not)],
+     yara_allowlisted: [$at.yara[] | select("\(.rule_name)|\(.source)" | IN($allow[]))],
+     code_insights: $at.code_insights}
     | .findings = (
         [.engines[] | "engine \(.engine): \(.category) \(.result // "")"]
         + (if (.malicious + .suspicious) > 0 and (.engines | length) == 0
@@ -278,11 +306,15 @@ while IFS=$'\t' read -r sha aid; do
   ENTRIES="$(jq -c --argjson e "$entry" '. + [$e]' <<<"$ENTRIES")"
 
   n="$(jq -r '.findings | length' <<<"$entry")"
+  allowed="$(jq -r '[.yara_allowlisted[] | "\(.rule_name) (\(.source))"] | join(", ")' <<<"$entry")"
   if [ "$n" -gt 0 ]; then
     FINDINGS=$((FINDINGS + n))
     jq -r --arg f "$path" --arg s "$sha" '.findings[] | "::error::\($f) (\($s)): \(.)"' <<<"$entry"
+    [ -z "$allowed" ] || echo "  $path ($sha): YARA allowlisted: $allowed"
   else
-    echo "  clean $path ($sha): 0 malicious, 0 suspicious, no YARA, Code insights $(jq -r 'if (.code_insights | type) == "string" then .code_insights else "benign" end' <<<"$entry")"
+    yara_note="no YARA"
+    [ -z "$allowed" ] || yara_note="YARA allowlisted: $allowed"
+    echo "  clean $path ($sha): 0 malicious, 0 suspicious, $yara_note, Code insights $(jq -r 'if (.code_insights | type) == "string" then .code_insights else "benign" end' <<<"$entry")"
   fi
 done <"$ANALYSES"
 
