@@ -78,7 +78,9 @@ case "$*" in
     fi ;;
   "plugin list --json")
     [ -f "$c/plugin/skills/a/SKILL.md" ] || [ -d "$c/plugin" ] || { echo '[]'; exit 0; }
-    if [ -n "${STUB_NO_INSTALL_PATH:-}" ]; then
+    if [ -n "${STUB_GONE_INSTALL_PATH:-}" ]; then
+      printf '[{"id":"nightgauge@nightgauge-plugins","enabled":true,"installPath":"%s/gone"}]\n' "$c"
+    elif [ -n "${STUB_NO_INSTALL_PATH:-}" ]; then
       printf '[{"id":"nightgauge@nightgauge-plugins","enabled":true}]\n'
     else
       printf '[{"id":"nightgauge@nightgauge-plugins","enabled":%s,"installPath":"%s/plugin"}]\n' \
@@ -247,6 +249,18 @@ expect "missing manifest pin is a harness error" 2 "HARNESS ERROR.*cannot read m
 fixture
 expect "no installPath is a harness error, not a violation" 2 "HARNESS ERROR.*no installPath" \
   STUB_NO_INSTALL_PATH=1
+
+fixture
+expect "an installPath that does not exist is a violation" 1 "installPath .*/gone does not exist" \
+  STUB_GONE_INSTALL_PATH=1
+
+fixture
+echo '{"max_tested":"npm:evil@1"}' >"$TMP/internal/adaptercompat/manifests/claude-headless.json"
+expect "a malformed max_tested is a harness error" 2 "HARNESS ERROR.*not MAJOR.MINOR.PATCH"
+
+fixture
+expect "PATH claude at a longer version is not the pin" 2 "@anthropic-ai/claude-code@9.9.9" \
+  STUB_VERSION=9.9.91
 
 echo "check-plugin-install-docs suite: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

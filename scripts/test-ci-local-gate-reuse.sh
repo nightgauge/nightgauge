@@ -127,5 +127,19 @@ CALLS="$(cat "$STUB_LOG")"
 check "a probe with no chosen binary refuses" "$(result test "$CODE" -eq 2)"
 check "a refused probe touches no ledger" "$(result test -z "$CALLS")"
 
+# A nightgauge installed beside yq (a brew cask) hides yq with it. The probe runs
+# no tool-dependent step, so the tool preflight must not refuse it (#2801).
+NO_YQ_PATH=""
+IFS=: read -r -a CLEAN_DIRS <<<"$CLEAN_PATH"
+for dir in "${CLEAN_DIRS[@]}"; do
+  [ -x "$dir/yq" ] || NO_YQ_PATH="$NO_YQ_PATH${NO_YQ_PATH:+:}$dir"
+done
+SAVED_PATH="$CLEAN_PATH"
+CLEAN_PATH="$NO_YQ_PATH"
+run "$TMP/bin/nightgauge" "$PASSED" --ledger-probe pass
+CLEAN_PATH="$SAVED_PATH"
+check "a probe with no yq on PATH still runs" "$CODE"
+check "a probe never reports a missing tool" "$(result test -n "$(has "$OUT" "missing required tool" || echo none)")"
+
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

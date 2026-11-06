@@ -514,9 +514,13 @@ REQUIRED_NPM_SCRIPTS=(
 REQUIRED_TOOLS=(git node npm npx jq perl python3 yq)
 
 MISSING=()
-for t in "${REQUIRED_TOOLS[@]}"; do
-  command -v "$t" >/dev/null || MISSING+=("missing required tool: $t")
-done
+# The probe modes run no tool-dependent step, and the reuse harness hides every
+# PATH dir holding a nightgauge binary, which can hide yq and jq with it.
+if [ -z "${LEDGER_PROBE:-}" ] && [ "${LIST_STEPS:-0}" != "1" ]; then
+  for t in "${REQUIRED_TOOLS[@]}"; do
+    command -v "$t" >/dev/null || MISSING+=("missing required tool: $t")
+  done
+fi
 for path in "${REQUIRED_FILES[@]}"; do
   [ -e "$path" ] || MISSING+=("missing required file: $path")
 done

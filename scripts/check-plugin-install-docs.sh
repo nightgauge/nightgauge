@@ -93,6 +93,10 @@ command -v jq >/dev/null || cannot_run "jq is required"
 command -v perl >/dev/null || cannot_run "perl is required"
 CLAUDE_CODE_VERSION="$(jq -r '.max_tested // empty' "$MANIFEST" 2>/dev/null)"
 [ -n "$CLAUDE_CODE_VERSION" ] || cannot_run "cannot read max_tested from $MANIFEST"
+# It becomes an npx install spec, so only MAJOR.MINOR.PATCH may pass, as in
+# scripts/adapter-cli-pin.sh.
+[[ "$CLAUDE_CODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  cannot_run "max_tested '$CLAUDE_CODE_VERSION' in $MANIFEST is not MAJOR.MINOR.PATCH"
 CLAUDE=()
 CLAUDE_SOURCE=""
 PATH_CLAUDE_VERSION=""
@@ -192,8 +196,12 @@ check_route() {
   fi
   install_path="$(printf '%s' "$entry" | jq -r '.installPath // empty')"
   # An empty path would glob under / and report a count, not the real fault.
-  [ -n "$install_path" ] && [ -d "$install_path" ] ||
+  [ -n "$install_path" ] ||
     cannot_run "plugin list --json gave $PLUGIN_ID no installPath"
+  if [ ! -d "$install_path" ]; then
+    violation "$doc: installPath $install_path does not exist after install"
+    return 0
+  fi
   for f in "$install_path"/skills/*/SKILL.md; do
     [ -f "$f" ] && found=$((found + 1))
   done
