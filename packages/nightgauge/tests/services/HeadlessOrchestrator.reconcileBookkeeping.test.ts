@@ -24,7 +24,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { reconcileBookkeepingFromDiskState } from "../../src/services/HeadlessOrchestrator";
+import {
+  allStagesAccountedFor,
+  clearRewoundStages,
+  reconcileBookkeepingFromDiskState,
+} from "../../src/services/HeadlessOrchestrator";
 import type { PipelineStage } from "@nightgauge/sdk";
 
 const STAGE_ORDER: PipelineStage[] = [
@@ -224,5 +228,49 @@ describe("reconcileBookkeepingFromDiskState (Issue #3450)", () => {
 
     expect(result.changed).toBe(false);
     expect(result.recovered).toEqual([]);
+  });
+});
+
+describe("allStagesAccountedFor (#2991)", () => {
+  it("counts a stage pushed twice by a rewind as complete", () => {
+    const completed: PipelineStage[] = [...STAGE_ORDER, "feature-dev", "feature-validate"];
+    expect(allStagesAccountedFor(completed, [], [], STAGE_ORDER)).toBe(true);
+  });
+
+  it("a duplicate cannot mask a missing stage", () => {
+    const completed = STAGE_ORDER.filter((s) => s !== "pipeline-finish");
+    completed.push("feature-dev");
+    expect(completed.length).toBe(STAGE_ORDER.length);
+    expect(allStagesAccountedFor(completed, [], [], STAGE_ORDER)).toBe(false);
+  });
+
+  it("accepts stages split across completed, skipped and deferred", () => {
+    expect(
+      allStagesAccountedFor(
+        STAGE_ORDER.slice(0, 5),
+        ["pr-create", "pr-merge"],
+        ["pipeline-finish"],
+        STAGE_ORDER
+      )
+    ).toBe(true);
+  });
+});
+
+describe("clearRewoundStages (#2991)", () => {
+  it("removes stages at or after the target from all three arrays, in place", () => {
+    const completedStages: PipelineStage[] = STAGE_ORDER.slice(0, 5);
+    const skippedStages: PipelineStage[] = ["pr-create"];
+    const deferredStages: PipelineStage[] = ["pr-merge"];
+    const arrays = { completedStages, skippedStages, deferredStages };
+
+    const removed = clearRewoundStages(arrays, STAGE_ORDER, STAGE_ORDER.indexOf("feature-dev"));
+
+    expect(completedStages).toEqual(["pipeline-start", "issue-pickup", "feature-planning"]);
+    expect(skippedStages).toEqual([]);
+    expect(deferredStages).toEqual([]);
+    expect(arrays.completedStages).toBe(completedStages);
+    expect(removed.sort()).toEqual(
+      ["feature-dev", "feature-validate", "pr-create", "pr-merge"].sort()
+    );
   });
 });
