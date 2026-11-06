@@ -410,6 +410,20 @@ describe("skillRunner - File Discovery and Parsing", () => {
       warn.mockRestore();
     });
 
+    it("findSkillFile reads the pinned root's SKILL.md, not the first folder's (#2799)", () => {
+      stubBundle(false);
+      const rel = "nightgauge-feature-dev/SKILL.md";
+      expect(findSkillFile("feature-dev", "/pinned/wt")).toBe(`/pinned/wt/skills/${rel}`);
+      const argv = rootsArgv();
+      expect(argv[argv.indexOf("--workspace") + 1]).toBe("/pinned/wt");
+    });
+
+    it("findSkillFile falls back to the first workspace folder with no root", () => {
+      stubBundle(false);
+      const rel = "nightgauge-feature-dev/SKILL.md";
+      expect(findSkillFile("feature-dev")).toBe(`/test/workspace/skills/${rel}`);
+    });
+
     it("renders a pinned run from its pinned root", () => {
       vi.mocked(spawn).mockReturnValue(createMockChildProcess());
 

@@ -576,3 +576,25 @@ describe("parseIssueBodySections parent detection (#1058)", () => {
     expect(none.parentIssue).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2799 — schema repair reads SKILL.md from the pinned root
+// ---------------------------------------------------------------------------
+
+describe("ContextAssembler schema repair skill root (#2799)", () => {
+  it("loads the skill from the workspace root provider, not the first folder", async () => {
+    const loadSkillContent = vi.fn().mockReturnValue(null);
+    const assembler = new ContextAssembler(makeLogger(), () => "/pinned/wt", null, {
+      loadSkillContent,
+    } as never);
+
+    const result = await (
+      assembler as unknown as {
+        attemptContextSchemaRepair: (...args: unknown[]) => Promise<{ succeeded: boolean }>;
+      }
+    ).attemptContextSchemaRepair("feature-dev", 42, {}, {}, "/pinned/wt/ctx.json", 1);
+
+    expect(loadSkillContent).toHaveBeenCalledWith("feature-dev", "/pinned/wt");
+    expect(result.succeeded).toBe(false);
+  });
+});

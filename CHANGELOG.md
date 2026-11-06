@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Context-schema repair reads the stage's `SKILL.md` from the run's pinned
+  worktree instead of the first workspace folder, so a pinned run repairs
+  against the skill it actually ran (#2799).
 - `nightgauge doctor` no longer hangs when `origin` accepts the connection and
   never responds. The worktree scan's `git fetch` now times out after 60
   seconds and falls back to the local ref.
