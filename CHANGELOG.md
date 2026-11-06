@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Releases publish again: the VirusTotal scan gate accepts the large-file
+  upload host `bigfiles.virustotal.com`, and still refuses any other upload URL
+  before the API key is sent.
 - "Unblocked by #N", "undepends on #N" and other spellings that glue a
   dependency keyword onto a preceding word no longer declare a dependency on
   #N (#2712).
