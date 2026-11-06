@@ -1,12 +1,14 @@
 package doctor
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
@@ -486,5 +488,50 @@ func TestHygieneFindings_BranchDeleteReDerivesProof(t *testing.T) {
 		if err := branchDeletePrecondition(r.dir, b, nil); err == nil {
 			t.Errorf("branch %s was allowed", b)
 		}
+	}
+}
+
+// #2791: an origin that accepts the connection and never answers used to hang
+// doctor inside the worktree scan's untimed git fetch.
+func TestCheckLeakedWorktrees_HungRemoteDoesNotHangDoctor(t *testing.T) {
+	r := newLeakRepo(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	var held []net.Conn
+	accepted := make(chan struct{})
+	go func() {
+		defer close(accepted)
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			held = append(held, c)
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		<-accepted
+		for _, c := range held {
+			_ = c.Close()
+		}
+	})
+	r.git("remote", "add", "origin", "git://"+ln.Addr().String()+"/repo.git")
+
+	prev := execution.OriginFetchTimeout
+	execution.OriginFetchTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { execution.OriginFetchTimeout = prev })
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worktreeLeakFindings(r.dir, aged(), nil)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("worktree scan hung on an unresponsive origin")
 	}
 }

@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge doctor` no longer hangs when `origin` accepts the connection and
+  never responds. The worktree scan's `git fetch` now times out after 60
+  seconds and falls back to the local ref.
 - A run the architecture-approval gate holds is no longer reported as a failed
   run. Local history and the platform push record it as `cancelled` with
   `outcome_type: awaiting_approval`, keeping its terminal kind, and it stays out
