@@ -25,6 +25,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- pr-create no longer re-runs the ~30-minute full local gate after merging the
+  base branch. The skill says to push the merge straight away, and the stage
+  fence refuses `bash scripts/ci-local.sh` and `nightgauge ci gate-run` in
+  pr-create; feature-validate's gate already covers the push (#2989).
 - A pipeline run that backtracked and then merged is now booked as a success.
   Rewinds now drop the stages they are about to re-run from the run's
   bookkeeping, and the completion check counts distinct stages instead of
