@@ -22,6 +22,13 @@
 #   CLEAN_INSTALL_KEEP_REPO=1      do not delete the throwaway repo/board on exit (debugging)
 #   CLEAN_INSTALL_KEEP_IMAGE=1     keep the ~2 GB per-run image on exit (debugging)
 #   CLEAN_INSTALL_VSIX=<path>      skip packaging and use this VSIX (must match the docker target)
+#   CLEAN_INSTALL_VSIX_SOURCE=<s>  where that VSIX came from, named in the summary's "Artifact tested"
+#                                  row (the workflow sets `rc-artifacts-<tag> (staging run …)`)
+#
+# Every VSIX, supplied or packaged, runs the artifact integrity checks staging runs
+# (check-runtime-assets, check-shipped-code, preflight skill-bundle against ./skills).
+# On an RC run CLEAN_INSTALL_SKILLS_SOURCE points the skill-bundle source at the tag's tree.
+# When GITHUB_STEP_SUMMARY is set the summary table is appended to it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,7 +38,7 @@ SMOKE=0
 for arg in "$@"; do
   case "$arg" in
     --smoke) SMOKE=1 ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -116,7 +123,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 step "preconditions"
-for tool in docker gh node go jq python3 npx; do command -v "$tool" >/dev/null || die "$tool is required"; done
+for tool in docker gh node go jq python3 npx unzip; do command -v "$tool" >/dev/null || die "$tool is required"; done
 docker info >/dev/null 2>&1 || die "docker daemon is not reachable"
 DOCKER_ARCH="$(docker version --format '{{.Server.Arch}}')"
 case "$DOCKER_ARCH" in
@@ -154,7 +161,9 @@ if [[ -n "${CLEAN_INSTALL_VSIX:-}" ]]; then
   VSIX="$CLEAN_INSTALL_VSIX"
   [[ -f "$VSIX" ]] || die "CLEAN_INSTALL_VSIX does not exist: $VSIX"
   [[ "$(basename "$VSIX")" == *"$VSCE_TARGET"* ]] || die "$(basename "$VSIX") is not a $VSCE_TARGET build"
+  VSIX_SOURCE="${CLEAN_INSTALL_VSIX_SOURCE:-supplied file}"
 else
+VSIX_SOURCE="packaged from tree $(git rev-parse --short HEAD)"
 step "package the VSIX for $VSCE_TARGET from $(git rev-parse --short HEAD)"
 BIN_VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
 npm run -w @nightgauge/sdk build >/dev/null
@@ -178,7 +187,19 @@ rm -f "$PKG"/nightgauge-*"$VSCE_TARGET"*.vsix
 (cd "$PKG" && npx @vscode/vsce package --no-dependencies --target "$VSCE_TARGET" >/dev/null)
 VSIX="$(ls -t "$PKG"/nightgauge-*"$VSCE_TARGET"*.vsix | sed -n 1p)"
 fi
-bash "$PKG/scripts/check-runtime-assets.sh" "$VSIX"
+step "artifact integrity checks on $(basename "$VSIX")"
+bash "$PKG/scripts/check-runtime-assets.sh" "$VSIX" || die "runtime-asset check failed on $VSIX"
+bash "$PKG/scripts/check-shipped-code.sh" "$VSIX" || die "shipped-code check failed on $VSIX"
+# An RC VSIX is checked against its own tag's skills (CLEAN_INSTALL_SKILLS_SOURCE).
+# The VSIX's binary is cross-compiled for the container; the bundle check needs a host one.
+go build -o "$RUN_DIR/nightgauge-host" ./cmd/nightgauge || die "cannot build the host binary"
+SKILLS_TMP="$RUN_DIR/vsix-skills"
+mkdir -p "$SKILLS_TMP"
+unzip -q "$VSIX" 'extension/dist/skills/*' -d "$SKILLS_TMP" || die "$VSIX carries no dist/skills"
+"$RUN_DIR/nightgauge-host" preflight skill-bundle \
+  --skills-root "$SKILLS_TMP/extension/dist/skills" --source-root "${CLEAN_INSTALL_SKILLS_SOURCE:-$ROOT/skills}" \
+  || die "skill-bundle check failed on $VSIX"
+rm -rf "$SKILLS_TMP"
 cp "$VSIX" "$RUN_DIR/vsix/"
 echo "vsix: $(basename "$VSIX") ($(du -h "$VSIX" | cut -f1))"
 
@@ -221,6 +242,7 @@ docker run --name "$CONTAINER" --shm-size=1g \
   -v "$RUN_DIR/vsix:/vsix:ro" \
   -v "$ROOT/docker/clean-install/run-in-container.sh:/harness/bin/run-in-container.sh:ro" \
   -v "$ROOT/docker/clean-install/scrub-evidence.sh:/harness/bin/scrub-evidence.sh:ro" \
+  -v "$ROOT/docker/clean-install/count-bundle-skill-reads.sh:/harness/bin/count-bundle-skill-reads.sh:ro" \
   -v "$ROOT/tests/clean-install/driver:/harness/driver:ro" \
   -v "$ROOT/tests/clean-install/issue.md:/harness/issue.md:ro" \
   -v "$OUT_DIR:/out" \
@@ -264,6 +286,16 @@ if [[ "$SMOKE" == "0" ]]; then
   check "PR exists on the throwaway repo" "$([[ -n "$PR_URL" ]] && echo 1 || echo 0)" "${PR_URL:-none}"
   check "PR is MERGED (forge says so)" "$([[ "$PR_STATE" == "MERGED" ]] && echo 1 || echo 0)" "$PR_STATE"
   check "issue is CLOSED" "$([[ "$ISSUE_STATE" == "CLOSED" ]] && echo 1 || echo 0)" "#$ISSUE_NUM $ISSUE_STATE"
+  # A missing bundle-read.json fails both rows; it never passes (#2722).
+  BUNDLE_READ="$OUT_DIR/bundle-read.json"
+  USER_DIRS="$(jq -r '.user_additional_dirs // "missing"' "$BUNDLE_READ" 2>/dev/null || echo missing)"
+  BUNDLE_READS="$(jq -r '.bundle_skill_reads // "missing"' "$BUNDLE_READ" 2>/dev/null || echo missing)"
+  BUNDLE_PATH="$(jq -r '.bundle_skills_path // "?"' "$BUNDLE_READ" 2>/dev/null || echo "?")"
+  check "no user-level additionalDirectories" "$([[ "$USER_DIRS" == "0" ]] && echo 1 || echo 0)" \
+    "user_additional_dirs=$USER_DIRS"
+  check "a stage read its skill from the bundle path" \
+    "$([[ "$BUNDLE_READS" =~ ^[0-9]+$ && "$BUNDLE_READS" -gt 0 ]] && echo 1 || echo 0)" \
+    "$BUNDLE_READS read(s) under $BUNDLE_PATH"
 fi
 # The summary falls back to the state the pipeline recorded (pr-{N}.json)
 # when the forge could not be asked; the MERGED check above stays forge-only.
@@ -278,10 +310,11 @@ jq -r '.findings[]' "$REPORT" | sed 's/^/- driver: /'
 [[ -f "$OUT_DIR/findings.txt" ]] && sed 's/^/- container: /' "$OUT_DIR/findings.txt" || true
 
 step "summary"
-cat <<TABLE
+SUMMARY="$(cat <<TABLE
 | Field                     | Value |
 | ------------------------- | ----- |
-| Tree                      | $(git rev-parse --short HEAD) |
+| Artifact tested           | $VSIX_SOURCE — $(basename "$VSIX") |
+| Harness tree              | $(git rev-parse --short HEAD) |
 | VSIX                      | $(basename "$VSIX") ($VSCE_TARGET) |
 | Extension activated       | $EXT_VERSION |
 | Binary (resolved in-host) | $BIN_PATH |
@@ -294,5 +327,10 @@ cat <<TABLE
 | Findings                  | $(( $(jq -r '.findings | length' "$REPORT") + $([[ -f "$OUT_DIR/findings.txt" ]] && wc -l < "$OUT_DIR/findings.txt" || echo 0) )) (report.json + findings.txt) |
 | Result                    | $([[ "$FAILED" == "0" ]] && echo PASS || echo FAIL) |
 TABLE
+)"
+printf '%s\n' "$SUMMARY"
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  { echo "### Clean-install gate (G1)"; echo; printf '%s\n' "$SUMMARY"; } >>"$GITHUB_STEP_SUMMARY"
+fi
 cp "$REPORT" "$RUN_DIR/report.json" 2>/dev/null || true
 [[ "$FAILED" == "0" ]]

@@ -1,6 +1,10 @@
 # Clean-machine install gate (docs/RELEASE_CHECKLIST.md, gate G1), automated.
 #
-# Packages the .vsix from the checked-out tree, builds an image with nothing
+# By default packages the .vsix from the checked-out tree. Dispatched with
+# `rc_tag`, it instead tests that release candidate's own linux-x64 VSIX from the
+# staging run's rc-artifacts-<tag> (scripts/fetch-rc-vsix.sh), with the harness
+# from the dispatch ref and the tag's tree checked out beside it; a missing or expired artifact fails the run, nothing
+# falls back to the tree. The run summary names the artifact tested. Builds an image with nothing
 # but VS Code, git, gh, Node and the claude CLI, installs the extension into a
 # fresh profile, creates a throwaway repository, and drives one issue to a
 # merged pull request with a real agent and a real forge. It spends real
@@ -34,12 +38,18 @@ on:
         required: false
         type: number
         default: 90
+      rc_tag:
+        description: "Test this RC tag's staging VSIX instead of packaging the tree, e.g. v0.8.1-rc.4"
+        required: false
+        type: string
+        default: ""
   schedule:
     # Mondays 06:00 UTC.
     - cron: "0 6 * * 1"
 
 permissions:
   contents: read
+  actions: read # download rc-artifacts-<tag> from the staging run
 
 concurrency:
   group: clean-install-e2e
@@ -53,6 +63,25 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The harness always comes from the dispatch ref: an RC tagged before
+          # this harness existed carries no fetch script.
+          persist-credentials: false
+
+      # Shape-check the tag before any step that receives secrets.
+      - name: Check the RC tag shape
+        if: ${{ inputs.rc_tag != '' }}
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: |
+          [[ "$RC_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]] \
+            || { echo "::error::rc_tag '$RC_TAG' is not vX.Y.Z-rc.N"; exit 1; }
+
+      # The skill-bundle check compares the RC VSIX with its own tag's skills.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ inputs.rc_tag != '' }}
+        with:
+          ref: refs/tags/${{ inputs.rc_tag }}
+          path: .rc-src
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -95,15 +124,41 @@ jobs:
             exit 1
           fi
 
+      - name: Fetch the RC VSIX
+        id: rc
+        if: ${{ inputs.rc_tag != '' && steps.secrets.outputs.run == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: bash scripts/fetch-rc-vsix.sh "$RC_TAG" "$RUNNER_TEMP/rc-vsix" >> "$GITHUB_OUTPUT"
+
       - name: Run the clean-install gate
         if: ${{ steps.secrets.outputs.run == 'true' }}
         env:
+          CLEAN_INSTALL_VSIX: ${{ steps.rc.outputs.vsix }}
+          CLEAN_INSTALL_SKILLS_SOURCE: ${{ inputs.rc_tag && format('{0}/.rc-src/skills', github.workspace) || '' }}
+          CLEAN_INSTALL_VSIX_SOURCE: ${{ steps.rc.outputs.vsix && format('rc-artifacts-{0} (staging run {1}, sha256 {2})', inputs.rc_tag, steps.rc.outputs.run_id, steps.rc.outputs.sha256) || '' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ secrets.CLEAN_INSTALL_GH_TOKEN }}
           E2E_OWNER: ${{ vars.CLEAN_INSTALL_E2E_OWNER || 'nightgauge' }}
           E2E_OWNER_TYPE: ${{ vars.CLEAN_INSTALL_E2E_OWNER_TYPE || 'org' }}
           CLEAN_INSTALL_WALL_CLOCK_MINUTES: ${{ inputs.wall_clock_minutes || '90' }}
         run: bash scripts/clean-install-e2e.sh
+
+      # The cached copy `claude plugin install` writes is what users run; this
+      # runs the README's commands and checks its skills, hooks and links.
+      # Exit 2 means the check could not run, which is not a pass.
+      - name: Validate the README plugin install (cached copy)
+        if: ${{ steps.secrets.outputs.run == 'true' }}
+        env:
+          CHECK_PLUGIN_REPO_ROOT: ${{ inputs.rc_tag && format('{0}/.rc-src', github.workspace) || '' }}
+        run: |
+          set +e
+          bash scripts/check-plugin-install-docs.sh
+          rc=$?
+          [[ $rc -ne 2 ]] || echo "::error::INFRASTRUCTURE — the plugin install check could not run"
+          exit "$rc"
 
       - name: Upload logs
         if: ${{ always() && steps.secrets.outputs.run == 'true' }}

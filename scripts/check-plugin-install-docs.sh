@@ -16,6 +16,10 @@
 # the committed tree, not that the public `stable` ref exists. The plugin must be
 # enabled and carry every SKILL.md committed under claude-plugins/nightgauge.
 # Docs are read from the working tree; the plugin comes from HEAD.
+# The cached copy at installPath is what users run (#2722), so it must also
+# carry hooks/hooks.json with every ${CLAUDE_PLUGIN_ROOT}/... script it names
+# present and executable, no broken symlink, and no relative Markdown link in
+# its skills that points at a missing file.
 #
 # Validate arm: `claude plugin validate --strict` passes on the working tree's
 # plugin and on the repository root, which holds the marketplace.
@@ -26,7 +30,8 @@
 # 2 the check could not run.
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# CHECK_PLUGIN_REPO_ROOT points the check at another tree (an RC tag checkout).
+REPO_ROOT="${CHECK_PLUGIN_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO_ROOT" || exit 2
 
 CLAUDE_CODE_VERSION="2.1.316"
@@ -180,6 +185,40 @@ check_route() {
   done
   [ "$found" -eq "$EXPECTED" ] ||
     violation "$doc: installed plugin has $found skills, the tree has $EXPECTED"
+  check_cached_copy "$doc" "$route" "$install_path"
+}
+
+# check_cached_copy DOC ROUTE DIR — the cached plugin copy's hooks and links.
+# A Markdown link is checked when it resolves from the committed plugin source:
+# that is a link the cache dropped. Links already broken in the source, and
+# template or URL targets, are not this check's concern.
+check_cached_copy() {
+  local doc="$1" route="$2" dir="$3" hooks rel link target md src
+  local pattern='\$\{CLAUDE_PLUGIN_ROOT\}/[^" ]+'
+  hooks="$dir/hooks/hooks.json"
+  if ! jq -e . "$hooks" >/dev/null 2>&1; then
+    violation "$doc ($route route): cached copy has no parseable hooks/hooks.json"
+  else
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      [ -x "$dir/$rel" ] ||
+        violation "$doc ($route route): cached hook ${rel} is missing or not executable"
+    done < <(jq -r '.. | .command? // empty | strings' "$hooks" | grep -oE "$pattern" |
+      sed "s#^\\\${CLAUDE_PLUGIN_ROOT}/##" | sort -u)
+  fi
+  while IFS= read -r -d '' link; do
+    violation "$doc ($route route): cached copy has a broken symlink ${link#"$dir"/}"
+  done < <(find -L "$dir" -type l -print0 2>/dev/null)
+  while IFS= read -r -d '' md; do
+    src="$REPO_ROOT/claude-plugins/nightgauge/${md#"$dir"/}"
+    while IFS= read -r target; do
+      target="${target%%#*}"
+      case "$target" in "" | http:* | https:* | mailto:* | /*) continue ;; esac
+      [ -e "$(dirname "$src")/$target" ] || continue
+      [ -e "$(dirname "$md")/$target" ] ||
+        violation "$doc ($route route): ${md#"$dir"/} links to missing $target"
+    done < <(grep -oE '\]\([^)[:space:]]+\)' "$md" | sed -E 's/^\]\(//; s/\)$//')
+  done < <(find "$dir/skills" -type f -name '*.md' -print0 2>/dev/null)
 }
 
 # --- Validate arm -----------------------------------------------------------

@@ -14,6 +14,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- The clean-install release gate (G1) can now test a release candidate's own
+  VSIX: dispatch `clean-install-e2e.yml` with `rc_tag=vX.Y.Z-rc.N`. The run
+  summary names the artifact tested, the VSIX runs the same integrity checks as
+  staging, the run asserts a stage read its skills from the installed bundle, and
+  the cached copy from `claude plugin install` is checked for hooks and broken
+  links. A missing RC artifact fails the run instead of testing the tree (#2722).
+
 ### Fixed
 
 - A pipeline run that backtracked and then merged is now booked as a success.
