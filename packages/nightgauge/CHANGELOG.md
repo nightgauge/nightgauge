@@ -18,6 +18,19 @@ and this project adheres to
   of having a synthetic artifact written over it, so a fully verified change no
   longer opens a PR that says `Refs` instead of `Closes`.
 
+## [0.8.2] - 2026-11-06
+
+0.8.1 was tagged but never published, because the release gate could not scan
+files over 32 MB (#3011). Its changes ship in this release and are listed below.
+
+### Fixed
+
+- When an issue re-runs with nothing left to build, the extension no longer
+  opens and merges an empty pull request. The fallback checks that the branch's
+  tree differs from its base, not just that it has commits ahead. A
+  `no-diff-against-base` result from the deterministic pr-create now ends the
+  run (issue closed, or parked in Backlog) instead of running the LLM
+  pr-create skill (#3012).
 - Claude stages launched from the VS Code extension can now write to the main
   checkout's knowledge base from a worktree without a user-level permission rule:
   they get `--add-dir <main checkout>/.nightgauge/knowledge` and
@@ -27,8 +40,6 @@ and this project adheres to
   halt stops dispatch: the headline counts halted repositories and lists each
   one, plus issues awaiting architecture approval, live and from the state
   file; `--json` adds `haltedRepos` and `architectureApprovalParked` (#2748).
-
-## [0.8.1] - 2026-11-05
 
 ### Fixed
 
@@ -1586,8 +1597,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.1...HEAD
-[0.8.1]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.1
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1

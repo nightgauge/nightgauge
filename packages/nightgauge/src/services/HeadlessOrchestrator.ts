@@ -4621,6 +4621,30 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       };
     }
 
+    // 3b. Commits ahead are not a diff (#3012): a re-run Refs branch can be
+    //     several commits ahead (squash-merged work plus a merge of base)
+    //     with a tree identical to base. `git diff --quiet` exits 0 when the
+    //     trees match and 1 when they differ; anything else is inconclusive
+    //     and opens no PR.
+    try {
+      await execFileAsync("git", ["diff", "--quiet", `origin/${base}`, "HEAD"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: 15_000,
+      });
+      return {
+        created: false,
+        reason: `[no-changes-produced] feature branch "${branch}" has no diff against ${base} (commits ahead, tree equal)`,
+      };
+    } catch (diffErr) {
+      if ((diffErr as { code?: unknown } | undefined)?.code !== 1) {
+        return {
+          created: false,
+          reason: `could not confirm "${branch}" has a diff against ${base}`,
+        };
+      }
+    }
+
     // 4. Push the branch.
     try {
       await execFileAsync("git", ["push", "-u", "origin", branch], {
@@ -4909,6 +4933,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       rate_limited?: boolean;
       duration_ms?: number;
       phases?: PrStagePhaseTransition[];
+      // #3012: set on a no-diff-against-base punt the verb already settled.
+      settled?: boolean;
+      issue_closed?: boolean;
+      terminal_detail?: string;
     };
     // #1397 — the deterministic runners report phases through a reporter, and
     // the Go scheduler attaches one. This route runs the SAME runners in a
@@ -5085,6 +5113,38 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         { issueNumber, prNumber: parsed.pr_number }
       );
       return { kind: "handled", result: { success: true, stage, durationMs } };
+    }
+
+    // No diff against base (#3012): the branch is level with its base, so
+    // there is nothing to open a PR for. The Go verb has commented the
+    // criteria and closed the issue when all are met; end the run with its
+    // verdict. Never run the LLM skill, which would open an empty PR.
+    if (stage === "pr-create" && parsed.path === "punt" && reason === "no-diff-against-base") {
+      const closed = parsed.settled === true && parsed.issue_closed === true;
+      const detail =
+        parsed.settled && parsed.terminal_detail
+          ? parsed.terminal_detail
+          : `[not-pipeline-actionable] pr-create: the feature branch has no diff against its ` +
+            `base, so there is nothing to open a PR for; #${issueNumber} waits in Backlog ` +
+            `for a human [#3012]`;
+      const noDiffErr = new Error(detail);
+      this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
+      this.logger.warn("Deterministic pr-create found no diff against base — settling (no LLM)", {
+        issueNumber,
+        closed,
+      });
+      if (this.stateService) {
+        try {
+          await this.stateService.failStage(stage, detail);
+        } catch {
+          // Non-critical — the caller still breaks the loop.
+        }
+      }
+      return {
+        kind: "refused",
+        error: noDiffErr,
+        terminalKind: closed ? "issue_closed" : "not_pipeline_actionable",
+      };
     }
 
     // Punt → record execution_path=llm + punt_reason; caller runs the LLM skill.

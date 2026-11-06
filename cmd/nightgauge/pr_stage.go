@@ -93,6 +93,48 @@ type prStageResultJSON struct {
 	CommitMade   bool   `json:"commit_made,omitempty"`
 	CommitSHA    string `json:"commit_sha,omitempty"`
 	CommitReason string `json:"commit_reason,omitempty"`
+
+	// No-diff settlement (#3012), additive. Set only on a
+	// no-diff-against-base punt: the verb has already commented the criteria
+	// and closed the issue when every one is met, so the caller ends the run
+	// with TerminalDetail instead of running the LLM pr-create skill.
+	Settled        bool   `json:"settled,omitempty"`
+	IssueClosed    bool   `json:"issue_closed,omitempty"`
+	TerminalDetail string `json:"terminal_detail,omitempty"`
+}
+
+// prStageNoDiffSettler settles a no-diff punt and returns the terminal detail.
+type prStageNoDiffSettler func(ctx context.Context, issueNumber int, res pmstages.PRCreateResult) (string, bool)
+
+// applyPrStageNoDiffSettlement settles a no-diff-against-base punt in place
+// (#3012). Path and Reason stay punt/no-diff-against-base; every other result
+// is left untouched.
+func applyPrStageNoDiffSettlement(ctx context.Context, out *prStageResultJSON, issueNumber int,
+	res pmstages.PRCreateResult, settle prStageNoDiffSettler) {
+	if out.Path != string(pmstages.CreatePathPunt) || out.Reason != pmstages.ReasonNoDiffAgainstBase {
+		return
+	}
+	detail, closed := settle(ctx, issueNumber, res)
+	out.Settled = true
+	out.IssueClosed = closed
+	out.TerminalDetail = detail
+}
+
+// newPrStageNoDiffSettler resolves the issue's node id and runs the shared
+// orchestrator.SettleNoDiff. A failed lookup settles with no node id, which
+// records nothing and parks the issue.
+func newPrStageNoDiffSettler(client *gh.Client, repo string) prStageNoDiffSettler {
+	return func(ctx context.Context, issueNumber int, res pmstages.PRCreateResult) (string, bool) {
+		svc := gh.NewIssueService(client)
+		nodeID := ""
+		owner, name := splitRepo("", repo)
+		if issue, err := svc.GetIssueWithRelations(ctx, owner, name, issueNumber, gh.NoRelations); err != nil {
+			fmt.Fprintf(os.Stderr, "pr-stage create: no-diff settle could not read #%d: %v\n", issueNumber, err)
+		} else if issue != nil {
+			nodeID = issue.NodeID
+		}
+		return orchestrator.SettleNoDiff(ctx, svc, svc, nodeID, issueNumber, res)
+	}
 }
 
 // resolvePrStageWorkspace resolves the workdir the runner reads context from and
@@ -226,6 +268,7 @@ func prStageCreateCmd() *cobra.Command {
 				out.Reason = fmt.Sprintf("%s: %v", pmstages.ReasonUnexpected, runErr)
 			} else if out.Path == string(pmstages.CreatePathPunt) {
 				out.RateLimited = orchestrator.ReasonIndicatesRateLimit(res.Reason)
+				applyPrStageNoDiffSettlement(ctx, &out, issueNumber, res, newPrStageNoDiffSettler(client, repo))
 			}
 			return emitPrStageResult(out, outputJSON)
 		},
