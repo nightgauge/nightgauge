@@ -763,7 +763,33 @@ func RewriteSkillRelativePaths(content string, stage string, skillDir string) st
 	// Skill-relative form (`_includes/foo.md` next to SKILL.md). Require the
 	// leading backtick so an already-absolute path is not rewritten again.
 	out = strings.ReplaceAll(out, "`_includes/", "`"+dir+string(filepath.Separator)+"_includes/")
-	return rewriteCrossSkillRefs(out, filepath.Dir(dir))
+	return rewriteRelativeSkillRefs(rewriteCrossSkillRefs(out, filepath.Dir(dir)), filepath.Dir(dir))
+}
+
+// relativeSkillRefRE matches a relative link target into the skill tree:
+// (../)+nightgauge-<x>/ at any depth, or (../){2,}_shared/. Such a target is
+// written relative to the file that holds it, often an _includes/ file, but once
+// the composer inlines that file the prompt resolves it against the skill
+// directory, so it points outside the bundle (#2800). A single ../_shared/
+// already resolves against the skill directory and is left as written. The left
+// boundary keeps an absolute path and a longer name out.
+var relativeSkillRefRE = regexp.MustCompile(`(^|[^/\w.-])((?:\.\./)+)(nightgauge-[a-z0-9-]+|_shared)/`)
+
+// rewriteRelativeSkillRefs points each relative skill-tree target at the
+// existing sibling under root. One with no sibling stays as written, which
+// `preflight skill-bundle` reports through SkillPaths.
+func rewriteRelativeSkillRefs(content, root string) string {
+	return relativeSkillRefRE.ReplaceAllStringFunc(content, func(match string) string {
+		subs := relativeSkillRefRE.FindStringSubmatch(match)
+		if subs[3] == "_shared" && len(subs[2]) < len("../../") {
+			return match
+		}
+		sibling := filepath.Join(root, subs[3])
+		if st, err := os.Stat(sibling); err != nil || !st.IsDir() {
+			return match
+		}
+		return subs[1] + sibling + string(filepath.Separator)
+	})
 }
 
 // rewriteCrossSkillRefs points each skills/nightgauge-<x>/ reference at the

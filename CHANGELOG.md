@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A relative link from a skill's supporting file into another skill or
+  `_shared/` (such as `../../nightgauge-verify-ui/SKILL.md`) now points at the
+  real file once the include is inlined into a stage prompt, and
+  `preflight skill-bundle` reports one that reaches outside the bundle.
+  `preflight skill-includes` now resolves a shared overlay's include directives
+  against each stage skill directory, as rendering does, so it no longer passes
+  a dead one or flags a working one (#2800).
 - Context-schema repair reads the stage's `SKILL.md` from the run's pinned
   worktree instead of the first workspace folder, so a pinned run repairs
   against the skill it actually ran (#2799).
