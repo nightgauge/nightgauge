@@ -24,6 +24,8 @@ Run-wide failures are selected by files in <state-dir>:
   never-complete       analyses stay "queued" forever
   quota                answer every request with HTTP 429
   wrong-sha            analyses report a different sha256 than the upload
+  upload-url           GET /files/upload_url serves this file's content
+                       instead of the stub's own upload URL
 """
 
 import hashlib
@@ -172,9 +174,11 @@ class Handler(BaseHTTPRequestHandler):
             )
         port = self.server.server_address[1]
         if self.path == "/api/v3/files/upload_url":
-            return self.answer(
-                "upload_url", 200, {"data": f"http://127.0.0.1:{port}/upload-large"}
-            )
+            url = f"http://127.0.0.1:{port}/upload-large"
+            if flag("upload-url"):
+                with open(os.path.join(STATE, "upload-url"), encoding="utf-8") as f:
+                    url = f.read().strip()
+            return self.answer("upload_url", 200, {"data": url})
         if self.path.startswith("/api/v3/analyses/"):
             aid = self.path.rsplit("/", 1)[-1]
             sha = UPLOADS.get(aid)

@@ -49,6 +49,13 @@
 # Usage:
 #   VT_API_KEY=... scripts/vt-scan.sh --report <out.json> [--api-base URL] FILE...
 #
+# UPLOAD ORIGINS
+#
+# A file over 32 MB is posted to the URL GET /files/upload_url returns. The key
+# goes with it, so that URL must be on the API's own origin or on
+# https://bigfiles.virustotal.com; any other URL is a HARNESS ERROR before the
+# key is sent.
+#
 # Environment (all optional except VT_API_KEY):
 #   VT_API_BASE            API root. Default https://www.virustotal.com/api/v3.
 #                          Overridden only by the offline test suites.
@@ -67,6 +74,9 @@ MIN_INTERVAL="${VT_MIN_INTERVAL:-15}"
 ANALYSIS_TIMEOUT="${VT_ANALYSIS_TIMEOUT:-1800}"
 HTTP_TIMEOUT="${VT_HTTP_TIMEOUT:-600}"
 LARGE_FILE_BYTES=33554432 # 32 MB: above this, POST /files refuses the upload.
+# VirusTotal answers GET /files/upload_url with a URL on this host. It is the
+# only origin besides the API's own that may receive the key.
+VT_UPLOAD_ORIGIN="https://bigfiles.virustotal.com"
 FILES=()
 
 WORK=""
@@ -155,7 +165,12 @@ vt_request() {
     curl -K - -sS -X "$method" --max-time "$HTTP_TIMEOUT" \
       -o "$BODY" -w '%{http_code}' "$@" "$url" 2>"$WORK/curl.err")"
   local rc=$?
-  local where="${url#"$API_ORIGIN"}"
+  local where
+  case "$url" in
+  "$API_ORIGIN"/*) where="${url#"$API_ORIGIN"}" ;;
+  # An upload URL carries a one-time token in its path: report only its origin.
+  *) where="$(sed -E 's#^(https?://[^/]+).*#\1#' <<<"$url")" ;;
+  esac
   where="${where%%\?*}"
   if [ "$rc" -ne 0 ]; then
     harness "$method $where: curl exit $rc ($(head -c 200 "$WORK/curl.err" | tr '\n' ' '))"
@@ -198,10 +213,11 @@ for sha in $UNIQUE; do
   if [ "$size" -gt "$LARGE_FILE_BYTES" ]; then
     vt_request GET "$API_BASE/files/upload_url"
     target="$(jq -r 'if (.data | type) == "string" then .data else empty end' "$BODY")"
-    # The key goes to this URL, so it must be the API's own host.
+    # The key goes to this URL, so it must be the API's own host or
+    # VirusTotal's large-file upload host. The trailing / refuses lookalikes.
     case "$target" in
-    "$API_ORIGIN"/*) ;;
-    *) harness "upload_url for $path is not on $API_ORIGIN" ;;
+    "$API_ORIGIN"/* | "$VT_UPLOAD_ORIGIN"/*) ;;
+    *) harness "upload_url for $path is not on $API_ORIGIN or $VT_UPLOAD_ORIGIN" ;;
     esac
   fi
   vt_request POST "$target" -F "file=@\"$path\""

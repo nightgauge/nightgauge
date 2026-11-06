@@ -188,6 +188,32 @@ grep -q '^GET /api/v3/files/upload_url' "$STATE/requests.log" && grep -q '^large
   ok "over 32 MB uploaded through upload_url" ||
   bad "over 32 MB: requests $(tr '\n' ' ' <"$STATE/requests.log")"
 
+# 16a. Any other upload URL is refused before anything is posted with the key.
+for u in http://bigfiles.virustotal.com/upload http://www.virustotal.com/upload \
+  https://bigfiles.virustotal.com.example.net/upload \
+  https://bigfiles.virustotal.com@example.net/upload https://example.net/upload; do
+  printf '%s\n' "$u" >"$STATE/upload-url"
+  scan -- "$BIG"
+  expect "upload_url $u -> exit 2" 2 "HARNESS ERROR: upload_url for"
+  grep -q '^POST' "$STATE/requests.log" &&
+    bad "upload_url $u: a POST was sent" || ok "upload_url $u: nothing posted"
+done
+
+# 16b. The large-file host is accepted. A refused proxy keeps the POST offline,
+# so curl fails after the origin check passed; the token stays out of output.
+printf '%s\n' "https://bigfiles.virustotal.com/_ah/upload/stub-token/" >"$STATE/upload-url"
+scan https_proxy=http://127.0.0.1:1 HTTPS_PROXY=http://127.0.0.1:1 NO_PROXY= no_proxy= \
+  ALL_PROXY= all_proxy= -- "$BIG"
+expect "upload_url on bigfiles.virustotal.com -> origin accepted" 2 "curl exit"
+if grep -qF "is not on" <<<"$OUT"; then
+  bad "bigfiles.virustotal.com upload_url was refused"
+elif grep -qF "stub-token" <<<"$OUT"; then
+  bad "the upload URL's token appears in output"
+else
+  ok "bigfiles.virustotal.com accepted; token not printed"
+fi
+rm -f "$STATE/upload-url"
+
 # 17. The key never appears in any output or report written above.
 if grep -qF "$KEY" "$ALL_OUT"; then
   bad "the API key appears in stdout, stderr or a report"
