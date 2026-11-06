@@ -174,6 +174,11 @@ phase node alongside the orchestrated stages.
   returns it to Ready. Do not write "close #N" anywhere in such a body: GitHub
   reads it as a closing keyword. The Validation section reports what ran:
   never pair "not run" with a pass count.
+- **Never run the full local gate (#2989).** `feature-validate`'s gate already
+  satisfies the "run the complete local gate once before pushing" rule. After
+  the Phase 2.3 base merge, push the merge straight away: PR CI and `pr-merge`
+  check the merged tree. The stage fence refuses `bash scripts/ci-local.sh` and
+  `nightgauge ci gate-run` here.
 - See also the cross-cutting gotchas in
   [`_shared/GOTCHAS.md`](../_shared/GOTCHAS.md).
 
@@ -644,6 +649,9 @@ classifier recognizes this string and maps it to `CatStaleBranchMergeConflict`.
 **Safety**: Uses standard `git merge` (not `--force`). If push fails, the
 merge is aborted to leave the working tree clean for the next attempt.
 
+
+A clean merge produces a new tree; push the merge straight away and do not run
+the full local gate on it (#2989). PR CI and `pr-merge` check the merged tree.
 
 **Failure outcome**: When conflicts are detected, the stage exits with status 1.
 The Go binary's failure classifier maps `stale-branch-merge-conflict` in stderr
