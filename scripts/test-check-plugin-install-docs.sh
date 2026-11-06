@@ -61,8 +61,14 @@ case "$*" in
           echo '{"enabledPlugins":{"nightgauge@nightgauge-plugins":true}}' >.claude/settings.json
         } ;;
     esac
-    mkdir -p "$c/plugin/skills/a"
-    [ -n "${STUB_NO_SKILLS:-}" ] || touch "$c/plugin/skills/a/SKILL.md" ;;
+    mkdir -p "$c/plugin/skills/a" "$c/plugin/hooks"
+    [ -n "${STUB_NO_SKILLS:-}" ] || echo "[ok](ref.md) [web](https://x) [a](#b)" >"$c/plugin/skills/a/SKILL.md"
+    echo ref >"$c/plugin/skills/a/ref.md"
+    echo '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\"${CLAUDE_PLUGIN_ROOT}/hooks/h.sh\""}]}]}}' \
+      >"$c/plugin/hooks/hooks.json"
+    [ -n "${STUB_NO_HOOK:-}" ] || { echo : >"$c/plugin/hooks/h.sh"; chmod +x "$c/plugin/hooks/h.sh"; }
+    [ -z "${STUB_BROKEN_LINK:-}" ] || ln -s missing-target "$c/plugin/skills/a/dangling"
+    [ -z "${STUB_DANGLING_MD:-}" ] || echo "[x](../gone.md)" >>"$c/plugin/skills/a/SKILL.md" ;;
   "plugin validate --strict "*)
     if [ "${STUB_VALIDATE_FAILS:-}" = plugin ] && [[ "$4" == */claude-plugins/nightgauge ]]; then
       echo "hooks.json: unquoted command"; exit 1
@@ -119,6 +125,21 @@ expect() {
 
 fixture
 expect "valid docs pass" 0 "check-plugin-install-docs: OK"
+
+fixture
+expect "cached copy missing a hook script" 1 "cached hook hooks/h.sh is missing" STUB_NO_HOOK=1
+
+fixture
+expect "cached copy with a broken symlink" 1 "broken symlink skills/a/dangling" STUB_BROKEN_LINK=1
+
+# The link resolves in the committed plugin, so the cache dropped its target.
+fixture
+echo gone >"$TMP/claude-plugins/nightgauge/skills/gone.md"
+expect "cached skill with a dangling link" 1 "links to missing ../gone.md" STUB_DANGLING_MD=1
+
+# Already broken in the source: not a packaging defect, not this check's concern.
+fixture
+expect "link broken in the source too is ignored" 0 "check-plugin-install-docs: OK" STUB_DANGLING_MD=1
 
 fixture
 sed -i.bak '/go install/d' "$TMP/README.md"
