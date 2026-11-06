@@ -17,10 +17,10 @@ changelog, and the release workflow refuses a tag that does not.
 ### Fixed
 
 - The base-branch freshness check in feature-validate and pr-merge no longer
-  aborts a merge that is already open. A merge whose every path is resolved
-  and staged, as feature-dev leaves it, is committed and pushed, so the remote
+  aborts a merge that is already open. A merge of the base whose every path
+  is resolved and staged, as feature-dev leaves it, is committed and pushed, so the remote
   PR branch that pr-merge reads includes the base, and the check carries on;
-  one with unmerged paths is left as found and reports
+  any other open merge, including one on a branch that is not behind, is left as found and reports
   `FRESHNESS_CHECK_FAILED=true`. A failed commit after conflict resolution also
   keeps the staged resolution instead of aborting it. pr-create's base merge
   commits and pushes a fully staged open merge the same way, reporting

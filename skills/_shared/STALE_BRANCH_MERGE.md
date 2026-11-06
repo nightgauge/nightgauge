@@ -29,9 +29,11 @@ git fetch origin "$MERGE_BASE" 2>/dev/null
 
 # An open merge with every path resolved and staged is concluded, never
 # aborted: committing it loses nothing (#2755). One with unmerged paths, or
-# whose commit fails, is left exactly as found for the guard below.
+# whose commit fails, or that merges anything not already in the base, is left
+# exactly as found for the guard below.
 FRESHNESS_MERGE_CONCLUDED=false
-if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && [ -z "$(git ls-files -u 2>/dev/null)" ]; then
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && [ -z "$(git ls-files -u 2>/dev/null)" ] \
+  && git merge-base --is-ancestor MERGE_HEAD "origin/$MERGE_BASE" 2>/dev/null; then
   if git commit --no-edit >/dev/null 2>&1; then
     echo "Concluded the open merge with its staged resolution."
     FRESHNESS_MERGE_CONCLUDED=true

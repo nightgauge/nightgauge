@@ -242,6 +242,31 @@ func TestRealGit_FreshnessCheck_OpenMergeSurvives(t *testing.T) {
 				t.Errorf("a failed commit must report FRESHNESS_CHECK_FAILED=true:\n%s", out)
 			}
 		})
+		t.Run("staged merge of a non-base branch is left open/"+sh, func(t *testing.T) {
+			ws, stub := openMergeRepo(t)
+			gittest.Run(t, ws, "checkout", "-q", "-b", "side", "origin/main")
+			if err := os.WriteFile(filepath.Join(ws, "f.txt"), []byte("side\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gittest.Run(t, ws, "commit", "-q", "-am", "side, not in base")
+			gittest.Run(t, ws, "checkout", "-q", testBranch)
+			_ = gittest.Command(ws, "merge", "side").Run() // conflicts by construction
+			if err := os.WriteFile(filepath.Join(ws, "f.txt"), []byte("resolved\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gittest.Run(t, ws, "add", "f.txt")
+			out, err := runSkillBlock(t, sh, ws, stub, block)
+			if err != nil {
+				t.Fatalf("%s: %v\n%s", sh, err, out)
+			}
+			if !mergeHeadOpen(ws) {
+				t.Fatalf("a merge of a branch outside the base was committed\n%s", out)
+			}
+			assertNotPushed(t, ws, out)
+			if !strings.Contains(out, "FRESHNESS_CHECK_FAILED=true") {
+				t.Errorf("an open non-base merge must report FRESHNESS_CHECK_FAILED=true:\n%s", out)
+			}
+		})
 		t.Run("open merge on a branch not behind base/"+sh, func(t *testing.T) {
 			ws, stub := openMergeRepo(t)
 			// Bring the base in for good, then leave an unrelated merge open on
