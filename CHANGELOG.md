@@ -23,6 +23,14 @@ changelog, and the release workflow refuses a tag that does not.
   the cached copy from `claude plugin install` is checked for hooks and broken
   links. A missing RC artifact fails the run instead of testing the tree (#2722).
 
+### Fixed
+
+- A pipeline run that backtracked and then merged is now booked as a success.
+  Rewinds now drop the stages they are about to re-run from the run's
+  bookkeeping, and the completion check counts distinct stages instead of
+  adding array lengths, so a stage that ran twice no longer marks a merged run
+  failed, and a duplicate can no longer hide a stage that never ran (#2991).
+
 ## [0.8.1] - 2026-11-05
 
 ### Fixed

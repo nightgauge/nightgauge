@@ -1062,6 +1062,58 @@ export interface RunScopedAttentionRaise {
 }
 
 /**
+ * True when every stage in `stageOrder` appears in at least one of the three
+ * bookkeeping arrays. Membership, not length: a rewound run pushes stages
+ * twice, and a duplicate must neither break completion nor mask a missing
+ * stage.
+ *
+ * @internal Exported for testing.
+ * @see Issue #2991
+ */
+export function allStagesAccountedFor(
+  completedStages: readonly PipelineStage[],
+  skippedStages: readonly PipelineStage[],
+  deferredStages: readonly PipelineStage[],
+  stageOrder: readonly PipelineStage[]
+): boolean {
+  const seen = new Set<PipelineStage>([...completedStages, ...skippedStages, ...deferredStages]);
+  return stageOrder.every((stage) => seen.has(stage));
+}
+
+/**
+ * Remove, in place, every stage at or after `targetIndex` in `stageOrder`
+ * from the three bookkeeping arrays, so a rewind leaves no stale entry for a
+ * stage it is about to re-run. Returns the distinct stages removed.
+ *
+ * @internal Exported for testing.
+ * @see Issue #2991
+ */
+export function clearRewoundStages(
+  arrays: {
+    completedStages: PipelineStage[];
+    skippedStages: PipelineStage[];
+    deferredStages: PipelineStage[];
+  },
+  stageOrder: readonly PipelineStage[],
+  targetIndex: number
+): PipelineStage[] {
+  const rewound = new Set<PipelineStage>(stageOrder.slice(Math.max(0, targetIndex)));
+  const removed = new Set<PipelineStage>();
+  for (const arr of [arrays.completedStages, arrays.skippedStages, arrays.deferredStages]) {
+    const kept = arr.filter((stage) => {
+      if (rewound.has(stage)) {
+        removed.add(stage);
+        return false;
+      }
+      return true;
+    });
+    arr.length = 0;
+    arr.push(...kept);
+  }
+  return [...removed];
+}
+
+/**
  * Result of reconcileBookkeepingFromDiskState — the in-memory arrays plus
  * a list of stages that were recovered from disk and a flag indicating
  * whether anything changed.
@@ -12990,6 +13042,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // loop increment lands on the target stage. The stage is NOT
               // pushed to completedStages and NOT recorded as failed — the run
               // is continuing, and executeBacktrack has recorded the transition.
+              clearRewoundStages(
+                { completedStages, skippedStages, deferredStages },
+                STAGE_ORDER,
+                disposition.targetIndex
+              );
               stageIndex = disposition.targetIndex - 1;
               continue;
             }
@@ -13795,6 +13852,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           if (canBacktrack) {
             const targetIndex = await this.executeBacktrack(signal, stage, issueNumber, callbacks);
             // Rewind: set stageIndex so the loop increments to targetIndex
+            // Drop stale bookkeeping for the stages about to re-run (#2991).
+            clearRewoundStages(
+              { completedStages, skippedStages, deferredStages },
+              STAGE_ORDER,
+              targetIndex
+            );
             stageIndex = targetIndex - 1;
             continue;
           }
@@ -14554,8 +14617,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // through the existing failure / pause / abort handling.
     // ===================================================================
     if (!failedStage && this.stateService) {
-      const accountedFor = completedStages.length + skippedStages.length + deferredStages.length;
-      if (accountedFor < STAGE_ORDER.length) {
+      const accountedFor = new Set([...completedStages, ...skippedStages, ...deferredStages]).size;
+      if (!allStagesAccountedFor(completedStages, skippedStages, deferredStages, STAGE_ORDER)) {
         try {
           const diskState = await this.stateService.getState();
           if (diskState) {
@@ -14572,10 +14635,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   issueNumber,
                   recovered: reconciled.recovered,
                   completedStagesBefore: accountedFor,
-                  completedStagesAfter:
-                    reconciled.completedStages.length +
-                    reconciled.skippedStages.length +
-                    reconciled.deferredStages.length,
+                  completedStagesAfter: new Set([
+                    ...reconciled.completedStages,
+                    ...reconciled.skippedStages,
+                    ...reconciled.deferredStages,
+                  ]).size,
                 }
               );
               // Reassign by mutating in place (these arrays are still `const`
@@ -14608,7 +14672,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // ===================================================================
     const pipelineComplete =
       !failedStage &&
-      completedStages.length + skippedStages.length + deferredStages.length === STAGE_ORDER.length;
+      allStagesAccountedFor(completedStages, skippedStages, deferredStages, STAGE_ORDER);
     if (
       !pipelineComplete &&
       deferredStages.length === 0 &&
