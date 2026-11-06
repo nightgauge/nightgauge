@@ -79,7 +79,7 @@
     },
     {
       "name": "learning-outcome-record",
-      "note": "Wired on both paths as of #304, and rooted identically \u2014 the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes \u2014 the Go scheduler's recordOutcome is unreachable from the extension path. SKIP PARITY: both paths record NOTHING for a blocked-dependency deferral (#305), a network_unavailable failure (#3296), an environment_halt (#101) and a gate_plugin_missing stop (#2723). The scheduler keys all four on terminal_failure_kind; the extension keys the deferral on record.outcome_type (which #305 sets from the wire flag and which clears terminal_failure_kind) and the other three on terminal_failure_kind. Same four states, different fields, because the deferral override on the extension path erases the kind.",
+      "note": "Wired on both paths as of #304, and rooted identically \u2014 the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes \u2014 the Go scheduler's recordOutcome is unreachable from the extension path. SKIP PARITY: both paths record NOTHING for a blocked-dependency deferral (#305), a network_unavailable failure (#3296), an environment_halt (#101), a gate_plugin_missing stop (#2723) and an architecture_approval_required hold (#2756). The scheduler keys all five on terminal_failure_kind; the extension keys the deferral on record.outcome_type (which #305 sets from the wire flag and which clears terminal_failure_kind), the approval hold on record.outcome_type awaiting_approval (set by ApplyNonFailureOutcome, which keeps the kind), and the other three on terminal_failure_kind. Same five states, different fields, because the deferral override on the extension path erases the kind.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, workspaceRoot)"
@@ -102,13 +102,14 @@
     },
     {
       "name": "pipeline-done-telemetry",
+      "note": "#2756: both paths emit an architecture_approval_required hold as a non-failure (Success=true), like a deferral, so the live view never paints a deliberate human pause red. Go keys it on terminalFailureKind via IsNonFailureTerminalKind; the extension on the terminating stage's gate-sourced kind (heldForApproval), the same source as the run record's terminal_failure_kind.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.telemetrySvc.EmitPipelineEvent(context.Background(), platform.PipelineEvent{"
       },
       "extension": {
         "file": "internal/ipc/server.go",
-        "anchor": "s.emitPipelineDoneTelemetry(runID, p, snap.Visibility)"
+        "anchor": "s.emitPipelineDoneTelemetry(runID, p, approvalHold && !p.Success, snap.Visibility)"
       }
     },
     {
@@ -594,7 +595,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "2064e557ab80c0eb404263f95b7948e1fbe0495195de1d15820fdfc9011a7a61"
+      "sha256": "e9e7eb1c07a9675d528044bf45ca15705c8fc6cde9f521224b8b8428ec439836"
     },
     {
       "id": "extension-runSlotPipeline-finally",

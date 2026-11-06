@@ -5450,7 +5450,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// Total run duration + outcome so the platform transitions the live
 			// row from 'running' to complete/failed (#1047). Copy the bool so the
 			// pointer doesn't alias the loop/closure variable.
-			doneSuccess := pipelineSuccess
+			// An approval hold is a non-failure (#2756): never a red row.
+			doneSuccess := pipelineSuccess || IsNonFailureTerminalKind(terminalFailureKind)
 			totalDurationMs := 0
 			if !snap.StartedAt.IsZero() {
 				totalDurationMs = int(time.Since(snap.StartedAt).Milliseconds())
@@ -5556,6 +5557,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		case TerminalKindGatePluginMissing:
 			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — stage stopped before any work)",
 				item.Number, TerminalKindGatePluginMissing)
+		case TerminalKindArchitectureApprovalRequired:
+			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — awaiting human approval, not a failure)",
+				item.Number, TerminalKindArchitectureApprovalRequired)
 		default:
 			// recordOutcome re-resolves the prediction from the run's worktree
 			// before writing the row (#994) — the values here were read at
@@ -10626,6 +10630,8 @@ func (s *Scheduler) recordV2History(
 	// to history is the single source of truth for both sinks.
 	now := time.Now()
 	record := hw.BuildV2Record(snap, success, errMsg, input, now)
+	// #2756: an architecture-approval hold is a non-failure.
+	ApplyNonFailureOutcome(&record)
 
 	// Attach gate results (best-effort — missing file is not an error) and the
 	// predicted-vs-actual routing decisions from recordOutcome.

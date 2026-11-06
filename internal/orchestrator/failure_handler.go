@@ -32,6 +32,33 @@ const OutcomeTypeBlocked = "blocked"
 // for a later tick once its blocker closes. Issue #305.
 const OutcomeTypeDeferred = "deferred"
 
+// OutcomeTypeAwaitingApproval is the run outcome_type for a run the
+// architecture-approval gate halted. The pause is a deliberate human hold, not
+// a failure, so the run books as "cancelled" with this outcome_type. Unlike a
+// deferral the record keeps terminal_failure_kind, because the hold logic reads
+// it from the latest run record. Issue #2756.
+const OutcomeTypeAwaitingApproval = "awaiting_approval"
+
+// IsNonFailureTerminalKind reports whether a terminal kind is a deliberate
+// human hold rather than a failure, so every surface (run record, run state,
+// live pipeline_done event) books it the same way. Issue #2756.
+func IsNonFailureTerminalKind(kind string) bool {
+	return kind == TerminalKindArchitectureApprovalRequired
+}
+
+// ApplyNonFailureOutcome rewrites a built run record whose terminal kind is a
+// deliberate human hold into a non-failure: outcome "cancelled" with a distinct
+// outcome_type. The terminal kind and detail are retained. Every other record is
+// left untouched. Both run-record writers call it after BuildV2Record so the
+// local history and the telemetry push agree. Issue #2756.
+func ApplyNonFailureOutcome(rec *state.V2RunRecord) {
+	if rec == nil || !IsNonFailureTerminalKind(rec.TerminalFailureKind) {
+		return
+	}
+	rec.Outcome = "cancelled"
+	rec.OutcomeType = OutcomeTypeAwaitingApproval
+}
+
 // Terminal failure kinds — what aborted the pipeline run (Issue #3001).
 //
 // Independent of state.GateResult / failure_category which classify failures by

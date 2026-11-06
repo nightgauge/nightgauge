@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A run the architecture-approval gate holds is no longer reported as a failed
+  run. Local history and the platform push record it as `cancelled` with
+  `outcome_type: awaiting_approval`, keeping its terminal kind, and it stays out
+  of the learning-outcome failure totals. The live Pipelines view no longer
+  shows it as a red failed row. Real failures still book as `failed`.
 - `nightgauge autonomous status` no longer reads "Running" while a repository
   halt stops dispatch. The headline gains `(N repositories halted)`, a
   `Halted repositories` section names each repo's issue, stage, reason and

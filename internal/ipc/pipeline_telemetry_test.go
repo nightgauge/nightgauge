@@ -3,6 +3,9 @@ package ipc
 import (
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 var telemetryNow = time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
@@ -148,7 +151,7 @@ func TestBuildPipelineDoneEvent(t *testing.T) {
 		// Includes a bookend that must be filtered out of stagesRun.
 		StagesRun: []string{"issue-pickup", "feature-dev", "pipeline-finish", "pr-merge"},
 	}
-	ev, ok := buildPipelineDoneEvent("run-uuid", p, telemetryNow)
+	ev, ok := buildPipelineDoneEvent("run-uuid", p, false, telemetryNow)
 	if !ok {
 		t.Fatal("expected pipeline_done event")
 	}
@@ -173,7 +176,7 @@ func TestBuildPipelineDoneEvent(t *testing.T) {
 }
 
 func TestBuildPipelineDoneEvent_RequiresRunID(t *testing.T) {
-	if _, ok := buildPipelineDoneEvent("", PipelineNotifyCompleteParams{IssueNumber: 1}, telemetryNow); ok {
+	if _, ok := buildPipelineDoneEvent("", PipelineNotifyCompleteParams{IssueNumber: 1}, false, telemetryNow); ok {
 		t.Error("empty runId must skip pipeline_done emission")
 	}
 }
@@ -191,12 +194,42 @@ func TestBuildPipelineDoneEvent_DeferredEmitsNonFailure(t *testing.T) {
 		Deferred:        true,
 		TotalDurationMs: 1200,
 	}
-	ev, ok := buildPipelineDoneEvent("run-uuid", p, telemetryNow)
+	ev, ok := buildPipelineDoneEvent("run-uuid", p, false, telemetryNow)
 	if !ok {
 		t.Fatal("expected pipeline_done event")
 	}
 	if ev.Success == nil || !*ev.Success {
 		t.Error("deferred completion must emit Success=true (non-failure terminal), not failed")
+	}
+}
+
+// An architecture-approval hold is a deliberate pause, not a failure, so the
+// live pipeline_done event must not paint it red. Issue #2756.
+func TestBuildPipelineDoneEvent_ApprovalHoldEmitsNonFailure(t *testing.T) {
+	p := PipelineNotifyCompleteParams{Repo: "nightgauge/nightgauge", IssueNumber: 2756}
+	ev, ok := buildPipelineDoneEvent("run-uuid", p, true, telemetryNow)
+	if !ok {
+		t.Fatal("expected pipeline_done event")
+	}
+	if ev.Success == nil || !*ev.Success {
+		t.Error("approval hold must emit Success=true (non-failure terminal), not failed")
+	}
+	ev, _ = buildPipelineDoneEvent("run-uuid", p, false, telemetryNow)
+	if ev.Success == nil || *ev.Success {
+		t.Error("a real failure must still emit Success=false")
+	}
+}
+
+func TestHeldForApproval(t *testing.T) {
+	snap := &state.RuntimeState{Stage: state.StageFeaturePlanning, StageGateResults: map[string][]state.StageGateResult{
+		string(state.StageFeaturePlanning): {{TerminalKind: orchestrator.TerminalKindArchitectureApprovalRequired}},
+	}}
+	if !heldForApproval(snap) {
+		t.Error("approval-gate terminal kind must read as a hold")
+	}
+	snap.StageGateResults[string(state.StageFeaturePlanning)][0].TerminalKind = orchestrator.TerminalKindSubagentCrash
+	if heldForApproval(snap) || heldForApproval(nil) {
+		t.Error("a real failure (or no snapshot) must not read as a hold")
 	}
 }
 
