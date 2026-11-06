@@ -805,4 +805,13 @@ func TestScheduler_WarningOnlyQuotaStallSkipsBudgetEscalation(t *testing.T) {
 	if got := s.retryEngine.CurrentModel("feature-dev"); got != "" {
 		t.Errorf("CurrentModel(feature-dev) = %q, want no escalation after a warning-only stall", got)
 	}
+	// With escalation skipped, the ordinary stall retry rewinds to planning
+	// (PLAN_REVISION_NEEDED) and re-runs feature-dev on the same tier. Pinning
+	// both counts catches a regression that stops retrying altogether.
+	if got := runner.callCount[state.StageFeaturePlanning]; got != 2 {
+		t.Errorf("feature-planning ran %d times, want 2 (initial + stall-retry rewind)", got)
+	}
+	if got := runner.callCount[state.StageFeatureDev]; got != 2 {
+		t.Errorf("feature-dev ran %d times, want 2 (stall + retry)", got)
+	}
 }

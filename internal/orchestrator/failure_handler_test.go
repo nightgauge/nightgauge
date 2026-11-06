@@ -200,7 +200,8 @@ func TestDemoteWarningOnlyQuotaKind(t *testing.T) {
 	}{
 		{TerminalKindRateLimitQuotaExhausted, warning, TerminalKindStallKill, true},
 		{TerminalKindRateLimitQuotaExhausted, "[rate-limit-quota-exhausted] idle 2m (status=limited; resetsAt=1)", TerminalKindRateLimitQuotaExhausted, false},
-		{TerminalKindRateLimitQuotaExhausted, warning + " then status=limited", TerminalKindRateLimitQuotaExhausted, false},
+		{TerminalKindRateLimitQuotaExhausted, warning + "\nagent: grep found status=limited in fixture", TerminalKindStallKill, true},
+		{TerminalKindRateLimitQuotaExhausted, warning + "\n[skillRunner] Stage [quota-killed] idle 2m after rate_limit_event (status=limited; five_hour bucket; resetsAt=2)", TerminalKindRateLimitQuotaExhausted, false},
 		{TerminalKindRateLimitQuotaExhausted, "[rate-limit-quota-exhausted] resets 10:30am; resetsAt=1", TerminalKindRateLimitQuotaExhausted, false},
 		{TerminalKindRateLimitQuotaExhausted, "You've hit your usage limit; the docs mention status=allowed_warning", TerminalKindRateLimitQuotaExhausted, false},
 		{TerminalKindSubagentCrash, warning, TerminalKindSubagentCrash, false},
@@ -231,7 +232,8 @@ func TestIsWarningOnlyQuotaStall(t *testing.T) {
 		{"soft kill", TerminalKindStallKill, soft, true},
 		{"plain stall", TerminalKindStallKill, "[stall-killed] exceeded stall idle threshold", false},
 		{"bare status token", TerminalKindStallKill, "[stall-killed] the log quoted status=allowed_warning", false},
-		{"limited alongside", TerminalKindStallKill, soft + " then status=limited", false},
+		{"unrelated stderr limited", TerminalKindStallKill, soft + "\nagent: grep found status=limited in fixture", true},
+		{"limited marker alongside", TerminalKindStallKill, soft + "\n[skillRunner] Stage [quota-killed] idle 2m after rate_limit_event (status=limited; five_hour bucket; resetsAt=2)", false},
 		{"other kind", TerminalKindSubagentCrash, soft, false},
 	}
 	for _, c := range cases {

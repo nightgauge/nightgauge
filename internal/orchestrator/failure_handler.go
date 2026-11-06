@@ -1147,12 +1147,18 @@ func DemoteWarningOnlyQuotaKind(kind, detail string) (string, bool) {
 // text of a genuine exhaustion that merely quotes it.
 const softQuotaKillMarker = "after rate_limit_event (status=allowed_warning"
 
+// limitedQuotaKillMarker is the same skillRunner.ts marker naming a hard
+// status=limited. The veto is anchored to it because detail also carries the
+// stage's stderr tail, and agent output that merely contains status=limited
+// must not disable the warning-only guard (#2737).
+const limitedQuotaKillMarker = "after rate_limit_event (status=limited"
+
 // IsWarningOnlyQuotaDetail reports whether detail carries skillRunner's kill
-// marker for a stage that stopped after a soft quota warning, with no
-// status=limited alongside it.
+// marker for a stage that stopped after a soft quota warning, and no
+// skillRunner marker for a status=limited event.
 func IsWarningOnlyQuotaDetail(detail string) bool {
 	return strings.Contains(detail, softQuotaKillMarker) &&
-		!strings.Contains(detail, "status=limited")
+		!strings.Contains(detail, limitedQuotaKillMarker)
 }
 
 // IsWarningOnlyQuotaStall reports a stall kill that followed a soft quota
