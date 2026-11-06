@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A relative link from a skill's supporting file into another skill or
+  `_shared/` (such as `../../nightgauge-verify-ui/SKILL.md`) now points at the
+  real file once the include is inlined into a stage prompt, and
+  `preflight skill-bundle` reports one that reaches outside the bundle.
+  `preflight skill-includes` now resolves a shared overlay's include directives
+  against each stage skill directory, as rendering does, so it no longer passes
+  a dead one or flags a working one (#2800).
 - Claude stages launched from the VS Code extension can now write to the main
   checkout's knowledge base from a worktree without a user-level permission rule:
   they get `--add-dir <main checkout>/.nightgauge/knowledge` and

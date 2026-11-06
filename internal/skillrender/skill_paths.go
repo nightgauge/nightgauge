@@ -22,15 +22,17 @@ const skillPathTail = "[^\\s`'\"()\\[\\]]*"
 
 var (
 	residualSkillPathRE = regexp.MustCompile(`(^|[^/\w.-])(skills/(?:nightgauge-[a-z0-9-]+|_shared)/` + skillPathTail + `)`)
-	relativeSkillPathRE = regexp.MustCompile("(^|[^/\\w.-])(\\.\\./_shared/" + skillPathTail + ")")
+	relativeSkillPathRE = regexp.MustCompile("(^|[^/\\w.-])((?:\\.\\./)+(?:_shared|nightgauge-[a-z0-9-]+)/" + skillPathTail + ")")
 	includesSkillPathRE = regexp.MustCompile("(`)(_includes/" + skillPathTail + ")")
 )
 
 // SkillPaths returns each skill path content names, in order of first
 // appearance, and whether it exists: absolute paths under root, residual
 // skills/nightgauge-*/ and skills/_shared/ paths, backticked _includes/ paths,
-// and relative ../_shared/ paths. The last two resolve against skillDir, as the
-// composer resolves them. A residual path never counts as existing, however the
+// and relative (../)+_shared/ or (../)+nightgauge-<x>/ paths. The last two
+// resolve against skillDir, as the composer resolves an inlined include, so a
+// relative target written for an _includes/ file reports Exists=false when it
+// reaches outside the bundle (#2800). A #fragment is dropped before the stat. A residual path never counts as existing, however the
 // current directory looks: it would resolve against the stage's worktree, which
 // is the failure this reports (#196).
 //
@@ -49,7 +51,8 @@ func SkillPaths(content, skillDir, root string) []SkillPath {
 		sp := SkillPath{Path: path}
 		if resolve != nil {
 			sp.Resolved = resolve(path)
-			_, err := os.Stat(sp.Resolved)
+			target, _, _ := strings.Cut(sp.Resolved, "#")
+			_, err := os.Stat(target)
 			sp.Exists = err == nil
 		}
 		out = append(out, sp)

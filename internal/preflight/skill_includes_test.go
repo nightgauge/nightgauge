@@ -240,3 +240,45 @@ func TestSkillIncludes_WorkingTreeIsClean(t *testing.T) {
 		t.Fatal("expected to scan skill files, scanned 0")
 	}
 }
+
+// ─── #2800: shared overlays resolve against each stage skill dir ────────────
+
+func TestSkillIncludes_SharedOverlayWorkingDirectiveIsClean(t *testing.T) {
+	root := t.TempDir()
+	writeIncludeFile(t, root, "skills/_shared/FRAG.md", "frag\n")
+	writeIncludeFile(t, root, "skills/nightgauge-feature-dev/SKILL.md", "---\nname: feature-dev\n---\nBody.\n")
+	writeIncludeFile(t, root, "skills/_shared/_overlays/m.md", "<!-- include: ../_shared/FRAG.md -->\n")
+	if res := runIncludes(t, root); len(res.Findings) != 0 {
+		t.Fatalf("expected no finding, got %+v", res.Findings)
+	}
+}
+
+func TestSkillIncludes_SharedOverlayDeadDirectiveIsFlagged(t *testing.T) {
+	for _, rel := range []string{"skills/_shared/_overlays", "skills/_shared/_overlays/hosts"} {
+		t.Run(rel, func(t *testing.T) {
+			root := t.TempDir()
+			writeIncludeFile(t, root, rel+"/FRAG.md", "frag\n")
+			writeIncludeFile(t, root, "skills/nightgauge-feature-dev/SKILL.md", "---\nname: feature-dev\n---\nBody.\n")
+			writeIncludeFile(t, root, rel+"/m.md", "<!-- include: FRAG.md -->\n")
+			res := runIncludes(t, root)
+			if len(res.Findings) != 1 {
+				t.Fatalf("expected 1 finding, got %+v", res.Findings)
+			}
+			want := filepath.Join("skills", "nightgauge-feature-dev", "FRAG.md")
+			if res.Findings[0].Resolved != want {
+				t.Errorf("resolved = %q, want %q", res.Findings[0].Resolved, want)
+			}
+		})
+	}
+}
+
+func TestSkillIncludes_SharedOverlayMirrorLayoutIsClean(t *testing.T) {
+	root := t.TempDir()
+	base := "claude-plugins/nightgauge/skills"
+	writeIncludeFile(t, root, base+"/_shared/FRAG.md", "frag\n")
+	writeIncludeFile(t, root, base+"/feature-dev/SKILL.md", "---\nname: feature-dev\n---\nBody.\n")
+	writeIncludeFile(t, root, base+"/_shared/_overlays/m.md", "<!-- include: ../_shared/FRAG.md -->\n")
+	if res := runIncludes(t, root); len(res.Findings) != 0 {
+		t.Fatalf("expected no finding, got %+v", res.Findings)
+	}
+}
