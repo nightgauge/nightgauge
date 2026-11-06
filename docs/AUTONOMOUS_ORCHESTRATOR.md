@@ -1481,6 +1481,10 @@ to reload" while two pipelines are still mid-`feature-dev`.
    # Autonomous Mode: Stopped — 0 running; safe to reload
    ```
 
+   A repository halt appends to the status word, as in
+   `Autonomous Mode: Running (1 repository halted) — …`, and status lists
+   each halt and each issue awaiting architecture approval below it (#2748).
+
    The status bar says the same thing (`Autonomous: Stopped — 2 running` →
    `Autonomous: Stopped — safe to reload`), and updates itself as the slots
    land, so the drain can be watched without re-running anything.

@@ -11985,12 +11985,12 @@ func capitalizeStatus(status string) string {
 // dev-install.sh hold in both (#2720). A daemon that answered autonomous.status
 // but not the summary gets "unknown": the scheduler's own list omits manual
 // runs, so it cannot stand in, and a false all-clear costs every running run.
-func liveAutonomousModeLine(status string, summary ipc.RunningPipelinesResult, known bool) string {
+func liveAutonomousModeLine(status string, halted int, summary ipc.RunningPipelinesResult, known bool) string {
 	reload := "reload safety unknown"
 	if known {
 		reload = reloadSafetyLine(summary.Runs)
 	}
-	return fmt.Sprintf("Autonomous Mode: %s — %s", capitalizeStatus(status), reload)
+	return fmt.Sprintf("Autonomous Mode: %s%s — %s", capitalizeStatus(status), haltedSuffix(halted), reload)
 }
 
 // liveAutonomousStatusJSON is the `--json` payload when a daemon answered. The
@@ -12003,14 +12003,16 @@ func liveAutonomousStatusJSON(res orchestrator.AutonomousState, summary ipc.Runn
 		runs = []ipc.RunningPipelineInfo{}
 	}
 	return map[string]any{
-		"daemon":                  true,
-		"status":                  res.Status,
-		"cycles":                  res.CyclesRun,
-		"running":                 res.Running,
-		"inReviewWithoutPR":       inReviewWithoutPRJSON(res.InReviewWithoutPR),
-		"running_pipelines":       runs,
-		"running_pipelines_known": known,
-		"reload_safe":             known && summary.Count == 0,
+		"daemon":                     true,
+		"status":                     res.Status,
+		"cycles":                     res.CyclesRun,
+		"running":                    res.Running,
+		"inReviewWithoutPR":          inReviewWithoutPRJSON(res.InReviewWithoutPR),
+		"haltedRepos":                orchestrator.HaltedRepos(&res),
+		"architectureApprovalParked": orchestrator.ArchitectureApprovalParked(&res),
+		"running_pipelines":          runs,
+		"running_pipelines_known":    known,
+		"reload_safe":                known && summary.Count == 0,
 	}
 }
 
@@ -12042,8 +12044,11 @@ func autonomousStatusCmd() *cobra.Command {
 					if outputJSON {
 						return printJSON(liveAutonomousStatusJSON(res, summary, known))
 					}
+					halted := orchestrator.HaltedRepos(&res)
 					fmt.Printf("Source: live daemon\n%s\nCycles: %d\n",
-						liveAutonomousModeLine(res.Status, summary, known), res.CyclesRun)
+						liveAutonomousModeLine(res.Status, len(halted), summary, known), res.CyclesRun)
+					printHaltedRepos(os.Stdout, halted, "")
+					printArchitectureParked(os.Stdout, orchestrator.ArchitectureApprovalParked(&res), "")
 					if len(res.Running) > 0 {
 						fmt.Printf("\nRunning (%d):\n", len(res.Running))
 						for _, r := range res.Running {
@@ -12071,7 +12076,7 @@ func autonomousStatusCmd() *cobra.Command {
 			}
 			data, err := os.ReadFile(statePath)
 			if os.IsNotExist(err) {
-				fmt.Println("No autonomous scheduler state found. Run 'nightgauge autonomous run' first.")
+				fmt.Println("No autonomous scheduler state found, so halt state is unknown. Run 'nightgauge autonomous run' first.")
 				return nil
 			}
 			if err != nil {
@@ -12109,8 +12114,14 @@ func autonomousStatusCmd() *cobra.Command {
 					RunningPipelines      []ipc.RunningPipelineInfo `json:"running_pipelines"`
 					RunningPipelinesKnown bool                      `json:"running_pipelines_known"`
 					ReloadSafe            bool                      `json:"reload_safe"`
+					// #2748 — the repo halts and architecture holds, [] when
+					// none, so a script need not walk pausedRepos and Failed.
+					HaltedRepos                []orchestrator.RepoPauseRecord `json:"haltedRepos"`
+					ArchitectureApprovalParked []orchestrator.FailedItem      `json:"architectureApprovalParked"`
 				}
-				payload := statusWithStalled{AutonomousState: state, Stalled: stalled}
+				payload := statusWithStalled{AutonomousState: state, Stalled: stalled,
+					HaltedRepos:                orchestrator.HaltedRepos(&state),
+					ArchitectureApprovalParked: orchestrator.ArchitectureApprovalParked(&state)}
 				if cwd, cwdErr := os.Getwd(); cwdErr == nil {
 					if holder, held := runstate.InspectServeLease(cwd); held {
 						payload.LeaseHeld = true
@@ -12129,9 +12140,10 @@ func autonomousStatusCmd() *cobra.Command {
 			}
 
 			// Human-readable table format
-			statusDisplay := capitalizeStatus(state.Status)
+			halted := orchestrator.HaltedRepos(&state)
+			statusDisplay := capitalizeStatus(state.Status) + haltedSuffix(len(halted))
 			if stalled {
-				fmt.Printf("Autonomous Mode: Stalled (pid %d is not running)\n", state.PID)
+				fmt.Printf("Autonomous Mode: Stalled%s (pid %d is not running)\n", haltedSuffix(len(halted)), state.PID)
 			} else if daemonKnown {
 				// One line, two facts, because they are routinely different:
 				// the scheduler is Stopped AND two pipelines are still
@@ -12203,6 +12215,8 @@ func autonomousStatusCmd() *cobra.Command {
 			}
 
 			printInReviewWithoutPR(os.Stdout, state.InReviewWithoutPR)
+			printHaltedRepos(os.Stdout, halted, " (from state file)")
+			printArchitectureParked(os.Stdout, orchestrator.ArchitectureApprovalParked(&state), " (from state file)")
 
 			// Completed items
 			if len(state.Completed) > 0 {
