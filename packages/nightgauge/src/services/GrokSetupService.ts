@@ -29,7 +29,7 @@ import {
   stampInstalledVersion,
   staleInstalledVersion,
 } from "./bundledSkills";
-import { ensureStableMarketplace } from "./stableMarketplace";
+import { ensureStableMarketplace, isVersionKeyedSource } from "./stableMarketplace";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -52,6 +52,27 @@ function getMarketplaceUrl(): string {
     DEFAULT_CONFIG.ui?.plugins?.marketplace_url ??
     DEFAULT_MARKETPLACE_URL
   );
+}
+
+interface GrokPluginEntry {
+  name: string;
+  source?: string;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Matches `phrase` in an execFile error's message, stderr or stdout. */
+function isAlreadyError(error: unknown, phrase: string): boolean {
+  const e = error as { message?: unknown; stderr?: unknown; stdout?: unknown } | null;
+  return [e?.message, e?.stderr, e?.stdout].some(
+    (part) => typeof part === "string" && part.includes(phrase)
+  );
+}
+
+function isAtPath(entry: GrokPluginEntry, dir: string): boolean {
+  return typeof entry.source === "string" && path.resolve(entry.source) === path.resolve(dir);
 }
 
 export class GrokSetupService implements vscode.Disposable {
@@ -175,6 +196,100 @@ export class GrokSetupService implements vscode.Disposable {
     return { grokCliAvailable: true, nightgaugeInstalled: false };
   }
 
+  /** The `nightgauge` entries of `grok plugin list --json`, or undefined when unreadable. */
+  private async listGrokPlugins(): Promise<GrokPluginEntry[] | undefined> {
+    try {
+      const { stdout } = await execFileAsync("grok", ["plugin", "list", "--json"]);
+      const parsed: unknown = JSON.parse(String(stdout));
+      if (!Array.isArray(parsed)) {
+        return undefined;
+      }
+      return parsed.filter(
+        (entry): entry is GrokPluginEntry =>
+          typeof entry === "object" && entry !== null && entry.name === "nightgauge"
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  private isStale(entry: GrokPluginEntry): boolean {
+    return (
+      typeof entry.source === "string" &&
+      isVersionKeyedSource(entry.source, this.context.extensionPath)
+    );
+  }
+
+  /**
+   * Grok copies an installed plugin under `$GROK_HOME/installed-plugins`, so an
+   * entry installed from a version-keyed extension directory stays frozen at
+   * that version. Grok has no in-place repoint and `plugin uninstall` removes
+   * one entry by name, so stale entries are uninstalled one at a time (the list
+   * re-read after each) and the plugin is reinstalled from the stable copy.
+   * The marketplace source is never removed. No-op when nothing is stale.
+   * Returns "unreadable" when the plugin list cannot be read.
+   */
+  private async repointStalePlugins(
+    stablePluginDir: string
+  ): Promise<"none" | "repointed" | "failed" | "unreadable"> {
+    let entries = await this.listGrokPlugins();
+    if (!entries) {
+      return "unreadable";
+    }
+    const firstStale = entries.find((entry) => this.isStale(entry));
+    if (!firstStale) {
+      return "none";
+    }
+    this.outputChannel.appendLine(
+      `Repointing Grok plugin from ${firstStale.source} to ${stablePluginDir}`
+    );
+    const bound = entries.length;
+    for (let i = 0; i < bound && entries.some((entry) => this.isStale(entry)); i++) {
+      try {
+        await execFileAsync("grok", ["plugin", "uninstall", "nightgauge", "--confirm"]);
+      } catch (error) {
+        this.outputChannel.appendLine(
+          `WARNING: grok plugin uninstall nightgauge failed: ${errorText(error)}`
+        );
+        return "failed";
+      }
+      const next = await this.listGrokPlugins();
+      if (!next) {
+        this.outputChannel.appendLine("WARNING: grok plugin list failed during the repoint");
+        return "failed";
+      }
+      entries = next;
+    }
+    if (entries.some((entry) => this.isStale(entry))) {
+      this.outputChannel.appendLine("WARNING: a version-keyed Grok plugin entry remains");
+      return "failed";
+    }
+    if (!entries.some((entry) => isAtPath(entry, stablePluginDir))) {
+      if (!(await this.installGrokPlugin(stablePluginDir))) {
+        return "failed";
+      }
+    }
+    this.outputChannel.appendLine(`✓ Grok plugin repointed to ${stablePluginDir}`);
+    return "repointed";
+  }
+
+  /** `grok plugin install <target> --trust`; "already installed" counts as success. */
+  private async installGrokPlugin(target: string): Promise<boolean> {
+    try {
+      await execFileAsync("grok", ["plugin", "install", target, "--trust"]);
+      this.outputChannel.appendLine(`✓ grok plugin install ${target}`);
+      return true;
+    } catch (error) {
+      if (isAlreadyError(error, "already installed")) {
+        return true;
+      }
+      this.outputChannel.appendLine(
+        `WARNING: grok plugin install ${target} failed: ${errorText(error)}`
+      );
+      return false;
+    }
+  }
+
   private async installPluginBestEffort(): Promise<void> {
     const bundledPath = ensureStableMarketplace(this.context, (message) =>
       this.outputChannel.appendLine(`WARNING: ${message}`)
@@ -184,23 +299,48 @@ export class GrokSetupService implements vscode.Disposable {
     try {
       await execFileAsync("grok", ["plugin", "marketplace", "add", marketplaceSource]);
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      this.outputChannel.appendLine(`WARNING: grok plugin marketplace add failed: ${msg}`);
+      // Grok keys sources by path: re-adding the same one is the steady state.
+      if (!isAlreadyError(error, "already configured")) {
+        this.outputChannel.appendLine(
+          `WARNING: grok plugin marketplace add failed: ${errorText(error)}`
+        );
+      }
     }
 
     const pluginDir = bundledPath ? path.join(bundledPath, "claude-plugins", "nightgauge") : "";
-    const installTargets =
-      pluginDir && fs.existsSync(pluginDir) ? [pluginDir, "nightgauge"] : ["nightgauge"];
-
-    for (const target of installTargets) {
-      try {
-        await execFileAsync("grok", ["plugin", "install", target, "--trust"]);
-        this.outputChannel.appendLine(`✓ grok plugin install ${target}`);
+    if (pluginDir && fs.existsSync(pluginDir)) {
+      const repoint = await this.repointStalePlugins(pluginDir);
+      if (repoint === "repointed" || repoint === "failed") {
         return;
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        this.outputChannel.appendLine(`WARNING: grok plugin install ${target} failed: ${msg}`);
       }
+      if (repoint === "none") {
+        const entries = await this.listGrokPlugins();
+        if (entries?.some((entry) => isAtPath(entry, pluginDir))) {
+          return;
+        }
+      }
+      await this.installGrokPlugin(pluginDir);
+      return;
+    }
+    await this.installGrokPlugin("nightgauge");
+  }
+
+  /** Activation upgrade path: re-point a version-keyed plugin entry, quietly. */
+  private async repointPluginIfVersionKeyed(): Promise<void> {
+    try {
+      await execAsync("grok --version");
+    } catch {
+      return;
+    }
+    const bundledPath = ensureStableMarketplace(this.context, (message) =>
+      this.outputChannel.appendLine(`WARNING: ${message}`)
+    )?.path;
+    if (!bundledPath) {
+      return;
+    }
+    const pluginDir = path.join(bundledPath, "claude-plugins", "nightgauge");
+    if (fs.existsSync(pluginDir)) {
+      await this.repointStalePlugins(pluginDir);
     }
   }
 
@@ -227,14 +367,16 @@ export class GrokSetupService implements vscode.Disposable {
 
   /**
    * Activation re-sync of installed skills, without opening the output
-   * channel. The Grok plugin is not reinstalled: its marketplace is the stable
-   * copy ensureStableMarketplace() keeps at this extension's version.
+   * channel. A plugin entry still installed from a version-keyed extension
+   * directory is re-pointed to the stable copy (#2802); one already there is
+   * left alone.
    */
   private async resyncSkills(version: string): Promise<void> {
     try {
       if (await this.copySkills()) {
         vscode.window.showInformationMessage(`Nightgauge updated its Grok skills to ${version}.`);
       }
+      await this.repointPluginIfVersionKeyed();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.outputChannel.appendLine(`✗ Re-sync failed: ${errorMessage}`);

@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- A Grok plugin installed from a version-keyed extension directory is now
+  re-pointed to the stable marketplace copy on setup and after an extension
+  upgrade, and re-running setup no longer warns that the marketplace source is
+  already configured (#2802).
 - A Claude stage the extension starts can read the rewritten skill include
   copies its prompt points at: the skills-tree flags now also grant the
   include cache directory `skill roots` reports, with edits to it denied
