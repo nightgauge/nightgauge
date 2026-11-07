@@ -860,7 +860,11 @@ func acRunTest(pattern string, d *ACDiff, tests ACTestState) acResult {
 	if err != nil || top == "" {
 		return acResult{}
 	}
-	name, loc, ok := d.findGoTest(re)
+	name, loc, ok, unread := d.findGoTest(re)
+	if !ok && unread {
+		// A diffed test file could not be read and may define the test.
+		return acResult{}
+	}
 	if !ok {
 		return acAnswer(ACUnmet, fmt.Sprintf("`-run` pattern `%s` matches no test defined on the branch", pattern))
 	}
@@ -883,7 +887,9 @@ func acRunTest(pattern string, d *ACDiff, tests ACTestState) acResult {
 
 // findGoTest finds a Go test definition whose name re matches: in added
 // lines, in the branch content of diffed test files, then via git grep.
-func (d *ACDiff) findGoTest(re *regexp.Regexp) (string, string, bool) {
+// unread reports that a diffed test file could not be read, so a miss is
+// not evidence the test is absent (#2669).
+func (d *ACDiff) findGoTest(re *regexp.Regexp) (name, loc string, found, unread bool) {
 	hit := func(text string) (string, bool) {
 		m := acGoTestDefRE.FindStringSubmatch(text)
 		if m != nil && re.MatchString(m[1]) {
@@ -895,7 +901,7 @@ func (d *ACDiff) findGoTest(re *regexp.Regexp) (string, string, bool) {
 	for _, p := range paths {
 		for _, l := range d.Files[p].Added {
 			if n, ok := hit(l.Text); ok {
-				return n, fmt.Sprintf("%s:%d", p, l.N), true
+				return n, fmt.Sprintf("%s:%d", p, l.N), true, false
 			}
 		}
 	}
@@ -903,15 +909,19 @@ func (d *ACDiff) findGoTest(re *regexp.Regexp) (string, string, bool) {
 		if !strings.HasSuffix(p, "_test.go") {
 			continue
 		}
-		lines, _ := d.lines(p)
+		lines, ok := d.lines(p)
+		if !ok {
+			unread = true
+			continue
+		}
 		for i, l := range lines {
 			if n, ok := hit(l); ok {
-				return n, fmt.Sprintf("%s:%d", p, i+1), true
+				return n, fmt.Sprintf("%s:%d", p, i+1), true, false
 			}
 		}
 	}
 	if d.Workdir == "" {
-		return "", "", false
+		return "", "", false, unread
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), acDiffTimeout)
 	defer cancel()
@@ -919,7 +929,7 @@ func (d *ACDiff) findGoTest(re *regexp.Regexp) (string, string, bool) {
 	cmd.Dir = d.Workdir
 	out, err := cmd.Output()
 	if err != nil {
-		return "", "", false
+		return "", "", false, unread
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		parts := strings.SplitN(line, ":", 3)
@@ -927,10 +937,10 @@ func (d *ACDiff) findGoTest(re *regexp.Regexp) (string, string, bool) {
 			continue
 		}
 		if n, ok := hit(parts[2]); ok {
-			return n, parts[0] + ":" + parts[1], true
+			return n, parts[0] + ":" + parts[1], true, false
 		}
 	}
-	return "", "", false
+	return "", "", false, unread
 }
 
 // acTestName finds a named test: Go `TestX`, Python `test_x`, or a quoted
@@ -1089,7 +1099,9 @@ func acTokenScope(c acClause, d *ACDiff) []string {
 		}
 		scope = append(scope, p)
 	}
-	if len(scope) == 0 {
+	// A clause about the changelog is answered by the changed changelogs, so
+	// a token in some other changed file cannot meet it (#2669).
+	if len(scope) == 0 || (about && len(changelogs) > 0) {
 		return changelogs
 	}
 	return scope
@@ -1106,8 +1118,8 @@ func acTokenScope(c acClause, d *ACDiff) []string {
 // its package's diff changes it. Only a token the whole diff lacks is unmet.
 //
 // A clause naming no diffed file never draws met from an arbitrary changed
-// file (#2669): its scope is the files inherited from a prior criterion, or,
-// for a clause about the changelog, acTokenScope. With neither it is not
+// file (#2669): for a clause about the changelog its scope is acTokenScope,
+// otherwise the files inherited from a prior criterion. With neither it is not
 // diff-checkable. verifyACClause keeps an inherited verdict only when met.
 // Bounds are compared against the values the scope's diff adds.
 func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
@@ -1117,10 +1129,12 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 	scope := named
 	switch {
 	case len(scope) > 0:
+	case acAboutChangelog(c, d):
+		// A changelog clause is answered by the changelog, never by a file
+		// inherited from an earlier criterion.
+		scope = acTokenScope(c, d)
 	case len(inherited) > 0:
 		scope = inherited
-	case acAboutChangelog(c, d):
-		scope = acTokenScope(c, d)
 	}
 	if len(scope) == 0 {
 		return acResult{}

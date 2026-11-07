@@ -353,6 +353,40 @@ diff --git a/docs/b.md b/docs/b.md
 	}
 }
 
+// #2669 review: a -run pattern is not unmet while a diffed test file is
+// unreadable, since that file may define the test.
+func TestVerifyACAgainstDiff_RunUnreadableTestFile(t *testing.T) {
+	d := memDiff(`diff --git a/x_test.go b/x_test.go
+--- a/x_test.go
++++ b/x_test.go
+@@ -1,0 +2 @@
++// helper
+`, nil)
+	if got, ok := VerifyACAgainstDiff("`go test -run TestHidden` passes.", nil, d, ACTestState{Passed: true}); ok {
+		t.Errorf("got %+v, want not diff-checkable", got)
+	}
+}
+
+// #2669 review: a changelog clause is answered by the changelog, not by a
+// file inherited from an earlier criterion.
+func TestVerifyACAgainstDiff_ChangelogBeatsInherited(t *testing.T) {
+	d := memDiff(`diff --git a/internal/foo.go b/internal/foo.go
+--- a/internal/foo.go
++++ b/internal/foo.go
+@@ -1,0 +2 @@
++// mentions --dry-run
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,0 +2 @@
++- unrelated entry
+`, nil)
+	prior := []string{"`internal/foo.go` adds the flag."}
+	if got, ok := VerifyACAgainstDiff("The changelog mentions `--dry-run`.", prior, d, ACTestState{}); ok && got.Status == ACMet {
+		t.Errorf("got %+v, want not met from inherited internal/foo.go", got)
+	}
+}
+
 // #2669: a file-less clause inherits the prior criterion's file.
 func TestVerifyACAgainstDiff_InheritsPriorFile(t *testing.T) {
 	d := memDiff(`diff --git a/docs/a.md b/docs/a.md
