@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 )
 
@@ -190,5 +191,60 @@ func TestSkillBundleRendersEveryOverlayKind(t *testing.T) {
 	// A provider key must select a real model of that provider, not base-only.
 	if got := modelForOverlayKey("openai"); got == "openai" {
 		t.Errorf("modelForOverlayKey(openai) = %q, want a model id", got)
+	}
+}
+
+// An on-demand include is never supplied, so only the default-budget pass and
+// its materialized copy show the agent's view of it (#2789).
+func TestSkillBundleChecksOnDemandIncludeCopies2789(t *testing.T) {
+	feature := skillrender.StageSkillDirs["feature-validate"]
+	for _, tt := range []struct {
+		name, target string
+		want         bool
+	}{
+		{"shipped sibling", "skills/" + skillrender.StageSkillDirs["feature-dev"] + "/SKILL.md", false},
+		{"unshipped sibling", "skills/nightgauge-missing/SKILL.md", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := completeBundle(t)
+			writeBundleFile(t, filepath.Join(root, feature, "SKILL.md"),
+				"---\nname: x\n---\n<!-- include: ../_shared/PREFLIGHT.md -->\n"+
+					"> **Read `_includes/step.md` (same directory as this SKILL.md) now.**\n\n"+
+					"Load on demand: `_includes/lazy.md`.\n")
+			writeBundleFile(t, filepath.Join(root, feature, "_includes", "lazy.md"),
+				"Read `skills/_shared/PREFLIGHT.md` and "+tt.target+".\n")
+			r := runBundle(t, root, "")
+			if got := hasFinding(r, SkillBundleRuleUnresolvedPath, "nightgauge-missing"); got != tt.want {
+				t.Fatalf("unresolved finding = %v, want %v: %+v", got, tt.want, r.Findings)
+			}
+			if !tt.want && len(r.Findings) != 0 {
+				t.Fatalf("findings: %+v", r.Findings)
+			}
+		})
+	}
+}
+
+// A skill-bundle check renders into a scratch include cache: every render,
+// including the every-include pass, leaves the user's cache dir untouched
+// (#2789).
+func TestSkillBundleLeavesUserIncludeCacheUntouched2789(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	userCache := opencodeallow.IncludeCacheRoot()
+	if userCache == "" || !strings.HasPrefix(userCache, home) {
+		t.Fatalf("IncludeCacheRoot() = %q, want a path under %s", userCache, home)
+	}
+	root := completeBundle(t)
+	feature := filepath.Join(root, skillrender.StageSkillDirs["feature-validate"])
+	writeBundleFile(t, filepath.Join(feature, "SKILL.md"),
+		"---\nname: x\n---\n<!-- include: ../_shared/PREFLIGHT.md -->\n"+
+			"> **Read `_includes/step.md` (same directory as this SKILL.md) now.**\n\n"+
+			"Load on demand: `_includes/lazy.md`.\n")
+	writeBundleFile(t, filepath.Join(feature, "_includes", "lazy.md"),
+		"Read `skills/_shared/PREFLIGHT.md`.\n")
+	runBundle(t, root, "")
+	if _, err := os.Lstat(userCache); !os.IsNotExist(err) {
+		t.Fatalf("user include cache %s exists after a skill-bundle check (err=%v)", userCache, err)
 	}
 }

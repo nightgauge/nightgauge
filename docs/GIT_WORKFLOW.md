@@ -1004,6 +1004,8 @@ bash scripts/marketplace-channel.sh 0.2.0      # prints: release
 #    refuses a tag without it.
 #    Bump claude-plugins/nightgauge/.claude-plugin/plugin.json in that PR when
 #    plugin files changed, or installed plugins receive nothing (#2724).
+#    PR CI and the local gate run check-plugin-version.sh --main-build, so a
+#    plugin change without a bump fails before merge (#3014).
 bash scripts/check-changelog.sh --tag v0.2.0   # exit 0 before tagging
 bash scripts/check-plugin-version.sh --tag v0.2.0
 

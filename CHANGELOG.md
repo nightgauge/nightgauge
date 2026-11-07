@@ -25,6 +25,71 @@ changelog, and the release workflow refuses a tag that does not.
   and the repository-level install docs no longer ask readers to commit
   `.claude/settings.json` as if that installed the plugin (#2801).
 
+- A skill `_includes/` file the prompt leaves for the agent to read (over the
+  include budget, or listed as load-on-demand) no longer sends it to
+  `skills/_shared/` and `skills/nightgauge-<x>/` paths that resolve against the
+  worktree. The render writes a rewritten copy to a content-addressed cache
+  directory and points the prompt at it; `skill render --json` lists them as
+  `materialized_includes`, and `preflight skill-bundle` now checks them. The
+  Claude and OpenCode adapters grant the stage read access to that cache
+  directory (the OpenCode hook takes it from the dispatcher, not its isolated
+  cache), and the Claude adapters deny edits to it (#2789).
+- **The AC diff check no longer calls a criterion unmet because a token was
+  missing from a file it could not read (#3037).** If a token is not in the
+  added lines and a file in scope is unreadable (too large, missing, or not a
+  regular file), the criterion is left for feature-validate to judge.
+- **pr-create's criterion check no longer reads prose notation as literal text.** It
+  matches a key-value span such as `state: SUCCESS` in JSON, YAML or Go-literal form,
+  and leaves a clause holding a placeholder or glob span to feature-validate instead
+  of marking it unmet, so complete work no longer merges as `Refs` (#3030).
+
+- **The clean-install G1 row "stage skills were loaded from the bundle path"
+  now passes a correct install.** Since stages receive their skill in the
+  prompt, they make no tool call under the bundle, so the old read count failed
+  working runs. The row now checks the `[skillRunner] skill_path=` lines in the
+  slot output channels: it passes only when at least one was logged and every
+  one is under the installed bundle's `dist/skills/`. The read count is still
+  reported, as information.
+- **pr-create's acceptance-criteria verifier is stricter about what counts as
+  met (#2669).** A validate verdict matched only by position can hold an issue
+  open but never close it. Negative evidence counts only for the criterion it
+  names, and no longer overturns a deterministic met. A criterion naming no
+  file inherits the file the previous criterion named, instead of matching any
+  added line; with none, it is checked only when it is about the changelog.
+  "human-readable", "manual page" and "log rotation" are no longer read as
+  operator or credential steps. A section check tries every named
+  file before reporting unmet. A file too large or otherwise unreadable is
+  treated as unknown, not empty, and a criterion checked only against a file
+  inherited from an earlier criterion can be met but never unmet. Credential
+  steps need an action ("rotate", "provision", …), so "the log never contains
+  credentials" is checkable. Reads are size-bounded and follow symlinks, the
+  diff collection honours the stage's cancellation, and a verdict resting on
+  uncommitted files records every such file as `uncommitted_paths`.
+- feature-validate's prompt now carries its Phase 6 output contract
+  (`acceptance_criteria_verdicts`). An include marked `<!-- supply: first -->` is
+  supplied before the include budget runs out, and the default budget is now
+  80 KiB, which also supplies pr-merge's post-merge include.
+- The clean-install G1 bundle-read row now counts skill reads from the stage
+  output logs. Stages write no session transcript, so it read 0 and failed every
+  full run.
+- A pull request that changes the Claude plugin without bumping its version past the
+  last stable tag now fails PR CI and the local gate, instead of turning `main` red
+  after merge.
+- Conflict recovery now judges commit statuses such as `cla` by their state, so a
+  PR whose checks are all green is recognised on the first poll instead of waiting
+  out the full CI budget and being booked as failed. When the wait does give up,
+  its message names the checks still pending (#3026).
+
+- The base-branch freshness check in feature-validate and pr-merge no longer
+  aborts a merge that is already open. A merge of the base whose every path
+  is resolved and staged, as feature-dev leaves it, is committed and pushed, so the remote
+  PR branch that pr-merge reads includes the base, and the check carries on;
+  any other open merge, including one on a branch that is not behind, is left as found and reports
+  `FRESHNESS_CHECK_FAILED=true`. A failed commit after conflict resolution also
+  keeps the staged resolution instead of aborting it. pr-create's base merge
+  commits and pushes a fully staged open merge the same way, reporting
+  `merged`, and stops with
+  `merge-in-progress` only when unmerged paths remain (#2755).
 - The release scan gate no longer holds a release for InQuest's informational
   `Windows_API_Function` YARA rule, which matches every Go binary. The rule is
   matched by name and source, still recorded in the report under

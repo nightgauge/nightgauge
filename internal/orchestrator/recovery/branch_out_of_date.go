@@ -365,6 +365,7 @@ func (a *BranchOutOfDate) waitForCI(ctx context.Context, failure StageFailure, e
 		relock := failure.YieldMergeLock()
 		defer relock()
 	}
+	lastPending := "rollup unreadable"
 	for poll := 0; poll < a.pollMax; poll++ {
 		select {
 		case <-ctx.Done():
@@ -378,10 +379,12 @@ func (a *BranchOutOfDate) waitForCI(ctx context.Context, failure StageFailure, e
 		}
 
 		out, err := execGh(ctx, "pr", "view", fmt.Sprint(failure.PRNumber), "--json", "statusCheckRollup")
+		lastPending = "rollup unreadable"
 		if err == nil {
 			var snap prChecksSnapshot
 			if json.Unmarshal(out, &snap) == nil {
-				state := summarizeChecks(snap.StatusCheckRollup)
+				state, pendingNames := summarizeChecks(snap.StatusCheckRollup)
+				lastPending = formatPending(pendingNames)
 				switch state {
 				case checksGreen:
 					return RecoveryResult{}, true
@@ -414,7 +417,7 @@ func (a *BranchOutOfDate) waitForCI(ctx context.Context, failure StageFailure, e
 
 	return RecoveryResult{
 		Action:   a.Name(),
-		Reason:   "CI still in flight on rebased head after polling budget — declining to claim recovery",
+		Reason:   "CI still in flight on rebased head after polling budget — declining to claim recovery; " + lastPending,
 		Evidence: evidence,
 		FollowUp: FollowUpNoAction,
 	}, false
@@ -429,10 +432,28 @@ const (
 	checksFailed
 )
 
-// summarizeChecks reduces the rollup to a single state: any FAILURE/ERROR is
-// terminal-failed; any in-flight (empty/PENDING/QUEUED/IN_PROGRESS) keeps the
-// wait pending; otherwise all checks are complete-and-green.
-func summarizeChecks(rows []statusCheckRollupEntry) checksState {
+// maxPendingNames caps how many pending checks a give-up message lists.
+const maxPendingNames = 10
+
+// formatPending renders the pending check names for the give-up message.
+func formatPending(names []string) string {
+	if len(names) == 0 {
+		return "still pending: no checks registered"
+	}
+	shown := names
+	more := ""
+	if len(names) > maxPendingNames {
+		shown = names[:maxPendingNames]
+		more = fmt.Sprintf(" +%d more", len(names)-maxPendingNames)
+	}
+	return "still pending: " + strings.Join(shown, ", ") + more
+}
+
+// summarizeChecks reduces the rollup to a single state: any failed row is
+// terminal-failed; any in-flight row keeps the wait pending, and its label is
+// returned; otherwise all checks are complete-and-green. Each row is judged by
+// verdict(), so a commit status is read by its state (#3026).
+func summarizeChecks(rows []statusCheckRollupEntry) (checksState, []string) {
 	// An empty rollup right after a force-push means the old runs were dropped and
 	// the rebased head's runs have not registered yet — treat it as PENDING (not
 	// green) so waitForCI keeps polling for the rebased commits' CI, matching the
@@ -440,22 +461,19 @@ func summarizeChecks(rows []statusCheckRollupEntry) checksState {
 	// the bounded poll budget expires and waitForCI declines rather than merging
 	// on a never-validated head (#4071 review).
 	if len(rows) == 0 {
-		return checksPending
+		return checksPending, nil
 	}
-	pending := false
+	var pending []string
 	for _, c := range rows {
-		switch strings.ToUpper(c.Conclusion) {
-		case "FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED":
-			return checksFailed
-		case "SUCCESS", "NEUTRAL", "SKIPPED":
-			// terminal-green; keep scanning.
-		default:
-			// "" / PENDING / QUEUED / IN_PROGRESS / EXPECTED / WAITING — in flight.
-			pending = true
+		switch c.verdict() {
+		case checksFailed:
+			return checksFailed, nil
+		case checksPending:
+			pending = append(pending, c.label())
 		}
 	}
-	if pending {
-		return checksPending
+	if len(pending) > 0 {
+		return checksPending, pending
 	}
-	return checksGreen
+	return checksGreen, nil
 }

@@ -26,6 +26,8 @@
 package skillrender
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -38,6 +40,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/models"
+	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
 // SchemaVersion is the JSON envelope version for `skill render --json`.
@@ -135,6 +138,10 @@ type Options struct {
 	// fit windows the supplied bytes would overflow, so only a caller that
 	// re-checks the fit (the scheduler's local-endpoint branch) sets it.
 	SupplyIncludes bool
+	// IncludeCacheDir holds the rewritten copies of `_includes/` files the
+	// render leaves as reads (materializeReadIncludes, #2789). Empty uses
+	// DefaultIncludeCacheDir.
+	IncludeCacheDir string
 	// Headless renders for a non-interactive run. Result.AllowedTools is then
 	// what such a run is granted (FilterHeadlessTools), and a skill whose
 	// allowed-tools lists nothing a headless run can use fails the render,
@@ -188,7 +195,10 @@ type Result struct {
 	// in full, in order, so the model does not spend a read on each
 	// (SupplyPhaseIncludes, #2178).
 	SuppliedIncludes []string `json:"supplied_includes,omitempty"`
-	Warnings         []string `json:"warnings"`
+	// MaterializedIncludes are the absolute paths of the rewritten include
+	// copies the prompt points at instead of the raw files (#2789).
+	MaterializedIncludes []string `json:"materialized_includes,omitempty"`
+	Warnings             []string `json:"warnings"`
 
 	// Content is the composed skill text. Excluded from --json (it goes to
 	// stdout) so the envelope stays readable.
@@ -446,6 +456,7 @@ func render(opts Options) (*Result, error) {
 		if body, err = composeIncludes(body, skillDir); err != nil {
 			return nil, err
 		}
+		body, res.MaterializedIncludes = materializeReadIncludes(body, opts.Stage, skillDir, opts.IncludeCacheDir, nil, warn)
 		res.Content = RewriteSkillRelativePaths(body, opts.Stage, skillDir)
 		return res, nil
 	}
@@ -525,6 +536,7 @@ func render(opts Options) (*Result, error) {
 	if res.Profile != ProfileCompact || opts.SupplyIncludes {
 		body, res.SuppliedIncludes = SupplyPhaseIncludes(body, skillDir, includeBudget(opts))
 	}
+	body, res.MaterializedIncludes = materializeReadIncludes(body, opts.Stage, skillDir, opts.IncludeCacheDir, res.SuppliedIncludes, warn)
 	res.Content = RewriteSkillRelativePaths(body, opts.Stage, skillDir)
 	return res, nil
 }
@@ -544,9 +556,23 @@ func includeBudget(opts Options) int {
 // supplies inline when Options.IncludeBudget is zero. It holds every include
 // feature-planning (46 KB), issue-pickup (50 KB) and pr-create (40 KB)
 // direct a phase to read; the larger feature-validate and pr-merge sets are
-// supplied in directive order until it is spent, and the rest stay reads.
+// supplied, marked includes first, until it is spent, and the rest stay reads.
 // feature-dev is exempt: see includeBudget.
-const DefaultIncludeBudget = 64 * 1024
+//
+// #3031: 80 KiB, up from 64. feature-validate's output contract
+// (context-and-board.md, 16.6 KB) is supplied first, and at 64 KiB it would
+// push run-tests.md back to a read; 80 KiB holds the contract plus the six
+// includes feature-validate already got (77.6 KB in total). pr-merge now also
+// gets post-merge.md.
+const DefaultIncludeBudget = 80 * 1024
+
+// SupplyFirstMarker, on a line of its own in an `_includes/` file, makes
+// SupplyPhaseIncludes take that include before unmarked ones (#3031). An
+// include that holds a stage's output contract carries it, so the contract
+// is never the one the budget runs out on.
+const SupplyFirstMarker = "<!-- supply: first -->"
+
+var supplyFirstRE = regexp.MustCompile(`(?m)^[ \t]*` + regexp.QuoteMeta(SupplyFirstMarker) + `[ \t]*\r?$`)
 
 // EveryPhaseInclude is an Options.IncludeBudget that supplies every phase
 // include, for a caller inspecting all the text a stage can be handed.
@@ -571,7 +597,8 @@ var phaseIncludeDirectiveRE = regexp.MustCompile("Read `_includes/([A-Za-z0-9._-
 // in the prompt costs the same text once, in the stable prefix, on every
 // adapter.
 //
-// Includes are taken in the order their first directive appears; one that
+// Includes marked with SupplyFirstMarker are taken first, then the rest;
+// within each group the order is that of their first directive. One that
 // does not fit in the remaining budget is skipped (its directives stay
 // reads) and the next is tried, so the result is deterministic. Render has
 // already refused a missing target (composeIncludes), so the one left behind
@@ -593,17 +620,32 @@ func SupplyPhaseIncludes(body, skillDir string, budget int) (string, []string) {
 			names = append(names, m[1])
 		}
 	}
+	type candidate struct {
+		name string
+		data []byte
+	}
+	var first, rest []candidate
+	for _, name := range names {
+		data, err := os.ReadFile(filepath.Join(skillDir, "_includes", name))
+		if err != nil {
+			continue
+		}
+		if supplyFirstRE.Match(data) {
+			first = append(first, candidate{name, data})
+		} else {
+			rest = append(rest, candidate{name, data})
+		}
+	}
 	supplied := map[string]string{}
 	var order []string
 	remaining := budget
-	for _, name := range names {
-		data, err := os.ReadFile(filepath.Join(skillDir, "_includes", name))
-		if err != nil || len(data) > remaining {
+	for _, c := range append(first, rest...) {
+		if len(c.data) > remaining {
 			continue
 		}
-		remaining -= len(data)
-		supplied[name] = string(data)
-		order = append(order, name)
+		remaining -= len(c.data)
+		supplied[c.name] = string(c.data)
+		order = append(order, c.name)
 	}
 	if len(order) == 0 {
 		return body, nil
@@ -790,6 +832,198 @@ func rewriteRelativeSkillRefs(content, root string) string {
 		}
 		return subs[1] + sibling + string(filepath.Separator)
 	})
+}
+
+// DefaultIncludeCacheDir is where a render writes rewritten include copies
+// when Options.IncludeCacheDir is empty: opencodeallow.IncludeCacheRoot, the
+// per-user cache directory every adapter grants read access to. Empty when
+// the user has no cache directory; materialization is then skipped rather
+// than falling back to a shared temp path.
+func DefaultIncludeCacheDir() string {
+	return opencodeallow.IncludeCacheRoot()
+}
+
+// includeRefRE matches a backticked skill-relative include reference, the
+// form RewriteSkillRelativePaths turns into the raw on-disk path.
+var includeRefRE = regexp.MustCompile("`_includes/([A-Za-z0-9._-]+\\.md)")
+
+// materializeReadIncludes gives every `_includes/` file the prompt still
+// tells the agent to read a rewritten copy on disk (#2789). The prompt's
+// paths are rewritten (RewriteSkillRelativePaths), but an include the render
+// did not supply is read raw, and its skills/_shared/ and
+// skills/nightgauge-<x>/ paths then resolve against the worktree. Each such
+// include, and each include whose references reach one, is rewritten into
+// <cacheDir>/<hash>/<name>; the body's references point at the copy. The
+// hash covers stage, skill dir and the raw bytes of the copied set, so the
+// path is byte-stable across renders and changes when any copy would. An
+// include that needs no rewrite keeps its original reference. A failed
+// write warns and leaves the references at the originals.
+func materializeReadIncludes(body, stage, skillDir, cacheDir string, supplied []string, warn func(string)) (string, []string) {
+	skip := map[string]bool{}
+	for _, n := range supplied {
+		skip[n] = true
+	}
+	// Closure of includes reachable from the body. Only the body skips
+	// supplied includes: an include that tells the agent to re-read a
+	// supplied one sends it to disk, so that one needs a copy too.
+	var names []string
+	raw := map[string]string{}
+	refs := map[string][]string{}
+	seen := map[string]bool{}
+	queue := includeNames(body, skip)
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		data, err := os.ReadFile(filepath.Join(skillDir, "_includes", name))
+		if err != nil {
+			continue
+		}
+		names = append(names, name)
+		raw[name] = string(data)
+		refs[name] = includeNames(string(data), nil)
+		queue = append(queue, refs[name]...)
+	}
+	// An include is copied when its rewrite changes more than its include
+	// references, or when it references a copied include (to a fixpoint).
+	dir := strings.TrimRight(skillDir, "/\\")
+	ownIncludes := "`" + dir + string(filepath.Separator) + "_includes/"
+	copied := map[string]bool{}
+	for _, n := range names {
+		rewritten := RewriteSkillRelativePaths(raw[n], stage, skillDir)
+		if strings.ReplaceAll(rewritten, ownIncludes, "`_includes/") != raw[n] {
+			copied[n] = true
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, n := range names {
+			if copied[n] {
+				continue
+			}
+			for _, r := range refs[n] {
+				if copied[r] {
+					copied[n], changed = true, true
+					break
+				}
+			}
+		}
+	}
+	var set []string
+	for _, n := range names {
+		if copied[n] {
+			set = append(set, n)
+		}
+	}
+	if len(set) == 0 {
+		return body, nil
+	}
+	sorted := slices.Clone(set)
+	sort.Strings(sorted)
+	h := sha256.New()
+	h.Write([]byte(stage + "\x00" + dir + "\x00"))
+	for _, n := range sorted {
+		h.Write([]byte(n + "\x00" + raw[n] + "\x00"))
+	}
+	if cacheDir == "" {
+		cacheDir = DefaultIncludeCacheDir()
+	}
+	if cacheDir == "" {
+		if warn != nil {
+			warn("no user cache directory for include copies; the agent reads the raw files")
+		}
+		return body, nil
+	}
+	outDir := filepath.Join(cacheDir, hex.EncodeToString(h.Sum(nil))[:16])
+	pointAtCopies := func(text string) string {
+		return includeRefRE.ReplaceAllStringFunc(text, func(m string) string {
+			n := includeRefRE.FindStringSubmatch(m)[1]
+			if !copied[n] {
+				return m
+			}
+			return "`" + filepath.Join(outDir, n)
+		})
+	}
+	for _, n := range set {
+		if err := writeAtomic(filepath.Join(outDir, n), RewriteSkillRelativePaths(pointAtCopies(raw[n]), stage, skillDir)); err != nil {
+			if warn != nil {
+				warn(fmt.Sprintf("materialize include %s: %v; the agent reads the raw file", n, err))
+			}
+			return body, nil
+		}
+	}
+	paths := make([]string, len(set))
+	for i, n := range set {
+		paths[i] = filepath.Join(outDir, n)
+	}
+	return pointAtCopies(body), paths
+}
+
+// includeNames lists the distinct include names text references, in order,
+// minus skip.
+func includeNames(text string, skip map[string]bool) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range includeRefRE.FindAllStringSubmatch(text, -1) {
+		if !seen[m[1]] && !skip[m[1]] {
+			seen[m[1]] = true
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+// writeAtomic writes data to path through a temp file and a rename, so a
+// concurrent render never reads a partial copy. An existing file is kept only
+// when its bytes already match; anything else, a symlink included, is
+// replaced. Directories are 0o700 and copies 0o600: the copies are prompt
+// text, and nobody but the rendering user should be able to change them.
+func writeAtomic(path, data string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := checkPrivateDir(dir); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+		if existing, err := os.ReadFile(path); err == nil && string(existing) == data {
+			return nil
+		}
+	}
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.WriteString(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// checkPrivateDir refuses a cache directory that is a symlink or that group
+// or other users can write, so a copy cannot be swapped under the agent.
+func checkPrivateDir(dir string) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%s is writable by other users", dir)
+	}
+	return nil
 }
 
 // rewriteCrossSkillRefs points each skills/nightgauge-<x>/ reference at the

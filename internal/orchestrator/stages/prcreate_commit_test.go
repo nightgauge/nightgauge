@@ -284,7 +284,7 @@ func TestCommitOwner_RealGit_TrivialPathLeavesBranchNonEmpty(t *testing.T) {
 	}
 	r := NewDeterministicPRCreateRunner()
 	r.git = NewExecGitClient()
-	r.readContext = func(string, int) (PRCreateSnapshot, error) { return snap, nil }
+	r.readContext = func(context.Context, string, int) (PRCreateSnapshot, error) { return snap, nil }
 	r.writeContext = func(string, prContextPayload) error { return nil }
 
 	res, err := r.Run(context.Background(), 1179, "owner/repo", dir)
@@ -329,7 +329,7 @@ func TestCommitOwner_RealGit_RefusesOnBaseBranch(t *testing.T) {
 
 	r := NewDeterministicPRCreateRunner()
 	r.git = NewExecGitClient()
-	r.readContext = func(string, int) (PRCreateSnapshot, error) {
+	r.readContext = func(context.Context, string, int) (PRCreateSnapshot, error) {
 		return PRCreateSnapshot{IssueNumber: 1179, Branch: "main", BaseBranch: "main", HasDev: true}, nil
 	}
 	r.writeContext = func(string, prContextPayload) error { return nil }

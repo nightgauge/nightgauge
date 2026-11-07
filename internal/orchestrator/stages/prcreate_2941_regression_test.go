@@ -144,7 +144,7 @@ func replay2938(t *testing.T, withLog, withLedger bool, unitBlock ...map[string]
 			t.Fatal(err)
 		}
 	}
-	snap, err := defaultReadCreateContext(dir, 2934)
+	snap, err := defaultReadCreateContext(context.Background(), dir, 2934)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestRegression2941_GateLogFailLineIsUnmet(t *testing.T) {
 	snap := replay2938(t, true, true)
 	snap.TestOutcomes.Failed = map[string]bool{"TestResumedLoopStoppedAndWaitedLeavesCheckoutUntouched": true}
 	delete(snap.TestOutcomes.Passed, "TestResumedLoopStoppedAndWaitedLeavesCheckoutUntouched")
-	r, ok := VerifyACAgainstDiff(issue2934ACs[0], collectFor(t, snap), acTestState(snap))
+	r, ok := VerifyACAgainstDiff(issue2934ACs[0], nil, collectFor(t, snap), acTestState(snap))
 	if !ok || r.Status != ACUnmet || !strings.Contains(r.Evidence, "--- FAIL: TestResumedLoopStoppedAndWaitedLeavesCheckoutUntouched") {
 		t.Errorf("got %+v, want unmet naming the FAIL line", r)
 	}
@@ -228,7 +228,7 @@ func fixtureDiff(t *testing.T, name string) *ACDiff {
 func TestRegression2941_Replay2947VersionBound(t *testing.T) {
 	const ac = "`claude-plugins/nightgauge/.claude-plugin/plugin.json` carries a version above `1.26.0`, chosen by `docs/GIT_WORKFLOW.md § Changelog`, and every other place the repository records the plugin version matches it"
 	d := fixtureDiff(t, "pr2947.diff")
-	r, ok := VerifyACAgainstDiff(ac, d, ACTestState{})
+	r, ok := VerifyACAgainstDiff(ac, nil, d, ACTestState{})
 	if !ok || r.Status != ACMet {
 		t.Fatalf("got %+v (ok=%v), want met", r, ok)
 	}
@@ -244,7 +244,7 @@ func TestRegression2941_Replay2947VersionBound(t *testing.T) {
 -  "version": "1.25.0",
 +  "version": "1.26.0",
 `, nil)
-	if r, ok := VerifyACAgainstDiff(ac, same, ACTestState{}); !ok || r.Status != ACUnmet || !strings.Contains(r.Evidence, "is above `1.26.0`") {
+	if r, ok := VerifyACAgainstDiff(ac, nil, same, ACTestState{}); !ok || r.Status != ACUnmet || !strings.Contains(r.Evidence, "is above `1.26.0`") {
 		t.Errorf("a version equal to the bound must be unmet: %+v", r)
 	}
 }
@@ -254,7 +254,7 @@ func TestRegression2941_Replay2947VersionBound(t *testing.T) {
 // `.vscodeignore` is named in the scripts' added lines.
 func TestRegression2941_Replay2951NamedPlaces(t *testing.T) {
 	const ac = "The skill bundle check on a packaged VSIX passes for every skill under `skills/`: the files a skill ships are the same in `dist/skills`, in the packaged VSIX, and in what `preflight skill-bundle --source-root` expects. One rule decides what test material stays behind, and `bundle-marketplace.sh`, `skillrender.BundleExcludes`, `scripts/lib/install_skill_tree.py` and `.vscodeignore` all apply it"
-	r, ok := VerifyACAgainstDiff(ac, fixtureDiff(t, "pr2951.diff"), ACTestState{})
+	r, ok := VerifyACAgainstDiff(ac, nil, fixtureDiff(t, "pr2951.diff"), ACTestState{})
 	if !ok || r.Status != ACMet {
 		t.Fatalf("got %+v (ok=%v), want met", r, ok)
 	}
@@ -267,7 +267,7 @@ func TestRegression2941_Replay2951NamedPlaces(t *testing.T) {
 // hook and its tests, which carry the tokens, are in internal/hooks.
 func TestRegression2941_Replay2956ActedOnFile(t *testing.T) {
 	const ac = "1. A PreToolUse:Bash check in the Claude Code plugin denies a Bash call that starts the full gate (`nightgauge ci gate-run`, or the repository's declared gate command such as `scripts/ci-local.sh`) unless `run_in_background` is `true` and `timeout` is at least the gate's limit (`hooks.pre_push.timeout_seconds`, else its default). The deny reason tells the agent how to start the gate instead. It is unit-tested for: foreground call denied, background call with a short timeout denied, background call with an adequate timeout allowed, an unrelated command allowed, and `&` inside a foreground call denied."
-	r, ok := VerifyACAgainstDiff(ac, fixtureDiff(t, "pr2956.diff"), ACTestState{})
+	r, ok := VerifyACAgainstDiff(ac, nil, fixtureDiff(t, "pr2956.diff"), ACTestState{})
 	if !ok || r.Status != ACMet {
 		t.Fatalf("got %+v (ok=%v), want met", r, ok)
 	}
@@ -408,7 +408,7 @@ func TestVerifyACAgainstDiff_Bounds(t *testing.T) {
 		{"`cfg.yaml` sets retries to `5`", ACMet},
 	}
 	for _, tc := range cases {
-		if r, ok := VerifyACAgainstDiff(tc.text, d, ACTestState{}); !ok || r.Status != tc.want {
+		if r, ok := VerifyACAgainstDiff(tc.text, nil, d, ACTestState{}); !ok || r.Status != tc.want {
 			t.Errorf("%q: got %+v (ok=%v), want %s", tc.text, r, ok, tc.want)
 		}
 	}
@@ -427,12 +427,16 @@ diff --git a/internal/hooks/gate.go b/internal/hooks/gate.go
 +++ b/internal/hooks/gate.go
 @@ -1,0 +2 @@
 +const flag = "run_in_background"
-`, nil)
-	r, ok := VerifyACAgainstDiff("A hook denies `run.sh` unless `run_in_background` is set", d, ACTestState{})
+`, map[string]string{
+		// Read content: an unreadable file leaves a missing token undecided (#3037).
+		"scripts/run.sh":         "#!/bin/sh\ncheck_gate\n",
+		"internal/hooks/gate.go": "package hooks\nconst flag = \"run_in_background\"\n",
+	})
+	r, ok := VerifyACAgainstDiff("A hook denies `run.sh` unless `run_in_background` is set", nil, d, ACTestState{})
 	if !ok || r.Status != ACMet || !strings.Contains(r.Evidence, "internal/hooks/gate.go:2") {
 		t.Errorf("got %+v (ok=%v)", r, ok)
 	}
-	r, ok = VerifyACAgainstDiff("`run.sh` adds `never_written`", d, ACTestState{})
+	r, ok = VerifyACAgainstDiff("`run.sh` adds `never_written`", nil, d, ACTestState{})
 	if !ok || r.Status != ACUnmet || !strings.Contains(r.Evidence, "every other changed file") {
 		t.Errorf("a token the whole diff lacks is unmet: %+v (ok=%v)", r, ok)
 	}
@@ -449,7 +453,7 @@ func TestVerifyACAgainstDiff_BoundIgnoresUnrelatedNumbers(t *testing.T) {
 +retries: 2
 +timeout: 30
 `, nil)
-	r, ok := VerifyACAgainstDiff("`cfg.yaml` sets retries to at least `3`", d, ACTestState{})
+	r, ok := VerifyACAgainstDiff("`cfg.yaml` sets retries to at least `3`", nil, d, ACTestState{})
 	if ok && r.Status == ACMet {
 		t.Fatalf("timeout 30 satisfied a retries bound: %+v", r)
 	}
@@ -459,7 +463,7 @@ func TestVerifyACAgainstDiff_BoundIgnoresUnrelatedNumbers(t *testing.T) {
 @@ -1,0 +2 @@
 +timeout: 30
 `, nil)
-	if r, ok := VerifyACAgainstDiff("`cfg.yaml` sets retries to at least `3`", added, ACTestState{}); ok && r.Status == ACMet {
+	if r, ok := VerifyACAgainstDiff("`cfg.yaml` sets retries to at least `3`", nil, added, ACTestState{}); ok && r.Status == ACMet {
 		t.Fatalf("an added unrelated number met the bound: %+v", r)
 	}
 }

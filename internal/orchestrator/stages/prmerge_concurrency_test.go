@@ -238,7 +238,7 @@ func TestDeterministicPRCreateRunner_ConcurrentRunsAreIsolated(t *testing.T) {
 	r.git = &concurrentGit{pushedFrom: &pushedFrom}
 	// Each run reads a snapshot carrying its OWN branch, so the recorded
 	// (branch -> workdir) pair identifies the run that produced it.
-	r.readContext = func(_ string, issue int) (PRCreateSnapshot, error) {
+	r.readContext = func(_ context.Context, _ string, issue int) (PRCreateSnapshot, error) {
 		snap := richSnap()
 		snap.IssueNumber = issue
 		snap.Branch = fmt.Sprintf("feat/%d-x", issue)

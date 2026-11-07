@@ -128,18 +128,24 @@ func RunSkillBundleCheck(ctx context.Context, opts SkillBundleOptions) (*SkillBu
 			result.Findings = append(result.Findings, f)
 		}
 	}
+	cacheDir, err := os.MkdirTemp("", "nightgauge-skill-bundle-includes-")
+	if err != nil {
+		return nil, fmt.Errorf("include cache dir: %w", err)
+	}
+	defer os.RemoveAll(cacheDir)
 	for _, r := range bundleRenders(root) {
 		result.RendersChecked++
 		// Every include supplied, so its text reaches SkillPaths: what fits the
 		// default budget changes with the skill, and any of it can be handed over.
 		res, err := skillrender.Render(skillrender.Options{
-			Stage:          r.stage,
-			Model:          r.model,
-			Adapter:        r.adapter,
-			Profile:        r.profile,
-			SkillsRoots:    []string{root},
-			IncludeBudget:  skillrender.EveryPhaseInclude,
-			SupplyIncludes: true,
+			Stage:           r.stage,
+			Model:           r.model,
+			Adapter:         r.adapter,
+			Profile:         r.profile,
+			SkillsRoots:     []string{root},
+			IncludeBudget:   skillrender.EveryPhaseInclude,
+			SupplyIncludes:  true,
+			IncludeCacheDir: cacheDir,
 		})
 		if err != nil {
 			// A joined render error is one fault per line.
@@ -148,15 +154,29 @@ func RunSkillBundleCheck(ctx context.Context, opts SkillBundleOptions) (*SkillBu
 			}
 			continue
 		}
-		for _, p := range skillrender.SkillPaths(res.Content, filepath.Dir(res.SkillPath), root) {
-			if !p.Exists {
-				report(SkillBundleFinding{
-					Rule:   SkillBundleRuleUnresolvedPath,
-					Path:   p.Path,
-					Detail: "named by a rendered prompt, not present under the skills root",
-					Render: r.String(),
-				})
+		scanSkillPaths(res.Content, filepath.Dir(res.SkillPath), root, r, report)
+		// At the default budget some includes stay reads, and the agent reads
+		// the rewritten copy the render materialized for each (#2789): check
+		// the prompt and every copy as the agent sees them.
+		def, err := skillrender.Render(skillrender.Options{
+			Stage:           r.stage,
+			Model:           r.model,
+			Adapter:         r.adapter,
+			Profile:         r.profile,
+			SkillsRoots:     []string{root},
+			IncludeCacheDir: cacheDir,
+		})
+		if err != nil {
+			continue // the full render above already reported it
+		}
+		scanSkillPaths(def.Content, filepath.Dir(def.SkillPath), root, r, report)
+		for _, copyPath := range def.MaterializedIncludes {
+			data, readErr := os.ReadFile(copyPath)
+			if readErr != nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("read materialized include %s: %v", copyPath, readErr))
+				continue
 			}
+			scanSkillPaths(string(data), filepath.Dir(def.SkillPath), root, r, report)
 		}
 	}
 
@@ -182,6 +202,21 @@ func RunSkillBundleCheck(ctx context.Context, opts SkillBundleOptions) (*SkillBu
 		}
 	}
 	return result, nil
+}
+
+// scanSkillPaths reports each skill path text names that is not present under
+// the skills root.
+func scanSkillPaths(text, skillDir, root string, r bundleRender, report func(SkillBundleFinding)) {
+	for _, p := range skillrender.SkillPaths(text, skillDir, root) {
+		if !p.Exists {
+			report(SkillBundleFinding{
+				Rule:   SkillBundleRuleUnresolvedPath,
+				Path:   p.Path,
+				Detail: "named by a rendered prompt, not present under the skills root",
+				Render: r.String(),
+			})
+		}
+	}
 }
 
 // bundleRenders lists every composition the tree supports, in a stable order:

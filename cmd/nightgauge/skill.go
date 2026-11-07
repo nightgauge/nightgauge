@@ -34,6 +34,9 @@ which skills trees a host searches, and in what order.`,
 type skillRootsEnvelope struct {
 	V     int      `json:"v"`
 	Roots []string `json:"roots"`
+	// IncludeCacheDir is where `skill render` writes rewritten include copies
+	// (#2789); a host grants the stage read access to it once it exists.
+	IncludeCacheDir string `json:"include_cache_dir,omitempty"`
 }
 
 // skillRootsCmd implements `nightgauge skill roots` (#2718): the extension hands
@@ -72,7 +75,7 @@ may come from PATH. The override is read only from the environment.`,
 				roots = []string{}
 			}
 			if jsonOutput {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(skillRootsEnvelope{V: 1, Roots: roots})
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(skillRootsEnvelope{V: 1, Roots: roots, IncludeCacheDir: skillrender.DefaultIncludeCacheDir()})
 			}
 			for _, root := range roots {
 				fmt.Fprintln(cmd.OutOrStdout(), root)

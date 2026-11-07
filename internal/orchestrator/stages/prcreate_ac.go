@@ -3,6 +3,7 @@ package stages
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -38,6 +39,9 @@ type ACVerdict struct {
 	// Step names the runtime or operator step a not_verifiable criterion
 	// needs (#2665), so the PR says what would verify it.
 	Step string `json:"step,omitempty"`
+	// Uncommitted lists the uncommitted or untracked paths a diff verdict's
+	// evidence rests on (#2669): the commit owner has not committed them yet.
+	Uncommitted []string `json:"uncommitted_paths,omitempty"`
 }
 
 // NormalizeACStatus maps the verdict vocabulary feature-validate writes, and
@@ -67,6 +71,10 @@ func NormalizeACStatus(s string) string {
 //
 // Validate verdicts are matched to criteria by matchValidateVerdicts: text
 // first, index only as a fallback, so a reordered list cannot misfile one.
+// An index-matched verdict may only contribute unmet (#2669): a position is
+// not evidence a verdict is about this criterion, so it can hold an issue
+// open but never close it. Negative evidence counts only in a clause that
+// names no other criterion, and never overturns a deterministic met.
 func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.ACReconcileResult, diffCheck ACDiffChecker) []ACVerdict {
 	if len(criteria) == 0 {
 		return nil
@@ -82,29 +90,40 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 	out := make([]ACVerdict, 0, len(criteria))
 	for i, text := range criteria {
 		var cands []ACVerdict
+		detMet := false
 		if c, ok := detByIndex[i]; ok && (c.Classification == preflight.ACSatisfied || c.Classification == preflight.ACUnsatisfied) {
 			ev := strings.Join(c.Evidence, ", ")
 			if ev == "" {
 				ev = c.Reason
 			}
 			cands = append(cands, ACVerdict{Status: NormalizeACStatus(c.Classification), Source: ACSourceDeterministic, Evidence: ev})
+			detMet = c.Classification == preflight.ACSatisfied
 		}
 		if diffCheck != nil {
-			if r, ok := diffCheck(text); ok {
-				cands = append(cands, ACVerdict{Status: r.Status, Source: ACSourceDiff, Evidence: r.Evidence, Step: r.Step})
+			if r, ok := diffCheck(text, criteria[:i]); ok {
+				ev := r.Evidence
+				if len(r.Uncommitted) > 0 {
+					ev += " (rests on uncommitted paths: " + strings.Join(r.Uncommitted, ", ") + ")"
+				}
+				cands = append(cands, ACVerdict{Status: r.Status, Source: ACSourceDiff, Evidence: ev, Step: r.Step, Uncommitted: r.Uncommitted})
 			}
 		}
-		val, hasVal := matched[i]
+		m, hasVal := matched[i]
 		var valV ACVerdict
 		if hasVal {
-			valV = ACVerdict{Status: NormalizeACStatus(val.Status), Source: ACSourceValidate, Evidence: strings.TrimSpace(val.Evidence)}
-			if valV.Status == ACNotVerifiable && negativeEvidenceRE.MatchString(valV.Evidence) {
+			valV = ACVerdict{Status: NormalizeACStatus(m.v.Status), Source: ACSourceValidate, Evidence: strings.TrimSpace(m.v.Evidence)}
+			if valV.Status == ACNotVerifiable && !detMet && acNegativeEvidence(valV.Evidence, i) {
 				valV.Status = ACUnmet
 			}
 		}
 		bodyEvidence := len(validate) > 0 && acAsksForPRBody(text)
 		if bodyEvidence {
 			valV, hasVal = acPRBodyVerdict(valV, hasVal)
+		}
+		// Applied last: an index-matched verdict may only add unmet (#2669),
+		// including one the PR-body rule upgraded to met.
+		if hasVal && m.byIndex && valV.Status != ACUnmet {
+			valV, hasVal = ACVerdict{}, false
 		}
 		if hasVal {
 			cands = append(cands, valV)
@@ -145,8 +164,9 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 //  4. a verdict with no text at the criterion's index.
 //
 // Text passes run first, so a reordered list still lands on its own text.
-func matchValidateVerdicts(criteria []string, validate []ACVerdict) map[int]ACVerdict {
-	out := map[int]ACVerdict{}
+// byIndex records a pass 3 or 4 match.
+func matchValidateVerdicts(criteria []string, validate []ACVerdict) map[int]acMatchedVerdict {
+	out := map[int]acMatchedVerdict{}
 	claimed := make([]bool, len(validate))
 	vkeys := make([]string, len(validate))
 	for j, v := range validate {
@@ -156,14 +176,14 @@ func matchValidateVerdicts(criteria []string, validate []ACVerdict) map[int]ACVe
 	for i, c := range criteria {
 		ckeys[i] = acMatchKey(c)
 	}
-	claim := func(i, j int) {
-		out[i] = validate[j]
+	claim := func(i, j int, byIndex bool) {
+		out[i] = acMatchedVerdict{v: validate[j], byIndex: byIndex}
 		claimed[j] = true
 	}
 	for i, ck := range ckeys {
 		for j, vk := range vkeys {
 			if ck != "" && !claimed[j] && vk == ck {
-				claim(i, j)
+				claim(i, j, false)
 				break
 			}
 		}
@@ -184,7 +204,7 @@ func matchValidateVerdicts(criteria []string, validate []ACVerdict) map[int]ACVe
 			hit = j
 		}
 		if hit >= 0 {
-			claim(i, hit)
+			claim(i, hit, false)
 		}
 	}
 	for _, wantText := range []bool{true, false} {
@@ -194,13 +214,18 @@ func matchValidateVerdicts(criteria []string, validate []ACVerdict) map[int]ACVe
 			}
 			for j, v := range validate {
 				if !claimed[j] && v.Index == i && (vkeys[j] != "") == wantText {
-					claim(i, j)
+					claim(i, j, true)
 					break
 				}
 			}
 		}
 	}
 	return out
+}
+
+type acMatchedVerdict struct {
+	v       ACVerdict
+	byIndex bool
 }
 
 // acMatchKey is the markdown-insensitive key used only to match validate
@@ -267,6 +292,36 @@ func acPRBodyVerdict(v ACVerdict, ok bool) (ACVerdict, bool) {
 // negativeEvidenceRE matches validate evidence that says the criterion is
 // not met even though its status did not (#2655).
 var negativeEvidenceRE = regexp.MustCompile(`(?i)\b(?:not met|unmet|not satisfied|unsatisfied|not implemented)\b`)
+
+// acOtherCriterionRE finds a reference to a criterion by number.
+var acOtherCriterionRE = regexp.MustCompile(`(?i)\b(?:AC\s*#?|criteri(?:on|a)\s*#?)(\d+)\b`)
+
+var acEvidenceClauseRE = regexp.MustCompile(`[.;\n]+`)
+
+// acNegativeEvidence reports whether evidence for the criterion at 0-based
+// index i says it is not met. A clause counts when it names no criterion or
+// names this one; only a clause naming other criteria alone is ignored, so
+// "AC3 is not met" in AC1's evidence leaves AC1 alone while "AC1 and AC3 are
+// not met" does not (#2669).
+func acNegativeEvidence(evidence string, i int) bool {
+	for _, clause := range acEvidenceClauseRE.Split(evidence, -1) {
+		if !negativeEvidenceRE.MatchString(clause) {
+			continue
+		}
+		refs := acOtherCriterionRE.FindAllStringSubmatch(clause, -1)
+		self := len(refs) == 0
+		for _, m := range refs {
+			if n, err := strconv.Atoi(m[1]); err == nil && n == i+1 {
+				self = true
+				break
+			}
+		}
+		if self {
+			return true
+		}
+	}
+	return false
+}
 
 // IssueClosedBy reports whether a PR with these verdicts closes its issue:
 // only when there is at least one criterion and every one is met.

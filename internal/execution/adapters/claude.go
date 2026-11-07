@@ -167,18 +167,25 @@ func claudePluginDirArgs(opts RunOptions) []string {
 // it is the checkout the stage was dispatched to change: a deny there would
 // stop a stage editing the repository's own skills/.
 func claudeSkillsDirArgs(opts RunOptions) []string {
-	root := opencodeallow.SkillsRootOf(opts.SkillPath)
-	if !filepath.IsAbs(root) || pathWithin(root, opts.WorktreeDir) {
+	var dirs []string
+	if root := opencodeallow.SkillsRootOf(opts.SkillPath); filepath.IsAbs(root) && !pathWithin(root, opts.WorktreeDir) {
+		dirs = append(dirs, root)
+	}
+	// The render's rewritten include copies (#2789) are read at run time too.
+	if cache := opencodeallow.GrantedIncludeCacheRoot(); cache != "" && !pathWithin(cache, opts.WorktreeDir) {
+		dirs = append(dirs, cache)
+	}
+	if len(dirs) == 0 {
 		return nil
 	}
-	var deny []string
-	for _, form := range openCodePathForms(root) {
-		deny = append(deny, "Edit(//"+strings.TrimLeft(filepath.ToSlash(form), "/")+"/**)")
+	var args, deny []string
+	for _, dir := range dirs {
+		args = append(args, "--add-dir", dir)
+		for _, form := range openCodePathForms(dir) {
+			deny = append(deny, "Edit(//"+strings.TrimLeft(filepath.ToSlash(form), "/")+"/**)")
+		}
 	}
-	return []string{
-		"--add-dir", root,
-		"--disallowedTools", strings.Join(deny, ","),
-	}
+	return append(args, "--disallowedTools", strings.Join(deny, ","))
 }
 
 // pathWithin reports whether path is dir or lies under it, comparing resolved

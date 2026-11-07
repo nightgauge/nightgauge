@@ -8,6 +8,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Freshness check no longer aborts a merge that is already open, so a staged
+  resolution survives (#2755).
+
 ### Changed
 
 - **The Phase 5.5 freshness check merges the base instead of rebasing (#2699).**

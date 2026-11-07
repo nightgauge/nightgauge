@@ -47,7 +47,7 @@ fixture() {
   }
   mkdir -p "$TMP/scripts" "$TMP/.claude-plugin" \
     "$TMP/claude-plugins/nightgauge/.claude-plugin" "$TMP/claude-plugins/nightgauge/skills/a"
-  cp "$GATE" "$TMP/scripts/"
+  cp "$GATE" "$REPO_ROOT/scripts/main-build-version.sh" "$TMP/scripts/"
   echo '{"plugins": [{"name": "nightgauge"}]}' >"$TMP/.claude-plugin/marketplace.json"
   printf -- '---\nname: a\ndescription: |\n  Fine: here, a block scalar.\n---\nbody\n' \
     >"$TMP/claude-plugins/nightgauge/skills/a/SKILL.md"
@@ -195,6 +195,27 @@ expect "a baseline tag with no version could not run" 2 "at v1.0.0" --tag v1.1.0
 
 fixture
 expect "a malformed tag is a usage error" 2 "--tag expects" --tag latest
+
+# #3014: PR CI judges the merge under the same synthetic tag main-build will.
+fixture
+touch_plugin
+commit two
+expect "--main-build fails a plugin change without a bump" 1 "still 1.0.0" --main-build
+set_version 1.1.0
+commit three
+expect "--main-build passes the same change after a bump" 0 "-main.g" --main-build
+
+fixture
+echo x >"$TMP/README.md"
+commit two
+expect "--main-build passes a change outside the plugin" 0 "" --main-build
+
+fixture
+git -C "$TMP" tag -d v1.0.0 >/dev/null
+expect "--main-build with no stable tag could not run" 2 "HARNESS ERROR" --main-build
+
+fixture
+expect "--main-build excludes --tag" 2 "excludes" --main-build --tag v1.1.0
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="

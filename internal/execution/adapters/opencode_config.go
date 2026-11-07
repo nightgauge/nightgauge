@@ -1754,6 +1754,10 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	if req.KnowledgeDir != "" {
 		env[opencodeplugin.EnvKnowledgeDir] = req.KnowledgeDir
 	}
+	// Resolved here, before the child's isolated XDG_CACHE_HOME applies (#2789).
+	if cache := opencodeallow.GrantedIncludeCacheRoot(); cache != "" {
+		env[opencodeallow.EnvIncludeCacheDir] = cache
+	}
 	// The dispatch-time external-directory gate admits the same read-only
 	// skills tree the permission map does (#2191).
 	if root := openCodeReadOnlySkillsRoot(req.Run); root != "" {

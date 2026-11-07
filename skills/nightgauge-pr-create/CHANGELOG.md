@@ -8,6 +8,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Phase 2.3 base merge no longer aborts a merge that is already open, so a staged
+  resolution survives (#2755).
+
 ### Changed
 
 - **The title comes from `nightgauge pr-stage title` (#2846).** The skill no longer composes it, so this path keeps the 72-character cap.

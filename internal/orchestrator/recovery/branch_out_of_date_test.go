@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -210,7 +211,7 @@ func TestAction_BranchOutOfDate_CINeverCompletes(t *testing.T) {
 		return []byte(""), nil
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
-		return []byte(`{"statusCheckRollup":[{"name":"test","conclusion":""}]}`), nil
+		return []byte(`{"statusCheckRollup":[{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}]}`), nil
 	})
 
 	merged := false
@@ -227,6 +228,9 @@ func TestAction_BranchOutOfDate_CINeverCompletes(t *testing.T) {
 	}
 	if res.FollowUp != FollowUpNoAction {
 		t.Errorf("FollowUp = %q, want no-action", res.FollowUp)
+	}
+	if !strings.Contains(res.Reason, "still pending: test") {
+		t.Errorf("Reason = %q, must name the pending check", res.Reason)
 	}
 }
 
@@ -652,11 +656,78 @@ func TestAction_BranchOutOfDate_NilRunner(t *testing.T) {
 // runs register) must be treated as PENDING, not green — otherwise waitForCI
 // short-circuits and re-runs the merge before the rebased commits are validated.
 func TestSummarizeChecks_EmptyIsPending(t *testing.T) {
-	if got := summarizeChecks(nil); got != checksPending {
+	if got, _ := summarizeChecks(nil); got != checksPending {
 		t.Errorf("nil rollup must be pending, got %v", got)
 	}
-	if got := summarizeChecks([]statusCheckRollupEntry{}); got != checksPending {
+	if got, _ := summarizeChecks([]statusCheckRollupEntry{}); got != checksPending {
 		t.Errorf("empty rollup must be pending, got %v", got)
+	}
+}
+
+// TestSummarizeChecks_CommitStatusState locks #3026: a commit status
+// (StatusContext) is judged by its state, not by its absent conclusion.
+func TestSummarizeChecks_CommitStatusState(t *testing.T) {
+	green := `{"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"SUCCESS"},` +
+		`{"__typename":"CheckRun","name":"b","status":"COMPLETED","conclusion":"SUCCESS"},`
+	cases := []struct {
+		name        string
+		row         string
+		want        checksState
+		wantPending []string
+	}{
+		{"success", `{"__typename":"StatusContext","context":"cla","state":"SUCCESS"}`, checksGreen, nil},
+		{"pending", `{"__typename":"StatusContext","context":"cla","state":"PENDING"}`, checksPending, []string{"cla"}},
+		{"expected", `{"__typename":"StatusContext","context":"cla","state":"EXPECTED"}`, checksPending, []string{"cla"}},
+		{"failure", `{"__typename":"StatusContext","context":"cla","state":"FAILURE"}`, checksFailed, nil},
+		{"error", `{"__typename":"StatusContext","context":"cla","state":"ERROR"}`, checksFailed, nil},
+		{"no typename success", `{"context":"cla","state":"SUCCESS"}`, checksGreen, nil},
+		{"no typename pending", `{"context":"cla","state":"PENDING"}`, checksPending, []string{"cla"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var snap prChecksSnapshot
+			if err := json.Unmarshal([]byte(`{"statusCheckRollup":[`+green+c.row+`]}`), &snap); err != nil {
+				t.Fatal(err)
+			}
+			got, pending := summarizeChecks(snap.StatusCheckRollup)
+			if got != c.want {
+				t.Errorf("state = %v, want %v", got, c.want)
+			}
+			if strings.Join(pending, ",") != strings.Join(c.wantPending, ",") {
+				t.Errorf("pending = %v, want %v", pending, c.wantPending)
+			}
+		})
+	}
+}
+
+// pr3016Rollup replays PR #3016's rollup: 27 green check runs plus the `cla`
+// commit status in state SUCCESS.
+func pr3016Rollup() string {
+	rows := make([]string, 0, 28)
+	for i := 0; i < 27; i++ {
+		rows = append(rows, fmt.Sprintf(`{"__typename":"CheckRun","name":"check-%d","status":"COMPLETED","conclusion":"SUCCESS"}`, i))
+	}
+	rows = append(rows, `{"__typename":"StatusContext","context":"cla","state":"SUCCESS"}`)
+	return `{"statusCheckRollup":[` + strings.Join(rows, ",") + `]}`
+}
+
+// TestBranchOutOfDate_PR3016RollupGreenFirstPoll asserts the #3016 rollup is
+// green on the first poll (#3026).
+func TestBranchOutOfDate_PR3016RollupGreenFirstPoll(t *testing.T) {
+	polls := 0
+	stubExecGh(t, func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) > 1 && args[0] == "pr" && args[1] == "view" {
+			polls++
+		}
+		return []byte(pr3016Rollup()), nil
+	})
+	a := newBranchOOD(&fakePRMergeRunner{})
+	_, ok := a.waitForCI(context.Background(), StageFailure{PRNumber: 3016}, nil)
+	if !ok {
+		t.Fatal("waitForCI must succeed on the #3016 rollup")
+	}
+	if polls != 1 {
+		t.Errorf("polls = %d, want 1", polls)
 	}
 }
 

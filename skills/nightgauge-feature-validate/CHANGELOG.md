@@ -8,6 +8,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Phase 1.4 freshness check no longer aborts a merge that is already open, so a staged
+  resolution survives (#2755).
+
 ### Changed
 
 - Step 2.7.3 is now the Independent Review Gate: one review per tree, in a fresh context, through `nightgauge review`. The self-critique and its hand-recorded verdict are gone (#2839).

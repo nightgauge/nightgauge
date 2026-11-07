@@ -129,6 +129,7 @@ func TestOpenCodePermissionMap_SkillsRootInsideWorktreeStaysEditable(t *testing.
 // Claude adapter parity: the knowledge base is added as a working directory,
 // and with no skill path the skills flags stay off the command.
 func TestClaudeAdapters_AddKnowledgeDir(t *testing.T) {
+	noIncludeCache(t)
 	opts := RunOptions{KnowledgeDir: "/main/.nightgauge/knowledge", Model: "m"}
 	for name, a := range map[string]interface {
 		BuildCommand(RunOptions) (string, []string, map[string]string)
@@ -147,6 +148,7 @@ func TestClaudeAdapters_AddKnowledgeDir(t *testing.T) {
 // TestClaudeAdapters_SkillsTreeIsReadableAndDenied pins #2718: the resolved tree
 // is added, not every search root, and the same argv denies file-tool writes.
 func TestClaudeAdapters_SkillsTreeIsReadableAndDenied(t *testing.T) {
+	noIncludeCache(t)
 	opts := RunOptions{
 		KnowledgeDir: "/main/.nightgauge/knowledge",
 		SkillPath:    "/bundle/dist/skills/nightgauge-feature-dev/SKILL.md",
@@ -171,6 +173,7 @@ func TestClaudeAdapters_SkillsTreeIsReadableAndDenied(t *testing.T) {
 // render can resolve the worktree's own skills/. Denying edits there would stop
 // a stage changing the repository it was dispatched to change.
 func TestClaudeSkillsDirArgs_SkipsATreeInsideTheWorktree(t *testing.T) {
+	noIncludeCache(t)
 	worktree := t.TempDir()
 	tree := filepath.Join(worktree, "skills")
 	if err := os.MkdirAll(tree, 0o755); err != nil {
@@ -196,6 +199,7 @@ func TestClaudeSkillsDirArgs_SkipsATreeInsideTheWorktree(t *testing.T) {
 // TestClaudeSkillsDirArgs_DeniesTheResolvedFormOfASymlinkedTree: the deny has to
 // name the path a file tool resolves to, not only the path the tree was given as.
 func TestClaudeSkillsDirArgs_DeniesTheResolvedFormOfASymlinkedTree(t *testing.T) {
+	noIncludeCache(t)
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -228,6 +232,7 @@ func TestClaudeSkillsDirArgs_DeniesTheResolvedFormOfASymlinkedTree(t *testing.T)
 // tree given as /private/tmp/... stayed writable as /tmp/.... The alias is a
 // temp symlink, so this runs on a Linux host whose /tmp is a real directory.
 func TestClaudeSkillsDirArgs_DeniesTheAliasFormOfTheTree(t *testing.T) {
+	noIncludeCache(t)
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
