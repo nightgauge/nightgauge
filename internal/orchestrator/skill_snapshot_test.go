@@ -144,12 +144,12 @@ func TestResetSkillSnapshotForRunDropsInheritedCopies(t *testing.T) {
 	read()
 	writeTestFile(t, skill, "new")
 
-	resetSkillSnapshotForRun(root, 7, "run-7", true)
+	resetSkillSnapshotForRun(root, 7, "run-7", true, false)
 	if got := read(); got != "old" {
 		t.Errorf("resumed run read %q, want the frozen %q", got, "old")
 	}
 
-	resetSkillSnapshotForRun(root, 7, "run-7", false)
+	resetSkillSnapshotForRun(root, 7, "run-7", false, false)
 	if got := read(); got != "new" {
 		t.Errorf("inherited run id read %q, want the current %q", got, "new")
 	}
@@ -171,7 +171,7 @@ func TestResetSkillSnapshotKeepsResumeWhileAnotherIssueOwnsRunState(t *testing.T
 	writeTestFile(t, skill, "edited")
 	saveSkillRunState(t, root, live, 8, "run-B") // issue B owns the record
 
-	resetSkillSnapshotForRun(root, 7, "run-R", skillSnapshotResumes(true, nil, 7))
+	resetSkillSnapshotForRun(root, 7, "run-R", skillSnapshotResumes(true, nil, 7), false)
 
 	again, err := runSkillSnapshot(root, live, 7, "run-R")
 	if err != nil {
@@ -222,7 +222,7 @@ func TestResetSkillSnapshotResumeAdoptsCopyUnderAnotherID(t *testing.T) {
 	}
 	writeTestFile(t, skill, "edited by a stage")
 
-	resetSkillSnapshotForRun(root, 7, "run-record", true)
+	resetSkillSnapshotForRun(root, 7, "run-record", true, true)
 	dst, err := runSkillSnapshot(root, live, 7, "run-record")
 	if err != nil {
 		t.Fatal(err)
@@ -256,5 +256,28 @@ func TestDropSkillSnapshotRemovesOnlyThatIssue(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(other, "skills", "a", "SKILL.md")); err != nil {
 		t.Errorf("issue #8's snapshot was removed: %v", err)
+	}
+}
+
+// A new platform-supplied run never adopts an earlier run's leftover copy: its
+// ID is its own, so only a copy under that exact key is reused (#2813 review).
+func TestResetSkillSnapshotRemoteRunDoesNotAdoptOtherCopies(t *testing.T) {
+	root := t.TempDir()
+	layouttest.MkCheckoutDir(t, root)
+	live := t.TempDir()
+	skill := filepath.Join(live, "skills", "a", "SKILL.md")
+	writeTestFile(t, skill, "old run")
+	if _, err := runSkillSnapshot(root, live, 7, "remote-1"); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, skill, "current")
+
+	resetSkillSnapshotForRun(root, 7, "remote-2", skillSnapshotResumes(true, nil, 7), false)
+	dst, err := runSkillSnapshot(root, live, 7, "remote-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dst, "skills", "a", "SKILL.md")); string(data) != "current" {
+		t.Errorf("new remote run read %q, want the current %q", data, "current")
 	}
 }

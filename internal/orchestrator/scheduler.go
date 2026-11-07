@@ -5248,7 +5248,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// (#2813). The resume decision comes from the ID's provenance above, never
 	// from re-reading run-state.json, which another issue's run may own.
 	resetSkillSnapshotForRun(workspaceRoot, item.Number, runtime.RunID,
-		skillSnapshotResumes(fromRemote, inheritedRS, item.Number))
+		skillSnapshotResumes(fromRemote, inheritedRS, item.Number), inheritedRS != nil)
 	runtime.Title = item.Title
 	// A remote run request's pin (#1656) is a fact of the run from its start.
 	if reqAdapter, reqModel, _ := s.QueueItemRequestedPin(item.Repo, item.Number); reqAdapter != "" {

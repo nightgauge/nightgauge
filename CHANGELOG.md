@@ -20,6 +20,7 @@ changelog, and the release workflow refuses a tag that does not.
   executes (#2813). The Go scheduler renders worktree skills from a read-only copy of
   `skills/` taken when the run starts, so edits to a later stage's `SKILL.md`, its
   includes or `skills/_shared` take effect on the next run, not the current one.
+  Stages the VS Code extension renders itself still read the live worktree.
 
 ## [0.8.2] - 2026-11-07
 
