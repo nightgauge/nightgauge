@@ -14,6 +14,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- A pipeline stage can no longer rewrite the instructions a later stage of the same run
+  executes (#2813). The Go scheduler renders worktree skills from a read-only copy of
+  `skills/` taken when the run starts, so edits to a later stage's `SKILL.md`, its
+  includes or `skills/_shared` take effect on the next run, not the current one.
+
 ## [0.8.2] - 2026-11-07
 
 0.8.1 was tagged but never published, because the release gate could not scan
@@ -21,10 +28,6 @@ files over 32 MB (#3011). Its changes ship in this release and are listed below.
 
 ### Fixed
 
-- A pipeline stage can no longer rewrite the instructions a later stage of the same run
-  executes (#2813). The Go scheduler renders worktree skills from a read-only copy of
-  `skills/` taken when the run starts, so edits to a later stage's `SKILL.md`, its
-  includes or `skills/_shared` take effect on the next run, not the current one.
 - The Output window no longer carries a previous run into a new one (#2808). A
   sequential run of an issue that earlier held the same tab starts with fresh stages,
   tokens and timings; a reused tab shows only the new run's output; and the tab's
