@@ -266,7 +266,7 @@ var acFailureEvidenceRE = regexp.MustCompile(`(?i)\bFAIL(?:ED|S|URE)?\b|\bdid no
 const ACNoRecordedEvidence = "feature-validate recorded no command and result for this criterion"
 
 func acAsksForPRBody(text string) bool {
-	return acPRBodyRE.MatchString(acCodeSpanRE.ReplaceAllString(text, " "))
+	return acPRBodyRE.MatchString(acStripCodeSpans(text))
 }
 
 // acPRBodyVerdict judges feature-validate's verdict on a criterion that asks
