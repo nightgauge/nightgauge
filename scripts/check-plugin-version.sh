@@ -24,6 +24,11 @@
 #       which is exit 2, not a pass. An unpushed tag is read as HEAD, so this
 #       works before tagging; main-build.yml passes its unpushed synthetic
 #       vX.Y.Z-main.g<sha> this way (#2952). Needs full history and tags.
+#   check-plugin-version.sh --main-build
+#       The --tag arm with the synthetic tag main-build.yml would judge HEAD
+#       under, derived by scripts/main-build-version.sh (the one derivation).
+#       PR CI and the local gate run this, so a plugin change without a bump
+#       fails before merge, not on main (#3014). No stable tag is exit 2.
 #   check-plugin-version.sh --tag vX.Y.Z[-rc.N] --first-release
 #       The same, but a tag with no baseline passes. A maintainer states this by
 #       hand for a true first release; automation never passes it. With a
@@ -42,6 +47,7 @@ MARKETPLACE=".claude-plugin/marketplace.json"
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 GATE_TAG=""
 FIRST_RELEASE=0
+MAIN_BUILD=0
 
 usage() {
   sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -52,6 +58,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --tag) GATE_TAG="${2:-}"; shift 2 || usage ;;
     --first-release) FIRST_RELEASE=1; shift ;;
+    --main-build) MAIN_BUILD=1; shift ;;
     -h|--help) usage ;;
     *) echo "check-plugin-version: unknown argument: $1" >&2; usage ;;
   esac
@@ -62,6 +69,14 @@ cannot_run() { echo "HARNESS ERROR: check-plugin-version: $1" >&2; exit 2; }
 
 [ "$FIRST_RELEASE" -eq 0 ] || [ -n "$GATE_TAG" ] ||
   cannot_run "--first-release needs --tag"
+
+if [ "$MAIN_BUILD" -eq 1 ]; then
+  [ -z "$GATE_TAG" ] && [ "$FIRST_RELEASE" -eq 0 ] ||
+    cannot_run "--main-build excludes --tag and --first-release"
+  DERIVED="$(bash "$REPO_ROOT/scripts/main-build-version.sh" HEAD)" ||
+    cannot_run "cannot derive the main-build version (git fetch --tags)"
+  GATE_TAG="v$DERIVED"
+fi
 
 FAIL=0
 violation() { echo "VIOLATION: $1" >&2; FAIL=1; }

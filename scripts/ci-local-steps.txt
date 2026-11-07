@@ -85,6 +85,7 @@ Changelog gate regression suite
 Changelog names every released tag
 Plugin version gate regression suite
 Plugin has one version and valid skills
+Plugin version above the last stable tag
 Plugin install docs gate regression suite
 Documented plugin install works
 RC VSIX fetch regression suite

@@ -1873,6 +1873,7 @@ run_group "Changelog gate regression suite" bash scripts/test-check-changelog.sh
 run_group "Changelog names every released tag" bash scripts/check-changelog.sh
 run_group "Plugin version gate regression suite" bash scripts/test-check-plugin-version.sh
 run_group "Plugin has one version and valid skills" bash scripts/check-plugin-version.sh
+run_group "Plugin version above the last stable tag" bash scripts/check-plugin-version.sh --main-build
 run_group "Plugin install docs gate regression suite" bash scripts/test-check-plugin-install-docs.sh
 run_group "Documented plugin install works" bash scripts/check-plugin-install-docs.sh
 run_group "RC VSIX fetch regression suite" bash scripts/test-fetch-rc-vsix.sh
