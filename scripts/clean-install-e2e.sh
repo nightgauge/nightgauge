@@ -243,6 +243,7 @@ docker run --name "$CONTAINER" --shm-size=1g \
   -v "$ROOT/docker/clean-install/run-in-container.sh:/harness/bin/run-in-container.sh:ro" \
   -v "$ROOT/docker/clean-install/scrub-evidence.sh:/harness/bin/scrub-evidence.sh:ro" \
   -v "$ROOT/docker/clean-install/count-bundle-skill-reads.sh:/harness/bin/count-bundle-skill-reads.sh:ro" \
+  -v "$ROOT/docker/clean-install/bundle-skill-source.sh:/harness/bin/bundle-skill-source.sh:ro" \
   -v "$ROOT/tests/clean-install/driver:/harness/driver:ro" \
   -v "$ROOT/tests/clean-install/issue.md:/harness/issue.md:ro" \
   -v "$OUT_DIR:/out" \
@@ -286,16 +287,19 @@ if [[ "$SMOKE" == "0" ]]; then
   check "PR exists on the throwaway repo" "$([[ -n "$PR_URL" ]] && echo 1 || echo 0)" "${PR_URL:-none}"
   check "PR is MERGED (forge says so)" "$([[ "$PR_STATE" == "MERGED" ]] && echo 1 || echo 0)" "$PR_STATE"
   check "issue is CLOSED" "$([[ "$ISSUE_STATE" == "CLOSED" ]] && echo 1 || echo 0)" "#$ISSUE_NUM $ISSUE_STATE"
-  # A missing bundle-read.json fails both rows; it never passes (#2722).
+  # A missing bundle-read.json fails both rows; it never passes (#2722, #3036).
   BUNDLE_READ="$OUT_DIR/bundle-read.json"
   USER_DIRS="$(jq -r '.user_additional_dirs // "missing"' "$BUNDLE_READ" 2>/dev/null || echo missing)"
   BUNDLE_READS="$(jq -r '.bundle_skill_reads // "missing"' "$BUNDLE_READ" 2>/dev/null || echo missing)"
   BUNDLE_PATH="$(jq -r '.bundle_skills_path // "?"' "$BUNDLE_READ" 2>/dev/null || echo "?")"
+  SKILL_SOURCE_OK="$(jq -r '.skill_source_ok == true' "$BUNDLE_READ" 2>/dev/null || echo false)"
+  SKILL_PATHS_IN="$(jq -r '((.skill_paths // []) - (.outside_bundle // [])) | length' "$BUNDLE_READ" 2>/dev/null || echo 0)"
+  SKILL_PATHS_OUT="$(jq -r '(.outside_bundle // []) | length' "$BUNDLE_READ" 2>/dev/null || echo 0)"
   check "no user-level additionalDirectories" "$([[ "$USER_DIRS" == "0" ]] && echo 1 || echo 0)" \
     "user_additional_dirs=$USER_DIRS"
-  check "a stage read its skill from the bundle path" \
-    "$([[ "$BUNDLE_READS" =~ ^[0-9]+$ && "$BUNDLE_READS" -gt 0 ]] && echo 1 || echo 0)" \
-    "$BUNDLE_READS read(s) under $BUNDLE_PATH"
+  check "stage skills were loaded from the bundle path" \
+    "$([[ "$SKILL_SOURCE_OK" == "true" ]] && echo 1 || echo 0)" \
+    "$SKILL_PATHS_IN skill_path(s) under $BUNDLE_PATH, $SKILL_PATHS_OUT outside; $BUNDLE_READS tool-call read(s)"
 fi
 # The summary falls back to the state the pipeline recorded (pr-{N}.json)
 # when the forge could not be asked; the MERGED check above stays forge-only.

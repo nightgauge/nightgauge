@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The clean-install G1 row "stage skills were loaded from the bundle path"
+  now passes a correct install.** Since stages receive their skill in the
+  prompt, they make no tool call under the bundle, so the old read count failed
+  working runs. The row now checks the `[skillRunner] skill_path=` lines in the
+  slot output channels: it passes only when at least one was logged and every
+  one is under the installed bundle's `dist/skills/`. The read count is still
+  reported, as information.
 - **pr-create's acceptance-criteria verifier is stricter about what counts as
   met (#2669).** A validate verdict matched only by position can hold an issue
   open but never close it. Negative evidence counts only for the criterion it
