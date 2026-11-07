@@ -1003,6 +1003,87 @@ else
   nope "(w11) an unguarded run did not write, so (w1)-(w6) prove nothing"
 fi
 
+# --- (m) the Claude marketplace repoint is verified, never assumed (#2804) --
+# A stub `claude` keeps a marketplace list in a state file, shaped like Claude
+# Code 2.1.319's `marketplace list --json`. In mode `repoint` an add rewrites
+# the entry to a directory source at its argument; `refuse` exits 1 the way an
+# older CLI was reported to; `noop` exits 0 and leaves the old source in place.
+CM_SANDBOX="$TMP/cm-repo"
+mkdir -p "$CM_SANDBOX/.claude-plugin"
+cp -R "$SANDBOX/skills" "$SANDBOX/scripts" "$CM_SANDBOX/"
+echo '{"name":"nightgauge-plugins","plugins":[{"name":"nightgauge"}]}' \
+  >"$CM_SANDBOX/.claude-plugin/marketplace.json"
+CM_STUB="$TMP/cm-stub"
+mkdir -p "$CM_STUB"
+cat >"$CM_STUB/claude" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"$CM_CALLS"
+case "$*" in
+  "plugin marketplace list --json") cat "$CM_STATE" ;;
+  "plugin marketplace add "*)
+    case "$CM_MODE" in
+      refuse)
+        echo "Marketplace 'nightgauge-plugins' is already added from a different source" >&2
+        exit 1
+        ;;
+      noop) ;;
+      *)
+        printf '[{"name":"nightgauge-plugins","source":"directory","path":"%s"}]\n' \
+          "$4" >"$CM_STATE"
+        ;;
+    esac
+    ;;
+esac
+exit 0
+STUB
+chmod +x "$CM_STUB/claude"
+CM_GIT_URL="https://github.com/nightgauge/nightgauge.git"
+
+cm_run() {
+  local label="$1" mode="$2"
+  CM_HOME="$TMP/home-$label" CM_ERR="$TMP/err-$label" CM_OUT="$TMP/out-$label"
+  CM_CALLS="$TMP/calls-$label" CM_RC=0
+  mkdir -p "$CM_HOME"
+  : >"$CM_CALLS"
+  printf '[{"name":"nightgauge-plugins","source":"git","url":"%s"}]\n' "$CM_GIT_URL" \
+    >"$TMP/state-$label"
+  HOME="$CM_HOME" XDG_CONFIG_HOME="$CM_HOME/xdg" CM_MODE="$mode" \
+    CM_STATE="$TMP/state-$label" CM_CALLS="$CM_CALLS" PATH="$CM_STUB:$SAFE_PATH" \
+    bash "$CM_SANDBOX/scripts/install-agent-skills.sh" --claude-only \
+    >"$CM_OUT" 2>"$CM_ERR" || CM_RC=$?
+}
+
+cm_refused_arm() {
+  local label="$1" mode="$2"
+  cm_run "$label" "$mode"
+  if [ "$CM_RC" -ne 1 ]; then
+    nope "($label) $mode add: exit $CM_RC, want 1"
+  elif ! grep -qF "it still uses $CM_GIT_URL" "$CM_ERR"; then
+    nope "($label) $mode add: stderr does not name the source still in use"
+  elif grep -qE '^plugin (install|uninstall)|marketplace update' "$CM_CALLS"; then
+    nope "($label) $mode add: refreshed plugins against the old source"
+  elif grep -q 'marketplace remove' "$CM_CALLS"; then
+    nope "($label) $mode add: called marketplace remove"
+  else
+    ok "($label) $mode add fails, names the old source, reinstalls nothing"
+  fi
+}
+
+cm_refused_arm m1 refuse
+cm_refused_arm m2 noop
+cm_run m3 repoint
+if [ "$CM_RC" -ne 0 ]; then
+  nope "(m3) repointed add: exit $CM_RC, want 0: $(cat "$CM_ERR")"
+elif ! grep -q '^plugin install nightgauge@nightgauge-plugins' "$CM_CALLS"; then
+  nope "(m3) repointed add: plugin was not reinstalled"
+elif ! grep -qF 'refreshed from local' "$CM_OUT"; then
+  nope "(m3) repointed add: no success line"
+elif grep -q 'marketplace remove' "$CM_CALLS"; then
+  nope "(m3) repointed add: called marketplace remove"
+else
+  ok "(m3) a verified repoint reinstalls the plugins"
+fi
+
 # --- (g) the suite never wrote the checkout it runs in ----------------------
 # ci-local.sh runs this suite concurrently with the read-only mirror drift gate,
 # and lint.yml runs it just before that gate. A run that regenerated the

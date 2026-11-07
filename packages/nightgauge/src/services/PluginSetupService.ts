@@ -291,8 +291,10 @@ export class PluginSetupService implements vscode.Disposable {
    * directory an upgrade will delete. A healthy source elsewhere is never touched.
    *
    * `marketplace add` repoints an existing name in place and keeps the install
-   * and its data; `marketplace remove` would uninstall the plugin and delete
-   * them (observed on Claude Code 2.1.316). One attempt per activation.
+   * and its data (observed on Claude Code 2.1.316, re-checked on 2.1.319 for a
+   * git -> directory repoint); `marketplace remove` would uninstall the plugin
+   * and delete them. A refused add, or an error that remains afterwards, is
+   * reported and never falls back to `remove`. One attempt per activation.
    */
   private async repairIfNeeded(
     status: PluginStatus,

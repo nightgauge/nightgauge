@@ -678,6 +678,35 @@ PY
 # so for a dev refresh we uninstall+install to guarantee the cache reflects the
 # current working tree even when the plugin version is unchanged.
 # ---------------------------------------------------------------------------
+# Print the source registered for Claude marketplace $1: `dir:<physical path>`
+# for a directory source, else its url/repo, "no registration" when absent, or
+# "unreadable marketplace list" when `marketplace list --json` cannot be parsed.
+claude_marketplace_source() {
+  local name="$1" list
+  if ! list="$(claude plugin marketplace list --json 2>/dev/null)"; then
+    echo "unreadable marketplace list"
+    return 0
+  fi
+  printf '%s' "$list" | MARKET_NAME="$name" node -e '
+    let raw = "";
+    process.stdin.on("data", (c) => (raw += c));
+    process.stdin.on("end", () => {
+      let list;
+      try { list = JSON.parse(raw); } catch { list = undefined; }
+      if (!Array.isArray(list)) { console.log("unreadable marketplace list"); return; }
+      const e = list.find((m) => m && m.name === process.env.MARKET_NAME);
+      if (!e) { console.log("no registration"); return; }
+      if (e.source === "directory" && typeof e.path === "string") {
+        let p = e.path;
+        try { p = require("fs").realpathSync(p); } catch {}
+        console.log("dir:" + p);
+        return;
+      }
+      console.log(e.url || e.repo || e.path || "unknown source");
+    });
+  ' 2>/dev/null || echo "unreadable marketplace list"
+}
+
 install_claude() {
   if ! command -v claude >/dev/null 2>&1; then
     echo "==> Claude Code: 'claude' CLI not found — skipping."
@@ -692,9 +721,25 @@ install_claude() {
   market_name="$(node -p "require('$MARKETPLACE_MANIFEST').name" 2>/dev/null || echo "nightgauge-plugins")"
 
   echo "==> Claude Code: pointing marketplace '$market_name' at local checkout ..."
-  # `add` replaces the source in place when the marketplace name already exists,
-  # so this safely switches a git-remote source over to this local directory.
-  claude plugin marketplace add "$REPO_ROOT" >/dev/null
+  # `add` on a name that already exists repoints it in place and keeps the
+  # installed plugins (observed on Claude Code 2.1.316, re-checked on 2.1.319
+  # for a git -> directory repoint). An older CLI was reported to refuse it, so
+  # the result is verified below rather than trusted: a refused add, or one that
+  # exits 0 and leaves the old source registered, stops here before anything is
+  # reinstalled from the wrong source. `marketplace remove` is never used: it
+  # uninstalls the plugins and deletes their data.
+  local before_source add_out add_rc=0 after_source repo_real
+  before_source="$(claude_marketplace_source "$market_name")"
+  add_out="$(claude plugin marketplace add "$REPO_ROOT" 2>&1)" || add_rc=$?
+  repo_real="$(cd "$REPO_ROOT" && pwd -P)"
+  after_source="$before_source"
+  [ "$add_rc" -eq 0 ] && after_source="$(claude_marketplace_source "$market_name")"
+  if [ "$add_rc" -ne 0 ] || [ "$after_source" != "dir:$repo_real" ]; then
+    echo "ERROR: Claude Code did not repoint marketplace '$market_name' to $REPO_ROOT;" \
+      "it still uses ${after_source#dir:}" >&2
+    [ -n "$add_out" ] && printf '%s\n' "$add_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
   claude plugin marketplace update "$market_name" >/dev/null
 
   # Plugin names declared by the marketplace manifest.
