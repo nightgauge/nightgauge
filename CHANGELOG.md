@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A Grok plugin installed from a version-keyed extension directory is now
+  re-pointed to the stable marketplace copy on setup and after an extension
+  upgrade, and re-running setup no longer warns that the marketplace source is
+  already configured (#2802).
 - The plugin install docs gate now runs the Claude Code version that
   `claude-headless.json`'s `max_tested` pins, uses a `claude` on `PATH` only at
   that version, and prints the version it ran. A plugin listing without an
