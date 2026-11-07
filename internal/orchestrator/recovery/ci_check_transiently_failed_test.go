@@ -121,3 +121,32 @@ func TestAction_CICheckTransientlyFailed_RerunFailsHard(t *testing.T) {
 		t.Errorf("expected no recovery when rerun also fails")
 	}
 }
+
+// TestAction_CICheckTransientlyFailed_CommitStatusFailureCounts asserts a commit
+// status in FAILURE counts as a failing check (#3026).
+func TestAction_CICheckTransientlyFailed_CommitStatusFailureCounts(t *testing.T) {
+	cases := []struct {
+		name, rollup, wantReason string
+	}{
+		{"sole failing status", `{"statusCheckRollup":[
+			{"__typename":"CheckRun","name":"unit","conclusion":"SUCCESS","workflowRun":{"databaseId":1}},
+			{"__typename":"StatusContext","context":"cla","state":"FAILURE"}]}`, "no workflow run id"},
+		{"status plus failing run", `{"statusCheckRollup":[
+			{"__typename":"CheckRun","name":"unit","conclusion":"FAILURE","workflowRun":{"databaseId":1}},
+			{"__typename":"StatusContext","context":"cla","state":"FAILURE"}]}`, "2 failing checks"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+				return []byte(c.rollup), nil
+			})
+			a := &CICheckTransientlyFailed{pollInterval: time.Millisecond, pollMax: 1}
+			res := a.Execute(context.Background(), StageFailure{
+				Stage: state.StagePRMerge, GateKind: gates.KindNoOp, PRNumber: 100, Reason: "failed-ci-checks", AttemptOrdinal: 1,
+			})
+			if res.Recovered || !strings.Contains(res.Reason, c.wantReason) {
+				t.Errorf("Reason = %q, want it to contain %q", res.Reason, c.wantReason)
+			}
+		})
+	}
+}

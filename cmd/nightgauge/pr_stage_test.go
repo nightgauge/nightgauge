@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 )
 
 // runPrStageCapture executes a pr-stage subcommand with args, capturing stdout.
@@ -301,5 +303,38 @@ func TestPrStageMerge_DoesNotStreamWithoutJSON(t *testing.T) {
 
 	if strings.Contains(stderr, orchestrator.PhaseStreamPrefix) {
 		t.Errorf("sentinel phase lines leaked into human output:\n%s", stderr)
+	}
+}
+
+// #3012: a no-diff punt carries the settlement so the extension ends the run
+// instead of running the LLM skill; other punts are untouched.
+func TestApplyPrStageNoDiffSettlement(t *testing.T) {
+	calls := 0
+	settle := func(_ context.Context, _ int, _ pmstages.PRCreateResult) (string, bool) {
+		calls++
+		return "issue_closed: settled", true
+	}
+	out := prStageResultJSON{Path: string(pmstages.CreatePathPunt), Reason: pmstages.ReasonNoDiffAgainstBase}
+	applyPrStageNoDiffSettlement(context.Background(), &out, 3012, pmstages.PRCreateResult{}, settle)
+	if !out.Settled || !out.IssueClosed || out.TerminalDetail != "issue_closed: settled" || calls != 1 {
+		t.Fatalf("got %+v (calls=%d), want settled and closed", out, calls)
+	}
+	if out.Path != string(pmstages.CreatePathPunt) || out.Reason != pmstages.ReasonNoDiffAgainstBase {
+		t.Errorf("path/reason changed: %+v", out)
+	}
+	raw, _ := json.Marshal(out)
+	for _, k := range []string{`"settled":true`, `"issue_closed":true`, `"terminal_detail":"issue_closed: settled"`} {
+		if !strings.Contains(string(raw), k) {
+			t.Errorf("JSON %s missing %s", raw, k)
+		}
+	}
+
+	other := prStageResultJSON{Path: string(pmstages.CreatePathPunt), Reason: "missing-dev-context"}
+	applyPrStageNoDiffSettlement(context.Background(), &other, 3012, pmstages.PRCreateResult{}, settle)
+	if other.Settled || calls != 1 {
+		t.Errorf("a non-no-diff punt was settled: %+v", other)
+	}
+	if raw, _ := json.Marshal(other); strings.Contains(string(raw), "settled") {
+		t.Errorf("unsettled punt JSON carries settled: %s", raw)
 	}
 }

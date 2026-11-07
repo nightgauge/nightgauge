@@ -27,10 +27,52 @@ echo "Phase 2.3: Checking freshness against origin/$MERGE_BASE..."
 # Step 2: Fetch latest state of the base branch
 git fetch origin "$MERGE_BASE" 2>/dev/null
 
+# An open merge with every path resolved and staged is concluded, never
+# aborted: committing it loses nothing (#2755). One with unmerged paths, or
+# whose commit fails, or that merges anything not already in the base, is left
+# exactly as found for the guard below.
+FRESHNESS_MERGE_CONCLUDED=false
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && [ -z "$(git ls-files -u 2>/dev/null)" ] \
+  && git merge-base --is-ancestor MERGE_HEAD "origin/$MERGE_BASE" 2>/dev/null; then
+  if git commit --no-edit >/dev/null 2>&1; then
+    echo "Concluded the open merge with its staged resolution."
+    FRESHNESS_MERGE_CONCLUDED=true
+    # Push it now: the branch then reads as up-to-date below, so Step 5 never
+    # runs for it. Same handling as Step 5.
+    PUSH_EXIT=0
+    nightgauge git push-branch 2>&1 || PUSH_EXIT=$?
+    if [ "$PUSH_EXIT" -ne 0 ]; then
+      if [ "$PUSH_EXIT" -eq 3 ]; then
+        echo "ERROR: origin rejected '$CURRENT_BRANCH' and the rejection was not reconciled." >&2
+      else
+        echo "ERROR: Failed to push the concluded merge on '$CURRENT_BRANCH' to origin." >&2
+        echo "Ensure you have push access and the branch is not protected." >&2
+      fi
+      FRESHNESS_MERGE_PERFORMED=true
+      FRESHNESS_MERGE_STATUS="push-failed"
+      exit 1
+    fi
+  fi
+fi # open merge
+
 # Step 3: Count commits on base NOT yet in our branch
 BEHIND_COUNT=$(git rev-list --count "HEAD..origin/$MERGE_BASE" 2>/dev/null || echo "0")
 
-if [ "$BEHIND_COUNT" -eq 0 ]; then
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  # A merge is still open: it has unmerged paths, or its commit failed above.
+  # Merging again fails with "You have not concluded your merge", and aborting
+  # would discard whatever resolution is staged (#2755). Leave it as found and stop: this is not a base conflict, so the
+  # stale-branch-merge-conflict outcome is not emitted.
+  echo "ERROR: A merge is already in progress (MERGE_HEAD $(git rev-parse --short MERGE_HEAD))." >&2
+  echo "Resolve and commit it (or abandon it yourself), then re-run the pipeline." >&2
+  FRESHNESS_MERGE_PERFORMED=false
+  FRESHNESS_MERGE_STATUS="merge-in-progress"
+  exit 1
+elif [ "$BEHIND_COUNT" -eq 0 ] && [ "${FRESHNESS_MERGE_CONCLUDED:-false}" = "true" ]; then
+  echo "Concluded merge pushed. Branch is up-to-date with origin/$MERGE_BASE."
+  FRESHNESS_MERGE_PERFORMED=true
+  FRESHNESS_MERGE_STATUS="merged"
+elif [ "$BEHIND_COUNT" -eq 0 ]; then
   echo "Branch is up-to-date with origin/$MERGE_BASE — no merge needed."
   FRESHNESS_MERGE_PERFORMED=false
   FRESHNESS_MERGE_STATUS="up-to-date"
@@ -51,12 +93,14 @@ else
       if [ "$PUSH_EXIT" -eq 3 ]; then
         # Exit 3 printed `[branch-forked]`: the run stops on the fork.
         echo "ERROR: origin rejected '$CURRENT_BRANCH' and the rejection was not reconciled." >&2
+      elif [ "$PUSH_EXIT" -eq 4 ]; then
+        # Exit 4 printed `[push-auth-failed]`: credentials refused (#2742).
+        echo "ERROR: origin refused this machine's credentials for '$CURRENT_BRANCH'; fix git auth." >&2
       else
         # Exit 1 is a permission/infra error — not a conflict
         echo "ERROR: Failed to push merged branch '$CURRENT_BRANCH' to origin." >&2
         echo "Ensure you have push access and the branch is not protected." >&2
       fi
-      git merge --abort 2>/dev/null || true
       FRESHNESS_MERGE_STATUS="push-failed"
       exit 1
     fi
@@ -81,7 +125,9 @@ else
     echo "  4. git add <resolved-files> && git commit" >&2
     echo "  5. Re-run the pipeline" >&2
 
-    # Abort the failed merge to restore clean working tree
+    # Abort the failed merge to restore a clean working tree. The open-merge
+    # probe above ran first, so this only undoes this block's own unresolved
+    # merge.
     git merge --abort 2>/dev/null || true
 
     FRESHNESS_MERGE_PERFORMED=false
@@ -93,14 +139,17 @@ fi
 
 **Output variables** (available to downstream phases):
 
-- `FRESHNESS_MERGE_PERFORMED` — `true` if a merge was performed, `false` if
-  branch was already up-to-date
+- `FRESHNESS_MERGE_PERFORMED` — `true` if a merge was performed or an open one
+  was concluded, `false` if branch was already up-to-date
 - `FRESHNESS_MERGE_STATUS` — `up-to-date` | `merged` | `conflict` |
-  `push-failed`
+  `push-failed` | `merge-in-progress` (a merge was already open; the stage
+  exits 1 and leaves it untouched)
 
 **Failure outcome**: When conflicts are detected, the stage exits with status 1
 and emits `stale-branch-merge-conflict` to stderr. The Go binary's failure
 classifier recognizes this string and maps it to `CatStaleBranchMergeConflict`.
 
 **Safety**: Uses standard `git merge` (not `--force`). If push fails, the
-merge is aborted to leave the working tree clean for the next attempt.
+merge commit stays local and the stage exits 1; nothing is undone. A merge that
+was already open before this block ran is never merged over or aborted: a fully
+staged one is committed and pushed, any other is left as found (#2755).

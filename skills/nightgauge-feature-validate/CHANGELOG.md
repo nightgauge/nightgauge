@@ -8,10 +8,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Phase 1.4 freshness check no longer aborts a merge that is already open, so a staged
+  resolution survives (#2755).
+
 ### Changed
 
 - Step 2.7.3 is now the Independent Review Gate: one review per tree, in a fresh context, through `nightgauge review`. The self-critique and its hand-recorded verdict are gone (#2839).
 - Step 5.3 pushes with `nightgauge git push-branch`, which recovers a self-inflicted fork (a rebased PR branch) without force and exits 3 with `[branch-forked]` on a genuine fork (#2699).
+- Step 5.3 handles `push-branch` exit 4 (`[push-auth-failed]`): it writes `validate-{N}.json` with the real verdict and `push_status: "auth_failed"` instead of withholding context, so a refused push is no longer reported as failed tests (#2742).
 - Step 5.3's exit 3 now also covers a rejected push that could not be reconciled, and exit 1 means only a failure that was not a rejection (#2749).
 
 ### Fixed

@@ -177,6 +177,8 @@ import {
   resolveSdkCliPath,
   claudeSkillsDirArgs,
   setIncludeCacheDirForTest,
+  claudeKnowledgeDirArgs,
+  stageKnowledgeDir,
   findSkillFile,
   resolveSkillRoots,
   setExtensionIsPackaged,
@@ -414,6 +416,20 @@ describe("skillRunner - File Discovery and Parsing", () => {
       warn.mockRestore();
     });
 
+    it("findSkillFile reads the pinned root's SKILL.md, not the first folder's (#2799)", () => {
+      stubBundle(false);
+      const rel = "nightgauge-feature-dev/SKILL.md";
+      expect(findSkillFile("feature-dev", "/pinned/wt")).toBe(`/pinned/wt/skills/${rel}`);
+      const argv = rootsArgv();
+      expect(argv[argv.indexOf("--workspace") + 1]).toBe("/pinned/wt");
+    });
+
+    it("findSkillFile falls back to the first workspace folder with no root", () => {
+      stubBundle(false);
+      const rel = "nightgauge-feature-dev/SKILL.md";
+      expect(findSkillFile("feature-dev")).toBe(`/test/workspace/skills/${rel}`);
+    });
+
     it("renders a pinned run from its pinned root", () => {
       vi.mocked(spawn).mockReturnValue(createMockChildProcess());
 
@@ -537,6 +553,91 @@ describe("skillRunner - File Discovery and Parsing", () => {
       expect(onStderr).toHaveBeenCalledWith(
         expect.stringMatching(/^\[skillRunner\] skill_path=.*nightgauge-feature-dev\/SKILL\.md\n$/)
       );
+    });
+  });
+
+  describe("claude knowledge dir (#2798)", () => {
+    const gitDirsFor =
+      (gitDir: string, commonDir: string) =>
+      (cmd: string, args: string[]): string => {
+        if (isSkillRenderCall(args)) return skillRenderStdout(args, {});
+        if (cmd === "git" && args.includes("--git-common-dir")) return `${gitDir}\n${commonDir}\n`;
+        return "";
+      };
+    const claudeCall = () => vi.mocked(spawn).mock.calls.find(([cmd]) => cmd === "claude")!;
+    const knowledgeFlag = (argv: string[]): string | undefined => {
+      const i = argv.findIndex((a, j) => a === "--add-dir" && argv[j + 1]?.endsWith("knowledge"));
+      return i >= 0 ? argv[i + 1] : undefined;
+    };
+
+    it("emits no flag for an empty dir", () => {
+      expect(claudeKnowledgeDirArgs("")).toEqual([]);
+      expect(claudeKnowledgeDirArgs("/repo/.nightgauge/knowledge")).toEqual([
+        "--add-dir",
+        "/repo/.nightgauge/knowledge",
+      ]);
+    });
+
+    it("resolves the main checkout for every worktree layout", () => {
+      vi.mocked(execFileSync).mockImplementation(gitDirsFor("", "") as never);
+      expect(stageKnowledgeDir(undefined)).toBe("");
+      expect(stageKnowledgeDir("/repo/.worktrees/issue-1")).toBe("/repo/.nightgauge/knowledge");
+      expect(stageKnowledgeDir("/repo/.nightgauge/worktrees/x-issue-1")).toBe(
+        "/repo/.nightgauge/knowledge"
+      );
+      expect(stageKnowledgeDir("/repo")).toBe("/repo/.nightgauge/knowledge");
+      vi.mocked(execFileSync).mockImplementation(
+        gitDirsFor("/repo/.git/worktrees/repo-issue-1", "/repo/.git") as never
+      );
+      expect(stageKnowledgeDir("/base/repo-issue-1")).toBe("/repo/.nightgauge/knowledge");
+    });
+
+    it("adds the flag and exports the variable on a headless spawn", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+      vi.mocked(execFileSync).mockImplementation(
+        gitDirsFor("/main/.git/worktrees/w", "/main/.git") as never
+      );
+
+      runStageSkillHeadless("feature-dev", 42, {});
+
+      const [, argv, opts] = claudeCall();
+      expect(knowledgeFlag(argv as string[])).toBe("/main/.nightgauge/knowledge");
+      expect((opts as { env: NodeJS.ProcessEnv }).env.NIGHTGAUGE_KNOWLEDGE_DIR).toBe(
+        "/main/.nightgauge/knowledge"
+      );
+    });
+
+    it("replaces an inherited variable with this run's dir", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+      vi.mocked(execFileSync).mockImplementation(
+        gitDirsFor("/main/.git/worktrees/w", "/main/.git") as never
+      );
+      process.env.NIGHTGAUGE_KNOWLEDGE_DIR = "/outer/.nightgauge/knowledge";
+      try {
+        runStageSkillHeadless("feature-dev", 42, {});
+      } finally {
+        delete process.env.NIGHTGAUGE_KNOWLEDGE_DIR;
+      }
+      const [, , opts] = claudeCall();
+      expect((opts as { env: NodeJS.ProcessEnv }).env.NIGHTGAUGE_KNOWLEDGE_DIR).toBe(
+        "/main/.nightgauge/knowledge"
+      );
+    });
+
+    it("adds the flag and exports the variable on an interactive spawn", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+      vi.mocked(execFileSync).mockImplementation(
+        gitDirsFor("/main/.git/worktrees/w", "/main/.git") as never
+      );
+
+      runStageSkillInteractive("feature-dev", 42, {});
+
+      const [, argv, opts] = claudeCall();
+      expect(knowledgeFlag(argv as string[])).toBe("/main/.nightgauge/knowledge");
+      expect((opts as { env: NodeJS.ProcessEnv }).env.NIGHTGAUGE_KNOWLEDGE_DIR).toBe(
+        "/main/.nightgauge/knowledge"
+      );
+      killAllActiveProcesses();
     });
   });
 

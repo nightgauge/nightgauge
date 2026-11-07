@@ -98,8 +98,15 @@ const (
 	// lead that crossed the break read a keyword ending one line onto the
 	// reference opening the next, so prose hard-wrapped after "does not …
 	// depend on" declared the reference it denied (#2349 review).
-	depBlockedByCore = `blocked[ \t_-]*by\b`
-	depDependsOnCore = `depends?[ \t_-]*on\b`
+	//
+	// The leading `\b` keeps a keyword glued to a preceding word from
+	// matching: without it "unblocked by #N" read as "blocked by #N" and
+	// declared the dependency the text denies (#2712). RE2 has no lookbehind;
+	// the wrappers (`` ` `` and `*`) are non-word characters, so wrapped
+	// spellings keep their boundary, and the zero-width assertion moves no
+	// submatch index.
+	depBlockedByCore = `\bblocked[ \t_-]*by\b`
+	depDependsOnCore = `\bdepends?[ \t_-]*on\b`
 
 	// depKeywordCore is either of them.
 	depKeywordCore = `(?:` + depBlockedByCore + `|` + depDependsOnCore + `)`

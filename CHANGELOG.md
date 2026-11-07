@@ -25,6 +25,116 @@ changelog, and the release workflow refuses a tag that does not.
   Claude and OpenCode adapters grant the stage read access to that cache
   directory (the OpenCode hook takes it from the dispatcher, not its isolated
   cache), and the Claude adapters deny edits to it (#2789).
+- **The AC diff check no longer calls a criterion unmet because a token was
+  missing from a file it could not read (#3037).** If a token is not in the
+  added lines and a file in scope is unreadable (too large, missing, or not a
+  regular file), the criterion is left for feature-validate to judge.
+- **pr-create's criterion check no longer reads prose notation as literal text.** It
+  matches a key-value span such as `state: SUCCESS` in JSON, YAML or Go-literal form,
+  and leaves a clause holding a placeholder or glob span to feature-validate instead
+  of marking it unmet, so complete work no longer merges as `Refs` (#3030).
+
+- **The clean-install G1 row "stage skills were loaded from the bundle path"
+  now passes a correct install.** Since stages receive their skill in the
+  prompt, they make no tool call under the bundle, so the old read count failed
+  working runs. The row now checks the `[skillRunner] skill_path=` lines in the
+  slot output channels: it passes only when at least one was logged and every
+  one is under the installed bundle's `dist/skills/`. The read count is still
+  reported, as information.
+- **pr-create's acceptance-criteria verifier is stricter about what counts as
+  met (#2669).** A validate verdict matched only by position can hold an issue
+  open but never close it. Negative evidence counts only for the criterion it
+  names, and no longer overturns a deterministic met. A criterion naming no
+  file inherits the file the previous criterion named, instead of matching any
+  added line; with none, it is checked only when it is about the changelog.
+  "human-readable", "manual page" and "log rotation" are no longer read as
+  operator or credential steps. A section check tries every named
+  file before reporting unmet. A file too large or otherwise unreadable is
+  treated as unknown, not empty, and a criterion checked only against a file
+  inherited from an earlier criterion can be met but never unmet. Credential
+  steps need an action ("rotate", "provision", …), so "the log never contains
+  credentials" is checkable. Reads are size-bounded and follow symlinks, the
+  diff collection honours the stage's cancellation, and a verdict resting on
+  uncommitted files records every such file as `uncommitted_paths`.
+- feature-validate's prompt now carries its Phase 6 output contract
+  (`acceptance_criteria_verdicts`). An include marked `<!-- supply: first -->` is
+  supplied before the include budget runs out, and the default budget is now
+  80 KiB, which also supplies pr-merge's post-merge include.
+- The clean-install G1 bundle-read row now counts skill reads from the stage
+  output logs. Stages write no session transcript, so it read 0 and failed every
+  full run.
+- A pull request that changes the Claude plugin without bumping its version past the
+  last stable tag now fails PR CI and the local gate, instead of turning `main` red
+  after merge.
+- Conflict recovery now judges commit statuses such as `cla` by their state, so a
+  PR whose checks are all green is recognised on the first poll instead of waiting
+  out the full CI budget and being booked as failed. When the wait does give up,
+  its message names the checks still pending (#3026).
+
+- The base-branch freshness check in feature-validate and pr-merge no longer
+  aborts a merge that is already open. A merge of the base whose every path
+  is resolved and staged, as feature-dev leaves it, is committed and pushed, so the remote
+  PR branch that pr-merge reads includes the base, and the check carries on;
+  any other open merge, including one on a branch that is not behind, is left as found and reports
+  `FRESHNESS_CHECK_FAILED=true`. A failed commit after conflict resolution also
+  keeps the staged resolution instead of aborting it. pr-create's base merge
+  commits and pushes a fully staged open merge the same way, reporting
+  `merged`, and stops with
+  `merge-in-progress` only when unmerged paths remain (#2755).
+- The release scan gate no longer holds a release for InQuest's informational
+  `Windows_API_Function` YARA rule, which matches every Go binary. The rule is
+  matched by name and source, still recorded in the report under
+  `yara_allowlisted` and named in the summary line; every other finding still
+  blocks (#3019).
+- A feature-validate artifact that records its acceptance-criteria verdicts
+  under `acceptance_criteria[].verdict` now fails the extension's deliverable
+  policy, as it already did in Go (#3013). The stage is re-asked to move them
+  under `acceptance_criteria_verdicts`; if it does not, the stage fails instead
+  of having a synthetic artifact written over it, so a fully verified change no
+  longer opens a PR that says `Refs` instead of `Closes`.
+
+## [0.8.2] - 2026-11-06
+
+0.8.1 was tagged but never published, because the release gate could not scan
+files over 32 MB (#3011). Its changes ship in this release and are listed below.
+
+### Fixed
+
+- `nightgauge pr-stage create` now settles a branch with no diff against its
+  base the way the scheduler does: it comments the acceptance criteria, closes
+  the issue when every one is met, and reports `settled`, `issue_closed` and
+  `terminal_detail` in its JSON. Post-merge no longer sends an issue back to
+  Ready when its `Refs` pull request changed no files; it parks the issue in
+  Backlog and says so in the remainder comment (#3012).
+- Releases publish again: the VirusTotal scan gate accepts the large-file
+  upload host `bigfiles.virustotal.com`, and still refuses any other upload URL
+  before the API key is sent.
+- "Unblocked by #N", "undepends on #N" and other spellings that glue a
+  dependency keyword onto a preceding word no longer declare a dependency on
+  #N (#2712).
+- A relative link from a skill's supporting file into another skill or
+  `_shared/` (such as `../../nightgauge-verify-ui/SKILL.md`) now points at the
+  real file once the include is inlined into a stage prompt, and
+  `preflight skill-bundle` reports one that reaches outside the bundle.
+  `preflight skill-includes` now resolves a shared overlay's include directives
+  against each stage skill directory, as rendering does, so it no longer passes
+  a dead one or flags a working one (#2800).
+- Context-schema repair reads the stage's `SKILL.md` from the run's pinned
+  worktree instead of the first workspace folder, so a pinned run repairs
+  against the skill it actually ran (#2799).
+- Claude stages launched from the VS Code extension can now write to the main
+  checkout's knowledge base from a worktree without a user-level permission rule:
+  they get `--add-dir <main checkout>/.nightgauge/knowledge` and
+  `NIGHTGAUGE_KNOWLEDGE_DIR`, as Go-launched stages already did (#2798).
+
+- `nightgauge doctor` no longer hangs when `origin` accepts the connection and
+  never responds. The worktree scan's `git fetch` now times out after 60
+  seconds and falls back to the local ref.
+- A run the architecture-approval gate holds is no longer reported as a failed
+  run. Local history and the platform push record it as `cancelled` with
+  `outcome_type: awaiting_approval`, keeping its terminal kind, and it stays out
+  of the learning-outcome failure totals. The live Pipelines view no longer
+  shows it as a red failed row. Real failures still book as `failed`.
 - `nightgauge autonomous status` no longer reads "Running" while a repository
   halt stops dispatch. The headline gains `(N repositories halted)`, a
   `Halted repositories` section names each repo's issue, stage, reason and
@@ -48,6 +158,12 @@ changelog, and the release workflow refuses a tag that does not.
 - The Claude plugin's version is now 1.28.0, so installed plugins receive the plugin changes
   made since v0.8.1 (#2989's pr-create skill change), and `main`'s release-path build passes
   its plugin-version check again.
+- A feature-validate push refused for authentication is no longer reported as
+  failed tests. `nightgauge git push-branch` now exits 4 and prints
+  `[push-auth-failed]` on a credential refusal; feature-validate records
+  `push_status: "auth_failed"` in its context, the run halts with that marker
+  (classified `git_transport_auth_failed`), and the failure comment tells you
+  to fix the git credentials instead of reviewing tests (#2742).
 - pr-create no longer re-runs the ~30-minute full local gate after merging the
   base branch. The skill says to push the merge straight away, and the stage
   fence refuses `bash scripts/ci-local.sh` and `nightgauge ci gate-run` in
@@ -57,8 +173,6 @@ changelog, and the release workflow refuses a tag that does not.
   bookkeeping, and the completion check counts distinct stages instead of
   adding array lengths, so a stage that ran twice no longer marks a merged run
   failed, and a duplicate can no longer hide a stage that never ran (#2991).
-
-## [0.8.1] - 2026-11-05
 
 ### Fixed
 
@@ -8516,8 +8630,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.1...HEAD
-[0.8.1]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.1
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1

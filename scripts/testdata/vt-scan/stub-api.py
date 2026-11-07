@@ -12,6 +12,9 @@ VSIX or tarball can carry a "detection" through extraction unchanged:
   VT-STUB-MALICIOUS    one engine reports malicious
   VT-STUB-SUSPICIOUS   one engine reports suspicious
   VT-STUB-YARA         one crowdsourced YARA rule matches
+  VT-STUB-WINAPI-INQUEST    InQuest's Windows_API_Function rule matches
+  VT-STUB-WINAPI-ELSEWHERE  the same rule name from another source matches
+(YARA markers combine: each appends one match.)
   VT-STUB-AI-SUSP      Code insights verdict "suspicious"
   VT-STUB-AI-ABSENT    no crowdsourced_ai_results field
   VT-STUB-AI-ODD       crowdsourced_ai_results in an unknown shape
@@ -24,6 +27,8 @@ Run-wide failures are selected by files in <state-dir>:
   never-complete       analyses stay "queued" forever
   quota                answer every request with HTTP 429
   wrong-sha            analyses report a different sha256 than the upload
+  upload-url           GET /files/upload_url serves this file's content
+                       instead of the stub's own upload URL
 """
 
 import hashlib
@@ -48,14 +53,29 @@ def file_object(sha, content):
     attrs = doc["data"]["attributes"]
     doc["data"]["id"] = sha
     attrs["crowdsourced_ai_results"][0]["id"] = sha
+    yara = []
     if b"VT-STUB-YARA" in content:
-        attrs["crowdsourced_yara_results"] = [
+        yara.append(
             {
                 "rule_name": "Stub_Forced_Rule",
                 "ruleset_name": "stub_rules",
                 "source": "https://example.invalid/stub-rules",
             }
-        ]
+        )
+    for marker, source in (
+        (b"VT-STUB-WINAPI-INQUEST", "https://github.com/InQuest/yara-rules-vt"),
+        (b"VT-STUB-WINAPI-ELSEWHERE", "https://example.invalid/fork-rules"),
+    ):
+        if marker in content:
+            yara.append(
+                {
+                    "rule_name": "Windows_API_Function",
+                    "ruleset_name": "Windows_API_Function",
+                    "source": source,
+                }
+            )
+    if yara:
+        attrs["crowdsourced_yara_results"] = yara
     if b"VT-STUB-AI-SUSP" in content:
         attrs["crowdsourced_ai_results"][0]["verdict"] = "suspicious"
     if b"VT-STUB-AI-ABSENT" in content:
@@ -172,9 +192,11 @@ class Handler(BaseHTTPRequestHandler):
             )
         port = self.server.server_address[1]
         if self.path == "/api/v3/files/upload_url":
-            return self.answer(
-                "upload_url", 200, {"data": f"http://127.0.0.1:{port}/upload-large"}
-            )
+            url = f"http://127.0.0.1:{port}/upload-large"
+            if flag("upload-url"):
+                with open(os.path.join(STATE, "upload-url"), encoding="utf-8") as f:
+                    url = f.read().strip()
+            return self.answer("upload_url", 200, {"data": url})
         if self.path.startswith("/api/v3/analyses/"):
             aid = self.path.rsplit("/", 1)[-1]
             sha = UPLOADS.get(aid)

@@ -45,6 +45,8 @@ export const BLOCKED_DEPENDENCY_MARKER = "[blocked-dependency]";
  * no verdict, so the stage-specific "did not pass" guidance would be false.
  */
 export const RUNAWAY_PROGRESS_MARKER = "[runaway-progress-exceeded]";
+/** Stamped by `git push-branch` exit 4 and carried by verifyPostValidateState (#2742). */
+export const PUSH_AUTH_FAILED_MARKER = "[push-auth-failed]";
 
 /** Stage display order for the timeline */
 const STAGE_ORDER: PipelineStage[] = [
@@ -486,6 +488,14 @@ function getRecommendations(
       );
       break;
     case "feature-validate":
+      if (errMessage.includes(PUSH_AUTH_FAILED_MARKER)) {
+        recs.push(
+          "- \u{1F511} **Push refused for authentication** — feature-validate finished, but the remote " +
+            "refused this machine's git credentials. Tests and acceptance criteria are not the cause. " +
+            "Fix the git credentials (SSH key or token) for this repository and re-queue."
+        );
+        break;
+      }
       recs.push(
         "- \u2705 **Validation failed** — the implementation did not pass tests or acceptance criteria. Review the test output above and consider whether the acceptance criteria are achievable in a single pass."
       );

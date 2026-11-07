@@ -658,7 +658,7 @@ type DeterministicPRCreateRunner struct {
 	now      func() time.Time
 
 	// Hook for tests to read context from a synthetic source.
-	readContext func(workdir string, issueNumber int) (PRCreateSnapshot, error)
+	readContext func(ctx context.Context, workdir string, issueNumber int) (PRCreateSnapshot, error)
 
 	// writeContext writes pr-{N}.json after a successful create. Indirected
 	// so tests can capture the output without touching disk.
@@ -708,7 +708,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	ph := newPhaseEmitter(ctx, prCreatePhases)
 
 	ph.start("load-context")
-	snap, err := r.readContext(workdir, issueNumber)
+	snap, err := r.readContext(ctx, workdir, issueNumber)
 	if err != nil {
 		ph.supersedeInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonContextInvalidJSON, Detail: err.Error()}, nil)
@@ -1003,7 +1003,7 @@ func pipelineContextPath(workdir, name string) string {
 // Missing dev-{N}.json sets HasDev=false (decision rule punts). Missing
 // validate-{N}.json sets HasValidate=false. Missing issue-{N}.json is
 // tolerated — the snapshot keeps zero-values.
-func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot, error) {
+func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber int) (PRCreateSnapshot, error) {
 	snap := PRCreateSnapshot{RunID: os.Getenv("NIGHTGAUGE_RUN_ID")}
 	var validateVerdicts []ACVerdict
 	unitRan := false
@@ -1158,7 +1158,7 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 		}
 	}
 	if workdir != "" {
-		if d, diffErr := CollectACDiff(context.Background(), workdir, snap.BaseBranch); diffErr == nil {
+		if d, diffErr := CollectACDiff(ctx, workdir, snap.BaseBranch); diffErr == nil {
 			diff = d
 			snap.TreeDiffEmpty = !d.hasDeliverable()
 		}

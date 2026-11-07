@@ -4027,6 +4027,9 @@ func (s *Server) registerMethods() {
 		// misattribution recorded a merged run as failed/stall_kill. The flip
 		// happens BEFORE both telemetry and the RunRecord so every surface
 		// reflects the merge, not a phantom kill.
+		// #2756: an architecture-approval hold books as a non-failure on the
+		// run state and the live event, matching the run record.
+		approvalHold := !p.Success && !p.Deferred && heldForApproval(res.entry.rs.Snapshot())
 		groundTruthFlipped := false
 		outcomeFor := func(stage state.PipelineStage) string {
 			if effective := reconcilePrMergeGroundTruth(p.Success, p.PrMerged, string(stage)); effective != p.Success {
@@ -4036,7 +4039,7 @@ func (s *Server) registerMethods() {
 			switch {
 			case p.Success:
 				return "complete"
-			case p.Deferred:
+			case p.Deferred, approvalHold:
 				return "cancelled"
 			default:
 				return "failed"
@@ -4068,7 +4071,7 @@ func (s *Server) registerMethods() {
 		}
 
 		// STEP 2 — the work, UNLOCKED, against the snapshot.
-		s.emitPipelineDoneTelemetry(runID, p, snap.Visibility)
+		s.emitPipelineDoneTelemetry(runID, p, approvalHold && !p.Success, snap.Visibility)
 
 		// Write the authoritative interactive RunRecord (#232). notifyComplete
 		// is the interactive-only terminal funnel — the Go scheduler path emits
@@ -4289,6 +4292,8 @@ func (s *Server) registerMethods() {
 				record.TerminalFailureKind = ""
 				record.OutcomeType = orchestrator.OutcomeTypeDeferred
 			}
+			// #2756: an architecture-approval hold is a non-failure too.
+			orchestrator.ApplyNonFailureOutcome(&record)
 			// #304: derive the learning/calibration outcome from the SAME
 			// record about to be written. Until this, the outcome corpus
 			// (.git/nightgauge/pipeline/history/outcomes.jsonl — the input to the
@@ -4378,7 +4383,7 @@ func (s *Server) registerMethods() {
 				if err := learning.NewRecorder(root).Record(outcome); err != nil {
 					log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
 				}
-			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt, outcomeSkipGatePluginMissing:
+			case outcomeSkipDeferred, outcomeSkipAwaitingApproval, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt, outcomeSkipGatePluginMissing:
 				log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
 					p.IssueNumber, outcomeVerdict)
 			case outcomeUnset:

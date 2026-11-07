@@ -46,6 +46,16 @@ func TestIncludeCacheIsGrantedOnceARenderWroteCopies2789(t *testing.T) {
 	if !slices.Contains(opencodeallow.Roots(openCodeAllowOptions(opts)), cache) {
 		t.Errorf("OpenCode roots omit the include cache %s", cache)
 	}
+	edit := openCodePermissionMap(opts, "").Edit
+	denied := false
+	for _, p := range openCodeWorktreeRelativeDirPatterns(worktree, cache) {
+		if edit.values[p] == openCodeDeny {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Errorf("OpenCode edit map does not deny the include cache %s", cache)
+	}
 }
 
 // noIncludeCache gives a test a HOME with no include cache, so an exact

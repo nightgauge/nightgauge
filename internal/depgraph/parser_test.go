@@ -1413,3 +1413,51 @@ func TestParseDependencyRefs_RealDeclarationsSurviveTheIssue477Fixes(t *testing.
 		}
 	}
 }
+
+// TestParseDependencyRefs_GluedKeywordDeclaresNothing pins the leading word
+// boundary on the keyword cores: "unblocked by #N" says the opposite of
+// "blocked by #N" and must not gate on #N in either pass (#2712).
+func TestParseDependencyRefs_GluedKeywordDeclaresNothing(t *testing.T) {
+	cases := []string{
+		"unblocked by #2712",
+		"Unblocked-by #2712",
+		"undepends on #2712",
+		"xblocked by #2712",
+		"Unblocked by acme/platform#2712",
+		"Unblocked by https://github.com/o/r/issues/2712",
+		// `_` is a word character, so underscore emphasis is not a wrapper.
+		"_Blocked by_ #2712",
+	}
+	for _, body := range cases {
+		t.Run(body, func(t *testing.T) {
+			if got := ParseDependencyRefs(body, selfRepo, testRepoAliases); len(got) != 0 {
+				t.Fatalf("ParseDependencyRefs(%q) = %v, want none", body, got)
+			}
+			if got := ParseCrossRepoRefs(body, testRepoAliases); len(got) != 0 {
+				t.Fatalf("ParseCrossRepoRefs(%q) = %v, want none", body, got)
+			}
+		})
+	}
+}
+
+// TestParseDependencyRefs_BoundedKeywordStillDeclares is the positive half of
+// the #2712 boundary: a keyword at line start, mid-sentence, or wrapped in
+// non-word characters still declares the dependency.
+func TestParseDependencyRefs_BoundedKeywordStillDeclares(t *testing.T) {
+	cases := []string{
+		"Blocked by #2712",
+		"`blockedBy` #2712",
+		"**Depends on:** #2712",
+		"blocked-by #2712",
+		"This is blocked by #2712",
+		"re-blocked by #2712",
+	}
+	for _, body := range cases {
+		t.Run(body, func(t *testing.T) {
+			got := sameRepoNumbers(t, body)
+			if len(got) != 1 || got[0] != 2712 {
+				t.Fatalf("sameRepoNumbers(%q) = %v, want [2712]", body, got)
+			}
+		})
+	}
+}

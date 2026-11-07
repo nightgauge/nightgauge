@@ -23,6 +23,26 @@ echo "Checking freshness against $FRESHNESS_BASE..."
 # Fetch latest state of the base branch
 git fetch origin "$FRESHNESS_BASE" 2>/dev/null
 
+# An open merge with every path resolved and staged is concluded, never
+# aborted: committing it loses nothing (#2755). One with unmerged paths, or
+# whose commit fails, or that merges anything not already in the base, is left
+# exactly as found for the guard below.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && [ -z "$(git ls-files -u 2>/dev/null)" ] \
+  && git merge-base --is-ancestor MERGE_HEAD "origin/$FRESHNESS_BASE" 2>/dev/null; then
+  if git commit --no-edit >/dev/null 2>&1; then
+    echo "Concluded the open merge with its staged resolution."
+    # Push it now: the branch then reads as fresh below, so the behind path's
+    # push never runs, and pr-merge checks the remote branch. Best-effort,
+    # fork tokens filtered, as on the behind path (#2749).
+    PUSH_ERR=$(mktemp)
+    if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+      echo "WARNING: Failed to push the concluded merge. Continuing with the local merge."
+      grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
+    fi
+    rm -f "$PUSH_ERR"
+  fi
+fi # open merge
+
 # Count commits on base that are NOT in our branch
 BEHIND_COUNT=$(git rev-list --count "HEAD..origin/$FRESHNESS_BASE" 2>/dev/null || echo "0")
 
@@ -31,7 +51,25 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
 
   CURRENT_BRANCH=$(git branch --show-current)
 
-  if git merge --no-edit -m "Merge origin/$FRESHNESS_BASE into $CURRENT_BRANCH" "origin/$FRESHNESS_BASE" 2>/dev/null; then
+  if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+    # A merge is still open: it has unmerged paths, or its commit failed above.
+    # Merging again fails with "You have not concluded your merge", and
+    # aborting would discard whatever resolution is staged (#2755). Leave it
+    # exactly as found: no merge, no abort.
+    echo "A merge is already in progress (MERGE_HEAD $(git rev-parse --short MERGE_HEAD)). Leaving it untouched."
+    if [ -n "$(git ls-files -u 2>/dev/null)" ]; then
+      echo "The open merge still has unmerged paths."
+    else
+      echo "The open merge has every path resolved and staged."
+    fi
+    if git merge-base --is-ancestor "origin/$FRESHNESS_BASE" MERGE_HEAD 2>/dev/null; then
+      echo "The open merge already brings in origin/$FRESHNESS_BASE."
+    else
+      echo "The open merge does not bring in origin/$FRESHNESS_BASE."
+    fi
+    echo "FRESHNESS_CHECK_FAILED=true"
+    FRESHNESS_CHECK_FAILED=true
+  elif git merge --no-edit -m "Merge origin/$FRESHNESS_BASE into $CURRENT_BRANCH" "origin/$FRESHNESS_BASE" 2>/dev/null; then
     echo "Merge successful. Branch is now up-to-date with $FRESHNESS_BASE."
     # Plain push; push-branch never forces and recovers a self-inflicted fork.
     # Best-effort: the cause is printed with the fork tokens filtered out, so a
@@ -39,6 +77,8 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
     # stage that carries on (#2749). The filter copies the `branch_forked`
     # clauses of internal/terminalkind/table.json.
     PUSH_ERR=$(mktemp)
+    # Exit 4 is a credential refusal (#2742): its `[push-auth-failed]` line
+    # passes the filter, so a later push surfaces the same cause.
     if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
       echo "WARNING: Failed to push merged branch. Continuing with the local merge."
       grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
@@ -106,19 +146,30 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
         fi
         rm -f "$PUSH_ERR"
       else
+        # Never abort here: the resolution is staged, and aborting would throw
+        # it away (#2755). The merge stays open for the caller to commit.
         echo "ERROR: Committing the merge failed after conflict resolution."
-        git merge --abort 2>/dev/null || true
+        echo "The merge is left open with the resolution staged; commit it to conclude."
         echo "FRESHNESS_CHECK_FAILED=true"
-        echo "Manual conflict resolution required. Base branch has diverged significantly."
         # Do NOT exit — let the calling phase decide how to handle
         FRESHNESS_CHECK_FAILED=true
       fi
     else
-      git merge --abort 2>/dev/null || true
+      # The open-merge probe above ran first, so a MERGE_HEAD here is the one
+      # this block just created with nothing resolved: undoing it loses nothing.
+      if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+        git merge --abort 2>/dev/null || true
+      fi
       echo "ERROR: Merge failed with no conflict markers. Unexpected state."
       FRESHNESS_CHECK_FAILED=true
     fi
   fi
+elif git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  # Not behind, but a merge is still open (unmerged paths, or its commit failed
+  # above). The base is in, yet the tree is not committed: report it (#2755).
+  echo "A merge is still in progress (MERGE_HEAD $(git rev-parse --short MERGE_HEAD)). Leaving it untouched."
+  echo "FRESHNESS_CHECK_FAILED=true"
+  FRESHNESS_CHECK_FAILED=true
 else
   echo "Branch is up-to-date with origin/$FRESHNESS_BASE."
 fi
@@ -128,8 +179,13 @@ fi
 
 - `BEHIND_COUNT` — how many commits the branch was behind (0 = already fresh)
 - `FRESHNESS_CHECK_FAILED` — set to `true` if the merge + conflict resolution
-  failed. The calling phase should decide whether to abort or continue.
+  failed, or if a merge was already open and the check left it alone. The
+  calling phase should decide whether to abort or continue.
 
 **Safety**: Merges the base and pushes with `nightgauge git push-branch`, which
 never forces. If the push fails, the cause is printed without the terminal
-marker, and the local merge is still valid for build/test validation.
+marker, and the local merge is still valid for build/test validation. The block
+never aborts a merge it did not start, and never aborts once a resolution is
+staged: a fully staged open merge is committed and pushed, any other open merge
+is left as found, and a failed commit leaves the staged resolution in place
+(#2755).

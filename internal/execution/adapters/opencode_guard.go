@@ -935,6 +935,8 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, binDir)...,
 	)
 	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, openCodeReadOnlySkillsRoot(opts))...)
+	// The include cache is granted for read only, like the skills tree (#2789).
+	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, opencodeallow.GrantedIncludeCacheRoot())...)
 	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeAliasConfigDenyPatterns(opts.WorktreeDir)...)
 	return &openCodePermissionJSON{
 		Wildcard: openCodeDeny,

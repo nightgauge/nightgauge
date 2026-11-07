@@ -13,7 +13,7 @@ import { describe, it, expect } from "vitest";
 // Types mirroring the bash variable contract from STALE_BRANCH_MERGE.md
 // ---------------------------------------------------------------------------
 
-type FreshnessStatus = "up-to-date" | "merged" | "conflict" | "push-failed";
+type FreshnessStatus = "up-to-date" | "merged" | "conflict" | "push-failed" | "merge-in-progress";
 
 interface FreshnessResult {
   performed: boolean;
@@ -31,6 +31,8 @@ interface GitScenario {
   hasConflicts: boolean;
   /** whether git push succeeds */
   pushSucceeds: boolean;
+  /** whether a merge is already open (MERGE_HEAD exists) — #2755 */
+  mergeInProgress?: boolean;
 }
 
 /**
@@ -38,7 +40,11 @@ interface GitScenario {
  * This mirrors the bash logic without executing real git commands.
  */
 function simulateFreshnessCheck(scenario: GitScenario): FreshnessResult {
-  const { behindCount, hasConflicts, pushSucceeds } = scenario;
+  const { behindCount, hasConflicts, pushSucceeds, mergeInProgress } = scenario;
+
+  if (mergeInProgress) {
+    return { performed: false, status: "merge-in-progress", exitCode: 1 };
+  }
 
   if (behindCount === 0) {
     return { performed: false, status: "up-to-date", exitCode: 0 };
@@ -69,6 +75,20 @@ function simulateFreshnessCheck(scenario: GitScenario): FreshnessResult {
 // ---------------------------------------------------------------------------
 
 describe("Phase 2.3: Proactive Main Branch Merge — single-issue", () => {
+  it("a merge is already open — fails without claiming a base conflict (#2755)", () => {
+    const result = simulateFreshnessCheck({
+      behindCount: 1,
+      hasConflicts: false,
+      pushSucceeds: true,
+      mergeInProgress: true,
+    });
+
+    expect(result.performed).toBe(false);
+    expect(result.status).toBe("merge-in-progress");
+    expect(result.exitCode).toBe(1);
+    expect(result.stderrContains).toBeUndefined();
+  });
+
   it("branch is already up-to-date — skips merge", () => {
     const result = simulateFreshnessCheck({
       behindCount: 0,
