@@ -544,9 +544,23 @@ func includeBudget(opts Options) int {
 // supplies inline when Options.IncludeBudget is zero. It holds every include
 // feature-planning (46 KB), issue-pickup (50 KB) and pr-create (40 KB)
 // direct a phase to read; the larger feature-validate and pr-merge sets are
-// supplied in directive order until it is spent, and the rest stay reads.
+// supplied, marked includes first, until it is spent, and the rest stay reads.
 // feature-dev is exempt: see includeBudget.
-const DefaultIncludeBudget = 64 * 1024
+//
+// #3031: 80 KiB, up from 64. feature-validate's output contract
+// (context-and-board.md, 16.6 KB) is supplied first, and at 64 KiB it would
+// push run-tests.md back to a read; 80 KiB holds the contract plus the six
+// includes feature-validate already got (77.6 KB in total). pr-merge now also
+// gets post-merge.md.
+const DefaultIncludeBudget = 80 * 1024
+
+// SupplyFirstMarker, on a line of its own in an `_includes/` file, makes
+// SupplyPhaseIncludes take that include before unmarked ones (#3031). An
+// include that holds a stage's output contract carries it, so the contract
+// is never the one the budget runs out on.
+const SupplyFirstMarker = "<!-- supply: first -->"
+
+var supplyFirstRE = regexp.MustCompile(`(?m)^[ \t]*` + regexp.QuoteMeta(SupplyFirstMarker) + `[ \t]*\r?$`)
 
 // EveryPhaseInclude is an Options.IncludeBudget that supplies every phase
 // include, for a caller inspecting all the text a stage can be handed.
@@ -571,7 +585,8 @@ var phaseIncludeDirectiveRE = regexp.MustCompile("Read `_includes/([A-Za-z0-9._-
 // in the prompt costs the same text once, in the stable prefix, on every
 // adapter.
 //
-// Includes are taken in the order their first directive appears; one that
+// Includes marked with SupplyFirstMarker are taken first, then the rest;
+// within each group the order is that of their first directive. One that
 // does not fit in the remaining budget is skipped (its directives stay
 // reads) and the next is tried, so the result is deterministic. Render has
 // already refused a missing target (composeIncludes), so the one left behind
@@ -593,17 +608,32 @@ func SupplyPhaseIncludes(body, skillDir string, budget int) (string, []string) {
 			names = append(names, m[1])
 		}
 	}
+	type candidate struct {
+		name string
+		data []byte
+	}
+	var first, rest []candidate
+	for _, name := range names {
+		data, err := os.ReadFile(filepath.Join(skillDir, "_includes", name))
+		if err != nil {
+			continue
+		}
+		if supplyFirstRE.Match(data) {
+			first = append(first, candidate{name, data})
+		} else {
+			rest = append(rest, candidate{name, data})
+		}
+	}
 	supplied := map[string]string{}
 	var order []string
 	remaining := budget
-	for _, name := range names {
-		data, err := os.ReadFile(filepath.Join(skillDir, "_includes", name))
-		if err != nil || len(data) > remaining {
+	for _, c := range append(first, rest...) {
+		if len(c.data) > remaining {
 			continue
 		}
-		remaining -= len(data)
-		supplied[name] = string(data)
-		order = append(order, name)
+		remaining -= len(c.data)
+		supplied[c.name] = string(c.data)
+		order = append(order, c.name)
 	}
 	if len(order) == 0 {
 		return body, nil
