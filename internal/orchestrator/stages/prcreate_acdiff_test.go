@@ -751,3 +751,76 @@ diff --git a/internal/w.go b/internal/w.go
 		t.Errorf("file-less clause resolved from an arbitrary file: %+v", got)
 	}
 }
+
+// #3030: a key-value span matches the same pair in JSON, YAML or Go-literal
+// form, the key case-insensitively and the value exactly.
+func TestACSpanMatcher_KeyValue(t *testing.T) {
+	match := acSpanMatcher("state: SUCCESS")
+	for _, line := range []string{`"state":"SUCCESS"`, `State: "SUCCESS"`, `state: 'SUCCESS'`, `state=SUCCESS`, `{"context":"cla","state":"SUCCESS"}`} {
+		if !match(line) {
+			t.Errorf("%q did not match", line)
+		}
+	}
+	for _, line := range []string{`"state":"FAILURE"`, `"status":"SUCCESS"`, `substate: SUCCESS`, `state: SUCCESSFUL`} {
+		if match(line) {
+			t.Errorf("%q matched", line)
+		}
+	}
+	if lit := acSpanMatcher("--dry-run"); !lit("use --dry-run") || lit("use --wet-run") {
+		t.Error("a non key-value span must match literally")
+	}
+}
+
+func TestACIsPatternSpan(t *testing.T) {
+	for tok, want := range map[string]bool{
+		"<sha7>": true, "a/**": true, "*.go": true, "(Z+1)": true, "X.Y.(Z+1)-main.g<sha7>": true,
+		"--dry-run": false, "f()": false, "Promise<void>": false, "*p": false, "(not-found)": false, "a * b": false, "<sha7>-x": true, "<div>": false, "<Button>": false, "/* x */": false, "**kwargs": false, "<N>.md": true, "dir/*": true, "**/x": true, "<issue-number>": true, "state: SUCCESS": false, "docs/a.md": false,
+	} {
+		if got := acIsPatternSpan(tok); got != want {
+			t.Errorf("acIsPatternSpan(%q) = %v, want %v", tok, got, want)
+		}
+	}
+}
+
+// #3030: replay of #3029 criterion 2 — the pair lands as JSON.
+func TestVerifyACAgainstDiff_Issue3029(t *testing.T) {
+	line := `{"__typename":"StatusContext","context":"cla","state":"SUCCESS"}`
+	d := memDiff(`diff --git a/testdata/rollup.json b/testdata/rollup.json
+--- a/testdata/rollup.json
++++ b/testdata/rollup.json
+@@ -0,0 +1 @@
++`+line+"\n", map[string]string{"testdata/rollup.json": line})
+	got, ok := VerifyACAgainstDiff("The fixture `testdata/rollup.json` holds a status context with `state: SUCCESS`.", nil, d, ACTestState{})
+	if !ok || got.Status != ACMet {
+		t.Errorf("got %+v ok=%v, want met", got, ok)
+	}
+}
+
+// #3030: replay of #3033 criterion 1 — placeholder and glob spans never make
+// a clause unmet on their own.
+func TestVerifyACAgainstDiff_Issue3033(t *testing.T) {
+	d := memDiff(`diff --git a/scripts/version.sh b/scripts/version.sh
+--- a/scripts/version.sh
++++ b/scripts/version.sh
+@@ -0,0 +1 @@
++echo "$major.$minor.$((patch+1))-main.g$(git rev-parse --short=7 HEAD)"
+`, map[string]string{"scripts/version.sh": "echo version"})
+	crit := "The version is `X.Y.(Z+1)-main.g<sha7>` when `claude-plugins/nightgauge/**` or `.claude-plugin/**` changes"
+	for name, c := range map[string]struct {
+		text  string
+		prior []string
+	}{
+		"named file": {"`scripts/version.sh` prints " + crit + ".", nil},
+		"inherited":  {crit + ".", []string{"`scripts/version.sh` computes the version."}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := VerifyACAgainstDiff(c.text, c.prior, d, ACTestState{}); ok && got.Status == ACUnmet {
+				t.Errorf("got %+v, want not unmet", got)
+			}
+		})
+	}
+	// A missing literal span still makes the clause unmet.
+	if got, ok := VerifyACAgainstDiff("`scripts/version.sh` prints `<sha7>` and `--absent-flag`.", nil, d, ACTestState{}); !ok || got.Status != ACUnmet {
+		t.Errorf("got %+v ok=%v, want unmet", got, ok)
+	}
+}

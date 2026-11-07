@@ -1036,6 +1036,9 @@ func acSection(c acClause, diffed []string, d *ACDiff) acResult {
 	// and none satisfies. An unreadable file may hold the section, so a clause
 	// with any unreadable file and no satisfying one is not diff-checkable,
 	// as in acUnchanged (#2669).
+	// A placeholder or glob span cannot be checked literally, so a section
+	// holding one is never met on its other spans (#3030).
+	tokens, patterns := acLiteralSpans(c.Tokens)
 	var reasons, tried []string
 	skipped := false
 	for _, p := range diffed {
@@ -1056,9 +1059,12 @@ func acSection(c acClause, diffed []string, d *ACDiff) acResult {
 			reasons = append(reasons, fmt.Sprintf("`%s` adds no line under %s", p, acHeadingList(c.Headings, true)))
 			continue
 		}
-		if missing := acMissingTokens(c.Tokens, sec); len(missing) > 0 {
+		if missing := acMissingTokens(tokens, sec); len(missing) > 0 {
 			reasons = append(reasons, fmt.Sprintf("lines `%s` adds under %s do not mention %s", p, acHeadingList(c.Headings, true), acList(missing, 5)))
 			continue
+		}
+		if patterns {
+			return acResult{}
 		}
 		ev := fmt.Sprintf("`%s:%d` adds %d line(s) under %s", p, sec[0].N, len(sec), acHeadingList(c.Headings, true))
 		if len(c.Tokens) > 0 {
@@ -1161,8 +1167,11 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 	if len(named) > 0 {
 		wide = acWideScope(c, d)
 	}
+	// Placeholder and glob spans never reach the matchers: a missing literal
+	// span is still unmet, otherwise the clause is left to validate (#3030).
+	tokens, patterns := acLiteralSpans(c.Tokens)
 	added := 0
-	for _, tok := range c.Tokens {
+	for _, tok := range tokens {
 		if loc, ok := acAddedToken(tok, scope, d); ok {
 			ev = append(ev, fmt.Sprintf("adds `%s` at `%s`", tok, loc))
 			cite(loc)
@@ -1188,7 +1197,7 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 		}
 		return acAnswer(ACUnmet, fmt.Sprintf("the diff does not add %s (looked in %s and every other changed file)", acList(missing, 5), acList(named, 3)), named...)
 	}
-	if added == 0 && !decided {
+	if patterns || (added == 0 && !decided) {
 		return acResult{}
 	}
 	return acAnswer(ACMet, "the diff "+strings.Join(ev, ", "), paths...)
@@ -1296,10 +1305,58 @@ func acBoundAdded(b acBound, paths []string, d *ACDiff) (loc, val string, ok, pa
 	return "", "", false, paired
 }
 
+// acKeyValueRE parses a key-value span such as `state: SUCCESS`: one key,
+// one `:` or `=` separator and one whitespace-free value, each optionally
+// quoted (#3030).
+var acKeyValueRE = regexp.MustCompile(`^["']?([A-Za-z_][A-Za-z0-9_.\-]*)["']?\s*[:=]\s*["']?([^\s"':=]+)["']?$`)
+
+// acSpanMatcher returns the test a line must pass to contain tok. A key-value
+// span matches the same pair written in any quoting and spacing, as JSON,
+// YAML or a Go literal, with the key compared case-insensitively and the
+// value exactly (#3030). Any other span matches as a literal substring.
+func acSpanMatcher(tok string) func(line string) bool {
+	m := acKeyValueRE.FindStringSubmatch(tok)
+	if m == nil {
+		return func(line string) bool { return strings.Contains(line, tok) }
+	}
+	re := regexp.MustCompile(`(?:^|[^A-Za-z0-9_])["']?(?i:` + regexp.QuoteMeta(m[1]) +
+		`)["']?\s*[:=]\s*["']?` + regexp.QuoteMeta(m[2]) + `(?:["']|[^A-Za-z0-9_]|$)`)
+	return re.MatchString
+}
+
+// acPatternSpanRE matches notation that stands for text rather than being
+// text (#3030): a `<placeholder>` holding a digit, `-` or `_`, or one joined
+// to other text by a separator (`g<sha7>`, `<N>.md`); a path glob (`/**`,
+// `**/`, `*.go`, `dir/*`); or a variable-plus-number expression such as
+// `(Z+1)`. A bare `<div>`, a generic `Promise<void>`, a pointer `*p`, a
+// `/* comment */`, `**kwargs` and a phrase like `(not-found)` stay literal.
+var acPatternSpanRE = regexp.MustCompile(`<[A-Za-z][A-Za-z0-9]*[0-9_\-][A-Za-z0-9_\-]*>` +
+	`|(?:^|[^A-Za-z0-9_]|(?:^|[^A-Za-z0-9_])[A-Za-z])<[A-Za-z][A-Za-z0-9_\-]*>[^\s>]` +
+	`|[.\-/]<[A-Za-z][A-Za-z0-9_\-]*>` +
+	`|/\*\*|\*\*/|\*\.[A-Za-z0-9]+|/\*(?:$|[/.A-Za-z0-9])` +
+	`|\([A-Za-z][A-Za-z0-9_]*\s*[+\-]\s*[0-9]+\)`)
+
+// acIsPatternSpan reports whether a span is a placeholder or glob that no
+// literal line can contain, so it can neither meet nor contradict a clause.
+func acIsPatternSpan(tok string) bool { return acPatternSpanRE.MatchString(tok) }
+
+// acLiteralSpans splits tokens into literal spans and pattern spans.
+func acLiteralSpans(tokens []string) (literal []string, patterns bool) {
+	for _, tok := range tokens {
+		if acIsPatternSpan(tok) {
+			patterns = true
+			continue
+		}
+		literal = append(literal, tok)
+	}
+	return literal, patterns
+}
+
 func acAddedToken(tok string, scope []string, d *ACDiff) (string, bool) {
+	match := acSpanMatcher(tok)
 	for _, p := range scope {
 		for _, l := range d.Files[p].Added {
-			if strings.Contains(l.Text, tok) {
+			if match(l.Text) {
 				return fmt.Sprintf("%s:%d", p, l.N), true
 			}
 		}
@@ -1308,10 +1365,11 @@ func acAddedToken(tok string, scope []string, d *ACDiff) (string, bool) {
 }
 
 func acPresentToken(tok string, scope []string, d *ACDiff) (string, bool) {
+	match := acSpanMatcher(tok)
 	for _, p := range scope {
 		lines, _ := d.lines(p)
 		for i, l := range lines {
-			if strings.Contains(l, tok) {
+			if match(l) {
 				return fmt.Sprintf("%s:%d", p, i+1), true
 			}
 		}
@@ -1323,8 +1381,9 @@ func acMissingTokens(tokens []string, lines []acDiffLine) []string {
 	var missing []string
 	for _, tok := range tokens {
 		found := false
+		match := acSpanMatcher(tok)
 		for _, l := range lines {
-			if strings.Contains(l.Text, tok) {
+			if match(l.Text) {
 				found = true
 				break
 			}

@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **pr-create's criterion check no longer reads prose notation as literal text.** It
+  matches a key-value span such as `state: SUCCESS` in JSON, YAML or Go-literal form,
+  and leaves a clause holding a placeholder or glob span to feature-validate instead
+  of marking it unmet, so complete work no longer merges as `Refs` (#3030).
+
 - **The clean-install G1 row "stage skills were loaded from the bundle path"
   now passes a correct install.** Since stages receive their skill in the
   prompt, they make no tool call under the bundle, so the old read count failed
