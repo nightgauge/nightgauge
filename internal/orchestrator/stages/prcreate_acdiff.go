@@ -1171,14 +1171,16 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 	// span is still unmet, otherwise the clause is left to validate (#3030).
 	tokens, patterns := acLiteralSpans(c.Tokens)
 	added := 0
+	skipped := false
 	for _, tok := range tokens {
+		present, found, unread := "", false, false
 		if loc, ok := acAddedToken(tok, scope, d); ok {
 			ev = append(ev, fmt.Sprintf("adds `%s` at `%s`", tok, loc))
 			cite(loc)
 			added++
-		} else if loc, ok := acPresentToken(tok, scope, d); ok {
-			ev = append(ev, fmt.Sprintf("keeps `%s` already at `%s`", tok, loc))
-			cite(loc)
+		} else if present, found, unread = acPresentToken(tok, scope, d); found {
+			ev = append(ev, fmt.Sprintf("keeps `%s` already at `%s`", tok, present))
+			cite(present)
 		} else if loc, ok := acSymbolPlace(tok, d); ok {
 			ev = append(ev, fmt.Sprintf("changes `%s` in `%s`", tok, loc))
 			cite(loc)
@@ -1189,9 +1191,16 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 			added++
 		} else {
 			missing = append(missing, tok)
+			skipped = skipped || unread
 		}
 	}
 	if len(missing) > 0 {
+		if skipped {
+			// A missing token may sit in a scope file the checker could not
+			// read: leave the clause to validate rather than call it unmet
+			// from content nobody saw (#3037, #2669 ADR-004).
+			return acResult{}
+		}
 		if len(named) == 0 {
 			return acAnswer(ACUnmet, fmt.Sprintf("the %s diff does not add %s", acList(scope, 3), acList(missing, 5)), scope...)
 		}
@@ -1364,17 +1373,24 @@ func acAddedToken(tok string, scope []string, d *ACDiff) (string, bool) {
 	return "", false
 }
 
-func acPresentToken(tok string, scope []string, d *ACDiff) (string, bool) {
+// acPresentToken looks for tok in the post-change content of the scope
+// files. unread reports that a scope file could not be read, so a token it
+// did not find may still be there: an unreadable file is never empty (#3037).
+func acPresentToken(tok string, scope []string, d *ACDiff) (loc string, found, unread bool) {
 	match := acSpanMatcher(tok)
 	for _, p := range scope {
-		lines, _ := d.lines(p)
+		lines, ok := d.lines(p)
+		if !ok {
+			unread = true
+			continue
+		}
 		for i, l := range lines {
 			if match(l) {
-				return fmt.Sprintf("%s:%d", p, i+1), true
+				return fmt.Sprintf("%s:%d", p, i+1), true, unread
 			}
 		}
 	}
-	return "", false
+	return "", false, unread
 }
 
 func acMissingTokens(tokens []string, lines []acDiffLine) []string {

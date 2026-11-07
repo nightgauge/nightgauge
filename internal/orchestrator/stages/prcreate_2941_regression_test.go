@@ -427,7 +427,11 @@ diff --git a/internal/hooks/gate.go b/internal/hooks/gate.go
 +++ b/internal/hooks/gate.go
 @@ -1,0 +2 @@
 +const flag = "run_in_background"
-`, nil)
+`, map[string]string{
+		// Read content: an unreadable file leaves a missing token undecided (#3037).
+		"scripts/run.sh":         "#!/bin/sh\ncheck_gate\n",
+		"internal/hooks/gate.go": "package hooks\nconst flag = \"run_in_background\"\n",
+	})
 	r, ok := VerifyACAgainstDiff("A hook denies `run.sh` unless `run_in_background` is set", nil, d, ACTestState{})
 	if !ok || r.Status != ACMet || !strings.Contains(r.Evidence, "internal/hooks/gate.go:2") {
 		t.Errorf("got %+v (ok=%v)", r, ok)

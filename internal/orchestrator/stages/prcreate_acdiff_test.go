@@ -446,7 +446,7 @@ func TestVerifyACAgainstDiff_UnreadableNotEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.WriteString("\n- " + strings.Repeat("x", acReadMaxBytes) + "\n"); err != nil {
+	if _, err := f.WriteString("\n### Fixed\n\n- " + strings.Repeat("x", acReadMaxBytes) + "\n"); err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
@@ -458,10 +458,53 @@ func TestVerifyACAgainstDiff_UnreadableNotEmpty(t *testing.T) {
 		"`CHANGELOG.md` adds a bullet under `## [Unreleased]`.",
 		"`CHANGELOG.md` section `## [Unreleased]` is unchanged.",
 		"The `## [Unreleased]` section is unchanged.",
+		// #3037 AC 3 and AC 4: the nested heading phrasing.
+		"`CHANGELOG.md` adds a bullet under `## [Unreleased]` -> `### Fixed`.",
+		"The `### Fixed` section is unchanged.",
 	} {
 		if got, ok := VerifyACAgainstDiff(text, nil, d, ACTestState{}); ok {
 			t.Errorf("%q: got %+v, want not diff-checkable", text, got)
 		}
+	}
+}
+
+// #3037: a token missing from the added lines of a file the checker could
+// not read is undecided, never unmet. The same file, read, stays unmet.
+func TestVerifyACAgainstDiff_TokenUnreadableNotUnmet(t *testing.T) {
+	const diff = `diff --git a/big.go b/big.go
+--- a/big.go
++++ b/big.go
+@@ -1,0 +2 @@
++var other = 1
+`
+	const text = "`big.go` defines `MissingSymbol`."
+	read := memDiff(diff, map[string]string{"big.go": "package big\nvar other = 1\n"})
+	if got, ok := VerifyACAgainstDiff(text, nil, read, ACTestState{}); !ok || got.Status != ACUnmet {
+		t.Fatalf("readable: got %+v ok=%v, want unmet", got, ok)
+	}
+	unread := memDiff(diff, nil)
+	unread.content["big.go"] = acContent{ok: false}
+	if got, ok := VerifyACAgainstDiff(text, nil, unread, ACTestState{}); ok {
+		t.Errorf("unreadable: got %+v, want not diff-checkable", got)
+	}
+	added := memDiff(diff, nil)
+	added.content["big.go"] = acContent{ok: false}
+	if got, ok := VerifyACAgainstDiff("`big.go` defines `other`.", nil, added, ACTestState{}); !ok || got.Status != ACMet {
+		t.Errorf("token in added lines of unreadable file: got %+v ok=%v, want met", got, ok)
+	}
+}
+
+// #3037 AC 5: a readable empty file is read, not treated as unreadable.
+func TestVerifyACAgainstDiff_EmptyFileReadable(t *testing.T) {
+	dir := changelogRepo(t)
+	writeFile(t, dir, "CHANGELOG.md", "")
+	d := collect(t, dir)
+	if l, ok := d.lines("CHANGELOG.md"); !ok || strings.Join(l, "") != "" {
+		t.Fatalf("lines(empty CHANGELOG.md) = %q ok=%v, want readable and empty", l, ok)
+	}
+	text := "`CHANGELOG.md` adds a bullet under `## [Unreleased]`."
+	if got, ok := VerifyACAgainstDiff(text, nil, d, ACTestState{}); !ok || got.Status != ACUnmet {
+		t.Errorf("got %+v ok=%v, want unmet", got, ok)
 	}
 }
 
