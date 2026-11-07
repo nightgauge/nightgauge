@@ -34,6 +34,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the plugin-version check diffs against the last stable tag
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
@@ -66,6 +68,12 @@ jobs:
         run: bash scripts/test-check-plugin-version.sh
       - name: Plugin has one version and valid skills
         run: bash scripts/check-plugin-version.sh
+      # #3014: judge this merge commit under the synthetic tag main-build.yml
+      # will use, so a plugin change without a bump fails here, not on main.
+      - name: Plugin version above the last stable tag
+        run: |
+          git fetch --tags --force --quiet origin
+          bash scripts/check-plugin-version.sh --main-build
       # Install docs (#2759): the binary step is present, the documented
       # commands install the plugin from this commit in a scratch config, and
       # `claude plugin validate --strict` passes (#2763).

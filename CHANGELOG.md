@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A pull request that changes the Claude plugin without bumping its version past the
+  last stable tag now fails PR CI and the local gate, instead of turning `main` red
+  after merge.
 - Conflict recovery now judges commit statuses such as `cla` by their state, so a
   PR whose checks are all green is recognised on the first poll instead of waiting
   out the full CI budget and being booked as failed. When the wait does give up,
