@@ -9,6 +9,11 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-07
+
+0.8.1 was tagged but never published, because the release gate could not scan
+files over 32 MB (#3011). Its changes ship in this release and are listed below.
+
 ### Fixed
 
 - The Output window no longer carries a previous run into a new one (#2808). A
@@ -30,14 +35,6 @@ and this project adheres to
   under `acceptance_criteria_verdicts`; if it does not, the stage fails instead
   of having a synthetic artifact written over it, so a fully verified change no
   longer opens a PR that says `Refs` instead of `Closes`.
-
-## [0.8.2] - 2026-11-06
-
-0.8.1 was tagged but never published, because the release gate could not scan
-files over 32 MB (#3011). Its changes ship in this release and are listed below.
-
-### Fixed
-
 - When an issue re-runs with nothing left to build, the extension no longer
   opens and merges an empty pull request. The fallback checks that the branch's
   tree differs from its base, not just that it has commits ahead. A
