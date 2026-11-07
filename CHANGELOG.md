@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The AC diff verifier now matches a `` `name()` `` span against declarations and calls with
+  arguments, such as `private async name(force: boolean)`, so a delivered function change is no
+  longer reported unmet (#3053).
 - The Claude Code dev refresh in `scripts/install-agent-skills.sh` now checks that the
   `nightgauge-plugins` marketplace really points at the local checkout after `marketplace add`.
   When Claude Code refuses the add or leaves the old source registered, the script fails and

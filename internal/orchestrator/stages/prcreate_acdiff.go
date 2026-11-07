@@ -1319,13 +1319,24 @@ func acBoundAdded(b acBound, paths []string, d *ACDiff) (loc, val string, ok, pa
 // quoted (#3030).
 var acKeyValueRE = regexp.MustCompile(`^["']?([A-Za-z_][A-Za-z0-9_.\-]*)["']?\s*[:=]\s*["']?([^\s"':=]+)["']?$`)
 
+// acCallSpanRE parses a call span: an identifier, optionally qualified,
+// followed by empty parentheses, such as `name()` or `Type.Method()` (#3053).
+var acCallSpanRE = regexp.MustCompile(`^(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*([A-Za-z_$][A-Za-z0-9_$]*)\(\)$`)
+
 // acSpanMatcher returns the test a line must pass to contain tok. A key-value
 // span matches the same pair written in any quoting and spacing, as JSON,
 // YAML or a Go literal, with the key compared case-insensitively and the
-// value exactly (#3030). Any other span matches as a literal substring.
+// value exactly (#3030). A call span such as `name()` or `obj.name()` matches
+// its last name followed by an open parenthesis, optionally after a generic,
+// so declarations and calls with arguments count (#3053). Any other span
+// matches as a literal substring.
 func acSpanMatcher(tok string) func(line string) bool {
 	m := acKeyValueRE.FindStringSubmatch(tok)
 	if m == nil {
+		if c := acCallSpanRE.FindStringSubmatch(tok); c != nil {
+			return regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(c[1]) +
+				`\s*(?:<[^>]*>)?\s*\(`).MatchString
+		}
 		return func(line string) bool { return strings.Contains(line, tok) }
 	}
 	re := regexp.MustCompile(`(?:^|[^A-Za-z0-9_])["']?(?i:` + regexp.QuoteMeta(m[1]) +
