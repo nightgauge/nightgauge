@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -70,14 +71,34 @@ func TestRunSkillSnapshotPrunesOtherRuns(t *testing.T) {
 func TestRunSkillSnapshotNoSkillsAndBadRunID(t *testing.T) {
 	root := t.TempDir()
 	layouttest.MkCheckoutDir(t, root)
-	if dst, err := runSkillSnapshot(root, t.TempDir(), 7, "run-x"); dst != "" || err != nil {
-		t.Errorf("no skills dir: %q, %v; want empty, nil", dst, err)
+	live := t.TempDir()
+	dst, err := runSkillSnapshot(root, live, 7, "run-x")
+	if err != nil || dst == "" {
+		t.Fatalf("no skills dir: %q, %v; want an empty frozen snapshot", dst, err)
+	}
+	if entries, err := os.ReadDir(filepath.Join(dst, "skills")); err != nil || len(entries) != 0 {
+		t.Fatalf("snapshot skills = %v, %v; want an empty directory", entries, err)
+	}
+	// An earlier stage creates skills/ mid-run: the run keeps its empty copy.
+	if err := os.MkdirAll(filepath.Join(live, "skills", "injected"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(live, "skills", "injected", "SKILL.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	again, err := runSkillSnapshot(root, live, 7, "run-x")
+	if err != nil || again != dst {
+		t.Fatalf("second call = %q, %v; want the run-start snapshot %q", again, err, dst)
+	}
+	if _, err := os.Stat(filepath.Join(again, "skills", "injected")); !os.IsNotExist(err) {
+		t.Errorf("a skill created mid-run reached the snapshot: %v", err)
 	}
 	if _, err := runSkillSnapshot(root, t.TempDir(), 7, ""); err == nil {
 		t.Error("empty run id accepted")
 	}
-	if dst, err := runSkillSnapshot(root, t.TempDir(), 7, "../x"); err != nil || dst != "" {
-		t.Errorf("path-like run id: %q, %v; want hashed key, no skills", dst, err)
+	if dst, err := runSkillSnapshot(root, t.TempDir(), 7, "../x"); err != nil ||
+		!strings.HasPrefix(filepath.Base(dst), snapshotKey("../x")) {
+		t.Errorf("path-like run id: %q, %v; want the hashed key", dst, err)
 	}
 }
 

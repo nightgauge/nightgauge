@@ -62,8 +62,8 @@ func snapshotKey(runID string) string {
 // live worktree and reopen the hole. Snapshots of the same issue's earlier
 // runs are pruned; other issues' snapshots are never touched.
 //
-// It returns ("", nil) when liveRoot has no skills/ directory: there is
-// nothing to freeze and nothing for the workspace root to supply.
+// When liveRoot has no skills/ directory the snapshot is an empty skills/, so
+// the absence is frozen too and a later stage cannot introduce skills mid-run.
 func runSkillSnapshot(workspaceRoot, liveRoot string, issueNumber int, runID string) (string, error) {
 	if runID == "" {
 		return "", fmt.Errorf("empty run id")
@@ -72,12 +72,16 @@ func runSkillSnapshot(workspaceRoot, liveRoot string, issueNumber int, runID str
 	// Resolve a symlinked skills/ root itself (WalkDir would not descend it);
 	// it is still copied once, so the content is frozen. Symlinks inside the
 	// tree are skipped by copySkillTree.
+	// A worktree with no skills/ at run start is frozen as an empty copy, not
+	// skipped: skipping would let the first render after an earlier stage
+	// created skills/ copy that stage's files into the run's snapshot.
 	src, err := filepath.EvalSymlinks(filepath.Join(liveRoot, "skills"))
-	if err != nil {
-		return "", nil
-	}
-	if info, err := os.Stat(src); err != nil || !info.IsDir() {
-		return "", nil
+	if err == nil {
+		if info, statErr := os.Stat(src); statErr != nil || !info.IsDir() {
+			src = ""
+		}
+	} else {
+		src = ""
 	}
 	if issueNumber <= 0 {
 		return "", fmt.Errorf("invalid issue number %d", issueNumber)
@@ -101,7 +105,12 @@ func runSkillSnapshot(workspaceRoot, liveRoot string, issueNumber int, runID str
 	if err != nil {
 		return "", err
 	}
-	if err := copySkillTree(src, filepath.Join(tmp, "skills")); err != nil {
+	if src == "" {
+		if err := os.Mkdir(filepath.Join(tmp, "skills"), 0o755); err != nil {
+			_ = os.RemoveAll(tmp)
+			return "", err
+		}
+	} else if err := copySkillTree(src, filepath.Join(tmp, "skills")); err != nil {
 		_ = os.RemoveAll(tmp)
 		return "", fmt.Errorf("copy %s: %w", src, err)
 	}
