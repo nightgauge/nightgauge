@@ -334,6 +334,25 @@ diff --git a/docs/b.md b/docs/b.md
 	}
 }
 
+// #2669 review: an unreadable named file may hold the section, so a readable
+// file lacking it does not make the clause unmet.
+func TestVerifyACAgainstDiff_SectionUnreadableNotUnmet(t *testing.T) {
+	d := memDiff(`diff --git a/docs/a.md b/docs/a.md
+--- a/docs/a.md
++++ b/docs/a.md
+@@ -2,0 +3 @@
++- unrelated line
+diff --git a/docs/b.md b/docs/b.md
+--- a/docs/b.md
++++ b/docs/b.md
+@@ -2,0 +3 @@
++- cites #77
+`, map[string]string{"docs/a.md": "# A\n## Usage\n- unrelated line\n"})
+	if got, ok := VerifyACAgainstDiff("`docs/a.md` or `docs/b.md` adds a line under `## Usage` citing #77.", nil, d, ACTestState{}); ok {
+		t.Errorf("got %+v, want not diff-checkable (docs/b.md unreadable)", got)
+	}
+}
+
 // #2669: a file-less clause inherits the prior criterion's file.
 func TestVerifyACAgainstDiff_InheritsPriorFile(t *testing.T) {
 	d := memDiff(`diff --git a/docs/a.md b/docs/a.md

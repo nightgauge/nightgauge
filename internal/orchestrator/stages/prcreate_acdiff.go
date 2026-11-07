@@ -1022,14 +1022,17 @@ func acSection(c acClause, diffed []string, d *ACDiff) acResult {
 		}
 		return true
 	}
-	// Every named file is tried; unmet only when some file was read and none
-	// satisfies. An unreadable file is skipped, and with none read the clause
-	// is not diff-checkable (#2669).
+	// Every named file is tried; unmet only when every named file was read
+	// and none satisfies. An unreadable file may hold the section, so a clause
+	// with any unreadable file and no satisfying one is not diff-checkable,
+	// as in acUnchanged (#2669).
 	var reasons, tried []string
+	skipped := false
 	for _, p := range diffed {
 		f := d.Files[p]
 		content, ok := d.lines(p)
 		if !ok {
+			skipped = true
 			continue
 		}
 		tried = append(tried, p)
@@ -1053,7 +1056,7 @@ func acSection(c acClause, diffed []string, d *ACDiff) acResult {
 		}
 		return acAnswer(ACMet, ev, p)
 	}
-	if len(tried) == 0 {
+	if skipped || len(tried) == 0 {
 		return acResult{}
 	}
 	return acAnswer(ACUnmet, strings.Join(reasons, "; "), tried...)
