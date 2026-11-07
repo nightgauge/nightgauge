@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The AC diff check no longer calls a criterion unmet because a token was
+  missing from a file it could not read (#3037).** If a token is not in the
+  added lines and a file in scope is unreadable (too large, missing, or not a
+  regular file), the criterion is left for feature-validate to judge.
 - **pr-create's criterion check no longer reads prose notation as literal text.** It
   matches a key-value span such as `state: SUCCESS` in JSON, YAML or Go-literal form,
   and leaves a clause holding a placeholder or glob span to feature-validate instead
