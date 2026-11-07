@@ -610,7 +610,7 @@ func verifyACClause(c acClause, inherited []string, d *ACDiff, tests ACTestState
 	switch {
 	case acScopeRE.MatchString(c.Prose) && len(c.Paths) > 0:
 		return acScope(c, d)
-	case acUnchangedRE.MatchString(c.Prose):
+	case acUnchangedAboutTarget(c.Raw):
 		return acUnchanged(c, d)
 	case acChangelogRE.MatchString(c.Prose) && len(c.Paths) == 0 && len(c.Headings) > 0:
 		return acChangelog(c, d)
@@ -1036,7 +1036,7 @@ func acSection(c acClause, diffed []string, d *ACDiff) acResult {
 	// and none satisfies. An unreadable file may hold the section, so a clause
 	// with any unreadable file and no satisfying one is not diff-checkable,
 	// as in acUnchanged (#2669).
-	// A placeholder or glob span cannot be checked literally, so a section
+	// A placeholder, glob or expression span cannot be checked literally, so a section
 	// holding one is never met on its other spans (#3030).
 	tokens, patterns := acLiteralSpans(c.Tokens)
 	var reasons, tried []string
@@ -1167,8 +1167,8 @@ func acTokens(c acClause, named, inherited []string, d *ACDiff) acResult {
 	if len(named) > 0 {
 		wide = acWideScope(c, d)
 	}
-	// Placeholder and glob spans never reach the matchers: a missing literal
-	// span is still unmet, otherwise the clause is left to validate (#3030).
+	// Placeholder, glob and expression spans never reach the matchers: a missing literal
+	// span is still unmet, otherwise the clause is left to validate (#3030, #3049).
 	tokens, patterns := acLiteralSpans(c.Tokens)
 	added := 0
 	skipped := false
@@ -1345,11 +1345,63 @@ var acPatternSpanRE = regexp.MustCompile(`<[A-Za-z][A-Za-z0-9]*[0-9_\-][A-Za-z0-
 	`|/\*\*|\*\*/|\*\.[A-Za-z0-9]+|/\*(?:$|[/.A-Za-z0-9])` +
 	`|\([A-Za-z][A-Za-z0-9_]*\s*[+\-]\s*[0-9]+\)`)
 
-// acIsPatternSpan reports whether a span is a placeholder or glob that no
-// literal line can contain, so it can neither meet nor contradict a clause.
-func acIsPatternSpan(tok string) bool { return acPatternSpanRE.MatchString(tok) }
+// acExpressionSpanRE matches a span stating a condition (#3049): a comparison
+// or logical operator between two operands (`a === b`, `x <= n`, `p && q`).
+// An arrow `=>`, a `--flag=value`, an assignment and a bare operator stay
+// literal.
+var acExpressionSpanRE = regexp.MustCompile(`[\w)\]"'.]\s*(?:===|!==|==|!=|<=|>=|&&|\|\|)\s*[\w(\["'!.\-]`)
 
-// acLiteralSpans splits tokens into literal spans and pattern spans.
+// acIsPatternSpan reports whether a span is a placeholder, glob or expression
+// that no literal line need contain, so it can neither meet nor contradict a
+// clause (#3030, #3049).
+func acIsPatternSpan(tok string) bool {
+	return acPatternSpanRE.MatchString(tok) || acExpressionSpanRE.MatchString(tok)
+}
+
+// acUnchangedBreakRE matches text that ends the phrase an unchanged word can
+// be about: a colon, a parenthesis, a semicolon or a sentence end.
+var acUnchangedBreakRE = regexp.MustCompile(`[:();]|\.(?:\s|$)`)
+
+// acUnchangedAboutTarget reports whether an unchanged word in raw is about a
+// named path or heading (#3049): the nearest code span before the word is a
+// path or heading, and no clause break or expression span lies between them.
+// "`p` is unchanged", "leaves `p` unchanged" and "with `p` untouched" are;
+// "covers: unchanged when short" and "(`a === b` is unchanged)" are not.
+func acUnchangedAboutTarget(raw string) bool {
+	spans := acCodeSpanRE.FindAllStringSubmatchIndex(raw, -1)
+	for _, w := range acUnchangedRE.FindAllStringIndex(raw, -1) {
+		inside := false
+		for _, sp := range spans {
+			if w[0] >= sp[0] && w[0] < sp[1] {
+				inside = true
+				break
+			}
+		}
+		if inside {
+			continue
+		}
+		for i := len(spans) - 1; i >= 0; i-- {
+			sp := spans[i]
+			if sp[1] > w[0] {
+				continue
+			}
+			if acUnchangedBreakRE.MatchString(raw[sp[1]:w[0]]) {
+				break
+			}
+			tok := raw[sp[2]:sp[3]]
+			if acExpressionSpanRE.MatchString(tok) {
+				break
+			}
+			if acIsPath(tok) || acHeadingTokRE.MatchString(tok) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// acLiteralSpans splits tokens into literal spans and pattern spans
+// (placeholder, glob or expression spans; #3030, #3049).
 func acLiteralSpans(tokens []string) (literal []string, patterns bool) {
 	for _, tok := range tokens {
 		if acIsPatternSpan(tok) {

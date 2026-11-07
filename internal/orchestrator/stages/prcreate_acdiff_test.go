@@ -838,6 +838,8 @@ func TestACIsPatternSpan(t *testing.T) {
 	for tok, want := range map[string]bool{
 		"<sha7>": true, "a/**": true, "*.go": true, "(Z+1)": true, "X.Y.(Z+1)-main.g<sha7>": true,
 		"--dry-run": false, "f()": false, "Promise<void>": false, "*p": false, "(not-found)": false, "a * b": false, "<sha7>-x": true, "<div>": false, "<Button>": false, "/* x */": false, "**kwargs": false, "<N>.md": true, "dir/*": true, "**/x": true, "<issue-number>": true, "state: SUCCESS": false, "docs/a.md": false,
+		"text.length === maxLength": true, "a !== b": true, "x == y": true, "n != 0": true, "i <= n": true, "n >= 1": true, "p && q": true, "a || b": true,
+		"() => x": false, "--flag=value": false, "x = 1": false, "||": false, "<=": false,
 	} {
 		if got := acIsPatternSpan(tok); got != want {
 			t.Errorf("acIsPatternSpan(%q) = %v, want %v", tok, got, want)
@@ -885,5 +887,49 @@ func TestVerifyACAgainstDiff_Issue3033(t *testing.T) {
 	// A missing literal span still makes the clause unmet.
 	if got, ok := VerifyACAgainstDiff("`scripts/version.sh` prints `<sha7>` and `--absent-flag`.", nil, d, ACTestState{}); !ok || got.Status != ACUnmet {
 		t.Errorf("got %+v ok=%v, want unmet", got, ok)
+	}
+}
+
+// #3049: an unchanged word routes only when it is about a named path or heading.
+func TestACUnchangedAboutTarget(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"`p.go` is unchanged.":                                                      true,
+		"`p.go` stays untouched.":                                                   true,
+		"The change leaves `p.go` unchanged.":                                       true,
+		"Ship it with `p.go` untouched.":                                            true,
+		"`p.go` is not modified.":                                                   true,
+		"The root `CHANGELOG.md` entry is unchanged.":                               true,
+		"The `### Added` / `### Changed` sections in `[Unreleased]` are unchanged.": true,
+		"`t.js` covers: unchanged when short enough.":                               false,
+		"`t.js` covers the boundary (`a === b` is unchanged).":                      false,
+		"`t.js` covers the boundary `a === b` is unchanged.":                        false,
+	} {
+		if got := acUnchangedAboutTarget(raw); got != want {
+			t.Errorf("acUnchangedAboutTarget(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// #3049: replay of G1's criterion — a fully delivered test file is not unmet.
+func TestVerifyACAgainstDiff_Issue3049(t *testing.T) {
+	body := "test('short', () => expect(truncate('ab', 5)).toBe('ab'));\n" +
+		"test('long', () => expect(truncate('abcdef', 4)).toBe('abc…'));\n" +
+		"test('boundary', () => expect(truncate('abcd', 4)).toBe('abcd'));\n" +
+		"test('type', () => expect(() => truncate(1, 4)).toThrow(TypeError));\n" +
+		"test('range', () => expect(() => truncate('a', -1)).toThrow(RangeError));"
+	var diff strings.Builder
+	diff.WriteString("diff --git a/test/truncate.test.js b/test/truncate.test.js\nnew file mode 100644\n--- /dev/null\n+++ b/test/truncate.test.js\n@@ -0,0 +1,5 @@\n")
+	for _, l := range strings.Split(body, "\n") {
+		diff.WriteString("+" + l + "\n")
+	}
+	d := memDiff(diff.String(), map[string]string{"test/truncate.test.js": body})
+	crit := "`test/truncate.test.js` covers: unchanged when short enough, truncated with `…` when too long, " +
+		"the boundary (`text.length === maxLength` is unchanged), the `TypeError` and the `RangeError`."
+	if got, ok := VerifyACAgainstDiff(crit, nil, d, ACTestState{}); ok && got.Status == ACUnmet {
+		t.Errorf("got %+v, want not unmet", got)
+	}
+	// A missing literal beside an expression is still unmet.
+	if got, ok := VerifyACAgainstDiff("`test/truncate.test.js` holds `ZeroDivision` when `a === b`.", nil, d, ACTestState{}); !ok || got.Status != ACUnmet {
+		t.Errorf("missing literal: got %+v ok=%v, want unmet", got, ok)
 	}
 }
