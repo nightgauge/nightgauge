@@ -404,8 +404,10 @@ The skill fixes. It does not wait for CI and it does not merge after a fix.
 When it pushes a CI fix, a transient re-run, or a freshness rebase, it writes
 `pr-merge-fix-{N}.json`
 (`{"result":"fix-pushed","pr_number":P,"head_sha":"<sha>","attempt":k}`) and
-exits 0. The scheduler (`runPRMergeSkillWithFixHandback`) deletes the marker
-and runs the deterministic runner again. The runner waits for CI as described
+exits 0. Both orchestrators consume it the same way: the Go scheduler
+(`runPRMergeSkillWithFixHandback`) and the extension's `HeadlessOrchestrator`
+(`runPrMergeSkillWithFixHandback`, #2833). Each deletes the marker and runs the
+deterministic runner again. The runner waits for CI as described
 in [Bounded CI wait](#bounded-ci-wait-issue-297), then merges or enqueues.
 
 | Runner result after the fix         | Stage outcome                                 |

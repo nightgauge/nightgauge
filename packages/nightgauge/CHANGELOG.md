@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **A pr-merge skill that pushed a CI fix no longer ends the run with the PR
+  unmerged when the VS Code extension drives the pipeline.** The extension now
+  reads the skill's `pr-merge-fix-{N}.json` hand-back, as the Go scheduler
+  does, and re-enters the deterministic runner to wait for CI and merge,
+  re-running the skill up to `pr.auto_fix_max_attempts` times (#2833).
+
 ## [0.8.2] - 2026-11-07
 
 0.8.1 was tagged but never published, because the release gate could not scan
