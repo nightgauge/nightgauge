@@ -3,8 +3,10 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -116,7 +118,7 @@ func renderStage(t *testing.T, root, stage, model, adapter, profile string) *ski
 	t.Helper()
 	r, err := skillrender.Render(skillrender.Options{
 		Stage: stage, Model: model, Adapter: adapter,
-		SkillsRoots: skillrender.DefaultRoots(root), Profile: profile,
+		SkillsRoots: dispatchedSnapshotRoots(t, root, 1662), Profile: profile,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -186,4 +188,24 @@ func TestScheduler_LargeHostedWindowKeepsTheFullProfile(t *testing.T) {
 	if !strings.HasPrefix(runner.devPrompt[0], full.Content) {
 		t.Error("feature-dev on a large hosted window was not dispatched on the full render")
 	}
+}
+
+// dispatchedSnapshotRoots is the root list the dispatch used: the issue's one
+// run snapshot (earlier runs are pruned), so a test render resolves the same
+// include paths as the dispatch did (#2813).
+func dispatchedSnapshotRoots(t *testing.T, root string, issue int) []string {
+	t.Helper()
+	base, err := layout.CheckoutPath(root, filepath.Join(skillSnapshotsDir, strconv.Itoa(issue)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("run snapshots for #%d = %v, %v; want exactly one", issue, entries, err)
+	}
+	return skillrender.ResolveRoots(skillrender.RootInputs{
+		Workspace: filepath.Join(base, entries[0].Name()),
+		Bundle:    skillrender.ExecutableBundleRoot(),
+		Override:  os.Getenv(skillrender.SkillsRootEnv),
+	})
 }

@@ -4846,12 +4846,36 @@ func loadWorktreePath(workspaceRoot string, issueNumber int) string {
 // searches is the run's worktree, the input the extension passes too, so the
 // hosts agree on the checkout as well as the order (#2718). A worktree that has
 // gone falls back to the repository root.
-func stageSkillRoots(workspaceRoot string, issueNumber int) []string {
+//
+// The workspace root's CONTENT is frozen per run (#2813): it is a snapshot of
+// the worktree's skills/ taken before the run's first render, so a stage cannot
+// rewrite the instructions a later stage of the same run executes. runID is the
+// dispatching run's own identity (RuntimeState.RunID), never the checkout-wide
+// run-state record, which names one issue while the scheduler runs several in
+// one checkout. With no run ID, or a snapshot that cannot be taken, it fails
+// closed: the workspace root is omitted, so a worktree-only skill fails render
+// as not found instead of silently reading the mutable tree.
+func stageSkillRoots(workspaceRoot string, issueNumber int, runID string) []string {
 	root := loadWorktreePath(workspaceRoot, issueNumber)
 	if info, err := os.Stat(root); err != nil || !info.IsDir() {
 		root = workspaceRoot
 	}
-	return skillrender.DefaultRoots(root)
+	snapshot := ""
+	if runID == "" {
+		log.Printf("WARN scheduler: issue #%d: no run id, omitting the workspace skills root", issueNumber)
+	} else {
+		var err error
+		snapshot, err = runSkillSnapshot(workspaceRoot, root, issueNumber, runID)
+		if err != nil {
+			log.Printf("WARN scheduler: issue #%d: cannot snapshot %s/skills for run %s, "+
+				"omitting the workspace skills root: %v", issueNumber, root, runID, err)
+		}
+	}
+	return skillrender.ResolveRoots(skillrender.RootInputs{
+		Workspace: snapshot,
+		Bundle:    skillrender.ExecutableBundleRoot(),
+		Override:  os.Getenv(skillrender.SkillsRootEnv),
+	})
 }
 
 // refusePreDispatch books a stage the pipeline declines to DISPATCH — the
@@ -5157,11 +5181,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// below the terminal defer (ADR-017 step 0b) — see below.
 	var runID string
 	var runIDMintErr error
+	// Where runID came from, for the skill snapshot's resume decision (#2813):
+	// fromRemote when the platform supplied it, inheritedRS when the checkout's
+	// run-state record did. The record is checkout-wide and may name another
+	// issue, so the reset below judges it here, once, for THIS issue.
+	var fromRemote bool
+	var inheritedRS *runstate.RunState
 	{
 		remoteRunID := s.queueItemRemoteRunID(item.Repo, item.Number)
 		if remoteRunID != "" {
 			if runstate.IsIdentity(remoteRunID) {
 				runID = remoteRunID
+				fromRemote = true
 			} else {
 				log.Printf("#%d: ignoring non-identity run id %q from remote — minting locally (ADR-017 Decision 1)",
 					item.Number, remoteRunID)
@@ -5172,6 +5203,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				if rs, err := runstate.Load(baseDir); err == nil && rs != nil && rs.RunID != "" {
 					if runstate.IsIdentity(rs.RunID) {
 						runID = rs.RunID
+						inheritedRS = rs
 					} else {
 						log.Printf("#%d: ignoring non-identity run id %q from run-state.json — minting locally (ADR-017 Decision 1)",
 							item.Number, rs.RunID)
@@ -5212,6 +5244,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	}
 
 	runtime := state.NewRuntimeState(item.Repo, item.Number, item.ID, runID)
+	// A run whose ID was inherited rather than resumed renders fresh skills
+	// (#2813). The resume decision comes from the ID's provenance above, never
+	// from re-reading run-state.json, which another issue's run may own.
+	resetSkillSnapshotForRun(workspaceRoot, item.Number, runtime.RunID,
+		skillSnapshotResumes(fromRemote, inheritedRS, item.Number))
 	runtime.Title = item.Title
 	// A remote run request's pin (#1656) is a fact of the run from its start.
 	if reqAdapter, reqModel, _ := s.QueueItemRequestedPin(item.Repo, item.Number); reqAdapter != "" {
@@ -6410,7 +6447,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			Stage:       string(stage),
 			Model:       model,
 			Adapter:     adapterName,
-			SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
+			SkillsRoots: stageSkillRoots(workspaceRoot, item.Number, runtime.RunID),
 			Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 			Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 		})
@@ -6498,7 +6535,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					Stage:       string(stage),
 					Model:       model,
 					Adapter:     adapterName,
-					SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
+					SkillsRoots: stageSkillRoots(workspaceRoot, item.Number, runtime.RunID),
 					Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 					Profile:     skillrender.ProfileCompact,
 					Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
@@ -6517,7 +6554,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Stage:          string(stage),
 						Model:          model,
 						Adapter:        adapterName,
-						SkillsRoots:    stageSkillRoots(workspaceRoot, item.Number),
+						SkillsRoots:    stageSkillRoots(workspaceRoot, item.Number, runtime.RunID),
 						Headless:       true, // every stage this dispatches runs non-interactively (#2390)
 						Profile:        skillrender.ProfileCompact,
 						SupplyIncludes: true,
@@ -6563,7 +6600,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Stage:       string(stage),
 						Model:       alt.ID,
 						Adapter:     adapterName,
-						SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
+						SkillsRoots: stageSkillRoots(workspaceRoot, item.Number, runtime.RunID),
 						Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 						Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 					})

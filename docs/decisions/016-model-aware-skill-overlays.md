@@ -341,6 +341,25 @@ worktree. `skill render --skills-root` is unchanged, and a failed `skill roots`
 call fails the stage. A Go test keeps ordering and the override out of
 `skillRunner.ts`.
 
+## Amendment (2026-11-07, #2813) — the workspace root is frozen per run
+
+The order above stands; the workspace root's **content** no longer tracks the
+live worktree. Before a run's first render the scheduler copies
+`<worktree>/skills` into a run-scoped directory in checkout state
+(`skillsnap/<issue>/<run-key>/skills`), keyed by a digest of the dispatching run's own ID, and every
+stage of that run searches the copy. An earlier stage has write access to the
+worktree, so without the copy it could rewrite a later stage's `SKILL.md`, an
+include, or `skills/_shared` and change what that stage executes.
+
+The copy skips symlinks, makes its files read-only, replaces the same issue's
+earlier copies (never another issue's: concurrent runs share the checkout), and
+is reused by a resumed run. A dispatch with no run ID omits the workspace root
+rather than searching the live tree. A copy that cannot be taken omits the workspace root, so a
+worktree-only skill fails render rather than reading the mutable tree.
+
+Extension-hosted renders still search the live worktree; that deviation is
+tracked as discovered work.
+
 ## Amendment (2026-09-14, #1636) — host overlay segment
 
 [ADR-022](022-opencode-multi-provider-adapter.md) §14 amends Decision 2's
