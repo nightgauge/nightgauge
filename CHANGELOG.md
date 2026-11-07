@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- pr-create's criterion verifier no longer marks a delivered criterion `unmet` because its prose
+  says "unchanged" about behaviour, or because it quotes an expression such as `a === b`. An
+  "unchanged" word now routes to the unchanged rule only when it is about a named path or
+  heading, and expression spans are treated like placeholders: undecided, never met (#3049).
 - A Grok plugin installed from a version-keyed extension directory is now
   re-pointed to the stable marketplace copy on setup and after an extension
   upgrade, and re-running setup no longer warns that the marketplace source is
