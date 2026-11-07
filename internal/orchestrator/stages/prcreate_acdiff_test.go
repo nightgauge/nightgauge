@@ -413,6 +413,9 @@ diff --git a/other.go b/other.go
 // #2669 review: a later criterion about another file must not fail against
 // the file an earlier criterion named.
 func TestVerifyACAgainstDiff_InheritedNeverUnmet(t *testing.T) {
+	// #3038: the token criterion 3 asks for is in the diff, in cmd/root.go,
+	// and absent from the inherited internal/foo.go. A search scoped to the
+	// inherited file misses it; that miss must not become an unmet verdict.
 	d := memDiff(`diff --git a/internal/foo.go b/internal/foo.go
 --- a/internal/foo.go
 +++ b/internal/foo.go
@@ -423,18 +426,35 @@ diff --git a/internal/foo_test.go b/internal/foo_test.go
 +++ b/internal/foo_test.go
 @@ -1,0 +2 @@
 +func TestFoo(t *testing.T) {}
-`, nil)
+diff --git a/cmd/root.go b/cmd/root.go
+--- a/cmd/root.go
++++ b/cmd/root.go
+@@ -1,0 +2 @@
++	return errors.New("invalid mode")
+`, map[string]string{"internal/foo.go": "package foo\n\nfunc Foo() {}\n"})
 	criteria := []string{
-		"`internal/foo.go` adds `Foo`.",
-		"Unit tests cover `Foo`.",
-		"The CLI prints `invalid mode`.",
+		"`internal/foo.go` validates the input.",
+		"Unit tests cover the invalid case.",
+		"The CLI prints `invalid mode` on failure.",
 	}
-	got, ok := VerifyACAgainstDiff(criteria[2], criteria[:2], d, ACTestState{Passed: true})
-	if ok {
-		t.Errorf("criterion 3 resolved %+v from an inherited file, want not diff-checkable", got)
+	pass := ACTestState{Passed: true}
+	if got, ok := VerifyACAgainstDiff(criteria[2], criteria[:2], d, pass); ok && got.Status == ACUnmet {
+		t.Errorf("criterion 3 resolved unmet from an inherited file: %+v", got)
 	}
-	if got, ok := VerifyACAgainstDiff(criteria[1], criteria[:1], d, ACTestState{Passed: true}); !ok || got.Status != ACMet {
+	// A token the diff lacks entirely, inherited, is still not unmet.
+	absent := "The CLI prints `bad flag` on failure."
+	if got, ok := VerifyACAgainstDiff(absent, criteria[:2], d, pass); ok && got.Status == ACUnmet {
+		t.Errorf("absent token resolved unmet from an inherited file: %+v", got)
+	}
+	// Inherited met is still allowed.
+	parent := []string{"`internal/foo.go` adds `Foo`."}
+	if got, ok := VerifyACAgainstDiff("Unit tests cover `Foo`.", parent, d, pass); !ok || got.Status != ACMet {
 		t.Errorf("inherited met still allowed: %+v ok=%v", got, ok)
+	}
+	// A clause that names its file still resolves unmet on a missing token.
+	named := "`internal/foo.go` mentions `--wet-run`."
+	if got, ok := VerifyACAgainstDiff(named, nil, d, pass); !ok || got.Status != ACUnmet {
+		t.Errorf("named-file missing token: got %+v ok=%v, want unmet", got, ok)
 	}
 }
 
