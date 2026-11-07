@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The Claude Code dev refresh in `scripts/install-agent-skills.sh` now checks that the
+  `nightgauge-plugins` marketplace really points at the local checkout after `marketplace add`.
+  When Claude Code refuses the add or leaves the old source registered, the script fails and
+  names that source instead of reinstalling the plugins from it (#2804).
 - pr-create's criterion verifier no longer marks a delivered criterion `unmet` because its prose
   says "unchanged" about behaviour, or because it quotes an expression such as `a === b`. An
   "unchanged" word now routes to the unchanged rule only when it is about a named path or
