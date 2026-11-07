@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The AC diff verifier now reads CommonMark code spans delimited by two or more backticks,
+  so a criterion such as ``` `` `name()` `` ``` is one span instead of prose between spans,
+  and a delivered criterion no longer resolves `unmet` (#3055).
 - The AC diff verifier now matches a `` `name()` `` span against declarations and calls with
   arguments, such as `private async name(force: boolean)`, so a delivered function change is no
   longer reported unmet (#3053).

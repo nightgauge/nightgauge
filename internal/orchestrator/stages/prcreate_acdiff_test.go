@@ -983,3 +983,78 @@ func TestVerifyACAgainstDiff_Issue3049(t *testing.T) {
 		t.Errorf("missing literal: got %+v ok=%v, want unmet", got, ok)
 	}
 }
+
+// #3055: code spans follow CommonMark backtick-run matching.
+func TestACCodeSpans(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"use `x` here", []string{"x"}},
+		{"`` a`b ``", []string{"a`b"}},
+		{"names ``` `` `name()` `` ```", []string{"`` `name()` ``"}},
+		{"`` `name()` ``", []string{"`name()`"}},
+		{"a `` b ` c", nil},
+		{"` ` and `y`", []string{" ", "y"}},
+		{"``a`b`` then `c`", []string{"a`b", "c"}},
+	}
+	for _, c := range cases {
+		var got []string
+		for _, sp := range acCodeSpans(c.in) {
+			got = append(got, c.in[sp[2]:sp[3]])
+		}
+		if strings.Join(got, "|") != strings.Join(c.want, "|") || len(got) != len(c.want) {
+			t.Errorf("acCodeSpans(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	if got := acStripCodeSpans("a `x` b `` y`z `` c"); got != "a   b   c" {
+		t.Errorf("acStripCodeSpans = %q", got)
+	}
+}
+
+func TestACSpanContent(t *testing.T) {
+	for in, want := range map[string]string{
+		"`` `name()` ``": "name()",
+		"`x`":            "x",
+		"`a` and `b`":    "`a` and `b`",
+		"plain":          "plain",
+	} {
+		if got := acSpanContent(in); got != want {
+			t.Errorf("acSpanContent(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := splitACClauses("keeps `` a, and b `` whole"); len(got) != 1 {
+		t.Errorf("split inside a multi-backtick span: %q", got)
+	}
+	if got := splitACClauses("`a` is set, and `b` is set"); len(got) != 2 {
+		t.Errorf("split outside spans: %q", got)
+	}
+}
+
+// #3055: replay of #3054 — a double-backtick span is one span, not prose.
+func TestVerifyACAgainstDiff_Issue3054(t *testing.T) {
+	const f = "internal/orchestrator/stages/prcreate_acdiff_test.go"
+	crit := "Regression test in `" + f + "`: the #3052 shape, where a diff edits the doc " +
+		"comment above `private async repairIfNeeded(` in a named TypeScript file and the " +
+		"criterion names ``` `` `repairIfNeeded()` `` ``` with that file, does not resolve `ACUnmet`."
+	for _, c := range splitACClauses(crit) {
+		for _, tok := range parseACClause(c).Tokens {
+			if strings.Contains(tok, "with that file") {
+				t.Fatalf("prose extracted as a span: %q", tok)
+			}
+		}
+	}
+	d := memDiff(`diff --git a/`+f+` b/`+f+`
+--- a/`+f+`
++++ b/`+f+`
+@@ -1 +1,4 @@
+ package stages
++
++// #3052: "private async repairIfNeeded(" must not be ACUnmet.
++func TestRepair(t *testing.T) { repairIfNeeded(true) }
+`, nil)
+	got, ok := VerifyACAgainstDiff(crit, nil, d, ACTestState{})
+	if ok && got.Status == ACUnmet {
+		t.Fatalf("delivered criterion resolved unmet: %+v", got)
+	}
+}

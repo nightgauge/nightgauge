@@ -343,7 +343,6 @@ type acBound struct {
 }
 
 var (
-	acCodeSpanRE    = regexp.MustCompile("`([^`]+)`")
 	acHeadingTokRE  = regexp.MustCompile(`^(#{1,6})\s+(\S.*)$`)
 	acPathLikeRE    = regexp.MustCompile(`^[A-Za-z0-9_.\-/]+$`)
 	acPathExtRE     = regexp.MustCompile(`\.[A-Za-z][A-Za-z0-9]{0,5}$`)
@@ -434,17 +433,93 @@ func acIsPath(s string) bool {
 	return !strings.HasPrefix(s, ".") && acPathExtRE.MatchString(s)
 }
 
+// acCodeSpans returns the CommonMark code spans in text as
+// [start, end, contentStart, contentEnd]. A run of N backticks opens a span
+// that only the next run of exactly N backticks closes; an opener with no
+// closer is literal text. Content that both starts and ends with a space, and
+// is not all spaces, loses one space at each end (CommonMark 6.1).
+func acCodeSpans(text string) [][4]int {
+	var out [][4]int
+	runEnd := func(i int) int {
+		for i < len(text) && text[i] == '`' {
+			i++
+		}
+		return i
+	}
+	for i := 0; i < len(text); {
+		if text[i] != '`' {
+			i++
+			continue
+		}
+		openEnd := runEnd(i)
+		n := openEnd - i
+		closeStart, closeEnd := -1, -1
+		for j := openEnd; j < len(text); {
+			if text[j] != '`' {
+				j++
+				continue
+			}
+			k := runEnd(j)
+			if k-j == n {
+				closeStart, closeEnd = j, k
+				break
+			}
+			j = k
+		}
+		if closeStart < 0 {
+			i = openEnd
+			continue
+		}
+		cs, ce := openEnd, closeStart
+		if c := text[cs:ce]; len(c) >= 2 && c[0] == ' ' && c[len(c)-1] == ' ' &&
+			strings.Trim(c, " ") != "" {
+			cs, ce = cs+1, ce-1
+		}
+		out = append(out, [4]int{i, closeEnd, cs, ce})
+		i = closeEnd
+	}
+	return out
+}
+
+// acStripCodeSpans replaces each code span with a single space.
+func acStripCodeSpans(text string) string {
+	spans := acCodeSpans(text)
+	if len(spans) == 0 {
+		return text
+	}
+	var b strings.Builder
+	prev := 0
+	for _, sp := range spans {
+		b.WriteString(text[prev:sp[0]])
+		b.WriteByte(' ')
+		prev = sp[1]
+	}
+	b.WriteString(text[prev:])
+	return b.String()
+}
+
+// acSpanContent unwraps s while it is exactly one code span, so the content
+// of “ `name()` “ is name().
+func acSpanContent(s string) string {
+	for {
+		spans := acCodeSpans(s)
+		if len(spans) != 1 || spans[0][0] != 0 || spans[0][1] != len(s) {
+			return s
+		}
+		s = s[spans[0][2]:spans[0][3]]
+	}
+}
+
 // splitACClauses splits on ", and" and ";" outside code spans, so each
 // predicate of a compound criterion is checked on its own.
 func splitACClauses(text string) []string {
 	var out []string
-	start, inCode := 0, false
+	spans := acCodeSpans(text)
+	start, si := 0, 0
 	for i := 0; i < len(text); i++ {
-		if text[i] == '`' {
-			inCode = !inCode
-			continue
-		}
-		if inCode {
+		if si < len(spans) && i == spans[si][0] {
+			i = spans[si][1] - 1
+			si++
 			continue
 		}
 		if m := acClauseSplitRE.FindString(text[i:]); m != "" {
@@ -458,7 +533,7 @@ func splitACClauses(text string) []string {
 }
 
 func parseACClause(raw string) acClause {
-	c := acClause{Raw: raw, Prose: acCodeSpanRE.ReplaceAllString(raw, " ")}
+	c := acClause{Raw: raw, Prose: acStripCodeSpans(raw)}
 	seen := map[string]bool{}
 	add := func(dst *[]string, s string) {
 		if !seen[s] {
@@ -466,8 +541,8 @@ func parseACClause(raw string) acClause {
 			*dst = append(*dst, s)
 		}
 	}
-	for _, m := range acCodeSpanRE.FindAllStringSubmatchIndex(raw, -1) {
-		tok := strings.TrimSpace(raw[m[2]:m[3]])
+	for _, m := range acCodeSpans(raw) {
+		tok := strings.TrimSpace(acSpanContent(raw[m[2]:m[3]]))
 		switch {
 		case tok == "":
 		case acHeadingTokRE.MatchString(tok):
@@ -546,7 +621,7 @@ func VerifyACAgainstDiff(text string, prior []string, d *ACDiff, tests ACTestSta
 	if d == nil || len(d.Files) == 0 {
 		return ACCheck{}, false
 	}
-	prose := acCodeSpanRE.ReplaceAllString(text, " ")
+	prose := acStripCodeSpans(text)
 	for _, r := range acRuntimeSteps {
 		if r.re.MatchString(prose) {
 			return ACCheck{Status: ACNotVerifiable, Step: r.step, Evidence: "needs " + r.step}, true
@@ -1379,7 +1454,7 @@ var acUnchangedBreakRE = regexp.MustCompile(`[:();]|\.(?:\s|$)`)
 // "`p` is unchanged", "leaves `p` unchanged" and "with `p` untouched" are;
 // "covers: unchanged when short" and "(`a === b` is unchanged)" are not.
 func acUnchangedAboutTarget(raw string) bool {
-	spans := acCodeSpanRE.FindAllStringSubmatchIndex(raw, -1)
+	spans := acCodeSpans(raw)
 	for _, w := range acUnchangedRE.FindAllStringIndex(raw, -1) {
 		inside := false
 		for _, sp := range spans {
@@ -1399,7 +1474,7 @@ func acUnchangedAboutTarget(raw string) bool {
 			if acUnchangedBreakRE.MatchString(raw[sp[1]:w[0]]) {
 				break
 			}
-			tok := raw[sp[2]:sp[3]]
+			tok := acSpanContent(raw[sp[2]:sp[3]])
 			if acExpressionSpanRE.MatchString(tok) {
 				break
 			}
