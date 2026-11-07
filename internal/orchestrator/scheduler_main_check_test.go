@@ -114,7 +114,7 @@ func TestCheckEpicCompletion_WiresTheMainCheckReaderThroughTheSeam(t *testing.T)
 		evaluatePostMergeFn: capture,
 		mainCheckReaderFn:   func(*gh.Client) hooks.MainCheckReader { return reader },
 	}
-	s.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/r", Number: 1}, 2)
+	s.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/r", Number: 1}, 2, false)
 	if got.MainChecks != reader {
 		t.Errorf("MainChecks = %v, want the seam's reader", got.MainChecks)
 	}
@@ -123,7 +123,7 @@ func TestCheckEpicCompletion_WiresTheMainCheckReaderThroughTheSeam(t *testing.T)
 	}
 
 	s = &Scheduler{evaluatePostMergeFn: capture, mainCheckReaderFn: func(*gh.Client) hooks.MainCheckReader { return reader }}
-	s.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/r", Number: 1}, 2)
+	s.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/r", Number: 1}, 2, false)
 	if got.MainChecks != nil {
 		t.Errorf("no client: MainChecks = %v, want nil", got.MainChecks)
 	}

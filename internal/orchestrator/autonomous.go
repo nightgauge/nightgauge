@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/nightgauge/nightgauge/internal/trust"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -275,6 +277,14 @@ type FailedItem struct {
 	// flag holds the entry for an operator (HoldOperatorResume) instead of
 	// letting the reconcile re-admit it into the same denial (#1756).
 	RetryCapped bool `json:"retryCapped,omitempty"`
+
+	// ReleasePending marks a HoldArchitectureApproval entry whose approval has
+	// landed but whose move back to Ready has not (#2717). The entry stays in
+	// the Failed list until every board carrying the issue reads Ready, so a
+	// failed board write is retried on the next reconcile instead of leaving
+	// the approved issue parked in In progress or In review, where the
+	// scheduler never dispatches it. See releaseArchitectureHold.
+	ReleasePending bool `json:"releasePending,omitempty"`
 }
 
 // hold returns the human act this entry waits for: the hold its Kind names
@@ -618,6 +628,7 @@ func isTransientRevertKind(kind string) bool {
 	switch kind {
 	case TerminalKindStallKill,
 		TerminalKindRunawayProgress,
+		TerminalKindStageCapKill,
 		TerminalKindStreamIdleTimeout,
 		TerminalKindRateLimitQuotaExhausted,
 		TerminalKindApiOverloaded,
@@ -1033,7 +1044,10 @@ type AutonomousScheduler struct {
 	// the sequence move and reports the state as it actually is, rather than
 	// waiting out its deadline on a transition that already happened.
 	runningSeq uint64
-	stopCh     chan struct{} // signals dispatch loop only — one reader
+	// loopDone is closed when the loop goroutine Start spawned returns
+	// (#2891). Replaced per Start under mu; nil until the first Start.
+	loopDone chan struct{}
+	stopCh   chan struct{} // signals dispatch loop only — one reader
 
 	// Background-goroutine lifecycle (#428). Every detached spawn in this file
 	// goes through goTracked so in-flight work can be cancelled and joined.
@@ -1147,6 +1161,10 @@ type AutonomousScheduler struct {
 	// is what made a retrying run indistinguishable from an idle one.
 	retryBackoff map[string]retryPlan
 
+	// blockedFindingLogged de-duplicates the blocked-finding skip log (#2914):
+	// key "repo#number" -> the finding identity last logged. Guarded by mu.
+	blockedFindingLogged map[string]string
+
 	// conflictRestartCount tracks how many times each issue hit the legacy
 	// fresh-branch conflict-restart path. As of #4072 the primary conflict path
 	// is the BRANCH-PRESERVING conflict-recovery loop: pr-merge captures the
@@ -1171,6 +1189,23 @@ type AutonomousScheduler struct {
 	// Key: "repo#number". Not persisted — intentionally resets on restart
 	// (the guard window is short and the race window vanishes after a cold start).
 	recentClosures map[string]time.Time
+
+	// expiredPendingWarned records which pending queue items have already been
+	// warned about as expired reservations (#2717), keyed by
+	// "repo#number@addedAt", so the warning fires once per item, not once per
+	// cycle. Guarded by mu; not persisted.
+	expiredPendingWarned map[string]bool
+
+	// architectureReleaseInFlight marks the issues ("repo#number") whose
+	// architecture-hold release board move is running (#2717), so a reconcile
+	// that fires while the move is in flight does not start a second one.
+	// Guarded by mu; not persisted — a restart re-derives it from the
+	// ReleasePending entries the next reconcile reads.
+	architectureReleaseInFlight map[string]bool
+
+	// releaseMoveStatus overrides the architecture release's board write in
+	// tests; nil writes through projectService.
+	releaseMoveStatus func(ctx context.Context, owner, repoName string, project int, ownerType gh.OwnerType, issue int, status string) error
 
 	// refinementSem limits concurrent refinements (buffered channel as semaphore).
 	refinementSem chan struct{}
@@ -1274,7 +1309,7 @@ type AutonomousScheduler struct {
 	// sets a private cache; the daemon replaces it with its shared one.
 	boardCache *boardcache.Cache
 
-	// resolveDepStatesFn batch-resolves the true GitHub state ("OPEN"/"CLOSED")
+	// resolveDepStatesFn batch-resolves the true GitHub state (a forge.DepState)
 	// of dependency keys ("owner/repo#number") that have NO node in the graph
 	// — the graph only builds nodes from project-board items (depgraph/
 	// builder.go), so a blockedBy/depends-on edge can point at an issue
@@ -1572,32 +1607,30 @@ func NewAutonomousScheduler(
 	return as
 }
 
+// ErrAlreadyRunning is returned by Run and Start when the loop is already up.
+var ErrAlreadyRunning = errors.New("autonomous scheduler is already running")
+
 // Run starts the autonomous scheduler loop. It blocks until the context is
 // cancelled, Stop() is called, the budget is exhausted, or all items complete.
+//
+// Run claims `running` on the caller's goroutine, so `go Run(ctx)` leaves a
+// window in which the loop has not claimed it yet and Stop() is a no-op
+// (#2891). Callers that spawn the loop use Start, which closes that window.
 func (as *AutonomousScheduler) Run(ctx context.Context) error {
-	// Catch panics so an unexpected crash is logged to autonomous-exits.jsonl
-	// rather than silently killing the goroutine and leaving the UI stuck in
-	// RUNNING state forever.
-	defer func() {
-		if r := recover(); r != nil {
-			stack := string(debug.Stack())
-			if len(stack) > 4096 {
-				stack = stack[:4096]
-			}
-			panicMsg := fmt.Sprintf("%v", r)
-			log.Printf("autonomous: PANIC: %s\n%s", panicMsg, stack)
-			as.mu.Lock()
-			as.state.Status = "crashed"
-			as.setRunningLocked(false)
-			as.mu.Unlock()
-			as.writeCrashExitEvent(panicMsg, stack)
-		}
-	}()
-
 	as.mu.Lock()
+	err := as.claimRunLocked()
+	as.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return as.runLoop(ctx)
+}
+
+// claimRunLocked marks the loop running and resets the start-of-run state.
+// Caller holds as.mu.
+func (as *AutonomousScheduler) claimRunLocked() error {
 	if as.running {
-		as.mu.Unlock()
-		return fmt.Errorf("autonomous scheduler is already running")
+		return ErrAlreadyRunning
 	}
 	as.setRunningLocked(true)
 	as.stopRequested = false
@@ -1631,7 +1664,30 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 	// independent of whether the fleet is dispatching or halted.
 	as.state.RestartedFromRunning = false
 	as.fireStatusChangeLocked()
-	as.mu.Unlock()
+	return nil
+}
+
+// runLoop is the body of Run after the claim.
+func (as *AutonomousScheduler) runLoop(ctx context.Context) error {
+	// Catch panics so an unexpected crash is logged to autonomous-exits.jsonl
+	// rather than silently killing the goroutine and leaving the UI stuck in
+	// RUNNING state forever.
+	defer func() {
+		if r := recover(); r != nil {
+			stack := string(debug.Stack())
+			if len(stack) > 4096 {
+				stack = stack[:4096]
+			}
+			panicMsg := fmt.Sprintf("%v", r)
+			log.Printf("autonomous: PANIC: %s\n%s", panicMsg, stack)
+			as.mu.Lock()
+			as.state.Status = "crashed"
+			as.setRunningLocked(false)
+			as.mu.Unlock()
+			as.writeCrashExitEvent(panicMsg, stack)
+		}
+	}()
+
 	as.persistState()
 
 	// Run config-coherence validation at startup and persist any warnings.
@@ -1669,6 +1725,7 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 		// failure accounting, the cascade feed, and its OWN board revert to
 		// a run whose merge already landed — #1650's exact repro.
 		merged := false
+		terminalKind = resumeNoOpKind(runtime, success)
 		if !success && runtime != nil {
 			snap := runtime.Snapshot()
 			merged = snap.MergedCommitSha != ""
@@ -2736,6 +2793,8 @@ func (as *AutonomousScheduler) Shutdown(grace time.Duration) {
 // that flag, runCycle would keep calling onDispatch for every candidate in its
 // already-built list — emitting autonomous.dispatch events to the TypeScript
 // extension after the user pressed "Stop Autonomous".
+//
+// Stop signals and returns; WaitStopped is the join for a loop Start spawned.
 func (as *AutonomousScheduler) Stop() {
 	as.mu.Lock()
 	defer as.mu.Unlock()
@@ -2950,8 +3009,10 @@ func (as *AutonomousScheduler) ResumeRepo(repo string) bool {
 	as.mu.Unlock()
 	log.Printf("autonomous: repo halt released for %s", repo)
 	// The halt is over, so its card must go with it — same contract as the
-	// fleet resume, evaluated on the next reconcile pass.
-	as.reconcileTerminalFailureCards()
+	// fleet resume. Dispatched because a card's Retry reaches this under the
+	// store lock (#2750); there it queues behind Resolve, finds the card already
+	// resolved, and leaves it that way.
+	as.dispatchAttention(as.reconcileTerminalFailureCards)
 	select {
 	case as.rescanCh <- struct{}{}:
 	default:
@@ -3055,8 +3116,9 @@ func (as *AutonomousScheduler) Resume() {
 			as.safetyRails.Reset()
 		}
 		// The halt is over, so its card must go with it — otherwise the fleet is
-		// running while the Action Center still says it is stopped.
-		defer as.resolveSafetyRailTrip()
+		// running while the Action Center still says it is stopped. Dispatched:
+		// as.mu is held here, and on a verb path the store lock is too (#2750).
+		as.dispatchAttention(as.resolveSafetyRailTrip)
 		// #3605 bullet C: clearing the cascading-failure breaker is gated on
 		// explicit user Resume — never on an automatic / self-clear path. We
 		// land here only from operator action, so reset is appropriate.
@@ -3322,6 +3384,14 @@ func (as *AutonomousScheduler) releaseOperatorHoldsLocked(scope string) []string
 		if inScope && f.hold() == HoldOperatorResume {
 			released = append(released, key)
 			log.Printf("autonomous: released %s — operator resume clears the %q hold", key, f.Kind)
+			if f.Kind == TerminalKindReviewCapReached {
+				repo, number := f.Repo, f.Number
+				as.dispatchAttention(func() { as.retractReviewCap(repo, number) })
+			}
+			if f.Kind == TerminalKindResumeNoOp {
+				repo, number := f.Repo, f.Number
+				as.dispatchAttention(func() { as.retractResumeNoOp(repo, number) })
+			}
 			continue
 		}
 		kept = append(kept, f)
@@ -3755,11 +3825,12 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	// Building the graph costs GraphQL quota. When no effective slots remain
 	// (considering both the global cap and any per-repo caps), skip the build
 	// entirely. When a pipeline finishes, TriggerRescan fires immediately.
-	availableSlots := as.effectiveAvailableSlots()
+	slots := as.slotAvailability()
+	availableSlots := slots.available
 	if availableSlots <= 0 {
 		as.mu.Lock()
-		log.Printf("autonomous: no effective slots available (MaxConcurrent=%d, ceiling=%d, running=%d), skipping graph build",
-			as.config.MaxConcurrent, as.dispatchCeilingLocked(), len(as.state.Running))
+		log.Printf("autonomous: no effective slots available (MaxConcurrent=%d, ceiling=%d, running=%d, pending=%d, reserved=%d), skipping graph build",
+			as.config.MaxConcurrent, as.dispatchCeilingLocked(), len(as.state.Running), slots.pending, slots.reserved)
 		as.mu.Unlock()
 		as.persistState()
 		if as.onCycleComplete != nil {
@@ -3901,6 +3972,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 
 	// 6. Fill slots with top candidates (safety-checked)
 	dispatched := 0
+dispatchLoop:
 	for i := 0; i < len(candidates) && dispatched < availableSlots; i++ {
 		// Stop-aware bail-out: if Stop() was called since this cycle began,
 		// abort the rest of the dispatch loop. Without this, the user's
@@ -3917,38 +3989,16 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		// paused, then #785 dispatched at 13:25:38 — same cycle. Re-check
 		// state.Status per-candidate so a Pause mid-cycle takes effect
 		// immediately.
-		as.mu.Lock()
-		stopRequested := as.stopRequested
-		statusNow := as.state.Status
-		as.mu.Unlock()
-		if stopRequested {
-			log.Printf("autonomous: stop requested mid-cycle — skipping %d remaining dispatches", len(candidates)-i)
-			break
-		}
-		if statusNow != "running" {
-			log.Printf("autonomous: status changed mid-cycle to %q — skipping %d remaining dispatches",
-				statusNow, len(candidates)-i)
-			break
-		}
-
 		item := candidates[i]
-		// Skip items already running
-		if as.isRunning(item.Repo, item.Number) {
+		switch as.dispatchStopFor(item, len(candidates)-i) {
+		case dispatchStopFleet:
+			break dispatchLoop
+		case dispatchStopRepo:
 			continue
 		}
 
-		// #1148: skip candidates in a HALTED repository. A terminal stage
-		// failure is evidence about one repo, so it stops that repo and
-		// nothing else — this `continue` is the whole difference between a
-		// repo-scoped halt and the fleet-wide pause it replaces. Runs already
-		// in flight are untouched (this loop only starts new ones), in this
-		// repo and every other.
-		as.mu.Lock()
-		haltedRepo := repoPaused(as.state, item.Repo)
-		as.mu.Unlock()
-		if haltedRepo {
-			log.Printf("autonomous: skipping %s#%d — repository halted awaiting triage (Resume %s to continue)",
-				item.Repo, item.Number, item.Repo)
+		// Skip items already running
+		if as.isRunning(item.Repo, item.Number) {
 			continue
 		}
 
@@ -4065,7 +4115,6 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 				}
 				return
 			}
-			as.safetyRails.RecordPipelineStart()
 		}
 
 		// Refine-if-slot-free, immediately before dispatch (#1514). This is
@@ -4074,6 +4123,20 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		// unrefined (with a line saying so) when they do not. A cold workspace
 		// therefore needs no backlog sweep before the pipeline is useful.
 		as.refineBeforeDispatch(ctx, graph, item)
+
+		// #2865: refinement takes minutes, so what the top of this loop read may
+		// be stale. A stopped candidate is simply not started: it stays on the
+		// board for the next cycle, charged nothing, which is why the pipeline
+		// start is counted only past this point.
+		switch as.dispatchStopFor(item, len(candidates)-i) {
+		case dispatchStopFleet:
+			break dispatchLoop
+		case dispatchStopRepo:
+			continue
+		}
+		if as.safetyRails != nil {
+			as.safetyRails.RecordPipelineStart()
+		}
 
 		as.enqueueItem(ctx, item)
 		dispatched++
@@ -4259,14 +4322,6 @@ type CandidateItem struct {
 	OpenPRNumber int
 }
 
-// isWorkCompleteStatus returns true when the dep's board status is the one
-// that CAN mean the dep's pipeline work is effectively done — even if the
-// issue itself is still OPEN. Currently this covers "In review". The status
-// string alone is NOT sufficient evidence, though (#281): a status-only
-// match is verified against inReviewPRBacked by evaluateDeps before it is
-// treated as satisfying a blockedBy edge, since a halt can park an issue at
-// "In review" with no PR behind it. If the PR is later rejected, the issue
-// moves back to In progress / Backlog and the dep re-blocks on the next scan.
 // repoContribution is one repo's contribution to a prioritize pass: how many
 // graph nodes it owns, how many are open, and how many survived every gate to
 // become dispatchable.
@@ -4312,6 +4367,10 @@ func (as *AutonomousScheduler) logRepoContributions(contrib map[string]*repoCont
 	}
 }
 
+// isWorkCompleteStatus returns true when the board status says the issue's
+// pipeline work is waiting on review. Currently this covers "In review". It
+// is not evidence of anything a dependent can use: evaluateDeps keys on issue
+// state, and an OPEN issue in this status still blocks (#2706).
 func isWorkCompleteStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
 	return s == "in review"
@@ -4458,6 +4517,18 @@ func depKeyNamesNoRepository(depKey string) bool {
 	return ok && !isOwnerRepo(repo)
 }
 
+// countConfirmedDeps counts the keys resolved to something that exists; a
+// MISSING key got an answer, but not a dependency.
+func countConfirmedDeps(resolved map[string]string) int {
+	n := 0
+	for _, state := range resolved {
+		if state != forge.DepStateMissing {
+			n++
+		}
+	}
+	return n
+}
+
 // evaluateDeps scans depKeys — a node's outgoing dependency edges from
 // rawAdjacency — and reports whether any of them still blocks dispatch.
 //
@@ -4470,17 +4541,21 @@ func depKeyNamesNoRepository(depKey string) bool {
 //   - resolved[depKey] == "CLOSED" -> satisfied; keep scanning other deps.
 //   - resolved[depKey] == "OPEN"   -> BLOCKED. The blocker is real and open,
 //     it just isn't board-synced.
+//   - resolved[depKey] == "PR_MERGED" -> satisfied, with no validation gate: a
+//     pull request has no program labels or marker to read, and a line naming
+//     one asks for exactly that pull request (#2854).
+//   - resolved[depKey] == "PR_OPEN", "PR_CLOSED" or "MISSING" -> BLOCKED, with
+//     a reason naming which.
 //   - depKey absent from resolved  -> BLOCKED (fail closed). Absence means no
 //     issue-state resolver was available, the GitHub lookup for its repo
-//     failed, or the batch response simply omitted it — never guess
+//     failed, or the batch response gave no verdict — never guess
 //     "satisfied" for a blocker of unknown state (#306).
 //
-// prBacked (keyed "repo#number", refreshed once per fresh graph build — see
-// inReviewPRBacked) is the evidence gate for the "In review" case (#281): a
-// dep whose board status is "In review" satisfies the edge only when its key
-// is also present in prBacked (a confirmed OPEN PR backs it). A status-only
-// match without confirmed PR evidence falls through to BLOCKED — the same
-// fail-closed posture as the off-board case above.
+// An on-board dep is decided by its issue state, never by its board status: an
+// OPEN dep blocks whether it is Done (a `Refs` merge can leave one, #2706), In
+// review with an open PR, or anything else. A partial delivery merges a PR and
+// stays open, so neither a PR nor a column proves the dependents' contract
+// exists; only closure does.
 //
 // validation (see ResolveValidationByKey) is the post-merge validation gate
 // (#2574). A closed dep that is a program member — an on-board node carrying a
@@ -4489,10 +4564,9 @@ func depKeyNamesNoRepository(depKey string) bool {
 // PR merged, the marker says main was green afterwards. A closed dep whose
 // standing is absent from validation fails closed when it could be a program
 // member (an off-board dep, whose labels only the resolver knows, or an
-// on-board program member). A program member "In review" never satisfies the
-// edge: the marker needs a merged, verified commit. A closed dep that is not
-// a program member keeps closure-based release.
-func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]string, prBacked map[string]bool, validation map[string]ValidationState) depBlockResult {
+// on-board program member). A closed dep that is not a program member keeps
+// closure-based release.
+func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]string, validation map[string]ValidationState) depBlockResult {
 	for _, depKey := range depKeys {
 		depNode, exists := g.Nodes[depKey]
 		if !exists {
@@ -4513,6 +4587,23 @@ func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]strin
 					blocked: true, blocker: depKey, offBoard: true,
 					status: "OPEN (resolved via GitHub — not on any project board)",
 				}
+			case state == forge.DepStatePRMerged:
+				continue
+			case state == forge.DepStatePROpen:
+				return depBlockResult{
+					blocked: true, blocker: depKey, offBoard: true,
+					status: "pull request still open (resolved via GitHub — not on any project board)",
+				}
+			case state == forge.DepStatePRClosed:
+				return depBlockResult{
+					blocked: true, blocker: depKey, offBoard: true,
+					status: "pull request closed without merging — nothing was delivered; failing closed, fix the dependency line",
+				}
+			case state == forge.DepStateMissing:
+				return depBlockResult{
+					blocked: true, blocker: depKey, offBoard: true,
+					status: "does not exist (no issue or pull request has this number — failing closed; fix the dependency line)",
+				}
 			}
 			// Resolved CLOSED: satisfied unless it is an unvalidated program member.
 			if res, held := validationHold(depKey, validation, true); held {
@@ -4529,17 +4620,9 @@ func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]strin
 			}
 			continue
 		}
-		if isWorkCompleteStatus(depNode.BoardStatus) {
-			key := fmt.Sprintf("%s#%d", depNode.Repo, depNode.Number)
-			if program {
-				return depBlockResult{blocked: true, blocker: depKey, unvalidated: true,
-					status: depNode.BoardStatus + " (program issue — released only by the post-merge validation marker after it merges)"}
-			}
-			if prBacked[key] {
-				continue // satisfied — PR confirmed
-			}
-			// "In review" without a confirmed PR does not satisfy the edge —
-			// fall through to blocked below (#281).
+		if program && isWorkCompleteStatus(depNode.BoardStatus) {
+			return depBlockResult{blocked: true, blocker: depKey, unvalidated: true,
+				status: depNode.BoardStatus + " (program issue — released only by the post-merge validation marker after it merges)"}
 		}
 		return depBlockResult{blocked: true, blocker: depKey, status: depNode.BoardStatus}
 	}
@@ -4748,7 +4831,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 				resolvedDepStates = r
 			}
 			log.Printf("autonomous: resolved %d/%d off-board dependency key(s) not on any project board: %v",
-				len(resolvedDepStates), len(keys), keys)
+				countConfirmedDeps(resolvedDepStates), len(keys), keys)
 		} else {
 			log.Printf("autonomous: WARNING no issue-state resolver wired — %d off-board dependency key(s) will fail closed (treated as blocked): %v",
 				len(keys), keys)
@@ -4803,6 +4886,9 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// auto-resolve retracts cards for issues that closed or moved.
 	var selfRepoObserved []string
 
+	blockedFindingSeen := make(map[string]bool)
+	defer as.forgetClearedBlockedFindings(blockedFindingSeen)
+
 	var candidates []CandidateItem
 	for key, node := range g.Nodes {
 		// Skip nodes not in the filtered repo set (--repos restriction).
@@ -4841,6 +4927,17 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		if hold, held := humanHeldSet[key]; held {
 			bump("human-hold:" + hold)
 			log.Printf("autonomous: skipping %s — held for a human decision, awaiting %s; no rescan releases it", key, hold)
+			continue
+		}
+
+		// Skip issues with an unresolved out-of-scope finding (#2914). Pickup
+		// would defer them for zero tokens, but each lap still dispatched a run
+		// and posted a chat message. Re-read every pass, so clearing the
+		// finding re-admits the issue on the next cycle.
+		if rec, found := as.blockedFindingFor(node.Repo, node.Number); found {
+			blockedFindingSeen[key] = true
+			bump("blocked-finding")
+			as.noteBlockedFindingSkip(key, rec)
 			continue
 		}
 
@@ -4949,17 +5046,12 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			continue
 		}
 
-		// Check if all dependencies are satisfied. A dep blocks dispatch only
-		// when it is OPEN and its work is not yet effectively complete. "In
-		// review" means the PR is open / merging — the upstream work is done,
-		// so downstream items can start. (If the PR is later rejected, the
-		// issue moves back to In progress / Backlog and the dep re-blocks on
-		// the next scan — self-healing.) "Done" is already CLOSED so it never
-		// reaches this branch.
+		// Check if all dependencies are satisfied. An OPEN dep blocks dispatch
+		// whatever its board status (#2706); see evaluateDeps.
 		blocked := false
 		var blocker, blockerStatus, blockerEdge string
 		offBoard, unvalidated := false, false
-		if res := evaluateDeps(adj[key], g, resolvedDepStates, prBackedSet, depValidation); res.blocked {
+		if res := evaluateDeps(adj[key], g, resolvedDepStates, depValidation); res.blocked {
 			blocked = true
 			blocker = res.blocker
 			blockerStatus = res.status
@@ -5000,7 +5092,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 					log.Printf("autonomous: ignoring epic %s's edges to its own sub-issues %v in the cascade — an epic blocked by its child is a data defect, not a gate (#1937)",
 						epicKey, ownSubs)
 				}
-				if res := evaluateDeps(gating, g, resolvedDepStates, prBackedSet, depValidation); res.blocked {
+				if res := evaluateDeps(gating, g, resolvedDepStates, depValidation); res.blocked {
 					blocked = true
 					blocker = res.blocker
 					offBoard = res.offBoard
@@ -5077,7 +5169,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			}
 			epicKey := g.NodeKey(node.ID())
 			gating, _ := epicCascadeDeps(g, adj, epicKey)
-			hasOpenBlocker := evaluateDeps(gating, g, resolvedDepStates, prBackedSet, depValidation).blocked
+			hasOpenBlocker := evaluateDeps(gating, g, resolvedDepStates, depValidation).blocked
 			if !hasOpenBlocker {
 				continue
 			}
@@ -5198,6 +5290,45 @@ func candidatePriorityRank(p string) int {
 }
 
 // enqueueItem adds an item to the existing scheduler's queue and starts it.
+// dispatchStop is what dispatchStopFor found.
+type dispatchStop int
+
+const (
+	dispatchClear     dispatchStop = iota
+	dispatchStopFleet              // end the dispatch loop
+	dispatchStopRepo               // skip this candidate; other repositories go on
+)
+
+// dispatchStopFor re-reads what may have stopped a dispatch since the cycle
+// began. The loop asks twice per candidate: on arrival, and after pre-dispatch
+// refinement, immediately before the run starts (#2865). remaining counts this
+// candidate and those after it.
+func (as *AutonomousScheduler) dispatchStopFor(item CandidateItem, remaining int) dispatchStop {
+	as.mu.Lock()
+	stopRequested := as.stopRequested
+	statusNow := as.state.Status
+	// #1148: a terminal stage failure is evidence about one repo, so it stops
+	// that repo and nothing else. Skipping rather than ending the loop is the
+	// whole difference between a repo-scoped halt and a fleet-wide pause. Runs
+	// already in flight are untouched: the loop only starts new ones.
+	haltedRepo := repoPaused(as.state, item.Repo)
+	as.mu.Unlock()
+	switch {
+	case stopRequested:
+		log.Printf("autonomous: stop requested mid-cycle — skipping %d remaining dispatches", remaining)
+		return dispatchStopFleet
+	case statusNow != "running":
+		log.Printf("autonomous: status changed mid-cycle to %q — skipping %d remaining dispatches",
+			statusNow, remaining)
+		return dispatchStopFleet
+	case haltedRepo:
+		log.Printf("autonomous: skipping %s#%d — repository halted awaiting triage (Resume %s to continue)",
+			item.Repo, item.Number, item.Repo)
+		return dispatchStopRepo
+	}
+	return dispatchClear
+}
+
 func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateItem) {
 	// Defense-in-depth for the self-repo guard (#292): every dispatch path
 	// funnels through here, so even a candidate that slipped past the
@@ -5333,6 +5464,11 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		filtered = append(filtered, r)
 	}
 	as.state.Running = filtered
+
+	if success && terminalFailureKind == TerminalKindResumeNoOp {
+		success = false
+		failureDetail = "the run resumed at pr-merge, found the PR already merged and left the issue open"
+	}
 
 	if success {
 		as.state.Completed = append(as.state.Completed, CompletedItem{
@@ -5547,6 +5683,14 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			terminalFailureKind = demoted
 		}
 
+		// A warning is not a rejection: whatever produced this kind, a failure
+		// with only `allowed_warning` behind it must not suspend dispatch.
+		if demoted, ok := DemoteWarningOnlyQuotaKind(terminalFailureKind, failureDetail); ok {
+			log.Printf("autonomous: %s quota kind demoted — warning-only, no hard signal; no global cooldown (%s → %s)",
+				key, terminalFailureKind, demoted)
+			terminalFailureKind = demoted
+		}
+
 		// The demoted BLOCKED outcome is held for this one issue as a
 		// non-fault outcome, like not_pipeline_actionable below: no retry, no
 		// cooldown, no lifetime-cap increment, no board revert — the extension
@@ -5666,12 +5810,18 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// this branch, two stall-kills on the same issue exhaust
 		// MaxLifetimeFailuresPerIssue (=2) and require manual triage every
 		// time — which defeats the purpose of autonomous mode.
-		if terminalFailureKind == TerminalKindStallKill || terminalFailureKind == TerminalKindRunawayProgress {
-			as.recordFailureLocked(repo, issue, title, now,
-				"stall-killed (transient) — will retry after backoff", terminalFailureKind)
-			as.scheduleRetryLocked(key, terminalFailureKind, "stage stalled and was killed", time.Now().Add(stallKillBackoff))
-			log.Printf("autonomous: stall-kill for %s — transient, retry in %v (no lifetime-cap increment)",
-				key, stallKillBackoff)
+		if terminalFailureKind == TerminalKindStallKill || terminalFailureKind == TerminalKindRunawayProgress ||
+			terminalFailureKind == TerminalKindStageCapKill {
+			failureNote, retryReason, logLabel := "stall-killed (transient) — will retry after backoff",
+				"stage stalled and was killed", "stall-kill"
+			if terminalFailureKind == TerminalKindStageCapKill {
+				failureNote, retryReason, logLabel = "stage-cap-killed (transient) — will retry after backoff",
+					"stage reached its runtime cap and was killed", "stage-cap-kill"
+			}
+			as.recordFailureLocked(repo, issue, title, now, failureNote, terminalFailureKind)
+			as.scheduleRetryLocked(key, terminalFailureKind, retryReason, time.Now().Add(stallKillBackoff))
+			log.Printf("autonomous: %s for %s — transient, retry in %v (no lifetime-cap increment)",
+				logLabel, key, stallKillBackoff)
 			as.persistStateLocked()
 			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
 			select {
@@ -6073,6 +6223,13 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			as.recordFailureLocked(repo, issue, title, now, reason, terminalFailureKind)
 			log.Printf("autonomous: %s#%d %s — parked for an operator: no retry, no lifetime-cap increment, no cascade feed, no pause — %s",
 				repo, issue, terminalFailureKind, ParkedRemediation(terminalFailureKind, detail))
+			if terminalFailureKind == TerminalKindReviewCapReached {
+				as.dispatchAttention(func() { as.raiseReviewCapReached(repo, issue, title, detail) })
+			}
+			if terminalFailureKind == TerminalKindResumeNoOp {
+				as.dispatchAttention(func() { as.raiseResumeNoOp(repo, issue, title) })
+				as.goTrackedBoardOp(func(genCtx context.Context) { as.moveParkedToBacklog(genCtx, repo, issue) })
+			}
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
@@ -6115,6 +6272,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
 			log.Printf("autonomous: %s#%d not pipeline-actionable (non-failure) — left parked, no retry, no lifetime-cap increment, no pause — %s",
 				repo, issue, detail)
+			// The extension path parks the row itself; a Go-path declaration
+			// (pr-create on a branch level with its base, #2941) has no one
+			// else to, and a row left in Ready is dispatched again. Idempotent.
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.moveParkedToBacklog(genCtx, repo, issue) })
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
@@ -6165,8 +6326,11 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// So: no lifetime-cap increment, no cascade-breaker feed (a forked branch
 		// says nothing about the health of the factory), no board revert to Ready
 		// — the issue is deliberately left where it is so nothing re-dispatches
-		// it. The Action Center card raised by the scheduler's pre-flight is the
+		// it. The Action Center card raised by the scheduler's terminal block is the
 		// way back in: resolving it clears the failure cooldown and requeues.
+		// A self-fork (a rebased PR branch whose origin copy carries no change
+		// the local tree lacks, #2699) is recovered before it reaches here, and a
+		// genuine fork arrives with its tip pinned at refs/nightgauge/stranded/<N>.
 		if terminalFailureKind == TerminalKindBranchForked {
 			detail := failureDetail
 			if detail == "" {
@@ -6259,7 +6423,8 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// (~$5 / ~13 min per cycle, observed in a production autonomous run)
 		// until the lifetime cap trips the whole scheduler. Human approval — the
 		// `approved:architecture` label or an approval file — is the way back
-		// in, and moving the issue to Ready re-queues it.
+		// in: releaseArchitectureHold moves the issue to Ready, which re-queues
+		// it (#2717).
 		if terminalFailureKind == TerminalKindArchitectureApprovalRequired {
 			detail := failureDetail
 			if detail == "" {
@@ -6297,7 +6462,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
-		if terminalFailureKind == TerminalKindPrMergeUnmerged {
+		if terminalFailureKind == TerminalKindPrMergeUnmerged || terminalFailureKind == TerminalKindMergeQueueEnqueueFailed {
 			detail := failureDetail
 			if detail == "" {
 				detail = "pr-merge: PR was not merged"
@@ -6590,9 +6755,8 @@ func (as *AutonomousScheduler) moveIssueToDone(parent context.Context, repo stri
 // "In review" — the truthful state when a PR exists but cannot merge (red
 // required check, review requirement, merge conflict). Keeping it OUT of
 // Ready stops the scheduler from re-dispatching into the same external
-// blocker, and "In review" already satisfies downstream dependency checks
-// (isWorkCompleteStatus). Modeled after moveIssueToDone. Best-effort: a
-// network failure logs a warning.
+// blocker. Its dependents keep waiting until it closes (#2706). Modeled after
+// moveIssueToDone. Best-effort: a network failure logs a warning.
 //
 // pr is the open PR that backs the issue, the evidence every "In review"
 // writer requires (#1496): a caller that has not confirmed one passes 0 and
@@ -6634,10 +6798,9 @@ func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo 
 // moveIssueToInProgress moves a sidelined issue's board status to "In
 // progress" — the truthful state when no PR backs it (e.g. the
 // architecture-approval gate halted before feature-dev ever ran). Modeled
-// after moveIssueToDone/moveIssueToInReview. Unlike "In review" this status
-// is never treated as satisfying a blockedBy edge (isWorkCompleteStatus only
-// matches "in review"), so dependents correctly stay blocked. Best-effort: a
-// network failure logs a warning.
+// after moveIssueToDone/moveIssueToInReview. No board status satisfies a
+// blockedBy edge, so dependents stay blocked while the issue is open (#2706).
+// Best-effort: a network failure logs a warning.
 func (as *AutonomousScheduler) moveIssueToInProgress(parent context.Context, repo string, issue int, reason string) {
 	owner, repoName := splitOwnerRepo(repo)
 	var projectNum int
@@ -6864,6 +7027,25 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 			continue
 		}
 
+		// Never Ready for a closed issue: Ready is the dispatchable status, and
+		// a session can die after the issue closed (#2750). An unread state is
+		// unknown, not open, so the recheck decides once the forge answers.
+		closed, err := as.orphanIssueClosed(opCtx, owner, repoName, item.Number)
+		if err != nil {
+			log.Printf("autonomous: recovery: NOT moving %s#%d to Ready — could not read the issue's state (%v); status left unchanged, will re-check once the forge answers",
+				item.Repo, item.Number, err)
+			as.enqueuePRRecheck(item.Repo, item.Number, 0, "")
+			recovered++
+			continue
+		}
+		if closed {
+			log.Printf("autonomous: recovery: NOT moving %s#%d to Ready — the issue is closed; moving it to Done instead",
+				item.Repo, item.Number)
+			as.moveIssueToDone(context.WithoutCancel(ctx), item.Repo, item.Number)
+			recovered++
+			continue
+		}
+
 		// Never Ready on top of the issue's own open PR, for the reason
 		// revertFailedIssueStatus gives: a session can crash in pr-merge,
 		// after pr-create opened the PR (#1707).
@@ -6905,6 +7087,24 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 	if recovered > 0 {
 		log.Printf("autonomous: startup recovery complete — recovered %d orphaned item(s)", recovered)
 	}
+}
+
+// orphanIssueClosed reads an orphaned item's issue state through the repo's own
+// client when one is resolvable. Unlike issueClosedOnForge it reports a failed
+// read as an error, so the caller cannot take "could not look" for "open".
+func (as *AutonomousScheduler) orphanIssueClosed(ctx context.Context, owner, repoName string, number int) (bool, error) {
+	if as.ghClient == nil {
+		return false, fmt.Errorf("no forge client")
+	}
+	var issues issueGetter = gh.NewIssueService(as.ghClient)
+	if as.scheduler != nil && as.scheduler.clientResolver != nil {
+		issues = as.scheduler.issueServiceFor(ctx, owner, repoName)
+	}
+	issue, err := issues.GetIssueWithRelations(ctx, owner, repoName, number, gh.NoRelations)
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(issue.State, "CLOSED"), nil
 }
 
 // isTriagedAndUnblocked returns true if a Backlog node is fully triaged
@@ -7197,8 +7397,8 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 			continue
 		}
 		promoted++
-		log.Printf("autonomous: promoted %s#%d from Backlog → Ready (unblocked by %s#%d)",
-			node.Repo, node.Number, completedRepo, completedIssue)
+		log.Printf("autonomous: promoted %s#%d from Backlog → Ready (%s)",
+			node.Repo, node.Number, promotionCause(downstreamKeys, downKey, completedKey))
 	}
 
 	as.recordPromotionDiagnostics(considered, eligible, promoted, rejections)
@@ -7208,6 +7408,17 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 	if promoted > 0 {
 		log.Printf("autonomous: promoteUnblockedToReady: promoted %d issue(s) to Ready", promoted)
 	}
+}
+
+// promotionCause names why promoteUnblockedToReady moved key. Its candidates
+// include every Backlog node (#288), so most promotions are not caused by the
+// completed issue. Saying "unblocked by" for those is how #2702, which depends
+// on nothing, was reported as released by #2684 (#2706).
+func promotionCause(dependents []string, key, completedKey string) string {
+	if slices.Contains(dependents, key) {
+		return "unblocked by " + completedKey
+	}
+	return "backlog sweep after " + completedKey + ", not a dependent"
 }
 
 // recordPromotionDiagnostics overwrites the LastPromotion* diagnostics fields
@@ -7392,10 +7603,36 @@ func (as *AutonomousScheduler) hasDispatchHeadroom() (bool, string) {
 	return true, ""
 }
 
+// pendingReservationTTL bounds how long a pending queue item may hold a
+// board-scan slot (#2717). fillSlots takes a Go-side item within one debounce
+// window of the queue.changed event that announces it, so an item still
+// pending after several windows is not about to be taken; reserving its slot
+// for longer only stalls the board scan, which is what kept the whole fleet
+// idle behind two approval queue items in #2717.
+const pendingReservationTTL = 2 * time.Minute
+
+// slotAvailability is effectiveAvailableSlots' answer with the reservation
+// counts the `no effective slots available` log reports (#2717).
+type slotAvailability struct {
+	available int
+	// pending is every pending queue item; reserved is the subset that held a
+	// slot (fresh and in a repository that is not halted).
+	pending  int
+	reserved int
+}
+
 // effectiveAvailableSlots returns how many additional pipelines can be
-// dispatched right now, considering both the global MaxConcurrent ceiling
-// (held to the workspace throttle when it applies, #2352) and any per-repo
-// caps. Returns 0 when all effective capacity is consumed.
+// dispatched right now. See slotAvailability.
+//
+// Must be called without as.mu held.
+func (as *AutonomousScheduler) effectiveAvailableSlots() int {
+	return as.slotAvailability().available
+}
+
+// slotAvailability computes the dispatchable slots, considering both the
+// global MaxConcurrent ceiling (held to the workspace throttle when it
+// applies, #2352) and any per-repo caps, less the slots reserved for pending
+// queue items. available is 0 when all effective capacity is consumed.
 //
 // When every active repo has an explicit cap, the per-repo sum is the binding
 // limit (e.g. MaxConcurrent=3 but only one repo with cap=1 means at most 1
@@ -7403,29 +7640,72 @@ func (as *AutonomousScheduler) hasDispatchHeadroom() (bool, string) {
 // only constraint — that repo can absorb any remaining global capacity.
 //
 // Must be called without as.mu held.
-func (as *AutonomousScheduler) effectiveAvailableSlots() int {
+func (as *AutonomousScheduler) slotAvailability() slotAvailability {
+	var pendingItems []QueueItem
+	if as.scheduler != nil {
+		// Read before as.mu: the queue has its own lock and is never read
+		// under the autonomous one.
+		pendingItems = as.scheduler.QueuePendingItems()
+	}
+
 	as.mu.Lock()
 	globalAvail := as.dispatchCeilingLocked() - len(as.state.Running)
 	repos := as.repos
+	reserved := as.pendingReservationsLocked(pendingItems, time.Now())
 	as.mu.Unlock()
 
+	res := slotAvailability{pending: len(pendingItems), reserved: reserved}
 	if globalAvail <= 0 {
-		return 0
+		return res
 	}
 
 	// Reserve slots for items already sitting in the explicit queue — they are
 	// about to be dispatched by fillSlots and should not be crowded out by
 	// board-scan candidates in the same runCycle (#3532).
-	if as.scheduler != nil {
-		pending := as.scheduler.QueuePendingCount()
-		if pending > 0 {
-			globalAvail -= pending
-			if globalAvail <= 0 {
-				return 0
-			}
-		}
+	globalAvail -= reserved
+	if globalAvail <= 0 {
+		return res
 	}
+	res.available = as.repoBoundSlots(repos, globalAvail)
+	return res
+}
 
+// pendingReservationsLocked counts the pending queue items that hold a
+// board-scan slot (#2717). An item reserves nothing when the fleet or its
+// repository is halted — fillSlots will not take it, so the slot would sit
+// idle until the halt lifts — or when it has been pending longer than
+// pendingReservationTTL; the first time an item expires, a warning names it.
+//
+// Caller MUST hold as.mu.
+func (as *AutonomousScheduler) pendingReservationsLocked(items []QueueItem, now time.Time) int {
+	if len(items) == 0 || machineHalted(as.state) {
+		return 0
+	}
+	reserved := 0
+	for _, it := range items {
+		if repoPaused(as.state, it.Repo) {
+			continue
+		}
+		age := now.Sub(it.AddedAt)
+		if !it.AddedAt.IsZero() && age > pendingReservationTTL {
+			key := fmt.Sprintf("%s#%d@%d", it.Repo, it.IssueNumber, it.AddedAt.UnixNano())
+			if !as.expiredPendingWarned[key] {
+				if as.expiredPendingWarned == nil {
+					as.expiredPendingWarned = make(map[string]bool)
+				}
+				as.expiredPendingWarned[key] = true
+				log.Printf("autonomous: WARNING pending queue item %s#%d has not been taken for %s (limit %s) — releasing its slot reservation to the board scan",
+					it.Repo, it.IssueNumber, age.Round(time.Second), pendingReservationTTL)
+			}
+			continue
+		}
+		reserved++
+	}
+	return reserved
+}
+
+// repoBoundSlots applies the per-repo caps to globalAvail.
+func (as *AutonomousScheduler) repoBoundSlots(repos []depgraph.RepoConfig, globalAvail int) int {
 	if len(repos) == 0 {
 		// No repos configured — global ceiling is the only constraint.
 		return globalAvail
@@ -7795,6 +8075,10 @@ func (as *AutonomousScheduler) recordFailureLocked(repo string, number int, titl
 			// The cap branch sets it again after this write; any other
 			// attempt is not at a cap.
 			f.RetryCapped = false
+			// A new attempt's outcome supersedes an earlier approval's
+			// pending board move (#2717): a fresh architecture halt waits
+			// for a fresh approval.
+			f.ReleasePending = false
 			if f.AttemptCount < 1 {
 				// Legacy entry without count — treat as one prior attempt.
 				f.AttemptCount = 1
@@ -7983,6 +8267,55 @@ func (as *AutonomousScheduler) architectureApprovalFileGranted(repo string, issu
 	return json.Unmarshal(b, &v) == nil && v.Approved
 }
 
+// resumeNoOpKind names a run that resumed at pr-merge, did no work and left the
+// issue open (#2878). It parks at once: Ready was withheld, so no second run
+// would ever come. A closed issue was simply finished and has no kind.
+func resumeNoOpKind(runtime *state.RuntimeState, success bool) string {
+	if success && runtime != nil {
+		if snap := runtime.Snapshot(); snap.MergeNoOp && snap.ReadyWithheld {
+			return TerminalKindResumeNoOp
+		}
+	}
+	return ""
+}
+
+// moveParkedToBacklog moves a parked issue to Backlog. The Failed entry is what
+// holds it, so a failed move leaves the park standing.
+func (as *AutonomousScheduler) moveParkedToBacklog(parent context.Context, repo string, issue int) {
+	owner, repoName := splitOwnerRepo(repo)
+	var projectNum int
+	var ownerType gh.OwnerType
+	as.mu.Lock()
+	for _, rc := range as.repos {
+		if rc.Owner == owner && rc.Name == repoName && rc.Project > 0 {
+			projectNum, ownerType = rc.Project, rc.OwnerType
+			break
+		}
+	}
+	as.mu.Unlock()
+	if projectNum == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
+	defer cancel()
+	if err := as.projectService(owner, projectNum, ownerType).MoveStatus(ctx, owner, repoName, issue, "Backlog"); err != nil {
+		log.Printf("autonomous: could not move parked %s#%d to Backlog: %v", repo, issue, err)
+	}
+}
+
+// parkedOnBoard names what parks an issue on the board: an excluded label or
+// Backlog. Such an issue stays out of re-admission (#2878); the next reconcile
+// after the park is lifted re-admits it.
+func (as *AutonomousScheduler) parkedOnBoard(node *depgraph.Node) (string, bool) {
+	if label, excluded := excludedLabelMatch(node.Labels, resolvedExcludeLabels(as.config.ExcludeLabels)); excluded {
+		return fmt.Sprintf("label %q", label), true
+	}
+	if strings.EqualFold(node.BoardStatus, "Backlog") {
+		return "Backlog", true
+	}
+	return "", false
+}
+
 func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 	// Resolved before the lock: config.Load reads the filesystem, and the
 	// architecture-approval hold below needs the same label name the gate
@@ -8014,6 +8347,11 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 			// expected and transient.
 			if ts, ok := as.recentClosures[key]; ok && time.Since(ts) < 60*time.Second {
 				log.Printf("autonomous: skipping re-admit for %s — closed %v ago (within 60s race guard window)", key, time.Since(ts).Round(time.Second))
+				kept = append(kept, c)
+				continue
+			}
+			if why, parked := as.parkedOnBoard(node); parked {
+				log.Printf("autonomous: keeping completed %s — still OPEN but parked by %s", key, why)
 				kept = append(kept, c)
 				continue
 			}
@@ -8061,6 +8399,14 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 			continue
 		}
 		if strings.EqualFold(node.State, "OPEN") {
+			if f.hold() == HoldArchitectureApproval && f.ReleasePending {
+				// The release was observed on an earlier pass (or asked for
+				// by the card) and its board move has not landed: keep the
+				// entry and retry the move (#2717).
+				heldFailed++
+				keptFailed = append(keptFailed, as.continueArchitectureReleaseLocked(f, "retrying the Ready move"))
+				continue
+			}
 			if hold := f.hold(); hold != HoldNone {
 				released, why := as.holdReleased(f, node, approvalLabel)
 				if !released {
@@ -8071,14 +8417,23 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 					log.Printf("autonomous: holding %s — %s (%s) awaits %s, not the rescan", key, f.Kind, hold, why)
 					continue
 				}
-				log.Printf("autonomous: releasing %s — %s hold cleared: %s", key, hold, why)
 				if hold == HoldArchitectureApproval {
-					// The card's lifetime is the hold's (#2577): once the
-					// approval lands it asks for nothing, so it must not
-					// wait for the run to succeed before it is retracted.
-					repo, number := f.Repo, f.Number
-					as.dispatchAttention(func() { as.retractArchitectureApproval(repo, number) })
+					// The approved issue sits in In progress or In review,
+					// statuses the scheduler never dispatches, so dropping
+					// the entry here would leave it parked forever (#2717).
+					// The shared release keeps the entry until the issue is
+					// back in Ready on every board that carries it.
+					log.Printf("autonomous: approval landed for %s — %s hold: %s; moving it to Ready", key, hold, why)
+					heldFailed++
+					keptFailed = append(keptFailed, as.beginArchitectureReleaseLocked(f))
+					continue
 				}
+				log.Printf("autonomous: releasing %s — %s hold cleared: %s", key, hold, why)
+			}
+			if why, parked := as.parkedOnBoard(node); parked {
+				log.Printf("autonomous: keeping failed %s — still OPEN but parked by %s", key, why)
+				keptFailed = append(keptFailed, f)
+				continue
 			}
 			// Still open and not held — re-admit for potential retry.
 			readmittedFailed++
@@ -8869,10 +9224,10 @@ func refinementModel(workspaceRoot string) string {
 // in this repository and failed to locate its skill at all in every other one.
 func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumber int, adapterName string) (execution.StageOptions, error) {
 	// Same composer the pipeline stages use (scheduler.go, skillrender.Render).
-	// Locating through DefaultRoots is what gives refinement the bundle
-	// fallback #874 added: <workspaceRoot>/skills first, then
-	// <binary>/../skills, which is the only root that exists in a workspace
-	// that is not the nightgauge source tree.
+	// Locating through DefaultRoots is what gives refinement the bundle root
+	// #874 added: <binary>/../skills ahead of <workspaceRoot>/skills (#2718),
+	// and the only root that exists in a workspace that is not the nightgauge
+	// source tree.
 	model := refinementModel(as.workspaceRoot)
 	rendered, err := skillrender.Render(skillrender.Options{
 		Stage:       string(state.StageIssueRefine),
@@ -8885,6 +9240,7 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 	if err != nil {
 		return execution.StageOptions{}, fmt.Errorf("refinement skill render failed: %w", err)
 	}
+	logResolvedSkillPath(issueNumber, state.StageIssueRefine, rendered.SkillPath)
 
 	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
 	return execution.StageOptions{

@@ -74,12 +74,12 @@
       },
       "extension": {
         "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
-        "anchor": "await moveToInReviewIfPRBacked(slot.issueNumber, cwd, this.logger, slot.repo);"
+        "anchor": "await moveToInReviewIfPRBacked(slot.issueNumber, cwd, this.logger, slot.repo, {"
       }
     },
     {
       "name": "learning-outcome-record",
-      "note": "Wired on both paths as of #304, and rooted identically \u2014 the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes \u2014 the Go scheduler's recordOutcome is unreachable from the extension path. SKIP PARITY: both paths record NOTHING for a blocked-dependency deferral (#305), a network_unavailable failure (#3296) and an environment_halt (#101). The scheduler keys all three on terminal_failure_kind; the extension keys the deferral on record.outcome_type (which #305 sets from the wire flag and which clears terminal_failure_kind) and the network and environment cases on terminal_failure_kind. Same three states, different fields, because the deferral override on the extension path erases the kind.",
+      "note": "Wired on both paths as of #304, and rooted identically \u2014 the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes \u2014 the Go scheduler's recordOutcome is unreachable from the extension path. SKIP PARITY: both paths record NOTHING for a blocked-dependency deferral (#305), a network_unavailable failure (#3296), an environment_halt (#101), a gate_plugin_missing stop (#2723) and an architecture_approval_required hold (#2756). The scheduler keys all five on terminal_failure_kind; the extension keys the deferral on record.outcome_type (which #305 sets from the wire flag and which clears terminal_failure_kind), the approval hold on record.outcome_type awaiting_approval (set by ApplyNonFailureOutcome, which keeps the kind), and the other three on terminal_failure_kind. Same five states, different fields, because the deferral override on the extension path erases the kind.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, workspaceRoot)"
@@ -102,13 +102,14 @@
     },
     {
       "name": "pipeline-done-telemetry",
+      "note": "#2756: both paths emit an architecture_approval_required hold as a non-failure (Success=true), like a deferral, so the live view never paints a deliberate human pause red. Go keys it on terminalFailureKind via IsNonFailureTerminalKind; the extension on the terminating stage's gate-sourced kind (heldForApproval), the same source as the run record's terminal_failure_kind.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.telemetrySvc.EmitPipelineEvent(context.Background(), platform.PipelineEvent{"
       },
       "extension": {
         "file": "internal/ipc/server.go",
-        "anchor": "s.emitPipelineDoneTelemetry(runID, p, snap.Visibility)"
+        "anchor": "s.emitPipelineDoneTelemetry(runID, p, approvalHold && !p.Success, snap.Visibility)"
       }
     },
     {
@@ -237,7 +238,7 @@
     },
     {
       "name": "queue-halt-on-failure",
-      "note": "Semantics differ (Go: pause with QueuePausedReason per failure_mode config; extension: clear + autonomousPause with a suppression ladder). Parity asserts both paths react to a slot failure.",
+      "note": "Semantics differ (Go: pause with QueuePausedReason per failure_mode config; extension: clear + autonomousPause with a suppression ladder). Parity asserts both paths react to a slot failure. Held kinds pause neither path (#2865): Go checks HoldForTerminalKind, the extension its HALT_SKIP sets.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "paused := s.pauseQueuedItemsUnlocked(reason)"
@@ -328,7 +329,7 @@
         "delete a successor's worktree.",
         "",
         "EVERY behavior in this manifest, accounted for. This list is exhaustive by construction: if you add a",
-        "behavior row above, add its disposition here, and keep the section counts summing to 26. TestForceClearAccountingIsExhaustive fails when a name is missing. (26 behaviors + this row.)",
+        "behavior row above, add its disposition here, and keep the section counts summing to 28. TestForceClearAccountingIsExhaustive fails when a name is missing. (28 behaviors + this row.)",
         "",
         "PERFORMED (3):",
         "  queue-item-completion       \u2014 completeQueueItem releases the dequeue's `processing` mark, on BOTH",
@@ -468,8 +469,10 @@
         "                                scheduler path performs both directly in its terminal defer (#440); this",
         "                                funnel is the extension side, where they are the claim's to do.",
         "",
-        "NOT APPLICABLE \u2014 Go-only by design (1):",
+        "NOT APPLICABLE \u2014 Go-only by design (3):",
         "  lifecycle-decision-trace    \u2014 ADR 013 / #179; the extension path emits no trace on either funnel.",
+        "  branch-forked-stranded-tip  — #2699; branch_forked is a Go scheduler terminal kind, never a force-clear outcome.",
+        "  gate-plugin-missing-attention — #2723; the kind comes from a stage's stderr marker, and a force-clear books `Cancelled by user`, never this kind.",
         "",
         "NOT APPLICABLE \u2014 Go-only until #1648 (2):",
         "  opencode-run-root-cleanup   \u2014 only the Go manager dispatches opencode, so only a Go run has an OpenCode",
@@ -561,6 +564,29 @@
         "file": "internal/ipc/server.go",
         "anchor": "if err := rt.SealAndRemove(sealDir); err != nil {"
       }
+    },
+    {
+      "name": "branch-forked-stranded-tip",
+      "note": "#2699: a branch_forked run's local tip is pinned at refs/nightgauge/stranded/<issue> before worktree and branch cleanup, and the branch-forked Action Center card names the ref and the SHA.",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.preserveBranchForkedRun(ctx, item, runtime, workspaceRoot, branchForkEvidence)"
+      },
+      "extension": {
+        "pathSpecific": "Go-only: the branch_forked terminal kind and its Action Center card are produced by the Go scheduler's branch-fork pre-flight and terminal classification; the extension path has neither (#2699)."
+      }
+    },
+    {
+      "name": "gate-plugin-missing-attention",
+      "note": "#2723: parking raises no card, so a stage stopped because its Claude plugin did not load raises one on each path. Both build it in gatePluginMissingRequest with one idempotency key, so a path that reaches both funnels leaves one card.",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.raiseGatePluginMissing(item.Repo, item.Number, runtime.RunID, string(stage), failText)"
+      },
+      "extension": {
+        "file": "internal/ipc/server.go",
+        "anchor": "orchestrator.RaiseGatePluginMissing(s.attentionStore(), recordRepo, p.IssueNumber, runID, string(snap.Stage), errMsg)"
+      }
     }
   ],
   "fences": [
@@ -569,14 +595,14 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "8086b0f50d24af7db5c122be00d0be2174a4725cf7cda50a2ba62d5bf5e52ec6"
+      "sha256": "e9e7eb1c07a9675d528044bf45ca15705c8fc6cde9f521224b8b8428ec439836"
     },
     {
       "id": "extension-runSlotPipeline-finally",
       "file": "packages/nightgauge/src/services/ConcurrentPipelineManager.ts",
       "begin": "terminal-parity:begin runSlotPipeline-finally",
       "end": "terminal-parity:end runSlotPipeline-finally",
-      "sha256": "4854f26b9165dbfa45ae32a98fe24c24d78f607d6731251ff63140800f95712d"
+      "sha256": "ec6f1f07f50d4f69fa406192c8977dc1df2b2e0ebbd5091845a7f7a8227415f3"
     },
     {
       "id": "extension-force-clear-funnel",

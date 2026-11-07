@@ -87,6 +87,20 @@ type RuntimeState struct {
 	StartedAt  time.Time     `json:"startedAt"`
 	StageStart time.Time     `json:"stageStart"`
 
+	// MergedPR is the run's PR once the forge confirms it MERGED (#2730). The
+	// run stays registered through its post-merge follow-up, still reading
+	// stage pr-merge, so this is what tells the two apart. Zero until then.
+	MergedPR int `json:"mergedPr,omitempty"`
+	// MergeNoOp is set when a run that resumed at pr-merge found the PR already
+	// merged, so it did no work at all (#2878). A full run whose PR was merged
+	// by someone else delivered work and does not set it.
+	MergeNoOp bool `json:"mergeNoOp,omitempty"`
+	// ResumedAtMerge is set when the run skipped forward to pr-merge (#2878).
+	ResumedAtMerge bool `json:"resumedAtMerge,omitempty"`
+	// ReadyWithheld is set when a partial delivery must stay out of Ready
+	// (#2878): completion writes Backlog rather than In Review.
+	ReadyWithheld bool `json:"readyWithheld,omitempty"`
+
 	// Process tracking
 	PID         int    `json:"pid,omitempty"`
 	WorktreeDir string `json:"worktreeDir,omitempty"`
@@ -230,6 +244,11 @@ type RuntimeState struct {
 	// (and stay empty when the breadcrumb fetch fails — non-blocking).
 	MergedCommitSha string `json:"mergedCommitSha,omitempty"`
 	MergedAt        string `json:"mergedAt,omitempty"`
+
+	// PartialDelivery is set when the post-merge hook found that this run's
+	// merge left the issue open (a `Refs` PR, #2595). The board then belongs to
+	// the hook's Ready, not to completion's In Review (#2706).
+	PartialDelivery bool `json:"partialDelivery,omitempty"`
 
 	// MainCheckVerdict + MainCheckFailing are the post-merge verification of
 	// the base branch (#1249, #2055): whether the merge was green (the merge
@@ -376,7 +395,10 @@ type RuntimeState struct {
 	// independent of the requested StageEfforts/StageThinking above. Absent
 	// means honestly-unreported — the #299/#397 convention — never a copy of
 	// the requested value.
-	StageServedEfforts  map[string]string `json:"stageServedEfforts,omitempty"`
+	StageServedEfforts map[string]string `json:"stageServedEfforts,omitempty"`
+	// StagePluginVersions holds the Nightgauge Claude plugin version each stage's
+	// system/init reported (#2723). Absent means the stage reported none.
+	StagePluginVersions map[string]string `json:"stagePluginVersions,omitempty"`
 	StageServedThinking map[string]string `json:"stageServedThinking,omitempty"`
 
 	// StageModelSelectionModes captures model_routing.mode (manual |
@@ -1333,6 +1355,36 @@ func (rs *RuntimeState) SetActualLinesChanged(lines int) {
 // evidence, and it stays 0 here.
 //
 // Idempotent: RunStage's post-start SetProcess re-stamps the same path.
+// SetMergedPR records that the run's PR is forge-confirmed MERGED (#2730), so a
+// run still doing post-merge follow-up reads as that, not as waiting to merge.
+func (rs *RuntimeState) SetMergedPR(pr int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.MergedPR = pr
+}
+
+// SetMergeNoOp records that this run resumed at pr-merge and found the PR
+// already merged (#2878). A run that did not resume there is not a no-op.
+func (rs *RuntimeState) SetMergeNoOp() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.MergeNoOp = rs.ResumedAtMerge
+}
+
+// SetResumedAtMerge records that the run skipped forward to pr-merge (#2878).
+func (rs *RuntimeState) SetResumedAtMerge() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.ResumedAtMerge = true
+}
+
+// SetReadyWithheld records that a partial delivery stays out of Ready (#2878).
+func (rs *RuntimeState) SetReadyWithheld() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.ReadyWithheld = true
+}
+
 func (rs *RuntimeState) SetWorktree(worktreeDir string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -1838,6 +1890,13 @@ func (rs *RuntimeState) SetMergeOutcome(sha, mergedAt string) {
 	}
 }
 
+// SetPartialDelivery records that this run's merge left the issue open (#2706).
+func (rs *RuntimeState) SetPartialDelivery() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.PartialDelivery = true
+}
+
 // SetMainCheckOutcome records the post-merge observation of the base branch
 // (#1249). An empty verdict is ignored so a caller that has nothing to say
 // cannot erase an earlier observation. failing is copied.
@@ -2286,6 +2345,20 @@ func (rs *RuntimeState) RecordStageServedModel(stage PipelineStage, model string
 		rs.StageServedModels = make(map[string]string)
 	}
 	rs.StageServedModels[string(stage)] = model
+}
+
+// RecordStagePluginVersion records the plugin version a stage reported loading
+// (#2723). Empty is ignored, as for RecordStageServedModel.
+func (rs *RuntimeState) RecordStagePluginVersion(stage PipelineStage, version string) {
+	if version == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StagePluginVersions == nil {
+		rs.StagePluginVersions = make(map[string]string)
+	}
+	rs.StagePluginVersions[string(stage)] = version
 }
 
 // RecordStageOpenCodeSession records the OpenCode session id observed for a
@@ -3171,6 +3244,10 @@ func (rs *RuntimeState) Snapshot() *RuntimeState {
 // snapshotLocked creates a deep copy while the caller already holds rs.mu.
 func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 	snap := &RuntimeState{
+		MergedPR:                 rs.MergedPR,
+		MergeNoOp:                rs.MergeNoOp,
+		ResumedAtMerge:           rs.ResumedAtMerge,
+		ReadyWithheld:            rs.ReadyWithheld,
 		Repo:                     rs.Repo,
 		IssueNumber:              rs.IssueNumber,
 		ItemID:                   rs.ItemID,
@@ -3197,6 +3274,7 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		PrUrl:                    rs.PrUrl,
 		MergedCommitSha:          rs.MergedCommitSha,
 		MergedAt:                 rs.MergedAt,
+		PartialDelivery:          rs.PartialDelivery,
 		MainCheckVerdict:         rs.MainCheckVerdict,
 		MainCheckFailing:         append([]string(nil), rs.MainCheckFailing...),
 		// The two durable latch halves travel with every copy and therefore
@@ -3332,6 +3410,12 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		snap.StageThinking = make(map[string]string, len(rs.StageThinking))
 		for k, v := range rs.StageThinking {
 			snap.StageThinking[k] = v
+		}
+	}
+	if len(rs.StagePluginVersions) > 0 {
+		snap.StagePluginVersions = make(map[string]string, len(rs.StagePluginVersions))
+		for k, v := range rs.StagePluginVersions {
+			snap.StagePluginVersions[k] = v
 		}
 	}
 	if len(rs.StageServedEfforts) > 0 {

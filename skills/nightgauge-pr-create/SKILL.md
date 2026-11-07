@@ -114,6 +114,11 @@ phase node alongside the orchestrated stages.
   returns it to Ready. Do not write "close #N" anywhere in such a body: GitHub
   reads it as a closing keyword. The Validation section reports what ran:
   never pair "not run" with a pass count.
+- **Never run the full local gate (#2989).** `feature-validate`'s gate already
+  satisfies the "run the complete local gate once before pushing" rule. After
+  the Phase 2.3 base merge, push the merge straight away: PR CI and `pr-merge`
+  check the merged tree. The stage fence refuses `bash scripts/ci-local.sh` and
+  `nightgauge ci gate-run` here.
 - See also the cross-cutting gotchas in
   [`_shared/GOTCHAS.md`](../_shared/GOTCHAS.md).
 
@@ -161,16 +166,17 @@ else
   BINARY="${NIGHTGAUGE_BIN:-}"
   [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
   [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-  if [ -z "$BINARY" ]; then
-    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-  fi
-  if [ -z "$BINARY" ]; then
-    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-    if [ -n "$GIT_COMMON_DIR" ]; then
-      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-      [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-    fi
+  if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+    for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+      "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+      [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+      grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+      NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+      case "${NG_ORIGIN%.git}" in
+        git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+          ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+      esac
+    done
   fi
   [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
   [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
@@ -294,6 +300,9 @@ may have merged into the base branch while this branch was being implemented.
 
 <!-- include: ../_shared/STALE_BRANCH_MERGE.md -->
 
+A clean merge produces a new tree; push the merge straight away and do not run
+the full local gate on it (#2989). PR CI and `pr-merge` check the merged tree.
+
 **Failure outcome**: When conflicts are detected, the stage exits with status 1.
 The Go binary's failure classifier maps `stale-branch-merge-conflict` in stderr
 to `CatStaleBranchMergeConflict` — a deterministic, non-retryable failure that
@@ -342,9 +351,9 @@ when `pr-{N}.json` is written in Phase 4.
 printf '<!-- phase:start name="create-pr" index=8 total=13 stage="pr-create" -->\n'
 ```
 
-Create the PR using the Go binary. The skill constructs the title, body (with
-correct closing keywords), and handles reviewer assignment with self-reviewer
-guard. Append `KNOWLEDGE_SECTION` to the PR body when non-empty.
+Create the PR using the Go binary. `nightgauge pr-stage title` renders the title
+(#2846). The skill constructs the body (with correct closing keywords) and
+handles reviewer assignment with self-reviewer guard. Append `KNOWLEDGE_SECTION` to the PR body when non-empty.
 
 > **Read `_includes/create-and-ci.md` (same directory as this SKILL.md) now and
 > follow its instructions before continuing this phase.**

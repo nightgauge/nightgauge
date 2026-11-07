@@ -31,7 +31,10 @@
  * @see Issue #1448
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// tests/setup.ts mocks this service globally (#2893); this suite tests it.
+vi.unmock("../../src/services/AutoRetroService");
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -169,6 +172,8 @@ describe("AutoRetroService: terminal-kind coverage (#1448)", () => {
       ["dev_handoff_missing", "skill-no-op"],
       ["stage_context_unreadable", "state-management"],
       ["api_overloaded", "infrastructure-outage"],
+      // Added by #2841: names what happened, not only who acts next.
+      ["merge_conflict", "merge-blocked"],
     ];
 
     it.each(PINNED)("%s classifies as %s", (kind, expected) => {

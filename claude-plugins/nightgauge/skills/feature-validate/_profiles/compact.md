@@ -1,5 +1,64 @@
-<!-- include: ../_shared/PIPELINE_CONTEXT.md -->
-<!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
+## System Context
+
+**Product**: Nightgauge — AI-powered Issue-to-PR pipeline.
+
+**Architecture**: Three-layer stack: portable Skills (SKILL.md), a TypeScript
+SDK, and a VSCode Extension, over a Go deterministic layer. Six pipeline
+stages execute as isolated subagents with JSON context handoff files.
+
+**Execution model**: Each pipeline stage runs in a fresh conversation. Context
+is passed exclusively through JSON files in the clone's pipeline state
+directory (`nightgauge layout path pipeline`) — never through conversation
+history. Every stage reads its predecessor's context file
+and writes its own.
+
+**Configuration**: 6-tier config system — built-in defaults → global config →
+project config → local config → env vars → CLI flags. Reference:
+[docs/CONFIGURATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md).
+
+**Standards**: Code standards in `docs/CODE_STANDARDS.md`. Security rules in
+`standards/security.md`. Testing patterns in `docs/TESTING.md`. Git workflow in
+`docs/GIT_WORKFLOW.md`.
+
+**Critical rules**: Never push to main. Never hardcode secrets. Never downgrade
+versions. Pre-submission validation is mandatory.
+
+## Autonomy Contract
+
+This run is autonomous. No human is watching, and nobody can answer a
+question mid-stage. `AskUserQuestion` is disabled — and _behaving_ as if it
+were available is the same failure.
+
+- **Proceed without asking** for any reversible action that follows from the
+  stage's task. If a decision is genuinely undecidable from the issue, the
+  context files, and the repo, fail fast with a clear error — never pause to
+  ask, and never silently pick between materially different product
+  directions.
+- **Never end a turn on a promise.** Before ending your turn, check your last
+  paragraph: if it is a plan, a question, a list of next steps, or a promise
+  about work not yet done ("I'll now…", "Next, I will…"), do that work now
+  with tool calls instead of describing it. A turn that ends on stated intent
+  with no corresponding tool call is recorded as a `premature_turn_end` stage
+  failure, not a success.
+- **Do not stop because the session feels long.** End the turn only when the
+  stage's output contract is satisfied (its context file and phase markers
+  are written) or you are genuinely blocked — and a genuine block is reported
+  as an explicit failure, never as an open question.
+- **Never end a turn with background work outstanding.** There is no "await
+  and resume" — your turn ending IS stage completion, and the pipeline
+  advances immediately. If you started something in the background, block on
+  it and read its result before you finish. "I'll wait for that to complete
+  rather than poll, and pick the pipeline back up once it lands" is not a
+  handoff; it is the stage reporting success on work it never saw (#202).
+- **Work only inside the worktree you were given.** Never delegate the
+  stage's implementation to a subagent running under worktree isolation, and
+  never `cd` outside your workspace to edit files. Only your own worktree is
+  read by later stages: on #202 a subagent wrote the entire fix into
+  `.claude/worktrees/agent-<id>`, so the stage passed, the branch stayed
+  empty, and the work was invisible to every stage after it. A gate now fails
+  the stage when this happens — but the run is dead either way, so do the work
+  where you stand.
+
 
 # Feature Validation (compact)
 
@@ -11,9 +70,9 @@
 > stay a strict subset of the base SKILL.md's own wording — this file trims,
 > it never invents new instructions.
 
-Trusts the dev context handoff (no build/unit-test/security re-runs that already passed), runs integration/E2E tests with Ralph Loop self-healing (up to 3 auto-fix attempts, [docs/RALPH_LOOP.md](../../../../../docs/RALPH_LOOP.md)), excludes pre-existing failures via baseline comparison, and writes validation context for `/nightgauge-pr-create`.
+Trusts the dev context handoff (no build/unit-test/security re-runs that already passed), runs integration/E2E tests with Ralph Loop self-healing (up to 3 auto-fix attempts, [docs/RALPH_LOOP.md](https://github.com/nightgauge/nightgauge/blob/main/docs/RALPH_LOOP.md)), excludes pre-existing failures via baseline comparison, and writes validation context for `/nightgauge-pr-create`.
 
-**Invoke**: `/nightgauge-feature-validate` (Claude Code plugin), `$nightgauge-feature-validate` (Codex), or via Agent Skills (Copilot/Cursor). **Requires**: `dev-{N}.json` (in the clone's pipeline state directory, `nightgauge layout path pipeline`) from `/nightgauge-feature-dev`, on the feature branch from `/nightgauge-issue-pickup` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHITECTURE.md)). **Config**: `.nightgauge/config.yaml` ([docs/CONFIGURATION.md](../../../../../docs/CONFIGURATION.md)); per-key defaults and env overrides in `_includes/configuration.md` (read when needed).
+**Invoke**: `/nightgauge:feature-validate` (Claude Code plugin), `$nightgauge-feature-validate` (Codex), or via Agent Skills (Copilot/Cursor). **Requires**: `dev-{N}.json` (in the clone's pipeline state directory, `nightgauge layout path pipeline`) from `/nightgauge-feature-dev`, on the feature branch from `/nightgauge-issue-pickup` (schema: [docs/CONTEXT_ARCHITECTURE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONTEXT_ARCHITECTURE.md)). **Config**: `.nightgauge/config.yaml` ([docs/CONFIGURATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md)); per-key defaults and env overrides in `_includes/configuration.md` (read when needed).
 
 ## Arguments
 
@@ -21,7 +80,7 @@ Trusts the dev context handoff (no build/unit-test/security re-runs that already
 
 ## Exit Contract — Read This First
 
-**This stage is NOT complete until `validate-{N}.json` exists in the clone's pipeline state directory (written with `nightgauge layout write pipeline validate-{N}.json`).** On any error, budget exhaustion, or bail-out, STILL execute Phase 6 and write it (`validation_status: "failed"` plus the matching `errorCategory` — enum: `build-failed`, `tests-failed`, `integration-failed`, `dead-code-blocked`, `mobile-apk-build-failed`, `mobile-mcp-tests-failed`, `verify-ui-gate-failed`). Exiting without it triggers a repo-blind orchestrator fallback that may misreport tests. The very last act before signaling completion MUST be:
+**This stage is NOT complete until `validate-{N}.json` exists in the clone's pipeline state directory (written with `nightgauge layout write pipeline validate-{N}.json`).** On any error, budget exhaustion, or bail-out, STILL execute Phase 6 and write it (`validation_status: "failed"` plus the matching `errorCategory` — enum: `build-failed`, `tests-failed`, `gate-timeout`, `integration-failed`, `dead-code-blocked`, `mobile-apk-build-failed`, `mobile-mcp-tests-failed`, `verify-ui-gate-failed`). Exiting without it triggers a repo-blind orchestrator fallback that may misreport tests. The very last act before signaling completion MUST be:
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
@@ -32,11 +91,11 @@ test -s "$(nightgauge layout path pipeline validate-${ISSUE_NUMBER}.json)" || \
 
 ## Spike Issues (`type:spike`)
 
-For `type:spike` issues, run `nightgauge spike materialize "$ISSUE_NUMBER" --dry-run`. Non-zero exit = the `docs/spikes/<N>-*.md` artifact is missing or its recommendations block fails schema validation — a **blocking** validation failure ([docs/SPIKE_CONTRACT.md](../../../../../docs/SPIKE_CONTRACT.md)).
+For `type:spike` issues, run `nightgauge spike materialize "$ISSUE_NUMBER" --dry-run`. Non-zero exit = the `docs/spikes/<N>-*.md` artifact is missing or its recommendations block fails schema validation — a **blocking** validation failure ([docs/SPIKE_CONTRACT.md](https://github.com/nightgauge/nightgauge/blob/main/docs/SPIKE_CONTRACT.md)).
 
 ## Orchestration
 
-Validation is an ordered pipeline — build (1.5) → tests (2) → CI-parity (2.5) — closed by an adversarial **gate** judge whose verdict is the evidence the Go `FeatureValidateGate.Verify()` loop consumes: a failed verdict fails validation. `gate_metrics[]` flows into the validate context (Phase 6); FeatureValidateGate treats zero records as a no-op failure. Full orchestration and supporting-file index: Read `skills/nightgauge-feature-validate/SKILL.md` when needed.
+Validation is an ordered pipeline — build (1.5) → tests (2) → CI-parity (2.5) — closed by the independent review (Step 2.7.3), whose verdict is the evidence the Go `FeatureValidateGate.Verify()` loop consumes: a failed verdict fails validation. A `catch` fails the run and is not a log of what the review found: a `pass` on the fixed tree supersedes it, and the gate judges the latest verdict per `gate_name`, in file order, except `judges` rows, where any failure in the latest attempt fails. `gate_metrics[]` flows into the validate context (Phase 6); FeatureValidateGate treats zero records as a no-op failure. Full orchestration and supporting-file index: Read `skills/nightgauge-feature-validate/SKILL.md` when needed.
 
 ## Gotchas
 
@@ -63,7 +122,57 @@ Validation is an ordered pipeline — build (1.5) → tests (2) → CI-parity (2
 printf '<!-- phase:start name="validate-environment" index=0 total=22 stage="feature-validate" -->\n'
 ```
 
-<!-- include: ../_shared/REPO_IDENTITY_CHECK.md -->
+### Repo Identity Assertion (HARD GATE — non-recoverable)
+
+If the `NIGHTGAUGE_TARGET_REPO` environment variable is set, the orchestrator
+has pinned the exact repo this stage must run in. Verify the current repository
+matches **before doing any work**:
+
+```bash
+if [ -n "$NIGHTGAUGE_TARGET_REPO" ]; then
+  # Derive this checkout's identity from its own git remote. The question
+  # is "which repository is this working directory?", and the remote answers
+  # it exactly — locally, with no API call. This used to shell out to the
+  # GitHub CLI for the same string, spending a request per stage on every
+  # repo in the workspace, invisible to `nightgauge api-usage`.
+  ACTUAL_REPO=$(git remote get-url origin 2>/dev/null \
+    | sed -E 's#^git@[^:]+:#-#; s#^https?://[^/]+/#-#; s#^-##; s#\.git$##')
+  if [ -n "$ACTUAL_REPO" ] && [ "$ACTUAL_REPO" != "$NIGHTGAUGE_TARGET_REPO" ]; then
+    echo "[repo-mismatch] FATAL: repository identity assertion failed"
+    echo "  Expected: $NIGHTGAUGE_TARGET_REPO"
+    echo "  Actual:   $ACTUAL_REPO"
+    echo "  CWD:      $(pwd)"
+    echo ""
+    echo "The orchestrator expected this stage to run in $NIGHTGAUGE_TARGET_REPO"
+    echo "but the working directory belongs to $ACTUAL_REPO."
+    exit 1
+  fi
+fi
+```
+
+**This is a terminal, non-recoverable stop condition. If the check prints
+`[repo-mismatch]` and exits 1, you MUST immediately end the stage with a failure.**
+
+Specifically, on a mismatch you must NOT:
+
+- `cd` into a different directory, switch worktrees, or `gh repo set-default` to
+  "make it match" — the orchestrator owns CWD; second-guessing it corrupts state.
+- Continue to later phases, create or push a branch, or open a PR — every
+  downstream artifact would land in the wrong repo.
+- Ask the user a question (`AskUserQuestion`) — autonomous runs have no human at
+  the prompt; the question is auto-dismissed and you would proceed on a guess.
+- Write a context/assessment file that claims success.
+
+The correct and ONLY action is to stop now and let the stage exit non-zero. This
+is a configuration fault in repo routing (the orchestrator set the wrong
+`NIGHTGAUGE_TARGET_REPO` for this worktree); it is fixed upstream in the
+orchestrator, never worked around inside the stage. The `[repo-mismatch]` marker
+is how the pipeline classifies and surfaces it.
+
+This check is a no-op — and the stage proceeds normally — when
+`NIGHTGAUGE_TARGET_REPO` is unset (e.g. manual single-stage CLI
+invocations) or already matches the current repo.
+
 
 ### Phase 0: Read Dev Context
 
@@ -163,7 +272,7 @@ printf '<!-- phase:start name="verify-ui-gate" index=11 total=22 stage="feature-
 printf '<!-- phase:start name="ci-parity-check" index=12 total=22 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run the repo's actual CI commands locally (format, lint, typecheck, full build). **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. The adversarial-review `gate record-metric` is emitted per the include.
+> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run this tree's one full gate: skip it when `nightgauge ci gate-status` says the tree passed, otherwise run the repository's local gate, or its CI commands when it has none. **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. Step 2.7.3 runs the independent review in a fresh context; `nightgauge review record` writes its verdict.
 
 ### Phase 2.6: Knowledge Coverage Check
 
@@ -215,7 +324,7 @@ printf '<!-- phase:start name="commit-and-push" index=17 total=22 stage="feature
 printf '<!-- phase:start name="write-validate-context" index=18 total=22 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Write `validate-{N}.json` with `nightgauge layout write pipeline validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above).
+> **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Write `validate-{N}.json` with `nightgauge layout write pipeline validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above).
 
 ### Phase 7: Sync Project Board Status
 

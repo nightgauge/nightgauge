@@ -1,0 +1,52 @@
+[
+  {
+    "name": "production-all-roots",
+    "mode": "production",
+    "override": true,
+    "bundle": true,
+    "want": ["override", "bundle", "workspace"]
+  },
+  {
+    "name": "production-bundle",
+    "mode": "production",
+    "override": false,
+    "bundle": true,
+    "want": ["bundle", "workspace"]
+  },
+  {
+    "name": "production-no-bundle",
+    "mode": "production",
+    "override": false,
+    "bundle": false,
+    "want": ["workspace"]
+  },
+  {
+    "name": "production-override-no-bundle",
+    "mode": "production",
+    "override": true,
+    "bundle": false,
+    "want": ["override", "workspace"]
+  },
+  {
+    "name": "production-no-workspace",
+    "mode": "production",
+    "override": false,
+    "bundle": true,
+    "no_workspace": true,
+    "want": ["bundle"]
+  },
+  {
+    "name": "development-all-roots",
+    "mode": "development",
+    "override": true,
+    "bundle": true,
+    "want": ["override", "workspace", "bundle"]
+  },
+  {
+    "name": "development-bundle",
+    "mode": "development",
+    "override": false,
+    "bundle": true,
+    "want": ["workspace", "bundle"]
+  }
+]

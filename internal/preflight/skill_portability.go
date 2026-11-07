@@ -64,12 +64,30 @@ const (
 	// CheckTruncatedBinaryCascade flags a fenced bash binary-discovery block
 	// that lost any rung from the canonical PREFLIGHT.md cascade (#55, #365).
 	CheckTruncatedBinaryCascade = "truncated_binary_cascade"
+
+	// CheckHooksDirReference flags a `$HOOKS_DIR/<file>` call naming a file
+	// that is not in the plugin's hooks directory. The skill guarded each call
+	// with `[ -x ]`, so a deleted script degraded to a warning nobody read and
+	// the step silently did nothing (#2764).
+	CheckHooksDirReference = "hooks_dir_reference"
+
+	// CheckSourceRepoPath flags a `packages/nightgauge[-sdk]/` path. Shipped
+	// skills run in any repository, where that path does not exist (#2764).
+	CheckSourceRepoPath = "source_repo_path"
+
+	// CheckClaudeSkillFlag flags `claude --skill`, a flag Claude Code does not
+	// have. Plugin skills run as `/nightgauge:<short>` (#2764).
+	CheckClaudeSkillFlag = "claude_skill_flag"
 )
 
 // SkillPortabilityOptions controls a single linter run.
 type SkillPortabilityOptions struct {
 	// Root is the repository root. When empty, the caller's CWD is used.
 	Root string
+	// SkillsDir is the skill tree to scan. When empty, <Root>/skills is used.
+	// A relative path resolves against Root. Set it to scan a built bundle
+	// (packages/nightgauge/dist/skills) rather than the source tree.
+	SkillsDir string
 }
 
 // vscodeExtensionPathRE matches a reference to the VSCode-extension binary
@@ -87,7 +105,7 @@ var vscodeExtensionPathRE = regexp.MustCompile(`(?i)\.vscode/extensions/nightgau
 var stopHookRE = regexp.MustCompile(`^hooks:\s*$`)
 
 // Cascade checks are block-scoped: a complete cascade elsewhere in the same
-// Markdown file must not hide a truncated sibling (#365). The five rungs are
+// Markdown file must not hide a truncated sibling (#365). The six rungs are
 // the provider-neutral discovery contract from PREFLIGHT.md.
 var (
 	cascadeStartRE  = regexp.MustCompile(`BINARY="\$\{NIGHTGAUGE_BIN`)
@@ -100,9 +118,40 @@ var (
 		{name: "PATH", pattern: regexp.MustCompile(`command -v nightgauge`)},
 		{name: "repo bin", pattern: regexp.MustCompile(`git rev-parse --show-toplevel`)},
 		{name: "canonical repo bin", pattern: regexp.MustCompile(`git rev-parse --git-common-dir`)},
+		{name: "dev repo bin gate", pattern: regexp.MustCompile(`NIGHTGAUGE_DEV_REPO_BIN:-`)},
 		{name: "go bin", pattern: regexp.MustCompile(`go/bin/nightgauge`)},
 	}
 )
+
+// hooksDirRefRE captures the file a `$HOOKS_DIR/...` or `${HOOKS_DIR}/...`
+// reference names. A trailing `.` is sentence punctuation, trimmed by the caller.
+var hooksDirRefRE = regexp.MustCompile(`\$\{?HOOKS_DIR\}?/([A-Za-z0-9_./-]+)`)
+
+// sourceRepoPathRE matches a path into this repository's TypeScript packages.
+var sourceRepoPathRE = regexp.MustCompile(`packages/nightgauge(-sdk)?\b`)
+
+// claudeSkillFlagRE matches the nonexistent `claude --skill` invocation.
+var claudeSkillFlagRE = regexp.MustCompile(`claude --skill\b`)
+
+// sourceRepoPathExempt lists lines that name a source-repository path on
+// purpose, keyed by skill-tree-relative file and the exact trimmed line so an
+// exemption cannot leak to another line or file.
+var sourceRepoPathExempt = map[string]map[string]string{
+	"nightgauge-model-watch/SKILL.md": {
+		"request, they edit `packages/nightgauge-sdk/src/eval/model-registry.json`,": "hands a registry patch to a Nightgauge maintainer, who edits this repository",
+	},
+	"nightgauge-release-watch/assessments/TEMPLATE.md": {
+		"- [ ] SDK (`packages/nightgauge-sdk/`) — New modules or changes to existing?": "assesses impact on Nightgauge's own components",
+		"- [ ] VSCode extension (`packages/nightgauge/`) — UI changes?":                "assesses impact on Nightgauge's own components",
+	},
+}
+
+// historyFile reports whether a skill-tree file records history rather than
+// instructions: a changelog quotes the old text it replaced, and is not
+// bundled into dist/skills.
+func historyFile(rel string) bool {
+	return filepath.Base(rel) == "CHANGELOG.md"
+}
 
 // RunSkillPortabilityCheck walks every Markdown file under skills/ rooted at
 // Root and emits a finding for each line that embeds a non-portable
@@ -134,7 +183,13 @@ func RunSkillPortabilityCheck(_ context.Context, opts SkillPortabilityOptions) (
 		Warnings: []string{},
 	}
 
-	skillsDir := filepath.Join(root, "skills")
+	skillsDir := opts.SkillsDir
+	if skillsDir == "" {
+		skillsDir = filepath.Join(root, "skills")
+	} else if !filepath.IsAbs(skillsDir) {
+		skillsDir = filepath.Join(root, skillsDir)
+	}
+	hooksDir := filepath.Join(root, "claude-plugins", "nightgauge", "hooks")
 	if info, statErr := os.Stat(skillsDir); statErr != nil || !info.IsDir() {
 		// No skills/ directory — nothing to check (e.g. a non-nightgauge
 		// repo). Report zero files rather than erroring.
@@ -177,8 +232,16 @@ func RunSkillPortabilityCheck(_ context.Context, opts SkillPortabilityOptions) (
 		if relErr != nil {
 			rel = path
 		}
+		treeRel, treeErr := filepath.Rel(skillsDir, path)
+		if treeErr != nil {
+			treeRel = rel
+		}
+		treeRel = filepath.ToSlash(treeRel)
 		lines := strings.Split(string(data), "\n")
 		for i, line := range lines {
+			for _, check := range lineChecks(treeRel, line, hooksDir) {
+				result.Findings = append(result.Findings, finding(rel, i+1, check, line))
+			}
 			if vscodeExtensionPathRE.MatchString(line) {
 				result.Findings = append(result.Findings, finding(rel, i+1, CheckVSCodeBinaryPath, line))
 			}
@@ -208,6 +271,45 @@ func RunSkillPortabilityCheck(_ context.Context, opts SkillPortabilityOptions) (
 	}
 
 	return result, nil
+}
+
+// lineChecks returns the #2764 checks one line fails. treeRel is the file's
+// path relative to the scanned skill tree.
+func lineChecks(treeRel, line, hooksDir string) []string {
+	if historyFile(treeRel) || treeRel == "README.md" {
+		return nil
+	}
+	var failed []string
+	for _, m := range hooksDirRefRE.FindAllStringSubmatch(line, -1) {
+		name := strings.TrimRight(m[1], ".")
+		if !hookFileExists(hooksDir, name) {
+			failed = append(failed, CheckHooksDirReference)
+			break
+		}
+	}
+	if sourceRepoPathRE.MatchString(line) {
+		if _, ok := sourceRepoPathExempt[treeRel][strings.TrimSpace(line)]; !ok {
+			failed = append(failed, CheckSourceRepoPath)
+		}
+	}
+	if claudeSkillFlagRE.MatchString(line) {
+		failed = append(failed, CheckClaudeSkillFlag)
+	}
+	return failed
+}
+
+// hookFileExists reports whether name is a regular file in the plugin's hooks
+// directory or its lib/ subdirectory. Skills set HOOKS_DIR to either.
+func hookFileExists(hooksDir, name string) bool {
+	if name == "" || strings.Contains(name, "..") {
+		return false
+	}
+	for _, dir := range []string{hooksDir, filepath.Join(hooksDir, "lib")} {
+		if info, err := os.Stat(filepath.Join(dir, name)); err == nil && info.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
 }
 
 type fencedBashBlock struct {

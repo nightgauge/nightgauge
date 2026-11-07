@@ -1,5 +1,64 @@
-<!-- include: ../_shared/PIPELINE_CONTEXT.md -->
-<!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
+## System Context
+
+**Product**: Nightgauge — AI-powered Issue-to-PR pipeline.
+
+**Architecture**: Three-layer stack: portable Skills (SKILL.md), a TypeScript
+SDK, and a VSCode Extension, over a Go deterministic layer. Six pipeline
+stages execute as isolated subagents with JSON context handoff files.
+
+**Execution model**: Each pipeline stage runs in a fresh conversation. Context
+is passed exclusively through JSON files in the clone's pipeline state
+directory (`nightgauge layout path pipeline`) — never through conversation
+history. Every stage reads its predecessor's context file
+and writes its own.
+
+**Configuration**: 6-tier config system — built-in defaults → global config →
+project config → local config → env vars → CLI flags. Reference:
+[docs/CONFIGURATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md).
+
+**Standards**: Code standards in `docs/CODE_STANDARDS.md`. Security rules in
+`standards/security.md`. Testing patterns in `docs/TESTING.md`. Git workflow in
+`docs/GIT_WORKFLOW.md`.
+
+**Critical rules**: Never push to main. Never hardcode secrets. Never downgrade
+versions. Pre-submission validation is mandatory.
+
+## Autonomy Contract
+
+This run is autonomous. No human is watching, and nobody can answer a
+question mid-stage. `AskUserQuestion` is disabled — and _behaving_ as if it
+were available is the same failure.
+
+- **Proceed without asking** for any reversible action that follows from the
+  stage's task. If a decision is genuinely undecidable from the issue, the
+  context files, and the repo, fail fast with a clear error — never pause to
+  ask, and never silently pick between materially different product
+  directions.
+- **Never end a turn on a promise.** Before ending your turn, check your last
+  paragraph: if it is a plan, a question, a list of next steps, or a promise
+  about work not yet done ("I'll now…", "Next, I will…"), do that work now
+  with tool calls instead of describing it. A turn that ends on stated intent
+  with no corresponding tool call is recorded as a `premature_turn_end` stage
+  failure, not a success.
+- **Do not stop because the session feels long.** End the turn only when the
+  stage's output contract is satisfied (its context file and phase markers
+  are written) or you are genuinely blocked — and a genuine block is reported
+  as an explicit failure, never as an open question.
+- **Never end a turn with background work outstanding.** There is no "await
+  and resume" — your turn ending IS stage completion, and the pipeline
+  advances immediately. If you started something in the background, block on
+  it and read its result before you finish. "I'll wait for that to complete
+  rather than poll, and pick the pipeline back up once it lands" is not a
+  handoff; it is the stage reporting success on work it never saw (#202).
+- **Work only inside the worktree you were given.** Never delegate the
+  stage's implementation to a subagent running under worktree isolation, and
+  never `cd` outside your workspace to edit files. Only your own worktree is
+  read by later stages: on #202 a subagent wrote the entire fix into
+  `.claude/worktrees/agent-<id>`, so the stage passed, the branch stayed
+  empty, and the work was invisible to every stage after it. A gate now fails
+  the stage when this happens — but the run is dead either way, so do the work
+  where you stand.
+
 
 # Feature Development (compact)
 
@@ -17,7 +76,7 @@ quality review, and write dev context for `/nightgauge-feature-validate`.
 
 ## Invocation
 
-`/nightgauge-feature-dev` (Claude Code plugin); `$nightgauge-feature-dev`
+`/nightgauge:feature-dev` (Claude Code plugin); `$nightgauge-feature-dev`
 (Codex); Agent Skills (Copilot/Cursor). Flags: `--plan <path>` (override plan
 file), `--sequential` (disable parallel file creation), `--skip-review` (not
 recommended). **Prerequisites**: `PLAN.md` from `/feature-planning` (or
@@ -30,14 +89,14 @@ For `type:spike` issues, the deliverable is a Markdown research artifact at
 `docs/spikes/<N>-*.md` with a `## Recommendations` section (fenced `yaml
 recommendations` block, stable kebab-case `id` per recommendation). No
 production code changes are expected. Full contract: Read
-[docs/SPIKE_CONTRACT.md](../../../../../docs/SPIKE_CONTRACT.md) when needed.
+[docs/SPIKE_CONTRACT.md](https://github.com/nightgauge/nightgauge/blob/main/docs/SPIKE_CONTRACT.md) when needed.
 
 ## Input Contract
 
 This skill requires `planning-{N}.json` (in the clone's pipeline state
 directory, `nightgauge layout path pipeline`) from
 `/nightgauge-feature-planning`. Schema, full configuration table and env
-overrides: Read [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHITECTURE.md),
+overrides: Read [docs/CONTEXT_ARCHITECTURE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONTEXT_ARCHITECTURE.md),
 `skills/nightgauge-feature-dev/SKILL.md` (## Configuration) and
 `skills/_shared/CONFIGURATION.md` when needed.
 
@@ -59,8 +118,9 @@ full path the first time it reads one.
 
 ## Gotchas
 
-- **Never run bare `vitest`.** Use `npx -w packages/nightgauge vitest run` —
-  bare `vitest` mis-resolves the workspace and can hang in watch mode.
+- **Never run bare `vitest`.** Use the repository's documented test command in
+  single-run mode (`vitest run`, scoped to the touched workspace) — bare
+  `vitest` mis-resolves the workspace and can hang in watch mode.
 - **Build before tests.** A build step MUST run before the suite — unit tests
   can pass while the build is broken, masking a defect feature-validate would
   catch later.
@@ -112,7 +172,57 @@ printf '<!-- phase:start name="validate-environment" index=0 total=17 stage="fea
 **PURPOSE**: Verify the skill is running in the correct repository before
 loading context or doing any work.
 
-<!-- include: ../_shared/REPO_IDENTITY_CHECK.md -->
+### Repo Identity Assertion (HARD GATE — non-recoverable)
+
+If the `NIGHTGAUGE_TARGET_REPO` environment variable is set, the orchestrator
+has pinned the exact repo this stage must run in. Verify the current repository
+matches **before doing any work**:
+
+```bash
+if [ -n "$NIGHTGAUGE_TARGET_REPO" ]; then
+  # Derive this checkout's identity from its own git remote. The question
+  # is "which repository is this working directory?", and the remote answers
+  # it exactly — locally, with no API call. This used to shell out to the
+  # GitHub CLI for the same string, spending a request per stage on every
+  # repo in the workspace, invisible to `nightgauge api-usage`.
+  ACTUAL_REPO=$(git remote get-url origin 2>/dev/null \
+    | sed -E 's#^git@[^:]+:#-#; s#^https?://[^/]+/#-#; s#^-##; s#\.git$##')
+  if [ -n "$ACTUAL_REPO" ] && [ "$ACTUAL_REPO" != "$NIGHTGAUGE_TARGET_REPO" ]; then
+    echo "[repo-mismatch] FATAL: repository identity assertion failed"
+    echo "  Expected: $NIGHTGAUGE_TARGET_REPO"
+    echo "  Actual:   $ACTUAL_REPO"
+    echo "  CWD:      $(pwd)"
+    echo ""
+    echo "The orchestrator expected this stage to run in $NIGHTGAUGE_TARGET_REPO"
+    echo "but the working directory belongs to $ACTUAL_REPO."
+    exit 1
+  fi
+fi
+```
+
+**This is a terminal, non-recoverable stop condition. If the check prints
+`[repo-mismatch]` and exits 1, you MUST immediately end the stage with a failure.**
+
+Specifically, on a mismatch you must NOT:
+
+- `cd` into a different directory, switch worktrees, or `gh repo set-default` to
+  "make it match" — the orchestrator owns CWD; second-guessing it corrupts state.
+- Continue to later phases, create or push a branch, or open a PR — every
+  downstream artifact would land in the wrong repo.
+- Ask the user a question (`AskUserQuestion`) — autonomous runs have no human at
+  the prompt; the question is auto-dismissed and you would proceed on a guess.
+- Write a context/assessment file that claims success.
+
+The correct and ONLY action is to stop now and let the stage exit non-zero. This
+is a configuration fault in repo routing (the orchestrator set the wrong
+`NIGHTGAUGE_TARGET_REPO` for this worktree); it is fixed upstream in the
+orchestrator, never worked around inside the stage. The `[repo-mismatch]` marker
+is how the pipeline classifies and surfaces it.
+
+This check is a no-op — and the stage proceeds normally — when
+`NIGHTGAUGE_TARGET_REPO` is unset (e.g. manual single-stage CLI
+invocations) or already matches the current repo.
+
 
 **Grounding gate** — before loading context or editing anything, confirm you
 are grounded: on **this** issue's feature branch (not the base) with the
@@ -127,16 +237,17 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 if [ -n "$BINARY" ]; then
@@ -349,9 +460,10 @@ printf '<!-- phase:start name="quality-review" index=10 total=17 stage="feature-
 **PURPOSE**: Run the 6 reviewer units declared in this skill's
 `orchestration:` frontmatter (code quality, security, test, documentation,
 performance, accessibility), aggregate findings, and set the quality-check
-result variables. On a provider without an orchestration capability, run the
-same six reviews sequentially in this agent. See
-[docs/WORKFLOW_ORCHESTRATION.md](../../../../../docs/WORKFLOW_ORCHESTRATION.md).
+result variables. On a provider without an orchestration capability, this
+phase reviews nothing and leaves `SECURITY_REVIEW_RESULT=skipped`; feature-validate
+runs the independent review. See
+[docs/WORKFLOW_ORCHESTRATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/WORKFLOW_ORCHESTRATION.md).
 
 > **Read `_includes/review-and-correction.md` now and follow its instructions before continuing this phase.**
 
@@ -364,13 +476,16 @@ printf '<!-- phase:start name="self-correction" index=11 total=17 stage="feature
 ```
 
 **PURPOSE**: Address review findings, re-run tests, run the formatter, and
-pass the Step 6.4 CI-parity HARD GATE before proceeding.
+pass the Step 6.4 focused-check HARD GATE before proceeding.
 
-**Step 6.4 — Verify All Checks Pass (HARD GATE)**: The full CI validation
-suite MUST pass locally before proceeding. These checks are **blocking** —
-feature-dev MUST NOT report success if any of them fail. Swallowing failures
-here lets a broken PR through to `pr-create`, where CI catches it and blocks
-the merge. See the CI-parity incident that motivated this gate.
+**Step 6.4 — Verify Focused Checks Pass (HARD GATE)**: The build, the tests
+for what changed and the formatter MUST pass before proceeding. These checks
+are **blocking** — feature-dev MUST NOT report success if any of them fail.
+Swallowing failures here lets a broken PR through to `pr-create`, where CI
+catches it and blocks the merge. The repository's complete gate belongs to
+feature-validate (#2784). The build must report `passed`, or `skipped` with
+no build system; a missing status fails. The focused tests run under their own
+guarded command in Step 6.2.
 
 > **Follow this phase's section of the review-and-correction include, read in Phase 5 above.**
 
@@ -456,7 +571,7 @@ context file path, and next step (`/nightgauge-feature-validate`).
    `files_changed`
    (`created`/`modified`/`deleted`) and `tests_status`, the two fields the
    derived-handoff gate (#1076) reconciles against git ground truth. Schema:
-   Read [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHITECTURE.md)
+   Read [docs/CONTEXT_ARCHITECTURE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONTEXT_ARCHITECTURE.md)
    when needed.
 
 **Next stage**: `/nightgauge-feature-validate`

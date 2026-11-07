@@ -37,7 +37,6 @@ UNREADABLE=0
 # Required fields in canonical order
 REQUIRED_FIELDS=(name description license metadata allowed-tools)
 
-COMMANDS_DIR="claude-plugins/nightgauge/commands"
 
 # Maximum allowed description length (Anthropic Agent Skills guidance, #3812).
 MAX_DESC_LEN=1024
@@ -119,28 +118,6 @@ check_description_quality() {
   # the skill does and when to use it.
   if [[ "$(printf '%s\n' "$desc" | grep -ciE '\b(use |used |run before|run after|run weekly|run on|run anytime|invoked by|before |after |when |periodically|on a regular|on a periodic)')" -eq 0 ]]; then
     echo "WARNING: $file — description has no 'when to use' trigger (state what AND when)"
-    ((WARNINGS++))
-  fi
-}
-
-# check_command_parity SKILL_FILE SKILL_DESC
-#   Warn when the mirrored claude-plugins command file's description has drifted
-#   from the SKILL.md description. Compares whitespace-normalized values. Skills
-#   with no command counterpart are skipped silently.
-check_command_parity() {
-  local skill_file="$1"
-  local skill_desc="$2"
-  local dir_name
-  dir_name=$(basename "$(dirname "$skill_file")")
-  local short="${dir_name#nightgauge-}"
-  local cmd_file="$COMMANDS_DIR/$short.md"
-
-  [[ -f "$cmd_file" ]] || return
-
-  local cmd_desc
-  cmd_desc=$(extract_description "$cmd_file")
-  if [[ "$skill_desc" != "$cmd_desc" ]]; then
-    echo "WARNING: $cmd_file — description differs from $skill_file (sync command description to SKILL.md)"
     ((WARNINGS++))
   fi
 }
@@ -346,11 +323,10 @@ check_skill() {
     fi
   fi
 
-  # Description quality + command-file parity (#3812)
+  # Description quality (#3812)
   local desc
   desc=$(extract_description "$file")
   check_description_quality "$file" "$desc"
-  check_command_parity "$file" "$desc"
 }
 
 # Find all SKILL.md files. SKILLS_ROOT is overridable so the regression suite

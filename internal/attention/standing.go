@@ -180,7 +180,10 @@ func (s *Store) ReconcileStanding(sw StandingSweep) (StandingResult, error) {
 		evaluated[p] = true
 	}
 
-	release := s.acquireSection()
+	release, err := s.acquireSection()
+	if err != nil {
+		return res, err
+	}
 	defer release()
 
 	stored, err := s.scanLocked()
@@ -259,7 +262,10 @@ func (s *Store) AutoResolveUnobserved(producer string, observed []string) (int, 
 		stillTrue[k] = true
 	}
 
-	release := s.acquireSection()
+	release, err := s.acquireSection()
+	if err != nil {
+		return 0, err
+	}
 	defer release()
 
 	stored, err := s.scanLocked()
@@ -306,7 +312,10 @@ func (s *Store) AutoResolveKey(producer, idempotencyKey string) (bool, error) {
 		return false, fmt.Errorf("attention: auto-resolve requires an idempotency_key")
 	}
 
-	release := s.acquireSection()
+	release, err := s.acquireSection()
+	if err != nil {
+		return false, err
+	}
 	defer release()
 
 	stored, err := s.scanLocked()

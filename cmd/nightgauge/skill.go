@@ -19,12 +19,71 @@ import (
 func skillCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "skill",
-		Short: "Compose executable skill text (render)",
+		Short: "Compose executable skill text (render) and resolve skill roots (roots)",
 		Long: `Skill composition verbs. ` + "`render`" + ` is the single composer for a stage's
 executable skill text: frontmatter parsing, _includes expansion, model-overlay
-resolution, and absolute-path rewriting (ADR 016).`,
+resolution, and absolute-path rewriting (ADR 016). ` + "`roots`" + ` is the one answer to
+which skills trees a host searches, and in what order.`,
 	}
 	cmd.AddCommand(skillRenderCmd())
+	cmd.AddCommand(skillRootsCmd())
+	return cmd
+}
+
+// skillRootsEnvelope is the `skill roots --json` shape. Roots is never null.
+type skillRootsEnvelope struct {
+	V     int      `json:"v"`
+	Roots []string `json:"roots"`
+}
+
+// skillRootsCmd implements `nightgauge skill roots` (#2718): the extension hands
+// over what only it knows and takes the order from skillrender.ResolveRoots.
+func skillRootsCmd() *cobra.Command {
+	var (
+		workspace      string
+		bundle         string
+		workspaceFirst bool
+		jsonOutput     bool
+	)
+	cmd := &cobra.Command{
+		Use:          "roots",
+		Short:        "List the skills trees a host searches, first match wins",
+		SilenceUsage: true,
+		Long: `List skills roots in search order: $` + skillrender.SkillsRootEnv + `, then the build's
+bundle, then <workspace>/skills. --workspace-first swaps the last two, for an
+Extension Development or Test host.
+
+--bundle replaces the tree found beside this binary. The extension passes it
+because its self-healed path is a fact the binary cannot see, and its binary
+may come from PATH. The override is read only from the environment.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			bundleRoot := bundle
+			if bundleRoot == "" {
+				bundleRoot = skillrender.ExecutableBundleRoot()
+			}
+			roots := skillrender.ResolveRoots(skillrender.RootInputs{
+				Workspace:      workspace,
+				Bundle:         bundleRoot,
+				Override:       os.Getenv(skillrender.SkillsRootEnv),
+				WorkspaceFirst: workspaceFirst,
+			})
+			if roots == nil {
+				roots = []string{}
+			}
+			if jsonOutput {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(skillRootsEnvelope{V: 1, Roots: roots})
+			}
+			for _, root := range roots {
+				fmt.Fprintln(cmd.OutOrStdout(), root)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&workspace, "workspace", "", "Checkout the run is rooted at; its skills/ directory is searched")
+	cmd.Flags().StringVar(&bundle, "bundle", "", "Skills tree the build ships; replaces the one found beside this binary")
+	cmd.Flags().BoolVar(&workspaceFirst, "workspace-first", false, "Rank the workspace ahead of the bundle (Extension Development and Test hosts)")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, `Emit {"v":1,"roots":[...]} instead of one root per line`)
 	return cmd
 }
 
@@ -104,9 +163,9 @@ An unknown model, a local provider (ollama/lm-studio, which have no registry
 entries by design), or an unreadable fragment all render base-only and exit 0.
 A malformed overlay must never take down a pipeline run.
 
-Skill LOCATION is the caller's responsibility: pass --skills-root (repeatable,
-first match wins). The binary cannot reproduce the extension's bundle
-discovery, so it owns only parsing, expansion, resolution, and composition.
+Skill LOCATION is the caller's input: pass --skills-root (repeatable, first
+match wins). ` + "`nightgauge skill roots`" + ` answers that list, and render owns only
+parsing, expansion, resolution, and composition.
 
 Composed text goes to stdout. With --json, the provenance envelope goes to
 stdout instead — resolved keys, the fragments applied in order, the injection

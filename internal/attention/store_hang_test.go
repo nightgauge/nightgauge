@@ -60,7 +60,10 @@ func TestMutationsGiveUpOnAWedgedStore(t *testing.T) {
 	id := raiseTestCard(t, s, "wedged:1")
 
 	// Wedge the directory: taken and never released for the test's duration.
-	release := acquireDir(s.dir)
+	release, err := acquireDirCtx(context.Background(), s.dir)
+	if err != nil {
+		t.Fatalf("acquireDirCtx: %v", err)
+	}
 	defer release()
 
 	cases := []struct {

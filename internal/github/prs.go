@@ -53,6 +53,11 @@ type PRMergeInfo struct {
 	// Body is the PR body as merged (#2595). Post-merge reads its closing
 	// keyword: a PR that says `Refs #N` delivered only part of the issue.
 	Body string
+	// ChangedFiles is the merged PR's changed-file count (#3012), meaningful
+	// only when ChangedFilesKnown. Post-merge refuses to send a known 0-file
+	// merge back to Ready: an empty PR delivered nothing, so re-running it loops.
+	ChangedFiles      int
+	ChangedFilesKnown bool
 }
 
 // GetPRMergeInfo fetches the merge breadcrumb of a merged PR. Satisfies
@@ -62,7 +67,12 @@ func (s *PRService) GetPRMergeInfo(ctx context.Context, owner, repo string, numb
 	if err != nil {
 		return PRMergeInfo{}, err
 	}
-	return PRMergeInfo{SHA: pr.MergeCommitSHA, MergedAt: pr.MergedAt, BaseRef: pr.BaseRef, MergedBy: pr.MergedBy, Body: pr.Body}, nil
+	info := PRMergeInfo{SHA: pr.MergeCommitSHA, MergedAt: pr.MergedAt, BaseRef: pr.BaseRef, MergedBy: pr.MergedBy, Body: pr.Body}
+	if pr.ChangedFiles != nil {
+		info.ChangedFiles = *pr.ChangedFiles
+		info.ChangedFilesKnown = true
+	}
+	return info, nil
 }
 
 // GetPR fetches a single pull request with review and check status.
@@ -105,6 +115,10 @@ func (s *PRService) GetPR(ctx context.Context, owner, repo string, number int) (
 		Additions:        int(pr.Additions),
 		Deletions:        int(pr.Deletions),
 		MergedAt:         string(pr.MergedAt),
+	}
+	if pr.ChangedFiles != nil {
+		n := int(*pr.ChangedFiles)
+		result.ChangedFiles = &n
 	}
 	if pr.MergeCommit != nil {
 		result.MergeCommitSHA = string(pr.MergeCommit.OID)
@@ -379,20 +393,43 @@ func (s *PRService) MergePRWithStrategy(ctx context.Context, prID string, strate
 		if strategy != "" && strategy != "SQUASH" {
 			log.Printf("merge PR #%d: base %s requires a merge queue; the queue's merge method applies instead of %s", st.Number, st.BaseRef, strategy)
 		}
-		final, err := mq.EnqueueAndWait(ctx, st, s.QueueWait)
+		opts := s.QueueWait
+		if opts.CheckSquashDefaults == nil {
+			opts.CheckSquashDefaults = func(ctx context.Context) (bool, error) {
+				src, err := mq.SquashSource(ctx, prID)
+				if err != nil {
+					return false, err
+				}
+				return NewSettingsService(s.client).SquashDefaultsPRTitled(ctx, src.Owner, src.Repo)
+			}
+		}
+		final, err := mq.EnqueueAndWait(ctx, st, opts)
 		if err != nil {
 			return "", fmt.Errorf("merge PR #%d via merge queue: %w", st.Number, err)
 		}
 		return final.MergeCommitOID, nil
 	}
 
-	var m mergePullRequestMutation
-	input := map[string]interface{}{
-		"input": MergePullRequestInput{
-			PullRequestID: graphql.ID(prID),
-			MergeMethod:   graphql.String(strategy),
-		},
+	in := MergePullRequestInput{
+		PullRequestID: graphql.ID(prID),
+		MergeMethod:   graphql.String(strategy),
 	}
+	if strategy == "" || strategy == "SQUASH" {
+		// Supply the squash commit explicitly (#2728): left to the repository
+		// defaults, a sole WIP-preservation commit becomes the subject.
+		src, err := mq.SquashSource(ctx, prID)
+		if err != nil {
+			return "", fmt.Errorf("merge PR (%s): %w", strategy, err)
+		}
+		h, b := src.SquashMessage()
+		hs, bs := graphql.String(h), graphql.String(b)
+		in.CommitHeadline, in.CommitBody = &hs, &bs
+		if in.MergeMethod == "" {
+			in.MergeMethod = "SQUASH"
+		}
+	}
+	var m mergePullRequestMutation
+	input := map[string]interface{}{"input": in}
 
 	if err := s.client.mutate(ctx, &m, input); err != nil {
 		return "", fmt.Errorf("merge PR (%s): %w", strategy, err)

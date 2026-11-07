@@ -197,6 +197,9 @@ describe("Go/extension halt-decision parity (#1169)", () => {
       "context_window_exceeded",
       "dev_context_stale",
       "environment_halt",
+      "gate_plugin_missing",
+      "resume_no_op",
+      "review_cap_reached",
     ]);
     const skipped = extensionSkipKinds();
     expect(

@@ -215,3 +215,23 @@ func TestReadGateMetrics_RecordFromRemovedWorktree(t *testing.T) {
 		t.Fatalf("want the worktree's verify-ui record, got %+v", entries)
 	}
 }
+
+// `nightgauge health gate-metrics` reports a superseded catch alongside the
+// pass that replaced it: only the gate judges the latest verdict (#2746).
+func TestReadGateMetrics_KeepsSupersededCatch(t *testing.T) {
+	repo := layouttest.Repo(t)
+	if err := state.AppendGateMetric(repo, 7, "adversarial-review", "catch", "x", "2026-10-31T00:00:00Z"); err != nil {
+		t.Fatalf("append catch: %v", err)
+	}
+	if err := state.AppendGateMetric(repo, 7, "adversarial-review", "pass", "", "2026-10-31T00:01:00Z"); err != nil {
+		t.Fatalf("append pass: %v", err)
+	}
+
+	entries, err := ReadGateMetrics(repo)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(entries) != 2 || entries[0].Result != "catch" || entries[1].Result != "pass" {
+		t.Fatalf("want catch then pass, got %+v", entries)
+	}
+}

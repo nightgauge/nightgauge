@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/notify.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/notify.sh\"",
             "timeout": 10,
             "statusMessage": "Sending notification...",
             "async": true
@@ -22,21 +22,21 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/format-on-save.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/format-on-save.sh\"",
             "timeout": 30,
             "statusMessage": "Auto-formatting...",
             "async": false
           },
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/version-check.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/version-check.sh\"",
             "timeout": 10,
             "statusMessage": "Checking version consistency...",
             "async": false
           },
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/test-quality.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/test-quality.sh\"",
             "timeout": 5,
             "statusMessage": "Checking test quality...",
             "async": false
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/workflow-gate.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/workflow-gate.sh\"",
             "timeout": 10,
             "statusMessage": "Validating workflow..."
           }
@@ -62,7 +62,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/careful-gate.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/careful-gate.sh\"",
             "timeout": 5,
             "statusMessage": "Checking careful-mode guardrail..."
           }
@@ -73,9 +73,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/stage-gate.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stage-gate.sh\"",
             "timeout": 5,
             "statusMessage": "Checking pipeline-stage guardrail..."
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/gate-background.sh\"",
+            "timeout": 5,
+            "statusMessage": "Checking how the local gate is started..."
           }
         ]
       },
@@ -84,7 +90,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/prompt-sanitize.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/prompt-sanitize.sh\"",
             "timeout": 5,
             "statusMessage": "Checking input sanitization..."
           }
@@ -95,7 +101,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/skill-usage-log.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/skill-usage-log.sh\"",
             "timeout": 5,
             "statusMessage": "Recording skill usage...",
             "async": true
@@ -109,7 +115,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/stop-verification.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stop-verification.sh\"",
             "statusMessage": "Verifying task completion...",
             "timeout": 30
           }
@@ -119,11 +125,22 @@
 
     "SessionStart": [
       {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/binary-check.sh\"",
+            "timeout": 5,
+            "statusMessage": "Checking for the Nightgauge binary..."
+          }
+        ]
+      },
+      {
         "matcher": "resume|compact",
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/hooks/inject-context.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/inject-context.sh\"",
             "timeout": 10,
             "statusMessage": "Restoring Nightgauge context..."
           }

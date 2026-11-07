@@ -35,6 +35,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
 import { ACQUIRE_ATTEMPTS, acquireVSCode } from "../launcher/acquireVSCode";
+import { agentHomeEnv, scrubInheritedHostEnv, secretStoreArgs } from "../launcher/hostIsolation";
 import {
   buildInventory,
   driftProblems,
@@ -75,6 +76,33 @@ const MANUAL_CLIENT = path.join(packageRoot, "src", "services", "IpcClient.ts");
 /** `--write-ipc-inventory` regenerates demo/ipc-inventory.json from this run. */
 const WRITE_INVENTORY = process.argv.includes("--write-ipc-inventory");
 
+/**
+ * Agent-home isolation (#2935). A fresh user-data dir has no install stamp,
+ * so activation re-syncs every present skill install (#2762 ADR-003). With
+ * the launcher's real HOME that wrote the worktree's skills into the
+ * developer's ~/.codex, ~/.grok and ~/.config/opencode. Every window gets a
+ * fake HOME seeded with the install a developer would have, holding a
+ * sentinel a re-sync would overwrite, and agent-home overrides pointing at a
+ * scratch install of its own that the re-sync is expected to reach.
+ */
+const AGENT_SENTINEL = "nightgauge host smoke sentinel (#2935): a re-sync must not reach this\n";
+const SEEDED_SKILLS = ["nightgauge-issue-pickup", "nightgauge-issue-create"];
+
+/** Seed a Nightgauge install for each agent under the given locations. */
+function seedAgentInstall(dirs: { codex: string; grok: string; opencode: string; claude: string }) {
+  for (const skills of [dirs.codex, dirs.grok, dirs.opencode]) {
+    for (const skill of SEEDED_SKILLS) {
+      fs.mkdirSync(path.join(skills, skill), { recursive: true });
+      fs.writeFileSync(path.join(skills, skill, "SKILL.md"), AGENT_SENTINEL);
+      // The marker a real install carries: without it a re-sync leaves the
+      // directory alone (#2739), and the regression would never reach it.
+      fs.writeFileSync(path.join(skills, skill, ".nightgauge-installed"), AGENT_SENTINEL);
+    }
+  }
+  fs.mkdirSync(dirs.claude, { recursive: true });
+  fs.writeFileSync(path.join(dirs.claude, "installed_plugins.json"), AGENT_SENTINEL);
+}
+
 function requireFile(file: string, remedy: string): void {
   if (!fs.existsSync(file)) {
     console.error(`ERROR: missing ${path.relative(packageRoot, file)}\n  ${remedy}`);
@@ -83,6 +111,11 @@ function requireFile(file: string, remedy: string): void {
 }
 
 async function main(): Promise<void> {
+  // runTests spawns VS Code with this process.env merged in (#2743).
+  const scrubbed = scrubInheritedHostEnv();
+  if (scrubbed.length > 0) {
+    console.log(`[host] dropped inherited ${scrubbed.join(", ")} before starting VS Code`);
+  }
   requireFile(
     EXTENSION_BUNDLE,
     "Run `npm run -w packages/nightgauge build` first — the host loads the real bundle, not src/."
@@ -135,9 +168,29 @@ async function main(): Promise<void> {
     const userDataDir = path.join(scratch, `user-data-${window}`);
     const transcript = path.join(scratch, `transcript-${window}.txt`);
     fs.mkdirSync(path.join(userDataDir, "User"), { recursive: true });
+    const fakeHome = path.join(scratch, `home-${window}`);
+    const agentHomes = path.join(scratch, `agent-homes-${window}`);
+    seedAgentInstall({
+      codex: path.join(fakeHome, ".codex", "skills"),
+      grok: path.join(fakeHome, ".grok", "skills"),
+      opencode: path.join(fakeHome, ".config", "opencode", "skills"),
+      claude: path.join(fakeHome, ".claude", "plugins"),
+    });
+    seedAgentInstall({
+      codex: path.join(agentHomes, "codex", "skills"),
+      grok: path.join(agentHomes, "grok", "skills"),
+      opencode: path.join(agentHomes, "config", "opencode", "skills"),
+      claude: path.join(agentHomes, "claude", "plugins"),
+    });
     fs.writeFileSync(
       path.join(userDataDir, "User", "settings.json"),
-      JSON.stringify({ "nightgauge.backend.binaryPath": IPC_STUB }, null, 2)
+      // Experiments off: VS Code's own fetch to its experiment service shares the
+      // extension host's global fetch, so demo mode's no-HTTP assertion caught it.
+      JSON.stringify(
+        { "nightgauge.backend.binaryPath": IPC_STUB, "workbench.enableExperiments": false },
+        null,
+        2
+      )
     );
     let code = 0;
     try {
@@ -157,6 +210,14 @@ async function main(): Promise<void> {
           // the developer's real machine-state root (ADR-024 § 8).
           NIGHTGAUGE_STATE_HOME: path.join(scratch, `state-${window}`),
           NIGHTGAUGE_SKIP_AUTH_PREFLIGHT: "1",
+          // Keep activation's skill re-sync off the developer's agent homes
+          // (#2935). HOME is fake as well, so a resolver that ignores its
+          // override lands on the seeded sentinels the activation suite
+          // checks, never on the real home.
+          ...agentHomeEnv(fakeHome, agentHomes),
+          NIGHTGAUGE_HOST_FAKE_HOME: fakeHome,
+          NIGHTGAUGE_HOST_AGENT_HOMES: agentHomes,
+          NIGHTGAUGE_HOST_AGENT_SENTINEL: AGENT_SENTINEL,
           // Read by the daemon (inherited through the extension host) and by
           // the in-host harness, which writes a marker line before each case.
           // Both windows append to one log, so the inventory and the drift
@@ -176,6 +237,9 @@ async function main(): Promise<void> {
           "--disable-extensions",
           "--disable-gpu",
           "--disable-workspace-trust",
+          // HOME is fake (#2935), so the OS keychain is not the user's: keep
+          // secrets in memory and Electron's safe storage off the keychain.
+          ...secretStoreArgs(),
         ],
       });
     } catch (err) {

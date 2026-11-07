@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // inReviewGuardForge answers the open-PR list with body; reads counts requests.
@@ -73,4 +74,41 @@ func TestRequireOpenPRForInReview(t *testing.T) {
 			t.Errorf("PR list read %d time(s) for non-In-review statuses", *reads)
 		}
 	})
+}
+
+type fakeItemReader struct {
+	status string
+	err    error
+}
+
+func (f fakeItemReader) GetItemWithoutRelations(context.Context, string, string, int) (*types.BoardItem, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &types.BoardItem{Status: f.status}, nil
+}
+
+func TestRequireCurrentStatus(t *testing.T) {
+	ctx := context.Background()
+	check := func(r fakeItemReader, onlyFrom string) error {
+		return requireCurrentStatus(ctx, r, "O", "a", 7, "in-review", onlyFrom)
+	}
+
+	if err := check(fakeItemReader{status: "In progress"}, "in-progress"); err != nil {
+		t.Errorf("matching status: err = %v, want nil", err)
+	}
+	if err := check(fakeItemReader{status: "IN PROGRESS"}, "in-progress"); err != nil {
+		t.Errorf("a board's own casing: err = %v, want nil", err)
+	}
+	err := check(fakeItemReader{status: "Ready"}, "in-progress")
+	if !errors.Is(err, errStatusYielded) || !strings.Contains(err.Error(), "yielding In review") {
+		t.Errorf("Ready: err = %v, want the yielding In review refusal", err)
+	}
+	err = check(fakeItemReader{err: errors.New("boom")}, "in-progress")
+	if err == nil || errors.Is(err, errStatusYielded) {
+		t.Errorf("unreadable: err = %v, want a read error distinct from the yield", err)
+	}
+	if err := check(fakeItemReader{err: errors.New("boom")}, ""); err != nil {
+		t.Errorf("no --only-from reads nothing: err = %v", err)
+	}
 }

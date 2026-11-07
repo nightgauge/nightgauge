@@ -33,6 +33,7 @@ import type { ConfigBridge } from "../services/ConfigBridge";
 import { TRUST_UNVERIFIED, trustTierOfContent, type TrustTier } from "@nightgauge/sdk";
 import { issueContextCandidates, pipelineFileCandidates } from "../utils/issueContextCandidates";
 import { resolveWorktreeBase } from "../utils/worktreeLocation";
+import { pluginHint } from "../utils/pluginHint";
 
 const RELATED_LIMIT = 10;
 const WATCHER_DEBOUNCE_MS = 500;
@@ -210,7 +211,15 @@ export class KnowledgeTreeProvider
   private getActiveIssueChildren(): BaseTreeItem[] {
     const issueNumber = this.pipelineStateService.getActiveIssueBlockingPickup();
     if (issueNumber === null) {
-      return [new KnowledgeEmptyItem("No active issue — pick one via /nightgauge:issue-pickup")];
+      return [
+        new KnowledgeEmptyItem(
+          pluginHint(
+            "issue-pickup",
+            "No active issue — pick one from the Ready list",
+            (command) => `No active issue — pick one via ${command}`
+          )
+        ),
+      ];
     }
 
     const knowledgePath = this.resolveKnowledgePath(issueNumber);

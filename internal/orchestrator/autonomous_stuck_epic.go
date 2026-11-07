@@ -200,11 +200,10 @@ func isEpicNode(n *depgraph.Node) bool {
 }
 
 // dispatchable mirrors the REAL autonomous dispatch gate so the watchdog cannot
-// drift from it (#4073 review). It reuses the package-local helpers
-// isDispatchableStatus (Ready/Todo/To Do, or Backlog under pickup) and
-// isWorkCompleteStatus (an "In review" dep — PR up, awaiting merge — does NOT
-// block downstream work), and applies the same parent-epic blockedBy cascade the
-// dispatcher does (unless disabled).
+// drift from it (#4073 review). It reuses the package-local helper
+// isDispatchableStatus (Ready/Todo/To Do, or Backlog under pickup) and applies
+// the same parent-epic blockedBy cascade the dispatcher does (unless disabled).
+// An OPEN dep blocks whatever its board status (#2706).
 func dispatchable(n *depgraph.Node, adj map[string][]string, graph *depgraph.Graph, pickupBacklog, disableEpicCascade bool) bool {
 	if n == nil || !strings.EqualFold(n.State, "OPEN") {
 		return false
@@ -264,16 +263,12 @@ func epicRefFor(n *depgraph.Node, epic depgraph.NodeID) string {
 	return epic.String()
 }
 
-// hasOpenBlocker reports whether any dependency in depKeys is OPEN and not
-// work-complete ("In review" deps don't block downstream, matching the
-// dispatcher's isWorkCompleteStatus skip).
+// hasOpenBlocker reports whether any dependency in depKeys is OPEN, whatever
+// its board status, matching the dispatcher's evaluateDeps (#2706).
 func hasOpenBlocker(depKeys []string, graph *depgraph.Graph) bool {
 	for _, depKey := range depKeys {
 		dep, ok := graph.Nodes[depKey]
 		if !ok || !strings.EqualFold(dep.State, "OPEN") {
-			continue
-		}
-		if isWorkCompleteStatus(dep.BoardStatus) {
 			continue
 		}
 		return true
@@ -281,7 +276,7 @@ func hasOpenBlocker(depKeys []string, graph *depgraph.Graph) bool {
 	return false
 }
 
-// openBlockerRefs returns the refs of the OPEN, non-work-complete dependencies
+// openBlockerRefs returns the refs of the OPEN dependencies
 // in depKeys (the same set hasOpenBlocker counts), for use in a human reason
 // string about an issue in home. A dependency in home reads "#N"; one in any
 // other repository reads "owner/repo#N", because in a reason about home's issue
@@ -292,7 +287,7 @@ func openBlockerRefs(depKeys []string, graph *depgraph.Graph, home string) []str
 	var deps []depgraph.NodeID
 	for _, depKey := range depKeys {
 		dep, ok := graph.Nodes[depKey]
-		if !ok || !strings.EqualFold(dep.State, "OPEN") || isWorkCompleteStatus(dep.BoardStatus) {
+		if !ok || !strings.EqualFold(dep.State, "OPEN") {
 			continue
 		}
 		deps = append(deps, dep.ID())

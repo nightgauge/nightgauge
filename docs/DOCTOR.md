@@ -155,21 +155,21 @@ Outcomes are `fixed`, `still-present`, `skipped` (no consent, or manual),
 `blocked`, `conflict`, and `stale` (IPC and cards only: the fingerprint is not in
 the current scan).
 
-| Verb                  | Used by                | What it does                                                     |
-| --------------------- | ---------------------- | ---------------------------------------------------------------- |
-| `worktree.sweep`      | NGD017                 | Removes only this finding's worktree, honouring live runs        |
-| `stash.sweep`         | NGD019                 | Restores only the named stash onto its landed branch, clean tree |
-| `branch.delete`       | NGD018                 | Compare-and-delete at the scanned tip                            |
-| `wip.prune`           | NGD020                 | Prunes a preserved-WIP ref whose content has landed              |
-| `process.terminate`   | NGD021                 | SIGTERM to the single pid, re-verified as your nightgauge binary |
-| `serve_lease.reclaim` | NGD022                 | Stops the wedged pid holding the scheduler lease                 |
-| `compose.cleanup`     | NGD016                 | Tears down the orphaned compose stack                            |
-| `outcome.init`        | NGD014, NGD033         | Writes the baseline complexity model (0600, directory 0700)      |
-| `survival.sweep`      | NGD026                 | Finalizes due survival records                                   |
-| `binary.build_cli`    | NGD001                 | Runs `make build-cli` in the source checkout                     |
-| `github.auth_refresh` | NGD006, NGD034, NGD041 | `gh auth refresh -h github.com -s <scopes>`                      |
-| `automation.restart`  | NGD029                 | Starts the autonomous scheduler through the running daemon       |
-| `layout.migrate`      | NGD044                 | Moves per-clone and machine state to ADR-024; never overwrites   |
+| Verb                  | Used by                | What it does                                                              |
+| --------------------- | ---------------------- | ------------------------------------------------------------------------- |
+| `worktree.sweep`      | NGD017                 | Removes only this finding's worktree, honouring live runs                 |
+| `stash.sweep`         | NGD019                 | Restores only the named stash onto its landed branch, clean tree          |
+| `branch.delete`       | NGD018                 | Compare-and-delete at the scanned tip                                     |
+| `wip.prune`           | NGD020                 | Prunes a preserved-WIP ref whose content has landed                       |
+| `process.terminate`   | NGD021                 | SIGTERM to the single pid, re-verified as your nightgauge binary          |
+| `serve_lease.reclaim` | NGD022                 | Stops the wedged pid holding the scheduler lease                          |
+| `compose.cleanup`     | NGD016                 | Tears down the orphaned compose stack                                     |
+| `outcome.init`        | NGD014, NGD033         | Writes the baseline complexity model (0600, directory 0700)               |
+| `survival.sweep`      | NGD026                 | Finalizes due survival records                                            |
+| `binary.build_cli`    | NGD001                 | Runs `make build-cli` in the source checkout (never for a release binary) |
+| `github.auth_refresh` | NGD006, NGD034, NGD041 | `gh auth refresh -h github.com -s <scopes>`                               |
+| `automation.restart`  | NGD029                 | Starts the autonomous scheduler through the running daemon                |
+| `layout.migrate`      | NGD044                 | Moves per-clone and machine state to ADR-024; never overwrites            |
 
 `repo.init` (NGD010, NGD011) is declared but deliberately not registered: the
 command is interactive, so `--fix` reports it `blocked` and names the command to
@@ -348,7 +348,8 @@ is never left running behind it.
 
 The hooks resolve `nightgauge` from the current directory in this order:
 `$NIGHTGAUGE_BIN`, `PATH`, `<repo root>/bin/nightgauge`, the canonical checkout's
-`bin/nightgauge` (worktrees), the VS Code extension bundle VS Code records as
+`bin/nightgauge` (worktrees; both repository steps need
+`NIGHTGAUGE_DEV_REPO_BIN=1` and a verified core checkout), the VS Code extension bundle VS Code records as
 installed, then `~/go/bin/nightgauge`. The result is cwd-dependent, so the same
 hook runs different binaries in different repos; the evidence names the resolved
 path, the resolving step and the binary's version.
@@ -356,7 +357,11 @@ path, the resolving step and the binary's version.
 - **Not found:** manual `install` (`go install` or the releases page).
 - **Stale** (the resolved binary reports a different version than the recorded
   install): inside a nightgauge source checkout, `auto` `build` runs
-  `make build-cli`; elsewhere, manual `reinstall`. An unversioned build (`dev`)
+  `make build-cli`; elsewhere, or when the resolved binary reports a release
+  version (`0.8.0`, `0.8.0-rc.3`, `0.8.1-main.g<sha>`), manual `reinstall`. A
+  release binary was built by CI, not from the checkout, so a rebuild is never
+  offered for it. The RC tarball's CLI and the VSIX-bundled CLI report the same
+  version string, so an RC install is not stale (#2721). An unversioned build (`dev`)
   cannot be compared and is only noted; so is a mismatch while
   `NIGHTGAUGE_BINARY_ISOLATED=1` declares the PATH binary deliberately isolated.
   Versions that carry a commit hash (git describe `-g<hash>` or a Go
@@ -418,7 +423,10 @@ the quota. Manual `wait`: wait for the reset, and find the heavy caller with
 **GitHub API budget near exhaustion.** `github_api_budget` · `warning`.
 
 From the local API ledger: a quota hit zero recently (which presents as an idle
-queue), or the projected GraphQL points per hour are past the threshold. Manual
+queue), or some GraphQL bucket's projected drain per hour is past the threshold
+of that bucket's own limit. A bucket is one identity, resource and reset
+window; parallel buckets are judged separately, never summed, and the finding
+names the bucket under pressure. Manual
 `inspect`: find the repeating caller with `nightgauge api-usage`; reduce polling
 or wait.
 
@@ -917,6 +925,48 @@ remove the keys from the machine file, pass credentials through the job
 environment, and rotate them. Only key names are reported.
 
 ### Adapters
+
+#### NGD051
+
+**A Nightgauge Claude plugin that failed to load.** `claude_plugin_health` ·
+`warning`, also when `claude plugin list --json` cannot be read. A machine with
+no `claude` CLI, or without the plugin, passes.
+
+The finding carries Claude Code's error, for example
+`Marketplace nightgauge-plugins failed to load: cache-miss`, because that entry
+can still read `"enabled": true`. Its skills and hooks are unavailable. Manual
+`repoint`: reload the VS Code window so the extension repoints the marketplace at
+its stable copy, or run `bash scripts/install-agent-skills.sh --claude-only` from
+the primary checkout.
+
+#### NGD112
+
+**Codex or Grok skills that differ from this build.** `agent_skills_drift` ·
+`warning`, also when a skills directory cannot be read. A machine with no Codex or
+Grok skills directory passes, and so does one where no Nightgauge skills tree can be
+found: another project's own `skills/` is not one.
+
+For `$CODEX_HOME/skills` (default `~/.codex/skills`) and `$GROK_HOME/skills`
+(default `~/.grok/skills`), the check reads each real `nightgauge-*` directory and
+each directory holding `.nightgauge-installed`. Symlinks and an operator's own
+unmarked `update-docs` are not reported. The reference is the first
+`<root>/<name>/SKILL.md`, or its copy under the sibling
+`claude-plugins/nightgauge/skills/`, across the skill roots a run renders from.
+
+| Finding                                     | Remedy                              |
+| ------------------------------------------- | ----------------------------------- |
+| `metadata.version` differs or is missing    | Run the installer                   |
+| Current skill with no install marker        | Run the installer with `--adopt`    |
+| Retired skill holding the marker            | Run the installer, which removes it |
+| Retired `nightgauge-*` skill with no marker | Remove the directory by hand        |
+
+The installer is `bash scripts/install-agent-skills.sh` from the primary checkout.
+An extension install has no git history, so it cannot adopt: remove a marker-less
+directory by hand and reinstall.
+
+The check compares versions, not bytes, because installed copies legitimately
+differ from the build's mirror (`name:`, `disable-model-invocation`, rebased
+links). It therefore cannot see an edit made without a version bump.
 
 #### NGD015
 

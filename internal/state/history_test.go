@@ -901,6 +901,39 @@ func TestRecordStageModelIdentity_ClearedByAdapterHop(t *testing.T) {
 // tracked separately; this test fixes the producer side of the contract so
 // that work has something to reconcile against, and fails if Go ever starts
 // silently filtering served efforts to the canonical ladder.
+// The run record states the plugin version each stage loaded (#2723), and a
+// stage that reported none stays absent from the serialized record.
+func TestBuildV2Record_PluginVersion(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 2723, "item-2723", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageModel(StageFeatureDev, "opus")
+	rs.RecordStagePluginVersion(StageFeatureDev, "1.25.0")
+	rs.RecordStagePluginVersion(StageFeatureDev, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1, Output: 1}, "", "")
+	rs.BeginStage(StageFeatureValidate)
+	rs.RecordStageModel(StageFeatureValidate, "opus")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1, Output: 1}, "", "")
+
+	raw, err := json.Marshal(NewHistoryWriter(t.TempDir()).BuildV2Record(rs, true, "", V2RunInput{}, time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back struct {
+		Stages map[string]struct {
+			ModelSelection map[string]any `json:"model_selection"`
+		} `json:"stages"`
+	}
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if got := back.Stages[string(StageFeatureDev)].ModelSelection["plugin_version"]; got != "1.25.0" {
+		t.Errorf("plugin_version = %v, record = %s", got, raw)
+	}
+	if _, present := back.Stages[string(StageFeatureValidate)].ModelSelection["plugin_version"]; present {
+		t.Error("a stage that reported no version carries plugin_version")
+	}
+}
+
 func TestBuildV2Record_ServedEffortOpenVocabulary(t *testing.T) {
 	const offLadder = "ultra" // deliberately not an EFFORT_LEVELS rung
 

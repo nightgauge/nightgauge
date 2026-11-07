@@ -296,6 +296,9 @@ type StageResultParams struct {
 	// and no stream event reporting it, so "on" is never fabricated.
 	ServedEffort   string `json:"servedEffort,omitempty"`
 	ServedThinking string `json:"servedThinking,omitempty"`
+	// PluginVersion is the Nightgauge Claude plugin version the stage's
+	// system/init reported (#2723). Empty means it reported none.
+	PluginVersion string `json:"pluginVersion,omitempty"`
 	// RefusalFallback* echo the CLI's system/model_refusal_fallback event
 	// when one was observed. Attribution + notification only — never used
 	// to retry or downgrade.

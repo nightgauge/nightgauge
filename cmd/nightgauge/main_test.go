@@ -292,6 +292,49 @@ func TestProjectSyncStatusRequiresArgs(t *testing.T) {
 	}
 }
 
+func TestHookBoardProject(t *testing.T) {
+	declared := &config.Config{
+		Owner: "nightgauge", DefaultRepo: "nightgauge",
+		Autonomous: &config.AutonomousConfig{Repositories: map[string]*config.RepositoryConfig{
+			"nightgauge/declared": {ProjectNumber: 7},
+		}},
+	}
+	tests := []struct {
+		name        string
+		explicit    bool
+		project     int
+		cfg         *config.Config
+		cfgErr      error
+		repo        string
+		want        int
+		wantWarning string
+	}{
+		{name: "explicit project wins", explicit: true, project: 99, cfg: declared, repo: "declared", want: 99},
+		{name: "explicit project ignores a config failure", explicit: true, project: 99, cfgErr: errors.New("bad yaml"), repo: "declared", want: 99},
+		{name: "declared repo resolves", cfg: declared, repo: "declared", want: 7},
+		{name: "undeclared repo keeps zero and warns", cfg: declared, repo: "undeclared", wantWarning: "no project board mapping"},
+		{name: "config failure keeps zero and warns", cfgErr: errors.New("bad yaml"), repo: "declared", wantWarning: "load config: bad yaml"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			got := hookBoardProject(&stderr, tt.explicit, tt.project, tt.cfg, tt.cfgErr, "nightgauge", tt.repo, "")
+			if got != tt.want {
+				t.Errorf("board = %d, want %d", got, tt.want)
+			}
+			if tt.wantWarning == "" {
+				if stderr.Len() != 0 {
+					t.Errorf("unexpected warning: %q", stderr.String())
+				}
+				return
+			}
+			if !strings.Contains(stderr.String(), "post-merge board sync skipped") || !strings.Contains(stderr.String(), tt.wantWarning) {
+				t.Errorf("warning = %q, want it to name the skipped sync and %q", stderr.String(), tt.wantWarning)
+			}
+		})
+	}
+}
+
 func TestResolveProjectNumber_ExplicitProjectWins(t *testing.T) {
 	cfg := &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge"}
 	got, err := resolveProjectNumber(cfg, true, 99, "nightgauge", "other-repo", "")

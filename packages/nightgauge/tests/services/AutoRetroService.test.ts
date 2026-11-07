@@ -19,6 +19,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+// tests/setup.ts mocks this service globally (#2893); this suite tests it.
+vi.unmock("../../src/services/AutoRetroService");
 vi.mock("node:fs/promises");
 
 // Hoist IPC mocks so they are available inside vi.mock factories
@@ -555,6 +557,19 @@ describe("AutoRetroService", () => {
   // ===========================================================================
 
   describe("classifyFailure (structured signals — #3204)", () => {
+    it('classifies a cap kill as "timeout" even with the stallKilled flag in the log', () => {
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text:
+            '{"stallKilled":true}\n[stage-cap-killed] feature-dev terminated: ' +
+            "reached pipeline.stage_hard_caps=2700000ms after 2700s",
+          sourcesAnalyzed: ["session_log"],
+        },
+        "feature-dev"
+      );
+      expect(findings[0].category).toBe("timeout");
+    });
+
     it('classifies as "stall-kill" on the skillRunner kill log line', () => {
       const findings = AutoRetroService.classifyFailure(
         {
@@ -691,6 +706,34 @@ describe("AutoRetroService", () => {
       // The remedy must not send the operator at the output contract.
       expect(findings[0].recommendation).not.toContain("verifying context");
       expect(findings[0].recommendation).toContain("credentials");
+    });
+
+    describe("an unresolved queue conflict (Issue #2841)", () => {
+      const terminalReason =
+        "[merge-conflict] deterministic pr-merge refused: merge-queue-failed: merge conflict " +
+        "with main: PR #7 is CONFLICTING (mergeStateStatus DIRTY); conflicting files: src/a.ts, b.go";
+
+      it.each([
+        ["the terminal reason alone", terminalReason],
+        // The gate and the punt log print this, and the run log joins the corpus.
+        // The prose arm must not claim the category and shed the named files.
+        ["a log that trips the merge-blocked prose arm", "PR #7 mergeStateStatus=DIRTY"],
+      ])("names the files as merge-blocked from %s", (_name, text) => {
+        const findings = AutoRetroService.classifyFailure(
+          {
+            text,
+            sourcesAnalyzed: ["session_log"],
+            terminalKind: "merge_conflict",
+            terminalReason,
+          },
+          "pr-merge"
+        );
+        expect(findings[0].category).toBe("merge-blocked");
+        expect(findings[0].category).not.toBe("timeout");
+        const evidence = findings[0].evidence.join("\n");
+        expect(evidence).toContain("src/a.ts");
+        expect(evidence).toContain("b.go");
+      });
     });
 
     it.each([

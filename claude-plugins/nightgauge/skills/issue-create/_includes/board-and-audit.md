@@ -139,7 +139,7 @@ done
 A sub-issue held back by `FILE_OWNERSHIP_UNSUBSTANTIATED` is reported in the
 Phase 5 result with its findings. Fix the declared set (or the AC), then
 promote it. The rules and the decision behind them are in
-[docs/ISSUE_AUDIT.md](../../../../../docs/ISSUE_AUDIT.md).
+[docs/ISSUE_AUDIT.md](https://github.com/nightgauge/nightgauge/blob/main/docs/ISSUE_AUDIT.md).
 
 **WHY**: Issues start in Backlog (Phase 4) to give Phase 3.5 time to set
 `blockedBy` relationships. Promoting to Ready here ensures the autonomous
@@ -270,34 +270,32 @@ echo "${ISSUE_BODY:-}" > "$ISSUE_BODY_FILE"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
-BODY_CONTENT=$(cat "$ISSUE_BODY_FILE" 2>/dev/null || echo "")
-SCAFFOLD_RESULT=$(ISSUE_NUMBER="$ISSUE_NUMBER" TITLE="$ISSUE_TITLE" IS_EPIC="$IS_EPIC" \
-  BODY_CONTENT="$BODY_CONTENT" \
-  node --input-type=module 2>/dev/null <<'NODEEOF' || echo '{"success":false,"error":"SDK scaffold failed"}')
-import { KnowledgeService } from './packages/nightgauge-sdk/dist/index.js';
-const svc = new KnowledgeService(process.cwd());
-const r = await svc.scaffoldForIssue(
-  parseInt(process.env.ISSUE_NUMBER || '0'),
-  process.env.TITLE || '',
-  process.env.BODY_CONTENT || '',
-  process.env.IS_EPIC === 'true'
-);
-process.stdout.write(JSON.stringify(r));
-NODEEOF
+# Acceptance-criteria checkboxes from the body seed PRD.md.
+CRITERIA_ARGS=()
+while IFS= read -r line; do
+  [ -n "$line" ] && CRITERIA_ARGS+=(--criteria "$line")
+done < <(sed -n 's/^- \[ \] //p' "$ISSUE_BODY_FILE" 2>/dev/null)
 rm -f "$ISSUE_BODY_FILE"
+if SCAFFOLD_RESULT=$("$BINARY" knowledge scaffold --issue-number "$ISSUE_NUMBER" \
+  --title "$ISSUE_TITLE" "${CRITERIA_ARGS[@]}" --json 2>/dev/null); then
+  SCAFFOLD_RESULT=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -c '. + {success: true}')
+else
+  SCAFFOLD_RESULT='{"success":false,"error":"knowledge scaffold failed"}'
+fi
 
 SCAFFOLD_SUCCESS=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.success // false')
 KNOWLEDGE_PATH=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.knowledge_path // empty')
@@ -370,9 +368,7 @@ jq . "$MANIFEST_PATH" > /dev/null || {
 echo "Manifest written: $MANIFEST_PATH"
 ```
 
-The manifest schema (`CreationManifestSchema`) is defined in
-`packages/nightgauge-sdk/src/context/schemas/creation-manifest.ts` and
-documented in [docs/ISSUE_AUDIT.md](../../../../../docs/ISSUE_AUDIT.md). Each entry
+The manifest schema (`CreationManifestSchema`) is documented in [docs/ISSUE_AUDIT.md](https://github.com/nightgauge/nightgauge/blob/main/docs/ISSUE_AUDIT.md). Each entry
 records: `repo`, `number`, `type`, `priority`, `size`, `status`,
 `parent_epic` (sub-issues only), `sub_issues` (epic only), `blocked_by`,
 `body_sections`, `component_labels`, `knowledge_path`, `spike_artifact`

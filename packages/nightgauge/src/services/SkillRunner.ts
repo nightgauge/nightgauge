@@ -32,6 +32,7 @@ import {
 import type { StallEvent } from "../schemas/stallEvents";
 import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipelineState";
 import { precomputeCalibratedStallThresholds } from "../utils/nightgaugeConfig";
+import { describeStageCapKill, isStageCapCeiling } from "../utils/killCeiling";
 import type { Logger } from "../utils/logger";
 import type { IpcClient } from "./IpcClient";
 
@@ -253,6 +254,8 @@ export interface StageResult {
    */
   servedEffort?: string;
   servedThinking?: string;
+  /** The Nightgauge plugin version the stage reported loading (#2723). */
+  pluginVersion?: string;
   /** Original model of the CLI's refusal fallback, when one was observed. */
   refusalFallbackFrom?: string;
   /** Fallback model of the CLI's refusal fallback, when one was observed. */
@@ -564,6 +567,16 @@ export class SkillRunner {
                 if (shippedPartially) {
                   errorText += ` — PR #${shippedPRNumber} shipped, advancing to pr-merge`;
                 }
+              } else if (result.stallKilled && isStageCapCeiling(result.killCeiling)) {
+                errorText = describeStageCapKill(
+                  stage,
+                  durationMs,
+                  result.killCeiling,
+                  result.killCeilingValue
+                );
+                if (result.error?.message) {
+                  errorText += `\nUpstream signal: ${result.error.message}`;
+                }
               } else if (result.stallKilled) {
                 errorText = `[stall-killed] ${stage} terminated`;
                 if (result.error?.message) {
@@ -615,6 +628,7 @@ export class SkillRunner {
               servedModel: result.servedModel,
               // ── #606 served-envelope forwarding ────────────────────
               servedEffort: result.servedEffort,
+              pluginVersion: result.pluginVersion,
               servedThinking: result.servedThinking,
               refusalFallbackFrom: result.modelRefusalFallback?.originalModel,
               refusalFallbackTo: result.modelRefusalFallback?.fallbackModel,

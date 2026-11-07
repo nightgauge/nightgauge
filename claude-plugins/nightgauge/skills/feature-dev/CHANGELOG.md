@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Phase 7 records `pr_summary`, one imperative line stating the change, in `dev-{N}.json` for the PR title (#2846).
+- Phase 5 no longer runs its reviewers in the authoring agent. Without a fan-out it reviews nothing, and feature-validate runs the independent review (#2839).
+- Conflict re-dispatch (Step 0.7.1b) merges the base into the existing PR branch instead of rebasing it, and pushes with `nightgauge git push-branch` (#2699).
+
 ### Added
 
 - **Deferrable discoveries are recorded (#479).** An adjacent bug, refactor or

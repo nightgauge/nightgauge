@@ -41,7 +41,7 @@ func (a *StallKilledOnPRMerge) Matches(failure StageFailure) bool {
 	if failure.Stage != state.StagePRMerge {
 		return false
 	}
-	if failure.TerminalKind != "stall_kill" {
+	if !terminalkind.IsStallShapedKill(failure.TerminalKind) {
 		return false
 	}
 	if hasCostCapMarker(failure.StageError) {

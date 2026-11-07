@@ -133,7 +133,7 @@ This creates the documentation structure the pipeline skills depend on.
 
 ```bash
 # Add Nightgauge plugins marketplace
-claude plugin marketplace add https://github.com/nightgauge/nightgauge.git
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
 
 # Install the pipeline skills
 claude plugin install nightgauge-issue-create@nightgauge-plugins

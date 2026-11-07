@@ -189,7 +189,19 @@ func (as *AutonomousScheduler) recheckPR(ctx context.Context, item PRRecheckItem
 			return
 		}
 	}
-	if !as.revertFailedIssueStatus(ctx, item.Repo, item.Number, item.Kind) {
+	// The revert can write Ready, so it never runs for a closed issue (#2750).
+	owner, repoName := splitOwnerRepo(item.Repo)
+	readCtx, cancel := context.WithTimeout(ctx, boardRecoveryTimeout)
+	closed, err := as.orphanIssueClosed(readCtx, owner, repoName, item.Number)
+	cancel()
+	if err != nil {
+		log.Printf("autonomous: pr-recheck: %s#%d issue state still unreadable (%v) — will re-check next scan",
+			item.Repo, item.Number, err)
+		return
+	}
+	if closed {
+		as.moveIssueToDone(ctx, item.Repo, item.Number)
+	} else if !as.revertFailedIssueStatus(ctx, item.Repo, item.Number, item.Kind) {
 		return // the revert could not list open PRs; it kept the entry
 	}
 	as.mu.Lock()

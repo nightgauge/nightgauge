@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // writeGateMetrics writes JSONL records to the checkout's
@@ -90,15 +92,16 @@ func TestFeatureValidateGate_SkillSaidSuccessButNoMetrics(t *testing.T) {
 
 // TestFeatureValidateGate_JudgeVerdict_Pass proves a passing adversarial judge
 // verdict — written as the {gate_name:"judges", result:"pass"} record the TS
-// gateMetricsWriter.appendJudgeVerdicts() emits (#3918) — flows through the
+// the SDK appendJudgeVerdicts() emits (#3918) — flows through the
 // EXISTING r.Result != "pass" loop without tripping the gate. This is the
 // zero-Go-change contract: the judge gate is just another gate-metrics record.
 func TestFeatureValidateGate_JudgeVerdict_Pass(t *testing.T) {
 	ws := layouttest.Repo(t)
 	writeGateMetrics(t, ws, 3918, []map[string]any{
 		{"gate_name": "build", "result": "pass"},
-		// Byte-for-byte the record the TS writer appends for a "pass" verdict.
-		{"gate_name": "judges", "result": "pass"},
+		// The fields the gate reads from the record the TS writer appends for a
+		// "pass" verdict.
+		{"gate_name": "judges", "result": "pass", "attempt_id": "run-1"},
 	})
 
 	gr := FeatureValidateGate{}.Verify(context.Background(), 3918, ws)
@@ -107,6 +110,24 @@ func TestFeatureValidateGate_JudgeVerdict_Pass(t *testing.T) {
 	}
 	if gr.Kind != KindOK {
 		t.Fatalf("expected KindOK on an all-pass run, got %q", gr.Kind)
+	}
+}
+
+// The evidence counts collapsed verdicts and raw rows, and says which is which.
+func TestFeatureValidateGate_EvidenceNamesVerdictsAndRows(t *testing.T) {
+	ws := layouttest.Repo(t)
+	writeGateMetrics(t, ws, 3918, []map[string]any{
+		{"gate_name": "build", "result": "catch"},
+		{"gate_name": "build", "result": "pass"},
+		{"gate_name": "lint", "result": "pass"},
+	})
+
+	gr := FeatureValidateGate{}.Verify(context.Background(), 3918, ws)
+	if !gr.Passed {
+		t.Fatalf("expected pass; reason=%q evidence=%v", gr.Reason, gr.Evidence)
+	}
+	if !slices.Contains(gr.Evidence, "verdicts=2 rows=3") {
+		t.Fatalf("expected evidence to contain %q, got %v", "verdicts=2 rows=3", gr.Evidence)
 	}
 }
 
@@ -124,7 +145,7 @@ func TestFeatureValidateGate_JudgeVerdict_FailTripsGate(t *testing.T) {
 		{"gate_name": "unit-tests", "result": "pass"},
 		// The judge rejected a "done" claim — every deterministic gate passed,
 		// yet this lone fail record must still trip the gate.
-		{"gate_name": "judges", "result": "fail", "error_summary": "claimed tests pass but suite was never run"},
+		{"gate_name": "judges", "result": "fail", "attempt_id": "run-1", "error_summary": "claimed tests pass but suite was never run"},
 	})
 
 	gr := FeatureValidateGate{}.Verify(context.Background(), 3918, ws)
@@ -143,6 +164,163 @@ func TestFeatureValidateGate_JudgeVerdict_FailTripsGate(t *testing.T) {
 	}
 	if !sawJudgeFail {
 		t.Fatalf("expected evidence to contain %q, got %v", "judges=fail", gr.Evidence)
+	}
+}
+
+// interruptedMarker is the row the SDK appendJudgeVerdicts writes when a
+// feature-validate run stopped before any judge verdict (#2880).
+func interruptedMarker(attemptID string) map[string]any {
+	r := map[string]any{
+		"gate_name":     "judges",
+		"result":        "fail",
+		"error_summary": "[judges-interrupted] feature-validate workflow stopped before any judge verdict",
+	}
+	if attemptID != "" {
+		r["attempt_id"] = attemptID
+	}
+	return r
+}
+
+// #2880: a run interrupted before any judge verdict is not "no judges". Its
+// marker trips the gate although every deterministic gate passed.
+func TestFeatureValidateGate_JudgeInterruptedMarker_TripsGate(t *testing.T) {
+	for _, attempt := range []string{"run-1", ""} {
+		ws := layouttest.Repo(t)
+		writeGateMetrics(t, ws, 2880, []map[string]any{
+			{"gate_name": "build", "result": "pass"},
+			{"gate_name": "lint", "result": "pass"},
+			interruptedMarker(attempt),
+		})
+
+		gr := FeatureValidateGate{}.Verify(context.Background(), 2880, ws)
+		if gr.Passed || gr.Kind != KindFail {
+			t.Fatalf("attempt %q: expected KindFail, got passed=%v kind=%q", attempt, gr.Passed, gr.Kind)
+		}
+		if !slices.Contains(gr.Evidence, "judges=fail") {
+			t.Fatalf("attempt %q: expected evidence to contain judges=fail, got %v", attempt, gr.Evidence)
+		}
+	}
+}
+
+// #2880: a marker stamped with its run's id is an attempt, so a later complete
+// attempt whose judges all passed supersedes it and a retry can clear it.
+func TestFeatureValidateGate_JudgeInterruptedMarker_SupersededByLaterAttempt(t *testing.T) {
+	ws := layouttest.Repo(t)
+	writeGateMetrics(t, ws, 2880, []map[string]any{
+		{"gate_name": "build", "result": "pass"},
+		interruptedMarker("run-1"),
+		{"gate_name": "judges", "result": "pass", "attempt_id": "run-2"},
+		{"gate_name": "judges", "result": "pass", "attempt_id": "run-2"},
+	})
+
+	gr := FeatureValidateGate{}.Verify(context.Background(), 2880, ws)
+	if !gr.Passed {
+		t.Fatalf("expected the later complete attempt to supersede the marker; reason=%q evidence=%v", gr.Reason, gr.Evidence)
+	}
+}
+
+// #2880: a partial run writes its judges without attempt_id, so its passes can
+// never supersede an earlier failing attempt.
+func TestFeatureValidateGate_PartialJudges_DoNotSupersedeFailingAttempt(t *testing.T) {
+	ws := layouttest.Repo(t)
+	writeGateMetrics(t, ws, 2880, []map[string]any{
+		{"gate_name": "build", "result": "pass"},
+		{"gate_name": "judges", "result": "fail", "attempt_id": "run-1", "error_summary": "claim not reproduced"},
+		{"gate_name": "judges", "result": "pass"},
+		{"gate_name": "judges", "result": "pass"},
+	})
+
+	gr := FeatureValidateGate{}.Verify(context.Background(), 2880, ws)
+	if gr.Passed || gr.Kind != KindFail {
+		t.Fatalf("expected KindFail: a partial run's passes must not clear run-1's fail; passed=%v kind=%q", gr.Passed, gr.Kind)
+	}
+}
+
+// #2880: the gate releases an interrupted marker on the reader side once a
+// later attempt, by any completion path, records a quality-gate verdict; it
+// does not depend on that path writing a judges row.
+func TestFeatureValidateGate_JudgeInterruptedMarker_ReleasedByLaterAttempt(t *testing.T) {
+	none := func(attemptID string) map[string]any {
+		return map[string]any{
+			"gate_name":     "judges",
+			"result":        "pass",
+			"attempt_id":    attemptID,
+			"error_summary": "[judges-none] feature-validate attempt completed with no judge verdict",
+		}
+	}
+	retry := []map[string]any{
+		{"gate_name": "build", "result": "pass"},
+		{"gate_name": "lint", "result": "pass"},
+	}
+	cases := []struct {
+		name  string
+		after []map[string]any
+		pass  bool
+		fail  string
+	}{
+		{"single-agent retry", append(slices.Clone(retry), none("sa-2")), true, ""},
+		{"orchestration disabled retry", retry, true, ""},
+		{"judge-less spec retry", append(slices.Clone(retry), none("run-2")), true, ""},
+		{"no later attempt", nil, false, "judges=fail"},
+		{"only later attempt-less judges", []map[string]any{
+			{"gate_name": "judges", "result": "pass"},
+		}, false, "judges=fail"},
+		{"later retry fails its own gate", []map[string]any{
+			{"gate_name": "build", "result": "pass"},
+			{"gate_name": "lint", "result": "fail"},
+		}, false, "lint=fail"},
+	}
+	for _, tc := range cases {
+		for _, attempt := range []string{"run-1", ""} {
+			t.Run(tc.name+"/attempt="+attempt, func(t *testing.T) {
+				ws := layouttest.Repo(t)
+				rows := []map[string]any{
+					{"gate_name": "build", "result": "pass"},
+					{"gate_name": "lint", "result": "pass"},
+					interruptedMarker(attempt),
+				}
+				writeGateMetrics(t, ws, 2880, append(rows, tc.after...))
+
+				gr := FeatureValidateGate{}.Verify(context.Background(), 2880, ws)
+				if tc.pass {
+					if !gr.Passed {
+						t.Fatalf("expected pass; reason=%q evidence=%v", gr.Reason, gr.Evidence)
+					}
+					return
+				}
+				if gr.Passed || gr.Kind != KindFail {
+					t.Fatalf("expected KindFail, got passed=%v kind=%q", gr.Passed, gr.Kind)
+				}
+				if !slices.Contains(gr.Evidence, tc.fail) {
+					t.Fatalf("expected evidence to contain %s, got %v", tc.fail, gr.Evidence)
+				}
+				if tc.fail != "judges=fail" && slices.Contains(gr.Evidence, "judges=fail") {
+					t.Fatalf("released marker must not trip the gate; evidence=%v", gr.Evidence)
+				}
+			})
+		}
+	}
+}
+
+// #2880: the reader-side release applies only to the interrupted marker. An
+// ordinary failing judges row still stands after a later quality-gate row.
+func TestFeatureValidateGate_FailingJudge_NotReleasedByLaterGateRow(t *testing.T) {
+	ws := layouttest.Repo(t)
+	writeGateMetrics(t, ws, 2880, []map[string]any{
+		{"gate_name": "judges", "result": "fail", "attempt_id": "run-1", "error_summary": "claim not reproduced"},
+		{"gate_name": "build", "result": "pass"},
+	})
+
+	gr := FeatureValidateGate{}.Verify(context.Background(), 2880, ws)
+	if gr.Passed || !slices.Contains(gr.Evidence, "judges=fail") {
+		t.Fatalf("expected judges=fail to stand; passed=%v evidence=%v", gr.Passed, gr.Evidence)
+	}
+}
+
+// The test marker's prefix must be the one the gate releases.
+func TestInterruptedMarkerPrefixMatchesState(t *testing.T) {
+	if !strings.HasPrefix(interruptedMarker("")["error_summary"].(string), state.JudgesInterruptedMarker) {
+		t.Fatal("interruptedMarker prefix drifted from state.JudgesInterruptedMarker")
 	}
 }
 

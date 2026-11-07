@@ -16,7 +16,7 @@ import (
 func TestAPILedgerRotatesPastMaxBytes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "api.jsonl")
-	l := &apiLedger{path: path, prev: map[string]int{}}
+	l := &apiLedger{path: path}
 	if err := l.open(); err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestAPILedgerRotatesPastMaxBytes(t *testing.T) {
 func TestAPILedgerKeepsBoundedBackups(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "api.jsonl")
-	l := &apiLedger{path: path, prev: map[string]int{}}
+	l := &apiLedger{path: path}
 	if err := l.open(); err != nil {
 		t.Fatalf("open: %v", err)
 	}

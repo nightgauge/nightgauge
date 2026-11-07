@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -212,5 +214,37 @@ func TestRefineStageOptionsModelFollowsThePerformanceMode(t *testing.T) {
 				t.Errorf("refinement model = %q, want %q", opts.Model, c.want)
 			}
 		})
+	}
+}
+
+// TestRefineStageOptionsLogsTheResolvedSkillPath pins #2718's line through a real
+// render. The scheduler's own render logs through the same helper; the second
+// half keeps that call from being dropped.
+func TestRefineStageOptionsLogsTheResolvedSkillPath(t *testing.T) {
+	ws := t.TempDir()
+	bundle := refineSkillFixture(t)
+	withRefineRoots(t, ws, bundle)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: ws})
+	as := NewAutonomousScheduler(sched, nil, []depgraph.RepoConfig{}, nil, DefaultAutonomousConfig(), ws)
+	opts, err := as.refineStageOptions("acme", "widgets", 42, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "skill_path=" + opts.SkillPath
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("log %q lacks %q", buf.String(), want)
+	}
+
+	src, err := os.ReadFile("scheduler.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "logResolvedSkillPath(item.Number, stage, skillData.SkillPath)") {
+		t.Error("the scheduler's stage render no longer logs its skill_path")
 	}
 }

@@ -91,6 +91,12 @@ before planning it (#2562).
 
 ## Gotchas
 
+- **An existing PR branch is updated by merging its base, never rebased.** When
+  the issue has an open PR that conflicts with its base, the plan merges
+  `origin/<base>` into the branch and pushes normally. Never prescribe a
+  rebase or a force push of any kind: a rebased tip no longer descends from
+  origin's, so validate's push is rejected and the run ends `branch_forked`
+  (#2699).
 - **Read docs and the knowledge base before proposing.** Skipping
   `knowledge_path/PRD.md` + `decisions.md` and the relevant `docs/` produces a
   plan that drifts from accumulated decisions and causes rework downstream.
@@ -165,6 +171,9 @@ printf '<!-- phase:start name="ac-reconcile" index=2 total=13 stage="feature-pla
   scope to the unsatisfied / undetectable subset.
 - otherwise → continue normal planning.
 
+`--notify-empty` comments once on an issue with no recognisable criteria, so
+the gap surfaces now rather than as `Refs #N` at pr-create (#2906).
+
 Consumes zero LLM tokens. Skip cleanly when the binary is missing.
 
 ```bash
@@ -175,16 +184,17 @@ ISSUE_BODY_FILE=$(mktemp)
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
@@ -203,6 +213,7 @@ if [ -n "$BINARY" ] && [ -s "$ISSUE_BODY_FILE" ]; then
     --workdir "$(pwd)" \
     --body-file "$ISSUE_BODY_FILE" \
     --out "$AC_RECONCILE_FILE" \
+    --notify-empty ${REPO:+--repo "$REPO"} \
     || echo "AC reconcile failed (non-fatal); continuing"
 fi
 rm -f "$ISSUE_BODY_FILE"
@@ -395,8 +406,8 @@ directory) with:
         "category": "TypeScript",
         "pattern": "flexEnum for enum coercion",
         "evidence": [
-          "packages/nightgauge-sdk/src/context/schemas/helpers.ts:35",
-          "packages/nightgauge-sdk/src/context/schemas/validate.ts:20"
+          "src/context/schemas/helpers.ts:35",
+          "src/context/schemas/validate.ts:20"
         ],
         "frequency": 3,
         "example_implementations": ["ChangeTypeSchema", "RoutingPathSchema"]
@@ -421,8 +432,8 @@ directory) with:
   Do NOT use `naming`, `structural`, `interface`, or `idiomatic` as substitutes.
 
   `pattern_mining_results` may be `null` when pattern mining was skipped — this
-  is valid. Source of truth for the schema:
-  `packages/nightgauge-sdk/src/context/schemas/planning.ts`.
+  is valid. Schema reference:
+  [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md).
 
 - `complexity_assessment` — use **exactly** these field names (values from Phase
   2):

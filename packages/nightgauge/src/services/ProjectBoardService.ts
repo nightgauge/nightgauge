@@ -398,10 +398,11 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       if (this.owner && this.projectNumber) this._onDidResolveConfig.fire();
       // Surface missing config to the user — silent empty views are confusing.
       // But an uninitialized repo is not a misconfigured one: before
-      // `/nightgauge:repo-init` runs there is no config.yaml to be missing
+      // Initialize Repository runs there is no config.yaml to be missing
       // keys from, the welcome view is already on screen inviting the user to
       // create it, and the README promises nothing is written until they opt
-      // in. Warning there contradicts all three (#901).
+      // in. Warning there contradicts all three (#901). Nor is an owner with no
+      // board: that is what Initialize Repository writes (#2760).
       if (!this.owner || !this.projectNumber) {
         const missing = [
           !this.owner ? "project.owner (or top-level owner)" : "",
@@ -410,12 +411,16 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
           .filter(Boolean)
           .join(", ");
         const initialized = await isRepoInitialized(this.workspaceRoot);
+        const unlinked = initialized && Boolean(this.owner);
+        const incomplete = initialized && !unlinked;
         log(
-          `${initialized ? "WARNING: Incomplete" : "Uninitialized repo — no"} project config` +
-            `${initialized ? ` — missing: ${missing}` : ""}. ` +
-            "Board views will be empty. Run /nightgauge:repo-init to fix."
+          unlinked
+            ? "No GitHub Project linked. Board views will be empty until one is."
+            : `${initialized ? "WARNING: Incomplete" : "Uninitialized repo — no"} project config` +
+                `${initialized ? ` — missing: ${missing}` : ""}. ` +
+                "Board views will be empty. Run Initialize Repository to fix."
         );
-        if (initialized) {
+        if (incomplete) {
           vscode.window.showWarningMessage(
             `Nightgauge: project config incomplete — missing ${missing}. ` +
               "Issue views will be empty until config is fixed."

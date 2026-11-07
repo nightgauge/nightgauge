@@ -201,7 +201,7 @@ describe("ui.behavior", () => {
 
       expect(DEFAULT_CONFIG.ui?.plugins?.auto_prompt).toBe(true);
       expect(DEFAULT_CONFIG.ui?.plugins?.marketplace_url).toBe(
-        "https://github.com/nightgauge/nightgauge.git"
+        "https://github.com/nightgauge/nightgauge.git#stable"
       );
     });
 

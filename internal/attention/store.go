@@ -139,6 +139,18 @@ var flockTimeout = 30 * time.Second
 // ignoring ctx is a bug in that verb, not something a deadline can repair.
 var verbTimeout = 20 * time.Second
 
+// defaultProducerLockWait bounds how long a background producer (raise, sweep,
+// streak, standing) queues for the in-process lock before giving up with
+// ErrStoreBusy (#2750).
+//
+// These callers run on the daemon's scan goroutine, not "on their own", so an
+// unbounded wait here parks dispatch itself: the Retry deadlock stopped the
+// scheduler while `autonomous status` kept printing running. It must exceed
+// verbTimeout, the longest a healthy Resolve holds the lock, or an ordinary
+// resolve would cost a producer its raise. TestProducerWaitOutlastsAVerb
+// asserts that.
+const defaultProducerLockWait = 25 * time.Second
+
 // lockFileName is the advisory lock file inside the store directory. It ends
 // in `.lock`, not `.json`, so the card scanners (List, scanLocked,
 // SweepExpired) skip it structurally rather than by name.
@@ -155,19 +167,10 @@ func dirLockFor(dir string) chan struct{} {
 
 // LOCK ORDER (#2528): this store lock → AutonomousScheduler.mu. Resolve runs
 // verbs that take the scheduler mutex, so scheduler code holding that mutex
-// must never reach acquireDir — it dispatches through
-// AutonomousScheduler.dispatchAttention instead.
-//
-// acquireDir takes both locks for dir and returns the release func, waiting as
-// long as it takes. Reserved for the daemon's own background producers (raise,
-// sweep, streak, standing), which run on their own goroutines and whose being
-// queued is invisible to an operator. Every OPERATOR-FACING mutation uses
-// acquireDirCtx instead — a person waiting on a socket must be told, not
-// parked.
-func acquireDir(dir string) func() {
-	release, _ := acquireDirCtx(context.Background(), dir)
-	return release
-}
+// must never reach acquireSection — it dispatches through
+// AutonomousScheduler.dispatchAttention instead. So must everything a verb can
+// reach, held mutex or not: the lock is not reentrant, and a verb runs on the
+// goroutine that holds it (#2750).
 
 // acquireDirCtx takes both locks for dir, giving up when ctx expires.
 //
@@ -200,18 +203,30 @@ type pendingEmit struct {
 	req   *DecisionRequest
 }
 
-// acquireSection is acquireDir plus the deferred listener fan-out: the release
-// it returns unlocks FIRST and only then runs the listeners queued by
-// emitLocked. See flushEmits for why that ordering is the fix for #1539.
-func (s *Store) acquireSection() func() {
-	release := acquireDir(s.dir)
-	return func() {
-		release()
-		s.flushEmits()
-	}
+// acquireSection takes the store for a background producer: acquireSectionCtx
+// bounded by the producer wait, so a wedged holder costs the caller
+// ErrStoreBusy rather than its goroutine. Every OPERATOR-FACING mutation uses
+// acquireSectionCtx with its own deadline — a person waiting on a socket should
+// not wait on this number.
+func (s *Store) acquireSection() (func(), error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.producerWait())
+	defer cancel()
+	return s.acquireSectionCtx(ctx)
 }
 
-// acquireSectionCtx is acquireSection with a deadline.
+// producerWait returns the wait acquireSection applies.
+func (s *Store) producerWait() time.Duration {
+	s.listenerMu.Lock()
+	defer s.listenerMu.Unlock()
+	if s.producerLockWait > 0 {
+		return s.producerLockWait
+	}
+	return defaultProducerLockWait
+}
+
+// acquireSectionCtx takes the store until ctx expires. The release it returns
+// unlocks FIRST and only then runs the listeners queued by emitLocked. See
+// flushEmits for why that ordering is the fix for #1539.
 func (s *Store) acquireSectionCtx(ctx context.Context) (func(), error) {
 	release, err := acquireDirCtx(ctx, s.dir)
 	if err != nil {
@@ -405,6 +420,8 @@ type Store struct {
 	steerWriter  SteerWriter
 	pendingEmits []pendingEmit
 	emitCh       chan pendingEmit // nil until the first Subscribe
+	// producerLockWait overrides defaultProducerLockWait when positive.
+	producerLockWait time.Duration
 }
 
 // emitQueueDepth is how many committed transitions may wait on a stuck
@@ -461,6 +478,17 @@ func (s *Store) SetSteerWriter(w SteerWriter) {
 	}
 	s.listenerMu.Lock()
 	s.steerWriter = w
+	s.listenerMu.Unlock()
+}
+
+// SetProducerLockWait overrides how long a background producer waits for the
+// store before failing with ErrStoreBusy. A non-positive d restores the default.
+func (s *Store) SetProducerLockWait(d time.Duration) {
+	if s == nil {
+		return
+	}
+	s.listenerMu.Lock()
+	s.producerLockWait = d
 	s.listenerMu.Unlock()
 }
 
@@ -555,7 +583,10 @@ func (s *Store) Raise(req DecisionRequest) (RaiseOutcome, string, error) {
 	}
 	s.applyRaiseDefaults(&req)
 
-	release := s.acquireSection()
+	release, err := s.acquireSection()
+	if err != nil {
+		return "", "", err
+	}
 	defer release()
 
 	stored, err := s.scanLocked()
@@ -1112,7 +1143,10 @@ func (s *Store) SweepExpired(ctx context.Context, exec VerbExecutor) (int, error
 	}
 	now := s.nowUTC()
 
-	release := s.acquireSection()
+	release, err := s.acquireSection()
+	if err != nil {
+		return 0, err
+	}
 
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -1222,7 +1256,7 @@ func (s *Store) loadLocked(id string) (string, *DecisionRequest, error) {
 // writeMaterializedLocked persists the request via write-temp + rename so a
 // reader never observes a half-written record (ADR-015 §C). The temp path is
 // per-writer (materializedTempPath) and the whole section is held under
-// acquireDir, so a concurrent writer in another process can neither share this
+// acquireSection, so a concurrent writer in another process can neither share this
 // staging file nor be inside this function at the same time (#1425).
 func (s *Store) writeMaterializedLocked(path string, req *DecisionRequest) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
@@ -1291,7 +1325,7 @@ func normalizeForWire(req *DecisionRequest) {
 // drainEmits runs it on its own goroutine.
 //
 // The journal append needs no lock of its own on either axis (#1425). Every
-// caller is already inside acquireDir's critical section, so it is covered
+// caller is already inside acquireSection's critical section, so it is covered
 // cross-process by the same flock as the materialized write; and
 // history.AppendJSONL is independently safe anyway, opening O_APPEND per call
 // and writing one marshalled record, which POSIX makes atomic against

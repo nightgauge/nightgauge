@@ -140,14 +140,14 @@ version is **not** bumped.
 
 ## The six default gates
 
-| Stage              | Gate (Go)             | What it checks                                                                                                                                                                                                     |
-| ------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `issue-pickup`     | `IssuePickupGate`     | `pipeline/issue-{N}.json` exists, parses, names a feature branch                                                                                                                                                   |
-| `feature-planning` | `FeaturePlanningGate` | `pipeline/planning-{N}.json` references a non-empty `plan_file`                                                                                                                                                    |
-| `feature-dev`      | `FeatureDevGate`      | `pipeline/dev-{N}.json` records ≥1 file change, build_verification ok — **and git agrees the workspace changed** (#202); a missing file or a missing `build_verification` is derived from git first (#1076, #1482) |
-| `feature-validate` | `FeatureValidateGate` | every `gate-metrics.jsonl` quality-gate record `result == "pass"` — **and every added test file the repo's test command excludes carries a passing execution record** (#1261)                                      |
-| `pr-create`        | `PrCreateGate`        | `pipeline/pr-{N}.json` records `pr_number`; `gh pr view` is OPEN                                                                                                                                                   |
-| `pr-merge`         | `PrMergeGate`         | `gh pr view` reports `state == "MERGED"`                                                                                                                                                                           |
+| Stage              | Gate (Go)             | What it checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `issue-pickup`     | `IssuePickupGate`     | `pipeline/issue-{N}.json` exists, parses, names a feature branch                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `feature-planning` | `FeaturePlanningGate` | `pipeline/planning-{N}.json` references a non-empty `plan_file`                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `feature-dev`      | `FeatureDevGate`      | `pipeline/dev-{N}.json` records ≥1 file change, build_verification ok — **and git agrees the workspace changed** (#202); a missing file or a missing `build_verification` is derived from git first (#1076, #1482)                                                                                                                                                                                                                                                                   |
+| `feature-validate` | `FeatureValidateGate` | the latest `gate-metrics.jsonl` verdict per `gate_name`, in file order, is `result == "pass"`, so a retry clears an earlier `catch` by re-running that gate while telemetry keeps every row (#2746), and `adversarial-review` rows come from `nightgauge review record` (#2839); `judges` rows are one set per `attempt_id`, and any failure in the latest attempt fails — **and every added test file the repo's test command excludes carries a passing execution record** (#1261) |
+| `pr-create`        | `PrCreateGate`        | `pipeline/pr-{N}.json` records `pr_number`; `gh pr view` is OPEN                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `pr-merge`         | `PrMergeGate`         | `gh pr view` reports `state == "MERGED"`                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 Gates that call `gh` use a 3-attempt, 1-second-backoff internal retry to
 absorb transient API failures (rate-limit, transient 5xx) before reporting
@@ -281,16 +281,19 @@ issue to the same status (the gate fires _before_ feature-dev ever runs, so
 no branch, no PR). Every dependent of that issue read the bare status string
 and dispatched against a contract that was never built.
 
-- **`Done` / issue `CLOSED`** — always satisfies. Terminal, unambiguous.
-- **`In review`** — satisfies **only** when an OPEN PR is confirmed for that
-  issue, via `openPRMergeStatesForRepo` (one batched `gh pr list` per repo,
-  cached each fresh graph build as `AutonomousScheduler.inReviewPRBacked`).
-  The board string alone is never sufficient — `evaluateDeps` checks
-  membership in that confirmed set before treating the dep as satisfied.
-  Fail-closed on query failure: a repo whose PR query fails contributes
-  nothing to `inReviewPRBacked`, so its `"In review"` deps read as blocked,
-  never as silently satisfied.
-- **`Ready`, `Backlog`, `In progress`, no status** — never satisfies.
+- **Issue `CLOSED`** — satisfies, subject to the validation marker for a
+  program member.
+- **Issue `OPEN`** — never satisfies, whatever its board status (#2706). A
+  `Refs` merge leaves an issue open with its PR merged, so neither `Done` nor
+  `In review` with an open PR proves the contract a dependent needs. A blocker
+  parked `In review` holds its dependents until someone resolves it.
+- **A key that names a pull request** — off-board keys only, because GitHub's
+  `blockedBy` relation links issues (#2854). Merged satisfies, with no
+  validation gate: a pull request carries no program labels or marker. Open
+  blocks. Closed without merging blocks, and the log says nothing was delivered.
+- **A number that does not exist** — blocks, and the log says so. That reason
+  needs GitHub's `NOT_FOUND` on the number; a failed read stays "not confirmed
+  via GitHub".
 
 The halt path that produced the false positive is fixed the same way:
 `sidelineHalt` now checks `openPRMergeStatesForRepo` before choosing a board

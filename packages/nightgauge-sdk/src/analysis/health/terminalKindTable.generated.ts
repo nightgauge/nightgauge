@@ -171,9 +171,32 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
   "kinds_without_rules": [
     "orchestrator_crash",
     "abandoned_commit",
-    "operator_stop"
+    "operator_stop",
+    "resume_no_op"
   ],
   "rules": [
+    {
+      "id": "merge-conflict",
+      "kind": "merge_conflict",
+      "signal": false,
+      "clauses": [
+        [
+          "[merge-conflict]"
+        ]
+      ],
+      "why": "Conflict recovery could not land a merge-queue conflict (#2841). HeadlessOrchestrator stamps the marker on the escalation, which names the conflicting files. First in the ladder because those file names and the refusal text are free-form: a path holding `timeout` or `network` must not reclassify a conflict."
+    },
+    {
+      "id": "merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": false,
+      "clauses": [
+        [
+          "merge-queue-enqueue-exhausted"
+        ]
+      ],
+      "why": "pr-merge's enqueue still failed after its transient-error retries (#2729); a permanent enqueue rejection keeps the `merge-queue-enqueue-failed` reason and its existing path. Matched before the network, timeout and crash heuristics because the wrapped forge cause is free text (`502`, `timeout`, `connection reset`) and must not move a green, unmerged PR to a retryable or crash kind."
+    },
     {
       "id": "stamped-stage-stop",
       "kind": "budget_exceeded",
@@ -360,6 +383,20 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
         ]
       ],
       "why": "A project-declared preflight.environment check failed in a stage's Phase 0 (#101): the operator's local environment (a service down, emulator storage full, PATH order) is broken, not the code. `nightgauge preflight environment` and the shared PREFLIGHT.md Layer 3 stamp the bracketed marker. Next to adapter-auth-failed and above the subagent-crash fallback, whose `exit ` substring would otherwise book an environment halt as a crash and feed the cascade breaker. The marker literal is unique to this producer, so its position among the other marker rules changes no other classification. Deliberately not matched on prose such as `environment check failed`, which a test runner's own output can print."
+    },
+    {
+      "id": "gate-plugin-missing",
+      "kind": "gate_plugin_missing",
+      "signal": true,
+      "clauses": [
+        [
+          "[gate-plugin-missing]"
+        ],
+        [
+          "gate_plugin_missing"
+        ]
+      ],
+      "why": "A bundled build's Claude stage did not load the Nightgauge plugin exactly once, so the stage runner stopped it before any work (#2723). Both stage runners stamp the bracketed marker, the same shape as environment-halt beside it and for the same reasons: above the subagent-crash fallback, whose `exit ` substring would book it as a crash and feed the cascade breaker, and unique to this producer, so its position changes no other classification. The no-bundle warning prints the separate `[gate-plugin-warning]` literal, so a warning in the stderr of an unrelated failure does not park that failure."
     },
     {
       "id": "context-window-exceeded",
@@ -662,6 +699,9 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "signal": false,
       "clauses": [
         [
+          "[push-auth-failed]"
+        ],
+        [
           "invalid auth method"
         ],
         [
@@ -695,7 +735,7 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
           "401 unauthorized"
         ]
       ],
-      "why": "A git or forge transport refused the credentials the machine offered (#878) — environment class, and the one thing on this ladder that no rerun, no stronger model and no better plan can clear. PLACED ABOVE premature-turn-end DELIBERATELY, and that position is the whole fix: the post-condition site composes its reason as `\u003cfirst cause\u003e — then \u003cpost-condition symptom\u003e` (#878's first half), so the string carries `invalid auth method` AND `exited 0 but did not write expected output context` — a clause of premature-turn-end. Matching is over the whole joined string, so whichever rule sits earlier takes it, and the observed run booked a credential-less epic-branch push as an agent that ended its turn on a promise. terminal_kind is what the V2 run record carries and what recovery routing and the retro path consume, so that misattribution teaches the learning loop the stage under-performed when the machine was simply not authenticated. TERMS ARE THE TRANSPORT'S OWN WORDING, matching the git-auth spellings orchestrator.permissionPhrases already acts on so the escalation gate and the recorded kind agree on the same evidence: go-git's `invalid auth method` (transport.ErrInvalidAuthMethod, what it returns for an *http.BasicAuth against an SSH remote — #593), ssh's `permission denied (publickey`, git's credential-prompt failures, and the forge API's `bad credentials`. THE TERMS ARE A DELIBERATE SUBSET OF permissionPhrases, NOT A COPY OF IT, and the difference is not an oversight — the two lists answer different questions at different costs. The gate asks \"could a stronger model possibly fix this?\" and pays one skipped retry for a false yes, matching PER LINE against a curated classifier. This ladder asks \"what is this failure CALLED?\", matches the WHOLE joined string, is first-match-wins, and sits above sixteen other rules — so a term here that appears in someone else's failure prose silently retitles their failure. Every spelling that is unambiguous at that price is present, including `authentication required`, `http 401` and `401 unauthorized` (a 401 is a credential refusal and nothing else; the written forms are used because the bare code appears in issue numbers and temp paths, the same trap that made permissionPhrases spell them out). FOUR SPELLINGS FROM THAT LIST ARE DELIBERATELY ABSENT, each pinned by a corpus row that would go red. Bare `permission denied`: corpus row permission-denied-negative-eacces pins a filesystem EACCES as unmatched, and the permission-denied rule below already refuses that literal for the same reason — so this rule takes only the `(publickey` form, which no filesystem error carries. Bare `authentication failed`: corpus row git-transport-auth-negative-bare-authentication-failed pins a MODEL adapter's own logged-out text, a different remedy — hence the narrowed `authentication failed for`, git's own wording. Bare `unauthorized`/`forbidden` and the 403 forms: 403 is GitHub's THROTTLE code as much as its refusal code, so `403 forbidden; browser_session limit exceeded` is corpus row boundary-negative-left-edge-session-limit, expected unmatched, and would be stolen. A run whose only evidence is a bare 403 therefore still books validation_error while the gate still declines to escalate it: that divergence is the conservative answer on both sides, not a gap — the gate's wrong answer costs a retry, this rule's wrong answer mislabels someone else's failure. BELOW adapter-auth-failed (#312) on purpose: that is the MODEL adapter refusing to launch, a different remedy from a git remote refusing a key, and it must keep its signal:true reaction. signal:false like its neighbours: this is a RECORD-attribution rule, and the fleet's reaction to a credential fault is unchanged by it."
+      "why": "A git or forge transport refused the credentials the machine offered (#878) — environment class, and the one thing on this ladder that no rerun, no stronger model and no better plan can clear. PLACED ABOVE premature-turn-end DELIBERATELY, and that position is the whole fix: the post-condition site composes its reason as `\u003cfirst cause\u003e — then \u003cpost-condition symptom\u003e` (#878's first half), so the string carries `invalid auth method` AND `exited 0 but did not write expected output context` — a clause of premature-turn-end. Matching is over the whole joined string, so whichever rule sits earlier takes it, and the observed run booked a credential-less epic-branch push as an agent that ended its turn on a promise. terminal_kind is what the V2 run record carries and what recovery routing and the retro path consume, so that misattribution teaches the learning loop the stage under-performed when the machine was simply not authenticated. TERMS ARE THE TRANSPORT'S OWN WORDING, matching the git-auth spellings orchestrator.permissionPhrases already acts on so the escalation gate and the recorded kind agree on the same evidence: go-git's `invalid auth method` (transport.ErrInvalidAuthMethod, what it returns for an *http.BasicAuth against an SSH remote — #593), ssh's `permission denied (publickey`, git's credential-prompt failures, and the forge API's `bad credentials`. THE TERMS ARE A DELIBERATE SUBSET OF permissionPhrases, NOT A COPY OF IT, and the difference is not an oversight — the two lists answer different questions at different costs. The gate asks \"could a stronger model possibly fix this?\" and pays one skipped retry for a false yes, matching PER LINE against a curated classifier. This ladder asks \"what is this failure CALLED?\", matches the WHOLE joined string, is first-match-wins, and sits above sixteen other rules — so a term here that appears in someone else's failure prose silently retitles their failure. Every spelling that is unambiguous at that price is present, including `authentication required`, `http 401` and `401 unauthorized` (a 401 is a credential refusal and nothing else; the written forms are used because the bare code appears in issue numbers and temp paths, the same trap that made permissionPhrases spell them out). FOUR SPELLINGS FROM THAT LIST ARE DELIBERATELY ABSENT, each pinned by a corpus row that would go red. Bare `permission denied`: corpus row permission-denied-negative-eacces pins a filesystem EACCES as unmatched, and the permission-denied rule below already refuses that literal for the same reason — so this rule takes only the `(publickey` form, which no filesystem error carries. Bare `authentication failed`: corpus row git-transport-auth-negative-bare-authentication-failed pins a MODEL adapter's own logged-out text, a different remedy — hence the narrowed `authentication failed for`, git's own wording. Bare `unauthorized`/`forbidden` and the 403 forms: 403 is GitHub's THROTTLE code as much as its refusal code, so `403 forbidden; browser_session limit exceeded` is corpus row boundary-negative-left-edge-session-limit, expected unmatched, and would be stolen. A run whose only evidence is a bare 403 therefore still books validation_error while the gate still declines to escalate it: that divergence is the conservative answer on both sides, not a gap — the gate's wrong answer costs a retry, this rule's wrong answer mislabels someone else's failure. BELOW adapter-auth-failed (#312) on purpose: that is the MODEL adapter refusing to launch, a different remedy from a git remote refusing a key, and it must keep its signal:true reaction. signal:false like its neighbours: this is a RECORD-attribution rule, and the fleet's reaction to a credential fault is unchanged by it. The bracketed `[push-auth-failed]` literal (#2742) is stamped by `nightgauge git push-branch` when it exits 4 and carried into the slot error by verifyPostValidateState, so a refused feature-validate push is classified by its terminal marker rather than by whichever earlier log line (a pre-push `Result: BLOCKED` summary) a free-text rule would otherwise reach first."
     },
     {
       "id": "premature-turn-end",
@@ -806,6 +846,23 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "Zombie-run guard (#252). `[stage-no-output-timeout]` is the first-output watchdog killing a stage that never produced any session output; its producer is HeadlessOrchestrator. It is transient-stall shaped: retry with backoff is the right recovery and it should not count against the lifetime failure cap. This row carried a second clause until #470 retired it — #427 had deleted its only producer, so it could no longer match anything."
     },
     {
+      "id": "stage-cap-kill",
+      "kind": "stage_cap_kill",
+      "signal": false,
+      "clauses": [
+        [
+          "[stage-cap-killed]"
+        ],
+        [
+          "exceeded stage_hard_cap"
+        ],
+        [
+          "exceeded stage_time_cap"
+        ]
+      ],
+      "why": "A stage stopped at `pipeline.stage_hard_caps` or `pipeline.stage_time_caps` (#2812). It was working and ran out of time, so it reads differently from an idle kill and recovers exactly like one. MUST precede stall-kill. The clauses are the exact producer wordings, not bare `hard cap`, so an idle kill's stderr tail or report text that merely names a cap stays stall_kill."
+    },
+    {
       "id": "stall-kill",
       "kind": "stall_kill",
       "signal": false,
@@ -830,9 +887,6 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
         ],
         [
           "exceeded stall idle threshold"
-        ],
-        [
-          "exceeded stage_hard_cap"
         ],
         [
           "hard cap"
@@ -896,6 +950,20 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
         ]
       ],
       "why": "pr-create's deterministic fallback confirmed the feature branch has zero commits ahead of base (#317) — genuinely nothing to open a PR for. Deliberately NOT matched on the bare phrase `no commits ahead of`: that phrase also appears in feature-validate's unrelated lost-implementation check, which must keep its organic classification."
+    },
+    {
+      "id": "review-cap-reached",
+      "kind": "review_cap_reached",
+      "signal": false,
+      "clauses": [
+        [
+          "[review-cap-reached]"
+        ],
+        [
+          "review_cap_reached"
+        ]
+      ],
+      "why": "The independent review reached its round cap with findings standing (#2865). Above validation-failed because it is a narrower claim about the same stage: a cap says something about one issue, so it parks instead of halting the repository. Its producers are verifyPostValidateState and the review's own summary."
     },
     {
       "id": "validation-failed",

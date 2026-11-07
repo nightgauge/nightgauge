@@ -1,0 +1,26 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 281582464..181938135 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
+ 
+ ### Fixed
+ 
++- The Claude plugin's version is now 1.27.0, so installed plugins receive the plugin changes
++  made since v0.8.0, and the v0.8.1 release candidates pass the staging plugin-version gate
++  (#2945).
+ - A doctor test whose repository has an `origin` now fails its cleanup by naming what is still
+   writing `.git` (each leftover entry with size and mtime, `gc.pid` and `gc.log` contents, and the
+   likely writer: `git gc`, `git maintenance` or a held lock) instead of a bare
+diff --git a/claude-plugins/nightgauge/.claude-plugin/plugin.json b/claude-plugins/nightgauge/.claude-plugin/plugin.json
+index 26adb8f01..0fc4df5ae 100644
+--- a/claude-plugins/nightgauge/.claude-plugin/plugin.json
++++ b/claude-plugins/nightgauge/.claude-plugin/plugin.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "nightgauge",
+-  "version": "1.26.0",
++  "version": "1.27.0",
+   "description": "AI-Augmented SDLC Framework - Complete issue-to-PR pipeline with enforceable quality gates",
+   "author": {
+     "name": "nightgauge"

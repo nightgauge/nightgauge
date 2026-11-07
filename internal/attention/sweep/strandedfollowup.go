@@ -60,10 +60,6 @@ func strandedCandidate(pr forge.OpenPRSummary, repo string) bool {
 // strandedBranchRE captures the issue number a pipeline branch encodes.
 var strandedBranchRE = regexp.MustCompile(`^[a-z]+/(\d+)-`)
 
-// strandedClosesRE matches a closing keyword and the issue it names, the
-// keywords GitHub honours in a PR body.
-var strandedClosesRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)\b`)
-
 // StrandedFollowUpMarker is the hidden body marker that identifies the
 // tracking issue filed for one PR.
 func StrandedFollowUpMarker(pr int) string {
@@ -111,9 +107,8 @@ func (p *StrandedFollowUpPRs) Evaluate(ctx context.Context, in Input) ([]attenti
 		if m := strandedBranchRE.FindStringSubmatch(pr.HeadRef); m != nil {
 			n, _ := strconv.Atoi(m[1])
 			numbers = append(numbers, n)
-			for _, c := range strandedClosesRE.FindAllStringSubmatch(pr.Body, -1) {
-				k, _ := strconv.Atoi(c[1])
-				numbers = append(numbers, k)
+			for _, c := range repoClosingRefs(pr.Body, in.Repo) {
+				numbers = append(numbers, c.Number)
 			}
 		}
 	}
@@ -136,7 +131,7 @@ func (p *StrandedFollowUpPRs) Evaluate(ctx context.Context, in Input) ([]attenti
 		if parentIssue := issue(parent); parentIssue == nil || !strings.EqualFold(parentIssue.State, "closed") {
 			continue
 		}
-		if closesOpenIssue(pr.Body, issue) {
+		if closesOpenIssue(pr.Body, in.Repo, issue) {
 			continue
 		}
 		title, body := strandedTrackingIssue(pr, parent)
@@ -170,12 +165,26 @@ func (p *StrandedFollowUpPRs) Evaluate(ctx context.Context, in Input) ([]attenti
 	return reqs, nil
 }
 
-// closesOpenIssue reports whether body names an OPEN issue with a closing
-// keyword: such a PR already has dispatchable work that will land it.
-func closesOpenIssue(body string, issue func(int) *forgetypes.Issue) bool {
-	for _, m := range strandedClosesRE.FindAllStringSubmatch(body, -1) {
-		n, _ := strconv.Atoi(m[1])
-		if is := issue(n); is != nil && strings.EqualFold(is.State, "open") {
+// repoClosingRefs returns the closing-keyword references in body that close
+// an issue of repo, in every form GitHub honours (forge.ClosingRefs, #2687).
+// The issues read here are repo's, so a closer naming another repository is
+// not one of them.
+func repoClosingRefs(body, repo string) []forge.ClosingRef {
+	var out []forge.ClosingRef
+	for _, r := range forge.ClosingRefs(body) {
+		// Targets supplies the repository and host checks; the number is r's own.
+		if r.Targets(repo, r.Number) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// closesOpenIssue reports whether body names an OPEN issue of repo with a
+// closing keyword: such a PR already has dispatchable work that will land it.
+func closesOpenIssue(body, repo string, issue func(int) *forgetypes.Issue) bool {
+	for _, r := range repoClosingRefs(body, repo) {
+		if is := issue(r.Number); is != nil && strings.EqualFold(is.State, "open") {
 			return true
 		}
 	}

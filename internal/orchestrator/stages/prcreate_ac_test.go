@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
@@ -81,9 +83,69 @@ func TestResolveACVerdicts(t *testing.T) {
 	}
 }
 
-// githubClosingRE is GitHub's closing-keyword grammar for issue 42. A Refs
-// body that matched it would still close the issue at merge.
-var githubClosingRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(?:[\w.-]+/[\w.-]+)?#42\b`)
+// githubCloses is an oracle for GitHub's documented closing-keyword grammar:
+// one of the nine keywords, an optional colon, then `#N`, `owner/repo#N` or an
+// issue URL. It scans the text by hand instead of sharing forge's regular
+// expression, so a form the matcher and the defanger both miss still fails
+// the tests that assert against it. A Refs body it accepts would still close
+// issue n at merge.
+func githubCloses(body string, n int) bool {
+	lower := strings.ToLower(body)
+	num := strconv.Itoa(n)
+	isWord := func(c byte) bool {
+		return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z'
+	}
+	// endsRef reports whether rest begins with the issue number as a whole number.
+	endsRef := func(rest string) bool {
+		return strings.HasPrefix(rest, num) && (len(rest) == len(num) || !isWord(rest[len(num)]))
+	}
+	for _, kw := range []string{"close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved"} {
+		for i := 0; ; {
+			j := strings.Index(lower[i:], kw)
+			if j < 0 {
+				break
+			}
+			start, end := i+j, i+j+len(kw)
+			i = start + 1
+			if (start > 0 && isWord(lower[start-1])) || (end < len(lower) && isWord(lower[end])) {
+				continue
+			}
+			rest := strings.TrimLeft(lower[end:], " \t\r\n")
+			rest = strings.TrimLeft(strings.TrimPrefix(rest, ":"), " \t\r\n")
+			if strings.HasPrefix(rest, "http://") || strings.HasPrefix(rest, "https://") {
+				// https://github.com/owner/repo/issues/N; GitHub acts on no other host.
+				parts := strings.SplitN(rest[strings.Index(rest, "//")+2:], "/", 5)
+				if len(parts) == 5 && parts[0] == "github.com" && parts[3] == "issues" && endsRef(parts[4]) {
+					return true
+				}
+				continue
+			}
+			// #N, or owner/repo#N with no whitespace inside the reference.
+			if hash := strings.IndexByte(rest, '#'); hash >= 0 &&
+				!strings.ContainsAny(rest[:hash], " \t\n") &&
+				(hash == 0 || strings.Count(rest[:hash], "/") == 1) && endsRef(rest[hash+1:]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestGithubClosesOracle(t *testing.T) {
+	for body, want := range map[string]bool{
+		"Closes #42":    true,
+		"fixes: o/r#42": true,
+		"Resolved https://github.com/o/r/issues/42": true,
+		"Refs #42":                              false,
+		"Closes #420":                           false,
+		"Closes https://github.com/o/r/pull/42": false,
+		"disclosed #42":                         false,
+	} {
+		if got := githubCloses(body, 42); got != want {
+			t.Errorf("githubCloses(%q) = %v, want %v", body, got, want)
+		}
+	}
+}
 
 // Regression fixture (#2595): an issue with three ACs and a diff that meets
 // one must produce Refs, not Closes, and name the two that remain.
@@ -102,7 +164,7 @@ func TestRenderBody_PartialDeliveryRefsNotCloses(t *testing.T) {
 	if !strings.Contains(body, "Refs #42\n") {
 		t.Errorf("partial delivery must say Refs #42:\n%s", body)
 	}
-	if githubClosingRE.MatchString(body) {
+	if githubCloses(body, 42) {
 		t.Errorf("partial delivery body carries a closing keyword for #42:\n%s", body)
 	}
 	if !strings.Contains(body, "Part of #7\n") {
@@ -198,7 +260,7 @@ func TestRenderBody_NotVerifiableRefsAndListsOnce(t *testing.T) {
 	s := richSnap()
 	s.ACVerdicts = ResolveACVerdicts([]string{"alpha crit", "beta crit"}, nil, nil, nil)
 	body := RenderBody(s)
-	if !strings.Contains(body, "Refs #42\n") || BodyClosesIssue(body, 42) {
+	if !strings.Contains(body, "Refs #42\n") || BodyClosesIssue(body, "o/r", 42) {
 		t.Errorf("all-not-verifiable must say Refs:\n%s", body)
 	}
 	if strings.Contains(body, "## Acceptance criteria") {
@@ -617,5 +679,108 @@ func TestResolveACVerdicts_ScopedNegativeEvidence(t *testing.T) {
 	got = ResolveACVerdicts(criteria, []ACVerdict{{Text: "second crit", Status: "unknown", Evidence: "not met"}}, det, nil)
 	if got[1].Status != ACMet {
 		t.Errorf("deterministic met overturned: %+v", got[1])
+	}
+}
+
+// #2670: a passed_unverified validate run still reports unit_tests.passed, so
+// checking that flag first made the never-executed suite case unreachable and
+// let it satisfy a test-named criterion. The snapshot is read from a validate
+// context written the way the gate writes it.
+func TestACTestState_UnverifiedSuiteOutranksValidatePass(t *testing.T) {
+	dir := initRepo(t)
+	doc := map[string]any{"validation_status": "passed", "unit_tests": map[string]any{"passed": true}}
+	f := deliverable.Finding{
+		Artifacts: []deliverable.TestArtifact{{Path: "e2e/widget.spec.ts", Tiers: []deliverable.Tier{deliverable.TierE2E}}},
+		Tiers:     []deliverable.Tier{deliverable.TierE2E},
+	}
+	if !deliverable.Apply(doc, f) {
+		t.Fatal("setup: Apply did not supersede the passed verdict")
+	}
+	// The branch really adds the suite: a finding naming a file the diff does
+	// not add is dropped as stale (#2941).
+	if err := os.MkdirAll(filepath.Join(dir, "e2e"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "e2e", "widget.spec.ts"), []byte("test('w', () => {})\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := pipelineContextPath(dir, "validate-42.json")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(doc)
+	if err := os.WriteFile(p, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := defaultReadCreateContext(context.Background(), dir, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.UnitTestsPassed || !snap.UnverifiedDeliverable.Detected() {
+		t.Fatalf("setup: want both flags set, got passed=%v unverified=%v", snap.UnitTestsPassed, snap.UnverifiedDeliverable.Detected())
+	}
+	got := acTestState(snap)
+	if got.Passed {
+		t.Errorf("a suite that never executed satisfied a test-named criterion: %+v", got)
+	}
+	if got.Source != "tests added but never executed" {
+		t.Errorf("Source = %q, want the unexecuted-suite reason", got.Source)
+	}
+}
+
+// #2662: criterion text and evidence are untrusted. A newline in either must
+// not open a bullet or a heading inside the section post-merge parses, and
+// must not split a closing keyword away from its rewrite.
+func TestRenderBody_UntrustedACTextRendersOnOneLine(t *testing.T) {
+	s := richSnap()
+	s.ACVerdicts = ResolveACVerdicts(
+		[]string{"Ship the widget\n- injected criterion", "Document it", "Done"},
+		[]ACVerdict{
+			{Index: 0, Status: "unmet", Evidence: "x\n- injected\n## Heading"},
+			{Index: 1, Status: "unmet", Evidence: "see notes\r\n  - also injected"},
+			// Text-matched: an index-only met is dropped (#2669).
+			{Index: 2, Text: "Done", Status: "met", Evidence: "fixes\n#9 and closes\n\n#10"},
+		}, nil, nil)
+	body := RenderBody(s)
+
+	want := []string{"Ship the widget - injected criterion", "Document it"}
+	if got := hooks.UnmetCriteria(body); !reflect.DeepEqual(got, want) {
+		t.Errorf("hooks.UnmetCriteria = %q, want %q\n%s", got, want, body)
+	}
+	if strings.Contains(body, "\n## Heading") {
+		t.Errorf("evidence opened a heading:\n%s", body)
+	}
+	if !strings.Contains(body, "_❌ unmet — feature-validate: x - injected ## Heading_\n") {
+		t.Errorf("evidence not collapsed onto its status line:\n%s", body)
+	}
+	if !strings.Contains(body, "(feature-validate: Refs #9 and Refs #10)") || BodyClosesIssue(body, "o/r", 9) || BodyClosesIssue(body, "o/r", 10) {
+		t.Errorf("a closing keyword split by a newline survived:\n%s", body)
+	}
+}
+
+func TestAppendUnmetACs_UntrustedTextRendersOnOneLine(t *testing.T) {
+	body := AppendUnmetACs("Body\n", 42, []string{"real\n## Heading\n- fake", "Closes\n#7"})
+	want := []string{"real ## Heading - fake", "Refs #7"}
+	if got := hooks.UnmetCriteria(body); !reflect.DeepEqual(got, want) {
+		t.Errorf("hooks.UnmetCriteria = %q, want %q\n%s", got, want, body)
+	}
+}
+
+// #2669 merge with #2941: the PR-body rule may upgrade a verdict to met, but
+// an index-matched verdict still only holds a criterion open.
+func TestResolveACVerdicts_IndexMatchedPRBodyVerdictNeverMet(t *testing.T) {
+	criteria := []string{"The command and its result are recorded in the PR body"}
+	got := ResolveACVerdicts(criteria, []ACVerdict{
+		{Index: 0, Text: "reworded beyond recognition", Status: "not_verifiable", Evidence: "go test ./x exited 0"},
+	}, nil, nil)
+	if got[0].Status == ACMet || IssueClosedBy(got) {
+		t.Errorf("index-matched PR-body verdict closed the criterion: %+v", got[0])
+	}
+	got = ResolveACVerdicts(criteria, []ACVerdict{
+		{Index: 0, Text: criteria[0], Status: "not_verifiable", Evidence: "go test ./x exited 0"},
+	}, nil, nil)
+	if got[0].Status != ACMet {
+		t.Errorf("text-matched PR-body verdict: %+v, want met", got[0])
 	}
 }

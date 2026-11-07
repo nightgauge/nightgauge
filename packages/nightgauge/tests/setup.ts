@@ -43,7 +43,25 @@ process.env.NIGHTGAUGE_CONFIG_HOME ??= path.join(os.tmpdir(), "nightgauge-tests-
   }
   for (const root of pinned) setCloneLayout(root, cloneLayoutFor(root, fakeGitCommonDir));
   afterAll(() => {
-    fs.rmSync(fakeGitCommonDir, { recursive: true, force: true });
+    // An unawaited failure retro that escaped its test writes here after the
+    // test ends and races this removal (#2893). Name it instead of letting it
+    // surface as an unexplained ENOTEMPTY.
+    const retros = path.join(fakeGitCommonDir, "nightgauge", "retros");
+    let leftover: string[] = [];
+    try {
+      leftover = (fs.readdirSync(retros, { recursive: true }) as string[]).map((f) =>
+        path.join(retros, String(f))
+      );
+    } catch {
+      // No retros directory: nothing escaped.
+    }
+    fs.rmSync(fakeGitCommonDir, { recursive: true, force: true, maxRetries: 3 });
+    if (leftover.length > 0) {
+      throw new Error(
+        `A real failure retro ran during this test file and wrote:\n  ${leftover.join("\n  ")}\n` +
+          "A suite that vi.unmocks AutoRetroService must not drive a failing pipeline (#2893)."
+      );
+    }
   });
 }
 
@@ -136,6 +154,14 @@ export function resetMockConfigBridge() {
 }
 
 // Mock ConfigBridge service
+// HeadlessOrchestrator starts AutoRetroService.runAfterFailure without awaiting
+// it; a real retro written after a test ends races the teardown above (#2893).
+// Mocked for every file so no suite can opt out by omission; suites that test
+// the service itself call vi.unmock.
+vi.mock("../src/services/AutoRetroService", async (orig) =>
+  (await import("./helpers/autoRetroMock")).mockAutoRetroModule(orig)
+);
+
 vi.mock("../src/services/ConfigBridge", () => ({
   ConfigBridge: {
     getInstance: vi.fn(() => mockConfigBridgeInstance),

@@ -11,57 +11,61 @@ Three-layer check:
 3. **Project environment** — the checks the project declares under
    `preflight.environment` (#101); opt-in, silent when none are declared
 
-The binary discovery cascade below is **provider-neutral** (#4029): it works
+The binary discovery cascade below is **provider-neutral** (issue 4029): it works
 identically under every adapter (Claude, Codex, Gemini, …) and references no
 VSCode-extension-specific path. The host that spawns the skill (the VSCode
 extension's `skillRunner`, or the Go `nightgauge` binary in auto/CLI mode)
 resolves the binary authoritatively and exports `NIGHTGAUGE_BIN`, which
-this cascade honors first. The remaining steps (PATH, repo `bin/`, the
-worktree's canonical-repo `bin/`, `~/go/bin`) are fallbacks for direct or
-terminal invocation.
+this cascade honors first. The remaining steps (PATH, the development-only repo
+`bin/` and worktree canonical-repo `bin/`, `~/go/bin`) are fallbacks for direct
+or terminal invocation.
 
 This intentionally **diverges** from
-`claude-plugins/nightgauge/hooks/lib/guard.sh` (#3262 → #4029): guard.sh is
+`claude-plugins/nightgauge/hooks/lib/guard.sh` (issue 3262 → issue 4029): guard.sh is
 Claude-Code-only and retains a trailing `~/.vscode/extensions/...` glob to serve
 the standalone-terminal-Claude case (where no host exports `NIGHTGAUGE_BIN`).
 Skills must stay portable Markdown and cannot reference that VSCode-only path —
-so the shared resolution order (`NIGHTGAUGE_BIN` → PATH → repo → canonical
-→ `~/go/bin`) stays in sync, and only guard.sh carries the extra Claude-only
+so the shared resolution order (`NIGHTGAUGE_BIN` → PATH → gated repo → gated
+canonical → `~/go/bin`) stays in sync, and only guard.sh carries the extra Claude-only
 fallback. The `nightgauge preflight skill-portability` gate enforces that
-no skill reintroduces a `.vscode/extensions` path.
+no skill reintroduces a `.vscode/extensions` path, and that every cascade keeps
+the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
+`bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
 `dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
 invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (#3262).
+failing with "command not found" (issue 3262).
 
 ```bash
-# Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → repo
-# bin → canonical-repo bin → ~/go/bin). No VSCode-extension path — see #4029.
+# Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
+# bin → gated canonical-repo bin → ~/go/bin). No VSCode-extension path — see issue 4029.
+# Repo bins need NIGHTGAUGE_DEV_REPO_BIN=1 and a verified core checkout (#2758).
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 if [ -z "$BINARY" ]; then
-  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH, bin/nightgauge, canonical-repo bin, or ~/go/bin" >&2
+  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH or ~/go/bin" >&2
   echo "" >&2
   echo "Install via: go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest" >&2
   echo "Or download from: https://github.com/nightgauge/nightgauge/releases" >&2
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (#3262).
+# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -71,7 +75,7 @@ export PATH="$(dirname "$BINARY"):$PATH"
 # concurrent sessions/workspaces owned by different GitHub users each use their
 # own token. GH_TOKEN outranks GITHUB_TOKEN and the gh keyring. Only resolve when
 # unset (an upstream env value — e.g. the VSCode extension's terminal env —
-# wins); never fail preflight over it. Mirrors hooks/lib/guard.sh (sync, #3262).
+# wins); never fail preflight over it. Mirrors hooks/lib/guard.sh (sync, issue 3262).
 if [ -z "${GH_TOKEN:-}" ]; then
   IB_REPO_TOKEN="$("$BINARY" forge auth token 2>/dev/null || true)"
   if [ -n "$IB_REPO_TOKEN" ]; then

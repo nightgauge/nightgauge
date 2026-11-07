@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 // TestPrMergeDefaultTimeoutCoversTheMergeQueueWait is #2214: the pr-merge
@@ -23,7 +25,7 @@ func TestPrMergeDefaultTimeoutCoversTheMergeQueueWait(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(short, ".nightgauge", "config.yaml"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := prMergeDefaultTimeoutSec(short); got != prMergeCITimeoutSec {
-		t.Errorf("short queue wait = %ds, want the CI-wait floor %ds", got, prMergeCITimeoutSec)
+	if got := prMergeDefaultTimeoutSec(short); got != int(config.DefaultPRMergeCIWait.Seconds()) {
+		t.Errorf("short queue wait = %ds, want the CI-wait floor %ds", got, int(config.DefaultPRMergeCIWait.Seconds()))
 	}
 }

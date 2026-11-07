@@ -24,6 +24,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/gateledger"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 )
@@ -64,12 +65,16 @@ const (
 	ReasonChecklistUnverified    = "manual-checklist-unverified"
 	ReasonSpikeIssue             = "spike-issue"
 	ReasonNoChanges              = "no-changes"
-	ReasonBranchIsBase           = "branch-is-base"
-	ReasonPushFailed             = "push-failed"
-	ReasonPushedRemoteExists     = "push-failed-remote-branch-exists"
-	ReasonCreateFailed           = "create-call-failed"
-	ReasonClientUnavailable      = "pr-client-unavailable"
-	ReasonContextInvalidJSON     = "context-invalid-json"
+	// ReasonNoDiffAgainstBase: the branch has commits but its tree matches the
+	// base (#2941, the #2942 re-run: +0/-0 after merges of main). Opening a PR
+	// would publish nothing, so the stage reports the criteria instead.
+	ReasonNoDiffAgainstBase  = "no-diff-against-base"
+	ReasonBranchIsBase       = "branch-is-base"
+	ReasonPushFailed         = "push-failed"
+	ReasonPushedRemoteExists = "push-failed-remote-branch-exists"
+	ReasonCreateFailed       = "create-call-failed"
+	ReasonClientUnavailable  = "pr-client-unavailable"
+	ReasonContextInvalidJSON = "context-invalid-json"
 )
 
 // PRCreateResult is the outcome of a single Run invocation.
@@ -90,6 +95,12 @@ type PRCreateResult struct {
 	CommitPerformed bool
 	CommitSHA       string
 	CommitReason    string
+
+	// ACVerdicts, Branch and BaseBranch are set on a ReasonNoDiffAgainstBase
+	// punt so the caller can close the issue or name what is unmet (#2941).
+	ACVerdicts []ACVerdict
+	Branch     string
+	BaseBranch string
 }
 
 // PRCreateRunner is the contract the scheduler uses to invoke the deterministic
@@ -125,6 +136,9 @@ type PRCreateSnapshot struct {
 	SecurityReview  string
 	TypeCheck       string
 	DeadCodeScanDev string
+	// PRSummary is the one-line statement of the change feature-dev recorded as
+	// pr_summary (#2846). Empty means the title falls back to the issue title.
+	PRSummary string
 
 	// Validate fields (from validate-{N}.json)
 	HasValidate bool
@@ -136,7 +150,19 @@ type PRCreateSnapshot struct {
 	ValidateErrorCategory  string
 	BuildPassed            bool
 	UnitTestsPassed        bool
-	IntegrationPassed      bool
+	// UnitTestsSource names what confirmed UnitTestsPassed when it was not
+	// feature-validate's own unit_tests block: the gate ledger's full
+	// local-gate pass on this tree (#2941). Empty means feature-validate.
+	UnitTestsSource   string
+	IntegrationPassed bool
+	// TestOutcomes are the per-test results of the gate log feature-validate
+	// named in unit_tests.log (#2941); TestLog is that log's path.
+	TestOutcomes deliverable.TestOutcomes
+	TestLog      string
+	// TreeDiffEmpty is true when the branch's tree, committed or not, matches
+	// its merge base outside pipeline bookkeeping (#2941). False when the diff
+	// could not be computed.
+	TreeDiffEmpty bool
 	// UnverifiedDeliverable is set when the run built a test suite it never
 	// executed (#152). It rides in the PR body so the gap is visible where a
 	// reviewer actually looks, rather than only in prose inside a JSON
@@ -183,6 +209,7 @@ type PRCreateDecision struct {
 //	!HasDev                                    → Punt (missing-dev-context)
 //	IssueType == "spike"                       → Punt (spike-issue)
 //	Branch == BaseBranch                       → Punt (branch-is-base)
+//	TreeDiffEmpty                              → Punt (no-diff-against-base)
 //	!HasValidate && ValidateSkippedByRoute     → dev-only checks, then Create
 //	                                             (rich-context: validate-skipped-by-route)
 //	!HasValidate                               → Punt (missing-validate-context)
@@ -203,6 +230,11 @@ func DecideCreate(snap PRCreateSnapshot) PRCreateDecision {
 	}
 	if snap.Branch == "" || snap.Branch == snap.BaseBranch {
 		return PRCreateDecision{Punt: true, Reason: ReasonBranchIsBase}
+	}
+	if snap.TreeDiffEmpty {
+		// Commits ahead are not a change: a branch that merged main into its
+		// already-merged work is level with the base (#2942).
+		return PRCreateDecision{Punt: true, Reason: ReasonNoDiffAgainstBase}
 	}
 	if !snap.HasValidate && snap.ValidateSkippedByRoute {
 		// The route deliberately skipped validation (#1968). Hold the floor the
@@ -278,16 +310,16 @@ var knownPrefixes = []string{
 
 // RenderTitle renders a deterministic PR title from a snapshot. Format:
 //
-//	<prefix>(#N): <stripped-title>
+//	<prefix>(#N): <text>
 //
-// Where <prefix> is the conventional-commit prefix derived from issue type
-// and <stripped-title> is the issue title with any leading
-// "<knownPrefix>(<scope>)?:" segment removed. Output is byte-equal across
-// repeated calls on identical input — no time, no map iteration, no env reads.
+// Where <prefix> is the conventional-commit prefix derived from issue type and
+// <text> is what titleText resolves: the recorded summary, or the issue title,
+// fitted so the whole title stays within maxTitleRunes. Output is byte-equal
+// across repeated calls on identical input — no time, no map iteration, no env
+// reads.
 func RenderTitle(snap PRCreateSnapshot) string {
-	prefix := titlePrefix(snap.IssueType)
-	stripped := stripTitlePrefix(snap.IssueTitle)
-	return fmt.Sprintf("%s(#%d): %s", prefix, snap.IssueNumber, stripped)
+	text, _ := titleText(snap)
+	return titleScope(snap) + text
 }
 
 func titlePrefix(issueType string) string {
@@ -410,9 +442,10 @@ func RenderBody(snap PRCreateSnapshot) string {
 	// Acceptance criteria (#2595, #2655): each criterion renders exactly
 	// once — met ones here, the rest under UnmetACHeading, which the
 	// post-merge hook reads (bullet lines only) to name the remainder.
-	// Criterion text and evidence are untrusted, so every closing keyword
-	// inside them is rewritten to `Refs`, whatever issue it names (#2655).
-	acText := RewriteAllClosesToRefs
+	// Criterion text and evidence are untrusted: they render on one line and
+	// every closing keyword inside them is rewritten to `Refs`, whatever
+	// issue it names (#2655, #2662).
+	acText := UntrustedACText
 	var met []ACVerdict
 	for _, v := range snap.ACVerdicts {
 		if v.Status == ACMet {
@@ -494,12 +527,17 @@ func unitTestsLabel(snap PRCreateSnapshot) string {
 	p, f := snap.TestsPassed, snap.TestsFailed
 	switch {
 	case p == 0 && f == 0:
+		if snap.UnitTestsPassed && snap.UnitTestsSource != "" {
+			return "passed (confirmed by " + snap.UnitTestsSource + ")"
+		}
 		if snap.UnitTestsPassed {
 			return "passed"
 		}
 		return "not run"
 	case f > 0:
 		return fmt.Sprintf("failed (%d passed, %d failed)", p, f)
+	case snap.UnitTestsPassed && snap.UnitTestsSource != "":
+		return fmt.Sprintf("passed (%d passed, %d failed; confirmed by %s)", p, f, snap.UnitTestsSource)
 	case snap.UnitTestsPassed:
 		return fmt.Sprintf("passed (%d passed, %d failed)", p, f)
 	default:
@@ -508,15 +546,30 @@ func unitTestsLabel(snap PRCreateSnapshot) string {
 }
 
 // acTestState is the test run a test-named criterion is checked against:
-// feature-validate's unit-test verdict. feature-dev's self-reported counts
-// stand in only when validate never ran and no built suite went unexecuted,
-// so an unconfirmed run cannot close an issue.
+// feature-validate's unit-test verdict. A built suite that went unexecuted
+// outranks that verdict, because a passed_unverified run can still report its
+// unit tests passed (#2670). feature-dev's self-reported counts stand in only
+// when validate never ran, so an unconfirmed run cannot close an issue.
+//
+// The gate log's per-test lines ride along whatever the overall verdict, so a
+// criterion naming a test is answered by that test's own result (#2941).
 func acTestState(snap PRCreateSnapshot) ACTestState {
+	st := acRunState(snap)
+	st.PassedTests, st.FailedTests = snap.TestOutcomes.Passed, snap.TestOutcomes.Failed
+	if snap.TestLog != "" {
+		st.LogSource = "the feature-validate gate log `" + filepath.Base(snap.TestLog) + "`"
+	}
+	return st
+}
+
+func acRunState(snap PRCreateSnapshot) ACTestState {
 	switch {
-	case snap.UnitTestsPassed:
-		return ACTestState{Passed: true, Source: "feature-validate unit tests"}
 	case snap.UnverifiedDeliverable.Detected():
 		return ACTestState{Source: "tests added but never executed"}
+	case snap.UnitTestsPassed && snap.UnitTestsSource != "":
+		return ACTestState{Passed: true, Source: snap.UnitTestsSource}
+	case snap.UnitTestsPassed:
+		return ACTestState{Passed: true, Source: "feature-validate unit tests"}
 	case snap.HasValidate:
 		return ACTestState{Source: "feature-validate unit tests"}
 	case snap.TestsFailed == 0 && snap.TestsPassed > 0:
@@ -679,7 +732,13 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	decision := DecideCreate(snap)
 	if !decision.ShouldCreate {
 		ph.supersedeInFlight()
-		return finish(PRCreateResult{Path: CreatePathPunt, Reason: decision.Reason}, nil)
+		res := PRCreateResult{Path: CreatePathPunt, Reason: decision.Reason}
+		if decision.Reason == ReasonNoDiffAgainstBase {
+			res.ACVerdicts = snap.ACVerdicts
+			res.Branch, res.BaseBranch = snap.Branch, snap.BaseBranch
+			res.Detail = fmt.Sprintf("branch %s has no diff against %s", snap.Branch, snap.BaseBranch)
+		}
+		return finish(res, nil)
 	}
 
 	if r.prClient == nil || r.git == nil {
@@ -701,6 +760,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		ph.start("verify-pr-created")
 		ph.complete("verify-pr-created")
 		ph.start("write-context")
+		logTitleNote(snap)
 		title := RenderTitle(snap)
 		body := RenderBody(snap)
 		_ = r.writeContext(workdir, prContextPayload{
@@ -753,6 +813,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: fmt.Sprintf("%s: %s", ReasonCreateFailed, truncateErr(idErr, 200))}, nil)
 	}
 
+	logTitleNote(snap)
 	title := RenderTitle(snap)
 	body := RenderBody(snap)
 	pr, createErr := r.prClient.CreatePR(ctx, repoID, title, body, snap.Branch, snap.BaseBranch)
@@ -945,6 +1006,7 @@ func pipelineContextPath(workdir, name string) string {
 func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber int) (PRCreateSnapshot, error) {
 	snap := PRCreateSnapshot{RunID: os.Getenv("NIGHTGAUGE_RUN_ID")}
 	var validateVerdicts []ACVerdict
+	unitRan := false
 
 	// issue-{N}.json
 	if data, err := readFile(pipelineContextPath(workdir, fmt.Sprintf("issue-%d.json", issueNumber))); err == nil {
@@ -991,11 +1053,13 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 				DeadCodeScan   string `json:"dead_code_scan"`
 			} `json:"quality_checks"`
 			KnowledgePath string `json:"knowledge_path"`
+			PRSummary     string `json:"pr_summary"`
 		}
 		if jsonErr := json.Unmarshal(data, &raw); jsonErr != nil {
 			return snap, fmt.Errorf("parse dev context: %w", jsonErr)
 		}
 		snap.HasDev = true
+		snap.PRSummary = raw.PRSummary
 		snap.FilesCreated = raw.FilesChanged.Created
 		snap.FilesModified = raw.FilesChanged.Modified
 		snap.FilesDeleted = raw.FilesChanged.Deleted
@@ -1020,7 +1084,10 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 				Passed bool `json:"passed"`
 			} `json:"build"`
 			UnitTests struct {
-				Passed bool `json:"passed"`
+				Ran    bool   `json:"ran"`
+				Passed bool   `json:"passed"`
+				Source string `json:"source"`
+				Tree   string `json:"tree"`
 			} `json:"unit_tests"`
 			IntegrationTests struct {
 				Passed bool `json:"passed"`
@@ -1051,9 +1118,14 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 				return snap, fmt.Errorf("validate context carries AC verdicts under the wrong key: %s", strings.Join(problems, "; "))
 			}
 			snap.UnverifiedDeliverable = deliverable.FindingFromArtifact(doc)
+			snap.TestLog = deliverable.UnitTestsLog(doc)
 		}
 		snap.BuildPassed = raw.Build.Passed
 		snap.UnitTestsPassed = raw.UnitTests.Passed
+		unitRan = raw.UnitTests.Ran
+		if raw.UnitTests.Source == deliverable.UnitSourceGateLedger {
+			snap.UnitTestsSource = ledgerSource(raw.UnitTests.Tree)
+		}
 		snap.IntegrationPassed = raw.IntegrationTests.Passed
 		for _, w := range raw.DeadCodeWarnings {
 			if strings.EqualFold(w.Severity, "error") {
@@ -1064,6 +1136,45 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 		snap.ManualChecklistOpen = manualChecklistOpen(raw.ManualChecklist)
 		for _, v := range raw.ACVerdicts {
 			validateVerdicts = append(validateVerdicts, ACVerdict{Index: v.Index, Text: v.Text, Status: v.Status, Evidence: v.Evidence})
+		}
+	}
+
+	// Facts no stage self-reports (#2941). The gate ledger answers whether the
+	// unit suite passed on this tree when validate's own block does not say
+	// so; the branch diff answers which reported test files were really added
+	// and whether the branch changes anything at all; the gate log answers
+	// each named test.
+	var diff *ACDiff
+	var ledgerPass *gateledger.Event
+	if workdir != "" && snap.HasValidate {
+		if ans, ok := deliverable.LedgerUnitPass(context.Background(), workdir); ok {
+			ledgerPass = &ans.Pass
+			// A block that says the suite ran keeps its own verdict: a
+			// recorded failure is never overwritten by a ledger pass.
+			if !snap.UnitTestsPassed && !unitRan {
+				snap.UnitTestsPassed = true
+				snap.UnitTestsSource = ledgerSource(ans.Pass.Tree)
+			}
+		}
+	}
+	if workdir != "" {
+		if d, diffErr := CollectACDiff(ctx, workdir, snap.BaseBranch); diffErr == nil {
+			diff = d
+			snap.TreeDiffEmpty = !d.hasDeliverable()
+		}
+	}
+	snap.UnverifiedDeliverable = recheckUnverified(snap.UnverifiedDeliverable, diff, snap.UnitTestsPassed)
+	// A gate log answers named tests only when it is the log of the ledger
+	// pass that proved this tree; any other log may be a stale earlier run.
+	if snap.TestLog != "" && !deliverable.LogFromPass(snap.TestLog, ledgerPass) {
+		log.Printf("pr-create: gate log %s is not tied to a gate pass on this tree; named tests fall back to the run's verdict", snap.TestLog)
+		snap.TestLog = ""
+	}
+	if snap.TestLog != "" {
+		if outcomes, logErr := deliverable.ParseGoTestOutcomes(snap.TestLog); logErr == nil {
+			snap.TestOutcomes = outcomes
+		} else {
+			log.Printf("pr-create: gate log %s unreadable (%v); named tests fall back to the run's verdict", snap.TestLog, logErr)
 		}
 	}
 
@@ -1095,8 +1206,8 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 			det = preflight.ReconcileACs(workdir, issueNumber, acCheckboxBody(criteria))
 			// A diff that cannot be collected (no base ref, shallow clone)
 			// leaves the diff verifier out; the other sources still answer.
-			if d, diffErr := CollectACDiff(ctx, workdir, snap.BaseBranch); diffErr == nil {
-				diffCheck = d.Checker(acTestState(snap))
+			if diff != nil {
+				diffCheck = diff.Checker(acTestState(snap))
 			}
 		}
 		snap.ACVerdicts = ResolveACVerdicts(criteria, validateVerdicts, det, diffCheck)
@@ -1118,6 +1229,31 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 	}
 
 	return snap, nil
+}
+
+// ledgerSource names a gate-ledger confirmation for the PR body.
+func ledgerSource(tree string) string {
+	if len(tree) > 12 {
+		tree = tree[:12]
+	}
+	if tree == "" {
+		return "a full local gate pass"
+	}
+	return "a full local gate pass on tree " + tree
+}
+
+// recheckUnverified drops artifacts a persisted finding no longer supports
+// (#2941): a file the branch diff does not ADD (a gate before #2941 counted
+// modified tests), and a file whose tier the ledger shows ran. With no diff the
+// finding stands, since the check must never clear what it cannot see.
+func recheckUnverified(f deliverable.Finding, diff *ACDiff, unitRan bool) deliverable.Finding {
+	if !f.Detected() || diff == nil {
+		return f
+	}
+	return f.Recheck(func(path string) bool {
+		fd, ok := diff.Files[path]
+		return ok && fd.Status == "added"
+	}, deliverable.Execution{Unit: unitRan})
 }
 
 // ---------------------------------------------------------------------------

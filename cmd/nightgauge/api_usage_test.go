@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -486,5 +487,30 @@ func TestReadAPIUsageAfterRetentionPrune(t *testing.T) {
 	}
 	if len(recs) != 1 || recs[0].Caller != "today" {
 		t.Fatalf("got %+v, want today's one record", recs)
+	}
+}
+
+// Interleaved buckets render one row each with their own drain, and JSON
+// carries them (#2692).
+func TestAPIUsageBucketsPerBucketDrain(t *testing.T) {
+	recs := []apiUsageRecord{
+		{Kind: "graphql", Identity: "app:x", Reset: 100, Remaining: 4860, HeaderObserved: true},
+		{Kind: "graphql", Identity: "app:x", Reset: 200, Remaining: 4788, HeaderObserved: true},
+		{Kind: "graphql", Identity: "app:x", Reset: 100, Remaining: 4840, Cost: 4000, HeaderObserved: true},
+		{Kind: "graphql", Identity: "app:x", Reset: 200, Remaining: 4780, Cost: 4000, HeaderObserved: true},
+	}
+	b := apiUsageBuckets(recs)
+	if len(b) != 2 || b[0].Drain != 20 || b[1].Drain != 8 {
+		t.Fatalf("buckets = %+v, want drains 20 and 8", b)
+	}
+	var buf strings.Builder
+	printAPIUsage(&buf, recs, nil, 0, 0, "caller", 15, 0)
+	out := buf.String()
+	if !strings.Contains(out, "Buckets") || strings.Count(out, "app:x") < 3 {
+		t.Errorf("report lacks one row per bucket:\n%s", out)
+	}
+	js, _ := json.Marshal(map[string]interface{}{"buckets": b})
+	if !strings.Contains(string(js), `"drain":20`) {
+		t.Errorf("json = %s", js)
 	}
 }

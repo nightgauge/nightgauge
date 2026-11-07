@@ -370,6 +370,18 @@ Test with Claude Code before submitting:
 # Copy to a test repo and verify behavior
 ```
 
+To run your working tree's skills through an installed build, point it at the
+tree. An installed binary or packaged extension otherwise runs the skills it
+shipped, ahead of the checkout, so a branch's skill edits have no effect (#2718):
+
+```bash
+export NIGHTGAUGE_SKILLS_ROOT="$PWD/skills"
+```
+
+The variable beats every other root in both the Go binary and the extension. For
+the extension, set it in the environment VS Code starts from. An Extension
+Development Host searches the workspace ahead of the bundle without it.
+
 #### 6. Submit a Pull Request
 
 ```bash
@@ -468,8 +480,7 @@ coverage gap: [docs/MODEL_ADAPTATION.md](docs/MODEL_ADAPTATION.md).
 **The skill IS the slash command.** A canonical `skills/<name>/SKILL.md` is
 bundled into the plugin by `scripts/install-agent-skills.sh` and registers
 `/nightgauge:<name>` directly. There are **no** command-wrapper files in
-`claude-plugins/nightgauge/commands/` (one exception: `model-routing-report.md`,
-a self-contained utility with no skill counterpart). Do NOT add a
+`claude-plugins/nightgauge/commands/`, and that directory no longer exists. Do NOT add a
 `commands/<name>.md` file for a name that has a skill — a plugin registers a
 slash entry for both a `commands/<name>.md` AND a `skills/<name>/SKILL.md`, and
 Claude Code does not dedupe them, so a wrapper produces a duplicate `/` entry

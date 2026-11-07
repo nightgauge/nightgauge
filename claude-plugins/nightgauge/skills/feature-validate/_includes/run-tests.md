@@ -275,7 +275,7 @@ After collecting failures, invoke Phase 1.7 (Baseline Comparison) to classify
 each. **New failures** (pass on main, fail on branch) go to Ralph Loop.
 **Pre-existing failures** (also fail on main) are logged, recorded as
 discovered work (Phase 1.7, per
-[Record vs. Backtrack](../../../../../docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work)),
+[Record vs. Backtrack](https://github.com/nightgauge/nightgauge/blob/main/docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work)),
 and skipped. If ALL
 failures are pre-existing, treat as passed. Report results: PASSED, FAILED, or
 Not configured.
@@ -327,7 +327,7 @@ a `file://` remote. It passed identically on the broken code — a `file://`
 remote needs no credentials either way — because the defect lived entirely in
 **which transport ran**. It was caught only by reverting the fix and noticing
 the test stayed green. Full class:
-[Vacuous Assertion](../../../../../docs/FAILURE_TAXONOMY.md#vacuous-assertion-the-test-that-cannot-go-red).
+[Vacuous Assertion](https://github.com/nightgauge/nightgauge/blob/main/docs/FAILURE_TAXONOMY.md#vacuous-assertion-the-test-that-cannot-go-red).
 
 Record the literal outcome in the validate context notes (`reverted → FAILED,
 restored → PASSED`). "The tests pass" is not that evidence.

@@ -1,12 +1,15 @@
 package hooks
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // readFileIfExists returns the file's contents and whether it existed; the
@@ -28,7 +31,7 @@ func readFileIfExists(t *testing.T, path string) (string, bool) {
 // resolution chain across the conditions that triggered the #3234 incident:
 //
 //   - missing binary, default policy → graceful skip (exit 0, warning)
-//   - missing binary, blocking policy → hard fail (exit 1)
+//   - missing binary, announce / gate policies → TestGuardShellMissingBinaryPolicy
 //   - canonical-repo binary visible from inside a worktree → resolves correctly
 //   - PATH-resolvable binary takes precedence
 //
@@ -56,10 +59,9 @@ func TestGuardShell(t *testing.T) {
 		// debugging hooks. The silent-default subtest below covers the new
 		// default.
 		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
-			"PATH":                     "/nonexistent",
-			"HOME":                     t.TempDir(),
-			"NIGHTGAUGE_HOOK_BLOCKING": "false",
-			"NIGHTGAUGE_HOOK_SILENT":   "false",
+			"PATH":                   "/nonexistent",
+			"HOME":                   t.TempDir(),
+			"NIGHTGAUGE_HOOK_SILENT": "false",
 		}, t.TempDir())
 		if code != 0 {
 			t.Errorf("expected exit 0 (graceful skip), got %d. stdout=%q stderr=%q", code, stdout, stderr)
@@ -78,10 +80,9 @@ func TestGuardShell(t *testing.T) {
 		home := t.TempDir()
 		logFile := filepath.Join(home, "hook-warnings.log")
 		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
-			"PATH":                     "/nonexistent",
-			"HOME":                     home,
-			"NIGHTGAUGE_HOOK_BLOCKING": "false",
-			"NIGHTGAUGE_HOOK_LOG":      logFile,
+			"PATH":                "/nonexistent",
+			"HOME":                home,
+			"NIGHTGAUGE_HOOK_LOG": logFile,
 		}, t.TempDir())
 		if code != 0 {
 			t.Errorf("expected exit 0 (silent graceful skip), got %d. stdout=%q stderr=%q", code, stdout, stderr)
@@ -104,52 +105,9 @@ func TestGuardShell(t *testing.T) {
 		}
 	})
 
-	t.Run("missing binary, blocking → exit 1 with error", func(t *testing.T) {
-		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
-			"PATH":                     "/nonexistent",
-			"HOME":                     t.TempDir(),
-			"NIGHTGAUGE_HOOK_BLOCKING": "true",
-		}, t.TempDir())
-		if code != 1 {
-			t.Errorf("expected exit 1, got %d. stdout=%q stderr=%q", code, stdout, stderr)
-		}
-		if !strings.Contains(stderr, "nightgauge binary not found") {
-			t.Errorf("expected 'binary not found' error, got stderr=%q", stderr)
-		}
-	})
-
-	t.Run("missing binary, blocking + silent → stderr stays loud (AC3)", func(t *testing.T) {
-		// AC3 contract: load-bearing hooks (NIGHTGAUGE_HOOK_BLOCKING=true)
-		// MUST keep stderr output even when silent mode is on. Silencing a
-		// load-bearing-hook failure would hide a real problem from the user.
-		// The side-channel log mirrors the message but does not replace stderr
-		// for blocking failures.
-		home := t.TempDir()
-		logFile := filepath.Join(home, "hook-warnings.log")
-		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
-			"PATH":                     "/nonexistent",
-			"HOME":                     home,
-			"NIGHTGAUGE_HOOK_BLOCKING": "true",
-			"NIGHTGAUGE_HOOK_SILENT":   "true",
-			"NIGHTGAUGE_HOOK_LOG":      logFile,
-		}, t.TempDir())
-		if code != 1 {
-			t.Errorf("expected exit 1 (blocking failure), got %d. stdout=%q stderr=%q", code, stdout, stderr)
-		}
-		if !strings.Contains(stderr, "nightgauge binary not found") {
-			t.Errorf("blocking failures MUST emit stderr regardless of silent mode, got stderr=%q", stderr)
-		}
-		// Side-channel log mirrors the failure for completeness.
-		if logContent, ok := readFileIfExists(t, logFile); ok {
-			if !strings.Contains(logContent, "[hook-blocked]") {
-				t.Errorf("expected '[hook-blocked]' mirror in side-channel log, got %q", logContent)
-			}
-		}
-	})
-
 	t.Run("default policy is non-blocking and silent", func(t *testing.T) {
-		// Neither NIGHTGAUGE_HOOK_BLOCKING nor NIGHTGAUGE_HOOK_SILENT
-		// is set — guard.sh defaults to non-blocking + silent (#3262). The
+		// Neither NIGHTGAUGE_HOOK_ON_MISSING_BINARY nor NIGHTGAUGE_HOOK_SILENT
+		// is set — guard.sh defaults to skip + silent (#3262). The
 		// test asserts both: graceful exit 0 AND empty stderr (so no
 		// stop-hook-error notification surfaces to the parent agent).
 		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
@@ -167,16 +125,30 @@ func TestGuardShell(t *testing.T) {
 	t.Run("canonical repo binary is found from inside a worktree", func(t *testing.T) {
 		// Build a fake repo with a worktree subdir, drop a fake binary in
 		// canonical_repo/bin/nightgauge, source guard.sh from inside the
-		// worktree subdir, assert it resolves to the canonical binary.
+		// worktree subdir. The canonical binary resolves only in a verified
+		// core checkout with the development setting on (#2758).
 		fakeRepo := t.TempDir()
 		runShell(t, fakeRepo, "git init -q && git config user.email t@t && git config user.name t && git commit --allow-empty -qm init")
 		runShell(t, fakeRepo, "mkdir -p .worktrees/fake-issue && git worktree add -q -b fake-branch .worktrees/fake-issue HEAD 2>/dev/null || git worktree add -q .worktrees/fake-issue HEAD")
 		runShell(t, fakeRepo, "mkdir -p bin && printf '#!/bin/bash\necho fake-binary\n' > bin/nightgauge && chmod +x bin/nightgauge")
 		worktreeDir := filepath.Join(fakeRepo, ".worktrees", "fake-issue")
 
+		// Setting off, and setting on in an unverified repository: never resolved.
+		unverified := []map[string]string{
+			{"PATH": "/nonexistent", "HOME": t.TempDir()},
+			{"PATH": "/nonexistent", "HOME": t.TempDir(), "NIGHTGAUGE_DEV_REPO_BIN": "1"},
+		}
+		for _, env := range unverified {
+			if out, _, _ := runGuard(t, guardPath, env, worktreeDir); strings.Contains(out, filepath.Join(fakeRepo, "bin", "nightgauge")) {
+				t.Errorf("unverified canonical bin resolved with env %v: stdout=%q", env, out)
+			}
+		}
+
+		runShell(t, fakeRepo, "printf 'module github.com/nightgauge/nightgauge\\n' > go.mod && git remote add origin https://github.com/nightgauge/nightgauge.git")
 		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
-			"PATH": "/nonexistent",
-			"HOME": t.TempDir(),
+			"PATH":                    "/nonexistent",
+			"HOME":                    t.TempDir(),
+			"NIGHTGAUGE_DEV_REPO_BIN": "1",
 		}, worktreeDir)
 		if code != 0 {
 			t.Errorf("expected exit 0 (canonical resolved), got %d. stdout=%q stderr=%q", code, stdout, stderr)
@@ -284,5 +256,187 @@ func findRepoRoot() (string, error) {
 			return "", os.ErrNotExist
 		}
 		dir = parent
+	}
+}
+
+// runHookWrapper runs a real plugin wrapper script with no binary resolvable
+// (empty PATH apart from system tools, empty HOME) from cwd, and returns its
+// stdout, stderr, exit code and side-channel log.
+func runHookWrapper(t *testing.T, repoRoot, wrapper, cwd string, extraEnv map[string]string) (stdout, stderr string, code int, log string) {
+	t.Helper()
+	logFile := filepath.Join(t.TempDir(), "hook-warnings.log")
+	env := map[string]string{
+		"HOME":                t.TempDir(),
+		"PATH":                lookupGitDir(t) + ":/bin:/usr/bin",
+		"NIGHTGAUGE_HOOK_LOG": logFile,
+	}
+	for k, v := range extraEnv {
+		env[k] = v
+	}
+	cmd := exec.Command(hookBash(t), filepath.Join(repoRoot, "claude-plugins", "nightgauge", "hooks", wrapper))
+	cmd.Dir = cwd
+	cmd.Stdin = strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"ls"}}`)
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	var outBuf, errBuf strings.Builder
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("%s failed to run: %v", wrapper, err)
+		}
+		code = exitErr.ExitCode()
+	}
+	log, _ = readFileIfExists(t, logFile)
+	return outBuf.String(), errBuf.String(), code, log
+}
+
+// TestGuardShellMissingBinaryPolicy pins #2765: with no binary, the session
+// gets ONE visible warning (SessionStart binary-check.sh), the safety gates
+// deny in a repository that opted in and stay out of the way elsewhere, and
+// nothing ever reaches stderr or exits non-zero (#3262).
+func TestGuardShellMissingBinaryPolicy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("guard.sh is bash-only")
+	}
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("findRepoRoot: %v", err)
+	}
+
+	optedIn := gittestRepo(t)
+	optIn(t, optedIn)
+	notOptedIn := gittestRepo(t)
+
+	t.Run("binary-check announces once with a systemMessage", func(t *testing.T) {
+		stdout, stderr, code, log := runHookWrapper(t, repoRoot, "binary-check.sh", notOptedIn, nil)
+		if code != 0 || strings.TrimSpace(stderr) != "" {
+			t.Fatalf("announce must exit 0 with empty stderr, got code=%d stderr=%q", code, stderr)
+		}
+		lines := strings.Split(strings.TrimSpace(stdout), "\n")
+		if len(lines) != 1 {
+			t.Fatalf("want exactly one stdout line, got %q", stdout)
+		}
+		var msg struct {
+			SystemMessage string `json:"systemMessage"`
+		}
+		if err := json.Unmarshal([]byte(lines[0]), &msg); err != nil {
+			t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
+		}
+		if !strings.Contains(msg.SystemMessage, "NOT enforcing") || !strings.Contains(msg.SystemMessage, "go install") {
+			t.Errorf("systemMessage must say the gates are off and how to install, got %q", msg.SystemMessage)
+		}
+		if !strings.Contains(log, "[hook-skipped]") {
+			t.Errorf("announce should also leave a side-channel line, got %q", log)
+		}
+	})
+
+	t.Run("binary-check is silent when the binary resolves", func(t *testing.T) {
+		fakeBin := t.TempDir()
+		if err := os.WriteFile(filepath.Join(fakeBin, "nightgauge"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		stdout, stderr, code, _ := runHookWrapper(t, repoRoot, "binary-check.sh", notOptedIn,
+			map[string]string{"PATH": fakeBin + ":" + lookupGitDir(t) + ":/bin:/usr/bin"})
+		if code != 0 || stdout != "" || strings.TrimSpace(stderr) != "" {
+			t.Fatalf("a resolved binary must produce no output, got code=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
+
+	for _, wrapper := range []string{"workflow-gate.sh", "prompt-sanitize.sh"} {
+		t.Run(wrapper+" denies in an opted-in repository", func(t *testing.T) {
+			stdout, stderr, code, log := runHookWrapper(t, repoRoot, wrapper, optedIn, nil)
+			if code != 0 || strings.TrimSpace(stderr) != "" {
+				t.Fatalf("gate must deny by decision (exit 0, no stderr), got code=%d stderr=%q", code, stderr)
+			}
+			var out struct {
+				HookSpecificOutput struct {
+					HookEventName            string `json:"hookEventName"`
+					PermissionDecision       string `json:"permissionDecision"`
+					PermissionDecisionReason string `json:"permissionDecisionReason"`
+				} `json:"hookSpecificOutput"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &out); err != nil {
+				t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
+			}
+			d := out.HookSpecificOutput
+			if d.HookEventName != "PreToolUse" || d.PermissionDecision != "deny" || d.PermissionDecisionReason == "" {
+				t.Fatalf("want a PreToolUse deny with a reason, got %+v", d)
+			}
+			if !strings.Contains(log, "[hook-denied]") {
+				t.Errorf("want a [hook-denied] side-channel line, got %q", log)
+			}
+		})
+
+		t.Run(wrapper+" skips in a repository that did not opt in", func(t *testing.T) {
+			stdout, stderr, code, log := runHookWrapper(t, repoRoot, wrapper, notOptedIn, nil)
+			if code != 0 || stdout != "" || strings.TrimSpace(stderr) != "" {
+				t.Fatalf("want a silent skip, got code=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			if !strings.Contains(log, "[hook-skipped]") {
+				t.Errorf("want a [hook-skipped] side-channel line, got %q", log)
+			}
+		})
+	}
+
+	t.Run("gate denies from a worktree of an opted-in canonical checkout", func(t *testing.T) {
+		repo := gittestRepo(t)
+		gittest.Run(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init")
+		wt := filepath.Join(t.TempDir(), "wt")
+		gittest.Run(t, repo, "worktree", "add", "-q", wt, "HEAD")
+		optIn(t, repo) // uncommitted: present only in the canonical checkout
+		stdout, _, code, _ := runHookWrapper(t, repoRoot, "workflow-gate.sh", wt, nil)
+		if code != 0 || !strings.Contains(stdout, `"permissionDecision":"deny"`) {
+			t.Fatalf("worktree of an opted-in checkout must be gated, got code=%d stdout=%q", code, stdout)
+		}
+	})
+
+	t.Run("stop-verification never blocks without the binary", func(t *testing.T) {
+		stdout, stderr, code, _ := runHookWrapper(t, repoRoot, "stop-verification.sh", optedIn, nil)
+		if code != 0 || stdout != "" || strings.TrimSpace(stderr) != "" {
+			t.Fatalf("stop-verification must skip (blocking a stop would trap the session), got code=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
+}
+
+// TestGuardShellUserShim pins step 3a (#2765): ~/.nightgauge/bin/nightgauge
+// resolves ahead of the VS Code bundle glob and behind PATH.
+func TestGuardShellUserShim(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("guard.sh is bash-only")
+	}
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("findRepoRoot: %v", err)
+	}
+	guardPath := filepath.Join(repoRoot, "claude-plugins", "nightgauge", "hooks", "lib", "guard.sh")
+
+	writeExe := func(path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	home := t.TempDir()
+	shim := filepath.Join(home, ".nightgauge", "bin", "nightgauge")
+	writeExe(shim)
+	writeExe(filepath.Join(home, ".vscode", "extensions", "nightgauge.nightgauge-0.8.0", "dist", "bin", "nightgauge"))
+
+	stdout, _, code := runGuard(t, guardPath, map[string]string{"PATH": "/nonexistent", "HOME": home}, t.TempDir())
+	if code != 0 || strings.TrimSpace(stdout) != shim {
+		t.Fatalf("shim must win over the VS Code bundle, got code=%d stdout=%q", code, stdout)
+	}
+
+	pathDir := t.TempDir()
+	onPath := filepath.Join(pathDir, "nightgauge")
+	writeExe(onPath)
+	stdout, _, _ = runGuard(t, guardPath, map[string]string{"PATH": pathDir, "HOME": home}, t.TempDir())
+	if strings.TrimSpace(stdout) != onPath {
+		t.Fatalf("PATH must win over the shim, got stdout=%q", stdout)
 	}
 }

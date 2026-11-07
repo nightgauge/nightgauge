@@ -19,8 +19,9 @@ var parkedKinds = []string{
 	TerminalKindContextWindowExceeded,
 	TerminalKindAdapterPermissionRejected,
 	TerminalKindAdapterIncompatible,
-	TerminalKindEnvironmentHalt, // #101: a broken local environment
-	TerminalKindDevContextStale, // #2637: a retry judged on a prior attempt's handoff
+	TerminalKindEnvironmentHalt,  // #101: a broken local environment
+	TerminalKindDevContextStale,  // #2637: a retry judged on a prior attempt's handoff
+	TerminalKindReviewCapReached, // #2865: the review's round cap
 }
 
 // TestParkedKinds_NoRetryNoLifetimeIncrementNoCascade drives each parked kind
@@ -187,6 +188,57 @@ func TestIsStageDeclaredBlockedOutcome(t *testing.T) {
 	for _, c := range cases {
 		if got := IsStageDeclaredBlockedOutcome(c.detail); got != c.want {
 			t.Errorf("IsStageDeclaredBlockedOutcome(%q) = %v, want %v", c.detail, got, c.want)
+		}
+	}
+}
+
+func TestDemoteWarningOnlyQuotaKind(t *testing.T) {
+	warning := "[rate-limit-quota-exhausted] idle 15m after rate_limit_event (status=allowed_warning; seven_day bucket; resetsAt=1)"
+	cases := []struct {
+		kind, detail, want string
+		demoted            bool
+	}{
+		{TerminalKindRateLimitQuotaExhausted, warning, TerminalKindStallKill, true},
+		{TerminalKindRateLimitQuotaExhausted, "[rate-limit-quota-exhausted] idle 2m (status=limited; resetsAt=1)", TerminalKindRateLimitQuotaExhausted, false},
+		{TerminalKindRateLimitQuotaExhausted, warning + "\nagent: grep found status=limited in fixture", TerminalKindStallKill, true},
+		{TerminalKindRateLimitQuotaExhausted, warning + "\n[skillRunner] Stage [quota-killed] idle 2m after rate_limit_event (status=limited; five_hour bucket; resetsAt=2)", TerminalKindRateLimitQuotaExhausted, false},
+		{TerminalKindRateLimitQuotaExhausted, "[rate-limit-quota-exhausted] resets 10:30am; resetsAt=1", TerminalKindRateLimitQuotaExhausted, false},
+		{TerminalKindRateLimitQuotaExhausted, "You've hit your usage limit; the docs mention status=allowed_warning", TerminalKindRateLimitQuotaExhausted, false},
+		{TerminalKindSubagentCrash, warning, TerminalKindSubagentCrash, false},
+	}
+	for _, c := range cases {
+		got, ok := DemoteWarningOnlyQuotaKind(c.kind, c.detail)
+		if got != c.want || ok != c.demoted {
+			t.Errorf("Demote(%q, %q) = (%q, %v), want (%q, %v)", c.kind, c.detail, got, ok, c.want, c.demoted)
+		}
+	}
+}
+
+// The text skillRunner stamps on a soft kill must classify as a stall.
+func TestSoftQuotaKillTextClassifiesAsStall(t *testing.T) {
+	detail := "[skillRunner] Stage [stall-killed] idle 15m 0s after rate_limit_event (status=allowed_warning; seven_day bucket; resetsAt=1778403000) — forcibly terminating process after 40m 0s (idle for 15m 0s)."
+	if got := ClassifyTerminalKind(detail); got != TerminalKindStallKill {
+		t.Fatalf("ClassifyTerminalKind = %q, want %q", got, TerminalKindStallKill)
+	}
+}
+
+// A stall after a quota warning must not climb to a stronger model.
+func TestIsWarningOnlyQuotaStall(t *testing.T) {
+	soft := "[skillRunner] Stage [stall-killed] idle 15m 0s after rate_limit_event (status=allowed_warning; seven_day bucket; resetsAt=1)"
+	cases := []struct {
+		name, kind, detail string
+		want               bool
+	}{
+		{"soft kill", TerminalKindStallKill, soft, true},
+		{"plain stall", TerminalKindStallKill, "[stall-killed] exceeded stall idle threshold", false},
+		{"bare status token", TerminalKindStallKill, "[stall-killed] the log quoted status=allowed_warning", false},
+		{"unrelated stderr limited", TerminalKindStallKill, soft + "\nagent: grep found status=limited in fixture", true},
+		{"limited marker alongside", TerminalKindStallKill, soft + "\n[skillRunner] Stage [quota-killed] idle 2m after rate_limit_event (status=limited; five_hour bucket; resetsAt=2)", false},
+		{"other kind", TerminalKindSubagentCrash, soft, false},
+	}
+	for _, c := range cases {
+		if got := IsWarningOnlyQuotaStall(c.kind, c.detail); got != c.want {
+			t.Errorf("%s: IsWarningOnlyQuotaStall = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

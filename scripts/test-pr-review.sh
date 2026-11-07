@@ -71,8 +71,8 @@ check "dot-dot path" 1 "$(fixture dotdot '.findings[0].file = "a/../../b"')"
 check "line zero" 1 "$(fixture line0 '.findings[0].line = 0')"
 check "line string" 1 "$(fixture linestr '.findings[0].line = "4"')"
 check "multi-line claim" 1 "$(fixture claimnl '.findings[0].claim = "a\nb"')"
-check "oversize claim" 1 "$(fixture claimbig '.findings[0].claim = ("x" * 301)')"
-check "oversize fix" 1 "$(fixture fixbig '.findings[0].fix = ("x" * 1001)')"
+check "long token past the fix limit still rejected" 1 \
+  "$(fixture skbig '.findings[0].fix = ("x" * 990 + " sk-ant-api03-abcdefghijkl")')"
 check "anthropic key shape" 1 "$(fixture skant '.findings[0].fix = "use sk-ant-api03-abc"')"
 check "github token shape" 1 "$(fixture ghp '.findings[0].claim = "token ghp_abcdef"')"
 check "fine-grained pat shape" 1 "$(fixture pat '.findings[0].fix = "github_pat_11ABC"')"
@@ -112,6 +112,36 @@ OUT="$(render "$INJ")"
 expect "forged marker neutralized" 1 "$(printf '%s\n' "$OUT" | grep -c '<!-- nightgauge:pr-review')"
 expect "mention neutralized" 0 "$(printf '%s\n' "$OUT" | grep -c '@octocat')"
 
+# --- render: over-long fields are per-finding (#2819) ----------------------
+LONGFIX="$(fixture fixbig '.findings[0].fix = ("x" * 1078)')"
+OUT="$(render "$LONGFIX")"
+expect "long fix: renders" 0 $?
+expect "long fix: both findings kept" 2 "$(printf '%s\n' "$OUT" | grep -c '^- \*\*')"
+FIXLINE="$(printf '%s\n' "$OUT" | grep '^  - Fix: xxx')"
+expect "long fix: ends in marker" 1 "$(printf '%s\n' "$FIXLINE" | grep -c '\[truncated\]$')"
+expect "long fix: within the limit" 1 "$([ $(( ${#FIXLINE} - 9 )) -le 1000 ] && echo 1 || echo 0)"
+expect "long fix: notice names the field" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c 'Shortened to fit: findings\[0\]\.fix (1078 characters, limit 1000)')"
+
+OUT="$(render "$(fixture claimbig '.findings[0].claim = ("y" * 301)')")"
+expect "long claim: renders" 0 $?
+expect "long claim: one line, truncated" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c '— yyy.*\[truncated\]$')"
+
+OUT="$(render "$(fixture pathbig '.findings[0].file = ("d/" * 206)')")"
+expect "long path: renders" 0 $?
+expect "long path: other finding posts" 1 "$(printf '%s\n' "$OUT" | grep -c '^- \*\*')"
+expect "long path: dropped finding absent" 0 "$(printf '%s\n' "$OUT" | grep -c 'pr.go')"
+expect "long path: notice says dropped" 1 \
+  "$(printf '%s\n' "$OUT" | grep -c 'Dropped: findings\[0\] (file path 412 characters, limit 300)')"
+expect "long path: counts kept findings" 1 "$(printf '%s\n' "$OUT" | grep -c '^1 blocker, 0 major')"
+
+ERR="$(node "$CLI" validate "$LONGFIX" 2>&1 >/dev/null)"
+expect "validate: long fix exits 0" 0 $?
+expect "validate: notice on stderr" 1 \
+  "$(printf '%s\n' "$ERR" | grep -c '^pr-review: notice: Shortened to fit: findings\[0\]\.fix')"
+expect "no over-long field: no notice" 0 "$(render "$(fixture valid .)" | grep -c 'Shortened\|Dropped')"
+
 # --- gate -------------------------------------------------------------------
 pr() {
   # pr <name> <jq-filter>
@@ -141,10 +171,86 @@ expect "gate: no key skipped" false "$(gate "$(pr nokey .)" pull_request '' fals
 
 GH_OUT="$TMP/gh-output"
 GITHUB_OUTPUT="$GH_OUT" node "$CLI" gate --pr-json "$(pr out .)" --event pull_request > /dev/null
-expect "gate: writes GITHUB_OUTPUT" 1 "$(grep -c '^reason=no ANTHROPIC_API_KEY' "$GH_OUT")"
+expect "gate: writes GITHUB_OUTPUT" 1 "$(grep -c '^reason=no CLAUDE_CODE_OAUTH_TOKEN' "$GH_OUT")"
 
 node "$CLI" gate --event pull_request > /dev/null 2>&1
 expect "gate: missing --pr-json is a usage error" 2 $?
+
+# The review step's turn limit. The real step runs against stub claude and npm
+# binaries: what differs between the arms is the CLI's result, and the assertions
+# read the step's exit code, annotation and job summary.
+WORKFLOW=".github/workflows/pr-review.yml"
+STEP_SELECT='.jobs.review.steps[] | select(.name == "Run the review passes")'
+if ! command -v yq > /dev/null 2>&1; then
+  echo "HARNESS ERROR: yq is not installed; the review step could not run"
+  exit 1
+fi
+STEP_RUN="$(yq "$STEP_SELECT | .run" "$WORKFLOW")"
+MAX_TURNS="$(yq "$STEP_SELECT | .env.REVIEW_MAX_TURNS" "$WORKFLOW")"
+if [ -z "$STEP_RUN" ] || [ "$STEP_RUN" = "null" ] || [ "$MAX_TURNS" = "null" ]; then
+  echo "HARNESS ERROR: could not extract the review step from $WORKFLOW"
+  exit 1
+fi
+
+expect "limit: the turn limit is 80" 80 "$MAX_TURNS"
+expect "trigger: manual only" "workflow_dispatch" "$(yq '.on | keys | .[]' "$WORKFLOW")"
+expect "billing: no pay-per-use key reaches the model" 0 \
+  "$(yq "$STEP_SELECT | .env | keys | .[]" "$WORKFLOW" | grep -c ANTHROPIC_API_KEY)"
+expect "limit: one --max-turns in the workflow" 1 "$(grep -c -e '--max-turns' "$WORKFLOW")"
+
+STUBS="$TMP/stubs"
+mkdir -p "$STUBS"
+printf '#!/bin/sh\nexit 0\n' > "$STUBS/npm"
+cat > "$STUBS/claude" <<'STUB'
+#!/bin/sh
+cat > /dev/null
+printf '%s' "$STUB_OUTPUT"
+exit "$STUB_STATUS"
+STUB
+chmod +x "$STUBS/npm" "$STUBS/claude"
+
+run_step() {
+  # run_step <case> <stub stdout> <stub exit> -> sets STEP_STATUS; output in $TMP/<case>.*
+  local name="$1" dir="$TMP/step-$1"
+  mkdir -p "$dir"
+  : > "$dir/summary"
+  PATH="$STUBS:$PATH" RUNNER_TEMP="$dir" GITHUB_STEP_SUMMARY="$dir/summary" \
+    FINDINGS_FILE="$dir/findings.json" REVIEW_MAX_TURNS="$MAX_TURNS" \
+    STUB_OUTPUT="$2" STUB_STATUS="$3" bash -c "$STEP_RUN" > "$dir/log" 2>&1
+  STEP_STATUS=$?
+}
+count() { grep -c -e "$1" "$2"; }
+
+LIMIT_JSON='{"type":"result","subtype":"error_max_turns","is_error":true,"result":null,
+  "errors":["Reached maximum number of turns (80)"]}'
+
+run_step limit1 "$LIMIT_JSON" 1
+expect "limit reached: step is red" 1 "$STEP_STATUS"
+expect "limit reached: annotation names the limit" 1 \
+  "$(count '^::error title=Review did not finish::.*did not finish.*limit of 80 turns' "$TMP/step-limit1/log")"
+expect "limit reached: summary names the limit" 1 \
+  "$(count 'did not finish: it reached the limit of 80 turns' "$TMP/step-limit1/summary")"
+
+run_step limit0 "$LIMIT_JSON" 0
+expect "limit reached, CLI exit 0: step is still red" 1 "$STEP_STATUS"
+expect "limit reached, CLI exit 0: annotation" 1 \
+  "$(count '^::error title=Review did not finish' "$TMP/step-limit0/log")"
+
+run_step ok '{"type":"result","subtype":"success","is_error":false,"result":"All clear."}' 0
+expect "success: step is green" 0 "$STEP_STATUS"
+expect "success: closing message stays in the log" 1 "$(count '^All clear\.$' "$TMP/step-ok/log")"
+expect "success: no annotation" 0 "$(count '::error' "$TMP/step-ok/log")"
+expect "success: empty summary" 0 "$(wc -c < "$TMP/step-ok/summary" | tr -d ' ')"
+
+run_step crash '' 1
+expect "other failure: step keeps the CLI's exit" 1 "$STEP_STATUS"
+expect "other failure: no did-not-finish text" 0 \
+  "$(cat "$TMP/step-crash/log" "$TMP/step-crash/summary" | grep -c 'did not finish')"
+
+run_step other 'Reached max turns, said the model' 3
+expect "other text: exit code preserved" 3 "$STEP_STATUS"
+expect "other text: not read as the limit" 0 \
+  "$(cat "$TMP/step-other/log" "$TMP/step-other/summary" | grep -c 'did not finish')"
 
 echo
 echo "pr-review: $PASS passed, $FAIL failed"

@@ -851,6 +851,10 @@ nightgauge skill render --stage pr-merge --model opus --skills-root ./skills \
 | `--json`            | Emit the provenance envelope instead of the composed text           |
 | `--include-content` | With `--json`, carry the composed text in the envelope's `content`  |
 
+**A missing include is an error.** `skill render` exits non-zero when an
+`<!-- include: -->` target or a phase-include target cannot be read, and names
+each one. An absent overlay still renders base-only (ADR 016 §2).
+
 **`--include-content` exists so a host needing both halves renders once.** The
 extension builds a prompt from the body _and_ a CLI allowlist from the
 frontmatter tool lists; without the flag that is two spawns, which is not
@@ -858,22 +862,45 @@ merely wasteful — two renders are two filesystem snapshots, so an edit landing
 between them yields tool declarations describing a different document than the
 body. It requires `--json` and refuses without it rather than silently no-opping.
 
-**Skill location is the caller's responsibility.** The binary cannot reproduce
-the extension's bundle discovery (`dist/skills/`, plus the
-garbage-collected-bundle self-heal from #3883), so it owns only parsing,
+**Skill location is the caller's input to `render`.** `render` owns only parsing,
 expansion, resolution, and composition. Supplying no `--skills-root` is an
 error rather than a guessed default — guessing is how an agent ends up reading
 a stale `~/.codex/skills` copy (#196).
 
+**`nightgauge skill roots` answers the list** (#2718). `skillrender.ResolveRoots`
+is the only implementation of the order, and every host uses it:
+
+```bash
+nightgauge skill roots --workspace /path/to/worktree --json
+nightgauge skill roots --workspace "$PWD" --bundle "$EXT/dist/skills" --workspace-first --json
+```
+
+| Flag                | Purpose                                                             |
+| ------------------- | ------------------------------------------------------------------- |
+| `--workspace`       | Checkout whose `skills/` is searched; omit for no workspace root    |
+| `--bundle`          | Skills tree the build ships; replaces the one beside this binary    |
+| `--workspace-first` | Rank the workspace ahead of the bundle (Development and Test hosts) |
+| `--json`            | Emit `{"v":1,"roots":[...]}` instead of one root per line           |
+
+The extension passes `--bundle` because its self-healed path (#3883) is a fact
+the binary cannot see and its binary may come from PATH. The override is read
+only from `$NIGHTGAUGE_SKILLS_ROOT`. A failed call fails the stage: the extension
+has no ordering of its own to fall back to.
+
 **The Go-direct path (`nightgauge run`, the scheduler) has no host to ask**, so
-it searches, in order: `<workspace>/skills`, then `$NIGHTGAUGE_SKILLS_ROOT` when
-set, then `<prefix>/skills` beside a binary installed as
-`<prefix>/bin/nightgauge` (the extension's `dist/` layout, or a hand install
-such as `~/.local/share/<name>/{bin,skills}`). A plain `go build` binary
-anywhere else finds no skills outside this repository: set
-`NIGHTGAUGE_SKILLS_ROOT` or use the prefix layout (#2220). `nightgauge doctor`
-reports the `skills` check: whether this binary can locate every stage's
-`SKILL.md`, and the roots it searched.
+it uses the same resolver with the bundle beside the binary and, on a pipeline
+run, the issue's worktree as the workspace. It searches, in order:
+`$NIGHTGAUGE_SKILLS_ROOT` when set, then `<prefix>/skills`
+beside a binary installed as `<prefix>/bin/nightgauge` (the extension's `dist/`
+layout, or a hand install such as `~/.local/share/<name>/{bin,skills}`), then
+`<workspace>/skills`. An installed build therefore runs the skills it shipped,
+even in a checkout of this repository, and the workspace still supplies a skill
+the bundle lacks (#2718). A packaged extension searches the same order; an
+Extension Development or Test host searches the override, the workspace, then
+the bundle. A plain `go build` binary anywhere else finds no skills outside this
+repository: set `NIGHTGAUGE_SKILLS_ROOT` or use the prefix layout (#2220).
+`nightgauge doctor` reports the `skills` check: whether this binary can locate
+every stage's `SKILL.md`, and the roots it searched.
 
 **Resolution cascade** (ADR 016 §2, as amended by #582), general to specific,
 shared before skill-specific — provider, then the concrete id. The band
@@ -944,6 +971,9 @@ nightgauge preflight secrets --workdir . [--json]
 # Fail when a skill include directive points at a file that does not exist (#337)
 nightgauge preflight skill-includes --root . [--tree DIR] [--json]
 
+# Fail when a built skills tree would not render every stage completely (#2761)
+nightgauge preflight skill-bundle --skills-root DIR [--source-root DIR] [--json]
+
 # Fail when a skill SKILL.md contains a direct `gh ` call (forge-abstraction gate)
 nightgauge preflight skill-no-direct-gh --root . [--json]
 
@@ -973,17 +1003,26 @@ nightgauge preflight managed-steering --root . [--fix] [--json]
 
 **Subcommand details:**
 
-| Subcommand            | Wraps                  | Stable JSON schema (v1)                                                                            |
-| --------------------- | ---------------------- | -------------------------------------------------------------------------------------------------- |
-| `links`               | `internal/docs.Run`    | `v, root, files_scanned, links_total, links_broken, findings, warnings`                            |
-| `syntax`              | `internal/preflight`   | `v, workdir, files_scanned, files_invalid, findings[{file, line, format, error}], warnings`        |
-| `secrets`             | `internal/scan.Run...` | `v, workdir, patterns{generic_kv,...}, total, warnings`                                            |
-| `skill-includes`      | `internal/preflight`   | `v, root, trees, files_checked, findings[{file, line, target, resolved, directive}], warnings`     |
-| `skill-no-direct-gh`  | `internal/preflight`   | `v, root, skills_checked, skills_exempted, findings[{skill, file, line, match}], warnings`         |
-| `skill-anti-patterns` | `internal/preflight`   | `v, root, files_checked, findings[{check, file, line, match}], warnings`                           |
-| `thinking-effort`     | `internal/preflight`   | `v, thinking_disabled, checked, findings[{source, model, effort, max_allowed, message}], warnings` |
-| `skill-portability`   | `internal/preflight`   | `v, root, files_checked, findings[{skill_file, line, check, match}], warnings`                     |
-| `managed-steering`    | `codexprovision`       | `v, root, files_checked, findings[path], fixed[path]`                                              |
+| Subcommand            | Wraps                  | Stable JSON schema (v1)                                                                                         |
+| --------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `links`               | `internal/docs.Run`    | `v, root, files_scanned, links_total, links_broken, findings, warnings`                                         |
+| `syntax`              | `internal/preflight`   | `v, workdir, files_scanned, files_invalid, findings[{file, line, format, error}], warnings`                     |
+| `secrets`             | `internal/scan.Run...` | `v, workdir, patterns{generic_kv,...}, total, warnings`                                                         |
+| `skill-includes`      | `internal/preflight`   | `v, root, trees, files_checked, findings[{file, line, target, resolved, directive}], warnings`                  |
+| `skill-bundle`        | `internal/preflight`   | `v, skills_root, source_root, files_checked, renders_checked, findings[{rule, path, detail, render}], warnings` |
+| `skill-no-direct-gh`  | `internal/preflight`   | `v, root, skills_checked, skills_exempted, findings[{skill, file, line, match}], warnings`                      |
+| `skill-anti-patterns` | `internal/preflight`   | `v, root, files_checked, findings[{check, file, line, match}], warnings`                                        |
+| `thinking-effort`     | `internal/preflight`   | `v, thinking_disabled, checked, findings[{source, model, effort, max_allowed, message}], warnings`              |
+| `skill-portability`   | `internal/preflight`   | `v, root, files_checked, findings[{skill_file, line, check, match}], warnings`                                  |
+| `managed-steering`    | `codexprovision`       | `v, root, files_checked, findings[path], fixed[path]`                                                           |
+
+**`skill-bundle` rule enum:** `dead_include`, `render_failed`, `unresolved_path`,
+`file_set`. It validates a built tree: `release.yml` and `staging.yml` run it on
+the skills extracted from each VSIX, and `ci-local.sh` on `dist/skills`. Each
+stage renders for the full and compact profiles under each overlay the tree
+carries, with every phase include supplied, and each skill path in the result
+must exist under the tree. `--source-root` adds the file-set comparison, the only
+check that sees a dropped overlay. An empty tree fails; an absent one exits 2.
 
 **`syntax` finding format enum:** `"json"` or `"yaml"`. Empty files are
 treated as valid (matches `python3 -m json.tool` and `yaml.safe_load`
@@ -1053,13 +1092,11 @@ tree-content guards do: a docs-only edit that drops the rule from a SKILL.md is
 exactly the change class a run_heavy gate would skip. The worked example lives in
 [`skills/_shared/UNOBSERVED_MECHANISM.md`](../skills/_shared/UNOBSERVED_MECHANISM.md).
 
-**`skill-includes` — the dead-include gate (#337).** Include expansion is
-fail-open by contract: `ExpandIncludes` leaves a directive in place when its
-target cannot be read, so the same document stays readable under a host that
-does not expand at all (Claude Code never does). The cost is that a **dead**
-include and a **deliberately unexpanded** one are byte-identical — the model
-receives the literal HTML comment where the shared content belonged, and
-nothing warns. Six shipped stage skills carried
+**`skill-includes` — the dead-include gate (#337).** `skill render` fails on a
+dead include, but only for the files one render composes and only when a stage
+runs. A host that loads `SKILL.md` directly never renders it (Claude Code never
+expands), so the model receives the literal HTML comment where the shared content
+belonged. This gate finds a dead include before merge, in every file. Six shipped stage skills carried
 `<!-- include: ../_shared/BATCH_MODE.md -->` against a file that had never been
 written, for the whole life of the repository; `pr-merge` carried it as the
 entire body of its declared Phase 0.5. (Batch mode itself was later removed,
@@ -1088,10 +1125,10 @@ now asserts that **no** directive survives expansion.
 **`skill-portability` check enum:** `vscode_extension_path` (hardcoded
 VSCode-extension binary path), `hooks_frontmatter` (Claude-only completion
 hook), and `truncated_binary_cascade` (a fenced bash resolver block missing any
-of the five PREFLIGHT rungs). The cascade check is per block, not per file: one
+of the six PREFLIGHT rungs, the `NIGHTGAUGE_DEV_REPO_BIN` gate included). The cascade check is per block, not per file: one
 complete resolver cannot hide a truncated sibling (#365). Scans every `*.md`
 under `skills/`; skills must resolve the binary provider-neutrally
-(`$NIGHTGAUGE_BIN` → PATH → repo bin → canonical-repo bin → `~/go/bin`). See
+(`$NIGHTGAUGE_BIN` → PATH → gated repo bin → gated canonical-repo bin → `~/go/bin`). See
 docs/SKILL_PORTABILITY.md (#4029).
 
 **No subcommand exposes `--fix`.** No deterministic auto-fix exists for broken
@@ -1241,8 +1278,10 @@ nightgauge project set-field <issue-number> --start-date 2026-05-01 --target-dat
 # Move issue to a status column
 nightgauge project move-status <issue-number> <status>
 
-# Sync issue status field (idempotent)
-nightgauge project sync-status <issue-number> <status>
+# Sync issue status field (idempotent). --only-from <status> writes only when
+# the issue holds that status; otherwise, or when the current status is
+# unreadable, it writes nothing and exits non-zero ("yielding <status>").
+nightgauge project sync-status <issue-number> <status> [--only-from <status>]
 
 # List project board items
 nightgauge board list [--status Ready] [--owner ORG] [--project N] [--json]
@@ -1846,6 +1885,44 @@ and inherit its guards, exactly as `ls-remote`, `commitAll` and the checkpoint
 anchor already did. This is a per-operation choice, not a fallback path: there
 is one implementation of each operation, and hand-rolling git's guards in Go
 would be a second, weaker copy of rules git already enforces.
+
+### Pushing a PR Branch Without Force (Issue #2699)
+
+```bash
+nightgauge git push-branch [--json]
+```
+
+Pushes the current branch with `git push origin HEAD:refs/heads/<branch>` and
+never forces. When the push is rejected as non-fast-forward, it checks whether
+the fork is self-inflicted: a three-way merge of origin's tip into the local tip
+is conflict-free and yields the local tree unchanged, whether or not origin's
+commits include merges. That is the shape a rebased PR branch leaves. The
+check compares content, not `git patch-id`, because a rebase that rewrites a
+hunk's context lines changes its patch-id. The verb then writes a commit with
+origin's tip as its first parent, the local tip as its second, and the local
+tree unchanged, moves the branch to it, and pushes again without force. If that
+push fails, the branch moves back to the original local tip. Protected branches
+(`main`, `master`, `develop`, `epic/*`) are never reconciled. The check uses
+`git merge-tree --write-tree`, so recovery needs git 2.38 or later; on an older
+git a rejected push exits 3 with outcome `unreconciled`. A criss-cross history
+(more than one merge base) is a fork even when the trees match.
+
+| Exit | Meaning                                                                                            |
+| ---- | -------------------------------------------------------------------------------------------------- |
+| 0    | Pushed. A recovery prints `[self-fork-recovered] origin/<b> <old>..<new>` (stderr under `--json`). |
+| 1    | A failure that was not a rejection; git's stderr is passed through. Origin is untouched.           |
+| 3    | A rejected push that was not reconciled: `[branch-forked] PUSH REJECTED: …`. Origin is untouched.  |
+
+Exit 3 has two `--json` outcomes. `forked` is a genuine fork, listing the
+origin-only SHAs, or a recovery push that lost a race with origin. `unreconciled`
+means the check could not run or declined, so whether origin carries work is
+unknown.
+
+The scheduler's branch-fork pre-flight applies the same recovery before it
+blocks a stage. A run that still ends `branch_forked` has its local tip pinned
+at `refs/nightgauge/stranded/<issue>` before worktree and branch cleanup. The
+ref is outside `refs/heads/`, so cleanup and `git gc` keep it, and the Action
+Center card names the ref and the SHA.
 
 ### Worktree Reclamation (Issue #110)
 
@@ -3123,6 +3200,48 @@ A program issue closed before #2574 carries no marker. Re-run
 accepted for compatibility, so items it validated keep releasing dependents.
 The hook never writes it and reports `present` for such an issue; an untrusted
 copy is ignored like any pasted marker.
+
+### PR Stage Runners
+
+`nightgauge pr-stage` is how the extension reaches the deterministic pr-create and
+pr-merge runners. See [PR_MERGE_STAGE.md](PR_MERGE_STAGE.md).
+
+```bash
+# Run a stage
+nightgauge pr-stage create <issue> --repo owner/name [--workdir W] [--json]
+nightgauge pr-stage merge <issue> [--workdir W] [--json]
+
+# The time budget derived from pipeline.merge_queue.wait_timeout
+nightgauge pr-stage budget [--workdir W] [--json]
+
+# The merge-queue wait recorded for the issue since a Unix-ms instant (#2770);
+# the wall-clock budget leaves it out. --json prints {"excluded_ms": n}
+nightgauge pr-stage queue-wait <issue> --since-ms <ms> [--workdir W] [--json]
+
+# The PR title, capped at 72 characters; the fallback note goes to stderr
+nightgauge pr-stage title <issue> [--workdir W]
+
+# The enqueue review gate; files open findings; read `proceed` from the JSON
+nightgauge pr-stage review-gate <issue> [--workdir W] [--json]
+
+# Open or close a review-fix round; `begin` refuses past the cap of two
+nightgauge pr-stage review-round begin <issue> [--workdir W]
+nightgauge pr-stage review-round end <issue> [--workdir W]
+
+# Whether a re-dispatch can resume at feature-validate, restoring preserved work
+nightgauge pr-stage resume-point <issue> [--workdir W]
+
+# Run conflict recovery for a refused pr-merge; read `outcome`, not the exit code
+nightgauge pr-stage recover <issue> --reason <text> [--workdir W] [--json]
+```
+
+`pr-stage recover` reports one of four outcomes:
+
+- `recovered`: recovery landed the merge.
+- `rewind`: re-dispatch feature-dev on the same branch using `backtrack_signal`, at most
+  `max_dev_redispatch` times.
+- `escalated`: recovery could not resolve the conflict; `conflicting_files` names the files.
+- `unmatched`: no recovery action applies, or conflict recovery is disabled.
 
 ### PR Operations
 
@@ -4428,8 +4547,66 @@ Each failure entry:
 
 `failure_type` values: `"format"` | `"lint"` | `"typecheck"` | `"build"` | `"test"` | `"unknown"`
 
-Used by `skills/nightgauge-feature-dev/SKILL.md` Phase 6.4 and
-`skills/nightgauge-feature-validate/SKILL.md` Phase 2.5.1.
+`ci discover-commands` is used by `skills/nightgauge-feature-validate/SKILL.md`
+Phase 2.5.1.
+
+#### `review prepare`, `review run` and `review record`
+
+The deterministic half of feature-validate's independent review (#2839). See
+[PR_REVIEW_PASSES.md](PR_REVIEW_PASSES.md).
+
+```bash
+nightgauge review prepare --issue N --json
+nightgauge review run --issue N
+nightgauge review record --issue N --tree T --findings F --started-at S
+```
+
+`prepare` returns `disabled`, a stored verdict (`reusable`, whose row it restores
+for a fresh worktree), `cap_reached` (with the last catch's findings in `result`
+and a ledger record naming the worktree, #2865), or a bundle by path. The bundle is
+`.nightgauge/review/<N>-*`: inside the workspace, so every adapter reaches it with
+no grant, and ignored, so it does not move the tree. `prepare` exits non-zero
+where git does not confirm that, and removes the issue's earlier bundles. The
+review's rules are the binary's embedded `internal/review/passes.md`, written into
+the bundle. `run` spawns one headless reviewer through the stage's adapter with
+`Read,Glob,Grep,Write`, and logs to `review-<N>-<unix>.log` in the clone's logs
+directory, where it outlives the bundle. `record`
+validates the findings and prints `{verdict, summary, counts, fix, discovered}`.
+Each finished round replaces the records of `producer:independent-review` in the
+capture with its own `discovered`, so only the last finished round is filed.
+Findings for a tree that moved, a missing or rejected file and a failed spawn all
+record `catch` with no ledger event, so the next attempt reviews again. Outcomes
+live in `gate-runs.jsonl` as kind `review`, which the local-gate answers ignore.
+
+#### `ci gate-status`, `ci gate-run` and `ci gate-record`
+
+One tree-keyed ledger, `gate-runs.jsonl` in the pipeline state directory, counts
+full gates and reuses a pass (#2784). `scripts/ci-local.sh` and feature-validate
+Phase 2.5 go through these verbs; nothing writes the file by path.
+
+```bash
+nightgauge ci gate-status --kind local-gate --json
+nightgauge ci gate-run
+RUN=$(nightgauge ci gate-record --event start --kind parity --tree "$TREE" --full)
+nightgauge ci gate-record --event finish --run-id "$RUN" --kind parity --tree "$TREE" \
+  --verdict pass --full --seconds 120
+```
+
+`gate-status` prints `reusable`, `reason`, `tree`, `gate_command`,
+`gate_records_itself`, and `passed_stage`, `passed_at` and `passed_seconds` when
+reusable, and `gate_error` when a declared gate fails validation. `gate_command`
+renders the repository's `local_gate`, else `bash scripts/ci-local.sh` when that
+script exists. It is for display and is never executed: arguments may hold shell
+metacharacters. `gate-run` runs each step as an argv, stops at the first failure,
+and fails on a `gate_error` or a repository with no gate.
+
+A pass is reusable only when it was full, the tree held still for the whole run,
+and no later failure or infrastructure stop landed on that tree. A `local-gate`
+pass satisfies both kinds. A `parity` pass satisfies only `parity`, because the
+discovered commands omit the repository's full test suite. Anything the ledger
+cannot prove means run the gate. Issue and stage come from
+`NIGHTGAUGE_ISSUE_NUMBER` and `NIGHTGAUGE_STAGE`, falling back to the branch for
+the issue.
 
 ---
 
@@ -5000,7 +5177,9 @@ which Claude Code reports as a _non-blocking_ error — the #354 shape exactly.
 Two rules, and one test that enforces them:
 
 - **stdout** carries only the hook's JSON. `guard.sh` diagnostics
-  (`[hook-skipped]`, `[hook-blocked]`, `[stale-binary]`) never go there.
+  (`[hook-skipped]`, `[hook-denied]`, `[stale-binary]`) never go there. The
+  `announce` and `gate` missing-binary policies print hook JSON there, a
+  `systemMessage` or a PreToolUse deny, and nothing else (#2765).
 - **stderr is not a free channel either.** The Claude CLI surfaces hook stderr
   to the parent agent as a `stop-hook-error` notification regardless of exit
   code, and those notifications have caused agents to abort turns (#3262). So
@@ -5962,6 +6141,20 @@ computes hit rates. Output is deterministically sorted by gate name.
 ]
 ```
 
+### Inquiry Scorecard (Issue #2911)
+
+```bash
+nightgauge inquiry scorecard                 # human summary, platform default window
+nightgauge inquiry scorecard --window 7d --json
+```
+
+Reads the platform's inquiry scorecard (`GET /v1/inquiry/scorecard`) through
+the running daemon, since the route takes a signed-in session and only the
+daemon holds one. `--json` prints the platform's object unchanged; the summary
+formats its numbers and computes none. Exit codes: `0` read (or no answers in
+the window), `1` platform error, `3` no daemon reachable, `4` no platform
+configured, `5` not signed in.
+
 ### API Usage — The GitHub Request Ledger (Issue #843, always-on in #1347)
 
 ```bash
@@ -6030,6 +6223,17 @@ Action Center card) attributes GraphQL alone; `api-usage --resource graphql`
 is how a script asks for the same thing, and it includes `graphql_mutation`
 because mutations bill to the same pool. The human report prints an unfiltered
 per-resource table instead, which is honest because it labels each pool.
+
+**Never sum parallel buckets.** One process can draw from two buckets of the
+same resource — the same identity with different `reset` windows, or two
+identities. Cost is the drop in `remaining` within one identity + resource +
+reset bucket; a request in a bucket with no prior observation (a new reset or
+identity) costs 0, so the gap between two buckets is never booked as spend
+(#2692). Each bucket's drain is its high minus low observed `remaining`, which
+is correct even for records an older writer priced across buckets. The human
+report and `--budget` list one row per bucket (identity, resource, reset,
+drain, low, limit, calls) against that bucket's own `limit`, and `--json`
+carries them as `buckets`.
 
 **Read the whole SET, not the live file.** The window anyone opens this report
 for is the busy one, and a busy hour is the hour that rotates: a reader that
@@ -8559,6 +8763,7 @@ nightgauge config show --key autonomous --json
 ```bash
 nightgauge config init --owner <login> [--owner-type org|user] [--repo <name>] \
   [--project <N>] [--out <path>] [--force] [--no-fetch] [--json]
+nightgauge config init --detect [--owner-type org|user] [--out <path>] [--force] [--json]
 ```
 
 Renders the canonical `.nightgauge/config.yaml` template (audit row
@@ -8577,12 +8782,19 @@ parser.
   `internal/github.ProjectService.SnapshotFields` cache, substitute the
   discovered project ID + Status/Priority/Size field IDs, and emit a
   fully-populated config.
+- **Detect** (`--detect`): take the owner and repository from the `origin`
+  remote and write a config with no project linked (`number: 0`, an empty
+  `id`, no `fields` block). This is the only offline form that loads
+  (`<PROJECT_NUMBER>` does not parse as an integer); the VS Code Initialize
+  Repository command uses it. It reads git only and makes no GitHub query. With
+  no GitHub `origin` it fails and writes nothing. Refuses `--owner`, `--repo`
+  and `--project`.
 
 **Flags**:
 
 | Flag              | Default                        | Behavior                                                                        |
 | ----------------- | ------------------------------ | ------------------------------------------------------------------------------- |
-| `--owner <login>` | _required_                     | GitHub project owner (org or user login)                                        |
+| `--owner <login>` | _required_ without `--detect`  | GitHub project owner (org or user login)                                        |
 | `--owner-type`    | `org`                          | `org` or `user` — must match the project's owner type                           |
 | `--repo <name>`   | _empty_                        | Default repo name; empty emits the `<REPO_NAME>` placeholder                    |
 | `--project <N>`   | `0`                            | Project V2 number; `0` emits placeholders for every project ID                  |
@@ -8590,6 +8802,7 @@ parser.
 | `--force`         | `false`                        | Overwrite an existing file at `--out`                                           |
 | `--no-fetch`      | `false`                        | Skip GitHub queries even when `--project` is set; emit field-ID placeholders    |
 | `--json`          | `false`                        | After writing, print `{"path":"...","wrote":true}` to stdout (machine-readable) |
+| `--detect`        | `false`                        | Derive owner and repo from `origin`; write a loadable config with no project    |
 
 **Ignore rules**: when `--out` is a `.nightgauge/config.yaml`, the verb also
 ensures the `.nightgauge/` ignore rules in that repository (also when it

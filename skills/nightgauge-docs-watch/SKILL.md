@@ -34,12 +34,12 @@ Nightgauge pipeline.
 
 ## Invocation
 
-| Tool        | Command                                                |
-| ----------- | ------------------------------------------------------ |
-| Claude Code | `/nightgauge:docs-watch [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                      |
-| Cursor      | Run via Agent Skills or direct SKILL.md                |
-| Standalone  | `claude --skill skills/nightgauge-docs-watch/SKILL.md` |
+| Tool        | Command                                 |
+| ----------- | --------------------------------------- |
+| Claude Code | `/nightgauge:docs-watch [options]`      |
+| Copilot     | Invoke via Agent Skills extension       |
+| Cursor      | Run via Agent Skills or direct SKILL.md |
+| Headless    | `claude -p "/nightgauge:docs-watch"`    |
 
 ## Arguments
 

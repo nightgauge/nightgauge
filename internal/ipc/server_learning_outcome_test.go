@@ -31,6 +31,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -904,7 +905,7 @@ func TestLearningOutcomeFor_FromCapturedFailedRunRecord(t *testing.T) {
 // every future caller.
 func TestOutcomeDecision_ThreeDistinctStates(t *testing.T) {
 	seen := map[string]outcomeDecision{}
-	for _, d := range []outcomeDecision{outcomeRecord, outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt} {
+	for _, d := range []outcomeDecision{outcomeRecord, outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt, outcomeSkipGatePluginMissing, outcomeSkipAwaitingApproval} {
 		name := d.String()
 		if name == "" || name == "unset" {
 			t.Errorf("decision %d has no distinct name (%q)", int(d), name)
@@ -944,6 +945,12 @@ func TestLearningOutcomeFor_SkipVerdictsFromRecordFields(t *testing.T) {
 	envhalt.TerminalFailureKind = orchestrator.TerminalKindEnvironmentHalt
 	if _, d := learningOutcomeFor(envhalt, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeSkipEnvironmentHalt {
 		t.Errorf("environment-halt record: decision = %s, want %s", d, outcomeSkipEnvironmentHalt)
+	}
+
+	gateStop := base
+	gateStop.TerminalFailureKind = orchestrator.TerminalKindGatePluginMissing
+	if _, d := learningOutcomeFor(gateStop, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeSkipGatePluginMissing {
+		t.Errorf("gate-plugin-missing record: decision = %s, want %s", d, outcomeSkipGatePluginMissing)
 	}
 }
 
@@ -1060,5 +1067,47 @@ func TestLearningOutcomeFor_RecordsModelLabelOverride(t *testing.T) {
 	}
 	if p := outcomePredictionFrom(forced); p.ModelOverrideSource != "label" || p.ModelOverrideLabel != "model:pin-sonnet" {
 		t.Errorf("run-record projection dropped the override: %+v", p)
+	}
+}
+
+// #2756: the record an architecture-approval hold sends to telemetry is
+// "cancelled" with outcome_type "awaiting_approval", it is kept out of the
+// learning corpus, and a real failure is still a recorded "failed".
+func TestArchitectureApprovalHold_NonFailureRecord(t *testing.T) {
+	base := loadCapturedRunRecord(t, "run-record-failed.json")
+
+	held := base
+	held.Outcome = "failed"
+	held.OutcomeType = ""
+	held.TerminalFailureKind = orchestrator.TerminalKindArchitectureApprovalRequired
+	orchestrator.ApplyNonFailureOutcome(&held)
+
+	wire, err := platform.V2RunRecordToExecutionHistoryRunRecord(held, platform.ExecutionHistoryMapperInput{Repo: "acme/widget"})
+	if err != nil {
+		t.Fatalf("map held record: %v", err)
+	}
+	if wire.Outcome != "cancelled" {
+		t.Errorf("telemetry outcome = %q, want cancelled", wire.Outcome)
+	}
+	if wire.OutcomeType == nil || *wire.OutcomeType != orchestrator.OutcomeTypeAwaitingApproval {
+		t.Errorf("telemetry outcomeType = %v, want %q", wire.OutcomeType, orchestrator.OutcomeTypeAwaitingApproval)
+	}
+	if held.TerminalFailureKind != orchestrator.TerminalKindArchitectureApprovalRequired {
+		t.Errorf("terminal kind dropped: %q", held.TerminalFailureKind)
+	}
+	if _, d := learningOutcomeFor(held, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeSkipAwaitingApproval {
+		t.Errorf("held record: decision = %s, want %s", d, outcomeSkipAwaitingApproval)
+	}
+
+	failed := base
+	failed.Outcome = "failed"
+	failed.OutcomeType = ""
+	failed.TerminalFailureKind = orchestrator.TerminalKindSubagentCrash
+	orchestrator.ApplyNonFailureOutcome(&failed)
+	if failed.Outcome != "failed" || failed.OutcomeType != "" {
+		t.Errorf("real failure rewritten: outcome=%q type=%q", failed.Outcome, failed.OutcomeType)
+	}
+	if _, d := learningOutcomeFor(failed, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeRecord {
+		t.Errorf("real failure: decision = %s, want %s", d, outcomeRecord)
 	}
 }

@@ -117,3 +117,31 @@ func TestDispatchedPRResumeIndex(t *testing.T) {
 		})
 	}
 }
+
+// TestDispatchedPRResumeIndex_LocalFileDoesNotOutrankForge (#2878): pr-{N}.json
+// outlives the merge, so it resumes only a PR the forge confirms OPEN.
+func TestDispatchedPRResumeIndex_LocalFileDoesNotOutrankForge(t *testing.T) {
+	cases := []struct {
+		name    string
+		view    string
+		wantIdx int
+	}{
+		{"merged PR", `{"state":"MERGED","headRefName":"feat/7-x"}`, 0},
+		{"open PR", `{"state":"OPEN","headRefName":"feat/7-x"}`, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := layouttest.Repo(t)
+			path := pipelineStatePath(root, "pr-7.json")
+			if err := atomicWriteFile(path, []byte(`{"issue_number":7,"pr_number":42,"status":"open"}`)); err != nil {
+				t.Fatal(err)
+			}
+			stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+				return []byte(tc.view), nil
+			})
+			if got := dispatchedPRResumeIndex(context.Background(), resumeStages(), root, "acme/app", 7, 42); got != tc.wantIdx {
+				t.Fatalf("index = %d, want %d", got, tc.wantIdx)
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
@@ -81,6 +82,11 @@ func TestStrandedFollowUpPRs(t *testing.T) {
 		{"open parent is not stranded", strandedPR(10, "feat/5-x", ""), map[int]string{5: "OPEN"}, 0},
 		{"body closes an open issue", strandedPR(11, "feat/5-x", "Closes #7"),
 			map[int]string{5: "CLOSED", 7: "OPEN"}, 0},
+		{"body closes an open issue by URL", strandedPR(17, "feat/5-x", "Closes https://github.com/o/r/issues/7"),
+			map[int]string{5: "CLOSED", 7: "OPEN"}, 0},
+		{"another repository's open #7 lands nothing here", strandedPR(18, "feat/5-x",
+			"Closes https://github.com/other/repo/issues/7\nFixes other/repo#7"),
+			map[int]string{5: "CLOSED", 7: "OPEN"}, 1},
 		{"body closes a closed issue", strandedPR(12, "feat/5-x", "Fixes #5"), map[int]string{5: "CLOSED"}, 1},
 		{"fork PR is never a candidate", func() forge.OpenPRSummary {
 			pr := strandedPR(14, "feat/5-x", "")
@@ -218,5 +224,100 @@ func TestStrandedFollowUpPRs_BoardFailureIsRetried(t *testing.T) {
 	}
 	if len(f.filed) != 1 || len(f.boarded) != 1 || f.boarded[0] != 9000 {
 		t.Fatalf("filed = %d, boarded = %v: the next pass must board the issue it already filed", len(f.filed), f.boarded)
+	}
+}
+
+// strandedForge is the forge the real filing path uses: GraphQL for the
+// repository id, Issues() for labels and CreateIssue. It has no GraphQL
+// surface; strandedGQLForge adds one.
+type strandedForge struct {
+	forge.ForgeClient
+	issues *strandedIssues
+}
+
+func (f *strandedForge) Issues() forge.IssueService { return f.issues }
+
+// Board and Project answer nil so boardcache.WrapClient can wrap the fake
+// without a board behind it.
+func (f *strandedForge) Board() forge.BoardService     { return nil }
+func (f *strandedForge) Project() forge.ProjectService { return nil }
+
+type strandedGQLForge struct {
+	strandedForge
+	queries int
+}
+
+func (f *strandedGQLForge) ExecuteGraphQL(context.Context, string, map[string]interface{}) ([]byte, error) {
+	f.queries++
+	return []byte(`{"data":{"repository":{"id":"R_repo"}}}`), nil
+}
+
+type strandedIssues struct {
+	forge.IssueService
+	createdIn []string
+}
+
+func (s *strandedIssues) GetRepoLabels(context.Context, string, string) (map[string]string, error) {
+	return map[string]string{"bug": "L_bug"}, nil
+}
+
+func (s *strandedIssues) CreateIssue(_ context.Context, repoID, title, body string, _ []string) (*forgetypes.Issue, error) {
+	s.createdIn = append(s.createdIn, repoID)
+	return &forgetypes.Issue{Number: 9100, Title: title, Body: body}, nil
+}
+
+// TestStrandedFollowUpPRs_FilesThroughSharedReadsWrap runs the producer's own
+// filing path through the client the sweep passes it: NewSharedReads().Wrap
+// over boardcache.WrapClient, both of which embed only forge.ForgeClient
+// (#2684). The direct wrap is kept as a second composition.
+func TestStrandedFollowUpPRs_FilesThroughSharedReadsWrap(t *testing.T) {
+	newProducer := func() *StrandedFollowUpPRs {
+		f := &strandedFake{
+			prs:    []forge.OpenPRSummary{strandedPR(2662, "feat/2655-pr-create", "")},
+			issues: map[int]string{2655: "CLOSED"},
+		}
+		p := f.producer()
+		p.FileTracking = nil // the real path: repository id, labels, CreateIssue
+		return p
+	}
+	compositions := map[string]func(forge.ForgeClient) forge.ForgeClient{
+		"sweep client (shared reads over board cache)": func(c forge.ForgeClient) forge.ForgeClient {
+			return NewSharedReads().Wrap(boardcache.WrapClient(boardcache.New(0), c, "o", 1))
+		},
+		"shared reads only": func(c forge.ForgeClient) forge.ForgeClient {
+			return NewSharedReads().Wrap(c)
+		},
+	}
+
+	for name, wrap := range compositions {
+		t.Run(name+": inner client with GraphQL files the tracking issue", func(t *testing.T) {
+			inner := &strandedGQLForge{strandedForge: strandedForge{issues: &strandedIssues{}}}
+			in := Input{Repo: "o/r", Owner: "o", Name: "r", Forge: wrap(inner)}
+			reqs, err := newProducer().Evaluate(context.Background(), in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inner.queries != 1 {
+				t.Errorf("GraphQL queries through the wrapper = %d, want 1", inner.queries)
+			}
+			if got := inner.issues.createdIn; len(got) != 1 || got[0] != "R_repo" {
+				t.Fatalf("CreateIssue repo ids = %v, want [R_repo]", got)
+			}
+			if len(reqs) != 1 || !strings.Contains(reqs[0].Body, "#9100") {
+				t.Fatalf("card must name the filed tracking issue: %+v", reqs)
+			}
+		})
+
+		t.Run(name+": inner client without GraphQL files nothing", func(t *testing.T) {
+			inner := &strandedForge{issues: &strandedIssues{}}
+			in := Input{Repo: "o/r", Owner: "o", Name: "r", Forge: wrap(inner)}
+			_, err := newProducer().Evaluate(context.Background(), in)
+			if !errors.Is(err, forge.ErrUnsupported) {
+				t.Fatalf("err = %v, want one wrapping forge.ErrUnsupported", err)
+			}
+			if len(inner.issues.createdIn) != 0 {
+				t.Fatalf("filed %v with no GraphQL surface", inner.issues.createdIn)
+			}
+		})
 	}
 }

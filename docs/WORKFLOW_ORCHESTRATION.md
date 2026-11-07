@@ -28,17 +28,17 @@ to the floor.
 
 ### Architecture at a glance
 
-| Concern                          | Owner                                                                       | Notes                                                                                 |
-| -------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Plan the run                     | engine (`selectExecutor` → `WorkflowSpec`)                                  | Always produces a provider-neutral `WorkflowSpec`                                     |
-| Canonical event tree + run-state | `WorkflowEvent` contract + `WorkflowExecutor` journal                       | `schemaVersion` 4 node tree; one append-only journal per run                          |
-| Reference execution              | `SdkFanoutRunner` (`runSdkFanout`)                                          | Universal floor; defines the contract; hard process/concurrency ceiling               |
-| `sdk-fanout` provider execution  | `SdkFanoutExecutors`                                                        | Turns Codex / Gemini / Copilot / OpenAI-compatible into runner bindings               |
-| Accelerated execution            | `adapter.runWorkflow?()`                                                    | Optional offload backend (Claude native Dynamic Workflows, research preview)          |
-| Capability declaration           | `OrchestrationCapability` on `ICliAdapter`                                  | `native-workflow` \| `sdk-fanout` (replaced the dead 4-boolean `AdapterCapabilities`) |
-| Backend resolution + durability  | `WorkflowExecutor`                                                          | Native vs floor, budget, quota gate, journal, cross-process resume                    |
-| Selection / routing              | `PipelineOrchestrator.selectExecutor` + `AutoProviderRouter`                | One selection point; workflow sub-score in the router                                 |
-| Anti-hallucination gating        | `GateMetricsWriter.appendJudgeVerdicts` → Go `FeatureValidateGate.Verify()` | Judge verdicts become gate evidence; zero new Go scaffolding                          |
+| Concern                          | Owner                                                         | Notes                                                                                 |
+| -------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Plan the run                     | engine (`selectExecutor` → `WorkflowSpec`)                    | Always produces a provider-neutral `WorkflowSpec`                                     |
+| Canonical event tree + run-state | `WorkflowEvent` contract + `WorkflowExecutor` journal         | `schemaVersion` 4 node tree; one append-only journal per run                          |
+| Reference execution              | `SdkFanoutRunner` (`runSdkFanout`)                            | Universal floor; defines the contract; hard process/concurrency ceiling               |
+| `sdk-fanout` provider execution  | `SdkFanoutExecutors`                                          | Turns Codex / Gemini / Copilot / OpenAI-compatible into runner bindings               |
+| Accelerated execution            | `adapter.runWorkflow?()`                                      | Optional offload backend (Claude native Dynamic Workflows, research preview)          |
+| Capability declaration           | `OrchestrationCapability` on `ICliAdapter`                    | `native-workflow` \| `sdk-fanout` (replaced the dead 4-boolean `AdapterCapabilities`) |
+| Backend resolution + durability  | `WorkflowExecutor`                                            | Native vs floor, budget, quota gate, journal, cross-process resume                    |
+| Selection / routing              | `PipelineOrchestrator.selectExecutor` + `AutoProviderRouter`  | One selection point; workflow sub-score in the router                                 |
+| Anti-hallucination gating        | SDK `appendJudgeVerdicts` → Go `FeatureValidateGate.Verify()` | Judge verdicts become gate evidence; any failure in the latest attempt trips the gate |
 
 ## The `OrchestrationCapability` seam
 
@@ -356,19 +356,50 @@ authenticated.
 ## Anti-hallucination gating: judge → gate
 
 Adversarial judge verdicts become **deterministic gate evidence** with zero new
-Go scaffolding. `GateMetricsWriter.appendJudgeVerdicts`
-(`packages/nightgauge/src/utils/gateMetricsWriter.ts`) folds the
-`JudgeVerdict` nodes of an orchestrated `feature-validate` run into
+Go scaffolding. The SDK's `appendJudgeVerdicts`
+(`packages/nightgauge-sdk/src/orchestrator/judgeGateMetrics.ts`), called by
+`PipelineOrchestrator.runStageWorkflow` once the stage ends (passed or failed),
+folds the `JudgeVerdict` nodes of an orchestrated `feature-validate` run into
 the checkout's `health/gate-metrics.jsonl`
 (`nightgauge layout path checkout health/gate-metrics.jsonl`) as
-`{ gate_name: "judges", result }` records, which the existing Go
-`FeatureValidateGate.Verify()` loop already consumes. The verdict → result mapping
+`{ gate_name: "judges", result, attempt_id }` records, which the Go
+`FeatureValidateGate.Verify()` loop consumes. The verdict → result mapping
 is **fail-closed**: only an explicit `pass` yields `result: "pass"`; both `fail`
 and `uncertain` yield `result: "fail"` (an unconfirmed claim must not slip past
-the gate), and the Go gate trips on any `result != "pass"`. A failing record
-carries the judge's first-line `rationale` as `error_summary` for triage. The
-writer is non-critical (never throws) and validates each record through a Zod
-schema before writing.
+the gate). Other gates are judged on their latest row per `gate_name` (#2746),
+but `judges` rows are independent critics, not successive verdicts: every record
+one run writes carries the `runId` of the run that owns its judges as its `attempt_id`, so a second fold
+of one run joins the attempt instead of replacing it, and the Go gate trips on
+any `result != "pass"` in the latest attempt. A later attempt replaces an earlier
+one, so a retry can clear a failure, and one judge's pass can never erase
+another's fail. A `judges` row with no `attempt_id`, written when the stream has no single owning
+run, is never superseded. A run interrupted (aborted, timed out or thrown)
+before it returned has judges that never ran, whatever finished: the writer
+records one failing row whose `error_summary` starts with `[judges-interrupted]`,
+so the gate trips instead of reading the partial set as passed. That row carries
+the attempt's own `runId` from the orchestrator (else the sole distinct `runId`
+among the stream's `run` nodes), so a later complete attempt can supersede it;
+with none it has no `attempt_id` and stands. A complete attempt that judged nothing (a
+judge-less workflow run or a single-agent retry) writes one passing row whose
+`error_summary` starts with `[judges-none]` under its own attempt, but only when
+the issue already has a `judges` row and its latest judges attempt holds no
+failure other than a marker, so a retry can clear an earlier marker but never a
+real failing judge. An interrupted run drops judges the abort cut off (status
+`failed`), since the marker already records them.
+The gate does not depend on that close: it also releases a `[judges-interrupted]`
+row once any later row, in file order, records a verdict for a gate other than
+`judges`. In practice that is the `adversarial-review` row the review gate
+records (or a `verify-ui` row), so a retry that records no such row leaves the
+marker standing, which fails closed. Later `judges` rows alone do not, and a marker with no later attempt
+still fails.
+A failing record carries the judge's first-line
+`rationale` as `error_summary` for triage. The writer is non-critical (never
+throws) and writes an attempt's judge rows in one append (an interrupted run's
+marker goes out first, separately): every record must pass the Zod
+schema first, and failures lead the payload, so neither a dropped row nor a torn
+write can leave a passing remainder. Each stage execution mints its own `runId`,
+so a retry is a new attempt. Only this writer may use the name: `AppendGateMetric` and
+`gate record-metric` refuse `judges`.
 
 ## Configuration knobs
 

@@ -63,12 +63,12 @@ that pin existing behavior rather than asserting ideal behavior.
 
 ## Invocation
 
-| Tool        | Command                                                   |
-| ----------- | --------------------------------------------------------- |
-| Claude Code | `/nightgauge:test-scaffold [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                         |
-| Cursor      | Run via Agent Skills or direct SKILL.md                   |
-| Standalone  | `claude --skill skills/nightgauge-test-scaffold/SKILL.md` |
+| Tool        | Command                                 |
+| ----------- | --------------------------------------- |
+| Claude Code | `/nightgauge:test-scaffold [options]`   |
+| Copilot     | Invoke via Agent Skills extension       |
+| Cursor      | Run via Agent Skills or direct SKILL.md |
+| Headless    | `claude -p "/nightgauge:test-scaffold"` |
 
 ## Arguments
 

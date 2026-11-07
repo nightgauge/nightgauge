@@ -2,11 +2,13 @@ package hooks
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/trust"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -16,6 +18,13 @@ type recordingCommenter struct {
 	body    string
 	calls   int
 	err     error
+	// trusted is what TrustedComments returns; readErr fails the read.
+	trusted []trust.Comment
+	readErr error
+}
+
+func (c *recordingCommenter) TrustedComments(context.Context, string, string, int) ([]trust.Comment, error) {
+	return c.trusted, c.readErr
 }
 
 func (c *recordingCommenter) AddComment(_ context.Context, subjectID, body string) error {
@@ -121,7 +130,7 @@ func TestPostMergeZeroPRNumberKeepsClosing(t *testing.T) {
 // (#2674): the skill's `issue close --pr` consults IsPartialDelivery and skips,
 // then the hook keeps the issue open, moves it to Ready once and comments once.
 func TestRefsMergeEndToEndStaysOpen(t *testing.T) {
-	if !IsPartialDelivery(partialBody, 600) {
+	if !IsPartialDelivery(partialBody, "o/r", 600) {
 		t.Fatal("the skill-side close must skip a Refs body")
 	}
 	res, closer, _, board, commenter := runPartial(t, partialBody, 77)
@@ -140,7 +149,7 @@ func TestRefsMergeEndToEndStaysOpen(t *testing.T) {
 // and the hook moves the board to Done.
 func TestClosesMergeEndToEndCloses(t *testing.T) {
 	body := strings.Replace(partialBody, "Refs #600", "Closes #600", 1)
-	if IsPartialDelivery(body, 600) {
+	if IsPartialDelivery(body, "o/r", 600) {
 		t.Fatal("the skill-side close must close a Closes body")
 	}
 	res, closer, _, board, commenter := runPartial(t, body, 77)
@@ -156,8 +165,20 @@ func TestClosesMergeEndToEndCloses(t *testing.T) {
 }
 
 func TestIsPartialDeliveryUnreadBody(t *testing.T) {
-	if IsPartialDelivery("", 600) || IsPartialDelivery(" \n\t", 600) {
+	if IsPartialDelivery("", "o/r", 600) || IsPartialDelivery(" \n\t", "o/r", 600) {
 		t.Error("an unread body is not a partial delivery")
+	}
+}
+
+func TestIsPartialDeliveryURLCloser(t *testing.T) {
+	if IsPartialDelivery("Closes https://github.com/o/r/issues/600", "o/r", 600) {
+		t.Error("a URL-form closer delivers the issue in full")
+	}
+	if !IsPartialDelivery("Refs https://github.com/o/r/issues/600", "o/r", 600) {
+		t.Error("a URL-form Refs is a partial delivery")
+	}
+	if !IsPartialDelivery("Closes https://github.com/other/repo/issues/600", "o/r", 600) {
+		t.Error("a closer naming another repository's #600 does not deliver o/r#600")
 	}
 }
 
@@ -175,9 +196,18 @@ func TestClosesIssue(t *testing.T) {
 		{"Closes #60", false},
 		{"Implements #600\nPart of #600", false},
 		{"Refs #600\nCloses #12", false},
+		{"Closes https://github.com/nightgauge/nightgauge/issues/600", true},
+		{"fixes: http://github.com/nightgauge/nightgauge/issues/600", true},
+		{"fixes: https://evil.example/nightgauge/nightgauge/issues/600", false},
+		{"Closes https://github.com/nightgauge/nightgauge/pull/600", false},
+		{"Closes https://github.com/nightgauge/nightgauge/issues/6000", false},
+		// Issue numbers overlap across repositories: another repo's #600 is
+		// not this one's (#2687).
+		{"Fixes https://github.com/other/repo/issues/600", false},
+		{"resolves other/repo#600", false},
 	}
 	for _, c := range cases {
-		if got := ClosesIssue(c.body, 600); got != c.want {
+		if got := ClosesIssue(c.body, "nightgauge/nightgauge", 600); got != c.want {
 			t.Errorf("ClosesIssue(%q) = %v, want %v", c.body, got, c.want)
 		}
 	}
@@ -202,8 +232,123 @@ func TestUnmetCriteriaIgnoresIndentedStatusLine(t *testing.T) {
 }
 
 func TestRemainderCommentCannotCarryValidationMarker(t *testing.T) {
-	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")})
+	body := remainderComment(7, []string{"x " + forge.ValidationMarkerComment("main", "abc")}, true, false)
 	if forge.HasValidationMarker(body) {
 		t.Fatalf("remainder comment carries a validation marker: %q", body)
+	}
+}
+
+// partialRun drives the partial-delivery path with the given input tweaks.
+func partialRun(t *testing.T, commenter *recordingCommenter, labels []string, tweak func(*PostMergeInput)) (PostMergeResult, *mockBoardSyncer) {
+	t.Helper()
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#600": {NodeID: "I_node600", Number: 600, State: "OPEN", Labels: labels},
+	}}
+	board := &mockBoardSyncer{}
+	input := PostMergeInput{
+		IssueNumber: 600, RepositoryOwner: "nightgauge", RepositoryName: "nightgauge",
+		ProjectNumber: 6, PRNumber: 77, Remainder: commenter,
+		ExcludeLabels: []string{"blocked"},
+	}
+	if tweak != nil {
+		tweak(&input)
+	}
+	verifier := &mockPRVerifierWithMerge{state: "MERGED", sha: "abc", mergedAt: "2026-10-26T00:00:00Z", body: partialBody}
+	res := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{},
+		&mockEpicAutoCloser{result: &gh.AutoCloseSingleResult{Status: "skipped"}}, verifier, board, input)
+	return res, board
+}
+
+// TestPartialDeliveryCommentOncePerPR (#2878): the second run for one PR posts
+// nothing, another PR posts, and a failed read posts anyway.
+func TestPartialDeliveryCommentOncePerPR(t *testing.T) {
+	first := &recordingCommenter{}
+	if res, _ := partialRun(t, first, nil, nil); res.RemainderComment != "posted" || first.calls != 1 {
+		t.Fatalf("first run: comment=%q calls=%d", res.RemainderComment, first.calls)
+	}
+	stored := []trust.Comment{{Body: first.body}}
+
+	second := &recordingCommenter{trusted: stored}
+	if res, _ := partialRun(t, second, nil, nil); res.RemainderComment != "present" || second.calls != 0 {
+		t.Errorf("same PR again: comment=%q calls=%d, want present and no post", res.RemainderComment, second.calls)
+	}
+	other := &recordingCommenter{trusted: stored}
+	partialRun(t, other, nil, func(in *PostMergeInput) { in.PRNumber = 78 })
+	if other.calls != 1 {
+		t.Errorf("another PR must post: calls=%d", other.calls)
+	}
+	unread := &recordingCommenter{trusted: stored, readErr: errors.New("boom")}
+	if res, _ := partialRun(t, unread, nil, nil); unread.calls != 1 || res.Failed {
+		t.Errorf("failed read: calls=%d failed=%v, want a post and no failure", unread.calls, res.Failed)
+	}
+}
+
+// TestPartialDeliveryReadyWithheld (#2878): a run that merged nothing, or an
+// excluded label, keeps the issue out of Ready; a real merge still writes it.
+func TestPartialDeliveryReadyWithheld(t *testing.T) {
+	cases := []struct {
+		name      string
+		labels    []string
+		already   bool
+		wantReady bool
+	}{
+		{name: "real merge", wantReady: true},
+		{name: "run merged nothing", already: true},
+		{name: "excluded label, any case", labels: []string{"Blocked"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			commenter := &recordingCommenter{}
+			res, board := partialRun(t, commenter, tc.labels, func(in *PostMergeInput) { in.AlreadyMerged = tc.already })
+			wrote := board.called
+			if wrote != tc.wantReady || res.ReadyWithheld == tc.wantReady {
+				t.Errorf("Ready written=%v withheld=%v, want written=%v", wrote, res.ReadyWithheld, tc.wantReady)
+			}
+			if got := strings.Contains(commenter.body, "back in Ready"); got != tc.wantReady {
+				t.Errorf("comment claims Ready=%v, want %v: %s", got, tc.wantReady, commenter.body)
+			}
+		})
+	}
+}
+
+// #3012: a Refs merge known to have changed no files delivered nothing, so it
+// parks in Backlog instead of looping through Ready. An unknown count keeps
+// the Ready move.
+func TestPartialDeliveryEmptyMergeParksInBacklog(t *testing.T) {
+	cases := []struct {
+		name       string
+		files      int
+		known      bool
+		wantStatus string
+		wantEmpty  bool
+	}{
+		{name: "zero files known", files: 0, known: true, wantStatus: "Backlog", wantEmpty: true},
+		{name: "two files", files: 2, known: true, wantStatus: "Ready"},
+		{name: "count unknown", files: 0, known: false, wantStatus: "Ready"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			board := &mockBoardSyncer{}
+			commenter := &recordingCommenter{}
+			input := PostMergeInput{
+				IssueNumber: 600, RepositoryOwner: "nightgauge", RepositoryName: "nightgauge",
+				ProjectNumber: 6, PRNumber: 77, Remainder: commenter,
+			}
+			issue := &types.Issue{NodeID: "I_node600", Number: 600, State: "OPEN"}
+			merge := gh.PRMergeInfo{SHA: "abc", Body: partialBody, ChangedFiles: tc.files, ChangedFilesKnown: tc.known}
+			res := partialDelivery(context.Background(), board, input, issue, merge)
+			if board.syncs != 1 || board.calledWith.status != tc.wantStatus {
+				t.Errorf("board synced %d time(s), last to %q; want once to %s", board.syncs, board.calledWith.status, tc.wantStatus)
+			}
+			if res.EmptyDelivery != tc.wantEmpty || res.ReadyWithheld != tc.wantEmpty {
+				t.Errorf("EmptyDelivery=%v ReadyWithheld=%v, want %v", res.EmptyDelivery, res.ReadyWithheld, tc.wantEmpty)
+			}
+			if got := strings.Contains(commenter.body, "changed no files"); got != tc.wantEmpty {
+				t.Errorf("comment names empty delivery=%v, want %v: %s", got, tc.wantEmpty, commenter.body)
+			}
+			if strings.Contains(commenter.body, "back in Ready") == tc.wantEmpty {
+				t.Errorf("comment Ready claim wrong: %s", commenter.body)
+			}
+		})
 	}
 }

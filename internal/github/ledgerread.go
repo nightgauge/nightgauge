@@ -287,6 +287,80 @@ type LedgerWindow struct {
 	// evidence. ExhaustedIdentity is the same for the exhaustion.
 	LowWaterIdentity  string `json:"low_water_identity,omitempty"`
 	ExhaustedIdentity string `json:"exhausted_identity,omitempty"`
+	// Buckets is one entry per rate-limit bucket (identity, resource, reset)
+	// seen in the window (#2692). Parallel buckets each count down from their
+	// own ceiling, so budget is judged per bucket, never summed against one
+	// limit. Sorted by identity, resource, reset.
+	Buckets []LedgerBucket `json:"buckets"`
+}
+
+// LedgerBucket is one rate-limit bucket's activity in a window.
+//
+// Drain is High - Low over records whose header was observed. It comes from
+// GitHub's own Remaining, so it is correct even for records whose Cost was
+// inflated by a writer that priced across buckets (before #2692).
+type LedgerBucket struct {
+	Identity string `json:"identity"`
+	Resource string `json:"resource"`
+	Reset    int64  `json:"reset,omitempty"`
+	// Limit is the bucket's ceiling; GraphQLHourlyLimit when no record in the
+	// window carried one.
+	Limit int `json:"limit"`
+	Calls int `json:"calls"`
+	High  int `json:"high"`
+	Low   int `json:"low"`
+	Drain int `json:"drain"`
+	// observed is false until a record with a real Remaining is seen.
+	observed bool
+}
+
+// ProjectedPerHour projects the bucket's drain to an hourly rate over the
+// overlap of [since, until] with the bucket's hour [reset-1h, reset] (the
+// whole window when Reset is unknown), dividing by at least
+// bucketProjectionFloor. Returns 0 under one minute, the same artefact guard
+// as PointsPerHour.
+func (b LedgerBucket) ProjectedPerHour(since, until time.Time) float64 {
+	from, to := since, until
+	if b.Reset != 0 {
+		end := time.Unix(b.Reset, 0)
+		if start := end.Add(-time.Hour); start.After(from) {
+			from = start
+		}
+		if end.Before(to) {
+			to = end
+		}
+	}
+	d := to.Sub(from)
+	if d < time.Minute {
+		return 0
+	}
+	// A bucket that reset minutes ago holds only its startup burst; scaling
+	// that slice to an hour invents a rate (1600 points in 5 min reads as
+	// 19200/h). Divide by at least bucketProjectionFloor instead.
+	if d < bucketProjectionFloor {
+		d = bucketProjectionFloor
+	}
+	return float64(b.Drain) / d.Hours()
+}
+
+// bucketProjectionFloor is the shortest span a bucket's drain is projected
+// over. Shorter overlaps are startup bursts, not a sustained rate.
+const bucketProjectionFloor = 45 * time.Minute
+
+// HottestBucket returns the GraphQL bucket whose projection is the largest
+// fraction of its own limit, and false when there is none.
+func (w LedgerWindow) HottestBucket() (LedgerBucket, bool) {
+	var best LedgerBucket
+	bestFrac, found := -1.0, false
+	for _, b := range w.Buckets {
+		if !isGraphQLResource(b.Resource) || b.Limit <= 0 {
+			continue
+		}
+		if f := b.ProjectedPerHour(w.Since, w.Until) / float64(b.Limit); f > bestFrac {
+			best, bestFrac, found = b, f, true
+		}
+	}
+	return best, found
 }
 
 // GraphQLResource is the X-RateLimit-Resource value GitHub bills GraphQL
@@ -308,10 +382,12 @@ func (w LedgerWindow) PointsPerHour() float64 {
 	return float64(w.Points) / d.Hours()
 }
 
-// OverIdleBudget reports whether the projected hourly spend is past the point
-// where one workspace can exhaust the GraphQL quota by itself.
+// OverIdleBudget reports whether some GraphQL bucket's projected hourly drain
+// is past IdleBudgetWarnFraction of that bucket's own limit (#2692). Parallel
+// buckets are judged separately, never summed against one limit.
 func (w LedgerWindow) OverIdleBudget() bool {
-	return w.PointsPerHour() > GraphQLHourlyLimit*IdleBudgetWarnFraction
+	b, ok := w.HottestBucket()
+	return ok && b.ProjectedPerHour(w.Since, w.Until) > float64(b.Limit)*IdleBudgetWarnFraction
 }
 
 // SummarizeWindow aggregates records into the window [since, until].
@@ -327,6 +403,7 @@ func SummarizeWindow(recs []APILedgerRecord, since, until time.Time) LedgerWindo
 		LowWaterRemaining: -1,
 	}
 	byCaller := map[string]*LedgerCallerSpend{}
+	buckets := map[ledgerBucketKey]*LedgerBucket{}
 	for _, r := range recs {
 		ts, err := time.Parse(time.RFC3339Nano, r.TS)
 		if err == nil {
@@ -349,6 +426,27 @@ func SummarizeWindow(recs []APILedgerRecord, since, until time.Time) LedgerWindo
 			resource = "unknown"
 		}
 		w.PointsByResource[resource] += r.Cost
+		bk := ledgerBucketKey{Identity: LedgerIdentity(r.Identity), Kind: resource, Reset: r.Reset}
+		b, ok := buckets[bk]
+		if !ok {
+			b = &LedgerBucket{Identity: bk.Identity, Resource: resource, Reset: r.Reset}
+			buckets[bk] = b
+		}
+		b.Calls++
+		if r.Limit > b.Limit {
+			b.Limit = r.Limit
+		}
+		// Same acceptance rule as the low-water mark below.
+		if r.HeaderObserved || r.Remaining > 0 || r.Cost > 0 {
+			if !b.observed || r.Remaining > b.High {
+				b.High = r.Remaining
+			}
+			if !b.observed || r.Remaining < b.Low {
+				b.Low = r.Remaining
+			}
+			b.observed = true
+			b.Drain = b.High - b.Low
+		}
 		isGraphQL := isGraphQLResource(resource)
 		if isGraphQL {
 			w.GraphQLCalls++
@@ -407,6 +505,22 @@ func SummarizeWindow(recs []APILedgerRecord, since, until time.Time) LedgerWindo
 	for _, c := range byCaller {
 		w.TopCallers = append(w.TopCallers, *c)
 	}
+	for _, b := range buckets {
+		if b.Limit == 0 {
+			b.Limit = GraphQLHourlyLimit
+		}
+		w.Buckets = append(w.Buckets, *b)
+	}
+	sort.Slice(w.Buckets, func(i, j int) bool {
+		a, b := w.Buckets[i], w.Buckets[j]
+		if a.Identity != b.Identity {
+			return a.Identity < b.Identity
+		}
+		if a.Resource != b.Resource {
+			return a.Resource < b.Resource
+		}
+		return a.Reset < b.Reset
+	})
 	sort.Slice(w.TopCallers, func(i, j int) bool {
 		a, b := w.TopCallers[i], w.TopCallers[j]
 		if a.Points != b.Points {

@@ -153,6 +153,7 @@ func flagContractOptions(models, prompts []string) []RunOptions {
 	opts = expandOptions(opts, []float64{0, 1.5}, func(o *RunOptions, v float64) { o.CostBudget = v })
 	opts = expandOptions(opts, []string{"", "/work/nightgauge-issue-1617"}, func(o *RunOptions, v string) { o.WorktreeDir = v })
 	opts = expandOptions(opts, []string{"", "ses_1617abc"}, func(o *RunOptions, v string) { o.ResumeSessionID = v })
+	opts = expandOptions(opts, []string{"", "/bundle/dist/claude-plugins/nightgauge"}, func(o *RunOptions, v string) { o.ClaudePluginDir = v })
 	return expandOptions(opts, prompts, func(o *RunOptions, v string) { o.Prompt = v })
 }
 
@@ -172,6 +173,7 @@ func describeOptions(o RunOptions) string {
 	add(o.CostBudget != 0, "CostBudget=%g", o.CostBudget)
 	add(o.WorktreeDir != "", "WorktreeDir=%s", o.WorktreeDir)
 	add(o.ResumeSessionID != "", "ResumeSessionID=%s", o.ResumeSessionID)
+	add(o.ClaudePluginDir != "", "ClaudePluginDir=%s", o.ClaudePluginDir)
 	add(o.Prompt != "", "Prompt=%q", o.Prompt)
 	if len(parts) == 0 {
 		return "zero RunOptions"
@@ -185,7 +187,7 @@ func describeOptions(o RunOptions) string {
 var flagContractVariedFields = map[string]bool{
 	"Model": true, "Effort": true, "MaxTurns": true, "MaxTokens": true,
 	"AllowedTools": true, "CostBudget": true, "WorktreeDir": true,
-	"ResumeSessionID": true, "Prompt": true,
+	"ResumeSessionID": true, "ClaudePluginDir": true, "Prompt": true,
 }
 
 // flagContractFixedFields are the RunOptions fields flagContractOptions sets

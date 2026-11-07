@@ -16,10 +16,14 @@ import {
   primeCloneLayouts,
   refreshCloneLayouts,
 } from "./utils/cloneLayout";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
-import { getStageLabel, killAllActiveProcesses } from "./utils/skillRunner";
+import { getStageLabel, killAllActiveProcesses, setExtensionIsPackaged } from "./utils/skillRunner";
 import { applyPerRepoGitHubTokenEnv } from "./utils/perRepoGitHubTokenEnv";
+import { installBinaryShim, userShimPath } from "./utils/binaryShim";
+import { resolveExtensionBundleRoot } from "./utils/extensionBundle";
 import { CONTEXT_URI_SCHEME } from "./views";
 import { initializeServices, type ExtensionServices } from "./bootstrap/services";
 import { registerAllCommands } from "./commands/register-all";
@@ -60,6 +64,8 @@ let extensionContext: vscode.ExtensionContext | null = null;
  * defined in package.json.
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // Skill root order depends on it, and a stage can render during activation.
+  setExtensionIsPackaged(context.extensionMode === vscode.ExtensionMode.Production);
   extensionContext = context;
   // A new activation is a new platform agent instance (#2395): its
   // registration, heartbeats and deregistration carry a fresh instance id.
@@ -192,6 +198,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.error("Command registration failed", { error: msg, stack });
     vscode.window.showErrorMessage(`Nightgauge command registration failed: ${msg}`);
     throw error;
+  }
+
+  // Link ~/.nightgauge/bin/nightgauge to this bundle's binary so the Claude
+  // plugin hooks and `nightgauge doctor` resolve it from any editor and any
+  // terminal (#2765). Packaged installs only: a development host must not point
+  // the user's shim at a worktree build. Fire-and-forget; never blocks or
+  // fails activation.
+  if (context.extensionMode === vscode.ExtensionMode.Production) {
+    const bundleRoot = resolveExtensionBundleRoot(context.extensionPath);
+    if (bundleRoot) {
+      installBinaryShim({
+        bundledBinary: path.join(bundleRoot, "dist", "bin", "nightgauge"),
+        homeDir: os.homedir(),
+        platform: process.platform,
+      }).then(
+        (result) =>
+          logger.info("Per-user binary shim", { result, shim: userShimPath(os.homedir()) }),
+        (error: unknown) =>
+          logger.warn("Per-user binary shim not written", {
+            error: error instanceof Error ? error.message : String(error),
+          })
+      );
+    }
   }
 
   // Push core disposables to context.subscriptions

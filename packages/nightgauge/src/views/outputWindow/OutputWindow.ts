@@ -558,6 +558,10 @@ export class OutputWindow implements vscode.Disposable {
    * token totals, and derived slot-level status/badge.
    */
   private syncSlotFromState(slotIndex: number, state: PipelineState): void {
+    // A settled slot is final: a late event must not revive it or overwrite
+    // the authoritative final cost (#2785).
+    if (this.state.getSlot(slotIndex)?.completedAt != null) return;
+
     // Per-stage statuses
     for (const [stageName, stageState] of Object.entries(state.stages)) {
       const stage = stageName as PipelineStage;
@@ -590,9 +594,7 @@ export class OutputWindow implements vscode.Disposable {
     }
 
     // Derived slot-level status for the badge
-    const derivedStatus = this.deriveSlotStatus(state);
-    const isTerminal = derivedStatus === "complete" || derivedStatus === "error";
-    this.state.updateSlotStatus(slotIndex, derivedStatus, isTerminal ? Date.now() : undefined);
+    this.state.updateSlotStatus(slotIndex, this.deriveSlotStatus(state));
     this.sendSlotBadgeUpdate(slotIndex);
   }
 
@@ -637,38 +639,17 @@ export class OutputWindow implements vscode.Disposable {
   }
 
   /**
-   * Derive a single slot-level status from all stage statuses in the given state.
+   * Derive a live slot's status from its stage statuses.
    *
-   * Priority: error > running > complete > skipped > pending
+   * Priority: error > running > pending. It never returns `complete`: every
+   * stage boundary leaves no stage running, and absent stages may still come,
+   * so only {@link notifySlotCompleted} ends a run (#2785). `error` carries no
+   * completion stamp because the scheduler may retry the failed stage.
    */
   private deriveSlotStatus(state: PipelineState): StageStatus {
-    let hasRunning = false;
-    let hasError = false;
-    let allDone = true;
-    let anySkipped = false;
-
-    for (const stageState of Object.values(state.stages)) {
-      const s = stageState.status;
-      if (s === "failed") {
-        hasError = true;
-      } else if (s === "running") {
-        hasRunning = true;
-        allDone = false;
-      } else if (s === "complete" || s === "skipped" || s === "deferred") {
-        if (s === "skipped" || s === "deferred") anySkipped = true;
-      } else {
-        allDone = false;
-      }
-    }
-
-    if (hasError) return "error";
-    if (hasRunning) return "running";
-    if (allDone && Object.keys(state.stages).length > 0) {
-      return anySkipped && !Object.values(state.stages).some((s) => s.status === "complete")
-        ? "skipped"
-        : "complete";
-    }
-    return "pending";
+    const statuses = Object.values(state.stages).map((stage) => stage.status);
+    if (statuses.includes("failed")) return "error";
+    return statuses.some((status) => status !== "pending") ? "running" : "pending";
   }
 
   /**
@@ -1220,13 +1201,13 @@ export class OutputWindow implements vscode.Disposable {
    *
    * @param slotIndex  - 0-based slot index
    * @param status     - Terminal status ("complete" or "error")
-   * @param costUsd    - Authoritative final cost in USD (from the pipeline callback)
+   * @param costUsd    - Authoritative final cost in USD; undefined keeps the slot's total
    * @param completedAt - Epoch ms timestamp; defaults to Date.now()
    */
   notifySlotCompleted(
     slotIndex: number,
     status: "complete" | "error",
-    costUsd: number,
+    costUsd: number | undefined,
     completedAt: number = Date.now()
   ): void {
     // Guard: if the slot was removed (e.g., user closed the tab), do nothing —
@@ -1243,7 +1224,7 @@ export class OutputWindow implements vscode.Disposable {
       outputTokens: current.outputTokens,
       cacheReadTokens: current.cacheReadTokens,
       cacheCreationTokens: current.cacheCreationTokens,
-      costUsd,
+      costUsd: costUsd ?? current.costUsd,
     });
 
     // Stamp status and completedAt on the in-memory SlotInfo so any

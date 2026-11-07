@@ -1,6 +1,7 @@
 package recovery
 
 import (
+	"github.com/nightgauge/nightgauge/internal/config"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 )
 
@@ -39,11 +40,19 @@ func Default(workspaceRoot string, prMergeRunner pmstages.PRMergeRunner, prCreat
 	// First-match-wins: conflict ≠ plain BEHIND, so it must precede branch-out-of-
 	// date. When disabled (pipeline.recovery.conflict_recovery.enabled: false), a
 	// conflict falls through to branch-out-of-date / triage.
-	branchOutOfDate := NewBranchOutOfDate(prMergeRunner)
+	// Both CI waits on an updated head share the ordinary pr-merge budget (#2980).
+	cfg, err := config.Load(workspaceRoot)
+	if err != nil {
+		cfg = nil
+	}
+	ciWait := cfg.ResolvePRMergeCIWait()
+	branchOutOfDate := NewBranchOutOfDate(prMergeRunner).WithCIWait(ciWait)
 	if GetConflictRecoveryEnabled(workspaceRoot) {
-		// A merge-queue conflict has no conflict context; the loop rebases
-		// through branch-out-of-date to capture one (#2611).
+		// A merge-queue conflict has no conflict context. The loop first tries a
+		// changelog union (#2841), then rebases through branch-out-of-date to
+		// capture one (#2611).
 		actions = append(actions, NewConflictRecoveryLoop(GetConflictMaxDevRedispatch(workspaceRoot)).
+			WithChangelogUnion(NewChangelogUnionMerge(prMergeRunner).WithCIWait(ciWait)).
 			WithRebaseFallback(branchOutOfDate))
 	}
 

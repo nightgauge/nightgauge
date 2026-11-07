@@ -55,6 +55,16 @@ type sharedClient struct {
 	reads *SharedReads
 }
 
+var _ forge.GraphQLService = (*sharedClient)(nil)
+
+// ExecuteGraphQL forwards the inner client's optional forge.GraphQLService.
+// Embedding only forge.ForgeClient hides it, so without this a producer
+// asserting the surface on the wrapper finds none even when the adapter has
+// one (#2684).
+func (c *sharedClient) ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
+	return forge.ForwardGraphQL(ctx, c.ForgeClient, query, variables)
+}
+
 // Security keeps the inner client's nil — producers test for it to report
 // "no security service" rather than read through a wrapper of nothing.
 func (c *sharedClient) Security() forge.SecurityService {

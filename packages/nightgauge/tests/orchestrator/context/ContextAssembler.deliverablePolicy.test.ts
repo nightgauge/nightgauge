@@ -37,7 +37,10 @@ vi.mock("../../../src/utils/zodErrorFormatter", () => ({
 
 import * as fs from "fs";
 
-import { ContextAssembler } from "../../../src/orchestrator/context/ContextAssembler";
+import {
+  ContextAssembler,
+  DeliverableContractError,
+} from "../../../src/orchestrator/context/ContextAssembler";
 import { canonicalSchemaVersion } from "@nightgauge/sdk";
 
 // Read the contract version from the registry rather than pinning a literal:
@@ -220,5 +223,72 @@ describe("validateStageContextOutput — a healthy deliverable is left alone", (
     const result = await assembler.validateStageContextOutput("feature-dev", 300);
     expect(result.error).toBeNull();
     expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+});
+
+// #3013: a validate artifact whose AC verdicts sit under acceptance_criteria is
+// policy-fatal; the stage is re-asked with the notes, and an unrepaired file is
+// a typed DeliverableContractError (which recovery must not synthesize over).
+describe("validateStageContextOutput — misplaced AC verdicts (#3013)", () => {
+  const misplaced = {
+    schema_version: "2.7",
+    issue_number: 3013,
+    validation_status: "passed",
+    acceptance_criteria: [0, 1, 2, 3, 4].map((index) => ({
+      index,
+      text: `criterion ${index}`,
+      verdict: "met",
+      evidence: "e",
+    })),
+  };
+  const corrected = {
+    schema_version: "2.7",
+    issue_number: 3013,
+    validation_status: "passed",
+    acceptance_criteria_verdicts: [{ index: 0, text: "c", status: "met", evidence: "e" }],
+  };
+  const repair = { enabled: true, max_attempts: 1 };
+
+  async function reask(rewrite: unknown) {
+    const { runStageSkillHeadless } = await import("../../../src/utils/skillRunner");
+    const run = vi.mocked(runStageSkillHeadless);
+    run.mockImplementation(((...args: unknown[]) => {
+      mockReadFileSync.mockReturnValue(JSON.stringify(rewrite) as never);
+      (args[2] as { onComplete: (r: { success: boolean }) => void }).onComplete({
+        success: true,
+      });
+      return { process: {} };
+    }) as never);
+    const { logger } = stage(misplaced);
+    const assembler = new ContextAssembler(logger, () => "/workspace", null, {
+      loadSkillContent: vi.fn().mockReturnValue({ content: "SKILL" }),
+    } as never);
+    const result = await assembler.validateStageContextOutput("feature-validate", 3013, repair);
+    return { result, run };
+  }
+
+  it("re-asks the stage with a prompt naming acceptance_criteria_verdicts", async () => {
+    const { run } = await reask(corrected);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(String(run.mock.calls[0]![10])).toContain("acceptance_criteria_verdicts");
+  });
+
+  it("passes when the rewrite moves the verdicts", async () => {
+    const { result } = await reask(corrected);
+    expect(result.error).toBeNull();
+  });
+
+  it("fails with DeliverableContractError when the rewrite is unchanged", async () => {
+    const { result } = await reask(misplaced);
+    expect(result.error).toBeInstanceOf(DeliverableContractError);
+    expect(result.error!.message).toContain("verdicts_under_wrong_key");
+  });
+
+  it("fails with DeliverableContractError and no re-ask when repair is disabled", async () => {
+    const { runStageSkillHeadless } = await import("../../../src/utils/skillRunner");
+    const { assembler } = stage(misplaced);
+    const result = await assembler.validateStageContextOutput("feature-validate", 3013);
+    expect(result.error).toBeInstanceOf(DeliverableContractError);
+    expect(runStageSkillHeadless).not.toHaveBeenCalled();
   });
 });

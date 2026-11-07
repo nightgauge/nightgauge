@@ -68,6 +68,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/pipeline"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	ibqueue "github.com/nightgauge/nightgauge/internal/queue"
+	"github.com/nightgauge/nightgauge/internal/queuewait"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"github.com/nightgauge/nightgauge/internal/scan"
@@ -873,7 +874,11 @@ func flagValue(cmd *cobra.Command, name string) (string, bool) {
 func resolveTargetFlags(cmd *cobra.Command, cfg *config.Config, workdir string) error {
 	flags := cmd.Flags()
 	if cfg != nil {
-		if !flags.Changed("owner") && cfg.Owner != "" {
+		// `config init --detect` takes its identity from the remote and refuses
+		// --owner, so a configured owner must not read as one the user passed.
+		detect := flags.Lookup("detect")
+		detecting := detect != nil && detect.Changed
+		if !flags.Changed("owner") && cfg.Owner != "" && !detecting {
 			_ = flags.Set("owner", cfg.Owner) // cobra flag.Set never errors for known flags
 		}
 		if !flags.Changed("repo") && cfg.DefaultRepo != "" && cmd.Annotations[repoBackfillAnnotation] == "true" {
@@ -1070,6 +1075,7 @@ func rootCmd() *cobra.Command {
 		exitRecordsCmd(),
 		traceCmd(),
 		attentionCmd(),
+		inquiryCmd(),
 		budgetStatsCmd(),
 		apiUsageCmd(),
 		docsCmd(),
@@ -1077,6 +1083,7 @@ func rootCmd() *cobra.Command {
 		e2eCmd(),
 		formatCmd(),
 		gateCmd(),
+		reviewCmd(),
 		triageCmd(),
 		prStageCmd(),
 		phaseCmd(),
@@ -1665,7 +1672,7 @@ left open for the post-merge hook to return to Ready (#2674).`,
 				if err != nil {
 					return fmt.Errorf("read PR #%d before closing #%d: %w", prNumber, number, err)
 				}
-				if skip, reason := issueCloseSkipReason(merge.Body, number); skip {
+				if skip, reason := issueCloseSkipReason(merge.Body, ownerPart+"/"+repoPart, number); skip {
 					if outputJSON {
 						return printJSON(map[string]interface{}{
 							"issueNumber": number,
@@ -1713,8 +1720,8 @@ left open for the post-merge hook to return to Ready (#2674).`,
 // issueCloseSkipReason decides whether `issue close --pr` leaves the issue
 // open: a PR body that names it without a closing keyword is a partial
 // delivery (#2595, #2674). The predicate is the post-merge hook's own.
-func issueCloseSkipReason(body string, number int) (bool, string) {
-	if hooks.IsPartialDelivery(body, number) {
+func issueCloseSkipReason(body, repo string, number int) (bool, string) {
+	if hooks.IsPartialDelivery(body, repo, number) {
 		return true, "partial_delivery"
 	}
 	return false, ""
@@ -4112,6 +4119,7 @@ func projectSyncStatusCmd() *cobra.Command {
 		owner         string
 		repo          string
 		projectNumber int
+		onlyFrom      string
 		outputJSON    bool
 	)
 
@@ -4124,11 +4132,14 @@ Status is a POSITIONAL argument, not a --status flag.
 
 Valid statuses: backlog, ready, in-progress, in-review, done, blocked, needs-info
 The board's own casing ("In progress", "In review") is accepted and normalized.
-in-review is refused unless an open PR whose head branch names the issue exists.`,
+in-review is refused unless an open PR whose head branch names the issue exists.
+--only-from writes only when the issue currently holds that status; otherwise it
+writes nothing and exits non-zero with a "yielding <status>" error.`,
 		Args: exactStatusArgs("sync-status"),
 		Example: `  nightgauge project sync-status 103 in-progress
   nightgauge project sync-status 103 "In progress"
-  nightgauge project sync-status 103 done --repo nightgauge/other-repo`,
+  nightgauge project sync-status 103 done --repo nightgauge/other-repo
+  nightgauge project sync-status 103 in-review --only-from "In progress"`,
 		// #1180 — without this a rejected invocation dumps flags and global
 		// flags below the error, which reads as help output; the operator who
 		// filed this saw only the trailing block and took the run for a no-op.
@@ -4145,6 +4156,11 @@ in-review is refused unless an open PR whose head branch names the issue exists.
 			if err != nil {
 				return err
 			}
+			if onlyFrom != "" {
+				if onlyFrom, err = normalizeBoardStatusArg(onlyFrom); err != nil {
+					return fmt.Errorf("--only-from: %w", err)
+				}
+			}
 
 			// Resolve the board before any network call — see projectAddCmd.
 			ownerPart, repoPart := splitRepo(owner, repo)
@@ -4160,6 +4176,9 @@ in-review is refused unless an open PR whose head branch names the issue exists.
 
 			client, err := clientFromConfig()
 			if err != nil {
+				return err
+			}
+			if err := requireCurrentStatus(cmd.Context(), gh.NewBoardService(client, ownerPart, projectNumber), ownerPart, repoPart, number, status, onlyFrom); err != nil {
 				return err
 			}
 			if err := requireOpenPRForInReview(cmd.Context(), client, ownerPart, repoPart, number, status); err != nil {
@@ -4187,6 +4206,7 @@ in-review is refused unless an open PR whose head branch names the issue exists.
 	ownerFlag(cmd, &owner, "GitHub organization")
 	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
+	cmd.Flags().StringVar(&onlyFrom, "only-from", "", "Write only when the issue currently holds this status")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	cmd.SetFlagErrorFunc(statusFlagErrorFunc("sync-status"))
 	return cmd
@@ -6620,6 +6640,7 @@ func hookCmd() *cobra.Command {
 		hookSkillUsageCmd(),
 		hookCarefulGateCmd(),
 		hookStageGateCmd(),
+		hookGateBackgroundCmd(),
 		hookClaudeStatusLineCmd(),
 		hookExternalDirectoryGateCmd(),
 	)
@@ -6724,6 +6745,17 @@ func hookStageGateCmd() *cobra.Command {
 	}
 }
 
+func hookGateBackgroundCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "gate-background",
+		Short:        "Deny a full local gate started in the foreground or with a short timeout (PreToolUse:Bash, reads JSON from stdin)",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return printPreToolUse(hooks.EvaluateGateBackground(readHookInput(cmd)))
+		},
+	}
+}
+
 func hookExternalDirectoryGateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "external-directory-gate",
@@ -6733,6 +6765,18 @@ func hookExternalDirectoryGateCmd() *cobra.Command {
 			return printPreToolUse(hooks.EvaluateExternalDirectoryGate(readHookInput(cmd)))
 		},
 	}
+}
+
+// stopHookActive reports the Stop payload's `stop_hook_active` flag. A
+// missing, empty or malformed payload reads as false.
+func stopHookActive(payload []byte) bool {
+	var input struct {
+		StopHookActive bool `json:"stop_hook_active"`
+	}
+	if len(payload) == 0 || json.Unmarshal(payload, &input) != nil {
+		return false
+	}
+	return input.StopHookActive
 }
 
 // stopVerifyEmitBound bounds the --emit-event path's own evaluation. That
@@ -6760,6 +6804,10 @@ Output format conforms to Claude Code's canonical Stop hook contract:
   - All tasks complete  → silent (no stdout, exit 0) — Claude Code accepts the stop
   - Tasks incomplete    → {"decision":"block","reason":"..."} (exit 0) — Claude Code keeps the agent working
 
+Scope (#2765): the hook acts only in a repository that opted in with
+.nightgauge/config.yaml, and emits no block when the stdin payload carries
+"stop_hook_active": true, so a Stop hook can never keep a session looping.
+
 The legacy ` + "`" + `{"ok":...,"reason":...}` + "`" + ` shape was non-conformant and caused
 Claude Code to fire a spurious "stop-hook-error" notification on every stage
 exit (see #3605 retro). The sentinel file at
@@ -6774,7 +6822,7 @@ internal and unaffected by this output-format change.`,
 			if emitEvent {
 				return emitStopVerifyEvent(workdir, sessionID, childSession)
 			}
-			out, err := hooks.EvaluateStopHookOutput(workdir)
+			out, err := hooks.EvaluateClaudeStopHook(workdir, stopHookActive(readHookInput(cmd)))
 			if err != nil {
 				return err
 			}
@@ -7068,6 +7116,7 @@ func hookPostMergeCmd() *cobra.Command {
 		prNumber      int
 		workdir       string
 		mainCheckWait time.Duration
+		alreadyMerged bool
 		outputJSON    bool
 	)
 
@@ -7110,6 +7159,12 @@ cause the command to exit non-zero.`,
 			installEpicCheckout(epicSvc)
 			prSvc := gh.NewPRService(client)
 
+			// The extension passes no --project, so resolve the board the way
+			// sync-status does: the hook owns Ready on a `Refs` merge and the
+			// stage sync no longer writes over it (#2706).
+			cfg, cfgErr := config.Load(workdir)
+			projectNumber = hookBoardProject(os.Stderr, cmd.Flags().Changed("project"), projectNumber, cfg, cfgErr, ownerPart, repoPart, workdir)
+
 			// Board syncer is only wired when a project is configured; the hook
 			// no-ops the board-Done sync (#3981) when it is nil.
 			var boardSvc hooks.BoardSyncer
@@ -7135,8 +7190,11 @@ cause the command to exit non-zero.`,
 				// (#2574) Comment the validation marker on a green merge so
 				// the issue's program dependents are released.
 				ValidationMarks: hookValidationMarks{Gate: markerTrustGate(client, workdir), issues: issueSvc},
-				// (#2595) Name the remainder on an issue whose PR said Refs.
-				Remainder: issueSvc,
+				// (#2595) Name the remainder on an issue whose PR said Refs,
+				// once per PR (#2878).
+				Remainder:     hookValidationMarks{Gate: markerTrustGate(client, workdir), issues: issueSvc},
+				AlreadyMerged: alreadyMerged,
+				ExcludeLabels: hookExcludeLabels(cfg),
 			})
 			reportMainChecks(workdir, ownerPart, repoPart, issueNumber, prNumber, result)
 
@@ -7185,8 +7243,7 @@ cause the command to exit non-zero.`,
 				case finErr != nil:
 					fmt.Fprintf(os.Stderr, "Warning: post-merge survival finalize failed: %v\n", finErr)
 				case finRes.Finalized > 0:
-					fmt.Printf("Post-merge: finalized %d due survival record(s): %v\n",
-						finRes.Finalized, finRes.ByVerdict)
+					reportSurvivalFinalized(os.Stdout, os.Stderr, outputJSON, finRes.SweepResult)
 				}
 			}
 
@@ -7249,7 +7306,7 @@ cause the command to exit non-zero.`,
 					fmt.Printf("  - %s\n", task)
 				}
 			case "partial_delivery":
-				fmt.Printf("PR #%d does not close issue #%d (Refs, not Closes) — left open and returned to Ready; %d unmet criteria named.\n",
+				fmt.Printf("PR #%d does not close issue #%d (Refs, not Closes) — left open; %d unmet criteria named.\n",
 					prNumber, issueNumber, len(result.UnmetCriteria))
 			case "pr_verify_error", "pr_not_merged", "issue_fetch_error", "auto_close_error":
 				// Already reported to stderr above, in both output modes.
@@ -7267,6 +7324,7 @@ cause the command to exit non-zero.`,
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "GitHub Project number for board sync (optional)")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "PR number to verify is MERGED before closing issue (optional; 0 skips verification, and skips the survival capture that needs its merge SHA)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Root of the survival journal (default: current directory). Set this when the process cwd is a transient worktree.")
+	cmd.Flags().BoolVar(&alreadyMerged, "already-merged", false, "The caller's run found the PR merged and merged nothing itself: a partial delivery stays out of Ready (#2878)")
 	cmd.Flags().DurationVar(&mainCheckWait, "main-check-wait", hooks.DefaultMainCheckTimeout, "How long to wait for the merge commit's check runs on the base branch to conclude before recording the verdict (0 = one immediate read, no wait). Requires --pr.")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	_ = cmd.MarkFlagRequired("issue") // cobra MarkFlagRequired never errors for known flags
@@ -7843,6 +7901,12 @@ func prMergeCmd() *cobra.Command {
 				return err
 			}
 
+			if issueNumber > 0 {
+				// The queue wait a budgeted pr-merge stage spends after its PR
+				// is enqueued is not the stage's work (#2770): record it so the
+				// stage's wall-clock budget leaves it out.
+				defer recordPRMergeQueueWait(&svc.QueueWait, issueNumber)()
+			}
 			sha, err := svc.MergePRWithStrategy(cmd.Context(), pr.NodeID, strategy)
 			if err != nil {
 				return fmt.Errorf("merge PR #%d in %s/%s: %w", number, ownerPart, repoPart, enrichError(err))
@@ -7885,6 +7949,21 @@ func prMergeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "Bypass the blockedBy pre-merge guard")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
+}
+
+// recordPRMergeQueueWait sets opts.OnQueued to open this process's
+// queue-wait interval for issue and returns the func that closes it, to run
+// when the merge call returns (#2770).
+func recordPRMergeQueueWait(opts *gh.MergeQueueWaitOptions, issue int) func() {
+	root, err := os.Getwd()
+	if err != nil {
+		return func() {}
+	}
+	begin, end := queuewait.Track(root, issue, func(err error) {
+		fmt.Fprintf(os.Stderr, "WARNING: %v\n", err)
+	})
+	opts.OnQueued = func(gh.MergeQueueStatus) { begin() }
+	return end
 }
 
 func prCIWaitCmd() *cobra.Command {
@@ -8120,9 +8199,9 @@ func checkRunFailing(checks []gh.CheckDetail, name string) bool {
 func ciCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ci",
-		Short: "CI check operations (wait, logs, history, parity, discover-commands)",
+		Short: "CI check operations (wait, logs, history, parity, discover-commands, gate-status, gate-run, gate-record)",
 	}
-	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd(), ciChecksCompleteCmd())
+	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd(), ciChecksCompleteCmd(), ciGateStatusCmd(), ciGateRunCmd(), ciGateRecordCmd())
 	return cmd
 }
 
@@ -8258,6 +8337,8 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 			// #2430: check identity for a cancelled duplicate, read only
 			// when one exists; post-merge observation only.
 			ev.MergeSuites = gh.SuiteWorkflowsFor(ctx, reader, owner, repo, sha, checks)
+			// #2952: a run a newer push on the base branch cancelled.
+			ev.NewerPushCancels = gh.NewerPushCancelsFor(ctx, reader, owner, repo, sha, prov, checks, runs)
 		}
 		if ev.PRHeadIsEvidence() {
 			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {
@@ -8902,6 +8983,7 @@ func gitCmd() *cobra.Command {
 		gitDiffCmd(),
 		gitFetchCmd(),
 		gitPushCmd(),
+		gitPushBranchCmd(),
 		gitAbortPipelineCmd(),
 		gitResetPipelineCmd(),
 		gitBranchCleanupCmd(),
@@ -10186,6 +10268,37 @@ func resolveProjectNumber(cfg *config.Config, explicitProject bool, projectNumbe
 		SharedBoard: projectNumber,
 		StartDir:    startDir,
 	})
+}
+
+// hookExcludeLabels resolves autonomous.exclude_labels for the post-merge hook.
+// A config that failed to load leaves cfg nil and resolves to the defaults.
+func hookExcludeLabels(cfg *config.Config) []string {
+	if cfg == nil {
+		return config.DefaultExcludeLabels
+	}
+	return cfg.Autonomous.ResolvedExcludeLabels()
+}
+
+// hookBoardProject picks the board `hook post-merge` syncs. An explicit
+// --project wins; otherwise the board comes from resolveProjectNumber. The hook
+// is non-blocking, so a failure keeps projectNumber and skips the sync, but it
+// warns on w: the stage sync no longer writes Done over the hook, so a skipped
+// sync leaves a partial delivery in its old column with nothing else to say why
+// (#2706).
+func hookBoardProject(w io.Writer, explicitProject bool, projectNumber int, cfg *config.Config, cfgErr error, ownerPart, repoPart, workdir string) int {
+	if explicitProject {
+		return projectNumber
+	}
+	if cfgErr != nil {
+		fmt.Fprintf(w, "Warning: post-merge board sync skipped: load config: %v\n", cfgErr)
+		return projectNumber
+	}
+	resolved, err := resolveProjectNumber(cfg, false, projectNumber, ownerPart, repoPart, workdir)
+	if err != nil {
+		fmt.Fprintf(w, "Warning: post-merge board sync skipped: %v\n", err)
+		return projectNumber
+	}
+	return resolved
 }
 
 func printJSON(v interface{}) error {
@@ -11808,10 +11921,30 @@ func reloadSafetyLine(runs []ipc.RunningPipelineInfo) string {
 			// can tell. Dropping it would manufacture a false "safe".
 			label += " (no progress recently)"
 		}
+		if r.MergedPR > 0 {
+			label += " (" + mergedFollowUpLabel(r.MergedPR) + ")"
+		}
 		names = append(names, label)
 	}
 	return fmt.Sprintf("%d pipeline(s) still running (%s); reload is not safe yet",
 		len(runs), strings.Join(names, ", "))
+}
+
+// mergedFollowUpLabel is how a run past its merge reads (#2730). Such a run stays
+// registered, at stage pr-merge, until its follow-up ends, and that read as a run
+// waiting to merge. The work is on main and what is left is cleanup.
+func mergedFollowUpLabel(pr int) string {
+	return fmt.Sprintf("merged #%d, post-merge follow-up", pr)
+}
+
+// mergedPRFor returns the merged PR of the running pipeline for repo#number, or 0.
+func mergedPRFor(runs []ipc.RunningPipelineInfo, repo string, number int) int {
+	for _, r := range runs {
+		if r.Repo == repo && r.IssueNumber == number {
+			return r.MergedPR
+		}
+	}
+	return 0
 }
 
 // shortRepoName reduces "owner/some-repo" to "some-repo" for display.
@@ -11839,6 +11972,50 @@ func runningPipelinesForWorkspace(ctx context.Context, workdir string) (ipc.Runn
 	return res, true
 }
 
+// capitalizeStatus renders a scheduler status for the human status line.
+func capitalizeStatus(status string) string {
+	if status == "" {
+		return status
+	}
+	return strings.ToUpper(status[:1]) + status[1:]
+}
+
+// liveAutonomousModeLine is the headline of `autonomous status` when a daemon
+// answered: the same sentence the state-file branch prints, so the doc and
+// dev-install.sh hold in both (#2720). A daemon that answered autonomous.status
+// but not the summary gets "unknown": the scheduler's own list omits manual
+// runs, so it cannot stand in, and a false all-clear costs every running run.
+func liveAutonomousModeLine(status string, halted int, summary ipc.RunningPipelinesResult, known bool) string {
+	reload := "reload safety unknown"
+	if known {
+		reload = reloadSafetyLine(summary.Runs)
+	}
+	return fmt.Sprintf("Autonomous Mode: %s%s — %s", capitalizeStatus(status), haltedSuffix(halted), reload)
+}
+
+// liveAutonomousStatusJSON is the `--json` payload when a daemon answered. The
+// reload keys match the state-file branch's: the guard in
+// check-running-pipelines.sh reads them, and a live daemon is the only case
+// with a window to reload (#2720).
+func liveAutonomousStatusJSON(res orchestrator.AutonomousState, summary ipc.RunningPipelinesResult, known bool) map[string]any {
+	runs := summary.Runs
+	if runs == nil {
+		runs = []ipc.RunningPipelineInfo{}
+	}
+	return map[string]any{
+		"daemon":                     true,
+		"status":                     res.Status,
+		"cycles":                     res.CyclesRun,
+		"running":                    res.Running,
+		"inReviewWithoutPR":          inReviewWithoutPRJSON(res.InReviewWithoutPR),
+		"haltedRepos":                orchestrator.HaltedRepos(&res),
+		"architectureApprovalParked": orchestrator.ArchitectureApprovalParked(&res),
+		"running_pipelines":          runs,
+		"running_pipelines_known":    known,
+		"reload_safe":                known && summary.Count == 0,
+	}
+}
+
 func autonomousStatusCmd() *cobra.Command {
 	var outputJSON bool
 
@@ -11860,16 +12037,18 @@ func autonomousStatusCmd() *cobra.Command {
 				defer client.Close()
 				var res orchestrator.AutonomousState
 				if callErr := client.Call(cmd.Context(), "autonomous.status", nil, &res); callErr == nil {
+					// Its own dial: the socket serves one request per connection,
+					// so `client` is spent. This is the one branch with a window
+					// to reload (#2720).
+					summary, known := runningPipelinesForWorkspace(cmd.Context(), workdir)
 					if outputJSON {
-						return printJSON(map[string]any{
-							"daemon":            true,
-							"status":            res.Status,
-							"cycles":            res.CyclesRun,
-							"running":           res.Running,
-							"inReviewWithoutPR": inReviewWithoutPRJSON(res.InReviewWithoutPR),
-						})
+						return printJSON(liveAutonomousStatusJSON(res, summary, known))
 					}
-					fmt.Printf("Source: live daemon\nStatus: %s\nCycles: %d\n", res.Status, res.CyclesRun)
+					halted := orchestrator.HaltedRepos(&res)
+					fmt.Printf("Source: live daemon\n%s\nCycles: %d\n",
+						liveAutonomousModeLine(res.Status, len(halted), summary, known), res.CyclesRun)
+					printHaltedRepos(os.Stdout, halted, "")
+					printArchitectureParked(os.Stdout, orchestrator.ArchitectureApprovalParked(&res), "")
 					if len(res.Running) > 0 {
 						fmt.Printf("\nRunning (%d):\n", len(res.Running))
 						for _, r := range res.Running {
@@ -11897,7 +12076,7 @@ func autonomousStatusCmd() *cobra.Command {
 			}
 			data, err := os.ReadFile(statePath)
 			if os.IsNotExist(err) {
-				fmt.Println("No autonomous scheduler state found. Run 'nightgauge autonomous run' first.")
+				fmt.Println("No autonomous scheduler state found, so halt state is unknown. Run 'nightgauge autonomous run' first.")
 				return nil
 			}
 			if err != nil {
@@ -11935,8 +12114,14 @@ func autonomousStatusCmd() *cobra.Command {
 					RunningPipelines      []ipc.RunningPipelineInfo `json:"running_pipelines"`
 					RunningPipelinesKnown bool                      `json:"running_pipelines_known"`
 					ReloadSafe            bool                      `json:"reload_safe"`
+					// #2748 — the repo halts and architecture holds, [] when
+					// none, so a script need not walk pausedRepos and Failed.
+					HaltedRepos                []orchestrator.RepoPauseRecord `json:"haltedRepos"`
+					ArchitectureApprovalParked []orchestrator.FailedItem      `json:"architectureApprovalParked"`
 				}
-				payload := statusWithStalled{AutonomousState: state, Stalled: stalled}
+				payload := statusWithStalled{AutonomousState: state, Stalled: stalled,
+					HaltedRepos:                orchestrator.HaltedRepos(&state),
+					ArchitectureApprovalParked: orchestrator.ArchitectureApprovalParked(&state)}
 				if cwd, cwdErr := os.Getwd(); cwdErr == nil {
 					if holder, held := runstate.InspectServeLease(cwd); held {
 						payload.LeaseHeld = true
@@ -11955,12 +12140,10 @@ func autonomousStatusCmd() *cobra.Command {
 			}
 
 			// Human-readable table format
-			statusDisplay := state.Status
-			if len(statusDisplay) > 0 {
-				statusDisplay = strings.ToUpper(statusDisplay[:1]) + statusDisplay[1:]
-			}
+			halted := orchestrator.HaltedRepos(&state)
+			statusDisplay := capitalizeStatus(state.Status) + haltedSuffix(len(halted))
 			if stalled {
-				fmt.Printf("Autonomous Mode: Stalled (pid %d is not running)\n", state.PID)
+				fmt.Printf("Autonomous Mode: Stalled%s (pid %d is not running)\n", haltedSuffix(len(halted)), state.PID)
 			} else if daemonKnown {
 				// One line, two facts, because they are routinely different:
 				// the scheduler is Stopped AND two pipelines are still
@@ -12023,11 +12206,17 @@ func autonomousStatusCmd() *cobra.Command {
 					if idx := strings.LastIndex(r.Repo, "/"); idx >= 0 {
 						repoShort = r.Repo[idx+1:]
 					}
+					if pr := mergedPRFor(summary.Runs, r.Repo, r.Number); pr > 0 {
+						fmt.Printf("  #%-4d %-12s %s elapsed — %s\n", r.Number, repoShort, elapsed, mergedFollowUpLabel(pr))
+						continue
+					}
 					fmt.Printf("  #%-4d %-12s %s elapsed\n", r.Number, repoShort, elapsed)
 				}
 			}
 
 			printInReviewWithoutPR(os.Stdout, state.InReviewWithoutPR)
+			printHaltedRepos(os.Stdout, halted, " (from state file)")
+			printArchitectureParked(os.Stdout, orchestrator.ArchitectureApprovalParked(&state), " (from state file)")
 
 			// Completed items
 			if len(state.Completed) > 0 {

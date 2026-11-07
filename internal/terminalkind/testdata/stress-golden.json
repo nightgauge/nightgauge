@@ -26,6 +26,36 @@
       "signal": ""
     },
     {
+      "input": "[merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[MERGE-CONFLICT]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "MERGE-QUEUE-ENQUEUE-EXHAUSTED",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -569,6 +599,36 @@
       "input": "ENVIRONMENT_HALT",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "exit 1: [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[GATE-PLUGIN-MISSING]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "gate_plugin_missing",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "exit 1: gate_plugin_missing",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "GATE_PLUGIN_MISSING",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "ai_apicallerror context_length_exceeded",
@@ -1471,6 +1531,21 @@
       "signal": ""
     },
     {
+      "input": "[push-auth-failed]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [push-auth-failed]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "[PUSH-AUTH-FAILED]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -1886,6 +1961,51 @@
       "signal": ""
     },
     {
+      "input": "[stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[STAGE-CAP-KILLED]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "exceeded stage_hard_cap",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: exceeded stage_hard_cap",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "EXCEEDED STAGE_HARD_CAP",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "exceeded stage_time_cap",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: exceeded stage_time_cap",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "EXCEEDED STAGE_TIME_CAP",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -1987,21 +2107,6 @@
     },
     {
       "input": "EXCEEDED STALL IDLE THRESHOLD",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "exceeded stage_hard_cap",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "exit 1: exceeded stage_hard_cap",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "EXCEEDED STAGE_HARD_CAP",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -2183,6 +2288,36 @@
     {
       "input": "NO_CHANGES_PRODUCED",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached]",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [review-cap-reached]",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[REVIEW-CAP-REACHED]",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "review_cap_reached",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: review_cap_reached",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "REVIEW_CAP_REACHED",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -2716,6 +2851,556 @@
       "signal": ""
     },
     {
+      "input": "[merge-conflict] | merge-queue-enqueue-exhausted",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | stage_budget_exceeded:",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | network unavailable: extended github connectivity loss",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | adapter_incompatible",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [model-stream-stalled]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | stream idle timeout",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | overloaded",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | socket connection was closed",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [rate-limit-quota-exhausted]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [adapter-auth-failed]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [environment-halt]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [gate-plugin-missing]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | ai_apicallerror context_length_exceeded",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | not_found_error model",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | pipeline-start-failure issue-closed",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [blocked-dependency]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | architecture approval required",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | github-quota-low",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | github-network-outage",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | secondary rate limit",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [pr-merge-unmerged",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [stage:worktree-containment]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [not-pipeline-actionable]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [dev-produced-no-changes]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [dev-handoff-missing]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [dev-step-cap-reached]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [dev-step-progress-unproven]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [push-auth-failed]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | premature turn end",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | worktree_uncommitted",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | budget_ceiling_hit",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [runaway-progress-exceeded]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [runaway-ceiling-exceeded]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [cost-cap-exceeded]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | stage-no-output-timeout",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [stage-cap-killed]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [stall-killed]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | pipeline_budget_exceeded",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | schema validation",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [no-changes-produced]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [review-cap-reached]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [validation-failed]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [validation-inconclusive]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [branch-forked]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [commit-orphaned]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [adapter-permission-rejected]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [permission-denied]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | stage_context_unreadable",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | dev_build_verification_missing",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | dev_build_verification_failed",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | [dev-context-stale]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | dev_tests_failed",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | pr_merge_lookup_failed",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[merge-conflict] | subagent crash",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | stage_budget_exceeded:",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | network unavailable: extended github connectivity loss",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | adapter_incompatible",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [model-stream-stalled]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | stream idle timeout",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | overloaded",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | socket connection was closed",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [rate-limit-quota-exhausted]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [adapter-auth-failed]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [environment-halt]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [gate-plugin-missing]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | ai_apicallerror context_length_exceeded",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | not_found_error model",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | pipeline-start-failure issue-closed",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [blocked-dependency]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | architecture approval required",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | github-quota-low",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | github-network-outage",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | secondary rate limit",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [pr-merge-unmerged",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [stage:worktree-containment]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [not-pipeline-actionable]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [dev-produced-no-changes]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [dev-handoff-missing]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [dev-step-cap-reached]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [dev-step-progress-unproven]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [push-auth-failed]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | premature turn end",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | worktree_uncommitted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | budget_ceiling_hit",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [runaway-progress-exceeded]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [runaway-ceiling-exceeded]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [cost-cap-exceeded]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | stage-no-output-timeout",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [stage-cap-killed]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [stall-killed]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | pipeline_budget_exceeded",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | schema validation",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [no-changes-produced]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [review-cap-reached]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [validation-failed]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [validation-inconclusive]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [branch-forked]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [commit-orphaned]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [adapter-permission-rejected]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [permission-denied]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | stage_context_unreadable",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | dev_build_verification_missing",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | dev_build_verification_failed",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [dev-context-stale]",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | dev_tests_failed",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | pr_merge_lookup_failed",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | subagent crash",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "stage_budget_exceeded: | network unavailable: extended github connectivity loss",
       "kind": "budget_exceeded",
       "signal": ""
@@ -2757,6 +3442,11 @@
     },
     {
       "input": "stage_budget_exceeded: | [environment-halt]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [gate-plugin-missing]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -2836,7 +3526,7 @@
       "signal": ""
     },
     {
-      "input": "stage_budget_exceeded: | invalid auth method",
+      "input": "stage_budget_exceeded: | [push-auth-failed]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -2876,6 +3566,11 @@
       "signal": ""
     },
     {
+      "input": "stage_budget_exceeded: | [stage-cap-killed]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "stage_budget_exceeded: | [stall-killed]",
       "kind": "budget_exceeded",
       "signal": ""
@@ -2892,6 +3587,11 @@
     },
     {
       "input": "stage_budget_exceeded: | [no-changes-produced]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [review-cap-reached]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -2961,6 +3661,16 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -3002,6 +3712,11 @@
     },
     {
       "input": "network unavailable: extended github connectivity loss | [environment-halt]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | [gate-plugin-missing]",
       "kind": "network_unavailable",
       "signal": ""
     },
@@ -3081,7 +3796,7 @@
       "signal": ""
     },
     {
-      "input": "network unavailable: extended github connectivity loss | invalid auth method",
+      "input": "network unavailable: extended github connectivity loss | [push-auth-failed]",
       "kind": "network_unavailable",
       "signal": ""
     },
@@ -3121,6 +3836,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | [stage-cap-killed]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | [stall-killed]",
       "kind": "network_unavailable",
       "signal": ""
@@ -3137,6 +3857,11 @@
     },
     {
       "input": "network unavailable: extended github connectivity loss | [no-changes-produced]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | [review-cap-reached]",
       "kind": "network_unavailable",
       "signal": ""
     },
@@ -3206,6 +3931,16 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "adapter_incompatible | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -3247,6 +3982,11 @@
     },
     {
       "input": "adapter_incompatible | [environment-halt]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [gate-plugin-missing]",
       "kind": "adapter_incompatible",
       "signal": ""
     },
@@ -3326,7 +4066,7 @@
       "signal": ""
     },
     {
-      "input": "adapter_incompatible | invalid auth method",
+      "input": "adapter_incompatible | [push-auth-failed]",
       "kind": "adapter_incompatible",
       "signal": ""
     },
@@ -3366,6 +4106,11 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | [stage-cap-killed]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "adapter_incompatible | [stall-killed]",
       "kind": "adapter_incompatible",
       "signal": ""
@@ -3382,6 +4127,11 @@
     },
     {
       "input": "adapter_incompatible | [no-changes-produced]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [review-cap-reached]",
       "kind": "adapter_incompatible",
       "signal": ""
     },
@@ -3451,6 +4201,16 @@
       "signal": ""
     },
     {
+      "input": "[model-stream-stalled] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[model-stream-stalled] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -3492,6 +4252,11 @@
     },
     {
       "input": "[model-stream-stalled] | [environment-halt]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [gate-plugin-missing]",
       "kind": "model_stream_stalled",
       "signal": ""
     },
@@ -3571,7 +4336,7 @@
       "signal": ""
     },
     {
-      "input": "[model-stream-stalled] | invalid auth method",
+      "input": "[model-stream-stalled] | [push-auth-failed]",
       "kind": "model_stream_stalled",
       "signal": ""
     },
@@ -3611,6 +4376,11 @@
       "signal": ""
     },
     {
+      "input": "[model-stream-stalled] | [stage-cap-killed]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[model-stream-stalled] | [stall-killed]",
       "kind": "model_stream_stalled",
       "signal": ""
@@ -3627,6 +4397,11 @@
     },
     {
       "input": "[model-stream-stalled] | [no-changes-produced]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [review-cap-reached]",
       "kind": "model_stream_stalled",
       "signal": ""
     },
@@ -3696,6 +4471,16 @@
       "signal": ""
     },
     {
+      "input": "stream idle timeout | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "stream idle timeout | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "stream idle timeout | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -3737,6 +4522,11 @@
     },
     {
       "input": "stream idle timeout | [environment-halt]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | [gate-plugin-missing]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -3816,7 +4606,7 @@
       "signal": "stream_idle_timeout"
     },
     {
-      "input": "stream idle timeout | invalid auth method",
+      "input": "stream idle timeout | [push-auth-failed]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -3856,6 +4646,11 @@
       "signal": "stream_idle_timeout"
     },
     {
+      "input": "stream idle timeout | [stage-cap-killed]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
       "input": "stream idle timeout | [stall-killed]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3872,6 +4667,11 @@
     },
     {
       "input": "stream idle timeout | [no-changes-produced]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | [review-cap-reached]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -3941,6 +4741,16 @@
       "signal": "stream_idle_timeout"
     },
     {
+      "input": "overloaded | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "overloaded | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "overloaded | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -3982,6 +4792,11 @@
     },
     {
       "input": "overloaded | [environment-halt]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | [gate-plugin-missing]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -4061,7 +4876,7 @@
       "signal": "api_overloaded"
     },
     {
-      "input": "overloaded | invalid auth method",
+      "input": "overloaded | [push-auth-failed]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -4101,6 +4916,11 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "overloaded | [stage-cap-killed]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "overloaded | [stall-killed]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -4117,6 +4937,11 @@
     },
     {
       "input": "overloaded | [no-changes-produced]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | [review-cap-reached]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -4186,6 +5011,16 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "socket connection was closed | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "socket connection was closed | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "socket connection was closed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -4227,6 +5062,11 @@
     },
     {
       "input": "socket connection was closed | [environment-halt]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | [gate-plugin-missing]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -4306,7 +5146,7 @@
       "signal": "api_connection_lost"
     },
     {
-      "input": "socket connection was closed | invalid auth method",
+      "input": "socket connection was closed | [push-auth-failed]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -4346,6 +5186,11 @@
       "signal": "api_connection_lost"
     },
     {
+      "input": "socket connection was closed | [stage-cap-killed]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
       "input": "socket connection was closed | [stall-killed]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
@@ -4362,6 +5207,11 @@
     },
     {
       "input": "socket connection was closed | [no-changes-produced]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | [review-cap-reached]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -4431,6 +5281,16 @@
       "signal": "api_connection_lost"
     },
     {
+      "input": "[rate-limit-quota-exhausted] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -4472,6 +5332,11 @@
     },
     {
       "input": "[rate-limit-quota-exhausted] | [environment-halt]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [gate-plugin-missing]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
@@ -4551,7 +5416,7 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
-      "input": "[rate-limit-quota-exhausted] | invalid auth method",
+      "input": "[rate-limit-quota-exhausted] | [push-auth-failed]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
@@ -4591,6 +5456,11 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[rate-limit-quota-exhausted] | [stage-cap-killed]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | [stall-killed]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
@@ -4607,6 +5477,11 @@
     },
     {
       "input": "[rate-limit-quota-exhausted] | [no-changes-produced]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [review-cap-reached]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
@@ -4676,6 +5551,16 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[adapter-auth-failed] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-auth-failed] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[adapter-auth-failed] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -4717,6 +5602,11 @@
     },
     {
       "input": "[adapter-auth-failed] | [environment-halt]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [gate-plugin-missing]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
     },
@@ -4796,7 +5686,7 @@
       "signal": "adapter_auth_failed"
     },
     {
-      "input": "[adapter-auth-failed] | invalid auth method",
+      "input": "[adapter-auth-failed] | [push-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
     },
@@ -4836,6 +5726,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[adapter-auth-failed] | [stage-cap-killed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "[adapter-auth-failed] | [stall-killed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
@@ -4852,6 +5747,11 @@
     },
     {
       "input": "[adapter-auth-failed] | [no-changes-produced]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [review-cap-reached]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
     },
@@ -4921,6 +5821,16 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[environment-halt] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[environment-halt] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[environment-halt] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -4964,6 +5874,11 @@
       "input": "[environment-halt] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[environment-halt] | [gate-plugin-missing]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
     },
     {
       "input": "[environment-halt] | ai_apicallerror context_length_exceeded",
@@ -5041,7 +5956,7 @@
       "signal": "environment_halt"
     },
     {
-      "input": "[environment-halt] | invalid auth method",
+      "input": "[environment-halt] | [push-auth-failed]",
       "kind": "environment_halt",
       "signal": "environment_halt"
     },
@@ -5081,6 +5996,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[environment-halt] | [stage-cap-killed]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
       "input": "[environment-halt] | [stall-killed]",
       "kind": "environment_halt",
       "signal": "environment_halt"
@@ -5097,6 +6017,11 @@
     },
     {
       "input": "[environment-halt] | [no-changes-produced]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[environment-halt] | [review-cap-reached]",
       "kind": "environment_halt",
       "signal": "environment_halt"
     },
@@ -5166,6 +6091,286 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[gate-plugin-missing] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[gate-plugin-missing] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[gate-plugin-missing] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[gate-plugin-missing] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[gate-plugin-missing] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[gate-plugin-missing] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[gate-plugin-missing] | ai_apicallerror context_length_exceeded",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | not_found_error model",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | pipeline-start-failure issue-closed",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [blocked-dependency]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | architecture approval required",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | github-quota-low",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | github-network-outage",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | secondary rate limit",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [pr-merge-unmerged",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [stage:worktree-containment]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [not-pipeline-actionable]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [dev-produced-no-changes]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [dev-handoff-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [dev-step-cap-reached]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [dev-step-progress-unproven]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [push-auth-failed]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | premature turn end",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | worktree_uncommitted",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | budget_ceiling_hit",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [runaway-progress-exceeded]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [runaway-ceiling-exceeded]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[gate-plugin-missing] | stage-no-output-timeout",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [stage-cap-killed]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [stall-killed]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | pipeline_budget_exceeded",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | schema validation",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [no-changes-produced]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [review-cap-reached]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [validation-failed]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [validation-inconclusive]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [branch-forked]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [commit-orphaned]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [adapter-permission-rejected]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [permission-denied]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | stage_context_unreadable",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | dev_build_verification_missing",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | dev_build_verification_failed",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | [dev-context-stale]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | dev_tests_failed",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | pr_merge_lookup_failed",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | subagent crash",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -5214,6 +6419,11 @@
       "input": "ai_apicallerror context_length_exceeded | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "ai_apicallerror context_length_exceeded | not_found_error model",
@@ -5286,7 +6496,7 @@
       "signal": ""
     },
     {
-      "input": "ai_apicallerror context_length_exceeded | invalid auth method",
+      "input": "ai_apicallerror context_length_exceeded | [push-auth-failed]",
       "kind": "context_window_exceeded",
       "signal": ""
     },
@@ -5326,6 +6536,11 @@
       "signal": ""
     },
     {
+      "input": "ai_apicallerror context_length_exceeded | [stage-cap-killed]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded | [stall-killed]",
       "kind": "context_window_exceeded",
       "signal": ""
@@ -5342,6 +6557,11 @@
     },
     {
       "input": "ai_apicallerror context_length_exceeded | [no-changes-produced]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [review-cap-reached]",
       "kind": "context_window_exceeded",
       "signal": ""
     },
@@ -5411,6 +6631,16 @@
       "signal": ""
     },
     {
+      "input": "not_found_error model | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "not_found_error model | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -5459,6 +6689,11 @@
       "input": "not_found_error model | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "not_found_error model | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "not_found_error model | ai_apicallerror context_length_exceeded",
@@ -5531,7 +6766,7 @@
       "signal": ""
     },
     {
-      "input": "not_found_error model | invalid auth method",
+      "input": "not_found_error model | [push-auth-failed]",
       "kind": "model_unavailable",
       "signal": ""
     },
@@ -5571,6 +6806,11 @@
       "signal": ""
     },
     {
+      "input": "not_found_error model | [stage-cap-killed]",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
       "input": "not_found_error model | [stall-killed]",
       "kind": "model_unavailable",
       "signal": ""
@@ -5587,6 +6827,11 @@
     },
     {
       "input": "not_found_error model | [no-changes-produced]",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | [review-cap-reached]",
       "kind": "model_unavailable",
       "signal": ""
     },
@@ -5656,6 +6901,16 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -5704,6 +6959,11 @@
       "input": "pipeline-start-failure issue-closed | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "pipeline-start-failure issue-closed | ai_apicallerror context_length_exceeded",
@@ -5776,7 +7036,7 @@
       "signal": ""
     },
     {
-      "input": "pipeline-start-failure issue-closed | invalid auth method",
+      "input": "pipeline-start-failure issue-closed | [push-auth-failed]",
       "kind": "issue_closed",
       "signal": ""
     },
@@ -5816,6 +7076,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | [stage-cap-killed]",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | [stall-killed]",
       "kind": "issue_closed",
       "signal": ""
@@ -5832,6 +7097,11 @@
     },
     {
       "input": "pipeline-start-failure issue-closed | [no-changes-produced]",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [review-cap-reached]",
       "kind": "issue_closed",
       "signal": ""
     },
@@ -5901,6 +7171,16 @@
       "signal": ""
     },
     {
+      "input": "[blocked-dependency] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[blocked-dependency] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -5949,6 +7229,11 @@
       "input": "[blocked-dependency] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[blocked-dependency] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[blocked-dependency] | ai_apicallerror context_length_exceeded",
@@ -6021,7 +7306,7 @@
       "signal": ""
     },
     {
-      "input": "[blocked-dependency] | invalid auth method",
+      "input": "[blocked-dependency] | [push-auth-failed]",
       "kind": "blocked_dependency",
       "signal": ""
     },
@@ -6061,6 +7346,11 @@
       "signal": ""
     },
     {
+      "input": "[blocked-dependency] | [stage-cap-killed]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
       "input": "[blocked-dependency] | [stall-killed]",
       "kind": "blocked_dependency",
       "signal": ""
@@ -6077,6 +7367,11 @@
     },
     {
       "input": "[blocked-dependency] | [no-changes-produced]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | [review-cap-reached]",
       "kind": "blocked_dependency",
       "signal": ""
     },
@@ -6146,6 +7441,16 @@
       "signal": ""
     },
     {
+      "input": "architecture approval required | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "architecture approval required | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "architecture approval required | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -6194,6 +7499,11 @@
       "input": "architecture approval required | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "architecture approval required | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "architecture approval required | ai_apicallerror context_length_exceeded",
@@ -6266,7 +7576,7 @@
       "signal": "architecture_approval_required"
     },
     {
-      "input": "architecture approval required | invalid auth method",
+      "input": "architecture approval required | [push-auth-failed]",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
     },
@@ -6306,6 +7616,11 @@
       "signal": "architecture_approval_required"
     },
     {
+      "input": "architecture approval required | [stage-cap-killed]",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
       "input": "architecture approval required | [stall-killed]",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
@@ -6322,6 +7637,11 @@
     },
     {
       "input": "architecture approval required | [no-changes-produced]",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "architecture approval required | [review-cap-reached]",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
     },
@@ -6391,6 +7711,16 @@
       "signal": "architecture_approval_required"
     },
     {
+      "input": "github-quota-low | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "github-quota-low | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "github-quota-low | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -6439,6 +7769,11 @@
       "input": "github-quota-low | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "github-quota-low | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "github-quota-low | ai_apicallerror context_length_exceeded",
@@ -6511,7 +7846,7 @@
       "signal": "github_quota_low"
     },
     {
-      "input": "github-quota-low | invalid auth method",
+      "input": "github-quota-low | [push-auth-failed]",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
     },
@@ -6551,6 +7886,11 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-quota-low | [stage-cap-killed]",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
       "input": "github-quota-low | [stall-killed]",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
@@ -6567,6 +7907,11 @@
     },
     {
       "input": "github-quota-low | [no-changes-produced]",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "github-quota-low | [review-cap-reached]",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
     },
@@ -6636,6 +7981,16 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-network-outage | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "github-network-outage | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "github-network-outage | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -6684,6 +8039,11 @@
       "input": "github-network-outage | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "github-network-outage | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "github-network-outage | ai_apicallerror context_length_exceeded",
@@ -6756,7 +8116,7 @@
       "signal": "github_network_outage"
     },
     {
-      "input": "github-network-outage | invalid auth method",
+      "input": "github-network-outage | [push-auth-failed]",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
     },
@@ -6796,6 +8156,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "github-network-outage | [stage-cap-killed]",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
       "input": "github-network-outage | [stall-killed]",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
@@ -6812,6 +8177,11 @@
     },
     {
       "input": "github-network-outage | [no-changes-produced]",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "github-network-outage | [review-cap-reached]",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
     },
@@ -6881,6 +8251,16 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "secondary rate limit | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "secondary rate limit | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -6929,6 +8309,11 @@
       "input": "secondary rate limit | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "secondary rate limit | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "secondary rate limit | ai_apicallerror context_length_exceeded",
@@ -7001,7 +8386,7 @@
       "signal": ""
     },
     {
-      "input": "secondary rate limit | invalid auth method",
+      "input": "secondary rate limit | [push-auth-failed]",
       "kind": "github_rate_limited",
       "signal": ""
     },
@@ -7041,6 +8426,11 @@
       "signal": ""
     },
     {
+      "input": "secondary rate limit | [stage-cap-killed]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "secondary rate limit | [stall-killed]",
       "kind": "github_rate_limited",
       "signal": ""
@@ -7057,6 +8447,11 @@
     },
     {
       "input": "secondary rate limit | [no-changes-produced]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [review-cap-reached]",
       "kind": "github_rate_limited",
       "signal": ""
     },
@@ -7126,6 +8521,16 @@
       "signal": ""
     },
     {
+      "input": "[pr-merge-unmerged | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[pr-merge-unmerged | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7174,6 +8579,11 @@
       "input": "[pr-merge-unmerged | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[pr-merge-unmerged | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[pr-merge-unmerged | ai_apicallerror context_length_exceeded",
@@ -7246,7 +8656,7 @@
       "signal": ""
     },
     {
-      "input": "[pr-merge-unmerged | invalid auth method",
+      "input": "[pr-merge-unmerged | [push-auth-failed]",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
@@ -7286,6 +8696,11 @@
       "signal": ""
     },
     {
+      "input": "[pr-merge-unmerged | [stage-cap-killed]",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
       "input": "[pr-merge-unmerged | [stall-killed]",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -7302,6 +8717,11 @@
     },
     {
       "input": "[pr-merge-unmerged | [no-changes-produced]",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | [review-cap-reached]",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
@@ -7371,6 +8791,16 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7419,6 +8849,11 @@
       "input": "[stage:worktree-containment] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[stage:worktree-containment] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[stage:worktree-containment] | ai_apicallerror context_length_exceeded",
@@ -7491,7 +8926,7 @@
       "signal": ""
     },
     {
-      "input": "[stage:worktree-containment] | invalid auth method",
+      "input": "[stage:worktree-containment] | [push-auth-failed]",
       "kind": "containment_breach",
       "signal": ""
     },
@@ -7531,6 +8966,11 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | [stage-cap-killed]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | [stall-killed]",
       "kind": "containment_breach",
       "signal": ""
@@ -7547,6 +8987,11 @@
     },
     {
       "input": "[stage:worktree-containment] | [no-changes-produced]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | [review-cap-reached]",
       "kind": "containment_breach",
       "signal": ""
     },
@@ -7616,6 +9061,16 @@
       "signal": ""
     },
     {
+      "input": "[not-pipeline-actionable] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[not-pipeline-actionable] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7664,6 +9119,11 @@
       "input": "[not-pipeline-actionable] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[not-pipeline-actionable] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[not-pipeline-actionable] | ai_apicallerror context_length_exceeded",
@@ -7736,7 +9196,7 @@
       "signal": ""
     },
     {
-      "input": "[not-pipeline-actionable] | invalid auth method",
+      "input": "[not-pipeline-actionable] | [push-auth-failed]",
       "kind": "not_pipeline_actionable",
       "signal": ""
     },
@@ -7776,6 +9236,11 @@
       "signal": ""
     },
     {
+      "input": "[not-pipeline-actionable] | [stage-cap-killed]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[not-pipeline-actionable] | [stall-killed]",
       "kind": "not_pipeline_actionable",
       "signal": ""
@@ -7792,6 +9257,11 @@
     },
     {
       "input": "[not-pipeline-actionable] | [no-changes-produced]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [review-cap-reached]",
       "kind": "not_pipeline_actionable",
       "signal": ""
     },
@@ -7861,6 +9331,16 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7909,6 +9389,11 @@
       "input": "[dev-produced-no-changes] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[dev-produced-no-changes] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[dev-produced-no-changes] | ai_apicallerror context_length_exceeded",
@@ -7981,7 +9466,7 @@
       "signal": ""
     },
     {
-      "input": "[dev-produced-no-changes] | invalid auth method",
+      "input": "[dev-produced-no-changes] | [push-auth-failed]",
       "kind": "dev_produced_no_changes",
       "signal": ""
     },
@@ -8021,6 +9506,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | [stage-cap-killed]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | [stall-killed]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -8037,6 +9527,11 @@
     },
     {
       "input": "[dev-produced-no-changes] | [no-changes-produced]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | [review-cap-reached]",
       "kind": "dev_produced_no_changes",
       "signal": ""
     },
@@ -8106,6 +9601,16 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[dev-handoff-missing] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -8154,6 +9659,11 @@
       "input": "[dev-handoff-missing] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[dev-handoff-missing] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[dev-handoff-missing] | ai_apicallerror context_length_exceeded",
@@ -8226,7 +9736,7 @@
       "signal": ""
     },
     {
-      "input": "[dev-handoff-missing] | invalid auth method",
+      "input": "[dev-handoff-missing] | [push-auth-failed]",
       "kind": "dev_handoff_missing",
       "signal": ""
     },
@@ -8266,6 +9776,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | [stage-cap-killed]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
       "input": "[dev-handoff-missing] | [stall-killed]",
       "kind": "dev_handoff_missing",
       "signal": ""
@@ -8282,6 +9797,11 @@
     },
     {
       "input": "[dev-handoff-missing] | [no-changes-produced]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | [review-cap-reached]",
       "kind": "dev_handoff_missing",
       "signal": ""
     },
@@ -8351,6 +9871,16 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-cap-reached] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-cap-reached] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -8399,6 +9929,11 @@
       "input": "[dev-step-cap-reached] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[dev-step-cap-reached] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[dev-step-cap-reached] | ai_apicallerror context_length_exceeded",
@@ -8471,7 +10006,7 @@
       "signal": ""
     },
     {
-      "input": "[dev-step-cap-reached] | invalid auth method",
+      "input": "[dev-step-cap-reached] | [push-auth-failed]",
       "kind": "dev_step_cap_reached",
       "signal": ""
     },
@@ -8511,6 +10046,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-cap-reached] | [stage-cap-killed]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-cap-reached] | [stall-killed]",
       "kind": "dev_step_cap_reached",
       "signal": ""
@@ -8527,6 +10067,11 @@
     },
     {
       "input": "[dev-step-cap-reached] | [no-changes-produced]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [review-cap-reached]",
       "kind": "dev_step_cap_reached",
       "signal": ""
     },
@@ -8596,6 +10141,16 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-progress-unproven] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-progress-unproven] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-progress-unproven] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -8644,6 +10199,11 @@
       "input": "[dev-step-progress-unproven] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[dev-step-progress-unproven] | ai_apicallerror context_length_exceeded",
@@ -8716,7 +10276,7 @@
       "signal": ""
     },
     {
-      "input": "[dev-step-progress-unproven] | invalid auth method",
+      "input": "[dev-step-progress-unproven] | [push-auth-failed]",
       "kind": "dev_step_progress_unproven",
       "signal": ""
     },
@@ -8756,6 +10316,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-progress-unproven] | [stage-cap-killed]",
+      "kind": "dev_step_progress_unproven",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-progress-unproven] | [stall-killed]",
       "kind": "dev_step_progress_unproven",
       "signal": ""
@@ -8772,6 +10337,11 @@
     },
     {
       "input": "[dev-step-progress-unproven] | [no-changes-produced]",
+      "kind": "dev_step_progress_unproven",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [review-cap-reached]",
       "kind": "dev_step_progress_unproven",
       "signal": ""
     },
@@ -8841,248 +10411,283 @@
       "signal": ""
     },
     {
-      "input": "invalid auth method | stage_budget_exceeded:",
+      "input": "[push-auth-failed] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[push-auth-failed] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[push-auth-failed] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
     },
     {
-      "input": "invalid auth method | network unavailable: extended github connectivity loss",
+      "input": "[push-auth-failed] | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
     },
     {
-      "input": "invalid auth method | adapter_incompatible",
+      "input": "[push-auth-failed] | adapter_incompatible",
       "kind": "adapter_incompatible",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [model-stream-stalled]",
+      "input": "[push-auth-failed] | [model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""
     },
     {
-      "input": "invalid auth method | stream idle timeout",
+      "input": "[push-auth-failed] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
     {
-      "input": "invalid auth method | overloaded",
+      "input": "[push-auth-failed] | overloaded",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
     {
-      "input": "invalid auth method | socket connection was closed",
+      "input": "[push-auth-failed] | socket connection was closed",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
     {
-      "input": "invalid auth method | [rate-limit-quota-exhausted]",
+      "input": "[push-auth-failed] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
     {
-      "input": "invalid auth method | [adapter-auth-failed]",
+      "input": "[push-auth-failed] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
     },
     {
-      "input": "invalid auth method | [environment-halt]",
+      "input": "[push-auth-failed] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
     },
     {
-      "input": "invalid auth method | ai_apicallerror context_length_exceeded",
+      "input": "[push-auth-failed] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[push-auth-failed] | ai_apicallerror context_length_exceeded",
       "kind": "context_window_exceeded",
       "signal": ""
     },
     {
-      "input": "invalid auth method | not_found_error model",
+      "input": "[push-auth-failed] | not_found_error model",
       "kind": "model_unavailable",
       "signal": ""
     },
     {
-      "input": "invalid auth method | pipeline-start-failure issue-closed",
+      "input": "[push-auth-failed] | pipeline-start-failure issue-closed",
       "kind": "issue_closed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [blocked-dependency]",
+      "input": "[push-auth-failed] | [blocked-dependency]",
       "kind": "blocked_dependency",
       "signal": ""
     },
     {
-      "input": "invalid auth method | architecture approval required",
+      "input": "[push-auth-failed] | architecture approval required",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
     },
     {
-      "input": "invalid auth method | github-quota-low",
+      "input": "[push-auth-failed] | github-quota-low",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
     },
     {
-      "input": "invalid auth method | github-network-outage",
+      "input": "[push-auth-failed] | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
     },
     {
-      "input": "invalid auth method | secondary rate limit",
+      "input": "[push-auth-failed] | secondary rate limit",
       "kind": "github_rate_limited",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [pr-merge-unmerged",
+      "input": "[push-auth-failed] | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [stage:worktree-containment]",
+      "input": "[push-auth-failed] | [stage:worktree-containment]",
       "kind": "containment_breach",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [not-pipeline-actionable]",
+      "input": "[push-auth-failed] | [not-pipeline-actionable]",
       "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [dev-produced-no-changes]",
+      "input": "[push-auth-failed] | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [dev-handoff-missing]",
+      "input": "[push-auth-failed] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [dev-step-cap-reached]",
+      "input": "[push-auth-failed] | [dev-step-cap-reached]",
       "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [dev-step-progress-unproven]",
+      "input": "[push-auth-failed] | [dev-step-progress-unproven]",
       "kind": "dev_step_progress_unproven",
       "signal": ""
     },
     {
-      "input": "invalid auth method | premature turn end",
+      "input": "[push-auth-failed] | premature turn end",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | worktree_uncommitted",
+      "input": "[push-auth-failed] | worktree_uncommitted",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | budget_ceiling_hit",
+      "input": "[push-auth-failed] | budget_ceiling_hit",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [runaway-progress-exceeded]",
+      "input": "[push-auth-failed] | [runaway-progress-exceeded]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [runaway-ceiling-exceeded]",
+      "input": "[push-auth-failed] | [runaway-ceiling-exceeded]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [cost-cap-exceeded]",
+      "input": "[push-auth-failed] | [cost-cap-exceeded]",
       "kind": "budget_exceeded",
       "signal": ""
     },
     {
-      "input": "invalid auth method | stage-no-output-timeout",
+      "input": "[push-auth-failed] | stage-no-output-timeout",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [stall-killed]",
+      "input": "[push-auth-failed] | [stage-cap-killed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | pipeline_budget_exceeded",
+      "input": "[push-auth-failed] | [stall-killed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | schema validation",
+      "input": "[push-auth-failed] | pipeline_budget_exceeded",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [no-changes-produced]",
+      "input": "[push-auth-failed] | schema validation",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [validation-failed]",
+      "input": "[push-auth-failed] | [no-changes-produced]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [validation-inconclusive]",
+      "input": "[push-auth-failed] | [review-cap-reached]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [branch-forked]",
+      "input": "[push-auth-failed] | [validation-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [commit-orphaned]",
+      "input": "[push-auth-failed] | [validation-inconclusive]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [adapter-permission-rejected]",
+      "input": "[push-auth-failed] | [branch-forked]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [permission-denied]",
+      "input": "[push-auth-failed] | [commit-orphaned]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | stage_context_unreadable",
+      "input": "[push-auth-failed] | [adapter-permission-rejected]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | dev_build_verification_missing",
+      "input": "[push-auth-failed] | [permission-denied]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | dev_build_verification_failed",
+      "input": "[push-auth-failed] | stage_context_unreadable",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | [dev-context-stale]",
+      "input": "[push-auth-failed] | dev_build_verification_missing",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | dev_tests_failed",
+      "input": "[push-auth-failed] | dev_build_verification_failed",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | pr_merge_lookup_failed",
+      "input": "[push-auth-failed] | [dev-context-stale]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
-      "input": "invalid auth method | subagent crash",
+      "input": "[push-auth-failed] | dev_tests_failed",
       "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "[push-auth-failed] | pr_merge_lookup_failed",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "[push-auth-failed] | subagent crash",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
       "signal": ""
     },
     {
@@ -9134,6 +10739,11 @@
       "input": "premature turn end | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "premature turn end | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "premature turn end | ai_apicallerror context_length_exceeded",
@@ -9211,7 +10821,7 @@
       "signal": ""
     },
     {
-      "input": "premature turn end | invalid auth method",
+      "input": "premature turn end | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -9246,6 +10856,11 @@
       "signal": ""
     },
     {
+      "input": "premature turn end | [stage-cap-killed]",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
       "input": "premature turn end | [stall-killed]",
       "kind": "premature_turn_end",
       "signal": ""
@@ -9262,6 +10877,11 @@
     },
     {
       "input": "premature turn end | [no-changes-produced]",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | [review-cap-reached]",
       "kind": "premature_turn_end",
       "signal": ""
     },
@@ -9331,6 +10951,16 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "worktree_uncommitted | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -9379,6 +11009,11 @@
       "input": "worktree_uncommitted | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "worktree_uncommitted | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "worktree_uncommitted | ai_apicallerror context_length_exceeded",
@@ -9456,7 +11091,7 @@
       "signal": ""
     },
     {
-      "input": "worktree_uncommitted | invalid auth method",
+      "input": "worktree_uncommitted | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -9491,6 +11126,11 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | [stage-cap-killed]",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
       "input": "worktree_uncommitted | [stall-killed]",
       "kind": "worktree_uncommitted",
       "signal": ""
@@ -9507,6 +11147,11 @@
     },
     {
       "input": "worktree_uncommitted | [no-changes-produced]",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | [review-cap-reached]",
       "kind": "worktree_uncommitted",
       "signal": ""
     },
@@ -9576,6 +11221,16 @@
       "signal": ""
     },
     {
+      "input": "budget_ceiling_hit | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "budget_ceiling_hit | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -9624,6 +11279,11 @@
       "input": "budget_ceiling_hit | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "budget_ceiling_hit | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "budget_ceiling_hit | ai_apicallerror context_length_exceeded",
@@ -9701,7 +11361,7 @@
       "signal": ""
     },
     {
-      "input": "budget_ceiling_hit | invalid auth method",
+      "input": "budget_ceiling_hit | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -9736,6 +11396,11 @@
       "signal": ""
     },
     {
+      "input": "budget_ceiling_hit | [stage-cap-killed]",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
       "input": "budget_ceiling_hit | [stall-killed]",
       "kind": "budget_ceiling_hit",
       "signal": ""
@@ -9752,6 +11417,11 @@
     },
     {
       "input": "budget_ceiling_hit | [no-changes-produced]",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | [review-cap-reached]",
       "kind": "budget_ceiling_hit",
       "signal": ""
     },
@@ -9821,6 +11491,16 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[runaway-progress-exceeded] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -9869,6 +11549,11 @@
       "input": "[runaway-progress-exceeded] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[runaway-progress-exceeded] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[runaway-progress-exceeded] | ai_apicallerror context_length_exceeded",
@@ -9946,7 +11631,7 @@
       "signal": ""
     },
     {
-      "input": "[runaway-progress-exceeded] | invalid auth method",
+      "input": "[runaway-progress-exceeded] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -9981,6 +11666,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | [stage-cap-killed]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
       "input": "[runaway-progress-exceeded] | [stall-killed]",
       "kind": "runaway_progress",
       "signal": ""
@@ -9997,6 +11687,11 @@
     },
     {
       "input": "[runaway-progress-exceeded] | [no-changes-produced]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | [review-cap-reached]",
       "kind": "runaway_progress",
       "signal": ""
     },
@@ -10066,6 +11761,16 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -10114,6 +11819,11 @@
       "input": "[runaway-ceiling-exceeded] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[runaway-ceiling-exceeded] | ai_apicallerror context_length_exceeded",
@@ -10191,7 +11901,7 @@
       "signal": ""
     },
     {
-      "input": "[runaway-ceiling-exceeded] | invalid auth method",
+      "input": "[runaway-ceiling-exceeded] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -10226,6 +11936,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | [stage-cap-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -10242,6 +11957,11 @@
     },
     {
       "input": "[runaway-ceiling-exceeded] | [no-changes-produced]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | [review-cap-reached]",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -10311,6 +12031,16 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[cost-cap-exceeded] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -10357,6 +12087,11 @@
     },
     {
       "input": "[cost-cap-exceeded] | [environment-halt]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | [gate-plugin-missing]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -10436,7 +12171,7 @@
       "signal": ""
     },
     {
-      "input": "[cost-cap-exceeded] | invalid auth method",
+      "input": "[cost-cap-exceeded] | [push-auth-failed]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -10471,6 +12206,11 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | [stage-cap-killed]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "[cost-cap-exceeded] | [stall-killed]",
       "kind": "budget_exceeded",
       "signal": ""
@@ -10487,6 +12227,11 @@
     },
     {
       "input": "[cost-cap-exceeded] | [no-changes-produced]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | [review-cap-reached]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -10556,6 +12301,16 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -10604,6 +12359,11 @@
       "input": "stage-no-output-timeout | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "stage-no-output-timeout | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "stage-no-output-timeout | ai_apicallerror context_length_exceeded",
@@ -10681,7 +12441,7 @@
       "signal": ""
     },
     {
-      "input": "stage-no-output-timeout | invalid auth method",
+      "input": "stage-no-output-timeout | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -10716,6 +12476,11 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | [stage-cap-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -10732,6 +12497,11 @@
     },
     {
       "input": "stage-no-output-timeout | [no-changes-produced]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | [review-cap-reached]",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -10801,6 +12571,286 @@
       "signal": ""
     },
     {
+      "input": "[stage-cap-killed] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[stage-cap-killed] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[stage-cap-killed] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[stage-cap-killed] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[stage-cap-killed] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[stage-cap-killed] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[stage-cap-killed] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[stage-cap-killed] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "[stage-cap-killed] | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "[stage-cap-killed] | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "[stage-cap-killed] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [dev-step-progress-unproven]",
+      "kind": "dev_step_progress_unproven",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [push-auth-failed]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | premature turn end",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | worktree_uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | budget_ceiling_hit",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [runaway-progress-exceeded]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [runaway-ceiling-exceeded]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | stage-no-output-timeout",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [stall-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | pipeline_budget_exceeded",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | schema validation",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [no-changes-produced]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [review-cap-reached]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [validation-failed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [validation-inconclusive]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [branch-forked]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [commit-orphaned]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [adapter-permission-rejected]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [permission-denied]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | stage_context_unreadable",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | dev_build_verification_missing",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | dev_build_verification_failed",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | [dev-context-stale]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | dev_tests_failed",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | pr_merge_lookup_failed",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stage-cap-killed] | subagent crash",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -10849,6 +12899,11 @@
       "input": "[stall-killed] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[stall-killed] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[stall-killed] | ai_apicallerror context_length_exceeded",
@@ -10926,7 +12981,7 @@
       "signal": ""
     },
     {
-      "input": "[stall-killed] | invalid auth method",
+      "input": "[stall-killed] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -10966,6 +13021,11 @@
       "signal": ""
     },
     {
+      "input": "[stall-killed] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed] | pipeline_budget_exceeded",
       "kind": "stall_kill",
       "signal": ""
@@ -10977,6 +13037,11 @@
     },
     {
       "input": "[stall-killed] | [no-changes-produced]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | [review-cap-reached]",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -11046,6 +13111,16 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -11094,6 +13169,11 @@
       "input": "pipeline_budget_exceeded | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "pipeline_budget_exceeded | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "pipeline_budget_exceeded | ai_apicallerror context_length_exceeded",
@@ -11171,7 +13251,7 @@
       "signal": ""
     },
     {
-      "input": "pipeline_budget_exceeded | invalid auth method",
+      "input": "pipeline_budget_exceeded | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -11211,6 +13291,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -11222,6 +13307,11 @@
     },
     {
       "input": "pipeline_budget_exceeded | [no-changes-produced]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | [review-cap-reached]",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -11291,6 +13381,16 @@
       "signal": ""
     },
     {
+      "input": "schema validation | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "schema validation | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -11339,6 +13439,11 @@
       "input": "schema validation | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "schema validation | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "schema validation | ai_apicallerror context_length_exceeded",
@@ -11416,7 +13521,7 @@
       "signal": ""
     },
     {
-      "input": "schema validation | invalid auth method",
+      "input": "schema validation | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -11456,6 +13561,11 @@
       "signal": ""
     },
     {
+      "input": "schema validation | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "schema validation | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -11467,6 +13577,11 @@
     },
     {
       "input": "schema validation | [no-changes-produced]",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | [review-cap-reached]",
       "kind": "validation_error",
       "signal": ""
     },
@@ -11536,6 +13651,16 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -11584,6 +13709,11 @@
       "input": "[no-changes-produced] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[no-changes-produced] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[no-changes-produced] | ai_apicallerror context_length_exceeded",
@@ -11661,7 +13791,7 @@
       "signal": ""
     },
     {
-      "input": "[no-changes-produced] | invalid auth method",
+      "input": "[no-changes-produced] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -11701,6 +13831,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -11713,6 +13848,11 @@
     {
       "input": "[no-changes-produced] | schema validation",
       "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | [review-cap-reached]",
+      "kind": "no_changes_produced",
       "signal": ""
     },
     {
@@ -11781,6 +13921,286 @@
       "signal": ""
     },
     {
+      "input": "[review-cap-reached] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[review-cap-reached] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[review-cap-reached] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[review-cap-reached] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[review-cap-reached] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[review-cap-reached] | [environment-halt]",
+      "kind": "environment_halt",
+      "signal": "environment_halt"
+    },
+    {
+      "input": "[review-cap-reached] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[review-cap-reached] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "[review-cap-reached] | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "[review-cap-reached] | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "[review-cap-reached] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [dev-step-progress-unproven]",
+      "kind": "dev_step_progress_unproven",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [push-auth-failed]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | premature turn end",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | worktree_uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | budget_ceiling_hit",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [runaway-progress-exceeded]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [runaway-ceiling-exceeded]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | stage-no-output-timeout",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [stall-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | pipeline_budget_exceeded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | schema validation",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [no-changes-produced]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [validation-failed]",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [validation-inconclusive]",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [branch-forked]",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [commit-orphaned]",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [adapter-permission-rejected]",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [permission-denied]",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | stage_context_unreadable",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | dev_build_verification_missing",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | dev_build_verification_failed",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [dev-context-stale]",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | dev_tests_failed",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | pr_merge_lookup_failed",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | subagent crash",
+      "kind": "review_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[validation-failed] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -11829,6 +14249,11 @@
       "input": "[validation-failed] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[validation-failed] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[validation-failed] | ai_apicallerror context_length_exceeded",
@@ -11906,7 +14331,7 @@
       "signal": ""
     },
     {
-      "input": "[validation-failed] | invalid auth method",
+      "input": "[validation-failed] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -11946,6 +14371,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-failed] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[validation-failed] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -11963,6 +14393,11 @@
     {
       "input": "[validation-failed] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -12026,6 +14461,16 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -12074,6 +14519,11 @@
       "input": "[validation-inconclusive] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[validation-inconclusive] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[validation-inconclusive] | ai_apicallerror context_length_exceeded",
@@ -12151,7 +14601,7 @@
       "signal": ""
     },
     {
-      "input": "[validation-inconclusive] | invalid auth method",
+      "input": "[validation-inconclusive] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -12191,6 +14641,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -12208,6 +14663,11 @@
     {
       "input": "[validation-inconclusive] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -12271,6 +14731,16 @@
       "signal": ""
     },
     {
+      "input": "[branch-forked] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[branch-forked] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -12319,6 +14789,11 @@
       "input": "[branch-forked] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[branch-forked] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[branch-forked] | ai_apicallerror context_length_exceeded",
@@ -12396,7 +14871,7 @@
       "signal": ""
     },
     {
-      "input": "[branch-forked] | invalid auth method",
+      "input": "[branch-forked] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -12436,6 +14911,11 @@
       "signal": ""
     },
     {
+      "input": "[branch-forked] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[branch-forked] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -12453,6 +14933,11 @@
     {
       "input": "[branch-forked] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -12516,6 +15001,16 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -12564,6 +15059,11 @@
       "input": "[commit-orphaned] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[commit-orphaned] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[commit-orphaned] | ai_apicallerror context_length_exceeded",
@@ -12641,7 +15141,7 @@
       "signal": ""
     },
     {
-      "input": "[commit-orphaned] | invalid auth method",
+      "input": "[commit-orphaned] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -12681,6 +15181,11 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -12698,6 +15203,11 @@
     {
       "input": "[commit-orphaned] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -12761,6 +15271,16 @@
       "signal": ""
     },
     {
+      "input": "[adapter-permission-rejected] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[adapter-permission-rejected] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -12809,6 +15329,11 @@
       "input": "[adapter-permission-rejected] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[adapter-permission-rejected] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[adapter-permission-rejected] | ai_apicallerror context_length_exceeded",
@@ -12886,7 +15411,7 @@
       "signal": ""
     },
     {
-      "input": "[adapter-permission-rejected] | invalid auth method",
+      "input": "[adapter-permission-rejected] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -12926,6 +15451,11 @@
       "signal": ""
     },
     {
+      "input": "[adapter-permission-rejected] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[adapter-permission-rejected] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -12943,6 +15473,11 @@
     {
       "input": "[adapter-permission-rejected] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -13006,6 +15541,16 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -13054,6 +15599,11 @@
       "input": "[permission-denied] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[permission-denied] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[permission-denied] | ai_apicallerror context_length_exceeded",
@@ -13131,7 +15681,7 @@
       "signal": ""
     },
     {
-      "input": "[permission-denied] | invalid auth method",
+      "input": "[permission-denied] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -13171,6 +15721,11 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -13188,6 +15743,11 @@
     {
       "input": "[permission-denied] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -13251,6 +15811,16 @@
       "signal": ""
     },
     {
+      "input": "stage_context_unreadable | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "stage_context_unreadable | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -13299,6 +15869,11 @@
       "input": "stage_context_unreadable | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "stage_context_unreadable | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "stage_context_unreadable | ai_apicallerror context_length_exceeded",
@@ -13376,7 +15951,7 @@
       "signal": ""
     },
     {
-      "input": "stage_context_unreadable | invalid auth method",
+      "input": "stage_context_unreadable | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -13416,6 +15991,11 @@
       "signal": ""
     },
     {
+      "input": "stage_context_unreadable | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "stage_context_unreadable | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -13433,6 +16013,11 @@
     {
       "input": "stage_context_unreadable | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -13496,6 +16081,16 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -13544,6 +16139,11 @@
       "input": "dev_build_verification_missing | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "dev_build_verification_missing | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "dev_build_verification_missing | ai_apicallerror context_length_exceeded",
@@ -13621,7 +16221,7 @@
       "signal": ""
     },
     {
-      "input": "dev_build_verification_missing | invalid auth method",
+      "input": "dev_build_verification_missing | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -13661,6 +16261,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -13678,6 +16283,11 @@
     {
       "input": "dev_build_verification_missing | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -13741,6 +16351,16 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_failed | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_failed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -13789,6 +16409,11 @@
       "input": "dev_build_verification_failed | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "dev_build_verification_failed | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "dev_build_verification_failed | ai_apicallerror context_length_exceeded",
@@ -13866,7 +16491,7 @@
       "signal": ""
     },
     {
-      "input": "dev_build_verification_failed | invalid auth method",
+      "input": "dev_build_verification_failed | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -13906,6 +16531,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_failed | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_failed | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -13923,6 +16553,11 @@
     {
       "input": "dev_build_verification_failed | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -13986,6 +16621,16 @@
       "signal": ""
     },
     {
+      "input": "[dev-context-stale] | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "[dev-context-stale] | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "[dev-context-stale] | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -14034,6 +16679,11 @@
       "input": "[dev-context-stale] | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[dev-context-stale] | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "[dev-context-stale] | ai_apicallerror context_length_exceeded",
@@ -14111,7 +16761,7 @@
       "signal": ""
     },
     {
-      "input": "[dev-context-stale] | invalid auth method",
+      "input": "[dev-context-stale] | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -14151,6 +16801,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-context-stale] | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "[dev-context-stale] | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -14168,6 +16823,11 @@
     {
       "input": "[dev-context-stale] | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[dev-context-stale] | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -14231,6 +16891,16 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -14279,6 +16949,11 @@
       "input": "dev_tests_failed | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "dev_tests_failed | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "dev_tests_failed | ai_apicallerror context_length_exceeded",
@@ -14356,7 +17031,7 @@
       "signal": ""
     },
     {
-      "input": "dev_tests_failed | invalid auth method",
+      "input": "dev_tests_failed | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -14396,6 +17071,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -14413,6 +17093,11 @@
     {
       "input": "dev_tests_failed | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -14476,6 +17161,16 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -14524,6 +17219,11 @@
       "input": "pr_merge_lookup_failed | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "pr_merge_lookup_failed | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "pr_merge_lookup_failed | ai_apicallerror context_length_exceeded",
@@ -14601,7 +17301,7 @@
       "signal": ""
     },
     {
-      "input": "pr_merge_lookup_failed | invalid auth method",
+      "input": "pr_merge_lookup_failed | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -14641,6 +17341,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -14658,6 +17363,11 @@
     {
       "input": "pr_merge_lookup_failed | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -14721,6 +17431,16 @@
       "signal": ""
     },
     {
+      "input": "subagent crash | [merge-conflict]",
+      "kind": "merge_conflict",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | merge-queue-enqueue-exhausted",
+      "kind": "merge_queue_enqueue_failed",
+      "signal": ""
+    },
+    {
       "input": "subagent crash | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
@@ -14769,6 +17489,11 @@
       "input": "subagent crash | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "subagent crash | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "subagent crash | ai_apicallerror context_length_exceeded",
@@ -14846,7 +17571,7 @@
       "signal": ""
     },
     {
-      "input": "subagent crash | invalid auth method",
+      "input": "subagent crash | [push-auth-failed]",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
@@ -14886,6 +17611,11 @@
       "signal": ""
     },
     {
+      "input": "subagent crash | [stage-cap-killed]",
+      "kind": "stage_cap_kill",
+      "signal": ""
+    },
+    {
       "input": "subagent crash | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
@@ -14903,6 +17633,11 @@
     {
       "input": "subagent crash | [no-changes-produced]",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [review-cap-reached]",
+      "kind": "review_cap_reached",
       "signal": ""
     },
     {
@@ -15084,6 +17819,26 @@
       "input": "usage limit | [environment-halt]",
       "kind": "environment_halt",
       "signal": "environment_halt"
+    },
+    {
+      "input": "[gate-plugin-missing] | session limit",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "session limit | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "[gate-plugin-missing] | usage limit",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "usage limit | [gate-plugin-missing]",
+      "kind": "gate_plugin_missing",
+      "signal": "gate_plugin_missing"
     },
     {
       "input": "architecture approval required | session limit",

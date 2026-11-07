@@ -10,6 +10,26 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Phase 1.4 freshness check no longer aborts a merge that is already open, so a staged
+  resolution survives (#2755).
+
+### Changed
+
+- Step 2.7.3 is now the Independent Review Gate: one review per tree, in a fresh context, through `nightgauge review`. The self-critique and its hand-recorded verdict are gone (#2839).
+- Step 5.3 pushes with `nightgauge git push-branch`, which recovers a self-inflicted fork (a rebased PR branch) without force and exits 3 with `[branch-forked]` on a genuine fork (#2699).
+- Step 5.3 handles `push-branch` exit 4 (`[push-auth-failed]`): it writes `validate-{N}.json` with the real verdict and `push_status: "auth_failed"` instead of withholding context, so a refused push is no longer reported as failed tests (#2742).
+- Step 5.3's exit 3 now also covers a rejected push that could not be reconciled, and exit 1 means only a failure that was not a rejection (#2749).
+
+### Fixed
+
+- The full gate's log is kept as `gate-{N}.log` and named in `unit_tests.log`,
+  and its Go result lines set the unit result, so a gate started in the
+  background still reaches pr-create. A criterion asking for a command and its
+  result in the PR body records both in its verdict's `evidence` (#2941).
+- **A `catch` fails the run; it is not a log of findings (#2746).** A defect
+  fixed in the fix loop gets `pass` and is described in the validate notes, and
+  the gate judges the latest verdict per `gate_name`, so a retry's verdict
+  supersedes an earlier one. Skill version 1.23.1.
 - **Step 6.0 names the verdict shape pr-create reads (#2665).** Verdicts go in
   `acceptance_criteria_verdicts` as `{index, text, status, evidence}` with the
   0-based index and verbatim text from `ac-reconcile-{N}.json`; the step no

@@ -48,6 +48,32 @@ func TestAppendGateMetric_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestAppendGateMetric_ReservesJudgeGateName(t *testing.T) {
+	for name, write := range map[string]func(ws string) error{
+		"AppendGateMetric": func(ws string) error {
+			return AppendGateMetric(ws, 1, JudgeGateName, "pass", "", "t")
+		},
+		"AppendGateMetricDetail": func(ws string) error {
+			return AppendGateMetricDetail(ws, 1, JudgeGateName, "pass", "", "t", nil, nil)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ws := layouttest.Repo(t)
+			err := write(ws)
+			if err == nil || !strings.Contains(err.Error(), "appendJudgeVerdicts") {
+				t.Fatalf("err = %v, want a refusal naming appendJudgeVerdicts", err)
+			}
+			got, err := ReadGateMetricsForIssue(ws, 1)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if len(got) != 0 {
+				t.Fatalf("a refused name wrote %d row(s)", len(got))
+			}
+		})
+	}
+}
+
 func TestAppendGateMetric_RejectsBadInput(t *testing.T) {
 	ws := layouttest.Repo(t)
 	if err := AppendGateMetric(ws, 1, "build", "maybe", "", "t"); err == nil {
@@ -82,6 +108,39 @@ func TestAppendGateMetric_WritesCheckoutNotWorkingTree(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(plain, ".nightgauge")); !os.IsNotExist(err) {
 		t.Fatalf("AppendGateMetric outside a git checkout wrote into it (stat err %v)", err)
+	}
+}
+
+// Superseded verdicts stay visible to telemetry: the reader and the clone
+// history both keep the earlier "catch" after a later "pass" (#2746).
+func TestAppendGateMetric_SupersededCatchStaysVisible(t *testing.T) {
+	ws := layouttest.Repo(t)
+	if err := AppendGateMetric(ws, 2746, "adversarial-review", "catch", "x", "2026-10-31T00:00:00Z"); err != nil {
+		t.Fatalf("append catch: %v", err)
+	}
+	if err := AppendGateMetric(ws, 2746, "adversarial-review", "pass", "", "2026-10-31T00:01:00Z"); err != nil {
+		t.Fatalf("append pass: %v", err)
+	}
+
+	got, err := ReadGateMetricsForIssue(ws, 2746)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) != 2 || got[0].Result != "catch" || got[1].Result != "pass" {
+		t.Fatalf("reader = %+v, want catch then pass", got)
+	}
+
+	history, err := layout.ClassFilePath(ws, layout.ClassLogs, GateMetricsHistoryName)
+	if err != nil {
+		t.Fatalf("history path: %v", err)
+	}
+	data, err := os.ReadFile(history)
+	if err != nil {
+		t.Fatalf("read history: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"result":"catch"`) || !strings.Contains(lines[1], `"result":"pass"`) {
+		t.Fatalf("history = %q, want catch then pass", lines)
 	}
 }
 

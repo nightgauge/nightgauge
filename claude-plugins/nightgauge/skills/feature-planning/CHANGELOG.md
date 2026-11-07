@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- New gotcha: an existing PR branch is updated by merging its base; a plan never prescribes a rebase or force push (#2699).
+
 ### Added
 
 - **Actionable Out of Scope entries are recorded (#479).** Each concrete
@@ -96,7 +100,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ### Documentation
 
 - Added
-  [docs/ADAPTIVE_DOCUMENTATION_READING.md](../../../../docs/ADAPTIVE_DOCUMENTATION_READING.md)
+  [docs/ADAPTIVE_DOCUMENTATION_READING.md](https://github.com/nightgauge/nightgauge/blob/main/docs/ADAPTIVE_DOCUMENTATION_READING.md)
   design doc explaining the feature
 
 ## [1.7.0] - 2026-02-02

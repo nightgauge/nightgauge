@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- New gotcha: an existing PR branch is updated by merging its base; a plan never prescribes a rebase or force push (#2699).
+
 ### Added
 
 - **Actionable Out of Scope entries are recorded (#479).** Each concrete

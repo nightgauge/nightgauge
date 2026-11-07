@@ -98,7 +98,7 @@
     "viewsWelcome": [
       {
         "view": "nightgauge.pipelineView",
-        "contents": "Welcome to Nightgauge.\n\nThis repository isn't set up for Nightgauge yet. Run the quick setup steps below to get started — nothing is written to your repo until you opt in.\n\n[$(rocket) Initialize Repository](command:nightgauge.quickstartRepoInit)\n[$(book) Make Repo AI-Ready](command:nightgauge.quickstartSmartSetup)\n[$(info) Learn More](command:nightgauge.quickstartLearnMore)\n\nInitialize creates .nightgauge/config.yaml, standard labels, and links your GitHub Project board. AI-Ready adds AGENTS.md, CLAUDE.md, and focused docs for agent use.",
+        "contents": "Welcome to Nightgauge.\n\nThis repository isn't set up for Nightgauge yet. Run the quick setup steps below to get started — nothing is written to your repo until you opt in.\n\n[$(rocket) Initialize Repository](command:nightgauge.quickstartRepoInit)\n[$(book) Make Repo AI-Ready](command:nightgauge.quickstartSmartSetup)\n[$(info) Learn More](command:nightgauge.quickstartLearnMore)\n\nInitialize creates .nightgauge/config.yaml from this repository's origin remote; link a GitHub Project board afterwards. AI-Ready adds AGENTS.md, CLAUDE.md, and focused docs for agent use.",
         "when": "!nightgauge.repoInitialized"
       },
       {
@@ -272,7 +272,7 @@
       },
       {
         "command": "nightgauge.setupCodex",
-        "title": "Nightgauge: Setup Codex Commands",
+        "title": "Nightgauge: Setup Codex Skills",
         "icon": "$(terminal)"
       },
       {
@@ -1543,13 +1543,13 @@
         "nightgauge.plugins.autoPrompt": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically prompt to install Claude plugins, Codex commands, and Grok skills on startup"
+          "description": "Automatically prompt to install Claude plugins and Codex, Grok and OpenCode skills on startup. Installed skills re-sync after an extension upgrade either way."
         },
         "nightgauge.plugins.marketplaceUrl": {
           "type": "string",
           "scope": "machine",
-          "default": "https://github.com/nightgauge/nightgauge.git",
-          "description": "Git URL for the Nightgauge plugin marketplace"
+          "default": "https://github.com/nightgauge/nightgauge.git#stable",
+          "description": "Git URL for the Nightgauge plugin marketplace. `#stable` follows releases."
         },
         "nightgauge.pipeline.defaultMode": {
           "type": "string",
@@ -1794,19 +1794,19 @@
     "@nightgauge/sdk": "*",
     "date-fns": "^4.4.0",
     "js-yaml": "^5.5.0",
-    "marked": "^18.1.1",
+    "marked": "^18.1.3",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@hono/node-server": "^2.1.5",
     "@playwright/test": "^1.64.1",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/vscode": "^1.85.0",
-    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/coverage-v8": "^5.1.0",
     "@vscode/test-electron": "^3.1.0",
-    "@vscode/vsce": "^4.0.0",
+    "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.28.2",
-    "hono": "^4.13.14",
+    "hono": "^4.13.16",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"

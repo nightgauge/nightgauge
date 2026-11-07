@@ -218,6 +218,7 @@ record may carry both fields, neither, or only one.
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `operator_stop`                  | The **scheduler** killed the stage — an operator pressed Stop, or a cancel tore the run down (Issue #1487). Derived structurally from `execution.Manager`'s own `Cancelled` flag and the scheduler's `stopRequested`, never from error text: a SIGTERM'd process exits 143 with its own last words, which describe nothing about why it died. Exempt from the per-issue lifetime failure cap and from the cascading-failures breaker |
 | `stall_kill`                     | Subagent exceeded `stall_kill_multiplier × stall_thresholds` and was forcibly killed                                                                                                                                                                                                                                                                                                                                                 |
+| `stage_cap_kill`                 | Stage stopped at `pipeline.stage_hard_caps` or `stage_time_caps`. Recovers like `stall_kill`, including `failure_category: stage-cap-killed-after-retry` on a second kill (#2812)                                                                                                                                                                                                                                                    |
 | `budget_exceeded`                | Pipeline-level or per-stage **token** budget ceiling tripped (with grace buffer applied)                                                                                                                                                                                                                                                                                                                                             |
 | `validation_error`               | Context schema validation failed terminally (e.g., missing output context for the stage)                                                                                                                                                                                                                                                                                                                                             |
 | `subagent_crash`                 | Subagent process exited non-zero with no recovery path (model escalation exhausted)                                                                                                                                                                                                                                                                                                                                                  |
@@ -237,8 +238,11 @@ record may carry both fields, neither, or only one.
 | `dev_step_cap_reached`           | feature-dev ran as bounded sub-sessions and spent its session bound (the unchecked-task count it started with, never more than 12) with plan tasks still unchecked; the finished steps' work is on disk and a retry resumes from the next unchecked task (Issue #1651)                                                                                                                                                               |
 | `dev_step_progress_unproven`     | the feature-dev step loop could not fingerprint the work tree (git failed on it) around a sub-session that checked no plan task, so it could not prove the step made progress and stopped rather than count it; environment class, and the earlier steps' work is on disk (Issue #1651)                                                                                                                                              |
 | `adapter_auth_failed`            | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra                                                                                                                                                                                                                                                                                     |
+| `merge_conflict`                 | Conflict recovery could not land a merge-queue conflict (Issue #2841) — the operator resolves the files the halt names                                                                                                                                                                                                                                                                                                               |
 | `no_changes_produced`            | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                                                                                                                                                                                                                           |
 | `not_pipeline_actionable`        | A stage declared the issue's deliverable is not producible by any pipeline lap — counsel sign-off, an operator-only credential, a human decision (Issue #1241) — not a failure and not a deferral                                                                                                                                                                                                                                    |
+| `review_cap_reached`             | The independent review reached its round cap with findings standing; the issue parks, the repository keeps dispatching, and the work stays uncommitted in the run's worktree (Issue #2865)                                                                                                                                                                                                                                           |
+| `resume_no_op`                   | A run resumed at pr-merge, found the PR already merged, did no work and left the issue open; it parks in Backlog and the repository keeps dispatching (Issue #2878)                                                                                                                                                                                                                                                                  |
 | `validation_failed`              | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                                                                                                                                                                                                                      |
 | `branch_forked`                  | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action                                                                                                                                                                                                                                                                                         |
 | `abandoned_commit`               | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191)                                                                                                                                                                                                  |
@@ -254,6 +258,7 @@ record may carry both fields, neither, or only one.
 | `adapter_incompatible`           | The adapter's binary cannot serve the dispatch: below the compat floor or unreadable (Issues #1627, #1631; a newer version is never refused) — parked; install a build at or above the floor                                                                                                                                                                                                                                         |
 | `dev_context_stale`              | feature-dev's gate found a `dev-N.json` older than the stage it judged, the `[dev-context-stale]` reason (Issue #2637) — a prior attempt's handoff; parked, never judged on its contents, not charged to the issue                                                                                                                                                                                                                   |
 | `environment_halt`               | A project-declared `preflight.environment` check failed in Phase 0, the `[environment-halt]` marker (Issue #101) — the operator's environment, not the code; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                      |
+| `gate_plugin_missing`            | A bundled build's Claude stage did not load the Nightgauge plugin exactly once, the `[gate-plugin-missing]` marker (Issue #2723) — stopped before any work; parked, held for an operator, excluded from the calibration corpus                                                                                                                                                                                                       |
 
 A rejected tool call the session recovered from (a later call completed and its step finished) is a warning, not `adapter_permission_rejected`: only a rejection still open when the session ends classifies it. A non-zero OpenCode exit whose only errors were recovered is handed to the stage's post-condition gate, which decides (Issue #2168).
 
@@ -302,6 +307,8 @@ from the captures in `internal/terminalkind/testdata/opencode/`.
 | The `.env` read guard rejected a `read`  | `adapter_permission_rejected` | Parked                                                  |
 | The binary cannot serve the dispatch     | `adapter_incompatible`        | Parked                                                  |
 | A retry inherited a prior dev context    | `dev_context_stale`           | Parked                                                  |
+| The review reached its round cap         | `review_cap_reached`          | Parked                                                  |
+| A resumed run merged nothing             | `resume_no_op`                | Parked                                                  |
 | The model server is not listening        | `network_unavailable`         | Generic backoff; outcome recording skipped              |
 | `ProviderModelNotFoundError`             | `model_unavailable`           | Cap recovery (below)                                    |
 | An Ollama model that is not pulled       | `model_unavailable`           | Cap recovery (below)                                    |
@@ -324,6 +331,19 @@ park held while the fleet runs. The extension-driven queue agrees: its
 queue, and a test reads `TerminalKindParks` from the Go source so the two
 cannot drift (#1753).
 
+- `resume_no_op` (#2878): a run that resumed at pr-merge reports the kind with
+  success when it found the PR already merged and the issue stayed open. Ready was
+  withheld, so no repeat would come: the report parks the issue in Backlog with an
+  Action Center card. A full run whose PR merged elsewhere is not a no-op. A release
+  clears the hold; move the issue to Ready to re-run it.
+
+- `review_cap_reached` (#2865): the independent review caught defects in every
+  round its cap allows. The run's work stays uncommitted in its worktree, and
+  the Action Center card lists the last catch's findings and that path, read
+  from the gate ledger. The review's metric row stays `catch`; its summary
+  carries the `[review-cap-reached]` marker `FeatureValidateGate` reads, and
+  the skill's `errorCategory: "review-cap-reached"` is the extension's signal.
+  A release re-runs the pipeline with a fresh round count.
 - `context_window_exceeded`: reload the model with a larger context, route the
   stage to a model with a larger window, or split the issue. It is not an
   agent failure. The run record carries the kind for the fit check (#1645) and
@@ -558,6 +578,8 @@ kinds that halt on purpose and say so, and the three parked kinds (#1631):
 | `adapter_incompatible`           | A binary at or above the floor, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `dev_context_stale`              | A filed pipeline-gap and the stale handoff removed   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 | `environment_halt`               | The check's remedy, applied to the environment       | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `gate_plugin_missing`            | An intact bundled plugin, or a newer Claude Code     | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `review_cap_reached`             | The standing findings, fixed or the issue narrowed   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 
 The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
 derives the hold from it via `HoldForTerminalKind`, so retryability has one
@@ -604,6 +626,28 @@ not a recovery attempt.
 `worktree_uncommitted` and `budget_ceiling_hit` are **recoverable** kinds: the
 autonomous scheduler does not increment `LifetimeIssueFailures` for them and the
 Go scheduler skips the board-status revert — the issue is re-dispatchable.
+
+### Gate plugin missing (#2723)
+
+A Claude stage's safety gates ship in the Nightgauge plugin, so a stage names it
+with `--plugin-dir` and reads the CLI's `system/init` event to prove it loaded.
+On a bundled build, each of these stops the stage before any work:
+
+- `plugins` is missing from `system/init`.
+- `plugins` has no entry named exactly `nightgauge`.
+- `plugins` has more than one such entry.
+- Work arrives on the stream with no `system/init` before it.
+
+The stage runner kills the process tree and writes `[gate-plugin-missing]` to
+stderr, which classifies as `gate_plugin_missing`. The kind parks and both
+outcome writers skip the run, as for `environment_halt`. Parking raises no card,
+so both terminal funnels raise a `gate-plugin-missing` Action Center card under
+one key.
+
+A build with no bundle beside it writes `[gate-plugin-warning]` on the same
+readings and continues. That literal is separate so a warning in the stderr of a
+later failure does not park that failure. Interactive stages have no stream, so
+they pass `--plugin-dir` with no check.
 
 ### Project environment halt (#101)
 
@@ -660,6 +704,7 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | -------------------------------- | ------------------------------------------------------------------------------------------- |
 | `operator_stop`                  | `infrastructure` — ours, and deliberate; never the issue's                                  |
 | `stall_kill`                     | `agent` — transient runtime issue                                                           |
+| `stage_cap_kill`                 | `agent` — transient runtime issue, same as `stall_kill`                                     |
 | `budget_exceeded`                | `agent` — call-pattern under operator control                                               |
 | `validation_error`               | `infrastructure` — pipeline contract failed                                                 |
 | `subagent_crash`                 | `organic` — implementation failure, full weight                                             |
@@ -676,8 +721,10 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `dev_step_cap_reached`           | `organic` — the plan outgrew the session bound; the issue's scope, not a crash              |
 | `dev_step_progress_unproven`     | `infrastructure` — git could not read the worktree; not the model or the issue              |
 | `adapter_auth_failed`            | `infrastructure` — probe starvation / credential state, not the issue                       |
+| `merge_conflict`                 | `organic` — the branch's content collided with its base                                     |
 | `no_changes_produced`            | `agent` — planning/scope failure (dispatch-eligibility gap), not the model's implementation |
 | `not_pipeline_actionable`        | non-failure — the issue is misfiled, not defective; no lifetime-cap increment, no cascade   |
+| `review_cap_reached`             | non-failure — one issue's review stopped; no lifetime-cap increment, no cascade, no pause   |
 | `validation_failed`              | `organic` — true implementation failure caught by feature-validate's own quality gate       |
 | `branch_forked`                  | `infrastructure` — the pipeline's own orphaned push (or an operator's), not the code        |
 | `worktree_uncommitted`           | recoverable — work preserved, not counted as a failure                                      |
@@ -692,6 +739,7 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `adapter_permission_rejected`    | parked — a `deny` or `ask` rule on an allowed tool; no lifetime-cap increment, no cascade   |
 | `adapter_incompatible`           | parked — the adapter's binary, not the issue; no lifetime-cap increment, no cascade         |
 | `environment_halt`               | parked — the operator's environment, not the issue; no lifetime-cap increment, no cascade   |
+| `gate_plugin_missing`            | parked — the install, not the issue; no lifetime-cap increment, no cascade                  |
 
 **The sweep (#1237).** #9 built the mechanism but left eleven `KindFail`
 sites emitting an empty `TerminalKind` — four in `feature_dev_gate.go`, two
@@ -732,6 +780,7 @@ V3) so legacy records remain valid — there is no migration step.
 // packages/nightgauge/src/schemas/executionHistory.ts
 export const TerminalFailureKindSchema = z.enum([
   "stall_kill",
+  "stage_cap_kill",
   "budget_exceeded",
   "validation_error",
   "subagent_crash",
@@ -753,6 +802,7 @@ export const TerminalFailureKindSchema = z.enum([
   "no_changes_produced", // Issue #317
   "validation_failed", // Issue #326
   "not_pipeline_actionable", // Issue #1241
+  "review_cap_reached", // Issue #2865
   "branch_forked", // Issue #163
 ]);
 
@@ -883,6 +933,15 @@ classifies `not_pipeline_actionable`
 (`DemoteEnvironmentalKindForOutcome`). The issue is held on its own as a
 non-fault outcome, with no retry, no global cooldown and no lifetime-cap
 increment. A stage that reached a verdict proves its own adapter was working.
+
+**A warning never feeds the global cooldown (#2711).** The cooldown to `resetsAt`
+needs a hard signal: `status: "limited"` or a provider rejection. The soft
+quota-signal idle kill follows only an `allowed_warning`, so `SkillRunner` stamps
+it `[stall-killed]`, and the scheduler demotes any quota kind whose detail reports
+`status=allowed_warning` to `stall_kill` (`DemoteWarningOnlyQuotaKind`). A detail
+with no status stays quota, because the provider's own rejection text carries none.
+Such a stall is never retried on a stronger model (`IsWarningOnlyQuotaStall`):
+quota is still under pressure, and a higher tier spends more of the bucket that warned.
 
 **Why it is bounded.** Extensions are consulted only after the rule ladder has
 projected **no signal**, so an extension can never overrule a kind projected by a
@@ -1367,7 +1426,9 @@ the kind **and** `mergeStateStatus=BLOCKED` in the reason. Ordered first, the
 kind wins and a correctly declined red PR is written up as "the stage reported
 success but the work never landed" — a bug report against a run that did its
 job. Ordered where it is, `merge-blocked` keeps the case and the kind rides
-along as a secondary finding.
+along as a secondary finding. `merge_conflict` is the exception: it maps to
+`merge-blocked` itself, so that extractor stands aside and the finding keeps the
+terminal reason, which names the conflicting files (#2841).
 
 The kind is read from the **threaded field**, never by regexing the joined
 evidence corpus. That corpus concatenates the terminal reason, the scoped

@@ -291,10 +291,9 @@ export function parseRelativeDate(relativeDate: string): Date {
     throw new Error(`Invalid relative date format: ${relativeDate}`);
   }
 
+  // Whole 24-hour days: a local calendar step is 25 hours long across a DST change.
   const days = parseInt(match[1], 10);
-  const date = new Date();
-  date.setDate(date.getDate() - days);
-  return date;
+  return new Date(Date.now() - days * 86_400_000);
 }
 
 /**

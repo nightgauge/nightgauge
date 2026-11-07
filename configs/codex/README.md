@@ -15,8 +15,9 @@ Stages are invoked through the unified entrypoint script
 previously lived under `configs/codex/commands/` were removed in #1804 — see
 `docs/MIGRATION.md`.)
 
-Codex slash commands for these stages are defined in custom command files under
-`.codex/commands/` and invoked as `/<name>`.
+Codex loads skills from `~/.codex/skills/` and exposes each one as
+`$<skill-name>`. It does not read `~/.codex/commands/`, so Nightgauge installs
+nothing there (#2762).
 
 Install/update Codex skills (`~/.codex/skills/`, invoked as `$nightgauge-<name>`)
 from the local working tree with:
@@ -24,6 +25,9 @@ from the local working tree with:
 ```bash
 ./scripts/install-agent-skills.sh --codex-only
 ```
+
+`Nightgauge: Setup Codex Skills` in VS Code installs the same tree from the
+extension bundle, and an extension upgrade re-syncs it on activation.
 
 This also runs automatically as part of the VS Code extension `dev-install.sh`,
 which refreshes the Claude Code plugins, Codex skills, and Grok skills
@@ -123,16 +127,16 @@ scripts/run-stage.sh codex pr-merge 554
 From an interactive Codex session opened at repository root:
 
 ```text
-/nightgauge-issue-pickup 554
-/nightgauge-feature-planning 554
-/nightgauge-feature-dev 554
-/nightgauge-feature-validate 554
-/nightgauge-pr-create 554
-/nightgauge-pr-merge 554
+$nightgauge-issue-pickup 554
+$nightgauge-feature-planning 554
+$nightgauge-feature-dev 554
+$nightgauge-feature-validate 554
+$nightgauge-pr-create 554
+$nightgauge-pr-merge 554
 ```
 
-These custom commands are defined in `.codex/commands/*.md` and route to the
-same `scripts/run-stage.sh` entry point listed above.
+These are the installed skills; in a checkout the same stages also run through
+the `scripts/run-stage.sh` entry point listed above.
 
 Any extra arguments are passed to `nightgauge-sdk stage`, for example:
 

@@ -6,13 +6,27 @@ copySkillsTree (packages/nightgauge/src/services/bundledSkills.ts), so
 either installer may replace what the other installed and neither touches
 anything else:
 
-  install --source SKILLS --dest ROOT --checkout REPO --label NAME
+  install --source SKILLS --dest ROOT --checkout REPO --label NAME [--adopt]
       Install every skill directory (one with a SKILL.md) and _shared/ from
       SKILLS into ROOT. A destination directory is replaced only when it is
       absent or is a real directory holding the install marker; anything else
       (an operator's own `update-docs`, another pack's `_shared`, a symlink, a
-      file) is left untouched and named in a warning. ROOT is refused when it
-      resolves into REPO or contains it. Prints the number installed.
+      file) is left untouched, named in a warning and counted as skipped. A
+      real directory in ROOT that holds the marker but has no skill in SKILLS
+      is removed. ROOT is refused when it resolves into REPO or contains it.
+
+      Prints `LABEL: installed N of M, skipped K`, and `, adopted A` and
+      `, removed R` when they are not zero. M is every eligible source
+      directory and N includes adopted ones. Exits 0 when K is 0, 3 when the
+      install finished with K > 0, and 1 when it refused or crashed.
+
+      --adopt also replaces a marker-less real directory when its content is
+      proven to be a version this repository shipped: its SKILL.md (for
+      _shared, every file) is a blob in REPO's git history. The old copy moves
+      to ROOT.nightgauge-adopted/<UTC-stamp>/<name>, outside ROOT, because an
+      agent loads every directory in ROOT as a live skill. Anything unproven
+      is left alone, named and counted as skipped. Missing or shallow history
+      proves nothing, so it exits 1 before anything is written.
 
   copy --source SKILLS --from DIR --to DIR
       Replace DIR (--to) with a contained copy of DIR (--from), which lies in
@@ -22,15 +36,31 @@ Both copy only what is inside SKILLS: a symlink is installed only when it
 resolves to a regular file inside the tree, and it lands as a regular file. A
 link that escapes the tree (to ~/.ssh, say), dangles, or names a directory is
 skipped and named in a warning. Warnings go to stderr.
+
+Neither copies a skill's top-level CHANGELOG.md or tests/ (#2762): the VSIX
+bundle (packages/nightgauge/scripts/bundle-marketplace.sh) leaves them out,
+and both installers must produce the same tree.
 """
 
 import argparse
 import os
+import posixpath
 import shutil
 import stat
+import subprocess
 import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from mirror_links import SKILLS_REL, release_ref, rewrite_identity_dir  # noqa: E402
 
 INSTALL_MARKER = ".nightgauge-installed"
+ADOPTED_SUFFIX = ".nightgauge-adopted"
+EXIT_SKIPPED = 3
+TEST_DIRS = frozenset({"tests", "__tests__"})
+TEST_FILE_SUFFIXES = (".test.ts", ".test.js")
+GIT_LOCATION_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
 INSTALL_MARKER_TEXT = (
     "Installed by Nightgauge, which replaces this directory when it installs "
     "its skills again.\n"
@@ -86,10 +116,25 @@ def resolve_contained(path, root, label):
     return real, st
 
 
-def copy_contained(source_dir, target_dir, root, label):
+def is_excluded(rel, is_dir):
+    """True for an entry of a skill directory that no install ships: a
+    top-level CHANGELOG.md, and test material at any depth (tests/, __tests__/,
+    *.test.ts, *.test.js). rel is slash-separated inside the skill directory.
+    The Go half is skillrender.BundleExcluded; the extension's is
+    isSkillExcluded in bundledSkills.ts (#2948)."""
+    if rel == "CHANGELOG.md":
+        return True
+    name = rel.rsplit("/", 1)[-1]
+    if is_dir:
+        return name in TEST_DIRS
+    return name.endswith(TEST_FILE_SUFFIXES)
+
+
+def copy_contained(source_dir, target_dir, root, label, excluded=None, prefix=""):
     """Copy a real directory's contents into target_dir (which exists). The
     marker name belongs to the installer, so a source entry by that name is
-    never copied over it."""
+    never copied over it. excluded(rel, is_dir), when given, drops entries at
+    any depth; rel is relative to the directory the copy started at."""
     for name in sorted(os.listdir(source_dir)):
         if name == INSTALL_MARKER:
             continue
@@ -97,27 +142,152 @@ def copy_contained(source_dir, target_dir, root, label):
         if entry is None:
             continue
         real, st = entry
+        is_dir = stat.S_ISDIR(st.st_mode)
+        rel = prefix + name
+        if excluded is not None and excluded(rel, is_dir):
+            continue
         target = os.path.join(target_dir, name)
-        if stat.S_ISDIR(st.st_mode):
+        if is_dir:
             os.mkdir(target)
-            copy_contained(real, target, root, label)
+            copy_contained(real, target, root, label, excluded, rel + "/")
         else:
             shutil.copy2(real, target)
+
+
+def skill_excludes(name):
+    """_shared ships whole; a skill directory ships without is_excluded."""
+    return None if name == "_shared" else is_excluded
+
+
+def is_real_dir(path):
+    try:
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def holds_marker(path):
+    """True when path is a real directory holding the install marker."""
+    if not is_real_dir(path):
+        return False
+    try:
+        return stat.S_ISREG(os.lstat(os.path.join(path, INSTALL_MARKER)).st_mode)
+    except FileNotFoundError:
+        return False
 
 
 def may_replace(target):
     """True when nothing is at target, or it is a real directory holding the
     install marker. A symlink or a file is always someone else's."""
+    return not os.path.lexists(target) or holds_marker(target)
+
+
+def git(checkout, *argv):
+    """git's stdout, or None when it failed. A pre-push hook exports GIT_DIR,
+    which would answer for the hook's repository instead of checkout."""
+    env = {k: v for k, v in os.environ.items() if k not in GIT_LOCATION_ENV}
     try:
-        st = os.lstat(target)
-    except FileNotFoundError:
-        return True
-    if not stat.S_ISDIR(st.st_mode):
+        done = subprocess.run(["git", "-C", checkout, *argv], env=env, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+    except OSError:
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def shipped_blobs(checkout, label):
+    """Every blob id any commit recorded for a SKILL.md or a _shared file, at
+    any path, so canonical and mirror copies both match. None (with a message)
+    when history cannot prove anything: a shallow clone would misreport shipped
+    copies as local edits."""
+    shallow = git(checkout, "rev-parse", "--is-shallow-repository")
+    if shallow is None or shallow.strip() != "false":
+        reason = "not a git checkout" if shallow is None else "this clone is shallow"
+        print(f"==> {label}: refusing --adopt: {reason}, so {checkout} cannot prove which "
+              "versions were shipped. Nothing was written.", file=sys.stderr)
+        return None
+    log = git(checkout, "log", "--format=", "--raw", "--no-abbrev", "--no-renames", "--",
+              "*SKILL.md", "*/_shared/*")
+    blobs = set()
+    for line in (log or "").splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and line.startswith(":"):
+            blobs.update(fields[2:4])
+    blobs = {blob for blob in blobs if blob.strip("0")}
+    if not blobs:
+        print(f"==> {label}: refusing --adopt: no skill history in {checkout}, so nothing can "
+              "be proven shipped. Nothing was written.", file=sys.stderr)
+        return None
+    return blobs
+
+
+def shipped_paths(target, name):
+    """The files whose blobs must all be shipped for target to be adopted, or
+    an empty list when target cannot be proven. _shared has no SKILL.md, so
+    every file in it must match, which leaves another pack's _shared alone."""
+    if name != "_shared":
+        path = os.path.join(target, "SKILL.md")
+        return [path] if os.path.isfile(path) and not os.path.islink(path) else []
+    paths = []
+    for dirpath, dirnames, filenames in os.walk(target):
+        for entry in dirnames + filenames:
+            path = os.path.join(dirpath, entry)
+            if os.path.islink(path):
+                return []
+            if not os.path.isdir(path):
+                paths.append(path)
+    return paths
+
+
+def is_shipped(target, name, blobs, checkout):
+    paths = shipped_paths(target, name)
+    if not paths:
         return False
-    try:
-        return stat.S_ISREG(os.lstat(os.path.join(target, INSTALL_MARKER)).st_mode)
-    except FileNotFoundError:
-        return False
+    ids = git(checkout, "hash-object", "--no-filters", "--", *paths)
+    return ids is not None and set(ids.split()) <= blobs
+
+
+def move_aside(target, name, aside_root):
+    """Rename target out of the skills root. A same-parent rename is atomic, so
+    the old copy is never half gone, and it happens before the replacement."""
+    os.makedirs(aside_root, exist_ok=True)
+    aside = os.path.join(aside_root, name)
+    if os.path.lexists(aside):
+        raise FileExistsError(f"{aside} already exists; {target} was not moved")
+    os.rename(target, aside)
+    return aside
+
+
+def prune_retired(dest, eligible, label):
+    """Remove each real directory holding the marker whose skill has left the
+    source. The marker is the only proof of ownership, so an unmarked stranger
+    and a symlink stay."""
+    removed = 0
+    for name in sorted(os.listdir(dest)):
+        target = os.path.join(dest, name)
+        if name not in eligible and holds_marker(target):
+            shutil.rmtree(target)
+            print(f"    {label}: removed {name}: it is no longer in the source.", file=sys.stderr)
+            removed += 1
+    return removed
+
+
+def summary(label, installed, total, skipped, adopted, removed):
+    line = f"    {label}: installed {installed} of {total}, skipped {skipped}"
+    if adopted:
+        line += f", adopted {adopted}"
+    if removed:
+        line += f", removed {removed}"
+    return line
+
+
+def contain_links(target, rel, ref):
+    """Turn links that leave the installed tree into GitHub URLs (#2764).
+
+    An installed skill has no `docs/` beside it, so `../../docs/X.md` is dead.
+    This is the rewrite bundle-marketplace.sh applies to dist/skills, so the
+    extension and this script still install the same bytes.
+    """
+    rewrite_identity_dir(target, posixpath.join(SKILLS_REL, rel.replace(os.sep, "/")), ref)
 
 
 def install(args):
@@ -129,8 +299,15 @@ def install(args):
             print(f"==> {args.label}: refusing to install into {args.dest}: it resolves to "
                   f"{real_dest}, which overlaps {other}. Nothing was written.", file=sys.stderr)
             return 1
+    blobs = shipped_blobs(checkout, args.label) if args.adopt else None
+    if args.adopt and blobs is None:
+        return 1
+    aside_root = os.path.join(real_dest + ADOPTED_SUFFIX,
+                              time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
     os.makedirs(args.dest, exist_ok=True)
-    count = 0
+    ref = release_ref(root)
+    eligible = set()
+    installed = skipped = adopted = 0
     for name in sorted(os.listdir(root)):
         entry_path = os.path.join(root, name)
         entry = resolve_contained(entry_path, root, args.label)
@@ -140,12 +317,28 @@ def install(args):
             skill = resolve_contained(os.path.join(entry_path, "SKILL.md"), root, args.label)
             if skill is None or not stat.S_ISREG(skill[1].st_mode):
                 continue
+        eligible.add(name)
         target = os.path.join(args.dest, name)
         if not may_replace(target):
-            warn(args.label, f"skipped {name}: {target} is not a directory Nightgauge installed "
-                 f"(no {INSTALL_MARKER}), so it is left untouched. Remove it to let "
-                 f"Nightgauge install {name}.")
-            continue
+            if args.adopt and is_real_dir(target):
+                if not is_shipped(target, name, blobs, checkout):
+                    warn(args.label, f"skipped {name}: {target} has local edits (it matches "
+                         "nothing this repository shipped), so it is left untouched. Remove "
+                         f"it to let Nightgauge install {name}.")
+                    skipped += 1
+                    continue
+                aside = move_aside(target, name, aside_root)
+                print(f"    {args.label}: adopted {name}: old copy moved to {aside}.",
+                      file=sys.stderr)
+                adopted += 1
+            else:
+                how = "Remove it" if args.adopt else (
+                    "Remove it, or run with --adopt if it is an old install,")
+                warn(args.label, f"skipped {name}: {target} is not a directory Nightgauge "
+                     f"installed (no {INSTALL_MARKER}), so it is left untouched. {how} to let "
+                     f"Nightgauge install {name}.")
+                skipped += 1
+                continue
         if os.path.lexists(target):
             shutil.rmtree(target)
         os.mkdir(target)
@@ -153,10 +346,14 @@ def install(args):
         # as Nightgauge's next time.
         with open(os.path.join(target, INSTALL_MARKER), "w", encoding="utf-8") as f:
             f.write(INSTALL_MARKER_TEXT)
-        copy_contained(entry[0], target, root, args.label)
-        count += 1
-    print(count)
-    return 0
+        copy_contained(entry[0], target, root, args.label, skill_excludes(name))
+        contain_links(target, name, ref)
+        installed += 1
+    # With no eligible source the tree is broken, not empty of skills: pruning
+    # against it would delete every Nightgauge skill.
+    removed = prune_retired(args.dest, eligible, args.label) if eligible else 0
+    print(summary(args.label, installed, len(eligible), skipped, adopted, removed))
+    return EXIT_SKIPPED if skipped else 0
 
 
 def copy(args):
@@ -171,7 +368,9 @@ def copy(args):
     if os.path.lexists(args.to_dir):
         shutil.rmtree(args.to_dir)
     os.makedirs(args.to_dir)
-    copy_contained(source, args.to_dir, root, args.label)
+    copy_contained(source, args.to_dir, root, args.label,
+                   skill_excludes(os.path.basename(source)))
+    contain_links(args.to_dir, os.path.relpath(source, root), release_ref(root))
     return 0
 
 
@@ -183,6 +382,7 @@ def main():
     p_install.add_argument("--dest", required=True)
     p_install.add_argument("--checkout", required=True)
     p_install.add_argument("--label", required=True)
+    p_install.add_argument("--adopt", action="store_true")
     p_install.set_defaults(func=install)
     p_copy = sub.add_parser("copy")
     p_copy.add_argument("--source", required=True)

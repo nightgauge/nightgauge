@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,9 +11,12 @@ import (
 	"strings"
 
 	forgecmd "github.com/nightgauge/nightgauge/cmd/nightgauge/forge"
+	"github.com/nightgauge/nightgauge/internal/cmd/followup"
 	"github.com/nightgauge/nightgauge/internal/config"
 	docspkg "github.com/nightgauge/nightgauge/internal/docs"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	gitpkg "github.com/nightgauge/nightgauge/internal/git"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 	"github.com/nightgauge/nightgauge/internal/scan"
@@ -43,6 +47,7 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightSyntaxCmd())
 	cmd.AddCommand(preflightSecretsCmd())
 	cmd.AddCommand(preflightSkillIncludesCmd())
+	cmd.AddCommand(preflightSkillBundleCmd())
 	cmd.AddCommand(preflightSkillNoDirectGHCmd())
 	cmd.AddCommand(preflightPlatformRawHTTPCmd())
 	cmd.AddCommand(preflightSkillAntiPatternsCmd())
@@ -230,10 +235,12 @@ Exit codes:
 // body file, unwritable output).
 func preflightACReconcileCmd() *cobra.Command {
 	var (
-		workdir    string
-		bodyFile   string
-		outPath    string
-		jsonOutput bool
+		workdir     string
+		bodyFile    string
+		outPath     string
+		jsonOutput  bool
+		notifyEmpty bool
+		repoSlug    string
 	)
 	cmd := &cobra.Command{
 		Use:   "ac-reconcile <issue-number>",
@@ -244,7 +251,12 @@ library (workflow-job-named, npm-script-defined, doc-section-present,
 grep-for-symbol, file-exists). Writes the ac-reconcile-{N}.json report
 (schema v1.0 — see docs/CONTEXT_ARCHITECTURE.md) whose aggregate_status
 drives feature-planning's verify-and-close short-circuit and focus_acs
-scope narrowing. Consumes zero LLM tokens.`,
+scope narrowing. Consumes zero LLM tokens.
+
+--notify-empty posts one comment on the issue when no acceptance criteria
+were found (aggregate no-acs-detected), so the gap surfaces before
+development rather than as a Refs line at pr-create (#2906). A hidden marker
+keeps it to one comment per issue; a forge failure warns and exits 0.`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -283,6 +295,9 @@ scope narrowing. Consumes zero LLM tokens.`,
 					len(result.AcceptanceCriteria), result.AggregateStatus,
 					result.SuggestedRoute.Approach, outPath)
 			}
+			if notifyEmpty && result.AggregateStatus == "no-acs-detected" {
+				notifyNoACs(cmd.Context(), cmd.ErrOrStderr(), dir, repoSlug, issueNumber)
+			}
 			return nil
 		},
 	}
@@ -290,7 +305,77 @@ scope narrowing. Consumes zero LLM tokens.`,
 	cmd.Flags().StringVar(&bodyFile, "body-file", "", "Path to a file containing the issue body (required)")
 	cmd.Flags().StringVar(&outPath, "out", "", "Write the ac-reconcile-{N}.json report to this path")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print the report JSON to stdout")
+	cmd.Flags().BoolVar(&notifyEmpty, "notify-empty", false,
+		"Comment on the issue once when no acceptance criteria were found")
+	cmd.Flags().StringVar(&repoSlug, "repo", "",
+		"owner/name of the issue's repository for --notify-empty (default: the workdir's origin)")
 	return cmd
+}
+
+// noACsMarker is the hidden line that makes the zero-criteria note
+// idempotent: a second run that finds it posts nothing (#2906).
+const noACsMarker = "<!-- nightgauge:no-acceptance-criteria -->"
+
+// noACsComment is the zero-criteria note posted by --notify-empty.
+func noACsComment(issueNumber int) string {
+	return noACsMarker + "\n" +
+		"Nightgauge found no acceptance criteria in this issue. Add a `## Acceptance Criteria` " +
+		"(or `## Verification` / `## Done when`) section with checkbox, numbered or bulleted " +
+		fmt.Sprintf("items; without one, the pull request will say `Refs #%d` and this issue ", issueNumber) +
+		"will not close on merge.\n"
+}
+
+// acEmptyNotifier reads and posts issue comments for --notify-empty.
+// followup.GitHubFiler satisfies it.
+type acEmptyNotifier interface {
+	HasComment(ctx context.Context, number int, marker string) (bool, error)
+	AddComment(ctx context.Context, number int, body string) error
+}
+
+// newACEmptyNotifier builds the live notifier for the issue's repository:
+// an explicit owner/name, else the workdir's origin remote. Swapped in tests.
+var newACEmptyNotifier = func(workdir, repoSlug string) (acEmptyNotifier, error) {
+	if repoSlug == "" {
+		svc, err := gitpkg.NewService(workdir)
+		if err != nil {
+			return nil, fmt.Errorf("open repository: %w", err)
+		}
+		if repoSlug, err = svc.RemoteRepoSlug(); err != nil {
+			return nil, fmt.Errorf("resolve repository: %w", err)
+		}
+	}
+	owner, name, ok := strings.Cut(repoSlug, "/")
+	if !ok || owner == "" || name == "" {
+		return nil, fmt.Errorf("repository %q is not owner/name", repoSlug)
+	}
+	client, err := clientFromConfigForOwner(owner)
+	if err != nil {
+		return nil, fmt.Errorf("create GitHub client: %w", err)
+	}
+	return followup.NewGitHubFiler(client, owner, name, 0, gh.OwnerType("")), nil
+}
+
+// notifyNoACs posts the zero-criteria note once. It is best-effort: every
+// failure is a warning, so planning never fails on it.
+func notifyNoACs(ctx context.Context, stderr io.Writer, workdir, repoSlug string, issueNumber int) {
+	n, err := newACEmptyNotifier(workdir, repoSlug)
+	if err != nil {
+		fmt.Fprintf(stderr, "Warning: ac-reconcile --notify-empty: %v — no note posted\n", err)
+		return
+	}
+	posted, err := n.HasComment(ctx, issueNumber, noACsMarker)
+	if err != nil {
+		fmt.Fprintf(stderr, "Warning: ac-reconcile --notify-empty: read #%d's comments: %v — no note posted\n", issueNumber, err)
+		return
+	}
+	if posted {
+		return
+	}
+	if err := n.AddComment(ctx, issueNumber, noACsComment(issueNumber)); err != nil {
+		fmt.Fprintf(stderr, "Warning: ac-reconcile --notify-empty: comment on #%d: %v\n", issueNumber, err)
+		return
+	}
+	fmt.Fprintf(stderr, "ac-reconcile: no acceptance criteria — noted on #%d\n", issueNumber)
 }
 
 // acFingerprintReport is the `preflight ac-fingerprint --json` output.
@@ -405,11 +490,10 @@ func preflightSkillIncludesCmd() *cobra.Command {
 		Long: `Walk the skill trees and emit a finding for each '<!-- include: path -->'
 directive whose target does not resolve to an existing file (#337).
 
-Include expansion is deliberately fail-open: skillrender.ExpandIncludes leaves
-a directive in place when its target cannot be read, so the document stays
-readable under a host that does not expand includes at all. The cost is that a
-DEAD include and a DELIBERATELY UNEXPANDED one are byte-identical — the model
-gets the literal HTML comment, and nothing says so.
+Render fails on a dead include, but only for the files one render composes and
+only when a stage runs. A host that loads SKILL.md directly never renders it, so
+the model gets the literal HTML comment. This gate finds a dead include before
+merge, in every file.
 
 Targets are resolved with the composer's own regex, so the captured path is
 exactly what expansion would try to open, and the finding echoes it VERBATIM.
@@ -417,8 +501,8 @@ That is what makes a malformed directive obvious: a trailing annotation inside
 the comment, as in '<!-- include: ../_shared/EPIC_HANDLING.md (sub-issue fetch
 section) -->', becomes part of the path even though the file it names exists.
 
-Scope is SKILL.md plus supporting files under _includes/ and _shared/, across
-both skills/ and the generated claude-plugins/nightgauge/skills/ mirror.
+Scope is SKILL.md plus supporting files under _includes/, _shared/, _profiles/
+and _overlays/, across both skills/ and the generated claude-plugins/nightgauge/skills/ mirror.
 README files are NOT scanned — they document the directive shape rather than
 using it.
 
@@ -795,6 +879,87 @@ func printPreflightSkillNoDirectGHHuman(r *preflight.SkillNoDirectGHResult) {
 	}
 }
 
+// preflightSkillBundleCmd wraps `internal/preflight.RunSkillBundleCheck`, the
+// package-time check on a built skills tree (#2761). release.yml and staging.yml
+// run it on the skills extracted from each VSIX; ci-local.sh runs it on dist/.
+func preflightSkillBundleCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		skillsRoot string
+		sourceRoot string
+	)
+	cmd := &cobra.Command{
+		Use:   "skill-bundle",
+		Short: "Fail when a built skills tree would not render every stage completely",
+		Long: `Validate a built skills tree, such as dist/skills or the tree inside a VSIX
+(#2761). Scans it for dead includes, renders every stage for the full and compact
+profiles under each overlay the tree carries, and requires every skill path a
+render names to exist under the tree. With --source-root, also compares the
+tree's file set with the source, the only way to see a dropped overlay: overlay
+absence is normal at render time.
+
+An empty tree is a failure, never a pass: every stage must render.
+
+Schema version 1 — field names (v, skills_root, source_root, files_checked,
+renders_checked, findings, warnings) are stable.
+
+Exit codes:
+  0  the tree is complete
+  1  one or more findings (gate fails)
+  2  the check could not run (e.g. the tree does not exist)`,
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := preflight.RunSkillBundleCheck(cmd.Context(), preflight.SkillBundleOptions{
+				SkillsRoot: skillsRoot,
+				SourceRoot: sourceRoot,
+			})
+			if err != nil {
+				return err
+			}
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					return err
+				}
+			} else {
+				printPreflightSkillBundleHuman(cmd.OutOrStdout(), result)
+			}
+			if len(result.Findings) > 0 {
+				return verdictExit{code: 1}
+			}
+			return nil
+		},
+	}
+	markCouldNotRunExit(cmd)
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON")
+	cmd.Flags().StringVar(&skillsRoot, "skills-root", "", "Built skills tree to validate (required)")
+	cmd.Flags().StringVar(&sourceRoot, "source-root", "", "Source skills tree; compares file sets when set")
+	_ = cmd.MarkFlagRequired("skills-root")
+	return cmd
+}
+
+func printPreflightSkillBundleHuman(w io.Writer, r *preflight.SkillBundleResult) {
+	fmt.Fprintf(w, "nightgauge preflight skill-bundle — schema v%d\n", r.V)
+	fmt.Fprintf(w, "skills root: %s\n", r.SkillsRoot)
+	if r.SourceRoot != "" {
+		fmt.Fprintf(w, "source root: %s\n", r.SourceRoot)
+	}
+	fmt.Fprintf(w, "files checked: %d  renders checked: %d  findings: %d\n", r.FilesChecked, r.RendersChecked, len(r.Findings))
+	for _, f := range r.Findings {
+		fmt.Fprintf(w, "  ✗ [%s] %s: %s", f.Rule, f.Path, f.Detail)
+		if f.Render != "" {
+			fmt.Fprintf(w, " (%s)", f.Render)
+		}
+		fmt.Fprintln(w)
+	}
+	for _, warning := range r.Warnings {
+		fmt.Fprintf(w, "  ! %s\n", warning)
+	}
+	if len(r.Findings) == 0 {
+		fmt.Fprintln(w, "the skills tree is complete ✓")
+	}
+}
+
 // preflightSkillPortabilityCmd wraps `internal/preflight.RunSkillPortabilityCheck`
 // and exits 1 when any skill Markdown file embeds a hardcoded VSCode-extension
 // binary path. Mirrors scripts/lint-skills/portability.sh. Wired into
@@ -806,6 +971,7 @@ func preflightSkillPortabilityCmd() *cobra.Command {
 	var (
 		jsonOutput bool
 		root       string
+		skillsRoot string
 	)
 	cmd := &cobra.Command{
 		Use:   "skill-portability",
@@ -818,6 +984,11 @@ the Codex, Gemini, Copilot and Cursor adapters, which never populate the
 VSCode extensions directory. Provider-neutral discovery
 ($NIGHTGAUGE_BIN → PATH → repo bin → canonical-repo bin → ~/go/bin) is
 the contract — see skills/_shared/PREFLIGHT.md (#4029).
+
+It also fails a $HOOKS_DIR/<file> call naming a file the plugin's hooks
+directory lacks, a packages/nightgauge[-sdk]/ path (absent from every
+repository but this one), and the nonexistent "claude --skill" flag (#2764).
+--skills-root scans a built bundle such as packages/nightgauge/dist/skills.
 
 The Claude-only claude-plugins/.../guard.sh intentionally keeps that glob
 (it is not a skill) and is NOT scanned by this gate.
@@ -832,7 +1003,8 @@ Exit codes:
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := preflight.RunSkillPortabilityCheck(cmd.Context(), preflight.SkillPortabilityOptions{
-				Root: root,
+				Root:      root,
+				SkillsDir: skillsRoot,
 			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "preflight skill-portability: %v\n", err)
@@ -853,6 +1025,7 @@ Exit codes:
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
 	cmd.Flags().StringVar(&root, "root", "", "Repository root (default: current working directory)")
+	cmd.Flags().StringVar(&skillsRoot, "skills-root", "", "Skill tree to scan, relative to --root (default: skills)")
 	return cmd
 }
 

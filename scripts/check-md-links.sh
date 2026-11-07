@@ -30,14 +30,23 @@
 # sorted into three classes:
 #
 #   dead                     an HTTP 404/410, or curl exit 6 (could not resolve
-#                            host) after retries. NXDOMAIN is deterministic and
-#                            is a real broken citation. FATAL.
+#                            host) while the control host still resolves.
+#                            NXDOMAIN is deterministic and is a real broken
+#                            citation. FATAL.
 #   unreachable-from-runner  any other curl transport failure (7 refused,
 #                            28 timeout, 35 TLS, 56 reset) after retries. The
 #                            check could not run. Reported by URL and curl exit
 #                            code; NOT fatal.
 #   alive-after-reprobe      any HTTP response other than 404/410 — a slow or
 #                            bot-walled host. NOT fatal.
+#
+# --- A resolver outage is not a dead link (#2693) ----------------------------
+#
+# A dead resolver answers exit 6 for EVERY host, so offline the whole corpus read
+# as dead links. Exit 6 is only "dead" when the control host
+# (MD_LINK_CHECK_CONTROL_URL, default https://github.com) still resolves. When it
+# does not, the link is unreachable-from-runner and the step prints HARNESS ERROR:
+# the check could not run, which ci-local.sh classes as infrastructure.
 #
 # --- A throttled link is not a resolved one (#1768) ---------------------------
 #
@@ -144,11 +153,27 @@ reprobe_url() {
     return
   fi
   if [ "$rc" -eq 6 ]; then
-    # Could not resolve host. Deterministic, and a real broken citation.
-    printf 'dead could not resolve host (curl exit 6)\n'
+    # Could not resolve host. record_reprobe decides, against the control host,
+    # whether this is a broken citation or a resolver outage (#2693).
+    printf 'resolve-failed could not resolve host (curl exit 6)\n'
     return
   fi
   printf 'unreachable-from-runner curl exit %s\n' "$rc"
+}
+
+# control_host_resolves — 0 when the control host resolves. Probed once per run
+# and cached in CONTROL_RESOLVES; must run in the main shell, not $(...).
+# Only curl exit 6 counts as "does not resolve".
+CONTROL_URL="${MD_LINK_CHECK_CONTROL_URL:-https://github.com}"
+CONTROL_RESOLVES=""
+control_host_resolves() {
+  if [ -z "$CONTROL_RESOLVES" ]; then
+    local rc=0
+    curl -sS -o /dev/null --max-time "${MD_LINK_CHECK_TIMEOUT:-20}" -I \
+      "$CONTROL_URL" 2>/dev/null || rc=$?
+    if [ "$rc" -eq 6 ]; then CONTROL_RESOLVES=no; else CONTROL_RESOLVES=yes; fi
+  fi
+  [ "$CONTROL_RESOLVES" = yes ]
 }
 
 # record_reprobe FILE URL — re-probe URL and file the verdict into the counters.
@@ -164,6 +189,15 @@ record_reprobe() {
   verdict="$(reprobe_url "$url")"
   class="${verdict%% *}"
   detail="${verdict#* }"
+  if [ "$class" = resolve-failed ]; then
+    if control_host_resolves; then
+      class=dead
+    else
+      class=unreachable-from-runner
+      detail="${detail}; control host ${CONTROL_URL} did not resolve either"
+      N_RESOLVER_OUTAGE=$((N_RESOLVER_OUTAGE + 1))
+    fi
+  fi
   case "$class" in
     dead)
       FILE_FATAL=1
@@ -198,6 +232,7 @@ N_UNREACHABLE=0
 N_ALIVE=0
 N_THROTTLED=0
 N_EXTERNAL=0
+N_RESOLVER_OUTAGE=0
 DEAD_LINES=""
 UNREACHABLE_LINES=""
 ALIVE_LINES=""
@@ -350,8 +385,18 @@ elif [ "$N_UNCHECKED" -gt 0 ]; then
   # here would make ci-local.sh class that real failure as infrastructure.
   echo "  not checked (markdown-link-check reported no link):${UNCHECKED_LINES}"
 fi
+OUTAGE_MSG="the runner could not resolve the control host ${CONTROL_URL}; ${N_RESOLVER_OUTAGE} link(s) failed to resolve and are unreachable-from-runner, not dead"
+if [ "$N_RESOLVER_OUTAGE" -gt 0 ] && [ "$FAIL" -eq 0 ]; then
+  echo "HARNESS ERROR: ${OUTAGE_MSG}"
+elif [ "$N_RESOLVER_OUTAGE" -gt 0 ]; then
+  # A dead link already fails this step as an assertion; do not reclass it.
+  echo "  resolver outage: ${OUTAGE_MSG}"
+fi
 echo ""
-if [ "$FAIL" -eq 0 ] && [ "$N_UNCHECKED" -eq 0 ]; then
+if [ "$FAIL" -eq 0 ] && [ "$N_RESOLVER_OUTAGE" -gt 0 ]; then
+  echo "! Markdown link check could not resolve hosts, so it did not pass (#2693)."
+  FAIL=1
+elif [ "$FAIL" -eq 0 ] && [ "$N_UNCHECKED" -eq 0 ]; then
   echo "✓ Markdown link check passed — ${COUNT} files, no dead links."
 elif [ "$FAIL" -eq 0 ]; then
   echo "! Markdown link check could not run on every file, so it did not pass (#2379)."

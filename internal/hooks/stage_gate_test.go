@@ -1,6 +1,9 @@
 package hooks
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // stageBash builds a PreToolUse Bash payload for the stage gate.
 func stageBash(command string) []byte {
@@ -160,6 +163,50 @@ func TestStageGate_NonBashAndMalformedAllow(t *testing.T) {
 	for _, cmd := range []string{"gh pr view 1", "gh pr list", "gh pr checks 1", "gh pr comment 1 --body hi", "gh issue view 1", "gh issue edit 1 --add-label x"} {
 		if got := evaluateStageGate(stageBash(cmd), "issue-pickup"); got.Decision != "allow" {
 			t.Errorf("read-only/edit forge op %q must be allowed; got block: %s", cmd, got.Reason)
+		}
+	}
+}
+
+// fullGateStarts are the forms that start the full local gate (#2989).
+var fullGateStarts = []string{
+	"bash scripts/ci-local.sh",
+	"./scripts/ci-local.sh",
+	"nohup bash scripts/ci-local.sh",
+	"nightgauge ci gate-run",
+	`"$BINARY" ci gate-run`,
+	"git merge origin/main && bash scripts/ci-local.sh",
+}
+
+func TestStageGate_PrCreateRefusesFullGate(t *testing.T) {
+	for _, cmd := range fullGateStarts {
+		got := evaluateStageGate(stageBash(cmd), "pr-create")
+		if got.Decision != "block" {
+			t.Errorf("pr-create: expected block for %q, got allow", cmd)
+			continue
+		}
+		if !strings.Contains(got.Reason, "feature-validate") || !strings.Contains(got.Reason, "#2989") {
+			t.Errorf("pr-create: reason for %q does not say why: %s", cmd, got.Reason)
+		}
+	}
+	for _, cmd := range []string{
+		"cat scripts/ci-local.sh",
+		"grep gate-run docs/GIT_WORKFLOW.md",
+		"nightgauge git push-branch",
+		"go test ./internal/hooks/...",
+		"gh pr create --title x --base main",
+	} {
+		if got := evaluateStageGate(stageBash(cmd), "pr-create"); got.Decision != "allow" {
+			t.Errorf("pr-create: expected allow for %q, got block: %s", cmd, got.Reason)
+		}
+	}
+}
+
+func TestStageGate_FullGateAllowedOutsidePrCreate(t *testing.T) {
+	for _, stage := range []string{"feature-validate", ""} {
+		for _, cmd := range fullGateStarts {
+			if got := evaluateStageGate(stageBash(cmd), stage); got.Decision != "allow" {
+				t.Errorf("[stage=%q] expected allow for %q, got block: %s", stage, cmd, got.Reason)
+			}
 		}
 	}
 }

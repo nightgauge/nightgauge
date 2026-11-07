@@ -193,7 +193,9 @@ required checks already passed on. Run every test before the merge and merge
 with confidence: the full suites do not re-run on push to `main`. What still
 runs there is CodeQL (code scanning needs a default-branch baseline) and one
 cheap `cache-warm` job that saves the Go, npm and Playwright caches PR runs
-restore. After the merge, verify what is actually meaningful:
+restore, plus `main-build.yml`, the RC build-and-verify under a synthetic
+version that publishes nothing (#2952). After the merge, verify what is
+actually meaningful:
 
 ```bash
 scripts/post-merge-check.sh <merge-sha>   # repo defaults to this checkout's origin
@@ -226,7 +228,13 @@ For the merge commit of a merged pull request it verifies three things:
    baseline for the Security tab and for pull requests' "new alerts"
    comparison, but they analyse the same tree with the same queries as the
    PR's own CodeQL run, which is required and already passed. A running or
-   failed CodeQL on the merge commit is reported, never `1` or `2`.
+   failed CodeQL on the merge commit is reported, never `1` or `2`. A failed
+   `main-build.yml` run is `1` like any other check. Its concurrency group
+   cancels an older run when the next merge lands; that cancel is reported as
+   `INFO` and names the newer commit to judge, but only when the same workflow
+   has a later push run on the base branch at a descendant commit. Otherwise,
+   or when that cannot be read, a cancel stays `1`. The compiled
+   `nightgauge ci checks-complete` applies the same rule.
 
 If the trees differ, which the strict policy prevents (so it means a ruleset
 bypass such as `--admin`), the PR run is not evidence about the landed tree.
@@ -257,9 +265,12 @@ merge queue instead of the strict up-to-date policy. In the queue the required
 checks run on the temporary `gh-readonly-queue/main/*` commit, which is the
 commit that then lands on `main`:
 
+- `ci.yml`'s heavy suites run here and not on the pull request. Its jobs still
+  run and report on a pull request, with their expensive steps skipped, because
+  the local gate has already run them. The queue runs them once, on the commit
+  that lands, and `lint.yml` does the same with its slowest self-tests.
 - `ci.yml`'s change-class gate classifies `merge_group.base_sha..head_sha`, the
-  group's cumulative diff against `main`, exactly as it classifies a pull
-  request's base and head.
+  group's cumulative diff against `main`.
 - `adapter-canary.yml` treats `merge_group` like `pull_request`: pinned CLI
   versions, the manifest diff against `merge_group.base_sha`, and never the
   drift-issue `report` job.
@@ -482,7 +493,10 @@ than producing an un-mergeable PR as a read-only or wrong user.
    ```
 
 4. **Open PR on GitHub** with:
-   - Clear title describing the change
+   - Clear title describing the change, at most 72 characters including
+     `<type>(#N): `. Pipeline PRs take the text from the `pr_summary` feature-dev
+     records in `dev-{N}.json`; without one they fall back to the issue title,
+     cut at a word boundary, and the stage log says so
    - Description of what changed and why
    - Testing steps
    - Screenshots (if applicable)
@@ -946,15 +960,24 @@ main ──●──●──●──●──●──
    `GORELEASER_CURRENT_TAG`; without that pin the rc tag on the same commit
    wins git's version sort — #1296)
 7. Push the tag: `git push origin v0.2.0`
-8. `release.yml` runs → builds, creates the GitHub Release with attested
-   assets, opens the Homebrew cask PR (gated by the `production` environment)
-   and closes older cask PRs as superseded. **Merge the cask PR** after
-   checking its sha256s against the release's `checksums.txt`: until it
-   merges, `brew` serves the previous version and `release-watchdog.yml` is
-   red (`scripts/verify-release-channels.sh`)
+8. `release.yml` runs (gated by the `production` environment) → builds,
+   creates a **draft** GitHub Release with attested assets and a **draft**
+   Homebrew cask PR, then scans the draft with VirusTotal
+   (`scripts/release-scan-gate.sh scan`, #2946): every asset, and every binary
+   and JS bundle inside each VSIX and tarball, by its exact downloaded bytes.
+   Only a clean scan publishes the release. Any finding, API error or missing
+   `VT_API_KEY` leaves a draft and fails the run. After publishing, the
+   `channels` job checks the published report (`release-scan-gate.sh verify`),
+   advances `stable`, marks the cask PR ready and closes older cask PRs as
+   superseded. **Merge the cask PR** after checking its sha256s against the
+   release's `checksums.txt`: until it merges, `brew` serves the previous
+   version and `release-watchdog.yml` is red
+   (`scripts/verify-release-channels.sh`). A re-run of an already published
+   release uploads nothing; it runs the `channels` job alone
 9. `gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both`
-   → promotes the release's own per-target VSIXs to the VS Code Marketplace
-   and Open VSX after verifying each against `checksums.txt` and its
+   → requires a published, scan-clean release, then promotes the release's
+   own per-target VSIXs to the VS Code Marketplace and Open VSX after
+   verifying each against `checksums.txt` and its
    `release.yml` attestation (every version publishes on the release channel),
    then fails unless each registry lists the version on every target within
    10 minutes. `release-watchdog.yml` re-checks both listings daily
@@ -979,10 +1002,22 @@ bash scripts/marketplace-channel.sh 0.2.0      # prints: release
 # 0. Land the changelog rollover PR first (§ Changelog): [Unreleased] becomes
 #    [X.Y.Z] - date in CHANGELOG.md and the extension's changelog. release.yml
 #    refuses a tag without it.
+#    Bump claude-plugins/nightgauge/.claude-plugin/plugin.json in that PR when
+#    plugin files changed, or installed plugins receive nothing (#2724).
+#    PR CI and the local gate run check-plugin-version.sh --main-build, so a
+#    plugin change without a bump fails before merge (#3014).
 bash scripts/check-changelog.sh --tag v0.2.0   # exit 0 before tagging
+bash scripts/check-plugin-version.sh --tag v0.2.0
 
 # 1. Ensure main is up to date
 git checkout main && git pull origin main
+
+# 1a. Tag an RC only from a commit whose main-build.yml run is green (#2952).
+#     That workflow runs staging's whole build on every push to main, so a
+#     release-path defect is already known. A run cancelled by a newer push is
+#     not green: tag the newer commit once its run is.
+gh run list --workflow=main-build.yml --commit "$(git rev-parse HEAD)" \
+  --limit 1 --json conclusion --jq '.[0].conclusion'   # latest run; must print: success
 
 # 2. Create an RC tag (annotated)
 git tag -a v0.2.0-rc.1 -m "Release candidate 1 for 0.2.0
@@ -1016,77 +1051,44 @@ gh release view v0.2.0 --json assets --jq '.assets[].name'
 gh release download v0.2.0 -p 'nightgauge-darwin-arm64-*.vsix' -D /tmp/rel
 gh attestation verify /tmp/rel/nightgauge-darwin-arm64-*.vsix --owner nightgauge
 
-# 9a. Multi-engine scan BEFORE any registry sees the files. release.yml's
-#     ClamAV step is one engine; a registry reviewer reads VirusTotal, where
-#     an archive has been flagged on some builds and not on near-identical
-#     others while every file inside it was clean. So it is checked per
-#     release, never assumed. Every report lives at
-#     https://www.virustotal.com/gui/file/<sha256>, the sha256 from
-#     checksums.txt.
-gh release download v0.4.0 -p '*.vsix' -p '*.tar.gz' -p 'checksums.txt' -D /tmp/rel
-(cd /tmp/rel && shasum -a 256 -c checksums.txt --ignore-missing)
-
-#     Submit by URL, not by upload. Paste each release asset's public download
-#     URL (each VSIX, each tarball) at https://www.virustotal.com/gui/home/url;
-#     VirusTotal fetches the file and files its report under the file's
-#     sha256. A free account's web uploader stops at about 3 MB, below every
-#     release file, and a free account's API key cannot submit files, so the
-#     URL route is the default:
-gh release view v0.4.0 --json assets --jq '.assets[] | select(.name | test("\\.(vsix|tar\\.gz)$")) | .url'
-
-#     The bare binaries: once a tarball's report exists, look its binary up by
-#     sha256 at https://www.virustotal.com/gui/file/<sha256>. VirusTotal may
-#     or may not have extracted it; "Item not found" means it did not.
-for t in /tmp/rel/*.tar.gz; do tar -xOzf "$t" nightgauge | shasum -a 256; done
-
-#     The two JS bundles are scanned as files of their own (#2322).
-#     VirusTotal does not report every file it unpacks from a VSIX, so a
-#     clean VSIX report says nothing about dist/extension.cjs, the largest
-#     code file in the package, or dist/sdk-cli.cjs. Both are the same bytes
-#     in every target VSIX; assert that, then look each up by sha256:
-for f in extension.cjs sdk-cli.cjs; do
-  n=$(for v in /tmp/rel/*.vsix; do unzip -p "$v" "extension/dist/$f" | shasum -a 256; done | sort -u | wc -l)
-  [ "$n" -eq 1 ] || { echo "dist/$f differs between the target VSIXs: submit each copy"; break; }
-  unzip -p "$(ls /tmp/rel/*.vsix | head -1)" "extension/dist/$f" > "/tmp/rel/$f"
-  shasum -a 256 "/tmp/rel/$f"     # its report: https://www.virustotal.com/gui/file/<sha256>
-done
-
-#     A bundle lookup that says "Item not found" needs the file hosted at a
-#     URL: the release owner puts both in a secret gist they create and
-#     submits each raw URL as above. The bundles are built from this open
-#     tree, so hosting them discloses nothing new. Direct submission through
-#     the API is only for an owner whose key is allowed to submit files; the
-#     key comes from the release session's environment, never a file or log:
-curl -s https://www.virustotal.com/api/v3/files -H "x-apikey: $VT_API_KEY" -F file=@/tmp/rel/extension.cjs
-
-#     Who submits: the owner has authorized the release session to submit
-#     the release URLs to VirusTotal itself (browser automation) and read the
-#     reports, so it does that rather than handing the URLs over. The owner's
-#     part is only what a session cannot do: a reCAPTCHA, which only a human
-#     completes, or a refused permission. Then the owner does that part; the
-#     session neither works around it nor skips the file.
-
-#     Record three things from EVERY report (each VSIX, each binary, each
-#     bundle) beside its URL: the engine detection count, the Code insights
-#     verdict, and the name of every community YARA rule that matched (the
-#     report's "Crowdsourced YARA rules" section; THOR is one such source).
-#     With a key, the same three are in the file object:
-curl -s "https://www.virustotal.com/api/v3/files/<sha256>" -H "x-apikey: $VT_API_KEY" | jq '.data.attributes |
-  {detections: (.last_analysis_stats.malicious + .last_analysis_stats.suspicious),
-   code_insights: .crowdsourced_ai_results, yara: [.crowdsourced_yara_results[]?.rule_name]}'
-
-#     Then decide:
-#     - Any engine detection stops the release: do not publish that file;
-#       remove the asset and cut the next patch.
-#     - A Code insights verdict of "Suspicious", or any YARA rule match, stops
-#       the release for an owner decision before step 10. Quote the verdict
-#       text and the rule names in that request; the owner decides whether to
-#       publish, fix first, or file a false-positive report.
+# 9a. Read the VirusTotal scan record. release.yml scanned the DRAFT release
+#     before publishing it (#2946): every asset, plus every binary (ELF,
+#     Mach-O or PE, or the exec bit) and every JS bundle inside each VSIX and
+#     tarball, deduplicated by sha256, through the free VirusTotal API. The
+#     record is vt-scan-report.json, attached to the release and kept as the
+#     run's `vt-scan-report` artifact. Per file it gives the engine counts and
+#     the engines that flagged it, the Code insights verdict ("not-produced"
+#     when VirusTotal makes none for that file type, ELF among them), and every
+#     crowdsourced YARA rule that matched. Each report is also at
+#     https://www.virustotal.com/gui/file/<sha256>.
+gh release download v0.4.0 -p vt-scan-report.json -D /tmp/rel
+jq -r '.status, (.files[] | "\(.sha256)  \(.file)  \(.malicious)/\(.suspicious)  \(.code_insights | tostring)  \([.yara[].rule_name] | join(","))")' /tmp/rel/vt-scan-report.json
+bash scripts/release-scan-gate.sh verify v0.4.0 -R nightgauge/nightgauge   # exit 0
+#
+#     The gate holds the release as a draft when:
+#     - one or more engines report any file malicious or suspicious;
+#     - any crowdsourced YARA rule matches;
+#     - a Code insights verdict is present and is not benign;
+#     - VT_API_KEY is missing, or the API errors, times out, answers in an
+#       unknown shape or runs out of quota (4/min, 500/day on the free key).
+#     The failed run names each file, its sha256 and the engine or rule.
+#     A finding is an owner decision: fix and cut the next patch, or file a
+#     false-positive report with the vendor and decide whether to publish the
+#     draft by hand. Nothing else publishes it. A harness error is re-run
+#     with `gh run rerun <run-id> --failed`, which reuses the draft.
+#
+#     VT_API_KEY is a production-environment secret: a free VirusTotal
+#     account's API key (profile → API key). The free public API accepts file
+#     submissions (https://docs.virustotal.com/reference/public-vs-premium-api,
+#     https://docs.virustotal.com/reference/files-scan), so no paid plan is
+#     needed. Set it with: gh secret set VT_API_KEY --env production
+#     The key reaches curl only through a config on stdin, never argv or logs.
 
 # 10. Publish to the registries — ON THE TAG, never from a branch. The run
 #     verifies VSCE_PAT / OVSX_PAT, downloads the release's VSIXs, checks each
 #     against checksums.txt and its release.yml attestation, checks version and
-#     channel, and publishes those exact files. It builds nothing. The `production` environment refuses
+#     channel, and publishes those exact files. It builds nothing, and refuses
+#     a draft or a release without a clean scan record. The `production` environment refuses
 #     a branch ref, and the workflow refuses anything that is not vX.Y.Z.
 gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both
 gh run watch
@@ -1102,9 +1104,21 @@ bash scripts/verify-release-channels.sh --channel marketplace
 bash scripts/verify-release-channels.sh --channel open-vsx
 
 # 12. Bring every other channel to the same version the same day. release.yml
-#     opened the Homebrew cask pull request: check its sha256s against the
+#     opened the Homebrew cask pull request as a draft and marked it ready once
+#     the release was published and scan-clean: check its sha256s against the
 #     release's checksums.txt, merge it, and confirm the tap serves the version.
+#     Never merge a cask PR that is still a draft: it points at a draft release.
 bash scripts/verify-release-channels.sh --channel homebrew
+#     release.yml fast-forwards the release-owned `stable` branch, which is what
+#     installed Claude plugins follow. Never move it by hand except to repair a
+#     refused move or create it where it is missing (at the latest release's
+#     commit, gh api repos/nightgauge/nightgauge/git/refs -f
+#     ref=refs/heads/stable -f sha=<sha>); the watchdog stays red and keeps one
+#     issue open until it matches. The step uses STABLE_BRANCH_TOKEN, falling
+#     back to github.token. The Stable move probe workflow reports whether
+#     github.token may update a ref across .github/workflows changes; if refused,
+#     the secret needs a fine-grained token with Contents and Workflows write.
+bash scripts/verify-release-channels.sh --channel claude-plugin
 
 # 13. Read each listing page as a user would. The listing is the extension's
 #     README as packaged in the VSIX, so it only changes with a release:
@@ -1208,8 +1222,12 @@ the same rule.
 
 1. Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` in both files, add a
    fresh empty `## [Unreleased]` above it, and update the compare links.
-2. `bash scripts/check-changelog.sh --tag vX.Y.Z` must exit 0 locally.
-3. Merge that PR, verify `main`'s own run is green, then tag.
+2. Bump the version in `claude-plugins/nightgauge/.claude-plugin/plugin.json` if
+   plugin files changed since the last stable tag. It is independent of the
+   product version and never goes down.
+3. `bash scripts/check-changelog.sh --tag vX.Y.Z` and
+   `bash scripts/check-plugin-version.sh --tag vX.Y.Z` must exit 0 locally.
+4. Merge that PR, verify `main`'s own run is green, then tag.
 
 The new section's compare links (`compare/vX.Y.Z...HEAD`, `compare/vPREV...vX.Y.Z`)
 404 until the tag exists — that is the ordering, not a mistake — so
@@ -1380,6 +1398,22 @@ If any step fails, fix the issue and re-run before pushing. The order matters:
 generated files must be regenerated before the TypeScript build, and the build
 must succeed before tests can run. `format:check` is the #1 cause of avoidable
 CI failures — always run `npm run format` before committing.
+
+### One gate per tree
+
+A passed gate is recorded against the exact tree (#2784). Running
+`scripts/ci-local.sh` again on that tree prints what passed it and exits 0, and
+`--no-reuse` forces a run. `--changed`, a run with a skipped step, a failed run
+and a tree edited during the run are never reusable. CI never consults the record
+and stays the authority. Reuse needs a `nightgauge` binary that has `ci
+gate-status`; without one the gate runs in full and says so.
+
+In a pipeline run, feature-dev runs focused checks only. feature-validate's Phase
+2.5 is the run's gate: it runs the repository's local gate, so `pre-push validate`
+can skip `go test` on that tree and a later push on it reuses the pass. A review
+fix changes the tree, so it is gated again. `nightgauge exit-records gate-summary`
+totals gates per stage and run. See
+[GO_BINARY.md](GO_BINARY.md#ci-gate-status-ci-gate-run-and-ci-gate-record).
 
 ### The gate is not the loop
 
@@ -1622,7 +1656,7 @@ If the `nightgauge` binary is not available:
 
 ```bash
 # Run validation manually
-nightgauge pre-push validate <issue-number> [--target main] [--timeout 180] [--json]
+nightgauge pre-push validate <issue-number> [--target main] [--timeout <seconds>] [--json]
 
 # Install git hook
 nightgauge pre-push install

@@ -1,5 +1,7 @@
 package state
 
+import "github.com/nightgauge/nightgauge/internal/diagnostics"
+
 // PhaseRegistry mirrors PHASE_REGISTRY
 // (packages/nightgauge-sdk/src/events/phaseRegistry.ts) for the three agentic
 // stages that report phase progress via marker parsing / inference rather than
@@ -79,4 +81,24 @@ var PhaseRegistry = map[PipelineStage][]string{
 // for stage, or nil for a stage with no entry (every deterministic stage).
 func RegistryPhaseNames(stage PipelineStage) []string {
 	return PhaseRegistry[stage]
+}
+
+// reviewPhaseName is the feature-dev phase a stage must have reached for its
+// review to count as run. It is the marker `exit-records gate-summary` splits on
+// (#2784): stages that skip it are faster for a reason unrelated to gates.
+const reviewPhaseName = "quality-review"
+
+// ReviewPhases reports, for a stage exit record, whether feature-dev reached
+// its quality review. It is empty for any other stage and on a nil snapshot, so
+// "no evidence" stays distinct from "did not run".
+func (rs *RuntimeState) ReviewPhases(stage PipelineStage) string {
+	if rs == nil || stage != StageFeatureDev {
+		return ""
+	}
+	for _, p := range rs.PhaseHistory {
+		if p.Stage == stage && p.Name == reviewPhaseName && p.Status != "unreported" && p.Status != "skipped" {
+			return diagnostics.ReviewPhasesRan
+		}
+	}
+	return diagnostics.ReviewPhasesMissing
 }

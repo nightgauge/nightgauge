@@ -376,4 +376,48 @@ describe("OutputWindow.subscribeSlotToStateService", () => {
 
     sub.dispose();
   });
+
+  it("keeps a run live across a stage boundary with no running stage (#2785)", () => {
+    const svc = makeFakeStateService();
+    const sub = ow.subscribeSlotToStateService(0, svc as any);
+
+    svc.emit(stateWith({ stages: { "issue-pickup": { status: "complete" } } }));
+
+    const slot = ow.getState().getSlot(0);
+    expect(slot?.status).toBe("running");
+    expect(slot?.completedAt).toBeNull();
+    sub.dispose();
+  });
+
+  it("shows a failed stage as error without stamping completion (#2785)", () => {
+    const svc = makeFakeStateService();
+    const sub = ow.subscribeSlotToStateService(0, svc as any);
+
+    svc.emit(stateWith({ stages: { "feature-dev": { status: "failed" } } }));
+
+    const slot = ow.getState().getSlot(0);
+    expect(slot?.status).toBe("error");
+    expect(slot?.completedAt).toBeNull();
+    sub.dispose();
+  });
+
+  it("ignores state events once the slot has settled (#2785)", () => {
+    const svc = makeFakeStateService();
+    const sub = ow.subscribeSlotToStateService(0, svc as any);
+    ow.notifySlotCompleted(0, "complete", 3, 5_000);
+
+    svc.emit(
+      stateWith({
+        stages: { "feature-dev": { status: "running" } },
+        tokens: { estimated_cost_usd: 1 },
+      })
+    );
+
+    const slot = ow.getState().getSlot(0);
+    expect(slot?.status).toBe("complete");
+    expect(slot?.completedAt).toBe(5_000);
+    expect(slot?.tokenUsage.costUsd).toBe(3);
+    expect(slot?.stage).toBeUndefined();
+    sub.dispose();
+  });
 });

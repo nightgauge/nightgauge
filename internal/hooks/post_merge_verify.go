@@ -340,6 +340,8 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 			// #2430: check identity for a cancelled duplicate, read only
 			// when one exists.
 			ev.MergeSuites = gh.SuiteWorkflowsFor(ctx, reader, owner, repo, sha, runs)
+			// #2952: a run a newer push on the base branch cancelled.
+			ev.NewerPushCancels = gh.NewerPushCancelsFor(ctx, reader, owner, repo, sha, prov, runs, nil)
 		}
 		if ev.PRHeadIsEvidence() {
 			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {

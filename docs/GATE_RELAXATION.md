@@ -110,8 +110,15 @@ on a gate whose only job is to decide how much work to do.
 error path — unknown event, missing or unresolvable SHA, unusable binary,
 classifier error all emit `run_heavy=true`. Non-`pull_request` events (a
 `workflow_dispatch` on `main`) force the full suite. `ci.yml` no longer runs on
-`push` to `main` (#2055): the strict ruleset makes the PR run the gate on the
-merged tree, so there is no push run to fast-track.
+`push` to `main` (#2055): the merge queue tests the commit that lands, so there is
+no push run to fast-track.
+
+The `changes` job's `run_heavy` output is `false` on a pull request, whatever the
+classifier says, while the live ruleset enforces the merge queue: the heavy suites
+run once, in the queue, and GitHub lands only a commit that passed them there. If
+the rule is removed or cannot be read, a pull request falls back to the classifier
+and runs them itself. The classifier decides for the `merge_group` run, where a
+docs-only group still skips them.
 
 ### `change_class` → workflow gate mapping
 

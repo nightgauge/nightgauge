@@ -63,12 +63,12 @@ working and proposes what to do next.
 
 ## Invocation
 
-| Tool        | Command                                                            |
-| ----------- | ------------------------------------------------------------------ |
-| Claude Code | `/nightgauge:continuous-improvement [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                                  |
-| Cursor      | Run via Agent Skills or direct SKILL.md                            |
-| Standalone  | `claude --skill skills/nightgauge-continuous-improvement/SKILL.md` |
+| Tool        | Command                                          |
+| ----------- | ------------------------------------------------ |
+| Claude Code | `/nightgauge:continuous-improvement [options]`   |
+| Copilot     | Invoke via Agent Skills extension                |
+| Cursor      | Run via Agent Skills or direct SKILL.md          |
+| Headless    | `claude -p "/nightgauge:continuous-improvement"` |
 
 ## Arguments
 

@@ -26,7 +26,8 @@
  * method it calls compiling and in place) turns the rewind tests AND the two
  * `blocked` tests red — feature-planning runs once instead of twice, no
  * `feedback-1142.json` is written, and the run books a generic failure instead
- * of `blocked` — while the halt tests stay green.
+ * of `blocked` — while the halt tests stay green. The second-pass-failure test
+ * goes red too: feature-validate runs once, not twice (#2995).
  *
  * THE FORK: a blocking signal is not automatically a rewind request. One that
  * declares work outside the issue's own scope must end the run as the existing
@@ -120,7 +121,9 @@ vi.mock("child_process", async () => {
  * verdict, and the `feedback` array asking for a rewind.
  */
 const { validateContext, writes } = vi.hoisted(() => ({
-  validateContext: { value: "{}" },
+  // `sequence`, when set, serves entry N-1 to the Nth feature-validate dispatch
+  // (last entry repeats) so a test can fail the first pass and pass the second.
+  validateContext: { value: "{}", sequence: null as string[] | null, dispatches: 0 },
   writes: [] as Array<{ path: string; data: string }>,
 }));
 
@@ -131,6 +134,10 @@ vi.mock("fs", async () => {
     existsSync: vi.fn().mockReturnValue(true),
     readFileSync: vi.fn().mockImplementation((p: string) => {
       if (typeof p === "string" && p.includes(`validate-${1142}.json`)) {
+        const seq = validateContext.sequence;
+        if (seq && seq.length > 0) {
+          return seq[Math.min(Math.max(validateContext.dispatches - 1, 0), seq.length - 1)];
+        }
         return validateContext.value;
       }
       return "{}";
@@ -153,13 +160,16 @@ interface FeedbackFixture {
 }
 
 /** A real failed-validate deliverable, optionally carrying feedback signals. */
-function failedValidateContext(feedback: FeedbackFixture[]): string {
+function failedValidateContext(
+  feedback: FeedbackFixture[],
+  errorCategory = "tests-failed"
+): string {
   return JSON.stringify({
     schema_version: "1.0",
     issue_number: ISSUE,
     stage: "feature-validate",
     validation_status: "failed",
-    errorCategory: "tests-failed",
+    errorCategory,
     ...(feedback.length > 0 ? { feedback } : {}),
   });
 }
@@ -264,6 +274,7 @@ function createMockStateService(): PipelineStateService {
 /** Every skill reports a clean exit-0 — the failure lives in the deliverable. */
 function mockSkills(): void {
   vi.mocked(runStageSkillHeadless).mockImplementation((stage, _issue, callbacks) => {
+    if (stage === "feature-validate") validateContext.dispatches++;
     Promise.resolve().then(() => {
       void callbacks?.onComplete?.({ success: true, exitCode: 0 } as SkillRunResult);
     });
@@ -286,6 +297,8 @@ describe("HeadlessOrchestrator — backtrack must be reachable on a FAILED stage
   beforeEach(() => {
     vi.clearAllMocks();
     writes.length = 0;
+    validateContext.sequence = null;
+    validateContext.dispatches = 0;
     delete process.env.NIGHTGAUGE_PIPELINE_MAX_BACKTRACKS;
     logger = makeLogger();
     mockSkills();
@@ -478,5 +491,86 @@ describe("HeadlessOrchestrator — backtrack must be reachable on a FAILED stage
     expect(result.failedStage).toBe("feature-validate");
     expect(result.error?.message).toContain("[validation-failed]");
     expect(vi.mocked(state.recordBacktrack)).toHaveBeenCalledTimes(1);
+  });
+
+  // #2991: both passes push the rewound stages, so the in-memory arrays hold
+  // duplicates. Length arithmetic then never equals STAGE_ORDER.length and a
+  // run that merged was booked `{ success: false, failedStage: undefined }`.
+  it("a rewind followed by a clean second pass is booked a success (#2991)", async () => {
+    validateContext.sequence = [
+      failedValidateContext([PLAN_REVISION_NEEDED]),
+      JSON.stringify({
+        schema_version: "1.0",
+        issue_number: ISSUE,
+        stage: "feature-validate",
+        validation_status: "passed",
+      }),
+    ];
+    // The second pass reaches pr-merge, which reads the forge (#2878).
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as {
+        forgePrState(n: number): Promise<string | null>;
+      },
+      "forgePrState"
+    ).mockResolvedValue("OPEN");
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as { readMergedPrNumber(n: number): number },
+      "readMergedPrNumber"
+    ).mockReturnValue(999);
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as {
+        validatePrCreateState(n: number): Promise<string>;
+      },
+      "validatePrCreateState"
+    ).mockResolvedValue("ok");
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as {
+        reconcileCompletionSideEffects(n: number): Promise<unknown>;
+      },
+      "reconcileCompletionSideEffects"
+    ).mockResolvedValue({ verified: true, issueClosed: true, mergedPrNumber: 999 });
+    const state = createMockStateService();
+    const orch = new HeadlessOrchestrator(state, logger, { contextFileWaitMs: 0 } as never);
+
+    const result = await orch.runPipeline(ISSUE);
+
+    expect(countOf("feature-validate")).toBe(2);
+    expect(vi.mocked(state.recordBacktrack)).toHaveBeenCalledTimes(1);
+    expect(result.failedStage).toBeUndefined();
+    expect(result.success).toBe(true);
+  }, 30_000);
+
+  // #2995: the re-run validate fails AGAIN, on a new edge
+  // (feature-validate->feature-dev), so the oscillation guard cannot be what
+  // refuses it — only the default budget (1) can. The run must halt with the
+  // SECOND pass's verdict, not a backtrack-specific message.
+  // RED-PROOF: replacing the post-validate gate's `evaluateFailedStageFeedback`
+  // consult with `{ kind: "halt" }` makes feature-validate run once, not twice.
+  it("a rewind whose re-run fails again halts on the spent budget with the second verdict (#2995)", async () => {
+    delete process.env.NIGHTGAUGE_PIPELINE_MAX_BACKTRACKS;
+    validateContext.sequence = [
+      failedValidateContext([PLAN_REVISION_NEEDED]),
+      failedValidateContext(
+        [{ ...PLAN_REVISION_NEEDED, backtrack_target_stage: "feature-dev" }],
+        "lint-failed"
+      ),
+    ];
+    const state = createMockStateService();
+    const orch = new HeadlessOrchestrator(state, logger, { contextFileWaitMs: 0 } as never);
+
+    const result = await orch.runPipeline(ISSUE);
+
+    expect(countOf("feature-planning")).toBe(2);
+    expect(countOf("feature-validate")).toBe(2);
+    const backtracks = vi.mocked(state.recordBacktrack).mock.calls;
+    expect(backtracks).toHaveLength(1);
+    expect(backtracks[0][0]).toMatchObject({ to_stage: "feature-planning", attempt_number: 1 });
+    expect(result.success).toBe(false);
+    expect(result.failedStage).toBe("feature-validate");
+    expect(result.outcomeType).not.toBe("blocked");
+    expect(result.error?.message).toContain("[validation-failed]");
+    expect(result.error?.message).toContain("lint-failed");
+    expect(writes.filter((w) => w.path.includes(`feedback-${ISSUE}.json`))).toHaveLength(1);
+    expect(vi.mocked(state.failStage).mock.calls.map((c) => c[0])).toContain("feature-validate");
   });
 });

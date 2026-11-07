@@ -21,6 +21,7 @@ vi.mock("vscode", () => ({
       dispose: vi.fn(),
     })),
     showInformationMessage: vi.fn(),
+    showWarningMessage: vi.fn(),
     showErrorMessage: vi.fn(),
   },
   workspace: {
@@ -38,15 +39,6 @@ vi.mock("child_process", () => ({
 vi.mock("util", () => ({
   promisify: vi.fn(() => mockExecAsync),
 }));
-
-const REQUIRED_COMMANDS = [
-  "nightgauge-issue-pickup.md",
-  "nightgauge-feature-planning.md",
-  "nightgauge-feature-dev.md",
-  "nightgauge-feature-validate.md",
-  "nightgauge-pr-create.md",
-  "nightgauge-pr-merge.md",
-];
 
 describe("CodexSetupService bundled skills", () => {
   let tmpRoot: string;
@@ -66,37 +58,13 @@ describe("CodexSetupService bundled skills", () => {
     prevCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
 
-    const commandsDir = path.join(extensionPath, "resources", "codex", "commands");
-    fs.mkdirSync(commandsDir, { recursive: true });
-    for (const file of REQUIRED_COMMANDS) {
-      fs.writeFileSync(path.join(commandsDir, file), `# ${file}\n`);
-    }
-
-    const pluginSkills = path.join(
-      extensionPath,
-      "dist",
-      "claude-plugins",
-      "nightgauge",
-      "skills",
-      "issue-create"
-    );
-    fs.mkdirSync(path.join(pluginSkills, "_includes"), { recursive: true });
-    fs.writeFileSync(path.join(pluginSkills, "SKILL.md"), "# issue-create\n");
-    fs.writeFileSync(path.join(pluginSkills, "_includes", "environment-and-content.md"), "# env\n");
-    fs.mkdirSync(
-      path.join(extensionPath, "dist", "claude-plugins", "nightgauge", "skills", "_shared"),
-      { recursive: true }
-    );
+    const bundledSkill = path.join(extensionPath, "dist", "skills", "nightgauge-issue-create");
+    fs.mkdirSync(path.join(bundledSkill, "_includes"), { recursive: true });
+    fs.writeFileSync(path.join(bundledSkill, "SKILL.md"), "# issue-create\n");
+    fs.writeFileSync(path.join(bundledSkill, "_includes", "environment-and-content.md"), "# env\n");
+    fs.mkdirSync(path.join(extensionPath, "dist", "skills", "_shared"), { recursive: true });
     fs.writeFileSync(
-      path.join(
-        extensionPath,
-        "dist",
-        "claude-plugins",
-        "nightgauge",
-        "skills",
-        "_shared",
-        "PREFLIGHT.md"
-      ),
+      path.join(extensionPath, "dist", "skills", "_shared", "PREFLIGHT.md"),
       "# preflight\n"
     );
 
@@ -109,7 +77,7 @@ describe("CodexSetupService bundled skills", () => {
     ).workspaceFolders = [{ uri: { fsPath: workspaceRoot } }] as never;
     mockExecAsync.mockResolvedValue({ stdout: "codex 1.0.0", stderr: "" });
     vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
-      "Install Codex Commands" as never
+      "Install Codex Skills" as never
     );
   });
 
@@ -152,6 +120,172 @@ describe("CodexSetupService bundled skills", () => {
     ).toBe(true);
     expect(fs.existsSync(path.join(codexHome, "skills", "_shared", "PREFLIGHT.md"))).toBe(true);
   });
+
+  it("a skipped skill shows a warning with the count instead of the success message", async () => {
+    const stale = path.join(codexHome, "skills", "nightgauge-issue-create");
+    fs.mkdirSync(stale, { recursive: true });
+    fs.writeFileSync(path.join(stale, "SKILL.md"), "# stale\n");
+
+    const vscode = await import("vscode");
+    const { CodexSetupService } = await import("../../src/services/CodexSetupService");
+    const update = vi.fn().mockResolvedValue(undefined);
+    const service = new CodexSetupService({
+      globalState: { get: vi.fn().mockReturnValue(false), update },
+      extensionPath,
+    } as never);
+    await service.checkAndPromptSetup();
+
+    expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+      expect.stringContaining("installed 1 of 2, skipped 1")
+    );
+    expect(vscode.window.showInformationMessage).not.toHaveBeenCalledWith(
+      expect.stringContaining("skills installed")
+    );
+    expect(fs.readFileSync(path.join(stale, "SKILL.md"), "utf8")).toBe("# stale\n");
+    // Setup stays recorded, so activation does not re-prompt on every start.
+    expect(update).toHaveBeenCalledWith("nightgauge.codexSetup.installed", true);
+  });
+});
+
+describe("copySkillsTree counts and retired skills (#2739)", () => {
+  let tmpRoot: string;
+  let source: string;
+  let dest: string;
+
+  function skill(root: string, name: string, marked = false): void {
+    fs.mkdirSync(path.join(root, name), { recursive: true });
+    fs.writeFileSync(path.join(root, name, "SKILL.md"), `# ${name}`);
+    if (marked) {
+      fs.writeFileSync(path.join(root, name, ".nightgauge-installed"), "x");
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-skill-counts-"));
+    source = path.join(tmpRoot, "source");
+    dest = path.join(tmpRoot, "dest");
+    skill(source, "nightgauge-issue-create");
+    skill(source, "nightgauge-retro");
+    fs.mkdirSync(dest, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("counts a marker-less directory as skipped and leaves it", async () => {
+    skill(dest, "nightgauge-retro");
+    fs.writeFileSync(path.join(dest, "nightgauge-retro", "mine.md"), "mine");
+    const { copySkillsTree, formatSkillCopySummary } =
+      await import("../../src/services/bundledSkills");
+    const result = await copySkillsTree(source, dest, vi.fn(), { prune: false });
+    expect(result).toEqual({ installed: 1, total: 2, skipped: 1, removed: 0 });
+    expect(formatSkillCopySummary(result)).toBe("installed 1 of 2, skipped 1");
+    expect(fs.existsSync(path.join(dest, "nightgauge-retro", "mine.md"))).toBe(true);
+  });
+
+  it("warns with the count and withholds success when a skill was skipped", async () => {
+    const vscode = await import("vscode");
+    const { reportSkillCopy } = await import("../../src/services/bundledSkills");
+    const output = { appendLine: vi.fn() } as unknown as import("vscode").OutputChannel;
+    const complete = reportSkillCopy(
+      "Codex",
+      { installed: 1, total: 2, skipped: 1, removed: 0 },
+      output
+    );
+    expect(complete).toBe(false);
+    expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+      expect.stringContaining("installed 1 of 2, skipped 1")
+    );
+  });
+
+  it("stays quiet when nothing was skipped", async () => {
+    const vscode = await import("vscode");
+    const { reportSkillCopy } = await import("../../src/services/bundledSkills");
+    const output = { appendLine: vi.fn() } as unknown as import("vscode").OutputChannel;
+    expect(
+      reportSkillCopy("Grok", { installed: 2, total: 2, skipped: 0, removed: 0 }, output)
+    ).toBe(true);
+    expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
+  });
+
+  it("removes a marked retired directory and spares unmarked ones and links", async () => {
+    skill(dest, "nightgauge-backlog-audit", true);
+    skill(dest, "find-skills");
+    skill(dest, "nightgauge-unmarked");
+    const linked = path.join(tmpRoot, "linked");
+    skill(tmpRoot, "linked", true);
+    fs.symlinkSync(linked, path.join(dest, "nightgauge-linked"));
+    const { copySkillsTree } = await import("../../src/services/bundledSkills");
+    const result = await copySkillsTree(source, dest, vi.fn(), { prune: true });
+    expect(result.removed).toBe(1);
+    expect(fs.existsSync(path.join(dest, "nightgauge-backlog-audit"))).toBe(false);
+    expect(fs.existsSync(path.join(dest, "find-skills", "SKILL.md"))).toBe(true);
+    expect(fs.existsSync(path.join(dest, "nightgauge-unmarked", "SKILL.md"))).toBe(true);
+    expect(fs.existsSync(path.join(linked, "SKILL.md"))).toBe(true);
+  });
+
+  it("installs each skill under its own name and never renames a short one (#2762)", async () => {
+    // The plugin mirror's short names were once renamed to nightgauge-*
+    // without touching SKILL.md; a canonical tree needs no rename at all.
+    skill(source, "issue-create");
+    const warn = vi.fn();
+    const { copySkillsTree } = await import("../../src/services/bundledSkills");
+    const result = await copySkillsTree(source, dest, warn, { prune: false });
+    expect(result).toEqual({ installed: 2, total: 2, skipped: 0, removed: 0 });
+    expect(fs.readdirSync(dest).sort()).toEqual(["nightgauge-issue-create", "nightgauge-retro"]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("issue-create is not a Nightgauge"));
+  });
+
+  it("leaves a skill's top-level CHANGELOG.md and test material behind, as the bundle does", async () => {
+    const root = path.join(source, "nightgauge-retro");
+    fs.writeFileSync(path.join(root, "CHANGELOG.md"), "# changes");
+    fs.mkdirSync(path.join(root, "tests"));
+    fs.writeFileSync(path.join(root, "tests", "case.md"), "case");
+    fs.mkdirSync(path.join(root, "_includes", "tests"), { recursive: true });
+    fs.writeFileSync(path.join(root, "_includes", "CHANGELOG.md"), "nested");
+    fs.writeFileSync(path.join(root, "_includes", "tests", "dropped.md"), "nested");
+    fs.mkdirSync(path.join(root, "src", "__tests__"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src", "__tests__", "a.test.ts"), "test");
+    fs.writeFileSync(path.join(root, "src", "b.test.js"), "test");
+    fs.writeFileSync(path.join(root, "src", "c.ts"), "code");
+    fs.mkdirSync(path.join(source, "_shared"));
+    fs.writeFileSync(path.join(source, "_shared", "CHANGELOG.md"), "shared");
+    const { copySkillsTree } = await import("../../src/services/bundledSkills");
+    await copySkillsTree(source, dest, vi.fn(), { prune: false });
+    const out = path.join(dest, "nightgauge-retro");
+    expect(fs.existsSync(path.join(out, "CHANGELOG.md"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "tests"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "_includes", "CHANGELOG.md"))).toBe(true);
+    expect(fs.existsSync(path.join(out, "_includes", "tests"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "src", "__tests__"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "src", "b.test.js"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "src", "c.ts"))).toBe(true);
+    expect(fs.existsSync(path.join(dest, "_shared", "CHANGELOG.md"))).toBe(true);
+  });
+
+  it("does not prune without the option, or from an empty source", async () => {
+    skill(dest, "nightgauge-backlog-audit", true);
+    const { copySkillsTree } = await import("../../src/services/bundledSkills");
+    await copySkillsTree(source, dest, vi.fn(), { prune: false });
+    expect(fs.existsSync(path.join(dest, "nightgauge-backlog-audit"))).toBe(true);
+
+    const empty = path.join(tmpRoot, "empty");
+    fs.mkdirSync(empty);
+    const result = await copySkillsTree(empty, dest, vi.fn(), { prune: true });
+    expect(result.removed).toBe(0);
+    expect(fs.existsSync(path.join(dest, "nightgauge-backlog-audit"))).toBe(true);
+  });
+
+  it("resolves dist/skills only, never the Claude plugin mirror (#2762)", async () => {
+    const { resolveBundledSkillsDir } = await import("../../src/services/bundledSkills");
+    const ext = path.join(tmpRoot, "ext");
+    skill(path.join(ext, "dist", "claude-plugins", "nightgauge", "skills"), "issue-create");
+    expect(resolveBundledSkillsDir(ext)).toBeNull();
+    skill(path.join(ext, "dist", "skills"), "nightgauge-issue-create");
+    expect(resolveBundledSkillsDir(ext)).toBe(path.join(ext, "dist", "skills"));
+  });
 });
 
 describe("copySkillsTree containment and ownership", () => {
@@ -192,10 +326,10 @@ describe("copySkillsTree containment and ownership", () => {
     const warn = vi.fn();
 
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    const count = await copySkillsTree(source, dest, warn);
+    const result = await copySkillsTree(source, dest, warn, { prune: false });
 
     const realSource = fs.realpathSync(source);
-    expect(count).toBe(2);
+    expect(result.installed).toBe(2);
     expect(fs.existsSync(path.join(dest, "nightgauge-issue-create", "SKILL.md"))).toBe(true);
     expect(present(path.join(dest, "nightgauge-issue-create", "etc"))).toBe(false);
     expect(present(path.join(dest, "nightgauge-etc"))).toBe(false);
@@ -224,10 +358,10 @@ describe("copySkillsTree containment and ownership", () => {
     const warn = vi.fn();
 
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    const count = await copySkillsTree(source, dest, warn);
+    const result = await copySkillsTree(source, dest, warn, { prune: false });
 
     const realSource = fs.realpathSync(source);
-    expect(count).toBe(2);
+    expect(result.installed).toBe(2);
     expect(fs.readFileSync(path.join(dest, "nightgauge-issue-create", "SKILL.md"), "utf8")).toBe(
       "# issue-create\n"
     );
@@ -246,20 +380,19 @@ describe("copySkillsTree containment and ownership", () => {
   });
 
   it("installs only SKILL.md directories and _shared/", async () => {
-    // The plugin-mirror layout the VSIX ships: short names, installed under
-    // the restored nightgauge- prefix, so a directory without a SKILL.md file
-    // would land as nightgauge-<name> in every user's skills directory.
-    const mirror = path.join(tmpRoot, "mirror");
-    write(path.join(mirror, "issue-create", "SKILL.md"), "# issue-create\n");
-    write(path.join(mirror, "_shared", "PREFLIGHT.md"), "# preflight\n");
-    write(path.join(mirror, "templates", "README.md"), "# templates\n");
-    fs.mkdirSync(path.join(mirror, "broken", "SKILL.md"), { recursive: true });
-    write(path.join(mirror, "README.md"), "# mirror\n");
+    // The canonical layout: skills/templates has no SKILL.md, and a directory
+    // without a SKILL.md file must not land in every user's skills directory.
+    const tree = path.join(tmpRoot, "tree");
+    write(path.join(tree, "nightgauge-issue-create", "SKILL.md"), "# issue-create\n");
+    write(path.join(tree, "_shared", "PREFLIGHT.md"), "# preflight\n");
+    write(path.join(tree, "templates", "README.md"), "# templates\n");
+    fs.mkdirSync(path.join(tree, "nightgauge-broken", "SKILL.md"), { recursive: true });
+    write(path.join(tree, "README.md"), "# tree\n");
 
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    const count = await copySkillsTree(mirror, dest, vi.fn());
+    const result = await copySkillsTree(tree, dest, vi.fn(), { prune: false });
 
-    expect(count).toBe(2);
+    expect(result.installed).toBe(2);
     expect(fs.readdirSync(dest).sort()).toEqual(["_shared", "nightgauge-issue-create"]);
   });
 
@@ -271,7 +404,7 @@ describe("copySkillsTree containment and ownership", () => {
     const warn = vi.fn();
 
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    await copySkillsTree(source, dest, warn);
+    await copySkillsTree(source, dest, warn, { prune: false });
 
     const copied = path.join(dest, "nightgauge-issue-create", "preflight.md");
     expect(fs.lstatSync(copied).isFile()).toBe(true);
@@ -284,7 +417,7 @@ describe("copySkillsTree containment and ownership", () => {
     const warn = vi.fn();
 
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    await copySkillsTree(source, dest, warn);
+    await copySkillsTree(source, dest, warn, { prune: false });
 
     expect(present(path.join(dest, "nightgauge-issue-create", "loop"))).toBe(false);
     expect(warn).toHaveBeenCalledWith(
@@ -307,7 +440,7 @@ describe("copySkillsTree containment and ownership", () => {
     const warn = vi.fn();
 
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    await copySkillsTree(source, dest, warn);
+    await copySkillsTree(source, dest, warn, { prune: false });
 
     const copied = fs
       .readdirSync(path.join(dest, "nightgauge-issue-create"), { recursive: true })
@@ -330,9 +463,9 @@ describe("copySkillsTree containment and ownership", () => {
     const warn = vi.fn();
 
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    const count = await copySkillsTree(source, dest, warn);
+    const result = await copySkillsTree(source, dest, warn, { prune: false });
 
-    expect(count).toBe(1);
+    expect(result.installed).toBe(1);
     expect(fs.readFileSync(path.join(dest, "my-skill", "SKILL.md"), "utf8")).toBe(
       "# the operator's own\n"
     );
@@ -356,9 +489,9 @@ describe("copySkillsTree containment and ownership", () => {
     const warn = vi.fn();
 
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    const count = await copySkillsTree(source, dest, warn);
+    const result = await copySkillsTree(source, dest, warn, { prune: false });
 
-    expect(count).toBe(1);
+    expect(result.installed).toBe(1);
     expect(fs.readFileSync(path.join(dest, "update-docs", "SKILL.md"), "utf8")).toBe(
       "# the operator's own\n"
     );
@@ -383,9 +516,9 @@ describe("copySkillsTree containment and ownership", () => {
     const warn = vi.fn();
 
     const { copySkillsTree, INSTALL_MARKER } = await import("../../src/services/bundledSkills");
-    const count = await copySkillsTree(source, agentSkills, warn);
+    const result = await copySkillsTree(source, agentSkills, warn, { prune: false });
 
-    expect(count).toBe(0);
+    expect(result.installed).toBe(0);
     expect(fs.readFileSync(path.join(checkoutSkill, "SKILL.md"), "utf8")).toBe(
       "# uncommitted edit\n"
     );
@@ -402,16 +535,16 @@ describe("copySkillsTree containment and ownership", () => {
   it("refreshes every directory it installed, recognised by its install marker", async () => {
     write(path.join(source, "update-docs", "SKILL.md"), "# update-docs v1\n");
     const { copySkillsTree, INSTALL_MARKER } = await import("../../src/services/bundledSkills");
-    await copySkillsTree(source, dest, vi.fn());
+    await copySkillsTree(source, dest, vi.fn(), { prune: false });
     expect(fs.lstatSync(path.join(dest, "_shared", INSTALL_MARKER)).isFile()).toBe(true);
     expect(fs.lstatSync(path.join(dest, "update-docs", INSTALL_MARKER)).isFile()).toBe(true);
 
     write(path.join(dest, "_shared", "STALE.md"), "# stale\n");
     write(path.join(source, "update-docs", "SKILL.md"), "# update-docs v2\n");
     const warn = vi.fn();
-    const count = await copySkillsTree(source, dest, warn);
+    const result = await copySkillsTree(source, dest, warn, { prune: false });
 
-    expect(count).toBe(3);
+    expect(result.installed).toBe(3);
     expect(fs.existsSync(path.join(dest, "_shared", "STALE.md"))).toBe(false);
     expect(fs.existsSync(path.join(dest, "_shared", "PREFLIGHT.md"))).toBe(true);
     expect(fs.readFileSync(path.join(dest, "update-docs", "SKILL.md"), "utf8")).toBe(
@@ -427,11 +560,11 @@ describe("copySkillsTree containment and ownership", () => {
     fs.symlinkSync(source, path.join(agentHome, "skills"));
 
     const { copySkillsTree } = await import("../../src/services/bundledSkills");
-    await expect(copySkillsTree(source, path.join(agentHome, "skills"), vi.fn())).rejects.toThrow(
-      fs.realpathSync(source)
-    );
     await expect(
-      copySkillsTree(source, path.join(source, "nested", "dest"), vi.fn())
+      copySkillsTree(source, path.join(agentHome, "skills"), vi.fn(), { prune: false })
+    ).rejects.toThrow(fs.realpathSync(source));
+    await expect(
+      copySkillsTree(source, path.join(source, "nested", "dest"), vi.fn(), { prune: false })
     ).rejects.toThrow(fs.realpathSync(source));
 
     expect(fs.readFileSync(path.join(source, "nightgauge-issue-create", "SKILL.md"), "utf8")).toBe(

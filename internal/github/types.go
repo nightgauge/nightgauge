@@ -473,6 +473,10 @@ type CreatePullRequestInput struct {
 type MergePullRequestInput struct {
 	PullRequestID graphql.ID     `json:"pullRequestId"`
 	MergeMethod   graphql.String `json:"mergeMethod"`
+	// CommitHeadline / CommitBody set the squash commit explicitly (#2728),
+	// so a WIP-preservation commit never becomes the subject on the base.
+	CommitHeadline *graphql.String `json:"commitHeadline,omitempty"`
+	CommitBody     *graphql.String `json:"commitBody,omitempty"`
 }
 
 type DeleteRefInput struct {
@@ -557,6 +561,8 @@ type pullRequestQuery struct {
 			ReviewDecision   graphql.String
 			Additions        graphql.Int
 			Deletions        graphql.Int
+			// ChangedFiles is a pointer so an absent count reads as unknown (#3012).
+			ChangedFiles *graphql.Int
 			// MergedAt + MergeCommit are populated only once the PR is MERGED —
 			// the post-merge ground-truth breadcrumb (#4133). MergeCommit is a
 			// pointer because it is null on un-merged PRs.

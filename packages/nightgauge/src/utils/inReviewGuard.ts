@@ -13,6 +13,12 @@
  * is the expected outcome on a PR-less failure: nothing is written, nothing is
  * retried and no other status is substituted, so the scheduler's revert is the
  * only write and the board ends where its log line says.
+ *
+ * A failure park also passes `onlyFrom: "In progress"` (#2706): the scheduler's
+ * revert may keep an issue with an open PR in Ready for a re-dispatch, and a
+ * park must not undo it. If the revert lands first the park yields; if the park
+ * lands first the revert writes last. A TS-only run is still In progress, so
+ * its park is unchanged.
  */
 
 import { execFile } from "child_process";
@@ -25,7 +31,10 @@ const execFileAsync = promisify(execFile);
 /** The CLI's refusal text (`errInReviewWithoutOpenPR` in project_inreview_guard.go). */
 export const IN_REVIEW_REFUSAL = "refusing In review";
 
-export type ParkInReviewOutcome = "moved" | "refused" | "failed";
+/** The CLI's `--only-from` refusal for In review (`requireCurrentStatus`). */
+export const IN_REVIEW_YIELD = "yielding In review";
+
+export type ParkInReviewOutcome = "moved" | "refused" | "yielded" | "failed";
 
 export interface ParkInReviewDeps {
   resolveBinary: () => Promise<string | null>;
@@ -37,12 +46,18 @@ const defaultDeps: ParkInReviewDeps = {
   exec: (binary, args, cwd) => execFileAsync(binary, args, { cwd, timeout: 60000 }),
 };
 
+export interface ParkInReviewOptions {
+  /** Write only when the board still holds this status (#2706). */
+  onlyFrom?: string;
+  deps?: ParkInReviewDeps;
+}
+
 export async function moveToInReviewIfPRBacked(
   issueNumber: number,
   cwd: string,
   logger: Logger,
   repoNameWithOwner?: string,
-  deps: ParkInReviewDeps = defaultDeps
+  { onlyFrom, deps = defaultDeps }: ParkInReviewOptions = {}
 ): Promise<ParkInReviewOutcome> {
   const binary = await deps.resolveBinary();
   if (!binary) {
@@ -55,6 +70,9 @@ export async function moveToInReviewIfPRBacked(
   if (repoNameWithOwner) {
     args.push("--repo", repoNameWithOwner);
   }
+  if (onlyFrom) {
+    args.push("--only-from", onlyFrom);
+  }
   try {
     await deps.exec(binary, args, cwd);
     logger.info("Moved issue to In review: its open PR awaits review", { issueNumber });
@@ -62,6 +80,10 @@ export async function moveToInReviewIfPRBacked(
   } catch (err) {
     const e = err as { stderr?: unknown; message?: unknown };
     const text = `${String(e?.stderr ?? "")}\n${String(e?.message ?? err)}`;
+    if (text.includes(IN_REVIEW_YIELD)) {
+      logger.info("Issue left the failed run's status: not moved to In review", { issueNumber });
+      return "yielded";
+    }
     if (text.includes(IN_REVIEW_REFUSAL)) {
       logger.info("Issue has no open PR: not moved to In review (status left for the scheduler)", {
         issueNumber,

@@ -12,7 +12,10 @@ import {
   refreshRepoInitializedContext,
   registerQuickstartCommands,
   maybeShowGettingStartedOnActivate,
+  REPO_INIT_SKILL,
+  SMART_SETUP_SKILL,
 } from "../../src/commands/quickstart";
+import { setPluginState } from "../../src/utils/pluginHint";
 import type { Logger } from "../../src/utils/logger";
 import { GettingStartedPanel } from "../../src/views/onboarding/GettingStartedPanel";
 
@@ -132,31 +135,134 @@ describe("quickstart helpers", () => {
       expect(GettingStartedPanel.show).toHaveBeenCalledTimes(1);
     });
 
-    it("opens a terminal running `claude /nightgauge:repo-init` when the repo-init command fires", async () => {
-      (vscode.workspace as any).workspaceFolders = [
-        { uri: { fsPath: tmpRoot }, name: "test", index: 0 },
-      ];
+    describe("Initialize Repository (#2760)", () => {
+      const savedBinaryPath = process.env.NIGHTGAUGE_GO_BINARY_PATH;
+      const savedPath = process.env.PATH;
+      let argsFile: string;
 
-      registerQuickstartCommands(context, tmpRoot, logger);
+      /** A binary outside PATH, standing in for the VSIX's bundled one. */
+      async function bundleBinary(script: string): Promise<void> {
+        const binary = path.join(tmpRoot, "bundled-nightgauge");
+        await fsp.writeFile(binary, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+        process.env.NIGHTGAUGE_GO_BINARY_PATH = binary;
+      }
 
-      const calls = (vscode.commands.registerCommand as any).mock.calls;
-      const handler = calls.find(
-        (c: unknown[]) => c[0] === "nightgauge.quickstartRepoInit"
-      )![1] as () => Promise<void>;
+      const writesConfig = () =>
+        bundleBinary(
+          `echo "$@" > "${argsFile}"\nmkdir -p .nightgauge\necho "owner: acme" > .nightgauge/config.yaml`
+        );
 
-      await handler();
+      async function fire(command: string): Promise<void> {
+        registerQuickstartCommands(context, tmpRoot, logger);
+        const calls = (vscode.commands.registerCommand as any).mock.calls;
+        await (calls.find((c: unknown[]) => c[0] === command)![1] as () => Promise<void>)();
+      }
 
-      expect(vscode.window.createTerminal).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: expect.stringContaining("/nightgauge:repo-init"),
-          cwd: tmpRoot,
-        })
-      );
-      const terminalInstance = (vscode.window.createTerminal as any).mock.results[0].value;
-      expect(terminalInstance.sendText).toHaveBeenCalledWith("claude /nightgauge:repo-init", true);
-      expect(terminalInstance.show).toHaveBeenCalled();
+      beforeEach(() => {
+        argsFile = path.join(tmpRoot, "args");
+        (vscode.workspace as any).workspaceFolders = [
+          { uri: { fsPath: tmpRoot }, name: "test", index: 0 },
+        ];
+        setPluginState("absent");
+        process.env.PATH = path.dirname(process.execPath) + ":/usr/bin:/bin";
+      });
 
-      (vscode.workspace as any).workspaceFolders = undefined;
+      afterEach(() => {
+        (vscode.workspace as any).workspaceFolders = undefined;
+        setPluginState("unknown");
+        process.env.PATH = savedPath;
+        if (savedBinaryPath === undefined) delete process.env.NIGHTGAUGE_GO_BINARY_PATH;
+        else process.env.NIGHTGAUGE_GO_BINARY_PATH = savedBinaryPath;
+      });
+
+      it("writes the config through the bundled binary with no plugin and no terminal", async () => {
+        await writesConfig();
+
+        await fire("nightgauge.quickstartRepoInit");
+
+        expect((await fsp.readFile(argsFile, "utf8")).trim()).toBe("config init --detect --json");
+        expect(await isRepoInitialized(tmpRoot)).toBe(true);
+        expect(vscode.commands.executeCommand).toHaveBeenLastCalledWith(
+          "setContext",
+          "nightgauge.repoInitialized",
+          true
+        );
+        expect(vscode.window.createTerminal).not.toHaveBeenCalled();
+        expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+          expect.stringContaining("created .nightgauge/config.yaml")
+        );
+      });
+
+      it("offers board linking through repo-init only when the plugin is enabled", async () => {
+        await writesConfig();
+        setPluginState("enabled");
+        (vscode.window.showInformationMessage as any).mockResolvedValueOnce("Link Project Board");
+
+        await fire("nightgauge.quickstartRepoInit");
+
+        const terminal = (vscode.window.createTerminal as any).mock.results[0].value;
+        expect(terminal.sendText).toHaveBeenCalledWith(`claude ${REPO_INIT_SKILL}`, true);
+      });
+
+      it("passes the binary's environment to the terminal it opens", async () => {
+        await writesConfig();
+        setPluginState("enabled");
+        (vscode.window.showInformationMessage as any).mockResolvedValueOnce("Link Project Board");
+
+        await fire("nightgauge.quickstartRepoInit");
+
+        const options = (vscode.window.createTerminal as any).mock.calls[0][0];
+        expect(options.env.NIGHTGAUGE_BIN).toBe(process.env.NIGHTGAUGE_GO_BINARY_PATH);
+        expect(options.env.PATH.split(":")[0]).toBe(tmpRoot);
+      });
+
+      it("shows the binary's own error and leaves the repository uninitialized", async () => {
+        await bundleBinary(`echo "Error: --detect needs a GitHub origin remote" >&2\nexit 1`);
+
+        await fire("nightgauge.quickstartRepoInit");
+
+        expect(vscode.window.showErrorMessage).toHaveBeenCalledWith(
+          expect.stringContaining("--detect needs a GitHub origin remote")
+        );
+        expect(await isRepoInitialized(tmpRoot)).toBe(false);
+      });
+
+      it("treats an existing config as success without running the binary", async () => {
+        await writesConfig();
+        await fsp.mkdir(path.join(tmpRoot, ".nightgauge"), { recursive: true });
+        await fsp.writeFile(path.join(tmpRoot, ".nightgauge", "config.yaml"), "owner: mine\n");
+
+        await fire("nightgauge.quickstartRepoInit");
+
+        await expect(fsp.stat(argsFile)).rejects.toThrow();
+        expect(vscode.window.showErrorMessage).not.toHaveBeenCalled();
+      });
+
+      it("runs plugin setup, not a dead terminal, for AI-Ready without the plugin", async () => {
+        await fire("nightgauge.quickstartSmartSetup");
+
+        expect(vscode.commands.executeCommand).toHaveBeenCalledWith("nightgauge.setupPlugins");
+        expect(vscode.window.createTerminal).not.toHaveBeenCalled();
+      });
+
+      it("opens smart-setup in a terminal when the plugin is enabled", async () => {
+        setPluginState("enabled");
+
+        await fire("nightgauge.quickstartSmartSetup");
+
+        const terminal = (vscode.window.createTerminal as any).mock.results[0].value;
+        expect(terminal.sendText).toHaveBeenCalledWith("claude /nightgauge:smart-setup", true);
+      });
+    });
+
+    it("names only skills the plugin ships", async () => {
+      const skillsDir = path.resolve(__dirname, "../../../../claude-plugins/nightgauge/skills");
+      const shipped = await fsp.readdir(skillsDir);
+
+      for (const skill of [REPO_INIT_SKILL, SMART_SETUP_SKILL]) {
+        expect(skill).toMatch(/^\/nightgauge:/);
+        expect(shipped).toContain(skill.replace("/nightgauge:", ""));
+      }
     });
 
     it("warns the user when no workspace folder is open", async () => {

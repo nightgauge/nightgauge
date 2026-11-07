@@ -10,6 +10,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Freshness check no longer aborts a merge that is already open, so a staged
+  resolution survives (#2755).
+
+### Changed
+
+- **The Phase 5.5 freshness check merges the base instead of rebasing (#2699).**
+  It pushes with `nightgauge git push-branch`, never `--force-with-lease`. Phase
+  6 conflict resolution still rebases.
+- **Phase 5.5's best-effort pushes keep the terminal marker out of the transcript
+  (#2749).** A failed push still prints its cause, with the fork tokens filtered
+  out, so a stage that carries on is not classified `branch_forked`.
+- **Review-fix rounds are capped and gated (#2730).** Phase 5 asks
+  `pr-stage review-gate`, fixes `hold` findings only, and wraps its one round in
+  `pr-stage review-round begin|end`. Step 6.3 runs the gate before merging. Every
+  other major is filed as an issue instead of becoming another commit.
+
+### Fixed
+
 - **A `Refs #N` merge no longer closes the issue (#2674).** Step 7.2 passes
   `--pr` to `nightgauge issue close`, which leaves a partially delivered issue
   open for the post-merge hook to return to Ready instead of failing with

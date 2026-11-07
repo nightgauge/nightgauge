@@ -15,7 +15,12 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { formatKillCeilingValue, msLimit, usdLimit } from "../../src/utils/killCeiling";
+import {
+  formatKillCeilingValue,
+  killReportIdleMs,
+  msLimit,
+  usdLimit,
+} from "../../src/utils/killCeiling";
 import { ProgressMonitor, type ProgressMonitorConfig } from "../../src/utils/progressMonitor";
 
 function makeConfig(overrides: Partial<ProgressMonitorConfig> = {}): ProgressMonitorConfig {
@@ -131,4 +136,21 @@ describe("ProgressMonitor attributes every kill to a named ceiling (#161)", () =
     const off = new ProgressMonitor(makeConfig({ enabled: false }));
     expect(off.check(5).ceiling).toBeUndefined();
   });
+});
+
+describe("killReportIdleMs (#2737)", () => {
+  const raw = 40 * 60_000;
+  const soft = 0;
+  it.each(["stage-hard-cap", "stage-time-cap"] as const)(
+    "reports raw output idle for a %s kill during live background work",
+    (ceiling) => {
+      expect(killReportIdleMs(ceiling, raw, soft)).toBe(raw);
+    }
+  );
+  it.each(["stall-idle", "quota-fast-fail-idle"] as const)(
+    "reports the live-work idle clock for a %s kill",
+    (ceiling) => {
+      expect(killReportIdleMs(ceiling, raw, soft)).toBe(soft);
+    }
+  );
 });

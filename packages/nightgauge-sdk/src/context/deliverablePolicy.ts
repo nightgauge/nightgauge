@@ -212,6 +212,7 @@ export function applyDeliverablePolicy(kind: string, decoded: unknown): PolicyOu
   } else if (kind === "validate") {
     applySkippedPhasesRule(doc, notes);
     applyGateMetricsRule(doc, notes);
+    applyACVerdictKeyRule(doc, notes);
   }
 
   return finalize(doc, notes);
@@ -580,4 +581,53 @@ function applyGateMetricsRule(doc: Record<string, unknown>, notes: PolicyNote[])
     kept.push(entry);
   });
   if (kept.length !== arr.length) doc.gate_metrics = kept;
+}
+
+/**
+ * Report acceptance-criteria verdicts a validate context carries under a key or
+ * field its consumers do not read (#2671). pr-create decodes only
+ * `acceptance_criteria_verdicts[{index, text, status, evidence}]`, so a verdict
+ * anywhere else is silently dropped and every criterion resolves to
+ * not_verifiable. One problem per offence; empty when clean. There is no alias:
+ * the wrong shape is rejected, never read (#2665). Port of Go
+ * `deliverable.MisplacedACVerdicts`; detail strings match it byte-for-byte.
+ */
+export function misplacedACVerdicts(doc: Record<string, unknown>): string[] {
+  const problems: string[] = [];
+  const ac = doc.acceptance_criteria;
+  if (Array.isArray(ac)) {
+    const n = ac.filter((e) => isPlainObject(e) && ("verdict" in e || "status" in e)).length;
+    if (n > 0) {
+      problems.push(
+        `acceptance_criteria carries ${n} verdict entr${n === 1 ? "y" : "ies"}; verdicts belong under acceptance_criteria_verdicts as {index, text, status, evidence}`
+      );
+    }
+  }
+  const verdicts = doc.acceptance_criteria_verdicts;
+  if (Array.isArray(verdicts)) {
+    verdicts.forEach((e, i) => {
+      if (isPlainObject(e) && "verdict" in e && !("status" in e)) {
+        problems.push(`acceptance_criteria_verdicts[${i}] uses verdict; the field is status`);
+      }
+    });
+  }
+  return problems;
+}
+
+/**
+ * Fail a validate context whose AC verdicts sit where pr-create cannot read
+ * them (#2671). FATAL, not repaired: the writer is wrong.
+ */
+function applyACVerdictKeyRule(doc: Record<string, unknown>, notes: PolicyNote[]): void {
+  for (const p of misplacedACVerdicts(doc)) {
+    const onVerdicts = p.startsWith("acceptance_criteria_verdicts");
+    notes.push({
+      field: onVerdicts ? "acceptance_criteria_verdicts" : "acceptance_criteria",
+      disposition: "fatal",
+      rule: onVerdicts
+        ? "validate.acceptance_criteria_verdicts.verdict_field"
+        : "validate.acceptance_criteria.verdicts_under_wrong_key",
+      detail: p,
+    });
+  }
 }

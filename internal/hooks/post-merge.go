@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/trust"
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // PostMergeInput holds parameters for the post-merge hook.
@@ -36,15 +35,18 @@ type PostMergeInput struct {
 	// it and the result says so (ValidationMarkerNotWired).
 	ValidationMarks ValidationMarkWriter
 	// Remainder comments on an issue whose merged PR did not close it
-	// (#2595), naming the unmet acceptance criteria. Nil skips the comment;
-	// the issue is still left open and returned to Ready.
-	Remainder IssueCommenter
-}
-
-// IssueCommenter comments on an issue by node ID. Implemented by
-// *github.IssueService.
-type IssueCommenter interface {
-	AddComment(ctx context.Context, subjectID, body string) error
+	// (#2595), naming the unmet acceptance criteria, once per merged PR
+	// (#2878): a trusted comment already carrying the PR's marker stops it.
+	// Nil skips the comment; the issue is still left open.
+	Remainder ValidationMarkWriter
+	// AlreadyMerged is set when the caller's run found the PR merged and merged
+	// nothing itself (#2878). The run did no work, so it must not return the
+	// issue to Ready, or the same run dispatches again.
+	AlreadyMerged bool
+	// ExcludeLabels are the human-only labels (autonomous.exclude_labels). A
+	// partial delivery on an issue carrying one stays out of Ready, so a merge
+	// cannot undo an operator's park (#2878).
+	ExcludeLabels []string
 }
 
 // ValidationMarkWriter reads an issue's comments through the trust filter and
@@ -190,8 +192,16 @@ type PostMergeResult struct {
 	// Ready, and UnmetCriteria names the remainder.
 	PartialDelivery bool     `json:"partialDelivery,omitempty"`
 	UnmetCriteria   []string `json:"unmetCriteria,omitempty"`
+	// ReadyWithheld is set on a partial delivery that must not return to Ready:
+	// the run merged nothing, or the issue carries an excluded label (#2878).
+	ReadyWithheld bool `json:"readyWithheld,omitempty"`
+	// EmptyDelivery is set on a partial delivery whose merged PR is known to
+	// have changed no files (#3012). Ready is withheld and the row parks in
+	// Backlog: re-running an issue whose last PR delivered nothing loops.
+	EmptyDelivery bool `json:"emptyDelivery,omitempty"`
 	// RemainderComment reports the comment naming the remainder: "posted",
-	// "failed", or empty when no commenter was wired.
+	// "present" when this PR's comment already exists, "failed", or empty when
+	// no commenter was wired.
 	RemainderComment string `json:"remainderComment,omitempty"`
 }
 
@@ -381,8 +391,8 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// part of the issue: pr-create found an unmet acceptance criterion. Leave
 	// the issue open, return it to Ready and name the remainder. Only a body
 	// we actually read can say this; an unread body keeps the close below.
-	if IsPartialDelivery(merge.Body, input.IssueNumber) {
-		return partialDelivery(ctx, boardSvc, input, issue.NodeID, merge)
+	if IsPartialDelivery(merge.Body, input.RepositoryOwner+"/"+input.RepositoryName, input.IssueNumber) {
+		return partialDelivery(ctx, boardSvc, input, issue, merge)
 	}
 
 	// Explicitly close the issue. This is the fallback in case GitHub's
@@ -647,28 +657,21 @@ func writeValidationMarker(ctx context.Context, input PostMergeInput, issueNodeI
 	return ValidationMarkerWritten
 }
 
-// closingKeywordRE matches GitHub's closing keywords followed by an issue
-// reference, optionally repo-qualified.
-var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(?:[\w.-]+/[\w.-]+)?#(\d+)\b`)
-
 // IsPartialDelivery reports whether a merged PR's body delivered only part of
 // issue number: the body was read and names no closing keyword for it (Refs
 // #N). An empty body was not read, so it is not a partial delivery. The
 // post-merge hook and `issue close --pr` share this one predicate (#2674).
-func IsPartialDelivery(body string, number int) bool {
-	return strings.TrimSpace(body) != "" && !ClosesIssue(body, number)
+// repo is the "owner/repo" the PR merged into: a closer naming another
+// repository's issue of the same number does not deliver this one.
+func IsPartialDelivery(body, repo string, number int) bool {
+	return strings.TrimSpace(body) != "" && !ClosesIssue(body, repo, number)
 }
 
-// ClosesIssue reports whether a PR body carries a closing keyword for issue
-// number (#2595).
-func ClosesIssue(body string, number int) bool {
-	want := strconv.Itoa(number)
-	for _, m := range closingKeywordRE.FindAllStringSubmatch(body, -1) {
-		if m[1] == want {
-			return true
-		}
-	}
-	return false
+// ClosesIssue reports whether a PR body in repo carries a closing keyword for
+// that repository's issue number (#2595), in any form GitHub honours
+// (forge.ClosesIssue, #2687).
+func ClosesIssue(body, repo string, number int) bool {
+	return forge.ClosesIssue(body, repo, number)
 }
 
 // unmetCriteriaHeading must equal stages.UnmetACHeading, which renders the
@@ -695,8 +698,9 @@ func UnmetCriteria(body string) []string {
 
 // partialDelivery handles a merged PR that did not close its issue: no close,
 // no Done, no epic rollup and no survival record. The board returns to Ready
-// so the remainder is scheduled, and a comment names it.
-func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeInput, issueNodeID string, merge gh.PRMergeInfo) (out PostMergeResult) {
+// so the remainder is scheduled, unless readyWithheld says otherwise, and a
+// comment names it once per merged PR.
+func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeInput, issue *types.Issue, merge gh.PRMergeInfo) (out PostMergeResult) {
 	out = PostMergeResult{
 		Reason:          "partial_delivery",
 		PartialDelivery: true,
@@ -706,6 +710,11 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 		MergedAt:        merge.MergedAt,
 		BaseRef:         merge.BaseRef,
 		MergedBy:        merge.MergedBy,
+		ReadyWithheld:   readyWithheld(input, issue.Labels),
+		EmptyDelivery:   merge.ChangedFilesKnown && merge.ChangedFiles == 0,
+	}
+	if out.EmptyDelivery {
+		out.ReadyWithheld = true
 	}
 	fmt.Fprintf(os.Stderr, "Post-merge: PR #%d does not close issue #%d — leaving it open (partial delivery)\n", input.PRNumber, input.IssueNumber)
 	defer func() {
@@ -713,16 +722,29 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 		out.ValidationMarker = ValidationMarkerNotClosing
 	}()
 
-	if boardSvc != nil && input.ProjectNumber > 0 {
+	if boardSvc != nil && input.ProjectNumber > 0 && !out.ReadyWithheld {
 		if err := boardSvc.SyncStatus(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, "Ready"); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to Ready failed for #%d: %v\n", input.IssueNumber, err)
 			out.Failed = true
 			out.Error = err.Error()
 		}
 	}
+	if boardSvc != nil && input.ProjectNumber > 0 && out.EmptyDelivery {
+		fmt.Fprintf(os.Stderr, "Post-merge: PR #%d changed no files — parking #%d in Backlog instead of Ready\n", input.PRNumber, input.IssueNumber)
+		if err := boardSvc.SyncStatus(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, "Backlog"); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to Backlog failed for #%d: %v\n", input.IssueNumber, err)
+			out.Failed = true
+			out.Error = err.Error()
+		}
+	}
 
 	if input.Remainder != nil {
-		if err := input.Remainder.AddComment(ctx, issueNodeID, remainderComment(input.PRNumber, out.UnmetCriteria)); err != nil {
+		if remainderCommentPosted(ctx, input) {
+			fmt.Fprintf(os.Stderr, "Post-merge: #%d already names the remainder of PR #%d\n", input.IssueNumber, input.PRNumber)
+			out.RemainderComment = "present"
+			return out
+		}
+		if err := input.Remainder.AddComment(ctx, issue.NodeID, remainderComment(input.PRNumber, out.UnmetCriteria, !out.ReadyWithheld, out.EmptyDelivery)); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge remainder comment failed for #%d: %v\n", input.IssueNumber, err)
 			out.RemainderComment = "failed"
 			out.Failed = true
@@ -736,9 +758,57 @@ func partialDelivery(ctx context.Context, boardSvc BoardSyncer, input PostMergeI
 	return out
 }
 
-func remainderComment(prNumber int, unmet []string) string {
+// readyWithheld reports whether a partial delivery must stay out of Ready.
+func readyWithheld(input PostMergeInput, labels []string) bool {
+	if input.AlreadyMerged {
+		return true
+	}
+	for _, exclude := range input.ExcludeLabels {
+		for _, label := range labels {
+			if strings.EqualFold(label, exclude) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// remainderMarker renders the hidden line that records this PR's remainder
+// comment. Criteria cannot forge it: remainderComment escapes "<!--".
+func remainderMarker(prNumber int) string {
+	return fmt.Sprintf("<!-- nightgauge:partial-delivery pr=%d -->", prNumber)
+}
+
+// remainderCommentPosted reports whether a trusted comment already names this
+// PR's remainder. A failed read answers false: a duplicate comment is cheaper
+// than a lost remainder.
+func remainderCommentPosted(ctx context.Context, input PostMergeInput) bool {
+	comments, err := input.Remainder.TrustedComments(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: post-merge: could not read #%d's comments for the remainder marker: %v — posting anyway\n", input.IssueNumber, err)
+		return false
+	}
+	marker := remainderMarker(input.PRNumber)
+	for _, c := range comments {
+		if strings.Contains(c.Body, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func remainderComment(prNumber int, unmet []string, backInReady, empty bool) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("PR #%d merged part of this issue and referenced it with `Refs`, so the issue stays open and is back in Ready.\n\n", prNumber))
+	b.WriteString(remainderMarker(prNumber) + "\n")
+	if empty {
+		b.WriteString(fmt.Sprintf("PR #%d referenced this issue with `Refs` but changed no files, so it delivered nothing. The issue stays open and waits in Backlog for a human instead of returning to Ready", prNumber))
+	} else {
+		b.WriteString(fmt.Sprintf("PR #%d merged part of this issue and referenced it with `Refs`, so the issue stays open", prNumber))
+	}
+	if backInReady {
+		b.WriteString(" and is back in Ready")
+	}
+	b.WriteString(".\n\n")
 	if len(unmet) == 0 {
 		b.WriteString("The PR did not list the remaining acceptance criteria; check them against the issue body.\n")
 		return b.String()

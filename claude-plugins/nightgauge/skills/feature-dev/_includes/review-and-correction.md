@@ -34,11 +34,12 @@ quality report (the `judge` unit) after all reviewers complete.
 
 The six reviewers are the portable units declared in the skill's
 `orchestration:` frontmatter. On a provider with an orchestration capability the
-`WorkflowEngine` fans them out concurrently; on a provider without one (Copilot,
-Cursor) run the same six reviews **sequentially** in this single agent and
-aggregate the results — same reviewers, same checks, same report. Do not encode
-a provider-specific spawn mechanism here; the frontmatter is the single source
-of the fan-out intent.
+`WorkflowEngine` fans them out concurrently. On a provider without one (Copilot,
+Cursor) this phase reviews nothing: skip to Phase 6 and leave
+`SECURITY_REVIEW_RESULT=skipped`. An author reading its own diff is not a review,
+and feature-validate runs the independent one (#2839). Do not encode a
+provider-specific spawn mechanism here; the frontmatter is the single source of
+the fan-out intent.
 
 Each reviewer receives:
 
@@ -145,10 +146,16 @@ For each issue found in Phase 5:
 
 ### Step 6.2: Re-run Tests
 
-After fixes:
+After fixes, run the tests covering what you changed, with a guard that stops
+the stage on failure. Scope the command to the touched packages or paths, never
+the repository's complete gate:
 
 ```bash
-npm test
+# e.g. FOCUSED_TESTS="go test ./internal/build/..." or
+#      FOCUSED_TESTS="npm test -w packages/<touched-package>"
+FOCUSED_TESTS="<scoped test command for the touched packages>"
+bash -c "$FOCUSED_TESTS" \
+  || { echo "ERROR: focused tests failed. Fix them before feature-validate."; exit 1; }
 ```
 
 ### Step 6.3: Run Formatter
@@ -162,30 +169,31 @@ nightgauge format run 2>&1 || { echo "ERROR: format run failed"; exit 1; }
 
 If the formatter modifies files, those changes must be included in the commit.
 
-### Step 6.4: Verify All Checks Pass (HARD GATE)
+### Step 6.4: Verify Focused Checks Pass (HARD GATE)
 
-Run the project's full CI validation suite locally before proceeding. These
-checks are **blocking** — feature-dev MUST NOT report success if any of them
-fail. Swallowing failures here lets a broken PR through to `pr-create`, where
-CI catches it and blocks the merge. See issue #2779 for the incident that
-motivated this gate.
+Run the build, the tests covering what you changed, and the formatter's check.
+These are **blocking**: feature-dev MUST NOT report success if any of them
+fails, because a swallowed failure is how a broken PR reached `pr-create` in
+#2779. Run `nightgauge build run --json` when Step 4.1.5 predates your last
+edit. The test arm is the guarded Step 6.2 run; the formatter arm is Step 6.3.
+
+The build passes only on `passed`, or on `skipped` with `ran: false` (no build
+system exists). Any other status, a missing status or empty output fails
+(`-s` makes empty output a `null` that fails instead of no result that passes).
+
+The repository's complete gate is **feature-validate's**, once per tree. Do not
+run it here, under any name: on #2700 and #2724 repeated gates took a run past
+four hours (#2784).
 
 ```bash
-CI_PARITY_RESULT=$(nightgauge ci parity-check --json 2>/dev/null || \
-  echo '{"passed":false,"commands_run":[],"failures":[{"command":"ci parity-check","failure_type":"build","output":"binary not found","exit_code":1}],"timestamp":""}')
-CI_PARITY_PASSED=$(printf '%s\n' "$CI_PARITY_RESULT" | jq -r '.passed')
-
-if [ "$CI_PARITY_PASSED" != "true" ]; then
-  echo "ERROR: CI parity check failed:"
-  printf '%s\n' "$CI_PARITY_RESULT" | jq -r '.failures[] | "  FAIL [\(.failure_type)]: \(.command)"'
-  echo "Fix the failures and re-run Step 6.3 + 6.4. Do NOT proceed to commit or to feature-validate."
-  exit 1
-fi
+nightgauge build run --json \
+  | jq -se '.[0] | .status == "passed" or (.status == "skipped" and .ran == false)' >/dev/null \
+  || { echo "ERROR: build did not pass (status must be passed, or skipped with no build system). Fix it before feature-validate."; exit 1; }
 ```
 
-If `format` failures appear, Step 6.3 should have already applied the fix. If
-the failure persists, the drift is likely in a file the formatter cannot rewrite
-(e.g., generated output). Investigate before proceeding.
+If the formatter's check still fails after Step 6.3, the drift is likely in a
+file the formatter cannot rewrite (generated output). Investigate before
+proceeding.
 
 ---
 
@@ -205,7 +213,7 @@ fragile half-finished implementation.
 
 An adjacent bug, refactor or cleanup noticed while implementing is not
 implemented here and is not dropped. Apply the rule in
-[Record vs. Backtrack](../../../../../docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work):
+[Record vs. Backtrack](https://github.com/nightgauge/nightgauge/blob/main/docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work):
 if this issue's acceptance criteria hold without it, record it and continue.
 Recorded work does not count toward the `SCOPE_DISCOVERED` file threshold.
 

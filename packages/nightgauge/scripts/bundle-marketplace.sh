@@ -10,7 +10,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PKG_DIR/../.." && pwd)"
-DIST="$PKG_DIR/dist"
+# NIGHTGAUGE_BUNDLE_DIST redirects the output so a test can run this script for
+# real into a temp directory (TestBundleShipsEverySkillFile).
+DIST="${NIGHTGAUGE_BUNDLE_DIST:-$PKG_DIR/dist}"
 
 # 1. Copy root marketplace manifest
 mkdir -p "$DIST/.claude-plugin"
@@ -27,46 +29,64 @@ for plugin_dir in "$REPO_ROOT/claude-plugins"/*/; do
   rsync -a --delete "$plugin_dir" "$dest/"
 done
 
-# 3. Bundle core pipeline skills so standalone repos (customers) can run the
-#    pipeline without needing the nightgauge source repo.
+# 3. Bundle every canonical skill (#2762). dist/skills is the one source the
+#    extension installs Codex, Grok and OpenCode skills from, so it carries the
+#    whole tree, exactly what scripts/install-agent-skills.sh installs from
+#    skills/: `name:` matches the directory, no disable-model-invocation, and
+#    relative links resolve. The Claude plugin mirror above is Claude-only: it
+#    rewrites names, injects DMI and rebases links. Standalone repos also run
+#    the pipeline from this copy without the nightgauge source repo.
 SKILLS_DIR="$DIST/skills"
 SHARED_DIR="$REPO_ROOT/skills/_shared"
 # Every key in the Go binary's skillrender.StageSkillDirs must appear here:
 # a skill the binary can name but the VSIX does not ship resolves in the
 # nightgauge source tree and nowhere else (#1029). Pinned by
-# TestBundleShipsEverySkillTheGoDirectPathRenders.
+# TestBundleShipsEverySkillTheGoDirectPathRenders. The copy below ships every
+# skill; this list makes a missing stage skill fail the bundle by name.
+#
+# pattern-mining and verify-ui are not stages. They are cross-skill targets: the
+# feature-planning and feature-validate prompts tell the model to follow them,
+# so a stage's prompt is incomplete without them (#2761).
 for skill in nightgauge-issue-pickup nightgauge-feature-planning \
              nightgauge-feature-dev nightgauge-feature-validate \
              nightgauge-pr-create nightgauge-pr-merge \
              nightgauge-issue-refine nightgauge-spike-materialize \
-             nightgauge-followup-materialize; do
-  src="$REPO_ROOT/skills/$skill"
-  if [ -d "$src" ]; then
-    dest="$SKILLS_DIR/$skill"
-    mkdir -p "$dest"
-    cp "$src/SKILL.md" "$dest/SKILL.md"
-    # Bundle the skill's on-demand _includes/ reference files (ADR-010
-    # progressive disclosure). The refactored SKILL.md bodies emit
-    # "Read `_includes/X.md` (same directory as this SKILL.md) now ..."
-    # directives, so the bundled skill is incomplete without them.
-    if [ -d "$src/_includes" ]; then
-      rsync -a "$src/_includes/" "$dest/_includes/"
-    fi
-    # Bundle the compact render profile (ADR 023 §Q5, #1654) the same way:
-    # `nightgauge skill render --profile compact` resolves
-    # <skillDir>/_profiles/<profile>.md relative to wherever SKILL.md
-    # actually lives, so a customer repo running only against this bundle
-    # needs the file on disk here too, not just in the source tree.
-    if [ -d "$src/_profiles" ]; then
-      rsync -a "$src/_profiles/" "$dest/_profiles/"
-    fi
+             nightgauge-followup-materialize \
+             nightgauge-pattern-mining nightgauge-verify-ui; do
+  if [ ! -f "$REPO_ROOT/skills/$skill/SKILL.md" ]; then
+    echo "Skill source $REPO_ROOT/skills/$skill is missing." >&2
+    exit 1
   fi
 done
+# A whole skill ships, not a list of its sidecars: a list dropped _overlays/ and
+# would have dropped verify-ui's flows/. A top-level CHANGELOG.md and test
+# material at any depth (tests/, __tests__/, *.test.ts, *.test.js) stay behind,
+# so .vscodeignore never drops a file the bundle carries (#2948).
+# skillrender.BundleExcluded is the Go half of this rule and
+# scripts/lib/install_skill_tree.py the script installer's. Starting from an
+# empty directory drops a skill that left skills/.
+rm -rf "$SKILLS_DIR"
+mkdir -p "$SKILLS_DIR"
+for src in "$REPO_ROOT/skills"/*/; do
+  skill="$(basename "$src")"
+  [ "$skill" != "_shared" ] || continue
+  [ -f "$src/SKILL.md" ] || continue
+  rsync -a --exclude=/CHANGELOG.md --exclude=tests/ --exclude=__tests__/ \
+    --exclude='*.test.ts' --exclude='*.test.js' "$src" "$SKILLS_DIR/$skill/"
+done
 # Copy shared includes so <!-- include: ../_shared/... --> directives resolve
-if [ -d "$SHARED_DIR" ]; then
-  mkdir -p "$SKILLS_DIR/_shared"
-  rsync -a "$SHARED_DIR/" "$SKILLS_DIR/_shared/"
+if [ ! -d "$SHARED_DIR" ]; then
+  echo "Shared skill source $SHARED_DIR is missing." >&2
+  exit 1
 fi
+mkdir -p "$SKILLS_DIR/_shared"
+rsync -a --delete "$SHARED_DIR/" "$SKILLS_DIR/_shared/"
+# Links that leave dist/skills (../../docs/...) name nothing in an installed
+# VSIX, so they become GitHub URLs (#2764). A release build pins them to its
+# tag, so a user reads the docs of the version they run; any other build
+# points at main. check-mirror-links.py --root dist/skills enforces this.
+LINK_REF="$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null || echo main)"
+python3 "$REPO_ROOT/scripts/lib/mirror_links.py" --identity --dest "$SKILLS_DIR" --ref "$LINK_REF"
 
 # 4. Bundle the Nightgauge OpenCode plugin (#1635) so OpenCodeSetupService can
 #    install it from the VSIX, never from a network fetch (#1671). Same two

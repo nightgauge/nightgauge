@@ -85,16 +85,17 @@ fi
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
@@ -199,12 +200,13 @@ fi
 When `IS_CONFLICT_RESOLUTION=true` and the context file is present, the agent
 MUST:
 
-1. Re-attempt the rebase of the PR branch onto `$CONFLICT_BASE` and read each
-   conflicting file. For each conflict, the `conflict-context-{N}.json` entry
-   carries the `ours` (this PR's feature work) and `theirs` (rebased base)
-   blobs — use them to understand both sides. Those names are the document's,
-   not git's index-stage names, which a rebase inverts; the writer has already
-   translated. An entry with `ours_mode`/`theirs_mode` `160000` is a submodule
+1. Merge the base into the PR branch — `git merge --no-ff "origin/$CONFLICT_BASE"`
+   — and read each conflicting file. Never rebase an existing PR branch: its
+   tip would stop descending from origin's, and the push is rejected (#2699).
+   For each conflict, the `conflict-context-{N}.json` entry carries the `ours`
+   (this PR's feature work) and `theirs` (the base) blobs — use them to
+   understand both sides. Under a merge these match git's own `ours`/`theirs`.
+   An entry with `ours_mode`/`theirs_mode` `160000` is a submodule
    pointer: it has no blobs, and `ours_commit`/`theirs_commit` are the two
    commits to choose between. An entry with `ours_present`/`theirs_present`
    `false` was deleted on that side (not emptied).
@@ -212,7 +214,8 @@ MUST:
    changes** (same rules as `nightgauge-pr-merge` Step 6.1.5: never blindly
    accept one side; integrate new code with base updates; re-apply refactors
    onto the updated base).
-3. Commit the resolution on the existing branch and push. The pipeline then
+3. Commit the merge on the existing branch and push it with
+   `nightgauge git push-branch` (never `--force`). The pipeline then
    flows forward to feature-validate → pr-create → pr-merge, which re-runs CI
    and merges the now-conflict-free PR.
 

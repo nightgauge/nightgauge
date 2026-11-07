@@ -810,7 +810,7 @@ guess.
 
 | Key                                           | Default                    | What it costs while on                                                                                                                                                                                                                                               |
 | --------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pipeline.adversarial_review.enabled`         | `true`                     | **Per-run cost.** One or more extra LLM critic passes on every `feature-validate`. It is the fresh-eyes read the implementing model cannot give itself                                                                                                               |
+| `pipeline.adversarial_review.enabled`         | `true`                     | **Per-run cost.** One independent review per tree on every `feature-validate`, at most three catches a run. It is the read the implementing model cannot give itself                                                                                                 |
 | `pipeline.grounding_gate.enabled`             | `true`                     | **Nothing measurable.** Deterministic pre-`feature-dev` check that the worktree is on the branch the run thinks it is. No model call                                                                                                                                 |
 | `pipeline.feature_dev_sub_sessions`           | `true`                     | **Nothing measurable** on windows of 200,000 tokens or more, where it never engages. Below that, feature-dev runs as one fresh session per plan task, which re-sends the cacheable skill prefix once per step. See [its section](#pipelinefeature_dev_sub_sessions). |
 | `pipeline.test_execution`                     | `true`                     | **Nothing measurable.** Inert in a repo whose test command excludes nothing; it has no off switch by design (see its section)                                                                                                                                        |
@@ -2359,6 +2359,10 @@ gate. Use this to cap the maximum idle time before a stall-kill, independent of
 the multiplier system.
 
 When unset (the default), the multiplier-derived value is used unchanged.
+
+The value is a non-negative YAML integer of milliseconds. The Go binary and the
+extension read the same value; a unit string such as `8m` is rejected, and the
+Go config load names `pipeline.stall_idle_ms` in its error.
 
 | Option          | Type    | Default     | Range | Description                                         |
 | --------------- | ------- | ----------- | ----- | --------------------------------------------------- |
@@ -5372,6 +5376,27 @@ are resolved before matching. `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` bypasses it.
 
 ---
 
+### hooks.pre_push
+
+Limit for `nightgauge pre-push validate` (#2700). `go test -timeout` gets what
+remains of it less 60 s, so a hung package normally panics with its goroutine
+dump before the gate stops it.
+
+```yaml
+hooks:
+  pre_push:
+    timeout_seconds: 2400 # default: 1800
+```
+
+An unset or non-positive value uses the default. `--timeout` overrides it. Set it
+above how long the merged-state gate takes on a loaded machine: an expired limit
+blocks the push with exit code 3.
+
+**Used by:** `nightgauge pre-push validate`, the installed git hook and
+feature-validate
+
+---
+
 ### local_gate
 
 The repository's complete local gate, as `nightgauge workspace contract
@@ -5401,6 +5426,7 @@ back to the default.
 
 **Used by:** `nightgauge workspace contract rollout`
 ([MULTI_REPO_WORKSPACE.md § Contract Rollout](MULTI_REPO_WORKSPACE.md#contract-rollout--workspace-contract-1480))
+and feature-validate Phase 2.5, which runs it as the run's one full gate (#2784)
 
 ---
 
@@ -5814,7 +5840,8 @@ opencode:
 A stage on a declared endpoint gets the tighter defaults, because a local
 model's window is smaller and its tokenizer spends more tokens on the same
 text. Every pipeline stage prompt also carries, once, the skill `_includes/`
-files its phases direct it to follow (up to 64 KB), so the model does not
+files its phases direct it to follow (up to 80 KB; an include marked
+`<!-- supply: first -->` is supplied before the others), so the model does not
 spend tool calls reading them; this applies to every adapter.
 
 When more than one endpoint lists the same model id under `models`, a stage
@@ -6421,10 +6448,10 @@ ui:
 
 Plugin management settings.
 
-| Option            | Type    | Default                                          | Description                      |
-| ----------------- | ------- | ------------------------------------------------ | -------------------------------- |
-| `auto_prompt`     | boolean | `true`                                           | Prompt to install Claude plugins |
-| `marketplace_url` | string  | `"https://github.com/nightgauge/nightgauge.git"` | Plugin marketplace repository    |
+| Option            | Type    | Default                                                 | Description                      |
+| ----------------- | ------- | ------------------------------------------------------- | -------------------------------- |
+| `auto_prompt`     | boolean | `true`                                                  | Prompt to install Claude plugins |
+| `marketplace_url` | string  | `"https://github.com/nightgauge/nightgauge.git#stable"` | Plugin marketplace repository    |
 
 **Example:**
 
@@ -6432,7 +6459,7 @@ Plugin management settings.
 ui:
   plugins:
     auto_prompt: true
-    marketplace_url: https://github.com/nightgauge/nightgauge.git
+    marketplace_url: https://github.com/nightgauge/nightgauge.git#stable
 ```
 
 ---

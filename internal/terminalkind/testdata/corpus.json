@@ -55,6 +55,24 @@
   ],
   "cases": [
     {
+      "id": "synthetic-merge-conflict-escalation",
+      "input": "[merge-conflict] deterministic pr-merge refused: merge-queue-failed: merge conflict with main: PR #429 is CONFLICTING; conflicting files: internal/timeout.go",
+      "expected": "merge_conflict",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "packages/nightgauge/src/services/HeadlessOrchestrator.ts: queueConflictEscalationError",
+      "rationale": "The escalation HeadlessOrchestrator writes when conflict recovery gives up (#2841). The file list is free text, so a path holding `timeout` must not move it to another kind."
+    },
+    {
+      "id": "synthetic-merge-queue-enqueue-exhausted",
+      "input": "deterministic pr-merge refused: merge-queue-enqueue-exhausted: enqueue pull request: failed after 4 attempts: enqueue retries exhausted: HTTP 502 Bad Gateway: i/o timeout",
+      "expected": "merge_queue_enqueue_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/orchestrator/stages/prmerge.go: awaitMergeQueue (#2729)",
+      "rationale": "An enqueue that exhausted its transient retries. The cause names a gateway status and a timeout; it must not read as network_unavailable or fall through to subagent_crash, or a green PR is stranded in In review."
+    },
+    {
       "id": "captured-api-overloaded",
       "input": "API Error: Overloaded",
       "expected": "api_overloaded",
@@ -431,6 +449,24 @@
       "source": "synthetic",
       "producer": "The post-condition site's composed reason (scheduler.go: `<first cause> — then <post-condition symptom>`, #878)",
       "rationale": "THE #878 ROW. The composed reason carries BOTH the cause and the symptom, and the symptom phrase is a clause of premature-turn-end. Whichever rule sits earlier wins the whole string, so ordering is the entire fix: a credential-less push booked as a turn-end tells the retro path the agent gave up when in fact the machine had no credential, and routes recovery at the agent instead of at the environment."
+    },
+    {
+      "id": "git-transport-auth-push-auth-failed-marker",
+      "input": "[push-auth-failed] PUSH REFUSED: remote: Invalid username or token. Password authentication is not supported for Git operations.",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "`nightgauge git push-branch` exit 4, carried by verifyPostValidateState into the feature-validate slot error (#2742)",
+      "rationale": "The marker is the stable signal: the push-branch verb has already decided this is a credential refusal, so the kind must not depend on whether git's own wording happens to contain one of the free-text terms."
+    },
+    {
+      "id": "order-push-auth-marker-beats-stale-pre-push-blocked",
+      "input": "Result: BLOCKED \u2014 2 checks failed\n[push-auth-failed] PUSH REFUSED: fatal: unable to access 'https://example.org/o/r.git/': The requested URL returned error: 403",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "A feature-validate run whose earlier `nightgauge pre-push validate` printed a BLOCKED summary before the push was refused (#2742, the #2706 specimen)",
+      "rationale": "THE #2742 RETRO ROW. The run's terminal failure is the refused push, not the earlier pre-push summary. The bare 403 alone is deliberately unmatched by this rule (GitHub's throttle code), so only the marker can carry the classification here."
     },
     {
       "id": "git-transport-auth-ssh-publickey",
@@ -928,13 +964,67 @@
       "rationale": "one of three real phrasings for the single most common failure this machine produces; each differs by a word, so a matcher written for one leaves the others unclassified — which is exactly the drift #306 found on the SDK side."
     },
     {
-      "id": "stall-kill-stage-hard-cap",
-      "input": "Stage feature-dev exceeded stage_hard_cap (45m 0s) — forcibly terminating process.",
+      "id": "stage-cap-kill-hard-cap-reason",
+      "input": "Stage feature-dev exceeded stage_hard_cap (45m 0s total runtime) — forcibly terminating process.",
+      "expected": "stage_cap_kill",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "skillRunner's hard-cap killReason",
+      "rationale": "A hard cap stopped a working stage. This text was stall_kill until #2812, so the record called a time limit a stall."
+    },
+    {
+      "id": "stage-cap-kill-time-cap-reason",
+      "input": "Stage feature-dev exceeded stage_time_cap (20m 0s total runtime) — forcibly terminating process.",
+      "expected": "stage_cap_kill",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "skillRunner's time-cap killReason",
+      "rationale": "The zero-cost adapter's cap is the same event as a hard cap, and this wording was classified by nothing specific before #2812."
+    },
+    {
+      "id": "stage-cap-kill-composed-hard-cap",
+      "input": "[stage-cap-killed] feature-dev terminated: reached pipeline.stage_hard_caps=2700000ms (pipeline.stage_hard_caps.feature-dev (total runtime, progress-gated)) after 2700s. The stage was stopped by its runtime limit. Reduce the stage's scope or raise the cap (0 to disable).",
+      "expected": "stage_cap_kill",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "composeStageCapKilledError for a stage-hard-cap ceiling",
+      "rationale": "The exact report text. If its prose ever hits a higher rule, the kind silently moves off the cap, so the whole sentence is pinned."
+    },
+    {
+      "id": "stage-cap-kill-composed-time-cap",
+      "input": "[stage-cap-killed] feature-dev terminated: reached pipeline.stage_time_caps=1200000ms (min(pipeline.stage_hard_caps.feature-dev=2700000ms, pipeline.stage_time_caps.feature-dev=1200000ms) — adapter=ollama has provider_scale=0) after 1200s. The stage was stopped by its runtime limit. Reduce the stage's scope or raise the cap (0 to disable).",
+      "expected": "stage_cap_kill",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "composeStageCapKilledError for a stage-time-cap ceiling",
+      "rationale": "The time-cap derivation names both config keys and the adapter. None of that free text may reach a higher rule."
+    },
+    {
+      "id": "stage-cap-kill-skillrunner-text",
+      "input": "[stage-cap-killed] pr-create terminated: reached pipeline.stage_hard_caps=900000ms (pipeline.stage_hard_caps.pr-create (total runtime, progress-gated)) after 900s\nUpstream signal: Process exited with code 143",
+      "expected": "stage_cap_kill",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "SkillRunner.ts cap errorText",
+      "rationale": "The IPC path carries the process tail after the report, and `exit`-shaped tails must not turn a cap kill into a crash."
+    },
+    {
+      "id": "stage-cap-kill-idle-report-names-the-cap-config",
+      "input": "[stall-killed] feature-dev terminated: subagent process exceeded stall kill threshold. The process ran for 1800s without completing. Configure pipeline.stall_kill_multiplier or pipeline.stage_hard_caps to adjust (0 to disable).",
       "expected": "stall_kill",
       "expected_signal": "",
       "source": "synthetic",
-      "producer": "PipelineBridge's stage hard-cap kill, reported in the IPC stage result errorText",
-      "rationale": "the canonical hard-cap marker, and unexercised before this row: deleting it from either ladder left every corpus suite green while Go said stall_kill and the SDK said nothing for the same kill."
+      "producer": "composeStallKilledError",
+      "rationale": "AC 3 of #2812. The idle report quotes `pipeline.stage_hard_caps` as advice, and that must not reclassify an idle kill as a cap kill."
+    },
+    {
+      "id": "stage-cap-kill-quota-marker-outranks-the-cap",
+      "input": "[stage-cap-killed] feature-dev terminated: reached pipeline.stage_hard_caps=2700000ms (pipeline.stage_hard_caps.feature-dev (total runtime, progress-gated)) after 2700s. The stage was stopped by its runtime limit. Reduce the stage's scope or raise the cap (0 to disable).\nUpstream signal: [rate-limit-quota-exhausted] idle 2m 0s after rate_limit_event",
+      "expected": "rate_limit_quota_exhausted",
+      "expected_signal": "rate_limit_quota_exhausted",
+      "source": "synthetic",
+      "producer": "composeStageCapKilledError with an upstream quota marker",
+      "rationale": "Quota stays above the new rule, so a cap kill that carries a quota marker keeps today's classification and still reaches the cooldown."
     },
     {
       "id": "stall-kill-hard-cap-wording",
@@ -1414,6 +1504,24 @@
       "rationale": "The second clause shape of the same kind: planning's plan_file exists as far as the context says but cannot be stat'ed (ENOTDIR, EACCES). Pinned separately so a clause deleted for `failed to stat` goes red on its own."
     },
     {
+      "id": "review-cap-reached-extension",
+      "input": "[review-cap-reached] feature-validate stopped at the independent review's round cap with findings standing. The code was intentionally NOT committed or pushed and stays in this run's worktree. Parking this issue for an operator.",
+      "expected": "review_cap_reached",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "HeadlessOrchestrator.verifyPostValidateState on errorCategory review-cap-reached (#2865)",
+      "rationale": "The whole text the extension reports. A cap is one issue's outcome, so this must park; reading as validation_failed is the defect that halted the repository."
+    },
+    {
+      "id": "review-cap-reached-summary",
+      "input": "[review-cap-reached] review round cap of 3 reached with defects unfixed",
+      "expected": "review_cap_reached",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "review.Consult's cap summary, which the metric row carries (#2865)",
+      "rationale": "The review's own summary reaches failure text through the validate notes, so it must name the same kind as the extension's sentence."
+    },
+    {
       "id": "dev-step-cap-reached",
       "input": "[dev-step-cap-reached] feature-dev ran 12 sub-session(s), its bound, with 3 plan task(s) still unchecked",
       "expected": "dev_step_cap_reached",
@@ -1862,6 +1970,24 @@
       "source": "synthetic",
       "producer": "nightgauge preflight environment (#101)",
       "rationale": "The verb's own per-check line wrapped in the stage's exit text. The `exit ` prefix is what the subagent-crash fallback keys on, so this pins the environment-halt rule sitting above it in the table."
+    },
+    {
+      "id": "gate-plugin-missing-stop-marker",
+      "input": "exit 1: [gate-plugin-missing] stopped before any work: system/init lists no nightgauge plugin; this build's safety gates did not load",
+      "expected": "gate_plugin_missing",
+      "expected_signal": "gate_plugin_missing",
+      "source": "synthetic",
+      "producer": "internal/execution/claude_plugin_gate.go and claudePluginGate.ts (#2723)",
+      "rationale": "The stage runner's stop marker wrapped in the stage's exit text. Booked as subagent_crash it would feed the cascade breaker for an install fault a retry cannot clear."
+    },
+    {
+      "id": "gate-plugin-warning-does-not-park",
+      "input": "exit 1: [gate-plugin-warning] system/init lists no nightgauge plugin; this build has no bundled plugin, so the stage continues without confirmed gates",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/execution/claude_plugin_gate.go and claudePluginGate.ts (#2723)",
+      "rationale": "A contributor's no-bundle warning sits in the stderr of whatever the stage later fails on. It must never name the failure, or a real crash on a local run would park as a plugin fault."
     }
   ]
 }

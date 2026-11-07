@@ -63,6 +63,8 @@ export interface NotifyStageTransitionParams {
   servedModel?: string;
   servedEffort?: string;
   servedThinking?: string;
+  /** The Nightgauge plugin version the stage's system/init reported (#2723). */
+  pluginVersion?: string;
   /**
    * Advisory OS pid of the child executing this stage (ADR-017 §7.2).
    *
@@ -107,6 +109,8 @@ export interface NotifyStageProgressParams {
   cacheReadTokens?: number;
   costUsd?: number;
   model?: string;
+  /** Marks the run's PR as forge-confirmed MERGED, not a token estimate (#2730). */
+  mergedPr?: number;
   /** The run this progress estimate belongs to. Accepted and ignored until step 4. */
   runId: string;
 }

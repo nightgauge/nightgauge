@@ -116,6 +116,14 @@ const GateMetricEntrySchema = z.object({
    */
   result: z.enum(["pass", "catch", "fail"]),
   duration_ms: z.number().int().min(0).nullish(),
+  /** A review's findings per severity (#2839) */
+  findings: z
+    .object({
+      blocker: z.number().int().min(0),
+      major: z.number().int().min(0),
+      nitpick: z.number().int().min(0),
+    })
+    .nullish(),
 });
 
 /**
@@ -310,11 +318,19 @@ export const ValidateContextSchema = z
       "inconclusive",
     ] as const).nullish(),
     /**
+     * Outcome of Step 5.3's `git push-branch` (optional, Issue #2742). `auth_failed`
+     * (push-branch exit 4) makes verifyPostValidateState halt with the
+     * `[push-auth-failed]` marker, whatever `validation_status` says.
+     */
+    push_status: z.enum(["pushed", "deferred", "auth_failed"]).nullish(),
+    /** The `[push-auth-failed]` line push-branch printed, when push_status is set. */
+    push_error: z.string().nullish(),
+    /**
      * Explicit failure category for hard-gate failures (v2.1, Issue #3041).
      *
      * MUST stay a superset of every `ERROR_CATEGORY="..."` the feature-validate
      * skill emits (`skills/nightgauge-feature-validate/_includes/`:
-     * build-verification.md, mobile-mcp-tests.md, verify-ui-gate.md). When the skill gains a new
+     * build-verification.md, ci-and-knowledge.md, mobile-mcp-tests.md, verify-ui-gate.md). When the skill gains a new
      * category, add it here in the SAME change — a value the skill emits but
      * this enum omits fails the parse and the whole validation-failure signal
      * is silently dropped as a "non-fatal schema mismatch", which is how a
@@ -332,6 +348,8 @@ export const ValidateContextSchema = z
         "mobile-apk-build-failed",
         "mobile-mcp-tests-failed",
         "verify-ui-gate-failed",
+        "gate-timeout",
+        "review-cap-reached",
       ])
       .nullish(),
     build: z

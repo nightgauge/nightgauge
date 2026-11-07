@@ -18,11 +18,26 @@ const GateMetricsName = layout.CheckoutHealth + "/gate-metrics.jsonl"
 //
 //   - CHECKOUT GateMetricsName is the in-run gate input. It is per-checkout, so a
 //     pipeline worktree's records vanish with the worktree, and a retry in a
-//     fresh worktree never sees an earlier run's "catch".
+//     fresh worktree never sees an earlier run's "catch". A retry in a reused
+//     worktree does see it, and a later verdict for that gate supersedes it
+//     (#2746).
 //   - CLONE logs GateMetricsHistoryName is the cross-run history that
 //     `nightgauge health gate-metrics` reads. Every linked worktree resolves it
 //     to the main clone, so it survives worktree cleanup (#2535).
 const GateMetricsHistoryName = "gate-metrics.jsonl"
+
+// JudgeGateName is the gate_name of adversarial judge rows. It mirrors
+// JUDGE_GATE_NAME in the SDK's appendJudgeVerdicts
+// (packages/nightgauge-sdk/src/orchestrator/judgeGateMetrics.ts), their only writer:
+// the gate groups these rows by attempt_id, which this writer cannot stamp, so
+// it refuses the name (#2778).
+const JudgeGateName = "judges"
+
+// JudgesInterruptedMarker prefixes the error_summary of the failing judges row
+// written when a feature-validate run stopped before its judges returned. It
+// mirrors JUDGES_INTERRUPTED_MARKER in the SDK's judgeGateMetrics.ts; the gate
+// releases the marker once a later attempt records a quality-gate verdict (#2880).
+const JudgesInterruptedMarker = "[judges-interrupted]"
 
 // AppendGateMetric appends one quality-gate record to the checkout's
 // health/gate-metrics.jsonl — the canonical signal the
@@ -33,19 +48,29 @@ const GateMetricsHistoryName = "gate-metrics.jsonl"
 //
 // This is the writer side the feature-validate adversarial-review phase uses
 // (#4097): the LLM critics run as a skill preflight and record their verdict
-// (result "pass" or "catch") here, so a "catch" trips validation through the
-// existing gate. The gate itself stays pure (no LLM, no network) — the
-// non-deterministic judgment arrives via this artifact, following the
+// (result "pass" or "catch") here, so a "catch" that no later verdict for that
+// gate supersedes trips validation through the existing gate. The gate itself
+// stays pure (no LLM, no network) — the non-deterministic judgment arrives via
+// this artifact, following the
 // "network/LLM checks are NOT StageGates" precedent in docs/STAGE_GATES.md.
 //
 // timestamp is supplied by the caller (the CLI, an I/O boundary) so this
 // function never reads the clock and stays deterministic for tests.
 func AppendGateMetric(workspaceRoot string, issueNumber int, gateName, result, errorSummary, timestamp string) error {
+	return AppendGateMetricDetail(workspaceRoot, issueNumber, gateName, result, errorSummary, timestamp, nil, nil)
+}
+
+// AppendGateMetricDetail is AppendGateMetric with the row's optional measures:
+// how long the gate ran and, for a review, its findings per severity (#2839).
+func AppendGateMetricDetail(workspaceRoot string, issueNumber int, gateName, result, errorSummary, timestamp string, durationMs *int64, findings *FindingCounts) error {
 	if result != "pass" && result != "catch" {
 		return fmt.Errorf("gate metric result must be \"pass\" or \"catch\", got %q", result)
 	}
 	if gateName == "" {
 		return fmt.Errorf("gate metric requires a non-empty gate name")
+	}
+	if gateName == JudgeGateName {
+		return fmt.Errorf("gate name %q is reserved: judge rows are written by the SDK appendJudgeVerdicts", gateName)
 	}
 
 	rec := gateMetricRecord{
@@ -54,6 +79,8 @@ func AppendGateMetric(workspaceRoot string, issueNumber int, gateName, result, e
 		IssueNumber:   issueNumber,
 		GateName:      gateName,
 		Result:        result,
+		DurationMs:    durationMs,
+		Findings:      findings,
 	}
 	if errorSummary != "" {
 		rec.ErrorSummary = &errorSummary

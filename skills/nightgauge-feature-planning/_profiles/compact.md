@@ -250,8 +250,8 @@ planning-{N}.json` (JSON on stdin, or `--from` a temp file; never a direct
 write under the git directory) with issue metadata, requirement
 summary, planned file changes, `files_to_read`, selected approach, validation
 strategy, timestamp/stage metadata, `pattern_mining_results` (optional; use
-**exactly** the field names in
-`packages/nightgauge-sdk/src/context/schemas/planning.ts` — required
+**exactly** the planning-context field names in
+[docs/CONTEXT_ARCHITECTURE.md](../../../docs/CONTEXT_ARCHITECTURE.md) — required
 `pattern_classifications` keys: `naming_conventions`, `structural_patterns`,
 `interface_patterns`, `idioms`; never `naming`/`structural`/`interface`/`idiomatic`),
 and `complexity_assessment` (below).

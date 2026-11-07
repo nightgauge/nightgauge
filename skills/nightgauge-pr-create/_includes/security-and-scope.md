@@ -146,11 +146,13 @@ if [ "$SECURITY_CRITICAL" -gt 0 ]; then
   echo ""
   echo "After fixing: git add -p && git commit --amend"
   # Record the stop so the orchestrator does not open a fallback PR (#2677).
+  # The runner exports NIGHTGAUGE_BIN without putting it on PATH (#2840).
   jq -n --arg gate security_scan \
     --arg reason "$SECURITY_CRITICAL critical secret finding(s) in the changed files" \
     --arg head_sha "$(git rev-parse HEAD)" --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{gate: $gate, reason: $reason, head_sha: $head_sha, created_at: $created_at}' \
-    | nightgauge layout write pipeline "pr-create-gate-stop-${ISSUE_NUMBER}.json" >/dev/null
+    | "${NIGHTGAUGE_BIN:-nightgauge}" layout write pipeline "pr-create-gate-stop-${ISSUE_NUMBER}.json" >/dev/null \
+    || echo "ERROR: could not record the security_scan gate stop" >&2
   exit 1
 
 elif [ "$SECURITY_WARNINGS" -gt 0 ]; then
@@ -204,16 +206,17 @@ if [ "$ISSUE_TYPE" = "docs" ] || [ "$ISSUE_TYPE" = "chore" ]; then
   BINARY="${NIGHTGAUGE_BIN:-}"
   [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
   [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-  if [ -z "$BINARY" ]; then
-    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-  fi
-  if [ -z "$BINARY" ]; then
-    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-    if [ -n "$GIT_COMMON_DIR" ]; then
-      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-      [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-    fi
+  if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+    for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+      "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+      [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+      grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+      NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+      case "${NG_ORIGIN%.git}" in
+        git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+          ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+      esac
+    done
   fi
   [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
   [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"

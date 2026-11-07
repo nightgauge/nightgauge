@@ -9,8 +9,13 @@
  *     the `nightgauge.refreshExtensionFromMain` command.
  *   - stale on non-critical paths only → yellow warning:
  *       `$(warning) Extension N commits behind`
- *     Click → modal with the same options. Dispatch is NOT refused for
- *     non-critical staleness.
+ *     Click → modal with the same options.
+ *   - stale on a tagged build (CI-built release candidate or release, #2721):
+ *       `$(info) Nightgauge <version>: workspace N commits ahead`
+ *     Click → modal naming the installed version and the distance, advising
+ *     to install the newer release candidate. It never offers the local
+ *     `dev-install.sh` refresh, which would replace a CI build with a local one.
+ *   Dispatch is never refused on staleness.
  *   - unknown (no build-info.json) → muted:
  *       `$(question) Extension version unknown`
  *
@@ -22,6 +27,13 @@ import type {
   ExtensionStalenessService,
   StalenessState,
 } from "../services/ExtensionStalenessService";
+
+type StaleState = Extract<StalenessState, { kind: "stale" }>;
+
+/** The installed version, falling back to the tag when no version was stamped. */
+function installedLabel(state: StaleState): string {
+  return state.build.version ?? state.build.tag ?? "unknown";
+}
 
 const REFRESH_COMMAND = "nightgauge.refreshExtensionFromMain";
 const SHOW_DETAILS_COMMAND = "nightgauge.showStalenessDetails";
@@ -58,6 +70,10 @@ export class ExtensionStalenessStatusItem implements vscode.Disposable {
       return;
     }
     // stale
+    if (state.build.tag !== null) {
+      this.renderTagged(state);
+      return;
+    }
     const isCritical = state.criticalPathsChanged.length > 0;
     if (isCritical) {
       this.item.text = `$(warning) Extension stale (${state.commitsBehind} commits, ${state.criticalPathsChanged.length} critical)`;
@@ -76,6 +92,43 @@ export class ExtensionStalenessStatusItem implements vscode.Disposable {
     this.item.show();
   }
 
+  private renderTagged(state: StaleState): void {
+    const critical = state.criticalPathsChanged.length;
+    const installed = installedLabel(state);
+    this.item.text = `$(info) Nightgauge ${installed}: workspace ${state.commitsBehind} commits ahead`;
+    this.item.tooltip =
+      `Installed: Nightgauge ${installed} (tag ${state.build.tag}).\n` +
+      `The workspace is ${state.commitsBehind} commits ahead of it` +
+      (critical > 0 ? `, ${critical} on critical pipeline files.\n` : `.\n`) +
+      `Install a newer release candidate to pick those up.\n\nClick for details.`;
+    this.item.backgroundColor =
+      critical > 0 ? new vscode.ThemeColor("statusBarItem.warningBackground") : undefined;
+    this.item.show();
+  }
+
+  private async showTaggedDetails(state: StaleState): Promise<void> {
+    const lines: string[] = [
+      `Installed: Nightgauge ${installedLabel(state)} (tag ${state.build.tag}).`,
+      `The workspace is ${state.commitsBehind} commits ahead of the installed build.`,
+      ``,
+      `Build SHA:    ${state.buildSha.slice(0, 12)}`,
+      `Current HEAD: ${state.currentSha.slice(0, 12)}`,
+      ``,
+    ];
+    if (state.criticalPathsChanged.length > 0) {
+      lines.push(`Critical pipeline files changed: ${state.criticalPathsChanged.length}`);
+    }
+    if (state.otherPathsChanged.length > 0) {
+      lines.push(`Other files changed: ${state.otherPathsChanged.length}`);
+    }
+    lines.push(
+      ``,
+      `To update: stop admitting work, let running runs drain, install the newer ` +
+        `release candidate, then reload the window.`
+    );
+    await vscode.window.showInformationMessage(lines.join("\n"), { modal: true });
+  }
+
   private async showDetails(): Promise<void> {
     const state = this.service.getState();
     if (state.kind === "fresh") {
@@ -88,7 +141,10 @@ export class ExtensionStalenessStatusItem implements vscode.Disposable {
       );
       return;
     }
-    const isCritical = state.criticalPathsChanged.length > 0;
+    if (state.build.tag !== null) {
+      await this.showTaggedDetails(state);
+      return;
+    }
     const lines: string[] = [
       `Extension is ${state.commitsBehind} commits behind workspace HEAD.`,
       ``,
@@ -115,8 +171,6 @@ export class ExtensionStalenessStatusItem implements vscode.Disposable {
     if (choice === refreshAction) {
       void vscode.commands.executeCommand(REFRESH_COMMAND);
     }
-    // Suppress unused-var lint when isCritical not used in message construction.
-    void isCritical;
   }
 
   dispose(): void {

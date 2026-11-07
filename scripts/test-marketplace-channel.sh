@@ -39,7 +39,13 @@ check_channel 0.5.1 release
 check_channel 0.7.0 release
 check_channel 1.0.0 release
 check_channel 2.7.4 release
+check_channel 0.8.1-main.gabc1234 release
+check_channel 0.8.1-main.g0123456 release
+check_channel 0.8.1-main.g0123456789abcdef0123456789abcdef01234567 release
 check_rejected ""
+check_rejected 0.8.1-main.123
+check_rejected 0.8.1-main.gabc12
+check_rejected 0.8.1-main.gABC1234
 check_rejected 0.4
 check_rejected 0.4.0-beta.1
 

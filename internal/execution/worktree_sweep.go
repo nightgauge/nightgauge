@@ -1,13 +1,17 @@
 package execution
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/gitworktree"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
@@ -620,6 +624,10 @@ func blockingChanges(worktreePath string) ([]string, error) {
 // delete another run's half-built `worktrees/<id>` entry and fail its
 // `git worktree add`.
 func reclaimWorktree(repoRoot string, wt worktreeRecord, keepBranch bool) error {
+	// Record the removal first (#2701); see layout.RemovalLedgerName.
+	if err := layout.RecordWorktreeRemoval(wt.Path); err != nil {
+		log.Printf("[WARN] worktree sweep: %v", err)
+	}
 	if err := gitworktree.Do(repoRoot, func(g *gitworktree.Session) error {
 		out, err := g.Remove(wt.Path)
 		if err == nil {
@@ -733,10 +741,27 @@ func gitOutput(dir string, args ...string) (string, error) {
 	return string(out), err
 }
 
+// OriginFetchTimeout bounds fetchOriginBranch (#2791). A single-branch fetch in
+// an existing clone that takes longer is treated as hung, so a remote that
+// accepts the connection and never answers cannot hang doctor or the sweep.
+// Exported only so tests in other packages can shorten it.
+var OriginFetchTimeout = 60 * time.Second
+
 func fetchOriginBranch(repoRoot, branch string) error {
-	cmd := exec.Command("git", "fetch", "origin", branch)
+	ctx, cancel := context.WithTimeout(context.Background(), OriginFetchTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "fetch", "origin", branch)
 	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	// git forks ssh or a remote helper that inherits the output pipe; killing
+	// only git leaves that child holding it open and CombinedOutput blocked.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
 	out, err := cmd.CombinedOutput()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("git fetch origin %s timed out after %s", branch, OriginFetchTimeout)
+	}
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg != "" {

@@ -226,8 +226,10 @@ func TestSweepRunsVerbsOutsideTheLock(t *testing.T) {
 	exec := verbFunc(func(context.Context, *DecisionRequest, Option) error {
 		done := make(chan struct{})
 		go func() {
-			release := acquireDir(s.dir)
-			release()
+			release, err := acquireDirCtx(context.Background(), s.dir)
+			if err == nil {
+				release()
+			}
 			close(done)
 		}()
 		select {

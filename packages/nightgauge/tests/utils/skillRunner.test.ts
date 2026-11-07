@@ -13,6 +13,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { spawn, execFileSync } from "child_process";
 import {
+  isRenderInvocation,
+  isRootsInvocation,
   isSkillRenderCall,
   modelFromRenderArgs,
   rootsFromRenderArgs,
@@ -48,6 +50,8 @@ vi.mock("fs", () => ({
   // A non-Claude stage is handed its rendered skill in a file (#2381).
   writeFileSync: vi.fn(),
   rmSync: vi.fn(),
+  realpathSync: vi.fn((target: string) => target),
+  readdirSync: vi.fn(() => []),
 }));
 
 // Mock child_process module
@@ -168,6 +172,12 @@ import {
   extractStreamJsonError,
   resolveTokenForSubprocess,
   resolveSdkCliPath,
+  claudeSkillsDirArgs,
+  claudeKnowledgeDirArgs,
+  stageKnowledgeDir,
+  findSkillFile,
+  resolveSkillRoots,
+  setExtensionIsPackaged,
 } from "../../src/utils/skillRunner";
 import type { PipelineStage } from "@nightgauge/sdk";
 import {
@@ -295,13 +305,325 @@ describe("skillRunner - File Discovery and Parsing", () => {
     vi.restoreAllMocks();
   });
 
+  // The order is ResolveRoots' and is pinned in Go. These pin the facts the
+  // host hands over, and that it returns the binary's answer unchanged.
+  describe("skill roots come from the binary (#2718)", () => {
+    function stubBundle(present: boolean): void {
+      vi.mocked(vscode.extensions.getExtension).mockReturnValue(
+        (present ? { extensionPath: "/ext" } : undefined) as never
+      );
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+    }
+
+    function rootsArgv(): string[] {
+      return vi
+        .mocked(execFileSync)
+        .mock.calls.map(([, args]) => (args ?? []) as string[])
+        .filter((args) => isRootsInvocation(args))
+        .at(-1)!;
+    }
+
+    afterEach(() => {
+      setExtensionIsPackaged(true);
+      vi.mocked(vscode.extensions.getExtension).mockReturnValue(undefined as never);
+    });
+
+    it("sends the bundle and workspace and no order flag on a packaged host", () => {
+      setExtensionIsPackaged(true);
+      stubBundle(true);
+      expect(resolveSkillRoots()).toEqual(["/ext/dist/skills", "/test/workspace/skills"]);
+      expect(rootsArgv()).toEqual([
+        "skill",
+        "roots",
+        "--json",
+        "--workspace",
+        "/test/workspace",
+        "--bundle",
+        "/ext/dist/skills",
+      ]);
+    });
+
+    it("asks for the workspace first off a packaged host", () => {
+      setExtensionIsPackaged(false);
+      stubBundle(true);
+      expect(resolveSkillRoots()).toEqual(["/test/workspace/skills", "/ext/dist/skills"]);
+      expect(rootsArgv()).toContain("--workspace-first");
+    });
+
+    it("treats an unreported host mode as packaged", () => {
+      stubBundle(true);
+      resolveSkillRoots();
+      expect(rootsArgv()).not.toContain("--workspace-first");
+    });
+
+    it("sends the self-healed bundle, not the stale extension path", () => {
+      vi.mocked(vscode.extensions.getExtension).mockReturnValue({
+        extensionPath: "/exts/nightgauge.nightgauge-1.0.0",
+      } as never);
+      vi.mocked(fs.existsSync).mockImplementation((p) => p !== "/exts/nightgauge.nightgauge-1.0.0");
+      vi.mocked(fs.readdirSync).mockReturnValue(["nightgauge.nightgauge-1.1.0"] as never);
+      resolveSkillRoots();
+      const argv = rootsArgv();
+      expect(argv[argv.indexOf("--bundle") + 1]).toBe(
+        "/exts/nightgauge.nightgauge-1.1.0/dist/skills"
+      );
+    });
+
+    it("sends the pinned root instead of the first workspace folder", () => {
+      stubBundle(false);
+      expect(resolveSkillRoots("/pinned/repo")).toEqual(["/pinned/repo/skills"]);
+      expect(rootsArgv()).not.toContain("--bundle");
+    });
+
+    it("omits --workspace when there is no workspace", () => {
+      stubBundle(false);
+      const folders = vscode.workspace.workspaceFolders;
+      (vscode.workspace as { workspaceFolders: unknown }).workspaceFolders = undefined;
+      resolveSkillRoots();
+      (vscode.workspace as { workspaceFolders: unknown }).workspaceFolders = folders;
+      expect(rootsArgv()).not.toContain("--workspace");
+    });
+
+    it("returns the binary's answer, override included, without reordering it", () => {
+      vi.mocked(execFileSync).mockReturnValueOnce(JSON.stringify({ v: 1, roots: ["/x", "/y"] }));
+      expect(resolveSkillRoots()).toEqual(["/x", "/y"]);
+    });
+
+    it("throws when the binary fails, and when its output is not a roots list", () => {
+      vi.mocked(execFileSync).mockImplementationOnce(() => {
+        throw new Error("spawn ENOENT");
+      });
+      expect(() => resolveSkillRoots()).toThrow(/skill roots failed: spawn ENOENT/);
+      vi.mocked(execFileSync).mockReturnValueOnce("not json");
+      expect(() => resolveSkillRoots()).toThrow(/unparseable/);
+      vi.mocked(execFileSync).mockReturnValueOnce("{}");
+      expect(() => resolveSkillRoots()).toThrow(/no roots list/);
+    });
+
+    it("findSkillFile answers null when the binary fails", () => {
+      vi.mocked(execFileSync).mockImplementationOnce(() => {
+        throw new Error("spawn ENOENT");
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(findSkillFile("feature-dev")).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("skill roots failed: spawn ENOENT")
+      );
+      warn.mockRestore();
+    });
+
+    it("findSkillFile reads the pinned root's SKILL.md, not the first folder's (#2799)", () => {
+      stubBundle(false);
+      const rel = "nightgauge-feature-dev/SKILL.md";
+      expect(findSkillFile("feature-dev", "/pinned/wt")).toBe(`/pinned/wt/skills/${rel}`);
+      const argv = rootsArgv();
+      expect(argv[argv.indexOf("--workspace") + 1]).toBe("/pinned/wt");
+    });
+
+    it("findSkillFile falls back to the first workspace folder with no root", () => {
+      stubBundle(false);
+      const rel = "nightgauge-feature-dev/SKILL.md";
+      expect(findSkillFile("feature-dev")).toBe(`/test/workspace/skills/${rel}`);
+    });
+
+    it("renders a pinned run from its pinned root", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+
+      runStageSkillHeadless(
+        "feature-dev",
+        42,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "/pinned/repo"
+      );
+
+      const render = vi
+        .mocked(execFileSync)
+        .mock.calls.map(([, args]) => (args ?? []) as string[])
+        .find((args) => isRenderInvocation(args))!;
+      expect(rootsFromRenderArgs(render)).toEqual(["/pinned/repo/skills"]);
+    });
+  });
+
+  describe("claude skills tree flags (#2718)", () => {
+    const skillPath = "/ext/dist/skills/nightgauge-feature-dev/SKILL.md";
+    const expected = [
+      "--add-dir",
+      "/ext/dist/skills",
+      "--disallowedTools",
+      "Edit(//ext/dist/skills/**)",
+    ];
+
+    it("adds the tree and denies file-tool writes to it", () => {
+      expect(claudeSkillsDirArgs(skillPath, "/worktrees/issue-1")).toEqual(expected);
+    });
+
+    it("takes the skill's parent as the tree for the flat <root>/<dir>.md layout", () => {
+      expect(claudeSkillsDirArgs("/opt/skills/nightgauge-feature-dev.md", "/repo")[1]).toBe(
+        "/opt/skills"
+      );
+    });
+
+    it("denies the resolved form of a symlinked tree as well", () => {
+      const realpath = (target: string): string => target.replace("/linked/", "/real/");
+      vi.mocked(fs.realpathSync).mockImplementation(realpath as unknown as typeof fs.realpathSync);
+      const args = claudeSkillsDirArgs("/linked/skills/stage/SKILL.md", "/repo");
+      expect(args[1]).toBe("/linked/skills");
+      expect(args[3]).toContain("Edit(//linked/skills/**)");
+      expect(args[3]).toContain("Edit(//real/skills/**)");
+      vi.mocked(fs.realpathSync).mockImplementation(
+        ((target: string) => target) as unknown as typeof fs.realpathSync
+      );
+    });
+
+    it("denies the /tmp form of a tree given under /private/tmp, with Edit rules only", () => {
+      const realpath = (target: string): string => (target === "/tmp" ? "/private/tmp" : target);
+      vi.mocked(fs.realpathSync).mockImplementation(realpath as unknown as typeof fs.realpathSync);
+      const args = claudeSkillsDirArgs("/private/tmp/ext/skills/stage/SKILL.md", "/repo");
+      expect(args[1]).toBe("/private/tmp/ext/skills");
+      expect(args[3].split(",").sort()).toEqual([
+        "Edit(//private/tmp/ext/skills/**)",
+        "Edit(//tmp/ext/skills/**)",
+      ]);
+      vi.mocked(fs.realpathSync).mockImplementation(
+        ((target: string) => target) as unknown as typeof fs.realpathSync
+      );
+    });
+
+    it("skips a tree inside the working directory", () => {
+      expect(claudeSkillsDirArgs("/repo/skills/nightgauge-feature-dev/SKILL.md", "/repo")).toEqual(
+        []
+      );
+    });
+
+    it("still adds a sibling whose name extends the working directory", () => {
+      expect(
+        claudeSkillsDirArgs("/repo-2/skills/nightgauge-feature-dev/SKILL.md", "/repo")
+      ).toHaveLength(4);
+    });
+
+    it("reaches the headless argv", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+      vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) =>
+        isSkillRenderCall(args)
+          ? skillRenderStdout(args, { skillsRoot: "/ext/dist/skills" })
+          : "") as never);
+
+      runStageSkillHeadless("feature-dev", 42, {});
+
+      const argv = vi.mocked(spawn).mock.calls.find(([cmd]) => cmd === "claude")![1] as string[];
+      const i = argv.indexOf("--add-dir");
+      expect(argv.slice(i, i + 4)).toEqual(expected);
+    });
+
+    it("logs the resolved skill_path when the stage starts", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+      const onStderr = vi.fn();
+
+      runStageSkillHeadless("feature-dev", 42, { onStderr });
+
+      expect(onStderr).toHaveBeenCalledWith(
+        expect.stringMatching(/^\[skillRunner\] skill_path=.*nightgauge-feature-dev\/SKILL\.md\n$/)
+      );
+    });
+  });
+
+  describe("claude knowledge dir (#2798)", () => {
+    const gitDirsFor =
+      (gitDir: string, commonDir: string) =>
+      (cmd: string, args: string[]): string => {
+        if (isSkillRenderCall(args)) return skillRenderStdout(args, {});
+        if (cmd === "git" && args.includes("--git-common-dir")) return `${gitDir}\n${commonDir}\n`;
+        return "";
+      };
+    const claudeCall = () => vi.mocked(spawn).mock.calls.find(([cmd]) => cmd === "claude")!;
+    const knowledgeFlag = (argv: string[]): string | undefined => {
+      const i = argv.findIndex((a, j) => a === "--add-dir" && argv[j + 1]?.endsWith("knowledge"));
+      return i >= 0 ? argv[i + 1] : undefined;
+    };
+
+    it("emits no flag for an empty dir", () => {
+      expect(claudeKnowledgeDirArgs("")).toEqual([]);
+      expect(claudeKnowledgeDirArgs("/repo/.nightgauge/knowledge")).toEqual([
+        "--add-dir",
+        "/repo/.nightgauge/knowledge",
+      ]);
+    });
+
+    it("resolves the main checkout for every worktree layout", () => {
+      vi.mocked(execFileSync).mockImplementation(gitDirsFor("", "") as never);
+      expect(stageKnowledgeDir(undefined)).toBe("");
+      expect(stageKnowledgeDir("/repo/.worktrees/issue-1")).toBe("/repo/.nightgauge/knowledge");
+      expect(stageKnowledgeDir("/repo/.nightgauge/worktrees/x-issue-1")).toBe(
+        "/repo/.nightgauge/knowledge"
+      );
+      expect(stageKnowledgeDir("/repo")).toBe("/repo/.nightgauge/knowledge");
+      vi.mocked(execFileSync).mockImplementation(
+        gitDirsFor("/repo/.git/worktrees/repo-issue-1", "/repo/.git") as never
+      );
+      expect(stageKnowledgeDir("/base/repo-issue-1")).toBe("/repo/.nightgauge/knowledge");
+    });
+
+    it("adds the flag and exports the variable on a headless spawn", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+      vi.mocked(execFileSync).mockImplementation(
+        gitDirsFor("/main/.git/worktrees/w", "/main/.git") as never
+      );
+
+      runStageSkillHeadless("feature-dev", 42, {});
+
+      const [, argv, opts] = claudeCall();
+      expect(knowledgeFlag(argv as string[])).toBe("/main/.nightgauge/knowledge");
+      expect((opts as { env: NodeJS.ProcessEnv }).env.NIGHTGAUGE_KNOWLEDGE_DIR).toBe(
+        "/main/.nightgauge/knowledge"
+      );
+    });
+
+    it("replaces an inherited variable with this run's dir", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+      vi.mocked(execFileSync).mockImplementation(
+        gitDirsFor("/main/.git/worktrees/w", "/main/.git") as never
+      );
+      process.env.NIGHTGAUGE_KNOWLEDGE_DIR = "/outer/.nightgauge/knowledge";
+      try {
+        runStageSkillHeadless("feature-dev", 42, {});
+      } finally {
+        delete process.env.NIGHTGAUGE_KNOWLEDGE_DIR;
+      }
+      const [, , opts] = claudeCall();
+      expect((opts as { env: NodeJS.ProcessEnv }).env.NIGHTGAUGE_KNOWLEDGE_DIR).toBe(
+        "/main/.nightgauge/knowledge"
+      );
+    });
+
+    it("adds the flag and exports the variable on an interactive spawn", () => {
+      vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+      vi.mocked(execFileSync).mockImplementation(
+        gitDirsFor("/main/.git/worktrees/w", "/main/.git") as never
+      );
+
+      runStageSkillInteractive("feature-dev", 42, {});
+
+      const [, argv, opts] = claudeCall();
+      expect(knowledgeFlag(argv as string[])).toBe("/main/.nightgauge/knowledge");
+      expect((opts as { env: NodeJS.ProcessEnv }).env.NIGHTGAUGE_KNOWLEDGE_DIR).toBe(
+        "/main/.nightgauge/knowledge"
+      );
+      killAllActiveProcesses();
+    });
+  });
+
   describe("skill composition delegates to `nightgauge skill render` (#79)", () => {
     /** Every `skill render` argv the dispatcher issued, in order. */
     function renderCalls(): string[][] {
       return vi
         .mocked(execFileSync)
         .mock.calls.map(([, args]) => (args ?? []) as string[])
-        .filter((args) => isSkillRenderCall(args));
+        .filter((args) => isRenderInvocation(args));
     }
 
     /** Point the render stub at a specific envelope for this test. */
@@ -408,7 +730,8 @@ describe("skillRunner - File Discovery and Parsing", () => {
       // implementation is the drift #78 removed. The binary is already a hard
       // dependency of every stage run, so this says so instead of shipping a
       // silently unexpanded skill.
-      vi.mocked(execFileSync).mockImplementation((() => {
+      vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) => {
+        if (isRootsInvocation(args)) return skillRenderStdout(args);
         throw new Error('SKILL.md not found for stage "feature-dev"');
       }) as never);
 
@@ -427,7 +750,8 @@ describe("skillRunner - File Discovery and Parsing", () => {
     });
 
     it("fails the stage when the render returns unparseable output", () => {
-      vi.mocked(execFileSync).mockImplementation((() => "not json at all") as never);
+      vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) =>
+        isRootsInvocation(args) ? skillRenderStdout(args) : "not json at all") as never);
 
       const onError = vi.fn();
       const onComplete = vi.fn();
@@ -4293,6 +4617,107 @@ allowed-tools: Read Write Edit Bash
     expect(stderrCalls.some((s) => s.includes("[rate-limit-quota-exhausted]"))).toBe(true);
   });
 
+  describe("after only an allowed_warning (#2711)", () => {
+    const warning =
+      JSON.stringify({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "allowed_warning",
+          resetsAt: 1778403000,
+          rateLimitType: "seven_day",
+          utilization: 76,
+        },
+      }) + "\n";
+    const backgroundStarted =
+      '{"type":"system","subtype":"task_started","task_id":"gate","is_backgrounded":true,"task_type":"local_bash"}\n';
+
+    // An inherited override would move the budget these tests measure against.
+    const inheritedQuotaIdleMs = process.env.NIGHTGAUGE_PIPELINE_QUOTA_SIGNAL_IDLE_MS;
+    beforeEach(() => {
+      delete process.env.NIGHTGAUGE_PIPELINE_QUOTA_SIGNAL_IDLE_MS;
+    });
+    afterEach(() => {
+      if (inheritedQuotaIdleMs !== undefined) {
+        process.env.NIGHTGAUGE_PIPELINE_QUOTA_SIGNAL_IDLE_MS = inheritedQuotaIdleMs;
+      }
+    });
+
+    it("does not kill a stage holding a live background task for 30 minutes", () => {
+      // feature-validate: both the 15-minute soft budget and the 20-minute
+      // stall kill sit inside the hold.
+      runStageSkillHeadless("feature-validate", 889, {});
+      mockProcess.stdout?.emit("data", Buffer.from(warning));
+      mockProcess.stdout?.emit("data", Buffer.from(backgroundStarted));
+
+      vi.advanceTimersByTime(30 * 60_000);
+
+      expect(mockProcess.kill).not.toHaveBeenCalled();
+    });
+
+    it("does not kill a stage inside a long foreground tool call", () => {
+      const toolStarted =
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "toolu_gate", name: "Bash", input: {} }],
+          },
+        }) + "\n";
+      runStageSkillHeadless("feature-validate", 889, {});
+      mockProcess.stdout?.emit("data", Buffer.from(warning));
+      mockProcess.stdout?.emit("data", Buffer.from(toolStarted));
+
+      vi.advanceTimersByTime(18 * 60_000);
+
+      expect(mockProcess.kill).not.toHaveBeenCalled();
+    });
+
+    it("holds a live background task for 30 minutes in autonomous mode", () => {
+      const onStallEvent = vi.fn();
+      const onStallPause = vi.fn();
+      runStageSkillHeadless(
+        "feature-validate",
+        889,
+        { onStallEvent, onStallPause },
+        undefined, // issueMetadata
+        undefined, // _batchContext
+        undefined, // skipToPhase
+        undefined, // modelOverride
+        undefined, // pauseAutoRouting
+        undefined, // pinnedWorkspaceRoot
+        undefined, // modelOverrideSource
+        undefined, // injectedSkillContent
+        true // autonomousMode
+      );
+      mockProcess.stdout?.emit("data", Buffer.from(warning));
+      mockProcess.stdout?.emit("data", Buffer.from(backgroundStarted));
+
+      vi.advanceTimersByTime(30 * 60_000);
+
+      expect(mockProcess.kill).not.toHaveBeenCalled();
+      expect(onStallPause).not.toHaveBeenCalled();
+      const actions = onStallEvent.mock.calls.map(
+        (c: unknown[]) => (c[0] as { action: string }).action
+      );
+      expect(actions).not.toContain("escalation_pause");
+      expect(actions).not.toContain("kill");
+    });
+
+    it("books a silent stage as a stall, not quota exhaustion", () => {
+      const onStderr = vi.fn();
+      runStageSkillHeadless("feature-dev", 889, { onStderr });
+      mockProcess.stdout?.emit("data", Buffer.from(warning));
+
+      vi.advanceTimersByTime(16 * 60_000);
+
+      expect(mockProcess.kill).toHaveBeenCalledWith("SIGTERM");
+      const stderr = onStderr.mock.calls.map((c: unknown[]) => String(c[0])).join("");
+      expect(stderr).toContain("[stall-killed]");
+      expect(stderr).toContain("status=allowed_warning");
+      expect(stderr).not.toContain("[rate-limit-quota-exhausted]");
+    });
+  });
+
   it("does NOT fast-fail before the 120s idle threshold has elapsed since the quota event", () => {
     runStageSkillHeadless("feature-dev", 889, {});
 
@@ -4632,7 +5057,7 @@ describe("skillRunner - a non-Claude stage is handed its render (#2381, #2390)",
     const renderArgs = vi
       .mocked(execFileSync)
       .mock.calls.map((call) => call[1] as string[])
-      .find((args) => isSkillRenderCall(args))!;
+      .find((args) => isRenderInvocation(args))!;
     expect(renderArgs).toEqual(expect.arrayContaining(["--adapter", "codex", "--headless"]));
     const { render } = handedRender();
     expect(render.stage).toBe("feature-dev");
@@ -4707,5 +5132,141 @@ describe("skillRunner - a non-Claude stage is handed its render (#2381, #2390)",
     const env = (vi.mocked(spawn).mock.calls[0][2] as { env: Record<string, string> }).env;
     expect(env.NIGHTGAUGE_STAGE_SKILL_RENDER).toBeUndefined();
     expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+});
+
+// Every Claude spawn the extension makes names the plugin, and the two with a
+// stream hold it to system/init (#2723).
+describe("skillRunner - Claude plugin gate (#2723)", () => {
+  const dir = "/ext/nightgauge/dist/claude-plugins/nightgauge";
+  const absentInit = JSON.stringify({
+    type: "system",
+    subtype: "init",
+    plugins: [{ name: "cc-plugin-telemetry", path: "builtin" }],
+  });
+  const presentInit = JSON.stringify({
+    type: "system",
+    subtype: "init",
+    plugins: [{ name: "nightgauge", source: "nightgauge@inline", version: "1.25.0" }],
+  });
+  const laterResult = JSON.stringify({
+    type: "result",
+    usage: { input_tokens: 999, output_tokens: 999 },
+  });
+  let mockProcess: ChildProcess;
+
+  const claudeArgv = (): string[] =>
+    vi.mocked(spawn).mock.calls.find(([cmd]) => cmd === "claude")![1] as string[];
+  const send = (...lines: string[]): void => {
+    mockProcess.stdout!.emit("data", Buffer.from(lines.join("\n") + "\n"));
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProcess = createMockChildProcess();
+    vi.mocked(spawn).mockReturnValue(mockProcess);
+    vi.mocked(vscode.extensions.getExtension).mockReturnValue({
+      extensionPath: "/ext/nightgauge",
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    setExtensionIsPackaged(true);
+  });
+
+  afterEach(() => {
+    killAllActiveProcesses();
+    setExtensionIsPackaged(true);
+  });
+
+  it("pins --plugin-dir on the headless spawn", () => {
+    runStageSkillHeadless("feature-dev", 42, {});
+    expect(
+      claudeArgv().slice(
+        claudeArgv().indexOf("--plugin-dir"),
+        claudeArgv().indexOf("--plugin-dir") + 2
+      )
+    ).toEqual(["--plugin-dir", dir]);
+  });
+
+  it("pins --plugin-dir on the resume spawn", () => {
+    resumeSessionWithResponse("session-1", "go", {});
+    expect(claudeArgv()).toEqual(expect.arrayContaining(["--plugin-dir", dir]));
+  });
+
+  it("pins --plugin-dir on the interactive spawn", () => {
+    runStageSkillInteractive("feature-dev", 42, {});
+    expect(claudeArgv()).toEqual(expect.arrayContaining(["--plugin-dir", dir]));
+  });
+
+  it("stops a bundled headless stage on init, before any later event", async () => {
+    const onComplete = vi.fn();
+    const onStderr = vi.fn();
+    const onTokenUsage = vi.fn();
+    runStageSkillHeadless("feature-dev", 42, { onComplete, onStderr, onTokenUsage });
+
+    send(absentInit, laterResult);
+
+    expect(mockProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(onTokenUsage).not.toHaveBeenCalled();
+    mockProcess.emit("close", 0);
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onStderr).toHaveBeenCalledWith(expect.stringContaining("[gate-plugin-missing]"));
+    const result = onComplete.mock.calls[0][0];
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toContain("[gate-plugin-missing]");
+    expect(result.pluginVersion).toBeUndefined();
+  });
+
+  it("reports the loaded version from a headless stage", async () => {
+    const onComplete = vi.fn();
+    runStageSkillHeadless("feature-dev", 42, { onComplete });
+
+    send(presentInit);
+
+    expect(mockProcess.kill).not.toHaveBeenCalled();
+    mockProcess.emit("close", 0);
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true, pluginVersion: "1.25.0" });
+  });
+
+  it("warns and completes with no bundle", async () => {
+    vi.mocked(vscode.extensions.getExtension).mockReturnValue(undefined as never);
+    const onComplete = vi.fn();
+    const onStderr = vi.fn();
+    runStageSkillHeadless("feature-dev", 42, { onComplete, onStderr });
+
+    send(absentInit);
+
+    expect(mockProcess.kill).not.toHaveBeenCalled();
+    expect(onStderr).toHaveBeenCalledWith(expect.stringContaining("[gate-plugin-warning]"));
+    mockProcess.emit("close", 0);
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onComplete.mock.calls[0][0].success).toBe(true);
+  });
+
+  it("stops a bundled resume on init, before any later event", () => {
+    const onComplete = vi.fn();
+    const onStderr = vi.fn();
+    const onTokenUsage = vi.fn();
+    resumeSessionWithResponse("session-1", "go", { onComplete, onStderr, onTokenUsage });
+
+    send(absentInit, laterResult);
+
+    expect(mockProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(onTokenUsage).not.toHaveBeenCalled();
+    expect(onStderr).toHaveBeenCalledWith(expect.stringContaining("[gate-plugin-missing]"));
+    mockProcess.emit("close", 0);
+    const result = onComplete.mock.calls[0][0];
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toContain("[gate-plugin-missing]");
+  });
+
+  it("reports the loaded version from a resume", () => {
+    const onComplete = vi.fn();
+    resumeSessionWithResponse("session-1", "go", { onComplete });
+
+    send(presentInit);
+    mockProcess.emit("close", 0);
+
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true, pluginVersion: "1.25.0" });
   });
 });

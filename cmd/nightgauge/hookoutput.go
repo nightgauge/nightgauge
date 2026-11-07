@@ -85,16 +85,23 @@ func printPreToolUse(decision hooks.GateDecision) error {
 //
 // A read failure yields nil, which every caller treats as "no payload" and
 // fails open — a hook that cannot read its input must not block the session.
-// resolveSanitizationMode reads the configured sanitization enforcement level,
-// defaulting to warn when there is no readable config.
+// resolveSanitizationMode returns the sanitization enforcement level for the
+// working directory (#2765, ADR-021):
+//
+//   - not opted in (no .nightgauge/config.yaml) → warn: the user-scoped plugin
+//     must not start denying prompts in a repository that never chose it;
+//   - opted in, config fails to load → block: a broken config never silently
+//     weakens the gate;
+//   - opted in → the configured mode, or config.DefaultSanitizationMode
+//     (block) when no `sanitization:` block is present.
 func resolveSanitizationMode() config.SanitizationMode {
 	workdir, err := os.Getwd()
-	if err != nil {
+	if err != nil || !hooks.RepoOptedIn(workdir) {
 		return config.SanitizationModeWarn
 	}
 	cfg, loadErr := config.Load(workdir)
-	if loadErr != nil || cfg == nil || cfg.Sanitization == nil {
-		return config.SanitizationModeWarn
+	if loadErr != nil || cfg == nil {
+		return config.SanitizationModeBlock
 	}
 	return cfg.Sanitization.ResolvedMode()
 }

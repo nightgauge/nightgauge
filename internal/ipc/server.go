@@ -2355,6 +2355,34 @@ func (s *Server) registerMethods() {
 		return s.getAnalyticsSvc().GetUsageSummary(ctx)
 	}
 
+	// platform.getInquiryScorecard reads the platform's inquiry scorecard
+	// (#2911). The route takes a session only, and the daemon is the one
+	// process that holds it, so the CLI reads the scorecard through here.
+	//
+	//ipc:method platformGetInquiryScorecard params:PlatformInquiryScorecardParams result:unknown
+	s.methods["platform.getInquiryScorecard"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		pc := s.getPlatformClient()
+		if pc == nil {
+			return nil, errors.New(ErrMsgPlatformNotConfigured)
+		}
+		var p PlatformInquiryScorecardParams
+		if len(params) > 0 && string(params) != "null" {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("invalid params: %w", err)
+			}
+		}
+		sc, err := pc.ReadInquiryScorecard(ctx, platform.InquiryScorecardQuery{
+			Window: p.Window, Floor: p.Floor, MinSample: p.MinSample,
+		})
+		if errors.Is(err, platform.ErrNoSession) {
+			return nil, errors.New(ErrMsgPlatformNotSignedIn)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return sc, nil
+	}
+
 	//ipc:method platformGetCostAnalytics params:PlatformCostAnalyticsParams result:CostAnalyticsResult
 	s.methods["platform.getCostAnalytics"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		if s.getAnalyticsSvc() == nil {
@@ -3535,6 +3563,7 @@ func (s *Server) registerMethods() {
 		// "the executor did not say" and "the executor said X" must remain
 		// distinguishable, which is the entire point of these fields.
 		rt.RecordStageServedModel(stage, p.ServedModel)
+		rt.RecordStagePluginVersion(stage, p.PluginVersion)
 		rt.RecordStageServedEffort(stage, p.ServedEffort)
 		rt.RecordStageServedThinking(stage, p.ServedThinking)
 		// When the executor served something OTHER than what was requested,
@@ -3811,6 +3840,11 @@ func (s *Server) registerMethods() {
 			repo = p.Repo
 		}
 
+		if p.MergedPR > 0 {
+			res.rs.SetMergedPR(p.MergedPR)
+			return map[string]string{"status": "ok"}, nil
+		}
+
 		// Emit the live in-stage token/cost estimate as a stage_progress event.
 		// Skipped internally (no runID / bookend stage) rather than erroring.
 		s.emitStageProgressTelemetry(runID, repo, p.IssueNumber, p.Stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, res.rs.RunVisibility())
@@ -3993,6 +4027,9 @@ func (s *Server) registerMethods() {
 		// misattribution recorded a merged run as failed/stall_kill. The flip
 		// happens BEFORE both telemetry and the RunRecord so every surface
 		// reflects the merge, not a phantom kill.
+		// #2756: an architecture-approval hold books as a non-failure on the
+		// run state and the live event, matching the run record.
+		approvalHold := !p.Success && !p.Deferred && heldForApproval(res.entry.rs.Snapshot())
 		groundTruthFlipped := false
 		outcomeFor := func(stage state.PipelineStage) string {
 			if effective := reconcilePrMergeGroundTruth(p.Success, p.PrMerged, string(stage)); effective != p.Success {
@@ -4002,7 +4039,7 @@ func (s *Server) registerMethods() {
 			switch {
 			case p.Success:
 				return "complete"
-			case p.Deferred:
+			case p.Deferred, approvalHold:
 				return "cancelled"
 			default:
 				return "failed"
@@ -4034,7 +4071,7 @@ func (s *Server) registerMethods() {
 		}
 
 		// STEP 2 — the work, UNLOCKED, against the snapshot.
-		s.emitPipelineDoneTelemetry(runID, p, snap.Visibility)
+		s.emitPipelineDoneTelemetry(runID, p, approvalHold && !p.Success, snap.Visibility)
 
 		// Write the authoritative interactive RunRecord (#232). notifyComplete
 		// is the interactive-only terminal funnel — the Go scheduler path emits
@@ -4127,6 +4164,9 @@ func (s *Server) registerMethods() {
 					gateTerminalKind = gateResults[len(gateResults)-1].TerminalKind
 				}
 				kind := orchestrator.ResolveTerminalKind(gateRan, gateTerminalKind, errMsg)
+				if kind == orchestrator.TerminalKindGatePluginMissing {
+					orchestrator.RaiseGatePluginMissing(s.attentionStore(), recordRepo, p.IssueNumber, runID, string(snap.Stage), errMsg)
+				}
 				if kind == "" {
 					kind = orchestrator.TerminalKindSubagentCrash
 				}
@@ -4252,6 +4292,8 @@ func (s *Server) registerMethods() {
 				record.TerminalFailureKind = ""
 				record.OutcomeType = orchestrator.OutcomeTypeDeferred
 			}
+			// #2756: an architecture-approval hold is a non-failure too.
+			orchestrator.ApplyNonFailureOutcome(&record)
 			// #304: derive the learning/calibration outcome from the SAME
 			// record about to be written. Until this, the outcome corpus
 			// (.git/nightgauge/pipeline/history/outcomes.jsonl — the input to the
@@ -4341,7 +4383,7 @@ func (s *Server) registerMethods() {
 				if err := learning.NewRecorder(root).Record(outcome); err != nil {
 					log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
 				}
-			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt:
+			case outcomeSkipDeferred, outcomeSkipAwaitingApproval, outcomeSkipNetworkUnavailable, outcomeSkipEnvironmentHalt, outcomeSkipGatePluginMissing:
 				log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
 					p.IssueNumber, outcomeVerdict)
 			case outcomeUnset:
@@ -5382,13 +5424,10 @@ func (s *Server) registerMethods() {
 		if !s.autonomousScheduler.ResumeUnlessMachineHalted() {
 			log.Printf("autonomous: started with a machine-raised halt still in force — no dispatch until an explicit resume")
 		}
-		if !s.autonomousScheduler.IsRunning() {
-			// No goroutine running (fresh server start or prior completion).
-			go func() {
-				if err := s.autonomousScheduler.Run(ctx); err != nil {
-					log.Printf("autonomous scheduler exited: %v", err)
-				}
-			}()
+		// Start claims the loop synchronously (#2891); already running is fine.
+		if err := s.autonomousScheduler.Start(ctx); err != nil &&
+			!errors.Is(err, orchestrator.ErrAlreadyRunning) {
+			return nil, err
 		}
 		// Wait for the loop to actually come up, then report what was
 		// observed (#494). A flat sleep here was a guess about how long

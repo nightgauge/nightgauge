@@ -45,8 +45,13 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { BinaryResolver } from "./BinaryResolver";
 import { moveToInReviewIfPRBacked } from "../utils/inReviewGuard";
+import { describeStageCapKill, isStageCapCeiling } from "../utils/killCeiling";
 import { IpcClient } from "./IpcClient";
-import { runWithPhaseStream, type PrStagePhaseTransition } from "./prStagePhaseStream";
+import {
+  parsePrStageBudget,
+  runWithPhaseStream,
+  type PrStagePhaseTransition,
+} from "./prStagePhaseStream";
 import { isAgenticReconcileStage, reconcileAgenticStagePhases } from "./agenticPhaseReconcile";
 import type { AttentionRaiseCheck } from "./IpcClientBase";
 import {
@@ -64,6 +69,7 @@ import type {
 import { SkillLoader } from "../orchestrator/skills/SkillLoader";
 import {
   ContextAssembler,
+  DeliverableContractError,
   STAGE_OUTPUT_CONTEXT_TYPE,
   STAGE_OUTPUT_SCHEMA,
   STAGE_INPUT_PREREQUISITES,
@@ -81,6 +87,7 @@ import {
   updateProjectItemStatus,
   ensureIssueOnProject,
   getProjectItemStatus,
+  getIssueState,
   type ProjectStatusValue,
 } from "../utils/projectFieldWriter";
 import { BOARD_STATUS, boardStatusEquals } from "../utils/projectFieldMapping";
@@ -316,6 +323,8 @@ import {
   type PhaseStaleEvent,
 } from "../utils/PhaseTimeoutManager";
 import { TelemetryService } from "./TelemetryService";
+import { pluginHint } from "../utils/pluginHint";
+import { withoutLaunchingSessionEnv } from "../utils/launchingSessionEnv";
 
 /**
  * Result of a full pipeline run
@@ -502,6 +511,11 @@ export interface RequestedPin {
 
 export interface PipelineRunResult {
   success: boolean;
+  /**
+   * pr-merge found the PR already merged, so this run merged nothing (#2878).
+   * The autonomous scheduler parks the issue with an attention card.
+   */
+  mergeNoOp?: boolean;
   completedStages: PipelineStage[];
   skippedStages: PipelineStage[];
   /** Stages deferred for human action (e.g., pr-merge awaiting review) */
@@ -874,20 +888,44 @@ export function composeStallKilledError(
   durationMs: number,
   upstreamError: Error | undefined
 ): Error {
+  const stallExplanation =
+    `[stall-killed] ${stage} terminated: subagent process exceeded stall kill threshold. ` +
+    `The process ran for ${Math.round(durationMs / 1000)}s without completing. ` +
+    `Configure pipeline.stall_kill_multiplier or pipeline.stage_hard_caps to adjust (0 to disable).`;
+  return withUpstreamSignal(stallExplanation, upstreamError);
+}
+
+/**
+ * Build the synthetic Error for a stage stopped at `stage_hard_caps` or
+ * `stage_time_caps` (#2812). The stage was working and ran out of time, so the
+ * report names the cap, its value and the elapsed time. It keeps the upstream
+ * markers for the same reason {@link composeStallKilledError} does.
+ *
+ * @internal Exported for testing only.
+ */
+export function composeStageCapKilledError(
+  stage: string,
+  durationMs: number,
+  killCeiling: string | undefined,
+  killCeilingValue: string | undefined,
+  upstreamError: Error | undefined
+): Error {
+  const capExplanation =
+    `${describeStageCapKill(stage, durationMs, killCeiling, killCeilingValue)}. ` +
+    `The stage was stopped by its runtime limit. ` +
+    `Reduce the stage's scope or raise the cap (0 to disable).`;
+  return withUpstreamSignal(capExplanation, upstreamError);
+}
+
+function withUpstreamSignal(explanation: string, upstreamError: Error | undefined): Error {
   const upstreamMarker = upstreamError?.message?.trim() ?? "";
   const carriesRecognizedMarker =
     upstreamMarker.length > 0 &&
     (upstreamMarker.includes("[rate-limit-quota-exhausted]") ||
       upstreamMarker.includes("rate-limit-quota-exhausted") ||
       /stream\s+idle\s+timeout/i.test(upstreamMarker));
-  const stallExplanation =
-    `[stall-killed] ${stage} terminated: subagent process exceeded stall kill threshold. ` +
-    `The process ran for ${Math.round(durationMs / 1000)}s without completing. ` +
-    `Configure pipeline.stall_kill_multiplier or pipeline.stage_hard_caps to adjust (0 to disable).`;
   return new Error(
-    carriesRecognizedMarker
-      ? `${stallExplanation}\nUpstream signal: ${upstreamMarker}`
-      : stallExplanation
+    carriesRecognizedMarker ? `${explanation}\nUpstream signal: ${upstreamMarker}` : explanation
   );
 }
 
@@ -1022,6 +1060,58 @@ export interface RunScopedAttentionRaise {
   checks?: AttentionRaiseCheck[];
   /** abandoned-dispatch / branch-protection: the last stage observed. */
   stage?: string;
+}
+
+/**
+ * True when every stage in `stageOrder` appears in at least one of the three
+ * bookkeeping arrays. Membership, not length: a rewound run pushes stages
+ * twice, and a duplicate must neither break completion nor mask a missing
+ * stage.
+ *
+ * @internal Exported for testing.
+ * @see Issue #2991
+ */
+export function allStagesAccountedFor(
+  completedStages: readonly PipelineStage[],
+  skippedStages: readonly PipelineStage[],
+  deferredStages: readonly PipelineStage[],
+  stageOrder: readonly PipelineStage[]
+): boolean {
+  const seen = new Set<PipelineStage>([...completedStages, ...skippedStages, ...deferredStages]);
+  return stageOrder.every((stage) => seen.has(stage));
+}
+
+/**
+ * Remove, in place, every stage at or after `targetIndex` in `stageOrder`
+ * from the three bookkeeping arrays, so a rewind leaves no stale entry for a
+ * stage it is about to re-run. Returns the distinct stages removed.
+ *
+ * @internal Exported for testing.
+ * @see Issue #2991
+ */
+export function clearRewoundStages(
+  arrays: {
+    completedStages: PipelineStage[];
+    skippedStages: PipelineStage[];
+    deferredStages: PipelineStage[];
+  },
+  stageOrder: readonly PipelineStage[],
+  targetIndex: number
+): PipelineStage[] {
+  const rewound = new Set<PipelineStage>(stageOrder.slice(Math.max(0, targetIndex)));
+  const removed = new Set<PipelineStage>();
+  for (const arr of [arrays.completedStages, arrays.skippedStages, arrays.deferredStages]) {
+    const kept = arr.filter((stage) => {
+      if (rewound.has(stage)) {
+        removed.add(stage);
+        return false;
+      }
+      return true;
+    });
+    arr.length = 0;
+    arr.push(...kept);
+  }
+  return [...removed];
 }
 
 /**
@@ -1189,6 +1279,29 @@ export function toNightgaugeAdapter(
   }
 }
 
+/** `nightgauge pr-stage recover --json` (#2841). */
+interface PrStageRecoverResult {
+  outcome: "recovered" | "rewind" | "escalated" | "unmatched";
+  reason?: string;
+  conflicting_files?: string[];
+  backtrack_signal?: PipelineFeedbackSignal;
+  max_dev_redispatch?: number;
+}
+
+/** Mirrors isQueueConflict in internal/orchestrator/recovery. */
+function isQueueConflictRefusal(reason: string): boolean {
+  const lower = reason.toLowerCase();
+  return lower.includes("merge-queue-failed") && lower.includes("merge conflict with");
+}
+
+/** `[merge-conflict]` classifies as `merge_conflict` for the card and the retro. */
+function queueConflictEscalationError(reason: string, files: string[]): Error {
+  const named = files.length > 0 ? files.join(", ") : "(could not determine conflicting files)";
+  return new Error(
+    `[merge-conflict] deterministic pr-merge refused: ${reason}; conflicting files: ${named}`
+  );
+}
+
 /**
  * Decide whether an unattended budget/ceiling escalation should proceed
  * (Issue #3851).
@@ -1333,6 +1446,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * Reset at the start of each runPipeline() call and in the finally block.
    */
   private backtrackCount = 0;
+  /** Per-run pr-merge -> feature-dev conflict rewinds (#2841). */
+  private conflictRedispatchCount = 0;
+  /**
+   * Stages a rewind must re-run although state still reads `complete`: nothing
+   * resets their status, so the resume check would skip them and the rewind
+   * would replay nothing (#2841).
+   */
+  private readonly replayStages = new Set<PipelineStage>();
   private traversedEdges: Set<string> = new Set();
 
   /**
@@ -1490,6 +1611,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private prMergedGroundTruth = false;
   /**
+   * Set when a run that resumed at pr-merge finds the PR `already-merged`: it
+   * did no work (#2878). Tells the post-merge hook not to write Ready, and the
+   * scheduler to park the issue if it stays open. Reset at every runPipeline() entry.
+   */
+  private mergeNoOp = false;
+  /** This run skipped forward to pr-merge. Reset at every runPipeline() entry. */
+  private resumedAtPrMerge = false;
+  /**
    * Estimator input snapshot pinned at pipeline start (#198): calibration
    * table, labels/title, and performance mode as-of run start. Reused for
    * every estimate and post-run comparison in the run. Reset per run.
@@ -1532,7 +1661,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.skillLoader = new SkillLoader(logger);
     this.contextAssembler = new ContextAssembler(
       logger,
-      () => this.getWorkingDirectory(),
+      () => this.pinnedWorkspaceRoot ?? this.getWorkingDirectory(),
       null, // contextLoader set later via setContextLoader()
       this.skillLoader,
       // ADR-017 step 3: the assembler's schema-repair re-invocation is part
@@ -1689,6 +1818,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * out of 'running'. Telemetry is fire-and-forget and never blocks the run.
    */
   private firePipelineComplete(result: PipelineRunResult, issueNumber?: number): void {
+    result.mergeNoOp = this.mergeNoOp;
     // #1127: the run is terminal and every post-run `setMeta` enrichment (the
     // health score among them) has already landed. Announce that before any
     // other completion work so the notifiers render their card from the state
@@ -2155,7 +2285,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * - feature-dev       -> "In progress" (reinforcement)
    * - feature-validate  -> "In progress" (reinforcement)
    * - pr-create         -> "In review"
-   * - pr-merge          -> "Done"
+   * - pr-merge          -> "Done", only when the issue is closed (#2706)
    *
    * @see Issue #1714 - Write project fields directly via GraphQL
    */
@@ -2163,7 +2293,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     stage: PipelineStage,
     issueNumber: number
   ): Promise<void> {
-    const statusValue = STAGE_STATUS_VALUES[stage];
+    let statusValue = STAGE_STATUS_VALUES[stage];
     if (!statusValue) {
       return;
     }
@@ -2224,6 +2354,31 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           issueNumber,
           err: err instanceof Error ? err.message : String(err),
         });
+      }
+    }
+
+    // Done means the issue is closed. The post-merge hook has already run, so
+    // an open issue is a partial delivery: it goes to Ready so the scheduler
+    // dispatches the remainder. That repeats the hook's write on purpose: the
+    // hook skips it when it cannot resolve a board, and In review would then
+    // strand the issue. An unreadable state writes nothing, since a guess could
+    // be wrong either way, but it must not pass silently. @see #2706
+    if (stage === "pr-merge") {
+      const issueState = await getIssueState(
+        issueNumber,
+        workspaceRoot,
+        this.logger,
+        this.repoOverride
+      );
+      if (issueState === null) {
+        this.logger.warn("Not writing Done after pr-merge: the issue state is unreadable", {
+          issueNumber,
+        });
+        await this.raiseBoardStatusWriteFailed(issueNumber, stage);
+        return;
+      }
+      if (issueState !== "CLOSED") {
+        statusValue = BOARD_STATUS.ready;
       }
     }
 
@@ -2312,6 +2467,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * scheduler's revert. Writing In review unconditionally here raced that
    * revert and stranded PR-less issues in In review (#1496). A TS-only run
    * with no PR stays "In progress", which the non-terminal reconcile recovers.
+   * It writes only from "In progress", so it never undoes the scheduler's Ready
+   * (#2706).
    *
    * Non-blocking: failures are logged but never throw.
    * @see Issue #1115 - Stale status after pipeline failure
@@ -2330,7 +2487,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       issueNumber,
       this.getPersistentRoot(),
       this.logger,
-      this.repoOverride
+      this.repoOverride,
+      { onlyFrom: BOARD_STATUS.inProgress }
     );
   }
 
@@ -3189,8 +3347,31 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       const parsed = JSON.parse(fs.readFileSync(ctxPath, "utf-8")) as {
         validation_status?: string;
         errorCategory?: string | null;
+        push_status?: string;
+        push_error?: string;
       };
       const status = (parsed.validation_status ?? "").trim().toLowerCase();
+      if ((parsed.push_status ?? "").trim().toLowerCase() === "auth_failed") {
+        // Stable `[push-auth-failed]` marker (#2742), checked before the
+        // failed branch: the remote refused the credentials, so whatever the
+        // test verdict was, a test failure is not the cause.
+        const detail = parsed.push_error ? ` Push error: ${parsed.push_error}` : "";
+        return new Error(
+          `[push-auth-failed] feature-validate could not push: the remote refused this ` +
+            `machine's git credentials (validation_status="${status || "unknown"}").${detail} ` +
+            `Fix the git credentials and re-queue; tests and acceptance criteria are not the cause.`
+        );
+      }
+      if (status === "failed" && parsed.errorCategory === "review-cap-reached") {
+        // Stable `[review-cap-reached]` marker (#2865): the cap is one issue's
+        // outcome, so it classifies as a park, not as a repository-halting
+        // validation_failed.
+        return new Error(
+          `[review-cap-reached] feature-validate stopped at the independent review's round ` +
+            `cap with findings standing. The code was intentionally NOT committed or pushed ` +
+            `and stays in this run's worktree. Parking this issue for an operator.`
+        );
+      }
       if (status === "failed") {
         const category = parsed.errorCategory ? ` (${parsed.errorCategory})` : "";
         // Stable `[validation-failed]` marker (#326) so ClassifyTerminalKind /
@@ -3857,6 +4038,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
   private async invokePostMergeHook(issueNumber: number): Promise<void> {
     const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+    // Only the hook's own answer proves the issue stayed open (#2878), so no
+    // path out of here may leave the flag set without it.
+    const alreadyMerged = this.mergeNoOp;
+    this.mergeNoOp = false;
     try {
       const resolver = BinaryResolver.fromVSCode();
       const binary = await resolver.resolve();
@@ -3901,6 +4086,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       if (prNumber > 0) {
         args.splice(4, 0, "--pr", String(prNumber));
       }
+      if (alreadyMerged) {
+        args.push("--already-merged");
+      }
 
       // The hook now waits out the merge commit's check runs on the base
       // branch (#1249): up to its own 20-minute budget, so main's run is
@@ -3916,6 +4104,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         issueNumber,
         result: stdout.trim(),
       });
+      // A no-op that closed the issue finished it; only one left open parks.
+      this.mergeNoOp = alreadyMerged && this.hookWithheldReady(stdout);
     } catch (err) {
       this.logger.warn("Post-merge hook failed (non-blocking)", {
         issueNumber,
@@ -4271,6 +4461,27 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * The title for when the binary cannot render one. It keeps the renderer's
+   * guarantees: the `(#N)` scope PR lookups key on, the 72-character cap cut at a
+   * word boundary, and no issue reference a closing keyword could act on (#2846).
+   */
+  private scopedFallbackTitle(issueNumber: number, raw: string): string {
+    const scope = `chore(#${issueNumber}): `;
+    const budget = 72 - scope.length;
+    const text = raw
+      .replace(/\s+/g, " ")
+      .replace(/#(?=\d)/g, "issue ")
+      .replace(/\bGH-(?=\d)/gi, "issue ")
+      .trim();
+    const chars = Array.from(text);
+    if (chars.length <= budget) return scope + text;
+    const head = chars.slice(0, budget + 1).join("");
+    const lastSpace = head.lastIndexOf(" ");
+    const cut = lastSpace > 0 ? head.slice(0, lastSpace) : chars.slice(0, budget).join("");
+    return scope + cut.replace(/[\s,;:-]+$/, "");
+  }
+
+  /**
    * Closing keyword for the fallback PR body, from feature-validate's verdicts.
    * Same predicate as IssueClosedBy (internal/orchestrator/stages/prcreate_ac.go,
    * #2655): `Closes` only when the verdict list is non-empty and every entry is
@@ -4305,7 +4516,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * dismissed prompt in autonomous mode, or the destructive-git hook rejecting
    * a heredoc PR body).
    *
-   * LAST-RESORT safety net: it opens a minimal PR (title from the issue, body
+   * LAST-RESORT safety net: it opens a minimal PR (title from `nightgauge
+   * pr-stage title`, the issue title if that fails, body
    * `Closes #N` only when validate met every criterion, else `Refs #N` so
    * merging leaves the issue open — #2655, #2677) purely to unblock
    * the pipeline — the rich description is the
@@ -4422,6 +4634,30 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       };
     }
 
+    // 3b. Commits ahead are not a diff (#3012): a re-run Refs branch can be
+    //     several commits ahead (squash-merged work plus a merge of base)
+    //     with a tree identical to base. `git diff --quiet` exits 0 when the
+    //     trees match and 1 when they differ; anything else is inconclusive
+    //     and opens no PR.
+    try {
+      await execFileAsync("git", ["diff", "--quiet", `origin/${base}`, "HEAD"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: 15_000,
+      });
+      return {
+        created: false,
+        reason: `[no-changes-produced] feature branch "${branch}" has no diff against ${base} (commits ahead, tree equal)`,
+      };
+    } catch (diffErr) {
+      if ((diffErr as { code?: unknown } | undefined)?.code !== 1) {
+        return {
+          created: false,
+          reason: `could not confirm "${branch}" has a diff against ${base}`,
+        };
+      }
+    }
+
     // 4. Push the branch.
     try {
       await execFileAsync("git", ["push", "-u", "origin", branch], {
@@ -4440,19 +4676,50 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return { created: false, reason: `branch push failed: ${stderr.slice(0, 200)}` };
     }
 
-    // 5. Open the PR. Title from the issue; minimal body with the closing
-    //    keyword. Passed as execFile args (no shell, no heredoc) so the
-    //    destructive-git hook that may have blocked the skill never applies.
+    // 5. Open the PR. Title from the binary's renderer, so this path keeps the
+    //    72-character cap and the `(#N)` scope PR lookups key on (#2846); minimal
+    //    body with the closing keyword. Passed as execFile args (no shell, no
+    //    heredoc) so the destructive-git hook that may have blocked the skill
+    //    never applies.
+    // #2506: open through the binary, never ambient `gh pr create` — the
+    // binary authors with the config-resolved identity (the pipeline App when
+    // github_auth.app is configured) and stamps forge.PipelineMarker.
+    const binary = await BinaryResolver.fromVSCode().resolve();
+    if (!binary) {
+      return {
+        created: false,
+        reason: "nightgauge binary unresolved; refusing ambient gh pr create",
+      };
+    }
     let title = `pr-create fallback for #${issueNumber}`;
     try {
       const { stdout } = await execFileAsync(
-        "gh",
-        ["issue", "view", String(issueNumber), "--json", "title", "-q", ".title", ...repoArgs],
-        { encoding: "utf-8", cwd, timeout: 30_000 }
+        binary,
+        ["pr-stage", "title", String(issueNumber), "--workdir", cwd],
+        { encoding: "utf-8", cwd, timeout: 15_000 }
       );
-      if (stdout.trim()) title = stdout.trim();
-    } catch {
-      // keep default title
+      // A binary older than the verb prints pr-stage's help and exits 0.
+      const rendered = stdout.trim();
+      if (rendered.includes("\n") || !rendered.includes(`(#${issueNumber}): `)) {
+        throw new Error("pr-stage title printed no title");
+      }
+      title = rendered;
+    } catch (titleErr) {
+      this.logger.warn("Deterministic create fallback: title verb failed; using the issue title", {
+        issueNumber,
+        error: titleErr instanceof Error ? titleErr.message : String(titleErr),
+      });
+      try {
+        const { stdout } = await execFileAsync(
+          "gh",
+          ["issue", "view", String(issueNumber), "--json", "title", "-q", ".title", ...repoArgs],
+          { encoding: "utf-8", cwd, timeout: 30_000 }
+        );
+        if (stdout.trim()) title = stdout.trim();
+      } catch {
+        // keep default title
+      }
+      title = this.scopedFallbackTitle(issueNumber, title);
     }
     const keyword = this.fallbackClosingKeyword(issueNumber, cwd);
     const verdictLine =
@@ -4466,16 +4733,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       `_Opened by the deterministic pr-create fallback (#3927) after the pr-create stage ` +
       `exited without creating a PR. The full description is normally authored by the ` +
       `pr-create stage; this is a safety-net PR to unblock the pipeline._`;
-    // #2506: open through the binary, never ambient `gh pr create` — the
-    // binary authors with the config-resolved identity (the pipeline App when
-    // github_auth.app is configured) and stamps forge.PipelineMarker.
-    const binary = await BinaryResolver.fromVSCode().resolve();
-    if (!binary) {
-      return {
-        created: false,
-        reason: "nightgauge binary unresolved; refusing ambient gh pr create",
-      };
-    }
     let repoSlug = this.repoOverride ?? "";
     if (!repoSlug) {
       try {
@@ -4587,7 +4844,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     | { kind: "llm" }
     | { kind: "handled"; result: StageRunResult }
     | { kind: "deferred"; error: Error }
-    | { kind: "refused"; error: Error }
+    | { kind: "refused"; error: Error; terminalKind?: string }
+    | {
+        kind: "conflict-rewind";
+        signal: PipelineFeedbackSignal;
+        maxDevRedispatch: number;
+        reason: string;
+        files: string[];
+      }
   > {
     if (stage !== "pr-create" && stage !== "pr-merge") {
       return { kind: "llm" };
@@ -4636,9 +4900,29 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     if (repo.includes("/")) {
       args.push("--repo", repo);
     }
-    // pr-merge waits out in-flight CI (bounded ~15 min in the runner); give the
-    // subprocess headroom above that. pr-create is fast.
-    const timeoutMs = stage === "pr-merge" ? 20 * 60_000 : 3 * 60_000;
+    // pr-merge can wait out CI and then a merge queue, so the binary derives its
+    // limit from pipeline.merge_queue.wait_timeout (#2730). pr-create is fast.
+    let timeoutMs = 3 * 60_000;
+    let recoveryTimeoutMs = timeoutMs;
+    if (stage === "pr-merge") {
+      try {
+        const { stdout } = await execFileAsync(
+          binary,
+          ["pr-stage", "budget", "--workdir", workdir, "--json"],
+          { encoding: "utf-8", cwd: workdir, timeout: 30_000 }
+        );
+        const budget = parsePrStageBudget(stdout);
+        timeoutMs = budget.client_timeout_ms;
+        recoveryTimeoutMs = budget.recovery_client_timeout_ms;
+      } catch (err) {
+        this.logger.warn("Deterministic pr-stage budget unavailable — running LLM path", {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        this.stageExecutionPaths.set(stage, { path: "llm", puntReason: "runner-error" });
+        return { kind: "llm" };
+      }
+    }
 
     // Signal start + mark running (runStage would do this; we skip runStage).
     // onStageStart is idempotent; this shows the spinner during the CI-wait.
@@ -4662,6 +4946,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       rate_limited?: boolean;
       duration_ms?: number;
       phases?: PrStagePhaseTransition[];
+      // #3012: set on a no-diff-against-base punt the verb already settled.
+      settled?: boolean;
+      issue_closed?: boolean;
+      terminal_detail?: string;
     };
     // #1397 — the deterministic runners report phases through a reporter, and
     // the Go scheduler attaches one. This route runs the SAME runners in a
@@ -4682,6 +4970,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         timeoutMs,
         onPhase: applyPhase,
         onLog: (line) => this.logger.debug(`pr-stage ${stage}: ${line}`),
+        onSpawn: (pid) =>
+          this.logger.info(`pr-stage ${stage} spawned pid=${pid} issue=#${issueNumber}`),
       });
       parsed = JSON.parse(stdout.trim());
     } catch (err) {
@@ -4737,6 +5027,48 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Refused → a deterministic gate declined the merge (generated steering on
     // the PR head, issue 1675). Never fall through to the LLM skill, which
     // could merge the same head; fail the stage with the classified reason.
+    if (parsed.path === "refused" && stage === "pr-merge" && isQueueConflictRefusal(reason)) {
+      // A queue conflict is recoverable (#2841). The Go registry decides how;
+      // this path only reacts, and never falls through to the LLM skill.
+      const recovery = await this.recoverQueueConflict(
+        binary,
+        issueNumber,
+        reason,
+        workdir,
+        recoveryTimeoutMs
+      );
+      if (recovery.outcome === "recovered") {
+        parsed = { ...parsed, path: "merged" };
+      } else if (recovery.outcome === "rewind" && recovery.backtrack_signal) {
+        this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
+        return {
+          kind: "conflict-rewind",
+          signal: recovery.backtrack_signal,
+          maxDevRedispatch: recovery.max_dev_redispatch ?? 0,
+          reason,
+          files: recovery.conflicting_files ?? [],
+        };
+      } else {
+        const conflictErr = queueConflictEscalationError(
+          recovery.reason ? `${reason}; ${recovery.reason}` : reason,
+          recovery.conflicting_files ?? []
+        );
+        this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
+        this.logger.warn("Queue conflict not recovered — failing the stage", {
+          issueNumber,
+          outcome: recovery.outcome,
+        });
+        if (this.stateService) {
+          try {
+            await this.stateService.failStage(stage, conflictErr.message);
+          } catch {
+            // Non-critical — the caller still breaks the loop.
+          }
+        }
+        return { kind: "refused", error: conflictErr, terminalKind: "merge_conflict" };
+      }
+    }
+
     if (parsed.path === "refused") {
       const refuseErr = new Error(`deterministic ${stage} refused: ${reason}`);
       this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
@@ -4757,6 +5089,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
     const created = stage === "pr-create" && parsed.path === "created";
     const merged = stage === "pr-merge" && parsed.path === "merged";
+    if (merged && reason === "already-merged" && this.resumedAtPrMerge) {
+      this.mergeNoOp = true;
+    }
     if (created || merged) {
       this.stageExecutionPaths.set(stage, { path: "deterministic" });
       if (this.stateService) {
@@ -4791,6 +5126,38 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         { issueNumber, prNumber: parsed.pr_number }
       );
       return { kind: "handled", result: { success: true, stage, durationMs } };
+    }
+
+    // No diff against base (#3012): the branch is level with its base, so
+    // there is nothing to open a PR for. The Go verb has commented the
+    // criteria and closed the issue when all are met; end the run with its
+    // verdict. Never run the LLM skill, which would open an empty PR.
+    if (stage === "pr-create" && parsed.path === "punt" && reason === "no-diff-against-base") {
+      const closed = parsed.settled === true && parsed.issue_closed === true;
+      const detail =
+        parsed.settled && parsed.terminal_detail
+          ? parsed.terminal_detail
+          : `[not-pipeline-actionable] pr-create: the feature branch has no diff against its ` +
+            `base, so there is nothing to open a PR for; #${issueNumber} waits in Backlog ` +
+            `for a human [#3012]`;
+      const noDiffErr = new Error(detail);
+      this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
+      this.logger.warn("Deterministic pr-create found no diff against base — settling (no LLM)", {
+        issueNumber,
+        closed,
+      });
+      if (this.stateService) {
+        try {
+          await this.stateService.failStage(stage, detail);
+        } catch {
+          // Non-critical — the caller still breaks the loop.
+        }
+      }
+      return {
+        kind: "refused",
+        error: noDiffErr,
+        terminalKind: closed ? "issue_closed" : "not_pipeline_actionable",
+      };
     }
 
     // Punt → record execution_path=llm + punt_reason; caller runs the LLM skill.
@@ -5643,11 +6010,34 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return false;
     }
 
+    // pr-{N}.json outlives the merge, so "open" there may be history: a `Refs`
+    // merge re-dispatched at pr-merge forever (#2878). Only the forge's OPEN
+    // resumes. MERGED on an open issue retires the delivered run's files, so the
+    // remainder re-plans; on any other issue the merge landed and only pr-merge's
+    // no-op is left (#500). Any other answer leaves them and runs every stage.
+    const forgeState = await this.forgePrState(prNumber);
+    if (forgeState !== "OPEN") {
+      this.logger.info(`Resume-at-pr-merge: PR #${prNumber} is not open on the forge`, {
+        issueNumber,
+        forgeState,
+      });
+      if (forgeState !== "MERGED") {
+        this.replayEveryStage();
+        return false;
+      }
+      if (await this.issueIsOpen(issueNumber)) {
+        this.retireDeliveredRun(issueNumber);
+        return false;
+      }
+    }
+
     // An open PR proves delivery only of the criteria it was built against
     // (#2623). When the issue's criteria changed since, re-plan: pr-create
     // then reuses the open PR and records the new fingerprint.
     let fingerprintProblem = "";
-    if (!recordedFingerprint) {
+    if (forgeState !== "OPEN") {
+      // Merged on a closed issue: the criteria are settled, nothing re-plans.
+    } else if (!recordedFingerprint) {
       fingerprintProblem = "no fingerprint recorded";
     } else {
       const current = await this.currentAcFingerprint(issueNumber);
@@ -5695,6 +6085,136 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.eventDispatcher.onStageSkipped("feature-planning", reason);
 
     return true;
+  }
+
+  /**
+   * Queue every stage to run again, whatever state remembers of it. The rewind's
+   * idiom (#1142): a stage that completes twice must clear its #698 guard.
+   */
+  private replayEveryStage(): void {
+    for (const stage of STAGE_ORDER) {
+      this.completedStageSet.delete(stage);
+      this.replayStages.add(stage);
+    }
+  }
+
+  /** A merged PR's files describe delivered work: retire them and re-plan (#2878). */
+  private retireDeliveredRun(issueNumber: number): void {
+    fs.rmSync(this.getContextPath("pr", issueNumber), { force: true });
+    fs.rmSync(this.getContextPath("dev", issueNumber), { force: true });
+    this.replayEveryStage();
+  }
+
+  /** Whether the forge reads the issue OPEN. An unreadable state is not. */
+  private async issueIsOpen(issueNumber: number): Promise<boolean> {
+    const state = await getIssueState(
+      issueNumber,
+      this.getPersistentRoot(),
+      this.logger,
+      this.repoOverride
+    );
+    return state === "OPEN";
+  }
+
+  /** Whether the post-merge hook's JSON says Ready was withheld. */
+  private hookWithheldReady(stdout: string): boolean {
+    try {
+      return (JSON.parse(stdout) as { readyWithheld?: boolean }).readyWithheld === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The PR's state on the forge, upper-cased, or null when it cannot be read. */
+  private async forgePrState(prNumber: number): Promise<string | null> {
+    try {
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["pr", "view", String(prNumber), "--json", "state", "-q", ".state", ...this.ghRepoArgs()],
+        { encoding: "utf-8", cwd: this.getWorkingDirectory(), timeout: 15_000 }
+      );
+      return stdout.trim().toUpperCase() || null;
+    } catch (err) {
+      this.logger.warn("Resume-at-pr-merge: could not read PR state", { prNumber, err });
+      return null;
+    }
+  }
+
+  /**
+   * Resume a re-dispatch at feature-validate when its dev work survived on the
+   * branch or under refs/nightgauge/wip/ (#2730). `pr-stage resume-point` makes
+   * the decision and restores the work, so the Go scheduler and this path agree.
+   * Anything but a clear yes runs every stage. Returns true when fast-forwarded.
+   */
+  private async resumeAtFeatureValidate(issueNumber: number): Promise<boolean> {
+    if (!this.stateService) return false;
+    const stages: PipelineStage[] = ["issue-pickup", "feature-planning", "feature-dev"];
+    const reason = await this.preservedResumePoint(issueNumber);
+    if (reason === null) return false;
+
+    const skip = `Skipped: resuming at feature-validate from preserved work — ${reason} (#2730)`;
+    const state = await this.stateService.getState();
+    for (const stage of stages) {
+      if (state?.stages[stage]?.status === "complete") continue;
+      try {
+        await this.stateService.skipStage(stage, skip);
+      } catch (err) {
+        this.logger.warn("Resume-at-feature-validate: could not mark stage skipped", {
+          stage,
+          err,
+        });
+        return false;
+      }
+    }
+    this.logger.info("Resuming at feature-validate from preserved work", { issueNumber, reason });
+    this.eventDispatcher.onStageSkipped("feature-planning", skip);
+    return true;
+  }
+
+  /** What the resume rests on, from `pr-stage resume-point`; null for no resume. */
+  private async preservedResumePoint(issueNumber: number): Promise<string | null> {
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) return null;
+      const workdir = this.getWorkingDirectory();
+      const { stdout } = await execFileAsync(
+        binary,
+        ["pr-stage", "resume-point", String(issueNumber), "--workdir", workdir],
+        { encoding: "utf-8", cwd: workdir, timeout: 60_000 }
+      );
+      const parsed = JSON.parse(stdout) as { resume?: unknown; reason?: unknown };
+      if (parsed.resume !== true) return null;
+      return typeof parsed.reason === "string" ? parsed.reason : "";
+    } catch (err) {
+      this.logger.warn("Resume-at-feature-validate: no decision, running every stage", {
+        issueNumber,
+        err,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Pin the merge ground truth (#266) and tell Go, so `autonomous status` reads
+   * the rest of this run as post-merge follow-up (#2730). The flag is set
+   * synchronously; the notice is a display fact, so it never rejects. The PR
+   * number comes from the caller or the run's pr context, with no forge call.
+   */
+  private async markPrMerged(issueNumber: number, prNumber?: number): Promise<void> {
+    this.prMergedGroundTruth = true;
+    try {
+      const pr = prNumber ?? this.prNumberFromContext(issueNumber);
+      if (pr > 0) await this.stateService?.notifyPrMerged(pr);
+    } catch (err) {
+      this.logger.debug("Could not report the merged PR", { issueNumber, err });
+    }
+  }
+
+  private prNumberFromContext(issueNumber: number): number {
+    const parsed = JSON.parse(fs.readFileSync(this.getContextPath("pr", issueNumber), "utf-8")) as {
+      pr_number?: unknown;
+    };
+    return typeof parsed.pr_number === "number" ? parsed.pr_number : 0;
   }
 
   /**
@@ -5761,19 +6281,46 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     //
     // An open PR recorded on disk is proof the work shipped, whatever state
     // remembers — as long as the issue's acceptance criteria are unchanged
-    // since it opened (#2623). Skip forward to pr-merge on that evidence alone. This is a
-    // purely local decision on purpose — a speculative forge query on every
-    // pipeline start would spend API budget on the overwhelmingly common
-    // case of a brand-new issue with no PR (#1428).
+    // since it opened (#2623) and the forge still reads it OPEN (#2878). Only a
+    // recorded open PR reaches the forge: a query on every pipeline start would
+    // spend API budget on the overwhelmingly common case of a brand-new issue
+    // with no PR (#1428).
     // ===================================================================
     if (prCreateState?.status !== "complete" && (await this.resumeAtPrMerge(issueNumber))) {
+      this.resumedAtPrMerge = true;
       return;
     }
 
-    if (prCreateState?.status !== "complete") return;
+    if (prCreateState?.status !== "complete") {
+      if (state.stages["feature-dev"]?.status !== "complete") {
+        await this.resumeAtFeatureValidate(issueNumber);
+      }
+      return;
+    }
 
     // Check if the pr context file is missing (worktree was cleaned up)
-    if (fs.existsSync(prContextPath)) return; // Already have context, resume will work
+    if (fs.existsSync(prContextPath)) {
+      // State's memory of pr-create proves no more than pr-{N}.json does, so the
+      // forge decides here too (#2878). OPEN resumes at pr-merge. MERGED on an
+      // open issue leaves a remainder to plan; on any other issue the merge
+      // landed and only pr-merge's no-op is left (#500). Any other answer, or no
+      // recorded PR, runs every stage and keeps the files.
+      const prNumber = this.readMergedPrNumber(issueNumber);
+      const forgeState = prNumber > 0 ? await this.forgePrState(prNumber) : null;
+      if (forgeState === "MERGED" && (await this.issueIsOpen(issueNumber))) {
+        this.retireDeliveredRun(issueNumber);
+      } else if (forgeState === "OPEN" || forgeState === "MERGED") {
+        this.resumedAtPrMerge = true;
+      } else {
+        this.logger.info("Resume at pr-merge refused: the forge does not read the PR open", {
+          issueNumber,
+          prNumber,
+          forgeState,
+        });
+        this.replayEveryStage();
+      }
+      return;
+    }
 
     this.logger.info(
       "Detected pr-create complete but pr context missing — checking for existing PR",
@@ -5793,6 +6340,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // pr-merge failed when it actually succeeded.
       const restoredContext = JSON.parse(fs.readFileSync(prContextPath, "utf-8"));
       if (restoredContext.status === "merged") {
+        // A merged PR on an open issue is a partial delivery, not #500's lost
+        // exit code: completing pr-merge here would end the run with the
+        // remainder unworked (#2878).
+        if (await this.issueIsOpen(issueNumber)) {
+          this.retireDeliveredRun(issueNumber);
+          return;
+        }
         this.logger.info(
           "PR is already merged on GitHub — marking pr-merge as complete to skip re-run",
           { issueNumber, prNumber: restoredContext.pr_number }
@@ -7593,7 +8147,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       message +=
         `Progress: ${closedCount}/${totalCount} sub-issues complete.\n\n` +
         `Open sub-issues:\n${openList}\n\n` +
-        `Pick up a sub-issue instead: /nightgauge:issue-pickup <number>`;
+        pluginHint(
+          "issue-pickup",
+          "Pick up a sub-issue instead.",
+          (command) => `Pick up a sub-issue instead: ${command} <number>`
+        );
     } else {
       message += `No sub-issues found. Pick up a sub-issue instead or close this epic manually.`;
     }
@@ -8266,7 +8824,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   ): Promise<void> {
     const workspaceRoot = this.getWorkingDirectory();
     // Resolve GITHUB_TOKEN for Go binary (VSCode doesn't inherit shell env)
-    const execEnv = { ...process.env };
+    const execEnv = withoutLaunchingSessionEnv();
     if (!execEnv.GITHUB_TOKEN) {
       try {
         const { stdout: tokenRaw } = await execFileAsync("gh", ["auth", "token"], {
@@ -8783,6 +9341,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return { recovered: false, error: originalError };
     }
 
+    // #3013: the generator exists for a file the subagent did NOT write. A
+    // validate artifact the policy rejected is a wrong file, and synthesizing
+    // over it drops acceptance_criteria_verdicts — pr-create then writes Refs.
+    if (originalError instanceof DeliverableContractError && stage === "feature-validate") {
+      this.logger.error(
+        "feature-validate deliverable violates the contract and was not repaired — refusing to synthesize over it",
+        { issueNumber, contextPath: originalError.contextPath }
+      );
+      return { recovered: false, error: originalError };
+    }
+
     this.logger.info(`${stage} context not written by subagent — generating deterministically`, {
       issueNumber,
     });
@@ -8876,7 +9445,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   ): Promise<CompletionReconciliationResult> {
     const workspaceRoot = this.getWorkingDirectory();
     // Resolve GITHUB_TOKEN for Go binary (VSCode doesn't inherit shell env)
-    const execEnv = { ...process.env };
+    const execEnv = withoutLaunchingSessionEnv();
     if (!execEnv.GITHUB_TOKEN) {
       try {
         const { stdout: tokenRaw } = await execFileAsync("gh", ["auth", "token"], {
@@ -8893,6 +9462,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       timeout: 30000,
       env: execEnv,
     };
+    // #2687: closing keywords count only for this repository's issue.
+    const repoSlug = await this.resolveRunRepoSlug();
+    if (!repoSlug) {
+      this.logger.warn(
+        "Could not resolve the run's repository; only bare #N closing keywords count",
+        { issueNumber }
+      );
+    }
 
     // Epic branch sub-issues: PRs merge to the epic branch, not main.
     // The issue stays open until the epic→main PR merges (which GitHub
@@ -8927,7 +9504,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       if (!baseBranch.startsWith("epic/")) {
         try {
           mergedPRs ??= await this.listMergedPRsForIssue(issueNumber, ghExecOptions);
-          const prBase = pickMergedPRForIssue(issueNumber, mergedPRs)?.baseRefName ?? "";
+          const prBase = pickMergedPRForIssue(issueNumber, mergedPRs, repoSlug)?.baseRefName ?? "";
           if (prBase?.startsWith("epic/")) {
             baseBranch = prBase;
           }
@@ -8970,7 +9547,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // @see Issue #1452 — stale feat/1462-* branch left on remote
         try {
           mergedPRs ??= await this.listMergedPRsForIssue(issueNumber, ghExecOptions);
-          const headRef = pickMergedPRForIssue(issueNumber, mergedPRs)?.headRefName ?? "";
+          const headRef = pickMergedPRForIssue(issueNumber, mergedPRs, repoSlug)?.headRefName ?? "";
           if (headRef && headRef.startsWith("feat/")) {
             // Check if remote ref still exists (GitHub auto-deletes head branches)
             let refExists = false;
@@ -9092,7 +9669,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // search is full-text, and every pipeline title is `fix(#N): …`, so a
         // search hit alone would close the issue on a `Refs #N` merge.
         mergedPRs ??= await this.listMergedPRsForIssue(issueNumber, ghExecOptions);
-        const closer = mergedPRs.find((pr) => prBodyClosesIssue(pr.body, issueNumber));
+        const closer = mergedPRs.find((pr) => prBodyClosesIssue(pr.body, issueNumber, repoSlug));
         if (closer) {
           mergedPrNumber = closer.number;
         } else if (mergedPRs.length > 0) {
@@ -9165,7 +9742,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           const commitLines = commitLogRaw
             .split("\x1e")
             .map((record) => record.trim().split("\x1f"))
-            .filter(([hash, , message]) => hash && prBodyClosesIssue(message, issueNumber))
+            .filter(
+              ([hash, , message]) => hash && prBodyClosesIssue(message, issueNumber, repoSlug)
+            )
             .map(([hash, subject]) => `${hash} ${subject}`);
           if (commitLines.length > 0) {
             const commitHashes = commitLines.map((line) => line.split(" ")[0]).join(", ");
@@ -10092,6 +10671,41 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Run `pr-stage recover` for a queue conflict (#2841). A verb that errors or
+   * emits non-JSON reports `escalated`: a refused head stays refused.
+   */
+  private async recoverQueueConflict(
+    binary: string,
+    issueNumber: number,
+    reason: string,
+    workdir: string,
+    timeoutMs: number
+  ): Promise<PrStageRecoverResult> {
+    const args = [
+      "pr-stage",
+      "recover",
+      String(issueNumber),
+      "--reason",
+      reason,
+      "--workdir",
+      workdir,
+      "--json",
+    ];
+    try {
+      const { stdout } = await execFileAsync(binary, args, {
+        encoding: "utf-8",
+        cwd: workdir,
+        timeout: timeoutMs,
+      });
+      return JSON.parse(stdout.trim()) as PrStageRecoverResult;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.warn("pr-stage recover failed", { issueNumber, err: detail });
+      return { outcome: "escalated", reason: `recovery could not run: ${detail}` };
+    }
+  }
+
+  /**
    * Evaluate whether a backtrack is allowed.
    *
    * Checks:
@@ -10155,6 +10769,22 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     const edgeKey = `${currentStage}->${targetStage}`;
     this.traversedEdges.add(edgeKey);
     this.backtrackCount++;
+    return this.rewindToBacktrackTarget(signal, currentStage, issueNumber, this.backtrackCount);
+  }
+
+  /**
+   * The stage-reset half of a backtrack: feedback file, replay guards, state
+   * record. Conflict rewinds call it directly because their edge is bounded by
+   * `max_dev_redispatch`, not by `max_backtracks` or the oscillation guard
+   * (#2841), mirroring RetryEngine.MaxConflictRedispatch.
+   */
+  private async rewindToBacktrackTarget(
+    signal: PipelineFeedbackSignal,
+    currentStage: PipelineStage,
+    issueNumber: number,
+    attemptNumber: number
+  ): Promise<number> {
+    const targetStage = signal.backtrack_target_stage as PipelineStage;
 
     const record: import("../schemas/pipelineState").BacktrackRecord = {
       from_stage: currentStage,
@@ -10162,7 +10792,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       signal_type: signal.signal_type,
       rationale: signal.rationale,
       timestamp: new Date().toISOString(),
-      attempt_number: this.backtrackCount,
+      attempt_number: attemptNumber,
     };
 
     // Write feedback-{N}.json for the target stage to read
@@ -10200,6 +10830,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // feature-planning and the pipeline stopped dead).
     for (const replayed of STAGE_ORDER.slice(targetIndex, currentIndex + 1)) {
       this.completedStageSet.delete(replayed);
+      this.replayStages.add(replayed);
     }
 
     // Record backtrack in pipeline state
@@ -10219,7 +10850,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       from: currentStage,
       to: targetStage,
       signalType: signal.signal_type,
-      attemptNumber: this.backtrackCount,
+      attemptNumber,
     });
 
     this.eventDispatcher.onBacktrackTriggered(record);
@@ -10712,6 +11343,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.contextAssembler.setRoutingConfig(this.config.routing ?? {});
     this.contextAssembler.setForceFullPipeline(this.config.forceFullPipeline);
     this.backtrackCount = 0; // Reset backtrack engine state (#1342)
+    this.conflictRedispatchCount = 0; // Reset the conflict rewind bound (#2841)
+    this.replayStages.clear();
     this.traversedEdges.clear(); // Reset oscillation guard (#1342)
     this.stageEscalationCounts.clear(); // Reset escalation engine (#1343)
     this.stageModelOverrides.clear(); // Reset escalation overrides (#1343)
@@ -10816,6 +11449,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.auditCorrelationId = crypto.randomUUID();
     this.blockedTerminalState = null;
     this.prMergedGroundTruth = false;
+    this.mergeNoOp = false;
+    this.resumedAtPrMerge = false;
     this.estimatorSnapshot = null;
 
     // RECEIVE OR MINT (ADR-017 Decision 10, #370).
@@ -11618,11 +12253,19 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           const currentState = await this.stateService.getState();
           if (currentState) {
             const stageState = currentState.stages[stage];
-            if (
+            // A prior resume leaves stages skipped, and retiring a merged run
+            // queues them too (#2878), so any settled status can be replayed.
+            const settled =
               stageState?.status === "complete" ||
               stageState?.status === "skipped" ||
-              stageState?.status === "deferred"
-            ) {
+              stageState?.status === "deferred";
+            const replaying = settled && this.replayStages.delete(stage);
+            if (replaying) {
+              this.logger.debug("Replaying a settled stage", {
+                stage,
+                status: stageState?.status,
+              });
+            } else if (settled) {
               // Verify context file exists for completed stages that produce
               // output context. If the file was deleted, re-run the stage
               // instead of skipping — otherwise the next stage will fail its
@@ -12155,9 +12798,33 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // rate-limit DEFERS (no LLM fallback, #3976).
         // ===================================================================
         const detOutcome = await this.runDeterministicPrStage(stage, issueNumber, stageStartTime);
+        if (detOutcome.kind === "conflict-rewind") {
+          if (this.conflictRedispatchCount >= detOutcome.maxDevRedispatch) {
+            failedStage = stage;
+            error = queueConflictEscalationError(
+              `${detOutcome.reason}; ${detOutcome.maxDevRedispatch} feature-dev re-dispatches did not resolve it`,
+              detOutcome.files
+            );
+            gateTerminalKind = "merge_conflict";
+            await this.stateService?.failStage(stage, error.message).catch(() => {});
+            break;
+          }
+          this.conflictRedispatchCount++;
+          stageIndex =
+            (await this.rewindToBacktrackTarget(
+              detOutcome.signal,
+              stage,
+              issueNumber,
+              this.conflictRedispatchCount
+            )) - 1;
+          continue;
+        }
         if (detOutcome.kind === "deferred" || detOutcome.kind === "refused") {
           failedStage = stage;
           error = detOutcome.error;
+          if (detOutcome.kind === "refused" && detOutcome.terminalKind) {
+            gateTerminalKind = detOutcome.terminalKind;
+          }
           break;
         }
         // The LLM pr-merge skill can merge whatever head the PR has, and it is
@@ -12460,6 +13127,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // loop increment lands on the target stage. The stage is NOT
               // pushed to completedStages and NOT recorded as failed — the run
               // is continuing, and executeBacktrack has recorded the transition.
+              clearRewoundStages(
+                { completedStages, skippedStages, deferredStages },
+                STAGE_ORDER,
+                disposition.targetIndex
+              );
               stageIndex = disposition.targetIndex - 1;
               continue;
             }
@@ -12597,7 +13269,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // #266: the deterministic gate confirms the PR is MERGED. Pin the
             // ground-truth flag so pipeline.notifyComplete can tell the Go
             // recording boundary the merge landed even if a later stage trips.
-            this.prMergedGroundTruth = true;
+            void this.markPrMerged(issueNumber);
           }
           if (mergeVerifyError) {
             // Check if PR is still OPEN (not CLOSED) — worth retrying once
@@ -12711,7 +13383,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   break;
                 }
                 // Retry succeeded and the gate confirms MERGED (#266).
-                this.prMergedGroundTruth = true;
+                void this.markPrMerged(issueNumber);
                 // Retry succeeded — clear retry state and continue
                 if (this.stateService) {
                   try {
@@ -13265,6 +13937,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           if (canBacktrack) {
             const targetIndex = await this.executeBacktrack(signal, stage, issueNumber, callbacks);
             // Rewind: set stageIndex so the loop increments to targetIndex
+            // Drop stale bookkeeping for the stages about to re-run (#2991).
+            clearRewoundStages(
+              { completedStages, skippedStages, deferredStages },
+              STAGE_ORDER,
+              targetIndex
+            );
             stageIndex = targetIndex - 1;
             continue;
           }
@@ -13472,6 +14150,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       this.cachedRoutingTelemetry = null; // Clear routing telemetry cache (#1005)
       this.completedStageSet.clear(); // Clear duplicate-prevention tracker (#698)
       this.backtrackCount = 0; // Clear backtrack engine state (#1342)
+      this.conflictRedispatchCount = 0; // Clear the conflict rewind bound (#2841)
+      this.replayStages.clear();
       this.traversedEdges.clear(); // Clear oscillation guard (#1342)
       this.stageEscalationCounts.clear(); // Clear escalation engine (#1343)
       this.stageModelOverrides.clear(); // Clear escalation overrides (#1343)
@@ -13611,7 +14291,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           budgetExceeded,
         });
         shippedButOverbudget = true;
-        this.prMergedGroundTruth = true; // #266: forge confirms MERGED
+        void this.markPrMerged(issueNumber, verified.prNumber); // #266: forge confirms MERGED
         if (!completedStages.includes("pr-merge")) {
           completedStages.push("pr-merge");
         }
@@ -14022,8 +14702,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // through the existing failure / pause / abort handling.
     // ===================================================================
     if (!failedStage && this.stateService) {
-      const accountedFor = completedStages.length + skippedStages.length + deferredStages.length;
-      if (accountedFor < STAGE_ORDER.length) {
+      const accountedFor = new Set([...completedStages, ...skippedStages, ...deferredStages]).size;
+      if (!allStagesAccountedFor(completedStages, skippedStages, deferredStages, STAGE_ORDER)) {
         try {
           const diskState = await this.stateService.getState();
           if (diskState) {
@@ -14040,10 +14720,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   issueNumber,
                   recovered: reconciled.recovered,
                   completedStagesBefore: accountedFor,
-                  completedStagesAfter:
-                    reconciled.completedStages.length +
-                    reconciled.skippedStages.length +
-                    reconciled.deferredStages.length,
+                  completedStagesAfter: new Set([
+                    ...reconciled.completedStages,
+                    ...reconciled.skippedStages,
+                    ...reconciled.deferredStages,
+                  ]).size,
                 }
               );
               // Reassign by mutating in place (these arrays are still `const`
@@ -14076,7 +14757,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // ===================================================================
     const pipelineComplete =
       !failedStage &&
-      completedStages.length + skippedStages.length + deferredStages.length === STAGE_ORDER.length;
+      allStagesAccountedFor(completedStages, skippedStages, deferredStages, STAGE_ORDER);
     if (
       !pipelineComplete &&
       deferredStages.length === 0 &&
@@ -16437,7 +17118,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             ) {
               const merged = await this.checkPrMergedForIssue(issueNumber);
               if (merged) {
-                this.prMergedGroundTruth = true;
+                void this.markPrMerged(issueNumber, merged.prNumber);
                 this.logger.warn(
                   "pr-merge killed after the merge landed — PR is MERGED; recording success " +
                     "(ground truth overrides late per-stage kill) (#266)",
@@ -16512,6 +17193,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // crossing and (b) printed a ceiling the cost never approached. Only
               // synthesize when skillRunner left no runaway marker at all, and do
               // so with honest progress-kill semantics (no invented ceiling).
+              // The monitor's `Ceiling:` line goes to the stream, not this error,
+              // so the expired ceiling is stamped here from the structured value
+              // for the failure report to name (#2694).
+              const killedAtCeiling = result.killCeiling
+                ? ` Ceiling: ${result.killCeiling}=${result.killCeilingValue ?? "unset"}.`
+                : "";
               const emittedMarker = result.error?.message ?? "";
               const hasRunawayMarker =
                 emittedMarker.includes("[runaway-progress-exceeded]") ||
@@ -16520,7 +17207,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 ? emittedMarker
                 : `[runaway-progress-exceeded] Stage ${stage} terminated: progress-based runaway kill ` +
                   `at cost $${costAtTermUsd.toFixed(4)} (no dollar ceiling crossed). ` +
-                  `Treated as transient — will retry with 30-minute backoff (Issue #3783).`;
+                  `Treated as transient — will retry with 30-minute backoff (Issue #3783).` +
+                  killedAtCeiling;
               const costCapError = new Error(runawayMarker);
 
               if (this.stateService) {
@@ -16534,6 +17222,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     // inventing an observation.
                     servedModel: result.servedModel,
                     servedEffort: result.servedEffort,
+                    pluginVersion: result.pluginVersion,
                     servedThinking: result.servedThinking,
                   });
                 } catch (err) {
@@ -16577,14 +17266,34 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // (also empty in this path). Compose the original marker text
             // into the synthetic message so downstream regex still matches.
             if (result.stallKilled) {
-              this.logger.error("Stage terminated due to stall detection auto-kill", {
-                stage,
-                durationMs,
-                stallKilled: true,
-                stall_indicator: true, // Issue #2871 — distinct field for dashboard filtering
-              });
+              // A cap kill logs neither stall field: AutoRetroService matches
+              // both in the log text (#2812).
+              const stageCapKilled = isStageCapCeiling(result.killCeiling);
+              if (stageCapKilled) {
+                this.logger.error("Stage terminated at its runtime cap", {
+                  stage,
+                  durationMs,
+                  killCeiling: result.killCeiling,
+                  killCeilingValue: result.killCeilingValue,
+                });
+              } else {
+                this.logger.error("Stage terminated due to stall detection auto-kill", {
+                  stage,
+                  durationMs,
+                  stallKilled: true,
+                  stall_indicator: true, // Issue #2871 — distinct field for dashboard filtering
+                });
+              }
 
-              const stallError = composeStallKilledError(stage, durationMs, result.error);
+              const stallError = stageCapKilled
+                ? composeStageCapKilledError(
+                    stage,
+                    durationMs,
+                    result.killCeiling,
+                    result.killCeilingValue,
+                    result.error
+                  )
+                : composeStallKilledError(stage, durationMs, result.error);
 
               if (this.stateService) {
                 try {
@@ -16597,6 +17306,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     // inventing an observation.
                     servedModel: result.servedModel,
                     servedEffort: result.servedEffort,
+                    pluginVersion: result.pluginVersion,
                     servedThinking: result.servedThinking,
                   });
                 } catch (err) {
@@ -16727,6 +17437,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                       // inventing an observation.
                       servedModel: result.servedModel,
                       servedEffort: result.servedEffort,
+                      pluginVersion: result.pluginVersion,
                       servedThinking: result.servedThinking,
                     });
                   }
@@ -16834,6 +17545,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     // inventing an observation.
                     servedModel: result.servedModel,
                     servedEffort: result.servedEffort,
+                    pluginVersion: result.pluginVersion,
                     servedThinking: result.servedThinking,
                   });
                   // A second `setStageModelSelection` call used to sit here
@@ -16988,6 +17700,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                       // inventing an observation.
                       servedModel: result.servedModel,
                       servedEffort: result.servedEffort,
+                      pluginVersion: result.pluginVersion,
                       servedThinking: result.servedThinking,
                     });
                     await this.stateService.clearRetrying(stage);

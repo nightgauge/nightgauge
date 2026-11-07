@@ -6,10 +6,20 @@ def ph($s): $s;
 # Drop local hook telemetry lines entirely (personal ~/.claude hook output).
 select(.type != "system" or (.subtype | startswith("hook_") | not))
 
-# system/init carries the whole local environment (skills, plugins, agents,
-# slash_commands, memory_paths, cwd). Keep only what a stream consumer reads.
+# system/init carries the whole local environment (skills, agents,
+# slash_commands, memory_paths, cwd). Keep only what a stream consumer reads,
+# which since #2723 includes the plugin gate's `plugins` and the version that
+# says which CLI reported them. A key the raw event lacks stays absent, and each
+# plugin's local path is redacted; "builtin" is not a path.
 | if .subtype == "init" then
-    {type, subtype, cwd: "/tmp/nightgauge-fixture", session_id, model, permissionMode, uuid}
+    with_entries(select(.key | IN(
+      "type", "subtype", "cwd", "session_id", "claude_code_version",
+      "model", "permissionMode", "plugins", "uuid"
+    )))
+    | .cwd = "/tmp/nightgauge-fixture"
+    | if has("plugins") then
+        .plugins |= map(if .path == "builtin" then . else .path = "<redacted>" end)
+      else . end
   else . end
 
 # Absolute local paths can appear in any string value (tool results, task

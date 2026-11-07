@@ -63,6 +63,12 @@ audit:
   flushIntervalMs: 30000
   offlineQueuePath: .nightgauge/audit-queue.json
 
+hooks:
+  pre_push:
+    # Twice ci-local's 20-minute GO_TEST_TIMEOUT: `go test ./...` takes about
+    # 437 s here and packages reached 10 minutes under load (#2700).
+    timeout_seconds: 2400
+
 autonomous:
   dry_run: true
   pickup_backlog: false

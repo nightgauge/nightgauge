@@ -507,6 +507,42 @@ export async function ensureIssueOnProject(
 }
 
 /**
+ * Read an issue's live forge state ("OPEN" or "CLOSED").
+ *
+ * @returns The state, or null when it could not be read
+ * @see Issue #2706 - Done is written only for a closed issue
+ */
+export async function getIssueState(
+  issueNumber: number,
+  cwd: string,
+  logger: Logger,
+  repoNameWithOwner?: string
+): Promise<string | null> {
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+    return null;
+  }
+
+  const board = await resolveBoard(cwd, repoNameWithOwner);
+  if ("error" in board) {
+    logger.warn(board.error, { cwd, issueNumber });
+    return null;
+  }
+  const { owner, repo } = resolveOwnerRepo(board.config, repoNameWithOwner);
+
+  try {
+    const resolved = await queryRepositoryNumberNode(owner, repo, issueNumber, "state", cwd);
+    const state = resolved?.node.state;
+    return typeof state === "string" ? state.toUpperCase() : null;
+  } catch (err) {
+    logger.warn("Could not read issue state", {
+      issueNumber,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/**
  * Get the current Status field value for an issue on the project board.
  *
  * @param issueNumber - The GitHub issue number

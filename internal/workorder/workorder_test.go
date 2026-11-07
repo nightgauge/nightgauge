@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/forge"
 )
 
 const programsYAML = `
@@ -199,10 +200,16 @@ func TestRank_ExternalBlockerFollowsTheSchedulerRule(t *testing.T) {
 		wantReady     bool
 		wantBlockedBy string
 		wantUnresolv  string
+		wantClosed    string
+		wantMissing   string
 	}{
 		"closed blocker in its repository dispatches": {resolved: map[string]string{"o/a#7": "CLOSED"}, wantReady: true},
 		"open blocker in its repository blocks":       {resolved: map[string]string{"o/a#7": "OPEN"}, wantBlockedBy: "o/a#7"},
 		"unknown state fails closed":                  {resolved: nil, wantUnresolv: "o/a#7"},
+		"merged pull request dispatches":              {resolved: map[string]string{"o/a#7": forge.DepStatePRMerged}, wantReady: true},
+		"open pull request blocks":                    {resolved: map[string]string{"o/a#7": forge.DepStatePROpen}, wantBlockedBy: "o/a#7"},
+		"closed unmerged pull request fails closed":   {resolved: map[string]string{"o/a#7": forge.DepStatePRClosed}, wantClosed: "o/a#7"},
+		"missing number fails closed":                 {resolved: map[string]string{"o/a#7": forge.DepStateMissing}, wantMissing: "o/a#7"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := Rank(f, g, tc.resolved, map[string]ValidationState{"o/a#7": {}}).Programs[0]
@@ -216,7 +223,8 @@ func TestRank_ExternalBlockerFollowsTheSchedulerRule(t *testing.T) {
 				t.Fatalf("blocked = %+v, want o/b#1", p.Blocked)
 			}
 			it := p.Blocked[0]
-			if strings.Join(it.BlockedBy, ",") != tc.wantBlockedBy || strings.Join(it.Unresolved, ",") != tc.wantUnresolv {
+			if strings.Join(it.BlockedBy, ",") != tc.wantBlockedBy || strings.Join(it.Unresolved, ",") != tc.wantUnresolv ||
+				strings.Join(it.ClosedUnmerged, ",") != tc.wantClosed || strings.Join(it.Nonexistent, ",") != tc.wantMissing {
 				t.Fatalf("item = %+v", it)
 			}
 		})
@@ -319,5 +327,19 @@ func TestIsProgramMember(t *testing.T) {
 	}
 	if IsProgramMember([]string{"programs", "type:feature"}) || IsProgramMember(nil) {
 		t.Error("a non-program label set was taken as a program member")
+	}
+}
+
+// A merged pull request is satisfied with no validation standing: the gate reads
+// issues, so sending one through it would hold the edge as unresolved (#2854).
+func TestRank_MergedPullRequestSkipsTheValidationGate(t *testing.T) {
+	f, _ := Parse([]byte("programs: [{ id: p }]"))
+	b := "o/b"
+	nodes := []*depgraph.Node{node(b, 1, "Ready", "", "program:p")}
+	edges := []depgraph.Edge{{From: depgraph.NodeID{Repo: b, Number: 1}, To: depgraph.NodeID{Repo: "o/a", Number: 7}, Type: "crossRepo", Resolvable: true}}
+
+	p := Rank(f, graphOf(nodes, edges), map[string]string{"o/a#7": forge.DepStatePRMerged}, nil).Programs[0]
+	if refs(p.Ready) != "o/b#1" {
+		t.Fatalf("ready = %s, blocked = %+v", refs(p.Ready), p.Blocked)
 	}
 }

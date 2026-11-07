@@ -23,8 +23,13 @@ import {
   applyOverviewCardUpdate,
   type OverviewCardUpdatePayload,
 } from "../../../src/views/outputWindow/OutputWindowOverviewDom";
-import { getOverviewPanelHtml } from "../../../src/views/outputWindow/OutputWindowHtml";
+import {
+  getOutputWindowHtml,
+  getOverviewPanelHtml,
+} from "../../../src/views/outputWindow/OutputWindowHtml";
+import { OutputWindowState } from "../../../src/views/outputWindow/OutputWindowState";
 import type { SlotInfo } from "../../../src/views/outputWindow/OutputWindowState";
+import { createMockMemento } from "../../mocks/memento";
 
 // ---------------------------------------------------------------------------
 // Tiny fake DOM. Implements only the surface area the helpers consume.
@@ -356,5 +361,117 @@ describe("Issue #3010 — Overview card live tick + phase indicator", () => {
 
       expect(phaseEl.textContent).toBe("");
     });
+  });
+});
+
+describe("Issue #2785 — one slot index across two runs", () => {
+  const T0 = 1_700_000_000_000;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The anchors the real renderer put on the elapsed element. */
+  function renderedElapsed(slot: SlotInfo): Record<string, string> {
+    const html = getOverviewPanelHtml([slot], T0);
+    const tag = /<div class="overview-card-elapsed"([^>]*)>/.exec(html)?.[1] ?? "";
+    return Object.fromEntries(
+      [...tag.matchAll(/data-([\w-]+)="([^"]*)"/g)].map(([, k, v]) => [
+        k.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase()),
+        v,
+      ])
+    );
+  }
+
+  function cardFor(slot: SlotInfo) {
+    const built = createCard({ slotIndex: slot.slotIndex });
+    const elapsed = built.card.querySelector(".overview-card-elapsed")!;
+    Object.assign(elapsed.dataset, renderedElapsed(slot));
+    return { root: built.root, elapsed };
+  }
+
+  function patch(slot: SlotInfo): OverviewCardUpdatePayload {
+    return {
+      slotIndex: slot.slotIndex,
+      status: slot.status ?? "pending",
+      statusLabel: "Running",
+      stageLabel: "",
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheTokens: 0,
+      startedAt: slot.startedAt,
+      completedAt: slot.completedAt,
+      runGeneration: slot.runGeneration,
+      currentPhase: null,
+    };
+  }
+
+  function render(slots: SlotInfo[]): string {
+    const webview = { cspSource: "csp" } as never;
+    return getOutputWindowHtml(webview, [], [], true, false, false, 11, undefined, slots, 0);
+  }
+
+  function twoRuns() {
+    vi.useFakeTimers({ now: T0 });
+    const state = new OutputWindowState(createMockMemento());
+    state.registerSlot(0, 10, "first", "o/r", { runId: "a" });
+    state.updateSlotStatus(0, "complete", T0 + 30_000);
+    const first = { ...state.getSlot(0)! };
+    vi.setSystemTime(T0 + 60_000);
+    state.registerSlot(0, 11, "second", "o/r", { runId: "b" });
+    return { first, second: state.getSlot(0)! };
+  }
+
+  it("replaces the old occupant's anchors and ticks from the new run", () => {
+    const { first, second } = twoRuns();
+    const { root, elapsed } = cardFor(first);
+    expect(elapsed.dataset.completedAt).toBe(String(T0 + 30_000));
+
+    applyOverviewCardUpdate(root as any, patch(second));
+
+    expect(elapsed.dataset.startedAt).toBe(String(T0 + 60_000));
+    expect(elapsed.dataset.completedAt).toBeUndefined();
+    expect(elapsed.textContent).toBe("—");
+
+    tickOverviewCardElapsed(root as any, T0 + 65_000);
+    expect(elapsed.textContent).toBe("5s");
+  });
+
+  it("renders the new occupant's tab badge without a completion stamp", () => {
+    const { second } = twoRuns();
+    const html = render([second]);
+    const badge = /<span class="tab-badge tab-badge-elapsed"[^>]*>/.exec(html)?.[0];
+
+    expect(badge).toContain(`data-started-at="${T0 + 60_000}"`);
+    expect(badge).not.toContain("data-completed-at");
+  });
+
+  it("keeps establish-once anchors when the generation is unchanged", () => {
+    const { second } = twoRuns();
+    const { root, elapsed } = cardFor(second);
+
+    applyOverviewCardUpdate(root as any, { ...patch(second), startedAt: T0 + 99_000 });
+
+    expect(elapsed.dataset.startedAt).toBe(String(T0 + 60_000));
+  });
+
+  it("keeps ticking across a stage boundary of one run", () => {
+    const { second } = twoRuns();
+    const { root, elapsed } = cardFor(second);
+
+    applyOverviewCardUpdate(root as any, { ...patch(second), status: "running" });
+    tickOverviewCardElapsed(root as any, T0 + 70_000);
+    expect(elapsed.textContent).toBe("10s");
+    tickOverviewCardElapsed(root as any, T0 + 71_000);
+    expect(elapsed.textContent).toBe("11s");
+  });
+
+  it("ships the tested helpers in the webview script, with no inline copy", () => {
+    const html = render([]);
+
+    expect(html).toContain(`(${applyOverviewCardUpdate.toString()})(document, message)`);
+    expect(html).toContain(`(${tickOverviewCardElapsed.toString()})(document, Date.now())`);
+    expect(html.split(".overview-card-elapsed[data-started-at]").length).toBe(2);
   });
 });

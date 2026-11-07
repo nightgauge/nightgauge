@@ -56,7 +56,7 @@ project:
 
 ```bash
 # Add the marketplace
-claude plugin marketplace add https://github.com/nightgauge/nightgauge.git
+claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable
 
 # Install the Nightgauge plugin
 claude plugin install nightgauge@nightgauge-plugins

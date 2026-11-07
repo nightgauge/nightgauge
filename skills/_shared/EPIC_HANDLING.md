@@ -105,21 +105,22 @@ fi
    BINARY="${NIGHTGAUGE_BIN:-}"
    [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
    [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-   if [ -z "$BINARY" ]; then
-     REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-     [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-   fi
-   if [ -z "$BINARY" ]; then
-     GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-     if [ -n "$GIT_COMMON_DIR" ]; then
-       CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-       [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-     fi
+   if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+     for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+       "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+       [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+       grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+       NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+       case "${NG_ORIGIN%.git}" in
+         git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+           ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+       esac
+     done
    fi
    [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
    [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
    if [ -z "$BINARY" ]; then
-     echo "ERROR: nightgauge binary not found in PATH or bin/nightgauge" >&2
+     echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH or ~/go/bin" >&2
      exit 1
    fi
    EPIC_STATUS=$("$BINARY" epic check-completion "$ISSUE_NUMBER" --json 2>/dev/null || echo '{"complete":false}')
@@ -191,21 +192,22 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
 if [ -z "$BINARY" ]; then
-  echo "ERROR: nightgauge binary not found in PATH or bin/nightgauge" >&2
+  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH or ~/go/bin" >&2
   exit 1
 fi
 EPIC_RESULT=$("$BINARY" epic check-completion "$ISSUE_NUMBER" --json 2>/dev/null || echo '{"complete":false}')
@@ -221,34 +223,19 @@ If `action == "ready-to-close"`:
 ```bash
 EPIC_NUMBER=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.epicNumber')
 EPIC_TITLE=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.title')
-HOOKS_DIR="${CLAUDE_PLUGIN_ROOT:-claude-plugins/nightgauge}/hooks/lib"
-
-# a. Classify summary tier (deterministic, no AI tokens)
-if [ ! -x "$HOOKS_DIR/classify-epic-summary-tier.sh" ]; then
-  echo "WARNING: Optional hook script not found: $HOOKS_DIR/classify-epic-summary-tier.sh. Summary tier classification will be skipped." >&2
-  TIER="none"
-else
-  TIER_RESULT=$("$HOOKS_DIR/classify-epic-summary-tier.sh" "$EPIC_NUMBER") || true
-  TIER=$(printf '%s\n' "$TIER_RESULT" | jq -r '.tier // "none"')
-fi
-
-# b. Generate summary if tier is not "none"
-SUMMARY=""
-if [ "${TIER:-none}" != "none" ]; then
-  if [ ! -x "$HOOKS_DIR/generate-epic-summary.sh" ]; then
-    echo "WARNING: Optional hook script not found: $HOOKS_DIR/generate-epic-summary.sh. Epic summary generation will be skipped." >&2
-  else
-    SUMMARY=$("$HOOKS_DIR/generate-epic-summary.sh" "$EPIC_NUMBER" "$TIER") || true
-  fi
-fi
+# a+b. Classify the tier and generate the summary in one deterministic call
+#      (no AI tokens). Tiers: minimal, standard, detailed.
+SUMMARY_JSON=$(nightgauge epic summary "$EPIC_NUMBER" --json 2>/dev/null || echo '{}')
+TIER=$(printf '%s\n' "$SUMMARY_JSON" | jq -r '.tier // "minimal"')
+SUMMARY=$(printf '%s\n' "$SUMMARY_JSON" | jq -r '.summary // empty')
 
 # c. Post summary as issue comment (if generated)
 if [ -n "$SUMMARY" ]; then
   gh issue comment "$EPIC_NUMBER" --body "$SUMMARY" 2>/dev/null || true
 fi
 
-# d. For full tier: commit summary to docs/epics/{N}-{slug}.md
-if [ "${TIER:-none}" = "full" ] && [ -n "$SUMMARY" ]; then
+# d. For the detailed tier: commit summary to docs/epics/{N}-{slug}.md
+if [ "$TIER" = "detailed" ] && [ -n "$SUMMARY" ]; then
   SLUG=$(echo "$EPIC_TITLE" | tr '[:upper:]' '[:lower:]' | \
     sed 's/[^a-z0-9 -]//g' | tr ' ' '-' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | \
     cut -c1-40 | sed 's/-$//')
@@ -269,21 +256,22 @@ fi
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
 if [ -z "$BINARY" ]; then
-  echo "ERROR: nightgauge binary not found in PATH or bin/nightgauge" >&2
+  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH or ~/go/bin" >&2
   exit 1
 fi
 # Find epic branch

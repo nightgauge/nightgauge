@@ -49,9 +49,12 @@ order, then prepends `dirname($BINARY)` to `PATH`:
 
 1. `$NIGHTGAUGE_BIN` (host-exported — primary under any adapter)
 2. `command -v nightgauge` (PATH)
-3. `$REPO_ROOT/bin/nightgauge`
-4. canonical-repo `bin/nightgauge` (git worktrees)
+3. `$REPO_ROOT/bin/nightgauge`, development only
+4. canonical-repo `bin/nightgauge` (git worktrees), development only
 5. `$HOME/go/bin/nightgauge`
+
+Steps 3 and 4 run only with `NIGHTGAUGE_DEV_REPO_BIN=1` in a verified Nightgauge
+core checkout, so a foreign repository can never supply the binary (#2758).
 
 No VSCode-extension path appears anywhere in `skills/`.
 
@@ -117,6 +120,12 @@ fragments at render time, so skill rendering is no longer model-independent.
   entries by design (a local model on an OpenCode endpoint), an unreadable fragment, or no `--model`
   at all: every one of these renders the base document and exits 0. That is
   byte-for-byte the behavior that predates overlays.
+- **A missing include is not base-only.** An overlay is an optional refinement,
+  so its absence is normal. An `<!-- include: -->` target or a phase-include
+  target is part of the procedure, so `nightgauge skill render` fails, naming the
+  file. A dropped overlay cannot be seen at render time for the same reason its
+  absence is normal, so `nightgauge preflight skill-bundle --source-root` catches
+  it by comparing the built tree with its source at package time.
 
 **Acknowledged gap.** Adaptation is applied by the render path only. A skill
 read _directly_ — opened by hand, or loaded by the harness when a user types
@@ -208,8 +217,9 @@ How the `opencode` adapter
   skills never load.
 - **`_includes` and `_shared` access.** A rendered skill's read directives
   are absolute paths into the skills tree the render resolved
-  (`<workspace>/skills`, `$NIGHTGAUGE_SKILLS_ROOT`, or the bundle's
-  `<prefix>/skills`), which lies outside the worktree. The per-run
+  (`$NIGHTGAUGE_SKILLS_ROOT`, the bundle's `<prefix>/skills`, or
+  `<workspace>/skills`, in the order `nightgauge skill roots` reports for every
+  host), which can lie outside the worktree. The per-run
   `external_directory` allow-list grants that whole tree read-only (both its
   given and symlink-resolved path forms), with a matching `edit` deny, so
   `_includes/…` and `skills/_shared/…` resolve for the core repository and
@@ -225,8 +235,16 @@ How the `opencode` adapter
   `git rev-parse --git-common-dir` (#2194). Stages receive it as
   `NIGHTGAUGE_KNOWLEDGE_DIR`; OpenCode's `external_directory` allow-list
   grants it read and write (the only external root without an `edit` deny),
-  and the Claude adapters pass it as `--add-dir`. The skills tree is never a
-  Claude working directory, so it stays read-only there too.
+  and the Claude adapters pass it as `--add-dir`.
+- **Skills tree access on Claude.** Stage spawns pass the resolved skills tree
+  as `--add-dir`, so a rendered skill's includes read without user-level
+  `additionalDirectories`, and pair it with a `--disallowedTools` `Edit(path)` rule
+  for every form of that tree: as given, symlink-resolved, and on a system alias such
+  as `/tmp` (#2718). `Edit` is the rule that works: it stops `Write` too, while the CLI
+  does not match a `Write(path)` rule against file permissions. `TestClaudeSkillsTreeLive`
+  proves the read and the deny against the installed CLI. As with OpenCode, read-only
+  holds for the file tools only. A tree inside the stage's worktree gets
+  neither flag: it is already reachable, and it is the checkout the stage may need to change.
 - **Hooks map to the Nightgauge OpenCode plugin.** Claude `PreToolUse` gates
   run as the plugin's `tool.execute.before` handler; completion checks are Go
   StageGates, as for every non-Claude host. A tool the plugin cannot map is

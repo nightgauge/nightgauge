@@ -153,9 +153,9 @@ func HasUnmergedIndex(porcelain string) bool {
 // produces the same message on a retry.
 func CommitMessage(snap PRCreateSnapshot) string {
 	subject := RenderTitle(snap)
-	if strings.TrimSpace(stripTitlePrefix(snap.IssueTitle)) == "" {
-		// Issue title unknown (no issue context) — do not emit a dangling
-		// "fix(#N):" subject.
+	if text, _ := titleText(snap); text == "" {
+		// Neither a summary nor an issue title (no context) — do not emit a
+		// dangling "fix(#N):" subject.
 		subject = fmt.Sprintf("%s(#%d): implement issue #%d",
 			titlePrefix(snap.IssueType), snap.IssueNumber, snap.IssueNumber)
 	}

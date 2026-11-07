@@ -45,15 +45,32 @@ func openPRPageJSON(prs map[int]string, hasNext bool, cursor string) string {
 	return string(b)
 }
 
-// answerNoOpenPRs answers an open-PR list request with an empty list and
-// reports whether r was one.
+// answerNoOpenPRs answers the reads that precede a recovery board write: the
+// open-PR list with an empty list, and the issue read with an open issue. It
+// reports whether r was one of them.
 func answerNoOpenPRs(w http.ResponseWriter, r *http.Request) bool {
 	body, _ := io.ReadAll(r.Body)
-	if !strings.Contains(string(body), "pullRequests(") {
+	return answerRecoveryRead(w, string(body))
+}
+
+func answerRecoveryRead(w http.ResponseWriter, body string) bool {
+	switch {
+	case strings.Contains(body, "pullRequests("):
+		_, _ = io.WriteString(w, openPRPageJSON(nil, false, ""))
+	case isIssueRead(body):
+		_, _ = io.WriteString(w, issueStateJSON("OPEN"))
+	default:
 		return false
 	}
-	_, _ = io.WriteString(w, openPRPageJSON(nil, false, ""))
 	return true
+}
+
+// isIssueRead reports whether a GraphQL request body is the single-issue read.
+func isIssueRead(body string) bool { return strings.Contains(body, "issue(number:") }
+
+// issueStateJSON renders issue #1 of a repository in the given state.
+func issueStateJSON(state string) string {
+	return fmt.Sprintf(`{"data":{"repository":{"issue":{"id":"I_1","number":1,"title":"t","state":%q}}}}`, state)
 }
 
 // revertFixture returns a scheduler whose one repository, O/a, has a project
@@ -73,6 +90,10 @@ func revertFixture(t *testing.T, pages ...map[int]string) (as *AutonomousSchedul
 			}
 			last := i == len(pages)-1
 			_, _ = io.WriteString(w, openPRPageJSON(pages[i], !last, fmt.Sprintf("cursor-%d", i+1)))
+			return
+		}
+		if isIssueRead(string(body)) {
+			_, _ = io.WriteString(w, issueStateJSON("OPEN"))
 			return
 		}
 		writes.Add(1)
@@ -345,7 +366,7 @@ func TestMoveIssueToInReview_RequiresOpenPREvidence(t *testing.T) {
 // PR it already has. #1501's runaway kill mid-gate otherwise sat in In review
 // with nothing left to re-run it.
 func TestRevertFailedIssueStatus_TransientKindWithOpenPRMovesToReady(t *testing.T) {
-	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindApiOverloaded} {
+	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindStageCapKill, TerminalKindApiOverloaded} {
 		t.Run(kind, func(t *testing.T) {
 			buf := withCapturedLog(t)
 			as, writes, _ := revertFixture(t, map[int]string{42: "feat/1-x"})
@@ -390,7 +411,7 @@ func TestRevertFailedIssueStatus_NonTransientKindWithOpenPRStaysInReview(t *test
 // stall-kill route (fixed backoff, no lifetime charge) and returns the issue to
 // Ready on top of its open PR, where the resume path re-runs pr-merge (#2554).
 func TestOnPipelineComplete_TransientFailureAfterPRCreate_RevertsToReady(t *testing.T) {
-	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindStreamIdleTimeout} {
+	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindStageCapKill, TerminalKindStreamIdleTimeout} {
 		t.Run("kind="+kind, func(t *testing.T) {
 			buf := withCapturedLog(t)
 			as, _, _ := revertFixture(t, map[int]string{42: "feat/1-x"})

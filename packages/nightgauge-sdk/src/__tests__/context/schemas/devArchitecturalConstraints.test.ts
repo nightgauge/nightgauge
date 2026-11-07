@@ -131,3 +131,16 @@ describe("DevContextSchema — architectural_constraints (Issue #3594)", () => {
     }
   });
 });
+
+describe("DevContextSchema — pr_summary (Issue #2846)", () => {
+  it("keeps a recorded summary and accepts its absence", () => {
+    const recorded = DevContextSchema.safeParse({ ...minimalDev, pr_summary: "cap PR titles" });
+    expect(recorded.success && recorded.data.pr_summary).toBe("cap PR titles");
+    expect(DevContextSchema.safeParse({ ...minimalDev, pr_summary: null }).success).toBe(true);
+    expect(DevContextSchema.safeParse(minimalDev).success).toBe(true);
+  });
+
+  it("rejects a non-string summary", () => {
+    expect(DevContextSchema.safeParse({ ...minimalDev, pr_summary: 7 }).success).toBe(false);
+  });
+});

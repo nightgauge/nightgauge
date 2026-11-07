@@ -108,11 +108,19 @@ SUMMARY_PROBE_FAIL=0
 # `--deps-probe DIR` prints the dependency-bootstrap decision for DIR and exits
 # (#2562), so scripts/test-ci-local-bootstrap.sh asserts it without running npm.
 DEPS_PROBE=""
+# `--no-reuse` runs the gate even when the ledger says this exact tree passed.
+NO_REUSE=0
+# `--ledger-probe pass|fail|skip` drives the real ledger calls around one trivial
+# step, so scripts/test-ci-local-gate-reuse.sh asserts what a run records without
+# running the gate (#2784).
+LEDGER_PROBE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --list-steps) LIST_STEPS=1; shift ;;
     --env-probe) ENV_PROBE=1; shift ;;
     --changed) CHANGED_SCOPE=1; shift ;;
+    --no-reuse) NO_REUSE=1; shift ;;
+    --ledger-probe) LEDGER_PROBE="${2:-pass}"; shift; [ "$#" -gt 0 ] && shift ;;
     --scope-probe) SCOPE_PROBE=1; shift ;;
     --summary-probe)
       SUMMARY_PROBE=1
@@ -412,6 +420,8 @@ REQUIRED_FILES=(
   scripts/check-visibility-prose.py
   scripts/test-workflow-refs-check.sh
   scripts/test-marketplace-channel.sh
+  scripts/main-build-version.sh
+  scripts/test-main-build-version.sh
   scripts/test-vsix-host-target.sh
   packages/nightgauge/scripts/vsix-host-target.sh
   scripts/test-verify-release-channels.sh
@@ -432,6 +442,8 @@ REQUIRED_FILES=(
   scripts/check-md-links.sh
   scripts/test-check-md-links.sh
   scripts/test-credential-scan-rules.sh
+  scripts/test-credential-scan.sh
+  scripts/credential-scan.sh
   scripts/check-decisions-index.sh
   scripts/test-check-decisions-index.sh
   scripts/check-agent-guidance.sh
@@ -439,6 +451,17 @@ REQUIRED_FILES=(
   scripts/test-agent-guidance-check.sh
   scripts/check-changelog.sh
   scripts/test-check-changelog.sh
+  scripts/check-plugin-version.sh
+  scripts/test-check-plugin-version.sh
+  scripts/check-plugin-install-docs.sh
+  scripts/test-check-plugin-install-docs.sh
+  scripts/fetch-rc-vsix.sh
+  scripts/test-fetch-rc-vsix.sh
+  docker/clean-install/count-bundle-skill-reads.sh
+  scripts/test-count-bundle-skill-reads.sh
+  scripts/test-plugin-hooks-path.sh
+  scripts/advance-stable.sh
+  scripts/test-advance-stable.sh
   scripts/test-mirror-drift-gate.sh
   scripts/test-install-agent-skills-targets.sh
   scripts/test-issue-body-contract.sh
@@ -450,6 +473,8 @@ REQUIRED_FILES=(
   scripts/install-agent-skills.sh
   scripts/test-mirror-link-check.sh
   scripts/check-mirror-links.py
+  scripts/test-mirror-includes.sh
+  scripts/lib/mirror_includes.py
   scripts/check-go-test-skips.py
   scripts/go-test-skip-allowlist.txt
   scripts/go-test-json-echo.py
@@ -457,6 +482,9 @@ REQUIRED_FILES=(
   scripts/test-ci-local-concurrency.sh
   scripts/test-ci-local-changed-scope.sh
   scripts/test-ci-local-bootstrap.sh
+  scripts/ci-local-go-test.sh
+  scripts/test-ci-local-go-pass-stamp.sh
+  scripts/test-ci-local-gate-reuse.sh
   scripts/state-backstop.sh
   scripts/test-state-backstop.sh
   scripts/doctor-app-permission-walkthrough.sh
@@ -700,7 +728,76 @@ reap_group_children() {
   return 0
 }
 
+# ── The gate ledger (#2784) ──────────────────────────────────────────────────
+#
+# A pipeline run repeated this gate across stages on a tree that had not changed.
+# The binary owns the ledger (no script writes under the git directory by path,
+# #2700): this asks whether the exact tree already passed, skips the run if so,
+# and records every run's start and finish, so a killed gate is counted too. A
+# missing or older binary means a full run and one line saying so: the safe
+# direction. GitHub Actions never consults the ledger, because a runner has none
+# to read. Plain CI is not that test: agent stage shells export CI too, and
+# keying on it left every pipeline gate unrecorded and unreused.
+GATE_LEDGER_BIN=""
+GATE_RUN_ID=""
+GATE_TREE=""
+GATE_RUN_STARTED=0
+
+gate_ledger_open() {
+  [ -z "${GITHUB_ACTIONS:-}" ] || return 0
+  local bin status full_flag=""
+  bin="${NIGHTGAUGE_BIN:-}"
+  [ -n "$bin" ] && [ -x "$bin" ] || bin="$(command -v nightgauge 2>/dev/null || true)"
+  if [ -z "$bin" ]; then
+    echo "gate ledger: no nightgauge binary, so this run is neither reused nor recorded"
+    return 0
+  fi
+  if ! status="$("$bin" ci gate-status --kind local-gate --json 2>/dev/null)" ||
+    ! printf '%s' "$status" | jq -e . >/dev/null 2>&1; then
+    echo "gate ledger: $bin has no ci gate-status, so this run is neither reused nor recorded"
+    return 0
+  fi
+  GATE_LEDGER_BIN="$bin"
+  GATE_TREE="$(printf '%s' "$status" | jq -r '.tree // ""')"
+  if [ "$CHANGED_SCOPE" -eq 0 ] && [ "$NO_REUSE" -eq 0 ] &&
+    [ "$(printf '%s' "$status" | jq -r '.reusable')" = "true" ]; then
+    echo "✓ Gate skipped: tree $GATE_TREE already passed" \
+      "($(printf '%s' "$status" | jq -r '"\(.passed_stage // "" | if . == "" then "outside a stage" else . end) at \(.passed_at), \(.passed_seconds)s"'))."
+    echo "  Force a run with: bash scripts/ci-local.sh --no-reuse"
+    # A full pass included the go test step, so pre-push may skip it here too,
+    # even when the pass came from another worktree of this clone.
+    printf '%s\n' "$GATE_TREE" >"$LOG_DIR/go-test-pass.tree" || true
+    "$bin" ci gate-record --event reused --kind local-gate --tree "$GATE_TREE" >/dev/null 2>&1 || true
+    exit 0
+  fi
+  [ "$CHANGED_SCOPE" -eq 1 ] || full_flag="--full"
+  GATE_RUN_STARTED=$SECONDS
+  # shellcheck disable=SC2086 # full_flag is one flag or nothing
+  GATE_RUN_ID="$("$bin" ci gate-record --event start --kind local-gate --tree "$GATE_TREE" \
+    $full_flag 2>/dev/null || true)"
+}
+
+# Called from the EXIT trap, so every way out of a run records its verdict. Pass
+# needs exit 0 and no failed step. Any other exit that no real check failed is an
+# infrastructure stop: it asserted nothing about the tree.
+gate_ledger_finish() { # gate_ledger_finish <exit code>
+  [ -n "$GATE_RUN_ID" ] || return 0
+  local run="$GATE_RUN_ID" verdict=infra full_flag=""
+  GATE_RUN_ID=""
+  if [ "$1" -eq 0 ] && [ "${FAIL_COUNT:-0}" -eq 0 ]; then
+    verdict=pass
+  elif [ "${FAIL_COUNT:-0}" -gt "${INFRA_COUNT:-0}" ]; then
+    verdict=fail
+  fi
+  [ "$CHANGED_SCOPE" -eq 0 ] && [ "${SKIP_COUNT:-0}" -eq 0 ] && full_flag="--full"
+  # shellcheck disable=SC2086 # full_flag is one flag or nothing
+  "$GATE_LEDGER_BIN" ci gate-record --event finish --run-id "$run" --kind local-gate \
+    --tree "$GATE_TREE" --verdict "$verdict" --seconds "$((SECONDS - GATE_RUN_STARTED))" \
+    $full_flag >/dev/null || echo "gate ledger: this run's result was not recorded" >&2
+}
+
 on_exit() {
+  local exit_code=$?
   # Only the main shell cleans up: a grouped step runs in a subshell that
   # inherits this trap, and letting it release the lock would hand the gate to
   # a second instance mid-run.
@@ -713,6 +810,7 @@ on_exit() {
     BACKSTOP_DONE=1
     bash scripts/state-backstop.sh verify "$BACKSTOP_DIR/before" "$BACKSTOP_DIR/after" >&2 || true
   fi
+  gate_ledger_finish "$exit_code"
   return 0
 }
 
@@ -1189,7 +1287,25 @@ if [ "$SUMMARY_PROBE" -eq 1 ]; then
   exit $?
 fi
 
+if [ -n "$LEDGER_PROBE" ]; then
+  # A probe runs one trivial step, so against a real binary it would record a
+  # full pass for this tree and the next real gate would skip. Harness only.
+  if [ -z "${NIGHTGAUGE_BIN+set}" ]; then
+    echo "--ledger-probe needs NIGHTGAUGE_BIN set (a stub, or empty): it would record a false pass" >&2
+    exit 2
+  fi
+  gate_ledger_open
+  run_step "ledger probe passing step" true
+  case "$LEDGER_PROBE" in
+    fail) run_step "ledger probe failing step" false ;;
+    skip) skip_step "ledger probe skipped step" "the probe asked for one" ;;
+  esac
+  print_final_verdict
+  exit $?
+fi
+
 if [ "$LIST_STEPS" -eq 0 ]; then
+  gate_ledger_open
   echo "CI-parity local validation — order mirrors .github/workflows/ci.yml"
   # Install dependencies once, before any step, when they are missing or stale
   # (#2562). A failed install means no npm step can run, so it is an
@@ -1260,6 +1376,16 @@ run_step "ci-local.sh change-scoping contract" \
 run_step "ci-local.sh dependency bootstrap decision" \
   bash scripts/test-ci-local-bootstrap.sh
 
+# 0c3. When the go test step records a passing tree (#2700). A stub `go`, so
+#      seconds; pre-push validate trusts this record to skip the suite.
+run_step "ci-local.sh go test pass record" \
+  bash scripts/test-ci-local-go-pass-stamp.sh
+
+# 0c4. When the gate reuses a passed tree and what it records (#2784). A stub
+#      binary and one trivial step, so seconds.
+run_step "ci-local.sh gate ledger reuse" \
+  bash scripts/test-ci-local-gate-reuse.sh
+
 # 0d. The machine-state backstop's own regression suite (#2311), before the
 #     steps it watches: the last step trusts it to go red when a run removes or
 #     changes the developer's ~/.nightgauge data. Seconds, against a fake HOME.
@@ -1301,7 +1427,7 @@ if [ "$GO_SCOPE_RUN" -eq 0 ]; then
     "--changed, and $GO_SCOPE_REASON"
 else
 run_group "go test ./... -count=1 (with skip accounting)" \
-  bash -c 'set -o pipefail; go test -json ./... -count=1 -timeout "$1" | tee go-test.json | python3 scripts/go-test-json-echo.py && python3 scripts/check-go-test-skips.py go-test.json' _ "$GO_TEST_TIMEOUT"
+  bash scripts/ci-local-go-test.sh "$GO_TEST_TIMEOUT" "$LOG_DIR/go-test-pass.tree"
 fi
 # Mirrors the race half of ci.yml's "Test (plain and race, concurrently)" step
 # (#493, merged with the plain pass in #1218), which replaced the
@@ -1390,10 +1516,25 @@ run_group "sign-macos-binaries.sh regression suite" \
 #       scanned, and this suite is what proves that floor can fail. The arms
 #       are stubbed so they run without ClamAV installed; a real-clamscan arm
 #       asserts the tool still emits the summary fields the script parses, so
-#       the stubs cannot drift. No arm plants an EICAR sample -- this suite
-#       runs only on developer machines, where that would trip real antivirus.
+#       the stubs cannot drift. No arm writes an EICAR sample -- this suite
+#       runs only on developer machines, where a lasting file would trip real
+#       antivirus. clamscan spools the gate's canary to a short-lived file.
 run_group "malware-scan.sh regression suite" \
   bash scripts/test-malware-scan.sh
+
+# 1b2c'. VirusTotal release gate (#2946) — vt-scan.sh and release-scan-gate.sh,
+#       which hold a GitHub Release as a draft until every file in it, and every
+#       binary and JS bundle inside its VSIXs and tarballs, scans clean. Both
+#       suites run offline against a local stand-in for the VirusTotal v3 API
+#       (scripts/testdata/vt-scan/stub-api.py) and a stub `gh`, so no arm needs
+#       a key or reaches VirusTotal. The failure they guard is a gate that
+#       passes when it should not: every arm that is not a parsed, clean
+#       report must keep the draft, and the second suite is the offline proof
+#       of AC7's two paths (a forced detection stays a draft; clean publishes).
+run_group "vt-scan.sh regression suite" \
+  bash scripts/test-vt-scan.sh
+run_group "release-scan-gate.sh draft-hold harness" \
+  bash scripts/test-release-scan-gate.sh
 
 # 1b2d. check-shipped-code.sh regression suite (#2320, #2321) — the scan of
 #       what the VSIX ships for the shapes a static malware scanner matches on
@@ -1513,6 +1654,7 @@ run_step "credential scan (tree + full history)" bash scripts/credential-scan.sh
 # 5a-ii. The custom .gitleaks.toml rules fire on what they exist for and stay
 #     quiet on secret references (#1770). Fixtures are built at run time.
 run_step "Credential-scan rules regression suite" bash scripts/test-credential-scan-rules.sh
+run_step "Credential-scan scope regression suite" bash scripts/test-credential-scan.sh
 
 # 5b. Publication boundary self-test — proves the guard still fails closed
 #     (mirrors .github/workflows/publication-boundary.yml's second step).
@@ -1591,6 +1733,7 @@ run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility
 # a gate nothing exercises degrades into an unconditional pass.
 run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
 run_group "Marketplace channel regression suite" bash scripts/test-marketplace-channel.sh
+run_group "Main build version regression suite" bash scripts/test-main-build-version.sh
 run_group "VSIX host-target regression suite" bash scripts/test-vsix-host-target.sh
 run_group "Release channel verification regression suite" bash scripts/test-verify-release-channels.sh
 run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
@@ -1661,6 +1804,27 @@ run_step "Prettier format:check" npm run format:check
 # 7. Build all workspaces
 run_step "npm run build (all workspaces)" npm run build
 
+# 7a. The built skill bundle (#2761). The source tree masks a file the bundler
+# forgot, so this runs on dist/, the tree a VSIX is packaged from.
+run_step "skill bundle (dist/skills)" \
+  go run ./cmd/nightgauge preflight skill-bundle \
+  --skills-root packages/nightgauge/dist/skills --source-root skills
+
+# 7a1. The skills a VSIX would carry (#2948). .vscodeignore drops files after
+# 7a looks, so this lists the packaged files with `vsce ls` (no VSIX built) and
+# runs the same preflight on exactly that subset of dist/skills.
+run_step "VSIX skill file list (vsce ls)" bash scripts/check-vsix-skill-files.sh
+
+# 7a2. The built bundle stays self-contained and portable (#2764): an installed
+# VSIX carries dist/skills alone, so a relative link out of it is dead, and
+# skill text naming packages/nightgauge or a deleted hook breaks elsewhere.
+run_step "skill bundle links stay inside dist/skills" \
+  python3 scripts/check-mirror-links.py \
+  --mirror packages/nightgauge/dist/skills --root packages/nightgauge/dist/skills
+run_step "skill bundle portability (dist/skills)" \
+  go run ./cmd/nightgauge preflight skill-portability \
+  --skills-root packages/nightgauge/dist/skills
+
 # 7b. Phase markers ↔ PHASE_REGISTRY drift check
 # Runs after the SDK build so the script can import PHASE_REGISTRY from
 # the workspace package. Catches the class of registry↔skill marker drift
@@ -1707,6 +1871,15 @@ run_group "Smart Setup bundles the canonical agent-guidance check" \
 # able to go red before it is trusted to be green.
 run_group "Changelog gate regression suite" bash scripts/test-check-changelog.sh
 run_group "Changelog names every released tag" bash scripts/check-changelog.sh
+run_group "Plugin version gate regression suite" bash scripts/test-check-plugin-version.sh
+run_group "Plugin has one version and valid skills" bash scripts/check-plugin-version.sh
+run_group "Plugin version above the last stable tag" bash scripts/check-plugin-version.sh --main-build
+run_group "Plugin install docs gate regression suite" bash scripts/test-check-plugin-install-docs.sh
+run_group "Documented plugin install works" bash scripts/check-plugin-install-docs.sh
+run_group "RC VSIX fetch regression suite" bash scripts/test-fetch-rc-vsix.sh
+run_group "Bundle skill read counter regression suite" bash scripts/test-count-bundle-skill-reads.sh
+run_group "Plugin hooks run from a path with a space" bash scripts/test-plugin-hooks-path.sh
+run_group "Stable move regression suite" bash scripts/test-advance-stable.sh
 
 # 11. Drift-gate self-test — proves the mirror gate below still fails closed
 #     rather than passing vacuously, the defect it was created to fix (#539),
@@ -1787,6 +1960,12 @@ run_step "Mirror link gate regression suite" \
   bash scripts/test-mirror-link-check.sh
 run_step "Mirror link integrity" python3 scripts/check-mirror-links.py
 
+# 11d. Mirror include expansion (#2764) — Claude Code loads a plugin skill as-is
+#      and never expands `<!-- include: -->`, so the generator does. 11b proves
+#      the mirror matches the generator; this proves the generator expands.
+run_step "Mirror include expansion regression suite" \
+  bash scripts/test-mirror-includes.sh
+
 # Collect every concurrent step before summarising. Placed HERE, at the very
 # end, so a grouped step overlaps the entire serial remainder rather than just
 # its immediate neighbours — the Go suites (284s combined) run underneath the
@@ -1827,7 +2006,7 @@ fi
 
 # LAST: nothing above changed the developer's machine state (#2311). The
 # before-listing was recorded ahead of the first step.
-run_step "machine state untouched by the run (~/.nightgauge, default STATE)" \
+run_step "machine state untouched by the run (~/.nightgauge, default STATE, agent homes)" \
   bash scripts/state-backstop.sh verify "$BACKSTOP_DIR/before" "$BACKSTOP_DIR/after"
 BACKSTOP_DONE=1
 

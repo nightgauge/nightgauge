@@ -263,3 +263,14 @@ func TestGetAdaptiveStallRecoveryEnabled_OutOfPipelineSection(t *testing.T) {
 		t.Error("expected false from in-section value, top-level should be ignored")
 	}
 }
+
+// A second cap kill keeps its own category; the stall category is untouched
+// (#2812).
+func TestKilledAfterRetryCategory(t *testing.T) {
+	if got := killedAfterRetryCategory(TerminalKindStageCapKill); got != "stage-cap-killed-after-retry" {
+		t.Errorf("cap kill category = %q", got)
+	}
+	if got := killedAfterRetryCategory(TerminalKindStallKill); got != "stall-killed-after-retry" {
+		t.Errorf("stall kill category = %q", got)
+	}
+}

@@ -16,21 +16,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { isJudgeVerdict, type JudgeVerdict } from "@nightgauge/sdk";
-
 import { GateMetricRecordSchema, type GateMetricRecord } from "../schemas/gateMetrics";
 import { writeFileAtomic } from "./atomicWrite";
 import { checkoutPath, isUsableWorkspaceRoot } from "./cloneLayout";
 
 /** The gate metrics file's name inside the checkout's `health/` entry. */
 const GATE_METRICS_FILE = "gate-metrics.jsonl";
-
-/**
- * Canonical gate_name for adversarial anti-hallucination judge verdicts (#3918).
- * The Go FeatureValidateGate.Verify() consumes these as ordinary gate-metrics
- * records — anything other than result="pass" trips the deterministic gate.
- */
-const JUDGE_GATE_NAME = "judges" as const;
 
 /** Default retention period in days */
 const DEFAULT_RETENTION_DAYS = 90;
@@ -59,56 +50,6 @@ export class GateMetricsWriter {
       await fs.appendFile(filePath, JSON.stringify(record) + "\n", "utf-8");
     } catch (error) {
       console.warn(`[Nightgauge] Failed to write gate metric record: ${error}`);
-    }
-  }
-
-  /**
-   * Fold the adversarial judge verdicts of an orchestrated feature-validate run
-   * into the gate-metrics file as `{ gate_name: "judges", result }` records — so
-   * an anti-hallucination judge's verdict becomes deterministic gate evidence
-   * the Go `FeatureValidateGate.Verify()` already consumes, with ZERO new Go
-   * scaffolding (#3918).
-   *
-   * Verdict → result mapping (fail-closed): only an explicit `"pass"` verdict
-   * yields `result: "pass"`. Both `"fail"` and `"uncertain"` yield
-   * `result: "fail"` — an unconfirmed claim must not be allowed to slip past the
-   * deterministic gate. The Go gate trips on any `result != "pass"`, so a
-   * rejected (or merely uncertain) judge verdict fails the gate.
-   *
-   * Accepts the raw `WorkflowEvent` node stream and selects judge nodes itself,
-   * so callers can hand it the run's emitted events without pre-filtering. The
-   * judge's `rationale` (truncated to the first line) is carried as
-   * `error_summary` on a failing record for triage. Non-critical: never throws.
-   *
-   * @param workspaceRoot Absolute path to the repository root.
-   * @param issueNumber   Issue the run belongs to (gate records are per-issue).
-   * @param judgeNodes     JudgeVerdict nodes (or a mixed node stream — non-judge
-   *                       nodes are ignored).
-   */
-  static async appendJudgeVerdicts(
-    workspaceRoot: string,
-    issueNumber: number,
-    judgeNodes: ReadonlyArray<JudgeVerdict | { kind: string }>
-  ): Promise<void> {
-    const verdicts = judgeNodes.filter((n): n is JudgeVerdict =>
-      isJudgeVerdict(n as Parameters<typeof isJudgeVerdict>[0])
-    );
-
-    for (const judge of verdicts) {
-      const passed = judge.verdict === "pass";
-      const errorSummary =
-        !passed && judge.rationale ? judge.rationale.split("\n")[0].slice(0, 500) : undefined;
-
-      const record: GateMetricRecord = {
-        schema_version: "1",
-        timestamp: judge.ts,
-        issue_number: issueNumber,
-        gate_name: JUDGE_GATE_NAME,
-        result: passed ? "pass" : "fail",
-        error_summary: errorSummary,
-      };
-
-      await this.appendRecord(workspaceRoot, record);
     }
   }
 

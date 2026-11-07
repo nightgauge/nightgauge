@@ -14,13 +14,20 @@ type RepositorySettings struct {
 	RepoFullName        string `json:"full_name"`
 	Owner               string `json:"owner"`
 	Repo                string `json:"repo"`
+	// SquashMergeCommitTitle / SquashMergeCommitMessage are the repository's
+	// squash defaults (PR_TITLE | COMMIT_OR_PR_TITLE; PR_BODY |
+	// COMMIT_MESSAGES | BLANK).
+	SquashMergeCommitTitle   string `json:"squash_merge_commit_title"`
+	SquashMergeCommitMessage string `json:"squash_merge_commit_message"`
 }
 
 // repoAPIResponse is the relevant subset of the GitHub REST API repository response.
 type repoAPIResponse struct {
-	FullName            string `json:"full_name"`
-	AllowAutoMerge      bool   `json:"allow_auto_merge"`
-	DeleteBranchOnMerge bool   `json:"delete_branch_on_merge"`
+	FullName                 string `json:"full_name"`
+	AllowAutoMerge           bool   `json:"allow_auto_merge"`
+	DeleteBranchOnMerge      bool   `json:"delete_branch_on_merge"`
+	SquashMergeCommitTitle   string `json:"squash_merge_commit_title"`
+	SquashMergeCommitMessage string `json:"squash_merge_commit_message"`
 }
 
 // SettingsService provides repository settings operations via GitHub REST API.
@@ -48,11 +55,13 @@ func (s *SettingsService) GetRepositorySettings(ctx context.Context, owner, repo
 	}
 
 	return &RepositorySettings{
-		AllowAutoMerge:      resp.AllowAutoMerge,
-		DeleteBranchOnMerge: resp.DeleteBranchOnMerge,
-		RepoFullName:        resp.FullName,
-		Owner:               owner,
-		Repo:                repo,
+		AllowAutoMerge:           resp.AllowAutoMerge,
+		DeleteBranchOnMerge:      resp.DeleteBranchOnMerge,
+		SquashMergeCommitTitle:   resp.SquashMergeCommitTitle,
+		SquashMergeCommitMessage: resp.SquashMergeCommitMessage,
+		RepoFullName:             resp.FullName,
+		Owner:                    owner,
+		Repo:                     repo,
 	}, nil
 }
 
@@ -81,4 +90,26 @@ func (s *SettingsService) EnableDeleteBranchOnMerge(ctx context.Context, owner, 
 		return fmt.Errorf("enable delete-branch-on-merge for %s/%s: %w", owner, repo, err)
 	}
 	return nil
+}
+
+// Squash defaults that keep a WIP-preservation commit off the base branch
+// (#2728): the subject is the PR title and the body the curated PR body.
+const (
+	SquashTitlePRTitle  = "PR_TITLE"
+	SquashMessagePRBody = "PR_BODY"
+)
+
+// SquashDefaultsPRTitled reports whether the repository's squash defaults are
+// PR_TITLE/PR_BODY. It only reads them: the merge queue builds its squash
+// commit from these defaults (#2728), and changing repository-wide settings is
+// an operator decision, never a side effect of merging one PR.
+func (s *SettingsService) SquashDefaultsPRTitled(ctx context.Context, owner, repo string) (bool, error) {
+	if owner == "" || repo == "" {
+		return false, fmt.Errorf("read squash defaults: owner and repo are required")
+	}
+	cur, err := s.GetRepositorySettings(ctx, owner, repo)
+	if err != nil {
+		return false, err
+	}
+	return cur.SquashMergeCommitTitle == SquashTitlePRTitle && cur.SquashMergeCommitMessage == SquashMessagePRBody, nil
 }

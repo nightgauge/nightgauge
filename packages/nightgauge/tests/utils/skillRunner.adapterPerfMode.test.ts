@@ -377,3 +377,32 @@ describe("openai-compatible adapter — agentic gate bars pipeline dispatch (#57
     );
   });
 });
+
+// #2848: the stage spawn starts from the host env less the launching Claude
+// Code session's residue, whatever the adapter, and what a stage needs on
+// purpose still arrives.
+describe("stage spawn env - launching-session residue (#2848)", () => {
+  beforeEach(() => {
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "gemini";
+    setExistsForAdapter("gemini");
+    vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+  });
+
+  it("strips CLAUDECODE and CLAUDE_* but keeps the exceptions", () => {
+    process.env.CLAUDECODE = "1";
+    process.env.CLAUDE_EFFORT = "high";
+    process.env.CLAUDE_CODE_SESSION_ID = "session-x";
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "auth-value";
+    process.env.CLAUDE_CONFIG_DIR = "/home/op/claude-home";
+
+    runStageSkillHeadless("feature-dev", 42, {});
+
+    const env = lastSpawnEnv();
+    expect(env.CLAUDECODE).toBeUndefined();
+    expect(env.CLAUDE_EFFORT).toBeUndefined();
+    expect(env.CLAUDE_CODE_SESSION_ID).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("auth-value");
+    expect(env.CLAUDE_CONFIG_DIR).toBe("/home/op/claude-home");
+    expect(env.NIGHTGAUGE_GEMINI_MODEL).toBeTruthy();
+  });
+});

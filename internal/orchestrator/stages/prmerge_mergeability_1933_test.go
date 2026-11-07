@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/github"
 )
@@ -177,5 +178,83 @@ func TestWaitForMergeability_TransientErrorDoesNotEndTheWait(t *testing.T) {
 	}
 	if got.Mergeable != "MERGEABLE" {
 		t.Errorf("Mergeable = %q, want MERGEABLE — a transient fetch error must not end the wait", got.Mergeable)
+	}
+}
+
+// The #2726 shape (#2730): CI finishes, and the very next read is UNKNOWN
+// because main just moved. That used to reach Decide and punt
+// `not-mergeable: UNKNOWN` into a full LLM stage.
+func TestDeterministicRunner_UnknownAfterCIWait_RereadsThenMerges(t *testing.T) {
+	blocked := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", ReviewDecision: "APPROVED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci"}}}
+	unknown := PRViewSnapshot{State: "OPEN", Mergeable: github.MergeableUnknown, MergeStateStatus: "UNKNOWN", ReviewDecision: "APPROVED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: "SUCCESS"}}}
+	clean := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", ReviewDecision: "APPROVED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: "SUCCESS"}}}
+	seq := &sequenceGh{responses: []sequenceResp{
+		{snap: blocked}, // initial fetch → CI in flight
+		{snap: unknown}, // CI wait ends: no longer pending, main just moved
+		{snap: unknown}, // mergeability poll 1 → still computing
+		{snap: clean},   // mergeability poll 2 → verdict landed
+		{snap: PRViewSnapshot{State: "MERGED"}},
+	}}
+	r := newRunnerWithSeqMergeability(seq, 42, 5, 5)
+
+	res, err := r.Run(context.Background(), 100, "owner/repo", "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res.Path != PathMerged {
+		t.Fatalf("Path = %q (reason %q), want merged: an UNKNOWN after the CI wait must be re-read", res.Path, res.Reason)
+	}
+	if seq.mergeCalls != 1 {
+		t.Fatalf("mergeCalls = %d, want 1", seq.mergeCalls)
+	}
+}
+
+func TestDeterministicRunner_UnknownAfterCIWait_SurvivorPuntsNamedReason(t *testing.T) {
+	blocked := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", ReviewDecision: "APPROVED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci"}}}
+	unknown := PRViewSnapshot{State: "OPEN", Mergeable: github.MergeableUnknown, MergeStateStatus: "UNKNOWN", ReviewDecision: "APPROVED"}
+	seq := &sequenceGh{responses: []sequenceResp{{snap: blocked}, {snap: unknown}}}
+	r := newRunnerWithSeqMergeability(seq, 42, 3, 5)
+
+	res, err := r.Run(context.Background(), 100, "owner/repo", "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res.Path != PathPunt || res.Reason != ReasonMergeabilityUnresolved {
+		t.Fatalf("got %q %q, want punt %q", res.Path, res.Reason, ReasonMergeabilityUnresolved)
+	}
+}
+
+// UNKNOWN can land as pending CI again (main moved and CI restarted): that is
+// another wait, not `dirty-merge-state: BLOCKED`.
+func TestDeterministicRunner_UnknownThenPendingCI_WaitsAgain(t *testing.T) {
+	blocked := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", ReviewDecision: "APPROVED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci"}}}
+	unknown := PRViewSnapshot{State: "OPEN", Mergeable: github.MergeableUnknown, MergeStateStatus: "UNKNOWN", ReviewDecision: "APPROVED"}
+	clean := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", ReviewDecision: "APPROVED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: "SUCCESS"}}}
+	seq := &sequenceGh{responses: []sequenceResp{
+		{snap: blocked}, {snap: unknown}, {snap: blocked}, {snap: clean},
+		{snap: PRViewSnapshot{State: "MERGED"}},
+	}}
+	r := newRunnerWithSeqMergeability(seq, 42, 5, 5)
+
+	res, err := r.Run(context.Background(), 100, "owner/repo", "/tmp")
+	if err != nil || res.Path != PathMerged {
+		t.Fatalf("Path = %q (reason %q), err %v, want merged", res.Path, res.Reason, err)
+	}
+}
+
+func TestMergeabilityDelay_DoublesToTheCapAndBudgetsNinetySeconds(t *testing.T) {
+	r := NewDeterministicRunner()
+	want := []time.Duration{2, 4, 8, 16, 16}
+	for i, w := range want {
+		if got := r.mergeabilityDelay(i); got != w*time.Second {
+			t.Errorf("delay %d = %s, want %s", i, got, w*time.Second)
+		}
+	}
+	var total time.Duration
+	for i := 0; i < r.mergeabilityPollMax; i++ {
+		total += r.mergeabilityDelay(i)
+	}
+	if total < 90*time.Second {
+		t.Fatalf("mergeability budget = %s, want at least 90s", total)
 	}
 }

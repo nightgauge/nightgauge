@@ -6,7 +6,7 @@ description: Analyze pipeline execution history for efficiency insights - comput
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.4.0"
+  version: "1.5.0"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task
@@ -47,12 +47,12 @@ results into human-readable findings.
 
 ## Invocation
 
-| Tool        | Command                                                    |
-| ----------- | ---------------------------------------------------------- |
-| Claude Code | `/nightgauge:pipeline-audit [options]`                     |
-| Copilot     | Invoke via Agent Skills extension                          |
-| Cursor      | Run via Agent Skills or direct SKILL.md                    |
-| Standalone  | `claude --skill skills/nightgauge-pipeline-audit/SKILL.md` |
+| Tool        | Command                                  |
+| ----------- | ---------------------------------------- |
+| Claude Code | `/nightgauge:pipeline-audit [options]`   |
+| Copilot     | Invoke via Agent Skills extension        |
+| Cursor      | Run via Agent Skills or direct SKILL.md  |
+| Headless    | `claude -p "/nightgauge:pipeline-audit"` |
 
 ## Arguments
 
@@ -536,6 +536,29 @@ assessment records:
 
 Gracefully skip if no assessments directory exists.
 
+#### Step 3.13: Inquiry Scorecard (Platform, Optional)
+
+The inquiry scorecard is computed by the platform, not by this skill. Read it
+through the daemon, which holds the signed-in session:
+
+```bash
+SCORECARD=$(nightgauge inquiry scorecard --json 2>/tmp/inquiry-scorecard.err)
+SCORECARD_EXIT=$?
+```
+
+- Non-zero exit (1 platform error, 3 daemon unreachable, 4 no platform
+  configured, 5 not signed in): skip the section with one line quoting the
+  first line of stderr, and set `inquiry_scorecard` to `null`.
+- `overall.answers == 0` and `byClass` empty: skip with "no inquiry answers in
+  window" and set `inquiry_scorecard` to `null`.
+- Otherwise copy the object into `inquiry_scorecard` unchanged and render the
+  section from it: window, overall impact ratio and counts, per-class table,
+  median time to answer, set waive/skip rates, kills and spend avoided,
+  cold-start vs history-rich, and weak classes with their recommendation.
+
+Display only the platform's numbers. Do not compute, derive or re-round any
+of them, and say in the section that they are the platform's.
+
 ---
 
 ### Phase 4: Generate Findings (Probabilistic)
@@ -720,6 +743,7 @@ Assemble the full report:
     "retry_cost_premium_pct": "number",
     "flagged_stages": ["string (stages with retry rate > 20%)"]
   },
+  "inquiry_scorecard": { "...": "platform scorecard object, or null" },
   "trends": {
     "cost_trend": "decreasing | stable | increasing",
     "efficiency_trend": "improving | stable | degrading",
@@ -887,16 +911,17 @@ nightgauge issue create --repo "$REPO" \
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
@@ -1050,6 +1075,7 @@ The full JSON report follows this structure:
     "retry_cost_premium_pct": "number",
     "flagged_stages": ["string (stages with retry rate > 20%)"]
   },
+  "inquiry_scorecard": "object | null (the platform's scorecard, unchanged; null when skipped)",
   "trends": {
     "cost_trend": "string (decreasing | stable | increasing)",
     "efficiency_trend": "string (improving | stable | degrading)",

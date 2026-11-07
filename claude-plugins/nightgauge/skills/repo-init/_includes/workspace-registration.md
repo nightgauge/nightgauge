@@ -15,6 +15,7 @@ immediately.
 ```bash
 # Find the workspace YAML (usually in the primary repo)
 WORKSPACE_YAML=""
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 PARENT_DIR="$(dirname "$REPO_ROOT")"
 
 for sibling in "$PARENT_DIR"/*/; do

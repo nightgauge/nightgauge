@@ -4,10 +4,9 @@
 
 **Product**: Nightgauge — AI-powered Issue-to-PR pipeline.
 
-**Architecture**: Three-layer stack: portable Skills (SKILL.md), TypeScript SDK
-(`packages/nightgauge-sdk/`), and VSCode Extension
-(`packages/nightgauge/`). Six pipeline stages execute as isolated
-subagents with JSON context handoff files.
+**Architecture**: Three-layer stack: portable Skills (SKILL.md), a TypeScript
+SDK, and a VSCode Extension, over a Go deterministic layer. Six pipeline
+stages execute as isolated subagents with JSON context handoff files.
 
 **Execution model**: Each pipeline stage runs in a fresh conversation. Context
 is passed exclusively through JSON files in the clone's pipeline state
@@ -16,9 +15,8 @@ history. Every stage reads its predecessor's context file
 and writes its own.
 
 **Configuration**: 6-tier config system — built-in defaults → global config →
-project config → local config → env vars → CLI flags. Schema defined in
-`packages/nightgauge/src/config/schema.ts`. Documentation in
-`docs/CONFIGURATION.md`.
+project config → local config → env vars → CLI flags. Reference:
+[docs/CONFIGURATION.md](../../docs/CONFIGURATION.md).
 
 **Standards**: Code standards in `docs/CODE_STANDARDS.md`. Security rules in
 `standards/security.md`. Testing patterns in `docs/TESTING.md`. Git workflow in
@@ -83,7 +81,7 @@ This skill completes the Issue-to-PR pipeline by:
 
 | Tool           | Command                             |
 | -------------- | ----------------------------------- |
-| Claude Code    | `/nightgauge-pr-merge` (via plugin) |
+| Claude Code    | `/nightgauge:pr-merge` (via plugin) |
 | OpenAI Codex   | `$nightgauge-pr-merge`              |
 | GitHub Copilot | Invoke via Agent Skills             |
 | Cursor         | Invoke via Agent Skills             |
@@ -161,10 +159,10 @@ attempt to populate that section itself; leave the placeholder from
 
 Pipeline skills read configuration from `.nightgauge/config.yaml`.
 
-**Full reference**: See `docs/CONFIGURATION.md` for the complete configuration
-guide including the 6-tier precedence chain, all config options, and examples.
-
-**Schema definition**: `packages/nightgauge/src/config/schema.ts`
+**Full reference**: See [docs/CONFIGURATION.md](../../docs/CONFIGURATION.md)
+for the complete configuration guide including the 6-tier precedence chain, all
+config options, and examples. `nightgauge config show` prints the resolved
+configuration for the current repository.
 
 **Key config sections by stage**:
 
@@ -342,57 +340,61 @@ Three-layer check:
 3. **Project environment** — the checks the project declares under
    `preflight.environment` (#101); opt-in, silent when none are declared
 
-The binary discovery cascade below is **provider-neutral** (#4029): it works
+The binary discovery cascade below is **provider-neutral** (issue 4029): it works
 identically under every adapter (Claude, Codex, Gemini, …) and references no
 VSCode-extension-specific path. The host that spawns the skill (the VSCode
 extension's `skillRunner`, or the Go `nightgauge` binary in auto/CLI mode)
 resolves the binary authoritatively and exports `NIGHTGAUGE_BIN`, which
-this cascade honors first. The remaining steps (PATH, repo `bin/`, the
-worktree's canonical-repo `bin/`, `~/go/bin`) are fallbacks for direct or
-terminal invocation.
+this cascade honors first. The remaining steps (PATH, the development-only repo
+`bin/` and worktree canonical-repo `bin/`, `~/go/bin`) are fallbacks for direct
+or terminal invocation.
 
 This intentionally **diverges** from
-`claude-plugins/nightgauge/hooks/lib/guard.sh` (#3262 → #4029): guard.sh is
+`claude-plugins/nightgauge/hooks/lib/guard.sh` (issue 3262 → issue 4029): guard.sh is
 Claude-Code-only and retains a trailing `~/.vscode/extensions/...` glob to serve
 the standalone-terminal-Claude case (where no host exports `NIGHTGAUGE_BIN`).
 Skills must stay portable Markdown and cannot reference that VSCode-only path —
-so the shared resolution order (`NIGHTGAUGE_BIN` → PATH → repo → canonical
-→ `~/go/bin`) stays in sync, and only guard.sh carries the extra Claude-only
+so the shared resolution order (`NIGHTGAUGE_BIN` → PATH → gated repo → gated
+canonical → `~/go/bin`) stays in sync, and only guard.sh carries the extra Claude-only
 fallback. The `nightgauge preflight skill-portability` gate enforces that
-no skill reintroduces a `.vscode/extensions` path.
+no skill reintroduces a `.vscode/extensions` path, and that every cascade keeps
+the `NIGHTGAUGE_DEV_REPO_BIN` gate (#2758): a foreign repository's
+`bin/nightgauge` must never run.
 
 After the cascade resolves `$BINARY`, the preflight prepends
 `dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
 invocations later in the same skill body resolve through PATH rather than
-failing with "command not found" (#3262).
+failing with "command not found" (issue 3262).
 
 ```bash
-# Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → repo
-# bin → canonical-repo bin → ~/go/bin). No VSCode-extension path — see #4029.
+# Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → gated repo
+# bin → gated canonical-repo bin → ~/go/bin). No VSCode-extension path — see issue 4029.
+# Repo bins need NIGHTGAUGE_DEV_REPO_BIN=1 and a verified core checkout (#2758).
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 if [ -z "$BINARY" ]; then
-  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH, bin/nightgauge, canonical-repo bin, or ~/go/bin" >&2
+  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH or ~/go/bin" >&2
   echo "" >&2
   echo "Install via: go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest" >&2
   echo "Or download from: https://github.com/nightgauge/nightgauge/releases" >&2
   echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
   exit 1
 fi
-# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (#3262).
+# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (issue 3262).
 export PATH="$(dirname "$BINARY"):$PATH"
 
 # Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
@@ -402,7 +404,7 @@ export PATH="$(dirname "$BINARY"):$PATH"
 # concurrent sessions/workspaces owned by different GitHub users each use their
 # own token. GH_TOKEN outranks GITHUB_TOKEN and the gh keyring. Only resolve when
 # unset (an upstream env value — e.g. the VSCode extension's terminal env —
-# wins); never fail preflight over it. Mirrors hooks/lib/guard.sh (sync, #3262).
+# wins); never fail preflight over it. Mirrors hooks/lib/guard.sh (sync, issue 3262).
 if [ -z "${GH_TOKEN:-}" ]; then
   IB_REPO_TOKEN="$("$BINARY" forge auth token 2>/dev/null || true)"
   if [ -n "$IB_REPO_TOKEN" ]; then
@@ -615,23 +617,24 @@ to ad-hoc polling.
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
 TIMEOUT=${ARG_TIMEOUT:-10}  # minutes (Go binary --timeout is in minutes)
 
 if [ -z "$BINARY" ]; then
-  echo "ERROR: nightgauge binary not found in PATH or bin/nightgauge" >&2
+  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH or ~/go/bin" >&2
   echo "This binary is required for the CI check gate." >&2
   exit 1
 fi
@@ -901,28 +904,29 @@ done
 One session makes one fix. After it pushes, Step 5 hands the PR back to the
 orchestrator: the deterministic pr-merge runner waits for CI and merges or
 enqueues. If CI fails again, the orchestrator runs this skill again. It stops
-after `pr.auto_fix_max_attempts` sessions (default 2, lowered in #3108;
+after `pr.auto_fix_max_attempts` sessions (default 2, lowered in issue 3108;
 `NIGHTGAUGE_PR_AUTO_FIX_MAX_ATTEMPTS` overrides it) and fails the stage with
 `auto-fix-exhausted`. Do not count attempts or poll CI here (#2504).
 
 #### Step 0: Fast-Path Merge State Check
 
-Before each fix iteration, check whether the PR already merged out-of-band (e.g. a previous attempt's push triggered a successful CI run that auto-merged, or a teammate manually merged). This is the cheapest possible deterministic guard against the failure mode in #3108: the LLM kept iterating on E2E selectors after the PR had already merged, burning ~$8 in the 60s after the work shipped.
+Before each fix iteration, check whether the PR already merged out-of-band (e.g. a previous attempt's push triggered a successful CI run that auto-merged, or a teammate manually merged). This is the cheapest possible deterministic guard against the failure mode in issue 3108: the LLM kept iterating on E2E selectors after the PR had already merged, burning ~$8 in the 60s after the work shipped.
 
 ```bash
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
@@ -1019,9 +1023,18 @@ deterministic retry of a purely transient failure.
 
 #### Step 1: Fetch Failure Logs
 
-Use `$HOOKS_DIR/fetch-ci-failure-logs.sh "$PR_NUMBER"` to retrieve logs. Parse
-`total_failures`, `logs_fetched`, and extract first failure's `name`, `logs`,
-and `logs_url` from the JSON result.
+Find the failed workflow run for the PR, then fetch its logs with the binary.
+`ci logs` takes a run ID, not a PR number:
+
+```bash
+FAILED_RUN=$("$BINARY" pr ci-wait "$PR_NUMBER" --timeout 1 --json 2>/dev/null \
+  | jq -r '[.checks[] | select(.conclusion == "FAILURE")][0].detailsUrl // empty' \
+  | grep -oE '/runs/[0-9]+' | grep -oE '[0-9]+')
+[ -n "$FAILED_RUN" ] && CI_LOGS=$("$BINARY" ci logs "$FAILED_RUN" --json)
+```
+
+The JSON carries `runId`, `status`, `url` and `content` (the failure log text).
+Take the failing check's `name` from the `ci-wait` checks list above.
 
 #### Step 2: Classify Failure Type
 
@@ -1126,7 +1139,7 @@ plainly. Example output:
 
 This step is the highest-leverage addition to auto-fix: a deterministic check
 that prevents the LLM from chasing inherited failures it has no signal to
-recognize. Reference: #3662 (Flutter PR #218 burned $12 hitting `num_turns: 40`
+recognize. Reference: issue 3662 (Flutter PR #218 burned $12 hitting `num_turns: 40`
 on a stack of 22 pre-existing failures it could not have known were not its).
 
 #### Step 3: Generate Fix (Probabilistic - AI)
@@ -1319,29 +1332,58 @@ Ready if `APPROVED` and no critical issues. Not ready if `REVIEW_REQUIRED` or
 printf '<!-- phase:start name="address-feedback" index=6 total=13 stage="pr-merge" -->\n'
 ```
 
+The binary decides what a review finding may do, and how many rounds a PR may
+spend. A green, mergeable PR enqueues; remaining findings become issues, not
+more commits on this PR (#2730). Ask it first:
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+REVIEW_GATE=$(nightgauge pr-stage review-gate "$ISSUE_NUMBER" --json)
+printf '%s\n' "$REVIEW_GATE" | jq '{proceed, verdict, reason, rounds, hold, filed}'
+```
+
 #### Step 5.0: Check for Fast-Track Merge
 
-Fast-track conditions (all must be true): `READY_TO_MERGE`, no critical/major
-issues, CI passed, PR mergeable.
+Fast-track conditions (all must be true): `READY_TO_MERGE`, `verdict` is
+`enqueue`, CI passed, PR mergeable.
 
 If `FAST_TRACK=true`, skip Steps 5.1-5.4 and proceed to Phase 6.
 
-#### Step 5.1: Handle Critical Issues
+#### Step 5.1: Handle Hold Findings
 
-If critical issues exist, they MUST be addressed.
+`verdict` `fix-round` lists the findings in `hold`: every blocker, plus any
+correctness major on a documented user path. Those are the ONLY findings this
+stage fixes.
 
-#### Step 5.2: Handle Major Issues
+#### Step 5.2: Leave Every Other Finding Alone
 
-Major issues should typically be fixed but user can override.
+Do not fix any other major or nitpick here, whether or not it looks easy. The
+gate files each remaining major as an issue before the merge, and every extra
+commit re-runs CI and restarts the review.
 
-#### Step 5.3: Handle Minor Issues
+#### Step 5.3: Stop on a Refusal
 
-Minor issues are non-blocking. If `--auto-fix` flag is set, skip prompts.
+`verdict` `hold-at-cap` or `wait-round`, or any `path` of `refused`, is terminal
+for this stage: report the `reason` and stop. Do not start another round and do
+not merge. `MaxReviewFixRounds` is a hard cap for the owner to look at.
 
-#### Step 5.4: Apply Fixes
+#### Step 5.4: Apply One Fix Round
 
-Make changes, stage, commit with `fix(#$ISSUE_NUMBER): address review feedback`,
-push, and wait for CI to re-run.
+Wrap the fix in a round. `begin` refuses past the cap, and that refusal is final.
+While a round is open nothing may enqueue, so `end` only after the push:
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+nightgauge pr-stage review-round begin "$ISSUE_NUMBER" || exit 1
+# Fix the `hold` findings, stage, commit with
+# `fix(#$ISSUE_NUMBER): address review feedback`, and push.
+nightgauge pr-stage review-round end "$ISSUE_NUMBER"
+```
+
+Run one round, then wait for CI to re-run on the new head and continue to the
+next phase. Never loop back to Phase 3.
 
 ---
 
@@ -1351,7 +1393,7 @@ push, and wait for CI to re-run.
 printf '<!-- phase:start name="freshness-check" index=7 total=13 stage="pr-merge" -->\n'
 ```
 
-**PURPOSE**: Proactively rebase the feature branch onto the latest base branch
+**PURPOSE**: Proactively merge the latest base branch into the feature branch
 BEFORE attempting merge. This prevents the reactive conflict resolution in Phase
 6 from ever being needed in most cases. Critical for epic batch processing where
 concurrent sub-issues merge and shift main/epic branch forward.
@@ -1367,6 +1409,12 @@ branch was being worked on.
 attempts. It is especially critical during epic batch processing where multiple
 sub-issues merge concurrently.
 
+**Merge, never rebase (#2699)**: the branch may already back an open PR. A
+rebased tip stops descending from origin's tip, so the next push is rejected as
+non-fast-forward and the run ends `branch_forked`. Merging the base keeps
+origin's tip an ancestor, so a plain push always fast-forwards. Never rebase
+the branch and never force-push it.
+
 ```bash
 # Determine base branch (epic branch or main)
 FRESHNESS_BASE="${BASE_BRANCH:-main}"
@@ -1375,35 +1423,79 @@ echo "Checking freshness against $FRESHNESS_BASE..."
 # Fetch latest state of the base branch
 git fetch origin "$FRESHNESS_BASE" 2>/dev/null
 
+# An open merge with every path resolved and staged is concluded, never
+# aborted: committing it loses nothing (#2755). One with unmerged paths, or
+# whose commit fails, or that merges anything not already in the base, is left
+# exactly as found for the guard below.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && [ -z "$(git ls-files -u 2>/dev/null)" ] \
+  && git merge-base --is-ancestor MERGE_HEAD "origin/$FRESHNESS_BASE" 2>/dev/null; then
+  if git commit --no-edit >/dev/null 2>&1; then
+    echo "Concluded the open merge with its staged resolution."
+    # Push it now: the branch then reads as fresh below, so the behind path's
+    # push never runs, and pr-merge checks the remote branch. Best-effort,
+    # fork tokens filtered, as on the behind path (#2749).
+    PUSH_ERR=$(mktemp)
+    if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+      echo "WARNING: Failed to push the concluded merge. Continuing with the local merge."
+      grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
+    fi
+    rm -f "$PUSH_ERR"
+  fi
+fi # open merge
+
 # Count commits on base that are NOT in our branch
 BEHIND_COUNT=$(git rev-list --count "HEAD..origin/$FRESHNESS_BASE" 2>/dev/null || echo "0")
 
 if [ "$BEHIND_COUNT" -gt 0 ]; then
-  echo "Branch is $BEHIND_COUNT commit(s) behind origin/$FRESHNESS_BASE. Rebasing..."
+  echo "Branch is $BEHIND_COUNT commit(s) behind origin/$FRESHNESS_BASE. Merging the base..."
 
-  # Store current branch name
   CURRENT_BRANCH=$(git branch --show-current)
 
-  # Attempt rebase
-  if git rebase "origin/$FRESHNESS_BASE" 2>/dev/null; then
-    echo "Rebase successful. Branch is now up-to-date with $FRESHNESS_BASE."
-
-    # Force-push the rebased branch (with lease for safety)
-    if ! git push --force-with-lease origin "$CURRENT_BRANCH" 2>/dev/null; then
-      echo "WARNING: Failed to push rebased branch. Continuing with local rebase."
+  if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+    # A merge is still open: it has unmerged paths, or its commit failed above.
+    # Merging again fails with "You have not concluded your merge", and
+    # aborting would discard whatever resolution is staged (#2755). Leave it
+    # exactly as found: no merge, no abort.
+    echo "A merge is already in progress (MERGE_HEAD $(git rev-parse --short MERGE_HEAD)). Leaving it untouched."
+    if [ -n "$(git ls-files -u 2>/dev/null)" ]; then
+      echo "The open merge still has unmerged paths."
+    else
+      echo "The open merge has every path resolved and staged."
     fi
+    if git merge-base --is-ancestor "origin/$FRESHNESS_BASE" MERGE_HEAD 2>/dev/null; then
+      echo "The open merge already brings in origin/$FRESHNESS_BASE."
+    else
+      echo "The open merge does not bring in origin/$FRESHNESS_BASE."
+    fi
+    echo "FRESHNESS_CHECK_FAILED=true"
+    FRESHNESS_CHECK_FAILED=true
+  elif git merge --no-edit -m "Merge origin/$FRESHNESS_BASE into $CURRENT_BRANCH" "origin/$FRESHNESS_BASE" 2>/dev/null; then
+    echo "Merge successful. Branch is now up-to-date with $FRESHNESS_BASE."
+    # Plain push; push-branch never forces and recovers a self-inflicted fork.
+    # Best-effort: the cause is printed with the fork tokens filtered out, so a
+    # rejection here cannot stamp the `[branch-forked]` terminal marker on a
+    # stage that carries on (#2749). The filter copies the `branch_forked`
+    # clauses of internal/terminalkind/table.json.
+    PUSH_ERR=$(mktemp)
+    # Exit 4 is a credential refusal (#2742): its `[push-auth-failed]` line
+    # passes the filter, so a later push surfaces the same cause.
+    if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+      echo "WARNING: Failed to push merged branch. Continuing with the local merge."
+      grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
+    fi
+    rm -f "$PUSH_ERR"
   else
-    # Rebase failed — check if conflicts are resolvable.
+    # Merge stopped on conflicts — check if they are resolvable.
     #
     # Enumerated with `ls-files -u -z`, NOT `git diff --name-only
     # --diff-filter=U`: the latter C-quotes any path with a non-ASCII or
     # control byte, so a conflict in `café.txt` arrives as the literal
     # 12-character string `"caf\303\251.txt"` and the `git add` below fails on
     # a path that does not exist — leaving that conflict silently unresolved
-    # and `rebase --continue` failing on it (#301). `-z` emits raw path bytes
-    # with a NUL terminator, so neither quoting nor a newline in a path can
-    # confuse the loop. git sorts the output by path, so skipping a repeat of
-    # the previous path collapses that path's index stages to one entry.
+    # (#301). `-z` emits raw path bytes with a NUL terminator, so neither
+    # quoting nor a newline in a path can confuse the loop. git sorts the
+    # output by path, so skipping a repeat of the previous path collapses that
+    # path's index stages to one entry.
     #
     # Append with `+=`, never `CONFLICT_FILES[$N]=` from N=0: zsh arrays are
     # 1-indexed and abort the whole loop with "assignment to invalid subscript
@@ -1421,19 +1513,16 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
     CONFLICT_COUNT=${#CONFLICT_FILES[@]}
 
     if [ "$CONFLICT_COUNT" -gt 0 ]; then
-      printf 'Rebase conflicts detected in:'
+      printf 'Merge conflicts detected in:'
       printf ' %s' "${CONFLICT_FILES[@]}"
       printf '\n'
       echo "Attempting AI-assisted conflict resolution..."
 
       # For each conflicted file:
       # 1. Read the file with conflict markers
-      # 2. Understand BOTH sides. git's marker labels are relative to what is
-      #    CHECKED OUT, and a rebase checks out the base and replays your
-      #    commits onto it — so under `git rebase origin/$FRESHNESS_BASE` the
-      #    `<<<<<<< HEAD` side is the BASE and the `>>>>>>> <sha>` side is this
-      #    branch's own feature work. That is the inverse of a merge; do not
-      #    read "HEAD" as "mine" (#301).
+      # 2. Understand BOTH sides. Under `git merge`, the `<<<<<<< HEAD` side
+      #    is this branch's own feature work and the `>>>>>>> origin/<base>`
+      #    side is the base being merged in.
       # 3. Produce a logically correct merge preserving BOTH changes
       # 4. Stage the resolved file
       #
@@ -1448,23 +1537,39 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
         git add "$FILE"
       done
 
-      if git rebase --continue 2>/dev/null; then
+      if git commit --no-edit 2>/dev/null; then
         echo "Conflict resolution successful."
-        git push --force-with-lease origin "$CURRENT_BRANCH" 2>/dev/null || true
+        PUSH_ERR=$(mktemp)
+        if ! nightgauge git push-branch 2>"$PUSH_ERR"; then
+          echo "WARNING: Failed to push merged branch. Continuing with the local merge."
+          grep -viE 'branch[-_]forked|non-fast-forward|push rejected|fetch first' "$PUSH_ERR" || true
+        fi
+        rm -f "$PUSH_ERR"
       else
-        echo "ERROR: Rebase --continue failed after conflict resolution."
-        git rebase --abort 2>/dev/null || true
+        # Never abort here: the resolution is staged, and aborting would throw
+        # it away (#2755). The merge stays open for the caller to commit.
+        echo "ERROR: Committing the merge failed after conflict resolution."
+        echo "The merge is left open with the resolution staged; commit it to conclude."
         echo "FRESHNESS_CHECK_FAILED=true"
-        echo "Manual conflict resolution required. Base branch has diverged significantly."
         # Do NOT exit — let the calling phase decide how to handle
         FRESHNESS_CHECK_FAILED=true
       fi
     else
-      git rebase --abort 2>/dev/null || true
-      echo "ERROR: Rebase failed with no conflict markers. Unexpected state."
+      # The open-merge probe above ran first, so a MERGE_HEAD here is the one
+      # this block just created with nothing resolved: undoing it loses nothing.
+      if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+        git merge --abort 2>/dev/null || true
+      fi
+      echo "ERROR: Merge failed with no conflict markers. Unexpected state."
       FRESHNESS_CHECK_FAILED=true
     fi
   fi
+elif git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  # Not behind, but a merge is still open (unmerged paths, or its commit failed
+  # above). The base is in, yet the tree is not committed: report it (#2755).
+  echo "A merge is still in progress (MERGE_HEAD $(git rev-parse --short MERGE_HEAD)). Leaving it untouched."
+  echo "FRESHNESS_CHECK_FAILED=true"
+  FRESHNESS_CHECK_FAILED=true
 else
   echo "Branch is up-to-date with origin/$FRESHNESS_BASE."
 fi
@@ -1473,17 +1578,22 @@ fi
 **Output variables**:
 
 - `BEHIND_COUNT` — how many commits the branch was behind (0 = already fresh)
-- `FRESHNESS_CHECK_FAILED` — set to `true` if rebase + conflict resolution
-  failed. The calling phase should decide whether to abort or continue.
+- `FRESHNESS_CHECK_FAILED` — set to `true` if the merge + conflict resolution
+  failed, or if a merge was already open and the check left it alone. The
+  calling phase should decide whether to abort or continue.
 
-**Safety**: Uses `--force-with-lease` (not `--force`) to prevent overwriting
-concurrent pushes. If the push fails, the local rebase is still valid for
-build/test validation.
+**Safety**: Merges the base and pushes with `nightgauge git push-branch`, which
+never forces. If the push fails, the cause is printed without the terminal
+marker, and the local merge is still valid for build/test validation. The block
+never aborts a merge it did not start, and never aborts once a resolution is
+staged: a fully staged open merge is committed and pushed, any other open merge
+is left as found, and a failed commit leaves the staged resolution in place
+(#2755).
 
 
 If `FRESHNESS_CHECK_FAILED=true`, proceed to Phase 6 anyway — the reactive
 conflict resolution (Step 6.1.5) may still succeed with a different strategy.
-If the rebase succeeded and pushed, CI re-runs on the new head. Do not wait
+If the merge succeeded and pushed, CI re-runs on the new head. Do not wait
 for it here: hand back to the deterministic merge path, which waits for CI and
 merges (#2504):
 
@@ -1493,7 +1603,7 @@ if [ "$BEHIND_COUNT" -gt 0 ] && [ "$FRESHNESS_CHECK_FAILED" != "true" ] && [ "$C
   jq -n --argjson pr "$PR_NUMBER" --arg sha "$(git rev-parse HEAD)" \
     '{result: "fix-pushed", pr_number: $pr, head_sha: $sha, attempt: 0}' \
     | nightgauge layout write pipeline "pr-merge-fix-${ISSUE_NUMBER}.json" >/dev/null
-  echo "Branch rebased and pushed — handing back to the deterministic merge path."
+  echo "Base merged and pushed — handing back to the deterministic merge path."
   exit 0
 fi
 ```
@@ -1511,8 +1621,9 @@ printf '<!-- phase:start name="merge" index=8 total=13 stage="pr-merge" -->\n'
 
 Run the ruleset pre-check, final mergeable verification, the knowledge
 conformance gate (every entry this issue wrote must carry the frontmatter
-contract), conflict resolution, merge-strategy selection, the deterministic
-Go-binary merge (with its `blockedBy` gate), and merge verification.
+contract), conflict resolution, merge-strategy selection, the review gate, the
+deterministic Go-binary merge (with its `blockedBy` gate), and merge
+verification.
 
 > **NEVER pass `--admin` (or `--auto`) to any merge command — no admin bypass
 > exists in this pipeline.** A merge blocked by branch protection or required
@@ -1587,16 +1698,17 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"

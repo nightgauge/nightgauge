@@ -714,7 +714,9 @@ export const PipelineConfigSchema = z.object({
    * computed `stall_threshold × stall_kill_multiplier` value as the idle-kill
    * gate. Returns undefined when unset, preserving the existing multiplier-
    * derived behavior. Set to 480000 (8 min) to cap the default 20-min idle
-   * kill on feature-validate.
+   * kill on feature-validate. Accepted form: a non-negative integer of
+   * milliseconds; a unit string such as `8m` is rejected by both the Go and
+   * the TypeScript reader (#2714).
    *
    * @env NIGHTGAUGE_PIPELINE_STALL_IDLE_MS
    * @see Issue #3484 — Fix model stall after tool result
@@ -730,10 +732,13 @@ export const PipelineConfigSchema = z.object({
    * fast-fail kills the stage. Applies even to a soft `allowed_warning` that
    * precedes the CLI hanging on a later hard-limited request. Capped below the
    * stage's normal idle budget, so a quota signal only makes a stage fail
-   * faster, never slower. Default: 900000 (15 min).
+   * faster, never slower. Time on a live background task does not count, and
+   * a kill after only a soft signal is a stall, not quota exhaustion. Default:
+   * 900000 (15 min).
    *
    * @env NIGHTGAUGE_PIPELINE_QUOTA_SIGNAL_IDLE_MS
    * @see Issue #3702 — soft quota signal preceded an 81-min idle hang.
+   * @see Issue #2711 — a gate wait was killed and set a day-long global cooldown.
    */
   quota_signal_idle_ms: z.number().int().min(0).optional(),
   /**
@@ -2811,7 +2816,7 @@ export type UIWarningsConfig = z.infer<typeof UIWarningsConfigSchema>;
  * Plugins configuration
  *
  * @behavior
- * - `auto_prompt`: Auto-prompt to install Claude plugins, Codex commands, and Grok skills
+ * - `auto_prompt`: Auto-prompt to install Claude plugins and Codex, Grok and OpenCode skills
  * - `marketplace_url`: Git URL for plugin marketplace
  */
 export const UIPluginsConfigSchema = z.object({
@@ -4153,7 +4158,7 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     },
     plugins: {
       auto_prompt: true,
-      marketplace_url: "https://github.com/nightgauge/nightgauge.git",
+      marketplace_url: "https://github.com/nightgauge/nightgauge.git#stable",
     },
     limits: {
       monthly_budget_usd: 0,

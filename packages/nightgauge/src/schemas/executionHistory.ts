@@ -344,6 +344,8 @@ export const HistoryStageDetailSchema = z.object({
        */
       served_effort: z.string().optional(),
       served_thinking: z.string().optional(),
+      /** The Nightgauge Claude plugin version the stage loaded (#2723). */
+      plugin_version: z.string().optional(),
       /** The model that was active before escalation (Issue #1343) */
       escalated_from: z.string().optional(),
       /**
@@ -527,6 +529,8 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `premature_turn_end` — stage exited 0 but its post-condition gate reported no state change; agent ended its turn on a promise (#74)
  *  - `dev_produced_no_changes` — feature-dev's gate found the stage workspace empty (clean tree, branch level with base) despite the dev context reporting changed files; work was done somewhere the pipeline never reads (#202)
  *  - `dev_handoff_missing` — the inverse: the dev context is absent or empty and git finds the changed files right there; the stage did the work and ended without writing its handoff, so the work must be preserved rather than re-derived (#223)
+ *  - `review_cap_reached` — the independent review reached its round cap with findings standing; the issue parks and the repository keeps dispatching (#2865)
+ *  - `resume_no_op` — a run that resumed at pr-merge found the PR already merged, did no work and left the issue open; it parks and the repository keeps dispatching (#2878)
  *  - `dev_step_cap_reached` — feature-dev ran as bounded sub-sessions and spent its session bound with plan tasks still unchecked; a retry resumes from the next unchecked task (#1651)
  *  - `dev_step_progress_unproven` — the feature-dev step loop could not fingerprint the work tree around a sub-session that checked no plan task, so it stopped rather than count the step as progress; environment class (#1651)
  *  - `containment_breach` — the write-containment check found the stage wrote into a repository it does not own; it exits 0 and reports success, so nothing else in the chain marks it failed (#129, classified in #230)
@@ -546,6 +550,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `adapter_permission_rejected` — the adapter auto-rejected a tool the stage's allowed tools grant under an `ask` rule, OpenCode's `.env` read guard included; parked (#1631)
  *  - `adapter_incompatible` — the adapter's binary cannot serve the dispatch (version floor or unreadable version); parked (#1631)
  *  - `environment_halt` — a project-declared preflight.environment check failed in Phase 0; parked (#101)
+ *  - `gate_plugin_missing` — a bundled build's Claude stage did not load the Nightgauge plugin; parked (#2723)
  *
  * MUST stay in lockstep with the Go constants in
  * internal/orchestrator/failure_handler.go and the SDK `TerminalFailureKind`
@@ -555,6 +560,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  */
 export const TerminalFailureKindSchema = z.enum([
   "stall_kill",
+  "stage_cap_kill", // Issue #2812 — stopped at stage_hard_caps or stage_time_caps; recovers like stall_kill
   "budget_exceeded",
   "validation_error",
   "subagent_crash",
@@ -581,9 +587,13 @@ export const TerminalFailureKindSchema = z.enum([
   "containment_breach", // Issue #230 — the write-containment check (#129) found the stage wrote into a repository it does not own; it exits 0 and reports success, so nothing else marks it failed
   "adapter_auth_failed", // Issue #312 — adapter auth pre-flight refused to launch (probe timed out after retry, or logged out); retryable infra
   "no_changes_produced", // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for
+  "review_cap_reached", // Issue #2865 — the independent review reached its round cap with findings standing; the issue parks and the repository keeps dispatching
+  "resume_no_op", // Issue #2878 — a run that resumed at pr-merge found the PR already merged, did no work and left the issue open; it parks and the repository keeps dispatching
   "validation_failed", // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure
   "branch_forked", // Issue #163 — branch diverged from its remote; pushes rejected non-fast-forward, unrecoverable by retry
   "runaway_progress", // Issue #3783 — progress-based runaway monitor fired; treated like stall_kill
+  "merge_conflict", // Issue #2841 — conflict recovery could not land a merge-queue conflict
+  "merge_queue_enqueue_failed", // Issue #2729 — pr-merge's enqueue still failed after transient retries; the green PR parks in In review for the reconcile
   "pr_merge_unmerged", // Issue #3691 — pr-merge exited cleanly but the PR was not actually merged
   "blocked_dependency", // Issue #305 — scheduler dispatched an issue whose blockedBy dependencies are still open; non-failure deferral
   "architecture_approval_required", // Issue #4098/#4222 — architecture-approval gate halted the run before feature-dev for a human-owned decision
@@ -611,6 +621,7 @@ export const TerminalFailureKindSchema = z.enum([
   "adapter_permission_rejected", // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's marker) under an `ask` rule, OpenCode's `.env` read guard included, distinct from permission_denied
   "adapter_incompatible", // Issue #1631 — the adapter's binary cannot serve the dispatch (#1627's version floor / unreadable version)
   "environment_halt", // Issue #101 — a project-declared preflight.environment check failed in Phase 0; the operator's environment, not the code
+  "gate_plugin_missing", // Issue #2723 — a bundled build's Claude stage did not load the Nightgauge plugin exactly once; stopped before any work
 ]);
 export type TerminalFailureKind = z.infer<typeof TerminalFailureKindSchema>;
 

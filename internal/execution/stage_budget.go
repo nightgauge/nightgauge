@@ -23,6 +23,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/models"
+	"github.com/nightgauge/nightgauge/internal/queuewait"
 )
 
 // StageBudgetMarker prefixes the stderr line of a stage stopped at a stage
@@ -163,8 +164,14 @@ type stageBudgetEnforcer struct {
 	proc    *os.Process
 	exited  <-chan struct{}
 
-	mu     sync.Mutex
-	breach *adapters.StageBudgetBreach
+	// excluded, when set, is the time inside [since, now] the wall clock
+	// leaves out: pr-merge's recorded merge-queue wait (#2770). It is asked
+	// only when the timer fires; the timer is then re-armed for what is left.
+	excluded func(since, now time.Time) time.Duration
+
+	mu       sync.Mutex
+	breach   *adapters.StageBudgetBreach
+	disarmed bool
 }
 
 // newStageBudgetEnforcer returns the enforcer for a stage whose stream has
@@ -184,16 +191,55 @@ func newStageBudgetEnforcer(limits config.ResolvedStageBudget, format AdapterStr
 func (e *stageBudgetEnforcer) arm(proc *os.Process, exited <-chan struct{}) {
 	e.proc, e.exited, e.started = proc, exited, time.Now()
 	if e.limits.MaxWallClock > 0 {
-		e.timer = time.AfterFunc(e.limits.MaxWallClock, func() {
-			if e.record(StageBudgetWallClock, time.Since(e.started).Milliseconds(), e.limits.MaxWallClock.Milliseconds()) {
-				e.stop()
-			}
-		})
+		e.mu.Lock()
+		e.timer = time.AfterFunc(e.limits.MaxWallClock, e.wallClockFired)
+		e.mu.Unlock()
+	}
+}
+
+// wallClockFired checks the wall clock at its timer. The stage's counted time
+// is its elapsed time less what excluded leaves out; under the limit, the
+// timer is re-armed for the rest, else the breach is recorded with the
+// counted time as observed.
+func (e *stageBudgetEnforcer) wallClockFired() {
+	now := time.Now()
+	counted := now.Sub(e.started)
+	if e.excluded != nil {
+		counted -= min(max(e.excluded(e.started, now), 0), counted)
+	}
+	limit := e.limits.MaxWallClock
+	if counted < limit {
+		e.mu.Lock()
+		if !e.disarmed {
+			e.timer.Reset(limit - counted)
+		}
+		e.mu.Unlock()
+		return
+	}
+	if e.record(StageBudgetWallClock, counted.Milliseconds(), limit.Milliseconds()) {
+		e.stop()
+	}
+}
+
+// stageBudgetExclusion is the time a stage's wall-clock budget leaves out, or
+// nil for none. pr-merge's wait after its PR reached the merge queue is the
+// queue's CI run, not the stage's work (#2770), so the record its own
+// `nightgauge pr merge --issue` writes is read; time before the enqueue,
+// such as review fixes, still counts.
+func stageBudgetExclusion(stage string, issue int, worktreeDir string) func(since, now time.Time) time.Duration {
+	if stage != "pr-merge" || issue <= 0 || worktreeDir == "" {
+		return nil
+	}
+	return func(since, now time.Time) time.Duration {
+		return queuewait.ExcludedFor(worktreeDir, issue, since, now)
 	}
 }
 
 // disarm stops the wall clock. The stage has ended.
 func (e *stageBudgetEnforcer) disarm() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.disarmed = true
 	if e.timer != nil {
 		e.timer.Stop()
 	}

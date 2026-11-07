@@ -429,7 +429,7 @@ func TestReconcileOutcome_EnumHygiene(t *testing.T) {
 	}
 	// The board write must stay conservative for an arm nobody mapped: it may
 	// never claim a closure that was not observed.
-	if got := completionBoardStatus(unknown, false); got != state.StatusInReview {
+	if got := completionBoardStatus(unknown, false, false); got != state.StatusInReview {
 		t.Errorf("completionBoardStatus(unknown arm) = %q, want %q — an unmapped arm must never write Done",
 			got, state.StatusInReview)
 	}
@@ -482,7 +482,7 @@ func TestCompletionBoardStatus_ObservedClosureWins(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := completionBoardStatus(tc.arm, tc.issueClosedNow); got != tc.want {
+			if got := completionBoardStatus(tc.arm, tc.issueClosedNow, false); got != tc.want {
 				t.Errorf("completionBoardStatus(%v, %v) = %q, want %q — %s",
 					tc.arm, tc.issueClosedNow, got, tc.want, tc.why)
 			}
@@ -509,8 +509,29 @@ func TestCompletionBoardStatus_PerArm(t *testing.T) {
 		{reconcilePrOpenStale, state.StatusInReview, "the work is in review, NOT merged — Done would be a lie"},
 	}
 	for _, tc := range cases {
-		if got := completionBoardStatus(tc.arm, false); got != tc.want {
+		if got := completionBoardStatus(tc.arm, false, false); got != tc.want {
 			t.Errorf("completionBoardStatus(%v) = %q, want %q — %s", tc.arm, got, tc.want, tc.why)
+		}
+	}
+}
+
+// TestCompletionBoardStatus_PartialDelivery (#2706): a `Refs` merge keeps the
+// hook's Ready; an observed closure still wins.
+func TestCompletionBoardStatus_PartialDelivery(t *testing.T) {
+	cases := []struct {
+		name   string
+		arm    reconcileOutcome
+		closed bool
+		want   state.BoardStatus
+	}{
+		{"open after a Refs merge", reconcileNone, false, state.StatusReady},
+		{"merged arm", reconcilePrMerged, false, state.StatusReady},
+		{"closed on the forge", reconcileNone, true, state.StatusDone},
+		{"closed arm", reconcileIssueClosed, false, state.StatusDone},
+	}
+	for _, tc := range cases {
+		if got := completionBoardStatus(tc.arm, tc.closed, true); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

@@ -45,7 +45,7 @@ func TestScheduler_PRCreate_DeterministicSkipsLLM(t *testing.T) {
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	created, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	created, _, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
 	if !created {
 		t.Fatalf("tryDeterministicPRCreate returned false, want true")
 	}
@@ -83,7 +83,7 @@ func TestScheduler_PRCreate_PuntInvokesLLM(t *testing.T) {
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	created, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	created, _, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
 	if created {
 		t.Fatalf("tryDeterministicPRCreate returned true on punt, want false (so LLM runs)")
 	}
@@ -119,7 +119,7 @@ func TestScheduler_PRCreate_RateLimitedDefersNoLLM(t *testing.T) {
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	created, rateLimited := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	created, rateLimited, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
 	if created {
 		t.Fatalf("tryDeterministicPRCreate returned created=true on rate-limit, want false")
 	}
@@ -146,7 +146,7 @@ func TestScheduler_PRCreate_NonRateLimitPuntStillInvokesLLM(t *testing.T) {
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	created, rateLimited := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	created, rateLimited, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
 	if created || rateLimited {
 		t.Fatalf("non-rate-limit punt: got created=%v rateLimited=%v, want false/false", created, rateLimited)
 	}
@@ -206,7 +206,7 @@ func TestScheduler_PRCreate_DeterministicErrorFallsThroughToLLM(t *testing.T) {
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	created, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	created, _, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
 	if created {
 		t.Fatalf("tryDeterministicPRCreate returned true on error, want false")
 	}
@@ -225,7 +225,7 @@ func TestScheduler_PRCreate_RecordsExecutionPath_Deterministic(t *testing.T) {
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	_, _ = s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	_, _, _ = s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
 	if got := rs.StageExecutionPath(state.StagePRCreate); got != "deterministic" {
 		t.Errorf("execution_path = %q, want deterministic", got)
 	}
@@ -241,7 +241,7 @@ func TestScheduler_PRCreate_RecordsExecutionPath_LLM(t *testing.T) {
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	_, _ = s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	_, _, _ = s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
 	if got := rs.StageExecutionPath(state.StagePRCreate); got != "llm" {
 		t.Errorf("execution_path = %q, want llm", got)
 	}
@@ -265,7 +265,7 @@ func TestScheduler_PRCreate_DeterministicPath_CostZero(t *testing.T) {
 	beforeIn := rs.InputTokens
 	beforeOut := rs.OutputTokens
 
-	created, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	created, _, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
 	if !created {
 		t.Fatalf("expected deterministic created=true")
 	}
@@ -292,7 +292,7 @@ func TestScheduler_PRCreate_NonPRCreateStage_NoOp(t *testing.T) {
 	rs.BeginStage(state.StageFeatureDev)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	if created, _ := s.tryDeterministicPRCreate(context.Background(), state.StageFeatureDev, rs, item, "/tmp"); created {
+	if created, _, _ := s.tryDeterministicPRCreate(context.Background(), state.StageFeatureDev, rs, item, "/tmp"); created {
 		t.Errorf("tryDeterministicPRCreate returned true for non-pr-create stage")
 	}
 	if det.callCount != 0 {
@@ -313,7 +313,7 @@ func TestScheduler_PRCreate_NilRunner_NoOp(t *testing.T) {
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	created, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	created, _, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
 	if created {
 		t.Errorf("nil runner should produce created=false")
 	}
@@ -346,7 +346,7 @@ func TestScheduler_PRCreate_ReadsContextFromWorktree(t *testing.T) {
 
 	// workspaceRoot is the canonical repo root — deliberately different from the
 	// worktree so a regression (passing workspaceRoot) is caught.
-	if _, _ = s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp/repo"); det.lastWorkdir != worktree {
+	if _, _, _ = s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp/repo"); det.lastWorkdir != worktree {
 		t.Fatalf("PRCreateRunner.Run workdir = %q, want worktree %q (#275: must read context from the worktree, not workspaceRoot)",
 			det.lastWorkdir, worktree)
 	}
@@ -364,7 +364,7 @@ func TestScheduler_PRCreate_NoWorktreeUsesWorkspaceRoot(t *testing.T) {
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	if _, _ = s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp/repo"); det.lastWorkdir != "/tmp/repo" {
+	if _, _, _ = s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp/repo"); det.lastWorkdir != "/tmp/repo" {
 		t.Fatalf("PRCreateRunner.Run workdir = %q, want workspaceRoot %q when no worktree is set", det.lastWorkdir, "/tmp/repo")
 	}
 }
@@ -412,10 +412,39 @@ func TestScheduler_PRCreate_OrthogonalToPRMerge(t *testing.T) {
 	}
 
 	// Call pr-create hook for pr-merge stage — must NOT fire.
-	if created, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRMerge, rs, item, "/tmp"); created {
+	if created, _, _ := s.tryDeterministicPRCreate(context.Background(), state.StagePRMerge, rs, item, "/tmp"); created {
 		t.Errorf("pr-create hook fired for pr-merge stage")
 	}
 	if prCreate.callCount != 0 {
 		t.Errorf("pr-create runner ran for pr-merge stage (calls=%d)", prCreate.callCount)
+	}
+}
+
+// #2941: a branch with no diff against its base ends the run without the LLM
+// path, which would open the empty PR (#2942). With a criterion unmet the
+// refusal parks the issue; with GitHub unavailable nothing is closed.
+func TestScheduler_PRCreate_NoDiffRefusesWithoutLLM(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	s.WithPRCreateRunner(&fakePRCreateRunner{result: pmstages.PRCreateResult{
+		Path: pmstages.CreatePathPunt, Reason: pmstages.ReasonNoDiffAgainstBase,
+		Branch: "feat/42-x", BaseBranch: "main",
+		ACVerdicts: []pmstages.ACVerdict{
+			{Text: "Ship it", Status: pmstages.ACMet},
+			{Text: "Document it", Status: pmstages.ACNotVerifiable},
+		},
+	}})
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
+	rs.BeginStage(state.StagePRCreate)
+	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
+
+	created, rateLimited, refusal := s.tryDeterministicPRCreate(context.Background(), state.StagePRCreate, rs, item, "/tmp")
+	if created || rateLimited || refusal == nil {
+		t.Fatalf("got created=%v rateLimited=%v refusal=%v, want a refusal", created, rateLimited, refusal)
+	}
+	if kind := ClassifyTerminalKind(refusal.Error()); kind != TerminalKindNotPipelineActionable {
+		t.Errorf("refusal %q classifies as %q, want %q", refusal, kind, TerminalKindNotPipelineActionable)
+	}
+	if got := rs.StageExecutionPath(state.StagePRCreate); got != "deterministic" {
+		t.Errorf("StageExecutionPath = %q, want deterministic", got)
 	}
 }

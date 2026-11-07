@@ -8,15 +8,19 @@
  */
 
 import * as vscode from "vscode";
-import * as path from "path";
-import * as fs from "fs";
-import { exec, execFile } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { ConfigBridge } from "./ConfigBridge";
 import { type UIPluginsConfig, DEFAULT_CONFIG } from "../config/schema";
 import { getPrefixedMainChannel } from "../utils/logger";
+import {
+  ensureStableMarketplace,
+  isVersionKeyedSource,
+  type StableMarketplace,
+} from "./stableMarketplace";
+import { setPluginState } from "../utils/pluginHint";
+import { stampInstalledVersion, staleInstalledVersion } from "./bundledSkills";
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 /**
@@ -57,14 +61,68 @@ function getPluginConfig(): PluginConfig {
 }
 
 /**
+ * What `claude plugin list --json` says about the plugin. `failed` wins over
+ * `enabled`: during an outage an entry reads `"enabled": true` beside
+ * `"errors": ["Marketplace nightgauge-plugins failed to load: cache-miss"]`.
+ * `unknown` means the output could not be read, which is evidence of nothing.
+ */
+export type PluginState = "enabled" | "disabled" | "failed" | "absent" | "unknown";
+
+/**
  * Plugin installation status
  */
 export interface PluginStatus {
   claudeCliAvailable: boolean;
   marketplaceAdded: boolean;
-  nightgaugePluginInstalled: boolean;
-  smartSetupPluginInstalled: boolean;
-  docsPluginInstalled: boolean;
+  /** The registered source directory; undefined for a git source. */
+  marketplacePath?: string;
+  plugin: PluginState;
+  /** Claude Code's own error text, verbatim. */
+  pluginErrors: string[];
+  /** Why `plugin` is `unknown`. Unset whenever the list was read. */
+  pluginReadError?: string;
+}
+
+interface PluginListEntry {
+  id?: unknown;
+  enabled?: unknown;
+  errors?: unknown;
+}
+
+interface MarketplaceListEntry {
+  name?: unknown;
+  source?: unknown;
+  path?: unknown;
+}
+
+/** Read one plugin's state from `claude plugin list --json`, by exact id. */
+export function parsePluginState(
+  stdout: string,
+  pluginId: string
+): Pick<PluginStatus, "plugin" | "pluginErrors"> {
+  let entries: unknown;
+  try {
+    entries = JSON.parse(stdout);
+  } catch {
+    return { plugin: "unknown", pluginErrors: [] };
+  }
+  if (!Array.isArray(entries)) {
+    return { plugin: "unknown", pluginErrors: [] };
+  }
+
+  // The same id appears once per scope it is installed in.
+  const matches = (entries as PluginListEntry[]).filter((entry) => entry?.id === pluginId);
+  if (matches.length === 0) {
+    return { plugin: "absent", pluginErrors: [] };
+  }
+  const pluginErrors = matches.flatMap((entry) =>
+    Array.isArray(entry.errors) ? entry.errors.map(String) : []
+  );
+  if (pluginErrors.length > 0) {
+    return { plugin: "failed", pluginErrors };
+  }
+  const enabled = matches.some((entry) => entry.enabled === true);
+  return { plugin: enabled ? "enabled" : "disabled", pluginErrors };
 }
 
 /**
@@ -80,9 +138,9 @@ export interface MarketplaceConfig {
  * Default marketplace configuration for Nightgauge
  */
 const DEFAULT_MARKETPLACE: MarketplaceConfig = {
-  repoUrl: "https://github.com/nightgauge/nightgauge.git",
+  repoUrl: "https://github.com/nightgauge/nightgauge.git#stable",
   marketplaceName: "nightgauge-plugins",
-  plugins: ["nightgauge", "smart-setup", "docs"],
+  plugins: ["nightgauge"],
 };
 
 /**
@@ -101,7 +159,9 @@ export class PluginSetupService implements vscode.Disposable {
 
   // State key for "don't show again"
   private static readonly DISMISSED_KEY = "nightgauge.pluginSetup.dismissed";
-  private static readonly INSTALLED_KEY = "nightgauge.pluginSetup.installed";
+
+  // Version-stamp target: globalState key nightgauge.pluginSetup.installedVersion.
+  private static readonly STAMP_TARGET = "plugin";
 
   constructor(
     context: vscode.ExtensionContext,
@@ -115,54 +175,43 @@ export class PluginSetupService implements vscode.Disposable {
   }
 
   /**
-   * Check plugin status and prompt user if setup is needed
+   * Check plugin status, repair what is broken, and prompt if setup is needed
    *
-   * This is the main entry point - call from extension activation.
+   * This is the main entry point - call from extension activation. `autoPrompt`
+   * and "don't show again" decline an install offer, not an outage report, so
+   * repair and failure reporting run ahead of both.
    */
   async checkAndPromptSetup(): Promise<void> {
-    // Check if auto-prompt is disabled in settings
     const config = getPluginConfig();
-    if (!config.autoPrompt) {
-      return;
-    }
-
-    // Update marketplace URL from config
     this.marketplace.repoUrl = config.marketplaceUrl;
 
-    // Check if user dismissed the prompt
+    let status = await this.getPluginStatus();
+
+    if (status.claudeCliAvailable) {
+      const stable = ensureStableMarketplace(this.context, (message) =>
+        this.outputChannel.appendLine(`WARNING: ${message}`)
+      );
+      status = await this.repairIfNeeded(status, stable);
+      await this.resyncIfStale(status, stable);
+      if (status.plugin === "unknown") {
+        this.reportUnreadable(status);
+      }
+    }
+
     const dismissed = this.context.globalState.get<boolean>(
       PluginSetupService.DISMISSED_KEY,
       false
     );
-
-    if (dismissed) {
+    if (!config.autoPrompt || dismissed) {
       return;
     }
-
-    // Check if already installed in a previous session
-    const installed = this.context.globalState.get<boolean>(
-      PluginSetupService.INSTALLED_KEY,
-      false
-    );
-
-    if (installed) {
-      // Verify it's still installed
-      const status = await this.getPluginStatus();
-      if (status.nightgaugePluginInstalled) {
-        return;
-      }
-      // Reset if somehow uninstalled
-      await this.context.globalState.update(PluginSetupService.INSTALLED_KEY, false);
-    }
-
-    const status = await this.getPluginStatus();
 
     if (!status.claudeCliAvailable) {
       await this.promptClaudeCliInstall();
       return;
     }
 
-    if (!status.nightgaugePluginInstalled) {
+    if (status.plugin === "absent") {
       await this.promptPluginInstall(status);
     }
   }
@@ -174,38 +223,173 @@ export class PluginSetupService implements vscode.Disposable {
     const status: PluginStatus = {
       claudeCliAvailable: false,
       marketplaceAdded: false,
-      nightgaugePluginInstalled: false,
-      smartSetupPluginInstalled: false,
-      docsPluginInstalled: false,
+      plugin: "unknown",
+      pluginErrors: [],
     };
 
-    // Check if Claude CLI is available
     try {
-      await execAsync("claude --version");
+      await execFileAsync("claude", ["--version"]);
       status.claudeCliAvailable = true;
     } catch {
       return status;
     }
 
-    // Check installed marketplaces
     try {
-      const { stdout } = await execAsync("claude plugin marketplace list");
-      status.marketplaceAdded = stdout.includes(this.marketplace.marketplaceName);
-    } catch {
-      // Marketplace command failed, assume not available
+      const { stdout } = await execFileAsync("claude", ["plugin", "marketplace", "list", "--json"]);
+      const entries = JSON.parse(stdout) as MarketplaceListEntry[];
+      const entry = entries.find((m) => m.name === this.marketplace.marketplaceName);
+      status.marketplaceAdded = entry !== undefined;
+      if (entry?.source === "directory" && typeof entry.path === "string") {
+        status.marketplacePath = entry.path;
+      } else if (
+        entry !== undefined &&
+        (typeof entry.source !== "string" || entry.source === "directory")
+      ) {
+        // Without a path the move off a version-keyed source cannot run.
+        this.outputChannel.appendLine(
+          `WARNING: marketplace ${this.marketplace.marketplaceName} has no usable source: ` +
+            JSON.stringify(entry)
+        );
+      }
+    } catch (error) {
+      this.logCliFailure("marketplace list", error);
     }
 
-    // Check installed plugins
     try {
-      const { stdout } = await execAsync("claude plugin list");
-      status.nightgaugePluginInstalled = stdout.includes("nightgauge");
-      status.smartSetupPluginInstalled = stdout.includes("smart-setup");
-      status.docsPluginInstalled = stdout.includes("docs");
-    } catch {
-      // Plugin list failed
+      const { stdout } = await execFileAsync("claude", ["plugin", "list", "--json"]);
+      Object.assign(status, parsePluginState(stdout, this.pluginId()));
+      if (status.plugin === "unknown") {
+        status.pluginReadError = "claude plugin list --json returned unreadable output";
+      }
+    } catch (error) {
+      this.logCliFailure("plugin list", error);
+      status.pluginReadError = error instanceof Error ? error.message : String(error);
     }
 
+    setPluginState(status.plugin);
     return status;
+  }
+
+  private pluginId(plugin = this.marketplace.plugins[0]): string {
+    return `${plugin}@${this.marketplace.marketplaceName}`;
+  }
+
+  private logCliFailure(command: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.outputChannel.appendLine(`WARNING: claude ${command} failed: ${message}`);
+  }
+
+  private isVersionKeyed(status: PluginStatus): boolean {
+    return (
+      status.marketplacePath !== undefined &&
+      isVersionKeyedSource(status.marketplacePath, this.context.extensionPath)
+    );
+  }
+
+  /**
+   * Repoint the marketplace when the plugin failed, or when it is enabled from a
+   * directory an upgrade will delete. A healthy source elsewhere is never touched.
+   *
+   * `marketplace add` repoints an existing name in place and keeps the install
+   * and its data; `marketplace remove` would uninstall the plugin and delete
+   * them (observed on Claude Code 2.1.316). One attempt per activation.
+   */
+  private async repairIfNeeded(
+    status: PluginStatus,
+    stable: StableMarketplace | undefined
+  ): Promise<PluginStatus> {
+    const failed = status.plugin === "failed";
+    if (!failed && !(status.plugin === "enabled" && this.isVersionKeyed(status))) {
+      return status;
+    }
+
+    const source = stable?.path ?? (failed ? this.marketplace.repoUrl : undefined);
+    if (!source) {
+      return status;
+    }
+
+    this.outputChannel.appendLine(`Repointing marketplace to ${source}`);
+    let addError: string | undefined;
+    try {
+      await execFileAsync("claude", ["plugin", "marketplace", "add", source]);
+    } catch (error) {
+      addError = error instanceof Error ? error.message : String(error);
+    }
+
+    const after = await this.getPluginStatus();
+    const problems = [...after.pluginErrors, ...(addError ? [addError] : [])];
+    if (problems.length > 0) {
+      this.reportFailure(problems);
+    } else if (after.plugin === "unknown") {
+      // checkAndPromptSetup surfaces this once, for repaired and unrepaired alike.
+      this.outputChannel.appendLine("Marketplace repointed; the repair could not be verified");
+    } else {
+      this.outputChannel.appendLine("✓ Marketplace repaired");
+    }
+    return after;
+  }
+
+  /** A status that could not be read is neither healthy nor absent: say so. */
+  private reportUnreadable(status: PluginStatus): void {
+    const detail = status.pluginReadError ?? "no plugin list was read";
+    this.outputChannel.appendLine(`✗ Nightgauge plugin status unavailable: ${detail}`);
+    vscode.window
+      .showWarningMessage(
+        `Could not read the Nightgauge Claude plugin's status: ${detail}`,
+        "View Output"
+      )
+      .then((selection) => {
+        if (selection === "View Output") {
+          this.outputChannel.show(true);
+        }
+      });
+  }
+
+  private reportFailure(problems: string[]): void {
+    const detail = problems.join("; ");
+    this.outputChannel.appendLine(`✗ Nightgauge plugin repair failed: ${detail}`);
+    vscode.window
+      .showErrorMessage(`The Nightgauge Claude plugin failed to load: ${detail}`, "View Output")
+      .then((selection) => {
+        if (selection === "View Output") {
+          this.outputChannel.show(true);
+        }
+      });
+  }
+
+  /**
+   * Bring an installed plugin up to this extension's version (#2762). The stamp
+   * records the version the plugin was last updated to, so an upgrade, a stamp
+   * older than this code, or an earlier update that failed all re-sync here.
+   * A failure leaves the stamp alone, so the next activation tries again.
+   */
+  private async resyncIfStale(
+    status: PluginStatus,
+    stable: StableMarketplace | undefined
+  ): Promise<void> {
+    if (
+      !stable ||
+      status.marketplacePath !== stable.path ||
+      !staleInstalledVersion(
+        this.context,
+        PluginSetupService.STAMP_TARGET,
+        status.plugin === "enabled"
+      )
+    ) {
+      return;
+    }
+    try {
+      await execFileAsync("claude", [
+        "plugin",
+        "marketplace",
+        "update",
+        this.marketplace.marketplaceName,
+      ]);
+      await execFileAsync("claude", ["plugin", "update", this.pluginId()]);
+      await stampInstalledVersion(this.context, PluginSetupService.STAMP_TARGET);
+    } catch (error) {
+      this.logCliFailure("plugin update", error);
+    }
   }
 
   /**
@@ -258,24 +442,6 @@ export class PluginSetupService implements vscode.Disposable {
   }
 
   /**
-   * Get the path to the bundled marketplace in the extension's dist/ directory.
-   * Returns undefined if the bundled marketplace is not available.
-   */
-  private getBundledMarketplacePath(): string | undefined {
-    const marketplacePath = path.join(
-      this.context.extensionPath,
-      "dist",
-      ".claude-plugin",
-      "marketplace.json"
-    );
-    if (fs.existsSync(marketplacePath)) {
-      // Return the directory containing .claude-plugin/ (i.e., dist/)
-      return path.join(this.context.extensionPath, "dist");
-    }
-    return undefined;
-  }
-
-  /**
    * Install marketplace and plugins
    */
   private async installPlugins(status: PluginStatus): Promise<void> {
@@ -283,10 +449,12 @@ export class PluginSetupService implements vscode.Disposable {
     this.outputChannel.appendLine("Starting Nightgauge plugin installation...\n");
 
     try {
-      // Add marketplace if needed
-      if (!status.marketplaceAdded) {
+      // Add the marketplace, or move it off a directory an upgrade will delete
+      if (!status.marketplaceAdded || this.isVersionKeyed(status)) {
         // Prefer the bundled marketplace (ships with the VSIX) over git clone
-        const bundledPath = this.getBundledMarketplacePath();
+        const bundledPath = ensureStableMarketplace(this.context, (message) =>
+          this.outputChannel.appendLine(`WARNING: ${message}`)
+        )?.path;
         const marketplaceSource = bundledPath ?? this.marketplace.repoUrl;
         const sourceLabel = bundledPath ? "bundled" : "remote";
 
@@ -306,21 +474,8 @@ export class PluginSetupService implements vscode.Disposable {
         this.outputChannel.appendLine("✓ Marketplace added\n");
       }
 
-      // Install each plugin
-      const pluginsToInstall = this.marketplace.plugins.filter((plugin) => {
-        switch (plugin) {
-          case "nightgauge":
-            return !status.nightgaugePluginInstalled;
-          case "smart-setup":
-            return !status.smartSetupPluginInstalled;
-          case "docs":
-            return !status.docsPluginInstalled;
-          default:
-            return true;
-        }
-      });
-
-      for (const plugin of pluginsToInstall) {
+      // `absent` is the only state that reaches this prompt, so each plugin installs.
+      for (const plugin of this.marketplace.plugins) {
         this.outputChannel.appendLine(`Installing plugin: ${plugin}`);
 
         await vscode.window.withProgress(
@@ -330,16 +485,15 @@ export class PluginSetupService implements vscode.Disposable {
             cancellable: false,
           },
           async () => {
-            await execAsync(`claude plugin install ${plugin}@${this.marketplace.marketplaceName}`);
+            await execFileAsync("claude", ["plugin", "install", this.pluginId(plugin)]);
           }
         );
 
         this.outputChannel.appendLine(`✓ ${plugin} installed\n`);
       }
 
-      // Mark as installed
-      await this.context.globalState.update(PluginSetupService.INSTALLED_KEY, true);
-
+      setPluginState("enabled");
+      await stampInstalledVersion(this.context, PluginSetupService.STAMP_TARGET);
       this.outputChannel.appendLine("All plugins installed successfully!");
       this.outputChannel.appendLine("\nAvailable commands:");
       this.outputChannel.appendLine("  /nightgauge:issue-pickup     - Pick up an issue");
@@ -377,15 +531,71 @@ export class PluginSetupService implements vscode.Disposable {
    */
   async resetDismissed(): Promise<void> {
     await this.context.globalState.update(PluginSetupService.DISMISSED_KEY, false);
-    await this.context.globalState.update(PluginSetupService.INSTALLED_KEY, false);
   }
 
   /**
-   * Manually trigger the setup prompt
+   * The `nightgauge.setupPlugins` command: always offers to install or update,
+   * whatever `plugins.autoPrompt` or an earlier "Don't Show Again" says (#2762).
+   * The activation path, checkAndPromptSetup(), is the one autoPrompt governs.
    */
   async showSetupPrompt(): Promise<void> {
     await this.resetDismissed();
-    await this.checkAndPromptSetup();
+    const config = getPluginConfig();
+    this.marketplace.repoUrl = config.marketplaceUrl;
+
+    let status = await this.getPluginStatus();
+    if (!status.claudeCliAvailable) {
+      await this.promptClaudeCliInstall();
+      return;
+    }
+    const stable = ensureStableMarketplace(this.context, (message) =>
+      this.outputChannel.appendLine(`WARNING: ${message}`)
+    );
+    status = await this.repairIfNeeded(status, stable);
+    if (status.plugin === "absent") {
+      await this.promptPluginInstall(status);
+      return;
+    }
+
+    const selection = await vscode.window.showInformationMessage(
+      "Update the Nightgauge Claude Code plugin?",
+      {
+        modal: true,
+        detail:
+          "Refreshes the Nightgauge marketplace and updates the installed plugin " +
+          "to the copy bundled with this extension.",
+      },
+      "Update Plugins",
+      "Later"
+    );
+    if (selection === "Update Plugins") {
+      await this.updatePlugins();
+    }
+  }
+
+  /** Refresh the registered marketplace and update the installed plugin. */
+  private async updatePlugins(): Promise<void> {
+    this.outputChannel.show(true);
+    try {
+      await execFileAsync("claude", [
+        "plugin",
+        "marketplace",
+        "update",
+        this.marketplace.marketplaceName,
+      ]);
+      for (const plugin of this.marketplace.plugins) {
+        await execFileAsync("claude", ["plugin", "update", this.pluginId(plugin)]);
+        this.outputChannel.appendLine(`✓ ${plugin} updated`);
+      }
+      await stampInstalledVersion(this.context, PluginSetupService.STAMP_TARGET);
+      vscode.window.showInformationMessage(
+        "Nightgauge plugins updated. Restart Claude Code sessions to load them."
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.outputChannel.appendLine(`✗ Update failed: ${errorMessage}`);
+      vscode.window.showErrorMessage(`Failed to update plugins: ${errorMessage}`);
+    }
   }
 
   /**

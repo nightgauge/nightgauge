@@ -3,6 +3,7 @@ package hooks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,7 +21,19 @@ type PrePushInput struct {
 	WorkDir       string
 	TargetBranch  string
 	FeatureBranch string
+	// TimeoutSeconds is the gate's limit: it bounds `go test -timeout` and is
+	// named in a timeout reason. 0 means no limit.
+	TimeoutSeconds int
 }
+
+// FailureKindTimeout marks a block caused by a limit expiring, not by a check
+// failing (#2700).
+const FailureKindTimeout = "timeout"
+
+// runnerWaitDelay bounds how long Run waits for a killed command's children to
+// release its output pipe. `go test`'s test binaries outlive a killed `go`, and
+// without this CombinedOutput blocks past the deadline. A var for tests.
+var runnerWaitDelay = 10 * time.Second
 
 // PrePushResult holds the outcome of pre-push validation.
 type PrePushResult struct {
@@ -31,7 +44,10 @@ type PrePushResult struct {
 	// ValidationPhases maps a phase to its outcome:
 	//   "passed"         the phase ran and succeeded
 	//   "failed"         the phase ran and failed (blocks the push)
-	//   "skipped"        the phase was not reached
+	//   "timeout"        a limit expired during the phase (blocks the push;
+	//                    says nothing about the code)
+	//   "skipped"        the phase was not reached, or was skipped for the
+	//                    reason in TestSkipReason
 	//   "not-applicable" the project has no such phase (e.g. a Node project
 	//                    with no `build` script) — recorded, not silent (#1159)
 	//   "unknown"        the gate could not determine whether the phase
@@ -39,6 +55,8 @@ type PrePushResult struct {
 	ValidationPhases map[string]string `json:"validation_phases"`
 	CriticalFindings int               `json:"critical_findings"`
 	Reason           string            `json:"reason,omitempty"`
+	FailureKind      string            `json:"failure_kind,omitempty"`
+	TestSkipReason   string            `json:"test_skip_reason,omitempty"`
 	ContextPath      string            `json:"context_path"`
 	StartedAt        string            `json:"started_at"`
 	CompletedAt      string            `json:"completed_at"`
@@ -50,10 +68,13 @@ type PrePushContextFile struct {
 	IssueNumber      int               `json:"issue_number"`
 	TargetBranch     string            `json:"target_branch"`
 	FeatureBranch    string            `json:"feature_branch"`
-	OverallStatus    string            `json:"overall_status"` // "passed" or "failed"
+	OverallStatus    string            `json:"overall_status"` // "passed", "failed" or "timeout"
 	ValidationPhases map[string]string `json:"validation_phases"`
 	CriticalFindings int               `json:"critical_findings"`
 	Blocking         bool              `json:"blocking"`
+	Reason           string            `json:"reason,omitempty"`
+	FailureKind      string            `json:"failure_kind,omitempty"`
+	TestSkipReason   string            `json:"test_skip_reason,omitempty"`
 	StartedAt        string            `json:"started_at"`
 	CompletedAt      string            `json:"completed_at"`
 }
@@ -70,7 +91,44 @@ type ExecCmdRunner struct{}
 func (r *ExecCmdRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	return cmd.CombinedOutput()
+	cmd.WaitDelay = runnerWaitDelay
+	out, err := cmd.CombinedOutput()
+	// The command itself succeeded; only a child kept the pipe open.
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
+	return out, err
+}
+
+// gateTimedOut reports whether a failing step stopped because a limit expired:
+// the gate's deadline, or Go's per-package timer.
+func gateTimedOut(ctx context.Context, output []byte) bool {
+	return errors.Is(ctx.Err(), context.DeadlineExceeded) || isGoTestTimeout(output)
+}
+
+func isGoTestTimeout(output []byte) bool {
+	return strings.Contains(string(output), "panic: test timed out after")
+}
+
+// blockIfTimedOut records a block as a timeout when the step that just failed
+// stopped on a limit. It must run before a step's own failure reason, or a
+// deadline reads as a merge conflict or a test failure.
+func blockIfTimedOut(ctx context.Context, phase string, output []byte, timeoutSeconds int, result *PrePushResult) bool {
+	if !gateTimedOut(ctx, output) {
+		return false
+	}
+	result.ValidationPhases[phase] = "timeout"
+	result.Decision = "block"
+	result.FailureKind = FailureKindTimeout
+	if ctx.Err() == nil {
+		result.Reason = fmt.Sprintf("Pre-push gate timed out in the %s phase: Go's per-package test limit fired, "+
+			"which can be a real hang (no assertion failed). Raise hooks.pre_push.timeout_seconds in "+
+			".nightgauge/config.yaml or pass --timeout if the suite needs longer.", phase)
+		return true
+	}
+	result.Reason = fmt.Sprintf("Pre-push gate timed out in the %s phase: the %ds limit expired (no test failed). "+
+		"Raise hooks.pre_push.timeout_seconds in .nightgauge/config.yaml or pass --timeout.", phase, timeoutSeconds)
+	return true
 }
 
 // EvaluatePrePush runs all pre-push validation phases for a feature branch.
@@ -108,16 +166,24 @@ func EvaluatePrePush(ctx context.Context, runner CmdRunner, input PrePushInput) 
 	}
 
 	// Phase 1: Merged-state build+test+vet
-	runMergedStateValidation(ctx, runner, workDir, input.TargetBranch, &result)
+	runMergedStateValidation(ctx, runner, workDir, input.TargetBranch, input.TimeoutSeconds, &result)
 
 	// Phase 2: Security gate (only if not already blocked)
 	if result.Decision != "block" {
 		runPrePushSecurityGate(ctx, runner, workDir, input.TargetBranch, &result)
+		// The scan's fallback returns quietly when its diff fails, so an expired
+		// or cancelled gate would otherwise pass unscanned.
+		if result.Decision != "block" && ctx.Err() != nil &&
+			!blockIfTimedOut(ctx, "security", nil, input.TimeoutSeconds, &result) {
+			result.ValidationPhases["security"] = "failed"
+			result.Decision = "block"
+			result.Reason = "Pre-push gate was interrupted before the security scan finished."
+		}
 	}
 
 	// Phase 3: Static checks (only if not already blocked)
 	if result.Decision != "block" {
-		runPrePushStaticChecks(ctx, runner, workDir, &result)
+		runPrePushStaticChecks(ctx, runner, workDir, input.TimeoutSeconds, &result)
 	}
 
 	result.CompletedAt = time.Now().UTC().Format(time.RFC3339)
@@ -130,7 +196,7 @@ func EvaluatePrePush(ctx context.Context, runner CmdRunner, input PrePushInput) 
 }
 
 // runMergedStateValidation performs Phase 1: fetch target, merge, build, test, vet.
-func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, targetBranch string, result *PrePushResult) {
+func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, targetBranch string, timeoutSeconds int, result *PrePushResult) {
 	result.ValidationPhases["merged_state"] = "passed"
 	result.ValidationPhases["build"] = "skipped"
 	result.ValidationPhases["test"] = "skipped"
@@ -144,6 +210,9 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 	// Save current branch
 	branchOut, err := runner.Run(ctx, workDir, "git", "branch", "--show-current")
 	if err != nil {
+		if blockIfTimedOut(ctx, "merged_state", nil, timeoutSeconds, result) {
+			return
+		}
 		result.ValidationPhases["merged_state"] = "failed"
 		result.Decision = "block"
 		result.Reason = "Failed to determine current branch"
@@ -154,6 +223,9 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 	// Create temp branch for merged-state testing
 	tempBranch := fmt.Sprintf("temp-pre-push-%d", tempBranchNonce())
 	if _, err := runner.Run(ctx, workDir, "git", "checkout", "-b", tempBranch); err != nil {
+		if blockIfTimedOut(ctx, "merged_state", nil, timeoutSeconds, result) {
+			return
+		}
 		result.ValidationPhases["merged_state"] = "failed"
 		result.Decision = "block"
 		result.Reason = "Failed to create temp branch for merged-state testing"
@@ -172,6 +244,7 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 		if out, cleanupErr := runner.Run(cleanupCtx, workDir, "git", "checkout", originalBranch); cleanupErr != nil {
 			result.ValidationPhases["merged_state"] = "failed"
 			result.Decision = "block"
+			result.FailureKind = ""
 			result.Reason = fmt.Sprintf("Failed to restore original branch %s after validation: %s",
 				originalBranch, truncateStr(strings.TrimSpace(string(out)), 500))
 			return // never delete the currently checked-out temp branch
@@ -179,6 +252,7 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 		if out, cleanupErr := runner.Run(cleanupCtx, workDir, "git", "branch", "-D", tempBranch); cleanupErr != nil {
 			result.ValidationPhases["merged_state"] = "failed"
 			result.Decision = "block"
+			result.FailureKind = ""
 			result.Reason = fmt.Sprintf("Restored %s but failed to delete temporary branch %s: %s",
 				originalBranch, tempBranch, truncateStr(strings.TrimSpace(string(out)), 500))
 		}
@@ -187,6 +261,9 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 	// Attempt merge with target
 	mergeOutput, err := runner.Run(ctx, workDir, "git", "merge", "--no-commit", "--no-ff", fmt.Sprintf("origin/%s", targetBranch))
 	if err != nil {
+		if blockIfTimedOut(ctx, "merged_state", mergeOutput, timeoutSeconds, result) {
+			return
+		}
 		result.ValidationPhases["merged_state"] = "failed"
 		result.Decision = "block"
 		result.Reason = fmt.Sprintf("Merge conflict with %s: %s", targetBranch, truncateStr(strings.TrimSpace(string(mergeOutput)), 500))
@@ -197,6 +274,9 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 	if fileExists(filepath.Join(workDir, "go.mod")) {
 		// Go project: build, test, vet
 		if out, err := runner.Run(ctx, workDir, "go", "build", "./..."); err != nil {
+			if blockIfTimedOut(ctx, "build", out, timeoutSeconds, result) {
+				return
+			}
 			result.ValidationPhases["build"] = "failed"
 			result.Decision = "block"
 			result.Reason = fmt.Sprintf("Build failed against merged state: %s", truncateStr(string(out), 500))
@@ -204,15 +284,26 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 		}
 		result.ValidationPhases["build"] = "passed"
 
-		if out, err := runner.Run(ctx, workDir, "go", "test", "./..."); err != nil {
-			result.ValidationPhases["test"] = "failed"
-			result.Decision = "block"
-			result.Reason = fmt.Sprintf("Tests failed against merged state: %s", truncateStr(string(out), 500))
-			return
+		if skip, reason := decideGoTestSkip(ctx, runner, workDir); skip {
+			result.TestSkipReason = reason
+		} else {
+			fmt.Fprintf(os.Stderr, "Running go test: %s\n", reason)
+			if out, err := runner.Run(ctx, workDir, "go", "test", "-timeout", goTestTimeoutArg(ctx, timeoutSeconds), "./..."); err != nil {
+				if blockIfTimedOut(ctx, "test", out, timeoutSeconds, result) {
+					return
+				}
+				result.ValidationPhases["test"] = "failed"
+				result.Decision = "block"
+				result.Reason = fmt.Sprintf("Tests failed against merged state: %s", truncateStr(string(out), 500))
+				return
+			}
+			result.ValidationPhases["test"] = "passed"
 		}
-		result.ValidationPhases["test"] = "passed"
 
 		if out, err := runner.Run(ctx, workDir, "go", "vet", "./..."); err != nil {
+			if blockIfTimedOut(ctx, "vet", out, timeoutSeconds, result) {
+				return
+			}
 			result.ValidationPhases["vet"] = "failed"
 			result.Decision = "block"
 			result.Reason = fmt.Sprintf("go vet failed: %s", truncateStr(string(out), 500))
@@ -249,6 +340,9 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 			// rather than indistinguishable from a build that passed.
 			result.ValidationPhases["build"] = "not-applicable"
 		} else if out, err := runner.Run(ctx, workDir, "npm", "run", "build"); err != nil {
+			if blockIfTimedOut(ctx, "build", out, timeoutSeconds, result) {
+				return
+			}
 			result.ValidationPhases["build"] = "failed"
 			result.Decision = "block"
 			result.Reason = fmt.Sprintf("npm build failed: %s", truncateStr(string(out), 500))
@@ -260,6 +354,9 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 		if _, ok := scripts["test"]; !ok {
 			result.ValidationPhases["test"] = "not-applicable"
 		} else if out, err := runner.Run(ctx, workDir, "npm", "test"); err != nil {
+			if blockIfTimedOut(ctx, "test", out, timeoutSeconds, result) {
+				return
+			}
 			result.ValidationPhases["test"] = "failed"
 			result.Decision = "block"
 			result.Reason = fmt.Sprintf("npm test failed: %s", truncateStr(string(out), 500))
@@ -322,13 +419,16 @@ func runPrePushSecurityGate(ctx context.Context, runner CmdRunner, workDir, targ
 }
 
 // runPrePushStaticChecks performs Phase 3: generated file sync, JSON/YAML validation.
-func runPrePushStaticChecks(ctx context.Context, runner CmdRunner, workDir string, result *PrePushResult) {
+func runPrePushStaticChecks(ctx context.Context, runner CmdRunner, workDir string, timeoutSeconds int, result *PrePushResult) {
 	result.ValidationPhases["static_checks"] = "passed"
 
 	// Check IPC client generated file sync
 	ipcFile := filepath.Join(workDir, "packages", "nightgauge", "src", "services", "IpcClient.generated.ts")
 	if fileExists(ipcFile) {
 		if out, err := runner.Run(ctx, workDir, "git", "diff", "--exit-code", ipcFile); err != nil {
+			if blockIfTimedOut(ctx, "static_checks", nil, timeoutSeconds, result) {
+				return
+			}
 			result.ValidationPhases["static_checks"] = "failed"
 			result.Decision = "block"
 			result.Reason = fmt.Sprintf("Generated file out of sync: IpcClient.generated.ts. Run 'make generate-ipc-client'.\n%s", truncateStr(string(out), 300))
@@ -353,6 +453,9 @@ func writePrePushContextFile(workDir string, input PrePushInput, result PrePushR
 	if result.Decision == "block" {
 		overallStatus = "failed"
 		blocking = true
+		if result.FailureKind == FailureKindTimeout {
+			overallStatus = "timeout"
+		}
 	}
 
 	ctxFile := PrePushContextFile{
@@ -364,6 +467,9 @@ func writePrePushContextFile(workDir string, input PrePushInput, result PrePushR
 		ValidationPhases: result.ValidationPhases,
 		CriticalFindings: result.CriticalFindings,
 		Blocking:         blocking,
+		Reason:           result.Reason,
+		FailureKind:      result.FailureKind,
+		TestSkipReason:   result.TestSkipReason,
 		StartedAt:        result.StartedAt,
 		CompletedAt:      result.CompletedAt,
 	}

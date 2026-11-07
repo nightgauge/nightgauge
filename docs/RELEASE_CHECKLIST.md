@@ -28,9 +28,9 @@ row; `main` moves.
 
 ### The one gate that matters
 
-| #   | Gate                                                                                                                                                                                                                 | State                                                                                                                                                                                             |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. See _The clean-machine install gate_ below. | **Done — #1137.** Walked on the release commit `e6e98c76` on 2026-09-02: packaged VSIX, bare container, fixture issue → merged PR, unattended. See _Findings from the release-commit walk_ below. |
+| #   | Gate                                                                                                                                                                                                                                                                                                                                              | State                                                                                                                                                                                             |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. For a release the evidence is `gh workflow run clean-install-e2e.yml -f rc_tag=vX.Y.Z-rc.N`, which tests that RC's own VSIX. See _The clean-machine install gate_ below. | **Done — #1137.** Walked on the release commit `e6e98c76` on 2026-09-02: packaged VSIX, bare container, fixture issue → merged PR, unattended. See _Findings from the release-commit walk_ below. |
 
 The pipeline has proven itself end to end on a real repository — an
 M-sized feature issue went pickup → plan → dev → validate → PR → merge
@@ -352,6 +352,19 @@ the repo and a release, and then left to whoever remembered it.
 This is the procedure. Run it against the packaged artifact, never a dev
 install (`scripts/dev-install.sh` is explicitly not a release-validation path).
 
+The automated gate (`.github/workflows/clean-install-e2e.yml`) has two forms.
+A scheduled or plain dispatch packages the VSIX from the tree, which proves the
+tree, not a build any user receives. Release evidence is the RC form:
+`gh workflow run clean-install-e2e.yml -f rc_tag=vX.Y.Z-rc.N` downloads the
+`linux-x64` VSIX from that tag's successful staging run (`rc-artifacts-<tag>`),
+checks the tag's tree out beside the dispatch-ref harness (the skill-bundle
+source and the plugin-install check read it), runs the staging integrity checks on it, and
+names it in the run summary's _Artifact tested_ row. If the artifact is missing
+or expired (14-day retention) the run fails; it never falls back to the tree.
+Re-run staging for the tag first. The same run also asserts a stage read its
+skills from the installed bundle, and validates the cached plugin copy that
+`claude plugin install` writes.
+
 ### The steps
 
 ```bash
@@ -489,13 +502,13 @@ absent in the container — but the agent's own credentials are inherited, so
 a first `claude` login is not walked. Two Quick Start steps are not walked
 through the product either, and each is filed as a finding:
 
-| Step                      | How the gate walks it                                                                                                                                                                                      | Finding |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| 3 — Trust the folder      | `--disable-workspace-trust`; the banner click is a VS Code surface, and #900 already fixed the product side                                                                                                | —       |
-| 4 — Initialize Repository | The command only opens an interactive `claude /nightgauge:repo-init` terminal. The container runs the VSIX's own binary verbs instead (`config init`, `label ensure`, `project ensure-fields`, board link) | #1154   |
-| 4 — board link            | The skill's `nightgauge forge graphql` link step fails on the default GitHub forge; the container links the board with `gh api graphql`                                                                    | #1157   |
-| 5 — Pick Up Issue         | The command accepts only a live tree item and otherwise opens an input box; the driver types the number with `xdotool`                                                                                     | #1155   |
-| 6 — Watch it run          | `pre-push validate` blocked any Node project without an `npm run build` script (the first real run halted at feature-validate after ~3 USD); fixed in #1159, the fixture keeps its `build` script          | #1159   |
+| Step                      | How the gate walks it                                                                                                                                                                                                                                                          | Finding |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| 3 — Trust the folder      | `--disable-workspace-trust`; the banner click is a VS Code surface, and #900 already fixed the product side                                                                                                                                                                    | —       |
+| 4 — Initialize Repository | The command runs `config init --detect` through the VSIX binary, which writes an unlinked config. Labels, fields and the board stay in the interactive `repo-init` skill, so the container runs the binary verbs instead (`label ensure`, `project ensure-fields`, board link) | #1154   |
+| 4 — board link            | The skill's `nightgauge forge graphql` link step fails on the default GitHub forge; the container links the board with `gh api graphql`                                                                                                                                        | #1157   |
+| 5 — Pick Up Issue         | The command accepts only a live tree item and otherwise opens an input box; the driver types the number with `xdotool`                                                                                                                                                         | #1155   |
+| 6 — Watch it run          | `pre-push validate` blocked any Node project without an `npm run build` script (the first real run halted at feature-validate after ~3 USD); fixed in #1159, the fixture keeps its `build` script                                                                              | #1159   |
 
 The driver (`tests/clean-install/driver/`) is a plain-JavaScript extension
 loaded with `--extensionDevelopmentPath`; the product extension is always the
@@ -548,6 +561,60 @@ credentials), and the two interactive Quick Start steps, which are walked by
 their binary-verb equivalents. A second-machine pass by someone who is not
 the maintainer remains the honest next step and is not a blocker for a
 pre-release.
+
+## The malware-scan gate
+
+`scripts/malware-scan.sh` needs ClamAV. Install it with:
+
+```text
+scripts/install-clamav-macos.sh, with /usr/local/clamav/bin on PATH / apt-get install -y clamav
+```
+
+The first form is macOS and the second is Linux. Then run `freshclam`. The macOS script installs
+the official ClamAV 1.5.4 package from the Cisco-Talos release and refuses any other bytes.
+Homebrew is not used: its `clamav` 1.5.4_1 rejected every signature database on the
+`macos-26-arm64` image `20261026.0455.x`, which carries `openssl@4` 4.1.0 (#2740), and a pin means
+the scanner changes only by a reviewed edit.
+
+On a local Mac, run it as
+`sudo /usr/local/clamav/bin/freshclam --user=root`. The script keeps the database directory
+root-owned there, because a user-owned directory lets anything running as that user plant or
+allowlist signatures. With `CI=true` it gives the directory to the runner user instead: a runner
+is ephemeral and runs a plain `freshclam` unprivileged.
+
+To bump the pin, change `CLAMAV_VERSION` and `PKG_SHA256` in the script and the digest in
+`scripts/test-malware-scan.sh`, taking the digest from the release asset. In the same change,
+check `MIN_SIGNATURES` in `scripts/malware-scan.sh` against the new version's `Known viruses`
+count.
+
+If a clean `freshclam` still trips the floor:
+
+1. Confirm `daily`, `main` and `bytecode` are all present and its output shows no 429.
+2. Read the real `Known viruses` count from `clamscan`.
+3. Confirm ClamAV pruned signatures, from its own announcement or database history.
+4. Lower `MIN_SIGNATURES` in a reviewed PR that carries this evidence. Update the
+   `below the 3000000 floor` arms in `scripts/test-malware-scan.sh` and the 3,000,000 in
+   [ARTIFACT_VERIFICATION.md](ARTIFACT_VERIFICATION.md).
+
+Never lower the floor to get past a partial database.
+
+## The VirusTotal draft gate
+
+`release.yml` publishes a release only after `scripts/release-scan-gate.sh scan`
+finds every file in the draft clean on VirusTotal (#2946). Before a tag:
+
+- The `production` environment has `VT_API_KEY`, a free VirusTotal account's
+  API key. Without it the preflight fails before the build.
+- The free key's quota fits: about 130 requests per release (about 40 unique
+  files, roughly 3 requests each) against 500 a day, so plan at most three
+  full scans of releases a day.
+
+After the run, read `vt-scan-report.json` as in
+[GIT_WORKFLOW.md step 9a](GIT_WORKFLOW.md#cutting-a-release--step-by-step).
+A finding leaves the draft for an owner decision. Never publish a draft with
+`gh release edit --draft=false` to get past a harness error: re-run the scan.
+`bash scripts/test-vt-scan.sh` and `bash scripts/test-release-scan-gate.sh`
+exercise every path offline.
 
 ## What this checklist is not
 

@@ -45,8 +45,12 @@ const {
   branchName,
   preExistingPrs,
   commitsAhead,
+  diffExit,
   pushFails,
   createFails,
+  titleVerbFails,
+  issueTitle,
+  titleVerbOutput,
   prCreated,
   calls,
 } = vi.hoisted(() => ({
@@ -56,8 +60,13 @@ const {
   branchName: { value: "feat/42-add-thing" },
   preExistingPrs: { value: [] as Array<{ number: number }> },
   commitsAhead: { value: "2" },
+  // `git diff --quiet origin/<base> HEAD` exit: 1 = trees differ (#3012).
+  diffExit: { value: 1 as number },
   pushFails: { value: false },
   createFails: { value: false },
+  titleVerbFails: { value: false },
+  issueTitle: { value: "Add thing\n" },
+  titleVerbOutput: { value: "fix(#42): add thing\n" },
   prCreated: { value: false },
   calls: { value: [] as string[][] },
 }));
@@ -98,6 +107,11 @@ vi.mock("child_process", async () => {
     if (cmd === "git" && a[0] === "rev-list") {
       return Promise.resolve({ stdout: `${commitsAhead.value}\n`, stderr: "" });
     }
+    // git diff --quiet origin/main HEAD → exit 0 equal, 1 differ (#3012)
+    if (cmd === "git" && a[0] === "diff" && a[1] === "--quiet") {
+      if (diffExit.value === 0) return Promise.resolve({ stdout: "", stderr: "" });
+      return Promise.reject(Object.assign(new Error("diff"), { code: diffExit.value }));
+    }
     // git push -u origin <branch>
     if (cmd === "git" && a[0] === "push") {
       if (pushFails.value) {
@@ -109,7 +123,14 @@ vi.mock("child_process", async () => {
     }
     // gh issue view <n> --json title -q .title
     if (cmd === "gh" && a[0] === "issue" && a[1] === "view") {
-      return Promise.resolve({ stdout: "Add thing\n", stderr: "" });
+      return Promise.resolve({ stdout: issueTitle.value, stderr: "" });
+    }
+    // nightgauge pr-stage title <n> --workdir <dir> (#2846)
+    if (cmd === "/fake/nightgauge" && a[0] === "pr-stage" && a[1] === "title") {
+      if (titleVerbFails.value) {
+        return Promise.reject(new Error("issue context missing"));
+      }
+      return Promise.resolve({ stdout: titleVerbOutput.value, stderr: "" });
     }
     // nightgauge pr create ... (#2506: never ambient gh pr create)
     if (cmd === "/fake/nightgauge" && a[0] === "pr" && a[1] === "create") {
@@ -178,6 +199,7 @@ describe("execution_path attribution when the fallback recovers (#122)", () => {
     branchName.value = "feat/42-add-thing";
     preExistingPrs.value = [];
     commitsAhead.value = "2";
+    diffExit.value = 1;
     pushFails.value = false;
     createFails.value = false;
     prCreated.value = false;
@@ -214,10 +236,37 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     branchName.value = "feat/42-add-thing";
     preExistingPrs.value = [];
     commitsAhead.value = "2";
+    diffExit.value = 1;
     pushFails.value = false;
     createFails.value = false;
+    titleVerbFails.value = false;
+    issueTitle.value = "Add thing\n";
+    titleVerbOutput.value = "fix(#42): add thing\n";
     prCreated.value = false;
     calls.value = [];
+  });
+
+  // #3012: a re-run Refs branch is commits ahead of base with an equal tree.
+  it("opens no PR when the branch is commits ahead but its tree equals base (#3012)", async () => {
+    commitsAhead.value = "3";
+    diffExit.value = 0;
+    const result = await callFallback();
+    expect(result.created).toBe(false);
+    expect(result.reason).toContain("[no-changes-produced]");
+    expect(result.reason).toMatch(/no diff against main/);
+    expect(countCalls((c) => c[0] === "git" && c[1] === "push")).toBe(0);
+    expect(
+      countCalls((c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create")
+    ).toBe(0);
+  });
+
+  it("opens no PR and stamps no marker when the tree diff is inconclusive (#3012)", async () => {
+    diffExit.value = 128;
+    const result = await callFallback();
+    expect(result.created).toBe(false);
+    expect(result.reason).not.toContain("[no-changes-produced]");
+    expect(result.reason).toMatch(/could not confirm .* has a diff/);
+    expect(countCalls((c) => c[0] === "git" && c[1] === "push")).toBe(0);
   });
 
   it("pushes the branch and opens a PR when commits exist and no PR is present", async () => {
@@ -229,7 +278,7 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     ).toBe(1);
   });
 
-  it("uses --body (not a heredoc) and includes the closing keyword + issue title", async () => {
+  it("uses --body (not a heredoc), the closing keyword and the rendered title (#2846)", async () => {
     await callFallback();
     const create = calls.value.find(
       (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
@@ -241,7 +290,40 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     expect(body).toContain("Refs #42");
     expect(body).not.toMatch(/\bCloses #42\b/);
     const title = create![create!.indexOf("--title") + 1];
-    expect(title).toBe("Add thing");
+    expect(title).toBe("fix(#42): add thing");
+    expect(countCalls((c) => c[0] === "gh" && c[1] === "issue")).toBe(0);
+  });
+
+  it("does not take an older binary's help text for a title (#2846)", async () => {
+    titleVerbOutput.value = "Invoke the deterministic runners\n\nUsage:\n  pr-stage [command]\n";
+    await callFallback();
+    const create = calls.value.find(
+      (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
+    );
+    expect(create![create!.indexOf("--title") + 1]).toBe("chore(#42): Add thing");
+  });
+
+  it("falls back to the issue title when the title verb fails (#2846)", async () => {
+    titleVerbFails.value = true;
+    const result = await callFallback();
+    expect(result.created).toBe(true);
+    const create = calls.value.find(
+      (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
+    );
+    expect(create![create!.indexOf("--title") + 1]).toBe("chore(#42): Add thing");
+  });
+
+  it("caps and neutralizes the issue title when the title verb fails (#2846)", async () => {
+    titleVerbFails.value = true;
+    issueTitle.value = `Fixes #7 ${"word ".repeat(30)}\n`;
+    await callFallback();
+    const create = calls.value.find(
+      (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
+    );
+    const title = create![create!.indexOf("--title") + 1];
+    expect(title.startsWith("chore(#42): Fixes issue 7 word")).toBe(true);
+    expect(title.length).toBeLessThanOrEqual(72);
+    expect(title.endsWith(" word")).toBe(true);
   });
 
   it("short-circuits to created:true without pushing when an open PR already exists", async () => {
@@ -338,6 +420,7 @@ function resetMocks() {
   branchName.value = "feat/42-add-thing";
   preExistingPrs.value = [];
   commitsAhead.value = "2";
+  diffExit.value = 1;
   pushFails.value = false;
   createFails.value = false;
   prCreated.value = false;

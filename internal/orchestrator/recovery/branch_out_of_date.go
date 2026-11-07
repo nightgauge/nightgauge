@@ -7,20 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
-)
-
-// DefaultRebaseCIPolls / DefaultRebaseCIPollInterval bound the post-rebase CI
-// wait. The action runs inside the scheduler's per-repo merge lock (held for
-// the whole pr-merge stage scope, see scheduler.go getMergeLock), so the budget
-// is deliberately tight: a never-green rebased head must not head-of-line block
-// the rest of the wave's merges. Mirrors DefaultECPolls / DefaultECPollInterval
-// in stages/prmerge.go.
-const (
-	DefaultRebaseCIPolls        = 10
-	DefaultRebaseCIPollInterval = 30 * time.Second
 )
 
 // BranchOutOfDate fetches origin/main, rebases the PR branch, and force-pushes
@@ -50,11 +41,26 @@ type BranchOutOfDate struct {
 // Default() pins this to the scheduler's existing instance; Execute guards it
 // with FollowUpHumanTriageRequired.
 func NewBranchOutOfDate(runner pmstages.PRMergeRunner) *BranchOutOfDate {
-	return &BranchOutOfDate{
-		runner:       runner,
-		pollInterval: DefaultRebaseCIPollInterval,
-		pollMax:      DefaultRebaseCIPolls,
+	return (&BranchOutOfDate{runner: runner}).WithCIWait(config.DefaultPRMergeCIWait)
+}
+
+// WithCIWait sizes the post-update CI wait to d, polled every
+// github.DefaultCIPollInterval. Default() passes config.ResolvePRMergeCIWait so
+// the wait matches an ordinary pr-merge CI wait (#2980): core CI takes 15 to 25
+// minutes, and a shorter wait booked a resolved conflict as a failure. The merge
+// lock is yielded for the wait (StageFailure.YieldMergeLock).
+func (a *BranchOutOfDate) WithCIWait(d time.Duration) *BranchOutOfDate {
+	return a.withPolling(github.DefaultCIPollInterval, d)
+}
+
+// withPolling sets the interval and enough polls to cover d (at least one).
+func (a *BranchOutOfDate) withPolling(interval, d time.Duration) *BranchOutOfDate {
+	a.pollInterval = interval
+	a.pollMax = int((d + interval - 1) / interval)
+	if a.pollMax < 1 {
+		a.pollMax = 1
 	}
+	return a
 }
 
 // Name implements RecoveryAction.
@@ -351,9 +357,15 @@ func (a *BranchOutOfDate) Execute(ctx context.Context, failure StageFailure) Rec
 // returns ok=true once every check is green; otherwise it returns a terminal
 // RecoveryResult (ok=false) describing why recovery is declined: a failing
 // check, context cancellation, or budget exhaustion while still in flight. The
-// budget (DefaultRebaseCIPolls × DefaultRebaseCIPollInterval) is bounded so a
-// never-green head cannot hang the scheduler under the per-repo merge lock.
+// budget (see WithCIWait) matches an ordinary pr-merge CI wait. The merge lock
+// is yielded for the wait and re-taken before returning, so the repository's
+// other merges proceed meanwhile (#2980); failure and cancellation return at once.
 func (a *BranchOutOfDate) waitForCI(ctx context.Context, failure StageFailure, evidence []string) (RecoveryResult, bool) {
+	if failure.YieldMergeLock != nil {
+		relock := failure.YieldMergeLock()
+		defer relock()
+	}
+	lastPending := "rollup unreadable"
 	for poll := 0; poll < a.pollMax; poll++ {
 		select {
 		case <-ctx.Done():
@@ -367,10 +379,12 @@ func (a *BranchOutOfDate) waitForCI(ctx context.Context, failure StageFailure, e
 		}
 
 		out, err := execGh(ctx, "pr", "view", fmt.Sprint(failure.PRNumber), "--json", "statusCheckRollup")
+		lastPending = "rollup unreadable"
 		if err == nil {
 			var snap prChecksSnapshot
 			if json.Unmarshal(out, &snap) == nil {
-				state := summarizeChecks(snap.StatusCheckRollup)
+				state, pendingNames := summarizeChecks(snap.StatusCheckRollup)
+				lastPending = formatPending(pendingNames)
 				switch state {
 				case checksGreen:
 					return RecoveryResult{}, true
@@ -403,7 +417,7 @@ func (a *BranchOutOfDate) waitForCI(ctx context.Context, failure StageFailure, e
 
 	return RecoveryResult{
 		Action:   a.Name(),
-		Reason:   "CI still in flight on rebased head after polling budget — declining to claim recovery",
+		Reason:   "CI still in flight on rebased head after polling budget — declining to claim recovery; " + lastPending,
 		Evidence: evidence,
 		FollowUp: FollowUpNoAction,
 	}, false
@@ -418,10 +432,28 @@ const (
 	checksFailed
 )
 
-// summarizeChecks reduces the rollup to a single state: any FAILURE/ERROR is
-// terminal-failed; any in-flight (empty/PENDING/QUEUED/IN_PROGRESS) keeps the
-// wait pending; otherwise all checks are complete-and-green.
-func summarizeChecks(rows []statusCheckRollupEntry) checksState {
+// maxPendingNames caps how many pending checks a give-up message lists.
+const maxPendingNames = 10
+
+// formatPending renders the pending check names for the give-up message.
+func formatPending(names []string) string {
+	if len(names) == 0 {
+		return "still pending: no checks registered"
+	}
+	shown := names
+	more := ""
+	if len(names) > maxPendingNames {
+		shown = names[:maxPendingNames]
+		more = fmt.Sprintf(" +%d more", len(names)-maxPendingNames)
+	}
+	return "still pending: " + strings.Join(shown, ", ") + more
+}
+
+// summarizeChecks reduces the rollup to a single state: any failed row is
+// terminal-failed; any in-flight row keeps the wait pending, and its label is
+// returned; otherwise all checks are complete-and-green. Each row is judged by
+// verdict(), so a commit status is read by its state (#3026).
+func summarizeChecks(rows []statusCheckRollupEntry) (checksState, []string) {
 	// An empty rollup right after a force-push means the old runs were dropped and
 	// the rebased head's runs have not registered yet — treat it as PENDING (not
 	// green) so waitForCI keeps polling for the rebased commits' CI, matching the
@@ -429,22 +461,19 @@ func summarizeChecks(rows []statusCheckRollupEntry) checksState {
 	// the bounded poll budget expires and waitForCI declines rather than merging
 	// on a never-validated head (#4071 review).
 	if len(rows) == 0 {
-		return checksPending
+		return checksPending, nil
 	}
-	pending := false
+	var pending []string
 	for _, c := range rows {
-		switch strings.ToUpper(c.Conclusion) {
-		case "FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED":
-			return checksFailed
-		case "SUCCESS", "NEUTRAL", "SKIPPED":
-			// terminal-green; keep scanning.
-		default:
-			// "" / PENDING / QUEUED / IN_PROGRESS / EXPECTED / WAITING — in flight.
-			pending = true
+		switch c.verdict() {
+		case checksFailed:
+			return checksFailed, nil
+		case checksPending:
+			pending = append(pending, c.label())
 		}
 	}
-	if pending {
-		return checksPending
+	if len(pending) > 0 {
+		return checksPending, pending
 	}
-	return checksGreen
+	return checksGreen, nil
 }

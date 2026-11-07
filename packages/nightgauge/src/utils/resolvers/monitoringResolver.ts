@@ -22,7 +22,11 @@ import type { DefaultModel } from "./modelResolver";
 import type { ClaudeEffort } from "./stageResolver";
 import type { ExecutionAdapter } from "../../config/schema";
 import { CodexModelCatalogService } from "../../services/CodexModelCatalogService";
-import { DEFAULT_BACKGROUND_TASK_CEILING_MS, type ProgressMonitorConfig } from "../progressMonitor";
+import {
+  DEFAULT_BACKGROUND_TASK_CEILING_MS,
+  DEFAULT_BACKGROUND_TASK_HARD_CEILING_MS,
+  type ProgressMonitorConfig,
+} from "../progressMonitor";
 import { isLocalExecution, isPriceableOpenCodeModel, localExecutionKey } from "../computeStageCost";
 
 // ============================================================================
@@ -435,7 +439,7 @@ export function getStallIdleMs(workspaceRoot?: string): number | undefined {
       }
 
       if (inPipeline) {
-        const match = trimmed.match(/^stall_idle_ms:\s*(\d+)/);
+        const match = trimmed.match(/^stall_idle_ms:\s*(\d+)\s*(?:#.*)?$/);
         if (match) {
           const parsed = Number.parseInt(match[1], 10);
           if (!Number.isNaN(parsed) && parsed >= 0) {
@@ -542,11 +546,12 @@ export function getQuotaSignalIdleMs(workspaceRoot?: string): number {
 /**
  * Decide whether the quota fast-fail should fire on the current stall tick.
  *
- * Two independent triggers, both gated on idle-since-the-last-rate-limit-signal:
+ * Two independent triggers, each gated on its own idle measure:
  *  1. Aggressive: a hard `status: "limited"` signal + idle ≥ exhaustedFastFailIdleMs (120s).
- *  2. Soft: ANY rate-limit signal seen + idle ≥ quotaSignalIdleBudgetMs (capped
- *     below the stage's normal idle budget). Catches a soft `allowed_warning`
- *     that precedes the CLI hanging on a later hard-limited request (#3702).
+ *  2. Soft: ANY rate-limit signal seen + soft idle ≥ quotaSignalIdleBudgetMs
+ *     (capped below the stage's normal idle budget). Catches a soft
+ *     `allowed_warning` that precedes the CLI hanging on a later hard-limited
+ *     request (#3702). Time on live work is not soft idle (#2711).
  *
  * Extracted as a pure function so this cost-sensitive decision is unit-testable
  * without spawning a subprocess.
@@ -564,6 +569,8 @@ export function shouldQuotaFastFail(params: {
   anyQuotaSignalSeen: boolean;
   /** Idle ms measured since the last rate-limit signal (min of idle and signal age). */
   idleSinceQuotaSignalMs: number;
+  /** The same measure with live background work removed; drives the soft trigger (#2711). */
+  softIdleSinceQuotaSignalMs: number;
   /** Aggressive `status: "limited"` fast-fail threshold (default 120s). */
   exhaustedFastFailIdleMs: number;
   /** Soft-signal idle budget, already capped below the stage's stallKillMs. */
@@ -573,13 +580,14 @@ export function shouldQuotaFastFail(params: {
     quotaExhaustedSignalActive,
     anyQuotaSignalSeen,
     idleSinceQuotaSignalMs,
+    softIdleSinceQuotaSignalMs,
     exhaustedFastFailIdleMs,
     quotaSignalIdleBudgetMs,
   } = params;
   if (quotaExhaustedSignalActive && idleSinceQuotaSignalMs >= exhaustedFastFailIdleMs) {
     return true;
   }
-  if (anyQuotaSignalSeen && idleSinceQuotaSignalMs >= quotaSignalIdleBudgetMs) {
+  if (anyQuotaSignalSeen && softIdleSinceQuotaSignalMs >= quotaSignalIdleBudgetMs) {
     return true;
   }
   return false;
@@ -2099,6 +2107,7 @@ export function getProgressRunawayConfig(
   let catastrophicLimitUsd = DEFAULT_CATASTROPHIC_LIMIT_USD;
   let externalProgressCeilingMs = DEFAULT_EXTERNAL_PROGRESS_CEILING_MS;
   let backgroundTaskCeilingMs = DEFAULT_BACKGROUND_TASK_CEILING_MS;
+  let backgroundTaskHardCeilingMs = DEFAULT_BACKGROUND_TASK_HARD_CEILING_MS;
 
   // Env var overrides
   const envEnabled = process.env["NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_ENABLED"];
@@ -2142,6 +2151,13 @@ export function getProgressRunawayConfig(
   if (envBackgroundCeiling !== undefined && envBackgroundCeiling !== "") {
     const parsed = Number.parseInt(envBackgroundCeiling, 10);
     if (!Number.isNaN(parsed) && parsed >= 0) backgroundTaskCeilingMs = parsed;
+  }
+
+  const envBackgroundHardCeiling =
+    process.env["NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_BACKGROUND_TASK_HARD_CEILING_MS"];
+  if (envBackgroundHardCeiling !== undefined && envBackgroundHardCeiling !== "") {
+    const parsed = Number.parseInt(envBackgroundHardCeiling, 10);
+    if (!Number.isNaN(parsed) && parsed >= 0) backgroundTaskHardCeilingMs = parsed;
   }
 
   // Config file overrides (only if no env override already changed the default)
@@ -2208,6 +2224,13 @@ export function getProgressRunawayConfig(
               const parsed = Number.parseInt(backgroundCeilingMatch[1], 10);
               if (!Number.isNaN(parsed) && parsed >= 0) backgroundTaskCeilingMs = parsed;
             }
+            const backgroundHardMatch = trimmed.match(
+              /^background_task_hard_ceiling_ms\s*:\s*(\d+)/
+            );
+            if (backgroundHardMatch && envBackgroundHardCeiling === undefined) {
+              const parsed = Number.parseInt(backgroundHardMatch[1], 10);
+              if (!Number.isNaN(parsed) && parsed >= 0) backgroundTaskHardCeilingMs = parsed;
+            }
           }
         }
       }
@@ -2235,6 +2258,7 @@ export function getProgressRunawayConfig(
     catastrophicKill,
     externalProgressCeilingMs,
     backgroundTaskCeilingMs,
+    backgroundTaskHardCeilingMs,
   };
 }
 

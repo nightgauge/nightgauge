@@ -171,7 +171,33 @@ func EvaluateStopJSON(workdir string) ([]byte, error) {
 // Always returns exit-code-0-equivalent output. Callers (CLI command) should
 // `os.Exit(0)` regardless.
 func EvaluateStopHookOutput(workdir string) ([]byte, error) {
+	return stopHookOutput(EvaluateStop(workdir))
+}
+
+// EvaluateClaudeStopHook is the Claude Code Stop hook entry point
+// (`nightgauge hook stop-verify`). It narrows EvaluateStopHookOutput in two
+// ways the user-scoped plugin needs (#2765):
+//
+//   - A repository that did not opt in (RepoOptedIn) is never evaluated: a
+//     stray PLAN.md in an unrelated project must not keep a session working.
+//   - stopHookActive (the payload's `stop_hook_active`, true when Claude Code
+//     is already continuing because of a Stop hook) emits no block, so the
+//     hook cannot loop. The plan is still evaluated, so the stop-hook
+//     sentinel the scheduler's uncommitted-work recovery reads is written
+//     exactly as on the first stop.
+func EvaluateClaudeStopHook(workdir string, stopHookActive bool) ([]byte, error) {
+	if !RepoOptedIn(workdir) {
+		return nil, nil
+	}
 	result := EvaluateStop(workdir)
+	if stopHookActive {
+		return nil, nil
+	}
+	return stopHookOutput(result)
+}
+
+// stopHookOutput renders a StopResult as Claude Code Stop hook stdout.
+func stopHookOutput(result StopResult) ([]byte, error) {
 	if result.OK {
 		// Silent success — Claude Code allows the stop to proceed.
 		return nil, nil

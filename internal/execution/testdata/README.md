@@ -53,14 +53,19 @@ lines — it never adds a key, changes a key's position, or alters any token
 count. What it does:
 
 - Drops `system/hook_*` lines (local `~/.claude` hook telemetry).
-- Reduces `system/init` to the fields a stream consumer reads. The raw event
-  carries the whole local environment (`skills`, `plugins`, `agents`,
+- Reduces `system/init` to the fields a stream consumer reads, including
+  `claude_code_version` and `plugins` with each local path redacted. The raw
+  event carries the whole local environment (`skills`, `agents`,
   `slash_commands`, `memory_paths`, absolute `cwd`).
 - Replaces `session_id` / `uuid` / `request_id` / thinking `signature` with
   stable placeholders.
 
 Everything else — every `usage` payload, every `message.id`, the event order,
 and the `result` event's key layout — is byte-for-byte as the CLI emitted it.
+
+The two `claude_stream_*` captures predate that `plugins` rule. They lack
+`plugins` and `claude_code_version` by redaction only: Claude Code 2.1.223
+reports both, as `claude_init_plugin_floor.jsonl` shows.
 
 ### Ground truth encoded in the file
 
@@ -740,3 +745,18 @@ Each entry is keyed by a capture's file name, and both tests fail when an
   The cloud stand-in's cost is the registry's rate card for `grok-4.6` (0.34
   USD per million input tokens, 1.02 per million output), not OpenCode's
   0.006262.
+
+## `claude_init_plugin_floor.jsonl`
+
+A real `system/init` and first assistant line from Claude Code `2.1.223`, the
+manifest's `min_version`, run with `--plugin-dir claude-plugins/nightgauge` while
+a user-level install was enabled, then passed through [`redact.jq`](redact.jq).
+It is the evidence that a bundled build runs on the floor (#2807):
+`TestFloorCaptureBacksTheManifestFloor` fails if `min_version` moves without a
+capture from the new floor.
+
+## `claude_init_plugin_user_install.jsonl`
+
+A real `system/init` from Claude Code `2.1.316`, taken with `--plugin-dir` while a
+user-level install was enabled. The CLI reports one `nightgauge` entry, from
+`nightgauge@inline`, so each gate fires once.

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -35,7 +37,8 @@ type Gate struct {
 func (g Gate) Missing() bool { return len(g.Steps) == 0 }
 
 // String renders the gate for a status row and a log line. It is never
-// executed.
+// executed: an argument may hold shell metacharacters, which are inert only
+// because steps run as argv. To run the gate, use Run.
 func (g Gate) String() string {
 	steps := make([]string, 0, len(g.Steps))
 	for _, s := range g.Steps {
@@ -266,6 +269,21 @@ func samePath(root, a, b string) bool {
 // case-insensitive filesystem resolves it.
 func foldPath(p string) string {
 	return strings.ToLower(path.Clean(p))
+}
+
+// Run executes every step in dir as an argv, never through a shell, streaming
+// its output, and stops at the first failure.
+func (g Gate) Run(ctx context.Context, dir string, stdout, stderr io.Writer) error {
+	for _, s := range g.Steps {
+		cmd := exec.CommandContext(ctx, s[0], s[1:]...)
+		cmd.Dir = dir
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("gate step %q: %w", strings.Join(s, " "), err)
+		}
+	}
+	return nil
 }
 
 // runGate runs every step in dir and stops at the first failure; the error

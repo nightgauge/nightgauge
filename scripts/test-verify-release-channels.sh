@@ -59,7 +59,7 @@ CURL_STUB
     echo "fake='$FAKE'"
     cat <<'GH_STUB'
 case "$1 $2" in
-"pr close" | "issue create" | "issue edit" | "issue close")
+"pr close" | "pr ready" | "issue create" | "issue edit" | "issue close")
   echo "$*" >>"$fake/writes.log"
   exit 0
   ;;
@@ -67,6 +67,18 @@ esac
 [ "$1" = "api" ] || exit 1
 for arg in "$@"; do
   case "$arg" in
+  */git/ref/heads/stable)
+    [ -e "$fake/stable-missing" ] && { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+    [ -e "$fake/stable.sha" ] || { echo 'gh: Bad Gateway (HTTP 502)' >&2; exit 1; }
+    printf '{"object": {"sha": "%s"}}\n' "$(cat "$fake/stable.sha")"
+    exit 0
+    ;;
+  */git/matching-refs/heads/stable)
+    [ -e "$fake/refs-unreadable" ] && { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+    cat "$fake/matching-refs.json" 2>/dev/null || echo '[]'
+    exit 0
+    ;;
+  */commits/v*) printf '{"sha": "tagsha"}\n'; exit 0 ;;
   */releases/latest) [ -e "$fake/no-release" ] && exit 1; cat "$fake/latest.json"; exit 0 ;;
   */contents/Casks/nightgauge.rb*) cat "$fake/cask.rb"; exit 0 ;;
   */pulls\?*) cat "$fake/pulls.json"; exit 0 ;;
@@ -77,18 +89,24 @@ exit 1
 GH_STUB
   } >"$FAKE/bin/gh"
   chmod +x "$FAKE/bin/gh"
+  # release-scan-gate.sh verify (#2946): exits with $FAKE/gate-rc (default 0)
+  # and logs its arguments, so a case can assert the gate ran and was obeyed.
+  printf '#!/usr/bin/env bash\necho "gate $*" >>"%s/gate.log"\nexit "$(cat "%s/gate-rc" 2>/dev/null || echo 0)"\n' \
+    "$FAKE" "$FAKE" >"$FAKE/bin/scan-gate"
+  chmod +x "$FAKE/bin/scan-gate"
 }
 
-# pr <number> <head-ref> [<head-repo>]
+# pr <number> <head-ref> [<head-repo>] [<draft>]
 pr() {
-  printf '{"number": %s, "head": {"ref": "%s", "repo": {"full_name": "%s"}}}' \
-    "$1" "$2" "${3:-nightgauge/homebrew-tap}"
+  printf '{"number": %s, "draft": %s, "head": {"ref": "%s", "repo": {"full_name": "%s"}}}' \
+    "$1" "${4:-false}" "$2" "${3:-nightgauge/homebrew-tap}"
 }
 
 OUT=""
 RC=0
 run() {
-  OUT="$(env -u GITHUB_STEP_SUMMARY PATH="$FAKE/bin:$PATH" bash "$SCRIPT" --channel homebrew "$@" 2>&1)"
+  OUT="$(env -u GITHUB_STEP_SUMMARY PATH="$FAKE/bin:$PATH" RELEASE_SCAN_GATE="$FAKE/bin/scan-gate" \
+    bash "$SCRIPT" --channel homebrew "$@" 2>&1)"
   RC=$?
 }
 
@@ -181,6 +199,36 @@ fixture v0.4.4 0.4.3 "[$(pr 17 cask-0.4.4), $(pr 99 cask-9.9.9 attacker/homebrew
 run --release --version 0.4.4 --close-superseded
 expect "fork PRs are ignored" 0 "cask-0.4.4" NONE
 
+# 9b. The scan gate (#2946): release mode verifies the release first, then
+#     marks the draft cask PR ready -- and only then.
+fixture v0.4.4 0.4.3 "[$(pr 17 cask-0.4.4 nightgauge/homebrew-tap true)]"
+run --release --version 0.4.4
+expect "a scan-clean release readies its draft cask PR" 0 "marked the draft cask PR nightgauge/homebrew-tap#17 ready" "pr ready 17"
+if grep -qx "gate verify v0.4.4 -R nightgauge/nightgauge" "$FAKE/gate.log" 2>/dev/null; then
+  echo "PASS: the scan gate verified the release whose cask it readied"; PASS=$((PASS + 1))
+else
+  echo "FAIL: the scan gate did not verify v0.4.4: $(cat "$FAKE/gate.log" 2>/dev/null)"; FAIL=$((FAIL + 1))
+fi
+fixture v0.4.4 0.4.3 "[$(pr 17 cask-0.4.4 nightgauge/homebrew-tap true)]"
+echo 1 >"$FAKE/gate-rc"
+run --release --version 0.4.4 --close-superseded
+expect "a draft or unscanned release is refused" 1 "refusing to ready its cask"
+case "$(cat "$FAKE/writes.log")" in
+*"pr "*) echo "FAIL: a cask PR was touched for an unscanned release"; FAIL=$((FAIL + 1)) ;;
+*) echo "PASS: an unscanned release touches no cask PR"; PASS=$((PASS + 1)) ;;
+esac
+fixture v0.4.4 0.4.3 "[$(pr 17 cask-0.4.4 nightgauge/homebrew-tap true)]"
+echo 2 >"$FAKE/gate-rc"
+run --release --version 0.4.4
+expect "a scan gate that cannot decide is exit 2" 2 "refusing to ready its cask"
+fixture v0.4.4 0.4.3 "[$(pr 17 cask-0.4.4)]"
+run --version 0.4.4
+if [ -s "$FAKE/gate.log" ]; then
+  echo "FAIL: watchdog mode ran the scan gate"; FAIL=$((FAIL + 1))
+else
+  echo "PASS: watchdog mode does not run the scan gate"; PASS=$((PASS + 1))
+fi
+
 # 10. Semver, not string order: 0.10.0 is newer than 0.9.0.
 fixture v0.10.0 0.10.0 "[$(pr 20 cask-0.9.0)]"
 run --close-superseded
@@ -227,7 +275,7 @@ expect "a missing --channel is rejected" 2 "--channel is required"
 fixture v0.4.4 0.4.4 '[]'
 OUT="$(PATH="$FAKE/bin:$PATH" bash "$SCRIPT" --channel snap 2>&1)"
 RC=$?
-expect "an unknown --channel names the three channels" 2 "(homebrew, marketplace, open-vsx)"
+expect "an unknown --channel names the channels" 2 "(homebrew, marketplace, open-vsx, claude-plugin)"
 
 # --- The extension listings (#1769) ----------------------------------------------
 # The Marketplace and Open VSX are channels of the same script: one query per
@@ -373,6 +421,49 @@ expect "an unparseable Open VSX answer is exit 2" 2 "unparseable"
 fixture v0.7.2 0.7.2 '[]'
 run_listing marketplace --extension 'not an id'
 expect "a malformed --extension is rejected" 2 "--extension must be publisher.name"
+
+# 25b. The plugin channel: stable must sit on the latest release's commit.
+fixture v0.7.2 0.7.2 '[]'
+echo tagsha >"$FAKE/stable.sha"
+run_listing claude-plugin
+expect "stable at the release is current" 0 "verdict: current"
+
+fixture v0.7.2 0.7.2 '[]'
+echo oldsha >"$FAKE/stable.sha"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "stable left behind is red and files one issue" 1 "fast-forward it" "issue create"
+
+fixture v0.7.2 0.7.2 '[]'
+run_listing claude-plugin
+expect "an unreadable stable branch is exit 2" 2 "cannot read the stable branch"
+
+fixture v0.7.2 0.7.2 '[]'
+touch "$FAKE/stable-missing"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "a missing stable branch is red and files one issue" 1 "does not exist" "issue create"
+
+# A 404 from a token that cannot read the repository is not a missing branch.
+fixture v0.7.2 0.7.2 '[]' '[]'
+touch "$FAKE/stable-missing" "$FAKE/refs-unreadable"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "an unreadable repository is exit 2, not MISSING" 2 "token cannot read refs" NONE
+
+fixture v0.7.2 0.7.2 '[]' '[]'
+touch "$FAKE/stable-missing"
+printf '[{"ref": "refs/heads/stable"}]\n' >"$FAKE/matching-refs.json"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "a listed stable that 404s is exit 2" 2 "reading it returned 404" NONE
+
+fixture v0.7.2 0.7.2 '[]' '[]'
+touch "$FAKE/stable-missing"
+printf '[{"ref": "refs/heads/stable-next"}]\n' >"$FAKE/matching-refs.json"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "a prefix match is not the stable branch" 1 "does not exist" "issue create"
+
+fixture v0.7.2 0.7.2 '[]' '[{"number": 9, "title": "Release channel behind: claude-plugin"}]'
+echo tagsha >"$FAKE/stable.sha"
+run_listing claude-plugin --issue-repo nightgauge/nightgauge
+expect "a current stable closes the channel issue" 0 "closed issue nightgauge/nightgauge#9" "issue close 9"
 
 # 26. The listing check is the only automated query to either registry host
 #     (#1767, #1769): no other workflow or script names one. The link-check

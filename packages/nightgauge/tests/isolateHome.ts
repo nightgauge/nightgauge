@@ -66,6 +66,14 @@ Object.assign(process.env, {
   NIGHTGAUGE_STATE_HOME: path.join(isolatedHome, "state"),
   NIGHTGAUGE_CACHE_HOME: path.join(isolatedHome, "cache"),
   NIGHTGAUGE_RUNTIME_DIR: runtimeDir,
+  // The agent homes the setup services install skills into (#2935). Moving
+  // HOME is not enough: a developer who exports any of these would have a
+  // test write its skills into their real install. Set after the Go block,
+  // which reads the real XDG_CONFIG_HOME.
+  CODEX_HOME: path.join(isolatedHome, ".codex"),
+  GROK_HOME: path.join(isolatedHome, ".grok"),
+  XDG_CONFIG_HOME: path.join(isolatedHome, ".config"),
+  CLAUDE_CONFIG_DIR: path.join(isolatedHome, ".claude"),
 });
 if (process.platform === "win32") {
   process.env.USERPROFILE = isolatedHome;

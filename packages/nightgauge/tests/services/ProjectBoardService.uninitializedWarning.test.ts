@@ -94,4 +94,18 @@ describe("ProjectBoardService — incomplete-config warning (#901)", () => {
     expect(showWarningMessage).toHaveBeenCalledTimes(1);
     expect(showWarningMessage.mock.calls[0][0]).toContain("project config incomplete");
   });
+
+  it("stays silent for an owner with no board, which Initialize Repository writes (#2760)", async () => {
+    await fs.mkdir(path.join(tmpRoot, ".nightgauge"), { recursive: true });
+    await fs.writeFile(path.join(tmpRoot, ".nightgauge", "config.yaml"), "owner: acme\n");
+    mockConfigGetProjectConfig.mockResolvedValue({
+      owner: "acme",
+      defaultRepo: "widget",
+      projectNumber: 0,
+    });
+
+    await new ProjectBoardService(tmpRoot).loadConfig();
+
+    expect(showWarningMessage).not.toHaveBeenCalled();
+  });
 });

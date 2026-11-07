@@ -34,6 +34,7 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
+	"github.com/nightgauge/nightgauge/internal/review"
 	"github.com/nightgauge/nightgauge/internal/trace"
 )
 
@@ -54,6 +55,9 @@ const (
 	producerRefinementExhausted = "refinement-exhausted"
 	producerSafetyRailTrip      = "safety-rail-trip"
 	producerEpicIntegration     = "epic-integration"
+	producerGatePluginMissing   = "gate-plugin-missing"
+	producerReviewCap           = "review-cap"
+	producerResumeNoOp          = "resume-no-op"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -95,6 +99,10 @@ func keyEpicIntegration(repo string, epic int) string {
 
 func keyArchitectureApproval(repo string, issue int) string {
 	return fmt.Sprintf("%s:%s#%d", producerArchitectureApprove, repo, issue)
+}
+
+func keyReviewCap(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerReviewCap, repo, issue)
 }
 
 // keyTerminalFailure builds the sticky (producer, idempotency_key) identity
@@ -379,6 +387,11 @@ func (as *AutonomousScheduler) raiseOwnerActionHandoff(repo string, issue int, t
 // already held it and wedged the daemon. This helper is the single
 // enforcement point for every attention call made while as.mu is held.
 //
+// The rule also covers everything a verb can reach, as.mu held or not (#2750):
+// a verb runs on the goroutine that holds the store lock, which is not
+// reentrant, so ResumeRepo's reconcile deadlocked on Retry with as.mu already
+// released. TestNoInlineAttentionReachableFromAVerb pins this.
+//
 // Dispatched ops run unordered relative to each other; callers must not
 // dispatch a raise and a retract for the same idempotency key in one pass.
 func (as *AutonomousScheduler) dispatchAttention(fn func()) {
@@ -480,6 +493,108 @@ func (as *AutonomousScheduler) raiseArchitectureApproval(repo string, issue int,
 		ExpiresAt:     standingExpiry(),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Note why this architecture is approved, or what needs to change first"},
 	})
+}
+
+// raiseReviewCapReached surfaces a run parked at the review's round cap (#2865):
+// what still stands and where the work is. The ledger holds both, because the
+// card is raised outside the run's worktree; without a record it falls back to
+// the failure text, so the cap is still named.
+func (as *AutonomousScheduler) raiseReviewCapReached(repo string, issue int, title, detail string) {
+	rec, err := review.LatestCap(as.steerRootFor(repo), issue)
+	if err != nil {
+		log.Printf("attention: read review cap record for %s#%d (fail-open): %v", repo, issue, err)
+	}
+	key := fmt.Sprintf("%s#%d", repo, issue)
+	// Each cap has its own fingerprint, so a cap after a release raises a new
+	// card instead of matching the released one (#2876).
+	fingerprint := fmt.Sprintf("review-cap:fallback:%d", time.Now().UnixNano())
+	var body strings.Builder
+	fmt.Fprintf(&body, "The independent review of %s (%q) reached its cap of %d rounds, so the run stopped. "+
+		"This issue is parked; the rest of the repository keeps dispatching.\n\n", key, title, review.MaxRounds)
+	if rec != nil {
+		fingerprint = "review-cap:" + rec.RunID
+		writeReviewCapRecord(&body, rec)
+	} else {
+		fmt.Fprintf(&body, "No review record was found: %s\n\n", detail)
+	}
+	body.WriteString("Release re-runs the pipeline with a fresh round count. It does not resume from the worktree.")
+
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyReviewCap(repo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("Review cap reached — #%d", issue),
+		Body:           body.String(),
+		Producer:       producerReviewCap,
+		Standing:       true,
+		Fingerprint:    fingerprint,
+		Context: attention.Context{Repo: repo, Issue: issue, Stage: review.Stage,
+			Blocker: TerminalKindReviewCapReached},
+		Options: []attention.Option{
+			{ID: "release", Label: "Release the issue", Verb: attention.VerbAutonomousClearIssueFailures,
+				Args: map[string]any{"key": key, "then": "autonomous.rescan"}, Style: attention.StylePrimary},
+			noopOption("park", "Keep it parked"),
+		},
+		DefaultAction: "park",
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note what you changed before releasing the issue"},
+	})
+}
+
+// keyResumeNoOp is the sticky identity of an issue's no-op merge card.
+func keyResumeNoOp(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerResumeNoOp, repo, issue)
+}
+
+// raiseResumeNoOp surfaces an issue parked after a resumed run merged nothing
+// (#2878). Standing like the review cap: the hold lasts until an operator
+// releases it, and the release retracts the card.
+func (as *AutonomousScheduler) raiseResumeNoOp(repo string, issue int, title string) {
+	key := fmt.Sprintf("%s#%d", repo, issue)
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyResumeNoOp(repo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("No-op merge — #%d", issue),
+		Body: fmt.Sprintf("A run of %s (%q) resumed at pr-merge, found the PR already merged and did no work. "+
+			"This issue is parked in Backlog; the rest of the repository keeps dispatching.\n\n"+
+			"%s", key, title, TerminalKindRemediation(TerminalKindResumeNoOp)),
+		Producer: producerResumeNoOp,
+		Standing: true,
+		Context:  attention.Context{Repo: repo, Issue: issue, Stage: "pr-merge", Blocker: TerminalKindResumeNoOp},
+		Options: []attention.Option{
+			{ID: "release", Label: "Release the issue", Verb: attention.VerbAutonomousClearIssueFailures,
+				Args: map[string]any{"key": key, "then": "autonomous.rescan"}, Style: attention.StylePrimary},
+			noopOption("park", "Keep it parked"),
+		},
+		DefaultAction: "park",
+		ExpiresAt:     standingExpiry(),
+	})
+}
+
+// retractResumeNoOp clears the card once the hold is released.
+func (as *AutonomousScheduler) retractResumeNoOp(repo string, issue int) {
+	as.retractCard(producerResumeNoOp, keyResumeNoOp(repo, issue))
+}
+
+// writeReviewCapRecord lists the last catch's findings and the worktree.
+func writeReviewCapRecord(b *strings.Builder, rec *review.CapRecord) {
+	if len(rec.Outcome.Fix) == 0 {
+		b.WriteString("The last review recorded no findings to fix.\n\n")
+	} else {
+		fmt.Fprintf(b, "Findings still standing, from the last finished review (%d):\n", len(rec.Outcome.Fix))
+		for _, f := range rec.Outcome.Fix {
+			where := f.File
+			if f.Line != nil {
+				where = fmt.Sprintf("%s:%d", f.File, *f.Line)
+			}
+			fmt.Fprintf(b, "- %s %s, %s: %s\n", f.Severity, f.Pass, where, f.Claim)
+		}
+		b.WriteString("\n")
+	}
+	if rec.Worktree != "" {
+		fmt.Fprintf(b, "The work is uncommitted in %s. Nothing was pushed.\n\n", rec.Worktree)
+	}
 }
 
 // keyUntrustedAuthorSkip builds the sticky (producer, idempotency_key)
@@ -796,23 +911,32 @@ func (as *AutonomousScheduler) resolveRefinementExhausted(fullRepo string, issue
 // observed set is every other open card of this producer. Listing is a local
 // store read, not a forge call, so this costs no API budget.
 func (as *AutonomousScheduler) retractArchitectureApproval(repo string, issue int) {
+	as.retractCard(producerArchitectureApprove, keyArchitectureApproval(repo, issue))
+}
+
+// retractReviewCap clears a capped issue's card once its hold is released, by
+// the card or from the CLI (#2865).
+func (as *AutonomousScheduler) retractReviewCap(repo string, issue int) {
+	as.retractCard(producerReviewCap, keyReviewCap(repo, issue))
+}
+
+func (as *AutonomousScheduler) retractCard(producer, target string) {
 	if as == nil || as.attention == nil {
 		return
 	}
-	target := keyArchitectureApproval(repo, issue)
 	reqs, err := as.attention.List(attention.ListFilter{})
 	if err != nil {
-		log.Printf("attention: retract %q list failed (fail-open): %v", producerArchitectureApprove, err)
+		log.Printf("attention: retract %q list failed (fail-open): %v", producer, err)
 		return
 	}
 	observed := make([]string, 0, len(reqs))
 	for _, r := range reqs {
-		if r.Producer != producerArchitectureApprove || r.IdempotencyKey == target {
+		if r.Producer != producer || r.IdempotencyKey == target {
 			continue
 		}
 		observed = append(observed, r.IdempotencyKey)
 	}
-	as.autoResolveAttention(producerArchitectureApprove, observed)
+	as.autoResolveAttention(producer, observed)
 }
 
 // --- Producer (unnumbered): terminal failure halt (per-issue, fleet-blocking) ---
@@ -855,6 +979,12 @@ func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stag
 	if as.state != nil && as.state.LifetimeIssueFailures != nil {
 		lifetimeFails = as.state.LifetimeIssueFailures[key]
 	}
+	haltReason := ""
+	if as.state != nil {
+		if halt, ok := as.state.PausedRepos[repo]; ok {
+			haltReason = halt.Reason
+		}
+	}
 	as.mu.Unlock()
 	attemptsRemaining := MaxLifetimeFailuresPerIssue - lifetimeFails
 	if attemptsRemaining < 0 {
@@ -865,6 +995,10 @@ func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stag
 	b.WriteString(fmt.Sprintf("Issue #%d failed terminally at %s (%s) and halted dispatch for %s — no further issues in this repository start until it is resolved. Every OTHER repository in the workspace keeps running (#1148), and runs already in flight are untouched.\n\n", issue, stage, terminalKind, repo))
 	if terminalKind == TerminalKindAbandonedCommit {
 		b.WriteString("A recovery attempt already found committed, unmerged work on this branch (clean tree, ahead of base) but could not resume automatically. The commit is still there — retry will resume at pr-create rather than re-deriving the work from scratch.\n\n")
+	}
+	if terminalKind == TerminalKindMergeConflict && haltReason != "" {
+		// #2841: the halt reason carries the conflicting files.
+		b.WriteString(haltReason + "\n\n")
 	}
 	if terminalKind == TerminalKindCommitOrphaned {
 		b.WriteString("A killed stage's commit landed off the expected feature branch (most likely a stray `temp-pre-push-<n>` branch left over from a SIGKILL mid pre-push validation) and self-heal could not check out the feature branch to recover it. The commit itself was NOT deleted — the worktree/branch cleanup guard preserves anything ahead of the base branch. Push the stranded branch and open a PR from it by hand before retrying; a plain Retry re-dispatches into a fresh worktree and re-derives the work from scratch instead of reusing the commit.\n\n")
@@ -1593,6 +1727,54 @@ func (s *Scheduler) raiseAuthFailure(repo string, issue int, runID, reason strin
 	})
 }
 
+// --- Producer (unnumbered): gate plugin missing (per-issue) -----------------
+
+// gatePluginMissingRequest is the card for a stage stopped because its Claude
+// plugin did not load (#2723). Parking holds the issue and raises nothing, and a
+// card is the only way an operator hears about a stage that never started. Both
+// terminal funnels build it here, and the shared key coalesces them.
+func gatePluginMissingRequest(repo string, issue int, runID, stage, detail string) attention.DecisionRequest {
+	key := fmt.Sprintf("%s#%d", repo, issue)
+	// The failure text carries the stage's whole stderr tail; the card needs the
+	// reading.
+	for _, line := range strings.Split(detail, "\n") {
+		if i := strings.Index(line, "[gate-plugin-missing]"); i >= 0 {
+			detail = line[i:]
+			break
+		}
+	}
+	return attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("%s:%s", producerGatePluginMissing, key),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("#%d stopped: safety gates did not load", issue),
+		Body: fmt.Sprintf("%s#%d stopped at %s before doing any work: %s\n\nNext: %s.",
+			repo, issue, stage, detail, ParkedRemediation(TerminalKindGatePluginMissing, detail)),
+		Producer: producerGatePluginMissing,
+		Context: attention.Context{Repo: repo, Issue: issue, RunID: runID, Stage: stage,
+			Blocker: TerminalKindGatePluginMissing, TraceRef: runTraceRef(runID)},
+		Options: []attention.Option{
+			{ID: "fixed-and-retry", Label: "Fixed — release the issue", Verb: attention.VerbAutonomousClearIssueFailures,
+				Args: map[string]any{"key": key, "then": "autonomous.rescan"}, Style: attention.StylePrimary},
+			noopOption("park", "Keep it parked"),
+		},
+		DefaultAction: "park",
+		ExpiresAt:     expiryFromNow(24 * time.Hour),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note what you changed before releasing the issue"},
+	}
+}
+
+// RaiseGatePluginMissing raises the card on the extension's terminal funnel,
+// which holds the store and no Scheduler. Fail-open like every raise path.
+func RaiseGatePluginMissing(store *attention.Store, repo string, issue int, runID, stage, detail string) {
+	raiseThrough(store, gatePluginMissingRequest(repo, issue, runID, stage, detail))
+}
+
+// raiseGatePluginMissing raises the card on the Go scheduler's path.
+func (s *Scheduler) raiseGatePluginMissing(repo string, issue int, runID, stage, detail string) {
+	s.raiseAttention(gatePluginMissingRequest(repo, issue, runID, stage, detail))
+}
+
 // --- Producer (unnumbered): branch forked from its remote (run-scoped) -------
 
 // raiseBranchForked surfaces a branch whose remote head is not reachable from
@@ -1603,21 +1785,26 @@ func (s *Scheduler) raiseAuthFailure(repo string, issue int, runID, reason strin
 // The card names both SHAs. A fork is only actionable if the operator can see
 // what diverged; "your branch has forked" without the two commits sends them
 // back to the terminal to re-derive the evidence the pipeline already had.
-func (s *Scheduler) raiseBranchForked(repo string, issue int, runID, branch string, fork BranchFork) {
+func (s *Scheduler) raiseBranchForked(repo string, issue int, runID, branch string, fork BranchFork, strandedRef, strandedSHA string) {
+	preserved, blocker := "", fmt.Sprintf("origin/%s=%s local=%s", branch, shortSHA(fork.RemoteSHA), shortSHA(fork.LocalSHA))
+	if strandedRef != "" {
+		preserved = fmt.Sprintf("Local work is preserved at `%s` = `%s`.\n\n", strandedRef, strandedSHA)
+		blocker += fmt.Sprintf(" stranded=%s@%s", strandedRef, shortSHA(strandedSHA))
+	}
 	s.raiseAttention(attention.DecisionRequest{
 		IdempotencyKey: fmt.Sprintf("branch-forked:%s#%d", repo, issue),
 		Kind:           attention.KindUnblock,
 		Severity:       attention.SeverityBlockingRun,
 		Title:          fmt.Sprintf("Branch %s has forked from origin", branch),
 		Body: fmt.Sprintf(
-			"#%d cannot push: %s\n\n"+
+			"#%d cannot push: %s\n\n%s"+
 				"No retry clears this. Decide which side survives — reset the local branch onto origin/%s, "+
 				"or delete origin/%s if the remote commit is an orphan from a killed run — then retry.",
-			issue, fork.Detail, branch, branch),
+			issue, fork.Detail, preserved, branch, branch),
 		Producer: "branch-fork",
 		Context: attention.Context{
 			Repo: repo, Issue: issue, RunID: runID,
-			Blocker:  fmt.Sprintf("origin/%s=%s local=%s", branch, shortSHA(fork.RemoteSHA), shortSHA(fork.LocalSHA)),
+			Blocker:  blocker,
 			TraceRef: runTraceRef(runID),
 		},
 		Options: []attention.Option{

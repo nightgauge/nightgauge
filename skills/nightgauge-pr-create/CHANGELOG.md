@@ -10,6 +10,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Phase 2.3 base merge no longer aborts a merge that is already open, so a staged
+  resolution survives (#2755).
+
+### Changed
+
+- **The title comes from `nightgauge pr-stage title` (#2846).** The skill no longer composes it, so this path keeps the 72-character cap.
+- **The stale-branch merge pushes with `nightgauge git push-branch` (#2749).** It
+  never forces, and exit 3 reports a rejected push as a fork while exit 1 keeps
+  the permission and infrastructure message.
+
+### Fixed
+
+- **The stage never runs the full local gate (#2989).** After the Phase 2.3
+  base merge it pushes straight away; `feature-validate`'s gate satisfies the
+  once-before-push rule, and the stage fence refuses a gate start here.
 - **Criteria the diff answers are checked against the diff (#2665).** The
   deterministic runner resolves each acceptance criterion from the branch diff
   as well as the tree re-run and the validate verdict, so a diff-checkable

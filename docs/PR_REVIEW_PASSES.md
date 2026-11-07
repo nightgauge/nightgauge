@@ -1,13 +1,39 @@
 # PR Review Passes
 
-Pull requests the pipeline opens are reviewed inside the pipeline. Pull requests
-opened by a person or by another tool are not. The
-`.github/workflows/pr-review.yml` workflow closes that gap: it runs the
-severity-ranked review passes defined here on every pull request the pipeline
-did not author, and posts the result as one advisory comment.
+Pull requests the pipeline opens are reviewed inside the pipeline. The
+`.github/workflows/pr-review.yml` workflow is the manual second opinion: a
+maintainer runs it on one pull request with `workflow_dispatch`, and it runs the
+severity-ranked review passes defined here and posts the result as one advisory
+comment. It never runs on its own, so it adds no model spend and no check to a
+pull request. To run it:
+
+```bash
+gh workflow run pr-review.yml -f pr_number=<N>
+```
+
+It authenticates with the `CLAUDE_CODE_OAUTH_TOKEN` secret, created with
+`claude setup-token`, so it draws on the Claude subscription. The workflow passes
+no `ANTHROPIC_API_KEY`: the CLI would prefer it, and it bills per use.
 
 This file is the committed definition. The review model reads it at run time,
 and `scripts/pr-review.mjs` enforces its limits before anything is posted.
+
+`feature-validate` applies the same passes, severities and finding schema locally
+(Step 2.7.3), through `nightgauge review`. It reviews each tree once, in a fresh
+context holding only the diff, the issue and the tree. Blockers and `correctness`
+majors go to a fix loop of at most three catches per run, other majors become
+discovered work, and nitpicks are counted. Each finished round replaces the
+review's discovered work with its own, so only the last finished round's findings
+are filed, and two passes at one location stay two findings. A review that does
+not finish records a `catch`, never a pass, and changes no discovered work. The
+sections below on comments and identity describe the manual workflow only.
+
+The binary carries its own copy of the Passes through Caps sections, as
+`internal/review/passes.md`, and writes it into each review's bundle, so a review
+works in any repository and a diff cannot edit its own reviewer's rules. Those
+sections name files in plain text rather than linking them because that copy is
+read where the links would not resolve. A test pins the copy to this file: edit
+both in the same change.
 
 ## Passes
 
@@ -15,20 +41,19 @@ Each pass reads the diff and the files it touches, and reports concrete,
 actionable findings only. A pass does not restate what the code does and does
 not praise it.
 
-| Pass              | Asks                                                                                                                           |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `correctness`     | Does the change do what it claims? Logic errors, unhandled cases, broken contracts                                             |
-| `security`        | Does it apply [standards/security.md](../standards/security.md)? Secrets, injection, unvalidated input, over-broad permissions |
-| `plan-compliance` | Does it deliver the issue it closes, and only that? Missing criteria, scope creep                                              |
+| Pass              | Asks                                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------- |
+| `correctness`     | Does the change do what it claims? Logic errors, unhandled cases, broken contracts                   |
+| `security`        | Does it apply `standards/security.md`? Secrets, injection, unvalidated input, over-broad permissions |
+| `plan-compliance` | Does it deliver the issue it closes, and only that? Missing criteria, scope creep                    |
 
 `plan-compliance` uses the bodies of the issues the pull request closes. When
 it closes none, the pass reports nothing.
 
 ## Severity
 
-The scale is the one in
-[nightgauge-adversarial-review](../skills/nightgauge-adversarial-review/SKILL.md).
-Both use this definition.
+The scale is the one in `skills/nightgauge-adversarial-review/SKILL.md`. Both use
+this definition.
 
 | Severity  | Meaning                                                                 |
 | --------- | ----------------------------------------------------------------------- |
@@ -57,13 +82,13 @@ rejected.
 }
 ```
 
-- `file` is a repository-relative path. It is not absolute and has no `..`
-  segment.
+- `file` is a repository-relative path of at most 300 characters. It is not
+  absolute and has no `..` segment.
 - `line` is a positive integer, or `null` for a finding about the whole file.
 - `claim` is one line of at most 300 characters.
 - `fix` is at most 1000 characters.
 - No string may contain a credential shape (`sk-ant-`, `ghp_`, `ghs_`, `gho_`,
-  `ghu_`, `github_pat_`). The model runs beside the API key, so such a string
+  `ghu_`, `github_pat_`). The model runs beside the model token, so such a string
   is treated as a leak and the whole file is rejected.
 
 ## Caps
@@ -72,8 +97,21 @@ rejected.
 | ----------------- | ----- | --------------------------------------------------------- |
 | Findings per file | 30    | More is rejected; nothing is posted                       |
 | Nitpicks shown    | 5     | The rest are counted in an "N more nitpicks omitted" line |
-| `claim` length    | 300   | Longer is rejected                                        |
-| `fix` length      | 1000  | Longer is rejected                                        |
+| `claim` length    | 300   | Longer is truncated with a marker; the comment says so    |
+| `fix` length      | 1000  | Longer is truncated with a marker; the comment says so    |
+| `file` length     | 300   | Longer drops that finding only; the comment says so       |
+| Turns per review  | 80    | Reaching it stops the review; the job fails, no comment   |
+
+## Turn limit
+
+A review that reaches the turn limit did not finish. Its red check is neither
+a pass nor a finding, and nothing is posted. The job summary and the error
+annotation say so and name the limit.
+
+The review scales with the diff, so the remedy is to split the pull request
+into smaller ones. One re-run is reasonable because turn use varies; repeating
+it is not the remedy. The value lives once, as `REVIEW_MAX_TURNS` in
+`.github/workflows/pr-review.yml`.
 
 ## Output
 
@@ -100,8 +138,8 @@ The comment is posted with the workflow's `GITHUB_TOKEN`, as
 the reviewer login equals the author login, so the reviewer is never the
 author.
 
-Also skipped: `dependabot[bot]`, draft pull requests, runs without an
-`ANTHROPIC_API_KEY` secret, and runs whose base commit has no
+Also skipped: `dependabot[bot]`, draft pull requests, runs without a
+`CLAUDE_CODE_OAUTH_TOKEN` secret, and runs whose base commit has no
 `scripts/pr-review.mjs` (the pull request that introduces it). A skip is
 explained in the job summary.
 
@@ -110,18 +148,23 @@ explained in the job summary.
 The review is advisory:
 
 - No job fails because of a finding. A job fails only when the harness itself
-  breaks, for example when the findings file is rejected.
+  breaks, for example when the findings file is rejected or the review reaches
+  its turn limit.
 - The comment is a plain comment. It never approves or requests changes.
 - The workflow is not a required status check, and must not be added to a
   ruleset.
 
+The pipeline's own merge is the one consumer. Before it enqueues, `pr-merge` reads
+the comment and may hold the merge or file its findings as issues. See
+[PR_MERGE_STAGE.md](PR_MERGE_STAGE.md#enqueue-review-gate-2730), which depends on
+this comment's format. Change `scripts/pr-review.mjs` and
+`internal/orchestrator/stages/prmerge_review.go` together.
+
 ## Fork pull requests
 
-Under `pull_request`, a fork's run gets no secrets and a read-only token, so it
-cannot call the model or post. Fork pull requests are skipped with an
-explanation. A maintainer reviews one by running the workflow manually with
-`workflow_dispatch` and the pull request number. Automatic fork review needs a
-different trigger and key isolation and is not implemented.
+A manual run reviews a fork's pull request like any other, because a maintainer
+chose to start it. Automatic fork review needs a `pull_request` trigger, which
+gives a fork no secrets, so it is not implemented.
 
 ## Security model
 

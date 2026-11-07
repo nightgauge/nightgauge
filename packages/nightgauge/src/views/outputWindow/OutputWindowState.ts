@@ -126,6 +126,12 @@ export interface SlotInfo {
    * "archived" chip in the tab header.
    */
   archived?: boolean;
+  /**
+   * Identifies the occupant of this slot index (#2785). Changes exactly when
+   * a new run takes the record, and is never reused, so the webview can tell
+   * an occupant change from a same-run patch.
+   */
+  runGeneration?: number;
 }
 
 /**
@@ -308,6 +314,8 @@ export class OutputWindowState {
   // Pinned and running slot tracking (Issue #2816)
   private pinnedSlots: Set<number> = new Set();
   private runningSlots: Set<number> = new Set();
+  /** Source of {@link SlotInfo.runGeneration}; survives slot removal (#2785). */
+  private lastRunGeneration = 0;
 
   // Log file persistence (Issue #190)
   private workspaceRoot: string | null = null;
@@ -700,8 +708,10 @@ export class OutputWindowState {
    * Register a concurrent pipeline slot for tab display.
    *
    * Called when a new slot starts via SlotOutputManager.createSlotChannel.
-   * Idempotent — safe to call again to update title. Clears the archived
-   * flag so resuming a tab in a live run replaces the rehydrated copy.
+   * Idempotent for one run — safe to call again to update title. A different
+   * run reusing the index starts from a clean record (#2785); see
+   * {@link isNewRun}. Clears the archived flag so resuming a tab in a live run
+   * replaces the rehydrated copy.
    */
   /**
    * Per-slot disk-log roots (#191): concurrent runs in different repos must
@@ -747,6 +757,23 @@ export class OutputWindowState {
     );
   }
 
+  /**
+   * Whether a registration belongs to a different run than the slot's record
+   * (#2785). A side that omits `runId` or `repoSlug` proves nothing: polls omit
+   * the run id (#586), and a first run id on a record without one is adoption.
+   */
+  private isNewRun(
+    existing: SlotInfo | undefined,
+    issueNumber: number,
+    repoSlug?: string,
+    runId?: string
+  ): boolean {
+    if (!existing || existing.archived) return true;
+    if (existing.issueNumber !== issueNumber) return true;
+    if (repoSlug && existing.repoSlug && repoSlug !== existing.repoSlug) return true;
+    return Boolean(runId && existing.runId && runId !== existing.runId);
+  }
+
   registerSlot(
     slotIndex: number,
     issueNumber: number,
@@ -754,7 +781,10 @@ export class OutputWindowState {
     repoSlug?: string,
     options?: SlotRegistrationOptions
   ): void {
-    const existing = this.slotInfos.get(slotIndex);
+    const previous = this.slotInfos.get(slotIndex);
+    const existing = this.isNewRun(previous, issueNumber, repoSlug, options?.runId)
+      ? undefined
+      : previous;
     const stages = existing?.stages ?? new Map<PipelineStage, StageProgress>();
     if (!existing) {
       for (const s of PIPELINE_STAGES) {
@@ -784,7 +814,9 @@ export class OutputWindowState {
       status: existing?.status ?? "pending",
       startedAt: existing?.startedAt ?? Date.now(),
       completedAt: existing?.completedAt ?? null,
+      currentPhase: existing?.currentPhase,
       archived: false,
+      runGeneration: existing?.runGeneration ?? ++this.lastRunGeneration,
     });
     this.runningSlots.add(slotIndex);
   }
@@ -830,6 +862,7 @@ export class OutputWindowState {
       },
       status: "complete",
       archived: true,
+      runGeneration: ++this.lastRunGeneration,
     });
   }
 
@@ -899,8 +932,8 @@ export class OutputWindowState {
    * Update the derived pipeline status for a slot's badge (Issue #2815).
    *
    * @param slotIndex  - Target slot
-   * @param status     - Derived status (error > running > complete > skipped > pending)
-   * @param completedAt - Epoch ms timestamp; set when status is 'complete' or 'error'
+   * @param status     - Derived status (error > running > pending; only settling sets complete)
+   * @param completedAt - Epoch ms timestamp; set only when the run settles
    */
   updateSlotStatus(slotIndex: number, status: StageStatus, completedAt?: number): void {
     const info = this.slotInfos.get(slotIndex);

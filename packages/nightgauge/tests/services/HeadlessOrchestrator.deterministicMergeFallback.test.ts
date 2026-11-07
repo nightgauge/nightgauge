@@ -277,6 +277,20 @@ describe("HeadlessOrchestrator deterministic merge fallback (Issue #3259)", () =
   // adapter must fail the pipeline FAST at pipeline-start — and the gate must be
   // wired with a real preflight runner (the bug was that no runner was passed,
   // so CLI adapters short-circuited to "passed").
+  // These runs resume on a recorded PR, which the forge must read open (#2878).
+  beforeEach(() => {
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as {
+        forgePrState(n: number): Promise<string | null>;
+      },
+      "forgePrState"
+    ).mockResolvedValue("OPEN");
+    vi.spyOn(
+      HeadlessOrchestrator.prototype as unknown as { readMergedPrNumber(n: number): number },
+      "readMergedPrNumber"
+    ).mockReturnValue(999);
+  });
+
   it("fails fast at pipeline-start when the CLI adapter is unauthenticated (#4044)", async () => {
     // Exercise the REAL gate: clear the suite-wide env skip (set in tests/setup.ts)
     // and make getSkipAuthPreflight return false so neither escape hatch fires.

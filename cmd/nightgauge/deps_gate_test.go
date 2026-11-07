@@ -155,6 +155,29 @@ func TestDepsGatePromoteSweep_ResumesWhenBlockerClosed(t *testing.T) {
 	}
 }
 
+// TestDepsGatePromoteSweep_KeepsPausedForOpenBodyDeclaredBlocker (#2706): the
+// sweep reads each blocker's live issue state, so one that a `Refs` merge left
+// open holds its dependent through the prose half of the check too. The sweep
+// has no board status to consult.
+func TestDepsGatePromoteSweep_KeepsPausedForOpenBodyDeclaredBlocker(t *testing.T) {
+	s := newTestScheduler(t)
+
+	pauseBlockedDependencyItem(s, "nightgauge", "nightgauge", 2703, "Downstream", deferredResult(2703, 2684, "Partly delivered"))
+
+	mock := &depsMockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#2703": {Number: 2703, Body: "Depends on #2684"},
+		"nightgauge/nightgauge#2684": {Number: 2684, Title: "Partly delivered", State: "OPEN"},
+	}}
+
+	summary := depsGatePromoteSweep(context.Background(), s, mock, "nightgauge", nil)
+	if len(summary.Promoted) != 0 {
+		t.Errorf("an open blocker released its dependent: %+v", summary.Promoted)
+	}
+	if len(summary.StillPaused) != 1 {
+		t.Errorf("expected #2703 still paused, got %+v", summary.StillPaused)
+	}
+}
+
 // TestDepsGatePromoteSweep_KeepsPausedWhenBlockerOpen verifies the promote sweep
 // leaves an item paused while its blocker remains OPEN.
 func TestDepsGatePromoteSweep_KeepsPausedWhenBlockerOpen(t *testing.T) {

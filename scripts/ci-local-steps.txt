@@ -2,6 +2,8 @@ ci-local.sh step inventory
 ci-local.sh concurrency and failure-reporting contract
 ci-local.sh change-scoping contract
 ci-local.sh dependency bootstrap decision
+ci-local.sh go test pass record
+ci-local.sh gate ledger reuse
 state-backstop.sh regression suite
 go build ./...
 go test ./... -count=1 (with skip accounting)
@@ -13,6 +15,8 @@ publish-vsix-set.sh regression suite
 npm-audit-check.js regression suite
 sign-macos-binaries.sh regression suite
 malware-scan.sh regression suite
+vt-scan.sh regression suite
+release-scan-gate.sh draft-hold harness
 check-shipped-code.sh regression suite
 scrub-evidence.sh regression suite
 capture-cli-help.sh regression suite
@@ -30,6 +34,7 @@ publication boundary
 publication boundary allowlist changes alone
 credential scan (tree + full history)
 Credential-scan rules regression suite
+Credential-scan scope regression suite
 Publication boundary regression suite
 Publication boundary rename carry-over
 Publication boundary derived ceiling
@@ -43,6 +48,7 @@ Band-vocabulary gate regression suite
 visibility-prose reintroduction gate
 Workflow-reference gate regression suite
 Marketplace channel regression suite
+Main build version regression suite
 VSIX host-target regression suite
 Release channel verification regression suite
 nonexistent-workflow-reference gate
@@ -60,6 +66,10 @@ analyze-model-routing.ts typecheck
 ESLint
 Prettier format:check
 npm run build (all workspaces)
+skill bundle (dist/skills)
+VSIX skill file list (vsce ls)
+skill bundle links stay inside dist/skills
+skill bundle portability (dist/skills)
 Phase markers ↔ PHASE_REGISTRY
 npm run test (all workspaces)
 Generated VSCode contributions in sync
@@ -73,6 +83,15 @@ Agent-guidance architecture
 Smart Setup bundles the canonical agent-guidance check
 Changelog gate regression suite
 Changelog names every released tag
+Plugin version gate regression suite
+Plugin has one version and valid skills
+Plugin version above the last stable tag
+Plugin install docs gate regression suite
+Documented plugin install works
+RC VSIX fetch regression suite
+Bundle skill read counter regression suite
+Plugin hooks run from a path with a space
+Stable move regression suite
 Mirror drift gate regression suite
 Agent-skill install target regression suite
 Issue-body contract gate regression suite
@@ -84,6 +103,7 @@ Pipefail early-exit gate
 Plugin skills mirror in sync
 Mirror link gate regression suite
 Mirror link integrity
+Mirror include expansion regression suite
 OpenCode integration (opencode_integration tag)
 VSCode host smoke tests
-machine state untouched by the run (~/.nightgauge, default STATE)
+machine state untouched by the run (~/.nightgauge, default STATE, agent homes)

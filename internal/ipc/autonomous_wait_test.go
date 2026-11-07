@@ -98,6 +98,10 @@ func TestAutonomousStop_ReportsObservedState(t *testing.T) {
 	})
 
 	server := NewServer(nil, WithAutonomousScheduler(as))
+	// A deadline far beyond the held cycle: a return on the transition and a
+	// return on the deadline are then minutes apart, not a ratio of scheduler
+	// latency on a loaded machine (#2950).
+	server.autonomousWaitTimeout = time.Minute
 	startHandler, ok := server.methods["autonomous.start"]
 	if !ok {
 		t.Fatal("autonomous.start handler not registered")
@@ -110,10 +114,7 @@ func TestAutonomousStop_ReportsObservedState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		cancel()
-		deadline := time.Now().Add(5 * time.Second)
-		for as.IsRunning() && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
-		}
+		stopAndJoinLoop(t, as, 5*time.Second)
 	})
 
 	if _, err := startHandler(ctx, nil); err != nil {
@@ -145,11 +146,11 @@ func TestAutonomousStop_ReportsObservedState(t *testing.T) {
 		t.Errorf("autonomous.stop reported Status=%q — the response must reflect the observed post-transition state", st.Status)
 	}
 	// The handler must be woken BY the transition, not released by its own
-	// deadline. The loop is held for 250ms and the deadline is seconds away,
-	// so anything near the deadline means the wait is polling a timer rather
-	// than observing the state change.
-	if elapsed > time.Second {
-		t.Errorf("autonomous.stop took %s to return after a 250ms cycle — the wait must be woken by the state transition, not by its deadline", elapsed)
+	// deadline. The deadline is a minute away and the loop is held 250ms, so
+	// only a deadline return reaches half of it; stillRunning and Status above
+	// already prove the transition was observed.
+	if elapsed >= server.autonomousWaitTimeout/2 {
+		t.Errorf("autonomous.stop took %s to return after a 250ms cycle — it returned on its deadline, not the transition", elapsed)
 	}
 }
 
@@ -183,10 +184,7 @@ func TestAutonomousStop_DeadlineReportsActualState(t *testing.T) {
 	t.Cleanup(func() {
 		close(release)
 		cancel()
-		deadline := time.Now().Add(5 * time.Second)
-		for as.IsRunning() && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
-		}
+		stopAndJoinLoop(t, as, 5*time.Second)
 	})
 
 	if _, err := startHandler(ctx, nil); err != nil {

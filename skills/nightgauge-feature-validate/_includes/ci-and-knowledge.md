@@ -26,6 +26,29 @@ failing on first CI run and requiring pr-merge auto-fix cycles.
 > full CI round-trip per attempt, and pr-merge's auto-fix is limited to 3
 > attempts with a narrow context window.
 
+### Step 2.5.0: One Gate Per Tree (#2784)
+
+This phase is the run's one full gate. Ask the ledger first: if this exact tree
+already passed, say so and move on. Otherwise a repository with a complete local
+gate runs that gate as this phase's only command, because the discovered commands
+are a subset of it and a pass of them cannot satisfy `pre-push validate`. A
+repository with no gate falls through to the discovered commands. An older binary
+answers with neither, which also means the discovered commands. `gate_command`
+is a display string and is never executed: `nightgauge ci gate-run` runs each
+step as an argv. A declared gate that fails validation also goes to `gate-run`,
+which fails with the reason instead of falling back to the discovered commands.
+
+```bash
+CI_GATE_STATUS=$(nightgauge ci gate-status --kind parity --json 2>/dev/null || \
+  echo '{"reusable":false,"reason":"this binary has no ci gate-status","tree":"","gate_command":"","gate_records_itself":false}')
+CI_GATE_REUSABLE=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.reusable')
+CI_GATE_REASON=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.reason')
+CI_GATE_TREE=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.tree')
+CI_GATE_COMMAND=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.gate_command')
+CI_GATE_RECORDS_ITSELF=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.gate_records_itself')
+CI_GATE_ERROR=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.gate_error // ""')
+```
+
 ### Step 2.5.1: Discover CI Commands from Workflow
 
 Scan every workflow under `.github/workflows/` that runs on `pull_request` or
@@ -40,6 +63,9 @@ CI_DISCOVER_RESULT=$(nightgauge ci discover-commands --json 2>/dev/null || \
 CI_PARITY_COMMANDS=()
 while IFS= read -r -d '' C; do CI_PARITY_COMMANDS+=("$C"); done \
   < <(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -j '.commands[] | ., "\u0000"' 2>/dev/null)
+if [ "$CI_GATE_REUSABLE" != "true" ] && { [ -n "$CI_GATE_COMMAND" ] || [ -n "$CI_GATE_ERROR" ]; }; then
+  CI_PARITY_COMMANDS=("nightgauge ci gate-run")
+fi
 echo "CI parity commands discovered (${#CI_PARITY_COMMANDS[@]}): ${CI_PARITY_COMMANDS[*]}"
 ```
 
@@ -47,7 +73,28 @@ echo "CI parity commands discovered (${#CI_PARITY_COMMANDS[@]}): ${CI_PARITY_COM
 
 Run each CI command in order. On first failure, stop and attempt auto-fix.
 
+When `nightgauge ci gate-run` is the command, start this step with the Bash
+tool's `run_in_background: true` and a `timeout` of at least the gate's limit in
+milliseconds (`hooks.pre_push.timeout_seconds` × 1000; 1,800,000 by default),
+then wait for its completion notification. Why: a foreground call is killed at
+twice its timeout (1200 s by default), and the gate takes longer, so a
+foreground gate is discarded after twenty minutes. A `&` inside a foreground
+call orphans it instead. The `gate-background` hook denies both forms (#2953).
+`gate_command` is never run directly: run `nightgauge ci gate-run`. Its log is
+declared at spawn so the wait reads as work
+(`_shared/LONG_RUNNING_PROCESSES.md`, #2694).
+
+The full gate runs the unit suite, so its result is the unit result. Its log
+is kept as `gate-{N}.log` in the pipeline state directory, and
+`UNIT_TESTS_LOG` and, from its Go `--- PASS` / `--- FAIL` lines, the
+`UNIT_TESTS_*` result and counts are set from it for Step 6.1. pr-create reads that log's `--- PASS` / `--- FAIL` lines to answer a
+criterion naming a test, and the gate ledger's pass for this tree when the
+block is missing. A gate started in the background and polled still leaves
+both, so its result reaches the PR (#2941).
+
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 CI_PARITY_PASSED=true
 CI_PARITY_FAILED_CMD=""
 CI_PARITY_FAILED_OUTPUT=""
@@ -67,8 +114,33 @@ function run_ci_parity() {
   for CMD in "${CI_PARITY_COMMANDS[@]}"; do
     echo "Running: $CMD"
     # A command may be a multi-line block; run it through a shell, as CI does.
-    OUTPUT=$(bash -c "$CMD" 2>&1)
+    CI_PARITY_LOG=$(mktemp "${TMPDIR:-/tmp}/ci-parity-XXXXXX")
+    IS_GATE=false
+    if [ "$CMD" = "nightgauge ci gate-run" ]; then
+      # The gate's log outlives the step: pr-create reads its per-test lines (#2941).
+      IS_GATE=true
+      CI_PARITY_LOG="$(nightgauge layout path pipeline "gate-${ISSUE_NUMBER}.log")"
+    fi
+    bash -c "$CMD" >"$CI_PARITY_LOG" 2>&1 &
+    CI_PARITY_PID=$!
+    echo "NIGHTGAUGE_PROGRESS: {\"pid\": $CI_PARITY_PID, \"log\": \"$CI_PARITY_LOG\", \"label\": \"ci parity\"}"
+    wait "$CI_PARITY_PID"
     EXIT_CODE=$?
+    OUTPUT=$(tail -c 65536 "$CI_PARITY_LOG")
+    if [ "$IS_GATE" = "true" ]; then
+      UNIT_TESTS_LOG="$CI_PARITY_LOG"
+      # Counts come from Go's own result lines; a gate with none leaves the
+      # unit block to the earlier phases (a zero count reads inconclusive).
+      GATE_TESTS_RUN=$(grep -cE '^[[:space:]]*--- (PASS|FAIL): ' "$CI_PARITY_LOG" || true)
+      if [ "${GATE_TESTS_RUN:-0}" -gt 0 ]; then
+        UNIT_TESTS_RAN=true
+        UNIT_TESTS_PASSED=$([ $EXIT_CODE -eq 0 ] && echo true || echo false)
+        UNIT_TESTS_RUN_COUNT=$GATE_TESTS_RUN
+        UNIT_TESTS_PASSED_COUNT=$(grep -cE '^[[:space:]]*--- PASS: ' "$CI_PARITY_LOG" || true)
+      fi
+    else
+      rm -f "$CI_PARITY_LOG"
+    fi
     if [ $EXIT_CODE -eq 0 ]; then STATUS=passed; REASON=""
     elif [ $EXIT_CODE -eq 127 ]; then STATUS=skipped; REASON="command not found"
     else STATUS=failed; REASON=""
@@ -91,11 +163,35 @@ function run_ci_parity() {
   return 0
 }
 
-if [ "${#CI_PARITY_COMMANDS[@]}" -eq 0 ]; then
+# A gate that writes its own ledger events needs no recording here. Anything else
+# is recorded as kind parity, so every repository is counted and reusable. A
+# command skipped as not installed means the pass was not full.
+function record_ci_parity() { # record_ci_parity <verdict>
+  [ "$CI_GATE_RECORDS_ITSELF" = "true" ] && [ -n "$CI_GATE_COMMAND" ] && return 0
+  local full_flag="--full"
+  printf '%s\n' "$CI_PARITY_RESULTS_JSON" | jq -e 'any(.status == "skipped")' >/dev/null && full_flag=""
+  nightgauge ci gate-record --event finish --run-id "$CI_GATE_RUN" --kind parity \
+    --tree "$CI_GATE_TREE" --verdict "$1" --seconds "$((SECONDS - CI_GATE_STARTED))" \
+    $full_flag >/dev/null 2>&1 || true
+}
+
+if [ "$CI_GATE_REUSABLE" = "true" ]; then
+  # The tree already passed, so nothing runs. A skipped check keeps `ci_parity`
+  # non-null for the lifecycle handoff and says why.
+  echo "⏭ Gate skipped: $CI_GATE_REASON"
+  nightgauge ci gate-record --event reused --kind parity --tree "$CI_GATE_TREE" >/dev/null 2>&1 || true
+  CI_PARITY_RAN=true
+  CI_PARITY_RESULTS_JSON=$(jq -cn --arg reason "$CI_GATE_REASON" \
+    '[{command: "ci gate-status", status: "skipped", reason: $reason}]')
+elif [ "${#CI_PARITY_COMMANDS[@]}" -eq 0 ]; then
   # A skipped phase is never silent: record why.
   SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "ci_parity_check", "reason": "no runnable CI commands discovered"}]')
 else
-  run_ci_parity
+  CI_GATE_STARTED=$SECONDS
+  if [ "$CI_GATE_RECORDS_ITSELF" != "true" ] || [ -z "$CI_GATE_COMMAND" ]; then
+    CI_GATE_RUN=$(nightgauge ci gate-record --event start --kind parity --tree "$CI_GATE_TREE" --full 2>/dev/null || true)
+  fi
+  if run_ci_parity; then record_ci_parity pass; else record_ci_parity fail; fi
 fi
 ```
 
@@ -184,7 +280,10 @@ while [ "$CI_PARITY_PASSED" = "false" ] && \
 
   # After applying fix, re-run ALL CI parity commands (not just the failed one)
   CI_PARITY_PASSED=true
-  run_ci_parity
+  CI_GATE_STATUS=$(nightgauge ci gate-status --kind parity --json 2>/dev/null || echo '{"tree":""}')
+  CI_GATE_TREE=$(printf '%s\n' "$CI_GATE_STATUS" | jq -r '.tree')
+  CI_GATE_STARTED=$SECONDS
+  if run_ci_parity; then record_ci_parity pass; else record_ci_parity fail; fi
 done
 
 if [ "$CI_PARITY_PASSED" = "false" ]; then
@@ -381,22 +480,38 @@ validation left — failures that would otherwise be caught during `pr-create` o
 
 ### Step 2.7.1: Resolve Binary and Run Gate
 
+Pass no timeout flag: the verb resolves `hooks.pre_push.timeout_seconds`, then
+its default, which covers the repository's suite. That limit exceeds what a
+foreground call survives, so start this step with the Bash tool's
+`run_in_background: true` and a `timeout` of at least that limit in milliseconds
+(`hooks.pre_push.timeout_seconds` × 1000; 1,800,000 by default), and wait for its
+completion notification before continuing. Why: a foreground call is killed at
+twice its timeout (1200 s by default), so a foreground gate is discarded after
+twenty minutes; a `&` inside a foreground call orphans it. The `gate-background`
+hook denies both forms (#2953). `gate_command` is never run directly.
+
+Exit 3 means a limit expired, not that an assertion failed. If the reason names
+the gate's limit, do not edit code: raise the limit it names. If it names Go's
+per-package limit, a package ran for most of the budget, so treat it as a likely
+hang in the change and find the package in the goroutine dump.
+
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 
@@ -407,16 +522,28 @@ if [ -n "$BINARY" ]; then
   TARGET_BRANCH=$(jq -r '.base_branch // "main"' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
   [ -z "$TARGET_BRANCH" ] && TARGET_BRANCH="main"
 
-  "$BINARY" pre-push validate "$ISSUE_NUMBER" --target "$TARGET_BRANCH" && {
-    PREPUSH_STATUS="passed"
-    echo "Pre-push validation passed"
-  } || {
-    PREPUSH_STATUS="failed"
-    echo "GATE BLOCKED: Pre-push validation failed. Fix issues before committing/pushing."
+  PREPUSH_EXIT=0
+  "$BINARY" pre-push validate "$ISSUE_NUMBER" --target "$TARGET_BRANCH" || PREPUSH_EXIT=$?
+  case "$PREPUSH_EXIT" in
+    0)
+      PREPUSH_STATUS="passed"
+      echo "Pre-push validation passed"
+      ;;
+    3)
+      PREPUSH_STATUS="timeout"
+      ERROR_CATEGORY="gate-timeout"
+      echo "GATE TIMED OUT: a limit expired before the gate finished; no check failed."
+      ;;
+    *)
+      PREPUSH_STATUS="failed"
+      echo "GATE BLOCKED: Pre-push validation failed. Fix issues before committing/pushing."
+      ;;
+  esac
+  if [ "$PREPUSH_EXIT" -ne 0 ]; then
     echo "See $(nightgauge layout path pipeline pre-push-${ISSUE_NUMBER}.json) for details."
     VALIDATION_STATUS="failed"
     SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "commit-and-push", "reason": "pre-push gate blocked"}]')
-  }
+  fi
 else
   # Graceful degradation: binary unavailable — run shell-based checks
   echo "WARNING: nightgauge binary not available — running shell-based pre-push checks"
@@ -446,59 +573,63 @@ fi
 The `PREPUSH_STATUS` variable is threaded to Phase 6 (write-validate-context)
 and recorded in `validate-{N}.json` as `pre_push_status`.
 
-### Step 2.7.3: Adversarial Review Gate (#4097)
+### Step 2.7.3: Independent Review Gate (#2839)
 
-**ON by default.** Disable only when `.nightgauge/config.yaml` sets
-`pipeline.adversarial_review.enabled: false`.
-
-Re-review the diff with **fresh eyes and no authoring context**, attacking it
-from the four `nightgauge-adversarial-review` lenses — **correctness,
-security, reuse/simplification, tests** (that skill's `#critic-lens-prompt`).
-This activates the previously-dormant critic as a default validate gate: it
-catches the quality-of-_reasoning_ defects the deterministic build/test gates
-cannot. The **judgment is the critics'**; the gate stays deterministic — the
-verdict reaches `FeatureValidateGate` via gate-metrics, per the
-"network/LLM checks are NOT StageGates" precedent in
-[docs/STAGE_GATES.md](../../../docs/STAGE_GATES.md).
-
-```bash
-ADV_ENABLED=$(yq -r '.pipeline.adversarial_review.enabled // "true"' .nightgauge/config.yaml 2>/dev/null || echo "true")
-if [ "$ADV_ENABLED" = "false" ]; then
-  echo "⏭ Adversarial review gate disabled (pipeline.adversarial_review.enabled=false)"
-fi
-```
-
-When enabled, perform the four-lens critique **yourself** (single-agent
-portability floor; reference the adversarial-review skill's critic-lens prompt).
-Fix any **real** defect found (not a nitpick) and re-review. A real finding
-whose fix lies outside this issue's acceptance criteria does not block: record
-it as discovered work per
-[Record vs. Backtrack](../../../docs/FEEDBACK_LOOPS.md#record-vs-backtrack-deferrable-discovered-work)
-and leave it out of the verdict.
+One review per tree, in a fresh context that holds only the diff, the issue and
+the working tree. You do not review this change: you start the review and act on
+its result. This is one of this stage's gates, so a provider rule against adding
+reviewers does not remove it. It applies the passes in
+[docs/PR_REVIEW_PASSES.md](../../../docs/PR_REVIEW_PASSES.md). The verdict reaches
+`FeatureValidateGate` via gate-metrics, per the "network/LLM checks are NOT
+StageGates" precedent in [docs/STAGE_GATES.md](../../../docs/STAGE_GATES.md).
+`pipeline.adversarial_review.enabled: false` turns it off.
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge discovered-work record --issue "$ISSUE_NUMBER" \
-  --source-stage feature-validate \
-  --summary "<lens>: <one-line out-of-scope defect>" \
-  --evidence "<file:line> — <what the critic observed>" \
-  --suggested-type bug --suggested-priority medium --suggested-size S \
-  --candidate-file "<file>" \
-  || echo "discovered work not recorded (non-fatal)"
+"$BINARY" review prepare --issue "$ISSUE_NUMBER" --json
 ```
 
-Then record exactly one verdict — a `catch` fails validation through the
-existing gate:
+Act on the JSON:
 
-```bash
-ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
-: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-# Only when a REAL, unfixed blocking defect remains after the fix loop:
-"$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate adversarial-review \
-  --result catch --error-summary "<lens>: <one-line defect>"
-# (also set VALIDATION_STATUS="failed" so commit/push is skipped)
+- `disabled`: the gate is off. Continue.
+- `reusable`: this tree was already reviewed. Use `result`, and run no model.
+- `cap_reached`: the last catch stands. Set `VALIDATION_STATUS="failed"` and
+  `ERROR_CATEGORY="review-cap-reached"`, and fix nothing more: `result.fix` is
+  what stands, not more work for this run. Commit and push stay skipped, so the
+  work stays in this worktree. The issue parks; the repository keeps dispatching.
+- Otherwise it returned a bundle. If your host has a subagent tool, start one
+  non-forked subagent, with no inherited conversation, and give it only the text
+  of `prompt_path`. Pass it nothing about this change. Then record its result,
+  with `tree`, `findings_path` and `started_at` copied from the JSON, because each
+  block runs in a new shell:
 
-# Otherwise — the change survived all four lenses with only nitpicks:
-"$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate adversarial-review --result pass
-```
+  ```bash
+  ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+  : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+  TREE="<tree>" FINDINGS_PATH="<findings_path>" STARTED_AT="<started_at>"
+  "$BINARY" review record --issue "$ISSUE_NUMBER" --tree "$TREE" \
+    --findings "$FINDINGS_PATH" --started-at "$STARTED_AT"
+  ```
+
+  With no subagent tool, or when the subagent left no file at `findings_path`,
+  discard that bundle and let the binary spawn the reviewer instead. It runs
+  prepare and record itself and prints the log path. That log is the review's
+  session log:
+
+  ```bash
+  ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+  : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+  "$BINARY" review run --issue "$ISSUE_NUMBER"
+  ```
+
+Never edit the findings file. The verdict is the binary's, and it writes the one
+gate-metric row, the duration, the severity counts and any discovered work.
+
+- `pass`: continue. Findings it routed to `discovered` need nothing from you.
+- `catch` with items in `fix`, and no `cap_reached`: fix each one, re-run the checks they touch, and
+  go back to `review prepare`. The tree changed, so that is a new round. A later
+  `pass` supersedes the catch, and after three catches in a run `prepare` stops.
+- `catch` with an empty `fix`: the review did not complete, which is not a pass.
+  Set `VALIDATION_STATUS="failed"` so commit and push are skipped, and put the
+  `summary` in the validate notes.

@@ -5351,6 +5351,21 @@ func TestResolveIssueStatesByKey_MissingIssueAbsentFromResult(t *testing.T) {
 	}
 }
 
+// A failed read gives no verdict: the keys stay absent, so the hold reason stays
+// "not confirmed via GitHub" and never claims the number does not exist (#2854).
+func TestResolveIssueStatesByKey_FailedReadLeavesKeysAbsent(t *testing.T) {
+	mock := newMockIssueSvc()
+	mock.depStatesErr = errors.New("boom")
+	resolved := ResolveIssueStatesByKey(context.Background(), mock, []string{"owner/repo#7"})
+	if len(resolved) != 0 {
+		t.Fatalf("resolved = %+v, want nothing from a failed read", resolved)
+	}
+	res := evaluateDeps([]string{"owner/repo#7"}, depgraph.NewGraph(), resolved, nil)
+	if !res.blocked || !strings.Contains(res.status, "not confirmed via GitHub") {
+		t.Fatalf("evaluateDeps = %+v, want the unconfirmed reason", res)
+	}
+}
+
 // TestResolveIssueStatesByKey_NilIssueService verifies the nil-issueSvc guard
 // (no GitHub call attempted when the issue service is unavailable).
 func TestResolveIssueStatesByKey_NilIssueService(t *testing.T) {

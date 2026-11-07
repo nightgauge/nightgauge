@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 )
 
@@ -107,19 +108,34 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 				cands = append(cands, ACVerdict{Status: r.Status, Source: ACSourceDiff, Evidence: ev, Step: r.Step, Uncommitted: r.Uncommitted})
 			}
 		}
-		if m, ok := matched[i]; ok {
-			v := ACVerdict{Status: NormalizeACStatus(m.v.Status), Source: ACSourceValidate, Evidence: strings.TrimSpace(m.v.Evidence)}
-			if v.Status == ACNotVerifiable && !detMet && acNegativeEvidence(v.Evidence, i) {
-				v.Status = ACUnmet
+		m, hasVal := matched[i]
+		var valV ACVerdict
+		if hasVal {
+			valV = ACVerdict{Status: NormalizeACStatus(m.v.Status), Source: ACSourceValidate, Evidence: strings.TrimSpace(m.v.Evidence)}
+			if valV.Status == ACNotVerifiable && !detMet && acNegativeEvidence(valV.Evidence, i) {
+				valV.Status = ACUnmet
 			}
-			if !m.byIndex || v.Status == ACUnmet {
-				cands = append(cands, v)
-			}
+		}
+		bodyEvidence := len(validate) > 0 && acAsksForPRBody(text)
+		if bodyEvidence {
+			valV, hasVal = acPRBodyVerdict(valV, hasVal)
+		}
+		// Applied last: an index-matched verdict may only add unmet (#2669),
+		// including one the PR-body rule upgraded to met.
+		if hasVal && m.byIndex && valV.Status != ACUnmet {
+			valV, hasVal = ACVerdict{}, false
+		}
+		if hasVal {
+			cands = append(cands, valV)
 		}
 
 		v := ACVerdict{Status: ACNotVerifiable, Source: ACSourceNone, Evidence: "no rule or verdict could check this criterion"}
 		if r, ok := firstACStatus(cands, ACUnmet); ok {
 			v = r
+		} else if bodyEvidence && valV.Status == ACMet {
+			// The criterion asks for its evidence in the PR body: cite the
+			// recorded command and result, which the body then carries.
+			v = valV
 		} else if r, ok := firstACStatus(cands, ACMet); ok {
 			v = r
 		} else if len(cands) > 0 {
@@ -231,6 +247,48 @@ func firstACStatus(cands []ACVerdict, status string) (ACVerdict, bool) {
 	return ACVerdict{}, false
 }
 
+// acPRBodyRE matches a criterion that asks for evidence in the PR body: "the
+// command and its result are in the PR body".
+var acPRBodyRE = regexp.MustCompile(`(?i)\b(?:in|to|into) the (?:PR|pull request) (?:body|description)\b`)
+
+// acResultEvidenceRE matches evidence that records a command's result, not
+// only that something was looked at: a zero exit status, Go's `ok  <pkg>`
+// line, a `--- PASS` line, or a pass count. A bare "pass" or "ok" is not a
+// result shape: "tests did not pass" carries both words.
+var acResultEvidenceRE = regexp.MustCompile(`(?i)\bexit(?:ed|s)?\s*(?:code\s*|status\s*)?(?:=\s*)?0\b|\bok\s+\S+/\S+|--- PASS:|\b[1-9]\d*\s+passed\b`)
+
+// acFailureEvidenceRE matches evidence that records a failure. Evidence that
+// carries one is never promoted, whatever result shape it also holds.
+var acFailureEvidenceRE = regexp.MustCompile(`(?i)\bFAIL(?:ED|S|URE)?\b|\bdid not\b|\bnot (?:pass|succeed)|\bexit(?:ed|s)?\s*(?:code\s*|status\s*)?(?:=\s*)?[1-9]\d*\b|\b[1-9]\d*\s+failed\b`)
+
+// ACNoRecordedEvidence is the reason a PR-body criterion is unmet when
+// feature-validate recorded nothing for it to carry (#2941).
+const ACNoRecordedEvidence = "feature-validate recorded no command and result for this criterion"
+
+func acAsksForPRBody(text string) bool {
+	return acPRBodyRE.MatchString(acCodeSpanRE.ReplaceAllString(text, " "))
+}
+
+// acPRBodyVerdict judges feature-validate's verdict on a criterion that asks
+// for a command and its result in the PR body (#2941). pr-create writes the
+// body and carries the verdict's evidence beside the criterion, so the part
+// feature-validate could not check itself (what the body will say) is done
+// here: a not_verifiable verdict whose evidence records a result becomes met.
+// No verdict, or evidence recording no result, is unmet with that reason —
+// the body would carry nothing. An unmet verdict stays unmet.
+func acPRBodyVerdict(v ACVerdict, ok bool) (ACVerdict, bool) {
+	if !ok || v.Evidence == "" || !acResultEvidenceRE.MatchString(v.Evidence) || acFailureEvidenceRE.MatchString(v.Evidence) {
+		if ok && v.Status == ACUnmet {
+			return v, true
+		}
+		return ACVerdict{Status: ACUnmet, Source: ACSourceValidate, Evidence: ACNoRecordedEvidence}, true
+	}
+	if v.Status == ACNotVerifiable {
+		v.Status = ACMet
+	}
+	return v, true
+}
+
 // negativeEvidenceRE matches validate evidence that says the criterion is
 // not met even though its status did not (#2655).
 var negativeEvidenceRE = regexp.MustCompile(`(?i)\b(?:not met|unmet|not satisfied|unsatisfied|not implemented)\b`)
@@ -307,59 +365,65 @@ func acCheckboxBody(criteria []string) string {
 	return b.String()
 }
 
-// closingKeywordRE matches GitHub's closing keywords followed by an issue
-// reference, optionally repo-qualified. Twin of hooks.closingKeywordRE, which
-// stages must not import; the two must agree on what closes an issue.
-var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*((?:[\w.-]+/[\w.-]+)?#(\d+))\b`)
+// closesTarget selects the closing references that close issue n of repo
+// ("owner/repo"). An unknown repo ("") selects every reference to number n
+// whatever repository it names: the AC backstop must fail closed, demoting a
+// closer it cannot place rather than letting it close the issue at merge.
+func closesTarget(repo string, n int) func(forge.ClosingRef) bool {
+	if repo == "" {
+		return func(r forge.ClosingRef) bool { return r.Number == n }
+	}
+	return func(r forge.ClosingRef) bool { return r.Targets(repo, n) }
+}
 
-// BodyClosesIssue reports whether body carries a closing keyword for issue n.
-func BodyClosesIssue(body string, n int) bool {
-	want := strconv.Itoa(n)
-	for _, m := range closingKeywordRE.FindAllStringSubmatch(body, -1) {
-		if m[2] == want {
+// BodyClosesIssue reports whether body carries a closing keyword for issue n
+// of repo ("owner/repo", or "" when unknown — see closesTarget). forge owns
+// the one closing-keyword matcher, shared with the post-merge hook.
+func BodyClosesIssue(body, repo string, n int) bool {
+	targets := closesTarget(repo, n)
+	for _, r := range forge.ClosingRefs(body) {
+		if targets(r) {
 			return true
 		}
 	}
 	return false
 }
 
-// RewriteClosesToRefs replaces every closing keyword that targets issue n
-// with `Refs`, so merging the PR leaves the issue open (#2623, the #2595
-// rule). References to other issues are untouched.
-func RewriteClosesToRefs(body string, n int) string {
-	want := strconv.Itoa(n)
-	return closingKeywordRE.ReplaceAllStringFunc(body, func(match string) string {
-		m := closingKeywordRE.FindStringSubmatch(match)
-		if m[2] != want {
-			return match
-		}
-		return "Refs " + m[1]
-	})
+// RewriteClosesToRefs replaces every closing keyword that targets issue n of
+// repo with `Refs`, so merging the PR leaves the issue open (#2623, the #2595
+// rule). References to other issues, including the same number in a named
+// other repository, are untouched; an unknown repo ("") rewrites every
+// reference to number n.
+func RewriteClosesToRefs(body, repo string, n int) string {
+	return forge.RewriteClosingRefs(body, closesTarget(repo, n))
 }
 
-// RewriteAllClosesToRefs replaces every closing keyword with `Refs`,
-// whatever issue it names. It is for untrusted text — acceptance-criterion
-// text and evidence come from an issue body anyone who can file an issue
-// writes — so no issue closes because a criterion named it.
-//
-// GitHub also honours a keyword followed by an issue URL, which
-// closingKeywordRE does not match, so those are defanged too.
-func RewriteAllClosesToRefs(s string) string {
-	s = closingKeywordRE.ReplaceAllStringFunc(s, func(match string) string {
-		return "Refs " + closingKeywordRE.FindStringSubmatch(match)[1]
-	})
-	return closingKeywordURLRE.ReplaceAllString(s, "Refs $1")
+// rewriteAllClosesToRefs replaces every closing keyword with `Refs`, whatever
+// issue it names, including the issue-URL form. It rewrites keywords only:
+// untrusted text goes through UntrustedACText, which also collapses line breaks.
+func rewriteAllClosesToRefs(s string) string {
+	return forge.RewriteClosingRefs(s, func(forge.ClosingRef) bool { return true })
 }
 
-// closingKeywordURLRE matches a closing keyword followed by an issue URL.
-var closingKeywordURLRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[ \t]*:?[ \t]*(https?://\S+/issues/\d+)`)
+// lineBreakRun is a run of whitespace that contains a line break.
+var lineBreakRun = regexp.MustCompile(`[ \t\f]*[\r\n]\s*`)
+
+// UntrustedACText renders criterion text or evidence for a PR body. Both come
+// from an issue body anyone who can file an issue writes. It puts them on one
+// line, so a newline cannot open a bullet or a heading inside the section
+// hooks.UnmetCriteria parses (#2662), and rewrites every closing keyword to
+// `Refs`, so no issue closes because a criterion named it. The line breaks go
+// first, so a keyword split across them is rewritten too.
+func UntrustedACText(s string) string {
+	return rewriteAllClosesToRefs(lineBreakRun.ReplaceAllString(s, " "))
+}
 
 // AppendUnmetACs adds criteria under UnmetACHeading, creating the section
 // when the body has none, so post-merge names them as the remainder.
 func AppendUnmetACs(body string, issueNumber int, criteria []string) string {
 	var items strings.Builder
 	for _, c := range criteria {
-		items.WriteString("- " + RewriteAllClosesToRefs(c) + "\n")
+		items.WriteString("- " + UntrustedACText(c) + "\n")
 	}
 	if i := strings.Index(body, UnmetACHeading); i >= 0 {
 		// Insert at the end of the existing section (next heading or EOF).

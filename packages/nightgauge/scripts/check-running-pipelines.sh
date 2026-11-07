@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Report the pipeline runs still in flight in this workspace's VS Code window.
 #
-# Installing the extension ends with a window reload, and `deactivate` calls
-# `abortAll()` — so a reload KILLS every running slot, each of which then
-# restarts from scratch and re-spends its planning. `nightgauge autonomous
+# Installing the extension does not reload the window, but the new build needs
+# the reload the operator does next, and `deactivate` calls `abortAll()` — so
+# that reload KILLS every running slot, each of which then restarts from
+# scratch and re-spends its planning. `nightgauge autonomous
 # stop` does not do that: Stop stops admitting new work and lets the running
 # slots finish. The gap this closes is that nothing told the operator WHEN the
 # last one had finished, so "stopped" and "safe to reload" looked identical
@@ -49,7 +50,7 @@ SUMMARY=$(printf '%s' "$STATUS_JSON" | node -e '
     } catch {
       process.exit(0); // unparseable — unknown, not an alarm
     }
-    // running_pipelines_known false means no daemon answered. An empty list
+    // running_pipelines_known false means no daemon or summary answered. An empty list
     // then means "we did not ask", not "nothing is running", and must never
     // be rendered as safe.
     if (!s || s.running_pipelines_known !== true) process.exit(0);

@@ -82,6 +82,31 @@ binary could not run), it first applies the same check to the branch's
 upstream head. A head that cannot be inspected is logged and passed; the
 pr-create push and the post-stage repair are the other layers of the guard.
 
+### Time budget (#2730)
+
+Every pr-merge limit derives from one value, the resolved
+`pipeline.merge_queue.wait_timeout`. `nightgauge pr-stage budget --json` reports
+them, and the extension asks the binary rather than holding a constant:
+
+| Field               | Value                                   |
+| ------------------- | --------------------------------------- |
+| `queue_wait_ms`     | The resolved queue wait                 |
+| `cli_timeout_ms`    | Queue wait plus 10 minutes, at least 20 |
+| `client_timeout_ms` | `cli_timeout_ms` plus 60 seconds        |
+
+So the CLI's own context always ends first and returns a structured result. The
+extension logs `pr-stage <stage> spawned pid=<pid> issue=#<N>` at spawn, and a
+signal death is reported as `pr-stage killed by signal <SIGNAL>`, so a kill can be
+attributed. If the budget verb fails, the stage is a `runner-error`.
+
+The stage's wall-clock budget (`pipeline.stage_budgets`) does not count the time
+its PR waits in the merge queue (#2770). `nightgauge pr merge --issue N` and the
+deterministic runner's queue wait record that time in `queue-wait-<N>.json`, from
+the moment the PR reaches the queue to the moment the merge call returns, and both
+wall-clock enforcers leave it out. Time before the enqueue, such as review fixes,
+still counts. See
+[GUARDRAILS_AND_BUDGETS.md](GUARDRAILS_AND_BUDGETS.md#per-stage-non-usd-budgets-1652).
+
 ### Bounded mergeability wait (Issue #1933)
 
 GitHub computes `mergeable` **asynchronously** and answers `UNKNOWN` for the
@@ -113,6 +138,11 @@ a verdict, and waiting would only delay the LLM path that has to resolve it.
 This is a race, so it is not observable on every run: a snapshot that happens to
 arrive after GitHub finished computing takes the deterministic path and looks
 correct. See `prmerge_mergeability_1933_test.go`, which pins the losing side.
+
+The wait doubles from 2 s to a 16 s cap over 10 polls, about two minutes (#2730).
+It also runs after the CI wait, because a PR read just after its base moved is
+`UNKNOWN` again, and that read used to reach `Decide` and punt. The two waits
+alternate, up to three CI waits per run, so `Decide` never sees `UNKNOWN`.
 
 ### Bounded CI wait (Issue #297)
 
@@ -171,6 +201,24 @@ with `merge-ec-timeout` rather than self-reporting `merged` (#4070). It never
 claims a merge it did not observe; the canonical `verifyPRMerged` checkpoint is
 the sole MERGED authority.
 
+### Squash commit subject (#2728)
+
+A direct squash passes the subject and body explicitly: `<PR title> (#N)` and
+the messages of the PR's non-WIP commits (`gh pr merge --subject --body`,
+GraphQL `commitHeadline`/`commitBody`). A sole WIP-preservation commit therefore
+never becomes the subject, and no `Nightgauge-WIP` trailer reaches the base.
+`enqueuePullRequest` takes no headline, so the queue uses the repository's
+squash defaults. Before an enqueue the runner reads them; it never changes
+them. Unless they are `squash_merge_commit_title=PR_TITLE` and
+`squash_merge_commit_message=PR_BODY`, a PR carrying a WIP-preservation commit
+is refused with `squash_defaults` and the remedy; other PRs enqueue. A
+repository admin sets the defaults once:
+
+```bash
+gh api -X PATCH repos/{owner}/{repo} \
+  -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY
+```
+
 ### Merge-queue-protected base branches (#2214)
 
 When the PR's base branch requires GitHub's merge queue, a direct merge is not
@@ -204,6 +252,12 @@ on core, #2225). The runner therefore:
    `conflict-context-{N}.json` and rewinds to `feature-dev` on the same
    branch; a stale one pushes and re-enqueues. Failed merge-group checks and
    closed PRs keep their reasons and are not routed to conflict recovery.
+
+   Both orchestration paths run the same recovery. The VS Code path reaches it
+   through `nightgauge pr-stage recover`. A conflict confined to `CHANGELOG.md`
+   files is unioned onto a merge of the base, without an LLM stage. Rewinds to
+   feature-dev stop at `max_dev_redispatch`, and an unresolved conflict halts as
+   `merge_conflict`, naming the files on the card and in the retro (#2841).
    An `UNMERGEABLE` entry on a PR that still reads `MERGEABLE` or `UNKNOWN`
    is blocked behind an entry ahead, so the wait continues. If GitHub removes
    that entry while the PR reads `MERGEABLE`, the wait re-enqueues it; once
@@ -219,6 +273,52 @@ Post-merge verification (#2055) needs no change: the commit a queue lands is
 the merge-group commit, whose tree differs from the PR head's, so the
 tree-mismatch rule applies and the verdict rests on the required checks the
 `merge_group` run reported on that commit.
+
+### Enqueue review gate (#2730)
+
+The Nightgauge review arrives as an issue comment, `<!-- nightgauge:pr-review -->`,
+from `github-actions[bot]`. It is not a pull request review, so `reviewDecision`
+never reflects it. The gate reads the newest such comment immediately before
+either merge path, and `pr-stage review-gate` runs the same code for the LLM stage.
+A comment from anyone else is ignored, and a PR with no review comment proceeds.
+The gate does not wait for a review that has not been posted.
+
+| Class    | Findings                                                                                             | Effect                           |
+| -------- | ---------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `hold`   | Every `blocker`; a `correctness` `major` anchored on `README*`, `docs/**`, `packages/*/package.json` | Stops the enqueue, earns a round |
+| `file`   | Any other `major`                                                                                    | Filed as an issue, then merged   |
+| `ignore` | `nitpick`                                                                                            | Nothing                          |
+
+The `hold` rule is how a documented user path is detected. It is a path and
+severity test on purpose, because a semantic judgement would need a model on the
+zero-token path. It can miss a broken path described in a finding anchored
+elsewhere, and it can hold on a harmless docs finding. The round cap bounds that.
+
+| Verdict       | Meaning                             | Outcome                                                                                   |
+| ------------- | ----------------------------------- | ----------------------------------------------------------------------------------------- |
+| `enqueue`     | Nothing holds                       | Files `file` findings, then merges                                                        |
+| `fix-round`   | A hold finding, with rounds left    | Punt `review-fix-needed` to the LLM                                                       |
+| `hold-at-cap` | A hold finding after two rounds     | Refused `review-round-cap`                                                                |
+| `wait-round`  | A fix round is open                 | Refused `review-fix-in-progress`                                                          |
+| `unreadable`  | The review or ledger could not read | Punt `review-read-failed`, or refused `review-unparseable` when the comment did not parse |
+
+`MaxReviewFixRounds` is 2, a constant. The LLM stage wraps its fix in
+`pr-stage review-round begin|end`, and `begin` refuses past the cap. Rounds live
+in `pr-merge-review-{N}.json`, in the pipeline state directory, so a re-dispatch
+inherits the count. An open round older than 60 minutes no longer holds the
+enqueue, so a killed stage cannot wedge the PR, but it still counts.
+
+A hold finding in a comment older than the last round's end is one that round
+answered, so the new head enqueues without waiting for the review to catch up.
+
+Open `file` findings are filed before the merge call, through the same machinery
+as `followup materialize` and under the same
+[Rule 5](SELF_IMPROVEMENT_BOUNDARIES.md#rule-5-autonomous-issue-filing-is-governed)
+controls. A finding the gate cannot track refuses the merge with
+`review-filing-failed`, including one over `follow_up_filing.max_per_run`. Filed
+findings are recorded in the ledger, so a retry does not file twice. In report
+mode nothing is filed: the findings go to `discovered-work-{N}.json` and the merge
+proceeds, because that mode is the operator's choice.
 
 ### Rate limits
 
@@ -245,24 +345,30 @@ LLM path.
 
 ### Failure modes
 
-| Reason                                      | Cause                                                                           | What happens                    |
-| ------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------- |
-| `no-pr-context-file`                        | `pr-{N}.json` missing (pr-create did not write it)                              | Punt → LLM                      |
-| `pr-context-invalid-json`                   | Corrupted pr-{N}.json                                                           | Punt → LLM                      |
-| `pr-context-missing-pr-number`              | pr-{N}.json present but `pr_number` is empty/zero                               | Punt → LLM                      |
-| `gh-unavailable`                            | `gh` CLI not on PATH                                                            | Punt → LLM                      |
-| `rate-limited`                              | GitHub or `gh` rate limit                                                       | Defer → cooldown (ADR-006)      |
-| `unexpected-error: …`                       | Anything else from `gh`                                                         | Punt → LLM                      |
-| `merge-call-failed: …`                      | Pre-flight passed but `gh pr merge` returned non-zero                           | Punt → LLM                      |
-| `not-mergeable`                             | `mergeable != MERGEABLE`                                                        | Punt → LLM                      |
-| `dirty-merge-state`                         | `mergeStateStatus != CLEAN`                                                     | Punt → LLM                      |
-| `failed-ci-checks: <name>`                  | At least one `FAILURE` or `ERROR` check                                         | Punt → LLM                      |
-| `review-not-approved: …`                    | `REVIEW_REQUIRED` or `CHANGES_REQUESTED`                                        | Punt → LLM                      |
-| `merge-ec-timeout: …`                       | Merge call succeeded but post-merge re-fetch errored or never observed `MERGED` | Punt → LLM (see #4070)          |
-| `merge-queue-failed: merge conflict with …` | Queued PR removed because it conflicts with its base                            | Conflict recovery → feature-dev |
-| `merge-queue-failed: …`                     | Queued PR removed from the merge queue (failed group, unmergeable, closed)      | Stage fails, no LLM             |
-| `merge-queue-timeout: …`                    | Queued PR not merged within `pipeline.merge_queue.wait_timeout`                 | Stage fails, no LLM             |
-| `merge-queue-enqueue-failed: …`             | `enqueuePullRequest` returned an error                                          | Stage fails, no LLM             |
+| Reason                                      | Cause                                                                           | What happens                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `no-pr-context-file`                        | `pr-{N}.json` missing (pr-create did not write it)                              | Punt → LLM                                            |
+| `pr-context-invalid-json`                   | Corrupted pr-{N}.json                                                           | Punt → LLM                                            |
+| `pr-context-missing-pr-number`              | pr-{N}.json present but `pr_number` is empty/zero                               | Punt → LLM                                            |
+| `gh-unavailable`                            | `gh` CLI not on PATH                                                            | Punt → LLM                                            |
+| `rate-limited`                              | GitHub or `gh` rate limit                                                       | Defer → cooldown (ADR-006)                            |
+| `unexpected-error: …`                       | Anything else from `gh`                                                         | Punt → LLM                                            |
+| `merge-call-failed: …`                      | Pre-flight passed but `gh pr merge` returned non-zero                           | Punt → LLM                                            |
+| `not-mergeable`                             | `mergeable != MERGEABLE`                                                        | Punt → LLM                                            |
+| `dirty-merge-state`                         | `mergeStateStatus != CLEAN`                                                     | Punt → LLM                                            |
+| `failed-ci-checks: <name>`                  | At least one `FAILURE` or `ERROR` check                                         | Punt → LLM                                            |
+| `review-not-approved: …`                    | `REVIEW_REQUIRED` or `CHANGES_REQUESTED`                                        | Punt → LLM                                            |
+| `merge-ec-timeout: …`                       | Merge call succeeded but post-merge re-fetch errored or never observed `MERGED` | Punt → LLM (see #4070)                                |
+| `merge-queue-failed: merge conflict with …` | Queued PR removed because it conflicts with its base                            | Changelog union, else conflict recovery → feature-dev |
+| `merge-queue-failed: …`                     | Queued PR removed from the merge queue (failed group, unmergeable, closed)      | Stage fails, no LLM                                   |
+| `merge-queue-timeout: …`                    | Queued PR not merged within `pipeline.merge_queue.wait_timeout`                 | Stage fails, no LLM                                   |
+| `review-fix-needed: …`                      | A hold finding, with fix rounds left                                            | Punt → LLM, one fix round                             |
+| `review-round-cap: …`                       | A hold finding after `MaxReviewFixRounds`                                       | Stage fails, no LLM                                   |
+| `review-fix-in-progress`                    | A fix round is open                                                             | Stage fails, no LLM                                   |
+| `review-unparseable: …`                     | A review comment did not parse                                                  | Stage fails, no LLM                                   |
+| `review-filing-failed: …`                   | An open finding could not become an issue                                       | Stage fails, no LLM                                   |
+| `review-read-failed: …`                     | The review or its ledger could not be read                                      | Punt → LLM                                            |
+| `merge-queue-enqueue-failed: …`             | `enqueuePullRequest` returned an error                                          | Stage fails, no LLM                                   |
 
 > **#4070 — no self-reported merge on post-verify failure.** The deterministic
 > runner used to return `PathMerged` when the post-merge re-fetch _errored_

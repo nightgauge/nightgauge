@@ -321,6 +321,7 @@ export class PipelineBridge {
         sessionId: result?.sessionId,
         servedModel: result?.servedModel,
         servedEffort: result?.servedEffort,
+        pluginVersion: result?.pluginVersion,
         servedThinking: result?.servedThinking,
       })
       .catch((err) => {
@@ -781,6 +782,7 @@ export class PipelineBridge {
         // #606 served-envelope attribution — the ServedModel analogues,
         // recorded next to served_model in the V2 history record.
         servedEffort: result.servedEffort,
+        pluginVersion: result.pluginVersion,
         servedThinking: result.servedThinking,
         refusalFallbackFrom: result.refusalFallbackFrom,
         refusalFallbackTo: result.refusalFallbackTo,

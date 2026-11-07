@@ -245,4 +245,19 @@ describe("OutputWindow.notifySlotCompleted", () => {
       costUsd: 1.25,
     });
   });
+
+  it("keeps the slot's cost total when the settler has none (#2785)", () => {
+    ow.getState().setSlotTokenUsage(0, {
+      inputTokens: 1,
+      outputTokens: 2,
+      cacheReadTokens: 3,
+      cacheCreationTokens: 4,
+      costUsd: 0.75,
+    });
+
+    ow.notifySlotCompleted(0, "complete", undefined, 1_700_000_000_000);
+
+    expect(ow.getState().getSlot(0)?.tokenUsage.costUsd).toBe(0.75);
+    expect(ow.getState().getSlot(0)?.completedAt).toBe(1_700_000_000_000);
+  });
 });

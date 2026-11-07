@@ -37,6 +37,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"gopkg.in/yaml.v3"
 )
 
@@ -182,6 +183,12 @@ type Item struct {
 	// standing could not be read. They block — the scheduler fails closed on
 	// an unknown blocker, and so does this ranking.
 	Unresolved []string `json:"unresolved_dependencies,omitempty"`
+	// ClosedUnmerged lists dependencies that name a pull request closed without
+	// merging (#2854). GitHub answered, and nothing was delivered, so they block.
+	ClosedUnmerged []string `json:"closed_unmerged_dependencies,omitempty"`
+	// Nonexistent lists dependencies whose number GitHub confirmed names no
+	// issue or pull request (#2854). They block until the line is fixed.
+	Nonexistent []string `json:"nonexistent_dependencies,omitempty"`
 	// Unvalidated lists closed program dependencies without the post-merge
 	// validation marker (#2574). They block until the marker is written.
 	Unvalidated []string `json:"unvalidated_dependencies,omitempty"`
@@ -257,8 +264,10 @@ func ValidationCandidates(g *depgraph.Graph, resolved map[string]string) (known 
 }
 
 // Rank classifies the graph's Ready issues by the programs file. resolved
-// maps an external dependency's key (see ExternalDependencies) to its forge
-// state, "OPEN" or "CLOSED"; a key absent from it is unresolved and blocks.
+// maps an external dependency's key (see ExternalDependencies) to its
+// forge.DepState: a merged pull request is satisfied, an open one blocks, and
+// one closed unmerged, a number that does not exist or a key absent from the
+// map is unresolved and blocks.
 // validation maps a closed blocker's key (see ValidationCandidates) to its
 // standing; a closed program blocker without the marker blocks, and one whose
 // standing is absent is unresolved and blocks.
@@ -281,6 +290,8 @@ func Rank(f *File, g *depgraph.Graph, resolved map[string]string, validation map
 	}
 	openBlockers := map[string][]string{}
 	unresolved := map[string][]string{}
+	closedUnmerged := map[string][]string{}
+	nonexistent := map[string][]string{}
 	unvalidated := map[string][]string{}
 	// closedBlocks applies the validation gate to a closed blocker.
 	closedBlocks := func(from, to string) {
@@ -308,8 +319,15 @@ func Rank(f *File, g *depgraph.Graph, resolved map[string]string, validation map
 		switch state, ok := resolved[to]; {
 		case !ok:
 			unresolved[from] = append(unresolved[from], to)
-		case strings.EqualFold(state, "OPEN"):
+		case state == forge.DepStatePRMerged:
+			// A pull request carries no labels or marker for the validation
+			// gate to read; a line naming one asks for that pull request.
+		case strings.EqualFold(state, "OPEN"), state == forge.DepStatePROpen:
 			openBlockers[from] = append(openBlockers[from], to)
+		case state == forge.DepStatePRClosed:
+			closedUnmerged[from] = append(closedUnmerged[from], to)
+		case state == forge.DepStateMissing:
+			nonexistent[from] = append(nonexistent[from], to)
 		default:
 			closedBlocks(from, to)
 		}
@@ -329,22 +347,25 @@ func Rank(f *File, g *depgraph.Graph, resolved map[string]string, validation map
 	classify := func(n *depgraph.Node) (Item, bool) {
 		key := n.ID().String()
 		it := Item{
-			Ref:         key,
-			Repo:        n.Repo,
-			Number:      n.Number,
-			Title:       n.Title,
-			Status:      n.BoardStatus,
-			Priority:    n.Priority,
-			Size:        n.Size,
-			Labels:      append([]string{}, n.Labels...),
-			BlockedBy:   dedupe(openBlockers[key]),
-			Unresolved:  dedupe(unresolved[key]),
-			Unvalidated: dedupe(unvalidated[key]),
+			Ref:            key,
+			Repo:           n.Repo,
+			Number:         n.Number,
+			Title:          n.Title,
+			Status:         n.BoardStatus,
+			Priority:       n.Priority,
+			Size:           n.Size,
+			Labels:         append([]string{}, n.Labels...),
+			BlockedBy:      dedupe(openBlockers[key]),
+			Unresolved:     dedupe(unresolved[key]),
+			ClosedUnmerged: dedupe(closedUnmerged[key]),
+			Nonexistent:    dedupe(nonexistent[key]),
+			Unvalidated:    dedupe(unvalidated[key]),
 		}
 		if it.Labels == nil {
 			it.Labels = []string{}
 		}
-		blocked := len(it.BlockedBy) > 0 || len(it.Unresolved) > 0 || len(it.Unvalidated) > 0
+		blocked := len(it.BlockedBy) > 0 || len(it.Unresolved) > 0 || len(it.Unvalidated) > 0 ||
+			len(it.ClosedUnmerged) > 0 || len(it.Nonexistent) > 0
 		for _, l := range f.ExcludeLabels {
 			if hasLabel(n.Labels, l) {
 				it.BlockedBy = append(it.BlockedBy, "label `"+l+"`")

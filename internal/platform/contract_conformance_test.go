@@ -191,6 +191,10 @@ var contractCallSites = []callSite{
 		_, err := NewBillingService(c).CreatePortalSession(ctx)
 		return err
 	}},
+	{api.OpInquiryScorecard, func(ctx context.Context, c *Client) error {
+		_, err := c.ReadInquiryScorecard(ctx, InquiryScorecardQuery{})
+		return err
+	}},
 	{api.OpPipelineIngestEvent, func(ctx context.Context, c *Client) error {
 		return NewAnalyticsService(c).emitPipelineEventSync(ctx, PipelineEvent{
 			RunID:     "run-1",

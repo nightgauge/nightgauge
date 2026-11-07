@@ -554,14 +554,36 @@ session reuse is out of scope. `nightgauge cost realized` reports the result.
 
 ## Spawn Environment Inheritance (Issue #91)
 
-Every Claude CLI spawn — the Go adapters (`internal/execution/adapters/claude.go`,
-`claude_sdk.go`) and the TypeScript `SkillRunner`
-(`packages/nightgauge/src/utils/skillRunner.ts`) — builds its explicit
-environment map on top of the **parent process's own environment**: the Go
-adapters spawn via `os.Environ()` plus their explicit `NIGHTGAUGE_*` overrides
-(`internal/execution/manager.go`), and the TS path spreads `...process.env`
-first. Nothing in that chain strips or replaces the inherited environment; it is
-only ever added to.
+Every stage spawn builds its environment on top of the **parent process's own
+environment, less the launching session's residue**. The Go path
+(`composeStageEnv` in `internal/execution/manager.go`) starts from
+`os.Environ()`; the TypeScript path (`skillRunner.ts` stage, resume and
+interactive spawns, the daemon spawn in `IpcClientBase.ts`, and the
+`HeadlessOrchestrator` side-effect execs) starts from
+`withoutLaunchingSessionEnv()` in `src/utils/launchingSessionEnv.ts`. The two
+apply the same rule and are changed together.
+
+**Launching-session residue (#2848).** An editor started with `code .` from a
+Claude Code terminal inherits that session's `CLAUDECODE` and `CLAUDE_*`
+variables (`CLAUDE_EFFORT`, `CLAUDE_CODE_SESSION_ID`, ...). A run must not
+depend on how its host was started, so every spawn removes `CLAUDECODE` and
+every `CLAUDE_*` name by rule, except the names a stage needs on purpose:
+
+| Kept name                       | Why                                                    |
+| ------------------------------- | ------------------------------------------------------ |
+| `CLAUDE_CODE_OAUTH_TOKEN`       | The stage's auth                                       |
+| `CLAUDE_PLUGIN_ROOT`            | The plugin root; the TS path also sets it explicitly   |
+| `CLAUDE_CODE_DISABLE_THINKING`  | The operator escape hatch described below              |
+| `CLAUDE_CONFIG_DIR`             | The operator's account home, which selects the account |
+| `CLAUDE_CODE_USE_BEDROCK`       | The operator's provider selection (Amazon Bedrock)     |
+| `CLAUDE_CODE_USE_VERTEX`        | The operator's provider selection (Google Vertex AI)   |
+| `CLAUDE_CODE_SKIP_BEDROCK_AUTH` | The operator's Bedrock auth setting                    |
+| `CLAUDE_CODE_SKIP_VERTEX_AUTH`  | The operator's Vertex auth setting                     |
+
+The rule reads names only. Nightgauge's own exports are applied after it, so
+they arrive whatever their name. Another deliberate `CLAUDE_*` setting must be
+added to both twins with its reason. Variables outside the `CLAUDE` namespace
+(`ANTHROPIC_*`, `PATH`, ...) are inherited unchanged.
 
 Both dispatch paths export the stage's identity on top of that inheritance:
 `NIGHTGAUGE_STAGE` and `NIGHTGAUGE_DISPATCH_MODEL`, the concrete model the
@@ -570,7 +592,7 @@ builds its provenance actor from `NIGHTGAUGE_DISPATCH_MODEL`. When the extension
 launches no model, it removes an inherited value rather than pass an outer
 run's model to the child, as it does for `NIGHTGAUGE_RUN_ID`.
 
-This inheritance is why thinking is **not** force-disabled on any Claude spawn
+Inheritance is why thinking is **not** force-disabled on any Claude spawn
 today. A `CLAUDE_CODE_DISABLE_THINKING=1` workaround was unconditionally set by
 all three spawn sites for a period and has since been removed; none of them
 sets the variable any more. See
@@ -583,11 +605,36 @@ never requires a rebuild.** An operator who hits the replay bug again on an
 older CLI can set `export CLAUDE_CODE_DISABLE_THINKING=1` in their own shell (or
 in whatever process launches Nightgauge) and every subsequent Claude spawn picks
 it up automatically, because each adapter's explicit map is layered on top of —
-never in place of — the environment it inherited. This is a deliberate
+never in place of — the environment it inherited, and the launching-session
+rule keeps this name as an explicit exception. This is a deliberate
 consequence of the inheritance model, not a fallback path Nightgauge implements
 or tests for.
 
 ---
+
+## Claude Plugin Loading (Issue #2723)
+
+Every Claude spawn passes `--plugin-dir` with the plugin the running build
+shipped, so a stage's gates do not depend on the operator's user-level install.
+The Go binary reads `<prefix>/claude-plugins/nightgauge` beside
+`<prefix>/bin/nightgauge`. A packaged extension reads
+`dist/claude-plugins/nightgauge`, then a workspace copy. A development host keeps
+the workspace first. A directory counts only when it holds `hooks/hooks.json`.
+
+The CLI replaces a same-named user-level install with the `--plugin-dir` copy and
+reports one `nightgauge` entry, with source `nightgauge@inline`, so each gate fires
+once. Claude Code 2.1.223 (the manifest floor) and 2.1.316 both report `plugins` on
+`system/init`, and so does a `--resume` run. `claude_init_plugin_floor.jsonl` and
+`claude_init_plugin_user_install.jsonl` in `internal/execution/testdata` are those
+captures, each with a user-level install enabled, and a test ties the first to the
+manifest's `min_version`.
+
+The stage runner reads that event on Go `RunStage` (the `claude` and `claude-sdk`
+adapters) and on the extension's headless and resume paths. See
+[Gate plugin missing](FAILURE_TAXONOMY.md#gate-plugin-missing-2723) for what it does
+with the reading. Each stage records the version it loaded as
+`model_selection.plugin_version` in the run record. Interactive stages pass the flag
+but have no stream to read.
 
 ## Per-Stage Executor Dispatch (single-agent vs. fan-out)
 

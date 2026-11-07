@@ -92,7 +92,32 @@ const HALT_SKIP_ENVIRONMENTAL: ReadonlySet<string> = new Set([
   // short per-issue backoff, no lifetime-cap increment, no pause.
   "model_stream_stalled",
 ]);
-const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set(["stall_kill"]);
+const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set([
+  "stall_kill",
+  "stage_cap_kill", // #2812 — a stage stopped at its runtime cap; recovers like a stall
+]);
+
+/**
+ * #2770: a `runaway_progress` kill recovers like a stall on the Go side
+ * (30-minute backoff, no lifetime-cap increment), and the monitor that raises
+ * it can be wrong, so one kill must not halt the repository. It is NOT in
+ * HALT_SKIP_TRANSIENT_STALL because it also skips the lifetime cap: skipped
+ * unconditionally, an issue the monitor keeps killing would retry forever.
+ * So the halt is skipped for the first CAP - 1 consecutive runaway kills of an
+ * issue and applies on the CAP-th; any other outcome of that issue resets the
+ * count. The count is in memory: a window reload is an operator action.
+ */
+export const RUNAWAY_CONSECUTIVE_RETRY_CAP = 3;
+
+/** The issue's consecutive runaway-kill count after an outcome of `kind`. */
+export function nextRunawayStreak(previous: number, kind: string | undefined): number {
+  return kind === "runaway_progress" ? previous + 1 : 0;
+}
+
+/** Whether a runaway kill at `streak` in a row skips the halt. */
+export function runawayKillSkipsHalt(streak: number): boolean {
+  return streak > 0 && streak < RUNAWAY_CONSECUTIVE_RETRY_CAP;
+}
 
 /**
  * The parked kinds (#1631, #1753): the next attempt on the same model and
@@ -113,6 +138,9 @@ const HALT_SKIP_PARKED: ReadonlySet<string> = new Set([
   "adapter_incompatible",
   "environment_halt",
   "dev_context_stale",
+  "gate_plugin_missing",
+  "review_cap_reached",
+  "resume_no_op",
 ]);
 
 /**
@@ -146,6 +174,7 @@ import type { Logger } from "../utils/logger";
 import { requeueOptionsFor, type ActiveSlot, type QueueItem } from "../types/queue";
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { moveToInReviewIfPRBacked } from "../utils/inReviewGuard";
+import { BOARD_STATUS } from "../utils/projectFieldMapping";
 import { postFailureComment } from "../utils/failureComment";
 import { epicBranchParent } from "../utils/epicBranchParent";
 import { formatEpicRef, isEpic, sameRepo, slotKey, type EpicRef } from "../utils/epicRef";
@@ -422,7 +451,8 @@ export interface ConcurrentPipelineCallbacks {
     stateService: PipelineStateService,
     epicNumber?: number,
     repoSlug?: string,
-    epicRepo?: string
+    epicRepo?: string,
+    runId?: string
   ) => void;
   /** Called when a slot's pipeline stage changes */
   onSlotStageChanged?: (
@@ -616,6 +646,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private queuedRemoteRunIds = new Set<string>();
   private queuedRemoteRunIdsAt = Number.NEGATIVE_INFINITY;
   /**
+   * The debounced fill a queue state with pending items schedules (#2717).
+   * A Go-side add (the daemon's QueueAddItem) announces itself only through
+   * queue.changed, never through the extension's onItemAdded, so without this
+   * wake the item sat pending while the daemon reserved a slot for it.
+   */
+  private pendingFillTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
    * TOMBSTONES: platform runs cancelled before their slot opened (#2344).
    *
    * A cancel can reach a remote run anywhere between the queue and its slot:
@@ -701,6 +738,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * (the #100 / #243 flake class).
    */
   private readonly lifecyclePromises = new Map<string, Promise<PipelineRunResult>>();
+  /** Consecutive runaway kills per {@link slotKey} (#2770). */
+  private readonly runawayStreaks = new Map<string, number>();
   private worktreeManager: WorktreeManager;
   private maxConcurrent: number;
   /**
@@ -2100,7 +2139,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       stateService,
       item.epicNumber,
       item.repoName,
-      item.epicRepo
+      item.epicRepo,
+      slot.runId
     );
 
     // Run pipeline asynchronously — don't await, let it complete in background
@@ -2226,6 +2266,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
       pipelineResult = result;
       pipelineSucceeded = result.success;
+      this.recordRunawayStreak(
+        slot,
+        result.success ? undefined : classifyTerminalKind(result.error?.message ?? "")
+      );
       pipelineDeferred = result.deferred ?? false;
       isAlreadyResolved = result.outcomeType === "already-resolved";
 
@@ -2526,7 +2570,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
               vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
               "";
             if (cwd) {
-              await moveToInReviewIfPRBacked(slot.issueNumber, cwd, this.logger, slot.repo);
+              await moveToInReviewIfPRBacked(slot.issueNumber, cwd, this.logger, slot.repo, {
+                onlyFrom: BOARD_STATUS.inProgress,
+              });
             }
           } catch {
             // Best effort — never block cleanup
@@ -3039,6 +3085,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     return false;
   }
 
+  /** Track the issue's consecutive runaway kills across its outcomes (#2770). */
+  private recordRunawayStreak(slot: PipelineSlot, kind: string | undefined): void {
+    const key = slotKey(slot.repo, slot.issueNumber);
+    const streak = nextRunawayStreak(this.runawayStreaks.get(key) ?? 0, kind);
+    if (streak === 0) this.runawayStreaks.delete(key);
+    else this.runawayStreaks.set(key, streak);
+  }
+
   private async haltQueueOnSlotFailure(
     slot: PipelineSlot,
     pipelineResult: PipelineRunResult | undefined
@@ -3216,9 +3270,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // Show a non-blocking warning toast instead so the user is aware, then
       // let autonomous continue working on other ready issues uninterrupted.
       // Runaway-ceiling kills (#3508) resolve to stall_kill in the table and are
-      // covered by the same set: no queue halt, no autonomous pause, 30m backoff
-      // via the Go layer.
-      const isStallKill = haltKind !== undefined && HALT_SKIP_TRANSIENT_STALL.has(haltKind);
+      // covered by the same set. Progress-based runaway kills keep their own
+      // kind, runaway_progress, and skip the halt only below
+      // RUNAWAY_CONSECUTIVE_RETRY_CAP kills in a row (#2770).
+      const isStallKill =
+        haltKind !== undefined &&
+        (HALT_SKIP_TRANSIENT_STALL.has(haltKind) ||
+          (haltKind === "runaway_progress" &&
+            runawayKillSkipsHalt(
+              this.runawayStreaks.get(slotKey(slot.repo, slot.issueNumber)) ?? 0
+            )));
       if (isStallKill) {
         const failedStage = pipelineResult?.failedStage ?? "unknown";
         this.logger.info(
@@ -3370,7 +3431,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           // label — a validation_error (harness/bookkeeping fault) must not
           // present as an unclassifiable organic failure on the halt card.
           const pauseTerminalKind = pipelineResult?.terminalKind || "unclassified";
-          const pauseReason = `haltQueueOnSlotFailure: issue #${slot.issueNumber} failed at ${failedStage}`;
+          // #2841: a conflict halt names its files, so the card must carry them.
+          const pauseDetail =
+            pauseTerminalKind === "merge_conflict" && pipelineResult?.error
+              ? `: ${pipelineResult.error.message}`
+              : "";
+          const pauseReason = `haltQueueOnSlotFailure: issue #${slot.issueNumber} failed at ${failedStage}${pauseDetail}`;
           // #1148: pauseRepo, not pause. Both verbs raise the same
           // terminal-failure card and both latch until an explicit human
           // Resume — the ONLY difference is how much stops. `autonomousPause`
@@ -4625,7 +4691,39 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     for (const item of state.items ?? []) if (item.remoteRunId) ids.add(item.remoteRunId);
     this.queuedRemoteRunIds = ids;
     this.noteHeldRemoteRuns();
+    this.wakeFillForPending(state);
   }
+
+  /**
+   * Schedule the debounced fill when a queue state carries a pending item and
+   * a slot is free (#2717). Every add, extension-side or Go-side, announces a
+   * queue change, so both reach fillSlots on this one path; fillSlots' own
+   * isFilling guard keeps concurrent fills apart. A paused queue, a queue with
+   * autoStart off, or a manager shutting down does not fill — the same gates
+   * the onItemAdded fill applies.
+   */
+  private wakeFillForPending(
+    state: NonNullable<Awaited<ReturnType<IssueQueueService["getQueue"]>>>
+  ): void {
+    if (this.isShuttingDown || this.windowEnding) return;
+    if (state.status === "paused") return;
+    if (!(state.items ?? []).some((item) => item.status === "pending")) return;
+    if (this.queueService.getConfig?.().autoStart === false) return;
+    if (this.availableSlotCount <= 0) return;
+    if (this.pendingFillTimer) clearTimeout(this.pendingFillTimer);
+    this.pendingFillTimer = setTimeout(() => {
+      this.pendingFillTimer = null;
+      if (this.availableSlotCount <= 0) return;
+      this.fillSlots().catch((err) => {
+        this.logger.warn("fillSlots after a queue change failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, ConcurrentPipelineManager.PENDING_FILL_DEBOUNCE_MS);
+  }
+
+  /** Coalesces a burst of queue changes into one fill, as onItemAdded does. */
+  private static readonly PENDING_FILL_DEBOUNCE_MS = 100;
 
   /**
    * Read the queue once, so the runs it carries are listed as held (#2357):
@@ -4968,6 +5066,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   dispose(): void {
     this.isShuttingDown = true;
+    if (this.pendingFillTimer) {
+      clearTimeout(this.pendingFillTimer);
+      this.pendingFillTimer = null;
+    }
     if (this.throttleLiftTimer) {
       clearTimeout(this.throttleLiftTimer);
       this.throttleLiftTimer = null;

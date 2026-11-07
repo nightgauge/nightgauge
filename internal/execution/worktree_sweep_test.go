@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
 )
@@ -1072,5 +1074,89 @@ func TestSweepMergedWorktrees_FindsWorktreeOutsideTree(t *testing.T) {
 	}
 	if _, err := os.Stat(wt); !os.IsNotExist(err) {
 		t.Errorf("worktree directory still on disk at %s", wt)
+	}
+}
+
+// hungRemote returns a git:// URL whose server accepts connections and never
+// answers — the #2791 shape that hung doctor's worktree scan.
+func hungRemote(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	var held []net.Conn
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			held = append(held, c)
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		<-done
+		for _, c := range held {
+			_ = c.Close()
+		}
+	})
+	return "git://" + ln.Addr().String() + "/repo.git"
+}
+
+func shortenOriginFetchTimeout(t *testing.T) {
+	t.Helper()
+	prev := OriginFetchTimeout
+	OriginFetchTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { OriginFetchTimeout = prev })
+}
+
+func TestFetchOriginBranch_HungRemoteReturnsError(t *testing.T) {
+	shortenOriginFetchTimeout(t)
+	f := newSweepFixture(t)
+	run(t, f.root, "git", "remote", "set-url", "origin", hungRemote(t))
+
+	errc := make(chan error, 1)
+	go func() { errc <- fetchOriginBranch(f.root, "main") }()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("want a timeout error, got %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("fetchOriginBranch hung on an unresponsive remote")
+	}
+}
+
+func TestSweepMergedWorktrees_HungRemoteTimesOutAndClassifiesLocally(t *testing.T) {
+	shortenOriginFetchTimeout(t)
+	f := newSweepFixture(t)
+	run(t, f.root, "git", "remote", "set-url", "origin", hungRemote(t))
+
+	type result struct {
+		res WorktreeSweepResult
+		err error
+	}
+	rc := make(chan result, 1)
+	go func() {
+		res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root, DryRun: true})
+		rc <- result{res, err}
+	}()
+	select {
+	case r := <-rc:
+		if r.err != nil {
+			t.Fatalf("sweep must continue after a fetch timeout, got %v", r.err)
+		}
+		if !strings.Contains(r.res.BaseRefFetchError, "timed out") {
+			t.Errorf("BaseRefFetchError = %q, want a timeout", r.res.BaseRefFetchError)
+		}
+		if r.res.BaseRef != "origin/main" {
+			t.Errorf("BaseRef = %q, want the local origin/main", r.res.BaseRef)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("SweepMergedWorktrees hung on an unresponsive remote")
 	}
 }

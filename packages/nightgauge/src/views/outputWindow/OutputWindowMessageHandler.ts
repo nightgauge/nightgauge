@@ -151,6 +151,8 @@ export type ExtensionToWebViewMessage =
       statusLabel: string;
       startedAt?: number;
       completedAt?: number | null;
+      /** Occupant of the slot index; a change replaces the elapsed anchors (#2785). */
+      runGeneration?: number;
       costUsd: number;
       inputTokens: number;
       outputTokens: number;
@@ -716,6 +718,7 @@ export function createOverviewCardUpdateMessage(
     statusLabel,
     startedAt: slot.startedAt,
     completedAt: slot.completedAt,
+    runGeneration: slot.runGeneration,
     costUsd: usage?.costUsd ?? 0,
     inputTokens: usage?.inputTokens ?? 0,
     outputTokens: usage?.outputTokens ?? 0,

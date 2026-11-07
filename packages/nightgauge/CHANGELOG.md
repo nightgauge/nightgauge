@@ -11,6 +11,189 @@ and this project adheres to
 
 ### Fixed
 
+- A feature-validate artifact that records its acceptance-criteria verdicts
+  under `acceptance_criteria[].verdict` now fails the extension's deliverable
+  policy, as it already did in Go (#3013). The stage is re-asked to move them
+  under `acceptance_criteria_verdicts`; if it does not, the stage fails instead
+  of having a synthetic artifact written over it, so a fully verified change no
+  longer opens a PR that says `Refs` instead of `Closes`.
+
+## [0.8.2] - 2026-11-06
+
+0.8.1 was tagged but never published, because the release gate could not scan
+files over 32 MB (#3011). Its changes ship in this release and are listed below.
+
+### Fixed
+
+- When an issue re-runs with nothing left to build, the extension no longer
+  opens and merges an empty pull request. The fallback checks that the branch's
+  tree differs from its base, not just that it has commits ahead. A
+  `no-diff-against-base` result from the deterministic pr-create now ends the
+  run (issue closed, or parked in Backlog) instead of running the LLM
+  pr-create skill (#3012).
+- Claude stages launched from the VS Code extension can now write to the main
+  checkout's knowledge base from a worktree without a user-level permission rule:
+  they get `--add-dir <main checkout>/.nightgauge/knowledge` and
+  `NIGHTGAUGE_KNOWLEDGE_DIR`, as Go-launched stages already did (#2798).
+
+- `nightgauge autonomous status` no longer reads "Running" while a repository
+  halt stops dispatch: the headline counts halted repositories and lists each
+  one, plus issues awaiting architecture approval, live and from the state
+  file; `--json` adds `haltedRepos` and `architectureApprovalParked` (#2748).
+
+### Fixed
+
+- An integer `pipeline.stall_idle_ms` no longer makes the `nightgauge` binary
+  fail to load the config; both readers now accept the same integer
+  milliseconds (#2714).
+- On a release candidate or release, the staleness status item shows the
+  installed version and the workspace's distance from it, and no longer offers
+  "Refresh extension", which would have replaced the CI build with a local one
+  (#2721).
+- The duplicate-dispatch test no longer spawns `gh` or `git`, so it passes
+  offline (#2693).
+- Installed Codex, Grok and OpenCode skills no longer carry skill test files (`__tests__/`,
+  `*.test.ts`, `*.test.js` and nested `tests/`), matching the skills the extension
+  packages (#2948).
+- Stages the extension runs, and the daemon it starts, no longer inherit `CLAUDECODE` and
+  `CLAUDE_*` variables from the Claude Code session that launched the editor. Auth, the plugin
+  root, the thinking escape hatch and the account home still arrive (#2848).
+- A pr-merge stage the extension runs no longer has its merge-queue wait counted against its
+  wall-clock budget (#2770).
+- A runaway-progress kill shows a warning and retries instead of halting the repository queue. The
+  third consecutive runaway kill of the same issue still halts it (#2770).
+- Churn kills are recorded as `progress-churn-tools` in the stage-exit record, whatever deferral
+  expired behind them (#2770).
+
+- On activation the extension links `~/.nightgauge/bin/nightgauge` to its bundled binary, so
+  the Claude plugin's hooks and terminals find the binary from VS Code, Insiders, VSCodium,
+  Cursor or Windsurf (#2765).
+
+- Codex, Grok and OpenCode skills the extension installs now match the ones
+  `scripts/install-agent-skills.sh` installs, and an extension upgrade re-syncs them on
+  activation, whatever `nightgauge.plugins.autoPrompt` says (#2762).
+
+- `Nightgauge: Setup Codex Commands` is now `Nightgauge: Setup Codex Skills`. It installs
+  `~/.codex/skills/` only; the old command files called a script the extension does not ship,
+  and Codex does not read `~/.codex/commands/`. Invoke stages as `$nightgauge-issue-pickup`
+  (#2762).
+
+- The Codex, Grok and Claude Code setup commands now always offer to install or update,
+  even with `nightgauge.plugins.autoPrompt` off (#2762).
+
+- The Claude Code plugin is updated again on activation after an extension upgrade or an
+  earlier failed update, until the update succeeds (#2762).
+
+## [0.8.0] - 2026-11-04
+
+### Fixed
+
+- Discord, Slack and Mattermost no longer post a message for a run that defers at
+  issue-pickup. The message is posted once the run reaches a later stage; a pickup
+  failure still notifies (#2914).
+- "Approve & re-queue" on an architecture-approval card now moves the issue to Ready, so it
+  dispatches. Queue items the daemon adds now start without waiting for another event (#2717).
+
+- A stage stopped by its runtime cap is now reported as that, naming the cap, its value and the
+  elapsed time, instead of as a stall (#2812).
+
+- A build with no bundled plugin now warns when work arrives before `system/init`, and
+  prints that warning once, not again on each subagent start. The minimum Claude CLI
+  stays 2.1.223 (#2807).
+
+- An issue left open by a `Refs` merge now re-plans its remaining criteria instead of looping on
+  `pr-merge`: a resume needs a PR the forge reads as OPEN, and a resumed run that merges nothing
+  parks the issue (#2878).
+- A review that reaches its round cap now parks that issue instead of halting the repository
+  (#2865), and an Action Center card lists the standing findings and the worktree.
+- Pipeline PR titles from the extension's fallback path now state the change, stay within 72
+  characters and carry the `(#N)` scope (#2846).
+- A merge-queue conflict now goes through conflict recovery instead of halting
+  the repository, and the halt card names the files when recovery cannot
+  resolve it.
+- A long merge-queue wait no longer ends in a paid LLM merge stage: the extension
+  takes its pr-merge timeout from the binary instead of a fixed 20 minutes. The
+  stage logs the `pr-stage` pid at spawn and names any signal that kills it.
+- The orphan reaper checks a process's start time before it kills, so it cannot
+  kill an unrelated process that reused a tracked pid.
+- Installing Codex or Grok skills warns when any were skipped, with the count
+  (`installed N of M, skipped K`), instead of reporting success. The skipped
+  directories keep their old skills, and the output channel names them.
+- Installing Codex or Grok skills removes Nightgauge skills that no longer ship.
+- A re-dispatched issue resumes at feature-validate from preserved work instead of
+  repeating planning and dev, when its acceptance criteria are unchanged (#2730).
+- Stages find their skills through `nightgauge skill roots`, so the extension and
+  the binary can no longer disagree on which skills run. If that call fails, the
+  stage fails with the reason. The write protection on a stage's skills tree now
+  also covers the `/tmp` form of a path (#2718).
+- The Output window's Overview card shows the right time for a running issue. A run
+  taking over a reused slot starts from a clean record, a stage boundary no longer
+  marks a live run finished, and the card's timer follows the new run.
+- Retry on a halted repository's Action Center card now resumes the repository
+  and closes the card. It used to freeze the scheduler until the daemon
+  restarted, while the status still read running (#2750).
+- The Claude plugin keeps working after an extension upgrade. Its marketplace now
+  lives in global storage, and an existing install moves there with its plugin data
+  intact. A plugin that failed to load is repaired on activation, or Claude Code's
+  error is shown, even if you dismissed the install prompt. If the plugin's status
+  cannot be read, a warning says why. The extension no longer
+  tries to install `smart-setup` and `docs`, which are skills inside the plugin
+  (#2719).
+- Pipeline stages now load the safety gates the extension ships, whatever the
+  state of your user-level Claude plugin. A packaged extension uses its bundled
+  plugin ahead of a workspace copy, and stops a stage before any work with an
+  Action Center card if the plugin did not load. Extension Development Hosts keep
+  the workspace first and warn instead (#2723).
+- A packaged extension now runs its own bundled skills, even in a workspace that
+  holds a `skills/` tree. `NIGHTGAUGE_SKILLS_ROOT` overrides the bundle, a skill
+  the bundle lacks still resolves from the workspace, and the Extension
+  Development Host keeps the workspace first. Claude stages can read the bundle
+  under default permissions and cannot edit it with file tools (#2718).
+- Initialize Repository works on a fresh install: it writes
+  `.nightgauge/config.yaml` with the bundled binary, so it needs neither the
+  Claude plugin nor `nightgauge` on `PATH`. Link a GitHub Project afterwards;
+  a repository with no board no longer shows the `project config incomplete`
+  warning.
+- Make Repo AI-Ready runs `/nightgauge:smart-setup`, and offers plugin setup
+  when the plugin is not enabled.
+- Terminals the extension opens for a skill or for `nightgauge pr merge` can run
+  `nightgauge`, because its directory is on `PATH`.
+- Hints that name a `/nightgauge:*` command appear only when the Claude plugin
+  is enabled.
+- The extension now ships every file a pipeline stage needs, including per-skill
+  model overlays and the `pattern-mining` and `verify-ui` skills. A stage whose
+  bundled skill is missing an include now fails and names the file, instead of
+  running on a partial prompt (#2761).
+- A validation retry in a reused worktree can now pass: the latest verdict per
+  gate decides, so an earlier `catch` no longer fails every later attempt, and
+  gate telemetry still shows every row. One judge's pass cannot erase another
+  judge's fail: any failing judge in the latest attempt fails validation (#2746).
+- Security: hooks no longer run a `bin/nightgauge` from the open repository,
+  so they use the bundled binary unless `NIGHTGAUGE_DEV_REPO_BIN=1` is set in a
+  verified Nightgauge core checkout.
+- Remote Claude plugin installs now follow the `stable` release branch, so
+  `claude plugin update` delivers releases. The new default for
+  `nightgauge.plugins.marketplaceUrl` ends in `#stable` (#2724).
+- A stage waiting on its own gate is no longer killed by the runaway monitor while the gate
+  still runs (#2694). `pipeline.progress_runaway.background_task_ceiling_ms` rises from 45 to 90
+  minutes, because a loaded `ci-local.sh` takes 50 and any live task now counts, declared or not.
+  A task whose declared log keeps growing can run to `background_task_hard_ceiling_ms` (120
+  minutes). A connectivity restore takes the outage off the monitor's clocks, a kill names the
+  expired ceiling and the task's age, and the failure report says the runaway monitor stopped the
+  stage instead of blaming the implementation.
+
+- **A long gate wait after a quota warning is no longer killed (#2711).** Time on a live
+  background task or foreground tool call no longer counts toward the idle budgets, and a kill
+  that followed only an `allowed_warning` is booked as a stall, with no global cooldown.
+- **A `Refs #N` merge no longer leaves the issue open but Done (#2706).** The pr-merge status
+  sync writes Done only for a closed issue and Ready for an open one, and an unreadable issue
+  state raises the board-status card. A failed run's In review park no longer overwrites the
+  scheduler's Ready.
+- **Post-pipeline verification no longer closes an issue for another repository's closer
+  (#2687).** A merged PR body or main commit saying `Fixes other/repo#N`, or that issue's URL,
+  no longer closes this repository's #N, and an issue URL counts only on github.com, as on
+  GitHub. A closer needs no space after the keyword (`Fixes:#N`), as on the Go side.
+
 - **A `Refs #N` merge no longer closes the issue after the pipeline (#2689).** Post-pipeline
   verification now closes an open issue only when a merged PR body or a commit on main carries a
   closing keyword (`Closes #N`, `owner/repo#N`, or the issue URL). A merge that only references
@@ -1414,7 +1597,9 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2
+[0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nightgauge/nightgauge/compare/v0.6.0...v0.7.0

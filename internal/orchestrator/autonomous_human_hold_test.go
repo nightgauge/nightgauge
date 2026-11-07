@@ -107,6 +107,9 @@ func TestArchitectureApprovalHold_ReleasedByApprovalLabel(t *testing.T) {
 		Labels: []string{"type:bug", config.DefaultArchitectureApprovalLabel},
 	})
 	as.reconcileStateAgainstGraph(approved)
+	// The release drops the entry once its board move is done (#2717); this
+	// fixture configures no board, so the move is a no-op that drops it.
+	as.waitBackground()
 
 	if len(as.state.Failed) != 0 {
 		t.Fatalf("approval label applied but the issue is still held — the label is the way back in")
@@ -136,6 +139,7 @@ func TestArchitectureApprovalHold_ReleasedByApprovalFile(t *testing.T) {
 
 	g := holdTestGraph(&depgraph.Node{Repo: "acme/flutter", Number: 530, State: "OPEN", BoardStatus: "Ready"})
 	as.reconcileStateAgainstGraph(g)
+	as.waitBackground() // the release drops the entry after its board move (#2717)
 
 	if len(as.state.Failed) != 0 {
 		t.Fatalf("approval file grants the gate but the issue is still held")

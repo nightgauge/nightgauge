@@ -2,7 +2,7 @@
   "adapter": "claude-headless",
   "binary": "claude",
   "min_version": "2.1.223",
-  "min_version_reason": "The oldest version a captured fixture backs: both stream-json captures in internal/execution/testdata were taken on Claude Code 2.1.223.",
+  "min_version_reason": "The oldest version a captured fixture backs: claude_init_plugin_floor.jsonl was taken on Claude Code 2.1.223 and reports the plugins list the stage gate reads, as do the claude_stream_* captures from that version before redaction.",
   "floor_policy": "warn",
   "max_tested": "2.1.258",
   "max_tested_reason": "The version CI installs for the continuous-improvement and release-watchdog workflows.",
@@ -16,11 +16,13 @@
   "required_flags": [
     "--add-dir",
     "--allowedTools",
+    "--disallowedTools",
     "--max-budget-usd",
     "--max-turns",
     "--model",
     "--no-session-persistence",
     "--output-format",
+    "--plugin-dir",
     "--verbose",
     "-p"
   ],
@@ -30,6 +32,10 @@
   "fixtures": [
     "internal/execution/testdata/claude_stream_real_capture.jsonl",
     "internal/execution/testdata/claude_stream_subagent_multi_result.jsonl",
+    "internal/execution/testdata/claude_init_plugin_present.jsonl",
+    "internal/execution/testdata/claude_init_plugin_absent.jsonl",
+    "internal/execution/testdata/claude_init_plugin_user_install.jsonl",
+    "internal/execution/testdata/claude_init_plugin_floor.jsonl",
     "internal/doctor/testdata/no-catalog-cli-probes/claude-help.txt",
     "internal/execution/adapters/testdata/cli-help/claude-headless-2.1.258.txt",
     "internal/execution/adapters/testdata/cli-help/claude-headless-2.1.258.txt.hidden"

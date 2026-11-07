@@ -226,9 +226,14 @@ whole mechanism is bounded by `external_progress_ceiling_ms` (20 minutes,
 matching `WEDGED_TOOL_CALL_CEILING_S`) so a wedged child cannot make a stage
 immortal. Claude Code background tasks (a `run_in_background` gate, a Monitor)
 are the exception: each is bounded by its own age against
-`background_task_ceiling_ms` (45 minutes), measured from when the oldest live
+`background_task_ceiling_ms` (90 minutes), measured from when the oldest live
 task started rather than from the last productive signal, so a full gate begun
-after minutes of rebasing is not killed mid-run (#2554). A stage that loops on
+after minutes of rebasing is not killed mid-run (#2554). Past that ceiling a
+running task keeps deferring only while a declared log grows, up to
+`background_task_hard_ceiling_ms` (120 minutes), so a loaded gate survives and a
+silent wedged one does not (#2694). A kill after a deferral expired names that
+ceiling and the task's age, and a connectivity resume takes the outage off the
+productive clock and task ages and restarts the activity clock. A stage that loops on
 `ls`/`cat` with nothing declared is killed on exactly the old schedule.
 
 ### Dollar-Ceiling Demotion
@@ -248,7 +253,8 @@ pipeline:
     min_cost_to_activate_usd: 0.50 # don't fire on cheap stages
     catastrophic_limit_usd: 200 # warn-only backstop if monitor itself fails
     external_progress_ceiling_ms: 1200000 # 20 min cap on external-progress deferral (0 disables)
-    background_task_ceiling_ms: 2700000 # 45 min cap per background task, by its own age (0 = use the external cap)
+    background_task_ceiling_ms: 5400000 # 90 min cap per background task, by its own age (0 = use the external cap)
+    background_task_hard_ceiling_ms: 7200000 # 120 min bound while a declared log grows (at or below the soft ceiling disables)
 ```
 
 All fields support env var overrides:
@@ -274,6 +280,13 @@ When the progress monitor fires, `exitSignalSource = "runaway-progress"` is set
 and the kill marker `[runaway-progress-exceeded]` is emitted. The Go
 `failure_handler.go` maps this to `TerminalKindRunawayProgress` — same recovery
 path as stall-kill (30m backoff, board→Ready, no lifetime-failure-cap increment).
+
+The extension does not halt the repository queue on a runaway kill (#2770): the
+monitor can be wrong, and one false kill paused every other ready issue. Because
+the kind also skips the lifetime cap, the skip is bounded: the halt is skipped for
+the first two consecutive runaway kills of an issue and applies on the third
+(`RUNAWAY_CONSECUTIVE_RETRY_CAP = 3`). Any other outcome of that issue resets the
+count. The count is held in memory, so a window reload resets it.
 
 ### Work-in-Progress Preservation (Issue #128)
 
@@ -308,3 +321,21 @@ triage. Only work the pipeline destroyed is work the pipeline preserves.
 This is the safety net that makes the whole class of guard kill non-destructive
 regardless of how the guards are tuned — a mis-tuned kill costs a retry, never
 the work.
+
+### Resumed Worktree Base Refresh (Issue #2897)
+
+A re-dispatch in the Go scheduler reuses the surviving run worktree. Before the
+first stage runs, the scheduler fetches `origin/<base>`, logs how many commits
+the branch is behind, and merges the base in place with `--autostash`, so
+uncommitted work is kept. The merge fast-forwards a branch with no commits of
+its own, so the next preserved-resume decision does not count a merge commit as
+dev work. It never rebases or pushes. Conflicts only in `CHANGELOG.md` files are
+resolved as a union. Any other conflict, or an uncommitted file the base also
+changed, aborts the merge and ends the run `merge_conflict`, naming the files. A
+failed fetch is logged and the run continues. A pr-merge resume is skipped,
+because that stage brings an open PR up to date itself.
+
+When a stage declares the issue blocked and names an issue or PR the forge now
+reads closed, the scheduler refreshes the base once. If the base advanced, the
+stage runs again on it. If not, the verdict stands, with a note that the
+re-check ran. This happens at most once per run.

@@ -8,12 +8,6 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
-import {
-  WORKFLOW_SCHEMA_VERSION,
-  zeroUsage,
-  type JudgeVerdict,
-  type WorkflowJudgeVerdict,
-} from "@nightgauge/sdk";
 import { GateMetricsWriter } from "../../src/utils/gateMetricsWriter";
 import { GateMetricRecordSchema, type GateMetricRecord } from "../../src/schemas/gateMetrics";
 import { fakeCloneLayout } from "../helpers/cloneLayout";
@@ -21,26 +15,12 @@ import { fakeCloneLayout } from "../helpers/cloneLayout";
 // Mock node:fs/promises
 vi.mock("node:fs/promises");
 
-/** Build a JudgeVerdict node for the appendJudgeVerdicts() tests. */
-function judgeNode(
-  verdict: WorkflowJudgeVerdict,
-  overrides: Partial<JudgeVerdict> = {}
-): JudgeVerdict {
-  return {
-    schemaVersion: WORKFLOW_SCHEMA_VERSION,
-    kind: "judge",
-    nodeId: "judge:run-1:0:0",
-    parentId: "phase:run-1:0",
-    seq: 3,
-    ts: "2026-02-28T10:05:00.000Z",
-    status: "succeeded",
-    judgeId: "refuter",
-    provider: "claude",
-    target: "agent:run-1:0:0",
-    verdict,
-    usage: zeroUsage(),
-    ...overrides,
-  };
+/** Every row handed to fs.appendFile, across calls. */
+function writtenRows(): Array<Record<string, unknown>> {
+  return vi
+    .mocked(fs.appendFile)
+    .mock.calls.flatMap((c) => (c[1] as string).trimEnd().split("\n"))
+    .map((line) => JSON.parse(line));
 }
 
 describe("GateMetricsWriter", () => {
@@ -163,79 +143,6 @@ describe("GateMetricsWriter", () => {
       const parsed = JSON.parse(writtenLine.trim());
       expect(parsed.result).toBe("catch");
       expect(parsed.error_summary).toBe("Expected 3 received 0");
-    });
-  });
-
-  describe("appendJudgeVerdicts()", () => {
-    it('writes a {gate_name:"judges", result:"pass"} record for a pass verdict', async () => {
-      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [judgeNode("pass")]);
-
-      expect(fs.appendFile).toHaveBeenCalledTimes(1);
-      const writtenLine = vi.mocked(fs.appendFile).mock.calls[0][1] as string;
-      const parsed = JSON.parse(writtenLine.trim());
-      expect(parsed.gate_name).toBe("judges");
-      expect(parsed.result).toBe("pass");
-      expect(parsed.issue_number).toBe(3918);
-      expect(parsed.schema_version).toBe("1");
-      expect(parsed.timestamp).toBe("2026-02-28T10:05:00.000Z");
-    });
-
-    it('writes result:"fail" for a fail verdict and carries the rationale as error_summary', async () => {
-      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
-        judgeNode("fail", { rationale: "claimed tests pass but suite was never run\nmore detail" }),
-      ]);
-
-      const writtenLine = vi.mocked(fs.appendFile).mock.calls[0][1] as string;
-      const parsed = JSON.parse(writtenLine.trim());
-      expect(parsed.result).toBe("fail");
-      // Only the first rationale line is carried.
-      expect(parsed.error_summary).toBe("claimed tests pass but suite was never run");
-    });
-
-    it('maps an "uncertain" verdict to result:"fail" (fail-closed)', async () => {
-      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [judgeNode("uncertain")]);
-
-      const writtenLine = vi.mocked(fs.appendFile).mock.calls[0][1] as string;
-      const parsed = JSON.parse(writtenLine.trim());
-      expect(parsed.result).toBe("fail");
-    });
-
-    it("the written record passes the gate-metrics Zod schema", async () => {
-      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [judgeNode("fail")]);
-
-      const writtenLine = vi.mocked(fs.appendFile).mock.calls[0][1] as string;
-      const parsed = JSON.parse(writtenLine.trim());
-      expect(GateMetricRecordSchema.safeParse(parsed).success).toBe(true);
-    });
-
-    it("writes one record per judge verdict and ignores non-judge nodes", async () => {
-      const nonJudge = { kind: "agent" } as unknown as JudgeVerdict;
-      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
-        judgeNode("pass", { nodeId: "judge:run-1:0:0" }),
-        nonJudge,
-        judgeNode("fail", { nodeId: "judge:run-1:0:1" }),
-      ]);
-
-      expect(fs.appendFile).toHaveBeenCalledTimes(2);
-      const results = vi
-        .mocked(fs.appendFile)
-        .mock.calls.map((c) => JSON.parse((c[1] as string).trim()).result);
-      expect(results).toEqual(["pass", "fail"]);
-    });
-
-    it("writes nothing when there are no judge verdicts", async () => {
-      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, []);
-      expect(fs.appendFile).not.toHaveBeenCalled();
-    });
-
-    it("omits error_summary on a passing verdict even when a rationale is present", async () => {
-      await GateMetricsWriter.appendJudgeVerdicts(workspaceRoot, 3918, [
-        judgeNode("pass", { rationale: "all claims independently confirmed" }),
-      ]);
-
-      const writtenLine = vi.mocked(fs.appendFile).mock.calls[0][1] as string;
-      const parsed = JSON.parse(writtenLine.trim());
-      expect(parsed.error_summary).toBeUndefined();
     });
   });
 

@@ -182,7 +182,7 @@ func TestEpicPostMergeBoardSyncInvalidatesSharedBoardCache(t *testing.T) {
 		return hooks.PostMergeResult{IssueClosed: true}
 	}
 
-	sched.checkEpicCompletion(ctx, types.BoardItem{Repo: "o/r", Number: 5}, 0)
+	sched.checkEpicCompletion(ctx, types.BoardItem{Repo: "o/r", Number: 5}, 0, false)
 
 	if !synced {
 		t.Fatal("the post-merge hook never ran")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -132,11 +133,12 @@ func buildStageProgressEvent(runID, repo string, issueNumber int, stage string, 
 // booked locally as outcome="cancelled", is emitted through the non-failure
 // (success-shaped terminal) branch rather than as failed. Without this the live
 // Pipelines view would flip a deferral to a red "failed" row.
-func buildPipelineDoneEvent(runID string, p PipelineNotifyCompleteParams, now time.Time) (platform.PipelineEvent, bool) {
+func buildPipelineDoneEvent(runID string, p PipelineNotifyCompleteParams, heldForApproval bool, now time.Time) (platform.PipelineEvent, bool) {
 	if runID == "" {
 		return platform.PipelineEvent{}, false
 	}
-	success := p.Success || p.Deferred
+	// An architecture-approval hold is a non-failure too (#2756).
+	success := p.Success || p.Deferred || heldForApproval
 	return platform.PipelineEvent{
 		RunID:           runID,
 		IssueNumber:     p.IssueNumber,
@@ -197,14 +199,25 @@ func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int,
 
 // emitPipelineDoneTelemetry emits the terminal pipeline_done event so the live
 // Pipelines view transitions the run from 'running' to 'complete'/'failed'.
-func (s *Server) emitPipelineDoneTelemetry(runID string, p PipelineNotifyCompleteParams, visibility string) {
+func (s *Server) emitPipelineDoneTelemetry(runID string, p PipelineNotifyCompleteParams, heldForApproval bool, visibility string) {
 	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
 		return
 	}
-	event, ok := buildPipelineDoneEvent(runID, p, time.Now())
+	event, ok := buildPipelineDoneEvent(runID, p, heldForApproval, time.Now())
 	if !ok {
 		return
 	}
 	event.Visibility = visibility
 	s.analyticsSvc.EmitPipelineEvent(context.Background(), event)
+}
+
+// heldForApproval reports whether a failed run stopped on a deliberate human
+// hold, read from the terminating stage's gate-sourced terminal kind — the same
+// source the run record's terminal_failure_kind comes from. Issue #2756.
+func heldForApproval(snap *state.RuntimeState) bool {
+	if snap == nil {
+		return false
+	}
+	results := snap.StageGateResults[string(snap.Stage)]
+	return len(results) > 0 && orchestrator.IsNonFailureTerminalKind(results[len(results)-1].TerminalKind)
 }

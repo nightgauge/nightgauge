@@ -120,6 +120,10 @@ if [ "$1" = "pr" ] && [ "$2" = "merge" ]; then
   touch "$FAKE_GH_STATE_DIR/merged"
   exit 0
 fi
+if [ "$1" = "api" ] && [ "$2" = "--paginate" ]; then
+  # The review comment read: this PR has none.
+  exit 0
+fi
 echo "fake-gh: unhandled invocation: $*" >&2
 exit 1
 `

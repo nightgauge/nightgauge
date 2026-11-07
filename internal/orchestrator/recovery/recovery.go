@@ -42,6 +42,12 @@ type StageFailure struct {
 	Repo           string
 	Workspace      string
 	AttemptOrdinal int // 1-based — increases per attempt within a run
+
+	// YieldMergeLock, when set, releases the caller's per-repo merge lock and
+	// returns a func that re-takes it. A CI wait on an updated head yields the
+	// lock for the wait and re-takes it before merging (#2980). Nil when no
+	// lock is held.
+	YieldMergeLock func() (relock func())
 }
 
 // RecoveryResult is the outcome of one RecoveryAction.Execute call.

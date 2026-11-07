@@ -3,10 +3,13 @@
  * ~/.grok/skills). Every future session of that agent, in every project,
  * loads what lands there, so both the source and the writes are constrained.
  *
- * - The default source is the VSIX bundle and nothing else. The VSIX ships
- *   the plugin skills under dist/claude-plugins/nightgauge/skills (short
- *   names) and a pipeline subset under dist/skills (canonical names). A
- *   workspace `skills/` tree is never consulted implicitly: it is reachable
+ * - The default source is the VSIX bundle's dist/skills and nothing else: the
+ *   complete canonical tree, the same one scripts/install-agent-skills.sh
+ *   installs from skills/ (#2762). The Claude plugin mirror under
+ *   dist/claude-plugins/nightgauge/skills is Claude-only; it rewrites `name:`,
+ *   injects disable-model-invocation and rebases links, so no other agent
+ *   installs from it. A workspace `skills/` tree is never consulted
+ *   implicitly: it is reachable
  *   only through installWorkspaceSkills(), a development command that
  *   refuses untrusted workspaces and names the absolute source and
  *   destination paths in a modal confirmation.
@@ -14,7 +17,10 @@
  *   copies a linked file only when the link resolves inside the source tree,
  *   never follows a linked directory, refuses a destination that overlaps the
  *   source, and replaces an existing destination directory only when it
- *   holds the install marker Nightgauge writes.
+ *   holds the install marker Nightgauge writes. It reports what it skipped,
+ *   and removes marked directories whose skill has left a complete source.
+ * - Each target records the extension version it was installed from
+ *   (stampInstalledVersion), so an upgrade re-syncs it on activation.
  */
 
 import * as fs from "fs";
@@ -23,6 +29,31 @@ import * as vscode from "vscode";
 
 const NAMESPACE = "nightgauge-";
 const UNPREFIXED = new Set(["_shared", "smart-setup", "update-docs", "pr-preflight"]);
+const SHARED_DIR = "_shared";
+
+const TEST_DIRS: ReadonlySet<string> = new Set(["tests", "__tests__"]);
+const TEST_FILE_SUFFIXES = [".test.ts", ".test.js"];
+
+/**
+ * Whether an entry of a skill directory stays out of every install: a
+ * top-level CHANGELOG.md, and test material at any depth (tests/, __tests__/,
+ * *.test.ts, *.test.js). `rel` is slash-separated inside the skill directory.
+ * The bundle (scripts/bundle-marketplace.sh), scripts/lib/install_skill_tree.py
+ * (is_excluded) and the Go skillrender.BundleExcluded apply the same rule, so
+ * every installer produces the same tree (#2948).
+ */
+export function isSkillExcluded(rel: string, isDir: boolean): boolean {
+  if (rel === "CHANGELOG.md") {
+    return true;
+  }
+  const name = rel.slice(rel.lastIndexOf("/") + 1);
+  if (isDir) {
+    return TEST_DIRS.has(name);
+  }
+  return TEST_FILE_SUFFIXES.some((suffix) => name.endsWith(suffix));
+}
+
+type SkillExcluded = (rel: string, isDir: boolean) => boolean;
 
 /**
  * Written into every directory copySkillsTree installs. A name, generic
@@ -39,26 +70,90 @@ const INSTALL_MARKER_TEXT =
 /** Receives one line per source or destination entry the install skipped. */
 export type SkillCopyWarn = (message: string) => void;
 
-export function resolveBundledSkillsDir(extensionPath: string): string | null {
-  const pluginSkills = path.join(extensionPath, "dist", "claude-plugins", "nightgauge", "skills");
-  if (fs.existsSync(pluginSkills)) {
-    return pluginSkills;
-  }
-  const distSkills = path.join(extensionPath, "dist", "skills");
-  if (fs.existsSync(distSkills)) {
-    return distSkills;
-  }
-  return null;
+/** What copySkillsTree did. `total` counts every eligible source directory. */
+export interface SkillCopyResult {
+  installed: number;
+  total: number;
+  skipped: number;
+  removed: number;
 }
 
-function destSkillName(dirName: string, restorePrefix: boolean): string {
-  if (!restorePrefix) {
-    return dirName;
+export interface SkillCopyOptions {
+  /**
+   * Remove marked destination directories that have no skill in the source.
+   * Pass true only for a complete source: the bundle is one, and a workspace
+   * tree is one only when isCanonicalSkillsTree() says so.
+   */
+  prune: boolean;
+}
+
+/**
+ * The VSIX's complete canonical skills tree, dist/skills, or null when this
+ * build does not carry one. It is the only bundled source for Codex, Grok and
+ * OpenCode: installing those from the Claude plugin mirror left skills whose
+ * `name:` disagreed with their directory, with disable-model-invocation set
+ * and with dangling links (#2762).
+ */
+export function resolveBundledSkillsDir(extensionPath: string): string | null {
+  const distSkills = path.join(extensionPath, "dist", "skills");
+  return fs.existsSync(distSkills) ? distSkills : null;
+}
+
+/** The context fields the version stamp reads. */
+export type VersionedContext = Pick<vscode.ExtensionContext, "globalState"> & {
+  extension?: { packageJSON?: { version?: unknown } };
+};
+
+/** The globalState key holding the extension version `target` was installed from. */
+export function installedVersionKey(target: string): string {
+  return `nightgauge.${target}Setup.installedVersion`;
+}
+
+/** This extension's version, or undefined when the context does not carry one. */
+export function extensionVersion(context: VersionedContext): string | undefined {
+  const version = context.extension?.packageJSON?.version;
+  return typeof version === "string" && version.length > 0 ? version : undefined;
+}
+
+/** Record that `target` now holds this extension version's skills. */
+export async function stampInstalledVersion(
+  context: VersionedContext,
+  target: string
+): Promise<void> {
+  const version = extensionVersion(context);
+  if (version) {
+    await context.globalState.update(installedVersionKey(target), version);
   }
-  if (UNPREFIXED.has(dirName) || dirName.startsWith(NAMESPACE)) {
-    return dirName;
+}
+
+/**
+ * The version to re-sync `target` to: this extension's version when the
+ * target's skills are installed and were stamped by another version, or never
+ * stamped (an install older than the stamp). Undefined when nothing is
+ * installed, which is an install offer and belongs to `plugins.autoPrompt`,
+ * or when the stamp already matches.
+ */
+export function staleInstalledVersion(
+  context: VersionedContext,
+  target: string,
+  installed: boolean
+): string | undefined {
+  const version = extensionVersion(context);
+  if (!installed || !version) {
+    return undefined;
   }
-  return `${NAMESPACE}${dirName}`;
+  return context.globalState.get<string>(installedVersionKey(target)) === version
+    ? undefined
+    : version;
+}
+
+/**
+ * True for a canonical tree, recognised by its entry skill. A workspace's
+ * `skills/` may be any project's, and pruning against one that merely holds a
+ * Nightgauge-named skill would delete every other installed skill.
+ */
+function isCanonicalSkillsTree(source: string): boolean {
+  return fs.existsSync(path.join(source, "nightgauge-issue-pickup", "SKILL.md"));
 }
 
 /**
@@ -181,16 +276,21 @@ async function resolveContained(
  * work. A symlink or a file is always the operator's.
  */
 async function mayReplace(target: string): Promise<boolean> {
-  let stats: fs.Stats;
   try {
-    stats = await fs.promises.lstat(target);
+    await fs.promises.lstat(target);
   } catch (error) {
     if (isMissing(error)) {
       return true;
     }
     throw error;
   }
-  if (!stats.isDirectory()) {
+  return holdsMarker(target);
+}
+
+/** True when `target` is a real directory holding the install marker. */
+async function holdsMarker(target: string): Promise<boolean> {
+  const stats = await fs.promises.lstat(target).catch(() => null);
+  if (!stats?.isDirectory()) {
     return false;
   }
   const marker = await fs.promises.lstat(path.join(target, INSTALL_MARKER)).catch(() => null);
@@ -200,13 +300,16 @@ async function mayReplace(target: string): Promise<boolean> {
 /**
  * Copy a real directory's contents; links to files inside `root` land as
  * regular files. The marker name belongs to copySkillsTree, so a source
- * entry by that name is never copied over it.
+ * entry by that name is never copied over it. `excluded(rel, isDir)`, when
+ * given, drops entries at any depth; `rel` is relative to the copy's start.
  */
 async function copyContained(
   sourceDir: string,
   targetDir: string,
   root: string,
-  warn: SkillCopyWarn
+  warn: SkillCopyWarn,
+  excluded?: SkillExcluded,
+  prefix = ""
 ): Promise<void> {
   await fs.promises.mkdir(targetDir, { recursive: true });
   for (const name of await fs.promises.readdir(sourceDir)) {
@@ -217,9 +320,14 @@ async function copyContained(
     if (!entry) {
       continue;
     }
+    const isDir = entry.stats.isDirectory();
+    const rel = prefix + name;
+    if (excluded?.(rel, isDir)) {
+      continue;
+    }
     const target = path.join(targetDir, name);
-    if (entry.stats.isDirectory()) {
-      await copyContained(entry.realPath, target, root, warn);
+    if (isDir) {
+      await copyContained(entry.realPath, target, root, warn, excluded, rel + "/");
     } else {
       await fs.promises.copyFile(entry.realPath, target);
     }
@@ -227,64 +335,105 @@ async function copyContained(
 }
 
 /**
- * Copy each SKILL.md directory (and `_shared/`) from sourceDir into destDir.
- * When the source is the plugin mirror (short names like `issue-create`),
- * restore the `nightgauge-` prefix so Codex/Grok invocations match the
- * canonical directory names used by `install-agent-skills.sh`.
+ * Copy each SKILL.md directory (and `_shared/`) from sourceDir into destDir
+ * under its own name, without what isSkillExcluded drops from a skill:
+ * the tree `install-agent-skills.sh` writes from the same canonical source.
  *
  * Refuses (throws) when the source and destination overlap. A skill is
  * installed only under a name Nightgauge owns and only where mayReplace()
  * allows, so every other destination entry is left untouched (with a
- * warning). Each installed directory gets the install marker before its
- * content, so even a partial install is recognised as Nightgauge's next
- * time. Returns the number of directories installed.
+ * warning) and counted as skipped. Each installed directory gets the install
+ * marker before its content, so even a partial install is recognised as
+ * Nightgauge's next time. With `prune`, a marked directory whose skill is not
+ * in the source is removed, unless the source is empty. An extension has no
+ * git history, so it cannot adopt a marker-less directory the way
+ * `install-agent-skills.sh --adopt` does.
  */
 export async function copySkillsTree(
   sourceDir: string,
   destDir: string,
-  warn: SkillCopyWarn
-): Promise<number> {
+  warn: SkillCopyWarn,
+  options: SkillCopyOptions
+): Promise<SkillCopyResult> {
   const { root } = await resolveInstallPaths(sourceDir, destDir);
-  const restorePrefix =
-    !fs.existsSync(path.join(root, "nightgauge-issue-create")) &&
-    fs.existsSync(path.join(root, "issue-create"));
 
   await fs.promises.mkdir(destDir, { recursive: true });
-  let count = 0;
+  const sourceNames = new Set<string>();
+  const result: SkillCopyResult = { installed: 0, total: 0, skipped: 0, removed: 0 };
   for (const name of await fs.promises.readdir(root)) {
     const entryPath = path.join(root, name);
     const entry = await resolveContained(entryPath, root, warn);
     if (!entry?.stats.isDirectory()) {
       continue;
     }
-    if (name !== "_shared") {
+    if (name !== SHARED_DIR) {
       const skillFile = await resolveContained(path.join(entryPath, "SKILL.md"), root, warn);
       if (!skillFile?.stats.isFile()) {
         continue;
       }
     }
-    const destName = destSkillName(name, restorePrefix);
-    const target = path.join(destDir, destName);
-    if (!isNightgaugeSkillName(destName)) {
-      warn(
-        `Skipped ${entryPath}: ${destName} is not a Nightgauge skill name; ${target} is untouched.`
-      );
+    const target = path.join(destDir, name);
+    sourceNames.add(name);
+    if (!isNightgaugeSkillName(name)) {
+      warn(`Skipped ${entryPath}: ${name} is not a Nightgauge skill name; ${target} is untouched.`);
       continue;
     }
+    result.total += 1;
     if (!(await mayReplace(target))) {
       warn(
         `Skipped ${entryPath}: ${target} is not a directory Nightgauge installed, so it is ` +
-          `left untouched. Remove it to let Nightgauge install ${destName}.`
+          `left untouched. Remove it to let Nightgauge install ${name}.`
       );
+      result.skipped += 1;
       continue;
     }
     await fs.promises.rm(target, { recursive: true, force: true });
     await fs.promises.mkdir(target);
     await fs.promises.writeFile(path.join(target, INSTALL_MARKER), INSTALL_MARKER_TEXT);
-    await copyContained(entryPath, target, root, warn);
-    count += 1;
+    const excluded = name === SHARED_DIR ? undefined : isSkillExcluded;
+    await copyContained(entryPath, target, root, warn, excluded);
+    result.installed += 1;
   }
-  return count;
+  if (options.prune && result.total > 0) {
+    for (const name of await fs.promises.readdir(destDir)) {
+      const target = path.join(destDir, name);
+      if (!sourceNames.has(name) && (await holdsMarker(target))) {
+        await fs.promises.rm(target, { recursive: true, force: true });
+        warn(`Removed ${target}: its skill is no longer in the source.`);
+        result.removed += 1;
+      }
+    }
+  }
+  return result;
+}
+
+/** `installed N of M, skipped K`, the same words the script installer prints. */
+export function formatSkillCopySummary(result: SkillCopyResult): string {
+  const summary = `installed ${result.installed} of ${result.total}, skipped ${result.skipped}`;
+  return result.removed > 0 ? `${summary}, removed ${result.removed}` : summary;
+}
+
+/**
+ * Log the summary and, when a skill was skipped, warn the user with the same
+ * count. Returns true when the install was complete, so the caller shows its
+ * success message only then.
+ */
+export function reportSkillCopy(
+  agent: string,
+  result: SkillCopyResult,
+  output: vscode.OutputChannel
+): boolean {
+  const summary = formatSkillCopySummary(result);
+  if (result.skipped === 0) {
+    output.appendLine(`✓ ${agent} skills: ${summary}`);
+    return true;
+  }
+  output.appendLine(`✗ ${agent} skills incomplete: ${summary}`);
+  vscode.window.showWarningMessage(
+    `Nightgauge ${agent} skills are incomplete: ${summary}. The skipped directories keep ` +
+      "their old skills; the Nightgauge output channel names them."
+  );
+  return false;
 }
 
 const INSTALL_FROM_WORKSPACE = "Install from Workspace";
@@ -347,13 +496,17 @@ export async function installWorkspaceSkills(
 
   output.show(true);
   try {
-    const count = await copySkillsTree(source, destDir, (message) =>
-      output.appendLine(`WARNING: ${message}`)
+    const result = await copySkillsTree(
+      source,
+      destDir,
+      (message) => output.appendLine(`WARNING: ${message}`),
+      { prune: isCanonicalSkillsTree(source) }
     );
-    output.appendLine(`✓ Copied ${count} skill directories from ${source} to ${realDest}`);
-    vscode.window.showInformationMessage(
-      `Installed ${count} ${agent} skill directories from ${source}.`
-    );
+    if (reportSkillCopy(agent, result, output)) {
+      vscode.window.showInformationMessage(
+        `Installed ${result.installed} ${agent} skill directories from ${source}.`
+      );
+    }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     output.appendLine(`✗ Installation from ${source} failed: ${errorMessage}`);

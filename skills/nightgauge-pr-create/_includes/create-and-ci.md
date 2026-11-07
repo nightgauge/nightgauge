@@ -12,26 +12,31 @@ inline in `SKILL.md`; this file carries the procedural steps it governs.
 
 ## Phase 3: create PR via Go binary
 
-Create the PR using the Go binary. The skill constructs the title, body (with
-correct closing keywords), and handles reviewer assignment with self-reviewer
-guard. Append `KNOWLEDGE_SECTION` to the PR body when non-empty:
+Create the PR using the Go binary. The binary renders the title from the
+`pr_summary` feature-dev recorded, capped at 72 characters (#2846): never compose
+it here. The skill constructs the body (with correct closing keywords) and
+handles reviewer assignment with self-reviewer guard. Append `KNOWLEDGE_SECTION`
+to the PR body when non-empty:
 
 ```bash
 BRANCH_NAME=$(git branch --show-current)
 : "${BRANCH_NAME:?detached HEAD: check out the issue branch}"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(printf '%s' "$BRANCH_NAME" | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-if [ -z "$BINARY" ]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-fi
-if [ -z "$BINARY" ]; then
-  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [ -n "$GIT_COMMON_DIR" ]; then
-    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-  fi
+if [ -z "$BINARY" ] && [ "${NIGHTGAUGE_DEV_REPO_BIN:-}" = "1" ]; then
+  for NG_ROOT in "$(git rev-parse --show-toplevel 2>/dev/null)" \
+    "$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"; do
+    [ -x "$NG_ROOT/bin/nightgauge" ] || continue
+    grep -qx 'module github.com/nightgauge/nightgauge' "$NG_ROOT/go.mod" 2>/dev/null || continue
+    NG_ORIGIN="$(git -C "$NG_ROOT" config --get remote.origin.url 2>/dev/null)"
+    case "${NG_ORIGIN%.git}" in
+      git@github.com:nightgauge/nightgauge | https://github.com/nightgauge/nightgauge | \
+        ssh://git@github.com/nightgauge/nightgauge) BINARY="$NG_ROOT/bin/nightgauge"; break ;;
+    esac
+  done
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
@@ -51,6 +56,16 @@ if ! git push -u origin "$BRANCH_NAME" 2>&1; then
   fi
 fi
 
+PR_TITLE=$("$BINARY" pr-stage title "$ISSUE_NUMBER") || {
+  echo "ERROR: could not render the PR title for #$ISSUE_NUMBER" >&2
+  exit 1
+}
+# A binary older than the verb prints pr-stage's help and exits 0.
+case "$PR_TITLE" in
+  *"(#$ISSUE_NUMBER): "*) ;;
+  *) echo "ERROR: this nightgauge binary has no pr-stage title; update it" >&2; exit 1 ;;
+esac
+
 RESULT=$("$BINARY" pr create \
   --title "$PR_TITLE" \
   --body "$PR_BODY" \
@@ -64,7 +79,6 @@ RESULT=$("$BINARY" pr create \
 
 The skill handles:
 
-- PR title construction with correct prefix (feat/fix/docs/refactor/chore)
 - PR body with correct closing keywords (`Part of #PARENT` + `Closes #N` for
   epic sub-issues so the sub-issue auto-closes on merge, `Closes #N` for
   standalone issues)

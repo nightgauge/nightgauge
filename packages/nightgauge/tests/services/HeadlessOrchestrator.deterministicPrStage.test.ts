@@ -50,7 +50,7 @@ vi.mock("../../src/utils/skillRunner", () => ({
 // BinaryResolver returns a fake path so runDeterministicPrStage dispatches to the
 // child_process stub below.
 vi.mock("../../src/services/BinaryResolver", () => ({
-  BinaryResolver: { fromVSCode: () => ({ resolve: async () => "/fake/nightgauge" }) },
+  BinaryResolver: { fromVSCode: () => ({ resolve: async () => binaryPath.value }) },
 }));
 
 // Mutable state shared between the hoisted mock factory and the tests.
@@ -61,7 +61,29 @@ const {
   gatePrMergePassed,
   prStagePhaseLines,
   gitHeadLeaked,
+  prStageBudget,
+  prStageRecover,
+  prStageMergeQueue,
+  prForgeState,
+  binaryPath,
 } = vi.hoisted(() => ({
+  // #2878: the forge's answer to the resume's PR-state check.
+  prForgeState: { value: "OPEN" },
+  binaryPath: { value: "/fake/nightgauge" as string | null },
+  // #2841: what `pr-stage recover` answers, one entry per call; a null entry
+  // makes the verb fail.
+  prStageRecover: { value: [] as Array<Record<string, unknown> | null> },
+  // #2841: per-call pr-stage merge answers, ahead of prStageMerge.
+  prStageMergeQueue: { value: [] as Array<Record<string, unknown>> },
+  // #2730: what `pr-stage budget` answers; null makes the verb fail.
+  prStageBudget: {
+    value: {
+      queue_wait_ms: 5_400_000,
+      cli_timeout_ms: 6_000_000,
+      client_timeout_ms: 6_060_000,
+      recovery_client_timeout_ms: 7_000_000,
+    } as Record<string, number> | null,
+  },
   // Issue 1675: when true, the branch's published head commits AGENTS.md
   // with the managed steering block (the fake `git` below serves it).
   gitHeadLeaked: { value: false },
@@ -133,6 +155,18 @@ vi.mock("child_process", async () => {
       return Promise.reject(new Error(`git ${g.join(" ")}: not in this fixture`));
     }
 
+    if (isBinary && a[0] === "pr-stage" && a[1] === "budget") {
+      if (prStageBudget.value === null) return Promise.reject(new Error("no budget verb"));
+      return Promise.resolve({ stdout: JSON.stringify(prStageBudget.value), stderr: "" });
+    }
+
+    if (isBinary && a[0] === "pr-stage" && a[1] === "recover") {
+      prStageCalls.value.push({ verb: "recover", args: a });
+      const answer = prStageRecover.value.shift();
+      if (!answer) return Promise.reject(new Error("recover verb failed"));
+      return Promise.resolve({ stdout: JSON.stringify(answer), stderr: "" });
+    }
+
     if (isBinary && a[0] === "pr-stage") {
       const verb = a[1]; // "create" | "merge"
       prStageCalls.value.push({ verb, args: a });
@@ -169,11 +203,42 @@ vi.mock("child_process", async () => {
       });
     }
 
+    // #2841: a rewind replays feature-dev and feature-validate; #2878: a retired
+    // run replays everything from issue-pickup.
+    if (
+      isBinary &&
+      a[0] === "gate" &&
+      ["issue-pickup", "feature-planning", "feature-dev", "feature-validate"].includes(a[2])
+    ) {
+      return Promise.resolve({
+        stdout: JSON.stringify({
+          stage: a[2],
+          gate_name: a[2],
+          passed: true,
+          reason: "ok",
+          evidence: [],
+        }),
+        stderr: "",
+      });
+    }
+
+    // #2878: the hook withholds Ready on a no-op that left the issue open.
+    if (isBinary && a[0] === "hook") {
+      return Promise.resolve({
+        stdout: JSON.stringify({ readyWithheld: a.includes("--already-merged") }),
+        stderr: "",
+      });
+    }
+
     if (isBinary && a[0] === "epic") {
       return Promise.resolve({ stdout: "{}", stderr: "" });
     }
 
     if (a[0] === "pr") {
+      // The resume's forge check (#2878).
+      if (a.includes("-q") && a.includes(".state")) {
+        return Promise.resolve({ stdout: prForgeState.value, stderr: "" });
+      }
       // Pre-merge branch-behind guard reads mergeStateStatus; CLEAN → proceed.
       if (a.includes("-q") && a.includes(".mergeStateStatus")) {
         return Promise.resolve({ stdout: "CLEAN", stderr: "" });
@@ -182,6 +247,11 @@ vi.mock("child_process", async () => {
         stdout: JSON.stringify({ state: "MERGED", statusCheckRollup: [] }),
         stderr: "",
       });
+    }
+
+    // resolvePostMergeNwo
+    if (a[0] === "repo" && a.includes('.owner.login + "/" + .name')) {
+      return Promise.resolve({ stdout: "TestOrg/test-repo", stderr: "" });
     }
 
     // resolveRunRepoSlug: gh repo view --json nameWithOwner -q .nameWithOwner
@@ -216,7 +286,10 @@ vi.mock("child_process", async () => {
     if (isPrStage) {
       const verb = a[1]; // "create" | "merge"
       prStageCalls.value.push({ verb, args: a });
-      const payload = verb === "create" ? prStageCreate.value : prStageMerge.value;
+      const payload =
+        verb === "create"
+          ? prStageCreate.value
+          : (prStageMergeQueue.value.shift() ?? prStageMerge.value);
       setImmediate(() => {
         // stderr first, as the real binary does: the transitions are reported
         // during the run, the result only at the end.
@@ -373,12 +446,22 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
   let mockLogger: Logger;
 
   beforeEach(() => {
+    prStageBudget.value = {
+      queue_wait_ms: 5_400_000,
+      cli_timeout_ms: 6_000_000,
+      client_timeout_ms: 6_060_000,
+      recovery_client_timeout_ms: 7_000_000,
+    };
     vi.clearAllMocks();
     // The worktree's per-clone data resolves under its git dir (ADR-024 § 7).
     fakeCloneLayout(WORKTREE);
     prStageCalls.value = [];
+    prStageRecover.value = [];
+    prStageMergeQueue.value = [];
     prStagePhaseLines.value = [];
     gatePrMergePassed.value = true;
+    prForgeState.value = "OPEN";
+    binaryPath.value = "/fake/nightgauge";
     // Reset to the deterministic-success defaults each test.
     prStageCreate.value = {
       stage: "pr-create",
@@ -539,6 +622,148 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
 
     expect(result.success).toBe(true);
     expect(vi.mocked(state.startPhase).mock.calls).toEqual([["pr-merge", "merge", 14, 9]]);
+  });
+
+  it("pr-merge: the client limit is the binary's, not a constant (#2730)", async () => {
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await orchestrator.runPipeline(300);
+      const delays = timers.mock.calls.map((c) => c[1]);
+      expect(delays).toContain(6_060_000);
+      expect(delays).not.toContain(20 * 60_000);
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
+  it("pr-merge: a verified merge tells Go, so status reads it as follow-up (#2730)", async () => {
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const notifyPrMerged = vi.fn().mockResolvedValue(undefined);
+    (state as unknown as { notifyPrMerged: typeof notifyPrMerged }).notifyPrMerged = notifyPrMerged;
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+    const context = vi
+      .spyOn(
+        orchestrator as unknown as { prNumberFromContext(n: number): number },
+        "prNumberFromContext"
+      )
+      .mockReturnValue(999);
+
+    await orchestrator.runPipeline(300);
+
+    expect(context).toHaveBeenCalledWith(300);
+    expect(notifyPrMerged).toHaveBeenCalledWith(999);
+  });
+
+  it("pr-merge: a run resumed at pr-merge that finds it already merged is a no-op (#2878)", async () => {
+    mockSkillSuccess();
+    const run = async () => {
+      const state = createMockStateService("pr-merge");
+      const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+      orchestrator.setWorktreeOverride(WORKTREE);
+      return orchestrator.runPipeline(300);
+    };
+
+    expect((await run()).mergeNoOp).toBe(false);
+
+    prStageMerge.value = { ...prStageMerge.value, reason: "already-merged" };
+    expect((await run()).mergeNoOp).toBe(true);
+  });
+
+  describe("a resume on a remembered pr-create (#2878)", () => {
+    function resumed(stages: Record<string, { status: string }> = {}) {
+      const state = createMockStateService("pr-merge");
+      const remembered = makeState("pr-merge");
+      vi.mocked(state.getState).mockResolvedValue({
+        ...remembered,
+        stages: { ...remembered.stages, ...stages },
+      } as never);
+      const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+      orchestrator.setWorktreeOverride(WORKTREE);
+      vi.spyOn(
+        orchestrator as unknown as { issueIsOpen(n: number): Promise<boolean> },
+        "issueIsOpen"
+      ).mockResolvedValue(true);
+      return { state, orchestrator };
+    }
+
+    function startedStages(state: PipelineStateService) {
+      return vi.mocked(state.startStage).mock.calls.map(([stage]) => stage);
+    }
+
+    it("replays planning from a skipped state when the PR merged", async () => {
+      mockSkillSuccess();
+      prForgeState.value = "MERGED";
+      const { state, orchestrator } = resumed({ "feature-planning": { status: "skipped" } });
+      await orchestrator.runPipeline(300);
+      expect(startedStages(state)).toContain("feature-planning");
+    });
+
+    it("replays a stage left deferred when the PR merged", async () => {
+      mockSkillSuccess();
+      prForgeState.value = "MERGED";
+      const { state, orchestrator } = resumed({ "feature-dev": { status: "deferred" } });
+      await orchestrator.runPipeline(300);
+      expect(startedStages(state)).toContain("feature-dev");
+    });
+
+    it("still goes straight to pr-merge when the PR is open", async () => {
+      mockSkillSuccess();
+      const { state, orchestrator } = resumed({ "feature-planning": { status: "skipped" } });
+      await orchestrator.runPipeline(300);
+      expect(startedStages(state)).not.toContain("feature-planning");
+    });
+  });
+
+  describe("the post-merge hook's early returns (#2878)", () => {
+    type Hookable = {
+      mergeNoOp: boolean;
+      invokePostMergeHook(n: number): Promise<void>;
+      resolvePostMergeNwo(n: number): Promise<{ owner: string; repo: string }>;
+    };
+
+    function orchestratorWithNoOp() {
+      const orchestrator = new HeadlessOrchestrator(
+        createMockStateService("pr-merge"),
+        mockLogger,
+        {
+          contextFileWaitMs: 0,
+        }
+      ) as unknown as Hookable;
+      orchestrator.mergeNoOp = true;
+      return orchestrator;
+    }
+
+    it("does not park when the binary cannot be resolved", async () => {
+      const orchestrator = orchestratorWithNoOp();
+      binaryPath.value = null;
+      await orchestrator.invokePostMergeHook(300);
+      expect(orchestrator.mergeNoOp).toBe(false);
+    });
+
+    it("does not park when the owner cannot be resolved", async () => {
+      const orchestrator = orchestratorWithNoOp();
+      vi.spyOn(orchestrator, "resolvePostMergeNwo").mockResolvedValue({ owner: "", repo: "" });
+      await orchestrator.invokePostMergeHook(300);
+      expect(orchestrator.mergeNoOp).toBe(false);
+    });
+  });
+
+  it("pr-merge: no budget means no timed run, so it is a runner error (#2730)", async () => {
+    prStageBudget.value = null;
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+    await orchestrator.runPipeline(300);
+    expect(prStageCalls.value.some((c) => c.verb === "merge")).toBe(false);
+    const skillStages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+    expect(skillStages).toContain("pr-merge");
   });
 
   it("pr-merge: 'punt' records the reason and falls through to the LLM skill", async () => {
@@ -730,5 +955,166 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     expect(payload.stagePuntReasons?.["pr-create"]).toBe("missing-validate-context");
     // pr-merge still ran deterministically after the pr-create fallthrough.
     expect(payload.stageExecutionPaths?.["pr-merge"]).toBe("deterministic");
+  });
+
+  // #3012: a no-diff punt was settled by the verb; the run ends with its
+  // verdict and the LLM skill (which would open an empty PR) never runs.
+  describe("a no-diff-against-base punt settles instead of running the LLM (#3012)", () => {
+    const runNoDiff = async (extra: Record<string, unknown>) => {
+      prStageCreate.value = {
+        stage: "pr-create",
+        path: "punt",
+        pr_number: 0,
+        reason: "no-diff-against-base",
+        rate_limited: false,
+        duration_ms: 3,
+        ...extra,
+      } as typeof prStageCreate.value;
+      mockSkillSuccess(); // must NOT be invoked
+      const state = createMockStateService("pr-create");
+      const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+      orchestrator.setWorktreeOverride(WORKTREE);
+      const result = await orchestrator.runPipeline(300);
+      const skillStages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+      return { result, state, skillStages };
+    };
+
+    it("closed: fails pr-create with the issue_closed detail and skips the skill", async () => {
+      const detail = "issue_closed: pr-create found branch b level with main [#2941]";
+      const { result, state, skillStages } = await runNoDiff({
+        settled: true,
+        issue_closed: true,
+        terminal_detail: detail,
+      });
+      expect(skillStages).not.toContain("pr-create");
+      expect(skillStages).not.toContain("pr-merge");
+      expect(prStageCalls.value.some((c) => c.verb === "merge")).toBe(false);
+      expect(result.success).toBe(false);
+      expect(vi.mocked(state.failStage)).toHaveBeenCalledWith("pr-create", detail);
+    });
+
+    it("open: fails pr-create with the not-pipeline-actionable detail", async () => {
+      const detail =
+        "[not-pipeline-actionable] pr-create: branch b has no diff against main [#2941]";
+      const { result, state, skillStages } = await runNoDiff({
+        settled: true,
+        issue_closed: false,
+        terminal_detail: detail,
+      });
+      expect(skillStages).not.toContain("pr-create");
+      expect(result.success).toBe(false);
+      expect(vi.mocked(state.failStage)).toHaveBeenCalledWith("pr-create", detail);
+    });
+
+    it("unsettled (older binary): still skips the skill and parks", async () => {
+      const { result, state, skillStages } = await runNoDiff({});
+      expect(skillStages).not.toContain("pr-create");
+      expect(result.success).toBe(false);
+      expect(vi.mocked(state.failStage)).toHaveBeenCalledWith(
+        "pr-create",
+        expect.stringContaining("[not-pipeline-actionable]")
+      );
+    });
+  });
+
+  // ── Queue conflict recovery (#2841) ─────────────────────────────────────
+  //
+  // Red-proof: restoring the old `refused` branch (delete the conflict arm of
+  // runDeterministicPrStage) fails every test here on the recover call.
+
+  const QUEUE_REASON =
+    "merge-queue-failed: merge conflict with main: PR #999 is CONFLICTING (mergeStateStatus DIRTY)";
+  const refused = {
+    stage: "pr-merge",
+    path: "refused",
+    pr_number: 999,
+    reason: QUEUE_REASON,
+    rate_limited: false,
+  };
+  const rewind = {
+    outcome: "rewind",
+    reason: "rebase conflict",
+    conflicting_files: ["src/a.ts"],
+    max_dev_redispatch: 2,
+    backtrack_signal: {
+      signal_type: "CONFLICT_RESOLUTION_NEEDED",
+      emitted_by_stage: "pr-merge",
+      backtrack_target_stage: "feature-dev",
+      rationale: "conflict",
+      evidence: ["src/a.ts"],
+      severity: "blocking",
+    },
+  };
+  const run = async () => {
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+    const result = await orchestrator.runPipeline(300);
+    const stages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+    return { state, result, stages };
+  };
+  const verbs = (verb: string) => prStageCalls.value.filter((c) => c.verb === verb);
+
+  it("a recovered queue conflict completes pr-merge with no failure", async () => {
+    prStageMergeQueue.value = [refused];
+    prStageRecover.value = [{ outcome: "recovered", reason: "merged", conflicting_files: [] }];
+    const { state, result, stages } = await run();
+
+    expect(verbs("recover")[0].args).toContain(QUEUE_REASON);
+    expect(result.success).toBe(true);
+    expect(result.failedStage).toBeUndefined();
+    expect(state.failStage).not.toHaveBeenCalled();
+    expect(stages).not.toContain("pr-merge");
+  });
+
+  it("a real conflict rewinds to feature-dev and the replay lands the merge", async () => {
+    prStageMergeQueue.value = [refused];
+    prStageRecover.value = [rewind];
+    const { state, result, stages } = await run();
+
+    expect(stages).toContain("feature-dev");
+    expect(stages).not.toContain("pr-merge");
+    expect(verbs("merge")).toHaveLength(2);
+    expect(state.failStage).not.toHaveBeenCalled();
+    expect(result.failedStage).toBeUndefined();
+    expect(result.terminalKind).toBeUndefined();
+  });
+
+  it("stops at exactly max_dev_redispatch and halts naming the files", async () => {
+    prStageMergeQueue.value = [refused, refused, refused];
+    prStageRecover.value = [rewind, rewind, rewind];
+    const { result, stages } = await run();
+
+    expect(stages.filter((s) => s === "feature-dev")).toHaveLength(2);
+    expect(verbs("merge")).toHaveLength(3);
+    expect(result.failedStage).toBe("pr-merge");
+    expect(result.terminalKind).toBe("merge_conflict");
+    expect(result.error?.message).toContain("[merge-conflict]");
+    expect(result.error?.message).toContain("src/a.ts");
+  });
+
+  it.each([
+    ["escalated", { outcome: "escalated", reason: "no", conflicting_files: ["b.go"] }, "b.go"],
+    ["unmatched", { outcome: "unmatched", reason: "off", conflicting_files: [] }, "could not"],
+    ["a verb error", null, "recovery could not run"],
+  ])("%s halts as merge_conflict and never reaches the LLM", async (_n, answer, text) => {
+    prStageMergeQueue.value = [refused];
+    prStageRecover.value = [answer as Record<string, unknown> | null];
+    const { result, stages } = await run();
+
+    expect(stages).not.toContain("pr-merge");
+    expect(result.failedStage).toBe("pr-merge");
+    expect(result.terminalKind).toBe("merge_conflict");
+    expect(result.error?.message).toContain(text);
+  });
+
+  it("a non-conflict refusal stays a plain refusal with no recovery", async () => {
+    prStageMerge.value = { ...refused, reason: "generated steering on the head" };
+    const { result } = await run();
+
+    expect(verbs("recover")).toHaveLength(0);
+    expect(result.failedStage).toBe("pr-merge");
+    expect(result.terminalKind).toBeUndefined();
   });
 });

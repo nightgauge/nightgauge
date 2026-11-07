@@ -5,11 +5,11 @@ description: Make any repository AI-ready with a tool-neutral AGENTS.md, a thin
   repositories that use the older CLAUDE.md-first layout. Use when setting up a
   new project, when a repository is missing or has outdated AI configuration
   files, or to verify conformance with `/smart-setup verify`. Run after
-  repo-init. User-invoked: the user types `/nightgauge:smart-setup`.
+  repo-init. User-invoked; the user types `/nightgauge:smart-setup`.
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "5.1.0"
+  version: "5.1.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 disable-model-invocation: true
@@ -779,7 +779,7 @@ runner from `--runs-on` (pass `--runs-on self-hosted` when the
 organization's private repositories must use self-hosted runners). The
 verb warns when the repository's Actions policy would reject the workflow
 — see
-[docs/GO_BINARY.md → Setup Operations](../../../../docs/GO_BINARY.md#setup-operations)
+[docs/GO_BINARY.md → Setup Operations](https://github.com/nightgauge/nightgauge/blob/main/docs/GO_BINARY.md#setup-operations)
 for the schema, exit codes, and template provenance.
 
 ```bash

@@ -6,12 +6,29 @@
 # path can be verified BEFORE a real release. Publishes NOTHING: no Marketplace,
 # no Homebrew push, no GitHub Release. Promote a green RC to a real release by
 # tagging the same commit vX.Y.Z (→ release.yml).
+#
+# Also reusable (workflow_call): main-build.yml runs this same build on every
+# push to main under a synthetic version X.Y.(Z+1)-main.g<sha7> (#2952), so a
+# release-path defect fails at the merge that caused it, not at the next RC
+# tag. That caller passes no secrets, so signing no-ops as on a fork.
 name: Staging (RC dry-run)
 
 on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to build, without the leading v (default: the pushed tag)"
+        type: string
+        required: false
+        default: ""
+      retention-days:
+        description: "Days to keep the uploaded artifacts"
+        type: number
+        required: false
+        default: 14
 
 permissions:
   contents: read
@@ -19,6 +36,8 @@ permissions:
 env:
   TZ: UTC
 
+# Under workflow_call github.ref is the caller's (refs/heads/main), so this
+# group stays distinct from main-build.yml's and neither waits on the other.
 concurrency:
   group: staging-${{ github.ref }}
   cancel-in-progress: true
@@ -64,11 +83,26 @@ jobs:
 
       - name: Extract version from tag
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          set -euo pipefail
+          if [[ -n "${INPUT_VERSION:-}" ]]; then
+            TAG="v${INPUT_VERSION}"
+            echo "Main build: $TAG (synthetic, never tagged or published)"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            echo "RC dry-run: $TAG"
+          fi
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "RC dry-run: $TAG"
+
+      # release.yml refuses this; an RC finds it first (#2724).
+      # An unpushed tag (a main build's synthetic one) is read as HEAD.
+      - name: Plugin version changed with the plugin
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: bash scripts/check-plugin-version.sh --tag "$TAG"
 
       - name: Install dependencies
         run: npm ci
@@ -106,15 +140,21 @@ jobs:
       - name: Stamp build provenance
         env:
           BUILD_BRANCH: ${{ github.ref_name }}
+          # #2721: a stamp carrying `tag` is a CI-built release candidate or
+          # release, so the staleness item never offers a local rebuild.
+          BUILD_TAG: ${{ steps.version.outputs.tag }}
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           DIST=packages/nightgauge/dist
           cat > "$DIST/build-info.json" <<EOF
           {
             "commitSha": "$(git rev-parse HEAD)",
             "branch": "$BUILD_BRANCH",
+            "tag": "$BUILD_TAG",
+            "version": "$BUILD_VERSION",
             "commitTimestamp": "$(git log -1 --format=%cI HEAD)",
             "buildTimestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "schemaVersion": "1"
+            "schemaVersion": "2"
           }
           EOF
           bash packages/nightgauge/scripts/check-build-info.sh "$DIST/build-info.json"
@@ -160,6 +200,11 @@ jobs:
           done
           echo "Packaged:"; ls -1 *.vsix
 
+      # The VSIX binaries are cross-compiled, so the bundle check below needs one
+      # built for this runner (#2761).
+      - name: Build the runner's binary
+        run: go build -o "$RUNNER_TEMP/nightgauge-runner" ./cmd/nightgauge
+
       # Every .vsix must carry the build-info stamp AND a bundled binary, and
       # must NOT ship source maps or type declarations (.vscodeignore drift).
       - name: Verify VSIX contents
@@ -188,6 +233,15 @@ jobs:
             # No shipped file may carry a fetch piped to a shell or a base64
             # decode, from whichever package it was bundled (#2320, #2321).
             bash scripts/check-shipped-code.sh "$VSIX"
+
+            # Validate the skills this VSIX carries, not dist/: only the
+            # extracted tree speaks for what .vscodeignore let through (#2761).
+            SKILLS_TMP="$(mktemp -d "$RUNNER_TEMP/vsix-skills.XXXXXX")"
+            unzip -q "$VSIX" 'extension/dist/skills/*' -d "$SKILLS_TMP"
+            "$RUNNER_TEMP/nightgauge-runner" preflight skill-bundle \
+              --skills-root "$SKILLS_TMP/extension/dist/skills" \
+              --source-root "$GITHUB_WORKSPACE/skills"
+            rm -rf "$SKILLS_TMP"
 
             # Assert the PACKAGED binary is Developer ID signed, not the one the
             # signing step happened to touch. The VSIX freezes a copy, so this
@@ -229,11 +283,9 @@ jobs:
       - name: Malware scan (ClamAV)
         run: |
           set -euo pipefail
-          brew install --quiet clamav
-          CLAMETC="$(brew --prefix)/etc/clamav"
-          mkdir -p "$CLAMETC" "$(brew --prefix)/var/lib/clamav"
-          sed 's/^Example/#Example/' "$CLAMETC/freshclam.conf.sample" > "$CLAMETC/freshclam.conf"
-          freshclam --quiet
+          bash scripts/install-clamav-macos.sh
+          export PATH="/usr/local/clamav/bin:$PATH"
+          freshclam
           bash scripts/malware-scan.sh \
             --report "$RUNNER_TEMP/clamav-report.json" \
             packages/nightgauge/*.vsix bin/
@@ -245,6 +297,7 @@ jobs:
           name: clamav-scan-report-rc
           path: ${{ runner.temp }}/clamav-report.json
           if-no-files-found: warn
+          retention-days: ${{ inputs.retention-days || 14 }}
 
       # syft powers the `sboms:` block in .goreleaser.yml. The RC dry-run must
       # exercise the exact same SBOM path as the real release, so install syft
@@ -268,7 +321,9 @@ jobs:
         env:
           # Same pin as release.yml (#1296): name the snapshot after the tag
           # that triggered the run, not the highest tag on the commit.
-          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+          # A main build's synthetic tag exists in no clone; snapshot mode
+          # only names the artifacts after it.
+          GORELEASER_CURRENT_TAG: ${{ steps.version.outputs.tag }}
 
       - name: Add VSIX checksums
         run: |
@@ -300,11 +355,16 @@ jobs:
             dist/manifest.json
             dist/*.spdx.sbom.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ inputs.retention-days || 14 }}
 
       - name: Summary
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          echo "### RC dry-run $TAG — no publish" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "${INPUT_VERSION:-}" ]]; then
+            echo "### Main build $TAG — no publish, nothing tagged" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### RC dry-run $TAG — no publish" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "Download **rc-artifacts-$TAG** from this run to install/test each platform's .vsix and the CLI tarballs." >> "$GITHUB_STEP_SUMMARY"

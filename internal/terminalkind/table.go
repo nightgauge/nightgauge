@@ -372,6 +372,14 @@ func RuleFires(ruleID, errorText string) bool {
 	panic(fmt.Sprintf("terminalkind: no rule with id %q", ruleID))
 }
 
+// IsStallShapedKill reports whether a terminal kind takes the stall recovery
+// path: a kill for idleness, or a stage stopped at its runtime cap (#2812). The
+// two read differently and recover alike. runaway_progress is not one: the
+// scheduler's stall retry has never handled it.
+func IsStallShapedKill(kind string) bool {
+	return kind == "stall_kill" || kind == "stage_cap_kill"
+}
+
 // Classify returns the terminal kind for errorText, or "" when no rule
 // matches. Callers fall back to the most generic kind (subagent_crash).
 func Classify(errorText string) string {

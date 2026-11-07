@@ -141,6 +141,16 @@ jobs:
           fi
           bash scripts/verify-release-channels.sh "${ARGS[@]}"
 
+      - name: Claude plugin stable branch is at the latest release
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          ARGS=(--channel claude-plugin)
+          if [ "$DRY_RUN" != "true" ]; then
+            ARGS+=(--issue-repo "$GITHUB_REPOSITORY")
+          fi
+          bash scripts/verify-release-channels.sh "${ARGS[@]}"
+
   gate:
     name: Resolve the autonomous_discovery switches
     runs-on: ubuntu-latest

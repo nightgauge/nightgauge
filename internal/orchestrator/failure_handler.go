@@ -32,6 +32,33 @@ const OutcomeTypeBlocked = "blocked"
 // for a later tick once its blocker closes. Issue #305.
 const OutcomeTypeDeferred = "deferred"
 
+// OutcomeTypeAwaitingApproval is the run outcome_type for a run the
+// architecture-approval gate halted. The pause is a deliberate human hold, not
+// a failure, so the run books as "cancelled" with this outcome_type. Unlike a
+// deferral the record keeps terminal_failure_kind, because the hold logic reads
+// it from the latest run record. Issue #2756.
+const OutcomeTypeAwaitingApproval = "awaiting_approval"
+
+// IsNonFailureTerminalKind reports whether a terminal kind is a deliberate
+// human hold rather than a failure, so every surface (run record, run state,
+// live pipeline_done event) books it the same way. Issue #2756.
+func IsNonFailureTerminalKind(kind string) bool {
+	return kind == TerminalKindArchitectureApprovalRequired
+}
+
+// ApplyNonFailureOutcome rewrites a built run record whose terminal kind is a
+// deliberate human hold into a non-failure: outcome "cancelled" with a distinct
+// outcome_type. The terminal kind and detail are retained. Every other record is
+// left untouched. Both run-record writers call it after BuildV2Record so the
+// local history and the telemetry push agree. Issue #2756.
+func ApplyNonFailureOutcome(rec *state.V2RunRecord) {
+	if rec == nil || !IsNonFailureTerminalKind(rec.TerminalFailureKind) {
+		return
+	}
+	rec.Outcome = "cancelled"
+	rec.OutcomeType = OutcomeTypeAwaitingApproval
+}
+
 // Terminal failure kinds — what aborted the pipeline run (Issue #3001).
 //
 // Independent of state.GateResult / failure_category which classify failures by
@@ -131,11 +158,27 @@ const (
 	// PR URL + failing checks so the operator can act without log
 	// archaeology. Issue #3691.
 	TerminalKindPrMergeUnmerged = "pr_merge_unmerged"
+	// TerminalKindMergeConflict is set when conflict recovery could not land a
+	// merge-queue conflict (#2841). Unlike pr_merge_unmerged it halts: the
+	// operator must resolve the named files. A conflict recovery handles never
+	// reaches this kind, so only an unresolved one charges the lifetime cap.
+	TerminalKindMergeConflict = "merge_conflict"
+	// TerminalKindMergeQueueEnqueueFailed is set when pr-merge's enqueue still
+	// failed after its transient-error retries (#2729). The PR is green and
+	// unmerged, so it is routed like TerminalKindPrMergeUnmerged (non-fault,
+	// sidelined to In review), and the in-review reconcile moves a CLEAN, green
+	// PR with this kind back to Ready.
+	TerminalKindMergeQueueEnqueueFailed = "merge_queue_enqueue_failed"
 	// TerminalKindRunawayProgress is set when the progress-based runaway
 	// monitor fires: the stage made no new forward-progress signal for the
 	// configured window. Same recovery path as stall_kill (30m backoff, no
 	// lifetime-cap increment, board→Ready). Issue #3783.
 	TerminalKindRunawayProgress = "runaway_progress"
+	// TerminalKindStageCapKill is set when a stage is stopped at
+	// pipeline.stage_hard_caps or pipeline.stage_time_caps. Same recovery as
+	// stall_kill, through terminalkind.IsStallShapedKill, but the stage reached
+	// a limit rather than going idle, so the two are counted apart. Issue #2812.
+	TerminalKindStageCapKill = "stage_cap_kill"
 	// TerminalKindApiOverloaded is set when the Anthropic API returns a 529
 	// "Overloaded" response — the service was momentarily at capacity. Surfaced
 	// by the Claude CLI as a result envelope with `is_error:true` and the
@@ -559,6 +602,13 @@ const (
 	// autonomous clear-failures`. The run is also excluded from the
 	// calibration corpus (learning.IsCalibrationExcludedKind).
 	TerminalKindEnvironmentHalt = "environment_halt"
+	// TerminalKindGatePluginMissing: a bundled build's Claude stage did not load
+	// the Nightgauge plugin exactly once, so the stage runner stopped it before
+	// any work on the `[gate-plugin-missing]` marker (#2723). The next attempt
+	// meets the same install, and the run measured the install, not the model, so
+	// it PARKS and records no outcome row, as TerminalKindEnvironmentHalt does.
+	// Parking alone raises no card; raiseGatePluginMissing does.
+	TerminalKindGatePluginMissing = "gate_plugin_missing"
 	// Gate-sourced structured kinds for the KindFail sites that used to emit an
 	// empty TerminalKind (#1237). Every one of them fell through
 	// ResolveTerminalKind's prose ladder, which has no clause for the
@@ -643,6 +693,19 @@ const (
 	// breaker; and an uncharged retry of a stage that keeps writing nothing
 	// would loop with no cap to stop it.
 	TerminalKindDevContextStale = "dev_context_stale"
+	// TerminalKindReviewCapReached: feature-validate's independent review reached
+	// its round cap with findings standing (#2865). It parks: the fault, if any,
+	// is one issue's, so it must not stop the repository, and a retry of the same
+	// tree buys the same review. The work stays uncommitted in the run's worktree
+	// and the Action Center card names it, with the findings. It is not
+	// TerminalKindNotPipelineActionable, whose claim is that no lap can produce
+	// the deliverable and whose path labels the issue owner-action.
+	TerminalKindReviewCapReached = "review_cap_reached"
+	// TerminalKindResumeNoOp: a run resumed at pr-merge, found the PR
+	// already merged, did no work and left the issue open (#2878). A run reports
+	// the kind with success and the report parks the issue: Ready was withheld,
+	// so no further dispatch would come.
+	TerminalKindResumeNoOp = "resume_no_op"
 )
 
 // TerminalKindParks reports whether the scheduler parks a failure of this
@@ -653,7 +716,8 @@ const (
 func TerminalKindParks(kind string) bool {
 	switch kind {
 	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible,
-		TerminalKindEnvironmentHalt, TerminalKindDevContextStale:
+		TerminalKindEnvironmentHalt, TerminalKindDevContextStale, TerminalKindGatePluginMissing,
+		TerminalKindReviewCapReached, TerminalKindResumeNoOp:
 		return true
 	}
 	return false
@@ -673,6 +737,10 @@ func TerminalKindRemediation(kind string) string {
 		return "a project-declared preflight.environment check failed, so the local environment is broken, not the code; " +
 			"apply the remedy the check names (in the failure text), " + parkedReleaseStep +
 			" — a retry meets the same environment"
+	case TerminalKindGatePluginMissing:
+		return "the stage's Claude process did not load this build's Nightgauge plugin exactly once, so its safety gates " +
+			"cannot be trusted; the failure text names the reading. Reinstall the build so its bundled plugin is intact, " +
+			"or update Claude Code if it rejected the plugin, " + parkedReleaseStep + " — a retry meets the same install"
 	case TerminalKindContextWindowExceeded:
 		return "the prompt outgrew the context the model server has the model loaded with; " +
 			"reload the model with a larger context, route the stage to a model with a larger one, " +
@@ -690,6 +758,14 @@ func TerminalKindRemediation(kind string) string {
 		return "feature-dev's gate found only a prior attempt's dev-N.json, so this attempt wrote no handoff and was " +
 			"not judged on the old one; file a pipeline-gap issue with the run's evidence, delete or regenerate the " +
 			"stale dev-N.json in the pipeline state directory, " + parkedReleaseStep
+	case TerminalKindReviewCapReached:
+		return "the independent review reached its round cap with findings standing, and the work is uncommitted in " +
+			"the run's worktree; the Action Center card lists both. Finish the fixes there or narrow the issue, " +
+			parkedReleaseStep + " — a release re-runs the pipeline with a fresh round count"
+	case TerminalKindResumeNoOp:
+		return "a run resumed at pr-merge and found the PR already merged, so nothing was delivered; check the " +
+			"issue's remaining acceptance criteria and its stale pr-N.json in the pipeline state directory, " +
+			parkedReleaseStep + ", then move the issue from Backlog to Ready to re-run it"
 	case TerminalKindAdapterIncompatible:
 		return "the adapter's binary cannot serve this dispatch; install a version at or above the floor the refusal names " +
 			"or pin the adapter's binary to it, " + parkedReleaseStep
@@ -1085,4 +1161,42 @@ func DemoteEnvironmentalKindForOutcome(kind, detail string) (string, bool) {
 		return TerminalKindNotPipelineActionable, true
 	}
 	return TerminalKindBlockedOutcomeHold, true
+}
+
+// DemoteWarningOnlyQuotaKind turns a quota kind whose detail reports a soft
+// `status=allowed_warning` into a stall. A cooldown that runs to resetsAt stops
+// the whole fleet, so it needs a hard signal: no request was rejected here
+// (#2711). A detail with no status stays quota, because the provider's own
+// rejection text carries none.
+func DemoteWarningOnlyQuotaKind(kind, detail string) (string, bool) {
+	if kind != TerminalKindRateLimitQuotaExhausted || !IsWarningOnlyQuotaDetail(detail) {
+		return kind, false
+	}
+	return TerminalKindStallKill, true
+}
+
+// softQuotaKillMarker is the part of skillRunner's kill marker that names a
+// soft status. Matching the bare status token would also match the failure
+// text of a genuine exhaustion that merely quotes it.
+const softQuotaKillMarker = "after rate_limit_event (status=allowed_warning"
+
+// limitedQuotaKillMarker is the same skillRunner.ts marker naming a hard
+// status=limited. The veto is anchored to it because detail also carries the
+// stage's stderr tail, and agent output that merely contains status=limited
+// must not disable the warning-only guard (#2737).
+const limitedQuotaKillMarker = "after rate_limit_event (status=limited"
+
+// IsWarningOnlyQuotaDetail reports whether detail carries skillRunner's kill
+// marker for a stage that stopped after a soft quota warning, and no
+// skillRunner marker for a status=limited event.
+func IsWarningOnlyQuotaDetail(detail string) bool {
+	return strings.Contains(detail, softQuotaKillMarker) &&
+		!strings.Contains(detail, limitedQuotaKillMarker)
+}
+
+// IsWarningOnlyQuotaStall reports a stall kill that followed a soft quota
+// warning. It is booked as a stall (#2711), but quota is still under pressure:
+// a stronger tier spends more of the bucket that just warned.
+func IsWarningOnlyQuotaStall(kind, detail string) bool {
+	return terminalkind.IsStallShapedKill(kind) && IsWarningOnlyQuotaDetail(detail)
 }

@@ -57,6 +57,7 @@ import type {
   PipelineFeedbackSignalType,
   TerminalFailureKind,
 } from "@nightgauge/sdk";
+import { pluginHint } from "../utils/pluginHint";
 
 // ============================================================================
 // Types
@@ -68,7 +69,7 @@ import type {
  * Categories added in #3204 (signal-first classifier):
  *
  *   - `stall-kill` — skillRunner forcibly terminated the stage for idle
- *     timeout or hard-cap. The agent went silent (often Bash hang, infinite
+ *     timeout. The agent went silent (often Bash hang, infinite
  *     tool loop, or stop-hook deadlock). Distinguished from `timeout`, which
  *     historically conflated with skillRunner kills.
  *   - `cost-cap` — skillRunner forcibly terminated the stage for crossing
@@ -162,6 +163,7 @@ export type RetroFailureCategory =
   | "adapter-permission-rejected"
   | "adapter-incompatible"
   | "environment-halt"
+  | "gate-plugin-missing"
   | "unknown";
 
 export interface RetroFinding {
@@ -528,6 +530,9 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   stall_kill: "stall-kill",
   subagent_crash: "stall-kill",
   runaway_progress: "stall-kill",
+  // A stage that ran out of time rather than one that went silent (#2812). The
+  // remedy is its scope or its cap.
+  stage_cap_kill: "timeout",
 
   // Nightgauge's OWN configured ceilings tripped. Actionable in config.
   budget_exceeded: "budget-exceeded",
@@ -614,11 +619,19 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // A project-declared environment check failed in Phase 0; the operator
   // fixes the environment the check's remedy names (#101).
   environment_halt: "environment-halt",
+  gate_plugin_missing: "gate-plugin-missing",
   git_transport_auth_failed: "credential-failure",
+
+  // Conflict recovery gave up: the PR cannot merge until the files the terminal
+  // reason names are resolved (#2841).
+  merge_conflict: "merge-blocked",
+  merge_queue_enqueue_failed: "merge-blocked",
 
   // A person owns the next move.
   architecture_approval_required: "human-decision-required",
   not_pipeline_actionable: "human-decision-required",
+  review_cap_reached: "human-decision-required",
+  resume_no_op: "human-decision-required",
   blocked_outcome_hold: "human-decision-required",
 
   // Dispatched over an open dependency edge: a scheduler decision, not a stage
@@ -657,7 +670,19 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
  * use `text`.
  */
 const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | null> = [
-  // skillRunner stall-kill log line, idle OR hard-cap.
+  // Stage stopped at its runtime cap (#2812). Ahead of the stall extractor:
+  // skillRunner's structured logs still carry the `stallKilled` flag on this kill.
+  ({ text }) => {
+    if (/\[stage-cap-killed\]\s+\S+\s+terminated/i.test(text)) {
+      return {
+        category: "timeout",
+        evidence: "skillRunner stopped the stage at its stage_hard_caps or stage_time_caps limit",
+        severityHint: "medium",
+      };
+    }
+    return null;
+  },
+  // skillRunner idle stall-kill log line.
   ({ text }) => {
     if (
       /Stage terminated due to stall detection auto-kill/i.test(text) ||
@@ -667,7 +692,7 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
     ) {
       return {
         category: "stall-kill",
-        evidence: "skillRunner forcibly terminated the stage for idle/hard-cap stall",
+        evidence: "skillRunner forcibly terminated the stage for an idle stall",
         severityHint: "medium",
       };
     }
@@ -765,8 +790,11 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
   // classify AHEAD of skill-no-op below. The orchestrator threads the blocker
   // reason into the terminal_reason source, e.g.
   // `blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)`.
-  ({ text, failedStage, feedbackSignals }) => {
+  ({ text, failedStage, feedbackSignals, terminalKind }) => {
     if (failedStage !== "pr-merge") return null;
+    // The record already says merge-blocked, and its reason names the files.
+    // Claiming the category here would drop that finding as a duplicate (#2841).
+    if (terminalKind === "merge_conflict") return null;
     const m = text.match(
       /blocked by (?:failing check|required review|review|merge conflict|non-mergeable state)[^\n]*/i
     );
@@ -1870,7 +1898,7 @@ export class AutoRetroService {
       timeout: "Pipeline terminated after exceeding configured time limit",
       "validation-failure": "Pipeline blocked by failing tests, type errors, or build failure",
       "stall-kill":
-        "skillRunner forcibly terminated the stage: subagent went silent past the idle or hard-cap threshold",
+        "skillRunner forcibly terminated the stage: subagent went silent past the idle threshold",
       "cost-cap":
         "skillRunner forcibly terminated the stage: per-stage cost cap exceeded before BudgetEnforcer grace-out",
       "infrastructure-outage":
@@ -1915,6 +1943,8 @@ export class AutoRetroService {
         "The adapter's binary cannot serve the dispatch — its version is below the tested floor or unreadable",
       "environment-halt":
         "A project-declared preflight.environment check failed before the stage did any work — the local environment is broken, not the code",
+      "gate-plugin-missing":
+        "A Claude stage did not load this build's Nightgauge plugin exactly once, so the stage runner stopped it before any work — the stage's safety gates could not be trusted",
       unknown: "Pipeline failure detected but category could not be determined",
     };
 
@@ -1985,7 +2015,13 @@ export class AutoRetroService {
         "The dispatch was refused before anything ran: the adapter's binary is below the compat manifest's floor or its version could not be read. Install a build at or above the floor (the refusal names the tested one) and pin the adapter's binary to it (for OpenCode, `opencode.binary` in ~/.nightgauge/config.yaml; see `nightgauge doctor`), then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. A retry on the same binary is refused the same way.",
       "environment-halt":
         "Apply the remedy the failed check names, then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. Do not change code: a retry meets the same environment.",
-      unknown: "Review logs manually. Run /nightgauge:retro for AI-powered root cause analysis.",
+      "gate-plugin-missing":
+        "Read the `[gate-plugin-missing]` line for what system/init reported. Reinstall the build so its bundled plugin is intact, or update Claude Code if it rejected the plugin, then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. A retry meets the same install.",
+      unknown: pluginHint(
+        "retro",
+        "Review logs manually.",
+        (command) => `Review logs manually. Run ${command} for AI-powered root cause analysis.`
+      ),
     };
 
     const severities: Record<RetroFailureCategory, "low" | "medium" | "high"> = {
@@ -2028,6 +2064,7 @@ export class AutoRetroService {
       "adapter-permission-rejected": "high",
       "adapter-incompatible": "high",
       "environment-halt": "medium",
+      "gate-plugin-missing": "high",
       unknown: "low",
     };
 

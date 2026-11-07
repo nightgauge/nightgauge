@@ -15,7 +15,7 @@
  * `160` log and #160's into a `209` log as the shared identity flipped.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("../../../src/utils/log-file-writer", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../src/utils/log-file-writer")>()),
@@ -27,6 +27,7 @@ vi.mock("../../../src/utils/log-file-writer", async (importOriginal) => ({
 
 import { OutputWindowState } from "../../../src/views/outputWindow/OutputWindowState";
 import { LogFileWriter } from "../../../src/utils/log-file-writer";
+import { createMockMemento } from "../../mocks/memento";
 
 const appendSpy = vi.mocked(LogFileWriter.appendToLog);
 
@@ -198,5 +199,123 @@ describe("OutputWindowState spawn-instant identity (#307 follow-up)", () => {
     const call = appendSpy.mock.calls[appendSpy.mock.calls.length - 1];
     expect(call[0]).toBe("/ws/infra"); // root already correct (#216)
     expect(call[1]).toBe(96); // BUG: tag falls through to the stale scalar
+  });
+});
+
+describe("OutputWindowState run identity on a reused slot index (#2785)", () => {
+  let state: OutputWindowState;
+
+  const dirty = (slotIndex: number) => {
+    state.updateSlotStage(slotIndex, "feature-dev");
+    state.updateSlotStageStatus(slotIndex, "feature-dev", "running");
+    state.setSlotTokenUsage(slotIndex, {
+      inputTokens: 500,
+      outputTokens: 50,
+      cacheReadTokens: 5,
+      cacheCreationTokens: 1,
+      costUsd: 2.5,
+    });
+    state.updateSlotStatus(slotIndex, "complete", 1_000);
+  };
+
+  const expectClean = (slotIndex: number) => {
+    const slot = state.getSlot(slotIndex)!;
+    expect(slot.startedAt).toBe(9_000);
+    expect(slot.completedAt).toBeNull();
+    expect(slot.status).toBe("pending");
+    expect(slot.stage).toBeUndefined();
+    expect(slot.currentPhase).toBeUndefined();
+    expect(slot.tokenUsage.costUsd).toBe(0);
+    expect(slot.stages.get("feature-dev")?.status).toBe("pending");
+  };
+
+  beforeEach(() => {
+    state = new OutputWindowState(createMockMemento());
+    vi.useFakeTimers({ now: 100 });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("starts a different issue on a reused index from a clean record", () => {
+    state.registerSlot(0, 10, "first", "o/r", { runId: "a" });
+    dirty(0);
+    const before = state.getSlot(0)!.runGeneration;
+    vi.setSystemTime(9_000);
+    state.registerSlot(0, 11, "second", "o/r");
+
+    expectClean(0);
+    expect(state.getSlot(0)!.runId).toBeUndefined();
+    expect(state.getSlot(0)!.runGeneration).not.toBe(before);
+  });
+
+  it("treats the same issue under a different run id as a new run", () => {
+    state.registerSlot(0, 10, "first", "o/r", { runId: "a" });
+    dirty(0);
+    vi.setSystemTime(9_000);
+    state.registerSlot(0, 10, "again", "o/r", { runId: "b" });
+
+    expectClean(0);
+    expect(state.getSlot(0)!.runId).toBe("b");
+  });
+
+  it("treats the same issue number in another repository as a new run", () => {
+    state.registerSlot(0, 10, "first", "o/r");
+    dirty(0);
+    vi.setSystemTime(9_000);
+    state.registerSlot(0, 10, "first", "o/other");
+
+    expectClean(0);
+  });
+
+  it.each([
+    ["same run id", { runId: "a" }],
+    ["no run id", undefined],
+  ])("keeps the record on a poll with %s, even after settling", (_name, options) => {
+    state.registerSlot(0, 10, "first", "o/r", { runId: "a" });
+    dirty(0);
+    state.getSlot(0)!.currentPhase = { name: "build", index: 1, total: 2 };
+    const generation = state.getSlot(0)!.runGeneration;
+    vi.setSystemTime(9_000);
+    state.registerSlot(0, 10, "renamed", "o/r", options);
+
+    const slot = state.getSlot(0)!;
+    expect(slot.startedAt).toBe(100);
+    expect(slot.completedAt).toBe(1_000);
+    expect(slot.tokenUsage.costUsd).toBe(2.5);
+    expect(slot.stages.get("feature-dev")?.status).toBe("running");
+    expect(slot.currentPhase?.name).toBe("build");
+    expect(slot.runId).toBe("a");
+    expect(slot.runGeneration).toBe(generation);
+  });
+
+  it("adopts a first run id without starting a new run", () => {
+    state.registerSlot(0, 10, "first", "o/r");
+    dirty(0);
+    state.registerSlot(0, 10, "first", "o/r", { runId: "a" });
+
+    expect(state.getSlot(0)!.runId).toBe("a");
+    expect(state.getSlot(0)!.startedAt).toBe(100);
+  });
+
+  it("replaces an archived record and gives it a fresh generation", () => {
+    state.registerArchivedSlot(0, 10, "old");
+    const archived = state.getSlot(0)!.runGeneration;
+    vi.setSystemTime(9_000);
+    state.registerSlot(0, 10, "live");
+
+    expectClean(0);
+    expect(state.getSlot(0)!.archived).toBe(false);
+    expect(state.getSlot(0)!.runGeneration).not.toBe(archived);
+  });
+
+  it("never reuses a generation after a slot is removed", () => {
+    state.registerSlot(0, 10, "first");
+    const first = state.getSlot(0)!.runGeneration;
+    state.removeSlot(0);
+    state.registerSlot(0, 10, "first");
+
+    expect(state.getSlot(0)!.runGeneration).not.toBe(first);
   });
 });

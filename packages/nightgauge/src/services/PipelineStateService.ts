@@ -19,6 +19,7 @@ import { IpcClient } from "./IpcClient";
 import {
   type NotifyCompleteParams,
   type NotifyPhaseTransitionParams,
+  type NotifyStageProgressParams,
   type NotifyStageTransitionParams,
   type SetPausedParams,
 } from "./ipcNotifyParams";
@@ -215,6 +216,8 @@ export interface StageAttribution {
   servedModel?: string;
   servedEffort?: string;
   servedThinking?: string;
+  /** The Nightgauge plugin version the stage's system/init reported (#2723). */
+  pluginVersion?: string;
 }
 
 export type ExtendedStageState = {
@@ -1368,6 +1371,7 @@ export class PipelineStateService implements vscode.Disposable {
           ...(attribution?.servedModel ? { servedModel: attribution.servedModel } : {}),
           ...(attribution?.servedEffort ? { servedEffort: attribution.servedEffort } : {}),
           ...(attribution?.servedThinking ? { servedThinking: attribution.servedThinking } : {}),
+          ...(attribution?.pluginVersion ? { pluginVersion: attribution.pluginVersion } : {}),
           // A finished child must not vouch for the run (ADR-017 §7.2): the
           // terminal transition zeroes the pid so the PID-reuse window is
           // bounded by one stage rather than by the whole run.
@@ -1440,6 +1444,7 @@ export class PipelineStateService implements vscode.Disposable {
           ...(attribution?.servedModel ? { servedModel: attribution.servedModel } : {}),
           ...(attribution?.servedEffort ? { servedEffort: attribution.servedEffort } : {}),
           ...(attribution?.servedThinking ? { servedThinking: attribution.servedThinking } : {}),
+          ...(attribution?.pluginVersion ? { pluginVersion: attribution.pluginVersion } : {}),
           // Terminal transition — see completeStage (ADR-017 §7.2).
           stagePid: 0,
           runId,
@@ -1712,6 +1717,27 @@ export class PipelineStateService implements vscode.Disposable {
    * post-routing, post-planning, epic context) so downstream consumers
    * like DiscordService can surface richer information.
    */
+  /**
+   * Tell Go the run's PR merged (#2730), so `autonomous status` reads a run in
+   * post-merge follow-up as that. Best-effort: this is a display fact, and the
+   * ground truth reaches Go through notifyComplete either way.
+   */
+  async notifyPrMerged(prNumber: number): Promise<void> {
+    const runId = this.wireIdentityOrSkip("pipeline.notifyStageProgress", "pr-merge");
+    if (runId === null) return;
+    try {
+      await this.ipc.call("pipeline.notifyStageProgress", {
+        repo: this.runRepo,
+        issueNumber: this.issueNumber ?? 0,
+        stage: "pr-merge",
+        mergedPr: prNumber,
+        runId,
+      } satisfies NotifyStageProgressParams);
+    } catch (err) {
+      console.debug("[PipelineStateService] notifyPrMerged failed (best-effort)", err);
+    }
+  }
+
   setMeta(meta: Partial<PipelineMeta>): void {
     if (!this._lastState) return;
     this._lastState.pipeline_meta = {

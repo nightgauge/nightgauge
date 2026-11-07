@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
+	"io"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -18,7 +23,7 @@ func TestPreflightCmd_RegistersAllSubcommands(t *testing.T) {
 		got = append(got, s.Use)
 	}
 	sort.Strings(got)
-	want := []string{"ac-fingerprint <issue-number>", "ac-reconcile <issue-number>", "dependency-guard", "environment", "links", "managed-steering", "mitigation-rule", "platform-raw-http", "secrets", "skill-anti-patterns", "skill-includes", "skill-no-direct-gh", "skill-portability", "skill-shell-state", "syntax", "thinking-effort"}
+	want := []string{"ac-fingerprint <issue-number>", "ac-reconcile <issue-number>", "dependency-guard", "environment", "links", "managed-steering", "mitigation-rule", "platform-raw-http", "secrets", "skill-anti-patterns", "skill-bundle", "skill-includes", "skill-no-direct-gh", "skill-portability", "skill-shell-state", "syntax", "thinking-effort"}
 	if len(got) != len(want) {
 		t.Fatalf("subcommand count = %d, want %d (got: %v)", len(got), len(want), got)
 	}
@@ -88,4 +93,78 @@ func TestPreflightCmd_SyntaxAndSecretsHaveWorkdirFlag(t *testing.T) {
 			}
 		}
 	}
+}
+
+// fakeACEmptyNotifier records --notify-empty's forge traffic (#2906).
+type fakeACEmptyNotifier struct {
+	existing []string
+	posted   []string
+}
+
+func (f *fakeACEmptyNotifier) HasComment(_ context.Context, _ int, marker string) (bool, error) {
+	for _, c := range append(append([]string{}, f.existing...), f.posted...) {
+		if strings.Contains(c, marker) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeACEmptyNotifier) AddComment(_ context.Context, _ int, body string) error {
+	f.posted = append(f.posted, body)
+	return nil
+}
+
+func runACReconcileNotify(t *testing.T, fake *fakeACEmptyNotifier, body string, flags ...string) {
+	t.Helper()
+	prev := newACEmptyNotifier
+	newACEmptyNotifier = func(string, string) (acEmptyNotifier, error) { return fake, nil }
+	t.Cleanup(func() { newACEmptyNotifier = prev })
+	dir := t.TempDir()
+	bodyFile := filepath.Join(dir, "body.md")
+	if err := os.WriteFile(bodyFile, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := preflightACReconcileCmd()
+	cmd.SetArgs(append([]string{"7", "--body-file", bodyFile, "--workdir", dir,
+		"--out", filepath.Join(dir, "out.json")}, flags...))
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("ac-reconcile: %v", err)
+	}
+}
+
+func TestPreflightACReconcile_NotifyEmpty(t *testing.T) {
+	const noACs = "## Summary\n\nJust prose.\n"
+	t.Run("posts once on no-acs-detected", func(t *testing.T) {
+		fake := &fakeACEmptyNotifier{}
+		runACReconcileNotify(t, fake, noACs, "--notify-empty")
+		runACReconcileNotify(t, fake, noACs, "--notify-empty")
+		if len(fake.posted) != 1 || !strings.HasPrefix(fake.posted[0], noACsMarker) ||
+			!strings.Contains(fake.posted[0], "`Refs #7`") {
+			t.Fatalf("posted = %q, want one marker comment naming Refs #7", fake.posted)
+		}
+	})
+	t.Run("existing marker comment posts nothing", func(t *testing.T) {
+		fake := &fakeACEmptyNotifier{existing: []string{"earlier\n" + noACsMarker}}
+		runACReconcileNotify(t, fake, noACs, "--notify-empty")
+		if len(fake.posted) != 0 {
+			t.Fatalf("posted = %q, want none", fake.posted)
+		}
+	})
+	t.Run("criteria found posts nothing", func(t *testing.T) {
+		fake := &fakeACEmptyNotifier{}
+		runACReconcileNotify(t, fake, "## Verification\n1. it works\n", "--notify-empty")
+		if len(fake.posted) != 0 {
+			t.Fatalf("posted = %q, want none", fake.posted)
+		}
+	})
+	t.Run("flag absent posts nothing", func(t *testing.T) {
+		fake := &fakeACEmptyNotifier{}
+		runACReconcileNotify(t, fake, noACs)
+		if len(fake.posted) != 0 {
+			t.Fatalf("posted = %q, want none", fake.posted)
+		}
+	})
 }

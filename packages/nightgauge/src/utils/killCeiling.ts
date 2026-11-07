@@ -43,6 +43,12 @@ export type KillCeilingName =
   | "progress-churn-tools"
   /** ProgressMonitor: `catastrophic_limit_usd` reached with no productive progress. */
   | "progress-catastrophic-cost"
+  /** ProgressMonitor: a background task outlived `background_task_ceiling_ms`. */
+  | "progress-background-task-ceiling"
+  /** ProgressMonitor: a background task outlived `background_task_hard_ceiling_ms`. */
+  | "progress-background-task-hard-ceiling"
+  /** ProgressMonitor: external work outlived `external_progress_ceiling_ms`. */
+  | "progress-external-progress-ceiling"
   /** skillRunner: elapsed reached `stall warn threshold × NX_RUNAWAY_KILL_MULTIPLE`. */
   | "nx-stall-multiple"
   /** skillRunner: elapsed reached `pipeline.stage_hard_caps.<stage>`. */
@@ -51,7 +57,7 @@ export type KillCeilingName =
   | "stage-time-cap"
   /** skillRunner: idle past the quota fast-fail budget after a rate-limit signal. */
   | "quota-fast-fail-idle"
-  /** skillRunner: idle past `stallKillMs` with no subprocess output. */
+  /** skillRunner: idle past `stallKillMs` with no output or live work within its ceiling. */
   | "stall-idle";
 
 /**
@@ -83,6 +89,45 @@ export function msLimit(ms: number): string {
 /** Render a USD limit for {@link KillCeiling.limit}. */
 export function usdLimit(usd: number): string {
   return `$${usd.toFixed(2)}`;
+}
+
+/**
+ * Whether a ceiling name is a stage runtime cap, as opposed to an idle or
+ * progress kill. Such a kill reads as a cap and books `stage_cap_kill` (#2812).
+ */
+export function isStageCapCeiling(name: string | undefined): boolean {
+  return name === "stage-hard-cap" || name === "stage-time-cap";
+}
+
+/**
+ * The idle figure a kill report prints. Soft kills use the live-work clock
+ * (#2711) that drove them. A stage cap is not an idle kill, so that clock would
+ * hide real output silence; cap kills report raw output idle (#2737).
+ */
+export function killReportIdleMs(
+  ceiling: KillCeilingName,
+  rawIdleMs: number,
+  softIdleMs: number
+): number {
+  return isStageCapCeiling(ceiling) ? rawIdleMs : softIdleMs;
+}
+
+/**
+ * The first sentence of a cap kill's report: the cap, its value and the elapsed
+ * time. Callers guarantee `killCeiling` passed {@link isStageCapCeiling}.
+ */
+export function describeStageCapKill(
+  stage: string,
+  durationMs: number,
+  killCeiling: string | undefined,
+  killCeilingValue: string | undefined
+): string {
+  const configKey =
+    killCeiling === "stage-time-cap" ? "pipeline.stage_time_caps" : "pipeline.stage_hard_caps";
+  return (
+    `[stage-cap-killed] ${stage} terminated: reached ${configKey}=${killCeilingValue ?? "unknown"} ` +
+    `after ${Math.round(durationMs / 1000)}s`
+  );
 }
 
 /**

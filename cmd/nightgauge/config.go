@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	gh "github.com/nightgauge/nightgauge/internal/github"
@@ -126,6 +128,7 @@ func configInitCmd() *cobra.Command {
 		force         bool
 		noFetch       bool
 		outputJSON    bool
+		detect        bool
 	)
 
 	cmd := &cobra.Command{
@@ -138,15 +141,25 @@ Without --project the template is emitted with <PROJECT_NUMBER> /
 --project N the verb queries GitHub once for the project ID and field/option
 IDs and substitutes them into the template.
 
+With --detect the owner and repository come from the origin remote and the
+template is rendered with no project linked (number: 0, no placeholders), so
+the file loads straight away. It reads git only and makes no GitHub query.
+Exactly one of --owner or --detect is required.
+
 The verb refuses to overwrite an existing file unless --force is given. Use
 --out - to write to stdout instead of a file.`,
 		Example: `  nightgauge config init --owner nightgauge
   nightgauge config init --owner nightgauge --project 1 --repo nightgauge
   nightgauge config init --owner nightgauge --project 1 --force
-  nightgauge config init --owner nightgauge --out -`,
+  nightgauge config init --owner nightgauge --out -
+  nightgauge config init --detect`,
 		SilenceUsage:  true,
 		SilenceErrors: false,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkInitIdentityFlags(owner, repo, projectNumber, detect); err != nil {
+				return err
+			}
+
 			// An existing config is the common CLI-only clone: the verb
 			// refuses to overwrite it, but the ignore rules it implies are
 			// still ensured (#2026) before the refusal, and before any
@@ -164,6 +177,14 @@ The verb refuses to overwrite an existing file unless --force is given. Use
 				OwnerType:     ownerType,
 				Repo:          repo,
 				ProjectNumber: projectNumber,
+				Unlinked:      detect,
+			}
+
+			if detect {
+				var err error
+				if opts.Owner, opts.Repo, err = detectInitIdentity(); err != nil {
+					return err
+				}
 			}
 
 			if projectNumber > 0 && !noFetch {
@@ -196,7 +217,7 @@ The verb refuses to overwrite an existing file unless --force is given. Use
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "", "GitHub project owner (org or user login) — required")
+	cmd.Flags().StringVar(&owner, "owner", "", "GitHub project owner (org or user login); required unless --detect is set")
 	cmd.Flags().StringVar(&ownerType, "owner-type", "org", `Owner type: "org" or "user"`)
 	cmd.Flags().StringVar(&repo, "repo", "", "Default repository name (emits <REPO_NAME> placeholder when empty)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "GitHub Project V2 number (omit for placeholder template)")
@@ -204,10 +225,47 @@ The verb refuses to overwrite an existing file unless --force is given. Use
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing file at --out")
 	cmd.Flags().BoolVar(&noFetch, "no-fetch", false, "Skip GitHub queries even when --project is set; emit placeholders for IDs")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit machine-readable JSON status to stdout after writing")
-
-	_ = cmd.MarkFlagRequired("owner")
+	cmd.Flags().BoolVar(&detect, "detect", false, "Derive owner and repo from the origin remote and write a config with no project linked")
 
 	return cmd
+}
+
+// checkInitIdentityFlags enforces exactly one source for the config's identity.
+func checkInitIdentityFlags(owner, repo string, projectNumber int, detect bool) error {
+	switch {
+	case detect && owner != "":
+		return errors.New("--owner and --detect cannot be used together")
+	case detect && repo != "":
+		return errors.New("--repo and --detect cannot be used together")
+	case detect && projectNumber != 0:
+		return errors.New("--project and --detect cannot be used together: --detect writes a config with no project linked")
+	case !detect && owner == "":
+		return errors.New("one of --owner or --detect is required")
+	}
+	return nil
+}
+
+// initSlugPattern is the owner/name shape GitHub permits. The two parts are
+// written unquoted into YAML, so a remote URL must not be able to add syntax.
+var initSlugPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$`)
+
+// detectInitIdentity reads the owner and repository from the origin remote of
+// the checkout at the working directory.
+func detectInitIdentity() (string, string, error) {
+	svc, err := openGitService()
+	if err != nil {
+		return "", "", fmt.Errorf("--detect needs a git repository: %w", err)
+	}
+	slug, err := svc.RemoteRepoSlug()
+	if err != nil {
+		return "", "", fmt.Errorf("--detect needs a GitHub origin remote (add one with `git remote add origin <url>`): %w", err)
+	}
+	slug = strings.TrimSuffix(slug, "/")
+	if !initSlugPattern.MatchString(slug) {
+		return "", "", fmt.Errorf("--detect needs a GitHub origin remote of the form owner/repo, got %q", slug)
+	}
+	owner, repo, _ := strings.Cut(slug, "/")
+	return owner, repo, nil
 }
 
 // configValidateCmd validates the .nightgauge/config.yaml file, reporting

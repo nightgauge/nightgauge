@@ -1237,3 +1237,29 @@ func TestCopilotBuildCommand_ToolPolicy(t *testing.T) {
 		t.Errorf("empty allow list args = %q, want [--allow-all-tools]", args)
 	}
 }
+
+// Both claude-spawning adapters load the plugin named on RunOptions (#2723), and
+// a build with no bundle passes no flag.
+func TestClaudeAdaptersPassPluginDir(t *testing.T) {
+	const dir = "/bundle/dist/claude-plugins/nightgauge"
+	for _, adapter := range []SkillRunner{NewClaudeAdapter(), NewClaudeSdkAdapter()} {
+		t.Run(adapter.Name(), func(t *testing.T) {
+			_, args, _ := adapter.BuildCommand(RunOptions{ClaudePluginDir: dir})
+			found := false
+			for i, arg := range args {
+				if arg == "--plugin-dir" {
+					found = i+1 < len(args) && args[i+1] == dir
+				}
+			}
+			if !found {
+				t.Errorf("args %v do not pass --plugin-dir %s", args, dir)
+			}
+			_, args, _ = adapter.BuildCommand(RunOptions{})
+			for _, arg := range args {
+				if arg == "--plugin-dir" {
+					t.Errorf("no bundle must pass no flag: %v", args)
+				}
+			}
+		})
+	}
+}

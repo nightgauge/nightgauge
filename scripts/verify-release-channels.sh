@@ -20,8 +20,12 @@
 # in the repository that queries either host (#1767 keeps the docs link gate
 # off them).
 #
+# The Claude plugin marketplace is installed at the `stable` branch, which
+# release.yml advances last (#2724). A branch left behind means `claude plugin
+# update` serves an old release, so it must sit on the release tag's commit.
+#
 # Usage:
-#   verify-release-channels.sh --channel homebrew|marketplace|open-vsx [options]
+#   verify-release-channels.sh --channel homebrew|marketplace|open-vsx|claude-plugin [options]
 #
 # Options:
 #   --version X.Y.Z       Expected version. Default: the latest non-prerelease
@@ -42,8 +46,13 @@
 #                         pull request for --version is expected: pass when the
 #                         tap already serves --version OR that pull request is
 #                         open, fail only when neither holds (nothing was
-#                         proposed). Without --release (watchdog mode) only
-#                         the tap's default branch counts. For a listing
+#                         proposed). For the cask, --release first requires
+#                         `release-scan-gate.sh verify` to pass (the release
+#                         is published and scan-clean, #2946), then marks a
+#                         draft cask pull request ready; it refuses (exit 1)
+#                         for a draft or unscanned release. Without --release
+#                         (watchdog mode) only the tap's default branch
+#                         counts. For a listing
 #                         channel, --release passes when --version is listed
 #                         on every target (a newer version may be listed too);
 #                         without it, every target's newest version must BE
@@ -105,9 +114,9 @@ done
 REPO_RE='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 
-CHANNELS="homebrew, marketplace, open-vsx"
+CHANNELS="homebrew, marketplace, open-vsx, claude-plugin"
 case "$CHANNEL" in
-homebrew | marketplace | open-vsx) ;;
+homebrew | marketplace | open-vsx | claude-plugin) ;;
 "") echo "ERROR: --channel is required ($CHANNELS)" >&2; exit 2 ;;
 *) echo "ERROR: unknown channel '$CHANNEL' ($CHANNELS)" >&2; exit 2 ;;
 esac
@@ -120,7 +129,7 @@ if [ -n "$VERSION" ] && [[ ! "$VERSION" =~ $SEMVER_RE ]]; then
   echo "ERROR: --version must be X.Y.Z (a stable release), got '$VERSION'" >&2
   exit 2
 fi
-if [ "$CHANNEL" != "homebrew" ]; then
+if [ "$CHANNEL" = "marketplace" ] || [ "$CHANNEL" = "open-vsx" ]; then
   if [ -z "$EXTENSION" ]; then
     MANIFEST="$(cd "$(dirname "$0")/.." && pwd)/packages/nightgauge/package.json"
     EXTENSION="$(jq -r '"\(.publisher).\(.name)"' "$MANIFEST" 2>/dev/null)" || EXTENSION=""
@@ -307,10 +316,80 @@ Detected by \`scripts/verify-release-channels.sh --channel $CHANNEL\` (#1874, #1
 }
 
 CURRENT=0
+
+# --- The plugin channel: where the stable branch points --------------------------
+if [ "$CHANNEL" = "claude-plugin" ]; then
+  if ! WANT="$(gh api "repos/$SOURCE/commits/v$VERSION" | jq -r '.sha // empty')" || [ -z "$WANT" ]; then
+    echo "ERROR: cannot resolve tag v$VERSION on $SOURCE" >&2
+    exit 2
+  fi
+  say "- release: \`$VERSION\` at \`$WANT\` ($SOURCE)"
+  # git/ref, not commits/: a missing ref is a 404 there, and only a 404 means the
+  # channel serves nothing. Any other failure says nothing about the channel.
+  STABLE_ERR="$(mktemp)"
+  SERVED="$(gh api "repos/$SOURCE/git/ref/heads/stable" 2>"$STABLE_ERR" | jq -r '.object.sha // empty')"
+  STABLE_ABSENT=0
+  grep -q 'HTTP 404' "$STABLE_ERR" && STABLE_ABSENT=1
+  rm -f "$STABLE_ERR"
+  if [ "$STABLE_ABSENT" -eq 1 ]; then
+    # GitHub also answers 404 for a repository the token cannot read. Only a
+    # readable listing without the ref proves the branch is gone. matching-refs
+    # is a prefix match, so look for the exact ref.
+    if ! STABLE_REFS="$(gh api "repos/$SOURCE/git/matching-refs/heads/stable" 2>/dev/null)" ||
+      ! printf '%s' "$STABLE_REFS" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      echo "ERROR: the token cannot read refs on $SOURCE, so a 404 on stable says nothing about the branch" >&2
+      exit 2
+    fi
+    if printf '%s' "$STABLE_REFS" | jq -e 'any(.[]; .ref == "refs/heads/stable")' >/dev/null; then
+      echo "ERROR: stable is listed on $SOURCE but reading it returned 404" >&2
+      exit 2
+    fi
+    VERDICT=1
+    REASON="the stable branch does not exist, so plugin installs at #stable fail: create it (gh api repos/$SOURCE/git/refs -f ref=refs/heads/stable -f sha=$WANT)."
+    say "- verdict: MISSING. $REASON"
+    echo "::error::$REASON" >&2
+    sync_issue
+    exit "$VERDICT"
+  fi
+  if [ -z "$SERVED" ]; then
+    echo "ERROR: cannot read the stable branch of $SOURCE" >&2
+    exit 2
+  fi
+  say "- \`stable\` serves: \`$SERVED\`"
+  if [ "$SERVED" = "$WANT" ]; then
+    VERDICT=0
+    CURRENT=1
+    say "- verdict: current"
+  else
+    VERDICT=1
+    REASON="stable is at $SERVED but the latest release v$VERSION is $WANT, so plugin updates stop there: fast-forward it (gh api -X PATCH repos/$SOURCE/git/refs/heads/stable -f sha=$WANT -F force=false)."
+    say "- verdict: BEHIND. $REASON"
+    echo "::error::$REASON" >&2
+  fi
+  sync_issue
+  exit "$VERDICT"
+fi
+
 if [ "$CHANNEL" != "homebrew" ]; then
   check_listing
   sync_issue
   exit "$VERDICT"
+fi
+
+# --- The scan gate: no cask may be readied for an unscanned release (#2946) -----
+# The cask pull request opens as a DRAFT while the GitHub Release is still a
+# draft. Release mode marks it ready only for a published release that
+# release-scan-gate.sh verify finds covered by a clean VirusTotal scan, and
+# refuses otherwise, so a cask that points at a draft is never mergeable.
+if [ "$RELEASE_MODE" -eq 1 ]; then
+  SCAN_GATE="${RELEASE_SCAN_GATE:-$(dirname "$0")/release-scan-gate.sh}"
+  bash "$SCAN_GATE" verify "v$VERSION" -R "$SOURCE"
+  GATE_RC=$?
+  if [ "$GATE_RC" -ne 0 ]; then
+    echo "::error::v$VERSION is not a published, scan-clean release (release-scan-gate.sh verify exit $GATE_RC): refusing to ready its cask." >&2
+    [ "$GATE_RC" -eq 1 ] && exit 1
+    exit 2
+  fi
 fi
 
 # --- The channel: what the tap's default branch actually serves ------------------
@@ -335,17 +414,18 @@ fi
 if ! OPEN_CASKS="$(printf '%s' "$PULLS" | jq -r --arg tap "$TAP" '
     .[] | select(.head.repo.full_name == $tap)
         | select(.head.ref | test("^cask-[0-9]+\\.[0-9]+\\.[0-9]+$"))
-        | "\(.number) \(.head.ref | ltrimstr("cask-"))"')"; then
+        | "\(.number) \(.head.ref | ltrimstr("cask-")) \(.draft // false)"')"; then
   echo "ERROR: unparseable pull request list from $TAP" >&2
   exit 2
 fi
 
 PROPOSED_PR=""
+PROPOSED_DRAFT=false
 NEWEST="$SERVED"
 if semver_lt "$NEWEST" "$VERSION"; then NEWEST="$VERSION"; fi
-while read -r num ver; do
+while read -r num ver draft; do
   [ -n "$num" ] || continue
-  [ "$ver" = "$VERSION" ] && PROPOSED_PR="$num"
+  [ "$ver" = "$VERSION" ] && { PROPOSED_PR="$num"; PROPOSED_DRAFT="$draft"; }
   if semver_lt "$NEWEST" "$ver"; then NEWEST="$ver"; fi
 done <<<"$OPEN_CASKS"
 
@@ -354,7 +434,7 @@ say "- tap \`main\` serves: \`$SERVED\` ($TAP)"
 
 # --- Supersede: an older proposal can never be the one to merge ------------------
 SUPERSEDED=""
-while read -r num ver; do
+while read -r num ver _; do
   [ -n "$num" ] || continue
   semver_lt "$ver" "$NEWEST" || continue
   if [ "$CLOSE_SUPERSEDED" -eq 1 ]; then
@@ -375,7 +455,14 @@ VERDICT=0
 if [ "$SERVED" = "$VERSION" ]; then
   CURRENT=1
   say "- verdict: current"
+elif [ "$RELEASE_MODE" -eq 1 ] && [ -n "$PROPOSED_PR" ] && [ "$PROPOSED_DRAFT" = "true" ] &&
+  ! gh pr ready "$PROPOSED_PR" -R "$TAP" >/dev/null; then
+  VERDICT=1
+  REASON="the scan-clean release $VERSION cannot be proposed: marking the draft cask PR $TAP#$PROPOSED_PR ready failed (the token needs pull_requests: write)."
+  say "- verdict: BEHIND. $REASON"
+  echo "::error::$REASON" >&2
 elif [ "$RELEASE_MODE" -eq 1 ] && [ -n "$PROPOSED_PR" ]; then
+  [ "$PROPOSED_DRAFT" = "true" ] && say "- marked the draft cask PR $TAP#$PROPOSED_PR ready: $VERSION is published and scan-clean"
   say "- verdict: proposed. The release is NOT complete until $TAP#$PROPOSED_PR (cask-$VERSION) is merged; the release watchdog goes red until it is."
   echo "::warning::brew still serves $SERVED. Merge $TAP#$PROPOSED_PR (cask-$VERSION) to finish the $VERSION release." >&2
 else

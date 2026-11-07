@@ -14,7 +14,7 @@ func TestAPILedgerWritesDatedSegmentsAndRollsAtMidnight(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "github-api.jsonl")
 	clock := time.Date(2026, 9, 28, 23, 59, 0, 0, time.UTC)
-	l := &apiLedger{path: base, segmented: true, now: func() time.Time { return clock }, prev: map[string]int{}}
+	l := &apiLedger{path: base, segmented: true, now: func() time.Time { return clock }}
 	if err := l.open(); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestAPILedgerSegmentRotatesOnSize(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "github-api.jsonl")
 	clock := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
-	l := &apiLedger{path: base, segmented: true, now: func() time.Time { return clock }, prev: map[string]int{}}
+	l := &apiLedger{path: base, segmented: true, now: func() time.Time { return clock }}
 	if err := l.open(); err != nil {
 		t.Fatal(err)
 	}

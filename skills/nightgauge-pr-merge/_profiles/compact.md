@@ -135,11 +135,12 @@ merge if `APPROVED` and no critical issues; not ready if `REVIEW_REQUIRED` or
 printf '<!-- phase:start name="address-feedback" index=6 total=13 stage="pr-merge" -->\n'
 ```
 
-Fast-track (skip straight to Phase 6) when `READY_TO_MERGE`, no critical/major
-issues, CI passed, and the PR is mergeable. Otherwise: critical issues MUST be
-addressed, major issues should be (user can override), minor issues are
-non-blocking (skip prompts under `--auto-fix`). Apply fixes, commit as
-`fix(#$ISSUE_NUMBER): address review feedback`, push, wait for CI.
+Ask `nightgauge pr-stage review-gate "$ISSUE_NUMBER" --json` (#2730). Fix only
+the findings it lists under `hold`, in one round wrapped in
+`nightgauge pr-stage review-round begin|end "$ISSUE_NUMBER"`, then push and wait
+for CI. Leave every other finding alone: the gate files each remaining major as
+an issue before the merge. A `hold-at-cap` or `wait-round` verdict, or a `begin`
+that refuses, is terminal: report the reason and stop.
 
 ### Phase 5.5: Proactive Freshness Check
 
@@ -147,10 +148,10 @@ non-blocking (skip prompts under `--auto-fix`). Apply fixes, commit as
 printf '<!-- phase:start name="freshness-check" index=7 total=13 stage="pr-merge" -->\n'
 ```
 
-Rebase onto the latest base branch BEFORE attempting merge, so the reactive
+Merge the latest base branch in BEFORE attempting merge, so the reactive
 conflict resolution in Phase 6 is rarely needed. **Read
 `skills/_shared/FRESHNESS_CHECK.md` now and follow it before continuing this
-phase.** If the rebase pushed, do not wait for CI: write the
+phase.** If the merge pushed, do not wait for CI: write the
 `pr-merge-fix-{N}.json` marker and exit 0 so the deterministic path waits and
 merges (`skills/_shared/AUTO_FIX_LOOP.md` Step 5, #2504).
 
@@ -162,8 +163,8 @@ printf '<!-- phase:start name="merge" index=8 total=13 stage="pr-merge" -->\n'
 
 Run the ruleset pre-check, final mergeable verification, the knowledge
 conformance gate, conflict resolution, merge-strategy selection (default is
-squash for sub-issue PRs; `--merge`/`--rebase` override it), the
-deterministic Go-binary merge (with its `blockedBy` gate), and merge
+squash for sub-issue PRs; `--merge`/`--rebase` override it), the review gate
+(`proceed: false` means do not merge), the deterministic Go-binary merge (with its `blockedBy` gate), and merge
 verification.
 
 > **NEVER pass `--admin` (or `--auto`) to any merge command — no admin bypass

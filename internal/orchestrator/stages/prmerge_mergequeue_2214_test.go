@@ -3,6 +3,7 @@ package stages
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,9 @@ type queueGh struct {
 	queueCalls  int
 	gotStatus   github.MergeQueueStatus
 	gotOpts     github.MergeQueueWaitOptions
+	// reachQueue, when set, fires opts.OnQueued as a real queue would once
+	// the PR is enqueued (#2770).
+	reachQueue bool
 }
 
 func (q *queueGh) MergeQueueStatus(_ context.Context, _ int) (github.MergeQueueStatus, error) {
@@ -46,6 +50,9 @@ func (q *queueGh) EnqueueAndWait(_ context.Context, st github.MergeQueueStatus, 
 	q.queueCalls++
 	q.gotStatus = st
 	q.gotOpts = opts
+	if q.reachQueue && opts.OnQueued != nil {
+		opts.OnQueued(st)
+	}
 	return q.final, q.waitErr
 }
 
@@ -263,5 +270,20 @@ func TestRun_MergeQueueNonConflict_KeepsReason(t *testing.T) {
 				t.Errorf("MergeQueueStatus called %d times; a non-unmergeable outcome must not re-read", q.statusCalls)
 			}
 		})
+	}
+}
+
+// An enqueue that exhausted its transient retries gets its own reason, so only
+// it maps to the non-fault merge_queue_enqueue_failed kind (#2729).
+func TestRun_MergeQueueEnqueueRetriesExhausted(t *testing.T) {
+	q := &queueGh{
+		fakeGh: fakeGh{preMerge: cleanOpen},
+		status: github.MergeQueueStatus{PRID: "PR_1", State: "OPEN", QueueRequired: true},
+		waitErr: fmt.Errorf("enqueue pull request: failed after 4 attempts: %w: %w",
+			github.ErrEnqueueRetriesExhausted, errors.New("HTTP 502")),
+	}
+	res, _ := newQueueRunner(q).Run(context.Background(), 7, "", "")
+	if res.Path != PathRefused || !strings.HasPrefix(res.Reason, ReasonMergeQueueEnqueueExhausted) {
+		t.Errorf("res = %+v, want refused merge-queue-enqueue-exhausted", res)
 	}
 }

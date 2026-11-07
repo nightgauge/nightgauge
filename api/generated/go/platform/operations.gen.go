@@ -276,6 +276,15 @@ var OpBillingPortalSession = Operation{
 	Upstream: UpstreamDeclared,
 }
 
+// OpInquiryScorecard is GET /v1/inquiry/scorecard.
+var OpInquiryScorecard = Operation{
+	ID:       "inquiry.scorecard",
+	Method:   "GET",
+	Path:     "/v1/inquiry/scorecard",
+	Security: SecurityUserJWT,
+	Upstream: UpstreamDeclared,
+}
+
 // OpPipelineIngestEvent is POST /v1/pipelines/events.
 var OpPipelineIngestEvent = Operation{
 	ID:       "pipeline-ingestEvent",
@@ -348,6 +357,7 @@ var Operations = []Operation{
 	OpAuditRetentionGet,
 	OpAuditRetentionUpdate,
 	OpBillingPortalSession,
+	OpInquiryScorecard,
 	OpPipelineIngestEvent,
 	OpPipelinesGetStatusByIssue,
 	OpQueueSync,

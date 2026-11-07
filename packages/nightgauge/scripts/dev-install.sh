@@ -62,10 +62,11 @@ fi
 # Default: local build and install
 # ---------------------------------------------------------------------------
 
-# Installing ends with a window reload, and a reload KILLS every running slot
-# (`deactivate` → `abortAll()`). `nightgauge autonomous stop` does not — it
-# stops admitting new work and lets the running slots finish — so the safe
-# sequence is stop, wait for "0 running", reload. Confirm before spending
+# Installing does not reload the window; the operator does that afterwards, and
+# a reload KILLS every running slot (`deactivate` → `abortAll()`). `nightgauge
+# autonomous stop` does not — it stops admitting new work and lets the running
+# slots finish — so the safe sequence is stop, wait for "0 running", install,
+# reload. Confirm before spending
 # someone's in-flight work (#1511).
 #
 # Never a hard block: an operator who wants the kill is entitled to it, and CI
@@ -78,7 +79,7 @@ check_running_pipelines() {
   echo "WARNING: pipelines are still running in this workspace:"
   printf '%s\n' "$rows"
   echo
-  echo "         Installing reloads the VS Code window, which ABORTS them —"
+  echo "         The install does not reload, but the window reload it needs ABORTS them —"
   echo "         each one restarts from scratch and re-spends its planning."
   echo "         To finish them first:"
   echo "           nightgauge autonomous stop      # autonomous: stops admitting, lets slots finish"

@@ -360,10 +360,45 @@ describe("DiscordService retry and flush", () => {
 
     await service.initialize();
     stageStartHandler!({ stage: "issue-pickup", issueNumber });
+    // The embed is posted once the run proceeds past pickup (#2914).
+    stageStartHandler!({ stage: "feature-planning", issueNumber });
 
     // Wait for the async handleStageStart to complete
     await vi.advanceTimersByTimeAsync(0);
   }
+
+  // #2914: a run that defers at issue-pickup must post nothing.
+  describe("deferred-at-pickup runs (#2914)", () => {
+    it("makes no request when a pickup-only run finalizes deferred", async () => {
+      pss.getState.mockResolvedValue(makeState(42));
+      await service.initialize();
+      stageStartHandler!({ stage: "issue-pickup", issueNumber: 42 });
+      await vi.advanceTimersByTimeAsync(0);
+      stateChangedHandler!(makeState(42, "deferred"));
+      runFinalizedHandler!(makeState(42, "deferred"));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("posts exactly once when the run proceeds to feature-planning", async () => {
+      await simulateIssuePickup(42);
+      await vi.advanceTimersByTimeAsync(0);
+      const posts = fetchMock.mock.calls.filter((c: any[]) => c[1]?.method === "POST");
+      expect(posts).toHaveLength(1);
+    });
+
+    it("still posts once when pickup itself fails", async () => {
+      pss.getState.mockResolvedValue(makeState(42, "failed"));
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({ id: "msg-42" }) });
+      await service.initialize();
+      stageStartHandler!({ stage: "issue-pickup", issueNumber: 42 });
+      await vi.advanceTimersByTimeAsync(0);
+      runFinalizedHandler!(makeState(42, "failed"));
+      await vi.advanceTimersByTimeAsync(0);
+      const posts = fetchMock.mock.calls.filter((c: any[]) => c[1]?.method === "POST");
+      expect(posts).toHaveLength(1);
+    });
+  });
 
   // Helper: mark run as final via state change
   async function markFinal(issueNumber: number, outcomeType = "productive"): Promise<void> {
@@ -976,6 +1011,7 @@ describe("DiscordService retry and flush", () => {
       });
       await service.initialize();
       stageStartHandler!({ stage: "issue-pickup", issueNumber });
+      stageStartHandler!({ stage: "feature-planning", issueNumber });
       await vi.advanceTimersByTimeAsync(0);
     }
 

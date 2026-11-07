@@ -103,12 +103,15 @@ import { readEffectiveConfigTextSync } from "./mergedConfigReader";
 import { shouldEmitSnapshot } from "./budgetStreamEnforcement";
 import { resolveExtensionBundleRoot } from "./extensionBundle";
 import { BinaryResolver } from "../services/BinaryResolver";
+import { resolveBinaryDiscoveryEnv } from "./binaryDiscoveryEnv";
 import { killProcessTree, DescendantTracker } from "./processTree";
+import { ClaudePluginGate } from "./claudePluginGate";
 import {
   StageBudgetEnforcer,
   getStageBudgetResolver,
   resolveStageBudgets,
   stageBudgetErrorMessage,
+  queueWaitExcludedMs,
   stageBudgetUnresolvedMessage,
   terminateStageProcessTree,
   type StageBudgetBreach,
@@ -211,10 +214,12 @@ import {
 import { isCostAwareRoutingEnabled, getCostPerSuccessContext } from "./costAwareRouting";
 import { withBehavioralPreamble } from "./behavioralPreamble";
 import type { KillCeiling } from "./killCeiling";
-import { formatKillCeilingValue, msLimit } from "./killCeiling";
+import { formatKillCeilingValue, killReportIdleMs, msLimit } from "./killCeiling";
 import {
   ProgressMonitor,
   applyBackgroundTaskEvent,
+  applyConnectivityResume,
+  syncBackgroundTasks,
   recordToolCallProgress,
   isBlindMonitorKill,
 } from "./progressMonitor";
@@ -247,6 +252,7 @@ import {
   type AutoRouterOptions,
 } from "./resolvers/adapterResolver";
 import { resolveMainRepoRoot } from "./adaptiveBudgetLoader";
+import { withoutLaunchingSessionEnv } from "./launchingSessionEnv";
 
 // Re-export for consumers
 export type { ParsedTokenUsage, RateLimitEventData } from "./tokenParser";
@@ -576,6 +582,11 @@ export interface SkillRunResult {
    */
   servedEffort?: string;
   servedThinking?: string;
+  /**
+   * The Nightgauge plugin version the stage's `system/init` reported (#2723).
+   * Undefined when the adapter is not Claude or the plugin did not load.
+   */
+  pluginVersion?: string;
   /**
    * The CLI's silent model swap after a safety refusal, when one was
    * observed (#91). Attribution + notification only — never used to retry.
@@ -2066,6 +2077,18 @@ export function setRunningWorktreePathsProvider(provider: (() => readonly string
   runningWorktreePathsProvider = provider;
 }
 
+/**
+ * Whether this is a packaged extension, rather than an Extension Development or
+ * Test host. Only `activate` holds `ExtensionMode`, so it reports it here.
+ * Unset reads as packaged: a missed call fails toward the bundle (#2718).
+ */
+let packagedExtensionHost = true;
+
+/** Record the host's mode. Called first in `activate`. */
+export function setExtensionIsPackaged(packaged: boolean): void {
+  packagedExtensionHost = packaged;
+}
+
 function resolveRunningWorktreePaths(): string[] {
   try {
     return [...(runningWorktreePathsProvider?.() ?? [])];
@@ -2770,7 +2793,7 @@ export const STALL_NUDGE_GRACE_MS = 60_000;
 export type StallKillPath = "idle" | "hard_cap" | "quota" | "none";
 
 export interface StallKillTickInputs {
-  /** ms since the last stdout/stderr chunk from the subprocess. */
+  /** ms since the last output or live work (background task, tool call, declared process). */
   idleMs: number;
   /** Idle threshold; 0 disables the idle gate entirely (cold start). */
   stallKillMs: number;
@@ -3225,24 +3248,44 @@ export function getStageLabel(stage: RunnableStage): string {
 }
 
 /**
+ * The binary to spawn for a `nightgauge` verb from this host.
+ *
+ * Tiers 1-3 read a VSCode setting and the extension bundle. Either can be
+ * unavailable — during activation, or in a host that is not the extension
+ * host at all — and that is precisely what BinaryResolver's PATH tier is
+ * for. Fall back to the bare name rather than failing the stage on a
+ * resolver that could not answer.
+ */
+function skillBinary(): string {
+  try {
+    return BinaryResolver.fromVSCode().resolveSync() ?? "nightgauge";
+  } catch {
+    return "nightgauge";
+  }
+}
+
+/**
  * Skill roots for this host, in search order (first match wins).
  *
- * Skill LOCATION is deliberately the host's job (ADR 016 §4): the binary
- * cannot reproduce this discovery, because the bundle path depends on the
- * VSCode extension host and carries the garbage-collected-bundle self-heal
- * from #3883. Everything DOWNSTREAM of location — frontmatter, `_includes`,
- * overlays, path rewriting — belongs to `nightgauge skill render`.
- *
  * A root is a directory CONTAINING skill directories, not a SKILL.md path.
+ *
+ * This gathers what only the extension host knows and takes the answer from
+ * `nightgauge skill roots`, the one implementation of the order (#2718, ADR 016
+ * amendment): the bundle path, with the #3883 self-heal, and whether this is a
+ * Development or Test host. The operator's override reaches the binary through
+ * the inherited environment. Keep ordering out of this function.
+ *
+ * `workspaceRoot` is the root the run is pinned to, which on a pipeline run is
+ * the per-issue worktree; without one, the first workspace folder.
+ *
+ * Throws on failure rather than ordering locally. A second implementation is
+ * the drift this replaced, and a stage cannot render without the binary anyway.
  */
-export function resolveSkillRoots(): string[] {
-  const roots: string[] = [];
-
-  // The nightgauge source repo's own skills/ (dev mode / dogfooding).
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (workspaceRoot) {
-    roots.push(path.join(workspaceRoot, "skills"));
-  }
+export function resolveSkillRoots(
+  workspaceRoot: string | undefined = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+): string[] {
+  const args = ["skill", "roots", "--json"];
+  if (workspaceRoot) args.push("--workspace", workspaceRoot);
 
   // Skills bundled inside the extension's dist/. This is how standalone repos
   // (customers) find pipeline skills without the nightgauge source repo as a
@@ -3250,11 +3293,136 @@ export function resolveSkillRoots(): string[] {
   // (auto-update GC): resolve to VS Code's recorded sibling bundle (#3883, #360).
   const ext = vscode.extensions.getExtension("nightgauge.nightgauge");
   const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
-  if (bundleRoot) {
-    roots.push(path.join(bundleRoot, "dist", "skills"));
+  if (bundleRoot) args.push("--bundle", path.join(bundleRoot, "dist", "skills"));
+
+  if (!packagedExtensionHost) args.push("--workspace-first");
+
+  let stdout: string;
+  try {
+    stdout = execFileSync(skillBinary(), args, { encoding: "utf-8" });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`skill roots failed: ${detail}`, { cause: err });
   }
 
-  return roots;
+  let roots: unknown;
+  try {
+    roots = (JSON.parse(stdout) as { roots?: unknown }).roots;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`skill roots returned unparseable output: ${detail}`, { cause: err });
+  }
+  if (!Array.isArray(roots) || !roots.every((root) => typeof root === "string")) {
+    throw new Error("skill roots returned no roots list");
+  }
+  return roots as string[];
+}
+
+/**
+ * Claude flags that make the resolved skills tree readable under a default
+ * user's permissions, with file-tool writes to it denied (#2718). The same
+ * contract as claudeSkillsDirArgs in internal/execution/adapters/claude.go,
+ * including one Edit rule per path form, why Edit alone stops file writes, and
+ * its reason for skipping a tree inside the stage's working directory.
+ */
+export function claudeSkillsDirArgs(skillPath: string, cwd: string | undefined): string[] {
+  // The binary locates <root>/<dir>/SKILL.md or <root>/<dir>.md.
+  const skillDir = path.dirname(skillPath);
+  const root = path.basename(skillPath) === "SKILL.md" ? path.dirname(skillDir) : skillDir;
+  if (!path.isAbsolute(root) || isPathWithin(root, cwd)) {
+    return [];
+  }
+  const deny = skillsTreeForms(root).map(
+    (form) => `Edit(//${form.split(path.sep).join("/").replace(/^\/+/, "")}/**)`
+  );
+  return ["--add-dir", root, "--disallowedTools", deny.join(",")];
+}
+
+/** Variable a stage is handed the run's knowledge base in, as KnowledgeDirEnvVar in Go. */
+export const KNOWLEDGE_DIR_ENV_VAR = "NIGHTGAUGE_KNOWLEDGE_DIR";
+
+/**
+ * The run's knowledge base: the MAIN checkout's `.nightgauge/knowledge`,
+ * absolute — the twin of config.KnowledgeBaseDir in Go (#2798). A worktree
+ * resolves to its main checkout through the in-tree marker or the recorded
+ * worktree, else through git's common dir; a main checkout or a non-git dir
+ * resolves to itself. `""` when there is no workspace root.
+ */
+export function stageKnowledgeDir(workspaceRoot: string | undefined): string {
+  if (!workspaceRoot) return "";
+  const norm = path.resolve(workspaceRoot);
+  let root = resolveMainRepoRoot(norm);
+  if (root === norm) {
+    try {
+      const out = execFileSync(
+        "git",
+        ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+        { cwd: norm, encoding: "utf-8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }
+      );
+      const [gitDir, commonDir] = String(out ?? "")
+        .trim()
+        .split("\n");
+      if (gitDir && commonDir && path.resolve(gitDir) !== path.resolve(commonDir)) {
+        root = path.dirname(path.resolve(commonDir));
+      }
+    } catch {
+      // Not a checkout, or git unavailable: the dir itself, as KnowledgeBaseDir.
+    }
+  }
+  return path.join(root, ".nightgauge", "knowledge");
+}
+
+/**
+ * Claude flags that make the knowledge base a working directory, so a stage in
+ * a worktree can write PRD/decisions/lessons into the main checkout (#2798).
+ * The twin of claudeKnowledgeDirArgs in internal/execution/adapters/claude.go.
+ */
+export function claudeKnowledgeDirArgs(knowledgeDir: string): string[] {
+  return knowledgeDir ? ["--add-dir", knowledgeDir] : [];
+}
+
+/** `env` with the knowledge-dir variable set to `dir`, or removed when `dir` is empty. */
+function interactiveKnowledgeEnv(env: NodeJS.ProcessEnv, dir: string): NodeJS.ProcessEnv {
+  const out = { ...env };
+  if (dir) out[KNOWLEDGE_DIR_ENV_VAR] = dir;
+  else delete out[KNOWLEDGE_DIR_ENV_VAR];
+  return out;
+}
+
+/** Top-level system symlinks a path is reached through, as openCodeSystemAliases. */
+const SYSTEM_PATH_ALIASES = ["/tmp"];
+
+/**
+ * Every form in which a tool call can name `root`: as given, resolved through
+ * symlinks, and the resolved form re-rooted on a system alias. /private/tmp/x is
+ * also /tmp/x on macOS. Realpath cannot find an alias form, which points AT the
+ * path rather than out of it. Matches openCodePathForms in opencode_guard.go.
+ */
+function skillsTreeForms(root: string): string[] {
+  const resolved = resolvedPath(root);
+  const forms = [path.normalize(root), resolved];
+  for (const alias of SYSTEM_PATH_ALIASES) {
+    const target = resolvedPath(alias);
+    if (target === alias) continue;
+    if (resolved === target || resolved.startsWith(`${target}${path.sep}`)) {
+      forms.push(path.join(alias, path.relative(target, resolved)));
+    }
+  }
+  return [...new Set(forms)];
+}
+
+function isPathWithin(candidate: string, dir: string | undefined): boolean {
+  if (!dir) return false;
+  const rel = path.relative(resolvedPath(dir), resolvedPath(candidate));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+function resolvedPath(target: string): string {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return target;
+  }
 }
 
 /**
@@ -3264,11 +3432,24 @@ export function resolveSkillRoots(): string[] {
  * which need the PATH rather than the composed text. The stage-execution paths
  * do NOT use this — they pass `resolveSkillRoots()` to the binary and take the
  * resolved path back from the render envelope, so location is answered once.
+ *
+ * @param workspaceRoot - The run's pinned root (its worktree). Omitted, the
+ *   roots fall back to the first workspace folder, which is only right for a
+ *   caller with no pinned run (#2799).
  */
-export function findSkillFile(stage: PipelineStage): string | null {
+export function findSkillFile(stage: PipelineStage, workspaceRoot?: string): string | null {
   const skillDir = STAGE_TO_SKILL_DIR[stage];
 
-  for (const root of resolveSkillRoots()) {
+  let roots: string[];
+  try {
+    roots = resolveSkillRoots(workspaceRoot);
+  } catch (err) {
+    // Keep the null contract for schema repair and SkillLoader, but name the
+    // cause: a broken binary is not a missing skill.
+    console.warn(`findSkillFile(${stage}): ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+  for (const root of roots) {
     const skillPath = path.join(root, skillDir, "SKILL.md");
     if (fs.existsSync(skillPath)) {
       return skillPath;
@@ -3336,24 +3517,15 @@ export function renderSkill(
   stage: PipelineStage,
   model?: string,
   adapter?: string,
-  headless = false
+  headless = false,
+  workspaceRoot?: string
 ): RenderedSkill {
-  const roots = resolveSkillRoots();
+  const roots = resolveSkillRoots(workspaceRoot);
   if (roots.length === 0) {
     throw new Error(`No skills root available for stage ${stage} (no workspace folder, no bundle)`);
   }
 
-  // Tiers 1-3 read a VSCode setting and the extension bundle. Either can be
-  // unavailable — during activation, or in a host that is not the extension
-  // host at all — and that is precisely what BinaryResolver's PATH tier is
-  // for. Fall back to the bare name rather than failing the stage on a
-  // resolver that could not answer.
-  let binary = "nightgauge";
-  try {
-    binary = BinaryResolver.fromVSCode().resolveSync() ?? binary;
-  } catch {
-    // Keep the PATH name.
-  }
+  const binary = skillBinary();
   const args = ["skill", "render", "--stage", stage, "--json", "--include-content"];
   if (model) args.push("--model", model);
   if (adapter) args.push("--adapter", adapter);
@@ -3874,9 +4046,10 @@ export function resolveTokenForSubprocess(
  * reproducing on CLI 2.1.186 — three multi-turn replay runs with thinking
  * enabled (up to 26 turns / 9 replayed blocks) completed without a 400; see
  * docs/PIPELINE_EXECUTION.md § Spawn Environment Inheritance. Every Claude
- * spawn spreads `...process.env` first, so an operator on an older CLI can
- * restore the workaround without a rebuild: export
- * CLAUDE_CODE_DISABLE_THINKING=1.
+ * spawn starts from the host env less the launching session's residue
+ * (withoutLaunchingSessionEnv, #2848), which keeps this name as an explicit
+ * exception, so an operator on an older CLI can restore the workaround without
+ * a rebuild: export CLAUDE_CODE_DISABLE_THINKING=1.
  * Mirrors the Go adapters (claude.go / claude_sdk.go).
  */
 
@@ -4099,38 +4272,81 @@ Stage: ${getStageLabel(stage)}\n\n`;
  * product workspace) that path does not exist, so the safety hooks were silently
  * absent and a pr-merge agent was able to push straight to main unguarded.
  *
- * Resolution order:
- *   1. Any workspace folder that has a live `claude-plugins/nightgauge`
- *      (dogfooding the nightgauge repo — live hooks win so edits apply
- *      without a republish).
- *   2. The extension's bundled `dist/claude-plugins/nightgauge` (ships in
- *      every VSIX — the universal fallback that guarantees customer repos and
- *      non-nightgauge workspaces still get the guards).
- *   3. undefined — only when neither is found (dev shell with no extension).
+ * Resolution order (#2723, the #2718 rule for hooks: a build runs what it shipped):
+ *   - A packaged extension: its bundled `dist/claude-plugins/nightgauge`, then
+ *     a workspace copy.
+ *   - An Extension Development or Test host: a workspace copy, so hook edits
+ *     apply without a republish, then the bundle.
+ *   - undefined when neither is found.
  */
 export function resolvePluginRoot(): string | undefined {
-  const hasHooks = (root: string): boolean => fs.existsSync(path.join(root, "hooks", "hooks.json"));
+  const bundled = bundledPluginRoot();
+  if (packagedExtensionHost && bundled) {
+    return bundled;
+  }
+  return workspacePluginRoot() ?? bundled;
+}
 
-  // 1. Prefer a live workspace copy (any folder, not just [0]).
+/** The plugin hooks a directory must hold to count as the plugin. */
+function hasPluginHooks(root: string): boolean {
+  return fs.existsSync(path.join(root, "hooks", "hooks.json"));
+}
+
+/** The first workspace folder's live `claude-plugins/nightgauge`, any folder. */
+function workspacePluginRoot(): string | undefined {
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
     const candidate = path.join(folder.uri.fsPath, "claude-plugins", "nightgauge");
-    if (hasHooks(candidate)) {
+    if (hasPluginHooks(candidate)) {
       return candidate;
     }
   }
+  return undefined;
+}
 
-  // 2. Fall back to the hooks bundled inside the extension's dist/ — always
-  //    present, so non-nightgauge workspaces still get the safety guards.
+/** The plugin the extension's dist/ ships. */
+function bundledPluginRoot(): string | undefined {
   const ext = vscode.extensions.getExtension("nightgauge.nightgauge");
   const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
-  if (bundleRoot) {
-    const bundled = path.join(bundleRoot, "dist", "claude-plugins", "nightgauge");
-    if (hasHooks(bundled)) {
-      return bundled;
-    }
-  }
+  if (!bundleRoot) return undefined;
+  const bundled = path.join(bundleRoot, "dist", "claude-plugins", "nightgauge");
+  return hasPluginHooks(bundled) ? bundled : undefined;
+}
 
-  return undefined;
+/**
+ * What a Claude spawn loads and how strictly it is held to it (#2723). `bundled`
+ * makes the stage's plugin gate stop instead of warn: a packaged build whose own
+ * bundle is the directory being loaded.
+ */
+export function resolveClaudePlugin(): { dir: string | undefined; bundled: boolean } {
+  const dir = resolvePluginRoot();
+  return {
+    dir,
+    bundled: packagedExtensionHost && dir !== undefined && dir === bundledPluginRoot(),
+  };
+}
+
+/** Claude flags that load the plugin, the twin of claudePluginDirArgs in claude.go. */
+export function claudePluginDirArgs(dir: string | undefined): string[] {
+  return dir ? ["--plugin-dir", dir] : [];
+}
+
+/**
+ * Stop a Claude process its plugin gate refused (#2723): SIGTERM now, then
+ * SIGKILL to the whole tree, as the stall kill does, so a child cannot outlive it.
+ */
+function stopClaudeForPluginGate(proc: ChildProcess, onStderr?: (data: string) => void): void {
+  proc.kill("SIGTERM");
+  const killTimer = setTimeout(() => {
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      /* already dead */
+    }
+    if (proc.pid) {
+      void killProcessTree(proc.pid, "SIGKILL", onStderr);
+    }
+  }, 5000);
+  proc.on("exit", () => clearTimeout(killTimer));
 }
 
 /**
@@ -4174,50 +4390,6 @@ export function reconcileOpenCodeSpawnEnv(env: NodeJS.ProcessEnv, model: string 
  * SDK builds the `opencode` process's env, not here.
  */
 const NIGHTGAUGE_NAMESPACE = "NIGHTGAUGE_";
-
-/**
- * Resolve the nightgauge Go binary and return env vars that make it
- * discoverable to skill subprocesses under ANY adapter (Claude, Codex, Gemini,
- * …) — Issue #4029.
- *
- * The extension bundles the binary at `<extensionPath>/dist/bin/…`, which is
- * NOT on the subprocess PATH. Skills historically located it by globbing the
- * `~/.vscode/extensions/nightgauge.<version>/dist/bin/` directory — a
- * VSCode-extension-specific path that breaks portability (and missed the
- * published, platform-suffixed binary). Instead the host now resolves the
- * binary authoritatively (BinaryResolver) and exports:
- *   - `NIGHTGAUGE_BIN` — absolute path, honored first by the skill cascade
- *     and `claude-plugins/.../guard.sh`.
- *   - `PATH` — with the binary's dir prepended so bare `nightgauge …` and
- *     `command -v nightgauge` resolve in every provider's shell.
- *
- * Returns `{}` when the binary is already on PATH (BinaryResolver's filesystem
- * tiers miss) — the skill's own `command -v` cascade covers that case — or when
- * resolution throws (defensive: never block a stage spawn over discovery).
- */
-function resolveBinaryDiscoveryEnv(): Record<string, string> {
-  try {
-    const binaryPath = BinaryResolver.fromVSCode().resolveSync();
-    if (!binaryPath) return {};
-    // Only export a path we can actually execute. If it exists but lacks the
-    // execute bit, fall through to the skill's own cascade (which guards on
-    // `[ -x ]`) rather than exporting a misleading NIGHTGAUGE_BIN.
-    try {
-      fs.accessSync(binaryPath, fs.constants.X_OK);
-    } catch {
-      return {};
-    }
-    const binDir = path.dirname(binaryPath);
-    const sep = process.platform === "win32" ? ";" : ":";
-    const currentPath = process.env.PATH ?? "";
-    return {
-      NIGHTGAUGE_BIN: binaryPath,
-      PATH: currentPath ? `${binDir}${sep}${currentPath}` : binDir,
-    };
-  } catch {
-    return {};
-  }
-}
 
 const loadedUnderVitest = process.env.VITEST === "true";
 
@@ -4755,6 +4927,7 @@ function runStageSkillHeadlessImpl(
   // rendered, so it only needs frontmatter extraction and the one path
   // rewrite; the disk path gets both from the binary.
   let skillDir: string;
+  let renderedSkillPath: string;
   let skillData: {
     content: string;
     allowedTools: string[];
@@ -4769,8 +4942,9 @@ function runStageSkillHeadlessImpl(
   // allowed-tools: empty when it declares none.
   let headlessDeclaredTools: string[];
   try {
-    const rendered = renderSkill(stage, modelDecision.model, adapter, true);
+    const rendered = renderSkill(stage, modelDecision.model, adapter, true, workspaceRoot);
     skillDir = rendered.skillDir;
+    renderedSkillPath = rendered.skillPath;
     skillSource = rendered.skillPath;
     if (injectedSkillContent) {
       const parsed = parseSkillContent(injectedSkillContent);
@@ -4791,6 +4965,7 @@ function runStageSkillHeadlessImpl(
     // The render above is headless, so the binary already refused a disk
     // skill left with no tool; an injected skill is refused here (#2390).
     headlessDeclaredTools = filterHeadlessTools(skillData.declaredAllowedTools, skillSource);
+    callbacks?.onStderr?.(`[skillRunner] skill_path=${skillSource}\n`);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     callbacks?.onError?.(error);
@@ -4858,8 +5033,14 @@ function runStageSkillHeadlessImpl(
   // guess. The ServedModel analogue, reported through pipeline.stageResult.
   let dispatchedEffort: string | undefined;
 
+  // The plugin a Claude stage loads and proves it loaded (#2723). Null for every
+  // other adapter.
+  let pluginGate: ClaudePluginGate | null = null;
+
   if (adapter === "claude") {
     const authProvider = getAuthProvider(workspaceRoot);
+    const claudePlugin = resolveClaudePlugin();
+    pluginGate = new ClaudePluginGate(claudePlugin.bundled);
     args = [
       "-p",
       "--no-session-persistence",
@@ -4868,6 +5049,9 @@ function runStageSkillHeadlessImpl(
       "--verbose",
       "--allowedTools",
       allAllowedTools.join(","),
+      ...claudeSkillsDirArgs(renderedSkillPath, workspaceRoot),
+      ...claudeKnowledgeDirArgs(stageKnowledgeDir(workspaceRoot)),
+      ...claudePluginDirArgs(claudePlugin.dir),
     ];
 
     if (authProvider === "bedrock") {
@@ -5435,8 +5619,8 @@ function runStageSkillHeadlessImpl(
 
   // Compute absolute CLAUDE_PLUGIN_ROOT so hook scripts (wait-for-ci-checks.sh,
   // fetch-ci-failure-logs.sh, the push-to-main guard, etc.) are always found
-  // regardless of which repo is the active working directory. Resolves to a
-  // live workspace copy when present, else the extension's bundled hooks — so
+  // regardless of which repo is the active working directory. Resolves to the
+  // extension's bundled hooks on a packaged host, so
   // non-nightgauge workspaces (platform, dashboard, customer repos, the
   // acmeapp incident) still load the deterministic safety guards instead of
   // pointing CLAUDE_PLUGIN_ROOT at a non-existent path. @see resolvePluginRoot
@@ -5596,8 +5780,9 @@ function runStageSkillHeadlessImpl(
   // Composed as a named object rather than inline in the spawn call because the
   // run-identity reconcile below is a DELETION, and a spread cannot express one
   // (see #370 / ADR-017).
+  const knowledgeDir = stageKnowledgeDir(workspaceRoot);
   const spawnEnv: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...withoutLaunchingSessionEnv(),
     // Export the resolved Go binary (NIGHTGAUGE_BIN + PATH prepend) so
     // skill subprocesses discover it under any adapter without a
     // VSCode-extension-specific glob (Issue #4029). Spread before the other
@@ -5643,6 +5828,8 @@ function runStageSkillHeadlessImpl(
     // `nightgauge knowledge stamp --stage` builds its provenance actor from
     // NIGHTGAUGE_DISPATCH_MODEL and fails without it (#2576).
     ...(launchedModel ? { NIGHTGAUGE_DISPATCH_MODEL: launchedModel } : {}),
+    // The run's knowledge base, at parity with the Go adapters (#2798).
+    ...(knowledgeDir ? { [KNOWLEDGE_DIR_ENV_VAR]: knowledgeDir } : {}),
     NIGHTGAUGE_STAGE: stage,
   };
 
@@ -5660,6 +5847,10 @@ function runStageSkillHeadlessImpl(
   // this child's provenance actor when no model was launched here (#2576).
   if (!launchedModel) {
     delete spawnEnv.NIGHTGAUGE_DISPATCH_MODEL;
+  }
+  // And for the knowledge base: never an outer run's (#2798).
+  if (!knowledgeDir) {
+    delete spawnEnv[KNOWLEDGE_DIR_ENV_VAR];
   }
 
   // The OpenCode stage's inherited overrides and foreign credentials go, and a
@@ -5900,6 +6091,23 @@ function runStageSkillHeadlessImpl(
   let stdoutBuffer = "";
   let stderrBuffer = "";
   let stdoutRawTail = "";
+
+  // Reads each message into the plugin gate (#2723). Its notice goes into
+  // stderrBuffer because that is what classifies the failure.
+  const observePluginGate = (parsed: ReturnType<typeof parseStreamJsonLine>): boolean => {
+    const stop = pluginGate?.observe(parsed) ?? false;
+    const notice = pluginGate?.takeNotice();
+    if (notice) {
+      stderrBuffer = appendTail(stderrBuffer, `${notice}\n`, OUTPUT_ERROR_TAIL_MAX_CHARS);
+      callbacks?.onStderr?.(`${notice}\n`);
+    }
+    if (stop) {
+      exitSignal = "SIGTERM";
+      exitSignalSource = "gate-plugin-missing";
+      stopClaudeForPluginGate(proc, callbacks?.onStderr);
+    }
+    return stop;
+  };
 
   // Buffer for phase marker detection in streaming text content.
   // Phase markers are HTML comments emitted by skills in content_block_delta
@@ -6300,6 +6508,18 @@ function runStageSkillHeadlessImpl(
   const stageBudgetEnforcer = new StageBudgetEnforcer({
     format: adapter === "claude" ? "claude" : "sdk",
     onBreach: (breach: StageBudgetBreach) => stopStageForBudget(stageBudgetErrorMessage(breach)),
+    // pr-merge's wait after its PR reached the merge queue is the queue's CI
+    // run, not the stage's work (#2770): the wall clock leaves out what the
+    // stage's own `nightgauge pr merge --issue` recorded.
+    ...(stage === "pr-merge" &&
+    issueNumber &&
+    issueNumber > 0 &&
+    isUsableWorkspaceRoot(workspaceRoot)
+      ? {
+          excludedMs: (sinceMs: number) =>
+            queueWaitExcludedMs(skillBinary(), workspaceRoot, issueNumber, sinceMs),
+        }
+      : {}),
   });
   stageBudgetEnforcer.start();
   const armStageBudget = (budgets: StageBudgets, logWarnings: boolean): void => {
@@ -6356,6 +6576,8 @@ function runStageSkillHeadlessImpl(
   // Initialised to startedAtMs so the first idle window is measured from
   // process start, matching pre-split behaviour for genuinely silent stages.
   let lastChunkAtMs = startedAtMs;
+  // Last stall tick that saw live work: a task, tool call or declared process (#2711).
+  let lastLiveWorkAtMs = startedAtMs;
 
   // Connectivity-aware stall gating (Issue #3203). When ConnectivityStateBus
   // reports the network is offline, the subagent is almost certainly blocked
@@ -6525,6 +6747,13 @@ function runStageSkillHeadlessImpl(
   stallTicker = setInterval(() => {
     const elapsed = Date.now() - startedAtMs;
     const idleMs = Date.now() - lastChunkAtMs;
+    // A stage waiting on a live gate is silent, not idle (#2711). The soft
+    // kills measure from the last tick with live work, so the budget resumes
+    // when the task ends, and the ceiling on that task bounds the exemption.
+    if (progressMonitor.isBackgroundWorkLive()) {
+      lastLiveWorkAtMs = Date.now();
+    }
+    const softIdleMs = Math.min(idleMs, Date.now() - lastLiveWorkAtMs);
 
     // Connectivity-aware stall gating (Issue #3203). Suspend kill checks when
     // the network is offline; reset the idle window when connectivity returns.
@@ -6552,6 +6781,11 @@ function runStageSkillHeadlessImpl(
       if (connectivityGate.resetIdleWindow) {
         lastChunkAtMs = Date.now();
       }
+      applyConnectivityResume(
+        progressMonitor,
+        backgroundTaskIds,
+        connectivityGate.offlineDurationMs ?? 0
+      );
       const resumeEvent: StallEvent = {
         timestamp: new Date().toISOString(),
         elapsed_ms: Date.now() - startedAtMs,
@@ -6623,6 +6857,7 @@ function runStageSkillHeadlessImpl(
       lastRateLimitEventAtMs !== undefined
         ? Math.min(idleMs, Date.now() - lastRateLimitEventAtMs)
         : Number.POSITIVE_INFINITY;
+    const softIdleSinceQuotaSignalMs = Math.min(softIdleMs, idleSinceQuotaSignalMs);
 
     // Soft-quota-signal idle fast-fail (Issue #3702). The aggressive gate above
     // only fires on `status: "limited"` — but a soft `allowed_warning` (e.g. the
@@ -6633,9 +6868,8 @@ function runStageSkillHeadlessImpl(
     // streaming and resets the idle clock — but prolonged silence after a
     // quota-PRESSURE signal is a reliable quota-block tell. The budget is capped
     // below `stallKillMs` so a quota signal can only make a stage fail faster,
-    // never slower, and the kill is classified as quota-exhausted (below) so the
-    // scheduler re-arms at the bucket's resetsAt instead of penalizing the
-    // issue's failure cap.
+    // never slower. The kill is booked as a stall (below): silence after a
+    // warning is a guess, and only a hard signal may stop the fleet (#2711).
     //
     // Issue #3825: only a DEGRADED status (`allowed_warning` or `limited`) arms
     // this gate — NOT a plain `status: "allowed"`. The CLI emits `allowed`
@@ -6660,6 +6894,7 @@ function runStageSkillHeadlessImpl(
         quotaExhaustedSignalActive,
         anyQuotaSignalSeen: degradedQuotaSignalSeen,
         idleSinceQuotaSignalMs,
+        softIdleSinceQuotaSignalMs,
         exhaustedFastFailIdleMs: QUOTA_EXHAUSTED_FAST_FAIL_IDLE_MS,
         quotaSignalIdleBudgetMs,
       });
@@ -6857,7 +7092,7 @@ function runStageSkillHeadlessImpl(
     const noProductiveProgress =
       progressMonitor.msSinceLastProductiveProgress > progressRunawayWindowMs;
     const stallDecision = evaluateStallKill({
-      idleMs,
+      idleMs: softIdleMs,
       stallKillMs,
       elapsedMs: effectiveElapsed,
       hardCapMs: effectiveHardCapMs,
@@ -6887,7 +7122,7 @@ function runStageSkillHeadlessImpl(
     }
 
     if (stallDecision.emitNudge) {
-      const nudgeMsg = `[stall-nudge] Stage ${stage} idle for ${formatElapsed(idleMs)}. Waiting ${NUDGE_GRACE_MS / 1000}s before kill.\n`;
+      const nudgeMsg = `[stall-nudge] Stage ${stage} idle for ${formatElapsed(softIdleMs)}. Waiting ${NUDGE_GRACE_MS / 1000}s before kill.\n`;
       stderrBuffer = appendTail(stderrBuffer, nudgeMsg, OUTPUT_ERROR_TAIL_MAX_CHARS);
       callbacks?.onStderr?.(nudgeMsg);
     }
@@ -6913,20 +7148,20 @@ function runStageSkillHeadlessImpl(
       // payload, mis-routing dozens of healthy idle-stalls as quota
       // failures. The Go classifier sees `[rate-limit-quota-exhausted]`
       // only when the bucket truly IS limited.
-      // Issue #3702: classify ANY quota-fast-fail kill as quota-exhausted, not
-      // just the `status: "limited"` case. Both the aggressive 120s gate and the
-      // soft-signal idle gate indicate the stage is wedged behind a quota wall,
-      // so both should route to the Go scheduler's quota-backoff/resume-at-reset
-      // path rather than the generic stall path (which penalizes the issue's
-      // lifetime failure cap and re-fires under the same conditions).
-      const quotaExhausted = !hardCapReached && quotaFastFailReached;
+      // Issue #2711: the soft gate fired on a warning, and no request was
+      // rejected, so it is booked as a stall: backoff, no lifetime-cap charge,
+      // no global cooldown. Only the marker below reaches that cooldown.
+      const quotaExhausted = !hardCapReached && quotaFastFailReached && quotaExhaustedSignalActive;
       // Issue #3425/#3702: when a fast-fail gate fires, the marker's reported
       // idle window is the gate's threshold (120s for `limited`, the capped
       // quota-signal budget otherwise), not the full `stallKillMs` (which would
       // say 80m even when we killed far sooner). Use whichever idle measurement
       // actually triggered the kill.
       const reportedIdleMs = quotaFastFailReached
-        ? Math.max(quotaFastFailThresholdMs, idleSinceQuotaSignalMs)
+        ? Math.max(
+            quotaFastFailThresholdMs,
+            quotaExhaustedSignalActive ? idleSinceQuotaSignalMs : softIdleSinceQuotaSignalMs
+          )
         : stallKillMs;
       const killReason = hardCapReached
         ? timeCapActive
@@ -6934,7 +7169,9 @@ function runStageSkillHeadlessImpl(
           : `exceeded stage_hard_cap (${formatElapsed(effectiveHardCapMs)} total runtime)`
         : quotaExhausted
           ? `[rate-limit-quota-exhausted] idle ${formatElapsed(reportedIdleMs)} after rate_limit_event (status=${lastRateLimitEvent?.status ?? "unknown"}; ${lastRateLimitEvent?.rateLimitType ?? "unknown"} bucket; resetsAt=${lastRateLimitEvent?.resetsAt ?? "unknown"})`
-          : `exceeded stall idle threshold (${formatElapsed(stallKillMs)} without output)`;
+          : quotaFastFailReached
+            ? `[stall-killed] idle ${formatElapsed(reportedIdleMs)} after rate_limit_event (status=${lastRateLimitEvent?.status ?? "unknown"}; ${lastRateLimitEvent?.rateLimitType ?? "unknown"} bucket; resetsAt=${lastRateLimitEvent?.resetsAt ?? "unknown"})`
+            : `exceeded stall idle threshold (${formatElapsed(stallKillMs)} without output)`;
       // Name the ceiling and its resolved value (#161). `signalSource` alone
       // is ambiguous — `hard-cap` covers both `stage_hard_caps` and the
       // zero-cost-adapter `stage_time_caps` fallback, which resolve from
@@ -6966,7 +7203,7 @@ function runStageSkillHeadlessImpl(
           : {
               name: "stall-idle",
               limit: msLimit(stallKillMs),
-              derivation: `idle-kill threshold (source: ${thresholdSource}) — no subprocess output`,
+              derivation: `idle-kill threshold (source: ${thresholdSource}) — no output or live work within its ceiling`,
             };
       const killEvent: StallEvent = {
         timestamp: new Date().toISOString(),
@@ -6991,10 +7228,13 @@ function runStageSkillHeadlessImpl(
       // `[rate-limit-quota-exhausted]` marker (#3386), `[stall-killed]`
       // marker, and any other diagnostic context the autonomous Go
       // scheduler classifies on were all lost between TS and Go (#3406).
+      // A cap kill is not an idle kill: report raw output silence, not the
+      // live-work clock that would show ~0 during background work (#2737).
+      const reportedOutputIdleMs = killReportIdleMs(killCeiling.name, idleMs, softIdleMs);
       const killMarker =
         `[skillRunner] Stage ${killReason} — ` +
         `forcibly terminating process after ${formatElapsed(elapsed)} ` +
-        `(idle for ${formatElapsed(idleMs)}).\n`;
+        `(idle for ${formatElapsed(reportedOutputIdleMs)}).\n`;
       stderrBuffer = appendTail(stderrBuffer, killMarker, OUTPUT_ERROR_TAIL_MAX_CHARS);
       callbacks?.onStderr?.(killMarker);
 
@@ -7008,7 +7248,7 @@ function runStageSkillHeadlessImpl(
           `stage: ${stage}`,
           `issue: ${issueNumber}`,
           `elapsed: ${formatElapsed(elapsed)}`,
-          `idle: ${formatElapsed(idleMs)}`,
+          `idle: ${formatElapsed(reportedOutputIdleMs)}`,
           `kill_reason: ${killReason}`,
           `kill_path: ${
             hardCapReached
@@ -7542,10 +7782,7 @@ function runStageSkillHeadlessImpl(
       }
 
       if (applyBackgroundTaskEvent(line, backgroundTaskIds)) {
-        progressMonitor.setBackgroundTasks(
-          backgroundTaskIds.size,
-          backgroundTaskIds.size > 0 ? Math.min(...backgroundTaskIds.values()) : null
-        );
+        syncBackgroundTasks(progressMonitor, backgroundTaskIds);
       }
 
       // Detect CI progress from wait-for-ci-checks.sh (Issue #902)
@@ -7573,6 +7810,14 @@ function runStageSkillHeadlessImpl(
       }
 
       const parsed = parseStreamJsonLine(line);
+
+      // Nothing after the stop is processed: the stage is being killed (#2723).
+      if (pluginGate?.stopped) {
+        continue;
+      }
+      if (observePluginGate(parsed)) {
+        continue;
+      }
 
       // Served-model attribution (#91): last observed model wins; a refusal
       // fallback event gets one observable log line the moment it fires.
@@ -8038,14 +8283,15 @@ function runStageSkillHeadlessImpl(
     // Orphan reaper: kill any descendants that outlived the parent. Tracked
     // pids were captured periodically while the parent was alive, so we can
     // still reach them after they've been reparented to init (#781 retro).
-    try {
-      descendantTracker.killSurvivors(callbacks?.onStderr);
-    } catch {
+    // Not awaited: it reads each survivor's identity from `ps`, and completion
+    // must not wait on that.
+    void descendantTracker.killSurvivors(callbacks?.onStderr).catch(() => {
       /* best-effort */
-    }
+    });
     // Process any remaining buffered output
-    if (stdoutBuffer) {
+    if (stdoutBuffer && !pluginGate?.stopped) {
       const parsed = parseStreamJsonLine(stdoutBuffer);
+      observePluginGate(parsed);
       observeServedModel(parsed);
       if (parsed?.usage) {
         tokenAccumulator.add(parsed.usage);
@@ -8059,7 +8305,8 @@ function runStageSkillHeadlessImpl(
       }
     }
 
-    const success = exitCode === 0;
+    // A CLI that traps the kill and exits 0 is still a stopped stage (#2723).
+    const success = exitCode === 0 && !pluginGate?.stopped;
     const stderrText = stderrBuffer.trim();
     const stdoutText = appendTail(stdoutRawTail, stdoutBuffer, OUTPUT_ERROR_TAIL_MAX_CHARS).trim();
 
@@ -8391,6 +8638,7 @@ function runStageSkillHeadlessImpl(
       // (honestly unreported, the provider default served).
       servedEffort: dispatchedEffort !== effortOverride ? dispatchedEffort : undefined,
       servedThinking: dispatchedThinking,
+      pluginVersion: pluginGate?.version,
       modelRefusalFallback,
     });
   });
@@ -8575,37 +8823,6 @@ export function runStageSkillHeadless(
   return handle;
 }
 
-export function runStageSkill(
-  stage: PipelineStage,
-  issueNumber?: number,
-  _callbacks?: SkillRunCallbacks
-): vscode.Terminal {
-  const skillDir = STAGE_TO_SKILL_DIR[stage];
-
-  // Build the command
-  let command = `claude /nightgauge:${skillDir.replace("nightgauge-", "")}`;
-  if (issueNumber && stage === "issue-pickup") {
-    command += ` ${issueNumber}`;
-  }
-
-  const terminalName = issueNumber ? `Nightgauge: Issue #${issueNumber}` : "Nightgauge Pipeline";
-
-  // Try to find an existing Nightgauge terminal
-  let terminal = vscode.window.terminals.find((t) => t.name.startsWith("Nightgauge:"));
-
-  if (!terminal) {
-    terminal = vscode.window.createTerminal({
-      name: terminalName,
-      cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-    });
-  }
-
-  terminal.show(true);
-  terminal.sendText(command);
-
-  return terminal;
-}
-
 /**
  * Kill all active skill processes
  */
@@ -8669,6 +8886,10 @@ export function resumeSessionWithResponse(
   callbacks?.onStderr?.(`[skillRunner] Resuming session: ${sessionId}\n`);
   callbacks?.onStderr?.(`[skillRunner] Response: ${response}\n`);
 
+  // A resumed session reads system/init afresh, so it proves its plugin too (#2723).
+  const claudePlugin = resolveClaudePlugin();
+  const pluginGate = new ClaudePluginGate(claudePlugin.bundled);
+
   // Build CLI arguments for resuming
   const args = [
     "-p",
@@ -8678,6 +8899,7 @@ export function resumeSessionWithResponse(
     "--verbose",
     "--resume",
     sessionId,
+    ...claudePluginDirArgs(claudePlugin.dir),
   ];
 
   // Add backend-specific flag based on auth_provider config
@@ -8711,7 +8933,7 @@ export function resumeSessionWithResponse(
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      ...process.env,
+      ...withoutLaunchingSessionEnv(),
       ...stageCIEnv(),
     },
   });
@@ -8758,6 +8980,18 @@ export function resumeSessionWithResponse(
     }
   };
 
+  const observePluginGate = (parsed: ReturnType<typeof parseStreamJsonLine>): boolean => {
+    const stop = pluginGate.observe(parsed);
+    const notice = pluginGate.takeNotice();
+    if (notice) {
+      callbacks?.onStderr?.(`${notice}\n`);
+    }
+    if (stop) {
+      stopClaudeForPluginGate(proc, callbacks?.onStderr);
+    }
+    return stop;
+  };
+
   // Handle stdout
   proc.stdout?.on("data", (data: Buffer) => {
     const text = data.toString();
@@ -8769,6 +9003,9 @@ export function resumeSessionWithResponse(
 
     for (const line of lines) {
       const parsed = parseStreamJsonLine(line);
+      if (pluginGate.stopped || observePluginGate(parsed)) {
+        continue;
+      }
       observeServedModel(parsed);
       if (parsed?.usage) {
         tokenAccumulator.add(parsed.usage);
@@ -8808,8 +9045,9 @@ export function resumeSessionWithResponse(
 
   // Handle completion
   proc.on("close", (exitCode) => {
-    if (stdoutBuffer) {
+    if (stdoutBuffer && !pluginGate.stopped) {
       const parsed = parseStreamJsonLine(stdoutBuffer);
+      observePluginGate(parsed);
       observeServedModel(parsed);
       if (parsed?.usage) {
         tokenAccumulator.add(parsed.usage);
@@ -8828,13 +9066,15 @@ export function resumeSessionWithResponse(
     const bookedUsage = resolveStageBookedUsage(tokenAccumulator, liveEstimator);
     activeProcesses.delete(processKey);
     callbacks?.onComplete?.({
-      success: exitCode === 0,
+      success: exitCode === 0 && !pluginGate.stopped,
       exitCode,
+      ...(pluginGate.stopped ? { error: new Error(pluginGate.notice) } : {}),
       tokenUsage: bookedUsage?.usage,
       costEstimated: bookedUsage?.estimated || undefined,
       sessionId: capturedSessionId,
       // #91 served-model attribution (diverged-only, like the stage path).
       servedModel: servedModel && servedModel !== defaultModel ? servedModel : undefined,
+      pluginVersion: pluginGate.version,
       modelRefusalFallback,
     });
   });
@@ -9201,6 +9441,7 @@ function launchCodexInteractiveTerminal(
   const terminal = vscode.window.createTerminal({
     name: terminalName,
     cwd: workspaceRoot,
+    env: resolveBinaryDiscoveryEnv(),
     shellPath: launch.shellPath,
     shellArgs: launch.shellArgs,
   });
@@ -9344,7 +9585,8 @@ export function runStageSkillInteractive(
   // renders base-only, which ADR 016 §2 defines as the fail-open result.
   let skillData: RenderedSkill;
   try {
-    skillData = renderSkill(stage);
+    skillData = renderSkill(stage, undefined, undefined, false, workspaceRoot);
+    callbacks?.onStderr?.(`[skillRunner] skill_path=${skillData.skillPath}\n`);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     callbacks?.onError?.(error);
@@ -9426,11 +9668,21 @@ export function runStageSkillInteractive(
   // Get auth provider from config (Issue #511)
   const authProvider = getAuthProvider(workspaceRoot);
 
+  const interactiveKnowledgeDir = stageKnowledgeDir(workspaceRoot);
+
   // Build CLI arguments for interactive mode
   // NO -p flag (keeps stdin open for conversation)
   // NO --output-format stream-json (raw text output)
   // NO --no-session-persistence (session can persist for multi-turn)
-  const args = ["--verbose", "--allowedTools", allInteractiveAllowedTools.join(",")];
+  const args = [
+    "--verbose",
+    "--allowedTools",
+    allInteractiveAllowedTools.join(","),
+    ...claudeSkillsDirArgs(skillData.skillPath, workspaceRoot),
+    ...claudeKnowledgeDirArgs(interactiveKnowledgeDir),
+    // No stream here, so this path passes the flag with no init check (#2723).
+    ...claudePluginDirArgs(resolveClaudePlugin().dir),
+  ];
 
   // Add backend-specific flag based on auth_provider config (Issue #511)
   // Default behavior ('max') requires no additional flag
@@ -9459,7 +9711,7 @@ export function runStageSkillInteractive(
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      ...process.env,
+      ...interactiveKnowledgeEnv(withoutLaunchingSessionEnv(), interactiveKnowledgeDir),
       ...autoAcceptEnv,
     },
   });

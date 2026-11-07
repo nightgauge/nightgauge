@@ -186,7 +186,10 @@ export function classifyFailureCategory(
     // Stall-killed after adaptive retry exhausted (Issue #3005). The first
     // stall already consumed its rewind slot; a second stall is terminal but
     // the underlying cause is still agent-class.
-    t.includes("stall-killed-after-retry")
+    t.includes("stall-killed-after-retry") ||
+    // Stopped at the stage's runtime cap (#2812): stall-class by recovery.
+    t.includes("[stage-cap-killed]") ||
+    t.includes("stage-cap-killed-after-retry")
   ) {
     return "agent";
   }
@@ -211,6 +214,7 @@ export function classifyFailureCategory(
  */
 export type TerminalFailureKind =
   | "stall_kill"
+  | "stage_cap_kill" // Issue #2812 — stopped at stage_hard_caps or stage_time_caps; recovers like stall_kill
   | "budget_exceeded"
   | "validation_error"
   | "subagent_crash"
@@ -239,9 +243,13 @@ export type TerminalFailureKind =
   | "dev_step_progress_unproven" // Issue #1651 — the feature-dev step loop could not fingerprint the work tree around a sub-session that checked no plan task, so it could not prove the step made progress and stopped; environment class, the earlier steps' work is on disk
   | "adapter_auth_failed" // Issue #312 — adapter auth pre-flight failed (probe timed out after retry, or definitively logged out); retryable infra
   | "no_changes_produced" // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for (e.g. a dispatched human-only issue)
+  | "resume_no_op" // Issue #2878 — a run that resumed at pr-merge found the PR already merged, did no work and left the issue open; one issue is parked, the repository keeps dispatching
+  | "review_cap_reached" // Issue #2865 — the independent review reached its round cap with findings standing; one issue is parked, the repository keeps dispatching, and the work stays uncommitted in the run's worktree
   | "validation_failed" // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash
   | "branch_forked" // Issue #163 — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it
   | "runaway_progress" // Issue #3783 — the progress-based runaway monitor fired; treated like stall_kill (30m backoff, no lifetime-cap increment)
+  | "merge_conflict" // Issue #2841 — conflict recovery could not land a merge-queue conflict
+  | "merge_queue_enqueue_failed" // Issue #2729 — pr-merge's enqueue still failed after transient retries
   | "pr_merge_unmerged" // Issue #3691 — pr-merge's session exited cleanly but the PR was not actually merged
   | "blocked_dependency" // Issue #305 — the autonomous scheduler dispatched an issue whose blockedBy dependencies are still open; a non-failure deferral
   | "architecture_approval_required" // Issue #4098/#4222 — the architecture-approval gate halted the run before feature-dev for a human-owned decision
@@ -269,6 +277,7 @@ export type TerminalFailureKind =
   // increment, no cascade feed, and the entry is held for an operator.
   | "context_window_exceeded" // Issue #1631 — the prompt outgrew the context the model server has the model loaded with; classified only from the adapter's own failed-request line (`AI_APICallError: …`), never from model text. Not an agent failure; parked with remediation until re-route (#1645) and decomposition (#1655) land
   | "adapter_permission_rejected" // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's `[adapter-permission-rejected]` marker): an `ask` rule from OpenCode's own `.env` read guard or a repository's or the user's opencode.json, the same kind whatever tool it names. Distinct from permission_denied, which retries
+  | "gate_plugin_missing" // Issue #2723 — a bundled build's Claude stage did not load the Nightgauge plugin exactly once (`[gate-plugin-missing]`); parked and excluded from the calibration corpus
   | "environment_halt" // Issue #101 — a project-declared preflight.environment check failed in Phase 0 (`[environment-halt]`); the operator's environment, not the code; parked and excluded from the calibration corpus
   | "adapter_incompatible"; // Issue #1631 — the adapter's binary cannot serve the dispatch (below the compat floor or unreadable; #1627; a newer version is never refused); install a build at or above the floor
 
@@ -279,6 +288,7 @@ export type TerminalFailureKind =
  */
 export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "stall_kill",
+  "stage_cap_kill", // Issue #2812 — stopped at stage_hard_caps or stage_time_caps; recovers like stall_kill
   "budget_exceeded",
   "validation_error",
   "subagent_crash",
@@ -305,9 +315,13 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "dev_step_progress_unproven",
   "adapter_auth_failed",
   "no_changes_produced",
+  "review_cap_reached",
+  "resume_no_op",
   "validation_failed",
   "branch_forked",
   "runaway_progress",
+  "merge_conflict",
+  "merge_queue_enqueue_failed",
   "pr_merge_unmerged",
   "blocked_dependency",
   "architecture_approval_required",
@@ -327,6 +341,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "context_window_exceeded",
   "adapter_permission_rejected",
   "environment_halt",
+  "gate_plugin_missing",
   "adapter_incompatible",
 ];
 

@@ -12,10 +12,15 @@
  * straight to main unguarded.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as vscode from "vscode";
-import { resolvePluginRoot } from "../../src/utils/skillRunner";
+import {
+  claudePluginDirArgs,
+  resolveClaudePlugin,
+  resolvePluginRoot,
+  setExtensionIsPackaged,
+} from "../../src/utils/skillRunner";
 
 vi.mock("vscode", () => ({
   workspace: { workspaceFolders: [] as Array<{ uri: { fsPath: string } }> },
@@ -94,5 +99,45 @@ describe("resolvePluginRoot", () => {
     setWorkspaceFolders(["/repos/acmeapp"]);
     vi.mocked(fs.existsSync).mockImplementation((p) => String(p).endsWith("/claude-plugins")); // not the hooks.json
     expect(resolvePluginRoot()).toBeUndefined();
+  });
+});
+
+// A build runs the gates it shipped, not a checkout it happens to have open (#2723).
+describe("resolveClaudePlugin", () => {
+  const workspace = "/repos/nightgauge/claude-plugins/nightgauge";
+  const bundle = "/ext/nightgauge/dist/claude-plugins/nightgauge";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setWorkspaceFolders(["/repos/nightgauge"]);
+    vi.mocked(vscode.extensions.getExtension).mockReturnValue({
+      extensionPath: "/ext/nightgauge",
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    setExtensionIsPackaged(true);
+  });
+
+  it("loads the bundle ahead of a workspace copy on a packaged host, and holds it to it", () => {
+    setExtensionIsPackaged(true);
+    expect(resolveClaudePlugin()).toEqual({ dir: bundle, bundled: true });
+  });
+
+  it("keeps the workspace first on a development host, and only warns", () => {
+    setExtensionIsPackaged(false);
+    expect(resolveClaudePlugin()).toEqual({ dir: workspace, bundled: false });
+  });
+
+  it("reads a packaged build with no bundle as no-bundle", () => {
+    setExtensionIsPackaged(true);
+    vi.mocked(fs.existsSync).mockImplementation((p) => String(p).startsWith(workspace));
+    expect(resolveClaudePlugin()).toEqual({ dir: workspace, bundled: false });
+  });
+
+  it("emits the flag only for a directory", () => {
+    expect(claudePluginDirArgs(bundle)).toEqual(["--plugin-dir", bundle]);
+    expect(claudePluginDirArgs(undefined)).toEqual([]);
   });
 });
