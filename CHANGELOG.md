@@ -14,6 +14,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-07
+
+0.8.1 was tagged but never published, because the release gate could not scan
+files over 32 MB (#3011). Its changes ship in this release and are listed below.
+
 ### Fixed
 
 - A pipeline stage can no longer rewrite the instructions a later stage of the same run
@@ -128,14 +133,6 @@ changelog, and the release workflow refuses a tag that does not.
   under `acceptance_criteria_verdicts`; if it does not, the stage fails instead
   of having a synthetic artifact written over it, so a fully verified change no
   longer opens a PR that says `Refs` instead of `Closes`.
-
-## [0.8.2] - 2026-11-06
-
-0.8.1 was tagged but never published, because the release gate could not scan
-files over 32 MB (#3011). Its changes ship in this release and are listed below.
-
-### Fixed
-
 - `nightgauge pr-stage create` now settles a branch with no diff against its
   base the way the scheduler does: it comments the acceptance criteria, closes
   the issue when every one is met, and reports `settled`, `issue_closed` and
