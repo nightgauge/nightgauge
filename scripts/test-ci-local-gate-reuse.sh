@@ -148,5 +148,23 @@ check "a probe with no yq on PATH still runs" "$CODE"
 check "the yq-less probe reached reuse" "$(result has "$OUT" "Gate skipped: tree t1 already passed")"
 check "a probe never reports a missing tool" "$(result test -n "$(has "$OUT" "missing required tool" || echo none)")"
 
+# Outside the probe exemption the preflight must refuse a missing tool by name,
+# before any step runs; the same run with yq present is the control (#2801).
+CLEAN_PATH="$TMP/noyq"
+run "$TMP/bin/nightgauge" "$UNPROVEN" --summary-probe
+CLEAN_PATH="$SAVED_PATH"
+check "a non-probe run without yq fails" "$(result test "$CODE" -ne 0)"
+check "the failure names yq" "$(result has "$OUT" "missing required tool: yq")"
+check "no step runs past a failed preflight" \
+  "$(result test -n "$(has "$OUT" "summary probe passing step" || echo none)")"
+run "$TMP/bin/nightgauge" "$UNPROVEN" --summary-probe
+check "the same run with yq present passes the preflight" \
+  "$(result test -n "$(has "$OUT" "missing required tool" || echo none)")"
+check "the same run with yq present exits zero" "$CODE"
+CLEAN_PATH="$TMP/noyq"
+run "$TMP/bin/nightgauge" "$UNPROVEN" --list-steps
+CLEAN_PATH="$SAVED_PATH"
+check "--list-steps without yq is exempt" "$CODE"
+
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
