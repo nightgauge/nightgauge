@@ -21,12 +21,13 @@ claude plugin install nightgauge@nightgauge-plugins
 
 ## For Repository-Level Configuration
 
-Run these from the repository and commit the `.claude/settings.json` they write:
+Run these from the repository:
 
 ```bash
 claude plugin marketplace add https://github.com/nightgauge/nightgauge.git#stable --scope project
 claude plugin install nightgauge@nightgauge-plugins --scope project
 ```
 
-Each teammate runs the same two commands after cloning. The committed settings
-alone were not shown to install the plugin for them.
+They record the plugin in `.claude/settings.json`, but that file alone was not
+shown to install it for anyone, so each teammate runs the same two commands
+after cloning.

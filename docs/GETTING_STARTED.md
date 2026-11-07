@@ -39,7 +39,8 @@ claude plugin install nightgauge@nightgauge-plugins
 ```
 
 These commands are the only route that has been run and shown to install the
-plugin, in a scratch `CLAUDE_CONFIG_DIR` on Claude Code 2.1.316, and
+plugin, in a scratch `CLAUDE_CONFIG_DIR` on the Claude Code version that
+`internal/adaptercompat/manifests/claude-headless.json` pins, and
 `scripts/check-plugin-install-docs.sh` re-runs them. Editing `settings.json`
 alone does not: the CLI then reports the plugin not found in the marketplace, and
 neither `claude -p` nor a logged-out interactive startup materializes it. An

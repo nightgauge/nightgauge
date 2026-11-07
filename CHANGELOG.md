@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The plugin install docs gate now runs the Claude Code version that
+  `claude-headless.json`'s `max_tested` pins, uses a `claude` on `PATH` only at
+  that version, and prints the version it ran. A plugin listing without an
+  `installPath` is a harness error rather than a skill-count violation. The
+  live install runs in its own CI job, so a slow install cannot exhaust
+  `lint core`. The local gate names a missing required tool before any step,
+  and the repository-level install docs no longer ask readers to commit
+  `.claude/settings.json` as if that installed the plugin (#2801).
+
 - A skill `_includes/` file the prompt leaves for the agent to read (over the
   include budget, or listed as load-on-demand) no longer sends it to
   `skills/_shared/` and `skills/nightgauge-<x>/` paths that resolve against the

@@ -79,9 +79,6 @@ jobs:
       # `claude plugin validate --strict` passes (#2763).
       - name: Plugin install docs gate self-test
         run: bash scripts/test-check-plugin-install-docs.sh
-      - name: Documented plugin install works
-        timeout-minutes: 10
-        run: bash scripts/check-plugin-install-docs.sh
       - name: Plugin hooks run from a path with a space
         run: bash scripts/test-plugin-hooks-path.sh
       - name: Stable move regression suite
@@ -304,6 +301,22 @@ jobs:
       - name: Agent-skill install target regression suite
         run: bash scripts/test-install-agent-skills-targets.sh
 
+  # The live install runs npx Claude Code over the network, so its time is not
+  # this repository's to bound. In lint-core a slow install could spend most of
+  # that job's 20 minutes (#2801); here its own 10-minute cap fires first.
+  plugin-install-docs:
+    name: "lint suite: documented plugin install"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Documented plugin install works
+        timeout-minutes: 10
+        run: bash scripts/check-plugin-install-docs.sh
+
   # The required `lint` context (.github/rulesets/main-branch.json only records
   # the live ruleset). It passes only when every job above succeeded or was
   # skipped: the suites skip on pull_request. `!cancelled()` and not a bare
@@ -311,7 +324,12 @@ jobs:
   # skipped required check reads as success.
   lint:
     name: lint
-    needs: [lint-core, mirror-drift-suite, ci-local-contract-suite, install-targets-suite]
+    needs:
+      - lint-core
+      - plugin-install-docs
+      - mirror-drift-suite
+      - ci-local-contract-suite
+      - install-targets-suite
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
