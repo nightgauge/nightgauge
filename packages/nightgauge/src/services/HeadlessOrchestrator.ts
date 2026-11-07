@@ -44,6 +44,11 @@ import { promisify } from "util";
 // any file under packages/nightgauge/src/services/.
 const execFileAsync = promisify(execFile);
 import { BinaryResolver } from "./BinaryResolver";
+import {
+  clearStalePrMergeFixMarker,
+  consumePrMergeFixMarker,
+  prMergeFixMarkerPath,
+} from "./prMergeFixMarker";
 import { moveToInReviewIfPRBacked } from "../utils/inReviewGuard";
 import { describeStageCapKill, isStageCapCeiling } from "../utils/killCeiling";
 import { IpcClient } from "./IpcClient";
@@ -187,7 +192,25 @@ import {
   isAdaptiveBudgetEnabled,
   type ContextSchemaRepairConfig,
   type PipelineModelOverride,
+  getPrCICheckConfig,
 } from "../utils/nightgaugeConfig";
+
+/** Go's `DefaultAutoFixMaxAttempts`, used when the configured value is not positive. */
+const DEFAULT_PR_MERGE_AUTO_FIX_MAX_ATTEMPTS = 2;
+/** Go's `ReasonFailedChecks` punt prefix (internal/orchestrator/stages/prmerge.go). */
+const PR_MERGE_REASON_FAILED_CHECKS = "failed-ci-checks";
+
+/** A deterministic pr-stage outcome the stage loop settles without the skill result. */
+type PrStageSettledOutcome =
+  | { kind: "deferred"; error: Error }
+  | { kind: "refused"; error: Error; terminalKind?: string }
+  | {
+      kind: "conflict-rewind";
+      signal: PipelineFeedbackSignal;
+      maxDevRedispatch: number;
+      reason: string;
+      files: string[];
+    };
 import { formatZodErrorsForPrompt } from "../utils/zodErrorFormatter";
 import {
   BudgetEnforcer,
@@ -4839,7 +4862,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private async runDeterministicPrStage(
     stage: PipelineStage,
     issueNumber: number,
-    stageStartTime: number
+    stageStartTime: number,
+    opts: { afterSkillSession?: boolean } = {}
   ): Promise<
     | { kind: "llm" }
     | { kind: "handled"; result: StageRunResult }
@@ -5092,6 +5116,19 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     if (merged && reason === "already-merged" && this.resumedAtPrMerge) {
       this.mergeNoOp = true;
     }
+    if ((created || merged) && opts.afterSkillSession) {
+      // The pr-merge fix hand-back (#2833): the skill session already
+      // completed the stage and emitted its stage.completed audit and
+      // onStageComplete, so emitting them again would double-count it.
+      this.logger.info(
+        `${stage}: deterministic path ${parsed.path} after the skill's fix (${reason})`,
+        { issueNumber, prNumber: parsed.pr_number }
+      );
+      return {
+        kind: "handled",
+        result: { success: true, stage, durationMs: Date.now() - stageStartTime },
+      };
+    }
     if (created || merged) {
       this.stageExecutionPaths.set(stage, { path: "deterministic" });
       if (this.stateService) {
@@ -5166,6 +5203,95 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       issueNumber,
     });
     return { kind: "llm" };
+  }
+
+  /**
+   * Runs the LLM pr-merge skill and honours its fix hand-back (#2504, #2833),
+   * the TypeScript twin of the Go scheduler's `runPRMergeSkillWithFixHandback`.
+   *
+   * A skill that fixed CI pushes, writes `pr-merge-fix-{N}.json` and exits 0
+   * without waiting for CI. Without this the exit-0 session read as success
+   * and the PR stayed unmerged. On a marker this re-enters the deterministic
+   * runner, which owns the CI wait and the merge. A runner that punts on
+   * failed checks again re-runs the skill, up to `pr.auto_fix_max_attempts`
+   * sessions; any other punt, or the last one, fails the stage.
+   *
+   * Returns the stage result, or a deferred/refused/conflict-rewind outcome
+   * for the stage loop's existing handling.
+   */
+  private async runPrMergeSkillWithFixHandback(
+    issueNumber: number,
+    callbacks: PipelineCallbacks | undefined,
+    modelOverride: PipelineModelOverride | undefined,
+    modelOverrideSource: import("../utils/skillRunner").ModelSource | undefined,
+    stageStartTime: number
+  ): Promise<StageRunResult | PrStageSettledOutcome> {
+    const root = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+    const markerPath = prMergeFixMarkerPath(root, issueNumber);
+    const configured = getPrCICheckConfig(root).autoFixMaxAttempts;
+    const maxAttempts = configured > 0 ? configured : DEFAULT_PR_MERGE_AUTO_FIX_MAX_ATTEMPTS;
+    try {
+      await clearStalePrMergeFixMarker(markerPath);
+    } catch (err) {
+      this.logger.warn("pr-merge: could not clear a stale fix marker", {
+        markerPath,
+        err: String(err),
+      });
+    }
+
+    for (let attempt = 1; ; attempt++) {
+      if (attempt > 1) {
+        const steeringRefusal = await this.refuseLlmMergeOnGeneratedSteering(issueNumber);
+        if (steeringRefusal) return { kind: "refused", error: steeringRefusal };
+        // The previous session completed the stage; a re-run must be allowed
+        // to complete it again, as the stage loop's retries do (#698).
+        this.completedStageSet.delete("pr-merge");
+      }
+      const result = await this.runStage(
+        "pr-merge",
+        issueNumber,
+        callbacks,
+        undefined,
+        modelOverride,
+        this.pinnedWorkspaceRoot,
+        modelOverrideSource
+      );
+      if (!result.success) return result;
+      const marker = await consumePrMergeFixMarker(markerPath, (message, meta) =>
+        this.logger.warn(message, { issueNumber, ...meta })
+      );
+      if (!marker) return result;
+
+      this.logger.info(
+        `pr-merge skill pushed fix ${attempt}/${maxAttempts} (PR #${marker.pr_number ?? "?"}, ` +
+          `${marker.head_sha ?? "unknown sha"}) — re-entering the deterministic runner`,
+        { issueNumber }
+      );
+      const outcome = await this.runDeterministicPrStage("pr-merge", issueNumber, stageStartTime, {
+        afterSkillSession: true,
+      });
+      // The stage ran an LLM session, so it is recorded as llm (as Go does).
+      const puntReason =
+        outcome.kind === "llm" ? this.stageExecutionPaths.get("pr-merge")?.puntReason : undefined;
+      if (outcome.kind === "llm" || outcome.kind === "handled") {
+        this.stageExecutionPaths.set("pr-merge", { path: "llm", puntReason });
+      }
+      if (outcome.kind === "handled") {
+        return { ...result, durationMs: Date.now() - stageStartTime };
+      }
+      if (outcome.kind !== "llm") return outcome;
+
+      const reason = puntReason ?? "unknown";
+      if (reason.startsWith(PR_MERGE_REASON_FAILED_CHECKS) && attempt < maxAttempts) continue;
+      const error = new Error(
+        `pr-merge failed: auto-fix-exhausted: ${reason} ` +
+          `(after ${attempt} of ${maxAttempts} fix attempts)`
+      );
+      await this.stateService?.failStage("pr-merge", error.message).catch(() => {});
+      // A refusal, not a failed result: the stage loop's retry path would
+      // spend yet another skill session past the configured bound.
+      return { kind: "refused", error };
+    }
   }
 
   /**
@@ -12798,33 +12924,41 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // rate-limit DEFERS (no LLM fallback, #3976).
         // ===================================================================
         const detOutcome = await this.runDeterministicPrStage(stage, issueNumber, stageStartTime);
-        if (detOutcome.kind === "conflict-rewind") {
-          if (this.conflictRedispatchCount >= detOutcome.maxDevRedispatch) {
-            failedStage = stage;
-            error = queueConflictEscalationError(
-              `${detOutcome.reason}; ${detOutcome.maxDevRedispatch} feature-dev re-dispatches did not resolve it`,
-              detOutcome.files
-            );
-            gateTerminalKind = "merge_conflict";
-            await this.stateService?.failStage(stage, error.message).catch(() => {});
-            break;
+        // Shared by the first runner pass and the pr-merge fix hand-back
+        // (#2833): "continue" after a conflict rewind, "break" otherwise.
+        const settleRunnerOutcome = async (
+          outcome: PrStageSettledOutcome
+        ): Promise<"break" | "continue"> => {
+          if (outcome.kind === "conflict-rewind") {
+            if (this.conflictRedispatchCount >= outcome.maxDevRedispatch) {
+              failedStage = stage;
+              error = queueConflictEscalationError(
+                `${outcome.reason}; ${outcome.maxDevRedispatch} feature-dev re-dispatches did not resolve it`,
+                outcome.files
+              );
+              gateTerminalKind = "merge_conflict";
+              await this.stateService?.failStage(stage, error.message).catch(() => {});
+              return "break";
+            }
+            this.conflictRedispatchCount++;
+            stageIndex =
+              (await this.rewindToBacktrackTarget(
+                outcome.signal,
+                stage,
+                issueNumber,
+                this.conflictRedispatchCount
+              )) - 1;
+            return "continue";
           }
-          this.conflictRedispatchCount++;
-          stageIndex =
-            (await this.rewindToBacktrackTarget(
-              detOutcome.signal,
-              stage,
-              issueNumber,
-              this.conflictRedispatchCount
-            )) - 1;
-          continue;
-        }
-        if (detOutcome.kind === "deferred" || detOutcome.kind === "refused") {
           failedStage = stage;
-          error = detOutcome.error;
-          if (detOutcome.kind === "refused" && detOutcome.terminalKind) {
-            gateTerminalKind = detOutcome.terminalKind;
+          error = outcome.error;
+          if (outcome.kind === "refused" && outcome.terminalKind) {
+            gateTerminalKind = outcome.terminalKind;
           }
+          return "break";
+        };
+        if (detOutcome.kind !== "llm" && detOutcome.kind !== "handled") {
+          if ((await settleRunnerOutcome(detOutcome)) === "continue") continue;
           break;
         }
         // The LLM pr-merge skill can merge whatever head the PR has, and it is
@@ -12840,20 +12974,37 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           }
         }
 
-        const result =
-          detOutcome.kind === "handled"
-            ? detOutcome.result
-            : await this.runStage(
-                stage,
-                issueNumber,
-                callbacks,
-                undefined,
-                stageModelOverride,
-                this.pinnedWorkspaceRoot,
-                this.userModelOverride && stageModelOverride === this.userModelOverride
-                  ? "user-override"
-                  : undefined
-              );
+        const stageModelSource =
+          this.userModelOverride && stageModelOverride === this.userModelOverride
+            ? ("user-override" as const)
+            : undefined;
+        let result: StageRunResult;
+        if (detOutcome.kind === "handled") {
+          result = detOutcome.result;
+        } else if (stage === "pr-merge") {
+          const handback = await this.runPrMergeSkillWithFixHandback(
+            issueNumber,
+            callbacks,
+            stageModelOverride,
+            stageModelSource,
+            stageStartTime
+          );
+          if ("kind" in handback) {
+            if ((await settleRunnerOutcome(handback)) === "continue") continue;
+            break;
+          }
+          result = handback;
+        } else {
+          result = await this.runStage(
+            stage,
+            issueNumber,
+            callbacks,
+            undefined,
+            stageModelOverride,
+            this.pinnedWorkspaceRoot,
+            stageModelSource
+          );
+        }
 
         if (!result.success) {
           // #3666 follow-up: shipped-partially is a recoverable budget kill,
