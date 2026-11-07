@@ -1,5 +1,7 @@
 # Reference: Write Validate Context & Sync Board (Phases 6, 7)
 
+<!-- supply: first -->
+
 Procedural detail for **Phase 6 (Write Validate Context)** and **Phase 7 (Sync
 Project Board Status)**. Read this when those phases fire.
 

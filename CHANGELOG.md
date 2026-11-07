@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- feature-validate's prompt now carries its Phase 6 output contract
+  (`acceptance_criteria_verdicts`). An include marked `<!-- supply: first -->` is
+  supplied before the include budget runs out, and the default budget is now
+  80 KiB, which also supplies pr-merge's post-merge include.
 - The clean-install G1 bundle-read row now counts skill reads from the stage
   output logs. Stages write no session transcript, so it read 0 and failed every
   full run.

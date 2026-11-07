@@ -5840,7 +5840,8 @@ opencode:
 A stage on a declared endpoint gets the tighter defaults, because a local
 model's window is smaller and its tokenizer spends more tokens on the same
 text. Every pipeline stage prompt also carries, once, the skill `_includes/`
-files its phases direct it to follow (up to 64 KB), so the model does not
+files its phases direct it to follow (up to 80 KB; an include marked
+`<!-- supply: first -->` is supplied before the others), so the model does not
 spend tool calls reading them; this applies to every adapter.
 
 When more than one endpoint lists the same model id under `models`, a stage
