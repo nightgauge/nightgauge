@@ -834,6 +834,56 @@ func TestACSpanMatcher_KeyValue(t *testing.T) {
 	}
 }
 
+// #3053: a call span matches declarations and calls with arguments.
+func TestACSpanMatcher_Call(t *testing.T) {
+	match := acSpanMatcher("name()")
+	for _, line := range []string{"name(a, b)", "this.name(x)", "func (s *T) name(", "async name(", "name<T>(", "name (x)", "obj.name("} {
+		if !match(line) {
+			t.Errorf("%q did not match", line)
+		}
+	}
+	for _, line := range []string{"xname(", "$name(", "name", "names("} {
+		if match(line) {
+			t.Errorf("%q matched", line)
+		}
+	}
+	for _, tok := range []string{"obj.name()", "Type.Method()"} {
+		last := tok[strings.LastIndex(tok, ".")+1 : len(tok)-2]
+		if !acSpanMatcher(tok)("x." + last + "(1)") {
+			t.Errorf("%q did not match its last segment", tok)
+		}
+	}
+	if acSpanMatcher("repairIfNeeded()")("repairIfNeededLater(") {
+		t.Error("a longer name must not match")
+	}
+	if lit := acSpanMatcher("--dry-run"); !lit("use --dry-run") || lit("use --wet-run") {
+		t.Error("a non-call span must match literally")
+	}
+}
+
+// #3053: replay of #3052 — a delivered function is not reported unmet.
+func TestVerifyACAgainstDiff_Issue3052(t *testing.T) {
+	decl := "  private async repairIfNeeded(force: boolean): Promise<void> {"
+	d := memDiff(`diff --git a/src/repair.ts b/src/repair.ts
+--- a/src/repair.ts
++++ b/src/repair.ts
+@@ -3 +3 @@
+-  /** Repairs. */
++  /** Repairs the marketplace entry when it drifted. */
+`, map[string]string{"src/repair.ts": "export class R {\n\n  /** Repairs the marketplace entry when it drifted. */\n" + decl + "\n  }\n}"})
+	for _, crit := range []string{
+		"`src/repair.ts` keeps `repairIfNeeded()`.",
+		"The doc comment in `src/repair.ts` mentions `repairIfNeeded()`.",
+	} {
+		if got, ok := VerifyACAgainstDiff(crit, nil, d, ACTestState{}); ok && got.Status == ACUnmet {
+			t.Errorf("%q: got %+v, want not unmet", crit, got)
+		}
+	}
+	if got, ok := VerifyACAgainstDiff("`src/repair.ts` keeps `missingFn()`.", nil, d, ACTestState{}); !ok || got.Status != ACUnmet {
+		t.Errorf("missing function: got %+v ok=%v, want unmet", got, ok)
+	}
+}
+
 func TestACIsPatternSpan(t *testing.T) {
 	for tok, want := range map[string]bool{
 		"<sha7>": true, "a/**": true, "*.go": true, "(Z+1)": true, "X.Y.(Z+1)-main.g<sha7>": true,
