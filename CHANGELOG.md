@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The clean-install G1 bundle-read row now counts skill reads from the stage
+  output logs. Stages write no session transcript, so it read 0 and failed every
+  full run.
 - A pull request that changes the Claude plugin without bumping its version past the
   last stable tag now fails PR CI and the local gate, instead of turning `main` red
   after merge.

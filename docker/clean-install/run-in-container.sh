@@ -213,9 +213,11 @@ if [[ "${E2E_SMOKE:-0}" != "1" ]]; then
     USER_ADDITIONAL_DIRS="$(jq '.permissions.additionalDirectories // [] | length' "$HOME/.claude/settings.json" 2>/dev/null || echo -1)"
   fi
   # Only a tool call that reads under the bundle (Read, Grep/Glob, Bash) counts;
-  # a transcript line that merely mentions the path (a grant) is not a read.
+  # a line that merely mentions the path (a grant) is not a read. Stages write
+  # no session transcript (--no-session-persistence), so the counter reads the
+  # stream-json in the slot output channels copied to $OUT/vscode-logs above.
   BUNDLE_SKILL_READS="$("$(dirname "$0")/count-bundle-skill-reads.sh" \
-    "$HOME/.claude/projects" "$BUNDLE_SKILLS" 2>/dev/null || echo 0)"
+    "$OUT/vscode-logs" "$BUNDLE_SKILLS" 2>/dev/null || echo 0)"
   jq -n --argjson u "${USER_ADDITIONAL_DIRS:-0}" --argjson r "${BUNDLE_SKILL_READS:-0}" --arg p "$BUNDLE_SKILLS" \
     '{user_additional_dirs: $u, bundle_skill_reads: $r, bundle_skills_path: $p}' > "$OUT/bundle-read.json"
   cat "$OUT/bundle-read.json"
