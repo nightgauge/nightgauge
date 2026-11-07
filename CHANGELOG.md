@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The Output window no longer carries a previous run into a new one (#2808). A
+  sequential run of an issue that earlier held the same tab starts with fresh stages,
+  tokens and timings; a reused tab shows only the new run's output; and the tab's
+  elapsed badge keeps ticking while a failed stage awaits a retry, stopping only when
+  the run settles.
 - The AC diff verifier now reads CommonMark code spans delimited by two or more backticks,
   so a criterion such as ``` `` `name()` `` ``` is one span instead of prose between spans,
   and a delivered criterion no longer resolves `unmet` (#3055).

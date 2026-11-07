@@ -11,6 +11,11 @@ and this project adheres to
 
 ### Fixed
 
+- The Output window no longer carries a previous run into a new one (#2808). A
+  sequential run of an issue that earlier held the same tab starts with fresh stages,
+  tokens and timings; a reused tab shows only the new run's output; and the tab's
+  elapsed badge keeps ticking while a failed stage awaits a retry, stopping only when
+  the run settles.
 - A Grok plugin installed from a version-keyed extension directory is now
   re-pointed to the stable marketplace copy on setup and after an extension
   upgrade, and re-running setup no longer warns that the marketplace source is

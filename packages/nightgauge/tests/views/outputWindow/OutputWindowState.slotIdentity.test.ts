@@ -310,6 +310,48 @@ describe("OutputWindowState run identity on a reused slot index (#2785)", () => 
     expect(state.getSlot(0)!.runGeneration).not.toBe(archived);
   });
 
+  describe("reused tab output and sequential identity (#2808)", () => {
+    const texts = (slotIndex: number) => state.getSlotEntries(slotIndex).map((e) => e.text);
+
+    it("starts a same-issue run with a new run id from a clean record and buffer", () => {
+      state.registerSlot(0, 10, "first", "o/r", { runId: "a" });
+      state.addEntry("old line", "info", undefined, { slotIndex: 0, skipDiskWrite: true });
+      dirty(0);
+      const before = state.getSlot(0)!.runGeneration;
+      vi.setSystemTime(9_000);
+      state.registerSlot(0, 10, "Issue #10", "o/r", { runId: "b" });
+
+      expectClean(0);
+      expect(state.getSlot(0)!.runGeneration).not.toBe(before);
+      expect(texts(0)).toEqual([]);
+    });
+
+    it("keeps the settled record when the call omits the run id (why the call site carries it)", () => {
+      state.registerSlot(0, 10, "first", "o/r", { runId: "a" });
+      dirty(0);
+      state.registerSlot(0, 10, "Issue #10");
+
+      expect(state.getSlot(0)!.completedAt).toBe(1_000);
+    });
+
+    it("keeps the buffer on a same-run re-registration", () => {
+      state.registerSlot(0, 10, "first", "o/r", { runId: "a" });
+      state.addEntry("line", "info", undefined, { slotIndex: 0, skipDiskWrite: true });
+      state.registerSlot(0, 10, "renamed", "o/r", { runId: "a" });
+
+      expect(texts(0)).toEqual(["line"]);
+    });
+
+    it("shows only the new run's entries when a different issue reuses the index", () => {
+      state.registerSlot(0, 10, "first", "o/r", { runId: "a" });
+      state.addEntry("old", "info", undefined, { slotIndex: 0, skipDiskWrite: true });
+      state.registerSlot(0, 11, "second", "o/r", { runId: "b" });
+      state.addEntry("new", "info", undefined, { slotIndex: 0, skipDiskWrite: true });
+
+      expect(texts(0)).toEqual(["new"]);
+    });
+  });
+
   it("never reuses a generation after a slot is removed", () => {
     state.registerSlot(0, 10, "first");
     const first = state.getSlot(0)!.runGeneration;

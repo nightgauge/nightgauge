@@ -152,3 +152,21 @@ export function applyOverviewCardUpdate(root: DomLikeRoot, u: OverviewCardUpdate
     // a running slot's update simply doesn't advance the completion stamp.
   }
 }
+
+/**
+ * Decide what the tab badge's 1 Hz elapsed timer does on a
+ * `slot-badge-update` (#2808). Only a stamped `completedAt` settles a run:
+ * a failed stage shows `error` unstamped while the scheduler may retry
+ * (#2785 ADR-002), so its timer keeps ticking. Self-contained — the webview
+ * embeds it via `toString()`.
+ */
+export function slotBadgeTimerAction(
+  status: string,
+  startedAt: number | null | undefined,
+  completedAt: number | null | undefined
+): "tick" | "stop" | "none" {
+  if (completedAt != null) return "stop";
+  if (startedAt != null && (status === "running" || status === "error")) return "tick";
+  if (status === "complete") return "stop";
+  return "none";
+}

@@ -152,7 +152,7 @@ describe("OutputWindow concurrent slot state isolation (#157)", () => {
     expect(slotBEntries.filter((e) => e.text === SEPARATOR)).toHaveLength(0);
   });
 
-  it("2. still inserts exactly one separator in a slot's own stream on a genuine issue transition, unaffected by a concurrent slot", () => {
+  it("2. starts a slot's stream fresh on a genuine issue transition, unaffected by a concurrent slot (#2808)", () => {
     ow.registerSlotInfo(0, 100, "Issue #100");
     ow.registerSlotInfo(1, 200, "Issue #200");
 
@@ -168,11 +168,16 @@ describe("OutputWindow concurrent slot state isolation (#157)", () => {
     const slotAEntries = ow.getState().getSlotEntries(0);
     const slotBEntries = ow.getState().getSlotEntries(1);
 
-    expect(slotAEntries.filter((e) => e.text === SEPARATOR)).toHaveLength(1);
+    // The reused tab shows only the new occupant's output (#2808), so there
+    // is no previous issue's output left to separate from.
+    expect(slotAEntries.filter((e) => e.text === SEPARATOR)).toHaveLength(0);
+    expect(slotAEntries.some((e) => e.text.includes("slot A on issue 100"))).toBe(false);
+    expect(slotAEntries.some((e) => e.text.includes("slot A on issue 101"))).toBe(true);
     expect(slotBEntries.filter((e) => e.text === SEPARATOR)).toHaveLength(0);
+    expect(slotBEntries.filter((e) => e.text.includes("slot B activity"))).toHaveLength(2);
   });
 
-  it("3. never writes two consecutive separators into one slot's stream across back-to-back issue changes", () => {
+  it("3. keeps only the latest occupant's output across back-to-back issue changes (#2808)", () => {
     ow.registerSlotInfo(0, 100, "Issue #100");
 
     ow.appendLine("first line", "info", undefined, { slotIndex: 0 });
@@ -188,8 +193,10 @@ describe("OutputWindow concurrent slot state isolation (#157)", () => {
       const bothSeparators = entries[i].text === SEPARATOR && entries[i + 1].text === SEPARATOR;
       expect(bothSeparators).toBe(false);
     }
-    // Exactly two transitions occurred → exactly two separators, never adjacent.
-    expect(entries.filter((e) => e.text === SEPARATOR)).toHaveLength(2);
+    // Each transition replaces the tab's stream, so only issue 102's line remains.
+    expect(entries.filter((e) => e.text === SEPARATOR)).toHaveLength(0);
+    expect(entries.map((e) => e.text).filter((t) => t.includes("line"))).toHaveLength(1);
+    expect(entries.some((e) => e.text.includes("third line"))).toBe(true);
   });
 
   it("4. isolates reasoning buffers so one slot's flush never contains another slot's reasoning text", () => {
