@@ -3152,7 +3152,15 @@ export async function initializeServices(
               outputWindow.setIssueNumber(num);
               if (sequentialSlotIndex === null) {
                 sequentialSlotIndex = nextSequentialSlotIndex++;
-                outputWindow.registerSlotInfo(sequentialSlotIndex, num, `Issue #${num}`);
+                // Carry the run's identity so a reused index held by a settled run
+                // of the same issue starts a new record (#2808).
+                outputWindow.registerSlotInfo(
+                  sequentialSlotIndex,
+                  num,
+                  `Issue #${num}`,
+                  headlessOrchestrator!.getRepoOverride() ?? undefined,
+                  { runId: pipelineStateService?.getRunId() ?? undefined }
+                );
               }
             }
           })

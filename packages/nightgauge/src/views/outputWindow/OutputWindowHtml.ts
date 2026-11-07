@@ -22,7 +22,11 @@ import type {
   SlotInfo,
 } from "./OutputWindowState";
 import type { ContentType } from "./contentFormatter";
-import { applyOverviewCardUpdate, tickOverviewCardElapsed } from "./OutputWindowOverviewDom";
+import {
+  applyOverviewCardUpdate,
+  slotBadgeTimerAction,
+  tickOverviewCardElapsed,
+} from "./OutputWindowOverviewDom";
 
 /**
  * Escape HTML special characters for security
@@ -2988,12 +2992,14 @@ function getScript(): string {
               }
             }
             // Manage elapsed timer for this slot
-            if (status === 'running' && startedAt != null) {
+            // An errored stage is live until completedAt is stamped (#2808).
+            const timerAction = (${slotBadgeTimerAction.toString()})(status, startedAt, completedAt);
+            if (timerAction === 'tick') {
               if (slotTimers[slotIndex]) clearInterval(slotTimers[slotIndex]);
               slotTimers[slotIndex] = setInterval(function() {
                 updateElapsedBadge(slotIndex, startedAt, null);
               }, 1000);
-            } else if ((status === 'complete' || status === 'error') && slotTimers[slotIndex]) {
+            } else if (timerAction === 'stop' && slotTimers[slotIndex]) {
               clearInterval(slotTimers[slotIndex]);
               delete slotTimers[slotIndex];
               if (startedAt != null) {

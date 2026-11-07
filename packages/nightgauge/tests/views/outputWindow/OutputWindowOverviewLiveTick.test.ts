@@ -21,6 +21,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   tickOverviewCardElapsed,
   applyOverviewCardUpdate,
+  slotBadgeTimerAction,
   type OverviewCardUpdatePayload,
 } from "../../../src/views/outputWindow/OutputWindowOverviewDom";
 import {
@@ -473,5 +474,25 @@ describe("Issue #2785 — one slot index across two runs", () => {
     expect(html).toContain(`(${applyOverviewCardUpdate.toString()})(document, message)`);
     expect(html).toContain(`(${tickOverviewCardElapsed.toString()})(document, Date.now())`);
     expect(html.split(".overview-card-elapsed[data-started-at]").length).toBe(2);
+  });
+});
+
+describe("slotBadgeTimerAction (#2808)", () => {
+  it.each([
+    ["error", 1_000, null, "tick"],
+    ["error", 1_000, 2_000, "stop"],
+    ["complete", 1_000, 2_000, "stop"],
+    ["complete", 1_000, null, "stop"],
+    ["running", 1_000, null, "tick"],
+    ["pending", null, null, "none"],
+  ] as const)("%s started=%s completed=%s -> %s", (status, startedAt, completedAt, want) => {
+    expect(slotBadgeTimerAction(status, startedAt, completedAt)).toBe(want);
+  });
+
+  it("is embedded in the slot-badge-update handler", () => {
+    const webview = { cspSource: "csp" } as never;
+    const html = getOutputWindowHtml(webview, [], [], true, false, false, 11, undefined, [], 0);
+    expect(html).toContain("function slotBadgeTimerAction");
+    expect(html).toContain("timerAction === 'tick'");
   });
 });

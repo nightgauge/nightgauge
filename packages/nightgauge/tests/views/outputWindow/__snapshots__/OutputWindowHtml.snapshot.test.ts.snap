@@ -2872,12 +2872,19 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
               }
             }
             // Manage elapsed timer for this slot
-            if (status === 'running' && startedAt != null) {
+            // An errored stage is live until completedAt is stamped (#2808).
+            const timerAction = (function slotBadgeTimerAction(status, startedAt, completedAt) {
+	if (completedAt != null) return "stop";
+	if (startedAt != null && (status === "running" || status === "error")) return "tick";
+	if (status === "complete") return "stop";
+	return "none";
+})(status, startedAt, completedAt);
+            if (timerAction === 'tick') {
               if (slotTimers[slotIndex]) clearInterval(slotTimers[slotIndex]);
               slotTimers[slotIndex] = setInterval(function() {
                 updateElapsedBadge(slotIndex, startedAt, null);
               }, 1000);
-            } else if ((status === 'complete' || status === 'error') && slotTimers[slotIndex]) {
+            } else if (timerAction === 'stop' && slotTimers[slotIndex]) {
               clearInterval(slotTimers[slotIndex]);
               delete slotTimers[slotIndex];
               if (startedAt != null) {
@@ -6974,12 +6981,19 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
               }
             }
             // Manage elapsed timer for this slot
-            if (status === 'running' && startedAt != null) {
+            // An errored stage is live until completedAt is stamped (#2808).
+            const timerAction = (function slotBadgeTimerAction(status, startedAt, completedAt) {
+	if (completedAt != null) return "stop";
+	if (startedAt != null && (status === "running" || status === "error")) return "tick";
+	if (status === "complete") return "stop";
+	return "none";
+})(status, startedAt, completedAt);
+            if (timerAction === 'tick') {
               if (slotTimers[slotIndex]) clearInterval(slotTimers[slotIndex]);
               slotTimers[slotIndex] = setInterval(function() {
                 updateElapsedBadge(slotIndex, startedAt, null);
               }, 1000);
-            } else if ((status === 'complete' || status === 'error') && slotTimers[slotIndex]) {
+            } else if (timerAction === 'stop' && slotTimers[slotIndex]) {
               clearInterval(slotTimers[slotIndex]);
               delete slotTimers[slotIndex];
               if (startedAt != null) {
@@ -11056,12 +11070,19 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
               }
             }
             // Manage elapsed timer for this slot
-            if (status === 'running' && startedAt != null) {
+            // An errored stage is live until completedAt is stamped (#2808).
+            const timerAction = (function slotBadgeTimerAction(status, startedAt, completedAt) {
+	if (completedAt != null) return "stop";
+	if (startedAt != null && (status === "running" || status === "error")) return "tick";
+	if (status === "complete") return "stop";
+	return "none";
+})(status, startedAt, completedAt);
+            if (timerAction === 'tick') {
               if (slotTimers[slotIndex]) clearInterval(slotTimers[slotIndex]);
               slotTimers[slotIndex] = setInterval(function() {
                 updateElapsedBadge(slotIndex, startedAt, null);
               }, 1000);
-            } else if ((status === 'complete' || status === 'error') && slotTimers[slotIndex]) {
+            } else if (timerAction === 'stop' && slotTimers[slotIndex]) {
               clearInterval(slotTimers[slotIndex]);
               delete slotTimers[slotIndex];
               if (startedAt != null) {
@@ -15127,12 +15148,19 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
               }
             }
             // Manage elapsed timer for this slot
-            if (status === 'running' && startedAt != null) {
+            // An errored stage is live until completedAt is stamped (#2808).
+            const timerAction = (function slotBadgeTimerAction(status, startedAt, completedAt) {
+	if (completedAt != null) return "stop";
+	if (startedAt != null && (status === "running" || status === "error")) return "tick";
+	if (status === "complete") return "stop";
+	return "none";
+})(status, startedAt, completedAt);
+            if (timerAction === 'tick') {
               if (slotTimers[slotIndex]) clearInterval(slotTimers[slotIndex]);
               slotTimers[slotIndex] = setInterval(function() {
                 updateElapsedBadge(slotIndex, startedAt, null);
               }, 1000);
-            } else if ((status === 'complete' || status === 'error') && slotTimers[slotIndex]) {
+            } else if (timerAction === 'stop' && slotTimers[slotIndex]) {
               clearInterval(slotTimers[slotIndex]);
               delete slotTimers[slotIndex];
               if (startedAt != null) {
@@ -19191,12 +19219,19 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
               }
             }
             // Manage elapsed timer for this slot
-            if (status === 'running' && startedAt != null) {
+            // An errored stage is live until completedAt is stamped (#2808).
+            const timerAction = (function slotBadgeTimerAction(status, startedAt, completedAt) {
+	if (completedAt != null) return "stop";
+	if (startedAt != null && (status === "running" || status === "error")) return "tick";
+	if (status === "complete") return "stop";
+	return "none";
+})(status, startedAt, completedAt);
+            if (timerAction === 'tick') {
               if (slotTimers[slotIndex]) clearInterval(slotTimers[slotIndex]);
               slotTimers[slotIndex] = setInterval(function() {
                 updateElapsedBadge(slotIndex, startedAt, null);
               }, 1000);
-            } else if ((status === 'complete' || status === 'error') && slotTimers[slotIndex]) {
+            } else if (timerAction === 'stop' && slotTimers[slotIndex]) {
               clearInterval(slotTimers[slotIndex]);
               delete slotTimers[slotIndex];
               if (startedAt != null) {
@@ -23253,12 +23288,19 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
               }
             }
             // Manage elapsed timer for this slot
-            if (status === 'running' && startedAt != null) {
+            // An errored stage is live until completedAt is stamped (#2808).
+            const timerAction = (function slotBadgeTimerAction(status, startedAt, completedAt) {
+	if (completedAt != null) return "stop";
+	if (startedAt != null && (status === "running" || status === "error")) return "tick";
+	if (status === "complete") return "stop";
+	return "none";
+})(status, startedAt, completedAt);
+            if (timerAction === 'tick') {
               if (slotTimers[slotIndex]) clearInterval(slotTimers[slotIndex]);
               slotTimers[slotIndex] = setInterval(function() {
                 updateElapsedBadge(slotIndex, startedAt, null);
               }, 1000);
-            } else if ((status === 'complete' || status === 'error') && slotTimers[slotIndex]) {
+            } else if (timerAction === 'stop' && slotTimers[slotIndex]) {
               clearInterval(slotTimers[slotIndex]);
               delete slotTimers[slotIndex];
               if (startedAt != null) {

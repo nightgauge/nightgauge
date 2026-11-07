@@ -782,9 +782,14 @@ export class OutputWindowState {
     options?: SlotRegistrationOptions
   ): void {
     const previous = this.slotInfos.get(slotIndex);
-    const existing = this.isNewRun(previous, issueNumber, repoSlug, options?.runId)
-      ? undefined
-      : previous;
+    const newRun = this.isNewRun(previous, issueNumber, repoSlug, options?.runId);
+    const existing = newRun ? undefined : previous;
+    // A new occupant of a reused index must not show the previous run's
+    // output (#2808). Output that arrived before the first registration is
+    // the run's own, so only a replaced record clears the buffer.
+    if (previous && newRun) {
+      this.perSlotBuffers.set(slotIndex, []);
+    }
     const stages = existing?.stages ?? new Map<PipelineStage, StageProgress>();
     if (!existing) {
       for (const s of PIPELINE_STAGES) {
