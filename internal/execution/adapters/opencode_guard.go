@@ -863,6 +863,8 @@ func openCodeAllowOptions(opts RunOptions) opencodeallow.Options {
 		KnowledgeDir: opts.KnowledgeDir,
 		// The skills tree the render resolved, read-only (#2191).
 		SkillsRoot: openCodeReadOnlySkillsRoot(opts),
+		// The render's rewritten include copies, read-only (#2789).
+		IncludeCacheDir: opencodeallow.GrantedIncludeCacheRoot(),
 	}
 }
 
@@ -933,6 +935,8 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, binDir)...,
 	)
 	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, openCodeReadOnlySkillsRoot(opts))...)
+	// The include cache is granted for read only, like the skills tree (#2789).
+	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, opencodeallow.GrantedIncludeCacheRoot())...)
 	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeAliasConfigDenyPatterns(opts.WorktreeDir)...)
 	return &openCodePermissionJSON{
 		Wildcard: openCodeDeny,

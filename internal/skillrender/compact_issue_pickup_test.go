@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -115,7 +116,8 @@ func assertCompactReadDirectives(t *testing.T, compact *Result) {
 			t.Errorf("Read directive %q is not a clean path (resolves to %q)", p, clean)
 		}
 		if !strings.HasPrefix(clean, skillDir+string(filepath.Separator)) &&
-			!strings.HasPrefix(clean, sharedDir+string(filepath.Separator)) {
+			!strings.HasPrefix(clean, sharedDir+string(filepath.Separator)) &&
+			!slices.Contains(compact.MaterializedIncludes, clean) {
 			t.Errorf("Read directive %q is outside the skill root %q and %q", p, skillDir, sharedDir)
 		}
 		if st, err := os.Stat(clean); err != nil {

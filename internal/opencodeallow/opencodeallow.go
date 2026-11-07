@@ -57,6 +57,9 @@ type Options struct {
 	// arbitrary skill dir could be far wider than a skills tree. "" adds
 	// nothing.
 	SkillsRoot string
+	// IncludeCacheDir is the render's include cache (GrantedIncludeCacheRoot
+	// in the dispatching process), read-only, when copies were written there.
+	IncludeCacheDir string
 }
 
 // EnvSkillsRoot is the variable the OpenCode adapter exports the run's
@@ -67,6 +70,12 @@ const EnvSkillsRoot = "NIGHTGAUGE_OPENCODE_SKILLS_ROOT"
 // knowledge base in (#2193), read back by RootsFromEnv and by the plugin's
 // exploration budget.
 const EnvKnowledgeDir = "NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR"
+
+// EnvIncludeCacheDir is the variable the OpenCode adapter exports the
+// render's include cache in (Options.IncludeCacheDir, #2789), computed in
+// the dispatching process: the child's isolated XDG_CACHE_HOME would make
+// IncludeCacheRoot name a directory the render never wrote to.
+const EnvIncludeCacheDir = "NIGHTGAUGE_OPENCODE_INCLUDE_CACHE_DIR"
 
 // SkillsRootOf is the skills tree the dispatched skill was located in
 // (#2191): the directory CONTAINING the skill directories, which a render
@@ -152,8 +161,37 @@ func Roots(opts Options) []string {
 	}
 	addOutsideWorktree(opts.ContextFile)
 	addOutsideWorktree(opts.OutputFile)
+	if opts.IncludeCacheDir != "" {
+		roots = append(roots, filepath.Clean(opts.IncludeCacheDir))
+	}
 	roots = append(roots, TmpRoot, PrivateTmpRoot)
 	return roots
+}
+
+// IncludeCacheRoot is the per-user directory a render writes rewritten
+// `_includes/` copies under (#2789), and that every adapter grants a stage
+// read access to. It is empty when the user has no cache directory: there is
+// then no private place for the copies, and the render does not write them.
+func IncludeCacheRoot() string {
+	base, err := os.UserCacheDir()
+	if err != nil || !filepath.IsAbs(base) {
+		return ""
+	}
+	return filepath.Join(base, "nightgauge", "skill-includes")
+}
+
+// GrantedIncludeCacheRoot is IncludeCacheRoot when it exists as a real
+// directory, which a render that wrote copies has made it; otherwise empty,
+// so a run whose render wrote none is granted nothing extra.
+func GrantedIncludeCacheRoot() string {
+	dir := IncludeCacheRoot()
+	if dir == "" {
+		return ""
+	}
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		return ""
+	}
+	return dir
 }
 
 // RootsFromEnv rebuilds Options' allow-list-relevant fields (skill dir,
@@ -169,8 +207,9 @@ func RootsFromEnv(worktreeDir string) []string {
 		OutputFile:  os.Getenv("NIGHTGAUGE_OUTPUT_FILE"),
 		// The adapter exports it only as an absolute path; anything else
 		// would widen the allow-list relative to the gate's cwd.
-		KnowledgeDir: absOrEmpty(os.Getenv(EnvKnowledgeDir)),
-		SkillsRoot:   absOrEmpty(os.Getenv(EnvSkillsRoot)),
+		KnowledgeDir:    absOrEmpty(os.Getenv(EnvKnowledgeDir)),
+		SkillsRoot:      absOrEmpty(os.Getenv(EnvSkillsRoot)),
+		IncludeCacheDir: absOrEmpty(os.Getenv(EnvIncludeCacheDir)),
 	}
 	if skillDir := os.Getenv("NIGHTGAUGE_SKILL_DIR"); skillDir != "" {
 		opts.SkillPath = filepath.Join(skillDir, "SKILL.md")

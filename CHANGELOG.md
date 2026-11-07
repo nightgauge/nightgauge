@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A skill `_includes/` file the prompt leaves for the agent to read (over the
+  include budget, or listed as load-on-demand) no longer sends it to
+  `skills/_shared/` and `skills/nightgauge-<x>/` paths that resolve against the
+  worktree. The render writes a rewritten copy to a content-addressed cache
+  directory and points the prompt at it; `skill render --json` lists them as
+  `materialized_includes`, and `preflight skill-bundle` now checks them. The
+  Claude and OpenCode adapters grant the stage read access to that cache
+  directory (the OpenCode hook takes it from the dispatcher, not its isolated
+  cache), and the Claude adapters deny edits to it (#2789).
 - **The AC diff check no longer calls a criterion unmet because a token was
   missing from a file it could not read (#3037).** If a token is not in the
   added lines and a file in scope is unreadable (too large, missing, or not a

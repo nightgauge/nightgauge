@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- A Claude stage the extension starts can read the rewritten skill include
+  copies its prompt points at: the skills-tree flags now also grant the
+  include cache directory `skill roots` reports, with edits to it denied
+  (#2789).
 - A feature-validate artifact that records its acceptance-criteria verdicts
   under `acceptance_criteria[].verdict` now fails the extension's deliverable
   policy, as it already did in Go (#3013). The stage is re-asked to move them
