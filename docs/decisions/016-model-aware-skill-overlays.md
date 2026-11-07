@@ -351,14 +351,27 @@ stage of that run searches the copy. An earlier stage has write access to the
 worktree, so without the copy it could rewrite a later stage's `SKILL.md`, an
 include, or `skills/_shared` and change what that stage executes.
 
-The copy skips symlinks, makes its files read-only, replaces the same issue's
-earlier copies (never another issue's: concurrent runs share the checkout), and
-is reused by a resumed run. A dispatch with no run ID omits the workspace root
-rather than searching the live tree. A copy that cannot be taken omits the workspace root, so a
-worktree-only skill fails render rather than reading the mutable tree.
+The copy skips symlinks, makes its files read-only, and replaces the same
+issue's earlier copies (never another issue's: concurrent runs share the
+checkout). A worktree with no `skills/` at run start is frozen as an empty copy,
+so a stage cannot add skills mid-run either. A resumed run adopts the issue's
+existing copy whatever its key, because the run-state record can carry a
+different ID from the one the run started under. A run that completes or aborts
+removes its copy; a paused run keeps it for the resume. A dispatch with no run
+ID omits the workspace root rather than searching the live tree, and so does a
+copy that cannot be taken, so a worktree-only skill fails render rather than
+reading the mutable tree.
 
-Extension-hosted renders still search the live worktree; that deviation is
-tracked as discovered work.
+**Deviation: extension-hosted renders.** A stage the VS Code extension renders
+itself (`skillRunner` through `nightgauge skill roots`) still searches the live
+worktree, so on that host the protection does not hold. The root order (#2718)
+is unchanged on both hosts; only the workspace root's content differs. The
+reason is scope: `skill roots` has no run identity to key a snapshot on, and
+giving it one changes the Go CLI and the extension together, a cross-package
+contract change outside this fix. Until that lands, the extension host trusts
+earlier stages not to edit `skills/`, as both hosts did before #2813. The gap is
+recorded as discovered work on #2813 (`dw-7b082a92d4a0`, `dw-8b20dab4bcfc`) to be
+filed as its own issue.
 
 ## Amendment (2026-09-14, #1636) — host overlay segment
 

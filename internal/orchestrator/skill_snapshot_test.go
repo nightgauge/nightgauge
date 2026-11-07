@@ -207,3 +207,54 @@ func TestSkillSnapshotResumes(t *testing.T) {
 		}
 	}
 }
+
+// A resume whose run-state record carries a different ID from the one the run
+// started under adopts the run-start copy instead of copying the edited tree
+// (#2813 review: MarkRunning mints its own ID).
+func TestResetSkillSnapshotResumeAdoptsCopyUnderAnotherID(t *testing.T) {
+	root := t.TempDir()
+	layouttest.MkCheckoutDir(t, root)
+	live := t.TempDir()
+	skill := filepath.Join(live, "skills", "a", "SKILL.md")
+	writeTestFile(t, skill, "old")
+	if _, err := runSkillSnapshot(root, live, 7, "run-start"); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, skill, "edited by a stage")
+
+	resetSkillSnapshotForRun(root, 7, "run-record", true)
+	dst, err := runSkillSnapshot(root, live, 7, "run-record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dst, "skills", "a", "SKILL.md")); string(data) != "old" {
+		t.Errorf("resumed run read %q, want the run-start %q", data, "old")
+	}
+	entries, _ := os.ReadDir(filepath.Dir(dst))
+	if len(entries) != 1 {
+		t.Errorf("issue keeps %d snapshots after adoption, want 1", len(entries))
+	}
+}
+
+// A run that ends without a resume removes its snapshot; other issues keep theirs.
+func TestDropSkillSnapshotRemovesOnlyThatIssue(t *testing.T) {
+	root := t.TempDir()
+	layouttest.MkCheckoutDir(t, root)
+	live := t.TempDir()
+	writeTestFile(t, filepath.Join(live, "skills", "a", "SKILL.md"), "a")
+	mine, err := runSkillSnapshot(root, live, 7, "run-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := runSkillSnapshot(root, live, 8, "run-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropSkillSnapshot(root, 7)
+	if _, err := os.Stat(filepath.Dir(mine)); !os.IsNotExist(err) {
+		t.Errorf("issue #7's snapshot directory survived the drop: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(other, "skills", "a", "SKILL.md")); err != nil {
+		t.Errorf("issue #8's snapshot was removed: %v", err)
+	}
+}

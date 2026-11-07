@@ -104,13 +104,42 @@ func runLocalFeatureDev(t *testing.T, window int) (root string, runner *profileC
 	root = realSkillsWorkspace(t)
 	runner = &profileCapturingRunner{steppedPipelineRunner: steppedPipelineRunner{root: root}}
 	s := newProfileTestScheduler(root, runner, adapters.NewOpenCodeAdapter())
+	// The run drops its skill snapshot when it ends (#2813), but rendered
+	// prompts embed the snapshot's include paths, so the re-renders below need
+	// it at the same path: keep a copy while the run is live, restore it after.
+	var snapDir string
+	keep := filepath.Join(t.TempDir(), "skills")
 	s.telemetrySvc = &hookTelemetry{onEvent: func(e platform.PipelineEvent) {
 		if e.EventType == "stage_completed" && e.Stage == string(state.StageIssuePickup) {
 			s.retryEngine.RecordEscalation(string(state.StageFeatureDev), openCodeReadinessModel)
+			roots := dispatchedSnapshotRoots(t, root, 1662)
+			for _, r := range roots {
+				if strings.Contains(r, skillSnapshotsDir) {
+					snapDir = filepath.Dir(r)
+				}
+			}
+			if snapDir == "" {
+				t.Fatalf("no snapshot root among %v", roots)
+			}
+			if err := copySkillTree(filepath.Join(snapDir, "skills"), keep); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}}
 	s.telemetryEnabled = true
 	s.runPipeline(context.Background(), types.BoardItem{Number: 1662, Repo: "nightgauge/test", ID: "item-1662"})
+	if snapDir == "" {
+		t.Fatal("issue-pickup never completed; no snapshot was captured")
+	}
+	if _, err := os.Stat(snapDir); !os.IsNotExist(err) {
+		t.Fatalf("the finished run kept its skill snapshot %s: %v", snapDir, err)
+	}
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := copySkillTree(keep, filepath.Join(snapDir, "skills")); err != nil {
+		t.Fatal(err)
+	}
 	return root, runner
 }
 

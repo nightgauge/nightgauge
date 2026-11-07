@@ -6012,7 +6012,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// path below has settled pipelineSuccess.
 	lifecycle, resumeFrom := beginRunLifecycle(workspaceRoot, item.Number,
 		resolveFeatureBranch(runtime, workspaceRoot, item.Number))
-	defer func() { lifecycle.finish(ctx, pipelineSuccess) }()
+	defer func() {
+		lifecycle.finish(ctx, pipelineSuccess)
+		// A run that will not resume no longer needs its skill snapshot (#2813);
+		// an interrupted (paused) run keeps it for the resume to adopt.
+		if pipelineSuccess || ctx.Err() == nil {
+			dropSkillSnapshot(workspaceRoot, item.Number)
+		}
+	}()
 
 	stageIdx := resumeStageIndex(stages, resumeFrom)
 	// A dispatch carrying the issue's open PR (#2541) starts at pr-merge

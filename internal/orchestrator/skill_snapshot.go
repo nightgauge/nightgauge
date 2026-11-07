@@ -213,28 +213,90 @@ func skillSnapshotResumes(fromRemote bool, rs *runstate.RunState, issue int) boo
 		(rs.State == runstate.StateRunning || rs.State == runstate.StatePaused)
 }
 
-// resetSkillSnapshotForRun discards issue's existing snapshot for runID unless
-// resumed, which the caller decides with skillSnapshotResumes from the run ID's
-// provenance. It never reads run state itself: the checkout's record names
-// whichever issue wrote it last, so re-reading it would drop a resumed run's
-// snapshot whenever a concurrent issue owns the record. The scheduler can
-// inherit a run ID from a stale or finished record; without the reset, that run
-// would reuse the old copy and never see updated skills (#2813).
-// Called once per run, before its first render. Best-effort: a failure leaves
-// the old copy, which is frozen content, never live content.
+// resetSkillSnapshotForRun prepares issue's snapshot directory for runID
+// before the run's first render; the caller decides resumed with
+// skillSnapshotResumes from the run ID's provenance. It never reads run state
+// itself: the checkout's record names whichever issue wrote it last.
+//
+// A resumed run adopts the issue's existing snapshot whatever its key, because
+// the run-state record can carry a different ID from the one the run started
+// under (MarkRunning mints its own). Re-copying on resume would freeze the
+// worktree as an earlier stage left it, which is the hole this closes (#2813).
+// A run that is not a resume discards the issue's snapshots, so an inherited ID
+// never reuses an old copy and the run sees updated skills.
+// Best-effort: a failure leaves frozen content, never live content.
 func resetSkillSnapshotForRun(workspaceRoot string, issueNumber int, runID string, resumed bool) {
-	if resumed || runID == "" || issueNumber <= 0 {
+	if runID == "" || issueNumber <= 0 {
 		return
 	}
+	base, ok := skillSnapshotIssueDir(workspaceRoot, issueNumber)
+	if !ok {
+		return
+	}
+	if !resumed {
+		_ = os.RemoveAll(base)
+		return
+	}
+	adoptSkillSnapshot(base, snapshotKey(runID))
+}
+
+// adoptSkillSnapshot renames the issue's one complete snapshot to key when no
+// snapshot already carries it. Pruning keeps at most one per issue; with
+// several (a failed prune), the newest is adopted and the rest are removed.
+func adoptSkillSnapshot(base, key string) {
+	if info, err := os.Stat(filepath.Join(base, key, "skills")); err == nil && info.IsDir() {
+		return
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	var pick string
+	var pickTime int64
+	for _, e := range entries {
+		if !e.IsDir() || strings.Contains(e.Name(), ".tmp-") {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(base, e.Name(), "skills"))
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if t := info.ModTime().UnixNano(); pick == "" || t > pickTime {
+			pick, pickTime = e.Name(), t
+		}
+	}
+	if pick == "" {
+		return
+	}
+	if err := os.Rename(filepath.Join(base, pick), filepath.Join(base, key)); err != nil {
+		return
+	}
+	pruneSkillSnapshots(base, key)
+}
+
+// dropSkillSnapshot removes issue's snapshots when its run ends in a state that
+// is never resumed (completed or aborted), so checkout state does not keep a
+// full skills/ copy for every issue it has run. A paused run keeps its copy.
+func dropSkillSnapshot(workspaceRoot string, issueNumber int) {
+	if issueNumber <= 0 {
+		return
+	}
+	if base, ok := skillSnapshotIssueDir(workspaceRoot, issueNumber); ok {
+		_ = os.RemoveAll(base)
+	}
+}
+
+// skillSnapshotIssueDir is issue's snapshot directory, without creating it.
+func skillSnapshotIssueDir(workspaceRoot string, issueNumber int) (string, bool) {
 	sub := filepath.Join(skillSnapshotsDir, strconv.Itoa(issueNumber))
 	base, err := layout.CheckoutPath(workspaceRoot, sub)
 	if err != nil {
 		if skillSnapshotFallbackBase == nil {
-			return
+			return "", false
 		}
 		if base, err = fallbackSnapshotBase(workspaceRoot, issueNumber); err != nil {
-			return
+			return "", false
 		}
 	}
-	_ = os.RemoveAll(filepath.Join(base, snapshotKey(runID)))
+	return base, true
 }
