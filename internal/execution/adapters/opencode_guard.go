@@ -863,6 +863,8 @@ func openCodeAllowOptions(opts RunOptions) opencodeallow.Options {
 		KnowledgeDir: opts.KnowledgeDir,
 		// The skills tree the render resolved, read-only (#2191).
 		SkillsRoot: openCodeReadOnlySkillsRoot(opts),
+		// The render's rewritten include copies, read-only (#2789).
+		IncludeCacheDir: opencodeallow.GrantedIncludeCacheRoot(),
 	}
 }
 

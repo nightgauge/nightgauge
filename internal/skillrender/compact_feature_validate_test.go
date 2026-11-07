@@ -63,7 +63,15 @@ func TestCompactFeatureValidate_VerifyUIGateIsReadNotInlined(t *testing.T) {
 		t.Errorf("compact render inlines the verify-ui include (found %q); it must stay a Read directive", fingerprint)
 	}
 	abs := filepath.Join(skillDir, filepath.FromSlash(fvVerifyUIInclude))
-	if !strings.Contains(compact.Content, "Read `"+abs+"`") {
+	// The include names sibling skills, so the render points at its rewritten
+	// copy (#2789) rather than the raw file.
+	read := abs
+	for _, p := range compact.MaterializedIncludes {
+		if filepath.Base(p) == filepath.Base(abs) {
+			read = p
+		}
+	}
+	if !strings.Contains(compact.Content, "Read `"+read+"`") {
 		t.Errorf("compact render has no Read directive for %s", abs)
 	}
 	for _, want := range []string{

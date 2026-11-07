@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- A Claude stage the extension starts can read the rewritten skill include
+  copies its prompt points at: the skills-tree flags now also grant the
+  include cache directory `skill roots` reports, with edits to it denied
+  (#2789).
 - `nightgauge autonomous status` no longer reads "Running" while a repository
   halt stops dispatch: the headline counts halted repositories and lists each
   one, plus issues awaiting architecture approval, live and from the state

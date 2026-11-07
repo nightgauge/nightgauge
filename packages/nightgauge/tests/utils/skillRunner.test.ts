@@ -52,6 +52,9 @@ vi.mock("fs", () => ({
   rmSync: vi.fn(),
   realpathSync: vi.fn((target: string) => target),
   readdirSync: vi.fn(() => []),
+  lstatSync: vi.fn(() => {
+    throw new Error("ENOENT");
+  }),
 }));
 
 // Mock child_process module
@@ -173,6 +176,7 @@ import {
   resolveTokenForSubprocess,
   resolveSdkCliPath,
   claudeSkillsDirArgs,
+  setIncludeCacheDirForTest,
   findSkillFile,
   resolveSkillRoots,
   setExtensionIsPackaged,
@@ -444,6 +448,26 @@ describe("skillRunner - File Discovery and Parsing", () => {
 
     it("adds the tree and denies file-tool writes to it", () => {
       expect(claudeSkillsDirArgs(skillPath, "/worktrees/issue-1")).toEqual(expected);
+    });
+
+    it("adds and denies the include cache once a render created it (#2789)", () => {
+      setIncludeCacheDirForTest("/home/u/.cache/nightgauge/skill-includes");
+      try {
+        expect(claudeSkillsDirArgs(skillPath, "/worktrees/issue-1")).toEqual(expected);
+        vi.mocked(fs.lstatSync).mockReturnValueOnce({
+          isDirectory: () => true,
+        } as unknown as fs.Stats);
+        expect(claudeSkillsDirArgs(skillPath, "/worktrees/issue-1")).toEqual([
+          "--add-dir",
+          "/ext/dist/skills",
+          "--add-dir",
+          "/home/u/.cache/nightgauge/skill-includes",
+          "--disallowedTools",
+          "Edit(//ext/dist/skills/**),Edit(//home/u/.cache/nightgauge/skill-includes/**)",
+        ]);
+      } finally {
+        setIncludeCacheDirForTest(undefined);
+      }
     });
 
     it("takes the skill's parent as the tree for the flat <root>/<dir>.md layout", () => {

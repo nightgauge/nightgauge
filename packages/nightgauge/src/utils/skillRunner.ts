@@ -3307,7 +3307,12 @@ export function resolveSkillRoots(
 
   let roots: unknown;
   try {
-    roots = (JSON.parse(stdout) as { roots?: unknown }).roots;
+    const envelope = JSON.parse(stdout) as { roots?: unknown; include_cache_dir?: unknown };
+    roots = envelope.roots;
+    includeCacheDir =
+      typeof envelope.include_cache_dir === "string" && path.isAbsolute(envelope.include_cache_dir)
+        ? envelope.include_cache_dir
+        : undefined;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     throw new Error(`skill roots returned unparseable output: ${detail}`, { cause: err });
@@ -3316,6 +3321,17 @@ export function resolveSkillRoots(
     throw new Error("skill roots returned no roots list");
   }
   return roots as string[];
+}
+
+/**
+ * Where `skill render` writes rewritten include copies (#2789), as the binary
+ * last reported it from `skill roots --json`. Undefined until then.
+ */
+let includeCacheDir: string | undefined;
+
+/** Test seam: set the include cache directory claudeSkillsDirArgs grants. */
+export function setIncludeCacheDirForTest(dir: string | undefined): void {
+  includeCacheDir = dir;
 }
 
 /**
@@ -3329,13 +3345,31 @@ export function claudeSkillsDirArgs(skillPath: string, cwd: string | undefined):
   // The binary locates <root>/<dir>/SKILL.md or <root>/<dir>.md.
   const skillDir = path.dirname(skillPath);
   const root = path.basename(skillPath) === "SKILL.md" ? path.dirname(skillDir) : skillDir;
-  if (!path.isAbsolute(root) || isPathWithin(root, cwd)) {
-    return [];
+  const dirs: string[] = [];
+  if (path.isAbsolute(root) && !isPathWithin(root, cwd)) dirs.push(root);
+  // The render's rewritten include copies are read at run time too (#2789);
+  // granted once a render has created the directory, as the Go adapter does.
+  if (includeCacheDir && isRealDirectory(includeCacheDir) && !isPathWithin(includeCacheDir, cwd)) {
+    dirs.push(includeCacheDir);
   }
-  const deny = skillsTreeForms(root).map(
-    (form) => `Edit(//${form.split(path.sep).join("/").replace(/^\/+/, "")}/**)`
-  );
-  return ["--add-dir", root, "--disallowedTools", deny.join(",")];
+  if (dirs.length === 0) return [];
+  const args: string[] = [];
+  const deny: string[] = [];
+  for (const dir of dirs) {
+    args.push("--add-dir", dir);
+    for (const form of skillsTreeForms(dir)) {
+      deny.push(`Edit(//${form.split(path.sep).join("/").replace(/^\/+/, "")}/**)`);
+    }
+  }
+  return [...args, "--disallowedTools", deny.join(",")];
+}
+
+function isRealDirectory(dir: string): boolean {
+  try {
+    return fs.lstatSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Top-level system symlinks a path is reached through, as openCodeSystemAliases. */
