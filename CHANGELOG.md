@@ -16,6 +16,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **pr-create's acceptance-criteria verifier is stricter about what counts as
+  met (#2669).** A validate verdict matched only by position can hold an issue
+  open but never close it. Negative evidence counts only for the criterion it
+  names, and no longer overturns a deterministic met. A criterion naming no
+  file inherits the file the previous criterion named, instead of matching any
+  added line; with none, it is checked only when it is about the changelog.
+  "human-readable", "manual page" and "log rotation" are no longer read as
+  operator or credential steps. A section check tries every named
+  file before reporting unmet. A file too large or otherwise unreadable is
+  treated as unknown, not empty, and a criterion checked only against a file
+  inherited from an earlier criterion can be met but never unmet. Credential
+  steps need an action ("rotate", "provision", …), so "the log never contains
+  credentials" is checkable. Reads are size-bounded and follow symlinks, the
+  diff collection honours the stage's cancellation, and a verdict resting on
+  uncommitted files records every such file as `uncommitted_paths`.
 - feature-validate's prompt now carries its Phase 6 output contract
   (`acceptance_criteria_verdicts`). An include marked `<!-- supply: first -->` is
   supplied before the include budget runs out, and the default budget is now

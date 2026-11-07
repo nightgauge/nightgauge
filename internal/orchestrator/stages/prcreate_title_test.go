@@ -301,7 +301,7 @@ func TestDefaultReadCreateContext_ProjectsPRSummary(t *testing.T) {
 	dir := layouttest.MkPipelineDir(t, root)
 	writePipelineFile(t, dir, "issue-42.json", `{"title":"t","type":"bug"}`)
 	writePipelineFile(t, dir, "dev-42.json", `{"pr_summary":"state the change"}`)
-	snap, err := defaultReadCreateContext(root, 42)
+	snap, err := defaultReadCreateContext(context.Background(), root, 42)
 	if err != nil {
 		t.Fatal(err)
 	}
