@@ -4842,10 +4842,10 @@ func loadWorktreePath(workspaceRoot string, issueNumber int) string {
 	return workspaceRoot
 }
 
-// stageSkillRoots is the root list for a stage of issue's run. The workspace it
-// searches is the run's worktree, the input the extension passes too, so the
-// hosts agree on the checkout as well as the order (#2718). A worktree that has
-// gone falls back to the repository root.
+// stageSkillRoots is the root list for a stage of issue's run. liveRoot is the
+// tree the run's stages execute in (stageWorkspace: runtime.WorktreeDir, else
+// the repository root), the input the extension passes too, so the hosts agree
+// on the checkout as well as the order (#2718).
 //
 // The workspace root's CONTENT is frozen per run (#2813): it is a snapshot of
 // the worktree's skills/ taken before the run's first render, so a stage cannot
@@ -4855,9 +4855,12 @@ func loadWorktreePath(workspaceRoot string, issueNumber int) string {
 // one checkout. With no run ID, or a snapshot that cannot be taken, it fails
 // closed: the workspace root is omitted, so a worktree-only skill fails render
 // as not found instead of silently reading the mutable tree.
-func stageSkillRoots(workspaceRoot string, issueNumber int, runID string) []string {
-	root := loadWorktreePath(workspaceRoot, issueNumber)
-	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+func stageSkillRoots(workspaceRoot, liveRoot string, issueNumber int, runID string) []string {
+	// A liveRoot with no skills/ (gone, or a worktree of a tree whose skills
+	// are uncommitted) falls back to the repository root. Either way the
+	// choice is made once, at the run's first render, and then frozen.
+	root := liveRoot
+	if info, err := os.Stat(filepath.Join(root, "skills")); err != nil || !info.IsDir() {
 		root = workspaceRoot
 	}
 	snapshot := ""
@@ -5181,18 +5184,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// below the terminal defer (ADR-017 step 0b) — see below.
 	var runID string
 	var runIDMintErr error
-	// Where runID came from, for the skill snapshot's resume decision (#2813):
-	// fromRemote when the platform supplied it, inheritedRS when the checkout's
-	// run-state record did. The record is checkout-wide and may name another
-	// issue, so the reset below judges it here, once, for THIS issue.
-	var fromRemote bool
-	var inheritedRS *runstate.RunState
 	{
 		remoteRunID := s.queueItemRemoteRunID(item.Repo, item.Number)
 		if remoteRunID != "" {
 			if runstate.IsIdentity(remoteRunID) {
 				runID = remoteRunID
-				fromRemote = true
 			} else {
 				log.Printf("#%d: ignoring non-identity run id %q from remote — minting locally (ADR-017 Decision 1)",
 					item.Number, remoteRunID)
@@ -5203,7 +5199,6 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				if rs, err := runstate.Load(baseDir); err == nil && rs != nil && rs.RunID != "" {
 					if runstate.IsIdentity(rs.RunID) {
 						runID = rs.RunID
-						inheritedRS = rs
 					} else {
 						log.Printf("#%d: ignoring non-identity run id %q from run-state.json — minting locally (ADR-017 Decision 1)",
 							item.Number, rs.RunID)
@@ -5244,11 +5239,6 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	}
 
 	runtime := state.NewRuntimeState(item.Repo, item.Number, item.ID, runID)
-	// A run whose ID was inherited rather than resumed renders fresh skills
-	// (#2813). The resume decision comes from the ID's provenance above, never
-	// from re-reading run-state.json, which another issue's run may own.
-	resetSkillSnapshotForRun(workspaceRoot, item.Number, runtime.RunID,
-		skillSnapshotResumes(fromRemote, inheritedRS, item.Number), inheritedRS != nil)
 	runtime.Title = item.Title
 	// A remote run request's pin (#1656) is a fact of the run from its start.
 	if reqAdapter, reqModel, _ := s.QueueItemRequestedPin(item.Repo, item.Number); reqAdapter != "" {
@@ -6012,6 +6002,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// path below has settled pipelineSuccess.
 	lifecycle, resumeFrom := beginRunLifecycle(workspaceRoot, item.Number,
 		resolveFeatureBranch(runtime, workspaceRoot, item.Number))
+	// Prepare the run's skill snapshot before its first render (#2813). Only
+	// beginRunLifecycle knows whether this run resumed a paused or interrupted
+	// record of THIS issue; when it did, the run adopts its run-start copy under
+	// whatever run ID it now carries, otherwise it discards the issue's copies
+	// and renders current skills.
+	resetSkillSnapshotForRun(workspaceRoot, item.Number, runtime.RunID, lifecycle.resumed)
 	defer func() {
 		lifecycle.finish(ctx, pipelineSuccess)
 		// A run that will not resume no longer needs its skill snapshot (#2813);
@@ -6454,7 +6450,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			Stage:       string(stage),
 			Model:       model,
 			Adapter:     adapterName,
-			SkillsRoots: stageSkillRoots(workspaceRoot, item.Number, runtime.RunID),
+			SkillsRoots: stageSkillRoots(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item.Number, runtime.RunID),
 			Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 			Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 		})
@@ -6542,7 +6538,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					Stage:       string(stage),
 					Model:       model,
 					Adapter:     adapterName,
-					SkillsRoots: stageSkillRoots(workspaceRoot, item.Number, runtime.RunID),
+					SkillsRoots: stageSkillRoots(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item.Number, runtime.RunID),
 					Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 					Profile:     skillrender.ProfileCompact,
 					Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
@@ -6561,7 +6557,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Stage:          string(stage),
 						Model:          model,
 						Adapter:        adapterName,
-						SkillsRoots:    stageSkillRoots(workspaceRoot, item.Number, runtime.RunID),
+						SkillsRoots:    stageSkillRoots(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item.Number, runtime.RunID),
 						Headless:       true, // every stage this dispatches runs non-interactively (#2390)
 						Profile:        skillrender.ProfileCompact,
 						SupplyIncludes: true,
@@ -6607,7 +6603,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Stage:       string(stage),
 						Model:       alt.ID,
 						Adapter:     adapterName,
-						SkillsRoots: stageSkillRoots(workspaceRoot, item.Number, runtime.RunID),
+						SkillsRoots: stageSkillRoots(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item.Number, runtime.RunID),
 						Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 						Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 					})

@@ -202,7 +202,7 @@ func (s *Scheduler) enforceIssueCapacity(ctx context.Context, d capacityDispatch
 				Stage:       string(d.stage),
 				Model:       alt.Model,
 				Adapter:     d.adapterName,
-				SkillsRoots: stageSkillRoots(d.workspaceRoot, d.item.Number, d.runtime.RunID),
+				SkillsRoots: stageSkillRoots(d.workspaceRoot, stageWorkspace(d.runtime, d.workspaceRoot), d.item.Number, d.runtime.RunID),
 				Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 				Warn:        func(msg string) { log.Printf("#%d: %s", d.item.Number, msg) },
 			})

@@ -1,13 +1,16 @@
 package orchestrator
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
-	"github.com/nightgauge/nightgauge/internal/runstate"
+	"github.com/nightgauge/nightgauge/internal/skillrender"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 func TestRunSkillSnapshotCopiesOnceAndReuses(t *testing.T) {
@@ -144,12 +147,12 @@ func TestResetSkillSnapshotForRunDropsInheritedCopies(t *testing.T) {
 	read()
 	writeTestFile(t, skill, "new")
 
-	resetSkillSnapshotForRun(root, 7, "run-7", true, false)
+	resetSkillSnapshotForRun(root, 7, "run-7", true)
 	if got := read(); got != "old" {
 		t.Errorf("resumed run read %q, want the frozen %q", got, "old")
 	}
 
-	resetSkillSnapshotForRun(root, 7, "run-7", false, false)
+	resetSkillSnapshotForRun(root, 7, "run-7", false)
 	if got := read(); got != "new" {
 		t.Errorf("inherited run id read %q, want the current %q", got, "new")
 	}
@@ -157,7 +160,8 @@ func TestResetSkillSnapshotForRunDropsInheritedCopies(t *testing.T) {
 
 // Issue A resumes run R while the checkout's run-state record names
 // concurrently running issue B: A's snapshot for R is kept, because the resume
-// decision comes from A's own run-ID provenance, not the shared record (#2813).
+// decision is A's own lifecycle's (beginRunLifecycle), not the shared record
+// (#2813).
 func TestResetSkillSnapshotKeepsResumeWhileAnotherIssueOwnsRunState(t *testing.T) {
 	root := t.TempDir()
 	layouttest.MkCheckoutDir(t, root)
@@ -171,7 +175,7 @@ func TestResetSkillSnapshotKeepsResumeWhileAnotherIssueOwnsRunState(t *testing.T
 	writeTestFile(t, skill, "edited")
 	saveSkillRunState(t, root, live, 8, "run-B") // issue B owns the record
 
-	resetSkillSnapshotForRun(root, 7, "run-R", skillSnapshotResumes(true, nil, 7), false)
+	resetSkillSnapshotForRun(root, 7, "run-R", true)
 
 	again, err := runSkillSnapshot(root, live, 7, "run-R")
 	if err != nil {
@@ -179,32 +183,6 @@ func TestResetSkillSnapshotKeepsResumeWhileAnotherIssueOwnsRunState(t *testing.T
 	}
 	if data, _ := os.ReadFile(filepath.Join(again, "skills", "a", "SKILL.md")); string(data) != "original" {
 		t.Errorf("resumed issue #7 read %q, want the frozen %q", data, "original")
-	}
-}
-
-func TestSkillSnapshotResumes(t *testing.T) {
-	rec := func(issue int, st runstate.Lifecycle) *runstate.RunState {
-		return &runstate.RunState{IssueNumber: issue, State: st, RunID: "run-x"}
-	}
-	cases := []struct {
-		name       string
-		fromRemote bool
-		rs         *runstate.RunState
-		want       bool
-	}{
-		{"remote id", true, nil, true},
-		{"remote id beside another issue's record", true, rec(8, runstate.StateRunning), true},
-		{"same issue running", false, rec(7, runstate.StateRunning), true},
-		{"same issue paused", false, rec(7, runstate.StatePaused), true},
-		{"same issue completed", false, rec(7, runstate.StateCompleted), false},
-		{"same issue aborted", false, rec(7, runstate.StateAborted), false},
-		{"other issue running", false, rec(8, runstate.StateRunning), false},
-		{"minted", false, nil, false},
-	}
-	for _, tc := range cases {
-		if got := skillSnapshotResumes(tc.fromRemote, tc.rs, 7); got != tc.want {
-			t.Errorf("%s: skillSnapshotResumes = %v, want %v", tc.name, got, tc.want)
-		}
 	}
 }
 
@@ -222,7 +200,7 @@ func TestResetSkillSnapshotResumeAdoptsCopyUnderAnotherID(t *testing.T) {
 	}
 	writeTestFile(t, skill, "edited by a stage")
 
-	resetSkillSnapshotForRun(root, 7, "run-record", true, true)
+	resetSkillSnapshotForRun(root, 7, "run-record", true)
 	dst, err := runSkillSnapshot(root, live, 7, "run-record")
 	if err != nil {
 		t.Fatal(err)
@@ -259,9 +237,9 @@ func TestDropSkillSnapshotRemovesOnlyThatIssue(t *testing.T) {
 	}
 }
 
-// A new platform-supplied run never adopts an earlier run's leftover copy: its
-// ID is its own, so only a copy under that exact key is reused (#2813 review).
-func TestResetSkillSnapshotRemoteRunDoesNotAdoptOtherCopies(t *testing.T) {
+// A run that resumed nothing discards the issue's earlier copy, whatever its
+// key, and renders the current skills (#2813).
+func TestResetSkillSnapshotNotResumedDropsOtherCopies(t *testing.T) {
 	root := t.TempDir()
 	layouttest.MkCheckoutDir(t, root)
 	live := t.TempDir()
@@ -272,12 +250,68 @@ func TestResetSkillSnapshotRemoteRunDoesNotAdoptOtherCopies(t *testing.T) {
 	}
 	writeTestFile(t, skill, "current")
 
-	resetSkillSnapshotForRun(root, 7, "remote-2", skillSnapshotResumes(true, nil, 7), false)
+	resetSkillSnapshotForRun(root, 7, "remote-2", false)
 	dst, err := runSkillSnapshot(root, live, 7, "remote-2")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(dst, "skills", "a", "SKILL.md")); string(data) != "current" {
-		t.Errorf("new remote run read %q, want the current %q", data, "current")
+		t.Errorf("fresh run read %q, want the current %q", data, "current")
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(dst)); len(entries) != 1 {
+		t.Errorf("issue keeps %d snapshots, want 1", len(entries))
+	}
+}
+
+// A platform run with a new run ID that resumes this issue's paused record
+// renders its later stages from the run-start snapshot, not the worktree an
+// earlier stage edited; a fresh run after a completed one renders the edit
+// (#2813 review: the resume decision is beginRunLifecycle's, not the run ID's
+// provenance).
+func TestPlatformRunResumingPausedRecordRendersFromSnapshot(t *testing.T) {
+	t.Setenv(skillrender.SkillsRootEnv, "")
+	root := layouttest.Repo(t)
+	skill := filepath.Join(root, "skills", "nightgauge-feature-dev", "SKILL.md")
+	writeTestFile(t, skill, "---\nname: feature-dev\n---\nrun-start body\n")
+	render := func(runID string) string {
+		t.Helper()
+		r, err := skillrender.Render(skillrender.Options{
+			Stage: "feature-dev", SkillsRoots: stageSkillRoots(root, root, 7, runID),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.Content
+	}
+
+	lc, _ := beginRunLifecycle(root, 7, "fix/7")
+	resetSkillSnapshotForRun(root, 7, "remote-1", lc.resumed)
+	if got := render("remote-1"); !strings.Contains(got, "run-start body") {
+		t.Fatalf("first render = %q, want the run-start body", got)
+	}
+	lc.stage(state.StageIssuePickup, "")
+	lc.stage(state.StageFeatureValidate, "")
+	writeTestFile(t, skill, "---\nname: feature-dev\n---\nINJECTED by an earlier stage\n")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(errors.New("terminated"))
+	lc.finish(ctx, false) // paused
+
+	lc2, _ := beginRunLifecycle(root, 7, "")
+	if !lc2.resumed {
+		t.Fatal("platform re-dispatch of a paused record: lc.resumed = false")
+	}
+	resetSkillSnapshotForRun(root, 7, "remote-2", lc2.resumed)
+	if got := render("remote-2"); strings.Contains(got, "INJECTED") || !strings.Contains(got, "run-start body") {
+		t.Errorf("resumed render = %q, want the run-start body, not the edit", got)
+	}
+	lc2.finish(context.Background(), true) // completed
+
+	lc3, _ := beginRunLifecycle(root, 7, "fix/7")
+	if lc3.resumed {
+		t.Fatal("a run after a completed one reported lc.resumed")
+	}
+	resetSkillSnapshotForRun(root, 7, "remote-3", lc3.resumed)
+	if got := render("remote-3"); !strings.Contains(got, "INJECTED") {
+		t.Errorf("fresh render = %q, want the current skill", got)
 	}
 }

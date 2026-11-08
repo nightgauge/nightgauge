@@ -344,8 +344,9 @@ call fails the stage. A Go test keeps ordering and the override out of
 ## Amendment (2026-11-07, #2813) — the workspace root is frozen per run
 
 The order above stands; the workspace root's **content** no longer tracks the
-live worktree. Before a run's first render the scheduler copies
-`<worktree>/skills` into a run-scoped directory in checkout state
+live worktree. Before a run's first render the scheduler copies the `skills/`
+of the tree the run's stages execute in (its worktree, else the repository
+root) into a run-scoped directory in checkout state
 (`skillsnap/<issue>/<run-key>/skills`), keyed by a digest of the dispatching run's own ID, and every
 stage of that run searches the copy. An earlier stage has write access to the
 worktree, so without the copy it could rewrite a later stage's `SKILL.md`, an
@@ -354,9 +355,11 @@ include, or `skills/_shared` and change what that stage executes.
 The copy skips symlinks, makes its files read-only, and replaces the same
 issue's earlier copies (never another issue's: concurrent runs share the
 checkout). A worktree with no `skills/` at run start is frozen as an empty copy,
-so a stage cannot add skills mid-run either. A resumed run adopts the issue's
-existing copy whatever its key, because the run-state record can carry a
-different ID from the one the run started under. A run that completes or aborts
+so a stage cannot add skills mid-run either. A run that resumes its paused or
+interrupted record (the run lifecycle's own decision, never the checkout-wide
+run-state record another issue may own) adopts the issue's existing copy
+whatever its key, because the resuming run can carry a different ID from the
+one the run started under. Any other run discards the issue's copies. A run that completes or aborts
 removes its copy; a paused run keeps it for the resume. A dispatch with no run
 ID omits the workspace root rather than searching the live tree, and so does a
 copy that cannot be taken, so a worktree-only skill fails render rather than

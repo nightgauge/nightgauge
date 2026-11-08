@@ -41,6 +41,9 @@ type runLifecycle struct {
 	baseDir string
 	issue   int
 	active  bool
+	// resumed is set when this run continued a paused or interrupted record
+	// of the same issue.
+	resumed bool
 }
 
 // provisionalBranch is the branch recorded before issue-pickup names the
@@ -94,6 +97,7 @@ func beginRunLifecycle(workspaceRoot string, issue int, branch string) (*runLife
 				return lc, ""
 			}
 			lc.active = true
+			lc.resumed = true
 			var from runstate.Stage
 			if rs.ResumeFromStage != nil {
 				from = *rs.ResumeFromStage

@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
-	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 // skillSnapshotsDir is the checkout-state subdirectory holding one frozen
@@ -199,36 +198,21 @@ func pruneSkillSnapshots(base, keep string) {
 	}
 }
 
-// skillSnapshotResumes reports whether runID continues an earlier run of
-// issue, judged from where the scheduler took runID (#2813). A platform-supplied
-// ID names this issue's run, and a new platform run carries a new ID. rs is the
-// run-state record that supplied runID, nil unless it did; it is a resume only
-// when that record names issue and is still running or paused. A record for
-// another issue, or a finished one, was inherited, not resumed.
-func skillSnapshotResumes(fromRemote bool, rs *runstate.RunState, issue int) bool {
-	if fromRemote {
-		return true
-	}
-	return rs != nil && rs.IssueNumber == issue &&
-		(rs.State == runstate.StateRunning || rs.State == runstate.StatePaused)
-}
-
 // resetSkillSnapshotForRun prepares issue's snapshot directory for runID
-// before the run's first render; the caller decides resumed with
-// skillSnapshotResumes from the run ID's provenance. It never reads run state
-// itself: the checkout's record names whichever issue wrote it last.
+// before the run's first render. resumed is beginRunLifecycle's decision: true
+// exactly when this run moved a paused or interrupted record of THIS issue back
+// to running, which is also when it skips the stages that already ran. It never
+// reads run state itself: the checkout's record names whichever issue wrote it
+// last.
 //
-// A resume whose ID came from the run-state record (adopt) takes the issue's
-// existing snapshot whatever its key, because that record can carry a different
-// ID from the one the run started under (MarkRunning mints its own). A
-// platform-supplied ID is the run's own for its whole life, so it reuses only
-// the copy under that exact key: a new platform run never adopts an older
-// run's copy. Re-copying on resume would freeze the
-// worktree as an earlier stage left it, which is the hole this closes (#2813).
-// A run that is not a resume discards the issue's snapshots, so an inherited ID
-// never reuses an old copy and the run sees updated skills.
-// Best-effort: a failure leaves frozen content, never live content.
-func resetSkillSnapshotForRun(workspaceRoot string, issueNumber int, runID string, resumed, adopt bool) {
+// A resumed run adopts the issue's existing snapshot whatever its key, because
+// the resuming run can carry a different ID from the one the run started under
+// (a platform re-dispatch brings a new one; MarkRunning mints its own).
+// Re-copying on resume would freeze the worktree as an earlier stage left it,
+// which is the hole this closes (#2813). A run that resumed nothing starts at
+// its first stage, so it discards the issue's snapshots and renders current
+// skills. Best-effort: a failure leaves frozen content, never live content.
+func resetSkillSnapshotForRun(workspaceRoot string, issueNumber int, runID string, resumed bool) {
 	if runID == "" || issueNumber <= 0 {
 		return
 	}
@@ -240,9 +224,7 @@ func resetSkillSnapshotForRun(workspaceRoot string, issueNumber int, runID strin
 		_ = os.RemoveAll(base)
 		return
 	}
-	if adopt {
-		adoptSkillSnapshot(base, snapshotKey(runID))
-	}
+	adoptSkillSnapshot(base, snapshotKey(runID))
 }
 
 // adoptSkillSnapshot renames the issue's one complete snapshot to key when no

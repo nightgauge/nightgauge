@@ -286,7 +286,7 @@ func TestStageSkillRootsSearchesTheRunsWorktree(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, "skills", "nightgauge-feature-dev", "SKILL.md"), "repository\n")
 	saveSkillRunState(t, root, worktree, 2718, "run-2718")
 
-	got := stageSkillRoots(root, 2718, "run-2718")
+	got := stageSkillRoots(root, loadWorktreePath(root, 2718), 2718, "run-2718")
 	if len(got) != 1 {
 		t.Fatalf("roots = %v, want only the run's workspace snapshot", got)
 	}
@@ -302,7 +302,7 @@ func TestStageSkillRootsSearchesTheRunsWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	saveSkillRunState(t, root, worktree, 2718, "run-2718b")
-	got = stageSkillRoots(root, 2718, "run-2718b")
+	got = stageSkillRoots(root, loadWorktreePath(root, 2718), 2718, "run-2718b")
 	data, err = os.ReadFile(filepath.Join(got[0], "nightgauge-feature-dev", "SKILL.md"))
 	if err != nil || string(data) != "repository\n" {
 		t.Errorf("worktree gone: SKILL.md = %q, %v; want the repository's copy", data, err)
@@ -325,7 +325,7 @@ func TestStageSkillRootsIgnoresWorktreeEditsBetweenStages(t *testing.T) {
 	render := func() string {
 		t.Helper()
 		r, err := skillrender.Render(skillrender.Options{
-			Stage: "feature-dev", SkillsRoots: stageSkillRoots(root, 2813, "run-2813"),
+			Stage: "feature-dev", SkillsRoots: stageSkillRoots(root, loadWorktreePath(root, 2813), 2813, "run-2813"),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -344,7 +344,7 @@ func TestStageSkillRootsIgnoresWorktreeEditsBetweenStages(t *testing.T) {
 	}
 
 	// The snapshot is read-only on disk.
-	snap := stageSkillRoots(root, 2813, "run-2813")[0]
+	snap := stageSkillRoots(root, loadWorktreePath(root, 2813), 2813, "run-2813")[0]
 	if err := os.WriteFile(filepath.Join(snap, "nightgauge-feature-dev", "SKILL.md"), []byte("x"), 0o644); err == nil {
 		t.Error("snapshot SKILL.md is writable, want read-only")
 	}
@@ -561,17 +561,37 @@ func TestStageSkillRootsFreezesWithoutMatchingRunState(t *testing.T) {
 	writeTestFile(t, skill, "---\nname: feature-dev\n---\noriginal body\n")
 	saveSkillRunState(t, root, t.TempDir(), 9999, "run-9999")
 
-	got := stageSkillRoots(root, 2813, "run-2813")
+	got := stageSkillRoots(root, loadWorktreePath(root, 2813), 2813, "run-2813")
 	if len(got) != 1 || strings.HasPrefix(got[0], filepath.Join(root, "skills")) {
 		t.Fatalf("roots = %v, want one snapshot outside the live tree", got)
 	}
 	writeTestFile(t, skill, "---\nname: feature-dev\n---\nINJECTED\n")
-	data, err := os.ReadFile(filepath.Join(stageSkillRoots(root, 2813, "run-2813")[0],
+	data, err := os.ReadFile(filepath.Join(stageSkillRoots(root, loadWorktreePath(root, 2813), 2813, "run-2813")[0],
 		"nightgauge-feature-dev", "SKILL.md"))
 	if err != nil || strings.Contains(string(data), "INJECTED") {
 		t.Errorf("snapshot SKILL.md = %q, %v; want the content from run start", data, err)
 	}
-	if roots := stageSkillRoots(root, 2813, ""); len(roots) != 0 {
+	if roots := stageSkillRoots(root, loadWorktreePath(root, 2813), 2813, ""); len(roots) != 0 {
 		t.Errorf("roots with no run id = %v, want the workspace root omitted", roots)
+	}
+}
+
+// The snapshot copies the tree the run's stages execute in (runtime.WorktreeDir),
+// not the primary checkout, even with no run-state worktree_path (#2813 review).
+func TestStageSkillRootsSnapshotsTheRunWorktree(t *testing.T) {
+	t.Setenv(skillrender.SkillsRootEnv, "")
+	root := t.TempDir()
+	wt := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "skills", "nightgauge-feature-dev", "SKILL.md"), "primary")
+	writeTestFile(t, filepath.Join(wt, "skills", "nightgauge-feature-dev", "SKILL.md"), "worktree")
+	rt := &state.RuntimeState{WorktreeDir: wt}
+
+	got := stageSkillRoots(root, stageWorkspace(rt, root), 2813, "run-wt")
+	if len(got) != 1 {
+		t.Fatalf("roots = %v, want one snapshot", got)
+	}
+	data, err := os.ReadFile(filepath.Join(got[0], "nightgauge-feature-dev", "SKILL.md"))
+	if err != nil || string(data) != "worktree" {
+		t.Errorf("snapshot SKILL.md = %q, %v; want the run worktree's %q", data, err, "worktree")
 	}
 }
