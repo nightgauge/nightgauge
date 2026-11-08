@@ -164,7 +164,8 @@ this comment's format. Change `scripts/pr-review.mjs` and
 
 A manual run reviews a fork's pull request like any other, because a maintainer
 chose to start it. Automatic fork review needs a `pull_request` trigger, which
-gives a fork no secrets, so it is not implemented.
+gives a fork no secrets, so it is not implemented. The workflow never uses
+`pull_request_target`, and automatic fork review stays a recorded follow-up.
 
 ## Security model
 
@@ -176,6 +177,20 @@ follows the split used by `continuous-improvement.yml`:
 2. `review` runs the model with `contents: read`, no forge token, no persisted
    checkout credentials, and no Bash. It can only read files and write the
    findings file.
+
+   The model token is in the CLI's environment, so an unconfined `Read` of
+   `/proc/self/environ` would recover it. The run therefore passes
+   `--restricted` (file tools confined to the checkout; project settings,
+   hooks and code-running tools ignored), `--tools "Read,Glob,Grep,Write"`,
+   `--strict-mcp-config`, `--permission-mode dontAsk`, and the committed
+   `.github/pr-review/claude-settings.json`. That file allows reads of
+   `.pr-review/`, `docs/`, `standards/` and
+   `skills/nightgauge-adversarial-review/` only, writes of `.pr-review/out/findings.json`
+   only, and denies `/proc`, `/sys`, `/dev`, `~`, `.git`, Bash and web tools.
+   Symlinks are deleted from the pull request's tree before the model runs.
+   After the model exits, a model-free step fails the run if the findings
+   file contains the token's exact value.
+
 3. `post` holds no model. It validates the findings file against the closed
    schema above, renders it, and upserts the comment with
    `pull-requests: write`.

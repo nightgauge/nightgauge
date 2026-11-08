@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "disableBypassPermissionsMode": "disable",
+    "allow": [
+      "Read(./.pr-review/**)",
+      "Read(./docs/**)",
+      "Read(./standards/**)",
+      "Read(./skills/nightgauge-adversarial-review/**)",
+      "Glob",
+      "Grep",
+      "Edit(./.pr-review/out/findings.json)",
+      "Write(./.pr-review/out/findings.json)"
+    ],
+    "deny": [
+      "Read(//proc/**)",
+      "Read(//sys/**)",
+      "Read(//dev/**)",
+      "Read(~/**)",
+      "Read(./.git/**)",
+      "Read(./.pr-review/head/.git/**)",
+      "Bash",
+      "WebFetch",
+      "WebSearch"
+    ]
+  }
+}
