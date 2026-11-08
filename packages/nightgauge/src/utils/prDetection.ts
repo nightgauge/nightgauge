@@ -360,10 +360,10 @@ export function prBodyClosesIssue(
 ): boolean {
   if (!text) return false;
   const closer =
-    /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*(?:([\w.-]+\/[\w.-]+)?#(\d+)|https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+))\b/gi;
+    /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*(?:([\w.-]+\/[\w.-]+)?#(\d+)|https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)|GH-(\d+))\b/gi;
   for (const m of text.matchAll(closer)) {
     const refRepo = m[1] ?? m[3] ?? "";
-    const num = Number(m[2] ?? m[4]);
+    const num = Number(m[2] ?? m[4] ?? m[5]);
     if (num !== issueNumber) continue;
     if (refRepo === "" || (repo !== "" && refRepo.toLowerCase() === repo.toLowerCase())) {
       return true;
