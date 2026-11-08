@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # Codesign (and optionally notarize) the macOS binaries that ship inside the
-# VSIX. No-op, loudly, when the Apple credentials are absent.
+# VSIX, the release archives and the Homebrew cask. No-op, loudly, when the
+# Apple credentials are absent, unless --require-team is given.
 #
 # Usage:
-#   sign-macos-binaries.sh bin/nightgauge-darwin-arm64 bin/nightgauge-darwin-amd64
+#   sign-macos-binaries.sh [--require-team TEAMID] BINARY...
+#
+#   --require-team TEAMID  Required mode, used by release.yml (#3064). Missing
+#                          credentials are fatal, and after signing every binary
+#                          must report TeamIdentifier=TEAMID and the hardened
+#                          `runtime` flag in `codesign -dv`, or the script exits
+#                          1 naming the binary. Without it, behaviour is the
+#                          loud no-op described below.
 #
 # Credentials, all optional. Signing is skipped entirely unless the first three
 # are present; notarization additionally needs the last three.
@@ -46,12 +54,25 @@
 
 set -uo pipefail
 
+REQUIRE_TEAM=""
+if [[ "${1:-}" == "--require-team" ]]; then
+  [[ -n "${2:-}" ]] || { echo "::error::--require-team needs a team identifier"; exit 1; }
+  REQUIRE_TEAM="$2"
+  shift 2
+fi
+
 BINARIES=("$@")
 (( ${#BINARIES[@]} > 0 )) || { echo "::error::no binaries given"; exit 1; }
 
 have() { [[ -n "${!1:-}" ]]; }
 
 if ! { have APPLE_CERT_P12 && have APPLE_CERT_PASSWORD && have APPLE_SIGNING_IDENTITY; }; then
+  if [[ -n "$REQUIRE_TEAM" ]]; then
+    echo "::error::Developer ID signing is required (--require-team $REQUIRE_TEAM) but"
+    echo "  APPLE_CERT_P12, APPLE_CERT_PASSWORD or APPLE_SIGNING_IDENTITY is empty."
+    echo "  A release must not ship ad-hoc signed darwin binaries."
+    exit 1
+  fi
   echo "::notice::Apple signing credentials absent — leaving binaries ad-hoc signed."
   echo "  To enable, create a 'Developer ID Application' certificate for the team"
   echo "  and set APPLE_CERT_P12, APPLE_CERT_PASSWORD and APPLE_SIGNING_IDENTITY."
@@ -122,7 +143,21 @@ for BIN in "${BINARIES[@]}"; do
   if ! codesign --verify --strict --verbose=2 "$BIN"; then
     echo "::error::signature on $BIN does not verify"; FAILED+=("$BIN"); echo "::endgroup::"; continue
   fi
-  codesign --display --verbose=2 "$BIN" 2>&1 | grep -E 'Authority|TeamIdentifier|flags' || true
+  DISPLAY_OUT="$(codesign --display --verbose=2 "$BIN" 2>&1)"
+  printf '%s\n' "$DISPLAY_OUT" | grep -E 'Authority|TeamIdentifier|flags' || true
+
+  # Required mode: verify the identity, not just that some signature verifies.
+  # An ad-hoc or wrong-team signature also passes `codesign --verify`.
+  if [[ -n "$REQUIRE_TEAM" ]]; then
+    if ! grep -qx "TeamIdentifier=$REQUIRE_TEAM" <<<"$DISPLAY_OUT"; then
+      echo "::error::$BIN is not signed by team $REQUIRE_TEAM"
+      FAILED+=("$BIN"); echo "::endgroup::"; continue
+    fi
+    if ! grep -qE 'flags=0x[0-9a-fA-F]+\([^)]*runtime' <<<"$DISPLAY_OUT"; then
+      echo "::error::$BIN lacks the hardened runtime flag"
+      FAILED+=("$BIN"); echo "::endgroup::"; continue
+    fi
+  fi
   echo "::endgroup::"
 done
 

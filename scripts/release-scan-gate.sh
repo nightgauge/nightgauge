@@ -18,6 +18,13 @@
 #                 file checksums.txt lists. The Homebrew cask, the Marketplace
 #                 and Open VSX move only after this passes.
 #
+#   local FILE... Scan release files that are on disk, with no tag and no GitHub
+#                 Release (#3064). The files are unpacked and collected exactly
+#                 as `scan` does for a draft, and scanned with vt-scan.sh.
+#                 Nothing is uploaded or published. staging.yml runs it over a
+#                 release candidate's archives and VSIXs, so a flagged build
+#                 fails the RC instead of reaching the soak.
+#
 # The scan reads the draft's own downloaded bytes, never local build outputs:
 # what is scanned is exactly what a user will download.
 #
@@ -25,44 +32,61 @@
 # re-run of release.yml cannot change the files of a public release.
 #
 # Options:
-#   -R, --repo OWNER/REPO  Repository. Default: $GITHUB_REPOSITORY.
-#   --report PATH          scan only: also keep the report here (run artifact).
+#   -R, --repo OWNER/REPO  scan/verify: repository. Default: $GITHUB_REPOSITORY.
+#   --report PATH          scan/local: also keep the report here (run artifact).
 #
-# Environment: VT_API_KEY (scan), plus vt-scan.sh's optional VT_* settings.
+# Environment: VT_API_KEY (scan, local), plus vt-scan.sh's optional VT_* settings.
 #
 # Exit:
 #   0  scan: clean and published. verify: published and covered by a clean scan.
+#      local: every file is clean.
 #   1  scan: a finding, the draft is kept. verify: draft, dirty or not covered.
+#      local: a finding.
 #   2  HARNESS ERROR: nothing could be decided; nothing was published.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPORT_ASSET="vt-scan-report.json"
 
+USAGE="usage: release-scan-gate.sh scan|verify <tag> [-R OWNER/REPO] [--report PATH]
+       release-scan-gate.sh local [--report PATH] FILE..."
 MODE="${1:-}"
-TAG="${2:-}"
-if [ $# -ge 2 ]; then shift 2; else shift $#; fi
+[ $# -gt 0 ] && shift
+TAG=""
 REPO="${GITHUB_REPOSITORY:-}"
 KEEP_REPORT=""
+LOCAL_FILES=()
 
 harness() { echo "HARNESS ERROR: release-scan-gate: $*" >&2; exit 2; }
 refuse() { echo "::error::release-scan-gate: $*" >&2; exit 1; }
 
-while [ $# -gt 0 ]; do
-  case "$1" in
-  -R | --repo) [ $# -ge 2 ] || harness "$1 needs a value"; REPO="$2"; shift 2 ;;
-  --report) [ $# -ge 2 ] || harness "$1 needs a value"; KEEP_REPORT="$2"; shift 2 ;;
-  *) harness "unknown argument '$1'" ;;
-  esac
-done
-
 case "$MODE" in
-scan | verify) ;;
-*) harness "usage: release-scan-gate.sh scan|verify <tag> [-R OWNER/REPO] [--report PATH]" ;;
+scan | verify)
+  TAG="${1:-}"
+  [ $# -gt 0 ] && shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    -R | --repo) [ $# -ge 2 ] || harness "$1 needs a value"; REPO="$2"; shift 2 ;;
+    --report) [ $# -ge 2 ] || harness "$1 needs a value"; KEEP_REPORT="$2"; shift 2 ;;
+    *) harness "unknown argument '$1'" ;;
+    esac
+  done
+  [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || harness "tag must be vX.Y.Z, got '$TAG'"
+  [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || harness "--repo OWNER/REPO (or GITHUB_REPOSITORY) is required"
+  command -v gh >/dev/null 2>&1 || harness "gh is required"
+  ;;
+local)
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --report) [ $# -ge 2 ] || harness "$1 needs a value"; KEEP_REPORT="$2"; shift 2 ;;
+    -*) harness "unknown argument '$1'" ;;
+    *) LOCAL_FILES+=("$1"); shift ;;
+    esac
+  done
+  [ "${#LOCAL_FILES[@]}" -gt 0 ] || harness "local: no files given: a scan of nothing is not a clean scan"
+  ;;
+*) harness "$USAGE" ;;
 esac
-[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || harness "tag must be vX.Y.Z, got '$TAG'"
-[[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || harness "--repo OWNER/REPO (or GITHUB_REPOSITORY) is required"
-command -v gh >/dev/null 2>&1 || harness "gh is required"
 command -v jq >/dev/null 2>&1 || harness "jq is required"
 
 WORK="$(mktemp -d)" || harness "mktemp failed"
@@ -106,6 +130,77 @@ is_binary() {
   esac
   return 1
 }
+
+# collect_scan_set — run inside $WORK/scan with the release files in assets/.
+# Writes $LIST: every asset, plus every binary and JS bundle inside each .vsix
+# and .tar.gz. Shared by `scan` and `local`, so a release candidate and a
+# draft are collected the same way.
+LIST="$WORK/files.txt"
+collect_scan_set() {
+  local a name dest bins bundles f
+  : >"$LIST"
+  for a in assets/*; do
+    [ -f "$a" ] || continue
+    echo "$a" >>"$LIST"
+    name="$(basename "$a")"
+    dest="extracted/$name"
+    case "$name" in
+    *.vsix) mkdir -p "$dest"; unzip -qo "$a" -d "$dest" 2>"$WORK/x.err" ||
+      harness "cannot unpack $name: $(head -c 200 "$WORK/x.err")" ;;
+    *.tar.gz) mkdir -p "$dest"; tar -xzf "$a" -C "$dest" 2>"$WORK/x.err" ||
+      harness "cannot unpack $name: $(head -c 200 "$WORK/x.err")" ;;
+    *) continue ;;
+    esac
+    bins=0 bundles=0
+    while IFS= read -r f; do
+      case "$f" in
+      *.js | *.cjs | *.mjs) echo "$f" >>"$LIST"; bundles=$((bundles + 1)) ;;
+      *) is_binary "$f" && { echo "$f" >>"$LIST"; bins=$((bins + 1)); } ;;
+      esac
+    done < <(find "$dest" -type f | LC_ALL=C sort)
+    # An archive that yields nothing to scan means extraction or selection broke,
+    # and the scan would be green having looked inside nothing (#2772).
+    [ "$bins" -gt 0 ] || harness "$name yielded no binary to scan"
+    case "$name" in *.vsix) [ "$bundles" -gt 0 ] || harness "$name yielded no JS bundle to scan" ;; esac
+    echo "  $name: $bins binar$([ "$bins" -eq 1 ] && echo y || echo ies), $bundles JS bundle(s)"
+  done
+}
+
+# run_vt_scan — scan $LIST with vt-scan.sh into $REPORT; sets SCAN_RC.
+REPORT="$WORK/$REPORT_ASSET"
+run_vt_scan() {
+  local f files=()
+  while IFS= read -r f; do files+=("$f"); done <"$LIST"
+  bash "$SCRIPT_DIR/vt-scan.sh" --report "$REPORT" "${files[@]}"
+  SCAN_RC=$?
+  if [ -n "$KEEP_REPORT" ] && [ -f "$REPORT" ]; then
+    cp "$REPORT" "$KEEP_REPORT" || echo "::warning::could not keep the report at $KEEP_REPORT" >&2
+  fi
+}
+
+# ============================================================================
+if [ "$MODE" = "local" ]; then
+  # The basename is the asset name, as on a release, so two files sharing one
+  # would silently scan only the last: refuse instead.
+  mkdir -p "$WORK/scan/assets" "$WORK/scan/extracted"
+  for f in "${LOCAL_FILES[@]}"; do
+    [ -f "$f" ] || harness "local: $f is not a file"
+    [ ! -e "$WORK/scan/assets/$(basename "$f")" ] ||
+      harness "local: two files are named $(basename "$f")"
+    cp "$f" "$WORK/scan/assets/" || harness "local: cannot copy $f"
+  done
+  cd "$WORK/scan" || harness "cannot enter the scan directory"
+  collect_scan_set
+  [ -s "$LIST" ] || harness "local: no files to scan"
+  run_vt_scan
+  cd - >/dev/null || true
+  if [ "$SCAN_RC" -ne 0 ]; then
+    echo "::error::release-scan-gate: local scan failed (vt-scan exit $SCAN_RC). Read the report." >&2
+    exit "$SCAN_RC"
+  fi
+  echo "release-scan-gate: every local file is clean (${#LOCAL_FILES[@]} given)"
+  exit 0
+fi
 
 # ============================================================================
 if [ "$MODE" = "verify" ]; then
@@ -160,42 +255,11 @@ while read -r n _ d; do
 done <<<"$BEFORE"
 
 cd "$WORK/scan" || harness "cannot enter the scan directory"
-LIST="$WORK/files.txt"
-: >"$LIST"
-for a in assets/*; do
-  [ -f "$a" ] || continue
-  echo "$a" >>"$LIST"
-  name="$(basename "$a")"
-  dest="extracted/$name"
-  case "$name" in
-  *.vsix) mkdir -p "$dest"; unzip -qo "$a" -d "$dest" 2>"$WORK/x.err" ||
-    harness "cannot unpack $name: $(head -c 200 "$WORK/x.err")" ;;
-  *.tar.gz) mkdir -p "$dest"; tar -xzf "$a" -C "$dest" 2>"$WORK/x.err" ||
-    harness "cannot unpack $name: $(head -c 200 "$WORK/x.err")" ;;
-  *) continue ;;
-  esac
-  bins=0 bundles=0
-  while IFS= read -r f; do
-    case "$f" in
-    *.js | *.cjs | *.mjs) echo "$f" >>"$LIST"; bundles=$((bundles + 1)) ;;
-    *) is_binary "$f" && { echo "$f" >>"$LIST"; bins=$((bins + 1)); } ;;
-    esac
-  done < <(find "$dest" -type f | LC_ALL=C sort)
-  # An archive that yields nothing to scan means extraction or selection broke,
-  # and the scan would be green having looked inside nothing (#2772).
-  [ "$bins" -gt 0 ] || harness "$name yielded no binary to scan"
-  case "$name" in *.vsix) [ "$bundles" -gt 0 ] || harness "$name yielded no JS bundle to scan" ;; esac
-  echo "  $name: $bins binar$([ "$bins" -eq 1 ] && echo y || echo ies), $bundles JS bundle(s)"
-done
+collect_scan_set
 [ -s "$LIST" ] || harness "draft $TAG has no files to scan"
 
-REPORT="$WORK/$REPORT_ASSET"
-FILES=()
-while IFS= read -r f; do FILES+=("$f"); done <"$LIST"
-bash "$SCRIPT_DIR/vt-scan.sh" --report "$REPORT" "${FILES[@]}"
-SCAN_RC=$?
+run_vt_scan
 cd - >/dev/null || true
-[ -n "$KEEP_REPORT" ] && [ -f "$REPORT" ] && cp "$REPORT" "$KEEP_REPORT"
 
 if [ "$SCAN_RC" -ne 0 ]; then
   # Best effort: the report on the draft is what the owner reads (GIT_WORKFLOW

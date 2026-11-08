@@ -5,6 +5,9 @@
 # Usage:
 #   goreleaser release --clean          # production (triggered by release.yml)
 #   goreleaser release --snapshot --clean  # local dry-run (no publish)
+#
+# Run `make build-all` first: every build copies its bin/ binary into the
+# archive (see `hooks.post` below), and a missing bin/ file fails the build.
 
 # Required by GoReleaser v2: a config without this is parsed as "version: 0" and
 # rejected outright ("only version: 2 configuration files are supported"). This
@@ -44,6 +47,16 @@ builds:
       - -trimpath
     ldflags:
       - -s -w -X main.version={{.Version}} -X "main.vendor=Edibu, LLC"
+    # #3064: the archives and the Homebrew cask must carry the SAME binaries the
+    # VSIXs bundle: the ones `make build-all` produced and release.yml signed
+    # with the Developer ID. GoReleaser's own build is unsigned, so it is
+    # overwritten here, before archiving, checksums, SBOMs and the cask see it.
+    # `builder: prebuilt` would skip the rebuild, but it is GoReleaser Pro only
+    # (OSS v2.17 rejects the key). scripts/verify-archive-binaries.sh proves the
+    # archives' bytes equal bin/ after GoReleaser runs.
+    hooks:
+      post:
+        - cmd: cp "bin/nightgauge-{{ .Os }}-{{ .Arch }}" "{{ .Path }}"
 
 archives:
   # `format` (singular) is deprecated in GoReleaser v2; `formats` is the

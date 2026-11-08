@@ -11,6 +11,11 @@
 # push to main under a synthetic version X.Y.(Z+1)-main.g<sha7> (#2952), so a
 # release-path defect fails at the merge that caused it, not at the next RC
 # tag. That caller passes no secrets, so signing no-ops as on a fork.
+#
+# An RC tag push also runs the `rc-scan` job: a multi-engine VirusTotal scan of
+# the RC's archives and VSIXs, and every binary and bundle inside them (#3064).
+# A finding fails the RC, so a flagged build never reaches the soak. Main
+# builds are not scanned.
 name: Staging (RC dry-run)
 
 on:
@@ -58,6 +63,8 @@ jobs:
     # Do not copy this pattern into a private repository without re-checking.
     runs-on: macos-latest
     timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -325,6 +332,12 @@ jobs:
           # only names the artifacts after it.
           GORELEASER_CURRENT_TAG: ${{ steps.version.outputs.tag }}
 
+      # #3064: the archives must carry the bin/ binaries the VSIXs bundle (the
+      # signed ones when the Apple secrets exist), byte for byte. Mirrors the
+      # same step in release.yml, so a broken copy hook fails the RC first.
+      - name: Verify archives carry the signed bin/ binaries
+        run: bash scripts/verify-archive-binaries.sh dist bin
+
       - name: Add VSIX checksums
         run: |
           set -euo pipefail
@@ -368,3 +381,54 @@ jobs:
             echo "### RC dry-run $TAG — no publish" >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "Download **rc-artifacts-$TAG** from this run to install/test each platform's .vsix and the CLI tarballs." >> "$GITHUB_STEP_SUMMARY"
+
+  # Multi-engine VirusTotal scan of the RC (#3064), through the same unpack and
+  # collection as the release gate (release-scan-gate.sh scan). An RC has no
+  # GitHub Release, so it scans the uploaded rc-artifacts in `local` mode, which
+  # never publishes anything. Its own job, on Linux: the free key's 4
+  # requests/min makes a full scan take about half an hour, longer than the
+  # dry-run's timeout. RC tag pushes only; main builds (workflow_call) are not
+  # scanned, and a missing VT_API_KEY fails the RC rather than skipping the scan.
+  rc-scan:
+    name: VirusTotal scan of the RC
+    needs: dry-run
+    # An RC tag push only. Under workflow_call (main-build.yml) github.ref is
+    # the caller's branch, and github.event_name is also `push`, so the ref is
+    # the test, with the version input as a second guard.
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.version == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download RC artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rc-artifacts-${{ needs.dry-run.outputs.tag }}
+          path: ${{ runner.temp }}/rc
+
+      - name: Scan every archive and VSIX
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VT_API_KEY:-}" ]; then
+            echo "::error::VT_API_KEY is not readable by staging.yml. The RC cannot be scanned, so it fails here instead of soaking unscanned. Add it as a repository secret (docs/RELEASE_CHECKLIST.md)."
+            exit 1
+          fi
+          shopt -s nullglob
+          FILES=("$RUNNER_TEMP"/rc/packages/nightgauge/*.vsix "$RUNNER_TEMP"/rc/dist/*.tar.gz)
+          [ "${#FILES[@]}" -gt 0 ] || { echo "::error::no .vsix or .tar.gz in rc-artifacts"; ls -R "$RUNNER_TEMP/rc"; exit 1; }
+          bash scripts/release-scan-gate.sh local \
+            --report "$RUNNER_TEMP/vt-scan-report-rc.json" "${FILES[@]}"
+
+      - name: Upload VirusTotal report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vt-scan-report-rc
+          path: ${{ runner.temp }}/vt-scan-report-rc.json
+          if-no-files-found: warn
+          retention-days: 14

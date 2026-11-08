@@ -271,6 +271,50 @@ gate verify "$TAG"
 rm -f "$REL/fail-view"
 expect "verify: an unreadable release is exit 2" 2 "cannot read release"
 
+# 17-21. local mode (#3064): the RC's on-disk files, no tag, no GitHub Release.
+# Same collection as `scan`, so the marker inside a deflated VSIX bundle is found.
+local_gate() {
+  rm -f "$VTSTATE/uploads.log"
+  OUT="$(env PATH="$WORK/bin:$PATH" VT_API_KEY="$KEY" VT_MIN_INTERVAL=0 VT_ANALYSIS_TIMEOUT=2 \
+    bash "$SUT" local "$@" 2>&1)"
+  RC=$?
+  printf '%s\n' "$OUT" >>"$ALL_OUT"
+}
+make_release draft
+: >"$REL/writes.log"
+local_gate --report "$WORK/local-report.json" "$REL"/assets/*.vsix "$REL"/assets/*.tar.gz
+expect "local: clean files -> exit 0" 0 "every local file is clean"
+[ "$(jq -r .status "$WORK/local-report.json" 2>/dev/null)" = "clean" ] &&
+  ok "local: --report keeps the clean report" || bad "local: no clean report kept"
+jq -e 'any(.files[].files[]; endswith("nightgauge_9.9.9_linux_amd64.tar.gz/nightgauge"))' \
+  "$WORK/local-report.json" >/dev/null &&
+  ok "local: the binary inside the tarball is scanned" || bad "local: tarball binary not scanned"
+[ ! -s "$REL/writes.log" ] && ok "local: nothing uploaded or edited" || bad "local wrote to a release"
+
+make_release draft VT-STUB-MALICIOUS
+local_gate "$REL"/assets/*.vsix "$REL"/assets/*.tar.gz
+expect "local: forced detection inside a VSIX -> exit 1" 1 "extension/dist/sdk-cli.cjs"
+
+local_gate
+expect "local: no files -> exit 2" 2 "a scan of nothing is not a clean scan"
+
+python3 -I - "$WORK/nobin.tar.gz" <<'PY2'
+import io, sys, tarfile
+with tarfile.open(sys.argv[1], "w:gz") as t:
+    info = tarfile.TarInfo("LICENSE"); info.size = 6; info.mode = 0o644
+    t.addfile(info, io.BytesIO(b"Apache"))
+PY2
+local_gate "$WORK/nobin.tar.gz"
+expect "local: an archive with no binary -> exit 2" 2 "nobin.tar.gz yielded no binary to scan"
+
+local_gate "$WORK/does-not-exist.vsix"
+expect "local: a missing file -> exit 2" 2 "is not a file"
+
+OUT="$(env -u VT_API_KEY PATH="$WORK/bin:$PATH" VT_MIN_INTERVAL=0 \
+  bash "$SUT" local "$REL"/assets/*.tar.gz 2>&1)"
+RC=$?
+expect "local: missing key -> exit 2" 2 "VT_API_KEY is not set"
+
 # 16. The key never appears in any output.
 grep -qF "$KEY" "$ALL_OUT" && bad "the API key appears in the gate's output" ||
   ok "the API key never appears in the gate's output"
