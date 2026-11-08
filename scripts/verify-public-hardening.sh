@@ -37,9 +37,10 @@ ENVIRONMENTS="$(api "repos/$REPO/environments")"
 jq -e '.environments[] | select(.name == "production")' <<<"$ENVIRONMENTS" >/dev/null \
   && pass "production environment exists" || fail "production environment exists" "absent"
 
-# The Marketplace publish is a manual dispatch (marketplace-publish.yml), not a
-# side effect of release.yml, so the old MARKETPLACE_PUBLISH gate variable must
-# be gone: a variable that no workflow reads is a false signal either way.
+# The Marketplace publish is marketplace-publish.yml, which release.yml calls on
+# every stable tag (#3062); no variable gates it, so the old MARKETPLACE_PUBLISH
+# gate variable must be gone: a variable that no workflow reads is a false
+# signal either way.
 VARIABLES="$(api "repos/$REPO/actions/variables")"
 MARKETPLACE="$(jq -r '.variables[]? | select(.name == "MARKETPLACE_PUBLISH") | .value' <<<"$VARIABLES")"
 check "MARKETPLACE_PUBLISH variable removed (publish is marketplace-publish.yml)" "absent" "${MARKETPLACE:-absent}"

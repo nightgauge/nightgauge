@@ -1,17 +1,19 @@
-# VS Code Marketplace publish (Gate 2), on demand — #1299.
+# VS Code Marketplace / Open VSX publish (Gate 2) — #1299, #3062.
 #
 # This is the ONLY Marketplace / Open VSX publish path. release.yml builds the
-# per-target VSIXs and attaches them to the GitHub Release; it never publishes
-# to a registry. This workflow promotes those exact files (#2151): it downloads
-# the tag's release VSIXs, verifies each against the release's checksums.txt
-# and its release.yml provenance attestation, checks version and channel,
-# verifies the PAT, publishes, and confirms each registry lists the version on
-# every target (#1769). It builds nothing, so the registries serve
-# the same SHA-256 the release records. It refuses a release that is still a
-# draft or is not covered by a clean VirusTotal scan (release-scan-gate.sh
-# verify, #2946). It is re-runnable on its own and never touches the GitHub
-# Release or the Homebrew tap. Run release.yml first.
+# per-target VSIXs, attaches them to the GitHub Release, and then calls this
+# workflow (`workflow_call`, registries: both) from its `registries` job, so
+# one stable tag publishes to every channel in one run (#3062). This workflow
+# promotes the release's exact files (#2151): it downloads the tag's release
+# VSIXs, verifies each against the release's checksums.txt and its release.yml
+# provenance attestation, checks version and channel, verifies the PAT,
+# publishes, and confirms each registry lists the version on every target
+# (#1769). It builds nothing, so the registries serve the same SHA-256 the
+# release records. It refuses a release that is still a draft or is not
+# covered by a clean VirusTotal scan (release-scan-gate.sh verify, #2946). It
+# never touches the GitHub Release or the Homebrew tap.
 #
+# A manual dispatch exists only to re-publish to a registry after a failure.
 # Dispatch it ON THE TAG, never from a branch:
 #
 #   gh workflow run marketplace-publish.yml --ref v0.2.2 -f registries=both
@@ -22,14 +24,27 @@
 # `production` environment's tag-only branch policy applies, exactly as it does
 # to release.yml; and the workflow definition that runs is the one at the tag,
 # so a publish is reproducible against the tagged tree. A fix to this file
-# therefore ships by tagging the fix, which is the correct unit anyway.
+# therefore ships by tagging the fix, which is the correct unit anyway. Under
+# `workflow_call` the ref, ref_type and sha are the caller's tag push, so the
+# same checks hold.
 #
 # Secrets: VSCE_PAT (Azure DevOps PAT, Marketplace: Manage, all accessible
 # organizations, owned by a member of the `nightgauge` publisher) and OVSX_PAT
-# (an Open VSX access token for the `nightgauge` namespace).
+# (an Open VSX access token for the `nightgauge` namespace). Both are verified
+# by scripts/verify-registry-pat.sh, the same check release.yml's preflight
+# runs before the draft release exists.
 name: Marketplace publish
 
 on:
+  # release.yml's `registries` job (#3062). workflow_call has no `choice`
+  # type, so the first guard step rejects any other value: a typo would turn
+  # every registry step's `if` false and publish nothing in silence.
+  workflow_call:
+    inputs:
+      registries:
+        description: "Where to publish: marketplace, open-vsx or both"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       registries:
@@ -81,8 +96,13 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           TAG: ${{ github.ref_name }}
+          REGISTRIES: ${{ inputs.registries }}
         run: |
           set -euo pipefail
+          case "$REGISTRIES" in
+            marketplace | open-vsx | both) ;;
+            *) echo "::error::registries must be marketplace, open-vsx or both, not '$REGISTRIES'"; exit 1 ;;
+          esac
           [[ "$REF_TYPE" == "tag" ]] || { echo "::error::dispatch this workflow on a release tag (--ref vX.Y.Z), not '$TAG' ($REF_TYPE)"; exit 1; }
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not a stable release tag (vX.Y.Z); rc tags are not published"; exit 1; }
 
@@ -121,25 +141,13 @@ jobs:
 
       # Verify the PAT BEFORE touching the artifacts, and fail loudly:
       # this workflow exists only to publish, so a missing or invalid PAT is
-      # an error here, not a skip.
+      # an error here, not a skip. The shared script holds the pinned tool
+      # and the retry policy release.yml's preflight uses too (#3062).
       - name: Verify VSCE_PAT against the publisher
         if: ${{ inputs.registries == 'marketplace' || inputs.registries == 'both' }}
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: |
-          set -euo pipefail
-          PUBLISHER=$(node -p "require('./packages/nightgauge/package.json').publisher")
-          [[ -n "${VSCE_PAT:-}" ]] || { echo "::error::VSCE_PAT secret is not set"; exit 1; }
-          # Azure DevOps intermittently times out /_apis/securityroles (seen on
-          # the v0.4.0 publish, #1599). A transient timeout is not a bad PAT,
-          # so retry before failing.
-          for attempt in 1 2 3 4 5; do
-            if npx --yes @vscode/vsce@3.9.2 verify-pat "$PUBLISHER"; then exit 0; fi
-            echo "::warning::verify-pat attempt $attempt failed; retrying in 15s"
-            sleep 15
-          done
-          echo "::error::VSCE_PAT verification failed after 5 attempts"
-          exit 1
+        run: bash scripts/verify-registry-pat.sh marketplace
 
       # Open VSX (#1316): the namespace is the same identifier as the
       # Marketplace publisher. Verified up front for the same reason.
@@ -147,18 +155,7 @@ jobs:
         if: ${{ inputs.registries == 'open-vsx' || inputs.registries == 'both' }}
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-        run: |
-          set -euo pipefail
-          NAMESPACE=$(node -p "require('./packages/nightgauge/package.json').publisher")
-          [[ -n "${OVSX_PAT:-}" ]] || { echo "::error::OVSX_PAT secret is not set"; exit 1; }
-          # Same transient-timeout retry as the Marketplace step above.
-          for attempt in 1 2 3 4 5; do
-            if npx --yes ovsx@1.2.0 verify-pat "$NAMESPACE"; then exit 0; fi
-            echo "::warning::verify-pat attempt $attempt failed; retrying in 15s"
-            sleep 15
-          done
-          echo "::error::OVSX_PAT verification failed after 5 attempts"
-          exit 1
+        run: bash scripts/verify-registry-pat.sh open-vsx
 
       # Build once, promote the same bytes (#2151). The registries get the
       # exact VSIXs release.yml built, scanned, attested and attached to the
