@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **PR titles no longer carry `Fixes GH-N` or an issue URL as a live closer.**
+  The closing-keyword grammar now recognizes `GH-N` in Go and in the
+  extension, so titles rewrite it to `Refs GH-N`, and the extension's fallback
+  PR title rewrites issue URLs to `issue N` alongside `#N` and `GH-N`.
+
 - **The release candidate scan can read its VirusTotal key.** `staging.yml`'s
   `rc-scan` job now runs in the `production` environment, where `VT_API_KEY`
   lives, instead of failing every RC tag before scanning. Its error and

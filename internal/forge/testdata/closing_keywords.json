@@ -142,5 +142,35 @@
     "repo": "o/r",
     "n": 7,
     "closes": true
+  },
+  {
+    "body": "Fixes GH-7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "fixes: gh-7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": true
+  },
+  {
+    "body": "Closes GH-70",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Refs GH-7",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
+  },
+  {
+    "body": "Fixes GH-7x",
+    "repo": "o/r",
+    "n": 7,
+    "closes": false
   }
 ]
