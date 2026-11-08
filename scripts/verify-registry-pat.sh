@@ -21,11 +21,13 @@ case "${1:-}" in
   marketplace)
     TOKEN_NAME=VSCE_PAT
     TOKEN="${VSCE_PAT:-}"
+    OTHER_TOKEN=OVSX_PAT
     VERIFY=(npx --yes @vscode/vsce@3.9.2 verify-pat)
     ;;
   open-vsx)
     TOKEN_NAME=OVSX_PAT
     TOKEN="${OVSX_PAT:-}"
+    OTHER_TOKEN=VSCE_PAT
     VERIFY=(npx --yes ovsx@1.2.0 verify-pat)
     ;;
   *)
@@ -40,6 +42,12 @@ unset TOKEN
 # The Marketplace publisher and the Open VSX namespace are the same identifier.
 PUBLISHER=$(node -p "require('$ROOT/packages/nightgauge/package.json').publisher")
 [[ -n "$PUBLISHER" ]] || { echo "::error::no publisher in packages/nightgauge/package.json"; exit 1; }
+
+# The verifier is a downloaded package: hand it only the token it checks. The
+# other registry PAT, the Homebrew tap token and the job's GitHub tokens are
+# removed from its environment.
+VERIFY=(env -u "$OTHER_TOKEN" -u HOMEBREW_TAP_GITHUB_TOKEN -u GITHUB_TOKEN -u GH_TOKEN \
+  -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL "${VERIFY[@]}")
 
 # Azure DevOps intermittently times out /_apis/securityroles (seen on the
 # v0.4.0 publish, #1599). A transient timeout is not a bad token, so retry

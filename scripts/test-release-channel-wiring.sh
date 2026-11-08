@@ -100,6 +100,25 @@ OUT="$(env -u OVSX_PAT bash "$VERIFY" open-vsx 2>&1)"
 check "verify-registry-pat.sh fails on a missing OVSX_PAT" "1:true" \
   "$?:$([[ "$OUT" == *"OVSX_PAT secret is not set"* ]] && echo true || echo false)"
 
+# The downloaded verifier sees only the token it checks: a stub npx reports
+# which credentials reached it.
+STUB="$(mktemp -d)"
+cat >"$STUB/npx" <<'STUB_EOF'
+#!/bin/sh
+for n in VSCE_PAT OVSX_PAT HOMEBREW_TAP_GITHUB_TOKEN GITHUB_TOKEN GH_TOKEN; do
+  eval "[ -n \"\${$n:-}\" ] && echo SEEN:$n"
+done
+exit 0
+STUB_EOF
+chmod +x "$STUB/npx"
+for REG in marketplace:VSCE_PAT open-vsx:OVSX_PAT; do
+  SEEN="$(PATH="$STUB:$PATH" VSCE_PAT=a OVSX_PAT=b HOMEBREW_TAP_GITHUB_TOKEN=c \
+    GITHUB_TOKEN=d GH_TOKEN=e bash "$VERIFY" "${REG%%:*}" 2>&1 | grep '^SEEN:' | tr '\n' ' ')"
+  check "verify-registry-pat.sh ${REG%%:*} passes only ${REG#*:} to the verifier" \
+    "SEEN:${REG#*:} " "$SEEN"
+done
+rm -rf "$STUB"
+
 echo ""
 echo "Release channel wiring: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
