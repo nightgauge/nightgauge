@@ -14,22 +14,7 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
-### Fixed
-
-- **The release candidate scan can read its VirusTotal key.** `staging.yml`'s
-  `rc-scan` job now runs in the `production` environment, where `VT_API_KEY`
-  lives, instead of failing every RC tag before scanning. Its error and
-  `docs/RELEASE_CHECKLIST.md` now point at the environment secret, not a
-  repository secret.
-
-- **The release scan no longer polls VirusTotal every 15 seconds while an
-  analysis is pending.** Waits between polls of one analysis now double from
-  `VT_MIN_INTERVAL` up to `VT_POLL_MAX_INTERVAL` (default 300 s), and one run
-  sends at most `VT_MAX_REQUESTS` requests (default 150) before stopping with a
-  harness error, so a slow analysis cannot spend the free key's daily quota.
-  The scan report records how many requests the run made in `requests`.
-
-## [0.8.3] - 2026-11-08
+## [0.8.3] - 2026-11-09
 
 0.8.1 and 0.8.2 were tagged but never published. The release gate could
 not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the macOS
@@ -38,6 +23,17 @@ flagged (#3064). Their changes ship in this release and are listed below.
 
 ### Fixed
 
+- **The release candidate scan can read its VirusTotal key.** `staging.yml`'s
+  `rc-scan` job now runs in the `production` environment, where `VT_API_KEY`
+  lives, instead of failing every RC tag before scanning. Its error and
+  `docs/RELEASE_CHECKLIST.md` now point at the environment secret, not a
+  repository secret.
+- **The release scan no longer polls VirusTotal every 15 seconds while an
+  analysis is pending.** Waits between polls of one analysis now double from
+  `VT_MIN_INTERVAL` up to `VT_POLL_MAX_INTERVAL` (default 300 s), and one run
+  sends at most `VT_MAX_REQUESTS` requests (default 150) before stopping with a
+  harness error, so a slow analysis cannot spend the free key's daily quota.
+  The scan report records how many requests the run made in `requests`.
 - **The macOS binaries in the release archives and the Homebrew cask are now
   signed with the Developer ID.** They are the same signed binaries the VSIXs
   bundle; GoReleaser used to rebuild them unsigned. A stable release now fails

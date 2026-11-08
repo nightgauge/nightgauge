@@ -9,7 +9,7 @@ and this project adheres to
 
 ## [Unreleased]
 
-## [0.8.3] - 2026-11-08
+## [0.8.3] - 2026-11-09
 
 0.8.1 and 0.8.2 were tagged but never published. The release gate could
 not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the macOS
