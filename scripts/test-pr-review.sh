@@ -204,6 +204,7 @@ printf '#!/bin/sh\nexit 0\n' > "$STUBS/npm"
 cat > "$STUBS/claude" <<'STUB'
 #!/bin/sh
 cat > /dev/null
+[ -n "${CLAUDE_ARGS_FILE:-}" ] && printf '%s\n' "$@" > "$CLAUDE_ARGS_FILE"
 printf '%s' "$STUB_OUTPUT"
 exit "$STUB_STATUS"
 STUB
@@ -216,7 +217,7 @@ run_step() {
   : > "$dir/summary"
   PATH="$STUBS:$PATH" RUNNER_TEMP="$dir" GITHUB_STEP_SUMMARY="$dir/summary" \
     FINDINGS_FILE="$dir/findings.json" REVIEW_MAX_TURNS="$MAX_TURNS" \
-    STUB_OUTPUT="$2" STUB_STATUS="$3" bash -c "$STEP_RUN" > "$dir/log" 2>&1
+    CLAUDE_ARGS_FILE="$dir/argv" STUB_OUTPUT="$2" STUB_STATUS="$3" bash -c "$STEP_RUN" > "$dir/log" 2>&1
   STEP_STATUS=$?
 }
 count() { grep -c -e "$1" "$2"; }
@@ -251,6 +252,68 @@ run_step other 'Reached max turns, said the model' 3
 expect "other text: exit code preserved" 3 "$STEP_STATUS"
 expect "other text: not read as the limit" 0 \
   "$(cat "$TMP/step-other/log" "$TMP/step-other/summary" | grep -c 'did not finish')"
+
+# Tool confinement (#3084): the argv the real step passes to the CLI.
+ARGV="$TMP/step-ok/argv"
+has_arg() { grep -cxF -e "$1" "$ARGV"; }
+expect "confine: --restricted" 1 "$(has_arg --restricted)"
+expect "confine: --strict-mcp-config" 1 "$(has_arg --strict-mcp-config)"
+expect "confine: --permission-mode dontAsk" 1 \
+  "$(grep -A1 -xF -e --permission-mode "$ARGV" | grep -cxF dontAsk)"
+expect "confine: --settings names the committed file" 1 \
+  "$(grep -A1 -xF -e --settings "$ARGV" | grep -cxF .github/pr-review/claude-settings.json)"
+expect "confine: --tools is the closed list" 1 \
+  "$(grep -A1 -xF -e --tools "$ARGV" | grep -cxF Read,Glob,Grep,Write)"
+expect "confine: no --allowedTools" 0 \
+  "$(cat "$ARGV" <(grep -v '^ *#' "$WORKFLOW") | grep -c -e '--allowedTools')"
+expect "confine: no permission bypass" 0 "$(grep -c -e '--dangerously-skip-permissions' "$WORKFLOW")"
+expect "trigger: never pull_request_target" 0 "$(grep -c pull_request_target: "$WORKFLOW")"
+
+SETTINGS=".github/pr-review/claude-settings.json"
+expect "settings: defaultMode dontAsk" dontAsk "$(jq -r '.permissions.defaultMode' "$SETTINGS")"
+for d in 'Read(//proc/**)' 'Read(//sys/**)' 'Read(~/**)' 'Read(./.git/**)' Bash WebFetch WebSearch; do
+  expect "settings: denies $d" true "$(jq --arg d "$d" '.permissions.deny | index($d) != null' "$SETTINGS")"
+done
+expect "settings: allow is the closed set" \
+  '["Edit(./.pr-review/out/findings.json)","Glob","Grep","Read(./.pr-review/**)","Read(./docs/**)","Read(./skills/nightgauge-adversarial-review/**)","Read(./standards/**)","Write(./.pr-review/out/findings.json)"]' \
+  "$(jq -c '.permissions.allow | sort' "$SETTINGS")"
+expect "settings: only write target is the findings file" '["./.pr-review/out/findings.json"]' \
+  "$(jq -c '[.permissions.allow[] | select(test("^(Edit|Write)")) | capture("\\((?<p>.*)\\)").p] | unique' "$SETTINGS")"
+
+# The symlink strip, run on a fixture tree.
+STRIP_RUN="$(yq '.jobs.review.steps[] | select(.name == "Strip symlinks from the pull request'"'"'s tree") | .run' "$WORKFLOW")"
+SDIR="$TMP/strip"
+mkdir -p "$SDIR/.pr-review/head/sub"
+echo secret > "$SDIR/environ"
+echo code > "$SDIR/.pr-review/head/sub/file.go"
+ln -s "$SDIR/environ" "$SDIR/.pr-review/head/sub/leak"
+(cd "$SDIR" && bash -c "$STRIP_RUN") > "$SDIR/log" 2>&1
+expect "strip: step is green" 0 $?
+expect "strip: symlink removed" no "$([ -L "$SDIR/.pr-review/head/sub/leak" ] && echo yes || echo no)"
+expect "strip: regular file kept" code "$(cat "$SDIR/.pr-review/head/sub/file.go")"
+expect "strip: log counts the removal" 1 "$(count 'Removed 1 symlink' "$SDIR/log")"
+
+# The token canary in the model-free validate step.
+VALIDATE_RUN="$(yq '.jobs.review.steps[] | select(.name == "Validate the findings") | .run' "$WORKFLOW")"
+expect "canary: runs even when the review step fails" '${{ always() }}' \
+  "$(yq '.jobs.review.steps[] | select(.name == "Validate the findings") | .if' "$WORKFLOW")"
+VDIR="$TMP/validate"
+mkdir -p "$VDIR/.pr-review/out" "$VDIR/scripts"
+cp "$CLI" "$VDIR/scripts/pr-review.mjs"
+validate_case() {
+  # validate_case <findings json> -> VSTATUS; log in $VDIR/log
+  printf '%s' "$1" > "$VDIR/.pr-review/out/findings.json"
+  (cd "$VDIR" && FINDINGS_FILE=.pr-review/out/findings.json MODEL_TOKEN=tok-xyz \
+    bash -c "$VALIDATE_RUN") > "$VDIR/log" 2>&1
+  VSTATUS=$?
+}
+validate_case '{"schema":1,"findings":[]}'
+expect "canary: clean findings pass" 0 "$VSTATUS"
+validate_case '{"schema":1,"findings":[],"x":"leaked tok-xyz here"}'
+expect "canary: token in findings is red" 1 "$VSTATUS"
+expect "canary: log names the leak" 1 "$(count 'contains the model token' "$VDIR/log")"
+expect "canary: log never echoes the token" 0 "$(count tok-xyz "$VDIR/log")"
+expect "canary: leaked file is emptied" 0 "$(wc -c < "$VDIR/.pr-review/out/findings.json" | tr -d ' ')"
 
 echo
 echo "pr-review: $PASS passed, $FAIL failed"

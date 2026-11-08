@@ -11,7 +11,10 @@ name: PR Review
 #           collects the review inputs (diff, title, body, closing issues).
 #
 #   review  The model, READ-ONLY: `contents: read`, no forge token, no
-#           persisted checkout credentials, no Bash. One findings file out.
+#           persisted checkout credentials, no Bash. Its file tools are
+#           confined to the checkout by --restricted and the committed
+#           .github/pr-review/claude-settings.json (#3084). One findings file
+#           out.
 #
 #   post    Model-free. Validates the findings against a closed schema
 #           (scripts/pr-review.mjs), renders them, and upserts ONE comment as
@@ -166,6 +169,14 @@ jobs:
           path: .pr-review/head
           persist-credentials: false
 
+      - name: Strip symlinks from the pull request's tree
+        # A link in the untrusted tree (x -> /proc/self/environ) would let a
+        # checkout-confined Read reach outside it. The diff carries the content.
+        run: |
+          set -euo pipefail
+          removed="$(find .pr-review/head -type l -print -delete | wc -l | tr -d ' ')"
+          echo "Removed $removed symlink(s) from the pull request's tree."
+
       - name: Download the review inputs
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -176,17 +187,19 @@ jobs:
         # So a failed model run still uploads something well-formed.
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/findings"
-          jq -n '{schema: 1, findings: []}' > "$RUNNER_TEMP/findings/findings.json"
+          # Inside the checkout: the model's file tools cannot reach RUNNER_TEMP.
+          mkdir -p .pr-review/out
+          jq -n '{schema: 1, findings: []}' > .pr-review/out/findings.json
 
       - name: Run the review passes
         env:
-          # The model's whole environment: a subscription token and a scratch
-          # path. Deliberately NO GH_TOKEN / GITHUB_TOKEN, and no
+          # The token is in the CLI's environment (and so in
+          # /proc/self/environ), which is why the file tools are confined
+          # below. Deliberately NO GH_TOKEN / GITHUB_TOKEN, and no
           # ANTHROPIC_API_KEY: the CLI prefers a key over the token, and a key
           # bills per use.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          FINDINGS_FILE: ${{ runner.temp }}/findings/findings.json
+          FINDINGS_FILE: .pr-review/out/findings.json
           # The one turn limit; docs/PR_REVIEW_PASSES.md states it too.
           REVIEW_MAX_TURNS: "80"
         run: |
@@ -194,13 +207,23 @@ jobs:
           npm install --global --no-fund --no-audit "$(scripts/adapter-cli-pin.sh claude-headless)"
 
           # No Bash: the diff is precomputed, so the model only reads files
-          # and writes the findings file. The limit handling stays in this step
-          # because scripts/ comes from BASE_SHA.
+          # and writes the findings file. --restricted confines the file tools
+          # to the checkout and ignores project settings and hooks; the
+          # committed settings allow only the review inputs, docs/, standards/, the
+          # adversarial-review skill and the
+          # findings file; dontAsk denies everything else. Never --allowedTools:
+          # a bare Read or Write there re-grants the whole filesystem (#3084).
+          # The limit handling stays in this step because scripts/ comes from
+          # BASE_SHA.
           RESULT_FILE="$RUNNER_TEMP/review-result.json"
           status=0
           claude -p \
             --no-session-persistence \
-            --allowedTools "Read,Glob,Grep,Write" \
+            --restricted \
+            --strict-mcp-config \
+            --tools "Read,Glob,Grep,Write" \
+            --settings .github/pr-review/claude-settings.json \
+            --permission-mode dontAsk \
             --output-format json \
             --max-turns "$REVIEW_MAX_TURNS" > "$RESULT_FILE" <<PROMPT || status=$?
           Review a pull request. Follow docs/PR_REVIEW_PASSES.md exactly: run
@@ -240,16 +263,29 @@ jobs:
           exit "$status"
 
       - name: Validate the findings
+        # Model-free, after the CLI has exited. The exact-value check backs up
+        # the credential-shape regex, which does not know the token's shape.
+        # always(): the upload below runs even when the review step fails, so
+        # the canary must run first in that case too.
+        if: ${{ always() }}
         env:
-          FINDINGS_FILE: ${{ runner.temp }}/findings/findings.json
-        run: node scripts/pr-review.mjs validate "$FINDINGS_FILE"
+          FINDINGS_FILE: .pr-review/out/findings.json
+          MODEL_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MODEL_TOKEN:-}" ] && grep -qF -f <(printf '%s\n' "$MODEL_TOKEN") "$FINDINGS_FILE"; then
+            echo "::error title=Token in findings::The findings file contains the model token. Nothing is uploaded or posted."
+            : > "$FINDINGS_FILE"
+            exit 1
+          fi
+          node scripts/pr-review.mjs validate "$FINDINGS_FILE"
 
       - name: Upload the findings
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-review-findings
-          path: ${{ runner.temp }}/findings/findings.json
+          path: .pr-review/out/findings.json
           if-no-files-found: error
           retention-days: 3
 

@@ -27,6 +27,11 @@ changelog, and the release workflow refuses a tag that does not.
   formatting to the card. A finding whose file or claim holds a control or
   invisible formatting character (newline, tab, bidi override) is rejected
   (#2875).
+- The manual PR review workflow confines the model's `Read` and `Write` to
+  the review inputs, `docs/` and its findings file, so it can no longer read
+  its own OAuth token from `/proc` or write outside the checkout. Symlinks in
+  the reviewed tree are removed first, and a findings file containing the
+  token fails the run before anything is posted (#3084).
 
 ## [0.8.3] - 2026-11-09
 
