@@ -330,7 +330,7 @@ describe("ConcurrentPipelineManager — skip haltQueueOnSlotFailure on environme
     expect(queueClear).not.toHaveBeenCalled();
   });
 
-  it("skips halt for hard-cap stall-kill (transient infra event)", async () => {
+  it("skips halt for a stage cap kill (transient infra event)", async () => {
     const { manager, controllable, queueClear } = makeManager();
     await manager.fillSlots();
     controllable.failIssue(
@@ -359,6 +359,27 @@ describe("ConcurrentPipelineManager — skip haltQueueOnSlotFailure on environme
     expect(mockShowWarningMessage).toHaveBeenCalledWith(
       expect.stringContaining("stalled at feature-validate")
     );
+    expect(mockShowWarningMessage).not.toHaveBeenCalledWith(expect.stringContaining("runtime cap"));
     expect(mockShowErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("names the runtime cap, not a stall, in the toast for a stage cap kill (#2886)", async () => {
+    const { manager, controllable, queueClear } = makeManager(undefined, 3500);
+    await manager.fillSlots();
+    controllable.failIssue(
+      3500,
+      "feature-dev",
+      "[stage-cap-killed] feature-dev terminated: exceeded stage_hard_cap (60m)"
+    );
+    await manager.settleForTest(3500);
+
+    expect(mockShowWarningMessage).toHaveBeenCalledWith(
+      expect.stringContaining("hit its runtime cap at feature-dev")
+    );
+    expect(mockShowWarningMessage).not.toHaveBeenCalledWith(expect.stringContaining("stalled"));
+    expect(mockShowErrorMessage).not.toHaveBeenCalled();
+    expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
+    expect(queueClear).not.toHaveBeenCalled();
   });
 });
