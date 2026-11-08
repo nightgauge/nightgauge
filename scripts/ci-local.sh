@@ -388,6 +388,8 @@ REQUIRED_FILES=(
   scripts/test-publish-vsix-set.sh
   scripts/test-npm-audit-check.sh
   scripts/test-sign-macos-binaries.sh
+  scripts/test-verify-archive-binaries.sh
+  scripts/verify-archive-binaries.sh
   scripts/test-check-shipped-code.sh
   packages/nightgauge/scripts/check-shipped-code.sh
   scripts/test-scrub-evidence.sh
@@ -420,6 +422,8 @@ REQUIRED_FILES=(
   scripts/check-visibility-prose.py
   scripts/test-workflow-refs-check.sh
   scripts/test-marketplace-channel.sh
+  scripts/test-release-channel-wiring.sh
+  scripts/verify-registry-pat.sh
   scripts/main-build-version.sh
   scripts/test-main-build-version.sh
   scripts/test-vsix-host-target.sh
@@ -1550,6 +1554,15 @@ run_group "vt-scan.sh regression suite" \
 run_group "release-scan-gate.sh draft-hold harness" \
   bash scripts/test-release-scan-gate.sh
 
+# 1b2c''. verify-archive-binaries.sh regression suite (#3064) — the check that
+#       release.yml and staging.yml run after GoReleaser, proving each archive
+#       (and so the Homebrew cask) carries the exact bin/ binary the VSIX of
+#       that target bundles: the Developer ID-signed one. Fixture tarballs
+#       cover identical (0), one archive differs (1) and a missing or
+#       ambiguous input (2, HARNESS ERROR).
+run_group "verify-archive-binaries.sh regression suite" \
+  bash scripts/test-verify-archive-binaries.sh
+
 # 1b2d. check-shipped-code.sh regression suite (#2320, #2321) — the scan of
 #       what the VSIX ships for the shapes a static malware scanner matches on
 #       (a fetch piped into a shell, a base64 decode). The scan itself runs
@@ -1747,6 +1760,7 @@ run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility
 # a gate nothing exercises degrades into an unconditional pass.
 run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
 run_group "Marketplace channel regression suite" bash scripts/test-marketplace-channel.sh
+run_group "Release channel wiring suite" bash scripts/test-release-channel-wiring.sh
 run_group "Main build version regression suite" bash scripts/test-main-build-version.sh
 run_group "VSIX host-target regression suite" bash scripts/test-vsix-host-target.sh
 run_group "Release channel verification regression suite" bash scripts/test-verify-release-channels.sh

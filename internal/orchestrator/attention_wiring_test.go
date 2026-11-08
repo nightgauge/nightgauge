@@ -1552,6 +1552,40 @@ func TestProducerReviewCapNamesTheFindingsAndTheWorktree(t *testing.T) {
 	}
 }
 
+// TestProducerReviewCapEscapesFindingText: reviewer text renders literally, so
+// a finding cannot add links or emphasis to the card (#2875).
+func TestProducerReviewCapEscapesFindingText(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	stored, err := json.Marshal(review.Outcome{Verdict: "catch", Fix: []review.Finding{
+		{Pass: "security", File: "x[y](z).go", Claim: "see [here](http://evil) **now**", Severity: "major"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateledger.Append(as.workspaceRoot, gateledger.Event{
+		RunID: "r", Event: gateledger.EventReviewCap, Kind: gateledger.KindReview, Tree: "t4",
+		Issue: 2875, Review: stored, Worktree: "/tmp/<wt>",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	as.raiseReviewCapReached("octocat/acme", 2875, "Capped", "text")
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	body := reqs[0].Body
+	for _, want := range []string{`x\[y\](z).go`, `see \[here\](http://evil) \*\*now\*\*`, `/tmp/\<wt\>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
+	}
+	for _, raw := range []string{"[here](http://evil)", "**now**", "<wt>"} {
+		if strings.Contains(body, raw) {
+			t.Errorf("body carries raw markdown %q:\n%s", raw, body)
+		}
+	}
+}
+
 // TestProducerReviewCapFallsBackToTheFailureText: a missing record still names
 // the cap.
 func TestProducerReviewCapFallsBackToTheFailureText(t *testing.T) {

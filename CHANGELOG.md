@@ -21,19 +21,66 @@ changelog, and the release workflow refuses a tag that does not.
   `skills/` taken when the run starts, so edits to a later stage's `SKILL.md`, its
   includes or `skills/_shared` take effect on the next run, not the current one.
   Stages the VS Code extension renders itself still read the live worktree.
+- When a stage is stopped for exceeding its runtime cap, the warning now says
+  the issue hit its runtime cap at that stage instead of saying it stalled.
+  The retry is unchanged: it still runs automatically after 30 minutes (#2886).
+
+### Security
+
+- The review-cap attention card now shows a reviewer's file and claim as
+  literal text: markdown in a finding can no longer add links, images or
+  formatting to the card. A finding whose file or claim holds a control or
+  invisible formatting character (newline, tab, bidi override) is rejected
+  (#2875).
+- The manual PR review workflow confines the model's `Read` and `Write` to
+  the review inputs, `docs/` and its findings file, so it can no longer read
+  its own OAuth token from `/proc` or write outside the checkout. Symlinks in
+  the reviewed tree are removed first, and a findings file containing the
+  token fails the run before anything is posted (#3084).
+
+## [0.8.3] - 2026-11-09
+
+0.8.1 and 0.8.2 were tagged but never published. The release gate could
+not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the macOS
+binaries in the archives unsigned and a hook script that one antivirus engine
+flagged (#3064). Their changes ship in this release and are listed below.
+
+### Fixed
+
+- **PR titles no longer carry `Fixes GH-N` or an issue URL as a live closer.**
+  The closing-keyword grammar now recognizes `GH-N` in Go and in the
+  extension, so titles rewrite it to `Refs GH-N`, and the extension's fallback
+  PR title rewrites issue URLs to `issue N` alongside `#N` and `GH-N`.
+- **The release candidate scan can read its VirusTotal key.** `staging.yml`'s
+  `rc-scan` job now runs in the `production` environment, where `VT_API_KEY`
+  lives, instead of failing every RC tag before scanning. Its error and
+  `docs/RELEASE_CHECKLIST.md` now point at the environment secret, not a
+  repository secret.
+- **The release scan no longer polls VirusTotal every 15 seconds while an
+  analysis is pending.** Waits between polls of one analysis now double from
+  `VT_MIN_INTERVAL` up to `VT_POLL_MAX_INTERVAL` (default 300 s), and one run
+  sends at most `VT_MAX_REQUESTS` requests (default 150) before stopping with a
+  harness error, so a slow analysis cannot spend the free key's daily quota.
+  The scan report records how many requests the run made in `requests`.
+- **The macOS binaries in the release archives and the Homebrew cask are now
+  signed with the Developer ID.** They are the same signed binaries the VSIXs
+  bundle; GoReleaser used to rebuild them unsigned. A stable release now fails
+  before its draft exists when the darwin binaries lack the team's Developer ID
+  signature and hardened runtime, or when the Apple signing secrets are missing,
+  and it checks that each archive carries the signed binary byte for byte. The
+  Claude plugin is now 1.28.1: the workflow gate hook's wrapper dropped a comment
+  line that a Microsoft detection model flagged; the hook behaves the same
+  (#3064).
+- **The pr-merge stage's default CLI timeout now outlasts a worst-case run.**
+  It was 100 minutes, but one run can spend a 15-minute CI wait, about two
+  minutes of mergeability backoff and the 90-minute queue wait. The default is
+  now the sum of those phases plus ten minutes (117m06s), and `pr-stage budget`
+  and recovery follow it (#2835).
 - **A pr-merge skill that pushed a CI fix no longer ends the run with the PR
   unmerged when the VS Code extension drives the pipeline.** The extension now
   reads the skill's `pr-merge-fix-{N}.json` hand-back, as the Go scheduler
   does, and re-enters the deterministic runner to wait for CI and merge,
   re-running the skill up to `pr.auto_fix_max_attempts` times (#2833).
-
-## [0.8.2] - 2026-11-07
-
-0.8.1 was tagged but never published, because the release gate could not scan
-files over 32 MB (#3011). Its changes ship in this release and are listed below.
-
-### Fixed
-
 - The Output window no longer carries a previous run into a new one (#2808). A
   sequential run of an issue that earlier held the same tab starts with fresh stages,
   tokens and timings; a reused tab shows only the new run's output; and the tab's
@@ -188,6 +235,22 @@ files over 32 MB (#3011). Its changes ship in this release and are listed below.
 
 ### Changed
 
+- **Release candidates are scanned by VirusTotal before they soak.** An RC tag
+  push now scans its archives and VSIXs, and every binary and JS bundle inside
+  them, the same way the release gate scans a draft. A finding fails the RC, so
+  a flagged build is caught at the RC instead of at the release. The scan needs
+  `VT_API_KEY` as a repository secret readable by `staging.yml` (#3064).
+- **One stable tag now publishes to every channel in one run.** Once the
+  release's VirusTotal scan is clean, `release.yml` publishes the GitHub
+  Release, readies the Homebrew cask pull request, advances the Claude plugin
+  `stable` branch, and publishes the extension to the VS Code Marketplace and
+  Open VSX. The registries no longer wait for a separate manual dispatch, so a
+  release can no longer ship on GitHub while both registries stay a version
+  behind. The preflight now fails the run before anything is drafted when
+  `HOMEBREW_TAP_GITHUB_TOKEN`, `VSCE_PAT` or `OVSX_PAT` is missing, and checks
+  each token without side effects; a release no longer skips Homebrew for lack
+  of a token. Dispatch `marketplace-publish.yml` only to re-publish to a
+  registry after a failure (#3062).
 - The clean-install release gate (G1) can now test a release candidate's own
   VSIX: dispatch `clean-install-e2e.yml` with `rc_tag=vX.Y.Z-rc.N`. The run
   summary names the artifact tested, the VSIX runs the same integrity checks as
@@ -486,6 +549,11 @@ recover`'s default timeout grows to match.
 
 - `claude-plugins/nightgauge/hooks/pre-push-validate.sh`, a hand-kept copy of the git
   pre-push hook that `nightgauge pre-push install` writes. It was never a Claude hook (#2764).
+
+## [0.8.2] - 2026-11-07
+
+Tagged but never published; the release gate stopped it (#3064). Its
+changes ship in [0.8.3].
 
 ## [0.8.0] - 2026-11-04
 
@@ -8672,7 +8740,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.3
 [0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2

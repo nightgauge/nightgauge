@@ -5,6 +5,12 @@
 #   - SHA256 checksums and manifest.json
 #   - Homebrew cask auto-bumped in nightgauge/homebrew-tap
 #   - Versioned per-target .vsix files (attached to the GitHub Release)
+#   - The Claude plugin `stable` branch, advanced to the tag
+#   - The VS Code Marketplace and Open VSX listings (marketplace-publish.yml)
+#
+# ONE TAG PUBLISHES TO EVERY CHANNEL (#3062): a release ships to every channel
+# once its scans pass, or it does not ship. Every publish credential is checked
+# by the preflight, before the draft exists.
 #
 # NOTHING IS PUBLIC BEFORE THE MULTI-ENGINE SCAN IS CLEAN (#2946). GoReleaser
 # creates a DRAFT release and a DRAFT cask pull request. Every asset is
@@ -15,19 +21,20 @@
 # draft and fails the run; the report is on the draft and in the run's
 # artifacts (docs/GIT_WORKFLOW.md step 9a).
 #
-# Three jobs:
-#   state     Is the release absent, a draft, or already published?
-#   release   Absent or draft only: build, draft, attach, scan, publish. It
-#             never runs against a published release, so a re-run cannot
-#             upload to one.
-#   channels  Only from a published, scan-clean release: advance `stable`, mark
-#             the cask pull request ready. Idempotent, so a re-run of a
-#             published release runs this job alone.
-#
-# The VS Code Marketplace publish is NOT part of this run: it is the separate,
-# re-runnable marketplace-publish.yml dispatch, which downloads the release's
-# VSIXs (#2151), requires the release to be published and scan-clean, and
-# verifies VSCE_PAT before publishing. One publish path, on demand.
+# Four jobs:
+#   state       Is the release absent, a draft, or already published?
+#   release     Absent or draft only: build, draft, attach, scan, publish. It
+#               never runs against a published release, so a re-run cannot
+#               upload to one.
+#   channels    Only from a published, scan-clean release: advance `stable`,
+#               mark the cask pull request ready.
+#   registries  Same condition as `channels`, in parallel: calls
+#               marketplace-publish.yml (registries: both), which downloads the
+#               release's VSIXs (#2151), requires the release to be published
+#               and scan-clean, and publishes to the VS Code Marketplace and
+#               Open VSX.
+# `channels` and `registries` are idempotent, so a re-run of a published
+# release runs those two alone.
 #
 # Version is derived from the tag itself (not commit count).
 # The Go binary and VSIX share the same version string.
@@ -40,7 +47,10 @@
 #   - VT_API_KEY secret in the `production` environment: a free VirusTotal
 #     account's API key (docs/GIT_WORKFLOW.md). Without it nothing publishes.
 #   - HOMEBREW_TAP_GITHUB_TOKEN secret in the `production` environment
-#     (PAT with contents:write on nightgauge/homebrew-tap)
+#     (PAT with contents + pull-request write on nightgauge/homebrew-tap)
+#   - VSCE_PAT and OVSX_PAT secrets in the `production` environment (see
+#     marketplace-publish.yml). The preflight fails the run without any of the
+#     three tokens.
 #   - nightgauge/homebrew-tap repository must exist
 
 name: Release
@@ -223,15 +233,18 @@ jobs:
         run: bash scripts/check-plugin-version.sh --tag "${GITHUB_REF_NAME}"
 
       # ---------------------------------------------------------------------
-      # PREFLIGHT — validate the Homebrew tap credential BEFORE anything is
-      # published. GoReleaser creates the GitHub Release before it pushes the
-      # cask, so a tap token found wanting late leaves a half-published
+      # PREFLIGHT — validate every publish credential BEFORE anything is
+      # published (#3062). GoReleaser creates the GitHub Release before it
+      # pushes the cask, and the registries publish after the release is
+      # public, so a token found wanting late leaves a half-published
       # release. Fail fast instead.
       # ---------------------------------------------------------------------
       - name: Preflight — publish credentials
         id: preflight
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
           # Presence only: the key itself is set on the scan step alone.
           VT_API_KEY_SET: ${{ secrets.VT_API_KEY != '' }}
         run: |
@@ -244,56 +257,65 @@ jobs:
             exit 1
           fi
 
-          # Homebrew degrades gracefully: without a tap token, skip that pipe
-          # rather than fail the release after the GitHub Release already exists.
-          if [ -n "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
-            # A PRESENT token is not a WORKING token, and the difference only
-            # shows up at the tap push — after the GitHub Release exists. Since
-            # the cask now arrives as a pull request (.goreleaser.yml), the token
-            # needs `pull_requests: write` on top of `contents: write`, and a
-            # contents-only token fails at exactly that late point.
-            #
-            # Probe both, without side effects:
-            #   contents  — GET the repo; `.permissions.push` must be true.
-            #   pull_reqs — POST a pull request with a head branch that cannot
-            #               exist. GitHub authorizes before it validates the
-            #               body, so 403 means "no permission" while 422 means
-            #               "permitted, bad head" — the answer we want. Nothing
-            #               is created on either path.
-            echo "HOMEBREW_TAP_GITHUB_TOKEN present — verifying it can write to nightgauge/homebrew-tap…"
-
-            # Every check here captures, then compares: piping a command into a
-            # reader that exits early (grep -q, head) under pipefail can turn a
-            # match into a miss when the writer takes SIGPIPE (#2360).
-            TAP_PUSH="$(GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" \
-                 gh api repos/nightgauge/homebrew-tap --jq '.permissions.push' 2>/dev/null || true)"
-            if [ "$TAP_PUSH" != "true" ]; then
-              echo "::error::HOMEBREW_TAP_GITHUB_TOKEN cannot write contents to nightgauge/homebrew-tap. Issue a fine-grained PAT with resource owner 'nightgauge', repository access limited to 'homebrew-tap', and Contents: Read and write. Failing now, before anything is published."
-              exit 1
+          # Every channel or none (#3062): a missing token fails the run here,
+          # before the draft exists. Report every missing token, then fail.
+          MISSING=0
+          for NAME in HOMEBREW_TAP_GITHUB_TOKEN VSCE_PAT OVSX_PAT; do
+            if [ -z "${!NAME:-}" ]; then
+              echo "::error::$NAME is not set in the production environment. A release publishes to every channel or to none (docs/GIT_WORKFLOW.md § Cutting a Release)."
+              MISSING=1
             fi
+          done
+          [ "$MISSING" -eq 0 ] || exit 1
 
-            PR_PROBE=$(GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" \
-              gh api -X POST repos/nightgauge/homebrew-tap/pulls \
-                -f head=__release_preflight_probe__ -f base=main -f title=probe \
-                -i 2>/dev/null | sed -n 1p || true)
-            case "$PR_PROBE" in
-              *403*)
-                echo "::error::HOMEBREW_TAP_GITHUB_TOKEN can write contents but CANNOT open pull requests on nightgauge/homebrew-tap. The tap requires a PR (branch ruleset) and .goreleaser.yml opens one, so the release would fail at the tap step AFTER the GitHub Release already exists. Add 'Pull requests: Read and write' to the token. Failing now instead."
-                exit 1
-                ;;
-              *422*)
-                echo "HOMEBREW_TAP_GITHUB_TOKEN verified: contents + pull-request write."
-                ;;
-              *)
-                echo "::warning::Homebrew tap token PR-permission probe returned an unexpected response ('${PR_PROBE:-empty}'). Proceeding, but if the release fails at the tap step, check that the token has 'Pull requests: Read and write'."
-                ;;
-            esac
+          # A PRESENT token is not a WORKING token, and the difference only
+          # shows up at the tap push — after the GitHub Release exists. Since
+          # the cask now arrives as a pull request (.goreleaser.yml), the token
+          # needs `pull_requests: write` on top of `contents: write`, and a
+          # contents-only token fails at exactly that late point.
+          #
+          # Probe both, without side effects:
+          #   contents  — GET the repo; `.permissions.push` must be true.
+          #   pull_reqs — POST a pull request with a head branch that cannot
+          #               exist. GitHub authorizes before it validates the
+          #               body, so 403 means "no permission" while 422 means
+          #               "permitted, bad head" — the answer we want. Nothing
+          #               is created on either path.
+          echo "Verifying HOMEBREW_TAP_GITHUB_TOKEN can write to nightgauge/homebrew-tap…"
 
-            echo "goreleaser_args=release --clean --release-notes ${{ steps.changelog.outputs.notes }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set — skipping the Homebrew cask push. Binaries and VSIXs still publish."
-            echo "goreleaser_args=release --clean --skip=homebrew --release-notes ${{ steps.changelog.outputs.notes }}" >> "$GITHUB_OUTPUT"
+          # Every check here captures, then compares: piping a command into a
+          # reader that exits early (grep -q, head) under pipefail can turn a
+          # match into a miss when the writer takes SIGPIPE (#2360).
+          TAP_PUSH="$(GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" \
+               gh api repos/nightgauge/homebrew-tap --jq '.permissions.push' 2>/dev/null || true)"
+          if [ "$TAP_PUSH" != "true" ]; then
+            echo "::error::HOMEBREW_TAP_GITHUB_TOKEN cannot write contents to nightgauge/homebrew-tap. Issue a fine-grained PAT with resource owner 'nightgauge', repository access limited to 'homebrew-tap', and Contents: Read and write. Failing now, before anything is published."
+            exit 1
           fi
+
+          PR_PROBE=$(GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" \
+            gh api -X POST repos/nightgauge/homebrew-tap/pulls \
+              -f head=__release_preflight_probe__ -f base=main -f title=probe \
+              -i 2>/dev/null | sed -n 1p || true)
+          case "$PR_PROBE" in
+            *403*)
+              echo "::error::HOMEBREW_TAP_GITHUB_TOKEN can write contents but CANNOT open pull requests on nightgauge/homebrew-tap. The tap requires a PR (branch ruleset) and .goreleaser.yml opens one, so the release would fail at the tap step AFTER the GitHub Release already exists. Add 'Pull requests: Read and write' to the token. Failing now instead."
+              exit 1
+              ;;
+            *422*)
+              echo "HOMEBREW_TAP_GITHUB_TOKEN verified: contents + pull-request write."
+              ;;
+            *)
+              echo "::warning::Homebrew tap token PR-permission probe returned an unexpected response ('${PR_PROBE:-empty}'). Proceeding, but if the release fails at the tap step, check that the token has 'Pull requests: Read and write'."
+              ;;
+          esac
+
+          # The same non-mutating checks marketplace-publish.yml runs before it
+          # publishes (scripts/verify-registry-pat.sh).
+          bash scripts/verify-registry-pat.sh marketplace
+          bash scripts/verify-registry-pat.sh open-vsx
+
+          echo "goreleaser_args=release --clean --release-notes ${{ steps.changelog.outputs.notes }}" >> "$GITHUB_OUTPUT"
 
       # Cross-compile every target binary up front so each platform-specific
       # .vsix can bundle the matching one. The extension loads its Go binary from
@@ -306,9 +328,12 @@ jobs:
         run: make build-all VERSION="$VERSION"
 
       # Sign before anything packages these binaries. The VSIX freezes whatever
-      # is in dist/bin/, so signing afterwards would ship an unsigned copy while
-      # reporting success. No-ops with a notice when the Apple secrets are
-      # absent, so a secretless re-run still completes.
+      # is in dist/bin/, and GoReleaser copies bin/ into the archives and the
+      # cask (.goreleaser.yml hooks.post), so signing afterwards would ship an
+      # unsigned copy while reporting success. Signing is REQUIRED here
+      # (#3064): missing Apple secrets, or a binary without the team's
+      # Developer ID and the hardened runtime, fail this step, so a secretless
+      # re-run fails here, before the draft exists.
       - name: Sign the macOS binaries
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -318,7 +343,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          bash scripts/sign-macos-binaries.sh \
+          bash scripts/sign-macos-binaries.sh --require-team RZJPN7Y7BG \
             bin/nightgauge-darwin-arm64 bin/nightgauge-darwin-amd64
 
       # Build EVERY workspace before testing, not just the SDK. The VSCode suite
@@ -560,9 +585,8 @@ jobs:
       - name: Ensure THIRD_PARTY_NOTICES for archives
         run: npm run notices
 
-      # args come from the preflight: `--skip=homebrew` is appended when no tap
-      # token is configured, so a missing token degrades gracefully instead of
-      # failing after the GitHub Release has already been created.
+      # args come from the preflight, which has already verified the tap
+      # token: there is no degraded, Homebrew-less release (#3062).
       # GORELEASER_CURRENT_TAG pins the release to the tag that triggered this
       # run. Without it GoReleaser takes the highest tag pointing at HEAD by
       # git's version sort, which ranks `v0.2.0-rc.25` ABOVE `v0.2.0` — so the
@@ -579,6 +603,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # #3064: the archives and the cask must carry the signed bin/ binaries,
+      # byte for byte. The draft is not public yet, so failing here keeps an
+      # unsigned archive from ever publishing.
+      - name: Verify archives carry the signed bin/ binaries
+        run: bash scripts/verify-archive-binaries.sh dist bin
 
       # Every step below addresses the release by the triggering tag. Prove
       # GoReleaser created THAT release before attaching anything to it.
@@ -683,7 +713,8 @@ jobs:
 
   # Every channel moves only from a published, scan-clean release (#2946). Runs
   # after `release` published, or alone when `state` found the release already
-  # published (a re-run). Each step is idempotent.
+  # published (a re-run). Each step is idempotent. `registries` below runs
+  # under this exact condition (scripts/test-release-channel-wiring.sh).
   channels:
     needs: [state, release]
     if: ${{ !cancelled() && needs.state.result == 'success' && (needs.release.result == 'success' || (needs.release.result == 'skipped' && needs.state.outputs.published == 'true')) }}
@@ -737,9 +768,24 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
-          if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
-            echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set; the cask was not proposed (see Preflight)."
-            exit 0
-          fi
           GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" bash scripts/verify-release-channels.sh \
             --channel homebrew --release --version "$VERSION" --close-superseded
+
+  # VS Code Marketplace and Open VSX (#3062), under the same condition as
+  # `channels` and in parallel with it. marketplace-publish.yml carries every
+  # guard: stable tag ref, published scan-clean release, digest, provenance
+  # and channel checks, and per-target listing confirmation. Its own
+  # `environment: production` resolves VSCE_PAT and OVSX_PAT.
+  # A called job cannot hold more than its caller grants, so this grants the
+  # callee's `attestations: read` as well as `contents: read`.
+  # publish-vsix-set.sh is idempotent, so a re-run of a published tag is safe.
+  registries:
+    needs: [state, release]
+    if: ${{ !cancelled() && needs.state.result == 'success' && (needs.release.result == 'success' || (needs.release.result == 'skipped' && needs.state.outputs.published == 'true')) }}
+    permissions:
+      contents: read
+      attestations: read
+    uses: ./.github/workflows/marketplace-publish.yml
+    with:
+      registries: both
+    secrets: inherit

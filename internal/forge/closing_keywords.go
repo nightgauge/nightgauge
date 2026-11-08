@@ -7,21 +7,22 @@ import (
 )
 
 // closingKeywordRE matches GitHub's closing keywords followed by an issue
-// reference: `#N`, `owner/repo#N`, or an issue URL `https://host/owner/repo/issues/N`
-// (#2687). It matches a URL on any host so RewriteClosingRefs defangs every
+// reference: `#N`, `owner/repo#N`, an issue URL `https://host/owner/repo/issues/N`
+// (#2687), or `GH-N` (#2859). It matches a URL on any host so RewriteClosingRefs defangs every
 // one in untrusted text; ClosingRef.Targets counts only github.com, the one
 // host GitHub acts on. It is the only Go definition: the pr-merge AC backstop, the
 // post-merge hook and the stranded follow-up producer all read it, so they
 // agree on what closes an issue. packages/nightgauge/src/utils/prDetection.ts
 // keeps a TypeScript copy of the same grammar.
 // Group 1 is the reference text; group 2 or 5 is the "owner/repo" it names
-// (empty for a bare `#N`); group 3 or 6 is the issue number; group 4 is a URL's host.
+// (empty for a bare `#N` or `GH-N`); group 3, 6 or 7 is the issue number; group 4
+// is a URL's host. `GH-N` is the last branch so the earlier groups keep their indexes.
 var closingKeywordRE = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*` +
-	`(([\w.-]+/[\w.-]+)?#(\d+)|https?://([^\s/]+)/([\w.-]+/[\w.-]+)/issues/(\d+))\b`)
+	`(([\w.-]+/[\w.-]+)?#(\d+)|https?://([^\s/]+)/([\w.-]+/[\w.-]+)/issues/(\d+)|GH-(\d+))\b`)
 
 // ClosingRef is one closing-keyword reference in a body. Ref is the text after
-// the keyword (`#7`, `o/r#7`, or the URL); Repo is the "owner/repo" the
-// reference names, empty for a bare `#7`; Host is a URL reference's host,
+// the keyword (`#7`, `o/r#7`, `GH-7`, or the URL); Repo is the "owner/repo" the
+// reference names, empty for a bare `#7` or `GH-7`; Host is a URL reference's host,
 // empty otherwise; Number is the issue it names.
 type ClosingRef struct {
 	Ref    string
@@ -47,6 +48,10 @@ func closingRef(m []string) ClosingRef {
 	if m[3] != "" {
 		n, _ := strconv.Atoi(m[3])
 		return ClosingRef{Ref: m[1], Repo: m[2], Number: n}
+	}
+	if m[7] != "" {
+		n, _ := strconv.Atoi(m[7])
+		return ClosingRef{Ref: m[1], Number: n}
 	}
 	n, _ := strconv.Atoi(m[6])
 	return ClosingRef{Ref: m[1], Repo: m[5], Host: m[4], Number: n}

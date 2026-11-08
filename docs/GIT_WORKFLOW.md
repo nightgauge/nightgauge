@@ -960,7 +960,13 @@ main ──●──●──●──●──●──
    `GORELEASER_CURRENT_TAG`; without that pin the rc tag on the same commit
    wins git's version sort — #1296)
 7. Push the tag: `git push origin v0.2.0`
-8. `release.yml` runs (gated by the `production` environment) → builds,
+8. `release.yml` runs (gated by the `production` environment). One tag
+   publishes to every channel in one run, once the scan is clean: the GitHub
+   Release, the Homebrew cask PR, the Claude plugin `stable` branch, the VS
+   Code Marketplace and Open VSX (#3062). Its preflight fails the run before
+   anything is drafted when `VT_API_KEY`, `HOMEBREW_TAP_GITHUB_TOKEN`,
+   `VSCE_PAT` or `OVSX_PAT` is missing, and verifies each token without side
+   effects. It builds,
    creates a **draft** GitHub Release with attested assets and a **draft**
    Homebrew cask PR, then scans the draft with VirusTotal
    (`scripts/release-scan-gate.sh scan`, #2946): every asset, and every binary
@@ -973,22 +979,25 @@ main ──●──●──●──●──●──
    release's `checksums.txt`: until it merges, `brew` serves the previous
    version and `release-watchdog.yml` is red
    (`scripts/verify-release-channels.sh`). A re-run of an already published
-   release uploads nothing; it runs the `channels` job alone
-9. `gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both`
-   → requires a published, scan-clean release, then promotes the release's
-   own per-target VSIXs to the VS Code Marketplace and Open VSX after
-   verifying each against `checksums.txt` and its
-   `release.yml` attestation (every version publishes on the release channel),
-   then fails unless each registry lists the version on every target within
-   10 minutes. `release-watchdog.yml` re-checks both listings daily
+   release uploads nothing; it runs the `channels` and `registries` jobs alone
+9. In parallel with `channels`, under the same condition, the `registries` job
+   calls `marketplace-publish.yml` (`registries: both`) → requires a
+   published, scan-clean release, then promotes the release's own per-target
+   VSIXs to the VS Code Marketplace and Open VSX after verifying each against
+   `checksums.txt` and its `release.yml` attestation (every version publishes
+   on the release channel), then fails unless each registry lists the version
+   on every target within 10 minutes. `release-watchdog.yml` re-checks both
+   listings daily. Dispatch
+   `gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=<registry>`
+   only to re-publish to a registry after a failure
 
 ### Per-Repository Workflows
 
-| Repository        | Staging (`v*-rc.*`)               | Production (`v*.*.*`)                                    |
-| ----------------- | --------------------------------- | -------------------------------------------------------- |
-| **nightgauge**    | Build VSIX + Go binary → artifact | Build → GitHub Release with VSIX; registries on dispatch |
-| **acme-platform** | Build Docker → push GHCR staging  | Build Docker → push GHCR prod + Release                  |
-| **acme-mobile**   | Build release APK → artifact      | Build APK → GitHub Release                               |
+| Repository        | Staging (`v*-rc.*`)               | Production (`v*.*.*`)                                                   |
+| ----------------- | --------------------------------- | ----------------------------------------------------------------------- |
+| **nightgauge**    | Build VSIX + Go binary → artifact | Build → GitHub Release with VSIX, Homebrew, plugin `stable`, registries |
+| **acme-platform** | Build Docker → push GHCR staging  | Build Docker → push GHCR prod + Release                                 |
+| **acme-mobile**   | Build release APK → artifact      | Build APK → GitHub Release                                              |
 
 ### Cutting a Release — Step by Step
 
@@ -1084,22 +1093,32 @@ bash scripts/release-scan-gate.sh verify v0.4.0 -R nightgauge/nightgauge   # exi
 #     needed. Set it with: gh secret set VT_API_KEY --env production
 #     The key reaches curl only through a config on stdin, never argv or logs.
 
-# 10. Publish to the registries — ON THE TAG, never from a branch. The run
-#     verifies VSCE_PAT / OVSX_PAT, downloads the release's VSIXs, checks each
-#     against checksums.txt and its release.yml attestation, checks version and
-#     channel, and publishes those exact files. It builds nothing, and refuses
-#     a draft or a release without a clean scan record. The `production` environment refuses
-#     a branch ref, and the workflow refuses anything that is not vX.Y.Z.
-gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both
+# 10. The same run publishes to the registries (#3062). One tag publishes to
+#     every channel once the scan is clean: the GitHub Release, the Homebrew
+#     cask PR, the Claude plugin `stable` branch, the VS Code Marketplace and
+#     Open VSX. release.yml's preflight required HOMEBREW_TAP_GITHUB_TOKEN,
+#     VSCE_PAT and OVSX_PAT before the draft existed and verified each without
+#     side effects (scripts/verify-registry-pat.sh for the two PATs). Its
+#     `registries` job, under the same condition as `channels`, calls
+#     marketplace-publish.yml with registries: both: it downloads the release's
+#     VSIXs, checks each against checksums.txt and its release.yml attestation,
+#     checks version and channel, and publishes those exact files. It builds
+#     nothing, and refuses a draft or a release without a clean scan record.
 gh run watch
+#
+#     Only to re-publish to a registry after a failure, dispatch the workflow
+#     ON THE TAG, never from a branch. The `production` environment refuses a
+#     branch ref, and the workflow refuses anything that is not vX.Y.Z.
+gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=open-vsx
 
 # 11. Confirm the listings serve the version, then run the post-merge hook for
 #     any issue the release closes (§ After Merge). marketplace-publish.yml
 #     already waited up to 10 minutes per registry for the version to list on
 #     every target and failed if it did not (#1769); the release watchdog
 #     re-checks both listings daily and keeps one issue per channel while one
-#     is behind. If the publish run's check failed, re-run the workflow on the
-#     tag (it is idempotent); never bump the version to work around it.
+#     is behind. If the publish run's check failed, re-run the release run's
+#     failed jobs or dispatch marketplace-publish.yml on the tag (both are
+#     idempotent); never bump the version to work around it.
 bash scripts/verify-release-channels.sh --channel marketplace
 bash scripts/verify-release-channels.sh --channel open-vsx
 
@@ -1173,11 +1192,15 @@ Environments are configured in each repository's Settings → Environments:
 
 - **`production`** — the only environment. Its deployment-branch policy admits
   `v*` **tag** refs only, so `release.yml` (tag-triggered) and
-  `marketplace-publish.yml` (dispatched on a tag) run behind it and a dispatch
-  from a branch is refused before a runner is assigned. No required reviewer
+  `marketplace-publish.yml` (called by `release.yml`, or dispatched on a tag to
+  re-publish after a failure) and `staging.yml`'s `rc-scan` job (rc tags) run
+  behind it and a dispatch from a branch is
+  refused before a runner is assigned. It holds `VT_API_KEY`,
+  `HOMEBREW_TAP_GITHUB_TOKEN`, `VSCE_PAT` and `OVSX_PAT`; a release without any
+  of them fails its preflight. No required reviewer
   (single maintainer); add one when there is a second.
-- There is no `staging` environment: `staging.yml` (rc tags) needs no secrets
-  beyond the job token and runs unbound.
+- There is no `staging` environment. In `staging.yml` only `rc-scan` binds to
+  `production`, to read `VT_API_KEY`; the dry-run job stays unbound.
 
 Benefits of environments even without upper-tier infrastructure:
 

@@ -18,7 +18,9 @@
 #   https://docs.virustotal.com/reference/public-vs-premium-api
 #   https://docs.virustotal.com/reference/files-scan
 #   https://docs.virustotal.com/reference/files-upload-url
-# This script spaces its own requests to stay under 4/min. It does not retry a
+# This script spaces its own requests to stay under 4/min, backs off between
+# polls of one analysis, and stops at VT_MAX_REQUESTS requests per run so one
+# slow analysis cannot spend the day's quota. It does not retry a
 # 429: with the requests already spaced, a 429 means the daily or monthly quota
 # is spent or another client shares the key, and waiting inside one job fixes
 # neither. It exits 2, and the release stays a draft for a later re-run.
@@ -64,6 +66,11 @@
 #   VT_MIN_INTERVAL        Seconds between requests. Default 15 (4/min).
 #   VT_ANALYSIS_TIMEOUT    Seconds to wait for one file's analysis. Default 1800.
 #   VT_HTTP_TIMEOUT        Seconds per HTTP request. Default 600.
+#   VT_POLL_MAX_INTERVAL   Longest wait between polls of one analysis. The
+#                          first wait is VT_MIN_INTERVAL and each later one
+#                          doubles, up to this. Default 300.
+#   VT_MAX_REQUESTS        Most API requests one run may send. Reaching it is a
+#                          HARNESS ERROR, not a retry. Default 150.
 #
 # Exit: 0 every file clean; 1 any finding; 2 HARNESS ERROR.
 #
@@ -75,6 +82,8 @@ API_BASE="${VT_API_BASE:-https://www.virustotal.com/api/v3}"
 MIN_INTERVAL="${VT_MIN_INTERVAL:-15}"
 ANALYSIS_TIMEOUT="${VT_ANALYSIS_TIMEOUT:-1800}"
 HTTP_TIMEOUT="${VT_HTTP_TIMEOUT:-600}"
+POLL_MAX_INTERVAL="${VT_POLL_MAX_INTERVAL:-300}"
+MAX_REQUESTS="${VT_MAX_REQUESTS:-150}"
 LARGE_FILE_BYTES=33554432 # 32 MB: above this, POST /files refuses the upload.
 # VirusTotal answers GET /files/upload_url with a URL on this host. It is the
 # only origin besides the API's own that may receive the key.
@@ -91,6 +100,7 @@ WORK=""
 REPORT_STATUS="error"
 REPORT_ERROR=""
 ENTRIES="[]"
+REQUESTS=0 # API requests sent this run, failed ones included: each spends quota.
 
 write_report() {
   [ -n "$REPORT" ] || return 0
@@ -100,8 +110,10 @@ write_report() {
     --arg api "$API_BASE" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --argjson files "$ENTRIES" \
+    --argjson requests "$REQUESTS" \
     '{tool: "vt-scan.sh", api: $api, scanned_at: $at, status: $status,
-      error: (if $error == "" then null else $error end), files: $files}' \
+      error: (if $error == "" then null else $error end), requests: $requests,
+      files: $files}' \
     >"$REPORT" 2>/dev/null || echo "WARNING: could not write $REPORT" >&2
 }
 
@@ -136,9 +148,15 @@ command -v jq >/dev/null 2>&1 || harness "jq is required"
 command -v curl >/dev/null 2>&1 || harness "curl is required"
 [ -n "$REPORT" ] || harness "--report is required"
 
-for n in "MIN_INTERVAL:$MIN_INTERVAL" "ANALYSIS_TIMEOUT:$ANALYSIS_TIMEOUT" "HTTP_TIMEOUT:$HTTP_TIMEOUT"; do
-  [[ "${n#*:}" =~ ^[0-9]{1,6}$ ]] || harness "${n%%:*} must be a whole number of seconds"
+for n in "MIN_INTERVAL:$MIN_INTERVAL" "ANALYSIS_TIMEOUT:$ANALYSIS_TIMEOUT" "HTTP_TIMEOUT:$HTTP_TIMEOUT" \
+  "POLL_MAX_INTERVAL:$POLL_MAX_INTERVAL"; do
+  [[ "${n#*:}" =~ ^[0-9]{1,6}$ ]] || harness "VT_${n%%:*} must be a whole number of seconds"
 done
+[[ "$MAX_REQUESTS" =~ ^[0-9]{1,6}$ ]] && [ "$MAX_REQUESTS" -gt 0 ] ||
+  harness "VT_MAX_REQUESTS must be a whole number above 0"
+# A cap below the floor would poll faster than the 4/min spacing allows.
+[ "$POLL_MAX_INTERVAL" -ge "$MIN_INTERVAL" ] ||
+  harness "VT_POLL_MAX_INTERVAL ($POLL_MAX_INTERVAL) is below VT_MIN_INTERVAL ($MIN_INTERVAL)"
 [[ "$API_BASE" =~ ^https?://[^/]+(/.*)?$ ]] || harness "API base is not an http(s) URL"
 API_BASE="${API_BASE%/}"
 API_ORIGIN="$(sed -E 's#^(https?://[^/]+).*#\1#' <<<"$API_BASE")"
@@ -157,29 +175,35 @@ size_of() { wc -c <"$1" 2>/dev/null | tr -d ' '; }
 
 # --- Requests ---------------------------------------------------------------
 LAST_REQUEST=0
+# Seconds the next request waits after the previous one. The poll loop raises
+# it for one request; vt_request resets it to MIN_INTERVAL after each send.
+NEXT_GAP="$MIN_INTERVAL"
 BODY="$WORK/body.json"
 
 # vt_request METHOD URL [curl args...] — body lands in $BODY. Anything but
 # HTTP 200 is a harness error; the message names the endpoint, never the key.
 vt_request() {
-  local method="$1" url="$2" now wait code
+  local method="$1" url="$2" now wait code where
   shift 2
-  now="$(date +%s)"
-  wait=$((LAST_REQUEST + MIN_INTERVAL - now))
-  [ "$wait" -gt 0 ] && sleep "$wait"
-  LAST_REQUEST="$(date +%s)"
-  : >"$BODY"
-  code="$(printf 'header = "x-apikey: %s"\n' "$VT_API_KEY" |
-    curl -K - -sS -X "$method" --max-time "$HTTP_TIMEOUT" \
-      -o "$BODY" -w '%{http_code}' "$@" "$url" 2>"$WORK/curl.err")"
-  local rc=$?
-  local where
   case "$url" in
   "$API_ORIGIN"/*) where="${url#"$API_ORIGIN"}" ;;
   # An upload URL carries a one-time token in its path: report only its origin.
   *) where="$(sed -E 's#^(https?://[^/]+).*#\1#' <<<"$url")" ;;
   esac
   where="${where%%\?*}"
+  [ "$REQUESTS" -lt "$MAX_REQUESTS" ] ||
+    harness "request budget spent: VT_MAX_REQUESTS=$MAX_REQUESTS reached before $method $where; re-run later or raise it"
+  now="$(date +%s)"
+  wait=$((LAST_REQUEST + NEXT_GAP - now))
+  [ "$wait" -gt 0 ] && sleep "$wait"
+  NEXT_GAP="$MIN_INTERVAL"
+  REQUESTS=$((REQUESTS + 1))
+  LAST_REQUEST="$(date +%s)"
+  : >"$BODY"
+  code="$(printf 'header = "x-apikey: %s"\n' "$VT_API_KEY" |
+    curl -K - -sS -X "$method" --max-time "$HTTP_TIMEOUT" \
+      -o "$BODY" -w '%{http_code}' "$@" "$url" 2>"$WORK/curl.err")"
+  local rc=$?
   if [ "$rc" -ne 0 ]; then
     harness "$method $where: curl exit $rc ($(head -c 200 "$WORK/curl.err" | tr '\n' ' '))"
   fi
@@ -245,8 +269,14 @@ while IFS=$'\t' read -r sha aid; do
   size="$(awk -F'\t' -v s="$sha" '$1 == s { print $2; exit }' "$INDEX")"
 
   deadline=$(($(date +%s) + ANALYSIS_TIMEOUT))
+  gap="$MIN_INTERVAL"
   while :; do
+    # Exponential backoff: MIN, 2*MIN, 4*MIN ... capped at POLL_MAX_INTERVAL.
+    NEXT_GAP="$gap"
+    echo "  polling analysis of $path after ${gap}s"
     vt_request GET "$API_BASE/analyses/$aid"
+    gap=$((gap * 2))
+    [ "$gap" -le "$POLL_MAX_INTERVAL" ] || gap="$POLL_MAX_INTERVAL"
     status="$(jq -r '.data.attributes.status // empty' "$BODY")"
     case "$status" in
     completed) break ;;

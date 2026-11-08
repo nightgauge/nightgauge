@@ -17,6 +17,7 @@ sign-macos-binaries.sh regression suite
 malware-scan.sh regression suite
 vt-scan.sh regression suite
 release-scan-gate.sh draft-hold harness
+verify-archive-binaries.sh regression suite
 check-shipped-code.sh regression suite
 scrub-evidence.sh regression suite
 capture-cli-help.sh regression suite
@@ -48,6 +49,7 @@ Band-vocabulary gate regression suite
 visibility-prose reintroduction gate
 Workflow-reference gate regression suite
 Marketplace channel regression suite
+Release channel wiring suite
 Main build version regression suite
 VSIX host-target regression suite
 Release channel verification regression suite

@@ -25,6 +25,8 @@ Run-wide failures are selected by files in <state-dir>:
                        (endpoint: upload, upload_url, analysis, file)
   garble-<endpoint>    answer that endpoint with a body that is not JSON
   never-complete       analyses stay "queued" forever
+  pending-polls        holds N: each analysis answers "queued" to its first N
+                       polls, then "completed"
   quota                answer every request with HTTP 429
   wrong-sha            analyses report a different sha256 than the upload
   upload-url           GET /files/upload_url serves this file's content
@@ -41,6 +43,7 @@ FIXTURES = sys.argv[1]
 STATE = sys.argv[2]
 EXPECTED_KEY = os.environ.get("STUB_VT_KEY", "")
 UPLOADS = {}  # analysis id -> sha256
+POLLS = {}  # analysis id -> polls answered so far
 
 
 def flag(name):
@@ -85,7 +88,14 @@ def file_object(sha, content):
     return doc
 
 
-def analysis_object(sha, content):
+def pending_polls():
+    if not flag("pending-polls"):
+        return 0
+    with open(os.path.join(STATE, "pending-polls"), encoding="utf-8") as f:
+        return int(f.read().strip() or "0")
+
+
+def analysis_object(sha, content, polls=1):
     stats = {"malicious": 0, "suspicious": 0, "undetected": 62, "harmless": 0}
     results = {
         "StubEngineA": {
@@ -113,7 +123,8 @@ def analysis_object(sha, content):
             "category": "suspicious",
             "result": "Stub.Heuristic",
         }
-    status = "queued" if flag("never-complete") else "completed"
+    queued = flag("never-complete") or polls <= pending_polls()
+    status = "queued" if queued else "completed"
     reported = "0" * 64 if flag("wrong-sha") else sha
     return {
         "data": {
@@ -204,7 +215,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.answer(
                     "analysis", 404, {"error": {"code": "NotFoundError"}}
                 )
-            return self.answer("analysis", 200, analysis_object(sha, CONTENTS[sha]))
+            POLLS[aid] = POLLS.get(aid, 0) + 1
+            return self.answer(
+                "analysis", 200, analysis_object(sha, CONTENTS[sha], POLLS[aid])
+            )
         if self.path.startswith("/api/v3/files/"):
             sha = self.path.rsplit("/", 1)[-1]
             if sha not in CONTENTS:

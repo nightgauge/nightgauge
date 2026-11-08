@@ -48,7 +48,7 @@ func Registry() []Automation {
 			Workflow: "release.yml",
 			// No TriggerEvent: this one is tag-triggered, and the verdict that
 			// matters is that it has never run AT ALL.
-			Remedy: "cut a stable tag; the Marketplace publish is a separate manual dispatch (marketplace-publish.yml) gated on VSCE_PAT",
+			Remedy: "cut a stable tag; one run publishes every channel, including the VS Code Marketplace and Open VSX, and its preflight requires HOMEBREW_TAP_GITHUB_TOKEN, VSCE_PAT and OVSX_PAT",
 		},
 	}
 }

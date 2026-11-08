@@ -588,12 +588,14 @@ func writeReviewCapRecord(b *strings.Builder, rec *review.CapRecord) {
 			if f.Line != nil {
 				where = fmt.Sprintf("%s:%d", f.File, *f.Line)
 			}
-			fmt.Fprintf(b, "- %s %s, %s: %s\n", f.Severity, f.Pass, where, f.Claim)
+			fmt.Fprintf(b, "- %s %s, %s: %s\n", f.Severity, f.Pass,
+				attention.EscapeMarkdown(where), attention.EscapeMarkdown(f.Claim))
 		}
 		b.WriteString("\n")
 	}
 	if rec.Worktree != "" {
-		fmt.Fprintf(b, "The work is uncommitted in %s. Nothing was pushed.\n\n", rec.Worktree)
+		fmt.Fprintf(b, "The work is uncommitted in %s. Nothing was pushed.\n\n",
+			attention.EscapeMarkdown(rec.Worktree))
 	}
 }
 

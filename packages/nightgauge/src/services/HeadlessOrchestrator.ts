@@ -4493,6 +4493,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     const budget = 72 - scope.length;
     const text = raw
       .replace(/\s+/g, " ")
+      // An issue URL is a closing reference too (#2859); match any host.
+      .replace(/https?:\/\/[^\s/]+\/[\w.-]+\/[\w.-]+\/issues\/(\d+)\b/gi, "issue $1")
       .replace(/#(?=\d)/g, "issue ")
       .replace(/\bGH-(?=\d)/gi, "issue ")
       .trim();

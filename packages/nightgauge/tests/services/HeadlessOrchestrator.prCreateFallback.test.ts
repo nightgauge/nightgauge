@@ -326,6 +326,23 @@ describe("tryDeterministicCreateFallback (#3927)", () => {
     expect(title.endsWith(" word")).toBe(true);
   });
 
+  it.each([
+    ["Fixes https://github.com/o/r/issues/7 now", "chore(#42): Fixes issue 7 now"],
+    ["Fixes https://ghes.example/o/r/issues/7 now", "chore(#42): Fixes issue 7 now"],
+    ["Fixes #7 now", "chore(#42): Fixes issue 7 now"],
+    ["Fixes GH-7 now", "chore(#42): Fixes issue 7 now"],
+  ])("neutralizes every closing form in the fallback title: %s (#2859)", async (raw, want) => {
+    titleVerbFails.value = true;
+    issueTitle.value = raw;
+    await callFallback();
+    const create = calls.value.find(
+      (c) => c[0] === "/fake/nightgauge" && c[1] === "pr" && c[2] === "create"
+    );
+    const title = create![create!.indexOf("--title") + 1];
+    expect(title).toBe(want);
+    expect(title).not.toContain("/issues/");
+  });
+
   it("short-circuits to created:true without pushing when an open PR already exists", async () => {
     preExistingPrs.value = [{ number: 50 }];
     const result = await callFallback();

@@ -42,7 +42,11 @@ cat > "$WORK/bin/codesign" <<'S'
 for a in "$@"; do
   case "$a" in
     --verify) exit "${VERIFY_RC:-0}" ;;
-    --display) echo "Authority=Developer ID Application: Edibu LLC (RZJPN7Y7BG)"; exit 0 ;;
+    --display)
+      echo "Authority=Developer ID Application: Edibu LLC (RZJPN7Y7BG)"
+      echo "CodeDirectory v=20500 size=1 flags=${FAKE_FLAGS:-0x10000(runtime)} hashes=1"
+      echo "TeamIdentifier=${FAKE_TEAM:-RZJPN7Y7BG}"
+      exit 0 ;;
   esac
 done
 exit "${SIGN_RC:-0}"
@@ -68,6 +72,10 @@ BIN="$WORK/nightgauge-darwin-arm64"
 run() { ( unset APPLE_CERT_P12 APPLE_CERT_PASSWORD APPLE_SIGNING_IDENTITY \
                 APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD
           "$@" bash "$SUT" "$BIN" ) > "$WORK/out" 2>&1; echo $?; }
+# Required mode (#3064): the same, with --require-team RZJPN7Y7BG.
+run_req() { ( unset APPLE_CERT_P12 APPLE_CERT_PASSWORD APPLE_SIGNING_IDENTITY \
+                    APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD
+              "$@" bash "$SUT" --require-team RZJPN7Y7BG "$BIN" ) > "$WORK/out" 2>&1; echo $?; }
 
 signing_env=(env APPLE_CERT_P12=Zm9v APPLE_CERT_PASSWORD=pw
              APPLE_SIGNING_IDENTITY="Developer ID Application: Edibu LLC (RZJPN7Y7BG)")
@@ -154,6 +162,54 @@ if [[ "$rc" != 0 ]] && grep -q 'no binaries given' "$WORK/out"; then
   ok "no arguments -> non-zero exit"
 else
   bad "no arguments -> non-zero (got $rc)"; cat "$WORK/out" >&2
+fi
+
+# 11. Required mode with no credentials is fatal: a release must not ship ad-hoc.
+rc=$(run_req env)
+if [[ "$rc" == 1 ]] && grep -q 'signing is required' "$WORK/out"; then
+  ok "required mode, no credentials -> exit 1"
+else
+  bad "required mode, no credentials -> exit 1 (got $rc)"; cat "$WORK/out" >&2
+fi
+
+# 12. Required mode, signed by another team -> exit 1, naming the binary.
+rc=$(run_req "${signing_env[@]}" FAKE_TEAM=AAAAAAAAAA)
+if [[ "$rc" == 1 ]] && grep -q "$BIN is not signed by team RZJPN7Y7BG" "$WORK/out"; then
+  ok "required mode, wrong team -> exit 1"
+else
+  bad "required mode, wrong team -> exit 1 (got $rc)"; cat "$WORK/out" >&2
+fi
+
+# 13. Required mode, no hardened runtime flag -> exit 1.
+rc=$(run_req "${signing_env[@]}" FAKE_FLAGS='0x0(none)')
+if [[ "$rc" == 1 ]] && grep -q "$BIN lacks the hardened runtime flag" "$WORK/out"; then
+  ok "required mode, no runtime flag -> exit 1"
+else
+  bad "required mode, no runtime flag -> exit 1 (got $rc)"; cat "$WORK/out" >&2
+fi
+
+# 14. Required mode, correct team and runtime -> exit 0.
+rc=$(run_req "${signing_env[@]}")
+if [[ "$rc" == 0 ]]; then
+  ok "required mode, team and runtime present -> exit 0"
+else
+  bad "required mode, good signature -> exit 0 (got $rc)"; cat "$WORK/out" >&2
+fi
+
+# 15. Default mode ignores a wrong team: the identity assertion is opt-in.
+rc=$(run "${signing_env[@]}" FAKE_TEAM=AAAAAAAAAA)
+if [[ "$rc" == 0 ]]; then
+  ok "default mode, wrong team -> not asserted, exit 0"
+else
+  bad "default mode, wrong team -> exit 0 (got $rc)"; cat "$WORK/out" >&2
+fi
+
+# 16. --require-team with no value is a usage error.
+rc=$( bash "$SUT" --require-team >"$WORK/out" 2>&1; echo $?)
+if [[ "$rc" == 1 ]] && grep -q 'needs a team identifier' "$WORK/out"; then
+  ok "--require-team without a value -> exit 1"
+else
+  bad "--require-team without a value -> exit 1 (got $rc)"; cat "$WORK/out" >&2
 fi
 
 echo
