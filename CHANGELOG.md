@@ -14,6 +14,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **One stable tag now publishes to every channel in one run.** Once the
+  release's VirusTotal scan is clean, `release.yml` publishes the GitHub
+  Release, readies the Homebrew cask pull request, advances the Claude plugin
+  `stable` branch, and publishes the extension to the VS Code Marketplace and
+  Open VSX. The registries no longer wait for a separate manual dispatch, so a
+  release can no longer ship on GitHub while both registries stay a version
+  behind. The preflight now fails the run before anything is drafted when
+  `HOMEBREW_TAP_GITHUB_TOKEN`, `VSCE_PAT` or `OVSX_PAT` is missing, and checks
+  each token without side effects; a release no longer skips Homebrew for lack
+  of a token. Dispatch `marketplace-publish.yml` only to re-publish to a
+  registry after a failure (#3062).
+
 ### Fixed
 
 - **The pr-merge stage's default CLI timeout now outlasts a worst-case run.**
