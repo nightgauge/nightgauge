@@ -1193,13 +1193,14 @@ Environments are configured in each repository's Settings → Environments:
 - **`production`** — the only environment. Its deployment-branch policy admits
   `v*` **tag** refs only, so `release.yml` (tag-triggered) and
   `marketplace-publish.yml` (called by `release.yml`, or dispatched on a tag to
-  re-publish after a failure) run behind it and a dispatch from a branch is
+  re-publish after a failure) and `staging.yml`'s `rc-scan` job (rc tags) run
+  behind it and a dispatch from a branch is
   refused before a runner is assigned. It holds `VT_API_KEY`,
   `HOMEBREW_TAP_GITHUB_TOKEN`, `VSCE_PAT` and `OVSX_PAT`; a release without any
   of them fails its preflight. No required reviewer
   (single maintainer); add one when there is a second.
-- There is no `staging` environment: `staging.yml` (rc tags) needs no secrets
-  beyond the job token and runs unbound.
+- There is no `staging` environment. In `staging.yml` only `rc-scan` binds to
+  `production`, to read `VT_API_KEY`; the dry-run job stays unbound.
 
 Benefits of environments even without upper-tier infrastructure:
 

@@ -624,9 +624,10 @@ every `.vsix` and `.tar.gz`, which unpacks and collects them exactly as `scan`
 does for a draft and publishes nothing. A finding fails the RC, so a flagged
 build never reaches the soak; read `vt-scan-report-rc` from the run.
 
-- `VT_API_KEY` must be a **repository** secret, readable by `staging.yml`. A
-  secret only in the `production` environment is invisible there, and the job
-  then fails closed rather than skipping the scan.
+- The job runs in the `production` environment and reads the same `VT_API_KEY`
+  as the release scan; no other copy of the key is needed. The environment's
+  `v*` tag policy admits RC tags. A missing key fails the RC closed rather than
+  skipping the scan.
 - An RC scan and a release scan cost about 260 of the 500 daily requests
   together. Main builds are not scanned.
 

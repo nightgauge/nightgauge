@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The release candidate scan can read its VirusTotal key.** `staging.yml`'s
+  `rc-scan` job now runs in the `production` environment, where `VT_API_KEY`
+  lives, instead of failing every RC tag before scanning. Its error and
+  `docs/RELEASE_CHECKLIST.md` now point at the environment secret, not a
+  repository secret.
+
 - **The release scan no longer polls VirusTotal every 15 seconds while an
   analysis is pending.** Waits between polls of one analysis now double from
   `VT_MIN_INTERVAL` up to `VT_POLL_MAX_INTERVAL` (default 300 s), and one run
