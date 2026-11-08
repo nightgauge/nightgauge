@@ -388,6 +388,8 @@ REQUIRED_FILES=(
   scripts/test-publish-vsix-set.sh
   scripts/test-npm-audit-check.sh
   scripts/test-sign-macos-binaries.sh
+  scripts/test-verify-archive-binaries.sh
+  scripts/verify-archive-binaries.sh
   scripts/test-check-shipped-code.sh
   packages/nightgauge/scripts/check-shipped-code.sh
   scripts/test-scrub-evidence.sh
@@ -1551,6 +1553,15 @@ run_group "vt-scan.sh regression suite" \
   bash scripts/test-vt-scan.sh
 run_group "release-scan-gate.sh draft-hold harness" \
   bash scripts/test-release-scan-gate.sh
+
+# 1b2c''. verify-archive-binaries.sh regression suite (#3064) — the check that
+#       release.yml and staging.yml run after GoReleaser, proving each archive
+#       (and so the Homebrew cask) carries the exact bin/ binary the VSIX of
+#       that target bundles: the Developer ID-signed one. Fixture tarballs
+#       cover identical (0), one archive differs (1) and a missing or
+#       ambiguous input (2, HARNESS ERROR).
+run_group "verify-archive-binaries.sh regression suite" \
+  bash scripts/test-verify-archive-binaries.sh
 
 # 1b2d. check-shipped-code.sh regression suite (#2320, #2321) — the scan of
 #       what the VSIX ships for the shapes a static malware scanner matches on

@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Release candidates are scanned by VirusTotal before they soak.** An RC tag
+  push now scans its archives and VSIXs, and every binary and JS bundle inside
+  them, the same way the release gate scans a draft. A finding fails the RC, so
+  a flagged build is caught at the RC instead of at the release. The scan needs
+  `VT_API_KEY` as a repository secret readable by `staging.yml` (#3064).
 - **One stable tag now publishes to every channel in one run.** Once the
   release's VirusTotal scan is clean, `release.yml` publishes the GitHub
   Release, readies the Homebrew cask pull request, advances the Claude plugin
@@ -30,6 +35,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The macOS binaries in the release archives and the Homebrew cask are now
+  signed with the Developer ID.** They are the same signed binaries the VSIXs
+  bundle; GoReleaser used to rebuild them unsigned. A stable release now fails
+  before its draft exists when the darwin binaries lack the team's Developer ID
+  signature and hardened runtime, or when the Apple signing secrets are missing,
+  and it checks that each archive carries the signed binary byte for byte. The
+  Claude plugin is now 1.28.1: the workflow gate hook's wrapper dropped a comment
+  line that a Microsoft detection model flagged; the hook behaves the same
+  (#3064).
 - **The pr-merge stage's default CLI timeout now outlasts a worst-case run.**
   It was 100 minutes, but one run can spend a 15-minute CI wait, about two
   minutes of mergeability backoff and the 90-minute queue wait. The default is

@@ -328,9 +328,12 @@ jobs:
         run: make build-all VERSION="$VERSION"
 
       # Sign before anything packages these binaries. The VSIX freezes whatever
-      # is in dist/bin/, so signing afterwards would ship an unsigned copy while
-      # reporting success. No-ops with a notice when the Apple secrets are
-      # absent, so a secretless re-run still completes.
+      # is in dist/bin/, and GoReleaser copies bin/ into the archives and the
+      # cask (.goreleaser.yml hooks.post), so signing afterwards would ship an
+      # unsigned copy while reporting success. Signing is REQUIRED here
+      # (#3064): missing Apple secrets, or a binary without the team's
+      # Developer ID and the hardened runtime, fail this step, so a secretless
+      # re-run fails here, before the draft exists.
       - name: Sign the macOS binaries
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -340,7 +343,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          bash scripts/sign-macos-binaries.sh \
+          bash scripts/sign-macos-binaries.sh --require-team RZJPN7Y7BG \
             bin/nightgauge-darwin-arm64 bin/nightgauge-darwin-amd64
 
       # Build EVERY workspace before testing, not just the SDK. The VSCode suite
@@ -600,6 +603,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # #3064: the archives and the cask must carry the signed bin/ binaries,
+      # byte for byte. The draft is not public yet, so failing here keeps an
+      # unsigned archive from ever publishing.
+      - name: Verify archives carry the signed bin/ binaries
+        run: bash scripts/verify-archive-binaries.sh dist bin
 
       # Every step below addresses the release by the triggering tag. Prove
       # GoReleaser created THAT release before attaching anything to it.

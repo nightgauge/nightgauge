@@ -17,6 +17,7 @@ sign-macos-binaries.sh regression suite
 malware-scan.sh regression suite
 vt-scan.sh regression suite
 release-scan-gate.sh draft-hold harness
+verify-archive-binaries.sh regression suite
 check-shipped-code.sh regression suite
 scrub-evidence.sh regression suite
 capture-cli-help.sh regression suite
