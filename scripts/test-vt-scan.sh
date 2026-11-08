@@ -232,6 +232,36 @@ else
 fi
 rm -f "$STATE/upload-url"
 
+# 18. Poll backoff: waits double from VT_MIN_INTERVAL and stop at the cap.
+# Its own file: the stub counts polls per analysis for the whole suite.
+SLOW="$(art slow.js 'console.log("slow")')"
+printf '3\n' >"$STATE/pending-polls"
+scan VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=4 VT_ANALYSIS_TIMEOUT=60 -- "$SLOW"
+rm -f "$STATE/pending-polls"
+expect "pending analysis polled to completion" 0 "every file clean"
+waits="$(sed -n 's/^  polling analysis of .* after \([0-9]*\)s$/\1/p' <<<"$OUT" | tr '\n' ' ')"
+[ "$waits" = "1 2 4 4 " ] && [ "$(grep -c '^GET /api/v3/analyses/' "$STATE/requests.log")" -eq 4 ] &&
+  ok "poll waits double and cap: 1 2 4 4" || bad "poll waits: want '1 2 4 4 ', got '$waits'"
+
+# 19. Every report counts the requests the run sent: POST, analysis, file.
+scan -- "$CLEAN"
+[ "$(jq -r '.requests' "$REPORT")" = "3" ] && ok "report records requests: 3" ||
+  bad "requests field: want 3, got $(jq -r '.requests' "$REPORT" 2>/dev/null)"
+
+# 20. The request budget stops the run before it sends past VT_MAX_REQUESTS.
+scan VT_MAX_REQUESTS=1 -- "$CLEAN"
+expect "request budget reached -> exit 2" 2 "HARNESS ERROR: request budget spent: VT_MAX_REQUESTS=1"
+[ "$(wc -l <"$STATE/requests.log" | tr -d ' ')" = "1" ] && [ "$(report_status)" = "error" ] &&
+  [ "$(jq -r '.requests' "$REPORT")" = "1" ] &&
+  ok "budget: one request sent, report error with requests 1" ||
+  bad "budget: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(cat "$REPORT" 2>/dev/null)"
+
+# 21. Invalid knobs are harness errors before any request.
+scan VT_MAX_REQUESTS=0 -- "$CLEAN"
+expect "VT_MAX_REQUESTS=0 -> exit 2" 2 "HARNESS ERROR: VT_MAX_REQUESTS"
+scan VT_MIN_INTERVAL=10 VT_POLL_MAX_INTERVAL=5 -- "$CLEAN"
+expect "VT_POLL_MAX_INTERVAL below VT_MIN_INTERVAL -> exit 2" 2 "HARNESS ERROR: VT_POLL_MAX_INTERVAL"
+
 # 17. The key never appears in any output or report written above.
 if grep -qF "$KEY" "$ALL_OUT"; then
   bad "the API key appears in stdout, stderr or a report"
