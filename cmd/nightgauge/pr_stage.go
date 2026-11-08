@@ -344,7 +344,7 @@ caller DEFERS instead of running the LLM into an exhausted bucket (#3976).`,
 	cmd.Flags().StringVar(&repo, "repo", "", "Target repository as owner/name (informational; merge reads pr-{N}.json)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
-	cmd.Flags().IntVar(&timeoutSec, "timeout", int(config.DefaultPRMergeCIWait.Seconds()), "Overall timeout in seconds (0 = no CLI timeout). When unset, raised to cover pipeline.merge_queue.wait_timeout plus 10m (#2214)")
+	cmd.Flags().IntVar(&timeoutSec, "timeout", int(config.DefaultPRMergeCIWait.Seconds()), "Overall timeout in seconds (0 = no CLI timeout). When unset, covers one CI wait, the mergeability backoff and pipeline.merge_queue.wait_timeout, plus 10m (#2835)")
 	return cmd
 }
 
@@ -419,14 +419,14 @@ func prMergeQueueWait(workspace string) time.Duration {
 }
 
 // prMergeDefaultTimeoutSec returns the pr-merge verb's default --timeout:
-// config.ResolvePRMergeCIWait, which covers a merge-queue wait (#2214) with ten
-// minutes' margin and never drops below the plain CI-wait floor.
+// config.ResolvePRMergeTimeout, the sum of one CI wait, the mergeability
+// backoff and the merge-queue wait, plus ten minutes' margin (#2214, #2835).
 func prMergeDefaultTimeoutSec(workspace string) int {
 	cfg, err := config.Load(workspace)
 	if err != nil {
 		cfg = nil
 	}
-	return int(cfg.ResolvePRMergeCIWait().Seconds())
+	return int(cfg.ResolvePRMergeTimeout().Seconds())
 }
 
 // prMergeBudget derives every pr-merge time limit from the one resolved queue

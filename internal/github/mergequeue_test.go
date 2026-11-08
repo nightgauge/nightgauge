@@ -632,3 +632,10 @@ func TestMergeQueue_DefaultsNotPRTitled_NoWIPCommit_EnqueuesWithoutPatch(t *test
 		t.Errorf("enqueued=%d patched=%d, want 1/0", qs.enqueued, qs.patched)
 	}
 }
+
+// TestMergeabilityWaitBudget pins the 2+4+8+16x7 = 126 s backoff (#2730, #2835).
+func TestMergeabilityWaitBudget(t *testing.T) {
+	if got, want := MergeabilityWaitBudget(), 126*time.Second; got != want {
+		t.Fatalf("MergeabilityWaitBudget() = %v, want %v", got, want)
+	}
+}

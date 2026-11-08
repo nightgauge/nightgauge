@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The pr-merge stage's default CLI timeout now outlasts a worst-case run.**
+  It was 100 minutes, but one run can spend a 15-minute CI wait, about two
+  minutes of mergeability backoff and the 90-minute queue wait. The default is
+  now the sum of those phases plus ten minutes (117m06s), and `pr-stage budget`
+  and recovery follow it (#2835).
 - **A pr-merge skill that pushed a CI fix no longer ends the run with the PR
   unmerged when the VS Code extension drives the pipeline.** The extension now
   reads the skill's `pr-merge-fix-{N}.json` hand-back, as the Go scheduler
