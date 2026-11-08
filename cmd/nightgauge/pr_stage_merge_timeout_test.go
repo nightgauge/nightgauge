@@ -4,17 +4,26 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/github"
 )
 
-// TestPrMergeDefaultTimeoutCoversTheMergeQueueWait is #2214: the pr-merge
-// verb's default --timeout must not cut a merge-queue wait short.
-func TestPrMergeDefaultTimeoutCoversTheMergeQueueWait(t *testing.T) {
+// TestPrMergeDefaultTimeoutCoversTheWorstCaseRun is #2214 and #2835: the
+// pr-merge verb's default --timeout must outlast one Run that spends a full CI
+// wait, the mergeability backoff and the full merge-queue wait.
+func TestPrMergeDefaultTimeoutCoversTheWorstCaseRun(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	if got, want := prMergeDefaultTimeoutSec(t.TempDir()), (90+10)*60; got != want {
-		t.Errorf("default = %ds, want %ds (90m queue wait + 10m)", got, want)
+	worst := github.DefaultCIPollInterval*github.DefaultCIPollMax + 126*time.Second +
+		config.DefaultMergeQueueWaitTimeout
+	got := time.Duration(prMergeDefaultTimeoutSec(t.TempDir())) * time.Second
+	if got <= worst {
+		t.Errorf("default = %v, does not cover the worst-case run %v", got, worst)
+	}
+	if want := 117*time.Minute + 6*time.Second; got != want {
+		t.Errorf("default = %v, want %v", got, want)
 	}
 
 	short := t.TempDir()
@@ -25,7 +34,8 @@ func TestPrMergeDefaultTimeoutCoversTheMergeQueueWait(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(short, ".nightgauge", "config.yaml"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := prMergeDefaultTimeoutSec(short); got != int(config.DefaultPRMergeCIWait.Seconds()) {
-		t.Errorf("short queue wait = %ds, want the CI-wait floor %ds", got, int(config.DefaultPRMergeCIWait.Seconds()))
+	want := 15*time.Minute + 126*time.Second + 5*time.Minute + config.PRMergeTimeoutMargin
+	if got := time.Duration(prMergeDefaultTimeoutSec(short)) * time.Second; got != want {
+		t.Errorf("short queue wait = %v, want %v", got, want)
 	}
 }

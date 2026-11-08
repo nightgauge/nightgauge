@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/github"
 )
 
 // PRConfig is the subset of the pr: block the Go scheduler reads (#2504).
@@ -73,6 +75,29 @@ func (c *Config) ResolvePRMergeCIWait() time.Duration {
 		wait = ci
 	}
 	return wait
+}
+
+// PRMergeTimeoutMargin is the slack the pr-merge verb's default --timeout
+// keeps above its phase budget.
+const PRMergeTimeoutMargin = 10 * time.Minute
+
+// ResolvePRMergeTimeout is the pr-merge verb's default CLI timeout: one CI
+// wait (pr.ci_check_timeout, else github.DefaultCIPollInterval x
+// DefaultCIPollMax, as the runner sizes it), plus the mergeability backoff
+// budget, plus the merge-queue wait, plus PRMergeTimeoutMargin (#2835). The
+// default is 15m + 2m06s + 90m + 10m = 117m06s. Safe on a nil receiver.
+func (c *Config) ResolvePRMergeTimeout() time.Duration {
+	var pipeline *PipelineConfig
+	var pr *PRConfig
+	if c != nil {
+		pipeline, pr = c.Pipeline, c.PR
+	}
+	ciWait := pr.ResolveCICheckTimeout()
+	if ciWait <= 0 {
+		ciWait = github.DefaultCIPollInterval * github.DefaultCIPollMax
+	}
+	return ciWait + github.MergeabilityWaitBudget() +
+		pipeline.ResolveMergeQueueWaitTimeout() + PRMergeTimeoutMargin
 }
 
 func positiveEnvInt(key string) int {

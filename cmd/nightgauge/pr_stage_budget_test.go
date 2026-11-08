@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
@@ -47,6 +48,11 @@ func TestPrMergeBudget_ClientOutlivesCLIOutlivesQueue(t *testing.T) {
 			}
 			if !(b.ClientTimeoutMs > b.CLITimeoutMs && b.CLITimeoutMs > b.QueueWaitMs) {
 				t.Fatalf("want client > cli > queue, got %+v", b)
+			}
+			phases := github.DefaultCIPollInterval*github.DefaultCIPollMax +
+				github.MergeabilityWaitBudget() + tc.want
+			if cli := time.Duration(b.CLITimeoutMs) * time.Millisecond; cli <= phases {
+				t.Fatalf("cli timeout %s does not cover CI wait + backoff + queue %s", cli, phases)
 			}
 			if got := b.CLITimeoutMs / 1000; got != int64(prMergeDefaultTimeoutSec(root)) {
 				t.Fatalf("cli_timeout_ms = %ds, the verb's real default is %ds", got, prMergeDefaultTimeoutSec(root))

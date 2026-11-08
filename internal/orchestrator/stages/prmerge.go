@@ -174,11 +174,6 @@ const (
 	// bounded so a repo with no CI at all cannot hold the deterministic path
 	// for the full 15 min before punting `no-checks-created`.
 	DefaultCINoCheckGracePolls = 4
-	// DefaultMergeabilityBackoffCap caps the doubling mergeability delay
-	// (#2730). With github.DefaultMergeabilityPolls that budgets 2+4+8+16x7 =
-	// 126 s. The old flat 20 s was shorter than GitHub takes to recompute after
-	// the base branch moves, so the wait expired on a PR that had no problem.
-	DefaultMergeabilityBackoffCap = 16 * time.Second
 	// mergeSettlePasses bounds how many CI waits one Run may spend. A CI wait
 	// can end on UNKNOWN, and that verdict can land as pending CI again, so the
 	// two waits alternate; the bound stops a PR whose base keeps moving from
@@ -413,7 +408,7 @@ func logPuntSnapshot(prNumber int, reason string, snap PRViewSnapshot) {
 
 // The mergeability wait (#1933) makes github.DefaultMergeabilityPolls polls from
 // github.DefaultMergeabilityPollInterval, doubling up to
-// DefaultMergeabilityBackoffCap (#2730); github.MergeableUnknown is GitHub's
+// github.DefaultMergeabilityBackoffCap (#2730); github.MergeableUnknown is GitHub's
 // "not computed yet" answer. They live in internal/github so the merge queue's
 // readiness wait shares the base values (#2584).
 
@@ -504,7 +499,7 @@ func NewDeterministicRunner() *DeterministicRunner {
 
 		mergeabilityPollInterval: github.DefaultMergeabilityPollInterval,
 		mergeabilityPollMax:      github.DefaultMergeabilityPolls,
-		mergeabilityBackoffCap:   DefaultMergeabilityBackoffCap,
+		mergeabilityBackoffCap:   github.DefaultMergeabilityBackoffCap,
 
 		now: time.Now,
 

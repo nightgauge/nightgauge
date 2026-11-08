@@ -59,7 +59,28 @@ const MergeableUnknown = "UNKNOWN"
 const (
 	DefaultMergeabilityPolls        = 10
 	DefaultMergeabilityPollInterval = 2 * time.Second
+	// DefaultMergeabilityBackoffCap caps the doubling mergeability delay
+	// (#2730). With DefaultMergeabilityPolls that budgets 2+4+8+16x7 =
+	// 126 s. The old flat 20 s was shorter than GitHub takes to recompute after
+	// the base branch moves, so the wait expired on a PR that had no problem.
+	DefaultMergeabilityBackoffCap = 16 * time.Second
 )
+
+// MergeabilityWaitBudget is the longest one mergeability wait can sleep: the
+// sum of the doubling, capped delays over DefaultMergeabilityPolls polls. It
+// mirrors stages.(*DeterministicRunner).mergeabilityDelay, and a test in that
+// package pins the two together (#2835).
+func MergeabilityWaitBudget() time.Duration {
+	var total time.Duration
+	d := DefaultMergeabilityPollInterval
+	for i := 0; i < DefaultMergeabilityPolls; i++ {
+		total += min(d, DefaultMergeabilityBackoffCap)
+		if d < DefaultMergeabilityBackoffCap {
+			d *= 2
+		}
+	}
+	return total
+}
 
 // DefaultCIPollInterval / DefaultCIPollMax are the CI-wait budget (#297):
 // 30 × 30s = 15 min. The pr-merge stage waits on CI with it, and the merge
