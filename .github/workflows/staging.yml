@@ -396,6 +396,10 @@ jobs:
     # the caller's branch, and github.event_name is also `push`, so the ref is
     # the test, with the version input as a second guard.
     if: startsWith(github.ref, 'refs/tags/v') && inputs.version == ''
+    # VT_API_KEY lives only in the production environment (#3070). Its
+    # deployment policy admits v* tag refs, so RC tags (v0.8.3-rc.1) qualify;
+    # the skipped workflow_call job never requests it from a branch ref.
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 80
     steps:
@@ -415,7 +419,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${VT_API_KEY:-}" ]; then
-            echo "::error::VT_API_KEY is not readable by staging.yml. The RC cannot be scanned, so it fails here instead of soaking unscanned. Add it as a repository secret (docs/RELEASE_CHECKLIST.md)."
+            echo "::error::VT_API_KEY is not set in the production environment. The RC cannot be scanned, so it fails here instead of soaking unscanned. Set it with gh secret set VT_API_KEY --env production (docs/RELEASE_CHECKLIST.md)."
             exit 1
           fi
           shopt -s nullglob
