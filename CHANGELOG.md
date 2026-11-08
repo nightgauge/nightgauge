@@ -14,6 +14,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release scan no longer polls VirusTotal every 15 seconds while an
+  analysis is pending.** Waits between polls of one analysis now double from
+  `VT_MIN_INTERVAL` up to `VT_POLL_MAX_INTERVAL` (default 300 s), and one run
+  sends at most `VT_MAX_REQUESTS` requests (default 150) before stopping with a
+  harness error, so a slow analysis cannot spend the free key's daily quota.
+  The scan report records how many requests the run made in `requests`.
+
 ## [0.8.3] - 2026-11-08
 
 0.8.1 and 0.8.2 were tagged but never published. The release gate could
