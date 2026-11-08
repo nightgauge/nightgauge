@@ -265,6 +265,9 @@ jobs:
       - name: Validate the findings
         # Model-free, after the CLI has exited. The exact-value check backs up
         # the credential-shape regex, which does not know the token's shape.
+        # always(): the upload below runs even when the review step fails, so
+        # the canary must run first in that case too.
+        if: ${{ always() }}
         env:
           FINDINGS_FILE: .pr-review/out/findings.json
           MODEL_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

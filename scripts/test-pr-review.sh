@@ -295,6 +295,8 @@ expect "strip: log counts the removal" 1 "$(count 'Removed 1 symlink' "$SDIR/log
 
 # The token canary in the model-free validate step.
 VALIDATE_RUN="$(yq '.jobs.review.steps[] | select(.name == "Validate the findings") | .run' "$WORKFLOW")"
+expect "canary: runs even when the review step fails" '${{ always() }}' \
+  "$(yq '.jobs.review.steps[] | select(.name == "Validate the findings") | .if' "$WORKFLOW")"
 VDIR="$TMP/validate"
 mkdir -p "$VDIR/.pr-review/out" "$VDIR/scripts"
 cp "$CLI" "$VDIR/scripts/pr-review.mjs"
