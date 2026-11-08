@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
@@ -149,6 +150,9 @@ func parseFinding(item json.RawMessage) (Finding, error) {
 		strings.ContainsRune(f.File, '\\') {
 		return Finding{}, fmt.Errorf("file %q is not repository-relative", f.File)
 	}
+	if hasControl(f.File) {
+		return Finding{}, fmt.Errorf("file %q contains a control character", f.File)
+	}
 	for _, seg := range strings.Split(f.File, "/") {
 		if seg == ".." {
 			return Finding{}, fmt.Errorf("file %q has a .. segment", f.File)
@@ -157,7 +161,7 @@ func parseFinding(item json.RawMessage) (Finding, error) {
 	if f.Line != nil && *f.Line < 1 {
 		return Finding{}, fmt.Errorf("line %d is not positive", *f.Line)
 	}
-	if f.Claim == "" || strings.ContainsAny(f.Claim, "\r\n") {
+	if f.Claim == "" || hasControl(f.Claim) {
 		return Finding{}, errors.New("claim must be one non-empty line")
 	}
 	if utf8.RuneCountInString(f.Claim) > maxClaim {
@@ -632,4 +636,13 @@ func clip(s string, n int) string {
 		return string(r)
 	}
 	return strings.TrimSpace(string(r[:n]))
+}
+
+// hasControl reports whether s holds a control or Unicode format character
+// (newline, tab, NUL, bidi override): any of them lets a value leave its line
+// or disguise itself on a surface that renders it.
+func hasControl(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
+	}) >= 0
 }
