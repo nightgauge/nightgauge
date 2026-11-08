@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-08
+
+0.8.1 and 0.8.2 were tagged but never published. The release gate could
+not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the macOS
+binaries in the archives unsigned and a hook script that one antivirus engine
+flagged (#3064). Their changes ship in this release and are listed below.
+
 ### Fixed
 
 - **A pr-merge skill that pushed a CI fix no longer ends the run with the PR
@@ -16,14 +23,6 @@ and this project adheres to
   reads the skill's `pr-merge-fix-{N}.json` hand-back, as the Go scheduler
   does, and re-enters the deterministic runner to wait for CI and merge,
   re-running the skill up to `pr.auto_fix_max_attempts` times (#2833).
-
-## [0.8.2] - 2026-11-07
-
-0.8.1 was tagged but never published, because the release gate could not scan
-files over 32 MB (#3011). Its changes ship in this release and are listed below.
-
-### Fixed
-
 - The Output window no longer carries a previous run into a new one (#2808). A
   sequential run of an issue that earlier held the same tab starts with fresh stages,
   tokens and timings; a reused tab shows only the new run's output; and the tab's
@@ -101,6 +100,11 @@ files over 32 MB (#3011). Its changes ship in this release and are listed below.
 
 - The Claude Code plugin is updated again on activation after an extension upgrade or an
   earlier failed update, until the update succeeds (#2762).
+
+## [0.8.2] - 2026-11-07
+
+Tagged but never published; the release gate stopped it (#3064). Its
+changes ship in [0.8.3].
 
 ## [0.8.0] - 2026-11-04
 
@@ -1615,7 +1619,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.3
 [0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2

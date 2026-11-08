@@ -14,24 +14,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
-### Changed
+## [0.8.3] - 2026-11-08
 
-- **Release candidates are scanned by VirusTotal before they soak.** An RC tag
-  push now scans its archives and VSIXs, and every binary and JS bundle inside
-  them, the same way the release gate scans a draft. A finding fails the RC, so
-  a flagged build is caught at the RC instead of at the release. The scan needs
-  `VT_API_KEY` as a repository secret readable by `staging.yml` (#3064).
-- **One stable tag now publishes to every channel in one run.** Once the
-  release's VirusTotal scan is clean, `release.yml` publishes the GitHub
-  Release, readies the Homebrew cask pull request, advances the Claude plugin
-  `stable` branch, and publishes the extension to the VS Code Marketplace and
-  Open VSX. The registries no longer wait for a separate manual dispatch, so a
-  release can no longer ship on GitHub while both registries stay a version
-  behind. The preflight now fails the run before anything is drafted when
-  `HOMEBREW_TAP_GITHUB_TOKEN`, `VSCE_PAT` or `OVSX_PAT` is missing, and checks
-  each token without side effects; a release no longer skips Homebrew for lack
-  of a token. Dispatch `marketplace-publish.yml` only to re-publish to a
-  registry after a failure (#3062).
+0.8.1 and 0.8.2 were tagged but never published. The release gate could
+not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the macOS
+binaries in the archives unsigned and a hook script that one antivirus engine
+flagged (#3064). Their changes ship in this release and are listed below.
 
 ### Fixed
 
@@ -54,14 +42,6 @@ changelog, and the release workflow refuses a tag that does not.
   reads the skill's `pr-merge-fix-{N}.json` hand-back, as the Go scheduler
   does, and re-enters the deterministic runner to wait for CI and merge,
   re-running the skill up to `pr.auto_fix_max_attempts` times (#2833).
-
-## [0.8.2] - 2026-11-07
-
-0.8.1 was tagged but never published, because the release gate could not scan
-files over 32 MB (#3011). Its changes ship in this release and are listed below.
-
-### Fixed
-
 - The Output window no longer carries a previous run into a new one (#2808). A
   sequential run of an issue that earlier held the same tab starts with fresh stages,
   tokens and timings; a reused tab shows only the new run's output; and the tab's
@@ -216,6 +196,22 @@ files over 32 MB (#3011). Its changes ship in this release and are listed below.
 
 ### Changed
 
+- **Release candidates are scanned by VirusTotal before they soak.** An RC tag
+  push now scans its archives and VSIXs, and every binary and JS bundle inside
+  them, the same way the release gate scans a draft. A finding fails the RC, so
+  a flagged build is caught at the RC instead of at the release. The scan needs
+  `VT_API_KEY` as a repository secret readable by `staging.yml` (#3064).
+- **One stable tag now publishes to every channel in one run.** Once the
+  release's VirusTotal scan is clean, `release.yml` publishes the GitHub
+  Release, readies the Homebrew cask pull request, advances the Claude plugin
+  `stable` branch, and publishes the extension to the VS Code Marketplace and
+  Open VSX. The registries no longer wait for a separate manual dispatch, so a
+  release can no longer ship on GitHub while both registries stay a version
+  behind. The preflight now fails the run before anything is drafted when
+  `HOMEBREW_TAP_GITHUB_TOKEN`, `VSCE_PAT` or `OVSX_PAT` is missing, and checks
+  each token without side effects; a release no longer skips Homebrew for lack
+  of a token. Dispatch `marketplace-publish.yml` only to re-publish to a
+  registry after a failure (#3062).
 - The clean-install release gate (G1) can now test a release candidate's own
   VSIX: dispatch `clean-install-e2e.yml` with `rc_tag=vX.Y.Z-rc.N`. The run
   summary names the artifact tested, the VSIX runs the same integrity checks as
@@ -514,6 +510,11 @@ recover`'s default timeout grows to match.
 
 - `claude-plugins/nightgauge/hooks/pre-push-validate.sh`, a hand-kept copy of the git
   pre-push hook that `nightgauge pre-push install` writes. It was never a Claude hook (#2764).
+
+## [0.8.2] - 2026-11-07
+
+Tagged but never published; the release gate stopped it (#3064). Its
+changes ship in [0.8.3].
 
 ## [0.8.0] - 2026-11-04
 
@@ -8700,7 +8701,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.3
 [0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/nightgauge/nightgauge/compare/v0.7.1...v0.7.2
