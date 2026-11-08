@@ -3282,16 +3282,23 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             )));
       if (isStallKill) {
         const failedStage = pipelineResult?.failedStage ?? "unknown";
+        // A stage_cap_kill (#2812) shares the stall recovery but not its
+        // wording: the stage was working and ran out of time, so the toast
+        // names the runtime cap instead of a stall (#2886).
+        const isCapKill = haltKind === "stage_cap_kill";
         this.logger.info(
-          "Skipping haltQueueOnSlotFailure — stall-kill is transient, Go layer will retry with backoff",
+          isCapKill
+            ? "Skipping haltQueueOnSlotFailure — stage cap kill is transient, Go layer will retry with backoff"
+            : "Skipping haltQueueOnSlotFailure — stall-kill is transient, Go layer will retry with backoff",
           {
             failedIssue: slot.issueNumber,
             failedStage,
             errSnippet: haltErrMsg.slice(0, 200),
           }
         );
+        const what = isCapKill ? "hit its runtime cap at" : "stalled at";
         void vscode.window.showWarningMessage(
-          `Nightgauge: Issue #${slot.issueNumber} stalled at ${failedStage} — will retry automatically in 30 min.`
+          `Nightgauge: Issue #${slot.issueNumber} ${what} ${failedStage} — will retry automatically in 30 min.`
         );
         return;
       }

@@ -9,6 +9,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- When a stage is stopped for exceeding its runtime cap, the warning now says
+  the issue hit its runtime cap at that stage instead of saying it stalled.
+  The retry is unchanged: it still runs automatically after 30 minutes (#2886).
+
 ## [0.8.3] - 2026-11-09
 
 0.8.1 and 0.8.2 were tagged but never published. The release gate could

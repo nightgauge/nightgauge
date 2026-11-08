@@ -14,6 +14,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- When a stage is stopped for exceeding its runtime cap, the warning now says
+  the issue hit its runtime cap at that stage instead of saying it stalled.
+  The retry is unchanged: it still runs automatically after 30 minutes (#2886).
+
 ### Security
 
 - The review-cap attention card now shows a reviewer's file and claim as
