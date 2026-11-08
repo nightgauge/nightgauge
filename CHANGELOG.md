@@ -14,6 +14,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Security
+
+- The review-cap attention card now shows a reviewer's file and claim as
+  literal text: markdown in a finding can no longer add links, images or
+  formatting to the card. A finding whose file or claim holds a control or
+  invisible formatting character (newline, tab, bidi override) is rejected
+  (#2875).
+
 ## [0.8.3] - 2026-11-09
 
 0.8.1 and 0.8.2 were tagged but never published. The release gate could
