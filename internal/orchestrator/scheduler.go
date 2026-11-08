@@ -4842,16 +4842,43 @@ func loadWorktreePath(workspaceRoot string, issueNumber int) string {
 	return workspaceRoot
 }
 
-// stageSkillRoots is the root list for a stage of issue's run. The workspace it
-// searches is the run's worktree, the input the extension passes too, so the
-// hosts agree on the checkout as well as the order (#2718). A worktree that has
-// gone falls back to the repository root.
-func stageSkillRoots(workspaceRoot string, issueNumber int) []string {
-	root := loadWorktreePath(workspaceRoot, issueNumber)
-	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+// stageSkillRoots is the root list for a stage of issue's run. liveRoot is the
+// tree the run's stages execute in (stageWorkspace: runtime.WorktreeDir, else
+// the repository root), the input the extension passes too, so the hosts agree
+// on the checkout as well as the order (#2718).
+//
+// The workspace root's CONTENT is frozen per run (#2813): it is a snapshot of
+// the worktree's skills/ taken before the run's first render, so a stage cannot
+// rewrite the instructions a later stage of the same run executes. runID is the
+// dispatching run's own identity (RuntimeState.RunID), never the checkout-wide
+// run-state record, which names one issue while the scheduler runs several in
+// one checkout. With no run ID, or a snapshot that cannot be taken, it fails
+// closed: the workspace root is omitted, so a worktree-only skill fails render
+// as not found instead of silently reading the mutable tree.
+func stageSkillRoots(workspaceRoot, liveRoot string, issueNumber int, runID string) []string {
+	// A liveRoot with no skills/ (gone, or a worktree of a tree whose skills
+	// are uncommitted) falls back to the repository root. Either way the
+	// choice is made once, at the run's first render, and then frozen.
+	root := liveRoot
+	if info, err := os.Stat(filepath.Join(root, "skills")); err != nil || !info.IsDir() {
 		root = workspaceRoot
 	}
-	return skillrender.DefaultRoots(root)
+	snapshot := ""
+	if runID == "" {
+		log.Printf("WARN scheduler: issue #%d: no run id, omitting the workspace skills root", issueNumber)
+	} else {
+		var err error
+		snapshot, err = runSkillSnapshot(workspaceRoot, root, issueNumber, runID)
+		if err != nil {
+			log.Printf("WARN scheduler: issue #%d: cannot snapshot %s/skills for run %s, "+
+				"omitting the workspace skills root: %v", issueNumber, root, runID, err)
+		}
+	}
+	return skillrender.ResolveRoots(skillrender.RootInputs{
+		Workspace: snapshot,
+		Bundle:    skillrender.ExecutableBundleRoot(),
+		Override:  os.Getenv(skillrender.SkillsRootEnv),
+	})
 }
 
 // refusePreDispatch books a stage the pipeline declines to DISPATCH — the
@@ -5975,7 +6002,20 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// path below has settled pipelineSuccess.
 	lifecycle, resumeFrom := beginRunLifecycle(workspaceRoot, item.Number,
 		resolveFeatureBranch(runtime, workspaceRoot, item.Number))
-	defer func() { lifecycle.finish(ctx, pipelineSuccess) }()
+	// Prepare the run's skill snapshot before its first render (#2813). Only
+	// beginRunLifecycle knows whether this run resumed a paused or interrupted
+	// record of THIS issue; when it did, the run adopts its run-start copy under
+	// whatever run ID it now carries, otherwise it discards the issue's copies
+	// and renders current skills.
+	resetSkillSnapshotForRun(workspaceRoot, item.Number, runtime.RunID, lifecycle.resumed)
+	defer func() {
+		lifecycle.finish(ctx, pipelineSuccess)
+		// A run that will not resume no longer needs its skill snapshot (#2813);
+		// an interrupted (paused) run keeps it for the resume to adopt.
+		if pipelineSuccess || ctx.Err() == nil {
+			dropSkillSnapshot(workspaceRoot, item.Number)
+		}
+	}()
 
 	stageIdx := resumeStageIndex(stages, resumeFrom)
 	// A dispatch carrying the issue's open PR (#2541) starts at pr-merge
@@ -6410,7 +6450,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			Stage:       string(stage),
 			Model:       model,
 			Adapter:     adapterName,
-			SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
+			SkillsRoots: stageSkillRoots(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item.Number, runtime.RunID),
 			Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 			Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 		})
@@ -6498,7 +6538,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					Stage:       string(stage),
 					Model:       model,
 					Adapter:     adapterName,
-					SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
+					SkillsRoots: stageSkillRoots(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item.Number, runtime.RunID),
 					Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 					Profile:     skillrender.ProfileCompact,
 					Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
@@ -6517,7 +6557,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Stage:          string(stage),
 						Model:          model,
 						Adapter:        adapterName,
-						SkillsRoots:    stageSkillRoots(workspaceRoot, item.Number),
+						SkillsRoots:    stageSkillRoots(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item.Number, runtime.RunID),
 						Headless:       true, // every stage this dispatches runs non-interactively (#2390)
 						Profile:        skillrender.ProfileCompact,
 						SupplyIncludes: true,
@@ -6563,7 +6603,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Stage:       string(stage),
 						Model:       alt.ID,
 						Adapter:     adapterName,
-						SkillsRoots: stageSkillRoots(workspaceRoot, item.Number),
+						SkillsRoots: stageSkillRoots(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item.Number, runtime.RunID),
 						Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 						Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 					})

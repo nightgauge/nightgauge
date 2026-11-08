@@ -3,8 +3,10 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -102,13 +104,9 @@ func runLocalFeatureDev(t *testing.T, window int) (root string, runner *profileC
 	root = realSkillsWorkspace(t)
 	runner = &profileCapturingRunner{steppedPipelineRunner: steppedPipelineRunner{root: root}}
 	s := newProfileTestScheduler(root, runner, adapters.NewOpenCodeAdapter())
-	s.telemetrySvc = &hookTelemetry{onEvent: func(e platform.PipelineEvent) {
-		if e.EventType == "stage_completed" && e.Stage == string(state.StageIssuePickup) {
-			s.retryEngine.RecordEscalation(string(state.StageFeatureDev), openCodeReadinessModel)
-		}
-	}}
-	s.telemetryEnabled = true
-	s.runPipeline(context.Background(), types.BoardItem{Number: 1662, Repo: "nightgauge/test", ID: "item-1662"})
+	runKeepingSnapshot(t, s, root, func() {
+		s.retryEngine.RecordEscalation(string(state.StageFeatureDev), openCodeReadinessModel)
+	})
 	return root, runner
 }
 
@@ -116,7 +114,7 @@ func renderStage(t *testing.T, root, stage, model, adapter, profile string) *ski
 	t.Helper()
 	r, err := skillrender.Render(skillrender.Options{
 		Stage: stage, Model: model, Adapter: adapter,
-		SkillsRoots: skillrender.DefaultRoots(root), Profile: profile,
+		SkillsRoots: dispatchedSnapshotRoots(t, root, 1662), Profile: profile,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +172,7 @@ func TestScheduler_LargeHostedWindowKeepsTheFullProfile(t *testing.T) {
 	root := realSkillsWorkspace(t)
 	runner := &profileCapturingRunner{steppedPipelineRunner: steppedPipelineRunner{root: root}}
 	s := newProfileTestScheduler(root, runner, nil)
-	s.runPipeline(context.Background(), types.BoardItem{Number: 1662, Repo: "nightgauge/test", ID: "item-1662"})
+	runKeepingSnapshot(t, s, root, nil)
 
 	if len(runner.devPrompt) != 1 {
 		t.Fatalf("feature-dev sessions = %d, want 1 (a large window runs one session)", len(runner.devPrompt))
@@ -185,5 +183,70 @@ func TestScheduler_LargeHostedWindowKeepsTheFullProfile(t *testing.T) {
 	}
 	if !strings.HasPrefix(runner.devPrompt[0], full.Content) {
 		t.Error("feature-dev on a large hosted window was not dispatched on the full render")
+	}
+}
+
+// dispatchedSnapshotRoots is the root list the dispatch used: the issue's one
+// run snapshot (earlier runs are pruned), so a test render resolves the same
+// include paths as the dispatch did (#2813).
+func dispatchedSnapshotRoots(t *testing.T, root string, issue int) []string {
+	t.Helper()
+	base, err := layout.CheckoutPath(root, filepath.Join(skillSnapshotsDir, strconv.Itoa(issue)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("run snapshots for #%d = %v, %v; want exactly one", issue, entries, err)
+	}
+	return skillrender.ResolveRoots(skillrender.RootInputs{
+		Workspace: filepath.Join(base, entries[0].Name()),
+		Bundle:    skillrender.ExecutableBundleRoot(),
+		Override:  os.Getenv(skillrender.SkillsRootEnv),
+	})
+}
+
+// runKeepingSnapshot runs issue #1662 and leaves its skill snapshot in place.
+// The run drops the snapshot when it ends (#2813), but rendered prompts embed
+// the snapshot's include paths, so a re-render must use the same path: copy it
+// while the run is live, assert the run removed it, then restore it. onPickup
+// runs when issue-pickup completes.
+func runKeepingSnapshot(t *testing.T, s *Scheduler, root string, onPickup func()) {
+	t.Helper()
+	var snapDir string
+	keep := filepath.Join(t.TempDir(), "skills")
+	s.telemetrySvc = &hookTelemetry{onEvent: func(e platform.PipelineEvent) {
+		if e.EventType != "stage_completed" || e.Stage != string(state.StageIssuePickup) {
+			return
+		}
+		if onPickup != nil {
+			onPickup()
+		}
+		roots := dispatchedSnapshotRoots(t, root, 1662)
+		for _, r := range roots {
+			if strings.Contains(r, skillSnapshotsDir) {
+				snapDir = filepath.Dir(r)
+			}
+		}
+		if snapDir == "" {
+			t.Fatalf("no snapshot root among %v", roots)
+		}
+		if err := copySkillTree(filepath.Join(snapDir, "skills"), keep); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	s.telemetryEnabled = true
+	s.runPipeline(context.Background(), types.BoardItem{Number: 1662, Repo: "nightgauge/test", ID: "item-1662"})
+	if snapDir == "" {
+		t.Fatal("issue-pickup never completed; no snapshot was captured")
+	}
+	if _, err := os.Stat(snapDir); !os.IsNotExist(err) {
+		t.Fatalf("the finished run kept its skill snapshot %s: %v", snapDir, err)
+	}
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := copySkillTree(keep, filepath.Join(snapDir, "skills")); err != nil {
+		t.Fatal(err)
 	}
 }

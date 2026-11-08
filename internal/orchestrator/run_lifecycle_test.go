@@ -77,6 +77,9 @@ func TestRunLifecycle_FreshRunTracksStagesAndCompletes(t *testing.T) {
 func TestRunLifecycle_CancelPausesAndReinvocationResumes(t *testing.T) {
 	root := layouttest.Repo(t)
 	lc, _ := beginRunLifecycle(root, 7, "fix/7")
+	if lc.resumed {
+		t.Fatal("a first attempt reported lc.resumed")
+	}
 	lc.stage(state.StageIssuePickup, "")
 	lc.stage(state.StageFeatureValidate, "")
 
@@ -93,6 +96,9 @@ func TestRunLifecycle_CancelPausesAndReinvocationResumes(t *testing.T) {
 	}
 
 	lc2, from := beginRunLifecycle(root, 7, "")
+	if !lc2.resumed {
+		t.Fatal("a paused record of the same issue was resumed, but lc.resumed is false")
+	}
 	if from != runstate.StageFeatureValid {
 		t.Fatalf("resumeFrom = %q, want feature-validate", from)
 	}

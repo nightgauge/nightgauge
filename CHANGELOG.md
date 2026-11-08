@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A pipeline stage can no longer rewrite the instructions a later stage of the same run
+  executes (#2813). The Go scheduler renders worktree skills from a read-only copy of
+  `skills/` taken when the run starts, so edits to a later stage's `SKILL.md`, its
+  includes or `skills/_shared` take effect on the next run, not the current one.
+  Stages the VS Code extension renders itself still read the live worktree.
 - When a stage is stopped for exceeding its runtime cap, the warning now says
   the issue hit its runtime cap at that stage instead of saying it stalled.
   The retry is unchanged: it still runs automatically after 30 minutes (#2886).
