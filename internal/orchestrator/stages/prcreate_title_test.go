@@ -172,6 +172,28 @@ func TestRenderTitle_NeverCarriesAClosingKeyword(t *testing.T) {
 	}
 }
 
+// Every closing form is defanged in a title, not only `#N` (#2859).
+func TestRenderTitle_DefangsGHAndURLClosingForms(t *testing.T) {
+	cases := []struct{ summary, issue, want string }{
+		{summary: "Fixes GH-12 in the parser", want: "Refs GH-12"},
+		{issue: "Fixes GH-12 in the parser", want: "Refs GH-12"},
+		{summary: "Closes https://github.com/o/r/issues/12 now", want: "Refs https://github.com/o/r/issues/12"},
+		{issue: "Closes https://github.com/o/r/issues/12 now", want: "Refs https://github.com/o/r/issues/12"},
+	}
+	for _, c := range cases {
+		s := titleSnap()
+		s.PRSummary, s.IssueTitle = c.summary, c.issue
+		got := RenderTitle(s)
+		if !strings.Contains(got, c.want) {
+			t.Errorf("RenderTitle(%+v) = %q, want it to contain %q", c, got, c.want)
+		}
+		if strings.Contains(strings.ToLower(got), "fixes gh-12") ||
+			strings.Contains(strings.ToLower(got), "closes https://") {
+			t.Errorf("closing keyword survived: %q", got)
+		}
+	}
+}
+
 func TestRenderTitle_StripsConventionalPrefixFromSummary(t *testing.T) {
 	s := titleSnap()
 	s.PRSummary = "fix(#42): cap the title"
