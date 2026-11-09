@@ -723,3 +723,14 @@ func TestDeterministicRunner_NoChecksYet_ThenFails_Punts(t *testing.T) {
 		t.Errorf("Merge must not be called when CI failed, got %d", seq.mergeCalls)
 	}
 }
+
+// TestCreateCommitArgs pins the gh request that creates a reworded commit
+// (#2988): a POST to the git commits API with raw string fields and parents
+// as an array.
+func TestCreateCommitArgs(t *testing.T) {
+	got := strings.Join(createCommitArgs("o", "r", "fix the thing", "tree1", []string{"p1"}), " ")
+	want := "api -X POST repos/o/r/git/commits -f message=fix the thing -f tree=tree1 -f parents[]=p1 --jq .sha"
+	if got != want {
+		t.Errorf("args = %q\nwant   %q", got, want)
+	}
+}

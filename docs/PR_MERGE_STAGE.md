@@ -210,9 +210,15 @@ never becomes the subject, and no `Nightgauge-WIP` trailer reaches the base.
 `enqueuePullRequest` takes no headline, so the queue uses the repository's
 squash defaults. Before an enqueue the runner reads them; it never changes
 them. Unless they are `squash_merge_commit_title=PR_TITLE` and
-`squash_merge_commit_message=PR_BODY`, a PR carrying a WIP-preservation commit
-is refused with `squash_defaults` and the remedy; other PRs enqueue. A
-repository admin sets the defaults once:
+`squash_merge_commit_message=PR_BODY`, a PR whose only commit is a
+WIP-preservation commit is reworded before the enqueue (#2988): the runner
+creates a commit with the same tree and parent whose message is the PR title,
+moves the head ref to it by compare-and-swap (`updateRefs` with `beforeOid`),
+waits for checks on the new head, then enqueues. It lands as `<PR title> (#N)`.
+A PR that mixes a WIP commit with other commits, a fork head, or a failed
+reword or lost swap is refused with `squash_defaults` and the cause; PRs
+without a WIP commit enqueue. To cover mixed PRs, a repository admin sets the
+defaults once:
 
 ```bash
 gh api -X PATCH repos/{owner}/{repo} \

@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A pull request whose only commit is a WIP-preservation commit now lands
+  through the merge queue under GitHub's default squash settings. Before the
+  enqueue, the binary rewords that commit to the PR title, keeping its tree and
+  parent, and moves the branch by compare-and-swap. Repository settings are
+  left alone. A PR that mixes WIP and real commits is still refused unless the
+  squash defaults are `PR_TITLE`/`PR_BODY` (#2988).
 - The local HTTP stubs used by the VirusTotal scan, release scan gate,
   platform smoke, action-pin and Markdown-link suites no longer reverse-resolve
   `127.0.0.1` when they bind. A slow reverse-DNS lookup used to delay the stub

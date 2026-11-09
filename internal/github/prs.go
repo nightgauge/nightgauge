@@ -403,6 +403,9 @@ func (s *PRService) MergePRWithStrategy(ctx context.Context, prID string, strate
 				return NewSettingsService(s.client).SquashDefaultsPRTitled(ctx, src.Owner, src.Repo)
 			}
 		}
+		if opts.CreateCommit == nil {
+			opts.CreateCommit = s.createCommit
+		}
 		final, err := mq.EnqueueAndWait(ctx, st, opts)
 		if err != nil {
 			return "", fmt.Errorf("merge PR #%d via merge queue: %w", st.Number, err)
@@ -416,7 +419,8 @@ func (s *PRService) MergePRWithStrategy(ctx context.Context, prID string, strate
 	}
 	if strategy == "" || strategy == "SQUASH" {
 		// Supply the squash commit explicitly (#2728): left to the repository
-		// defaults, a sole WIP-preservation commit becomes the subject.
+		// defaults, a sole WIP-preservation commit becomes the subject. The
+		// queue path takes no headline and rewords that commit instead (#2988).
 		src, err := mq.SquashSource(ctx, prID)
 		if err != nil {
 			return "", fmt.Errorf("merge PR (%s): %w", strategy, err)
@@ -673,4 +677,21 @@ func (s *PRService) ListOpenPRSummaries(ctx context.Context, owner, repo string)
 		out = append(out, forge.OpenPRSummary{Number: pr.Number, HeadRef: pr.HeadRef, HeadRepo: pr.HeadRepo, Body: pr.Body, URL: pr.URL})
 	}
 	return out, nil
+}
+
+// createCommit implements MergeQueueWaitOptions.CreateCommit over the REST
+// git commits API (#2988): it creates a commit object and moves no ref.
+func (s *PRService) createCommit(ctx context.Context, owner, repo, message, tree string, parents []string) (string, error) {
+	body, err := s.client.restPost(ctx, fmt.Sprintf("/repos/%s/%s/git/commits", owner, repo),
+		map[string]any{"message": message, "tree": tree, "parents": parents})
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", fmt.Errorf("parse created commit: %w", err)
+	}
+	return out.SHA, nil
 }
