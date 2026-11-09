@@ -1131,6 +1131,35 @@ const StageBlockedOutcomePrefix = "BLOCKED — "
 // increment (#2551).
 const TerminalKindBlockedOutcomeHold = "blocked_outcome_hold"
 
+// TerminalKindOutOfScopeBlocked is a scheduler-local routing value, not a
+// table kind: a run its stage stopped correctly because the issue is blocked
+// on out-of-scope work, with the blocked finding recorded on disk. It is a
+// non-fault outcome — no retry, no backoff, no lifetime-cap increment — and it
+// is NOT held: the finding defers dispatch at pickup, so clearing it re-admits
+// the issue without clear-failures (#2895).
+const TerminalKindOutOfScopeBlocked = "out_of_scope_blocked"
+
+// outOfScopeBlockerMarker is the blocker HeadlessOrchestrator.ts books for an
+// out-of-scope stop (`out-of-scope: <SIGNAL_TYPE>`), as it appears in the
+// ConcurrentPipelineManager.ts slot error `BLOCKED — PR unmerged: out-of-scope:
+// …`. Keep both TS sites in step with this matcher (#2895).
+const outOfScopeBlockerMarker = "unmerged: out-of-scope: "
+
+// IsOutOfScopeBlockedOutcome reports whether detail is the synthesized slot
+// error for an out-of-scope blocker stop: the StageBlockedOutcomePrefix
+// followed, before any `Remediation:` evidence, by the out-of-scope blocker.
+func IsOutOfScopeBlockedOutcome(detail string) bool {
+	d := strings.TrimSpace(detail)
+	if !strings.HasPrefix(d, StageBlockedOutcomePrefix) {
+		return false
+	}
+	head := strings.TrimPrefix(d, StageBlockedOutcomePrefix)
+	if i := strings.Index(head, "Remediation:"); i >= 0 {
+		head = head[:i]
+	}
+	return strings.Contains(head, outOfScopeBlockerMarker)
+}
+
 // IsStageDeclaredBlockedOutcome reports whether detail is an outcome a stage
 // declared itself — the repo-synthesized BLOCKED slot error, or a detail the
 // record ladder classifies not_pipeline_actionable. Such an outcome means the

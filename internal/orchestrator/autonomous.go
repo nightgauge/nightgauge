@@ -5436,6 +5436,13 @@ func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateIt
 // false from the extension/IPC path (NotifyComplete) — that breadcrumb has
 // no extension-side equivalent.
 func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, success bool, conflictRestart bool, terminalFailureKind string, failureDetail string, merged bool) {
+	// Read the out-of-scope finding before taking as.mu: resolving the run
+	// root may shell out, and nothing here may block under the lock (#2895).
+	outOfScopeFinding := false
+	if !success && IsOutOfScopeBlockedOutcome(failureDetail) {
+		_, outOfScopeFinding = as.blockedFindingFor(repo, issue)
+	}
+
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
@@ -5698,6 +5705,30 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		if terminalFailureKind == TerminalKindBlockedOutcomeHold {
 			as.recordFailureLocked(repo, issue, title, now, failureDetail, terminalFailureKind)
 			log.Printf("autonomous: %s blocked by its stage (non-failure) — held, no retry, no cooldown, no lifetime-cap increment", key)
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			return
+		}
+
+		// A stage that stopped because the issue is blocked on out-of-scope
+		// work, and recorded the finding, behaved correctly. Book it as a
+		// non-fault outcome: no cascade feed, no backoff or retry, no
+		// lifetime-cap increment, no board revert. It is not held — the
+		// finding on disk defers dispatch, and clearing it re-admits the
+		// issue. Without a finding nothing defers the next dispatch, so the
+		// general charged path below still applies (#2895).
+		if outOfScopeFinding && terminalFailureKind != TerminalKindNotPipelineActionable {
+			terminalFailureKind = TerminalKindOutOfScopeBlocked
+			as.recordFailureLocked(repo, issue, title, now, failureDetail, terminalFailureKind)
+			log.Printf("autonomous: %s blocked on out-of-scope work (non-failure) — finding recorded, no lifetime-cap increment, no backoff; clearing the finding re-admits it", key)
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()

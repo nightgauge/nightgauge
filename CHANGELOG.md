@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A run that stops correctly because its issue is blocked on out-of-scope work no
+  longer counts toward the issue's lifetime failure cap and no longer backs it off.
+  Clearing the out-of-scope-blocker finding re-admits the issue without
+  `nightgauge autonomous clear-failures` (#2895).
 - A pipeline stage can no longer rewrite the instructions a later stage of the same run
   executes (#2813). The Go scheduler renders worktree skills from a read-only copy of
   `skills/` taken when the run starts, so edits to a later stage's `SKILL.md`, its

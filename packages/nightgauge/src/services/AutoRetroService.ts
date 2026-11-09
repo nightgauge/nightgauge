@@ -637,6 +637,7 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // Dispatched over an open dependency edge: a scheduler decision, not a stage
   // failure.
   blocked_dependency: "dependency-blocked",
+  out_of_scope_blocked: "dependency-blocked",
 
   // There was nothing to produce.
   issue_closed: "no-work-required",
