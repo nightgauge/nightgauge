@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The PR review confinement probe goes green when the confinement holds. CLI
+  2.1.258 enforces the `Read(//proc/**)` deny inside the Read tool and reports
+  the tool error "File is in a directory that is denied by your permission
+  settings.", never a `permission_denials` entry, so every attempt stayed
+  unproven and `main` stayed red after #3115. That refusal now counts as a
+  denial; any other error, such as a missing path or an OS `EACCES`, does not
+  (#3093).
 - The PR review confinement probe now reads the CLI's `stream-json`
   transcript. A `/proc` call that returned content is red as "confinement
   broken" even when the model does not quote it, where it used to pass as

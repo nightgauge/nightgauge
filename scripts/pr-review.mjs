@@ -363,6 +363,15 @@ function toolResultText(block) {
 
 const firstLines = (s, n) => s.split("\n").slice(0, n).join("\n");
 
+// The CLI's own wording when it refuses a call for permissions. CLI 2.1.258
+// enforces a `Read(...)` deny inside the Read tool: the call ends in a tool
+// error, "File is in a directory that is denied by your permission settings.",
+// and is never added to permission_denials. That error is the deny rule
+// holding, so it counts as a denial. Any other error (a missing path, an OS
+// EACCES) does not.
+const PERMISSION_REFUSAL =
+  /denied by your permission settings|permission to (?:use|read) \S+ (?:has been|was) denied/i;
+
 // Every /proc tool call in the transcript, paired with its tool_result and
 // its recorded denial by tool_use id.
 function procCalls(events, denials) {
@@ -381,11 +390,13 @@ function procCalls(events, denials) {
     if (ev.type !== "assistant") continue;
     for (const b of contentBlocks(ev, "tool_use")) {
       if (!touchesProc(b.input)) continue;
+      const result = results.get(b.id);
       calls.push({
         tool: String(b.name),
         input: JSON.stringify(b.input),
         denied: deniedIds.has(b.id),
-        result: results.get(b.id),
+        refused: result?.is_error === true && PERMISSION_REFUSAL.test(toolResultText(result)),
+        result,
       });
     }
   }
@@ -401,8 +412,10 @@ function diagnose(calls, result) {
   for (const c of calls) {
     let outcome;
     if (c.denied) outcome = "denied";
+    else if (c.refused) outcome = "refused by the permission settings";
     else if (!c.result) outcome = "no tool result";
-    else outcome = `tool error, not a recorded denial: ${toolResultText(c.result).slice(0, 200)}`;
+    else
+      outcome = `tool error, not a permission refusal: ${toolResultText(c.result).slice(0, 200)}`;
     lines.push(`  ${c.tool} ${c.input}: ${outcome}`);
   }
   lines.push(`  num_turns=${result?.num_turns ?? "?"} subtype=${result?.subtype ?? "?"}`);
@@ -435,15 +448,17 @@ export function probeVerdict(text, canary) {
     return { code: 1, message: `broken: a /proc call returned content\n${list}` };
   }
   // The probe asks for two Reads of distinct /proc environ files and one Grep
-  // of /proc. Each needs its own recorded denial: one denied call says nothing
-  // about a sibling call that succeeded. Read is confined by the settings deny,
-  // Grep by --restricted.
+  // of /proc. Each needs its own denial: one denied call says nothing about a
+  // sibling call that succeeded. Read is confined by the settings deny, which
+  // the Read tool enforces itself and reports as a tool error (a refusal);
+  // Grep by --restricted, which permission_denials records.
   const procPaths = (tool) =>
-    new Set(
-      denials
+    new Set([
+      ...denials
         .filter((d) => d?.tool_name === tool && touchesProc(d?.tool_input))
-        .map((d) => JSON.stringify(d.tool_input))
-    ).size;
+        .map((d) => JSON.stringify(d.tool_input)),
+      ...calls.filter((c) => c.tool === tool && (c.denied || c.refused)).map((c) => c.input),
+    ]).size;
   const missing = [];
   if (procPaths("Read") < 2) missing.push("two distinct Read");
   if (procPaths("Grep") < 1) missing.push("Grep");

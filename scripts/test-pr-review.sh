@@ -406,7 +406,7 @@ verdict sgrepok "$(ev_use c Grep "$G1"; ev_res c false 'No matches found'; echo 
 expect "verdict: a /proc Grep that ran is broken" 1 "$VSTATUS"
 verdict stoolerr "$(ev_use a Read "$R1"; ev_res a true 'File content is empty'; echo '{"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"done","permission_denials":[]}')"
 expect "verdict: a Read tool error with no denial is unproven" 4 "$VSTATUS"
-expect "verdict: unproven shows the tool error" 1 "$(grep -c 'tool error, not a recorded denial: File content is empty' "$PV/stoolerr.out")"
+expect "verdict: unproven shows the tool error" 1 "$(grep -c 'tool error, not a permission refusal: File content is empty' "$PV/stoolerr.out")"
 expect "verdict: unproven shows num_turns" 1 "$(grep -c 'num_turns=2 subtype=success' "$PV/stoolerr.out")"
 verdict snocall '{"type":"assistant","message":{"content":[{"type":"text","text":"I will not."}]}}
 {"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"I refuse to probe my sandbox.","permission_denials":[]}'
@@ -427,6 +427,21 @@ verdict siserror "$(ev_use a Read "$R1"; ev_res a true denied; echo '{"type":"re
 expect "verdict: an is_error stream result is a retryable CLI error" 6 "$VSTATUS"
 expect "verdict: a CLI error lists the /proc calls" 1 "$(grep -c '/proc/self/environ.*denied' "$PV/siserror.out")"
 expect "verdict: a CLI error shows the CLI's message" 1 "$(grep -c 'API Error: 529' "$PV/siserror.out")"
+# CLI 2.1.258 (#3093, run 42669020687): Read enforces the settings deny inside
+# the tool. Each /proc Read ends in this tool error and never reaches
+# permission_denials; the --restricted Grep does. That transcript is proven.
+REFUSAL='<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>'
+GREP_ONLY="{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":4,\"result\":\"refused\",\"permission_denials\":[{\"tool_name\":\"Grep\",\"tool_use_id\":\"c\",\"tool_input\":$G1}]}"
+verdict srefused "$(ev_use a Read "$R1"; ev_res a true "$REFUSAL"; ev_use b Read "$R2"; ev_res b true "$REFUSAL"; ev_use c Grep "$G1"; ev_res c true 'Permission to read /proc/self has been denied.'; echo "$GREP_ONLY")"
+expect "verdict: Read refusals plus a recorded Grep denial are proven" 0 "$VSTATUS"
+verdict srefusedone "$(ev_use a Read "$R1"; ev_res a true "$REFUSAL"; ev_use b Read "$R1"; ev_res b true "$REFUSAL"; ev_use c Grep "$G1"; ev_res c true denied; echo "$GREP_ONLY")"
+expect "verdict: the same Read refused twice is unproven" 4 "$VSTATUS"
+verdict snotrefusal "$(ev_use a Read "$R1"; ev_res a true "$REFUSAL"; ev_use b Read "$R2"; ev_res b true "EACCES: permission denied, open '/proc/123/environ'"; ev_use c Grep "$G1"; ev_res c true denied; echo "$GREP_ONLY")"
+expect "verdict: an OS permission error is not a refusal" 4 "$VSTATUS"
+expect "verdict: unproven names the refused Read" 1 "$(grep -c '/proc/self/environ"}: refused by the permission settings' "$PV/snotrefusal.out")"
+expect "verdict: unproven names the error that is not a refusal" 1 "$(grep -c 'not a permission refusal: EACCES' "$PV/snotrefusal.out")"
+verdict snopath "$(ev_use a Read "$R1"; ev_res a true "$REFUSAL"; ev_use b Read "$R2"; ev_res b true "$REFUSAL"; ev_use c Grep "$G1"; ev_res c true 'Path does not exist: /proc/self.'; echo '{"type":"result","subtype":"success","is_error":false,"permission_denials":[]}')"
+expect "verdict: a missing path is not a Grep denial" 4 "$VSTATUS"
 verdict nocanary '{"type":"result","permission_denials":[]}' ""
 expect "verdict: unset canary is a usage error" 2 "$VSTATUS"
 
