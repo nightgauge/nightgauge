@@ -1194,6 +1194,7 @@ func issueCmd() *cobra.Command {
 		issueHasLabelCmd(),
 		issueExtractTargetsCmd(),
 		issueCheckOwnershipCmd(),
+		issuePartialDeliveryCmd(),
 	)
 	return cmd
 }

@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Already-Resolved Issue Signal: a partial-delivery comment's remaining criteria are met only by evidence dated after it; plan them as `focus_acs`, never verify-and-close (#3089).
 - New gotcha: an existing PR branch is updated by merging its base; a plan never prescribes a rebase or force push (#2699).
 
 ### Added

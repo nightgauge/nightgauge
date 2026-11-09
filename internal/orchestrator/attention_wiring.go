@@ -1948,6 +1948,63 @@ func BuildOutOfScopeBlocker(repo string, issue int, runID, stage string) attenti
 	}
 }
 
+// ProducerPartialDeliveryCloseRefused names the card for a verify-and-close
+// early exit that refused to close an issue over a recorded partial-delivery
+// remainder (#3089).
+const ProducerPartialDeliveryCloseRefused = "partial-delivery-close-refused"
+
+// BuildPartialDeliveryCloseRefused constructs the card for a run whose planning
+// stage answered verify-and-close while the issue's newest trusted
+// `<!-- nightgauge:partial-delivery pr=N -->` comment still lists unmet
+// criteria and no PR that closes the issue merged after it (#3089).
+//
+// EXTENSION-ONLY: the early exit lives in the TypeScript HeadlessOrchestrator.
+// pr, criteria and unlisted come from the DAEMON's own read
+// (hooks.PendingPartialDelivery in the attention.raise handler), never from the
+// caller. Criteria are escaped so a "<!--" in one cannot plant a marker.
+func BuildPartialDeliveryCloseRefused(repo string, issue int, runID string, pr int, criteria []string, unlisted bool) attention.DecisionRequest {
+	owner, name := splitRepo(repo)
+	var list strings.Builder
+	if unlisted || len(criteria) == 0 {
+		list.WriteString("- (unlisted — check the issue body)\n")
+	} else {
+		for _, c := range criteria {
+			list.WriteString("- " + strings.ReplaceAll(c, "<!--", "&lt;!--") + "\n")
+		}
+	}
+	return attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("%s:%s#%d", ProducerPartialDeliveryCloseRefused, repo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("#%d not closed: PR #%d left criteria unmet", issue, pr),
+		Body: fmt.Sprintf(
+			"Planning concluded #%d is already resolved (verify-and-close), but PR #%d recorded a "+
+				"partial delivery on it and no PR that closes the issue has merged since. The "+
+				"pipeline refused to close the issue and ended the run `blocked`.\n\n"+
+				"Remaining acceptance criteria:\n\n%s\n"+
+				"Close the issue if planning's evidence really meets them, or re-plan so the "+
+				"remaining criteria become the run's focus.",
+			issue, pr, list.String()),
+		Producer: ProducerPartialDeliveryCloseRefused,
+		Context: attention.Context{
+			Repo: repo, Issue: issue, RunID: runID, Stage: "feature-planning",
+			Blocker:  fmt.Sprintf("partial-delivery remainder from PR #%d", pr),
+			TraceRef: runTraceRef(runID),
+		},
+		Options: []attention.Option{
+			{ID: "replan", Label: "Re-plan with the remaining criteria as focus_acs",
+				Verb:  attention.VerbQueueAdd,
+				Args:  map[string]any{"owner": owner, "repo": name, "issueNumber": issue},
+				Style: attention.StylePrimary},
+			{ID: "close", Label: "Close on planning's evidence", Verb: attention.VerbIssueClose,
+				Style: attention.StyleDefault},
+			noopOption("leave", "Leave open"),
+		},
+		DefaultAction: "leave",
+		ExpiresAt:     expiryFromNow(72 * time.Hour),
+	}
+}
+
 // ProducerBoardStatusWriteFailed names the run-scoped producer for a project
 // board status write the extension could not make (#1501).
 const ProducerBoardStatusWriteFailed = "board-status-write-failed"

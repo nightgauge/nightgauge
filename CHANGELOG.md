@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A verify-and-close planning verdict no longer closes an issue whose newest
+  partial-delivery comment still lists unmet acceptance criteria. The run now ends
+  `blocked` unless a PR that closes the issue merged after that comment, and an
+  Action Center card offers to close the issue, re-plan it, or leave it open. If the
+  check cannot run, the issue is not closed. `nightgauge issue partial-delivery <N>
+--json` reports the remainder (#3089).
 - A run that stops correctly because its issue is blocked on out-of-scope work no
   longer counts toward the issue's lifetime failure cap and no longer backs it off.
   Clearing the out-of-scope-blocker finding re-admits the issue without

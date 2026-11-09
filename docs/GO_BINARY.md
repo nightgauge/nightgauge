@@ -1467,6 +1467,13 @@ nightgauge issue create --title "..." --body "..." --labels "type:feature"
 # halts with: "Issue #N was not closed after merge — run: gh issue close N --reason completed"
 nightgauge issue close <number> [--owner ORG] [--repo REPO]
 
+# Report a pending partial-delivery remainder (#3089): the newest trusted
+# <!-- nightgauge:partial-delivery pr=N --> comment and its listed criteria,
+# unless a PR that closes the issue merged after it. Exit 0 on a read
+# (pending or not), 2 when the read failed. The verify-and-close early exit
+# refuses to close while `pending` is true or the read fails.
+nightgauge issue partial-delivery <number> [--owner ORG] [--repo REPO] [--json]
+
 # Edit issue body (full replacement or append)
 nightgauge issue edit <number> --body "new full body" [--owner ORG] [--repo REPO] [--json]
 nightgauge issue edit <number> --append-body "\n\nappended text" [--owner ORG] [--repo REPO] [--json]

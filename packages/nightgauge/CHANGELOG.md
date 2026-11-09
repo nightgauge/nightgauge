@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- A run no longer closes an issue as already resolved while a merged partial
+  delivery still lists unmet acceptance criteria. The run ends blocked, and an
+  Action Center card offers to close the issue, re-plan it, or leave it open (#3089).
 - When a stage is stopped for exceeding its runtime cap, the warning now says
   the issue hit its runtime cap at that stage instead of saying it stalled.
   The retry is unchanged: it still runs automatically after 30 minutes (#2886).

@@ -10,6 +10,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -391,6 +393,9 @@ func TestAttentionRaiseCollapsesRepeatForceClearsOntoOneCard(t *testing.T) {
 func TestNoRaiseableProducerIsStandingWithoutRetraction(t *testing.T) {
 	s := newAttentionTestServer(t)
 	recordRunSpend(t, s, "octocat/acme", 1, 20)
+	s.partialDeliveryStatus = func(context.Context, string, int) (hooks.PartialDeliveryStatus, error) {
+		return hooks.PartialDeliveryStatus{Pending: true, PR: 2, Criteria: []string{"c1"}}, nil
+	}
 	samples := map[string]AttentionRaiseParams{
 		ProducerBudgetCeiling: {Producer: ProducerBudgetCeiling, Repo: "octocat/acme", Issue: 1,
 			RunID: "run-1"},
@@ -419,6 +424,10 @@ func TestNoRaiseableProducerIsStandingWithoutRetraction(t *testing.T) {
 		// check, not this card.
 		ProducerBoardStatusWriteFailed: {Producer: ProducerBoardStatusWriteFailed,
 			Repo: "octocat/acme", Issue: 1, RunID: "run-1", Stage: "feature-dev"},
+		// #3089. EVENT, not standing: one refused close, observed once by the
+		// extension's early exit; a human resolves it by closing or re-planning.
+		ProducerPartialDeliveryCloseRefused: {Producer: ProducerPartialDeliveryCloseRefused,
+			Repo: "octocat/acme", Issue: 1, RunID: "run-1"},
 	}
 	for _, producer := range RaiseableProducers() {
 		p, ok := samples[producer]
@@ -1573,5 +1582,54 @@ func TestBoardStatusWriteFailedRaisesOverIPC(t *testing.T) {
 	}
 	if reqs[0].Producer != ProducerBoardStatusWriteFailed || reqs[0].Context.Stage != "feature-validate" {
 		t.Errorf("card = producer %q stage %q", reqs[0].Producer, reqs[0].Context.Stage)
+	}
+}
+
+// TestPartialDeliveryCloseRefusedIsDaemonDerived — #3089. The PR and criteria
+// on the card come from the daemon's own read; a remainder that is not pending
+// raises nothing, and a failed read is an error, not a card.
+func TestPartialDeliveryCloseRefusedIsDaemonDerived(t *testing.T) {
+	s := newAttentionTestServer(t)
+	status := hooks.PartialDeliveryStatus{}
+	var readErr error
+	s.partialDeliveryStatus = func(_ context.Context, repo string, issue int) (hooks.PartialDeliveryStatus, error) {
+		if repo != "octocat/acme" || issue != 3084 {
+			t.Errorf("read %s#%d", repo, issue)
+		}
+		return status, readErr
+	}
+	raw := raiseParams(t, AttentionRaiseParams{Producer: ProducerPartialDeliveryCloseRefused,
+		Repo: "octocat/acme", Issue: 3084, RunID: "run-1", Stage: "ignored"})
+
+	res, err := s.handleAttentionRaise(context.Background(), raw)
+	if err != nil || res.(AttentionRaiseResult).Outcome != outcomeNotApplicable {
+		t.Fatalf("not pending: res=%v err=%v, want not_applicable", res, err)
+	}
+
+	readErr = errors.New("rate limited")
+	if _, err := s.handleAttentionRaise(context.Background(), raw); err == nil {
+		t.Fatal("failed read raised a card")
+	}
+
+	readErr = nil
+	status = hooks.PartialDeliveryStatus{Pending: true, PR: 3085, Criteria: []string{"criterion one <!-- x"}}
+	if _, err := s.handleAttentionRaise(context.Background(), raw); err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	reqs, err := s.attentionStore().List(attention.ListFilter{})
+	if err != nil || len(reqs) != 1 {
+		t.Fatalf("list = %d, err %v", len(reqs), err)
+	}
+	r := reqs[0]
+	if !strings.Contains(r.Title, "#3084") || !strings.Contains(r.Title, "#3085") ||
+		!strings.Contains(r.Body, "criterion one &lt;!-- x") || strings.Contains(r.Body, "<!--") {
+		t.Errorf("card title %q body %q", r.Title, r.Body)
+	}
+	verbs := map[string]attention.Verb{}
+	for _, o := range r.Options {
+		verbs[o.ID] = o.Verb
+	}
+	if verbs["replan"] != attention.VerbQueueAdd || verbs["close"] != attention.VerbIssueClose || r.DefaultAction != "leave" {
+		t.Errorf("options %v default %q", verbs, r.DefaultAction)
 	}
 }

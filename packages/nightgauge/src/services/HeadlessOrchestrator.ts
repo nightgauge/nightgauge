@@ -1059,7 +1059,8 @@ export interface RunScopedAttentionRaise {
     | "branch-protection"
     | "abandoned-dispatch"
     | "out-of-scope-blocker"
-    | "board-status-write-failed";
+    | "board-status-write-failed"
+    | "partial-delivery-close-refused";
   issueNumber: number;
   /**
    * budget-ceiling carries NO fields at all, and that is the security boundary
@@ -8824,6 +8825,99 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Refuse a verify-and-close close over a pending partial-delivery remainder
+   * (#3089). Returns the blocker when the close was refused (null when it may
+   * proceed): `blockedTerminalState` is set so the run books `blocked`, and
+   * (when the remainder was read) an Action Center card offers close /
+   * re-plan / leave. A failed read also refuses, without a card.
+   */
+  private async refuseCloseOverPartialDelivery(issueNumber: number): Promise<string | null> {
+    const remainder = await this.assessPartialDeliveryRemainder(issueNumber);
+    if (!remainder.pending && !remainder.readFailed) {
+      return null;
+    }
+    this.logger.warn(
+      "Early exit refused: a recorded partial delivery left acceptance criteria unmet",
+      {
+        issueNumber,
+        pr: remainder.pr,
+        criteria: remainder.criteria,
+        readFailed: remainder.readFailed,
+      }
+    );
+    if (remainder.pending) {
+      await this.raiseRunScopedAttention({
+        producer: "partial-delivery-close-refused",
+        issueNumber,
+      });
+    }
+    this.blockedTerminalState = remainder.readFailed
+      ? {
+          blocker: "partial-delivery: remainder check could not run",
+          remediation:
+            `Run \`nightgauge issue partial-delivery ${issueNumber} --json\` ` +
+            "and close or re-plan the issue by hand.",
+        }
+      : {
+          blocker: `partial-delivery: PR #${remainder.pr} left criteria unmet`,
+          remediation:
+            "Close the issue if planning's evidence meets the remaining criteria, " +
+            "or re-plan with them as focus_acs.",
+          prNumber: remainder.pr || undefined,
+        };
+    return this.blockedTerminalState.blocker;
+  }
+
+  /**
+   * Does the issue carry a recorded partial-delivery remainder that no later
+   * merged closing PR has retired (#3089)?
+   *
+   * Runs `nightgauge issue partial-delivery <N> --json`, the one deterministic
+   * source of truth. Fails closed: an unresolved binary, a non-zero exit or
+   * unparseable output reports `readFailed`, and the caller refuses the close.
+   */
+  private async assessPartialDeliveryRemainder(
+    issueNumber: number
+  ): Promise<{ pending: boolean; pr: number; criteria: string[]; readFailed: boolean }> {
+    const failed = { pending: false, pr: 0, criteria: [] as string[], readFailed: true };
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        throw new Error("nightgauge binary unresolved");
+      }
+      const { owner, repo } = await this.resolvePostMergeNwo(issueNumber);
+      if (!owner || !repo) {
+        throw new Error("repository unresolved");
+      }
+      const { stdout } = await execFileAsync(
+        binary,
+        ["issue", "partial-delivery", String(issueNumber), "--repo", `${owner}/${repo}`, "--json"],
+        { cwd: this.getWorkingDirectory(), encoding: "utf-8", timeout: 60_000 }
+      );
+      const parsed = JSON.parse(String(stdout)) as {
+        pending?: unknown;
+        pr?: unknown;
+        criteria?: unknown;
+      };
+      if (typeof parsed.pending !== "boolean") {
+        throw new Error("partial-delivery output has no boolean `pending`");
+      }
+      return {
+        pending: parsed.pending,
+        pr: typeof parsed.pr === "number" ? parsed.pr : 0,
+        criteria: Array.isArray(parsed.criteria) ? parsed.criteria.map(String) : [],
+        readFailed: false,
+      };
+    } catch (err) {
+      this.logger.warn("Partial-delivery check failed — refusing the verify-and-close close", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return failed;
+    }
+  }
+
+  /**
    * Check if feature-planning signaled that the issue is already resolved.
    *
    * Reads `planning-{N}.json` and checks for the `verify-and-close` signal:
@@ -14129,6 +14223,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             });
 
             const reach = await this.assessEarlyExitReachability(issueNumber);
+            let partialDeliveryBlocker: string | null = null;
             if (!reach.onBase) {
               this.logger.warn(
                 "Early exit refused: verify-and-close evidence is only on the issue branch",
@@ -14136,6 +14231,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               );
               branchOnlyResume = true;
               // Resume the pipeline (validate -> pr-create) instead of closing.
+            } else if (
+              (partialDeliveryBlocker = await this.refuseCloseOverPartialDelivery(issueNumber))
+            ) {
+              // #3089: a recorded remainder that nothing merged since has
+              // closed. The run ends blocked (blockedTerminalState) the way the
+              // other blocked forks do; feature-dev never runs on the empty
+              // verify-and-close plan, and the issue is not closed.
+              failedStage = stage;
+              error = new Error(`[partial-delivery] ${partialDeliveryBlocker}`);
+              break;
             } else {
               // Run lightweight close path (best-effort)
               await this.runAlreadyResolvedClosePath(issueNumber, callbacks);

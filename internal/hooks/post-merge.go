@@ -776,7 +776,7 @@ func readyWithheld(input PostMergeInput, labels []string) bool {
 // remainderMarker renders the hidden line that records this PR's remainder
 // comment. Criteria cannot forge it: remainderComment escapes "<!--".
 func remainderMarker(prNumber int) string {
-	return fmt.Sprintf("<!-- nightgauge:partial-delivery pr=%d -->", prNumber)
+	return fmt.Sprintf(partialDeliveryMarkerFormat, prNumber)
 }
 
 // remainderCommentPosted reports whether a trusted comment already names this
@@ -813,7 +813,7 @@ func remainderComment(prNumber int, unmet []string, backInReady, empty bool) str
 		b.WriteString("The PR did not list the remaining acceptance criteria; check them against the issue body.\n")
 		return b.String()
 	}
-	b.WriteString("Remaining acceptance criteria:\n\n")
+	b.WriteString(RemainingCriteriaHeading + "\n\n")
 	for _, c := range unmet {
 		// Escape HTML-comment openers: this comment is posted by the trusted
 		// identity, and a criterion carrying the validation marker would
