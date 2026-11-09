@@ -31,6 +31,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Security
 
+- A new `pr-review-confinement.yml` workflow checks that the PR review model
+  cannot read its OAuth token from `/proc`. It runs the real CLI with a
+  random per-run canary and passes only when the CLI records a denial for
+  every `/proc` `Read` and `Grep` it asks for. It fails if the canary leaks,
+  or if any denial is missing in three tries. The review and the probe share one confinement
+  definition, `scripts/pr-review-claude.sh` (#3084).
 - The review-cap attention card now shows a reviewer's file and claim as
   literal text: markdown in a finding can no longer add links, images or
   formatting to the card. A finding whose file or claim holds a control or
