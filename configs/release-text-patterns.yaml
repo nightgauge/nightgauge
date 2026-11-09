@@ -1,0 +1,18 @@
+# YARA text patterns that have flagged a Nightgauge release.
+#
+# Read by cmd/release-text-pattern-check, which fails the release when any
+# text file inside a shipped .vsix or .tar.gz matches one of these. Each entry
+# names the rule, where the rule is published, the release it hit, and the
+# rule's string as a Go RE2 regex ((?i) stands in for YARA's /i).
+#
+# Add an entry whenever a new YARA rule matches a release; fix the matching
+# text at its cause. Never allowlist it. See docs/RELEASE_BINARIES.md.
+patterns:
+  - rule: Microsoft_Excel_Hidden_Macrosheet
+    source: https://github.com/InQuest/yara-rules-vt
+    release: v0.8.4
+    pattern: '(?i)hidden\s*=\s*["''][12]["'']'
+  - rule: Microsoft_Excel_Hidden_Macrosheet
+    source: https://github.com/InQuest/yara-rules-vt
+    release: v0.8.4
+    pattern: '(?i)state\s*=\s*["''](hidden|veryHidden)["'']'
