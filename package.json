@@ -2,6 +2,11 @@
   "name": "nightgauge",
   "private": true,
   "description": "Nightgauge — an AI-powered Issue-to-PR pipeline (VS Code extension, Go CLI, and SDK)",
+  "allowScripts": {
+    "@vscode/vsce-sign": false,
+    "esbuild": false,
+    "protobufjs": false
+  },
   "overrides": {
     "@anthropic-ai/claude-agent-sdk": {
       "@anthropic-ai/sdk": "^0.128.0"
