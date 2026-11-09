@@ -254,6 +254,7 @@ export type TerminalFailureKind =
   | "blocked_dependency" // Issue #305 — the autonomous scheduler dispatched an issue whose blockedBy dependencies are still open; a non-failure deferral
   | "architecture_approval_required" // Issue #4098/#4222 — the architecture-approval gate halted the run before feature-dev for a human-owned decision
   | "not_pipeline_actionable" // Issue #1241 — a stage DECLARED the issue's deliverable is not producible by any pipeline lap (counsel sign-off, an operator-only credential, a human decision); not a failure and not a deferral, so the issue is labelled owner-action and left parked rather than retried
+  | "out_of_scope_blocked" // Issue #2895 — a stage stopped correctly on out-of-scope work and recorded the blocked finding; non-fault, no backoff, no lifetime-cap increment; clearing the finding re-admits it
   | "blocked_outcome_hold" // Issue #2551 — a stage-declared BLOCKED outcome misread as an environmental quota failure; held for that one issue, no retry, no global cooldown
   | "validation_inconclusive" // Issue #221 — feature-validate's unit-test tier ran but executed zero tests; usually an environmental misconfiguration
   // Declared-but-unmatched, mirroring Go: set by the recovery action from
@@ -328,6 +329,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "validation_inconclusive",
   "not_pipeline_actionable",
   "blocked_outcome_hold",
+  "out_of_scope_blocked",
   "operator_stop",
   "abandoned_commit",
   "commit_orphaned",
