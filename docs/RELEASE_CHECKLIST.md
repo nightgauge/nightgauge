@@ -669,13 +669,11 @@ provenance signal available for it. It also stops Gatekeeper warning users who
 install from a VSIX or from Open VSX, which is a present-day benefit
 independent of any Marketplace listing.
 
-**Ruled out, so it is not repeated:** symbol stripping was investigated as a
-possible false-positive trigger and rejected. Go retains function names in
-`pclntab` regardless of `-s -w` (`main.main`, `runtime.*` and package
-identifiers are all still present in a stripped build, and `go tool nm` still
-resolves symbols), so the binary is not meaningfully obscured. Unstripping
-would cost about 12.7MB, a 44% size increase, for no measurable gain. The
-release keeps `-s -w`.
+**Superseded (#3091):** symbol stripping was once ruled out as a
+false-positive trigger, on the grounds that Go keeps function names in
+`pclntab` either way. Scanning showed otherwise: Microsoft Defender's model
+flagged every Linux build without DWARF and passed every build with it. Release
+binaries now ship unstripped; see [RELEASE_BINARIES.md](RELEASE_BINARIES.md).
 
 ### Repository secrets to add
 

@@ -85,7 +85,11 @@ check-terminal-kind-table:
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 VENDOR ?= Edibu, LLC
-LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X 'main.vendor=$(VENDOR)'"
+# Release binaries ship UNSTRIPPED: no -s, no -w. Microsoft Defender's model
+# flagged the stripped Go ELF (Wacatac.*!ml); DWARF debug information is what
+# keeps it clean, and the symbol table alone does not. A test fails if either
+# flag returns. See docs/RELEASE_BINARIES.md.
+LDFLAGS := -ldflags "-X main.version=$(VERSION) -X 'main.vendor=$(VENDOR)'"
 
 # -trimpath removes local filesystem paths from the binary, so a build of a
 # given commit is reproducible by anyone rather than carrying the builder's

@@ -89,8 +89,9 @@ make build-all VERSION=<version>
 
 ## 5. Inspect the dependency tree
 
-The binary is stripped (`-s -w`) but retains Go build info, so the full module
-graph is enumerable without our cooperation:
+The binary ships unstripped ([RELEASE_BINARIES.md](RELEASE_BINARIES.md)) and
+retains Go build info, so the full module graph is enumerable without our
+cooperation:
 
 ```bash
 go version -m extension/dist/bin/nightgauge

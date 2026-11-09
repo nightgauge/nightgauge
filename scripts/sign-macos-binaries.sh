@@ -38,11 +38,9 @@
 # available for a native executable, and it also stops Gatekeeper from warning
 # users who install from a VSIX or Open VSX.
 #
-# Note on what is NOT claimed: symbol stripping was investigated as a possible
-# false-positive trigger and ruled out. Go retains function names in pclntab
-# regardless of `-s -w` (`main.main` and package identifiers are still present
-# in a stripped build, and `go tool nm` still works), so the binary is not
-# meaningfully obscured and the release keeps `-s -w`.
+# Release binaries ship unstripped, with DWARF (#3091): Microsoft Defender's
+# model flagged the stripped Go ELF. See docs/RELEASE_BINARIES.md. Signing does
+# not remove the DWARF that release-dwarf-check verifies.
 #
 # ## Notarization and bare executables
 #

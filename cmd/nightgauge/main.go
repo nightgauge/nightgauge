@@ -90,8 +90,8 @@ var version = "dev"
 // contain a vendor identifier". On macOS that is carried by the Developer ID
 // code signature, but the linux build is unsigned and so carried no vendor
 // attribution at all beyond the Go module path. A linker-injected string
-// covers every target uniformly and survives stripping, since -s -w removes
-// the symbol table and DWARF, not package-level data.
+// covers every target uniformly: it is package-level data, present in every
+// build of the binary.
 //
 // Overridable via -X so a downstream rebuild is not forced to claim our name.
 var vendor = "Edibu, LLC"

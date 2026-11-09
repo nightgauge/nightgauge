@@ -14,6 +14,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-11-09
+
+0.8.1, 0.8.2 and 0.8.3 were tagged but never published. The release gate could
+not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the macOS
+binaries in the archives unsigned and a hook script that one antivirus engine
+flagged (#3064). For 0.8.3, Microsoft Defender's model flagged its stripped Linux
+binary (#3091). Their changes ship in this release and are listed below.
+
 ### Fixed
 
 - A verify-and-close planning verdict no longer closes an issue whose newest
@@ -34,35 +42,12 @@ changelog, and the release workflow refuses a tag that does not.
 - When a stage is stopped for exceeding its runtime cap, the warning now says
   the issue hit its runtime cap at that stage instead of saying it stalled.
   The retry is unchanged: it still runs automatically after 30 minutes (#2886).
-
-### Security
-
-- A new `pr-review-confinement.yml` workflow checks that the PR review model
-  cannot read its OAuth token from `/proc`. It runs the real CLI with a
-  random per-run canary and passes only when the CLI records a denial for
-  every `/proc` `Read` and `Grep` it asks for. It fails if the canary leaks,
-  or if any denial is missing in three tries. The review and the probe share one confinement
-  definition, `scripts/pr-review-claude.sh` (#3084).
-- The review-cap attention card now shows a reviewer's file and claim as
-  literal text: markdown in a finding can no longer add links, images or
-  formatting to the card. A finding whose file or claim holds a control or
-  invisible formatting character (newline, tab, bidi override) is rejected
-  (#2875).
-- The manual PR review workflow confines the model's `Read` and `Write` to
-  the review inputs, `docs/` and its findings file, so it can no longer read
-  its own OAuth token from `/proc` or write outside the checkout. Symlinks in
-  the reviewed tree are removed first, and a findings file containing the
-  token fails the run before anything is posted (#3084).
-
-## [0.8.3] - 2026-11-09
-
-0.8.1 and 0.8.2 were tagged but never published. The release gate could
-not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the macOS
-binaries in the archives unsigned and a hook script that one antivirus engine
-flagged (#3064). Their changes ship in this release and are listed below.
-
-### Fixed
-
+- **Release binaries ship unstripped, with their DWARF debug information.**
+  Microsoft Defender's model flagged the stripped Linux binary of 0.8.3
+  (`Wacatac.C!ml`); builds that keep DWARF scan clean. Each release build now
+  fails before its VirusTotal scan if any binary in an archive or VSIX lacks
+  DWARF, and a test fails if `-s` or `-w` returns to the linker flags. Binaries
+  are about 15 MB larger. See `docs/RELEASE_BINARIES.md` (#3091).
 - **PR titles no longer carry `Fixes GH-N` or an issue URL as a live closer.**
   The closing-keyword grammar now recognizes `GH-N` in Go and in the
   extension, so titles rewrite it to `Refs GH-N`, and the extension's fallback
@@ -354,6 +339,22 @@ flagged (#3064). Their changes ship in this release and are listed below.
 
 ### Security
 
+- A new `pr-review-confinement.yml` workflow checks that the PR review model
+  cannot read its OAuth token from `/proc`. It runs the real CLI with a
+  random per-run canary and passes only when the CLI records a denial for
+  every `/proc` `Read` and `Grep` it asks for. It fails if the canary leaks,
+  or if any denial is missing in three tries. The review and the probe share one confinement
+  definition, `scripts/pr-review-claude.sh` (#3084).
+- The review-cap attention card now shows a reviewer's file and claim as
+  literal text: markdown in a finding can no longer add links, images or
+  formatting to the card. A finding whose file or claim holds a control or
+  invisible formatting character (newline, tab, bidi override) is rejected
+  (#2875).
+- The manual PR review workflow confines the model's `Read` and `Write` to
+  the review inputs, `docs/` and its findings file, so it can no longer read
+  its own OAuth token from `/proc` or write outside the checkout. Symlinks in
+  the reviewed tree are removed first, and a findings file containing the
+  token fails the run before anything is posted (#3084).
 - Every pushed branch is now credential-scanned, not only branches with a pull
   request (#2958). `credential-scan.yml` runs on push to any branch except
   `main` (the merge queue already scans what lands) and scans that branch's own
@@ -566,10 +567,15 @@ recover`'s default timeout grows to match.
 - `claude-plugins/nightgauge/hooks/pre-push-validate.sh`, a hand-kept copy of the git
   pre-push hook that `nightgauge pre-push install` writes. It was never a Claude hook (#2764).
 
+## [0.8.3] - 2026-11-09
+
+Tagged but never published: Microsoft Defender's model flagged its stripped
+Linux binary. Its changes ship in [0.8.4].
+
 ## [0.8.2] - 2026-11-07
 
 Tagged but never published; the release gate stopped it (#3064). Its
-changes ship in [0.8.3].
+changes ship in [0.8.4].
 
 ## [0.8.0] - 2026-11-04
 
@@ -8756,7 +8762,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.4...HEAD
+[0.8.4]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.4
 [0.8.3]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.3
 [0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2
 [0.8.0]: https://github.com/nightgauge/nightgauge/compare/v0.7.2...v0.8.0
