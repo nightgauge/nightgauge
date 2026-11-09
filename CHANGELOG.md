@@ -24,6 +24,12 @@ binary (#3091). Their changes ship in this release and are listed below.
 
 ### Fixed
 
+- `nightgauge knowledge validate <N>` and the PR knowledge section now use the
+  current issue's knowledge directory when a stale same-numbered
+  `features/<N>-*` directory also exists. The newest entry wins, by frontmatter
+  `generated.at`, then file time, then name; before, the first directory in
+  name order shadowed the fresh one and validation reported `no_frontmatter`
+  against the wrong entry.
 - A verify-and-close planning verdict no longer closes an issue whose newest
   partial-delivery comment still lists unmet acceptance criteria. The run now ends
   `blocked` unless a PR that closes the issue merged after that comment, and an
