@@ -185,7 +185,8 @@ async function main(): Promise<void> {
     fs.writeFileSync(
       path.join(userDataDir, "User", "settings.json"),
       // Experiments off: VS Code's own fetch to its experiment service shares the
-      // extension host's global fetch, so demo mode's no-HTTP assertion caught it.
+      // extension host's global fetch. This only reduces that traffic; demo mode's
+      // recorder filters the host (VSCODE_CORE_HOSTS), which keeps it deterministic.
       JSON.stringify(
         { "nightgauge.backend.binaryPath": IPC_STUB, "workbench.enableExperiments": false },
         null,

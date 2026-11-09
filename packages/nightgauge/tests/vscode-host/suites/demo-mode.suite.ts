@@ -131,6 +131,39 @@ function describeTarget(target: unknown): string {
 }
 
 /**
+ * Hosts VS Code core itself calls from the extension host. default.exp-tas.com is
+ * the experiment (TAS) assignment service: it runs on the same global fetch the
+ * recorder patches, and `workbench.enableExperiments: false` in launch.ts does not
+ * reliably stop its `/vscode/ab` request, so it landed inside the scenario window
+ * intermittently (#2983). Matched on the exact hostname. An extension call to this
+ * host would be hidden too; attributing calls by caller costs more than this suite
+ * needs, and the extension has no reason to reach it.
+ */
+const VSCODE_CORE_HOSTS = new Set(["default.exp-tas.com"]);
+
+/** The hostname a fetch or http(s) target names, or undefined when it names none. */
+function targetHostname(target: unknown): string | undefined {
+  try {
+    if (typeof target === "string") return new URL(target).hostname;
+    if (target instanceof URL) return target.hostname;
+    if (target instanceof Request) return new URL(target.url).hostname;
+  } catch {
+    return undefined;
+  }
+  if (target && typeof target === "object") {
+    const opts = target as { hostname?: unknown; host?: unknown };
+    if (typeof opts.hostname === "string") return opts.hostname;
+    if (typeof opts.host === "string") return opts.host.replace(/:\d+$/, "");
+  }
+  return undefined;
+}
+
+function isVsCodeCoreTraffic(target: unknown): boolean {
+  const host = targetHostname(target);
+  return host !== undefined && VSCODE_CORE_HOSTS.has(host);
+}
+
+/**
  * Record every outbound HTTP attempt: the default imports are Node's own
  * module objects, which the extension's bundle shares, and fetch is global.
  */
@@ -142,7 +175,9 @@ function recordOutboundHttp(): void {
     for (const fn of ["request", "get"] as const) {
       const original = mod[fn];
       (mod as Record<string, unknown>)[fn] = (...args: unknown[]) => {
-        outbound.push(`${name}.${fn} ${describeTarget(args[0])}`);
+        if (!isVsCodeCoreTraffic(args[0])) {
+          outbound.push(`${name}.${fn} ${describeTarget(args[0])}`);
+        }
         return (original as (...a: unknown[]) => unknown)(...args);
       };
       restoreHttp.push(() => ((mod as Record<string, unknown>)[fn] = original));
@@ -150,7 +185,9 @@ function recordOutboundHttp(): void {
   }
   const originalFetch = globalThis.fetch;
   globalThis.fetch = ((input: unknown, init?: unknown) => {
-    outbound.push(`fetch ${String(input instanceof Request ? input.url : input)}`);
+    if (!isVsCodeCoreTraffic(input)) {
+      outbound.push(`fetch ${String(input instanceof Request ? input.url : input)}`);
+    }
     return originalFetch(...([input, init] as Parameters<typeof fetch>));
   }) as typeof fetch;
   restoreHttp.push(() => (globalThis.fetch = originalFetch));
