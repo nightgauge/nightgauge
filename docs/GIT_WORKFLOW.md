@@ -972,7 +972,12 @@ main ──●──●──●──●──●──
    (`scripts/release-scan-gate.sh scan`, #2946): every asset, and every binary
    and JS bundle inside each VSIX and tarball, by its exact downloaded bytes.
    Only a clean scan publishes the release. Any finding, API error or missing
-   `VT_API_KEY` leaves a draft and fails the run. After publishing, the
+   `VT_API_KEY` leaves a draft and fails the run. Before the scan,
+   `cmd/release-dwarf-check` fails the run if any shipped binary lacks DWARF:
+   release binaries ship unstripped, and a Microsoft `!ml` finding on a Go
+   binary is checked against [RELEASE_BINARIES.md](RELEASE_BINARIES.md) first
+   (#3091). A scan finding is fixed at its cause, never waived as a false
+   positive. After publishing, the
    `channels` job checks the published report (`release-scan-gate.sh verify`),
    advances `stable`, marks the cask PR ready and closes older cask PRs as
    superseded. **Merge the cask PR** after checking its sha256s against the
@@ -1081,10 +1086,12 @@ bash scripts/release-scan-gate.sh verify v0.4.0 -R nightgauge/nightgauge   # exi
 #     - VT_API_KEY is missing, or the API errors, times out, answers in an
 #       unknown shape or runs out of quota (4/min, 500/day on the free key).
 #     The failed run names each file, its sha256 and the engine or rule.
-#     A finding is an owner decision: fix and cut the next patch, or file a
-#     false-positive report with the vendor and decide whether to publish the
-#     draft by hand. Nothing else publishes it. A harness error is re-run
-#     with `gh run rerun <run-id> --failed`, which reuses the draft.
+#     A finding is fixed at its cause and ships in the next patch; it is
+#     never waived as a false positive, and nothing publishes the held draft.
+#     Check a Microsoft `!ml` finding on a Go binary against
+#     docs/RELEASE_BINARIES.md first: are the binaries still unstripped, and
+#     did release-dwarf-check pass? A harness error is re-run with
+#     `gh run rerun <run-id> --failed`, which reuses the draft.
 #
 #     VT_API_KEY is a production-environment secret: a free VirusTotal
 #     account's API key (profile → API key). The free public API accepts file

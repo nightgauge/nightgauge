@@ -45,8 +45,11 @@ builds:
     # paths agree. -trimpath keeps builds reproducible from the tag.
     flags:
       - -trimpath
+    # Unstripped on purpose: no -s, no -w. Defender's model flagged the stripped
+    # Go ELF, and DWARF debug information is what keeps it clean. A test fails
+    # if either flag returns. See docs/RELEASE_BINARIES.md.
     ldflags:
-      - -s -w -X main.version={{.Version}} -X "main.vendor=Edibu, LLC"
+      - -X main.version={{.Version}} -X "main.vendor=Edibu, LLC"
     # #3064: the archives and the Homebrew cask must carry the SAME binaries the
     # VSIXs bundle: the ones `make build-all` produced and release.yml signed
     # with the Developer ID. GoReleaser's own build is unsigned, so it is

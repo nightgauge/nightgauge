@@ -15,6 +15,7 @@ repository.
 | [TESTING.md](./TESTING.md)                           | How to test plugins and configurations             |
 | [GIT_WORKFLOW.md](./GIT_WORKFLOW.md)                 | Branch naming, commit messages, PR guidelines      |
 | [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md)       | VS Code RC go/no-go from the 2026-08-20 run        |
+| [RELEASE_BINARIES.md](./RELEASE_BINARIES.md)         | Why release binaries ship unstripped (DWARF)       |
 | [PROJECT_SETUP.md](./PROJECT_SETUP.md)               | GitHub Project configuration and views             |
 | [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md)           | Sprint/iteration support and planning              |
 | [ESTIMATION.md](./ESTIMATION.md)                     | Story points, size labels, and velocity tracking   |

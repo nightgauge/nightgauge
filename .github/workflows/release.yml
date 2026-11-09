@@ -610,6 +610,18 @@ jobs:
       - name: Verify archives carry the signed bin/ binaries
         run: bash scripts/verify-archive-binaries.sh dist bin
 
+      # #3091: release binaries ship unstripped (docs/RELEASE_BINARIES.md).
+      # Read the packaged bytes, not the flags, and prove every Go binary in
+      # every archive and VSIX carries DWARF before any VirusTotal scan sees
+      # them. Built once rather than `go run`, so exit 1 (a binary lacks
+      # DWARF) and exit 2 (nothing checked) stay distinct in the log; both
+      # fail this step.
+      - name: Verify every shipped binary carries DWARF (docs/RELEASE_BINARIES.md)
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/release-dwarf-check" ./cmd/release-dwarf-check
+          "$RUNNER_TEMP/release-dwarf-check" dist/*.tar.gz packages/nightgauge/*.vsix
+
       # Every step below addresses the release by the triggering tag. Prove
       # GoReleaser created THAT release before attaching anything to it.
       - name: Verify GoReleaser drafted the triggering tag
