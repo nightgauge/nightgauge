@@ -161,6 +161,28 @@ feature PR holds up the whole queue (#317 and #320 both did this).
 `.gitattributes` marks `package-lock.json` as `-diff`, so review the result with
 `git diff --text package-lock.json`.
 
+## Install scripts (`allowScripts`)
+
+npm 11 runs a dependency's install script only when `allowScripts` in the root
+`package.json` approves it. A package with no entry is skipped with the warning
+"install scripts not yet covered by allowScripts". Our workspaces' own scripts,
+such as the SDK's `postinstall`, still run. Every dependency with an install
+script needs a recorded decision, so that npm's list of uncovered packages
+names only new ones.
+
+| Package             | Decision | Why the script is not needed                                                                                                                                                                 |
+| ------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `esbuild`           | denied   | The binary comes from the `@esbuild/<platform>` optional dependency, which npm installs regardless of scripts; `install.js` only validates it and optimises the shim.                        |
+| `protobufjs`        | denied   | `scripts/postinstall` only prints a version-scheme warning.                                                                                                                                  |
+| `@vscode/vsce-sign` | denied   | `postinstall.js` copies the platform signing binary into `bin/`. `vsce` calls it only for `--sign-tool`, `--manifestPath` or `--signaturePath`, and no workflow or script here passes those. |
+
+Every runner has already worked with all three skipped (npm 11.19.1, #3112).
+The merge-group CI run 42691676367 passed. Staging run 42642295140 built and
+scanned every v0.8.5-rc.1 VSIX, and those VSIXs passed G1. When `npm ci` names a
+new uncovered package, decide it here: read its install script, then add an
+approval (`true`, pinned with `npm install-scripts approve <pkg>`) or a denial
+(`false`), with a row in this table.
+
 ## Local Validation
 
 Before pushing, verify your changes pass the audit check:
