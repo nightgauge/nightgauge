@@ -52,12 +52,17 @@ jobs:
   # group's diff, so a bad change cannot reach main without passing them. That only
   # holds while the queue is enforced, so it is read from the live ruleset. If the
   # rule is gone or the read fails, the pull request runs the suites itself.
+  # A diff that touches a script installing a pinned npm CLI (`pr_heavy`, see
+  # PRHeavyPaths in internal/ci/classify.go) also runs them on the pull request:
+  # PR #3103 skipped the real OpenCode integration and broke only in the queue
+  # (#3093).
   changes:
     name: Change class
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      run_heavy: ${{ steps.queue.outputs.enforced == 'true' && 'false' || steps.classify.outputs.run_heavy }}
+      run_heavy: ${{ steps.queue.outputs.enforced == 'true' && steps.classify.outputs.pr_heavy != 'true' && 'false' || steps.classify.outputs.run_heavy }}
+      pr_heavy: ${{ steps.classify.outputs.pr_heavy }}
       change_class: ${{ steps.classify.outputs.change_class }}
       reason: ${{ steps.classify.outputs.reason }}
     steps:

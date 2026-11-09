@@ -37,11 +37,21 @@ if [ "$1" = root ]; then
 fi
 printf '%s\n' "$*" >"$STUB_DIR/npm-argv"
 [ -z "${STUB_NPM_FAILS:-}" ] || { echo "npm ERR! boom"; exit 1; }
-global=false; prefix=""
+global=false; prefix=""; allow=false
 while [ "$#" -gt 0 ]; do
-  case "$1" in --global) global=true ;; --prefix) prefix="$2"; shift ;; esac
+  case "$1" in
+    --global) global=true ;;
+    --prefix) prefix="$2"; shift ;;
+    --allow-scripts=*) allow=true ;;
+  esac
   shift
 done
+# The runner's npm (merge-group run 42623529378) refuses the flag here.
+if $allow && ! $global; then
+  echo "npm error code EALLOWSCRIPTS"
+  echo "npm error --allow-scripts is not allowed in project-scoped installs."
+  exit 1
+fi
 if [ -n "$prefix" ] && $global; then dir="$prefix/bin"
 elif [ -n "$prefix" ]; then dir="$prefix/node_modules/.bin"
 else dir="$STUB_DIR/bin"; fi
@@ -129,6 +139,20 @@ check "global --prefix passes the prefix" grep -q -- "--global --prefix $TMP/gp"
 expect "local --prefix prints DIR/node_modules/.bin/<binary>" 0 "^$TMP/lp/node_modules/.bin/tool$" -- \
   --prefix "$TMP/lp" "$PKG@9.9.9" tool
 check "local --prefix does not save" grep -q -- "--no-save --no-package-lock" "$TMP/npm-argv"
+check "local --prefix passes no --allow-scripts" bash -c "! grep -q -- --allow-scripts '$TMP/npm-argv'"
+check "local --prefix writes the allowance to DIR/.npmrc" \
+  test "$(grep -cxF "allow-scripts=$PKG" "$TMP/lp/.npmrc" 2>/dev/null)" = 1
+expect "a second local install succeeds" 0 "^$TMP/lp/node_modules/.bin/tool$" -- \
+  --prefix "$TMP/lp" "$PKG@9.9.9" tool
+check "the .npmrc allowance is written once" \
+  test "$(grep -cxF "allow-scripts=$PKG" "$TMP/lp/.npmrc" 2>/dev/null)" = 1
+mkdir -p "$TMP/lp3" && printf 'fund=false' >"$TMP/lp3/.npmrc"
+expect "an existing .npmrc is kept" 0 "^$TMP/lp3/node_modules/.bin/tool$" -- \
+  --prefix "$TMP/lp3" "$PKG@9.9.9" tool
+check "an existing .npmrc keeps its lines and gains the allowance on its own line" \
+  test "$(cat "$TMP/lp3/.npmrc")" = "fund=false"$'\n'"allow-scripts=$PKG"
+check "global --prefix still passes --allow-scripts" bash -c \
+  "rm -f '$TMP/npm-argv'; STUB_DIR='$TMP' PATH='$TMP/stubs:$PATH' bash '$SCRIPT' --global --prefix '$TMP/gp' '$PKG@9.9.9' tool >/dev/null 2>&1 && grep -q -- '--allow-scripts=$PKG' '$TMP/npm-argv'"
 mkdir -p "$TMP/lp2/node_modules/$PKG" && cp "$TMP/root/$PKG/package.json" "$TMP/lp2/node_modules/$PKG/"
 expect "local mode repairs from DIR/node_modules" 0 "^$TMP/lp2/node_modules/.bin/tool$" \
   STUB_NATIVE=1 -- --prefix "$TMP/lp2" "$PKG@9.9.9" tool

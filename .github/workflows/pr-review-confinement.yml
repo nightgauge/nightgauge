@@ -9,8 +9,8 @@
 # no model: green only when permission_denials records a denial for every
 # requested /proc call and the canary is absent; red when the canary leaks; an
 # attempt missing any denial is retried, then red as unproven; a CLI that
-# failed, writing no JSON result or an error result (exit 5), is red at once,
-# with the CLI's output shown.
+# failed, writing no JSON result (exit 5), is red at once, and one reporting an
+# error result (exit 6) is retried, then red; both show the CLI's output.
 #
 # Runs only trusted code from this repository, never pull request content.
 # Not a required check. See docs/PR_REVIEW_PASSES.md#confinement-probe.
@@ -92,12 +92,16 @@ jobs:
                 exit 1
                 ;;
               5)
-                # Deterministic: the CLI itself failed, so a retry proves nothing.
-                echo "::error title=Claude CLI failed::The CLI wrote no JSON result or an error result; its output is above."
+                # Deterministic: the CLI wrote no JSON result, so a retry proves nothing.
+                echo "::error title=Claude CLI failed::The CLI wrote no JSON result; its output is above."
                 exit 1
                 ;;
               4)
                 echo "Attempt $i: unproven."
+                ;;
+              6)
+                # The CLI reported an error, which may be a transient API failure.
+                echo "Attempt $i: the CLI reported an error."
                 ;;
               *)
                 echo "::error title=Confinement unproven::probe-verdict exited $verdict."
@@ -106,5 +110,9 @@ jobs:
             esac
             i=$((i + 1))
           done
+          if [ "$verdict" = 6 ]; then
+            echo "::error title=Claude CLI failed::The CLI reported an error on the last of $PROBE_ATTEMPTS attempts; its output is above."
+            exit 1
+          fi
           echo "::error title=Confinement unproven::No attempt recorded a denial for every /proc call in $PROBE_ATTEMPTS attempts."
           exit 1

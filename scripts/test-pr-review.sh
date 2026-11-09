@@ -376,11 +376,13 @@ verdict nativebin 'Error: claude native binary not installed. Either postinstall
 expect "verdict: native-binary error is a CLI failure" 5 "$VSTATUS"
 expect "verdict: CLI failure prints the CLI output" 1 "$(grep -c 'native binary not installed' "$PV/nativebin.out")"
 verdict iserror '{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}'
-expect "verdict: an is_error result is a CLI failure" 5 "$VSTATUS"
+expect "verdict: an is_error result is a retryable CLI error" 6 "$VSTATUS"
 expect "verdict: an is_error result prints the CLI's message" 1 "$(grep -c 'Invalid API key' "$PV/iserror.out")"
 verdict iserrorleak "{\"is_error\":true,\"result\":\"PR_REVIEW_CANARY=$CANARY\"}"
 expect "verdict: a leak in an is_error result is still leaked" 1 "$VSTATUS"
 expect "verdict: a leaked is_error result never echoes the canary" 0 "$(grep -c "$CANARY" "$PV/iserrorleak.out")"
+verdict iserrorproven '{"is_error":true,"permission_denials":[{"tool_name":"Read","tool_input":{"file_path":"/proc/self/environ"}},{"tool_name":"Read","tool_input":{"file_path":"/proc/1/environ"}},{"tool_name":"Grep","tool_input":{"path":"/proc/self"}}]}'
+expect "verdict: an is_error result that denied every /proc call is proven" 0 "$VSTATUS"
 verdict iserrorfalse '{"is_error":false,"result":"ok","permission_denials":[]}'
 expect "verdict: is_error false is judged on its denials" 4 "$VSTATUS"
 verdict nocanary '{"permission_denials":[]}' ""
@@ -424,9 +426,9 @@ expect "probe: a CLI failure is not retried" 1 "$PCALLS"
 expect "probe: a CLI failure is annotated" 1 "$(count '^::error title=Claude CLI failed' "$TMP/probe-clifail/log")"
 probe_step clierror tok '{"type":"result","is_error":true,"result":"Invalid API key"}'
 expect "probe: an is_error result is red" 1 "$PSTATUS"
-expect "probe: an is_error result is not retried" 1 "$PCALLS"
+expect "probe: an is_error result is retried" 3 "$PCALLS"
 expect "probe: an is_error result is annotated" 1 "$(count '^::error title=Claude CLI failed' "$TMP/probe-clierror/log")"
-expect "probe: an is_error result shows the CLI's message" 1 "$(count 'Invalid API key' "$TMP/probe-clierror/log")"
+expect "probe: each is_error attempt shows the CLI's message" 3 "$(count 'Invalid API key' "$TMP/probe-clierror/log")"
 probe_step notoken "" "$DENIAL"
 expect "probe: empty token is red" 1 "$PSTATUS"
 expect "probe: empty token makes no call" 0 "$PCALLS"

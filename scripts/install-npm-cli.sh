@@ -12,8 +12,12 @@
 # npm 11 (ubuntu-26.04's image) skips package install scripts unless they are
 # allowed, and CLIs such as @anthropic-ai/claude-code and opencode-ai set up
 # their native binary in one. Without it the binary exits "native binary not
-# installed" (#3093). So this passes --allow-scripts=<package>; an npm that
-# does not know the flag warns and runs scripts by default. If the binary
+# installed" (#3093). So a global install passes --allow-scripts=<package>;
+# an npm that does not know the flag warns and runs scripts by default. npm
+# refuses that flag for a project-scoped install (EALLOWSCRIPTS: "Add the
+# entries to the allowScripts field in package.json, or to .npmrc"), so a
+# local --prefix install instead appends allow-scripts=<package> to
+# DIR/.npmrc, once, and passes no flag. If the binary
 # still does not run, the package's own preinstall, install and postinstall
 # scripts, read from its package.json, are run in npm's order. The binary must
 # then exit 0 from --version with output naming <version>.
@@ -71,7 +75,19 @@ args=(install)
 $global && args+=(--global)
 [ -z "$prefix" ] || args+=(--prefix "$prefix")
 $global || args+=(--no-save --no-package-lock)
-args+=(--no-fund --no-audit --loglevel=error "--allow-scripts=$pkg" "$spec")
+args+=(--no-fund --no-audit --loglevel=error)
+if $global; then
+  args+=("--allow-scripts=$pkg")
+else
+  npmrc="$prefix/.npmrc"
+  mkdir -p "$prefix" || fail "cannot create the install prefix $prefix"
+  if ! grep -qxF "allow-scripts=$pkg" "$npmrc" 2>/dev/null; then
+    # A file without a final newline would join the entry to its last line.
+    if [ -s "$npmrc" ] && [ -n "$(tail -c 1 "$npmrc")" ]; then echo >>"$npmrc"; fi
+    echo "allow-scripts=$pkg" >>"$npmrc" || fail "cannot write the allowance to $npmrc"
+  fi
+fi
+args+=("$spec")
 out="$(npm "${args[@]}" 2>&1)" || fail "npm install of $spec failed" "$out"
 
 if $global && [ -z "$prefix" ]; then
