@@ -363,6 +363,16 @@ function toolResultText(block) {
 
 const firstLines = (s, n) => s.split("\n").slice(0, n).join("\n");
 
+// The CLI enforces a settings deny rule on a Read path while validating the
+// tool input, before the permission check that fills permission_denials. The
+// call then ends in an error tool_result naming the deny rule and never
+// reaches permission_denials (#3093). That message is a denial; any other tool
+// error (an empty file, a missing path) is not.
+const DENY_RULE_ERROR = /denied by your permission settings/;
+function isDenyRuleError(block) {
+  return block?.is_error === true && DENY_RULE_ERROR.test(toolResultText(block));
+}
+
 // Every /proc tool call in the transcript, paired with its tool_result and
 // its recorded denial by tool_use id.
 function procCalls(events, denials) {
@@ -381,11 +391,14 @@ function procCalls(events, denials) {
     if (ev.type !== "assistant") continue;
     for (const b of contentBlocks(ev, "tool_use")) {
       if (!touchesProc(b.input)) continue;
+      const result = results.get(b.id);
       calls.push({
         tool: String(b.name),
+        rawInput: b.input,
         input: JSON.stringify(b.input),
         denied: deniedIds.has(b.id),
-        result: results.get(b.id),
+        ruleDenied: !deniedIds.has(b.id) && isDenyRuleError(result),
+        result,
       });
     }
   }
@@ -401,6 +414,7 @@ function diagnose(calls, result) {
   for (const c of calls) {
     let outcome;
     if (c.denied) outcome = "denied";
+    else if (c.ruleDenied) outcome = "denied by the settings deny rule";
     else if (!c.result) outcome = "no tool result";
     else outcome = `tool error, not a recorded denial: ${toolResultText(c.result).slice(0, 200)}`;
     lines.push(`  ${c.tool} ${c.input}: ${outcome}`);
@@ -437,10 +451,13 @@ export function probeVerdict(text, canary) {
   // The probe asks for two Reads of distinct /proc environ files and one Grep
   // of /proc. Each needs its own recorded denial: one denied call says nothing
   // about a sibling call that succeeded. Read is confined by the settings deny,
-  // Grep by --restricted.
+  // Grep by --restricted. A deny-rule tool error counts as a recorded denial.
+  const recorded = denials.concat(
+    calls.filter((c) => c.ruleDenied).map((c) => ({ tool_name: c.tool, tool_input: c.rawInput }))
+  );
   const procPaths = (tool) =>
     new Set(
-      denials
+      recorded
         .filter((d) => d?.tool_name === tool && touchesProc(d?.tool_input))
         .map((d) => JSON.stringify(d.tool_input))
     ).size;
