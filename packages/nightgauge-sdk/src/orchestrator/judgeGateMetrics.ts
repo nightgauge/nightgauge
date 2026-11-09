@@ -41,6 +41,14 @@ export const JUDGES_INTERRUPTED_MARKER = "[judges-interrupted]";
  */
 export const JUDGES_NONE_MARKER = "[judges-none]";
 
+/**
+ * `error_summary` prefix of the failing row a dropped judge attempt writes: a
+ * verdict record failed validation, or a complete run whose spec declared
+ * judges recorded no verdict. Without it the gate would read the attempt as
+ * one that never had judges. Mirrors `state.JudgesDroppedMarker` (#2944).
+ */
+export const JUDGES_DROPPED_MARKER = "[judges-dropped]";
+
 /** One judge row, as the gate-metrics readers accept it. */
 const JudgeGateRecordSchema = z.object({
   schema_version: z.literal("1"),
@@ -89,6 +97,12 @@ export function gateMetricsFilePath(cwd: string): string {
  * complete attempt can supersede it; with none or several it is omitted and the
  * row trips the gate for good, which fails closed.
  *
+ * A dropped attempt writes one failing {@link JUDGES_DROPPED_MARKER} row and
+ * no verdict row: when a verdict record is invalid, and when a complete run
+ * whose spec declared `declaredJudges > 0` judges recorded no verdict (in place
+ * of the `[judges-none]` close). With `declaredJudges` absent or `0`, nothing
+ * changes (#2944).
+ *
  * @param cwd         Any path inside the checkout whose gate-metrics to write.
  * @param issueNumber Issue the run belongs to.
  * @param nodes       The run's node stream, `run` and `phase` nodes included.
@@ -97,7 +111,7 @@ export async function appendJudgeVerdicts(
   cwd: string,
   issueNumber: number,
   nodes: ReadonlyArray<WorkflowNode | { kind: string }>,
-  options: { complete?: boolean; attemptId?: string } = {}
+  options: { complete?: boolean; attemptId?: string; declaredJudges?: number } = {}
 ): Promise<void> {
   try {
     const stream = nodes as ReadonlyArray<WorkflowNode>;
@@ -111,9 +125,26 @@ export async function appendJudgeVerdicts(
     // An interrupted run's judges are a partial set: whatever finished, the
     // marker says the rest never ran, so its passes cannot pass the gate.
     if (options.complete === false) {
-      await appendInterruptedMarker(cwd, issueNumber, stream, options.attemptId);
+      await appendMarker(
+        cwd,
+        issueNumber,
+        stream,
+        options.attemptId,
+        `${JUDGES_INTERRUPTED_MARKER} feature-validate workflow stopped before every judge returned a verdict`
+      );
     }
     if (verdicts.length === 0) {
+      const declared = options.declaredJudges ?? 0;
+      if (options.complete !== false && declared > 0) {
+        await appendMarker(
+          cwd,
+          issueNumber,
+          stream,
+          options.attemptId,
+          `${JUDGES_DROPPED_MARKER} feature-validate workflow declared ${declared} judge(s) but recorded no verdict`
+        );
+        return;
+      }
       if (options.complete !== false && options.attemptId) {
         await appendNoJudgesRow(cwd, issueNumber, options.attemptId);
       }
@@ -149,6 +180,17 @@ export async function appendJudgeVerdicts(
         console.warn(
           `[Nightgauge] Invalid judge verdict record, dropping the attempt: ${validation.error.message}`
         );
+        // No verdict row, but the drop itself is recorded so the gate cannot
+        // read the attempt as one that never had judges (#2944).
+        const issue = validation.error.issues[0];
+        const detail = issue ? `${issue.path.join(".") || "record"}: ${issue.message}` : "invalid";
+        await appendMarker(
+          cwd,
+          issueNumber,
+          stream,
+          attemptId,
+          `${JUDGES_DROPPED_MARKER} feature-validate invalid judge verdict record: ${detail.slice(0, 300)}`
+        );
         return;
       }
       lines.push(JSON.stringify(record) + "\n");
@@ -160,12 +202,16 @@ export async function appendJudgeVerdicts(
   }
 }
 
-/** Write the failing marker row of a run interrupted before it returned. */
-async function appendInterruptedMarker(
+/**
+ * Write one failing marker row (interrupted or dropped attempt). Its
+ * `attempt_id` is the known attempt, else the stream's sole run id, else none.
+ */
+async function appendMarker(
   cwd: string,
   issueNumber: number,
   stream: ReadonlyArray<WorkflowNode>,
-  knownAttemptId: string | undefined
+  knownAttemptId: string | undefined,
+  errorSummary: string
 ): Promise<void> {
   // A run node is emitted once per state change, so count distinct ids.
   const runIds = new Set(stream.filter(isWorkflowRun).map((run) => run.runId));
@@ -177,13 +223,13 @@ async function appendInterruptedMarker(
     issue_number: issueNumber,
     gate_name: JUDGE_GATE_NAME,
     result: "fail",
-    error_summary: `${JUDGES_INTERRUPTED_MARKER} feature-validate workflow stopped before every judge returned a verdict`,
+    error_summary: errorSummary,
     attempt_id: knownAttemptId || inferred,
   };
   const validation = JudgeGateRecordSchema.safeParse(record);
   if (!validation.success) {
     console.warn(
-      `[Nightgauge] Invalid interrupted-judges record, not written: ${validation.error.message}`
+      `[Nightgauge] Invalid judges marker record, not written: ${validation.error.message}`
     );
     return;
   }
@@ -195,7 +241,7 @@ async function appendInterruptedMarker(
  * row for the issue: an issue never judged needs no row, and the gate already
  * reads its absence as "no judges". It never closes over a real failure: when
  * the latest judges attempt (as the Go gate reads it) holds a failing row other
- * than an interrupted marker, that failure stands and nothing is written.
+ * than an interrupted or dropped marker, that failure stands and nothing is written.
  */
 async function appendNoJudgesRow(
   cwd: string,
@@ -222,7 +268,8 @@ async function appendNoJudgesRow(
   // every attempt-less row (with no attempt id, every row), must hold no real
   // failure.
   const isMarker = (row: Partial<JudgeGateRecord>): boolean =>
-    (row.error_summary ?? "").startsWith(JUDGES_INTERRUPTED_MARKER);
+    (row.error_summary ?? "").startsWith(JUDGES_INTERRUPTED_MARKER) ||
+    (row.error_summary ?? "").startsWith(JUDGES_DROPPED_MARKER);
   const judgedRows = rows.filter((row) => !isMarker(row));
   const latest = judgedRows[judgedRows.length - 1]?.attempt_id;
   const considered = latest

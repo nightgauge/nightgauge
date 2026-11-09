@@ -83,18 +83,26 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 				fmt.Sprintf("%d gate-metrics row(s) carry no result", len(results)),
 			}, KindFail, TerminalKindValidationFailed
 		}
-		var failed []string
+		var failed, dropped []string
 		capped := false
 		for _, r := range verdicts {
 			if r.Result != "pass" {
 				failed = append(failed, fmt.Sprintf("%s=%s", r.GateName, r.Result))
 				capped = capped || isReviewCapRow(r)
+				if isJudgesMarker(r, state.JudgesDroppedMarker) {
+					dropped = append(dropped, r.ErrorSummary)
+				}
 			}
 		}
 		if capped {
 			// #2865: the cap says something about this issue, so it parks here
 			// rather than failing as a repository-halting validation_failed.
 			return false, "the independent review reached its round cap", failed, KindFail, TerminalKindReviewCapReached
+		}
+		if len(dropped) > 0 {
+			// #2944: a dropped judge attempt must not read as "no judges".
+			return false, "a judge attempt was dropped: the run declared judges but no usable " +
+				"verdict was recorded", append(failed, dropped...), KindFail, TerminalKindValidationFailed
 		}
 		if len(failed) > 0 {
 			// Real quality-gate failure — work happened and produced a failing result.
@@ -136,6 +144,11 @@ func isReviewCapRow(r state.GateResult) bool {
 	return r.GateName == ReviewGateName && strings.HasPrefix(r.ErrorSummary, ReviewCapMarker)
 }
 
+// isJudgesMarker reports whether r is a judges row carrying marker.
+func isJudgesMarker(r state.GateResult, marker string) bool {
+	return r.GateName == state.JudgeGateName && strings.HasPrefix(r.ErrorSummary, marker)
+}
+
 // latestVerdicts reduces gate-metric rows to the verdicts the gate judges: the
 // last row per GateName, in file order, kept at that name's first position so
 // the output is deterministic. Telemetry reads every row, so this view stays
@@ -152,8 +165,8 @@ func isReviewCapRow(r state.GateResult) bool {
 // A row with no AttemptID cannot be placed in an attempt, so it always stands,
 // and a latest row with no AttemptID keeps every judge row. Doubt fails closed.
 //
-// An interrupted marker (a judges row whose ErrorSummary starts with
-// state.JudgesInterruptedMarker) is released when any later row, in file
+// An interrupted or dropped marker (a judges row whose ErrorSummary starts with
+// state.JudgesInterruptedMarker or state.JudgesDroppedMarker) is released when any later row, in file
 // order, carries a Result under a GateName that is neither empty nor judges.
 // The SDK writes the marker after the interrupted attempt's own rows, so such
 // a row comes from a later attempt (in practice the adversarial-review row the
@@ -168,8 +181,8 @@ func latestVerdicts(results []state.GateResult) []state.GateResult {
 		}
 	}
 	released := func(i int, r state.GateResult) bool {
-		return i < lastGateRow && r.GateName == state.JudgeGateName &&
-			strings.HasPrefix(r.ErrorSummary, state.JudgesInterruptedMarker)
+		return i < lastGateRow && (isJudgesMarker(r, state.JudgesInterruptedMarker) ||
+			isJudgesMarker(r, state.JudgesDroppedMarker))
 	}
 
 	var judgeAttempt string

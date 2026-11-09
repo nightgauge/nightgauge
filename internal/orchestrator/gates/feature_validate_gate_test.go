@@ -355,3 +355,73 @@ func TestFeatureValidateGate_MisplacedACVerdicts(t *testing.T) {
 		t.Fatalf("correct shape must pass; reason=%q evidence=%v", gr.Reason, gr.Evidence)
 	}
 }
+
+// droppedMarker builds the failing judges row the SDK writes for a dropped
+// judge attempt (#2944).
+func droppedMarker(attemptID string) map[string]any {
+	r := map[string]any{
+		"gate_name":     "judges",
+		"result":        "fail",
+		"error_summary": "[judges-dropped] feature-validate workflow declared 2 judge(s) but recorded no verdict",
+	}
+	if attemptID != "" {
+		r["attempt_id"] = attemptID
+	}
+	return r
+}
+
+// #2944: a dropped judge attempt fails with a reason naming the drop, not the
+// generic quality-gate failure and never "no judges".
+func TestFeatureValidateGate_JudgeDroppedMarker_FailsWithDroppedReason(t *testing.T) {
+	for _, attempt := range []string{"run-1", ""} {
+		ws := layouttest.Repo(t)
+		writeGateMetrics(t, ws, 2944, []map[string]any{
+			{"gate_name": "build", "result": "pass"},
+			droppedMarker(attempt),
+		})
+
+		gr := FeatureValidateGate{}.Verify(context.Background(), 2944, ws)
+		if gr.Passed || gr.Kind != KindFail {
+			t.Fatalf("attempt %q: expected KindFail, got passed=%v kind=%q", attempt, gr.Passed, gr.Kind)
+		}
+		if !strings.Contains(gr.Reason, "a judge attempt was dropped") {
+			t.Fatalf("attempt %q: expected the dropped reason, got %q", attempt, gr.Reason)
+		}
+		if !slices.Contains(gr.Evidence, "judges=fail") {
+			t.Fatalf("attempt %q: expected judges=fail evidence, got %v", attempt, gr.Evidence)
+		}
+	}
+}
+
+// #2944: a later attempt's quality-gate row releases a dropped marker, as it
+// releases an interrupted one.
+func TestFeatureValidateGate_JudgeDroppedMarker_ReleasedByLaterGateRow(t *testing.T) {
+	ws := layouttest.Repo(t)
+	writeGateMetrics(t, ws, 2944, []map[string]any{
+		droppedMarker("run-1"),
+		{"gate_name": "adversarial-review", "result": "pass"},
+	})
+
+	gr := FeatureValidateGate{}.Verify(context.Background(), 2944, ws)
+	if !gr.Passed {
+		t.Fatalf("expected a later gate row to release the marker; reason=%q evidence=%v", gr.Reason, gr.Evidence)
+	}
+}
+
+// #2944: a run with no judges rows at all still passes unchanged.
+func TestFeatureValidateGate_NoJudgeRows_StillPasses(t *testing.T) {
+	ws := layouttest.Repo(t)
+	writeGateMetrics(t, ws, 2944, []map[string]any{{"gate_name": "build", "result": "pass"}})
+
+	gr := FeatureValidateGate{}.Verify(context.Background(), 2944, ws)
+	if !gr.Passed {
+		t.Fatalf("expected pass with no judges rows; reason=%q", gr.Reason)
+	}
+}
+
+// #2944: droppedMarker's prefix must match the Go constant the gate keys on.
+func TestDroppedMarkerHelperMatchesState(t *testing.T) {
+	if !strings.HasPrefix(droppedMarker("")["error_summary"].(string), state.JudgesDroppedMarker) {
+		t.Fatal("droppedMarker prefix drifted from state.JudgesDroppedMarker")
+	}
+}

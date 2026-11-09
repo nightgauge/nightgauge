@@ -1,5 +1,5 @@
 /**
- * Tests for the SDK judge-verdict fold into gate-metrics (#3918, #2778, #2880).
+ * Tests for the SDK judge-verdict fold into gate-metrics (#3918, #2778, #2880, #2944).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -16,6 +16,7 @@ import { checkoutPath } from "../../context/cloneLayout.js";
 import {
   appendJudgeVerdicts,
   gateMetricsFilePath,
+  JUDGES_DROPPED_MARKER,
   JUDGES_INTERRUPTED_MARKER,
   JUDGES_NONE_MARKER,
 } from "../../orchestrator/judgeGateMetrics.js";
@@ -211,15 +212,82 @@ describe("appendJudgeVerdicts", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Failed to write judge"));
   });
 
-  it("one invalid failing record writes nothing, not the passing rest", async () => {
+  it("one invalid record writes only a dropped marker, no verdict row (#2944)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await appendJudgeVerdicts(dir, 3918, [
       ...runNodes("run-1"),
       judgeNode("pass", { nodeId: "judge:run-1:0:0" }),
       judgeNode("fail", { nodeId: "judge:run-1:0:1", ts: 0 as unknown as string }),
     ]);
-    expect(await rows()).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("dropping the attempt"));
+    const written = await rows();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({
+      gate_name: "judges",
+      issue_number: 3918,
+      result: "fail",
+      attempt_id: "run-1",
+    });
+    const summary = String(written[0].error_summary);
+    expect(summary.startsWith(JUDGES_DROPPED_MARKER)).toBe(true);
+    expect(summary).toContain("invalid judge verdict record: timestamp");
+  });
+
+  it("a complete run that declared judges but recorded none writes a dropped marker (#2944)", async () => {
+    await appendJudgeVerdicts(dir, 3918, runNodes("run-1"), {
+      complete: true,
+      attemptId: "run-1",
+      declaredJudges: 2,
+    });
+    const written = await rows();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({ gate_name: "judges", result: "fail", attempt_id: "run-1" });
+    expect(String(written[0].error_summary)).toBe(
+      `${JUDGES_DROPPED_MARKER} feature-validate workflow declared 2 judge(s) but recorded no verdict`
+    );
+  });
+
+  it("a dropped attempt replaces the [judges-none] close over an earlier marker (#2944)", async () => {
+    await appendJudgeVerdicts(dir, 3918, [], { complete: false, attemptId: "wf-1" });
+    await appendJudgeVerdicts(dir, 3918, [], {
+      complete: true,
+      attemptId: "wf-2",
+      declaredJudges: 1,
+    });
+    const written = await rows();
+    expect(written).toHaveLength(2);
+    expect(written[1]).toMatchObject({ result: "fail", attempt_id: "wf-2" });
+    expect(String(written[1].error_summary).startsWith(JUDGES_DROPPED_MARKER)).toBe(true);
+  });
+
+  it("a later attempt with no declared judges closes a dropped marker", async () => {
+    await appendJudgeVerdicts(dir, 3918, [], {
+      complete: true,
+      attemptId: "wf-1",
+      declaredJudges: 1,
+    });
+    await appendJudgeVerdicts(dir, 3918, [], { complete: true, attemptId: "sa-2" });
+    const written = await rows();
+    expect(written).toHaveLength(2);
+    expect(String(written[1].error_summary).startsWith(JUDGES_NONE_MARKER)).toBe(true);
+  });
+
+  it("declaredJudges 0 keeps the no-verdict behaviour unchanged", async () => {
+    await appendJudgeVerdicts(dir, 3918, runNodes("run-1"), {
+      complete: true,
+      attemptId: "run-1",
+      declaredJudges: 0,
+    });
+    await expect(fs.stat(gateMetricsFilePath(dir))).rejects.toThrow();
+  });
+
+  it("an interrupted run with declared judges writes only the interrupted marker", async () => {
+    await appendJudgeVerdicts(dir, 3918, runNodes("run-1"), {
+      complete: false,
+      declaredJudges: 2,
+    });
+    const written = await rows();
+    expect(written).toHaveLength(1);
+    expect(String(written[0].error_summary).startsWith(JUDGES_INTERRUPTED_MARKER)).toBe(true);
   });
 
   it("writes nothing, and creates no file, when there are no judges", async () => {

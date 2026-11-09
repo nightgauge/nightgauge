@@ -72,3 +72,19 @@ func TestFeatureValidateGate_ReviewCapParks(t *testing.T) {
 		t.Fatalf("kind = %q, want %q", res.TerminalKind, TerminalKindValidationFailed)
 	}
 }
+
+// #2944: a dropped marker followed only by passing judges rows from a partial
+// or attempt-less set still fails: judges rows never release it.
+func TestFeatureValidateGate_JudgeDroppedMarker_NotClearedByPartialJudges(t *testing.T) {
+	ws := layouttest.Repo(t)
+	writeGateMetrics(t, ws, 2944, []map[string]any{
+		{"gate_name": "build", "result": "pass"},
+		droppedMarker(""),
+		{"gate_name": "judges", "result": "pass"},
+	})
+
+	gr := FeatureValidateGate{}.Verify(context.Background(), 2944, ws)
+	if gr.Passed || !strings.Contains(gr.Reason, "a judge attempt was dropped") {
+		t.Fatalf("expected the dropped reason; passed=%v reason=%q", gr.Passed, gr.Reason)
+	}
+}
