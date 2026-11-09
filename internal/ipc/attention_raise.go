@@ -33,8 +33,11 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -64,6 +67,10 @@ const (
 	// board writer is the extension's projectFieldWriter (#1501). See
 	// orchestrator.BuildBoardStatusWriteFailed.
 	ProducerBoardStatusWriteFailed = orchestrator.ProducerBoardStatusWriteFailed
+	// ProducerPartialDeliveryCloseRefused is extension-only by design — the
+	// verify-and-close early exit lives in HeadlessOrchestrator (#3089). See
+	// orchestrator.BuildPartialDeliveryCloseRefused.
+	ProducerPartialDeliveryCloseRefused = orchestrator.ProducerPartialDeliveryCloseRefused
 )
 
 // raiseableProducers is the closed allowlist. Adding an entry here is the
@@ -113,6 +120,10 @@ var raiseableProducers = map[string]struct{}{
 	// Like out-of-scope-blocker it has no producer-specific field — `stage` is
 	// the only thing it reads, and every word on the card is the builder's.
 	ProducerBoardStatusWriteFailed: {},
+	// #3089. Every fact on the card — the PR and its remaining criteria — is
+	// re-read by the daemon (Server.partialDeliveryStatus); the caller supplies
+	// only repo, issue and runId.
+	ProducerPartialDeliveryCloseRefused: {},
 }
 
 // RaiseableProducers returns the allowlist sorted, for diagnostics, error
@@ -158,6 +169,34 @@ type derivedFacts struct {
 	// magnitude would otherwise have no source but the report itself.
 	spentUSD          float64
 	spendCorroborated bool
+}
+
+// partialDeliveryTimeout bounds the daemon's forge read for the
+// partial-delivery-close-refused raise.
+const partialDeliveryTimeout = 30 * time.Second
+
+// readPartialDelivery reads repo#issue's partial-delivery remainder with the
+// repo's own identity and trusted bots. s.partialDeliveryStatus replaces it in
+// tests.
+func (s *Server) readPartialDelivery(repo string, issue int) (hooks.PartialDeliveryStatus, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), partialDeliveryTimeout)
+	defer cancel()
+	if s.partialDeliveryStatus != nil {
+		return s.partialDeliveryStatus(ctx, repo, issue)
+	}
+	owner, name, _ := strings.Cut(repo, "/")
+	if s.resolver == nil {
+		return hooks.PartialDeliveryStatus{}, fmt.Errorf("no client resolver")
+	}
+	client, err := s.resolver.Resolve(ctx, owner, name)
+	if err != nil {
+		return hooks.PartialDeliveryStatus{}, err
+	}
+	var bots []string
+	if cfg, err := config.Load(s.repoRoot(repo)); err == nil && cfg != nil && cfg.Autonomous != nil {
+		bots = cfg.Autonomous.TrustedBots
+	}
+	return hooks.PendingPartialDelivery(ctx, hooks.NewPartialDeliveryReader(client, bots), owner, name, issue)
 }
 
 // handleAttentionRaise validates a closed-producer raise and writes it through
@@ -534,6 +573,21 @@ func (s *Server) buildRaise(p AttentionRaiseParams) (attention.DecisionRequest, 
 		// caller observed the failed write, and the card it builds offers no
 		// verb, so nothing a caller sends can act on anything.
 		return orchestrator.BuildBoardStatusWriteFailed(p.Repo, p.Issue, p.RunID, p.Stage), true, nil
+
+	case ProducerPartialDeliveryCloseRefused:
+		// DAEMON-DERIVED. The remainder is re-read here through the trust
+		// filter; a read failure raises nothing (the caller still refuses the
+		// close), and a remainder that is not pending is not_applicable.
+		status, err := s.readPartialDelivery(p.Repo, p.Issue)
+		if err != nil {
+			return attention.DecisionRequest{}, false,
+				fmt.Errorf("attention.raise: %s: %w", ProducerPartialDeliveryCloseRefused, err)
+		}
+		if !status.Pending {
+			return attention.DecisionRequest{}, false, nil
+		}
+		return orchestrator.BuildPartialDeliveryCloseRefused(p.Repo, p.Issue, p.RunID,
+			status.PR, status.Criteria, status.Unlisted), true, nil
 	}
 	// Unreachable: the allowlist check ran first. Kept so a producer added to
 	// the allowlist and not to the switch is a loud failure, not a silent

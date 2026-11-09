@@ -30,6 +30,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gitops "github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
 	"github.com/nightgauge/nightgauge/internal/intelligence/failure"
 	"github.com/nightgauge/nightgauge/internal/intelligence/health"
@@ -268,6 +269,9 @@ type Server struct {
 
 	// resolver auto-resolves GitHub clients from (owner, repo) using per-repo config.
 	resolver *ClientResolver
+	// partialDeliveryStatus replaces the forge read behind the
+	// partial-delivery-close-refused raise in tests (#3089).
+	partialDeliveryStatus func(ctx context.Context, repo string, issue int) (hooks.PartialDeliveryStatus, error)
 
 	// rateLimitTracker persists GitHub rate-limit state to disk so multiple
 	// IPC processes (one per VSCode window) share a single view of quota

@@ -811,6 +811,12 @@ signal instead of a normal plan:
 - Use it ONLY when the fix is reachable from the default (or epic base) branch.
   Work committed only on the issue's own unmerged branch is NOT resolved: the
   orchestrator refuses to close and resumes validate -> pr-create instead.
+- Criteria listed in a `<!-- nightgauge:partial-delivery pr=N -->` comment are
+  met only by evidence dated after that comment, such as a PR merged later.
+  Code that was already on main when the comment was posted is the partial
+  delivery itself, not proof of the remainder. Plan those criteria as
+  `focus_acs`; never answer verify-and-close over them. The orchestrator
+  refuses such a close and raises an Action Center card (#3089).
 
 The orchestrator detects this signal after feature-planning completes and
 short-circuits the remaining stages (feature-dev, feature-validate, pr-create,
