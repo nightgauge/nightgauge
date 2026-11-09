@@ -30,10 +30,11 @@ ship in this release and are listed below.
 - When a stage is stopped for exceeding its runtime cap, the warning now says
   the issue hit its runtime cap at that stage instead of saying it stalled.
   The retry is unchanged: it still runs automatically after 30 minutes (#2886).
-- **The bundled `nightgauge` binary ships unstripped.** Microsoft
-  Defender's model flagged the stripped Linux binary of 0.8.3; the binary now
-  keeps its DWARF debug information. Each VSIX is larger as
-  a result (#3091).
+- **The bundled `nightgauge` binary no longer trips Microsoft Defender's
+  machine-learning model.** The cause was the newer `modernc.org/sqlite` and
+  `libc` releases, so they are pinned to the versions that scan clean (#3104).
+  The binary also ships unstripped, with its DWARF debug information, and each
+  VSIX is larger as a result (#3091).
 - **A pr-merge skill that pushed a CI fix no longer ends the run with the PR
   unmerged when the VS Code extension drives the pipeline.** The extension now
   reads the skill's `pr-merge-fix-{N}.json` hand-back, as the Go scheduler

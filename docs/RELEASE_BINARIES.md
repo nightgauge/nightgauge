@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-09
 **Status:** Decided
-**Issue:** #3091, #3102
+**Issue:** #3091, #3102, #3104
 
 ---
 
@@ -62,7 +62,8 @@ The v0.8.4 release scan (`release.yml` run 42611150909, tag `v0.8.4` at
 `release-dwarf-check` printed `ok` for it. The v0.8.4-rc.1 binary built from
 the same commit (`29fe75c6…`) scanned clean; the two differ only in the
 embedded version string. Unstripped binaries remain the release rule, but DWARF
-does not keep a binary clean. The cause of this finding is tracked separately.
+does not keep a binary clean. The cause was the dependency set; see
+[Dependencies that move the Microsoft model's score](#dependencies-that-move-the-microsoft-models-score).
 
 | Build                    | Linker strip flags | Symbol table | DWARF | sha256 (first 8) | Microsoft    |
 | ------------------------ | ------------------ | ------------ | ----- | ---------------- | ------------ |
@@ -134,7 +135,46 @@ scan needs no change.
 
 Check it against this record first. Are the binaries still unstripped, and did
 `release-dwarf-check` pass in the run that built them? If not, restore DWARF.
-If they are unstripped and still flagged, as v0.8.4 was, the cause is
-something else. Find it and fix it there. Never report it to the vendor as a
+Then check that `go.mod` still holds the pinned dependency set below
+(`TestScoreSensitiveModulesStayPinned`). If they are unstripped, pinned and
+still flagged, the cause is something else. Find it and fix it there. Never report it to the vendor as a
 false positive, never allowlist it, and never publish on the grounds that it
 is one.
+
+## Dependencies that move the Microsoft model's score
+
+v0.8.4's unstripped Linux binary was flagged too (`Trojan:Script/Wacatac.B!ml`,
+sha256 `3ba7e66c…`), with DWARF present. The rc.1 build of the same commit was
+clean, and the two differ only in their version string. Session 86 rescanned the
+published v0.7.2 binary on that day's model (clean, 0/64) and then swapped
+dependency sets between 0.7.2's code and newer code. Every build was Linux
+amd64, scanned with `scripts/vt-scan.sh`:
+
+| Dependency set                                                                                | Code                                  | Builds | Flagged by Microsoft |
+| --------------------------------------------------------------------------------------------- | ------------------------------------- | ------ | -------------------- |
+| `modernc.org/sqlite` 1.60.1, `libc` 1.77.1, `go-humanize` 1.0.1, `oapi-codegen/runtime` 1.7.0 | 0.7.2, 0.8.4 and `main` at `8c0df4d4` | 11     | 0                    |
+| `modernc.org/sqlite` 1.61.1, `libc` 1.79.0, `go-humanize` 1.1.0, `oapi-codegen/runtime` 1.8.0 | 0.8.2 to 0.8.5                        | 12     | 6                    |
+| As above, with `oapi-codegen/runtime` 1.7.0                                                   | 0.8.4                                 | 1      | 1                    |
+
+On the newer set the verdict flips with the version string alone, and no
+script-like string differs between the two sets. The newer `libc` and
+`sqlite`, a C-to-Go translation of SQLite, add about 3,000 unique strings of
+translated C and symbol data. That shifts the statistical profile the model
+scores. Stripping does not decide it. DWARF made unstripped builds better
+odds, but it is not a guarantee.
+
+So these four modules are pinned to the clean set (#3104).
+`TestScoreSensitiveModulesStayPinned` in `cmd/release-dwarf-check` fails if
+`go.mod` moves any of them, and `.github/dependabot.yml` ignores version updates
+for them. Advisories still surface as Dependabot alerts. `go-humanize` moves
+with `sqlite`, because `go mod tidy` raises it to 1.1.0 when `sqlite` 1.61.x is
+required.
+
+**Raising a pinned module.** Build the Linux amd64 binary from the candidate
+`go.mod` at four or more version strings, for example `X.Y.Z-rc.1`, `X.Y.Z`,
+`X.Y.Z-rc.2` and `X.Y+1.0-rc.1`. Build each in a clone that holds only the tag
+`vX.Y.Z…`:
+`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-X main.version=<v> -X 'main.vendor=Edibu, LLC'" ./cmd/nightgauge`.
+Scan each one with `scripts/vt-scan.sh`, and raise the pin in the same pull
+request only if every build is clean. If a security advisory forces a raise
+that does not scan clean, the release waits until a clean set exists.
