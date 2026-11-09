@@ -210,11 +210,18 @@ environment. It asks the model, through `scripts/pr-review-claude.sh`, to
 `Read` `/proc/self/environ` and its parent shell's environ and to `Grep`
 `/proc/self`. The CLI writes its `stream-json` transcript, so the verdict sees
 every tool call and the result it got, not only the recorded denials.
-`node scripts/pr-review.mjs probe-verdict` decides without a model:
+A `/proc` call counts as denied when `permission_denials` records it, as it
+does for the `--restricted` Grep, or when its tool result is the CLI's deny
+rule error. CLI 2.1.258 checks a `Read` path against the settings deny while it
+validates the tool input, before the permission check that fills
+`permission_denials`, so a denied Read ends in the tool error "File is in a
+directory that is denied by your permission settings." and is never recorded
+(#3093). Any other error, such as an empty file or a missing path, is not a
+denial. `node scripts/pr-review.mjs probe-verdict` decides without a model:
 
 | Exit | Verdict                                                                          | Probe                              |
 | ---- | -------------------------------------------------------------------------------- | ---------------------------------- |
-| 0    | `permission_denials` lists a denial for every `/proc` call, even with `is_error` | green                              |
+| 0    | every requested `/proc` call was denied, even with `is_error`                    | green                              |
 | 1    | the canary appears anywhere, or a `/proc` call got a result that is not an error | red, confinement broken            |
 | 4    | a requested `/proc` call has no denial                                           | retried, then red as unproven      |
 | 5    | the transcript has no JSON result event: the CLI itself failed                   | red at once; CLI output shown      |
@@ -222,8 +229,9 @@ every tool call and the result it got, not only the recorded denials.
 
 A `/proc` call that returned content is red even when the model does not quote
 it, because the canary check alone would miss it. On exits 4 and 6 the log
-lists each `/proc` call the model made and its outcome (denied, a tool error
-with its first 200 characters, or no result), the turn count, and the final
+lists each `/proc` call the model made and its outcome (denied, denied by the
+settings deny rule, another tool error with its first 200 characters, or no
+result), the turn count, and the final
 reply. It never prints the canary or the content of a successful tool result.
 
 The probe tries three times before it reports an unproven result. It never
