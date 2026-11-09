@@ -67,7 +67,18 @@ class Stub(http.server.BaseHTTPRequestHandler):
         pass
 
 
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stub)
+import socketserver
+
+
+class StubServer(http.server.ThreadingHTTPServer):
+    # HTTPServer.server_bind calls socket.getfqdn(host), a reverse-DNS lookup
+    # that can block for tens of seconds before the port is published (#2984).
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+server = StubServer(("127.0.0.1", 0), Stub)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 API = f"http://127.0.0.1:{server.server_address[1]}"
 DEAD = "http://127.0.0.1:9"  # discard port: connection refused

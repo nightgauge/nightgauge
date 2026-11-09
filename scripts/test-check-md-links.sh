@@ -149,7 +149,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 port = int(sys.argv[1])
-HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+import socketserver
+
+
+class StubServer(HTTPServer):
+    # HTTPServer.server_bind calls socket.getfqdn(host), a reverse-DNS lookup
+    # that can block for tens of seconds before the port is published (#2984).
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+StubServer(("127.0.0.1", port), Handler).serve_forever()
 PYEOF
 
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"

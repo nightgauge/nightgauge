@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The local HTTP stubs used by the VirusTotal scan, release scan gate,
+  platform smoke, action-pin and Markdown-link suites no longer reverse-resolve
+  `127.0.0.1` when they bind. A slow reverse-DNS lookup used to delay the stub
+  past the harness's start window, and the suite reported `HARNESS ERROR`
+  against a healthy stub (#2984).
+
 - The PR review confinement probe now reads the CLI's `stream-json`
   transcript. A `/proc` call that returned content is red as "confinement
   broken" even when the model does not quote it, where it used to pass as

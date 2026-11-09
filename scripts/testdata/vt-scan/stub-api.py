@@ -227,7 +227,18 @@ class Handler(BaseHTTPRequestHandler):
         return self.answer("none", 404, {"error": {"code": "NotFoundError"}})
 
 
-server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+import socketserver
+
+
+class StubServer(ThreadingHTTPServer):
+    # HTTPServer.server_bind calls socket.getfqdn(host), a reverse-DNS lookup
+    # that can block for tens of seconds before the port is published (#2984).
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+server = StubServer(("127.0.0.1", 0), Handler)
 with open(os.path.join(STATE, "port.tmp"), "w", encoding="utf-8") as f:
     f.write(str(server.server_address[1]))
 os.replace(os.path.join(STATE, "port.tmp"), os.path.join(STATE, "port"))
