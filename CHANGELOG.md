@@ -22,6 +22,14 @@ changelog, and the release workflow refuses a tag that does not.
   parent, and moves the branch by compare-and-swap. Repository settings are
   left alone. A PR that mixes WIP and real commits is still refused unless the
   squash defaults are `PR_TITLE`/`PR_BODY` (#2988).
+
+- `npm ci` records a decision for every dependency install script. npm 11
+  skips a dependency's install script unless `allowScripts` covers it, and it
+  warned on every runner about `esbuild`, `protobufjs` and `@vscode/vsce-sign`,
+  so a new package that needs its script would have been lost among them. All
+  three are denied in the root `package.json`: none is needed, and the runners
+  already worked without them. `docs/NPM_AUDIT_PROCESS.md § Install scripts`
+  gives the reason for each and how to decide the next one (#3112).
 - The local HTTP stubs used by the VirusTotal scan, release scan gate,
   platform smoke, action-pin and Markdown-link suites no longer reverse-resolve
   `127.0.0.1` when they bind. A slow reverse-DNS lookup used to delay the stub
