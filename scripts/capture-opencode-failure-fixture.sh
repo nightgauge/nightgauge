@@ -138,7 +138,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
     do_GET = do_POST = reply
     def log_message(self, *args):
         pass
-server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+import socketserver
+
+
+class StubServer(http.server.HTTPServer):
+    # HTTPServer.server_bind calls socket.getfqdn(host), a reverse-DNS lookup
+    # that can block for tens of seconds before the port is published (#2984).
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+server = StubServer(("127.0.0.1", 0), Handler)
 open(port_path, "w").write(str(server.server_address[1]))
 threading.Timer(180, server.shutdown).start()
 server.serve_forever()

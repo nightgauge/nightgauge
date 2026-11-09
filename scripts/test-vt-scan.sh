@@ -333,6 +333,26 @@ expect "VT_REUSE_MAX_AGE not in seconds -> exit 2" 2 "HARNESS ERROR: VT_REUSE_MA
 scan VT_MIN_ENGINES=0 -- "$CLEAN"
 expect "VT_MIN_ENGINES=0 -> exit 2" 2 "HARNESS ERROR: VT_MIN_ENGINES"
 
+# 22. The stub binds without a reverse-DNS lookup (#2984): with
+# socket.getfqdn made to raise, it must still publish a port and answer.
+DNS_STATE="$WORK/dns-state"
+mkdir -p "$DNS_STATE"
+STUB_VT_KEY="$KEY" python3 -I -c "$(printf 'import runpy, socket, sys\ndef no_dns(*a, **k): raise RuntimeError(\"socket.getfqdn called at bind (#2984)\")\nsocket.getfqdn = no_dns\nsys.argv = sys.argv[1:]\nrunpy.run_path(sys.argv[0], run_name=\"__main__\")')" \
+  "$FIXTURES/stub-api.py" "$FIXTURES" "$DNS_STATE" 2>"$WORK/dns.err" &
+DNS_PID=$!
+for _ in $(seq 1 50); do
+  [ -s "$DNS_STATE/port" ] && break
+  sleep 0.1
+done
+if [ -s "$DNS_STATE/port" ] &&
+  curl -s -o /dev/null "http://127.0.0.1:$(cat "$DNS_STATE/port")/"; then
+  ok "stub starts and answers with socket.getfqdn raising"
+else
+  bad "stub needs socket.getfqdn at bind: $(tail -1 "$WORK/dns.err")"
+fi
+kill "$DNS_PID" 2>/dev/null
+wait "$DNS_PID" 2>/dev/null
+
 # 17. The key never appears in any output or report written above.
 if grep -qF "$KEY" "$ALL_OUT"; then
   bad "the API key appears in stdout, stderr or a report"

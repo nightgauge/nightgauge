@@ -116,7 +116,18 @@ class Handler(BaseHTTPRequestHandler):
 
 # Port 0: the kernel picks a free port, so concurrent gates never collide on
 # one. The chosen port is published through port_path once the socket listens.
-server = HTTPServer(("127.0.0.1", 0), Handler)
+import socketserver
+
+
+class StubServer(HTTPServer):
+    # HTTPServer.server_bind calls socket.getfqdn(host), a reverse-DNS lookup
+    # that can block for tens of seconds before the port is published (#2984).
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+server = StubServer(("127.0.0.1", 0), Handler)
 with open(port_path + ".tmp", "w") as pf:
     pf.write(str(server.server_address[1]))
 import os
@@ -559,6 +570,22 @@ check "the workflow passes the production test account's token" \
   "$(contains "$WF" 'PLATFORM_SMOKE_SESSION_TOKEN: ${{ secrets.PLATFORM_SMOKE_SESSION_TOKEN }}' && echo 0 || echo 1)"
 check "the workflow targets no other deployment (#2401)" \
   "$(grep -qi 'staging' "$WF" && echo 1 || echo 0)"
+
+# --- The mock binds without a reverse-DNS lookup (#2984) --------------------
+# With socket.getfqdn made to raise, the mock must still publish its port.
+printf '[]' > "$TMP/dns-routes.json"
+rm -f "$TMP/dns-port"
+python3 -I -c "$(printf 'import runpy, socket, sys\ndef no_dns(*a, **k): raise RuntimeError(\"socket.getfqdn called at bind (#2984)\")\nsocket.getfqdn = no_dns\nsys.argv = sys.argv[1:]\nrunpy.run_path(sys.argv[0], run_name=\"__main__\")')" \
+  "$MOCK_SERVER" "$TMP/dns-routes.json" "$TMP/dns-port" "$TMP/dns.log" 2>"$TMP/dns.err" &
+DNS_PID=$!
+for _ in $(seq 1 50); do
+  [ -s "$TMP/dns-port" ] && break
+  sleep 0.1
+done
+check "mock server starts with socket.getfqdn raising" \
+  "$([ -s "$TMP/dns-port" ] && curl -s -o /dev/null "http://127.0.0.1:$(cat "$TMP/dns-port")/v1/health" && echo 0 || echo 1)"
+kill "$DNS_PID" 2>/dev/null || true
+wait "$DNS_PID" 2>/dev/null || true
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="

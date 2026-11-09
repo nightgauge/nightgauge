@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The local HTTP stubs used by the VirusTotal scan, release scan gate,
+  platform smoke, action-pin and Markdown-link suites no longer reverse-resolve
+  `127.0.0.1` when they bind. A slow reverse-DNS lookup used to delay the stub
+  past the harness's start window, and the suite reported `HARNESS ERROR`
+  against a healthy stub (#2984).
+
 - A VirusTotal scan spends about a third of the requests it did. Every file
   used to be uploaded again and re-analysed, at 3 requests each, though a
   release ships byte for byte the hooks, skill scripts and bundles its RC
