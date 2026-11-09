@@ -207,24 +207,14 @@ jobs:
           npm install --global --no-fund --no-audit "$(scripts/adapter-cli-pin.sh claude-headless)"
 
           # No Bash: the diff is precomputed, so the model only reads files
-          # and writes the findings file. --restricted confines the file tools
-          # to the checkout and ignores project settings and hooks; the
-          # committed settings allow only the review inputs, docs/, standards/, the
-          # adversarial-review skill and the
-          # findings file; dontAsk denies everything else. Never --allowedTools:
-          # a bare Read or Write there re-grants the whole filesystem (#3084).
-          # The limit handling stays in this step because scripts/ comes from
-          # BASE_SHA.
+          # and writes the findings file. scripts/pr-review-claude.sh is the
+          # one definition of the confinement flags (#3084); the
+          # pr-review-confinement workflow probes the same script. It comes
+          # from BASE_SHA, as does the rest of scripts/. The limit handling
+          # stays in this step.
           RESULT_FILE="$RUNNER_TEMP/review-result.json"
           status=0
-          claude -p \
-            --no-session-persistence \
-            --restricted \
-            --strict-mcp-config \
-            --tools "Read,Glob,Grep,Write" \
-            --settings .github/pr-review/claude-settings.json \
-            --permission-mode dontAsk \
-            --output-format json \
+          scripts/pr-review-claude.sh \
             --max-turns "$REVIEW_MAX_TURNS" > "$RESULT_FILE" <<PROMPT || status=$?
           Review a pull request. Follow docs/PR_REVIEW_PASSES.md exactly: run
           the correctness, security and plan-compliance passes and use its

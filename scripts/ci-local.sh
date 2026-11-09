@@ -437,6 +437,8 @@ REQUIRED_FILES=(
   scripts/apply-proposal-artifact.sh
   scripts/test-validate-proposal-artifact.sh
   scripts/pr-review.mjs
+  scripts/pr-review-claude.sh
+  .github/workflows/pr-review-confinement.yml
   scripts/test-pr-review.sh
   .github/scripts/cla-check.test.mjs
   scripts/test-measure-cache-boundary-loss.sh
