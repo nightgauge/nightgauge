@@ -1070,8 +1070,12 @@ gh attestation verify /tmp/rel/nightgauge-darwin-arm64-*.vsix --owner nightgauge
 #     Mach-O or PE, or the exec bit) and every JS bundle inside each VSIX and
 #     tarball, deduplicated by sha256, through the free VirusTotal API. The
 #     record is vt-scan-report.json, attached to the release and kept as the
-#     run's `vt-scan-report` artifact. Per file it gives the engine counts and
-#     the engines that flagged it, the Code insights verdict ("not-produced"
+#     run's `vt-scan-report` artifact. A file VirusTotal analysed within the
+#     last 24 hours (VT_REUSE_MAX_AGE), usually by the RC's scan, is judged
+#     from that analysis in one request; any other file is re-analysed or
+#     uploaded. Per file it gives the source ("reused", "reanalysed" or
+#     "uploaded"), when it was analysed and by how many engines, the engine
+#     counts and the engines that flagged it, the Code insights verdict ("not-produced"
 #     when VirusTotal makes none for that file type, ELF among them), and every
 #     crowdsourced YARA rule that matched. Each report is also at
 #     https://www.virustotal.com/gui/file/<sha256>.

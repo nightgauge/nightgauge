@@ -132,7 +132,12 @@ OUT=""
 RC=0
 ALL_OUT="$WORK/all-output.log"
 : >"$ALL_OUT"
+# Each gate run starts against an empty VirusTotal: a new stub epoch, so a
+# file an earlier arm analysed is uploaded again, not reused.
+EPOCH=0
+forget_vt() { EPOCH=$((EPOCH + 1)); echo "$EPOCH" >"$VTSTATE/epoch"; }
 gate() {
+  forget_vt
   rm -f "$VTSTATE/uploads.log"
   OUT="$(env PATH="$WORK/bin:$PATH" VT_API_KEY="$KEY" VT_MIN_INTERVAL=0 VT_ANALYSIS_TIMEOUT=2 \
     bash "$SUT" "$@" -R acme/widget 2>&1)"
@@ -274,6 +279,7 @@ expect "verify: an unreadable release is exit 2" 2 "cannot read release"
 # 17-21. local mode (#3064): the RC's on-disk files, no tag, no GitHub Release.
 # Same collection as `scan`, so the marker inside a deflated VSIX bundle is found.
 local_gate() {
+  forget_vt
   rm -f "$VTSTATE/uploads.log"
   OUT="$(env PATH="$WORK/bin:$PATH" VT_API_KEY="$KEY" VT_MIN_INTERVAL=0 VT_ANALYSIS_TIMEOUT=2 \
     bash "$SUT" local "$@" 2>&1)"

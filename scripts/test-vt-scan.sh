@@ -77,11 +77,18 @@ ALL_OUT="$WORK/all-output.log"
 : >"$ALL_OUT"
 
 # scan [env assignments...] -- files...
+# Each scan starts against an empty VirusTotal (a new stub epoch) unless
+# KEEP_VT=1, which keeps every file the stub already analysed.
+EPOCH=0
 scan() {
   local envs=()
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
   shift
-  rm -f "$REPORT" "$STATE/requests.log" "$STATE/uploads.log"
+  if [ "${KEEP_VT:-0}" != 1 ]; then
+    EPOCH=$((EPOCH + 1))
+    echo "$EPOCH" >"$STATE/epoch"
+  fi
+  rm -f "$REPORT" "$STATE/requests.log" "$STATE/uploads.log" "$STATE/analyses.log"
   OUT="$(env VT_API_KEY="$KEY" VT_MIN_INTERVAL=0 VT_ANALYSIS_TIMEOUT=2 \
     ${envs[@]+"${envs[@]}"} bash "$SUT" --report "$REPORT" --api-base "$BASE" "$@" 2>&1)"
   RC=$?
@@ -188,7 +195,7 @@ scan -- "$WORK/art/does-not-exist"
 expect "unreadable file -> exit 2" 2 "HARNESS ERROR: not a readable file"
 OUT="$(env VT_API_KEY="$KEY" VT_MIN_INTERVAL=0 bash "$SUT" --report "$REPORT" --api-base "http://127.0.0.1:1/api/v3" "$CLEAN" 2>&1)"
 RC=$?
-expect "unreachable API -> exit 2" 2 "HARNESS ERROR: POST /api/v3/files: curl exit"
+expect "unreachable API -> exit 2" 2 "HARNESS ERROR: GET /api/v3/files/"
 
 # 15. Deduplication: two paths with one digest are uploaded once, both reported.
 scan -- "$CLEAN" "$CLEAN2"
@@ -240,13 +247,73 @@ scan VT_MIN_INTERVAL=1 VT_POLL_MAX_INTERVAL=4 VT_ANALYSIS_TIMEOUT=60 -- "$SLOW"
 rm -f "$STATE/pending-polls"
 expect "pending analysis polled to completion" 0 "every file clean"
 waits="$(sed -n 's/^  polling analysis of .* after \([0-9]*\)s$/\1/p' <<<"$OUT" | tr '\n' ' ')"
-[ "$waits" = "1 2 4 4 " ] && [ "$(grep -c '^GET /api/v3/analyses/' "$STATE/requests.log")" -eq 4 ] &&
-  ok "poll waits double and cap: 1 2 4 4" || bad "poll waits: want '1 2 4 4 ', got '$waits'"
+SLOW_SHA="$(shasum -a 256 "$SLOW" | cut -d' ' -f1)"
+[ "$waits" = "1 2 4 4 " ] && [ "$(grep -c "^GET /api/v3/files/$SLOW_SHA " "$STATE/requests.log")" -eq 5 ] &&
+  ! grep -q '^GET /api/v3/analyses/' "$STATE/requests.log" &&
+  ok "poll waits double and cap: 1 2 4 4, on the file report (1 lookup + 4 polls)" ||
+  bad "poll waits: want '1 2 4 4 ' and 5 file GETs, got '$waits' and $(grep -c "^GET /api/v3/files/$SLOW_SHA " "$STATE/requests.log")"
 
-# 19. Every report counts the requests the run sent: POST, analysis, file.
+# 19. Every report counts the requests the run sent: lookup, POST, one poll.
 scan -- "$CLEAN"
 [ "$(jq -r '.requests' "$REPORT")" = "3" ] && ok "report records requests: 3" ||
   bad "requests field: want 3, got $(jq -r '.requests' "$REPORT" 2>/dev/null)"
+jq -e '.files[0].source == "uploaded" and .sources == {uploaded: 1} and .files[0].engines_total == 70
+  and (.files[0].analysed_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))' "$REPORT" >/dev/null &&
+  ok "an unknown file is uploaded; the report records source, engines and analysis time" ||
+  bad "uploaded report: $(jq -c '{sources, f: .files[0] | {source, engines_total, analysed_at}}' "$REPORT" 2>/dev/null)"
+
+# 19a-19h. Reuse (session 86): a file VirusTotal analysed within
+# VT_REUSE_MAX_AGE is judged from that analysis in 1 request; an older one is
+# re-analysed without a re-upload; every report is judged by the same rules.
+CLEAN_SHA="$(shasum -a 256 "$CLEAN" | cut -d' ' -f1)"
+KEEP_VT=1 scan -- "$CLEAN"
+expect "a fresh analysis is reused -> exit 0" 0 "reused report, analysed"
+[ "$(jq -r '.requests' "$REPORT")" = "1" ] && ! grep -q '^POST' "$STATE/requests.log" &&
+  jq -e '.files[0].source == "reused" and .sources == {reused: 1}' "$REPORT" >/dev/null &&
+  ok "reuse: 1 request, nothing posted, source reused" ||
+  bad "reuse: requests $(tr '\n' ' ' <"$STATE/requests.log"), report $(jq -c '.sources' "$REPORT" 2>/dev/null)"
+scan -- "$MAL"
+KEEP_VT=1 scan -- "$MAL"
+expect "a reused report with a detection -> exit 1" 1 "engine StubEngineA: malicious Stub.Forced.Detection"
+[ "$(jq -r '.requests' "$REPORT")" = "1" ] && ok "reuse never skips judging: the detection is found in 1 request" ||
+  bad "reused detection: requests $(jq -r '.requests' "$REPORT" 2>/dev/null)"
+scan -- "$CLEAN"
+KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 -- "$CLEAN"
+expect "VT_REUSE_MAX_AGE=0 re-analyses a fresh file -> exit 0" 0 "reanalysed report"
+grep -q "^POST /api/v3/files/$CLEAN_SHA/analyse " "$STATE/requests.log" && [ ! -s "$STATE/uploads.log" ] &&
+  [ "$(jq -r '.requests' "$REPORT")" = "3" ] &&
+  ok "VT_REUSE_MAX_AGE=0: reanalysed, not re-uploaded, 3 requests" ||
+  bad "reuse off: requests $(tr '\n' ' ' <"$STATE/requests.log")"
+scan -- "$CLEAN"
+echo "$CLEAN_SHA $(($(date +%s) - 172800)) $CLEAN" >"$STATE/seed"
+EPOCH=$((EPOCH + 1)); echo "$EPOCH" >"$STATE/epoch"
+KEEP_VT=1 scan -- "$CLEAN"
+rm -f "$STATE/seed"
+expect "an analysis older than VT_REUSE_MAX_AGE is re-analysed -> exit 0" 0 "reanalysing $CLEAN ($CLEAN_SHA): last analysed"
+grep -qx "$CLEAN_SHA" "$STATE/analyses.log" && [ ! -s "$STATE/uploads.log" ] &&
+  jq -e '.files[0].source == "reanalysed"' "$REPORT" >/dev/null &&
+  ok "stale: POST /files/{sha256}/analyse, no upload, source reanalysed" ||
+  bad "stale: requests $(tr '\n' ' ' <"$STATE/requests.log")"
+SEEDED_MAL="$(art seeded-mal.bin 'payload VT-STUB-MALICIOUS seeded')"
+SEEDED_MAL_SHA="$(shasum -a 256 "$SEEDED_MAL" | cut -d' ' -f1)"
+EPOCH=$((EPOCH + 1)); echo "$EPOCH" >"$STATE/epoch"
+echo "$SEEDED_MAL_SHA $(($(date +%s) - 3600)) $SEEDED_MAL" >"$STATE/seed"
+KEEP_VT=1 scan -- "$SEEDED_MAL"
+rm -f "$STATE/seed"
+expect "a detection in a report another client made is still a finding -> exit 1" 1 "engine StubEngineA: malicious"
+touch "$STATE/few-engines"
+scan -- "$CLEAN"
+expect "a report listing too few engines -> exit 2" 2 "fewer than VT_MIN_ENGINES=40: it is incomplete"
+rm -f "$STATE/few-engines"
+scan -- "$CLEAN"
+touch "$STATE/few-engines-once"
+KEEP_VT=1 scan -- "$CLEAN"
+expect "a fresh report with too few engines is re-analysed, not reused" 0 "reanalysed report"
+scan -- "$CLEAN"
+touch "$STATE/fail-analyse"
+KEEP_VT=1 scan VT_REUSE_MAX_AGE=0 -- "$CLEAN"
+rm -f "$STATE/fail-analyse"
+expect "HTTP 500 on reanalysis -> exit 2" 2 "HARNESS ERROR: POST /api/v3/files/$CLEAN_SHA/analyse: HTTP 500"
 
 # 20. The request budget stops the run before it sends past VT_MAX_REQUESTS.
 scan VT_MAX_REQUESTS=1 -- "$CLEAN"
@@ -261,6 +328,10 @@ scan VT_MAX_REQUESTS=0 -- "$CLEAN"
 expect "VT_MAX_REQUESTS=0 -> exit 2" 2 "HARNESS ERROR: VT_MAX_REQUESTS"
 scan VT_MIN_INTERVAL=10 VT_POLL_MAX_INTERVAL=5 -- "$CLEAN"
 expect "VT_POLL_MAX_INTERVAL below VT_MIN_INTERVAL -> exit 2" 2 "HARNESS ERROR: VT_POLL_MAX_INTERVAL"
+scan VT_REUSE_MAX_AGE=1d -- "$CLEAN"
+expect "VT_REUSE_MAX_AGE not in seconds -> exit 2" 2 "HARNESS ERROR: VT_REUSE_MAX_AGE"
+scan VT_MIN_ENGINES=0 -- "$CLEAN"
+expect "VT_MIN_ENGINES=0 -> exit 2" 2 "HARNESS ERROR: VT_MIN_ENGINES"
 
 # 17. The key never appears in any output or report written above.
 if grep -qF "$KEY" "$ALL_OUT"; then

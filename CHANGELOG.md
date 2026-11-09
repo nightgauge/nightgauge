@@ -16,6 +16,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A VirusTotal scan spends about a third of the requests it did. Every file
+  used to be uploaded again and re-analysed, at 3 requests each, though a
+  release ships byte for byte the hooks, skill scripts and bundles its RC
+  scan analysed hours earlier: 66 of the 99 requests of the v0.8.5-rc.1 scan.
+  `scripts/vt-scan.sh` now looks each file up first. A file VirusTotal
+  analysed within `VT_REUSE_MAX_AGE` (default 24 hours) is judged from that
+  analysis in 1 request, by the same rules as a new one. An older one is
+  re-analysed through `POST /files/{sha256}/analyse` without a re-upload, and
+  an unknown one is uploaded. A submitted file is polled through its file
+  report, which carries the engines, YARA matches and Code insights in one
+  answer, so no separate analysis poll is spent: never more than 3 requests a
+  file, as before. A report listing fewer than `VT_MIN_ENGINES` (default 40)
+  engines is refused as incomplete. The report records each file's source,
+  analysis time and engine count (#3116).
 - The PR review confinement probe now reads the CLI's `stream-json`
   transcript. A `/proc` call that returned content is red as "confinement
   broken" even when the model does not quote it, where it used to pass as
