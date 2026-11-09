@@ -14,23 +14,27 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-11-09
+
+0.8.1, 0.8.2, 0.8.3 and 0.8.4 were tagged but never published. The release
+gate could not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the
+macOS binaries in the archives unsigned and a hook script that one antivirus
+engine flagged (#3064). For 0.8.3, Microsoft Defender's model flagged its
+stripped Linux binary (#3091). For 0.8.4, a YARA rule matched the extension
+bundle and Defender's model flagged the Linux binary (#3102). Their changes
+ship in this release and are listed below.
+
 ### Fixed
 
+- The extension bundle no longer contains text that InQuest's YARA rule
+  `Microsoft_Excel_Hidden_Macrosheet` matches, which held 0.8.4. A new release
+  check, `release-text-pattern-check`, fails the release when any text file in
+  a shipped `.vsix` or `.tar.gz` matches a YARA text pattern that has flagged a
+  release; the patterns live in `configs/release-text-patterns.yaml` (#3102).
 - A feature-validate judge attempt that was dropped, because a verdict record
   was invalid or a run that declared judges recorded none, now fails the gate
   with "a judge attempt was dropped" instead of reading as a run without
   judges (#2944).
-
-## [0.8.4] - 2026-11-09
-
-0.8.1, 0.8.2 and 0.8.3 were tagged but never published. The release gate could
-not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the macOS
-binaries in the archives unsigned and a hook script that one antivirus engine
-flagged (#3064). For 0.8.3, Microsoft Defender's model flagged its stripped Linux
-binary (#3091). Their changes ship in this release and are listed below.
-
-### Fixed
-
 - `nightgauge knowledge validate <N>` and the PR knowledge section now use the
   current issue's knowledge directory when a stale same-numbered
   `features/<N>-*` directory also exists. The newest entry wins, by frontmatter
@@ -580,15 +584,21 @@ recover`'s default timeout grows to match.
 - `claude-plugins/nightgauge/hooks/pre-push-validate.sh`, a hand-kept copy of the git
   pre-push hook that `nightgauge pre-push install` writes. It was never a Claude hook (#2764).
 
+## [0.8.4] - 2026-11-09
+
+Tagged but never published: the release scan matched a YARA rule in the
+extension bundle and Microsoft Defender's model flagged its Linux binary. Its
+changes ship in [0.8.5].
+
 ## [0.8.3] - 2026-11-09
 
 Tagged but never published: Microsoft Defender's model flagged its stripped
-Linux binary. Its changes ship in [0.8.4].
+Linux binary. Its changes ship in [0.8.5].
 
 ## [0.8.2] - 2026-11-07
 
 Tagged but never published; the release gate stopped it (#3064). Its
-changes ship in [0.8.4].
+changes ship in [0.8.5].
 
 ## [0.8.0] - 2026-11-04
 
@@ -8776,6 +8786,7 @@ the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
 [Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.4...HEAD
+[0.8.5]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.5
 [0.8.4]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.4
 [0.8.3]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.3
 [0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2

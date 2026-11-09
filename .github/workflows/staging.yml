@@ -350,6 +350,16 @@ jobs:
           go build -o "$RUNNER_TEMP/release-dwarf-check" ./cmd/release-dwarf-check
           "$RUNNER_TEMP/release-dwarf-check" dist/*.tar.gz packages/nightgauge/*.vsix
 
+      # A YARA text pattern that once flagged a release must never ship again:
+      # v0.8.4 was held by InQuest's Microsoft_Excel_Hidden_Macrosheet matching
+      # the extension bundle (#3102, docs/RELEASE_BINARIES.md).
+      - name: Verify no shipped text file matches a known YARA text pattern (docs/RELEASE_BINARIES.md)
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/release-text-pattern-check" ./cmd/release-text-pattern-check
+          "$RUNNER_TEMP/release-text-pattern-check" --patterns configs/release-text-patterns.yaml \
+            dist/*.tar.gz packages/nightgauge/*.vsix
+
       - name: Add VSIX checksums
         run: |
           set -euo pipefail

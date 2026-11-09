@@ -2,8 +2,8 @@
 // carries DWARF debug information.
 //
 // Release binaries ship unstripped (docs/RELEASE_BINARIES.md): Microsoft
-// Defender's model flagged the stripped Go ELF, and DWARF is what keeps it
-// clean. This tool reads the packaged bytes, not the linker flags, so it also
+// Defender's model flagged the stripped Go ELF. DWARF is the best available
+// lever, not a guarantee: v0.8.4 was flagged with DWARF present. This tool reads the packaged bytes, not the linker flags, so it also
 // catches a binary stripped by any later step.
 //
 //	release-dwarf-check PATH...

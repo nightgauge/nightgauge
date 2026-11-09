@@ -1087,7 +1087,9 @@ bash scripts/release-scan-gate.sh verify v0.4.0 -R nightgauge/nightgauge   # exi
 #       unknown shape or runs out of quota (4/min, 500/day on the free key).
 #     The failed run names each file, its sha256 and the engine or rule.
 #     A finding is fixed at its cause and ships in the next patch; it is
-#     never waived as a false positive, and nothing publishes the held draft.
+#     never reported to the vendor as a false positive, never allowlisted,
+#     never called a false positive as a reason to publish, and nothing
+#     publishes the held draft (docs/RELEASE_BINARIES.md).
 #     Check a Microsoft `!ml` finding on a Go binary against
 #     docs/RELEASE_BINARIES.md first: are the binaries still unstripped, and
 #     did release-dwarf-check pass? A harness error is re-run with
