@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The PR review confinement probe now reads the CLI's `stream-json`
+  transcript. A `/proc` call that returned content is red as "confinement
+  broken" even when the model does not quote it, where it used to pass as
+  "unproven". An unproven or errored attempt lists each `/proc` call the model
+  made and what happened to it, so a red run names its cause.
 - Pinned npm CLIs install again on ubuntu-26.04 runners, whose npm 11 skips
   package install scripts. The four Claude workflows, the plugin install-docs
   check, the adapter canary, the CLI help capture and the OpenCode integration

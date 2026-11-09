@@ -4,7 +4,8 @@
 # Callers: the review step in .github/workflows/pr-review.yml and the probe in
 # .github/workflows/pr-review-confinement.yml. Both must call this script and
 # never `claude` directly, so the probe tests exactly what the review runs.
-# Callers add only --max-turns; stdin (the prompt) passes through.
+# Callers add only --max-turns, and the probe its output format (the last
+# --output-format wins); stdin (the prompt) passes through.
 #
 # Never --allowedTools: a bare Read or Write there re-grants the whole
 # filesystem. --restricted confines the file tools to the checkout; the
