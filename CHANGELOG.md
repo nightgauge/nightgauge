@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `docs/RELEASE_BINARIES.md` and `scripts/vt-scan.sh` record why the one YARA
+  allowlist entry, InQuest's `Windows_API_Function` (#3019), stands beside
+  the rule that a finding is never allowlisted. It matches every Go binary's
+  standard library, gives no verdict, and is never hidden: each report records
+  it, and the summary line names it. Any engine verdict, and any other YARA
+  match, is a finding fixed at its cause, and adding an entry is an owner
+  decision (#3106).
 - The local HTTP stubs used by the VirusTotal scan, release scan gate,
   platform smoke, action-pin and Markdown-link suites no longer reverse-resolve
   `127.0.0.1` when they bind. A slow reverse-DNS lookup used to delay the stub

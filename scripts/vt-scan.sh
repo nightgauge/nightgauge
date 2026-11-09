@@ -124,8 +124,11 @@ VT_UPLOAD_ORIGIN="https://bigfiles.virustotal.com"
 # Crowdsourced YARA rules that are recorded but never count as a finding, as
 # "rule_name|source", matched exactly. Owner decision (#3019): InQuest's
 # Windows_API_Function rule matches every Go binary (os.ReadFile, os.WriteFile)
-# and describes itself as "not an indication of malicious behavior". Adding an
-# entry here is a reviewed change to the release policy.
+# and describes itself as "not an indication of malicious behavior". It is no
+# engine verdict and is never hidden: each report records it under
+# yara_allowlisted and the summary line names it. The owner kept it alongside
+# the rule that a finding is never allowlisted (#3106; docs/RELEASE_BINARIES.md).
+# Adding an entry here is an owner decision, never a session's.
 YARA_ALLOWLIST=("Windows_API_Function|https://github.com/InQuest/yara-rules-vt")
 FILES=()
 

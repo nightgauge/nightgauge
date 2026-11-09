@@ -17,8 +17,18 @@ A scan finding is fixed at its cause. Owner rule: a finding is never reported
 to the vendor as a false positive (no WDSI or "incorrectly detected"
 submission), never allowlisted, and never called a false positive as a reason
 to publish. A false-positive submission once got the Marketplace publishing
-account banned. The `Windows_API_Function` entry in `scripts/vt-scan.sh`'s
-YARA allowlist (#3019) predates this rule and is tracked for reconciliation.
+account banned.
+
+One standing exception predates the rule, and the owner kept it (#3019,
+reconfirmed in #3106): the `Windows_API_Function` entry in `scripts/vt-scan.sh`'s
+YARA allowlist. InQuest's rule matches the Windows API names that every Go
+binary's standard library carries (`os.ReadFile`, `os.WriteFile`). It describes
+itself as "not an indication of malicious behavior", gives no verdict, and is
+not an engine detection, so it does not count in VirusTotal's detection ratio.
+It is never hidden: every scan report records it under `yara_allowlisted`, and
+the summary line names it for each file. The rule above governs everything
+else. Any engine verdict, and any other YARA match, is a finding fixed at its
+cause. Adding an allowlist entry is an owner decision, never a session's.
 
 ## Context
 
