@@ -16,7 +16,7 @@ import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 
 /** Display state for the stall status bar item. */
-export type StallDisplayState = "hidden" | "stalled";
+export type StallDisplayState = "stalled" | "hidden";
 
 /**
  * StallStatusBarItem manages a persistent stall indicator in the VS Code status bar.
@@ -36,7 +36,10 @@ export type StallDisplayState = "hidden" | "stalled";
 export class StallStatusBarItem implements vscode.Disposable {
   readonly item: vscode.StatusBarItem;
 
-  private displayState: StallDisplayState = "hidden";
+  // A boolean, not a "hidden"/"stalled" field: the bundled text
+  // assigning the hidden string to a *State field matched InQuest's YARA rule
+  // Microsoft_Excel_Hidden_Macrosheet and held v0.8.4 (#3102).
+  private stalled = false;
   private elapsedMs = 0;
   private stage: PipelineStage | undefined;
   private updateTicker: ReturnType<typeof setInterval> | null = null;
@@ -52,7 +55,7 @@ export class StallStatusBarItem implements vscode.Disposable {
 
   /** Current display state (for testing). */
   getDisplayState(): StallDisplayState {
-    return this.displayState;
+    return this.stalled ? "stalled" : "hidden";
   }
 
   /**
@@ -71,7 +74,7 @@ export class StallStatusBarItem implements vscode.Disposable {
     }
     this.stage = stage;
     this.elapsedMs = elapsedMs;
-    this.displayState = "stalled";
+    this.stalled = true;
     this.updateTicker = setInterval(() => {
       this.elapsedMs += 30_000;
       this.render();
@@ -91,7 +94,7 @@ export class StallStatusBarItem implements vscode.Disposable {
       clearInterval(this.updateTicker);
       this.updateTicker = null;
     }
-    this.displayState = "hidden";
+    this.stalled = false;
     this.elapsedMs = 0;
     this.stage = undefined;
     this.item.hide();
@@ -106,7 +109,7 @@ export class StallStatusBarItem implements vscode.Disposable {
   }
 
   private render(): void {
-    if (this.displayState === "stalled" && this.stage) {
+    if (this.stalled && this.stage) {
       const elapsedSec = Math.floor(this.elapsedMs / 1000);
       const min = Math.floor(elapsedSec / 60);
       const sec = elapsedSec % 60;

@@ -34,21 +34,27 @@ changelog, and the release workflow refuses a tag that does not.
   a pull request whose diff cannot be classified also runs the heavy suites
   itself (#3093).
 
+## [0.8.5] - 2026-11-09
+
+0.8.1, 0.8.2, 0.8.3 and 0.8.4 were tagged but never published. The release
+gate could not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the
+macOS binaries in the archives unsigned and a hook script that one antivirus
+engine flagged (#3064). For 0.8.3, Microsoft Defender's model flagged its
+stripped Linux binary (#3091). For 0.8.4, a YARA rule matched the extension
+bundle and Defender's model flagged the Linux binary (#3102). Their changes
+ship in this release and are listed below.
+
+### Fixed
+
+- The extension bundle no longer contains text that InQuest's YARA rule
+  `Microsoft_Excel_Hidden_Macrosheet` matches, which held 0.8.4. A new release
+  check, `release-text-pattern-check`, fails the release when any text file in
+  a shipped `.vsix` or `.tar.gz` matches a YARA text pattern that has flagged a
+  release; the patterns live in `configs/release-text-patterns.yaml` (#3102).
 - A feature-validate judge attempt that was dropped, because a verdict record
   was invalid or a run that declared judges recorded none, now fails the gate
   with "a judge attempt was dropped" instead of reading as a run without
   judges (#2944).
-
-## [0.8.4] - 2026-11-09
-
-0.8.1, 0.8.2 and 0.8.3 were tagged but never published. The release gate could
-not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the macOS
-binaries in the archives unsigned and a hook script that one antivirus engine
-flagged (#3064). For 0.8.3, Microsoft Defender's model flagged its stripped Linux
-binary (#3091). Their changes ship in this release and are listed below.
-
-### Fixed
-
 - `nightgauge knowledge validate <N>` and the PR knowledge section now use the
   current issue's knowledge directory when a stale same-numbered
   `features/<N>-*` directory also exists. The newest entry wins, by frontmatter
@@ -73,12 +79,23 @@ binary (#3091). Their changes ship in this release and are listed below.
 - When a stage is stopped for exceeding its runtime cap, the warning now says
   the issue hit its runtime cap at that stage instead of saying it stalled.
   The retry is unchanged: it still runs automatically after 30 minutes (#2886).
+- **The Linux binary no longer trips Microsoft Defender's machine-learning
+  model.** The cause was the dependency set. With `modernc.org/sqlite` 1.61.x
+  and `modernc.org/libc` 1.79.0, Defender flagged 6 of 12 Linux builds
+  (`Wacatac.B!ml` and `.C!ml`), and the verdict flipped with nothing but the
+  version string. With 0.7.2's set (`sqlite` 1.60.1, `libc` 1.77.1,
+  `go-humanize` 1.0.1, `oapi-codegen/runtime` 1.7.0) it flagged 0 of 11. Those
+  four modules are now pinned. Dependabot no longer proposes them, and a test
+  fails if `go.mod` moves them. Raising one now requires a clean scan of the
+  Linux binary at four or more version strings, as `docs/RELEASE_BINARIES.md`
+  sets out (#3104).
 - **Release binaries ship unstripped, with their DWARF debug information.**
-  Microsoft Defender's model flagged the stripped Linux binary of 0.8.3
-  (`Wacatac.C!ml`); builds that keep DWARF scan clean. Each release build now
-  fails before its VirusTotal scan if any binary in an archive or VSIX lacks
-  DWARF, and a test fails if `-s` or `-w` returns to the linker flags. Binaries
-  are about 15 MB larger. See `docs/RELEASE_BINARIES.md` (#3091).
+  Each release build fails before its VirusTotal scan if any binary in an
+  archive or VSIX lacks DWARF, and a test fails if `-s` or `-w` returns to the
+  linker flags. Binaries are about 15 MB larger. Unstripped builds scanned
+  clean more often, but DWARF alone does not keep a binary clean: v0.8.4's
+  unstripped Linux binary was still flagged, and the dependency pin above is
+  what fixed it. See `docs/RELEASE_BINARIES.md` (#3091).
 - **PR titles no longer carry `Fixes GH-N` or an issue URL as a live closer.**
   The closing-keyword grammar now recognizes `GH-N` in Go and in the
   extension, so titles rewrite it to `Refs GH-N`, and the extension's fallback
@@ -598,15 +615,21 @@ recover`'s default timeout grows to match.
 - `claude-plugins/nightgauge/hooks/pre-push-validate.sh`, a hand-kept copy of the git
   pre-push hook that `nightgauge pre-push install` writes. It was never a Claude hook (#2764).
 
+## [0.8.4] - 2026-11-09
+
+Tagged but never published: the release scan matched a YARA rule in the
+extension bundle and Microsoft Defender's model flagged its Linux binary. Its
+changes ship in [0.8.5].
+
 ## [0.8.3] - 2026-11-09
 
 Tagged but never published: Microsoft Defender's model flagged its stripped
-Linux binary. Its changes ship in [0.8.4].
+Linux binary. Its changes ship in [0.8.5].
 
 ## [0.8.2] - 2026-11-07
 
 Tagged but never published; the release gate stopped it (#3064). Its
-changes ship in [0.8.4].
+changes ship in [0.8.5].
 
 ## [0.8.0] - 2026-11-04
 
@@ -8794,6 +8817,7 @@ the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
 [Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.4...HEAD
+[0.8.5]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.5
 [0.8.4]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.4
 [0.8.3]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.3
 [0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2

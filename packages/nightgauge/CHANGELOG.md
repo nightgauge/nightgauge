@@ -9,26 +9,32 @@ and this project adheres to
 
 ## [Unreleased]
 
-## [0.8.4] - 2026-11-09
+## [0.8.5] - 2026-11-09
 
-0.8.1, 0.8.2 and 0.8.3 were tagged but never published. The release gate could
-not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the macOS
-binaries in the archives unsigned and a hook script that one antivirus engine
-flagged (#3064). For 0.8.3, Microsoft Defender's model flagged its stripped Linux
-binary (#3091). Their changes ship in this release and are listed below.
+0.8.1, 0.8.2, 0.8.3 and 0.8.4 were tagged but never published. The release
+gate could not scan files over 32 MB for 0.8.1 (#3011). For 0.8.2 it found the
+macOS binaries in the archives unsigned and a hook script that one antivirus
+engine flagged (#3064). For 0.8.3, Microsoft Defender's model flagged its
+stripped Linux binary (#3091). For 0.8.4, a YARA rule matched the extension
+bundle and Defender's model flagged the Linux binary (#3102). Their changes
+ship in this release and are listed below.
 
 ### Fixed
 
+- The extension bundle no longer contains text that InQuest's YARA rule
+  `Microsoft_Excel_Hidden_Macrosheet` matches, which held 0.8.4. The stall
+  indicator behaves as before (#3102).
 - A run no longer closes an issue as already resolved while a merged partial
   delivery still lists unmet acceptance criteria. The run ends blocked, and an
   Action Center card offers to close the issue, re-plan it, or leave it open (#3089).
 - When a stage is stopped for exceeding its runtime cap, the warning now says
   the issue hit its runtime cap at that stage instead of saying it stalled.
   The retry is unchanged: it still runs automatically after 30 minutes (#2886).
-- **The bundled `nightgauge` binary ships unstripped.** Microsoft
-  Defender's model flagged the stripped Linux binary of 0.8.3; the binary now
-  keeps its DWARF debug information, which scans clean. Each VSIX is larger as
-  a result (#3091).
+- **The bundled `nightgauge` binary no longer trips Microsoft Defender's
+  machine-learning model.** The cause was the newer `modernc.org/sqlite` and
+  `libc` releases, so they are pinned to the versions that scan clean (#3104).
+  The binary also ships unstripped, with its DWARF debug information, and each
+  VSIX is larger as a result (#3091).
 - **A pr-merge skill that pushed a CI fix no longer ends the run with the PR
   unmerged when the VS Code extension drives the pipeline.** The extension now
   reads the skill's `pr-merge-fix-{N}.json` hand-back, as the Go scheduler
@@ -112,15 +118,21 @@ binary (#3091). Their changes ship in this release and are listed below.
 - The Claude Code plugin is updated again on activation after an extension upgrade or an
   earlier failed update, until the update succeeds (#2762).
 
+## [0.8.4] - 2026-11-09
+
+Tagged but never published: the release scan matched a YARA rule in the
+extension bundle and Microsoft Defender's model flagged its Linux binary. Its
+changes ship in [0.8.5].
+
 ## [0.8.3] - 2026-11-09
 
 Tagged but never published: Microsoft Defender's model flagged its stripped
-Linux binary. Its changes ship in [0.8.4].
+Linux binary. Its changes ship in [0.8.5].
 
 ## [0.8.2] - 2026-11-07
 
 Tagged but never published; the release gate stopped it (#3064). Its
-changes ship in [0.8.4].
+changes ship in [0.8.5].
 
 ## [0.8.0] - 2026-11-04
 
@@ -1636,6 +1648,7 @@ shipped as [0.2.1].
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
 [Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.8.4...HEAD
+[0.8.5]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.5
 [0.8.4]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.4
 [0.8.3]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.3
 [0.8.2]: https://github.com/nightgauge/nightgauge/compare/v0.8.0...v0.8.2

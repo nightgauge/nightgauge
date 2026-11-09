@@ -28,6 +28,16 @@ updates:
         update-types:
           - minor
           - patch
+    # Pinned (#3104). With modernc.org/sqlite 1.61.x and libc 1.79.0, Microsoft
+    # Defender's ML model flagged 6 of 12 Linux builds. With the versions below,
+    # it flagged 0 of 11. Raising any of these takes the four-version-string
+    # Linux scan in docs/RELEASE_BINARIES.md, so Dependabot never proposes it.
+    # Advisories for these modules still surface as Dependabot alerts.
+    ignore:
+      - dependency-name: modernc.org/sqlite
+      - dependency-name: modernc.org/libc
+      - dependency-name: github.com/dustin/go-humanize
+      - dependency-name: github.com/oapi-codegen/runtime
     open-pull-requests-limit: 5
 
   - package-ecosystem: npm
