@@ -13,11 +13,38 @@
 #
 # THE FREE KEY IS ENOUGH
 #
-# The public API accepts POST /files, and GET /files/upload_url for files over
-# 32 MB, at 4 requests/min and 500/day:
+# The public API serves GET /files/{sha256}, POST /files, POST
+# /files/{sha256}/analyse, and GET /files/upload_url for files over 32 MB, at 4
+# requests/min and 500/day:
 #   https://docs.virustotal.com/reference/public-vs-premium-api
+#   https://docs.virustotal.com/reference/file-info
 #   https://docs.virustotal.com/reference/files-scan
+#   https://docs.virustotal.com/reference/files-analyse
 #   https://docs.virustotal.com/reference/files-upload-url
+#
+# REQUESTS PER FILE
+#
+# Every unique file (by sha256) is first looked up: GET /files/{sha256}.
+#
+#   - VirusTotal analysed it within VT_REUSE_MAX_AGE (default 24 hours), and
+#     that analysis lists at least VT_MIN_ENGINES engines: its report is judged
+#     exactly as a new one would be. 1 request. A release ships the hooks,
+#     skill scripts and bundles its RC carried byte for byte, and the RC scan
+#     analysed them hours earlier: re-analysing them spent two thirds of every
+#     release scan (session 86).
+#   - VirusTotal knows it, but its last analysis is older: POST
+#     /files/{sha256}/analyse re-analyses it without a re-upload. 3 requests:
+#     lookup, reanalysis, and at least one poll.
+#   - VirusTotal does not know it (404): it is uploaded. 3 requests, or 4 over
+#     32 MB.
+#
+# A submitted file is polled with GET /files/{sha256} until its
+# last_analysis_date is later than the one the lookup saw. That one answer
+# carries the engine results, the crowdsourced YARA matches and Code insights,
+# so no separate GET /analyses/{id} is spent. VirusTotal writes the file's
+# last_analysis_* fields when the analysis completes, and a report listing
+# fewer than VT_MIN_ENGINES engines is refused as incomplete (exit 2).
+#
 # This script spaces its own requests to stay under 4/min, backs off between
 # polls of one analysis, and stops at VT_MAX_REQUESTS requests per run so one
 # slow analysis cannot spend the day's quota. It does not retry a
@@ -71,6 +98,10 @@
 #                          doubles, up to this. Default 300.
 #   VT_MAX_REQUESTS        Most API requests one run may send. Reaching it is a
 #                          HARNESS ERROR, not a retry. Default 150.
+#   VT_REUSE_MAX_AGE       Seconds within which VirusTotal's last analysis of a
+#                          file is judged instead of re-analysed. Default 86400.
+#                          0 re-analyses every file.
+#   VT_MIN_ENGINES         Fewest engines a judged report may list. Default 40.
 #
 # Exit: 0 every file clean; 1 any finding; 2 HARNESS ERROR.
 #
@@ -84,6 +115,8 @@ ANALYSIS_TIMEOUT="${VT_ANALYSIS_TIMEOUT:-1800}"
 HTTP_TIMEOUT="${VT_HTTP_TIMEOUT:-600}"
 POLL_MAX_INTERVAL="${VT_POLL_MAX_INTERVAL:-300}"
 MAX_REQUESTS="${VT_MAX_REQUESTS:-150}"
+REUSE_MAX_AGE="${VT_REUSE_MAX_AGE:-86400}"
+MIN_ENGINES="${VT_MIN_ENGINES:-40}"
 LARGE_FILE_BYTES=33554432 # 32 MB: above this, POST /files refuses the upload.
 # VirusTotal answers GET /files/upload_url with a URL on this host. It is the
 # only origin besides the API's own that may receive the key.
@@ -111,8 +144,11 @@ write_report() {
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --argjson files "$ENTRIES" \
     --argjson requests "$REQUESTS" \
+    --argjson reuse "$REUSE_MAX_AGE" \
     '{tool: "vt-scan.sh", api: $api, scanned_at: $at, status: $status,
       error: (if $error == "" then null else $error end), requests: $requests,
+      reuse_max_age: $reuse,
+      sources: ($files | group_by(.source) | map({key: .[0].source, value: length}) | from_entries),
       files: $files}' \
     >"$REPORT" 2>/dev/null || echo "WARNING: could not write $REPORT" >&2
 }
@@ -154,6 +190,9 @@ for n in "MIN_INTERVAL:$MIN_INTERVAL" "ANALYSIS_TIMEOUT:$ANALYSIS_TIMEOUT" "HTTP
 done
 [[ "$MAX_REQUESTS" =~ ^[0-9]{1,6}$ ]] && [ "$MAX_REQUESTS" -gt 0 ] ||
   harness "VT_MAX_REQUESTS must be a whole number above 0"
+[[ "$REUSE_MAX_AGE" =~ ^[0-9]{1,7}$ ]] || harness "VT_REUSE_MAX_AGE must be a whole number of seconds"
+[[ "$MIN_ENGINES" =~ ^[0-9]{1,3}$ ]] && [ "$MIN_ENGINES" -gt 0 ] ||
+  harness "VT_MIN_ENGINES must be a whole number above 0"
 # A cap below the floor would poll faster than the 4/min spacing allows.
 [ "$POLL_MAX_INTERVAL" -ge "$MIN_INTERVAL" ] ||
   harness "VT_POLL_MAX_INTERVAL ($POLL_MAX_INTERVAL) is below VT_MIN_INTERVAL ($MIN_INTERVAL)"
@@ -180,8 +219,12 @@ LAST_REQUEST=0
 NEXT_GAP="$MIN_INTERVAL"
 BODY="$WORK/body.json"
 
-# vt_request METHOD URL [curl args...] — body lands in $BODY. Anything but
-# HTTP 200 is a harness error; the message names the endpoint, never the key.
+# vt_request METHOD URL [curl args...] — body lands in $BODY and the status in
+# HTTP_STATUS. Anything but HTTP 200 is a harness error, except a 404
+# NotFoundError while ALLOW_404=1 (a file VirusTotal does not know). The
+# message names the endpoint, never the key.
+ALLOW_404=0
+HTTP_STATUS=""
 vt_request() {
   local method="$1" url="$2" now wait code where
   shift 2
@@ -210,6 +253,11 @@ vt_request() {
   if [ "$code" = "429" ]; then
     harness "$method $where: HTTP 429, the VirusTotal quota is spent (4/min, 500/day on the free key); re-run later"
   fi
+  HTTP_STATUS="$code"
+  if [ "$code" = "404" ] && [ "$ALLOW_404" = 1 ] &&
+    [ "$(jq -r '.error.code // empty' "$BODY" 2>/dev/null)" = "NotFoundError" ]; then
+    return 0
+  fi
   if [ "$code" != "200" ]; then
     local why
     why="$(jq -r '.error | "\(.code // "?"): \(.message // "")"' "$BODY" 2>/dev/null)"
@@ -234,14 +282,37 @@ done
 UNIQUE="$(cut -f1 "$INDEX" | awk '!seen[$0]++')"
 echo "vt-scan: ${#FILES[@]} file(s), $(printf '%s\n' "$UNIQUE" | wc -l | tr -d ' ') unique by sha256"
 
-# --- 1. Upload every unique file (analyses run while later files upload) ------
-ANALYSES="$WORK/analyses.tsv"
-: >"$ANALYSES"
-for sha in $UNIQUE; do
-  line="$(awk -F'\t' -v s="$sha" '$1 == s { print; exit }' "$INDEX")"
-  size="$(cut -f2 <<<"$line")"
-  path="$(cut -f3- <<<"$line")"
-  target="$API_BASE/files"
+# vt_file SHA — GET /files/{sha256}; a 404 NotFoundError is an answer
+# (HTTP_STATUS=404), not an error.
+vt_file() {
+  ALLOW_404=1
+  vt_request GET "$API_BASE/files/$1"
+  ALLOW_404=0
+}
+
+# file_facts SHA PATH — from the file object in $BODY, after checking it names
+# SHA, prints "<last_analysis_date or 0><TAB><engines listed>".
+file_facts() {
+  local id
+  id="$(jq -r '.data.id // empty' "$BODY")"
+  [ "$id" = "$1" ] || harness "file object describes ${id:-no file}, not $2 ($1)"
+  jq -r '.data.attributes as $a
+    | [(if ($a.last_analysis_date | type) == "number" then $a.last_analysis_date | floor else 0 end),
+       (if ($a.last_analysis_results | type) == "object" then $a.last_analysis_results | length else 0 end)]
+    | @tsv' "$BODY"
+}
+
+utc() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
+
+expect_analysis() {
+  local aid
+  aid="$(jq -r 'if .data.type == "analysis" and (.data.id | type) == "string" then .data.id else empty end' "$BODY")"
+  [[ "$aid" =~ ^[A-Za-z0-9=_:+/-]+$ ]] || harness "$1 returned no analysis id"
+}
+
+# upload PATH SIZE — POST the bytes; over 32 MB through upload_url.
+upload() {
+  local path="$1" size="$2" target="$API_BASE/files"
   if [ "$size" -gt "$LARGE_FILE_BYTES" ]; then
     vt_request GET "$API_BASE/files/upload_url"
     target="$(jq -r 'if (.data | type) == "string" then .data else empty end' "$BODY")"
@@ -253,78 +324,58 @@ for sha in $UNIQUE; do
     esac
   fi
   vt_request POST "$target" -F "file=@\"$path\""
-  aid="$(jq -r 'if .data.type == "analysis" and (.data.id | type) == "string" then .data.id else empty end' "$BODY")"
-  [[ "$aid" =~ ^[A-Za-z0-9=_:+/-]+$ ]] || harness "POST /files for $path returned no analysis id"
-  printf '%s\t%s\n' "$sha" "$aid" >>"$ANALYSES"
-  echo "  uploaded $path ($sha)"
-done
+  expect_analysis "POST /files for $path"
+}
 
 ALLOW_JSON="$(printf '%s\n' "${YARA_ALLOWLIST[@]}" | jq -R . | jq -sc .)"
-
-# --- 2. Per file: wait for the analysis, then read the file object -----------
 FINDINGS=0
-while IFS=$'\t' read -r sha aid; do
+
+# judge SHA SOURCE — judge the file object in $BODY: its last analysis's
+# engines, its crowdsourced YARA matches and its Code insights. Every source
+# (reused, reanalysed, uploaded) is judged by the same rules.
+judge() {
+  local sha="$1" source="$2" path paths_json size verdict entry n allowed facts adate engines yara_note
   path="$(awk -F'\t' -v s="$sha" '$1 == s { print $3; exit }' "$INDEX")"
   paths_json="$(awk -F'\t' -v s="$sha" '$1 == s { print $3 }' "$INDEX" | jq -R . | jq -sc .)"
   size="$(awk -F'\t' -v s="$sha" '$1 == s { print $2; exit }' "$INDEX")"
-
-  deadline=$(($(date +%s) + ANALYSIS_TIMEOUT))
-  gap="$MIN_INTERVAL"
-  while :; do
-    # Exponential backoff: MIN, 2*MIN, 4*MIN ... capped at POLL_MAX_INTERVAL.
-    NEXT_GAP="$gap"
-    echo "  polling analysis of $path after ${gap}s"
-    vt_request GET "$API_BASE/analyses/$aid"
-    gap=$((gap * 2))
-    [ "$gap" -le "$POLL_MAX_INTERVAL" ] || gap="$POLL_MAX_INTERVAL"
-    status="$(jq -r '.data.attributes.status // empty' "$BODY")"
-    case "$status" in
-    completed) break ;;
-    queued | in-progress) ;;
-    *) harness "analysis of $path has unknown status '${status:-missing}'" ;;
-    esac
-    [ "$(date +%s)" -lt "$deadline" ] ||
-      harness "analysis of $path ($sha) did not complete within ${ANALYSIS_TIMEOUT}s"
-  done
-  reported="$(jq -r '.meta.file_info.sha256 // empty' "$BODY")"
-  [ "$reported" = "$sha" ] ||
-    harness "analysis $aid describes ${reported:-no file}, not $path ($sha)"
-  analysis="$(jq -ce '
+  facts="$(file_facts "$sha" "$path")" || exit 2
+  adate="${facts%%$'\t'*}"
+  engines="${facts##*$'\t'}"
+  [ "$engines" -ge "$MIN_ENGINES" ] ||
+    harness "report for $path ($sha) lists $engines engine(s), fewer than VT_MIN_ENGINES=$MIN_ENGINES: it is incomplete"
+  verdict="$(jq -ce '
     .data.attributes as $a
-    | if ($a.stats.malicious | type) == "number" and ($a.stats.suspicious | type) == "number"
-         and ($a.results | type) == "object"
-      then {malicious: $a.stats.malicious, suspicious: $a.stats.suspicious,
-            engines: [$a.results | to_entries[]
-                      | select(.value.category == "malicious" or .value.category == "suspicious")
-                      | {engine: (.value.engine_name // .key), category: .value.category,
-                         result: .value.result}]}
-      else error("shape") end' "$BODY" 2>/dev/null)" ||
-    harness "analysis of $path has no parseable stats and results"
-
-  vt_request GET "$API_BASE/files/$sha"
-  attrs="$(jq -ce '
-    .data.attributes as $a
-    | if ($a | type) != "object" then error("shape") else . end
+    | if ($a.last_analysis_stats.malicious | type) == "number"
+         and ($a.last_analysis_stats.suspicious | type) == "number"
+         and ($a.last_analysis_results | type) == "object"
+      then . else error("analysis") end
     | ($a.crowdsourced_yara_results // []) as $y
     | if ($y | type) != "array" or ($y | any(.[]; (.rule_name | type) != "string"))
       then error("yara") else . end
     | ($a.crowdsourced_ai_results) as $ai
-    | if $ai == null or $ai == [] then {code_insights: "not-produced"}
-      elif ($ai | type) == "array" and ($ai | all(.[]; (.verdict | type) == "string"))
-      then {code_insights: [$ai[] | {source: (.source // "Code Insight"), verdict: .verdict}]}
-      else error("ai") end
-    | . + {yara: [$y[] | {rule_name, ruleset_name: (.ruleset_name // null), source: (.source // null)}]}
-    ' "$BODY" 2>/dev/null)" ||
-    harness "file object for $path ($sha) has YARA or Code insights results in an unknown shape"
+    | (if $ai == null or $ai == [] then "not-produced"
+       elif ($ai | type) == "array" and ($ai | all(.[]; (.verdict | type) == "string"))
+       then [$ai[] | {source: (.source // "Code Insight"), verdict: .verdict}]
+       else error("ai") end) as $ci
+    | {malicious: $a.last_analysis_stats.malicious, suspicious: $a.last_analysis_stats.suspicious,
+       engines: [$a.last_analysis_results | to_entries[]
+                 | select(.value.category == "malicious" or .value.category == "suspicious")
+                 | {engine: (.value.engine_name // .key), category: .value.category,
+                    result: .value.result}],
+       yara: [$y[] | {rule_name, ruleset_name: (.ruleset_name // null), source: (.source // null)}],
+       code_insights: $ci}' "$BODY" 2>/dev/null)" ||
+    harness "file object for $path ($sha) has its analysis, YARA or Code insights results in an unknown shape"
 
   entry="$(jq -cn --argjson allow "$ALLOW_JSON" \
     --arg file "$path" --arg sha "$sha" --argjson size "$size" --argjson files "$paths_json" \
-    --argjson an "$analysis" --argjson at "$attrs" '
+    --arg source "$source" --arg at "$(utc "$adate")" --argjson total "$engines" \
+    --argjson v "$verdict" '
     {file: $file, files: $files, sha256: $sha, size: $size,
-     malicious: $an.malicious, suspicious: $an.suspicious, engines: $an.engines,
-     yara: [$at.yara[] | select(("\(.rule_name)|\(.source)" | IN($allow[])) | not)],
-     yara_allowlisted: [$at.yara[] | select("\(.rule_name)|\(.source)" | IN($allow[]))],
-     code_insights: $at.code_insights}
+     source: $source, analysed_at: $at, engines_total: $total,
+     malicious: $v.malicious, suspicious: $v.suspicious, engines: $v.engines,
+     yara: [$v.yara[] | select(("\(.rule_name)|\(.source)" | IN($allow[])) | not)],
+     yara_allowlisted: [$v.yara[] | select("\(.rule_name)|\(.source)" | IN($allow[]))],
+     code_insights: $v.code_insights}
     | .findings = (
         [.engines[] | "engine \(.engine): \(.category) \(.result // "")"]
         + (if (.malicious + .suspicious) > 0 and (.engines | length) == 0
@@ -341,12 +392,70 @@ while IFS=$'\t' read -r sha aid; do
     FINDINGS=$((FINDINGS + n))
     jq -r --arg f "$path" --arg s "$sha" '.findings[] | "::error::\($f) (\($s)): \(.)"' <<<"$entry"
     [ -z "$allowed" ] || echo "  $path ($sha): YARA allowlisted: $allowed"
+    echo "  $path ($sha): $source report, analysed $(utc "$adate") by $engines engines"
   else
     yara_note="no YARA"
     [ -z "$allowed" ] || yara_note="YARA allowlisted: $allowed"
-    echo "  clean $path ($sha): 0 malicious, 0 suspicious, $yara_note, Code insights $(jq -r 'if (.code_insights | type) == "string" then .code_insights else "benign" end' <<<"$entry")"
+    echo "  clean $path ($sha): 0 malicious, 0 suspicious, $yara_note, Code insights $(jq -r 'if (.code_insights | type) == "string" then .code_insights else "benign" end' <<<"$entry"); $source report, analysed $(utc "$adate") by $engines engines"
   fi
-done <"$ANALYSES"
+}
+
+# --- 1. Look up every unique file; judge a fresh report, submit the rest -----
+# Submissions are made in this pass, so analyses run while later files are
+# looked up. Lines of "sha256<TAB>last_analysis_date before<TAB>source".
+SUBMITTED="$WORK/submitted.tsv"
+: >"$SUBMITTED"
+for sha in $UNIQUE; do
+  line="$(awk -F'\t' -v s="$sha" '$1 == s { print; exit }' "$INDEX")"
+  size="$(cut -f2 <<<"$line")"
+  path="$(cut -f3- <<<"$line")"
+  vt_file "$sha"
+  if [ "$HTTP_STATUS" = "404" ]; then
+    upload "$path" "$size"
+    printf '%s\t0\tuploaded\n' "$sha" >>"$SUBMITTED"
+    echo "  uploaded $path ($sha): VirusTotal did not know it"
+    continue
+  fi
+  facts="$(file_facts "$sha" "$path")" || exit 2
+  adate="${facts%%$'\t'*}"
+  engines="${facts##*$'\t'}"
+  age=$(($(date +%s) - adate))
+  if [ "$REUSE_MAX_AGE" -gt 0 ] && [ "$adate" -gt 0 ] && [ "$age" -le "$REUSE_MAX_AGE" ] &&
+    [ "$engines" -ge "$MIN_ENGINES" ]; then
+    judge "$sha" reused
+    continue
+  fi
+  vt_request POST "$API_BASE/files/$sha/analyse"
+  expect_analysis "POST /files/$sha/analyse for $path"
+  printf '%s\t%s\treanalysed\n' "$sha" "$adate" >>"$SUBMITTED"
+  if [ "$adate" -gt 0 ]; then
+    echo "  reanalysing $path ($sha): last analysed $(utc "$adate"), ${age}s ago"
+  else
+    echo "  reanalysing $path ($sha): VirusTotal has no complete analysis of it"
+  fi
+done
+
+# --- 2. Per submitted file: poll its report until the new analysis lands -----
+while IFS=$'\t' read -r sha before source; do
+  path="$(awk -F'\t' -v s="$sha" '$1 == s { print $3; exit }' "$INDEX")"
+  deadline=$(($(date +%s) + ANALYSIS_TIMEOUT))
+  gap="$MIN_INTERVAL"
+  while :; do
+    # Exponential backoff: MIN, 2*MIN, 4*MIN ... capped at POLL_MAX_INTERVAL.
+    NEXT_GAP="$gap"
+    echo "  polling analysis of $path after ${gap}s"
+    vt_file "$sha"
+    gap=$((gap * 2))
+    [ "$gap" -le "$POLL_MAX_INTERVAL" ] || gap="$POLL_MAX_INTERVAL"
+    if [ "$HTTP_STATUS" = "200" ]; then
+      facts="$(file_facts "$sha" "$path")" || exit 2
+      [ "${facts%%$'\t'*}" -gt "$before" ] && break
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] ||
+      harness "analysis of $path ($sha) did not complete within ${ANALYSIS_TIMEOUT}s"
+  done
+  judge "$sha" "$source"
+done <"$SUBMITTED"
 
 if [ "$FINDINGS" -gt 0 ]; then
   REPORT_STATUS="findings"
