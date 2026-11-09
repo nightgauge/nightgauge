@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,21 @@ type queueServer struct {
 	patchStatus                int
 	patched                    int
 	mergeInput                 map[string]any
+	// Reword fakes (#2988): crossRepo marks a fork head; createStatus fails
+	// the REST commit create; refsErr fails updateRefs. created/refUpdate
+	// record what was written and mutations every mutation name issued.
+	crossRepo    bool
+	createStatus int
+	refsErr      string
+	created      map[string]any
+	refUpdate    map[string]any
+	mutations    []string
+	// rewordedHead is the head reported once updateRefs succeeds; headLag
+	// status reads after it still report the old head (#2988).
+	// pendingMessage replaces commitMessages once the lag is consumed.
+	rewordedHead   string
+	headLag        int
+	pendingMessage string
 }
 
 func prNode(state string, queueEnabled, inQueue bool, entry map[string]any, mergeOID string) map[string]any {
@@ -80,6 +96,16 @@ func (qs *queueServer) handler(t *testing.T) http.HandlerFunc {
 		qs.mu.Lock()
 		defer qs.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/git/commits") && r.Method == http.MethodPost {
+			if qs.createStatus != 0 {
+				w.WriteHeader(qs.createStatus)
+				_, _ = w.Write([]byte(`{"message":"Repository rule violations found"}`))
+				return
+			}
+			_ = json.NewDecoder(r.Body).Decode(&qs.created)
+			_ = json.NewEncoder(w).Encode(map[string]any{"sha": "reworded1"})
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/repos/") {
 			if r.Method == http.MethodPatch {
 				qs.patched++
@@ -107,13 +133,35 @@ func (qs *queueServer) handler(t *testing.T) http.HandlerFunc {
 				msgs = []string{"fix: real change\n\nexplanation"}
 			}
 			nodes := make([]any, 0, len(msgs))
-			for _, m := range msgs {
-				nodes = append(nodes, map[string]any{"commit": map[string]any{"message": m}})
+			parent := "base1"
+			for i, m := range msgs {
+				oid := fmt.Sprintf("c%d", i)
+				nodes = append(nodes, map[string]any{"commit": map[string]any{"oid": oid, "message": m,
+					"tree":    map[string]any{"oid": "tree" + oid},
+					"parents": map[string]any{"nodes": []any{map[string]any{"oid": parent}}}}})
+				parent = oid
 			}
 			data = map[string]any{"node": map[string]any{"number": 42, "title": "fix the thing",
-				"baseRepository": map[string]any{"name": "r", "owner": map[string]any{"login": "o"}},
+				"headRefName": "feat/42-x", "headRefOid": parent, "isCrossRepository": qs.crossRepo,
+				"baseRepository": map[string]any{"id": "R_1", "name": "r", "owner": map[string]any{"login": "o"}},
 				"commits":        map[string]any{"nodes": nodes}}}
+		case strings.Contains(req.Query, "updateRefs"):
+			qs.mutations = append(qs.mutations, "updateRefs")
+			qs.refUpdate = req.Variables
+			if qs.refsErr != "" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": nil, "errors": []any{map[string]any{"message": qs.refsErr}}})
+				return
+			}
+			qs.rewordedHead, _ = req.Variables["after"].(string)
+			if m, ok := qs.created["message"].(string); ok {
+				qs.pendingMessage = m
+				if qs.headLag == 0 {
+					qs.commitMessages = []string{m}
+				}
+			}
+			data = map[string]any{"updateRefs": map[string]any{"clientMutationId": nil}}
 		case strings.Contains(req.Query, "enqueuePullRequest"):
+			qs.mutations = append(qs.mutations, "enqueuePullRequest")
 			qs.enqueued++
 			qs.readsAtEnqueue = qs.reads
 			if qs.enqueueErr != "" {
@@ -134,7 +182,23 @@ func (qs *queueServer) handler(t *testing.T) http.HandlerFunc {
 				i = len(qs.statuses) - 1
 			}
 			qs.reads++
-			data = map[string]any{"node": qs.statuses[i]}
+			node := qs.statuses[i]
+			if qs.rewordedHead != "" {
+				if qs.headLag > 0 {
+					qs.headLag--
+					if qs.headLag == 0 && qs.pendingMessage != "" {
+						qs.commitMessages = []string{qs.pendingMessage}
+					}
+				} else {
+					cp := make(map[string]any, len(node))
+					for k, v := range node {
+						cp[k] = v
+					}
+					cp["headRefOid"] = qs.rewordedHead
+					node = cp
+				}
+			}
+			data = map[string]any{"node": node}
 		default:
 			t.Errorf("unexpected query: %s", req.Query)
 		}
@@ -603,22 +667,6 @@ func TestMergeQueue_DefaultsAlreadySet_EnqueuesWithoutPatch(t *testing.T) {
 	}
 	if qs.patched != 0 || qs.enqueued != 1 {
 		t.Errorf("patched=%d enqueued=%d, want 0/1", qs.patched, qs.enqueued)
-	}
-}
-
-func TestMergeQueue_DefaultsNotPRTitled_SoleWIPCommit_RefusesWithoutPatch(t *testing.T) {
-	qs := &queueServer{statuses: queuedToMerged(), commitMessages: []string{wipMessage},
-		squashTitle: "COMMIT_OR_PR_TITLE", squashMessage: "COMMIT_MESSAGES"}
-	_, err := newQueuePRService(t, qs).MergePRWithStrategy(context.Background(), "PR_1", "SQUASH")
-	var mqe *MergeQueueError
-	if !errors.As(err, &mqe) || mqe.Kind != MergeQueueSquashDefaults {
-		t.Fatalf("err = %v, want squash_defaults MergeQueueError", err)
-	}
-	if qs.enqueued != 0 || qs.patched != 0 {
-		t.Errorf("enqueued=%d patched=%d, want no enqueue and no settings change", qs.enqueued, qs.patched)
-	}
-	if !strings.Contains(err.Error(), "squash_merge_commit_title=PR_TITLE") {
-		t.Errorf("error %q does not name the operator remedy", err)
 	}
 }
 

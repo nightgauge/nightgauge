@@ -1628,6 +1628,28 @@ func (c *execGhClient) checkSquashDefaults(ctx context.Context) (bool, error) {
 	return strings.TrimSpace(string(out)) == github.SquashTitlePRTitle+" "+github.SquashMessagePRBody, nil
 }
 
+// createCommit implements MergeQueueWaitOptions.CreateCommit (#2988) with
+// `gh api -X POST repos/<owner>/<repo>/git/commits`. It creates a commit
+// object only; the merge queue moves the ref by compare-and-swap.
+func (c *execGhClient) createCommit(ctx context.Context, owner, repo, message, tree string, parents []string) (string, error) {
+	out, err := github.RunGhSubprocess(ctx, c.workdir, createCommitArgs(owner, repo, message, tree, parents)...)
+	if err != nil {
+		return "", normalizeGhError(err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// createCommitArgs builds the gh arguments for createCommit; -f keeps every
+// value a raw string and parents[] makes gh send a JSON array.
+func createCommitArgs(owner, repo, message, tree string, parents []string) []string {
+	args := []string{"api", "-X", "POST", fmt.Sprintf("repos/%s/%s/git/commits", owner, repo),
+		"-f", "message=" + message, "-f", "tree=" + tree}
+	for _, p := range parents {
+		args = append(args, "-f", "parents[]="+p)
+	}
+	return append(args, "--jq", ".sha")
+}
+
 // PRBody implements prBodyClient.
 func (c *execGhClient) PRBody(ctx context.Context, prNumber int) (string, error) {
 	return c.viewBody(ctx, "pr", prNumber)
@@ -1699,6 +1721,9 @@ func (c *execGhClient) MergeQueueStatus(ctx context.Context, prNumber int) (gith
 func (c *execGhClient) EnqueueAndWait(ctx context.Context, st github.MergeQueueStatus, opts github.MergeQueueWaitOptions) (github.MergeQueueStatus, error) {
 	if opts.CheckSquashDefaults == nil {
 		opts.CheckSquashDefaults = c.checkSquashDefaults
+	}
+	if opts.CreateCommit == nil {
+		opts.CreateCommit = c.createCommit
 	}
 	return github.NewMergeQueue(c.graphQL).EnqueueAndWait(ctx, st, opts)
 }

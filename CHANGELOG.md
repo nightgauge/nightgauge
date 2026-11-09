@@ -23,6 +23,13 @@ changelog, and the release workflow refuses a tag that does not.
   it, and the summary line names it. Any engine verdict, and any other YARA
   match, is a finding fixed at its cause, and adding an entry is an owner
   decision (#3106).
+- A pull request whose only commit is a WIP-preservation commit now lands
+  through the merge queue under GitHub's default squash settings. Before the
+  enqueue, the binary rewords that commit to the PR title, keeping its tree and
+  parent, and moves the branch by compare-and-swap. Repository settings are
+  left alone. A PR that mixes WIP and real commits is still refused unless the
+  squash defaults are `PR_TITLE`/`PR_BODY` (#2988).
+
 - `npm ci` records a decision for every dependency install script. npm 11
   skips a dependency's install script unless `allowScripts` covers it, and it
   warned on every runner about `esbuild`, `protobufjs` and `@vscode/vsce-sign`,

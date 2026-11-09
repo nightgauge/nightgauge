@@ -114,6 +114,12 @@ type MergeQueueWaitOptions struct {
 	// The queue takes no headline, so these defaults decide the squash subject
 	// on the base branch. It reads only; it never changes repository settings.
 	CheckSquashDefaults func(ctx context.Context) (prTitled bool, err error)
+	// CreateCommit, when set, creates a commit object in owner/repo with the
+	// given message, tree and parents and returns its OID (#2988). The guard
+	// uses it to reword a sole WIP commit; the commit is then moved onto the
+	// PR head branch by compare-and-swap. It writes the PR branch only, never
+	// repository settings. Nil keeps the refusal.
+	CreateCommit func(ctx context.Context, owner, repo, message, tree string, parents []string) (oid string, err error)
 }
 
 // onQueuedOnce wraps o.OnQueued so it fires at most once.
@@ -765,6 +771,50 @@ func (q *MergeQueue) failure(ctx context.Context, prID string, number int, kind,
 	return e
 }
 
+// rewordedReady re-reads a PR whose head was reworded to oid until the PR
+// reports oid as its head, waits for it to be ready again and re-runs the
+// squash guard once (#2988). GitHub syncs a PR's head after a ref move
+// asynchronously; guarding or waiting on the stale head would retry a reword
+// whose compare-and-swap must fail, or accept the old head's checks.
+func (q *MergeQueue) rewordedReady(ctx context.Context, status MergeQueueStatus, oid string, opts MergeQueueWaitOptions) (MergeQueueStatus, error) {
+	opts = opts.withDefaults()
+	deadline := time.Now().Add(opts.ReadyTimeout)
+	var cur MergeQueueStatus
+	for {
+		var err error
+		cur, err = q.StatusByID(ctx, status.PRID)
+		if err != nil {
+			return status, fmt.Errorf("re-read PR #%d after reword: %w", status.Number, err)
+		}
+		if cur.InQueue || cur.State != "OPEN" || cur.HeadOID == oid {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			return cur, &MergeQueueError{PRNumber: cur.Number, Kind: MergeQueueSquashDefaults,
+				Cause: fmt.Errorf("PR head is %s, not reworded commit %s, after %s", cur.HeadOID, oid, opts.ReadyTimeout)}
+		}
+		if err := q.sleep(ctx, opts.ReadyPollInterval); err != nil {
+			return cur, err
+		}
+	}
+	if cur.InQueue || cur.State != "OPEN" {
+		return cur, nil
+	}
+	ready, err := q.WaitReady(ctx, cur, opts)
+	if err != nil || ready.InQueue || ready.State != "OPEN" {
+		return ready, err
+	}
+	again, err := q.guardSquashDefaults(ctx, ready, opts)
+	if err != nil {
+		return ready, err
+	}
+	if again != "" {
+		return ready, &MergeQueueError{PRNumber: ready.Number, Kind: MergeQueueSquashDefaults,
+			Cause: fmt.Errorf("WIP commit still present after reword")}
+	}
+	return ready, nil
+}
+
 // EnqueueAndWait enqueues the PR when it is not already queued and waits for
 // the outcome. status is the observation that established QueueRequired.
 // Before enqueueing it waits for the PR to be ready (#2584): GitHub rejects an
@@ -786,8 +836,20 @@ func (q *MergeQueue) EnqueueAndWait(ctx context.Context, status MergeQueueStatus
 		}
 	}
 	if !status.InQueue && status.State == "OPEN" {
-		if err := q.guardSquashDefaults(ctx, status, opts); err != nil {
+		rewordedOID, err := q.guardSquashDefaults(ctx, status, opts)
+		if err != nil {
 			return status, err
+		}
+		if rewordedOID != "" {
+			// The head moved to the reworded commit (#2988): wait for the PR to
+			// report it and for its
+			// checks, then guard again, which now passes through.
+			if status, err = q.rewordedReady(ctx, status, rewordedOID, opts); err != nil || status.State == "MERGED" {
+				return status, err
+			}
+			if status.InQueue || status.State != "OPEN" {
+				return q.Wait(ctx, status.PRID, status, opts)
+			}
 		}
 		if err := q.enqueueRetrying(ctx, status); err != nil {
 			if strings.Contains(err.Error(), enqueueNotReadyMessage) {
