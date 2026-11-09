@@ -392,6 +392,13 @@ row once any later row, in file order, records a verdict for a gate other than
 records (or a `verify-ui` row), so a retry that records no such row leaves the
 marker standing, which fails closed. Later `judges` rows alone do not, and a marker with no later attempt
 still fails.
+A dropped attempt writes one failing row whose `error_summary` starts with
+`[judges-dropped]` and no verdict row: when a judge record fails the Zod schema,
+and when a complete run whose spec declares judges records no verdict (in place
+of the `[judges-none]` close). The gate fails on it with the reason "a judge
+attempt was dropped", so the drop never reads as a run without judges, and
+releases it by the same rule as `[judges-interrupted]`. A run that declares no
+judges writes nothing new.
 A failing record carries the judge's first-line
 `rationale` as `error_summary` for triage. The writer is non-critical (never
 throws) and writes an attempt's judge rows in one append (an interrupted run's

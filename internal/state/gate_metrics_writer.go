@@ -39,6 +39,14 @@ const JudgeGateName = "judges"
 // releases the marker once a later attempt records a quality-gate verdict (#2880).
 const JudgesInterruptedMarker = "[judges-interrupted]"
 
+// JudgesDroppedMarker prefixes the error_summary of the failing judges row
+// written when a feature-validate judge attempt was dropped: a verdict record
+// failed validation, or a complete run that declared judges recorded none. It
+// mirrors JUDGES_DROPPED_MARKER in the SDK's judgeGateMetrics.ts; the gate
+// fails on it with a dropped-attempt reason and releases it like the
+// interrupted marker (#2944).
+const JudgesDroppedMarker = "[judges-dropped]"
+
 // AppendGateMetric appends one quality-gate record to the checkout's
 // health/gate-metrics.jsonl — the canonical signal the
 // deterministic FeatureValidateGate already consumes

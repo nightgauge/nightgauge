@@ -501,6 +501,11 @@ export class PipelineOrchestrator {
           complete: workflowReturned,
           // Without an attempt id a complete run with no verdict writes no row.
           attemptId: failed ? undefined : selection.spec.runId,
+          // Declared judges with no verdict are a dropped attempt (#2944).
+          declaredJudges: selection.spec.phases.reduce(
+            (n, phase) => n + (phase.judges?.length ?? 0),
+            0
+          ),
         });
       }
     }

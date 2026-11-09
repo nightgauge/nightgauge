@@ -14,6 +14,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- A feature-validate judge attempt that was dropped, because a verdict record
+  was invalid or a run that declared judges recorded none, now fails the gate
+  with "a judge attempt was dropped" instead of reading as a run without
+  judges (#2944).
+
 ## [0.8.4] - 2026-11-09
 
 0.8.1, 0.8.2 and 0.8.3 were tagged but never published. The release gate could
