@@ -59,12 +59,23 @@ ship in this release and are listed below.
 - When a stage is stopped for exceeding its runtime cap, the warning now says
   the issue hit its runtime cap at that stage instead of saying it stalled.
   The retry is unchanged: it still runs automatically after 30 minutes (#2886).
+- **The Linux binary no longer trips Microsoft Defender's machine-learning
+  model.** The cause was the dependency set. With `modernc.org/sqlite` 1.61.x
+  and `modernc.org/libc` 1.79.0, Defender flagged 6 of 12 Linux builds
+  (`Wacatac.B!ml` and `.C!ml`), and the verdict flipped with nothing but the
+  version string. With 0.7.2's set (`sqlite` 1.60.1, `libc` 1.77.1,
+  `go-humanize` 1.0.1, `oapi-codegen/runtime` 1.7.0) it flagged 0 of 11. Those
+  four modules are now pinned. Dependabot no longer proposes them, and a test
+  fails if `go.mod` moves them. Raising one now requires a clean scan of the
+  Linux binary at four or more version strings, as `docs/RELEASE_BINARIES.md`
+  sets out (#3104).
 - **Release binaries ship unstripped, with their DWARF debug information.**
-  Microsoft Defender's model flagged the stripped Linux binary of 0.8.3
-  (`Wacatac.C!ml`); builds that keep DWARF scan clean. Each release build now
-  fails before its VirusTotal scan if any binary in an archive or VSIX lacks
-  DWARF, and a test fails if `-s` or `-w` returns to the linker flags. Binaries
-  are about 15 MB larger. See `docs/RELEASE_BINARIES.md` (#3091).
+  Each release build fails before its VirusTotal scan if any binary in an
+  archive or VSIX lacks DWARF, and a test fails if `-s` or `-w` returns to the
+  linker flags. Binaries are about 15 MB larger. Unstripped builds scanned
+  clean more often, but DWARF alone does not keep a binary clean: v0.8.4's
+  unstripped Linux binary was still flagged, and the dependency pin above is
+  what fixed it. See `docs/RELEASE_BINARIES.md` (#3091).
 - **PR titles no longer carry `Fixes GH-N` or an issue URL as a live closer.**
   The closing-keyword grammar now recognizes `GH-N` in Go and in the
   extension, so titles rewrite it to `Refs GH-N`, and the extension's fallback
