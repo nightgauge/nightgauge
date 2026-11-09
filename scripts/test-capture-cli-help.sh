@@ -72,6 +72,9 @@ OPENCODE_V="$(max_tested opencode)"
 write_fake_cli() { # write_fake_cli <path> <name>
   cat >"$1" <<EOF
 #!/bin/bash
+# install-npm-cli.sh proves the install with --version: answer with the
+# version the npm stub recorded beside the binary.
+if [ "\$1" = --version ] && [ -f "\$0.version" ]; then cat "\$0.version"; exit 0; fi
 log="$LOG/cli-$2.\$\$"
 printf '%s\n' "\$*" >"\$log.argv"
 env >"\$log.env"
@@ -147,7 +150,7 @@ EOF
 }
 
 # npm stub: `npm install --prefix DIR ... <pkg>@<version>` lays out a package
-# with that version and a fake bin.
+# with that version and a fake bin that reports it from --version.
 cat >"$STUBS/npm" <<EOF
 #!/bin/bash
 log="$LOG/npm.\$\$"
@@ -179,6 +182,7 @@ esac
 mkdir -p "\$prefix/node_modules/\$pkg" "\$prefix/node_modules/.bin"
 printf '{"name":"%s","version":"%s"}\n' "\$pkg" "\$version" >"\$prefix/node_modules/\$pkg/package.json"
 cp "$STUBS/fake-cli-\$bin" "\$prefix/node_modules/.bin/\$bin"
+printf '%s\n' "\$version" >"\$prefix/node_modules/.bin/\$bin.version"
 EOF
 chmod +x "$STUBS/npm"
 

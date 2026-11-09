@@ -25,12 +25,16 @@
 # plugin and on the repository root, which holds the marketplace.
 #
 # Claude Code runs at max_tested from internal/adaptercompat/manifests/
-# claude-headless.json: PATH claude only when it reports that version, else npx.
+# claude-headless.json: PATH claude only when it reports that version, else
+# scripts/install-npm-cli.sh installs it into a temporary prefix.
 #
 # Exit codes: 0 docs hold; 1 a violation was found (each named on stderr);
 # 2 the check could not run.
 set -uo pipefail
 
+# The installer is the harness's own, even when the tree under test is an RC
+# tag cut before scripts/install-npm-cli.sh existed.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)" || exit 2
 # CHECK_PLUGIN_REPO_ROOT points the check at another tree (an RC tag checkout).
 REPO_ROOT="${CHECK_PLUGIN_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO_ROOT" || exit 2
@@ -52,9 +56,11 @@ FAIL=0
 violation() { echo "VIOLATION: $1" >&2; FAIL=1; }
 
 TMP=""
+CLAUDE_PREFIX=""
 # shellcheck disable=SC2329 # invoked by the trap below
 cleanup() {
   [ -n "$TMP" ] && rm -rf "$TMP"
+  [ -n "$CLAUDE_PREFIX" ] && rm -rf "$CLAUDE_PREFIX"
   return 0
 }
 trap cleanup EXIT
@@ -93,7 +99,7 @@ command -v jq >/dev/null || cannot_run "jq is required"
 command -v perl >/dev/null || cannot_run "perl is required"
 CLAUDE_CODE_VERSION="$(jq -r '.max_tested // empty' "$MANIFEST" 2>/dev/null)"
 [ -n "$CLAUDE_CODE_VERSION" ] || cannot_run "cannot read max_tested from $MANIFEST"
-# It becomes an npx install spec, so only MAJOR.MINOR.PATCH may pass, as in
+# It becomes an npm install spec, so only MAJOR.MINOR.PATCH may pass, as in
 # scripts/adapter-cli-pin.sh.
 [[ "$CLAUDE_CODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
   cannot_run "max_tested '$CLAUDE_CODE_VERSION' in $MANIFEST is not MAJOR.MINOR.PATCH"
@@ -106,12 +112,15 @@ PATH_CLAUDE_VERSION="${PATH_CLAUDE_VERSION%%[[:space:]]*}"
 if [ -n "$PATH_CLAUDE_VERSION" ] && [ "$PATH_CLAUDE_VERSION" = "$CLAUDE_CODE_VERSION" ]; then
   CLAUDE=(claude)
   CLAUDE_SOURCE="PATH claude"
-elif command -v npx >/dev/null &&
-  npx --yes "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" --version </dev/null >/dev/null 2>&1; then
-  CLAUDE=(npx --yes "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION")
-  CLAUDE_SOURCE="npx"
+elif CLAUDE_PREFIX="$(mktemp -d)" &&
+  CLAUDE_BIN="$("$SCRIPT_DIR/install-npm-cli.sh" --global --prefix "$CLAUDE_PREFIX" \
+    "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" claude)"; then
+  # The installer allows the package's postinstall, which npm 11 skips by
+  # default and npx cannot allow (#3093).
+  CLAUDE=("$CLAUDE_BIN")
+  CLAUDE_SOURCE="npm --prefix"
 else
-  cannot_run "neither claude $CLAUDE_CODE_VERSION on PATH nor npx @anthropic-ai/claude-code@$CLAUDE_CODE_VERSION can run"
+  cannot_run "neither claude $CLAUDE_CODE_VERSION on PATH nor scripts/install-npm-cli.sh could provide it"
 fi
 echo "check-plugin-install-docs: Claude Code $CLAUDE_CODE_VERSION via $CLAUDE_SOURCE"
 
@@ -133,7 +142,7 @@ printf '[url "%s"]\n\tinsteadOf = %s\n' "$TMP/mirror.git" "$URL" >"$TMP/gitconfi
 # claude_run SCRATCH ARGS... — run Claude Code in SCRATCH's project directory. A
 # scratch config is where a first-run or trust prompt would appear, so stdin is
 # closed and the call is bounded. Output goes to a file, not a pipe: a child of
-# npx that outlives the alarm would otherwise hold the pipe open.
+# the CLI that outlives the alarm would otherwise hold the pipe open.
 claude_run() {
   local dir="$1"
   shift

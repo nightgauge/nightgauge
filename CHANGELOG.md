@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Pinned npm CLIs install again on ubuntu-26.04 runners, whose npm 11 skips
+  package install scripts. The four Claude workflows, the plugin install-docs
+  check, the adapter canary, the CLI help capture and the OpenCode integration
+  suite now install through `scripts/install-npm-cli.sh`. It allows the
+  package's install script, runs the package's own scripts if npm skipped
+  them, and fails with a named error unless `<binary> --version` reports the
+  pin. The confinement probe now reports a CLI failure, either output that is
+  not JSON or a JSON result with `is_error: true`, as "Claude CLI failed" with
+  the CLI's output, instead of retrying it as unproven (#3093).
+
 - A feature-validate judge attempt that was dropped, because a verdict record
   was invalid or a run that declared judges recorded none, now fails the gate
   with "a judge attempt was dropped" instead of reading as a run without

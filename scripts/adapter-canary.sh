@@ -212,10 +212,11 @@ cmd_install() {
     version="$(resolve_npm_version "$npm_pkg" "$requested")"
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] \
       || die "$adapter: resolved version '$version' is not a semver"
-    bounded "$INSTALL_TIMEOUT" npm install --prefix "$prefix" --no-save \
-      --no-package-lock --loglevel=error "$npm_pkg@$version" >&2 \
-      || die "$adapter: npm install $npm_pkg@$version failed"
-    bin="$prefix/node_modules/.bin/$binary"
+    # The installer allows the package's install script (npm 11 skips it) and
+    # proves `$binary --version` reports the version (#3093).
+    bin="$(bounded "$INSTALL_TIMEOUT" "$REPO_ROOT/scripts/install-npm-cli.sh" --prefix "$prefix" \
+      "$npm_pkg@$version" "$binary")" \
+      || die "$adapter: installing $npm_pkg@$version failed"
   elif [ -n "$installer" ]; then
     [ "$requested" = "latest" ] && requested=""
     local script="$prefix/installer.sh"

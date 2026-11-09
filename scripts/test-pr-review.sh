@@ -14,6 +14,7 @@
 # shellcheck disable=SC2016 # jq programs and literal backticks are meant to stay unexpanded
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
+REPO_ROOT="$PWD"
 
 CLI="scripts/pr-review.mjs"
 PASS=0
@@ -201,8 +202,13 @@ expect "limit: one --max-turns in the workflow" 1 "$(grep -c -e '--max-turns' "$
 STUBS="$TMP/stubs"
 mkdir -p "$STUBS"
 printf '#!/bin/sh\nexit 0\n' > "$STUBS/npm"
+# The step runs scripts/install-npm-cli.sh, which needs `claude --version`
+# to report the pin (#3093).
+PIN_VERSION="$(bash "$REPO_ROOT/scripts/adapter-cli-pin.sh" claude-headless)"
+export PIN_VERSION="${PIN_VERSION##*@}"
 cat > "$STUBS/claude" <<'STUB'
 #!/bin/sh
+[ "${1:-}" = "--version" ] && { echo "$PIN_VERSION (Claude Code)"; exit 0; }
 cat > /dev/null
 [ -n "${CLAUDE_ARGS_FILE:-}" ] && printf '%s\n' "$@" > "$CLAUDE_ARGS_FILE"
 [ -n "${CLAUDE_CALLS_FILE:-}" ] && echo call >> "$CLAUDE_CALLS_FILE"
@@ -363,7 +369,20 @@ expect "verdict: non-/proc denials are unproven" 4 "$VSTATUS"
 verdict none '{"result":"ok","permission_denials":[]}'
 expect "verdict: no denials is unproven" 4 "$VSTATUS"
 verdict notjson 'Error: CLI crashed'
-expect "verdict: non-JSON is unproven" 4 "$VSTATUS"
+expect "verdict: non-JSON is a CLI failure" 5 "$VSTATUS"
+verdict empty ''
+expect "verdict: an empty result is a CLI failure" 5 "$VSTATUS"
+verdict nativebin 'Error: claude native binary not installed. Either postinstall did not run (--ignore-scripts, ...)'
+expect "verdict: native-binary error is a CLI failure" 5 "$VSTATUS"
+expect "verdict: CLI failure prints the CLI output" 1 "$(grep -c 'native binary not installed' "$PV/nativebin.out")"
+verdict iserror '{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}'
+expect "verdict: an is_error result is a CLI failure" 5 "$VSTATUS"
+expect "verdict: an is_error result prints the CLI's message" 1 "$(grep -c 'Invalid API key' "$PV/iserror.out")"
+verdict iserrorleak "{\"is_error\":true,\"result\":\"PR_REVIEW_CANARY=$CANARY\"}"
+expect "verdict: a leak in an is_error result is still leaked" 1 "$VSTATUS"
+expect "verdict: a leaked is_error result never echoes the canary" 0 "$(grep -c "$CANARY" "$PV/iserrorleak.out")"
+verdict iserrorfalse '{"is_error":false,"result":"ok","permission_denials":[]}'
+expect "verdict: is_error false is judged on its denials" 4 "$VSTATUS"
 verdict nocanary '{"permission_denials":[]}' ""
 expect "verdict: unset canary is a usage error" 2 "$VSTATUS"
 
@@ -399,6 +418,15 @@ probe_step unproven tok '{"permission_denials":[]}'
 expect "probe: no attempt is red" 1 "$PSTATUS"
 expect "probe: retried to $ATTEMPTS calls" 3 "$PCALLS"
 expect "probe: log names unproven" 1 "$(count '^::error title=Confinement unproven::No attempt recorded' "$TMP/probe-unproven/log")"
+probe_step clifail tok 'Error: claude native binary not installed.'
+expect "probe: a CLI failure is red" 1 "$PSTATUS"
+expect "probe: a CLI failure is not retried" 1 "$PCALLS"
+expect "probe: a CLI failure is annotated" 1 "$(count '^::error title=Claude CLI failed' "$TMP/probe-clifail/log")"
+probe_step clierror tok '{"type":"result","is_error":true,"result":"Invalid API key"}'
+expect "probe: an is_error result is red" 1 "$PSTATUS"
+expect "probe: an is_error result is not retried" 1 "$PCALLS"
+expect "probe: an is_error result is annotated" 1 "$(count '^::error title=Claude CLI failed' "$TMP/probe-clierror/log")"
+expect "probe: an is_error result shows the CLI's message" 1 "$(count 'Invalid API key' "$TMP/probe-clierror/log")"
 probe_step notoken "" "$DENIAL"
 expect "probe: empty token is red" 1 "$PSTATUS"
 expect "probe: empty token makes no call" 0 "$PCALLS"
@@ -406,6 +434,16 @@ expect "probe: triggers" "workflow_dispatch schedule push" "$(yq '.on | keys | .
 expect "probe: contents read only" "contents: read" "$(yq -o=props '.permissions' "$PROBE_WF" | sed 's/ = /: /')"
 for bad in pull_request ANTHROPIC_API_KEY GH_TOKEN GITHUB_TOKEN; do
   expect "probe: no $bad" 0 "$(code_only "$PROBE_WF" | grep -c "$bad")"
+done
+
+# No workflow installs the Claude CLI directly; all go through the installer (#3093).
+expect "install: no direct npm install of the pinned CLI" 0 \
+  "$(grep -l 'npm install --global.*adapter-cli-pin.sh' "$REPO_ROOT"/.github/workflows/*.yml | wc -l | tr -d ' ')"
+expect "install: the confinement probe re-runs when the installer changes" 1 \
+  "$(yq '.on.push.paths[]' "$REPO_ROOT/.github/workflows/pr-review-confinement.yml" | grep -cx 'scripts/install-npm-cli.sh')"
+for wf in pr-review pr-review-confinement continuous-improvement release-watchdog; do
+  expect "install: $wf.yml uses scripts/install-npm-cli.sh" 1 \
+    "$(grep -c 'scripts/install-npm-cli.sh --global' "$REPO_ROOT/.github/workflows/$wf.yml")"
 done
 
 echo

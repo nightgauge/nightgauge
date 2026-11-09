@@ -90,8 +90,8 @@ case "$*" in
 esac
 STUB
   chmod +x "$TMP/bin/claude"
-  printf '#!/bin/sh\nexit 1\n' >"$TMP/bin/npx"
-  chmod +x "$TMP/bin/npx"
+  printf '#!/bin/sh\nexit 1\n' >"$TMP/bin/npm"
+  chmod +x "$TMP/bin/npm"
 }
 
 fixture() {
@@ -100,7 +100,7 @@ fixture() {
   mkdir -p "$TMP/scripts" "$TMP/docs" "$TMP/bin" "$TMP/configs/claude" \
     "$TMP/claude-plugins/nightgauge/skills/a" "$TMP/internal/adaptercompat/manifests"
   echo '{"max_tested":"9.9.9"}' >"$TMP/internal/adaptercompat/manifests/claude-headless.json"
-  cp "$GATE" "$TMP/scripts/"
+  cp "$GATE" "$REPO_ROOT/scripts/install-npm-cli.sh" "$TMP/scripts/"
   echo x >"$TMP/claude-plugins/nightgauge/skills/a/SKILL.md"
   for d in README.md claude-plugins/nightgauge/README.md docs/GETTING_STARTED.md \
     configs/claude/README.md; do
@@ -237,9 +237,10 @@ expect "shipped settings marketplace" 1 "configs/claude/settings.json: documents
 fixture
 expect "the run names the manifest's Claude Code version" 0 "Claude Code 9.9.9 via PATH claude"
 
-# A PATH claude at another version is not the pinned one: fall back to npx.
+# A PATH claude at another version is not the pinned one: fall back to
+# scripts/install-npm-cli.sh (a failing npm stub here, so the check cannot run).
 fixture
-expect "PATH claude at another version falls back to npx" 2 "@anthropic-ai/claude-code@9.9.9" \
+expect "PATH claude at another version falls back to the installer" 2 "@anthropic-ai/claude-code@9.9.9" \
   STUB_VERSION=1.0.0
 
 fixture

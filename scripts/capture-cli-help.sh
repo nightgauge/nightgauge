@@ -16,7 +16,7 @@
 # answers part of that hazard:
 #   - Every CLI is installed fresh, at the pinned version, into one `mktemp -d`
 #     prefix, never globally, and the prefix is removed on every exit (trap).
-#     npm packages use `npm install --prefix`; the grok CLI uses its vendor
+#     npm packages use scripts/install-npm-cli.sh --prefix; the grok CLI uses its vendor
 #     installer, with HOME and GROK_BIN_DIR inside the prefix. A vendor
 #     installer's sha256 is checked against `expected_installer_sha256`
 #     before it runs, refusing an installer that does not match the recorded
@@ -28,8 +28,8 @@
 #     config (~/.npmrc, ~/.grok, ~/.config) is visible to them.
 #   - The script runs each CLI with `--help` only, after the subcommand the
 #     adapter dispatches where it uses one, with stdin from /dev/null. Vendor
-#     install steps run the binary themselves: opencode's npm postinstall runs
-#     `--version`, and the grok installer runs `--version` and generates shell
+#     install steps run the binary themselves: install-npm-cli.sh and
+#     opencode's npm postinstall run `--version`, and the grok installer runs `--version` and generates shell
 #     completions. Nothing else runs it.
 #   - Every download, install and CLI call is bounded by a timeout. macOS has no
 #     timeout(1), so a perl wrapper runs the command in a process group of its
@@ -459,10 +459,13 @@ for adapter in "${ADAPTERS[@]}"; do
     [ -e "$TOOLS/npm" ] || die "$adapter installs with npm, and npm is not on PATH"
     dir="$PREFIX/npm-$adapter"
     mkdir -p "$dir"
-    if ! in_clean_env "$INSTALL_TIMEOUT" "$TOOLS/npm" install --prefix "$dir" --no-save \
-      --no-package-lock --loglevel=error "$npm_pkg@$version" >"$LOGS/$adapter-install.log" 2>&1; then
+    # The installer allows the package's install script (npm 11 skips it) and
+    # proves `$binary --version` reports the pin (#3093). It runs in the clean
+    # environment, whose PATH holds the npm and node it needs.
+    if ! in_clean_env "$INSTALL_TIMEOUT" /bin/bash "$REPO_ROOT/scripts/install-npm-cli.sh" \
+      --prefix "$dir" "$npm_pkg@$version" "$binary" >"$LOGS/$adapter-install.log" 2>&1; then
       sed 's/^/    /' "$LOGS/$adapter-install.log" >&2
-      die "$adapter: npm install $npm_pkg@$version failed"
+      die "$adapter: installing $npm_pkg@$version failed"
     fi
     installed="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("version", ""))' \
       "$dir/node_modules/$npm_pkg/package.json" 2>/dev/null || true)"
