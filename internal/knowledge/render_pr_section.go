@@ -111,28 +111,12 @@ func RenderPRSection(workspaceRoot string, issueNumber int) (string, error) {
 }
 
 // findIssueKnowledgeDir locates `.nightgauge/knowledge/features/{N}-*/`
-// for the given issue. Returns ("", nil) when no match is found, matching the
-// bash no-op semantics.
+// for the given issue, choosing the current one by resolveIssueDir's rule
+// when several share the number. Returns ("", nil) when no match is found,
+// matching the bash no-op semantics.
 func findIssueKnowledgeDir(workspaceRoot string, issueNumber int) (string, error) {
 	featuresDir := filepath.Join(workspaceRoot, ".nightgauge", "knowledge", "features")
-	prefix := fmt.Sprintf("%d-", issueNumber)
-
-	entries, err := os.ReadDir(featuresDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("read features dir: %w", err)
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		if strings.HasPrefix(e.Name(), prefix) {
-			return filepath.Join(featuresDir, e.Name()), nil
-		}
-	}
-	return "", nil
+	return resolveIssueDir(featuresDir, issueNumber, nil)
 }
 
 // renderBullet emits a single Markdown bullet for the given knowledge entry.

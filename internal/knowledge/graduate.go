@@ -293,40 +293,33 @@ func ReadADRBlock(decisionsPath, anchor string) (string, error) {
 }
 
 // FindDecisionsPath resolves the decisions.md path for an issue
-// number by scanning .nightgauge/knowledge/{epics,features}/
-// for a directory whose name starts with `{issueNumber}-`. Returns
-// the workspace-relative path on success.
+// number by scanning .nightgauge/knowledge/{features,epics}/
+// for a directory whose name starts with `{issueNumber}-` and holds a
+// decisions.md. When several do, resolveIssueDir picks the current one.
+// Returns the workspace-relative path on success.
 func FindDecisionsPath(workspaceRoot string, issueNumber int) (string, error) {
 	if issueNumber <= 0 {
 		return "", fmt.Errorf("issue number must be positive")
 	}
 	root := filepath.Join(workspaceRoot, ".nightgauge", "knowledge")
-	prefix := fmt.Sprintf("%d-", issueNumber)
+	hasDecisions := func(dir string) bool {
+		_, err := os.Stat(filepath.Join(dir, "decisions.md"))
+		return err == nil
+	}
 	for _, category := range []string{"features", "epics"} {
-		catDir := filepath.Join(root, category)
-		entries, err := os.ReadDir(catDir)
+		dir, err := resolveIssueDir(filepath.Join(root, category), issueNumber, hasDecisions)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return "", fmt.Errorf("read %s: %w", catDir, err)
+			return "", err
 		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			if !strings.HasPrefix(e.Name(), prefix) {
-				continue
-			}
-			candidate := filepath.Join(catDir, e.Name(), "decisions.md")
-			if _, err := os.Stat(candidate); err == nil {
-				rel, relErr := filepath.Rel(workspaceRoot, candidate)
-				if relErr != nil {
-					return candidate, nil
-				}
-				return rel, nil
-			}
+		if dir == "" {
+			continue
 		}
+		candidate := filepath.Join(dir, "decisions.md")
+		rel, relErr := filepath.Rel(workspaceRoot, candidate)
+		if relErr != nil {
+			return candidate, nil
+		}
+		return rel, nil
 	}
 	return "", fmt.Errorf("no decisions.md found for issue #%d under %s", issueNumber, filepath.Join(".nightgauge", "knowledge"))
 }

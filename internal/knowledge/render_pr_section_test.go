@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -177,5 +178,24 @@ func TestTitleCaseFromFilename(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("titleCaseFromFilename(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestRenderPRSection_StaleSameNumberedDirDoesNotShadowFresh(t *testing.T) {
+	root := t.TempDir()
+	writeKnowledgeFixture(t, root, 2893, "auto-regenerate-knowledge", map[string]string{
+		"PRD.md": "# PRD\n",
+	})
+	writeKnowledgeFixture(t, root, 2893, "test-vscode-unawaited", map[string]string{
+		"PRD.md": stampedDoc("2026-11-03T07:15:44Z", "# PRD\n"),
+	})
+
+	got, err := RenderPRSection(root, 2893)
+	if err != nil {
+		t.Fatalf("RenderPRSection: %v", err)
+	}
+	if !strings.Contains(got, "features/2893-test-vscode-unawaited/PRD.md") ||
+		strings.Contains(got, "auto-regenerate-knowledge") {
+		t.Errorf("links do not point at the fresh dir:\n%s", got)
 	}
 }
