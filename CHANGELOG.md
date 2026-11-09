@@ -20,7 +20,11 @@ changelog, and the release workflow refuses a tag that does not.
   transcript. A `/proc` call that returned content is red as "confinement
   broken" even when the model does not quote it, where it used to pass as
   "unproven". An unproven or errored attempt lists each `/proc` call the model
-  made and what happened to it, so a red run names its cause.
+  made and what happened to it, so a red run names its cause. A `/proc` Read
+  that the CLI refuses with a tool error citing the permission settings deny
+  rule now counts as denied. The CLI applies that rule before it records
+  permission denials, so a working confinement read as "unproven" and failed
+  on `main`.
 - Pinned npm CLIs install again on ubuntu-26.04 runners, whose npm 11 skips
   package install scripts. The four Claude workflows, the plugin install-docs
   check, the adapter canary, the CLI help capture and the OpenCode integration
