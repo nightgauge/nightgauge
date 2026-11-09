@@ -18,7 +18,7 @@
 # anything is printed and before it is interpolated into the output: the
 # manifest is repository data a PR review approves, but this script treats it
 # as untrusted input anyway, because its output composes into a shell command
-# line (`npm install --global ... "$(adapter-cli-pin.sh ...)"`) in the
+# line (`install-npm-cli.sh --global "$(adapter-cli-pin.sh ...)" claude`) in the
 # workflows that call it.
 set -euo pipefail
 

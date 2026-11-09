@@ -28,8 +28,9 @@
 //
 // probe-verdict (the confinement probe, #3084) exits 0 when the CLI result
 // records a denial for every /proc call the probe asks for, 1 when the canary
-// appears anywhere in the result, and 4 otherwise (unproven). It never prints
-// the canary.
+// appears anywhere in the result, 5 when the CLI itself failed (the result is
+// empty or not JSON, or is JSON with is_error: true; its output is printed,
+// after the leak check), and 4 otherwise (unproven). It never prints the canary.
 
 import { appendFileSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -331,7 +332,8 @@ export function probeVerdict(text, canary) {
   try {
     doc = JSON.parse(text);
   } catch {
-    return { code: 4, message: "unproven: the result is not JSON" };
+    const head = text.split("\n").slice(0, 40).join("\n");
+    return { code: 5, message: `cli failed: the CLI wrote no JSON result\n${head}` };
   }
   const denials = Array.isArray(doc?.permission_denials) ? doc.permission_denials : [];
   // The probe asks for two Reads of distinct /proc environ files and one Grep
@@ -348,6 +350,14 @@ export function probeVerdict(text, canary) {
   if (procPaths("Read") < 2) missing.push("two distinct Read");
   if (procPaths("Grep") < 1) missing.push("Grep");
   if (!missing.length) return { code: 0, message: "proven: every /proc call was denied" };
+  // A JSON result the CLI itself marked as an error (a bad credential, an API
+  // failure) proves nothing, but an API error can be transient: exit 6 is
+  // retried, and the workflow reports a CLI failure once every attempt ends so.
+  if (doc?.is_error === true) {
+    const detail = typeof doc.result === "string" && doc.result ? doc.result : text;
+    const head = detail.split("\n").slice(0, 40).join("\n");
+    return { code: 6, message: `cli error: the CLI reported an error\n${head}` };
+  }
   return { code: 4, message: `unproven: no denied ${missing.join(" or ")} of /proc was recorded` };
 }
 

@@ -1366,7 +1366,7 @@ Every push that fails CI wastes time and pollutes the PR with fix-up commits.
 `git`, `go`, `make`, `node`/`npm`/`npx`, `jq`, `perl`, mikefarah `yq`, and a `python3` with
 `.github/requirements-ci.txt` installed. Its preflight names any missing tool
 and exits before the first step. The plugin install docs gate also needs
-network access for `npx @anthropic-ai/claude-code@<max_tested>`, the version
+network access to install `@anthropic-ai/claude-code@<max_tested>`, the version
 `internal/adaptercompat/manifests/claude-headless.json` pins, unless that
 version of `claude` is on `PATH`.
 
@@ -1552,16 +1552,12 @@ them yourself before pushing when the change touches OpenCode:
 - `internal/execution/adapters/opencode*`,
 - `internal/execution/opencode*`.
 
-Mirror CI's step "OpenCode integration" in `.github/workflows/ci.yml`: same
-pinned version and the same `-run` list, taken from that step, because the
-workflow is the source of truth for both.
+Run the script CI's step "OpenCode integration" runs. It installs the
+manifest's pinned OpenCode through `scripts/install-npm-cli.sh` and runs the
+same `-run` list:
 
 ```bash
-prefix="$(mktemp -d)"
-npm install --prefix "$prefix" --no-fund --no-audit opencode-ai@<version CI pins>
-PATH="$prefix/node_modules/.bin:$PATH" go test -tags opencode_integration -count=1 -v \
-  -run '<the -run list from ci.yml>' \
-  ./internal/execution/ ./internal/execution/adapters/ ./internal/execution/opencodeplugin/
+bash scripts/opencode-integration.sh
 ```
 
 A pass on a fast machine does not clear a timing-sensitive test: #2076's race

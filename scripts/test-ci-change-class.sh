@@ -170,6 +170,29 @@ case_diff "empty (no files changed)" empty false
 # tweak pay the full matrix for no reason.
 case_diff "docs under .github/ is docs_only" docs_only false .github/ISSUE_TEMPLATE/bug.md
 
+# A diff touching a pinned-npm-CLI installer runs heavy on the pull request
+# itself (#3093); an ordinary source diff leaves that to the merge queue.
+pr_heavy_case() {
+  local name="$1" want="$2" file="$3" repo base head outputs got
+  repo="$(new_repo)"
+  base="$(git -C "$repo" rev-parse HEAD)"
+  git_in "$repo" checkout -q -b feature
+  mkdir -p "$repo/$(dirname "$file")"
+  echo "changed by $name" >>"$repo/$file"
+  git_in "$repo" add -A
+  git_in "$repo" commit -q -m "$name"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  outputs="$(classify "$repo" pull_request "$base" "$head")"
+  got="$(printf '%s\n' "$outputs" | sed -n 's/^pr_heavy=//p')"
+  if [ "$got" = "$want" ]; then
+    ok "$name → pr_heavy=$got"
+  else
+    bad "$name" "want pr_heavy=$want; got pr_heavy=${got:-<none>}"
+  fi
+}
+pr_heavy_case "the npm CLI installer is pr_heavy" true scripts/install-npm-cli.sh
+pr_heavy_case "an ordinary source diff is not pr_heavy" false internal/x.go
+
 # A README + docs/ sweep is still one kind.
 case_diff "multi-file docs sweep" docs_only false docs/GUIDE.md docs/OTHER.md
 
@@ -177,15 +200,16 @@ echo
 echo "B. Fail-open — anything unclassifiable runs the full suite"
 
 fail_open_case() {
-  local name="$1" outputs got_heavy got_class
+  local name="$1" outputs got_heavy got_class got_pr
   shift
   outputs="$("$@")"
   got_heavy="$(printf '%s\n' "$outputs" | sed -n 's/^run_heavy=//p')"
   got_class="$(printf '%s\n' "$outputs" | sed -n 's/^change_class=//p')"
-  if [ "$got_heavy" = "true" ] && [ "$got_class" = "unknown" ]; then
-    ok "$name → run_heavy=true change_class=unknown"
+  got_pr="$(printf '%s\n' "$outputs" | sed -n 's/^pr_heavy=//p')"
+  if [ "$got_heavy" = "true" ] && [ "$got_class" = "unknown" ] && [ "$got_pr" = "true" ]; then
+    ok "$name → run_heavy=true change_class=unknown pr_heavy=true"
   else
-    bad "$name" "want run_heavy=true change_class=unknown; got run_heavy=${got_heavy:-<none>} change_class=${got_class:-<none>}"
+    bad "$name" "want run_heavy=true change_class=unknown pr_heavy=true; got run_heavy=${got_heavy:-<none>} change_class=${got_class:-<none>} pr_heavy=${got_pr:-<none>}"
   fi
 }
 
@@ -319,8 +343,10 @@ refute_block() {
 
 assert_block changes 'run_heavy:.*steps\.classify\.outputs\.run_heavy' \
   "the changes job exports run_heavy"
-assert_block changes "run_heavy:.*steps\.queue\.outputs\.enforced == 'true' && 'false'" \
-  "a pull request leaves the heavy suites to an enforced merge queue"
+assert_block changes "run_heavy:.*steps\.queue\.outputs\.enforced == 'true' && steps\.classify\.outputs\.pr_heavy != 'true' && 'false'" \
+  "a pull request leaves the heavy suites to an enforced merge queue unless it is pr_heavy"
+assert_block changes 'pr_heavy:.*steps\.classify\.outputs\.pr_heavy' \
+  "the changes job exports pr_heavy"
 assert_block changes "if grep -qx merge_queue" \
   "enforcement is read from the live ruleset"
 assert_block changes 'if: .*github\.event_name == .pull_request.' \

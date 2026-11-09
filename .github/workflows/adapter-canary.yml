@@ -91,13 +91,17 @@ jobs:
             # Captured, not piped into `grep -q .`: under pipefail a reader
             # that exits at its first line can SIGPIPE git and read a changed
             # manifest as unchanged (#2360).
-            CHANGED="$(git diff --name-only "$BASE_SHA" HEAD -- internal/adaptercompat/manifests/)"
+            # The pins, and the scripts that install the pinned CLIs: a change
+            # to how a CLI is installed is canaried on its own PR (#3093).
+            CHANGED="$(git diff --name-only "$BASE_SHA" HEAD -- internal/adaptercompat/manifests/ \
+              scripts/install-npm-cli.sh scripts/adapter-canary.sh scripts/adapter-cli-pin.sh \
+              scripts/capture-cli-help.sh)"
             if [ -n "$CHANGED" ]; then
               echo "run=true" >> "$GITHUB_OUTPUT"
-              echo "internal/adaptercompat/manifests/ changed: running"
+              printf 'changed, so running:\n%s\n' "$CHANGED"
             else
               echo "run=false" >> "$GITHUB_OUTPUT"
-              echo "internal/adaptercompat/manifests/ unchanged: nothing to canary on this PR"
+              echo "no adapter pin or CLI install script changed: nothing to canary on this PR"
             fi
             exit 0
           fi

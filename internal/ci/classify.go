@@ -22,12 +22,29 @@ type ClassifyResult struct {
 	// Jobs holds the per-job run flags (run_build, run_go_tests, run_e2e,
 	// run_vsix_audit) the workflow reads as `needs.changes.outputs.<key>`.
 	Jobs map[string]bool `json:"jobs"`
+	// PRHeavy is true when the diff touches a PRHeavyPaths script. The CI
+	// `changes` job then runs the heavy suites on the pull request itself
+	// instead of leaving them to the merge queue (#3093).
+	PRHeavy bool `json:"pr_heavy"`
 	// Reason is a human-readable explanation for logs.
 	Reason string `json:"reason"`
 }
 
 // HeavyJobKeys are the per-job output flags the CI `changes` gate exposes.
 var HeavyJobKeys = []string{"run_build", "run_go_tests", "run_e2e", "run_vsix_audit"}
+
+// PRHeavyPaths are the scripts that install and exercise the pinned npm CLIs.
+// Their behaviour depends on the runner's own npm, which no unit test stands in
+// for, so a pull request that changes one runs the heavy suites (the real
+// OpenCode integration among them) itself. PR #3103 left them to the merge
+// queue and its project-scoped install broke there first (#3093).
+var PRHeavyPaths = []string{
+	"scripts/install-npm-cli.sh",
+	"scripts/opencode-integration.sh",
+	"scripts/adapter-canary.sh",
+	"scripts/capture-cli-help.sh",
+	"scripts/adapter-cli-pin.sh",
+}
 
 // ClassifyForCI decides whether a diff (changedFiles, typically `git diff
 // --name-only base...head`) needs the heavy CI jobs. It is conservative and
@@ -56,7 +73,23 @@ func ClassifyForCI(changedFiles []string) ClassifyResult {
 	for _, k := range HeavyJobKeys {
 		res.Jobs[k] = runHeavy
 	}
+	if path := firstPRHeavyPath(changedFiles); path != "" {
+		res.PRHeavy = true
+		res.Reason += fmt.Sprintf("; %s installs or runs a pinned npm CLI, so the pull request runs the heavy suites itself", path)
+	}
 	return res
+}
+
+// firstPRHeavyPath returns the first changed file listed in PRHeavyPaths, or "".
+func firstPRHeavyPath(changedFiles []string) string {
+	for _, f := range changedFiles {
+		for _, p := range PRHeavyPaths {
+			if f == p {
+				return f
+			}
+		}
+	}
+	return ""
 }
 
 func classReason(class changeClassifier.Classification, runHeavy bool) string {
@@ -73,6 +106,7 @@ func FailOpenResult(reason string) ClassifyResult {
 	res := ClassifyResult{
 		ChangeClass: "unknown",
 		RunHeavy:    true,
+		PRHeavy:     true,
 		Jobs:        make(map[string]bool, len(HeavyJobKeys)),
 		Reason:      reason,
 	}

@@ -14,6 +14,26 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- Pinned npm CLIs install again on ubuntu-26.04 runners, whose npm 11 skips
+  package install scripts. The four Claude workflows, the plugin install-docs
+  check, the adapter canary, the CLI help capture and the OpenCode integration
+  suite now install through `scripts/install-npm-cli.sh`. It allows the
+  package's install script, runs the package's own scripts if npm skipped
+  them, and fails with a named error unless `<binary> --version` reports the
+  pin. The confinement probe now reports output that is not JSON as "Claude CLI
+  failed" at once, with the CLI's output. A JSON result with `is_error: true`
+  is green when it records a denial for every `/proc` call; otherwise it is
+  retried, since an API error can be transient, and reported as a CLI failure
+  if the last attempt still errors. A project-scoped
+  install (`--prefix DIR`) writes the allowance to `DIR/.npmrc`, because npm
+  refuses `--allow-scripts` there with `EALLOWSCRIPTS`. A pull request that
+  changes one of these install scripts now runs the heavy CI suites itself
+  rather than leaving them to the merge queue, and the adapter canary as well;
+  a pull request whose diff cannot be classified also runs the heavy suites
+  itself (#3093).
+
 ## [0.8.5] - 2026-11-09
 
 0.8.1, 0.8.2, 0.8.3 and 0.8.4 were tagged but never published. The release

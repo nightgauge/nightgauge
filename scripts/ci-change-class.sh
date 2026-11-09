@@ -76,18 +76,21 @@ log() {
   fi
 }
 
-# decide emits the three outputs and exits 0 — the ONLY exit path in this file.
+# decide emits the four outputs and exits 0 — the ONLY exit path in this file.
+# pr_heavy=true makes ci.yml run the heavy suites on a pull request even when
+# the merge queue would otherwise run them (#3093).
 decide() {
-  local heavy="$1" class="$2" reason="$3"
+  local heavy="$1" class="$2" reason="$3" pr_heavy="${4:-false}"
   emit run_heavy "$heavy"
+  emit pr_heavy "$pr_heavy"
   emit change_class "$class"
   emit reason "$reason"
-  log "change_class=$class run_heavy=$heavy — $reason"
+  log "change_class=$class run_heavy=$heavy pr_heavy=$pr_heavy — $reason"
   exit 0
 }
 
 fail_open() {
-  decide true unknown "$1"
+  decide true unknown "$1" true
 }
 
 event="${NG_EVENT_NAME:-}"
@@ -142,6 +145,7 @@ json="$("$bin" ci classify --base "$base" --head "$head" --workdir "$root" --jso
 # instead, which is where that check belongs anyway.
 class="$(sed -n 's/^[[:space:]]*"change_class"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$json" | sed -n 1p)"
 heavy="$(sed -n 's/^[[:space:]]*"run_heavy"[[:space:]]*:[[:space:]]*\([a-z]*\).*/\1/p' <<<"$json" | sed -n 1p)"
+pr_heavy="$(sed -n 's/^[[:space:]]*"pr_heavy"[[:space:]]*:[[:space:]]*\([a-z]*\).*/\1/p' <<<"$json" | sed -n 1p)"
 reason="$(sed -n 's/^[[:space:]]*"reason"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' <<<"$json" | sed -n 1p)"
 
 [ -n "$class" ] || fail_open "could not parse change_class out of the classifier output — running the full suite"
@@ -149,5 +153,9 @@ case "$heavy" in
   true | false) ;;
   *) fail_open "could not parse run_heavy out of the classifier output — running the full suite" ;;
 esac
+case "$pr_heavy" in
+  true | false) ;;
+  *) fail_open "could not parse pr_heavy out of the classifier output — running the full suite" ;;
+esac
 
-decide "$heavy" "$class" "${reason:-classified from the diff ${base}...${head}}"
+decide "$heavy" "$class" "${reason:-classified from the diff ${base}...${head}}" "$pr_heavy"

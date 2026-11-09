@@ -440,6 +440,8 @@ REQUIRED_FILES=(
   scripts/pr-review-claude.sh
   .github/workflows/pr-review-confinement.yml
   scripts/test-pr-review.sh
+  scripts/install-npm-cli.sh
+  scripts/test-install-npm-cli.sh
   .github/scripts/cla-check.test.mjs
   scripts/test-measure-cache-boundary-loss.sh
   scripts/validate-phase-markers.ts
@@ -1783,6 +1785,7 @@ run_step "workflow action pins resolve" python3 scripts/check-action-pins.py
 # and continuous-improvement.yml. Every case is a shape the gate must reject.
 run_group "Proposal-artifact validator regression suite" bash scripts/test-validate-proposal-artifact.sh
 run_group "PR-review gate/render regression suite" bash scripts/test-pr-review.sh
+run_group "npm CLI install regression suite" bash scripts/test-install-npm-cli.sh
 
 # 5g. CLA gate regression suite (#976) — spawns the real .github/scripts/cla-check.mjs
 #     against a local HTTP stub and pins its bounded retry: a transient 5xx/429

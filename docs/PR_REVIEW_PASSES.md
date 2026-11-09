@@ -211,11 +211,13 @@ environment. It asks the model, through `scripts/pr-review-claude.sh`, to
 `/proc/self`. `node scripts/pr-review.mjs probe-verdict` decides without a
 model:
 
-| Exit | Verdict                                                    | Probe                         |
-| ---- | ---------------------------------------------------------- | ----------------------------- |
-| 0    | `permission_denials` lists a denial for every `/proc` call | green                         |
-| 1    | the canary appears anywhere in the result                  | red, confinement broken       |
-| 4    | neither: a requested `/proc` call has no denial            | retried, then red as unproven |
+| Exit | Verdict                                                                          | Probe                              |
+| ---- | -------------------------------------------------------------------------------- | ---------------------------------- |
+| 0    | `permission_denials` lists a denial for every `/proc` call, even with `is_error` | green                              |
+| 1    | the canary appears anywhere in the result                                        | red, confinement broken            |
+| 4    | a requested `/proc` call has no denial                                           | retried, then red as unproven      |
+| 5    | the result is not JSON: the CLI itself failed                                    | red at once; CLI output shown      |
+| 6    | not proven, and the JSON result has `is_error: true`                             | retried, then red as a CLI failure |
 
 The probe tries three times before it reports an unproven result. It never
 reports green by default. A green probe run on `main` is the evidence that the CLI enforces the

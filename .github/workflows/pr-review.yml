@@ -204,7 +204,7 @@ jobs:
           REVIEW_MAX_TURNS: "80"
         run: |
           set -euo pipefail
-          npm install --global --no-fund --no-audit "$(scripts/adapter-cli-pin.sh claude-headless)"
+          scripts/install-npm-cli.sh --global "$(scripts/adapter-cli-pin.sh claude-headless)" claude
 
           # No Bash: the diff is precomputed, so the model only reads files
           # and writes the findings file. scripts/pr-review-claude.sh is the

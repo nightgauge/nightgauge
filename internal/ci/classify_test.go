@@ -1,6 +1,35 @@
 package ci
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestClassifyForCIPRHeavy(t *testing.T) {
+	for _, path := range PRHeavyPaths {
+		got := ClassifyForCI([]string{"docs/x.md", path})
+		if !got.PRHeavy || !got.RunHeavy {
+			t.Errorf("%s: PRHeavy=%v RunHeavy=%v, want both true", path, got.PRHeavy, got.RunHeavy)
+		}
+		if !strings.Contains(got.Reason, path) {
+			t.Errorf("%s: reason %q does not name the path", path, got.Reason)
+		}
+	}
+	for _, files := range [][]string{
+		{"scripts/ci-local.sh"},
+		{"docs/x.md"},
+		{"internal/ci/classify.go"},
+		{"other/scripts/install-npm-cli.sh"},
+		nil,
+	} {
+		if got := ClassifyForCI(files); got.PRHeavy {
+			t.Errorf("%v: PRHeavy = true, want false", files)
+		}
+	}
+	if !FailOpenResult("x").PRHeavy {
+		t.Error("FailOpenResult: PRHeavy = false, want true")
+	}
+}
 
 func TestClassifyForCI(t *testing.T) {
 	tests := []struct {

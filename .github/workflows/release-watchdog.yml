@@ -332,7 +332,7 @@ jobs:
           RELEASES_FILE: ${{ runner.temp }}/releases.json
         run: |
           set -euo pipefail
-          npm install --global --no-fund --no-audit "$(scripts/adapter-cli-pin.sh claude-headless)"
+          scripts/install-npm-cli.sh --global "$(scripts/adapter-cli-pin.sh claude-headless)" claude
 
           # Prompt on stdin with `-p`, matching how the pipeline's own Claude
           # adapter invokes the CLI (internal/execution/adapters/claude.go).

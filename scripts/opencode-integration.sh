@@ -18,7 +18,9 @@ set -euo pipefail
 prefix="${1:-$(mktemp -d "${TMPDIR:-/tmp}/opencode-cli.XXXXXX")}"
 pin="$(bash scripts/adapter-cli-pin.sh opencode)"
 
-npm install --prefix "$prefix" --no-fund --no-audit "$pin"
+# The installer allows opencode-ai's postinstall, which npm 11 skips, and
+# proves `opencode --version` reports the pin (#3093).
+bash scripts/install-npm-cli.sh --prefix "$prefix" "$pin" opencode >/dev/null
 PATH="$prefix/node_modules/.bin:$PATH" go test -tags opencode_integration -count=1 -v -timeout 10m \
   -run '^Test(OpenCode(Integration.*|PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|MergeHarnessReclaimsOrphanedLocks|CatalogEnvMatchesTheBinary|AnthropicModelsMatchTheBinary)|RealOpenCodePinRelaxedUnderCanary|PluginLoadsOnRealOpenCode|ToolExecuteBeforeFiresInSubagentAgainstRealOpenCode|RealPluginDeniesTaskAgainstRealOpenCode|CompactionAutocontinueSuppressionAgainstRealOpenCode|PermissionAskEventAgainstRealOpenCode)$' \
   ./internal/execution/ ./internal/execution/adapters/ ./internal/execution/opencodeplugin/

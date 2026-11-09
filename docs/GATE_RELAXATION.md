@@ -80,10 +80,10 @@ be skipped — a documented convention is exactly what failed here.
 
 `.github/workflows/ci.yml` runs a cheap `changes` job (`name: Change class`)
 that shells `scripts/ci-change-class.sh`, which classifies the pull request's
-diff via `nightgauge ci classify` and publishes three job outputs:
+diff via `nightgauge ci classify` and publishes four job outputs:
 
 ```text
-run_heavy=false   change_class=docs_only   reason=…
+run_heavy=false   pr_heavy=false   change_class=docs_only   reason=…
 ```
 
 The three build-and-test jobs — `go` (`Go build & test`), `sdk` (`SDK build &
@@ -119,6 +119,14 @@ run once, in the queue, and GitHub lands only a commit that passed them there. I
 the rule is removed or cannot be read, a pull request falls back to the classifier
 and runs them itself. The classifier decides for the `merge_group` run, where a
 docs-only group still skips them.
+
+One path set overrides the queue: a diff that touches a script installing or
+running a pinned npm CLI (`PRHeavyPaths` in `internal/ci/classify.go`) sets
+`pr_heavy=true`, and the pull request runs the heavy suites itself. Those
+scripts depend on the runner's own npm, which no unit test stands in for, and
+deferring them let PR #3103 break only in the queue (#3093). Every fail-open
+path emits `pr_heavy=true` as well, so a pull request whose diff cannot be
+classified runs the heavy suites itself rather than deferring to the queue.
 
 ### `change_class` → workflow gate mapping
 

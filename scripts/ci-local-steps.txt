@@ -58,6 +58,7 @@ Action-pin gate regression suite
 workflow action pins resolve
 Proposal-artifact validator regression suite
 PR-review gate/render regression suite
+npm CLI install regression suite
 CLA gate regression suite
 Cache-boundary measurement smoke
 doctor-app-permission-walkthrough.sh regression suite
