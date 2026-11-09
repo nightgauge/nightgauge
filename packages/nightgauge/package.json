@@ -1799,7 +1799,7 @@
   },
   "devDependencies": {
     "@hono/node-server": "^2.1.5",
-    "@playwright/test": "^1.64.1",
+    "@playwright/test": "^1.65.0",
     "@types/node": "^26.6.6",
     "@types/vscode": "^1.85.0",
     "@vitest/coverage-v8": "^5.1.0",
