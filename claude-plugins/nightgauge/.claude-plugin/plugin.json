@@ -1,6 +1,6 @@
 {
   "name": "nightgauge",
-  "version": "1.28.1",
+  "version": "1.29.0",
   "description": "AI-Augmented SDLC Framework - Complete issue-to-PR pipeline with enforceable quality gates",
   "author": {
     "name": "nightgauge"
