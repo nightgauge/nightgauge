@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`doctor` no longer reports the orphaned-process scan unverifiable on a
+  slow host (#2998).** The machine-wide `ps` scan now has a 30s ceiling instead
+  of 5s (a full table took ~6.4s at load 200); the per-pid lookup before a
+  terminate keeps 5s. A wedged `ps`, including one whose child holds stdout
+  open, still ends at the deadline with the unverifiable finding.
+
 - **A re-admitted partial delivery now works only on what is left (#3160).**
   When a `Refs` merge leaves an issue open with a
   `<!-- nightgauge:partial-delivery pr=N -->` comment, the autonomous

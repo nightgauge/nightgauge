@@ -63,8 +63,32 @@ const staleProcessAge = 1 * time.Hour
 // worktree carrier uses — and the incident specimen (31h) still surfaces.
 const staleSidecarClaim = 24 * time.Hour
 
-// psTimeout bounds the enumeration so a wedged `ps` cannot hang `doctor`.
-const psTimeout = 5 * time.Second
+// psTimeout bounds a machine-wide scan (the full `ps` table reads and
+// `git worktree list`) so a wedged command cannot hang `doctor`.
+//
+// It is a fixed ceiling, not a load-scaled one. A full-table `ps` took ~6.4s at
+// load ~200 (#2998), so the old 5s bound read a slow host as an unverifiable
+// scan. 30s is ~4.7x that measurement. The bound only has to separate "slow"
+// from "wedged": Go's stdlib has no portable load-average reader, and a scaled
+// bound would make the wedged case's latency depend on the load it measures.
+// A wedged `ps` still ends here and yields the unverifiable finding. The
+// per-pid precondition lookup keeps its own short bound (psLookupTimeout).
+const psTimeout = 30 * time.Second
+
+// psWaitDelay bounds how long Output waits for stdout to close after the
+// deadline kills the command. Without it a `ps` wrapper whose child keeps the
+// pipe open blocks Output past the deadline.
+const psWaitDelay = time.Second
+
+// boundedOutput runs name with args, killed at timeout, and returns its
+// stdout. WaitDelay keeps a child that inherited stdout from outliving it.
+func boundedOutput(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = psWaitDelay
+	return cmd.Output()
+}
 
 // runningProcess is one row of the process table.
 type runningProcess struct {
@@ -109,12 +133,16 @@ func (p runningProcess) isNightgauge() bool {
 // so the tests read a captured table instead of spawning one (and so the
 // captured table is the only description of `ps` output in the package).
 func enumerateProcesses() (string, error) {
+	return enumerateProcessesWithin(psTimeout)
+}
+
+// enumerateProcessesWithin is enumerateProcesses with an explicit bound, so a
+// test can prove a wedged `ps` ends at the deadline.
+func enumerateProcessesWithin(timeout time.Duration) (string, error) {
 	if runtime.GOOS == "windows" {
 		return "", fmt.Errorf("no ps on %s", runtime.GOOS)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), psTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,etime=,command=").Output()
+	out, err := boundedOutput(timeout, "ps", "-axo", "pid=,etime=,command=")
 	if err != nil {
 		return "", err
 	}
@@ -1095,9 +1123,7 @@ func workspaceDirs(startDir string) []string {
 	if err != nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), psTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", abs, "worktree", "list", "--porcelain").Output()
+	out, err := boundedOutput(psTimeout, "git", "-C", abs, "worktree", "list", "--porcelain")
 	if err != nil {
 		return []string{abs}
 	}
@@ -1122,9 +1148,7 @@ func processParents() map[int]int {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), psTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=").Output()
+	out, err := boundedOutput(psTimeout, "ps", "-axo", "pid=,ppid=")
 	if err != nil {
 		return nil
 	}

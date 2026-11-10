@@ -1,12 +1,11 @@
 package doctor
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
 )
@@ -27,11 +26,13 @@ type processIdentity struct {
 // read (it exited, or `ps` failed); either way it must not be signalled.
 type processLookup func(pid int) (processIdentity, error)
 
+// psLookupTimeout bounds the per-pid `ps -p` re-read before a terminate verb.
+// It stays short: a slow lookup fails toward refusing to signal, the safe side.
+const psLookupTimeout = 5 * time.Second
+
 // psProcessLookup reads a pid's owner and command line from `ps`.
 func psProcessLookup(pid int) (processIdentity, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), psTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-o", "uid=", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	out, err := boundedOutput(psLookupTimeout, "ps", "-o", "uid=", "-o", "command=", "-p", strconv.Itoa(pid))
 	if err != nil {
 		return processIdentity{}, fmt.Errorf("pid %d could not be read: %w", pid, err)
 	}
