@@ -644,6 +644,7 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
 
   // There was nothing to produce.
   issue_closed: "no-work-required",
+  partial_remainder_met: "no-work-required",
   no_changes_produced: "no-work-required",
 
   // The work exists somewhere the pipeline does not look. Recover it FIRST.

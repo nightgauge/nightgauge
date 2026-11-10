@@ -143,3 +143,10 @@ func NewPartialDeliveryReader(client *gh.Client, trustedBots []string) PartialDe
 		issues: gh.NewIssueService(client),
 	}
 }
+
+// NewPartialDeliveryReaderFromGate is the reader for a caller that already
+// holds a trust gate, such as the scheduler (#3160): comments through gate,
+// closing merges through issues.
+func NewPartialDeliveryReaderFromGate(gate *trust.Gate, issues *gh.IssueService) PartialDeliveryReader {
+	return partialDeliveryReader{gate: gate, issues: issues}
+}

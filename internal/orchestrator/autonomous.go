@@ -3930,7 +3930,11 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	// Items may have been recorded as "completed" or "failed" in a previous
 	// session but the issue is still OPEN on GitHub (e.g., due to a cross-repo
 	// routing bug that prevented closing). Re-admit them as candidates.
-	as.reconcileStateAgainstGraph(graph)
+	readmittedCompleted := as.reconcileStateAgainstGraph(graph)
+	// A re-admitted partial delivery whose remainder now verifies on main is
+	// held for a human instead of dispatched (#3160). Runs after the reconcile
+	// released as.mu, because the vet reads the forge and the tree.
+	as.vetPartialReadmits(ctx, readmittedCompleted)
 
 	// 2c. Recover PRs left "sitting" in review — a failed/stale pr-merge leaves
 	// the issue in "In review" where it is neither dispatchable nor blocking, so
@@ -8432,7 +8436,10 @@ func (as *AutonomousScheduler) parkedOnBoard(node *depgraph.Node) (string, bool)
 	return "", false
 }
 
-func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
+// reconcileStateAgainstGraph re-admits or holds completed and failed entries
+// against the live graph. It returns the completed items it re-admitted, for
+// vetPartialReadmits (#3160).
+func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) []CompletedItem {
 	// Resolved before the lock: config.Load reads the filesystem, and the
 	// architecture-approval hold below needs the same label name the gate
 	// itself resolves (pipeline.architecture_approval.approval_label) rather
@@ -8453,6 +8460,7 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 	// Reconcile completed list
 	kept := make([]CompletedItem, 0, len(as.state.Completed))
 	readmitted := 0
+	var readmittedItems []CompletedItem
 	for _, c := range as.state.Completed {
 		key := fmt.Sprintf("%s#%d", c.Repo, c.Number)
 		node, exists := g.Nodes[key]
@@ -8474,6 +8482,7 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 			// Issue is still open on GitHub — remove from completed so it
 			// becomes a candidate again.
 			readmitted++
+			readmittedItems = append(readmittedItems, c)
 			log.Printf("autonomous: re-admitting %s — marked completed but still OPEN on GitHub", key)
 			continue
 		}
@@ -8594,6 +8603,7 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 			readmitted, readmittedFailed, heldFailed, prunedFailed, prunedLifetime, prunedQuarantine)
 		as.persistStateLocked()
 	}
+	return readmittedItems
 }
 
 // AddTokensSpent atomically adds tokens to the spent counter.

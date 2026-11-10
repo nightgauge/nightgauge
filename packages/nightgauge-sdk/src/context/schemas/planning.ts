@@ -311,6 +311,20 @@ export const PlanningContextSchema = z
      * which knowledge the agent already consumed.
      */
     knowledge_read: z.array(z.string()).nullish(),
+    /**
+     * Partial-delivery re-run scope (Issue #3160). Spliced by the scheduler
+     * from `partial-delivery-{N}.json` when an earlier `Refs` PR delivered
+     * the rest of the issue: `criteria` are the remaining acceptance
+     * criteria and are this run's whole scope. Absent on every other run.
+     */
+    partial_delivery: z
+      .object({
+        pr: z.number().int().positive(),
+        criteria: z.array(z.string()),
+        comment_at: z.string().datetime().optional(),
+      })
+      .passthrough()
+      .nullish(),
     created_at: z.string().datetime(),
   })
   // AI agents may include extra fields not in the schema (title, type,

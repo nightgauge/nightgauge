@@ -16,6 +16,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A re-admitted partial delivery now works only on what is left (#3160).**
+  When a `Refs` merge leaves an issue open with a
+  `<!-- nightgauge:partial-delivery pr=N -->` comment, the autonomous
+  scheduler re-checks each remaining criterion against `main` with
+  pr-create's verifier before it re-admits the issue. If every one is met, no
+  run is dispatched: the verdicts are posted on the issue, an Action Center
+  card asks a human to close it, and the issue is held. Otherwise the
+  remaining criteria become the run's whole scope. They are written into
+  `planning-{N}.json` as `partial_delivery`, and the planning and feature-dev
+  prompts say the rest of the issue is already on `main`. A re-run whose
+  feature-dev leaves the branch level with its base ends
+  `not_pipeline_actionable` before feature-validate. It comments the remaining
+  criteria and parks the issue in Backlog instead of spending a validate cycle
+  on a run with no diff.
 - **pr-create no longer reports two kinds of delivered acceptance criteria as
   unmet (#3154).** A criterion naming one identifier wrapped in `{}`, `<>` or
   `[]`, such as `{sessionJwt}`, now matches that identifier as a whole word in
