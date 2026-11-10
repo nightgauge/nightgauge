@@ -496,24 +496,58 @@ suite("demo mode", () => {
     ).catch(() => undefined);
     assert.deepEqual(activated(), UI_TABS);
     // The webview's own answer: it activated each tab the way a click does.
-    // Its reply to the last activateTab arrives after the post, so wait for it.
-    const selected = () =>
-      panel.received
-        .filter(
-          (m): m is { type: string; tab: string } => (m as { type?: unknown }).type === "selectTab"
-        )
-        .map((m) => m.tab)
-        .filter((tab, i, all) => all[i - 1] !== tab);
-    await waitFor(
-      () => (selected().slice(-UI_TABS.length).join() === UI_TABS.join() ? true : undefined),
-      10_000,
-      "the webview's selectTab reply to each UI step"
-    ).catch(() => undefined);
-    assert.deepEqual(
-      selected().slice(-UI_TABS.length),
-      UI_TABS,
-      `webview selectTab: ${selected().join(", ")}`
-    );
+    // Each step waits for a selectTab naming its tab that arrived at or after
+    // that step's own activateTab post, so a timeout names the step and says
+    // whether the post was delivered, late, or never answered (#3025).
+    const isType = (m: unknown, type: string): m is { type: string; tab: string } =>
+      (m as { type?: unknown }).type === type;
+    const postIndexes = panel.posted
+      .map((m, i) => (isType(m, "activateTab") ? i : -1))
+      .filter((i) => i >= 0);
+    const origin = panel.postedAt[postIndexes[0]] ?? Date.now();
+    const offset = (at: number) => `+${at - origin}ms`;
+    const replyAfter = (tab: string, since: number) =>
+      panel.received.findIndex(
+        (m, i) => isType(m, "selectTab") && m.tab === tab && panel.receivedAt[i] >= since
+      );
+    const report = (gaveUpAt: number) => {
+      const steps = UI_TABS.map((tab, step) => {
+        const p = postIndexes[step];
+        const postedAt = panel.postedAt[p];
+        const r = replyAfter(tab, postedAt);
+        const reply = r >= 0 ? offset(panel.receivedAt[r]) : "none";
+        return `  ${step + 1}. ${tab}: posted ${offset(postedAt)}, delivered ${String(
+          panel.delivered[p]
+        )}, reply ${reply}`;
+      });
+      const sequence = panel.received
+        .map((m, i) => (isType(m, "selectTab") ? `${m.tab}@${offset(panel.receivedAt[i])}` : ""))
+        .filter(Boolean);
+      return [
+        ...steps,
+        `  selectTab received: ${sequence.join(", ") || "none"}`,
+        `  gave up at ${offset(gaveUpAt)}`,
+      ].join("\n");
+    };
+    // A hang guard, not a latency ceiling (#2950 ADR-002): a live webview
+    // answers in well under a second; this bound only stops a lost reply
+    // from hanging the suite.
+    const STEP_REPLY_BUDGET_MS = 30_000;
+    for (const [step, tab] of UI_TABS.entries()) {
+      const postedAt = panel.postedAt[postIndexes[step]];
+      try {
+        await waitFor(
+          () => (replyAfter(tab, postedAt) >= 0 ? true : undefined),
+          Math.max(0, postedAt + STEP_REPLY_BUDGET_MS - Date.now()),
+          `step ${step + 1} (${tab}) selectTab reply`
+        );
+      } catch {
+        assert.fail(
+          `step ${step + 1} (${tab}): no selectTab reply within ${STEP_REPLY_BUDGET_MS}ms of its ` +
+            `activateTab post\n${report(Date.now())}`
+        );
+      }
+    }
   });
 
   test("the scenario played to its end without outbound HTTP", async () => {

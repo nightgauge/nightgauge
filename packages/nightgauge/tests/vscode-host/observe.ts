@@ -36,12 +36,22 @@ export interface CapturedPanel {
   messageListeners: Array<(message: unknown) => unknown>;
   /** Every message the extension posted to the webview, in order. */
   posted: unknown[];
+  /** `Date.now()` of each entry in `posted`, by index. */
+  postedAt: number[];
+  /**
+   * What each post's `postMessage` thenable resolved to, by index:
+   * `false` means the webview was not live to receive it, `undefined` that
+   * it has not resolved yet (or rejected).
+   */
+  delivered: (boolean | undefined)[];
   /**
    * Every message the real webview sent the extension, in order. Calls a
    * case makes through `messageListeners` are not recorded here, so this is
    * the webview's own side of the protocol (a tab it actually activated).
    */
   received: unknown[];
+  /** `Date.now()` of each entry in `received`, by index. */
+  receivedAt: number[];
 }
 
 export interface CapturedNotification {
@@ -174,7 +184,10 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
       disposed: false,
       messageListeners: [],
       posted: [],
+      postedAt: [],
+      delivered: [],
       received: [],
+      receivedAt: [],
     };
     const webview = panel.webview;
     const subscribe = webview.onDidReceiveMessage.bind(webview);
@@ -188,6 +201,7 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
       return subscribe(
         (message: unknown) => {
           record.received.push(message);
+          record.receivedAt.push(Date.now());
           return bound(message);
         },
         undefined,
@@ -196,8 +210,17 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
     };
     const post = webview.postMessage.bind(webview);
     (webview as { postMessage: unknown }).postMessage = (message: unknown) => {
-      record.posted.push(message);
-      return post(message);
+      const index = record.posted.push(message) - 1;
+      record.postedAt.push(Date.now());
+      record.delivered.push(undefined);
+      const result = post(message);
+      result.then(
+        (ok) => {
+          record.delivered[index] = ok;
+        },
+        () => undefined
+      );
+      return result;
     };
     panel.onDidDispose(() => {
       record.disposed = true;
