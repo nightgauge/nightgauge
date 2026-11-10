@@ -283,6 +283,8 @@ jobs:
         run: npm ci
       - name: ci-local.sh concurrency and failure-reporting contract
         run: bash scripts/test-ci-local-concurrency.sh
+      - name: ci-local.sh machine-dependency contract
+        run: bash scripts/test-ci-local-machine-deps.sh
 
   install-targets-suite:
     name: "lint suite: agent-skill install targets"

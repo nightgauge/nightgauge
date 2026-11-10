@@ -45,6 +45,12 @@ set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# bash 3.2 (macOS /bin/bash) hung this gate rather than failing it (#3127): exit
+# 2, before any step and anything bash-4-only, with the fix named.
+# shellcheck source=lib/require-bash4.sh
+. "$REPO_ROOT/scripts/lib/require-bash4.sh"
+require_bash4 ci-local.sh
+
 # ── Variables CI never has (#2524) ───────────────────────────────────────────
 #
 # The gate is CI parity, so it must not hand its steps variables GitHub Actions
@@ -63,11 +69,28 @@ cd "$REPO_ROOT"
 CI_ABSENT_ENV=(NIGHTGAUGE_HOST_CI NIGHTGAUGE_SKILL_DIR ELECTRON_RUN_AS_NODE)
 unset "${CI_ABSENT_ENV[@]}"
 
+# ── Fixture commits are never signed (#3127) ─────────────────────────────────
+#
+# Suites build throwaway repositories and commit into them. A user's global
+# `commit.gpgsign=true` with no key loaded failed five suites on a new machine,
+# none of them about signing. GIT_CONFIG_COUNT outranks every config file, so
+# append (never replace) commit/tag.gpgsign=false for every step this gate runs.
+disable_fixture_signing() {
+  local n="${GIT_CONFIG_COUNT:-0}"
+  case "$n" in '' | *[!0-9]*) n=0 ;; esac
+  export "GIT_CONFIG_KEY_$n=commit.gpgsign" "GIT_CONFIG_VALUE_$n=false"
+  export "GIT_CONFIG_KEY_$((n + 1))=tag.gpgsign" "GIT_CONFIG_VALUE_$((n + 1))=false"
+  export GIT_CONFIG_COUNT=$((n + 2))
+}
+disable_fixture_signing
+
 LIST_STEPS=0
 # `--env-probe` reports, from a CHILD process, whether each CI_ABSENT_ENV name
 # is set, and runs no steps. It is the regression test for the scrub: drop the
 # `unset` above and the probe prints `NAME=set` for whatever the caller leaked.
 ENV_PROBE=0
+# `--budget-probe` prints the heavy-step budget and where it came from (#3127).
+BUDGET_PROBE=0
 # `--slot-probe [seconds]` takes one heavy-step slot from the machine-wide
 # budget, reports how many were in use when it got one, holds it for `seconds`
 # (default 0) and hands it back. It exists so the concurrency contract is
@@ -118,6 +141,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --list-steps) LIST_STEPS=1; shift ;;
     --env-probe) ENV_PROBE=1; shift ;;
+    --budget-probe) BUDGET_PROBE=1; shift ;;
     --changed) CHANGED_SCOPE=1; shift ;;
     --no-reuse) NO_REUSE=1; shift ;;
     --ledger-probe) LEDGER_PROBE="${2:-pass}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -171,6 +195,10 @@ if [ "$ENV_PROBE" -eq 1 ]; then
   probe_env="$(env)"
   for name in "${CI_ABSENT_ENV[@]}"; do
     if grep -q "^${name}=" <<<"$probe_env"; then echo "${name}=set"; else echo "${name}=unset"; fi
+  done
+  # What a step's `git` sees for signing, read from a child (#3127).
+  for key in commit.gpgsign tag.gpgsign core.abbrev; do
+    echo "${key}=$(git config --get "$key" 2>/dev/null)"
   done
   exit 0
 fi
@@ -490,6 +518,9 @@ REQUIRED_FILES=(
   scripts/go-test-json-echo.py
   scripts/lib/ci_local_failures.sh
   scripts/test-ci-local-concurrency.sh
+  scripts/test-ci-local-machine-deps.sh
+  scripts/lib/require-bash4.sh
+  scripts/lib/ci-local-budget.sh
   scripts/test-ci-local-changed-scope.sh
   scripts/test-ci-local-bootstrap.sh
   scripts/ci-local-go-test.sh
@@ -575,10 +606,25 @@ fi
 MAIN_PID=$$
 # The MACHINE-WIDE number of concurrent grouped steps. Before #1983 this bounded
 # each process separately, so three gates ran 12 heavy jobs on 12 cores and the
-# kernel started killing children. There is nothing to gain past a handful of
-# slots even for a single gate: #1219 measured the critical path at one 144s
-# step.
-CI_LOCAL_JOBS="${CI_LOCAL_JOBS:-4}"
+# kernel started killing children. The default was then a fixed 4, sized on
+# that 12-core box; on a 30-core box it idles most of the machine (#3127). It is
+# now max(4, ncpu/3), capped at 12, and an explicit CI_LOCAL_JOBS still wins.
+# Only the default changed: the slot algorithm is the one #1983 introduced.
+# shellcheck source=lib/ci-local-budget.sh
+. "$REPO_ROOT/scripts/lib/ci-local-budget.sh"
+if [ -n "${CI_LOCAL_JOBS:-}" ]; then
+  CI_LOCAL_JOBS_SOURCE="CI_LOCAL_JOBS env"
+else
+  _ncpu="$(ci_local_detect_ncpu)"
+  CI_LOCAL_JOBS="$(ci_local_default_jobs "$_ncpu")"
+  CI_LOCAL_JOBS_SOURCE="default max(4, ncpu/3) cap 12, ncpu=$_ncpu"
+  unset _ncpu
+fi
+CI_LOCAL_BUDGET_LINE="Heavy-step budget: CI_LOCAL_JOBS=$CI_LOCAL_JOBS ($CI_LOCAL_JOBS_SOURCE)"
+if [ "$BUDGET_PROBE" -eq 1 ]; then
+  echo "$CI_LOCAL_BUDGET_LINE"
+  exit 0
+fi
 # Seconds to wait for a slot before proceeding anyway with a warning. The budget
 # is advisory — the gate's CORRECTNESS does not depend on it, only the box's
 # health does — so exceeding it beats hanging.
@@ -901,6 +947,7 @@ if [ "$RELEASE_PROBE" -eq 1 ]; then
   exit 0
 fi
 if [ "$LIST_STEPS" -eq 0 ]; then
+  echo "$CI_LOCAL_BUDGET_LINE"
   announce_neighbours
 fi
 
@@ -1383,6 +1430,11 @@ run_step "ci-local.sh step inventory" bash scripts/test-ci-local-inventory.sh
 #     `--lock-probe`, never a second full gate.
 run_step "ci-local.sh concurrency and failure-reporting contract" \
   bash scripts/test-ci-local-concurrency.sh
+
+# 0b'. The gate's dependencies on its host machine (#3127): bash >= 4, a
+#      CPU-sized budget, and unsigned fixture commits. Seconds, via probes.
+run_step "ci-local.sh machine-dependency contract" \
+  bash scripts/test-ci-local-machine-deps.sh
 
 # 0c. The gate's own change-scoping contract (#1985). Third, for the same reason
 #     0b is second: `--changed` can remove the two most expensive steps from a

@@ -534,7 +534,7 @@ fi
 valid_fixture
 git -C "$FIX" init -q
 git -C "$FIX" add -A
-git -C "$FIX" -c user.name=t -c user.email=t@example.invalid commit -qm fixture
+git -C "$FIX" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -qm fixture
 expect_pass "git-backed fixture passes"
 before=$(git -C "$FIX" status --porcelain)
 mkdir -p "$FIX/extra"

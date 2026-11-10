@@ -119,6 +119,10 @@ while IFS= read -r path; do
 done <<EOF
 $(read_array REQUIRED_FILES)
 EOF
+# ci-local.sh sources these before parsing arguments (#3127), so the stub needs
+# the real files, not empty ones.
+cp "$REPO_ROOT/scripts/lib/require-bash4.sh" "$REPO_ROOT/scripts/lib/ci-local-budget.sh" \
+  "$STUB/scripts/lib/"
 
 : > "$STUB/Makefile"
 while IFS= read -r target; do

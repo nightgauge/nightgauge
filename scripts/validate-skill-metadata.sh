@@ -27,6 +27,11 @@
 
 set -uo pipefail
 
+# `local -A` below needs bash 4; exit 2 with the fix named instead (#3127).
+# shellcheck source=lib/require-bash4.sh
+. "$(dirname "$0")/lib/require-bash4.sh"
+require_bash4 validate-skill-metadata.sh
+
 CANONICAL_SOURCE="https://github.com/nightgauge/nightgauge"
 ERRORS=0
 WARNINGS=0
