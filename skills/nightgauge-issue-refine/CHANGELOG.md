@@ -6,6 +6,11 @@ All notable changes to this skill are documented here.
 
 ### Fixed
 
+- **Acceptance criteria guidance names two unsatisfiable shapes (#3154).**
+  Never write a criterion only a human can satisfy in the PR body (phrase it
+  so feature-validate's `pr_note` can carry it), and never set a measured
+  target the issue's own change cannot reach.
+
 - **Step 1.3 reads the issue again, with only trusted comments (#2130).** It
   passed `--json number,title,…` to `nightgauge forge issue view`, whose
   `--json` takes no value, so the command failed and the step reported the

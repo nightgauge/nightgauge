@@ -356,6 +356,8 @@ func stripTitlePrefix(title string) string {
 //	## Changes       (always; sorted file lists)
 //	## Validation    (always)
 //	## Acceptance criteria (only the met ACs; omitted when none is met)
+//	## Notes for acceptance criteria (feature-validate's pr_note per AC;
+//	                  omitted when none carries one)
 //	## ⚠️ Unmet acceptance criteria (every AC not met, or no ACs at all)
 //	## Knowledge     (only when KnowledgeSection is non-empty)
 //	closing keywords (Closes #N only when every AC is met, else Refs #N;
@@ -460,6 +462,22 @@ func RenderBody(snap PRCreateSnapshot) string {
 				b.WriteString(fmt.Sprintf(" (%s: %s)", v.Source, acText(v.Evidence)))
 			}
 			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	// Notes (#3154): the PR-description content feature-validate wrote for a
+	// criterion, which is what meets a criterion asking for it. Untrusted,
+	// like the criterion text.
+	var noted []ACVerdict
+	for _, v := range snap.ACVerdicts {
+		if strings.TrimSpace(v.PRNote) != "" {
+			noted = append(noted, v)
+		}
+	}
+	if len(noted) > 0 {
+		b.WriteString(ACNotesHeading + "\n\n")
+		for _, v := range noted {
+			b.WriteString(fmt.Sprintf("- %s: %s\n", acText(v.Text), acText(v.PRNote)))
 		}
 		b.WriteString("\n")
 	}
@@ -1101,6 +1119,7 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 				Text     string `json:"text"`
 				Status   string `json:"status"`
 				Evidence string `json:"evidence"`
+				PRNote   string `json:"pr_note"`
 			} `json:"acceptance_criteria_verdicts"`
 		}
 		if jsonErr := json.Unmarshal(data, &raw); jsonErr != nil {
@@ -1135,7 +1154,7 @@ func defaultReadCreateContext(ctx context.Context, workdir string, issueNumber i
 		}
 		snap.ManualChecklistOpen = manualChecklistOpen(raw.ManualChecklist)
 		for _, v := range raw.ACVerdicts {
-			validateVerdicts = append(validateVerdicts, ACVerdict{Index: v.Index, Text: v.Text, Status: v.Status, Evidence: v.Evidence})
+			validateVerdicts = append(validateVerdicts, ACVerdict{Index: v.Index, Text: v.Text, Status: v.Status, Evidence: v.Evidence, PRNote: v.PRNote})
 		}
 	}
 

@@ -32,7 +32,7 @@ func TestFeatureValidatePromptCarriesItsOutputContract3031(t *testing.T) {
 	if !slices.Contains(res.SuppliedIncludes, "context-and-board.md") {
 		t.Fatalf("context-and-board.md not supplied; supplied = %v", res.SuppliedIncludes)
 	}
-	for _, want := range []string{"acceptance_criteria_verdicts", "{index, text, status, evidence}", version} {
+	for _, want := range []string{"acceptance_criteria_verdicts", "{index, text, status, evidence, pr_note}", version} {
 		if !strings.Contains(res.Content, want) {
 			t.Errorf("rendered feature-validate prompt lacks %q", want)
 		}

@@ -358,7 +358,7 @@ func TestResolveACVerdicts_PRBodyEvidence(t *testing.T) {
 	other := ACVerdict{Index: 1, Text: "Something else", Status: "met", Evidence: "x"}
 
 	got := ResolveACVerdicts([]string{ac, "Something else"}, []ACVerdict{other}, nil, nil)
-	if got[0].Status != ACUnmet || got[0].Evidence != ACNoRecordedEvidence {
+	if got[0].Status != ACUnmet || got[0].Evidence != ACNoPRNote {
 		t.Errorf("no recorded evidence: got %+v", got[0])
 	}
 
@@ -375,7 +375,7 @@ func TestResolveACVerdicts_PRBodyEvidence(t *testing.T) {
 
 	noResult := ACVerdict{Index: 0, Text: ac, Status: "not_verifiable", Evidence: "PR body content is written by pr-create"}
 	got = ResolveACVerdicts([]string{ac}, []ACVerdict{noResult}, nil, nil)
-	if got[0].Status != ACUnmet || got[0].Evidence != ACNoRecordedEvidence {
+	if got[0].Status != ACUnmet || got[0].Evidence != ACNoPRNote {
 		t.Errorf("evidence with no result: got %+v", got[0])
 	}
 }

@@ -1058,3 +1058,57 @@ func TestVerifyACAgainstDiff_Issue3054(t *testing.T) {
 		t.Fatalf("delivered criterion resolved unmet: %+v", got)
 	}
 }
+
+// #3154: a single identifier wrapped in `{}`, `<>` or `[]` matches as a whole
+// word; #3053's call spans and other spans are unchanged.
+func TestACSpanMatcher_WrappedIdentifier(t *testing.T) {
+	cases := []struct {
+		tok, line string
+		want      bool
+	}{
+		{"{sessionJwt}", "[{ sessionJwt: [] }]", true},
+		{"{sessionJwt}", "const sessionJwtX = 1", false},
+		{"{sessionJwt}", "  return sessionJwt;", true},
+		{"{ sessionJwt }", "sessionJwt", true},
+		{"<Button>", "return <Button onClick={f} />", true},
+		{"<Button>", "ButtonGroup", false},
+		{"[items]", "items.push(x)", true},
+		{"[items]", "$items", false},
+		{"{a, b}", "a, b", false},
+		{"{a, b}", "x = {a, b}", true},
+		{"name()", "name(a, b)", true},
+		{"name()", "xname(", false},
+		{"name()", "name", false},
+	}
+	for _, c := range cases {
+		if got := acSpanMatcher(c.tok)(c.line); got != c.want {
+			t.Errorf("acSpanMatcher(%q)(%q) = %v, want %v", c.tok, c.line, got, c.want)
+		}
+	}
+	if acIsPatternSpan("{sessionJwt}") || acIsPatternSpan("<Button>") {
+		t.Error("a wrapped identifier must reach the matcher, not be read as a pattern")
+	}
+	if !acIsPatternSpan("<issue-number>") {
+		t.Error("a placeholder must stay a pattern")
+	}
+}
+
+// #3154: a criterion naming `{sessionJwt}` is met by a diff that adds the
+// identifier inside an object literal.
+func TestVerifyACAgainstDiff_Issue3154(t *testing.T) {
+	d := memDiff(`diff --git a/src/session.ts b/src/session.ts
+--- a/src/session.ts
++++ b/src/session.ts
+@@ -1 +1 @@
+-export const fields = [];
++export const fields = [{ sessionJwt: [] }];
+`, map[string]string{"src/session.ts": "export const fields = [{ sessionJwt: [] }];\n"})
+	got, ok := VerifyACAgainstDiff("`src/session.ts` adds `{sessionJwt}`.", nil, d, ACTestState{})
+	if !ok || got.Status != ACMet {
+		t.Errorf("got %+v ok=%v, want met", got, ok)
+	}
+	got, ok = VerifyACAgainstDiff("`src/session.ts` adds `{sessionToken}`.", nil, d, ACTestState{})
+	if ok && got.Status == ACMet {
+		t.Errorf("absent identifier: got %+v, want not met", got)
+	}
+}
