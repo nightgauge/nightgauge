@@ -25,3 +25,24 @@ func TestEscapeMarkdown(t *testing.T) {
 		}
 	}
 }
+
+func TestCodeSpan(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"plain path", "/tmp/wt-2865", "`/tmp/wt-2865`"},
+		{"markdown punctuation stays verbatim", `/var/cd_ef/*x*\[y]`, "`/var/cd_ef/*x*\\[y]`"},
+		{"inner backtick", "a`b", "``a`b``"},
+		{"inner double run", "a``b`c", "```a``b`c```"},
+		{"leading backtick", "`a", "`` `a ``"},
+		{"trailing backtick", "a`", "`` a` ``"},
+		{"leading space", " a", "`  a `"},
+		{"newline and bidi become spaces", "a\nb\u202ec", "`a b c`"},
+		{"empty", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := CodeSpan(c.in); got != c.want {
+				t.Errorf("CodeSpan(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}

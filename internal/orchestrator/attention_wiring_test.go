@@ -1553,7 +1553,8 @@ func TestProducerReviewCapNamesTheFindingsAndTheWorktree(t *testing.T) {
 }
 
 // TestProducerReviewCapEscapesFindingText: reviewer text renders literally, so
-// a finding cannot add links or emphasis to the card (#2875).
+// a finding cannot add links or emphasis to the card (#2875). Paths render as
+// code spans, where Markdown is inert, so they stay exact (#3129).
 func TestProducerReviewCapEscapesFindingText(t *testing.T) {
 	as := newAttentionProducerScheduler(t)
 	stored, err := json.Marshal(review.Outcome{Verdict: "catch", Fix: []review.Finding{
@@ -1574,12 +1575,12 @@ func TestProducerReviewCapEscapesFindingText(t *testing.T) {
 		t.Fatalf("got %d requests, want 1", len(reqs))
 	}
 	body := reqs[0].Body
-	for _, want := range []string{`x\[y\](z).go`, `see \[here\](http://evil) \*\*now\*\*`, `/tmp/\<wt\>`} {
+	for _, want := range []string{"`x[y](z).go`", `see \[here\](http://evil) \*\*now\*\*`, "`/tmp/<wt>`"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body lacks %q:\n%s", want, body)
 		}
 	}
-	for _, raw := range []string{"[here](http://evil)", "**now**", "<wt>"} {
+	for _, raw := range []string{"[here](http://evil)", "**now**"} {
 		if strings.Contains(body, raw) {
 			t.Errorf("body carries raw markdown %q:\n%s", raw, body)
 		}
@@ -1650,7 +1651,7 @@ func TestReviewCapOnAnUnchangedTreeFillsTheCard(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("got %d requests, want 1", len(reqs))
 	}
-	for _, want := range []string{"a.go:12", "nil deref on empty slice", root} {
+	for _, want := range []string{"`a.go:12`", "nil deref on empty slice", "`" + root + "`"} {
 		if !strings.Contains(reqs[0].Body, want) {
 			t.Errorf("body lacks %q:\n%s", want, reqs[0].Body)
 		}
@@ -1691,5 +1692,27 @@ func TestReviewCapAfterReleaseRaisesANewCard(t *testing.T) {
 	as.raiseReviewCapReached("octocat/acme", 2865, "Capped", "text")
 	if reqs := openRequests(t, as); len(reqs) != 1 {
 		t.Fatalf("the second cap must raise one card, got %d", len(reqs))
+	}
+}
+
+// A path renders as a code span, verbatim, whatever Markdown punctuation it holds (#3129).
+func TestReviewCapRecordRendersPathsAsCodeSpans(t *testing.T) {
+	line := 7
+	rec := &review.CapRecord{
+		Worktree: "/tmp/a_b/*c*/d`e",
+		Outcome: review.Outcome{Fix: []review.Finding{{
+			Pass: "correctness", Severity: "high", File: "x_y/*z*.go", Line: &line, Claim: "bad_thing",
+		}}},
+	}
+	var b strings.Builder
+	writeReviewCapRecord(&b, rec)
+	body := b.String()
+	for _, want := range []string{
+		"The work is uncommitted in ``/tmp/a_b/*c*/d`e``. Nothing was pushed.",
+		"- high correctness, `x_y/*z*.go:7`: bad\\_thing\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
 	}
 }
