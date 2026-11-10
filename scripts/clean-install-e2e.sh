@@ -29,6 +29,9 @@
 # (check-runtime-assets, check-shipped-code, preflight skill-bundle against ./skills).
 # On an RC run CLEAN_INSTALL_SKILLS_SOURCE points the skill-bundle source at the tag's tree.
 # When GITHUB_STEP_SUMMARY is set the summary table is appended to it.
+# The two bundle-read rows hard-fail on EVERY run kind (schedule, manual
+# dispatch, RC dispatch, local); --smoke evaluates neither. The summary's
+# "Bundle-read rows (G1)" row names the rule and this run's kind (#2997).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,10 +41,24 @@ SMOKE=0
 for arg in "$@"; do
   case "$arg" in
     --smoke) SMOKE=1 ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
+
+# Run kind, named in the summary beside the bundle-read rule (#2997).
+case "${GITHUB_EVENT_NAME:-}" in
+  schedule) RUN_KIND="schedule" ;;
+  workflow_dispatch)
+    if [[ -n "${CLEAN_INSTALL_VSIX:-}" ]]; then RUN_KIND="rc dispatch"; else RUN_KIND="manual dispatch"; fi ;;
+  "") RUN_KIND="local" ;;
+  *) RUN_KIND="$GITHUB_EVENT_NAME" ;;
+esac
+if [[ "$SMOKE" == "1" ]]; then
+  BUNDLE_RULE="not evaluated (--smoke) — this run: $RUN_KIND"
+else
+  BUNDLE_RULE="hard-fail on every run kind — this run: $RUN_KIND"
+fi
 
 OWNER="${E2E_OWNER:-nightgauge}"
 OWNER_TYPE="${E2E_OWNER_TYPE:-org}"
@@ -287,7 +304,8 @@ if [[ "$SMOKE" == "0" ]]; then
   check "PR exists on the throwaway repo" "$([[ -n "$PR_URL" ]] && echo 1 || echo 0)" "${PR_URL:-none}"
   check "PR is MERGED (forge says so)" "$([[ "$PR_STATE" == "MERGED" ]] && echo 1 || echo 0)" "$PR_STATE"
   check "issue is CLOSED" "$([[ "$ISSUE_STATE" == "CLOSED" ]] && echo 1 || echo 0)" "#$ISSUE_NUM $ISSUE_STATE"
-  # A missing bundle-read.json fails both rows; it never passes (#2722, #3036).
+  # Both rows hard-fail on every run kind (schedule, dispatch, RC, local); a
+  # missing bundle-read.json fails both and never passes (#2722, #3036, #2997).
   BUNDLE_READ="$OUT_DIR/bundle-read.json"
   USER_DIRS="$(jq -r '.user_additional_dirs // "missing"' "$BUNDLE_READ" 2>/dev/null || echo missing)"
   BUNDLE_READS="$(jq -r '.bundle_skill_reads // "missing"' "$BUNDLE_READ" 2>/dev/null || echo missing)"
@@ -327,6 +345,7 @@ SUMMARY="$(cat <<TABLE
 | Run outcome               | $OUTCOME |
 | PR                        | ${PR_NUMBER:+#$PR_NUMBER }${PR_URL:-none} ($PR_STATE_SHOWN, merge $PR_MERGE_SHA) |
 | Issue                     | $ISSUE_STATE |
+| Bundle-read rows (G1)     | $BUNDLE_RULE |
 | Cost / duration           | ${COST} USD / $((DURATION_MS / 1000)) s |
 | Findings                  | $(( $(jq -r '.findings | length' "$REPORT") + $([[ -f "$OUT_DIR/findings.txt" ]] && wc -l < "$OUT_DIR/findings.txt" || echo 0) )) (report.json + findings.txt) |
 | Result                    | $([[ "$FAILED" == "0" ]] && echo PASS || echo FAIL) |

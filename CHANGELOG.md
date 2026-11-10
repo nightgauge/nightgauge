@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The clean-install gate (G1) now states its rule for the two bundle-read rows:
+  they hard-fail on every run kind, scheduled runs included, and the run summary's
+  _Bundle-read rows (G1)_ row names the rule and the run kind (#2997).
 - The release run's Open VSX confirmation now reads each target's registry record
   (`/api/<namespace>/<extension>/<target>/<version>`) instead of the search-indexed
   listing, so a published version is confirmed within one poll. The index lagged
