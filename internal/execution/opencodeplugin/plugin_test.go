@@ -559,8 +559,10 @@ func TestNodeHarnessGatesJS(t *testing.T) {
 
 	t.Run("a hung verb times out and blocks closed", func(t *testing.T) {
 		root := t.TempDir()
+		// Must outlast gates.js's SPAWN_TIMEOUT_MS (15000ms); exec so the
+		// timeout's SIGTERM reaches sleep itself and no child holds the pipes.
 		sleeper := filepath.Join(t.TempDir(), "sleeper.sh")
-		if err := os.WriteFile(sleeper, []byte("#!/bin/sh\nsleep 10\n"), 0o755); err != nil {
+		if err := os.WriteFile(sleeper, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		res := runNodeHarness(t, node, root, "echo hi", sleeper, nil)

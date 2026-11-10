@@ -53,7 +53,12 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
-const SPAWN_TIMEOUT_MS = 5000;
+// Bounds one gate verb. The gate is fail-closed and runs synchronously on
+// opencode's thread, so a longer bound only delays a hung gate, while a short
+// one falsely denies tool calls under load: 5000ms timed out (spawnSync
+// ETIMEDOUT) in TestExperimentalToolIDsClassified under -race at load avg ~42
+// (#3025).
+const SPAWN_TIMEOUT_MS = 15000;
 
 // MARKER prefixes a careful-gate denial (#1635, unchanged).
 const MARKER = "[nightgauge-gate:careful]";
@@ -258,6 +263,7 @@ function runGateVerb(args, payload, cwd, marker) {
     );
   }
 
+  const startedAt = Date.now();
   const result = spawnSync(bin, args, {
     input: JSON.stringify(payload),
     cwd,
@@ -268,12 +274,12 @@ function runGateVerb(args, payload, cwd, marker) {
 
   if (result.error) {
     throw new Error(
-      `${marker} the gate could not run (${result.error.message}); the tool call is blocked closed`
+      `${marker} the gate could not run (${result.error.message}) after ${Date.now() - startedAt}ms (bound ${SPAWN_TIMEOUT_MS}ms); the tool call is blocked closed`
     );
   }
   if (result.signal) {
     throw new Error(
-      `${marker} the gate timed out or was killed (signal ${result.signal}); the tool call is blocked closed`
+      `${marker} the gate timed out or was killed (signal ${result.signal}) after ${Date.now() - startedAt}ms (bound ${SPAWN_TIMEOUT_MS}ms); the tool call is blocked closed`
     );
   }
   if (result.status !== 0) {

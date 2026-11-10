@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The opencode plugin's gates no longer deny tool calls on a loaded
+  machine.** Each gate verb may now run for 15 seconds instead of 5 before
+  the call is blocked closed, and a timed-out gate's error names how long it
+  ran.
 - **`doctor` no longer reports the orphaned-process scan unverifiable on a
   slow host (#2998).** The machine-wide `ps` scan now has a 30s ceiling instead
   of 5s (a full table took ~6.4s at load 200); the per-pid lookup before a
