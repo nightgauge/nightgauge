@@ -845,7 +845,7 @@ func HoldForTerminalKind(kind string) string {
 	switch kind {
 	case TerminalKindArchitectureApprovalRequired:
 		return HoldArchitectureApproval
-	case TerminalKindNotPipelineActionable, TerminalKindBlockedOutcomeHold:
+	case TerminalKindNotPipelineActionable, TerminalKindBlockedOutcomeHold, TerminalKindPartialRemainderMet:
 		return HoldOperatorResume
 	}
 	// The parked kinds (#1631) are faults of the configuration, not decisions
@@ -1143,6 +1143,13 @@ const StageBlockedOutcomePrefix = "BLOCKED — "
 // as a non-fault outcome — no retry, no global cooldown, no lifetime-cap
 // increment (#2551).
 const TerminalKindBlockedOutcomeHold = "blocked_outcome_hold"
+
+// TerminalKindPartialRemainderMet is a scheduler-local routing value, not a
+// table kind: a re-admitted partial delivery whose every remaining criterion
+// now verifies on main (#3160). No run is dispatched; the scheduler posts the
+// verdicts, raises a card, and holds the issue for a human to close it, since
+// closing over a recorded remainder is never the pipeline's call (#3089).
+const TerminalKindPartialRemainderMet = "partial_remainder_met"
 
 // TerminalKindOutOfScopeBlocked is a scheduler-local routing value, not a
 // table kind: a run its stage stopped correctly because the issue is blocked

@@ -250,6 +250,11 @@ type RuntimeState struct {
 	// the hook's Ready, not to completion's In Review (#2706).
 	PartialDelivery bool `json:"partialDelivery,omitempty"`
 
+	// PartialRerun is set at run start when the issue carries a pending
+	// partial-delivery remainder (#3160): an earlier `Refs` PR delivered the
+	// rest of the issue, and this run's whole scope is the listed criteria.
+	PartialRerun *PartialRerun `json:"partialRerun,omitempty"`
+
 	// MainCheckVerdict + MainCheckFailing are the post-merge verification of
 	// the base branch (#1249, #2055): whether the merge was green (the merge
 	// commit's tree is the merged PR head's, the head's required checks passed,
@@ -1897,6 +1902,41 @@ func (rs *RuntimeState) SetPartialDelivery() {
 	rs.PartialDelivery = true
 }
 
+// PartialRerun is the remainder a re-admitted partial-delivery run targets
+// (#3160): the PR that delivered the rest of the issue and the criteria its
+// partial-delivery comment listed as still unmet.
+type PartialRerun struct {
+	PR       int      `json:"pr"`
+	Criteria []string `json:"criteria"`
+}
+
+// SetPartialRerun records this run's partial-delivery scope (#3160). An empty
+// criteria list clears it: an unlisted remainder is no scope.
+func (rs *RuntimeState) SetPartialRerun(pr int, criteria []string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if len(criteria) == 0 {
+		rs.PartialRerun = nil
+		return
+	}
+	rs.PartialRerun = &PartialRerun{PR: pr, Criteria: append([]string(nil), criteria...)}
+}
+
+// PartialRerunScope returns a copy of this run's partial-delivery scope, or
+// nil when the run is not a partial-delivery re-run (#3160).
+func (rs *RuntimeState) PartialRerunScope() *PartialRerun {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return copyPartialRerun(rs.PartialRerun)
+}
+
+func copyPartialRerun(p *PartialRerun) *PartialRerun {
+	if p == nil {
+		return nil
+	}
+	return &PartialRerun{PR: p.PR, Criteria: append([]string(nil), p.Criteria...)}
+}
+
 // SetMainCheckOutcome records the post-merge observation of the base branch
 // (#1249). An empty verdict is ignored so a caller that has nothing to say
 // cannot erase an earlier observation. failing is copied.
@@ -3275,6 +3315,7 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		MergedCommitSha:          rs.MergedCommitSha,
 		MergedAt:                 rs.MergedAt,
 		PartialDelivery:          rs.PartialDelivery,
+		PartialRerun:             copyPartialRerun(rs.PartialRerun),
 		MainCheckVerdict:         rs.MainCheckVerdict,
 		MainCheckFailing:         append([]string(nil), rs.MainCheckFailing...),
 		// The two durable latch halves travel with every copy and therefore

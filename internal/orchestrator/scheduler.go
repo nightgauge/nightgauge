@@ -783,6 +783,21 @@ type issueGetter interface {
 
 // Scheduler reads the project board and dispatches pipeline executions.
 type Scheduler struct {
+	// partialDeliveryRead replaces readPartialDelivery's forge read in tests
+	// (#3160). nil in production.
+	partialDeliveryRead func(ctx context.Context, repo string, issue int) (hooks.PartialDeliveryStatus, error)
+	// noDiffCommenter replaces the issue commenter the partial re-run stop
+	// and the re-admit vet post through, in tests (#3160). nil in production.
+	noDiffCommenter NoDiffCommenter
+	// partialRemainderVerify and issueCommentPost replace the re-admit vet's
+	// tree verifier and comment post in tests (#3160). nil in production.
+	partialRemainderVerify func(workdir string, issue int, criteria []string) []pmstages.ACVerdict
+	issueCommentPost       func(ctx context.Context, repo string, issue int, body string) error
+	// partialCheckoutAtBase replaces checkoutAtBase, the re-admit vet's
+	// check that its checkout is clean and on origin's base, in tests. nil in
+	// production.
+	partialCheckoutAtBase func(root string) error
+
 	// endpointSlots is the per-endpoint slot ledger of endpoint-aware
 	// OpenCode dispatch (#1679), guarded by mu (endpoint_select.go).
 	endpointSlots *endpointLedger
@@ -4371,6 +4386,7 @@ func validateStageOutput(stage state.PipelineStage, workspaceRoot string, issueN
 	}
 	if stage == state.StageFeaturePlanning {
 		spliceACReconcile(workspaceRoot, issueNumber, outputFile)
+		splicePartialDelivery(workspaceRoot, issueNumber, outputFile)
 	}
 	return nil
 }
@@ -6080,6 +6096,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			return
 		}
 	}
+	// A re-admitted partial delivery (#3160): the remainder its comment lists
+	// is the run's whole scope. Only a run that still has feature-dev ahead of
+	// it can use a scope, so a pr-merge or later resume makes no forge read.
+	if stagesInclude(stages[stageIdx:], state.StageFeatureDev) {
+		s.scopePartialRerun(ctx, runtime, item, stageWorkspace(runtime, workspaceRoot))
+	}
+
 	// One blocked-outcome re-check per run (#2897), so a blocker that stays
 	// closed cannot re-run a stage forever.
 	blockerRechecked := false
@@ -6713,6 +6736,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		if stage == state.StageFeatureDev && effectiveContextType == "planning" {
 			prompt += renderPlanHandoffForPrompt(ws, item.Number)
 		}
+
+		// Partial-delivery re-run scope (#3160). "" for an unscoped run, so its
+		// prompt stays byte-identical.
+		prompt += partialRerunPromptBlock(stage, runtime.PartialRerunScope())
 
 		// Determine output context file path (worktree-rooted). contextFile
 		// (input) was already resolved above alongside effectiveContextType.
@@ -7528,6 +7555,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						}
 					}
 				}
+			}
+		}
+
+		// A partial-delivery re-run whose feature-dev left the branch level with
+		// its base ends here, before feature-validate (#3160). Both a clean exit
+		// and a gate no-op verdict (zero files recorded, or files claimed but
+		// none on disk) reach it; the branch-against-base comparison inside is
+		// what decides. Either way there is nothing to validate, and the
+		// remainder is posted, not closed.
+		if stage == state.StageFeatureDev &&
+			((err == nil && exitCode == 0) || (gateRan && gateRes.Kind == gates.KindNoOp)) {
+			if detail, stopped := s.stopNoDiffPartialRerun(ctx, runtime, item, stageWorkspace(runtime, workspaceRoot)); stopped {
+				runtime.SetStageError(stage, detail)
+				terminalFailureKind = TerminalKindNotPipelineActionable
+				return
 			}
 		}
 

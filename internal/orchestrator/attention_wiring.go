@@ -2055,6 +2055,56 @@ func BuildPartialDeliveryCloseRefused(repo string, issue int, runID string, pr i
 	}
 }
 
+// ProducerPartialRemainderMet names the card for a re-admitted partial
+// delivery whose every remaining criterion now verifies on main (#3160).
+const ProducerPartialRemainderMet = "partial-remainder-met"
+
+// BuildPartialRemainderMet constructs the card the autonomous scheduler raises
+// instead of re-dispatching an issue whose partial-delivery remainder all
+// verifies on main (#3160). The verdicts come from the scheduler's own
+// verifier run; criteria and evidence are escaped so a "<!--" in one cannot
+// plant a marker.
+func BuildPartialRemainderMet(repo string, issue, pr int, verdicts []pmstages.ACVerdict) attention.DecisionRequest {
+	owner, name := splitRepo(repo)
+	var list strings.Builder
+	for _, v := range verdicts {
+		list.WriteString("- " + strings.ReplaceAll(v.Text, "<!--", "&lt;!--"))
+		if v.Evidence != "" {
+			list.WriteString(" (" + v.Source + ": " + strings.ReplaceAll(v.Evidence, "<!--", "&lt;!--") + ")")
+		}
+		list.WriteString("\n")
+	}
+	return attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("%s:%s#%d", ProducerPartialRemainderMet, repo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("#%d: PR #%d's remaining criteria now verify on main", issue, pr),
+		Body: fmt.Sprintf(
+			"#%d stayed open after PR #%d, a partial delivery. Before re-running it, the scheduler "+
+				"re-checked each remaining criterion against `main` with pr-create's verifier, and every "+
+				"one is now met. No run was dispatched, and the issue is held.\n\n"+
+				"Verdicts:\n\n%s\n"+
+				"Close the issue if this evidence holds, or re-plan it anyway.",
+			issue, pr, list.String()),
+		Producer: ProducerPartialRemainderMet,
+		Context: attention.Context{
+			Repo: repo, Issue: issue,
+			Blocker: fmt.Sprintf("partial-delivery remainder from PR #%d verifies on main", pr),
+		},
+		Options: []attention.Option{
+			{ID: "close", Label: "Close the issue", Verb: attention.VerbIssueClose,
+				Style: attention.StylePrimary},
+			{ID: "replan", Label: "Re-plan anyway",
+				Verb:  attention.VerbQueueAdd,
+				Args:  map[string]any{"owner": owner, "repo": name, "issueNumber": issue},
+				Style: attention.StyleDefault},
+			noopOption("leave", "Leave open"),
+		},
+		DefaultAction: "leave",
+		ExpiresAt:     expiryFromNow(72 * time.Hour),
+	}
+}
+
 // ProducerBoardStatusWriteFailed names the run-scoped producer for a project
 // board status write the extension could not make (#1501).
 const ProducerBoardStatusWriteFailed = "board-status-write-failed"
