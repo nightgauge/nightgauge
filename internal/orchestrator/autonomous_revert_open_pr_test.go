@@ -366,7 +366,7 @@ func TestMoveIssueToInReview_RequiresOpenPREvidence(t *testing.T) {
 // PR it already has. #1501's runaway kill mid-gate otherwise sat in In review
 // with nothing left to re-run it.
 func TestRevertFailedIssueStatus_TransientKindWithOpenPRMovesToReady(t *testing.T) {
-	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindStageCapKill, TerminalKindApiOverloaded} {
+	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindStageCapKill, TerminalKindHostSlept, TerminalKindApiOverloaded} {
 		t.Run(kind, func(t *testing.T) {
 			buf := withCapturedLog(t)
 			as, writes, _ := revertFixture(t, map[int]string{42: "feat/1-x"})
@@ -411,7 +411,7 @@ func TestRevertFailedIssueStatus_NonTransientKindWithOpenPRStaysInReview(t *test
 // stall-kill route (fixed backoff, no lifetime charge) and returns the issue to
 // Ready on top of its open PR, where the resume path re-runs pr-merge (#2554).
 func TestOnPipelineComplete_TransientFailureAfterPRCreate_RevertsToReady(t *testing.T) {
-	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindStageCapKill, TerminalKindStreamIdleTimeout} {
+	for _, kind := range []string{TerminalKindRunawayProgress, TerminalKindStallKill, TerminalKindStageCapKill, TerminalKindHostSlept, TerminalKindStreamIdleTimeout} {
 		t.Run("kind="+kind, func(t *testing.T) {
 			buf := withCapturedLog(t)
 			as, _, _ := revertFixture(t, map[int]string{42: "feat/1-x"})

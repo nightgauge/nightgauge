@@ -26,6 +26,21 @@
       "signal": ""
     },
     {
+      "input": "[host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "exit 1: [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[HOST-SLEPT]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -2851,6 +2866,286 @@
       "signal": ""
     },
     {
+      "input": "[host-slept] | [merge-conflict]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | merge-queue-enqueue-exhausted",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | stage_budget_exceeded:",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | network unavailable: extended github connectivity loss",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | adapter_incompatible",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [model-stream-stalled]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | stream idle timeout",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | overloaded",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | socket connection was closed",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [rate-limit-quota-exhausted]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [adapter-auth-failed]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [environment-halt]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [gate-plugin-missing]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | ai_apicallerror context_length_exceeded",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | not_found_error model",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | pipeline-start-failure issue-closed",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [blocked-dependency]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | architecture approval required",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | github-quota-low",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | github-network-outage",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | secondary rate limit",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [pr-merge-unmerged",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [stage:worktree-containment]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [not-pipeline-actionable]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [dev-produced-no-changes]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [dev-handoff-missing]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [dev-step-cap-reached]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [dev-step-progress-unproven]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [push-auth-failed]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | premature turn end",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | worktree_uncommitted",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | budget_ceiling_hit",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [runaway-progress-exceeded]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [runaway-ceiling-exceeded]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [cost-cap-exceeded]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | stage-no-output-timeout",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [stage-cap-killed]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [stall-killed]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | pipeline_budget_exceeded",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | schema validation",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [no-changes-produced]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [review-cap-reached]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [validation-failed]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [validation-inconclusive]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [branch-forked]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [commit-orphaned]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [adapter-permission-rejected]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [permission-denied]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | stage_context_unreadable",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | dev_build_verification_missing",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | dev_build_verification_failed",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | [dev-context-stale]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | dev_tests_failed",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | pr_merge_lookup_failed",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | subagent crash",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[merge-conflict] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[merge-conflict] | merge-queue-enqueue-exhausted",
       "kind": "merge_conflict",
       "signal": ""
@@ -3119,6 +3414,11 @@
       "input": "[merge-conflict] | subagent crash",
       "kind": "merge_conflict",
       "signal": ""
+    },
+    {
+      "input": "merge-queue-enqueue-exhausted | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "merge-queue-enqueue-exhausted | [merge-conflict]",
@@ -3391,6 +3691,11 @@
       "signal": ""
     },
     {
+      "input": "stage_budget_exceeded: | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "stage_budget_exceeded: | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -3659,6 +3964,11 @@
       "input": "stage_budget_exceeded: | subagent crash",
       "kind": "budget_exceeded",
       "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "network unavailable: extended github connectivity loss | [merge-conflict]",
@@ -3931,6 +4241,11 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "adapter_incompatible | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -4199,6 +4514,11 @@
       "input": "adapter_incompatible | subagent crash",
       "kind": "adapter_incompatible",
       "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[model-stream-stalled] | [merge-conflict]",
@@ -4471,6 +4791,11 @@
       "signal": ""
     },
     {
+      "input": "stream idle timeout | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "stream idle timeout | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -4739,6 +5064,11 @@
       "input": "stream idle timeout | subagent crash",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "overloaded | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "overloaded | [merge-conflict]",
@@ -5011,6 +5341,11 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "socket connection was closed | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "socket connection was closed | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -5279,6 +5614,11 @@
       "input": "socket connection was closed | subagent crash",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[rate-limit-quota-exhausted] | [merge-conflict]",
@@ -5551,6 +5891,11 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[adapter-auth-failed] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[adapter-auth-failed] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -5819,6 +6164,11 @@
       "input": "[adapter-auth-failed] | subagent crash",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[environment-halt] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[environment-halt] | [merge-conflict]",
@@ -6091,6 +6441,11 @@
       "signal": "environment_halt"
     },
     {
+      "input": "[gate-plugin-missing] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[gate-plugin-missing] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -6359,6 +6714,11 @@
       "input": "[gate-plugin-missing] | subagent crash",
       "kind": "gate_plugin_missing",
       "signal": "gate_plugin_missing"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "ai_apicallerror context_length_exceeded | [merge-conflict]",
@@ -6631,6 +6991,11 @@
       "signal": ""
     },
     {
+      "input": "not_found_error model | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "not_found_error model | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -6899,6 +7264,11 @@
       "input": "not_found_error model | subagent crash",
       "kind": "model_unavailable",
       "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "pipeline-start-failure issue-closed | [merge-conflict]",
@@ -7171,6 +7541,11 @@
       "signal": ""
     },
     {
+      "input": "[blocked-dependency] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[blocked-dependency] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -7439,6 +7814,11 @@
       "input": "[blocked-dependency] | subagent crash",
       "kind": "blocked_dependency",
       "signal": ""
+    },
+    {
+      "input": "architecture approval required | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "architecture approval required | [merge-conflict]",
@@ -7711,6 +8091,11 @@
       "signal": "architecture_approval_required"
     },
     {
+      "input": "github-quota-low | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "github-quota-low | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -7979,6 +8364,11 @@
       "input": "github-quota-low | subagent crash",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
+    },
+    {
+      "input": "github-network-outage | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "github-network-outage | [merge-conflict]",
@@ -8251,6 +8641,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "secondary rate limit | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "secondary rate limit | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -8519,6 +8914,11 @@
       "input": "secondary rate limit | subagent crash",
       "kind": "github_rate_limited",
       "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[pr-merge-unmerged | [merge-conflict]",
@@ -8791,6 +9191,11 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[stage:worktree-containment] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -9059,6 +9464,11 @@
       "input": "[stage:worktree-containment] | subagent crash",
       "kind": "containment_breach",
       "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[not-pipeline-actionable] | [merge-conflict]",
@@ -9331,6 +9741,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[dev-produced-no-changes] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -9599,6 +10014,11 @@
       "input": "[dev-produced-no-changes] | subagent crash",
       "kind": "dev_produced_no_changes",
       "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[dev-handoff-missing] | [merge-conflict]",
@@ -9871,6 +10291,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-cap-reached] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[dev-step-cap-reached] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -10139,6 +10564,11 @@
       "input": "[dev-step-cap-reached] | subagent crash",
       "kind": "dev_step_cap_reached",
       "signal": ""
+    },
+    {
+      "input": "[dev-step-progress-unproven] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[dev-step-progress-unproven] | [merge-conflict]",
@@ -10411,6 +10841,11 @@
       "signal": ""
     },
     {
+      "input": "[push-auth-failed] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[push-auth-failed] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -10679,6 +11114,11 @@
       "input": "[push-auth-failed] | subagent crash",
       "kind": "git_transport_auth_failed",
       "signal": ""
+    },
+    {
+      "input": "premature turn end | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "premature turn end | [merge-conflict]",
@@ -10951,6 +11391,11 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "worktree_uncommitted | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -11219,6 +11664,11 @@
       "input": "worktree_uncommitted | subagent crash",
       "kind": "worktree_uncommitted",
       "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "budget_ceiling_hit | [merge-conflict]",
@@ -11491,6 +11941,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[runaway-progress-exceeded] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -11759,6 +12214,11 @@
       "input": "[runaway-progress-exceeded] | subagent crash",
       "kind": "runaway_progress",
       "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[runaway-ceiling-exceeded] | [merge-conflict]",
@@ -12031,6 +12491,11 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[cost-cap-exceeded] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -12299,6 +12764,11 @@
       "input": "[cost-cap-exceeded] | subagent crash",
       "kind": "budget_exceeded",
       "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "stage-no-output-timeout | [merge-conflict]",
@@ -12571,6 +13041,11 @@
       "signal": ""
     },
     {
+      "input": "[stage-cap-killed] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[stage-cap-killed] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -12839,6 +13314,11 @@
       "input": "[stage-cap-killed] | subagent crash",
       "kind": "stage_cap_kill",
       "signal": ""
+    },
+    {
+      "input": "[stall-killed] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[stall-killed] | [merge-conflict]",
@@ -13111,6 +13591,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "pipeline_budget_exceeded | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -13379,6 +13864,11 @@
       "input": "pipeline_budget_exceeded | subagent crash",
       "kind": "budget_exceeded",
       "signal": ""
+    },
+    {
+      "input": "schema validation | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "schema validation | [merge-conflict]",
@@ -13651,6 +14141,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[no-changes-produced] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -13919,6 +14414,11 @@
       "input": "[no-changes-produced] | subagent crash",
       "kind": "no_changes_produced",
       "signal": ""
+    },
+    {
+      "input": "[review-cap-reached] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[review-cap-reached] | [merge-conflict]",
@@ -14191,6 +14691,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-failed] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[validation-failed] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -14459,6 +14964,11 @@
       "input": "[validation-failed] | subagent crash",
       "kind": "validation_failed",
       "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[validation-inconclusive] | [merge-conflict]",
@@ -14731,6 +15241,11 @@
       "signal": ""
     },
     {
+      "input": "[branch-forked] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[branch-forked] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -14999,6 +15514,11 @@
       "input": "[branch-forked] | subagent crash",
       "kind": "branch_forked",
       "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[commit-orphaned] | [merge-conflict]",
@@ -15271,6 +15791,11 @@
       "signal": ""
     },
     {
+      "input": "[adapter-permission-rejected] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "[adapter-permission-rejected] | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -15539,6 +16064,11 @@
       "input": "[adapter-permission-rejected] | subagent crash",
       "kind": "adapter_permission_rejected",
       "signal": ""
+    },
+    {
+      "input": "[permission-denied] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[permission-denied] | [merge-conflict]",
@@ -15811,6 +16341,11 @@
       "signal": ""
     },
     {
+      "input": "stage_context_unreadable | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "stage_context_unreadable | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -16079,6 +16614,11 @@
       "input": "stage_context_unreadable | subagent crash",
       "kind": "stage_context_unreadable",
       "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "dev_build_verification_missing | [merge-conflict]",
@@ -16351,6 +16891,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_failed | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "dev_build_verification_failed | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -16619,6 +17164,11 @@
       "input": "dev_build_verification_failed | subagent crash",
       "kind": "dev_build_verification_failed",
       "signal": ""
+    },
+    {
+      "input": "[dev-context-stale] | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "[dev-context-stale] | [merge-conflict]",
@@ -16891,6 +17441,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "dev_tests_failed | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -17159,6 +17714,11 @@
       "input": "dev_tests_failed | subagent crash",
       "kind": "dev_tests_failed",
       "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "pr_merge_lookup_failed | [merge-conflict]",
@@ -17431,6 +17991,11 @@
       "signal": ""
     },
     {
+      "input": "subagent crash | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
       "input": "subagent crash | [merge-conflict]",
       "kind": "merge_conflict",
       "signal": ""
@@ -17699,6 +18264,26 @@
       "input": "subagent crash | pr_merge_lookup_failed",
       "kind": "pr_merge_lookup_failed",
       "signal": ""
+    },
+    {
+      "input": "[host-slept] | session limit",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "session limit | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "[host-slept] | usage limit",
+      "kind": "host_slept",
+      "signal": "host_slept"
+    },
+    {
+      "input": "usage limit | [host-slept]",
+      "kind": "host_slept",
+      "signal": "host_slept"
     },
     {
       "input": "stream idle timeout | session limit",

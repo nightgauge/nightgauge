@@ -360,6 +360,12 @@ type AutonomousState struct {
 	// Status() returns, never persisted.
 	EndpointSlots *EndpointSlotsStatus `json:"endpointSlots,omitempty"`
 
+	// SleepAssertion reports whether the daemon holds its macOS sleep
+	// assertion (caffeinate) while the scheduler runs, and its pid (#3136).
+	// Runtime-only, like BoardRecoveryInFlight: stamped onto the snapshot
+	// Status() returns, never persisted.
+	SleepAssertion *SleepAssertionStatus `json:"sleepAssertion,omitempty"`
+
 	// LifetimeIssueFailures tracks failures across sessions (NOT cleared on
 	// Resume). Used to enforce the per-issue terminal-failure cap so a single
 	// broken issue cannot be retried indefinitely. Cleared only by an explicit
@@ -629,6 +635,7 @@ func isTransientRevertKind(kind string) bool {
 	case TerminalKindStallKill,
 		TerminalKindRunawayProgress,
 		TerminalKindStageCapKill,
+		TerminalKindHostSlept,
 		TerminalKindStreamIdleTimeout,
 		TerminalKindRateLimitQuotaExhausted,
 		TerminalKindApiOverloaded,
@@ -930,6 +937,12 @@ const graphIncompleteThreshold = 0.10
 // It sits above the existing Scheduler — uses the depgraph to determine
 // what to run and the existing pipeline infrastructure to run it.
 type AutonomousScheduler struct {
+	// sleepAssertion keeps a macOS host awake while runLoop runs (#3136).
+	// Built lazily by sleepAssertionLocked so a scheduler constructed as a
+	// struct literal in a test still has one.
+	sleepAssertion     *SleepAssertion
+	sleepAssertionOnce sync.Once
+
 	scheduler *Scheduler
 	// trustGateOverride replaces the scheduler's eligibility gate for the
 	// autonomous loop's own decisions. Tests only; nil in production, where
@@ -1687,6 +1700,16 @@ func (as *AutonomousScheduler) runLoop(ctx context.Context) error {
 			as.writeCrashExitEvent(panicMsg, stack)
 		}
 	}()
+
+	// Hold the host awake for as long as this loop runs (#3136). The deferred
+	// Stop runs on every exit, a panic included; `-w` ends the child if the
+	// daemon itself dies. The scheduler runs inside the daemon, so its pid is
+	// the one caffeinate watches.
+	sleepAssertion := as.sleepAssertionHandle()
+	if err := sleepAssertion.Start(os.Getpid()); err != nil {
+		log.Printf("autonomous: %v — the host may idle-sleep while the scheduler runs", err)
+	}
+	defer sleepAssertion.Stop()
 
 	as.persistState()
 
@@ -2946,6 +2969,13 @@ func (as *AutonomousScheduler) PauseRepo(repo, reason, triggeredBy string, issue
 			return false
 		}
 	}
+	// #3136: a run lost to host sleep is infrastructure. The extension's halt
+	// policy skips it by kind; this is the Go side of the same decision, read
+	// from the outcome onPipelineComplete already recorded.
+	if triggeredBy == haltTagSlotFailure && as.latestFailureKindLocked(repo, issue) == TerminalKindHostSlept {
+		log.Printf("autonomous: declining repo halt for %s — #%d lost its stage to host sleep (%s)", repo, issue, reason)
+		return false
+	}
 	if as.state.PausedRepos == nil {
 		as.state.PausedRepos = make(map[string]*RepoPauseRecord)
 	}
@@ -3609,7 +3639,20 @@ func (as *AutonomousScheduler) Status() AutonomousState {
 	// operator board mutations are pending whenever autonomous is running.
 	snapshot.BoardRecoveryInFlight = as.BoardRecoveryInFlight()
 	snapshot.EndpointSlots = endpointSlots
+	sa := as.sleepAssertionHandle().Status()
+	snapshot.SleepAssertion = &sa
 	return snapshot
+}
+
+// sleepAssertionHandle returns the scheduler's sleep assertion, building it on
+// first use.
+func (as *AutonomousScheduler) sleepAssertionHandle() *SleepAssertion {
+	as.sleepAssertionOnce.Do(func() {
+		if as.sleepAssertion == nil {
+			as.sleepAssertion = NewSleepAssertion()
+		}
+	})
+	return as.sleepAssertion
 }
 
 // rateLimitPressureWindow is the rolling window (in cycles) over which
@@ -5829,6 +5872,34 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			}
 			as.persistStateLocked()
 			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			return
+		}
+
+		// A stage that lost more than HostSleepThreshold to host sleep (#3136)
+		// failed because a wall-clock limit expired while the machine slept,
+		// not because of anything in the issue. Same recovery as a stall kill:
+		// fixed backoff, NO lifetime-cap increment, NO cascade feed, board back
+		// to Ready, no repo halt (PauseRepo declines a slot-failure halt for
+		// this kind). The card tells the operator how to keep the host awake.
+		if terminalFailureKind == TerminalKindHostSlept {
+			as.recordFailureLocked(repo, issue, title, now,
+				"host slept during the stage (infrastructure) — will retry after backoff", terminalFailureKind)
+			as.scheduleRetryLocked(key, terminalFailureKind, "host slept during the stage", time.Now().Add(stallKillBackoff))
+			log.Printf("autonomous: host-slept for %s — infrastructure, retry in %v (no lifetime-cap increment, no repo halt)",
+				key, stallKillBackoff)
+			as.persistStateLocked()
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue, terminalFailureKind) })
+			as.dispatchAttention(func() { as.raiseHostSlept(repo, issue, title, failureDetail) })
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
 			return
 		}
 
@@ -8092,6 +8163,20 @@ func (as *AutonomousScheduler) loadState() {
 // state file and the status display. Besides the display clutter, the state
 // file grew unboundedly for retry-heavy issues. Dedup-on-write keeps one row
 // per issue with `AttemptCount` + first/last timestamps.
+// latestFailureKindLocked returns the kind of the latest recorded failure of
+// repo#number, or "" when none is recorded. Caller holds as.mu.
+func (as *AutonomousScheduler) latestFailureKindLocked(repo string, number int) string {
+	if as.state == nil || number == 0 {
+		return ""
+	}
+	for i := range as.state.Failed {
+		if f := as.state.Failed[i]; f.Repo == repo && f.Number == number {
+			return f.Kind
+		}
+	}
+	return ""
+}
+
 func (as *AutonomousScheduler) recordFailureLocked(repo string, number int, title, failedAt, reason, kind string) {
 	for i := range as.state.Failed {
 		f := &as.state.Failed[i]

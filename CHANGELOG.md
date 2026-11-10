@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A macOS host no longer idle-sleeps while the autonomous scheduler runs: the
+  daemon holds `caffeinate -i -s -w <pid>` from scheduler start to stop, and
+  `nightgauge autonomous status` (text and `--json`) reports whether it is held
+  and its pid. A stage that fails after the host slept more than 60 s through it
+  is booked `host_slept`: it retries after a backoff, returns to Ready, charges
+  no lifetime attempt and halts no repository, and its failure comment and card
+  say how long the host slept and how to prevent it. `nightgauge doctor` warns
+  (`NGD113`) when system sleep is enabled on AC power (#3136).
 - `scripts/ci-local.sh` no longer stalls for 30 minutes when a concurrent step is
   killed before it starts. Its heavy-step slot used to name the gate's own pid,
   which stays alive, so the slot could not be reclaimed. The gate now records the

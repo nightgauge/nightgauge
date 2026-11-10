@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- A run stopped because the host went to sleep no longer halts its repository.
+  It shows a warning that it will retry, and its issue comment says how long the
+  host slept and how to keep it awake (`sudo pmset -c sleep 0`) instead of
+  reporting a validation failure (#3136).
+
 ## [0.8.5] - 2026-11-09
 
 0.8.1, 0.8.2, 0.8.3 and 0.8.4 were tagged but never published. The release

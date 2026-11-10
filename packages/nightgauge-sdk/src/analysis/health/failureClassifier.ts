@@ -215,6 +215,7 @@ export function classifyFailureCategory(
 export type TerminalFailureKind =
   | "stall_kill"
   | "stage_cap_kill" // Issue #2812 — stopped at stage_hard_caps or stage_time_caps; recovers like stall_kill
+  | "host_slept" // Issue #3136 — the host slept >60 s during the failed stage; recovers like stall_kill
   | "budget_exceeded"
   | "validation_error"
   | "subagent_crash"
@@ -290,6 +291,7 @@ export type TerminalFailureKind =
 export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "stall_kill",
   "stage_cap_kill", // Issue #2812 — stopped at stage_hard_caps or stage_time_caps; recovers like stall_kill
+  "host_slept", // Issue #3136 — the host slept >60 s during the failed stage; recovers like stall_kill
   "budget_exceeded",
   "validation_error",
   "subagent_crash",
