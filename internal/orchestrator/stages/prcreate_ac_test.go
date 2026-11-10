@@ -784,3 +784,65 @@ func TestResolveACVerdicts_IndexMatchedPRBodyVerdictNeverMet(t *testing.T) {
 		t.Errorf("text-matched PR-body verdict: %+v, want met", got[0])
 	}
 }
+
+// #3154: a criterion asking for PR-description content is met by a pr_note
+// feature-validate wrote for it, and unmet, with the reason named, without one.
+func TestResolveACVerdicts_PRNote(t *testing.T) {
+	const ac = "The PR records the cause of the false negative."
+	noted := ACVerdict{Index: 0, Text: ac, Status: "not_verifiable",
+		PRNote: "acSpanMatcher compared `{sessionJwt}` literally"}
+	got := ResolveACVerdicts([]string{ac}, []ACVerdict{noted}, nil, nil)
+	if got[0].Status != ACMet || got[0].Source != ACSourceValidate || got[0].PRNote != noted.PRNote {
+		t.Errorf("with a pr_note: got %+v, want met carrying the note", got[0])
+	}
+	if !IssueClosedBy(got) {
+		t.Error("a criterion met by its pr_note must let the PR close the issue")
+	}
+
+	bare := ACVerdict{Index: 0, Text: ac, Status: "not_verifiable", Evidence: "PR body is written by pr-create"}
+	got = ResolveACVerdicts([]string{ac}, []ACVerdict{bare}, nil, nil)
+	if got[0].Status != ACUnmet || got[0].Evidence != ACNoPRNote {
+		t.Errorf("without a pr_note: got %+v, want unmet with %q", got[0], ACNoPRNote)
+	}
+	body := RenderBody(PRCreateSnapshot{IssueNumber: 3154, ACVerdicts: got})
+	if !strings.Contains(body, UnmetACHeading) || !strings.Contains(body, "- "+ac) {
+		t.Errorf("the unmet criterion must be named:\n%s", body)
+	}
+
+	unmet := ACVerdict{Index: 0, Text: ac, Status: "unmet", PRNote: "a note"}
+	if got = ResolveACVerdicts([]string{ac}, []ACVerdict{unmet}, nil, nil); got[0].Status != ACUnmet {
+		t.Errorf("a note must not overturn an unmet verdict: got %+v", got[0])
+	}
+
+	// An index-matched verdict may still only add unmet (#2669).
+	byIndex := ACVerdict{Index: 0, Text: "a different criterion", Status: "not_verifiable", PRNote: "a note"}
+	if got = ResolveACVerdicts([]string{ac}, []ACVerdict{byIndex}, nil, nil); got[0].Status == ACMet {
+		t.Errorf("an index-matched note must not close the issue: got %+v", got[0])
+	}
+}
+
+// #3154: the broadened PR-body phrasing.
+func TestACAsksForPRBody(t *testing.T) {
+	for _, s := range []string{
+		"the command and its result are in the PR body",
+		"The PR description explains the boundary.",
+		"The pull request body lists both cases.",
+		"The PR records the cause.",
+		"the PR lists the affected files",
+		"The PR names the follow-up issue.",
+	} {
+		if !acAsksForPRBody(s) {
+			t.Errorf("%q: not read as a PR-body criterion", s)
+		}
+	}
+	for _, s := range []string{
+		"The parser records the cause in `log.txt`.",
+		"`acSpanMatcher` names the identifier.",
+		"A PR is created for the branch.",
+		"`the PR records` appears only in a code span.",
+	} {
+		if acAsksForPRBody(s) {
+			t.Errorf("%q: read as a PR-body criterion", s)
+		}
+	}
+}

@@ -37,7 +37,7 @@ pr-create decides `Closes #N` versus `Refs #N` from these verdicts and its own
 deterministic diff check. For each criterion in `ac-reconcile-{N}.json`
 (`.acceptance_criteria[]`, in index order), judge it against
 `git diff <base>...HEAD` and record one entry in `acceptance_criteria_verdicts`
-as `{index, text, status, evidence}`: `index` is the 0-based index from
+as `{index, text, status, evidence, pr_note}`: `index` is the 0-based index from
 `ac-reconcile-{N}.json`, `text` is that criterion's text copied verbatim, and
 `status` is one of the values below. pr-create ignores any other shape: do not
 write the key `acceptance_criteria`, a `verdict` field, or 1-based indexes.
@@ -53,8 +53,17 @@ by `evidence`: run the command and record it with its result, for example
 `go test ./internal/ipc -run 'TestX' -count=50: ok internal/ipc 119.1s`.
 pr-create writes the body and carries that evidence beside the criterion; a
 verdict with no command and result is reported unmet with "feature-validate
-recorded no command and result for this criterion" (#2941). Do not write that
-the result "will be in the PR body" in place of the result.
+recorded no pr_note or command result for this criterion" (#2941). Do not write
+that the result "will be in the PR body" in place of the result.
+
+A criterion that asks for PR-description content ("the PR description lists",
+"the PR records the cause", "the PR names") is answered by `pr_note`: write the
+prose the PR should carry (the cause, the boundary, the list) as one plain
+string, grounded in what the diff and the run show. pr-create renders it under
+`## Notes for acceptance criteria`, so the criterion is met by what the body
+then says (#3154). Omit `pr_note` for any other criterion, and never write one
+for content the change does not support: a note on an `unmet` verdict does not
+lift it.
 
 The issue closes only when every criterion resolves `met` (#2655), and an
 `unmet` from any source wins. So do not mark a criterion `unmet` because it is
@@ -63,7 +72,7 @@ diff check or tree re-run lifts your `not_verifiable`; it never lifts your
 `unmet`. With no `ac-reconcile-{N}.json`, leave the array empty.
 
 ```bash
-# One object per criterion: {index, text, status, evidence}
+# One object per criterion: {index, text, status, evidence, pr_note}
 AC_VERDICTS_JSON='[]'
 ```
 

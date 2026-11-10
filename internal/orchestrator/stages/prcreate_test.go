@@ -739,3 +739,30 @@ func TestRenderBody_NamesMissingACReconcile(t *testing.T) {
 		t.Errorf("missing artifact must be named and must not close:\n%s", body)
 	}
 }
+
+// #3154: pr_note renders under ACNotesHeading, untrusted text rewritten.
+func TestRenderBody_ACNotes(t *testing.T) {
+	snap := PRCreateSnapshot{IssueNumber: 42, ACVerdicts: []ACVerdict{
+		{Index: 0, Text: "The PR records the cause.", Status: ACMet, Source: ACSourceValidate,
+			PRNote: "literal matching;\nthis closes #999"},
+		{Index: 1, Text: "Other", Status: ACMet, Source: ACSourceDiff, Evidence: "x"},
+	}}
+	body := RenderBody(snap)
+	i := strings.Index(body, ACNotesHeading)
+	if i < 0 {
+		t.Fatalf("no notes section:\n%s", body)
+	}
+	if j := strings.Index(body, "## Acceptance criteria"); j < 0 || j > i {
+		t.Errorf("notes must follow the met criteria:\n%s", body)
+	}
+	if !strings.Contains(body, "- The PR records the cause.: literal matching; this Refs #999\n") {
+		t.Errorf("note not rendered on one line with closing keywords rewritten:\n%s", body)
+	}
+	if BodyClosesIssue(body, "o/r", 999) || !BodyClosesIssue(body, "o/r", 42) {
+		t.Errorf("closing keywords wrong:\n%s", body)
+	}
+	snap.ACVerdicts[0].PRNote = ""
+	if strings.Contains(RenderBody(snap), ACNotesHeading) {
+		t.Error("no note, no section")
+	}
+}

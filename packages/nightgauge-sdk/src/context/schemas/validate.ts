@@ -485,7 +485,8 @@ export const ValidateContextSchema = z
      * (#2595), judged against the branch diff. pr-create renders `Refs #N`
      * instead of `Closes #N` when any is `unmet`. Status synonyms
      * (satisfied/unsatisfied/undetectable) are normalised, and an unknown
-     * value reads as `not_verifiable`, matching the Go resolver.
+     * value reads as `not_verifiable`, matching the Go resolver. `pr_note`
+     * carries the PR-description content a criterion asks for (#3154).
      */
     acceptance_criteria_verdicts: z
       .array(
@@ -494,6 +495,12 @@ export const ValidateContextSchema = z
           text: z.string(),
           status: z.preprocess(normalizeACStatus, z.enum(AC_VERDICT_STATUSES)),
           evidence: optionalString(),
+          /**
+           * PR-description content for this criterion (#3154). pr-create
+           * renders it under `## Notes for acceptance criteria`; a criterion
+           * asking for PR-description content is met by it.
+           */
+          pr_note: optionalString(),
         })
       )
       .nullish(),

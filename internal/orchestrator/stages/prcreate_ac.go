@@ -42,6 +42,11 @@ type ACVerdict struct {
 	// Uncommitted lists the uncommitted or untracked paths a diff verdict's
 	// evidence rests on (#2669): the commit owner has not committed them yet.
 	Uncommitted []string `json:"uncommitted_paths,omitempty"`
+	// PRNote is the prose feature-validate wrote for the PR body about this
+	// criterion (#3154). pr-create renders it under ACNotesHeading, so a
+	// criterion asking for PR-description content is met by what the body
+	// then carries.
+	PRNote string `json:"pr_note,omitempty"`
 }
 
 // NormalizeACStatus maps the verdict vocabulary feature-validate writes, and
@@ -111,7 +116,8 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 		m, hasVal := matched[i]
 		var valV ACVerdict
 		if hasVal {
-			valV = ACVerdict{Status: NormalizeACStatus(m.v.Status), Source: ACSourceValidate, Evidence: strings.TrimSpace(m.v.Evidence)}
+			valV = ACVerdict{Status: NormalizeACStatus(m.v.Status), Source: ACSourceValidate,
+				Evidence: strings.TrimSpace(m.v.Evidence), PRNote: strings.TrimSpace(m.v.PRNote)}
 			if valV.Status == ACNotVerifiable && !detMet && acNegativeEvidence(valV.Evidence, i) {
 				valV.Status = ACUnmet
 			}
@@ -125,8 +131,10 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 		if hasVal && m.byIndex && valV.Status != ACUnmet {
 			valV, hasVal = ACVerdict{}, false
 		}
+		note := ""
 		if hasVal {
 			cands = append(cands, valV)
+			note = valV.PRNote
 		}
 
 		v := ACVerdict{Status: ACNotVerifiable, Source: ACSourceNone, Evidence: "no rule or verdict could check this criterion"}
@@ -148,7 +156,8 @@ func ResolveACVerdicts(criteria []string, validate []ACVerdict, det *preflight.A
 				}
 			}
 		}
-		v.Index, v.Text = i, text
+		// The note renders whichever source decided the verdict (#3154).
+		v.Index, v.Text, v.PRNote = i, text, note
 		out = append(out, v)
 	}
 	return out
@@ -247,9 +256,12 @@ func firstACStatus(cands []ACVerdict, status string) (ACVerdict, bool) {
 	return ACVerdict{}, false
 }
 
-// acPRBodyRE matches a criterion that asks for evidence in the PR body: "the
-// command and its result are in the PR body".
-var acPRBodyRE = regexp.MustCompile(`(?i)\b(?:in|to|into) the (?:PR|pull request) (?:body|description)\b`)
+// acPRBodyRE matches a criterion that asks for content in the PR body: "the
+// command and its result are in the PR body", "the PR description lists the
+// boundary", "the PR records the cause" (#2941, #3154). It runs on prose with
+// code spans stripped.
+var acPRBodyRE = regexp.MustCompile(`(?i)\b(?:PR|pull request) (?:body|description)\b` +
+	`|\bthe PR (?:records|lists|names)\b`)
 
 // acResultEvidenceRE matches evidence that records a command's result, not
 // only that something was looked at: a zero exit status, Go's `ok  <pkg>`
@@ -261,27 +273,36 @@ var acResultEvidenceRE = regexp.MustCompile(`(?i)\bexit(?:ed|s)?\s*(?:code\s*|st
 // carries one is never promoted, whatever result shape it also holds.
 var acFailureEvidenceRE = regexp.MustCompile(`(?i)\bFAIL(?:ED|S|URE)?\b|\bdid not\b|\bnot (?:pass|succeed)|\bexit(?:ed|s)?\s*(?:code\s*|status\s*)?(?:=\s*)?[1-9]\d*\b|\b[1-9]\d*\s+failed\b`)
 
-// ACNoRecordedEvidence is the reason a PR-body criterion is unmet when
-// feature-validate recorded nothing for it to carry (#2941).
-const ACNoRecordedEvidence = "feature-validate recorded no command and result for this criterion"
+// ACNoPRNote is the reason a PR-body criterion is unmet when feature-validate
+// recorded nothing for the body to carry: no pr_note and no command result
+// (#2941, #3154).
+const ACNoPRNote = "feature-validate recorded no pr_note or command result for this criterion"
 
 func acAsksForPRBody(text string) bool {
 	return acPRBodyRE.MatchString(acStripCodeSpans(text))
 }
 
 // acPRBodyVerdict judges feature-validate's verdict on a criterion that asks
-// for a command and its result in the PR body (#2941). pr-create writes the
-// body and carries the verdict's evidence beside the criterion, so the part
-// feature-validate could not check itself (what the body will say) is done
-// here: a not_verifiable verdict whose evidence records a result becomes met.
-// No verdict, or evidence recording no result, is unmet with that reason —
-// the body would carry nothing. An unmet verdict stays unmet.
+// for content in the PR body (#2941, #3154). pr-create writes the body, so the
+// part feature-validate could not check itself (what the body will say) is
+// done here. A verdict that is not unmet becomes met when it carries a
+// pr_note, which the body renders under ACNotesHeading, or when it is
+// not_verifiable with evidence recording a command result, which the body
+// carries beside the criterion. No verdict, or one with neither, is unmet
+// with ACNoPRNote: the body would carry nothing. An unmet verdict stays unmet.
 func acPRBodyVerdict(v ACVerdict, ok bool) (ACVerdict, bool) {
-	if !ok || v.Evidence == "" || !acResultEvidenceRE.MatchString(v.Evidence) || acFailureEvidenceRE.MatchString(v.Evidence) {
-		if ok && v.Status == ACUnmet {
-			return v, true
+	if ok && v.Status == ACUnmet {
+		return v, true
+	}
+	if ok && v.PRNote != "" {
+		v.Status = ACMet
+		if v.Evidence == "" {
+			v.Evidence = "pr_note rendered under " + strings.TrimPrefix(ACNotesHeading, "## ")
 		}
-		return ACVerdict{Status: ACUnmet, Source: ACSourceValidate, Evidence: ACNoRecordedEvidence}, true
+		return v, true
+	}
+	if !ok || v.Evidence == "" || !acResultEvidenceRE.MatchString(v.Evidence) || acFailureEvidenceRE.MatchString(v.Evidence) {
+		return ACVerdict{Status: ACUnmet, Source: ACSourceValidate, Evidence: ACNoPRNote}, true
 	}
 	if v.Status == ACNotVerifiable {
 		v.Status = ACMet
@@ -352,6 +373,11 @@ func OpenACs(verdicts []ACVerdict) []ACVerdict {
 // post-merge hook parses the section under it to name the remainder on the
 // issue, so the two must agree.
 const UnmetACHeading = "## ⚠️ Unmet acceptance criteria"
+
+// ACNotesHeading heads the section where pr-create renders feature-validate's
+// per-criterion pr_note (#3154): the PR-description content a criterion asks
+// for.
+const ACNotesHeading = "## Notes for acceptance criteria"
 
 // acCheckboxBody rebuilds an issue-body fragment from criteria text so the
 // deterministic reconciler can re-run against the branch tree.

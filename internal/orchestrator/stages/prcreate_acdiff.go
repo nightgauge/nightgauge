@@ -1398,19 +1398,45 @@ var acKeyValueRE = regexp.MustCompile(`^["']?([A-Za-z_][A-Za-z0-9_.\-]*)["']?\s*
 // followed by empty parentheses, such as `name()` or `Type.Method()` (#3053).
 var acCallSpanRE = regexp.MustCompile(`^(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*([A-Za-z_$][A-Za-z0-9_$]*)\(\)$`)
 
+// acWrappedIdentRE parses a span that is one identifier wrapped in `{}`, `<>`
+// or `[]`, such as `{sessionJwt}` (#3154). Spaces are allowed inside `{}` and
+// `[]`; a span holding more than one identifier does not match.
+var acWrappedIdentRE = regexp.MustCompile(`^(?:\{\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\}|<([A-Za-z_$][A-Za-z0-9_$]*)>|\[\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\])$`)
+
+// acWrappedIdent returns the identifier a wrapped-identifier span holds, or
+// "" when tok is not one.
+func acWrappedIdent(tok string) string {
+	m := acWrappedIdentRE.FindStringSubmatch(tok)
+	if m == nil {
+		return ""
+	}
+	for _, g := range m[1:] {
+		if g != "" {
+			return g
+		}
+	}
+	return ""
+}
+
 // acSpanMatcher returns the test a line must pass to contain tok. A key-value
 // span matches the same pair written in any quoting and spacing, as JSON,
 // YAML or a Go literal, with the key compared case-insensitively and the
 // value exactly (#3030). A call span such as `name()` or `obj.name()` matches
 // its last name followed by an open parenthesis, optionally after a generic,
-// so declarations and calls with arguments count (#3053). Any other span
-// matches as a literal substring.
+// so declarations and calls with arguments count (#3053). A single identifier
+// wrapped in `{}`, `<>` or `[]` matches that identifier as a whole word, so
+// `{sessionJwt}` matches `[{ sessionJwt: [] }]` but not `sessionJwtX`
+// (#3154). Any other span matches as a literal substring.
 func acSpanMatcher(tok string) func(line string) bool {
 	m := acKeyValueRE.FindStringSubmatch(tok)
 	if m == nil {
 		if c := acCallSpanRE.FindStringSubmatch(tok); c != nil {
 			return regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(c[1]) +
 				`\s*(?:<[^>]*>)?\s*\(`).MatchString
+		}
+		if id := acWrappedIdent(tok); id != "" {
+			return regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(id) +
+				`(?:[^A-Za-z0-9_$]|$)`).MatchString
 		}
 		return func(line string) bool { return strings.Contains(line, tok) }
 	}

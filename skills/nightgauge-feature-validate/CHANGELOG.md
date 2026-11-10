@@ -10,6 +10,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Step 6.0 records a `pr_note` for a criterion that asks for PR-description
+  content (#3154).** pr-create renders it under `## Notes for acceptance
+criteria`, so "the PR records the cause" can be met instead of always
+  reading unmet.
+
 - Phase 1.4 freshness check no longer aborts a merge that is already open, so a staged
   resolution survives (#2755).
 

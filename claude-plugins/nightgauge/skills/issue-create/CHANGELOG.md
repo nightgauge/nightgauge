@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The acceptance-criteria quality bar names two unsatisfiable shapes
+  (#3154).** Never write a criterion only a human can satisfy in the PR body
+  (phrase it so feature-validate's `pr_note` can carry it), and never set a
+  measured target the issue's own change cannot reach.
+
 ### Added
 
 - Epic bodies carry `Falsifier:` and `Demand:` lines in `## Summary`, and the

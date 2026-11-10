@@ -241,6 +241,12 @@ Before finalizing any issue, check:
 - Does every acceptance criterion have a matching `## Verification` bullet a
   reviewer could run? An AC with no way to observe it is a wish, not a
   criterion — rewrite or drop it.
+- Can the pipeline satisfy each criterion (#3154)? Never write one only a human
+  can satisfy in the PR body: pr-create writes the body, and a PR-description
+  criterion is met only through feature-validate's per-criterion `pr_note`, so
+  phrase it as "the PR description records X" with X derivable from the
+  change. Never set a measured target (a percentage, a latency, a count) that
+  this issue's own change cannot reach.
 - Does the ask preserve one path? Under the no-backwards-compat doctrine
   (`AGENTS.md` § Repository operating contract) an issue must never request a compat
   shim, a migration fallback, a feature flag that keeps both behaviors, or

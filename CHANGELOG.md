@@ -14,6 +14,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **pr-create no longer reports two kinds of delivered acceptance criteria as
+  unmet (#3154).** A criterion naming one identifier wrapped in `{}`, `<>` or
+  `[]`, such as `{sessionJwt}`, now matches that identifier as a whole word in
+  the diff instead of the literal braces. A criterion asking for PR-description
+  content ("the PR records the cause", "the PR description lists") is met by a
+  `pr_note` feature-validate writes for it, which pr-create renders under
+  `## Notes for acceptance criteria`; without one it stays unmet, with the
+  missing note named. The Claude plugin is now 1.29.1 so installed plugins
+  receive the updated feature-validate, issue-create and issue-refine skills.
+
 ### Changed
 
 - `scripts/ci-local.sh` now runs six long, independent suites concurrently,

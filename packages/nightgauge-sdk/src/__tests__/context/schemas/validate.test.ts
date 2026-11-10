@@ -434,6 +434,22 @@ describe("ValidateContextSchema — acceptance_criteria_verdicts (#2595)", () =>
     expect(ValidateContextSchema.safeParse(minimalValidate).success).toBe(true);
   });
 
+  it("carries a per-criterion pr_note (#3154)", () => {
+    const parsed = ValidateContextSchema.parse({
+      ...minimalValidate,
+      acceptance_criteria_verdicts: [
+        { index: 0, text: "The PR records the cause", status: "met", pr_note: "literal match" },
+        { index: 1, text: "b", status: "met", pr_note: "" },
+        { index: 2, text: "c", status: "met" },
+      ],
+    });
+    expect(parsed.acceptance_criteria_verdicts?.map((v) => v.pr_note)).toEqual([
+      "literal match",
+      null,
+      undefined,
+    ]);
+  });
+
   it("rejects a verdict without its criterion index", () => {
     const result = ValidateContextSchema.safeParse({
       ...minimalValidate,

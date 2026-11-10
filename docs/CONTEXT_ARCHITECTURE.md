@@ -708,6 +708,8 @@ issue #1608)
 | `manual_checklist`                         | array  | Yes      | Manual verification items                                                                           |
 | `manual_checklist[].item`                  | string | Yes      | Checklist item description                                                                          |
 | `manual_checklist[].verified`              | bool   | Yes      | Whether item was verified                                                                           |
+| `acceptance_criteria_verdicts`             | array  | No       | `{index, text, status, evidence, pr_note}` per criterion (#2595)                                    |
+| `acceptance_criteria_verdicts[].pr_note`   | string | No       | PR-description content; rendered under `## Notes for acceptance criteria` (#3154)                   |
 | `project_type`                             | string | Yes      | Detected project type                                                                               |
 | `notes`                                    | string | No       | Additional notes                                                                                    |
 | `created_at`                               | string | Yes      | ISO 8601 timestamp                                                                                  |

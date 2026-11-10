@@ -7,7 +7,7 @@ description: Analyze a raw GitHub issue and rewrite it with structured sections,
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.0.3"
+  version: "1.0.4"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Glob Grep Bash
 ---
@@ -340,6 +340,17 @@ So that {business or user value delivered}.
 Each criterion must be observable and testable. Avoid vague criteria like "works
 correctly" — instead: "When X happens, Y is displayed" or "Calling Z returns
 status 200 with field F present."
+
+Two criteria are never satisfiable, so never write them (#3154):
+
+- A criterion only a human can satisfy in the PR body. pr-create writes the
+  body itself; a PR-description criterion is met only through
+  feature-validate's per-criterion `pr_note`. Phrase it as "the PR description
+  records X", with X derivable from the change (the cause, the boundary, the
+  list).
+- A measured target (a percentage, a latency, a count) that this issue's own
+  change cannot reach. State the target the change moves, or split the rest
+  into its own issue.
 
 **4. Technical Notes** (always include):
 
