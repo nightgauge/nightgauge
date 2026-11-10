@@ -3303,6 +3303,23 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         return;
       }
 
+      // Host sleep (#3136): a wall-clock limit expired while the machine slept.
+      // The Go layer books it host_slept — backoff, board back to Ready, no
+      // lifetime attempt — and declines the repository halt for it, so halting
+      // here would override that decision over a sleeping laptop.
+      if (haltKind === "host_slept") {
+        const failedStage = pipelineResult?.failedStage ?? "unknown";
+        this.logger.info(
+          "Skipping haltQueueOnSlotFailure — the host slept during the stage; Go layer retries with backoff",
+          { failedIssue: slot.issueNumber, failedStage }
+        );
+        void vscode.window.showWarningMessage(
+          `Nightgauge: the host slept while issue #${slot.issueNumber} was at ${failedStage} — it will retry automatically. ` +
+            "Keep the host awake with `sudo pmset -c sleep 0`, or leave the autonomous scheduler's caffeinate assertion running."
+        );
+        return;
+      }
+
       // Architecture-approval pause (#4222): a deliberate, per-issue,
       // human-owned decision point — NOT a failure. The orchestrator halted
       // BEFORE feature-dev (zero dev/validate spend), the outcome classifier

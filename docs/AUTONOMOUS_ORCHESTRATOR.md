@@ -540,6 +540,34 @@ circuit breaker > rate limit > health gate > epic checkpoint > author trust.
 See [Safety Rails Reference](#safety-rails-reference) for configuration
 details.
 
+### macOS hosts must not idle-sleep while the scheduler runs
+
+A macOS host set to idle-sleep keeps dispatching in DarkWake, then the system
+force-sleeps it mid-stage. A stage's wall-clock limit (a gate timeout, a stall
+or stage cap) keeps running while the host sleeps, so the run used to be booked
+as a defect of the issue: it halted the repository and charged a lifetime
+attempt (#3136). Three things now cover it:
+
+- **The daemon holds a sleep assertion while the scheduler runs.** On macOS,
+  starting the scheduler spawns `caffeinate -i -s -w <daemon pid>`, which holds
+  `PreventUserIdleSystemSleep` and, on AC power, `PreventSystemSleep`. Stopping
+  the scheduler kills it; `-w` ends it if the daemon dies. On other platforms
+  this does nothing and is logged once. `nightgauge autonomous status` prints
+  `Sleep assertion: held (caffeinate pid N)`, and `--json` carries
+  `sleepAssertion` (`held`, `pid`, `reason`).
+- **A run that lost time to sleep is booked `host_slept`.** When a stage fails
+  and its wall-clock span exceeds its monotonic (awake) span by more than 60 s,
+  the scheduler books it `host_slept` before any retry, escalation or stall
+  recovery. Like `stall_kill`, it backs off 30 minutes, returns the issue to
+  Ready, charges no lifetime attempt, feeds no cascade breaker and halts no
+  repository. The failure comment and an FYI Action Center card say how long the
+  host slept and how to stop it.
+- **`nightgauge doctor` warns** ([`NGD113`](DOCTOR.md#ngd113)) when
+  `pmset -g custom` reports `sleep` other than `0` on AC power.
+
+The assertion only covers the time the scheduler runs. To keep the host awake
+regardless, run `sudo pmset -c sleep 0`.
+
 ### 6. State Persistence
 
 The scheduler writes its full state to `autonomous/state.json` in the
@@ -1228,6 +1256,11 @@ halt data has one wire shape rather than two that can drift.
   `stall_kill`. Unchanged by #1148 and pinned by test — the Go scheduler
   auto-recovers all of them. This skip set predates #1148 and is
   deliberately untouched by it.
+- **`host_slept`** (#3136). The host slept through the stage, so the limit
+  that expired measured sleep, not the issue. Go books it like `stall_kill` and
+  `PauseRepo` declines a slot-failure halt for an issue whose latest recorded
+  failure is `host_slept`. See
+  [macOS hosts must not idle-sleep](#macos-hosts-must-not-idle-sleep-while-the-scheduler-runs).
 - **`adapter_auth_failed`** (#1169). The pipeline-start auth pre-flight refused
   to launch. Go already routes the kind as retryable infra and says so —
   "no lifetime-cap increment, no cascade feed, no pause" — so halting here

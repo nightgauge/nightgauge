@@ -49,6 +49,7 @@ import {
   postFailureComment,
   ARCHITECTURE_APPROVAL_REQUIRED_MARKER,
   BLOCKED_DEPENDENCY_MARKER,
+  HOST_SLEPT_MARKER,
 } from "../../src/utils/failureComment";
 import { Logger } from "../../src/utils/logger";
 
@@ -585,5 +586,48 @@ describe("postFailureComment — push auth refusal (Issue #2742)", () => {
     );
     expect(cmd).toContain("did not pass tests");
     expect(cmd).not.toContain("Push refused for authentication");
+  });
+});
+
+describe("postFailureComment — host slept (Issue #3136)", () => {
+  beforeEach(() => {
+    execMock.mockReset();
+    execMock.mockImplementation((_cmd: string, _opts: unknown, cb: Function) => {
+      cb(null, "", "");
+    });
+  });
+
+  it("says how long the host slept and how to prevent it, and never calls it a validation failure", async () => {
+    // The text orchestrator.HostSleptStageError writes for a gate timeout
+    // that expired while the host slept.
+    const result = makeResult({
+      failedStage: "feature-validate",
+      budgetExceeded: false,
+      error: new Error(
+        `${HOST_SLEPT_MARKER} the host slept for 15m27s during feature-validate (wall clock 20m0s, awake 4m33s). ` +
+          "This run was booked as infrastructure, not as a failure of this issue, and will retry. " +
+          "To keep the host awake: the daemon holds a `caffeinate -i -s` assertion while the autonomous " +
+          "scheduler runs (see `nightgauge autonomous status`), or disable sleep on AC power with `sudo pmset -c sleep 0`."
+      ),
+    });
+    const state = makeState(1.5);
+    state.gate_results = [
+      {
+        gate_name: "feature-validate",
+        result: "timeout",
+        error_summary: "validation gate timed out",
+      },
+    ] as unknown as PipelineState["gate_results"];
+
+    await postFailureComment({ issueNumber: 3136, result, state, cwd: "/tmp/repo", logger });
+
+    expect(execMock).toHaveBeenCalled();
+    const cmd: string = execMock.mock.calls[0][0];
+    expect(cmd).toContain("15m27s");
+    expect(cmd).toContain("pmset -c sleep 0");
+    expect(cmd).toContain("Host Slept");
+    expect(cmd).not.toMatch(/validation/i);
+    expect(cmd).not.toContain("Pipeline Failure Report");
+    expect(cmd).not.toContain("lifetime failure cap");
   });
 });

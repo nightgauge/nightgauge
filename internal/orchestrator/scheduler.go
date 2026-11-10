@@ -7752,7 +7752,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// (#533).
 			if !exitPayload.Success {
 				if failText := stageFailureText(err, result); failText != "" {
-					exitPayload.TerminalKind = ResolveTerminalKind(gateRan, gateRes.TerminalKind, failText)
+					exitPayload.TerminalKind = ReclassifyForHostSleep(
+						ResolveTerminalKind(gateRan, gateRes.TerminalKind, failText),
+						HostSleptDuration(stageStartedAt, time.Now()))
 				}
 			}
 			if gateRan {
@@ -7783,6 +7785,19 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				s.emitStateChanged(item.Repo, item.Number, runtime)
 				log.Printf("#%d: stage %s stopped by the operator (exit %d) — not the issue's failure, no retry, no escalation",
 					item.Number, stage, exitCode)
+				return
+			}
+
+			// Host sleep (#3136): a stage whose wall-clock span exceeds its
+			// awake span by more than HostSleepThreshold failed because a limit
+			// expired while the host slept. Short circuit before retry,
+			// escalation and stall recovery — none of them addresses a sleeping
+			// host — and book it as infrastructure.
+			if s.bookHostSleptStage(item.Number, stage, runtime, stageStartedAt,
+				ResolveTerminalKind(gateRan, gateRes.TerminalKind, stageFailureText(err, result)),
+				stageFailureText(err, result)) {
+				terminalFailureKind = TerminalKindHostSlept
+				s.emitStateChanged(item.Repo, item.Number, runtime)
 				return
 			}
 
@@ -8743,6 +8758,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				if causeKind := ClassifyTerminalKind(firstCause); causeKind != "" {
 					terminalFailureKind = causeKind
 				}
+			}
+			// A stage that slept through its run and then wrote no output is
+			// host_slept like any other failure of it (#3136).
+			if s.bookHostSleptStage(item.Number, stage, runtime, stageStartedAt, terminalFailureKind, outputErr.Error()) {
+				terminalFailureKind = TerminalKindHostSlept
+				s.emitStateChanged(item.Repo, item.Number, runtime)
 			}
 			return // Pipeline failed
 		}
@@ -12103,4 +12124,26 @@ func (s *Scheduler) preserveBranchForkedRun(ctx context.Context, item types.Boar
 // NIGHTGAUGE_SKILL_DIR.
 func logResolvedSkillPath(issue int, stage state.PipelineStage, skillPath string) {
 	log.Printf("#%d: stage %s skill_path=%s", issue, stage, skillPath)
+}
+
+// bookHostSleptStage reports whether the failed stage that started at
+// startedAt lost more than HostSleepThreshold to host sleep and its failure
+// kind is one host sleep explains (#3136). When it did, the stage error is
+// replaced with HostSleptStageError, the marker every downstream classifier
+// reads as host_slept, and the original failure text is logged.
+func (s *Scheduler) bookHostSleptStage(issue int, stage state.PipelineStage, runtime *state.RuntimeState,
+	startedAt time.Time, kind, failText string) bool {
+	now := time.Now()
+	slept := measureHostSleep(startedAt, now)
+	if ReclassifyForHostSleep(kind, slept) != TerminalKindHostSlept {
+		return false
+	}
+	wall := now.Round(0).Sub(startedAt.Round(0))
+	if wall < slept {
+		wall = slept
+	}
+	runtime.SetStageError(stage, HostSleptStageError(string(stage), wall, slept))
+	log.Printf("#%d: stage %s failed after the host slept %s — booked host_slept, no retry in this run, no escalation (was %q: %s)",
+		issue, stage, formatSleep(slept), kind, failText)
+	return true
 }

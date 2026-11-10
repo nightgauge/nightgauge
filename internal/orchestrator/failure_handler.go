@@ -179,6 +179,14 @@ const (
 	// stall_kill, through terminalkind.IsStallShapedKill, but the stage reached
 	// a limit rather than going idle, so the two are counted apart. Issue #2812.
 	TerminalKindStageCapKill = "stage_cap_kill"
+	// TerminalKindHostSlept is set when a stage failed and the host slept for
+	// more than HostSleepThreshold during it: its wall-clock span exceeded its
+	// monotonic (awake) span. Whatever limit expired, it expired while the
+	// host slept, so the run is infrastructure, not a defect of the issue:
+	// stall_kill's recovery (backoff, no lifetime-cap increment, board back to
+	// Ready, no repo halt). The scheduler writes HostSleptMarker into the stage
+	// error, which the rule table matches. Issue #3136.
+	TerminalKindHostSlept = "host_slept"
 	// TerminalKindApiOverloaded is set when the Anthropic API returns a 529
 	// "Overloaded" response — the service was momentarily at capacity. Surfaced
 	// by the Claude CLI as a result envelope with `is_error:true` and the
@@ -874,6 +882,11 @@ func ClassifyTerminalKind(errorText string) string {
 // failures that didn't set a structured kind (including all historical
 // records persisted before this field existed).
 func ResolveTerminalKind(gateRan bool, gateTerminalKind string, errorText string) string {
+	// The scheduler's own host-sleep verdict (#3136) outranks the gate: the
+	// gate judged a stage that ran out of wall clock while the host slept.
+	if HasHostSleptMarker(errorText) {
+		return TerminalKindHostSlept
+	}
 	if gateRan && gateTerminalKind != "" {
 		return gateTerminalKind
 	}

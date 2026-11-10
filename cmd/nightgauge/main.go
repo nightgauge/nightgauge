@@ -12014,6 +12014,22 @@ func liveAutonomousStatusJSON(res orchestrator.AutonomousState, summary ipc.Runn
 		"running_pipelines":          runs,
 		"running_pipelines_known":    known,
 		"reload_safe":                known && summary.Count == 0,
+		"sleepAssertion":             res.SleepAssertion,
+	}
+}
+
+// sleepAssertionLine renders the daemon's macOS sleep assertion (#3136) for
+// `autonomous status`.
+func sleepAssertionLine(sa *orchestrator.SleepAssertionStatus) string {
+	switch {
+	case sa == nil:
+		return "Sleep assertion: unknown (the daemon did not report it)"
+	case sa.Held:
+		return fmt.Sprintf("Sleep assertion: held (caffeinate pid %d)", sa.PID)
+	case sa.Reason != "":
+		return "Sleep assertion: not held — " + sa.Reason
+	default:
+		return "Sleep assertion: not held"
 	}
 }
 
@@ -12048,6 +12064,7 @@ func autonomousStatusCmd() *cobra.Command {
 					halted := orchestrator.HaltedRepos(&res)
 					fmt.Printf("Source: live daemon\n%s\nCycles: %d\n",
 						liveAutonomousModeLine(res.Status, len(halted), summary, known), res.CyclesRun)
+					fmt.Println(sleepAssertionLine(res.SleepAssertion))
 					printHaltedRepos(os.Stdout, halted, "")
 					printArchitectureParked(os.Stdout, orchestrator.ArchitectureApprovalParked(&res), "")
 					if len(res.Running) > 0 {

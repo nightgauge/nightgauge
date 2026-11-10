@@ -58,6 +58,7 @@ const (
 	producerGatePluginMissing   = "gate-plugin-missing"
 	producerReviewCap           = "review-cap"
 	producerResumeNoOp          = "resume-no-op"
+	producerHostSlept           = "host-slept"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -572,6 +573,49 @@ func (as *AutonomousScheduler) raiseResumeNoOp(repo string, issue int, title str
 	})
 }
 
+// keyHostSlept is the sticky identity of an issue's host-slept card.
+func keyHostSlept(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerHostSlept, repo, issue)
+}
+
+// raiseHostSlept tells the operator that a run of repo#issue lost its stage to
+// host sleep (#3136). It is informational: the run is already booked as
+// infrastructure and will retry, nothing is halted and no lifetime attempt was
+// charged. detail is the host_slept stage error, which carries how long the
+// host slept and the remedy. The text never calls the run a validation failure:
+// whatever limit expired, it expired while the host slept.
+func (as *AutonomousScheduler) raiseHostSlept(repo string, issue int, title, detail string) {
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyHostSlept(repo, issue),
+		Kind:           attention.KindHandoff,
+		Severity:       attention.SeverityFYI,
+		Title:          fmt.Sprintf("Host slept — #%d will retry", issue),
+		Body:           hostSleptCardBody(repo, issue, title, detail),
+		Producer:       producerHostSlept,
+		Context:        attention.Context{Repo: repo, Issue: issue, Blocker: TerminalKindHostSlept},
+		Options: []attention.Option{
+			noopOption("acknowledge", "Acknowledge"),
+		},
+		DefaultAction: "acknowledge",
+		ExpiresAt:     standingExpiry(),
+	})
+}
+
+// hostSleptCardBody renders the host-slept card's body.
+func hostSleptCardBody(repo string, issue int, title, detail string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "A run of %s#%d (%q) stopped because the host went to sleep while a stage was running. ", repo, issue, title)
+	b.WriteString("It was booked as infrastructure, not as a failure of the issue: no lifetime attempt was charged, ")
+	b.WriteString("the repository keeps dispatching, and the issue returns to Ready and retries after a backoff.\n\n")
+	if strings.TrimSpace(detail) != "" {
+		b.WriteString(strings.TrimSpace(strings.TrimPrefix(detail, HostSleptMarker)))
+		b.WriteString("\n\n")
+	} else {
+		b.WriteString(HostSleptPrevention + "\n\n")
+	}
+	return b.String()
+}
+
 // retractResumeNoOp clears the card once the hold is released.
 func (as *AutonomousScheduler) retractResumeNoOp(repo string, issue int) {
 	as.retractCard(producerResumeNoOp, keyResumeNoOp(repo, issue))
@@ -973,6 +1017,12 @@ func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stag
 	}
 	if terminalKind == "" {
 		terminalKind = "unknown"
+	}
+
+	// A run lost to host sleep halts nothing (#3136): PauseRepo declines it,
+	// and the host-slept card, not a halt card, is what the operator sees.
+	if terminalKind == TerminalKindHostSlept {
+		return
 	}
 
 	key := fmt.Sprintf("%s#%d", repo, issue)

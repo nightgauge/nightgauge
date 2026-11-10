@@ -964,6 +964,24 @@
       "rationale": "one of three real phrasings for the single most common failure this machine produces; each differs by a word, so a matcher written for one leaves the others unclassified — which is exactly the drift #306 found on the SDK side."
     },
     {
+      "id": "host-slept-stage-error",
+      "input": "[host-slept] the host slept for 15m27s during feature-validate (wall clock 20m0s, awake 4m33s). This run was booked as infrastructure, not as a failure of this issue, and will retry. To keep the host awake: the daemon holds a `caffeinate -i -s` assertion while the autonomous scheduler runs (see `nightgauge autonomous status`), or disable sleep on AC power with `sudo pmset -c sleep 0`.",
+      "expected": "host_slept",
+      "expected_signal": "host_slept",
+      "source": "synthetic",
+      "producer": "orchestrator.HostSleptStageError",
+      "rationale": "A stage that lost 15 minutes to host sleep (#3136). Before the marker, the same run was booked validation_error from its gate timeout, halted the repository and charged a lifetime attempt."
+    },
+    {
+      "id": "host-slept-outranks-timeout-text",
+      "input": "[host-slept] the host slept for 2m0s during pr-merge (wall clock 50m0s, awake 48m0s). exceeded stage_hard_cap stall timeout",
+      "expected": "host_slept",
+      "expected_signal": "host_slept",
+      "source": "synthetic",
+      "producer": "orchestrator.HostSleptStageError, with trailing text a later rule would claim",
+      "rationale": "The marker is first in the ladder: a cap or stall wording elsewhere in the text must not take the run back to a kind the sleep explains."
+    },
+    {
       "id": "stage-cap-kill-hard-cap-reason",
       "input": "Stage feature-dev exceeded stage_hard_cap (45m 0s total runtime) — forcibly terminating process.",
       "expected": "stage_cap_kill",

@@ -533,6 +533,9 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // A stage that ran out of time rather than one that went silent (#2812). The
   // remedy is its scope or its cap.
   stage_cap_kill: "timeout",
+  // A wall-clock limit expired while the host slept (#3136): an environment
+  // fault the operator fixes by keeping the host awake.
+  host_slept: "timeout",
 
   // Nightgauge's OWN configured ceilings tripped. Actionable in config.
   budget_exceeded: "budget-exceeded",

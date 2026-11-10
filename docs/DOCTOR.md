@@ -968,6 +968,21 @@ The check compares versions, not bytes, because installed copies legitimately
 differ from the build's mirror (`name:`, `disable-model-invocation`, rebased
 links). It therefore cannot see an edit made without a version bump.
 
+#### NGD113
+
+**System sleep enabled on AC power.** `host_sleep` · `warning`. macOS only; every
+other platform, and a host whose `pmset -g custom` reports no AC profile or does
+not run, passes.
+
+The check reads the `sleep` value of the `AC Power:` section of `pmset -g custom`
+and warns when it is not `0`. A host that idle-sleeps can sleep through a running
+stage, so a time limit expires while nothing runs. The orchestrator books such a
+run `host_slept` and retries it, and the daemon holds a `caffeinate -i -s`
+assertion while the autonomous scheduler runs, but a stage started any other way is
+not covered. Manual `disable-ac-sleep`: run `sudo pmset -c sleep 0`, or keep the
+scheduler running. See
+[AUTONOMOUS_ORCHESTRATOR.md](AUTONOMOUS_ORCHESTRATOR.md#macos-hosts-must-not-idle-sleep-while-the-scheduler-runs).
+
 #### NGD015
 
 **No usable AI coding agent.** `ai_adapter` · `warning`.

@@ -561,6 +561,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
 export const TerminalFailureKindSchema = z.enum([
   "stall_kill",
   "stage_cap_kill", // Issue #2812 — stopped at stage_hard_caps or stage_time_caps; recovers like stall_kill
+  "host_slept", // Issue #3136 — the host slept >60 s during the failed stage; recovers like stall_kill
   "budget_exceeded",
   "validation_error",
   "subagent_crash",
