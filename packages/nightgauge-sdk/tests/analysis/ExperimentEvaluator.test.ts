@@ -6,12 +6,15 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { ExperimentEvaluator } from "../../src/analysis/ExperimentEvaluator.js";
 import { cloneLayoutFor, setCloneLayout } from "../../src/context/cloneLayout.js";
 import type { ExperimentConfig, ExperimentOutcome } from "../../src/analysis/experiment-types.js";
 
-const WORKSPACE = "/tmp/test-experiment-evaluator";
+// A per-run directory, not a fixed /tmp path: afterEach removes it, and two
+// concurrent gates running this suite would delete each other's fixtures (#3143).
+const WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), "test-experiment-evaluator-"));
 // Experiments live in the checkout's own directory (ADR-024 § 7). A fixed
 // layout, so no test here runs git.
 setCloneLayout(WORKSPACE, cloneLayoutFor(WORKSPACE, path.join(WORKSPACE, ".git")));

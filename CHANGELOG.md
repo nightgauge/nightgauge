@@ -27,6 +27,16 @@ changelog, and the release workflow refuses a tag that does not.
   because they assert timing. The step inventory and failure report are
   unchanged. The timing summary also prints a `Serial steps: Ns summed` line
   above `Wall clock:`, so every gate log shows its critical path (#3143).
+- `scripts/ci-local.sh` no longer stalls its serial chain while it waits for a
+  heavy-step slot. A short grouped step that finds every slot busy now runs
+  inline as a serial step. Only the five long suites (both Go suites,
+  `npm run test`, the publication boundary suite and the gate's concurrency
+  contract) still wait for a slot. The timing summary adds a
+  `Slot waits: Ns blocking the serial chain; drain wait: Ns.` line, so the
+  time between the serial sum and the wall clock has a name. Four vitest
+  files that wrote a fixed temporary path now use their own `mkdtemp`
+  directory, so concurrent gates no longer delete each other's fixtures
+  (#3143).
 
 ### Fixed
 
