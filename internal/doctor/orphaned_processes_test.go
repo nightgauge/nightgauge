@@ -1356,3 +1356,37 @@ func TestWorktreeDirContaining_FindsResolvedBaseOutsideTree(t *testing.T) {
 		t.Fatalf("worktreeDirContaining = (%q, %q, %v), want (%q, widget-issue-2038, true)", gotRoot, leaf, ok, root)
 	}
 }
+
+// A wedged `ps` must still end at the deadline with the unverifiable finding
+// (#2998), whether ps itself hangs or a child keeps its stdout open.
+func TestEnumerateProcesses_AWedgedPsTimesOutToUnverifiable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no ps on windows")
+	}
+	cases := map[string]string{
+		"ps hangs":           "#!/bin/sh\nexec /bin/sleep 30\n",
+		"child holds stdout": "#!/bin/sh\n/bin/sleep 30\n",
+	}
+	for name, script := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "ps"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			start := time.Now()
+			_, err := enumerateProcessesWithin(300 * time.Millisecond)
+			elapsed := time.Since(start)
+			if err == nil {
+				t.Fatal("wedged ps returned no error")
+			}
+			if elapsed > 5*time.Second {
+				t.Fatalf("wedged ps held enumeration for %v", elapsed)
+			}
+			findings, _ := unverifiableProcessScan(err)
+			if len(findings) == 0 || !strings.Contains(strings.ToLower(fmt.Sprint(findings[0])), "unverifiable") {
+				t.Fatalf("want an unverifiable finding, got %+v", findings)
+			}
+		})
+	}
+}
