@@ -675,15 +675,46 @@ slots_in_use() {
 
 # Take one slot, blocking until the machine-wide budget allows it. Prints the
 # slot's path on stdout; the caller's child owns it and removes it when done.
+# One line per held slot: who holds it, whether that pid is alive, whether it is
+# this gate's MAIN pid, and for how long. A silent 30-minute wait was #3133's
+# whole defect; the wait now names what it is waiting on. Best-effort: a
+# diagnostic must never fail the gate.
+slot_holders() {
+  local slot pid owner alive ismain mtime age cmd now
+  now="$(date +%s)"
+  for slot in "$SLOT_ROOT"/*; do
+    [ -d "$slot" ] || continue
+    pid=""; owner=""
+    [ -r "$slot/pid" ] && pid="$(cat "$slot/pid" 2>/dev/null || true)"
+    [ -r "$slot/owner" ] && owner="$(cat "$slot/owner" 2>/dev/null || true)"
+    alive=dead
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=alive
+    ismain=no
+    [ "$pid" = "$MAIN_PID" ] && ismain=yes
+    # GNU first: on Linux `stat -f` prints filesystem info for `%m`, not mtime.
+    mtime="$(stat -c %Y "$slot/owner" 2>/dev/null || stat -f %m "$slot/owner" 2>/dev/null || true)"
+    age="?"
+    case "$mtime" in ''|*[!0-9]*) ;; *) age="$((now - mtime))s" ;; esac
+    cmd=""
+    [ -n "$pid" ] && cmd="$(ps -o command= -p "$pid" 2>/dev/null | sed -n 1p | cut -c1-80 || true)"
+    echo "    slot ${slot##*/}: pid=${pid:-none} $alive main=$ismain owner=${owner:-none}" \
+         "age=$age cmd=${cmd:-?}" >&2
+  done
+  return 0
+}
+
 slot_acquire() {
-  mkdir -p "$SLOT_ROOT"
   local i waited=0 announced=0
   while : ; do
+    # Re-created every pass: a root deleted under a live gate must not be
+    # waited on for the whole CI_LOCAL_SLOT_WAIT.
+    mkdir -p "$SLOT_ROOT" 2>/dev/null || true
     i=1
     while [ "$i" -le "$CI_LOCAL_JOBS" ]; do
       if mkdir "$SLOT_ROOT/$i" 2>/dev/null; then
-        # `owner` is written once and never rewritten; `pid` is rewritten by the
-        # grouped child so a killed child's slot becomes reclaimable. They answer
+        # `owner` is written once and never rewritten; `pid` is rewritten by
+        # `run_group` with the child's pid so a killed child's slot becomes
+        # reclaimable. They answer
         # different questions: `pid` is "is the holder alive", `owner` is "is
         # this still the same holder".
         printf '%s\n' "$GATE_ID" > "$SLOT_ROOT/$i/owner"
@@ -697,6 +728,7 @@ slot_acquire() {
     if [ "$announced" -eq 0 ]; then
       echo "  (waiting for a heavy-step slot: $(slots_in_use)/$CI_LOCAL_JOBS in use" \
            "machine-wide, shared with any other gate for this repository)" >&2
+      slot_holders
       announced=1
     fi
     sleep 1
@@ -704,8 +736,13 @@ slot_acquire() {
     if [ "$waited" -ge "$CI_LOCAL_SLOT_WAIT" ]; then
       echo "  ! waited ${waited}s for a heavy-step slot and gave up waiting;" \
            "proceeding OVER the machine-wide budget of $CI_LOCAL_JOBS." >&2
+      slot_holders
       printf '\n'
       return 0
+    fi
+    if [ $((waited % 60)) -eq 0 ]; then
+      echo "  (still waiting ${waited}s for a heavy-step slot: $(slots_in_use)/$CI_LOCAL_JOBS in use)" >&2
+      slot_holders
     fi
   done
 }
@@ -1229,16 +1266,28 @@ run_group() {
   # in the parent after `wait` timed queue-to-group-end, so every grouped step
   # reported the group's total and the summary was useless for finding the
   # expensive one.
-  # The child OWNS its slot: it rewrites the pid file with its own pid, so if it
-  # is killed the slot becomes reclaimable by any gate, and it removes the slot
+  # The child OWNS its slot: the pid file names the child, so if it is killed
+  # the slot becomes reclaimable by any gate, and the child removes the slot
   # when it finishes so the budget frees up without waiting for `run_group_wait`.
+  # The PARENT names the child, writing `$!` right after the fork (below). The
+  # child used to rewrite the pid itself as its first statement, and a child
+  # killed before that statement left the slot stamped with the live MAIN pid,
+  # which `slot_reclaim_dead` never frees: the next `run_group` waited the full
+  # CI_LOCAL_SLOT_WAIT in silence (#3133). The parent's write runs whether or
+  # not the child is still alive, so no kill timing leaves a live non-holder.
   ( local_start=$SECONDS
-    [ -n "$slot" ] && printf '%s\n' "$BASHPID" > "$slot/pid" 2>/dev/null
     "$@" > "$log" 2>&1
     printf '%s\n' "$?" > "$codefile"
     printf '%s\n' "$((SECONDS - local_start))" > "$codefile.secs"
     [ -n "$slot" ] && slot_release "$slot"
     true ) &
+  # Stamp only a slot this gate still owns: a fast child may already have released it, and
+  # the path may now be another gate's live slot.
+  if [ -n "$slot" ] && [ -d "$slot" ] &&
+     [ "$(cat "$slot/owner" 2>/dev/null || true)" = "$GATE_ID" ]; then
+    printf '%s\n' "$!" > "$slot/pid" 2>/dev/null || true
+  fi
+  LAST_GROUP_SLOT="$slot"
   GROUP_PIDS+=("$!")
   GROUP_LABELS+=("$label")
   GROUP_CODEFILES+=("$codefile")
@@ -1324,6 +1373,23 @@ if [ "$GROUP_PROBE" -gt 0 ]; then
     run_group "group probe $i" \
       env SLOT_ROOT="$SLOT_ROOT" OBS="$OBS" HOLD="$GROUP_PROBE_HOLD" \
       sh -c 'ls -d "$SLOT_ROOT"/*/ 2>/dev/null | wc -l | tr -d " " >> "$OBS"; sleep "$HOLD"'
+    # Read in the parent straight after the fork, before the child can run: the
+    # slot must already name the child, not this gate's MAIN pid (#3133).
+    if [ -n "${LAST_GROUP_SLOT:-}" ]; then
+      gp_pid="$(cat "$LAST_GROUP_SLOT/pid" 2>/dev/null || true)"
+      if [ "$gp_pid" = "${GROUP_PIDS[$((${#GROUP_PIDS[@]} - 1))]}" ]; then
+        echo "group probe: slot pid is child"
+      elif [ "$gp_pid" = "$MAIN_PID" ]; then
+        echo "group probe: slot pid is main"
+      else
+        echo "group probe: slot pid is other (${gp_pid:-none})"
+      fi
+    fi
+    # Kill the first child before the rest are spawned: its slot must be
+    # reclaimed as soon as it is dead, not outlasted for CI_LOCAL_SLOT_WAIT.
+    if [ "$i" -eq 1 ] && [ "${CI_LOCAL_PROBE_KILL_FIRST:-0}" = "1" ]; then
+      kill -KILL "${GROUP_PIDS[0]}" 2>/dev/null || true
+    fi
     i=$((i + 1))
   done
   # Reproduce the failure this issue is about: a grouped child killed before it

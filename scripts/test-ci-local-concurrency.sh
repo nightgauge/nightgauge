@@ -177,7 +177,7 @@ check "failure_markers lifts 15 of 20,000 markers and succeeds (status $markers_
 # observed maximum exceed the budget and turns this red.
 mkdir -p "$TMP/slots-b1" "$TMP/logs-b1"
 env CI_LOCAL_SLOT_ROOT="$TMP/slots-b1" CI_LOCAL_LOG_DIR="$TMP/logs-b1" CI_LOCAL_JOBS=2 \
-  bash scripts/ci-local.sh --group-probe 5 2 > "$TMP/budget.log" 2>&1
+  CI_LOCAL_SLOT_WAIT=60 bash scripts/ci-local.sh --group-probe 5 2 > "$TMP/budget.log" 2>&1
 budget_code=$?
 [ "$budget_code" -eq 0 ]
 check "a --group-probe run of five steps at budget 2 completes" $?
@@ -196,7 +196,7 @@ check "the budget actually bound — a step waited for a slot" $?
 # that asserted false, and cost a full diagnostic cycle. `--group-probe` kills
 # its last child by the pid captured at spawn to reproduce it exactly.
 env CI_LOCAL_PROBE_KILL_CHILD=1 CI_LOCAL_SLOT_ROOT="$TMP/slots-k1" \
-  CI_LOCAL_LOG_DIR="$TMP/logs-k1" bash scripts/ci-local.sh --group-probe 3 3 \
+  CI_LOCAL_LOG_DIR="$TMP/logs-k1" CI_LOCAL_SLOT_WAIT=60 bash scripts/ci-local.sh --group-probe 3 3 \
   > "$TMP/killed.log" 2>&1
 grep -q 'group probe: fail=1 infra=1' "$TMP/killed.log"
 check "a killed grouped child is counted as infrastructure, not as a failed check" $?
@@ -207,6 +207,45 @@ check "the report says why: no exit code was recorded" $?
 grep -q 'NOTHING has been asserted about your diff' "$TMP/killed.log"
 check "the report says the step asserted nothing either way" $?
 
+# ── (7b) a child killed before it starts leaves a RECLAIMABLE slot (#3133) ───
+# The slot used to name the gate's MAIN pid until the child's first statement
+# rewrote it; a child killed in that window left a slot stamped with a live pid
+# that `slot_reclaim_dead` never frees, and the next step waited the whole
+# CI_LOCAL_SLOT_WAIT in silence. The parent now writes `$!` right after the
+# fork (only into a slot whose owner is still this gate). Budget 1: steps 2 and
+# 3 can only run if the killed step 1's slot is reclaimed.
+mkdir -p "$TMP/slots-kf" "$TMP/logs-kf"
+env CI_LOCAL_SLOT_ROOT="$TMP/slots-kf" CI_LOCAL_LOG_DIR="$TMP/logs-kf" CI_LOCAL_JOBS=1 \
+  CI_LOCAL_SLOT_WAIT=20 CI_LOCAL_PROBE_KILL_FIRST=1 \
+  bash scripts/ci-local.sh --group-probe 3 1 > "$TMP/killfirst.log" 2>&1
+check "a group whose first child is killed at spawn completes" $?
+! grep -q 'gave up waiting' "$TMP/killfirst.log"
+check "the killed child's slot was reclaimed, not outlasted" $?
+grep -q 'group probe: fail=1 infra=1' "$TMP/killfirst.log"
+check "the child killed at spawn is counted as infrastructure" $?
+# Deterministic, independent of the kill race: read in the parent right after
+# each fork, the slot must already name the child. Removing the parent's `$!`
+# write makes these read `is main`.
+[ "$(grep -c '^group probe: slot pid is child$' "$TMP/killfirst.log")" -eq 3 ] &&
+  ! grep -q '^group probe: slot pid is \(main\|other\)' "$TMP/killfirst.log"
+check "every grouped slot names its child, never the gate's main pid" $?
+
+# ── (7c) a slot wait names its holders ──────────────────────────────────────
+# Silence was #3133's defect: one "waiting" line, then 20 minutes of nothing.
+holder="$TMP/slots-holder"
+mkdir -p "$holder/1"
+sleep 30 &
+hold_pid=$!
+HOLDER_PIDS="$HOLDER_PIDS $hold_pid"
+printf '%s\n' "$hold_pid" > "$holder/1/pid"
+printf 'some-other-gate-1\n' > "$holder/1/owner"
+env CI_LOCAL_SLOT_ROOT="$holder" CI_LOCAL_LOG_DIR="$TMP/logs-holder" CI_LOCAL_JOBS=1 \
+  CI_LOCAL_SLOT_WAIT=3 bash scripts/ci-local.sh --slot-probe > "$TMP/holder.log" 2>&1
+grep -q "slot 1: pid=$hold_pid alive main=no owner=some-other-gate-1" "$TMP/holder.log"
+check "a slot wait names the live holder pid and its owner" $?
+grep -q 'gave up waiting' "$TMP/holder.log"
+check "the holder-report arm still gives up on a live holder" $?
+
 # ── (8) the budget is shared ACROSS PROCESSES, not per process ───────────────
 # The regression itself, stated as a test: two gates, one budget. Each run asks
 # for three steps at budget two; if the bound were per-process the two together
@@ -214,11 +253,11 @@ check "the report says the step asserted nothing either way" $?
 shared="$TMP/slots-shared"
 mkdir -p "$shared" "$TMP/logs-s1" "$TMP/logs-s2"
 env CI_LOCAL_SLOT_ROOT="$shared" CI_LOCAL_LOG_DIR="$TMP/logs-s1" CI_LOCAL_JOBS=2 \
-  bash scripts/ci-local.sh --group-probe 3 3 > "$TMP/shared1.log" 2>&1 &
+  CI_LOCAL_SLOT_WAIT=60 bash scripts/ci-local.sh --group-probe 3 3 > "$TMP/shared1.log" 2>&1 &
 s1=$!
 HOLDER_PIDS="$HOLDER_PIDS $s1"
 env CI_LOCAL_SLOT_ROOT="$shared" CI_LOCAL_LOG_DIR="$TMP/logs-s2" CI_LOCAL_JOBS=2 \
-  bash scripts/ci-local.sh --group-probe 3 3 > "$TMP/shared2.log" 2>&1 &
+  CI_LOCAL_SLOT_WAIT=60 bash scripts/ci-local.sh --group-probe 3 3 > "$TMP/shared2.log" 2>&1 &
 s2=$!
 HOLDER_PIDS="$HOLDER_PIDS $s2"
 wait "$s1"; s1_code=$?
@@ -291,7 +330,7 @@ check "a slot we still own IS released (the guard is not 'never release')" $?
 # The gates that collide are the ones in sibling worktrees of one repository.
 # Keying on the worktree path would give each its own budget and restore the
 # defect exactly.
-default_root="$(bash scripts/ci-local.sh --slot-probe | sed -n 's|^slot acquired: \(.*\)/[0-9]* in_use.*|\1|p')"
+default_root="$(CI_LOCAL_SLOT_WAIT=60 bash scripts/ci-local.sh --slot-probe | sed -n 's|^slot acquired: \(.*\)/[0-9]* in_use.*|\1|p')"
 common="$(git rev-parse --git-common-dir)"
 case "$common" in /*) ;; *) common="$REPO_ROOT/$common" ;; esac
 expected_key="$(printf '%s' "$common" | cksum | awk '{print $1}')"

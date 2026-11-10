@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `scripts/ci-local.sh` no longer stalls for 30 minutes when a concurrent step is
+  killed before it starts. Its heavy-step slot used to name the gate's own pid,
+  which stays alive, so the slot could not be reclaimed. The gate now records the
+  step's pid at spawn. A slot wait also lists each slot's holder (pid,
+  alive or dead, owner, age, command) when it starts, every minute, and when it
+  gives up (#3133).
 - The clean-install gate (G1) now states its rule for the two bundle-read rows:
   they hard-fail on every run kind, scheduled runs included, and the run summary's
   _Bundle-read rows (G1)_ row names the rule and the run kind (#2997).
