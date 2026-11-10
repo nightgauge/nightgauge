@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `scripts/ci-local.sh` no longer depends on its host machine in three ways
+  (#3127). Under bash older than 4 (macOS `/bin/bash`) it, and
+  `scripts/validate-skill-metadata.sh`, exit 2 at once naming
+  `brew install bash`, instead of hanging until the run is killed. The default
+  `CI_LOCAL_JOBS` is now `max(4, ncpu/3)` capped at 12, and the start-up output
+  and `--budget-probe` report the budget and its source. Every step runs with
+  `commit.gpgsign` and `tag.gpgsign` off, so a global signing config with no
+  key loaded no longer fails fixture commits.
+
 - `docs/RELEASE_BINARIES.md` and `scripts/vt-scan.sh` record why the one YARA
   allowlist entry, InQuest's `Windows_API_Function` (#3019), stands beside
   the rule that a finding is never allowlisted. It matches every Go binary's

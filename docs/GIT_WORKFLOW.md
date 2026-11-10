@@ -1366,8 +1366,10 @@ consistency:
 catching environment differences, not for running tests you skipped locally.
 Every push that fails CI wastes time and pollutes the PR with fix-up commits.
 
-**Prerequisites.** `scripts/ci-local.sh` needs `npm ci` run in the worktree,
-`git`, `go`, `make`, `node`/`npm`/`npx`, `jq`, `perl`, mikefarah `yq`, and a `python3` with
+**Prerequisites.** `scripts/ci-local.sh` needs bash 4 or newer (macOS ships
+3.2 as `/bin/bash`: `brew install bash`, and the gate exits 2 naming that fix),
+`npm ci` run in the worktree, `git`, `go`, `make`, `node`/`npm`/`npx`, `jq`,
+`perl`, mikefarah `yq`, and a `python3` with
 `.github/requirements-ci.txt` installed. Its preflight names any missing tool
 and exits before the first step. The plugin install docs gate also needs
 network access to install `@anthropic-ai/claude-code@<max_tested>`, the version
