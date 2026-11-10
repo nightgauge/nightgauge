@@ -128,6 +128,14 @@ SCOPE_PROBE=0
 # must then be non-zero, never a printed "N check(s) failed" over exit 0 (#1494).
 SUMMARY_PROBE=0
 SUMMARY_PROBE_FAIL=0
+# `--timing-probe` runs one fast serial step and one 3-second grouped step
+# through the REAL runners and prints the REAL timing summary (#3143). The
+# summed serial time must count the serial step only: the grouped step ran
+# beside the chain, so adding it would hide the critical path again.
+# `--timing-probe fail` makes the grouped step fail, so the verdict must name it
+# with its log path exactly as it names a failed serial step.
+TIMING_PROBE=0
+TIMING_PROBE_FAIL=0
 # `--deps-probe DIR` prints the dependency-bootstrap decision for DIR and exits
 # (#2562), so scripts/test-ci-local-bootstrap.sh asserts it without running npm.
 DEPS_PROBE=""
@@ -150,6 +158,11 @@ while [ "$#" -gt 0 ]; do
       SUMMARY_PROBE=1
       shift
       case "${1:-}" in fail) SUMMARY_PROBE_FAIL=1; shift ;; esac
+      ;;
+    --timing-probe)
+      TIMING_PROBE=1
+      shift
+      case "${1:-}" in fail) TIMING_PROBE_FAIL=1; shift ;; esac
       ;;
     --slot-probe)
       SLOT_PROBE=1
@@ -992,6 +1005,10 @@ FAIL_COUNT=0
 # Per-step wall clock, parallel arrays (#1217).
 STEP_SECONDS=()
 STEP_LABELS=()
+# Parallel to STEP_SECONDS: "serial", "concurrent" or "skipped" (#3143). The
+# serial steps run one after another, so their sum is the gate's critical path;
+# the concurrent ones overlap it and are not added.
+STEP_MODES=()
 GATE_STARTED=$SECONDS
 FAILED_STEPS=()
 FAILED_LOGS=()
@@ -1064,6 +1081,7 @@ skip_step() { # skip_step <label> <reason>
   SKIP_COUNT=$((SKIP_COUNT + 1))
   STEP_SECONDS+=("0")
   STEP_LABELS+=("$1 [SKIPPED]")
+  STEP_MODES+=("skipped")
   return 0
 }
 
@@ -1149,6 +1167,31 @@ print_final_verdict() {
   fi
 }
 
+# Slowest steps + total (#1217). Printed on pass AND fail: the run you most
+# want to profile is often the one that failed at minute twelve.
+#
+# The summed serial time sits beside the wall clock (#3143). The serial steps
+# run one after another, so their sum is the floor under the wall clock however
+# many cores the box has; when it is close to the wall clock, the serial chain,
+# not the longest grouped step, is what to shorten next.
+print_timing_summary() {
+  local total=$((SECONDS - GATE_STARTED))
+  local i serial_sum=0 serial_n=0 concurrent_n=0
+  for i in "${!STEP_MODES[@]}"; do
+    case "${STEP_MODES[$i]}" in
+      serial) serial_sum=$((serial_sum + STEP_SECONDS[i])); serial_n=$((serial_n + 1)) ;;
+      concurrent) concurrent_n=$((concurrent_n + 1)) ;;
+    esac
+  done
+  echo ""
+  echo "Serial steps: ${serial_sum}s summed over $serial_n step(s), the critical path;" \
+    "$concurrent_n concurrent step(s) ran beside them."
+  echo "Wall clock: $((total / 60))m$((total % 60))s total. Slowest steps:"
+  for i in "${!STEP_LABELS[@]}"; do
+    printf '%6s  %s\n' "${STEP_SECONDS[$i]}s" "${STEP_LABELS[$i]}"
+  done | sort -rn | sed -n '1,8s/^/  /p'
+}
+
 run_step() {
   local label="$1"
   shift
@@ -1177,6 +1220,7 @@ run_step() {
   # 47 sequential steps and no way to tell which three of them are the cost.
   STEP_SECONDS+=("$elapsed")
   STEP_LABELS+=("$label")
+  STEP_MODES+=("serial")
   if [ "$code" -eq 0 ]; then
     echo "  ✓ $label (${elapsed}s)"
   else
@@ -1335,6 +1379,7 @@ run_group_wait() {
     cat "${GROUP_LOGS[$i]}" 2>/dev/null || true
     STEP_SECONDS+=("$elapsed")
     STEP_LABELS+=("${GROUP_LABELS[$i]}")
+    STEP_MODES+=("concurrent")
     if [ "$code" -eq 0 ] 2>/dev/null; then
       echo "  ✓ ${GROUP_LABELS[$i]} (${elapsed}s, concurrent)"
     else
@@ -1404,6 +1449,19 @@ if [ "$GROUP_PROBE" -gt 0 ]; then
   echo "group probe: max concurrent slots $(sort -n "$OBS" | tail -1) budget $CI_LOCAL_JOBS"
   echo "group probe: fail=$FAIL_COUNT infra=$INFRA_COUNT"
   exit 0
+fi
+
+if [ "$TIMING_PROBE" -eq 1 ]; then
+  run_step "timing probe serial step" true
+  if [ "$TIMING_PROBE_FAIL" -eq 1 ]; then
+    run_group "timing probe concurrent step" sh -c 'sleep 3; exit 1'
+  else
+    run_group "timing probe concurrent step" sleep 3
+  fi
+  run_group_wait
+  print_timing_summary
+  print_final_verdict
+  exit $?
 fi
 
 if [ "$SUMMARY_PROBE" -eq 1 ]; then
@@ -1492,9 +1550,13 @@ run_step "ci-local.sh step inventory" bash scripts/test-ci-local-inventory.sh
 #     child killed under load was reported as a plain `exit 1`, i.e. as if a
 #     check had asserted false. It also pins the single-instance lock, which is
 #     the general answer to a property reported three times (#1607, #1697,
-#     #1983). Runs serially and takes seconds: it drives the lock through
-#     `--lock-probe`, never a second full gate.
-run_step "ci-local.sh concurrency and failure-reporting contract" \
+#     #1983). "Second" is about trust, not data: its result is read at the
+#     drain with every other grouped step, and a red one is named in the final
+#     summary like any other. Grouped since #3143 (~140s): it writes only its
+#     own `mktemp -d` (logs, slot roots, fixtures), and every nested ci-local.sh
+#     it starts gets its own CI_LOCAL_SLOT_ROOT or an unbounded CI_LOCAL_JOBS,
+#     so it never waits behind the slots of the gate that is running it.
+run_group "ci-local.sh concurrency and failure-reporting contract" \
   bash scripts/test-ci-local-concurrency.sh
 
 # 0b'. The gate's dependencies on its host machine (#3127): bash >= 4, a
@@ -1803,11 +1865,20 @@ run_step "credential scan (tree + full history)" bash scripts/credential-scan.sh
 # 5a-ii. The custom .gitleaks.toml rules fire on what they exist for and stay
 #     quiet on secret references (#1770). Fixtures are built at run time.
 run_step "Credential-scan rules regression suite" bash scripts/test-credential-scan-rules.sh
-run_step "Credential-scan scope regression suite" bash scripts/test-credential-scan.sh
+# Grouped since #3143: every case runs gitleaks inside a fresh repository under
+# its own `mktemp -d`, seeded by copying the scanner and .gitleaks.toml (reads).
+# It writes nothing in this checkout.
+run_group "Credential-scan scope regression suite" bash scripts/test-credential-scan.sh
 
 # 5b. Publication boundary self-test — proves the guard still fails closed
 #     (mirrors .github/workflows/publication-boundary.yml's second step).
-run_step "Publication boundary regression suite" bash scripts/test-publication-boundary.sh
+#     Grouped since #3143. It writes only its claimed sandbox under
+#     ${TMPDIR}/nightgauge-pubboundary-sandboxes/run.* (a detached worktree at
+#     HEAD, its fixtures and its index) plus that worktree's registration in
+#     the shared .git, which concurrent gates already share by design (#1697).
+#     The checkout is never written (#713), so the boundary scan (step 5,
+#     serial, before it) and every tree reader after it see the same tree.
+run_group "Publication boundary regression suite" bash scripts/test-publication-boundary.sh
 
 # 5b-iii. Rename carry-over (#837) — hermetic, ~0.3s. Deliberately NOT a case
 #     in the suite above: exercising a rename means `git mv`-ing a real tracked
@@ -1849,7 +1920,13 @@ run_step "Publication boundary ceiling lag and erosion" \
 run_step "Publication boundary attribution" \
   bash scripts/test-publication-boundary-attribution.sh
 
-run_step "Publication boundary suite hermeticity" \
+# Grouped since #3143. It writes only its own harness root under
+# ${TMPDIR}/nightgauge-pubboundary-sandboxes/harness.* (the suites it starts and
+# kills nest inside it) and a tally under `mktemp`. Its assertions are scoped to
+# that root, so the concurrent standalone suite above is not its leak: dirt is
+# attributed to suite-owned paths (#832), only worktrees that VANISH count, and
+# additions by a concurrent session are ignored (#1697).
+run_group "Publication boundary suite hermeticity" \
   bash scripts/test-publication-boundary-hermeticity.sh
 
 # 5b-ii. Allowlist-isolation self-test (#1970): proves the check that step 5-i
@@ -1860,8 +1937,11 @@ run_step "Publication boundary allowlist isolation regression suite" \
 # 5b-iii. The pre-push guard (#2365) — the boundary checked before a push to
 #     the public repository, which CI only sees after GitHub has stored it.
 #     Real pushes through the hooks npm install installs, into throwaway
-#     repositories; no tree scan of this checkout.
-run_step "Publication push guard regression suite" \
+#     repositories; no tree scan of this checkout. Grouped since #3143: the
+#     repositories, remotes and hook directories all live under its own
+#     `mktemp -d`, with a hermetic git config (GIT_CONFIG_GLOBAL=/dev/null). It
+#     only reads this checkout, copying the guard's scripts into them.
+run_group "Publication push guard regression suite" \
   bash scripts/test-publication-push-guard.sh
 
 # 5c. Band-vocabulary reintroduction gate (#582) — fails on hand-inlined band
@@ -1950,6 +2030,10 @@ run_step "analyze-model-routing.ts typecheck" \
 run_step "ESLint" npm run lint
 
 # 6. Prettier formatting — the #1 cause of avoidable CI failures.
+#    Stays SERIAL (#3143): the very next step, `npm run build`, rewrites
+#    packages/nightgauge/package.json in place (generate:contributions writes it
+#    unconditionally) and Prettier checks that file. Grouped, Prettier could read
+#    it truncated mid-write and fail on bytes no commit contains.
 run_step "Prettier format:check" npm run format:check
 
 # 7. Build all workspaces
@@ -1983,7 +2067,13 @@ run_step "skill bundle portability (dist/skills)" \
 run_step "Phase markers ↔ PHASE_REGISTRY" npx tsx scripts/validate-phase-markers.ts
 
 # 8. Tests (single run — NEVER bare vitest which hangs in watch mode)
-run_step "npm run test (all workspaces)" npm run test -- --run
+#    Grouped since #3143, declared HERE because it needs the dist/ that step 7
+#    built and starts only after it. No serial step after it writes what it
+#    reads: up to the drain they are checks (`--check`, `--check-mirror` into a
+#    temp destination, link and contract scans), and the grouped suites after it
+#    run in sandboxes. It writes only temporary directories of its own under
+#    TMPDIR. It already ran beside the Go suites, so this adds no new load class.
+run_group "npm run test (all workspaces)" npm run test -- --run
 
 # 9. Generated package contributions in sync
 run_step "Generated VSCode contributions in sync" \
@@ -2133,7 +2223,8 @@ run_group_wait
 # the groups drain, alone, as it does in CI: two of its tests assert wall-clock
 # bounds on a real OpenCode process (a fast-path dispatch, a kill deadline),
 # and under the concurrent Go and vitest suites both overran (measured
-# 2026-09-30: 23s against a ~4.5s fast path, and a killed run).
+# 2026-09-30: 23s against a ~4.5s fast path, and a killed run). That timing
+# dependency is why it stays serial when the suites above became groups (#3143).
 if [ "$GO_SCOPE_RUN" -eq 0 ]; then
   skip_step "OpenCode integration (opencode_integration tag)" \
     "--changed, and $GO_SCOPE_REASON"
@@ -2147,7 +2238,8 @@ fi
 # and can never answer "does the extension come up", so before this step a
 # change could pass the gate and fail that job (#2476, #2478). It loads `dist/`, which
 # step 7 built. Alone, after the groups drain, for the OpenCode step's reason:
-# the demo window plays a timed scenario. Linux needs an X server, as in CI;
+# the demo window plays a timed scenario, the same timing dependency that keeps
+# it serial (#3143). Linux needs an X server, as in CI;
 # macOS and Windows open their own windows.
 if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ]; then
   run_step "VSCode host smoke tests" \
@@ -2165,18 +2257,6 @@ BACKSTOP_DONE=1
 if [ "$LIST_STEPS" -eq 1 ]; then
   exit 0
 fi
-
-# Slowest steps + total (#1217). Printed on pass AND fail: the run you most
-# want to profile is often the one that failed at minute twelve.
-print_timing_summary() {
-  local total=$((SECONDS - GATE_STARTED))
-  echo ""
-  echo "Wall clock: $((total / 60))m$((total % 60))s total. Slowest steps:"
-  local i
-  for i in "${!STEP_LABELS[@]}"; do
-    printf '%6s  %s\n' "${STEP_SECONDS[$i]}s" "${STEP_LABELS[$i]}"
-  done | sort -rn | sed -n '1,8s/^/  /p'
-}
 
 echo ""
 echo "-------------------------------------------------------------------------"

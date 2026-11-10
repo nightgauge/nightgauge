@@ -14,6 +14,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- `scripts/ci-local.sh` now runs six long, independent suites concurrently,
+  under the machine-wide heavy-step budget: the publication boundary
+  regression suite, its hermeticity suite, the publication push guard suite,
+  the credential-scan scope suite, the gate's own concurrency contract and
+  `npm run test`. Each writes only its own temporary directory, and the comment
+  above each step says so. Prettier stays serial because the next step,
+  `npm run build`, rewrites `packages/nightgauge/package.json`, which Prettier
+  checks. OpenCode integration and the VS Code host smoke tests stay serial
+  because they assert timing. The step inventory and failure report are
+  unchanged. The timing summary also prints a `Serial steps: Ns summed` line
+  above `Wall clock:`, so every gate log shows its critical path (#3143).
+
 ### Fixed
 
 - A macOS host no longer idle-sleeps while the autonomous scheduler runs: the

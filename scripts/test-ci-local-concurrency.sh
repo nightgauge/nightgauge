@@ -330,7 +330,13 @@ check "a slot we still own IS released (the guard is not 'never release')" $?
 # The gates that collide are the ones in sibling worktrees of one repository.
 # Keying on the worktree path would give each its own budget and restore the
 # defect exactly.
-default_root="$(CI_LOCAL_SLOT_WAIT=60 bash scripts/ci-local.sh --slot-probe | sed -n 's|^slot acquired: \(.*\)/[0-9]* in_use.*|\1|p')"
+# This is the one arm that touches the REAL shared root, and the only thing it
+# asserts is that root's path. Since #3143 this suite runs as a grouped step, so
+# the gate running it holds slots of that very root, the Go suites among them.
+# Under the gate's own budget the probe waited out CI_LOCAL_SLOT_WAIT behind
+# them and then printed an empty slot path, failing the arm. An unbounded
+# CI_LOCAL_JOBS lets it take the first free slot number at once.
+default_root="$(CI_LOCAL_JOBS=1000 CI_LOCAL_SLOT_WAIT=60 bash scripts/ci-local.sh --slot-probe | sed -n 's|^slot acquired: \(.*\)/[0-9]* in_use.*|\1|p')"
 common="$(git rev-parse --git-common-dir)"
 case "$common" in /*) ;; *) common="$REPO_ROOT/$common" ;; esac
 expected_key="$(printf '%s' "$common" | cksum | awk '{print $1}')"
@@ -371,7 +377,13 @@ check "run_group throttles on the machine-wide slot budget" $?
 # concurrent gates this suite produced 16 of its 24 assertions and a bare
 # non-zero exit; two concurrent runs must each complete all 24. This is the
 # expensive arm in this file and it is the point of it.
-TREE_BEFORE="$(git status --porcelain --untracked-files=all | LC_ALL=C sort)"
+# Scoped to the surface this suite could write if it escaped its temp repo:
+# the generator's source (`skills/`) and its mirror. Grouped, this arm runs
+# beside serial gate steps that legitimately write other tracked files (say
+# `make generate-ipc-client`), so a whole-checkout comparison would blame this
+# suite for their writes (#3143).
+DRIFT_SURFACE=(skills claude-plugins/nightgauge/skills)
+TREE_BEFORE="$(git status --porcelain --untracked-files=all -- "${DRIFT_SURFACE[@]}" | LC_ALL=C sort)"
 bash scripts/test-mirror-drift-gate.sh > "$TMP/drift-a.log" 2>&1 &
 da=$!
 HOLDER_PIDS="$HOLDER_PIDS $da"
@@ -392,7 +404,7 @@ check "concurrent drift-gate suite B ran all 24 assertions" $?
 # ci-local.sh, i.e. by construction on a tree with uncommitted work, so
 # "git status is empty" is the wrong assertion — it was the wrong assertion in
 # #855 too. What matters is that the two concurrent runs changed nothing.
-[ "$TREE_BEFORE" = "$(git status --porcelain --untracked-files=all | LC_ALL=C sort)" ]
+[ "$TREE_BEFORE" = "$(git status --porcelain --untracked-files=all -- "${DRIFT_SURFACE[@]}" | LC_ALL=C sort)" ]
 check "two concurrent drift-gate suites changed nothing in the checkout" $?
 
 # ── (14) a fixture git failure is a HARNESS ERROR, exit 2 ──────────────────
@@ -466,6 +478,40 @@ else
     check "the gate scrubs $name before any step runs" $?
   done
 fi
+
+# ── (18) the summary sums the SERIAL steps only, beside the wall clock (#3143) ─
+# `--timing-probe` runs a fast serial step and a 3-second grouped step through
+# the real runners and the real `print_timing_summary`. The serial sum is the
+# critical path; counting the grouped step makes it at least 3s.
+env CI_LOCAL_SLOT_ROOT="$TMP/slots-timing" CI_LOCAL_LOG_DIR="$TMP/logs-timing" CI_LOCAL_JOBS=2 \
+  bash scripts/ci-local.sh --timing-probe > "$TMP/timing.log" 2>&1
+timing_rc=$?
+[ "$timing_rc" -eq 0 ]
+check "a passing timing probe exits 0 (got $timing_rc)" $?
+serial_line="$(grep '^Serial steps: ' "$TMP/timing.log" || true)"
+serial_sum="$(printf '%s\n' "$serial_line" | sed -n 's/^Serial steps: \([0-9]*\)s summed over \([0-9]*\) step(s).*/\1 \2/p')"
+case "$serial_sum" in
+  "0 1" | "1 1") check "the serial sum counts the serial step only ($serial_line)" 0 ;;
+  *) check "the serial sum counts the serial step only (got: ${serial_line:-no line})" 1 ;;
+esac
+grep -q '1 concurrent step(s) ran beside them' "$TMP/timing.log"
+check "the summary counts the grouped step as concurrent" $?
+# Beside the wall clock: the line immediately above `Wall clock:`.
+after_serial="$(grep -A1 '^Serial steps: ' "$TMP/timing.log" | sed -n 2p)"
+[[ $after_serial == 'Wall clock: '* ]]
+check "the serial sum is printed beside the wall clock" $?
+
+# ── (19) a failing GROUPED step is named in the verdict with its log ────────
+# Moving a suite from run_step to run_group must not change the failure report.
+env CI_LOCAL_SLOT_ROOT="$TMP/slots-timing-f" CI_LOCAL_LOG_DIR="$TMP/logs-timing-f" CI_LOCAL_JOBS=2 \
+  bash scripts/ci-local.sh --timing-probe fail > "$TMP/timing-fail.log" 2>&1
+timing_fail_rc=$?
+[ "$timing_fail_rc" -ne 0 ]
+check "a failing grouped step makes the gate exit non-zero (got $timing_fail_rc)" $?
+grep -q '^✗ 1 check(s) failed' "$TMP/timing-fail.log" &&
+  grep -q '^  - timing probe concurrent step$' "$TMP/timing-fail.log" &&
+  grep -q "full output: $TMP/logs-timing-f/timing-probe-concurrent-step.log" "$TMP/timing-fail.log"
+check "the failed grouped step is named in the summary with its log path" $?
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then
