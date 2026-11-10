@@ -41,6 +41,8 @@
 #   --wait SECONDS        Listing channels, --release only: re-query every
 #                         CHANNEL_POLL_SECONDS (default 30) until the version is
 #                         listed on every target or SECONDS have passed.
+#                         Open VSX release mode reads each target's registry
+#                         record, not the search-indexed listing (#3126).
 #   --release             Release-run mode. The cask pull request was opened
 #                         seconds ago and waits for review, so an unmerged
 #                         pull request for --version is expected: pass when the
@@ -223,6 +225,36 @@ query_listing() {
   fi
 }
 
+# query_openvsx_record TARGET — what Open VSX's own record serves for TARGET at
+# VERSION: GET /api/<ns>/<name>/<target>/<version>. The listing query above is
+# served from a search index that lagged v0.8.5's publish by 20+ minutes while
+# this record was current within seconds (#3126). Prints the observed version on
+# a 200 whose record names VERSION's target, "HTTP <code>" for any other answer
+# (BEHIND, re-polled), and returns 2 only when the registry cannot be reached.
+query_openvsx_record() {
+  local tgt="$1" raw code body observed
+  # No -f: a 404 is an answer (not yet published), not a transport failure.
+  if ! raw="$(curl -sS --max-time 30 -w '\n%{http_code}' \
+    "https://open-vsx.org/api/${EXTENSION%%.*}/${EXTENSION#*.}/$tgt/$VERSION")"; then
+    echo "ERROR: cannot query Open VSX for $EXTENSION ($tgt)" >&2
+    return 2
+  fi
+  code="${raw##*$'\n'}"
+  body="${raw%$'\n'*}"
+  if [ "$code" = "000" ] || [ -z "$code" ]; then
+    echo "ERROR: cannot query Open VSX for $EXTENSION ($tgt)" >&2
+    return 2
+  fi
+  if [ "$code" = "200" ]; then
+    observed="$(jq -r --arg t "$tgt" \
+      'if (.targetPlatform // $t) == $t then (.version // empty) else empty end' \
+      <<<"$body" 2>/dev/null)"
+    printf '%s' "${observed:-HTTP 200 without a matching record}"
+  else
+    printf 'HTTP %s' "$code"
+  fi
+}
+
 # newest_for TARGET LISTING — the newest stable version listed for TARGET.
 newest_for() {
   local want="$1" best="" tgt ver
@@ -236,22 +268,34 @@ newest_for() {
 # Sets CURRENT, VERDICT and REASON; exits 2 when the registry cannot be read.
 # Watchdog mode: every target's newest listed version must be the release.
 # Release mode: the release must be listed on every target, polled for up to
-# --wait seconds because a registry indexes a publish asynchronously.
+# --wait seconds because a registry indexes a publish asynchronously. Open VSX
+# release mode reads each target's record instead of the listing (#3126), so
+# records holds a "TARGET OBSERVED" line per target and listing stays unread.
 check_listing() {
-  local name listing t newest missing behind deadline
+  local name listing="" t newest missing behind deadline records="" observed
+  local by_record=0
   if [ "$CHANNEL" = "marketplace" ]; then name="VS Code Marketplace"; else name="Open VSX"; fi
+  [ "$CHANNEL" = "open-vsx" ] && [ "$RELEASE_MODE" -eq 1 ] && by_record=1
   deadline=$((SECONDS + WAIT))
   while :; do
-    listing="$(query_listing)" || exit 2
-    missing="" behind=""
-    for t in $TARGETS; do
-      if [ "$RELEASE_MODE" -eq 1 ]; then
-        grep -qxF "$t $VERSION" <<<"$listing" || missing+=" $t"
-      else
-        newest="$(newest_for "$t" "$listing")"
-        [ "$newest" = "$VERSION" ] || behind+="; $t serves ${newest:-nothing}"
-      fi
-    done
+    missing="" behind="" records=""
+    if [ "$by_record" -eq 1 ]; then
+      for t in $TARGETS; do
+        observed="$(query_openvsx_record "$t")" || exit 2
+        records+="$t $observed"$'\n'
+        [ "$observed" = "$VERSION" ] || missing+=" $t"
+      done
+    else
+      listing="$(query_listing)" || exit 2
+      for t in $TARGETS; do
+        if [ "$RELEASE_MODE" -eq 1 ]; then
+          grep -qxF "$t $VERSION" <<<"$listing" || missing+=" $t"
+        else
+          newest="$(newest_for "$t" "$listing")"
+          [ "$newest" = "$VERSION" ] || behind+="; $t serves ${newest:-nothing}"
+        fi
+      done
+    fi
     if [ "$RELEASE_MODE" -eq 0 ] || [ -z "$missing" ] || [ "$SECONDS" -ge "$deadline" ]; then
       break
     fi
@@ -260,14 +304,21 @@ check_listing() {
   done
 
   say "- release: \`$VERSION\` ($SOURCE)"
-  say "- $name listing \`$EXTENSION\`, newest per target:"
-  for t in $TARGETS; do
-    newest="$(newest_for "$t" "$listing")"
-    say "  - \`$t\`: \`${newest:-not listed}\`"
-  done
+  if [ "$by_record" -eq 1 ]; then
+    say "- $name record \`$EXTENSION\` per target:"
+    while read -r t observed; do
+      [ -n "$t" ] && say "  - \`$t\`: \`$observed\`"
+    done <<<"$records"
+  else
+    say "- $name listing \`$EXTENSION\`, newest per target:"
+    for t in $TARGETS; do
+      newest="$(newest_for "$t" "$listing")"
+      say "  - \`$t\`: \`${newest:-not listed}\`"
+    done
+  fi
 
   VERDICT=1
-  if [ -z "$listing" ]; then
+  if [ "$by_record" -eq 0 ] && [ -z "$listing" ]; then
     REASON="$EXTENSION is not listed on $name: check the listing and the publisher account, then re-run marketplace-publish.yml on v$VERSION."
   elif [ -n "$missing" ]; then
     REASON="$VERSION is not listed within ${WAIT}s on $name for:$missing. Re-run marketplace-publish.yml on v$VERSION (it is idempotent)."

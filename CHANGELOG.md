@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The release run's Open VSX confirmation now reads each target's registry record
+  (`/api/<namespace>/<extension>/<target>/<version>`) instead of the search-indexed
+  listing, so a published version is confirmed within one poll. The index lagged
+  v0.8.5's publish by more than 20 minutes and turned a good release red. A 404, an
+  error or a different version is still BEHIND and re-polled until `--wait` (#3126).
 - The review-cap attention card shows the worktree path and each finding's
   location exactly, as Markdown code spans, instead of backslash-escaping
   characters such as `_`, so the path can be copied (#3129).

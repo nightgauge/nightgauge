@@ -47,7 +47,16 @@ echo "$*" >>"$fake/curl.log"
 for arg in "$@"; do
   case "$arg" in
   https://marketplace.visualstudio.com/*) cat "$fake/marketplace.json"; exit 0 ;;
-  https://open-vsx.org/*) cat "$fake/openvsx.json"; exit 0 ;;
+  https://open-vsx.org/api/-/query*) cat "$fake/openvsx.json"; exit 0 ;;
+  https://open-vsx.org/api/*/*/*/*)
+    # The per-target record (#3126), asked for with -w '\n%{http_code}'.
+    rec="${arg#https://open-vsx.org/api/*/*/}"
+    rec="$fake/openvsx-record/${rec%%/*}-${rec#*/}"
+    if [ -e "$rec.json" ]; then cat "$rec.json"; printf '\n200'
+    elif [ -e "$rec.code" ]; then printf '{"error":"server"}\n%s' "$(cat "$rec.code")"
+    else printf '{"error":"not found"}\n404'; fi
+    exit 0
+    ;;
   esac
 done
 exit 6
@@ -304,6 +313,13 @@ openvsx_lists() {
   targets "$@" | jq --arg ns "$ns" --arg n "$name" \
     '{extensions: [.[] | {namespace: $ns, name: $n, version, targetPlatform}]}' >"$FAKE/openvsx.json"
 }
+# openvsx_record <target> <version> [<served-version>] -> Open VSX's own record
+# for <target> at <version> answers 200, serving <served-version> (#3126).
+openvsx_record() {
+  mkdir -p "$FAKE/openvsx-record"
+  printf '{"namespace": "nightgauge", "name": "nightgauge", "version": "%s", "targetPlatform": "%s"}\n' \
+    "${3:-$2}" "$1" >"$FAKE/openvsx-record/$1-$2.json"
+}
 ALL_072=(0.7.2:darwin-arm64 0.7.2:darwin-x64 0.7.2:linux-x64)
 
 run_listing() { # run_listing <channel> [args...]
@@ -381,13 +397,54 @@ q="$(queries)"
 if [ "$q" -ge 2 ] && [ "$q" -le 4 ]; then echo "PASS: the wait polls a bounded number of times ($q)"; PASS=$((PASS + 1))
 else echo "FAIL: want 2-4 polls within --wait 2, got $q"; FAIL=$((FAIL + 1)); fi
 
-# 23. Without --wait, release mode queries once.
+# 23. Open VSX release mode reads each target's record once, never the listing
+#     (#3126): the search index lagged v0.8.5's publish by 20+ minutes.
+fixture v0.7.2 0.7.2 '[]'
+openvsx_lists nightgauge nightgauge 0.7.1:darwin-arm64 0.7.1:darwin-x64 0.7.1:linux-x64
+for t in darwin-arm64 darwin-x64 linux-x64; do openvsx_record "$t" 0.7.2; done
+run_listing open-vsx --release --version 0.7.2
+expect "a record hit with a lagging listing is green in release mode" 0 "verdict: listed"
+if [ "$(queries)" = "3" ]; then echo "PASS: one record query per target without --wait"; PASS=$((PASS + 1))
+else echo "FAIL: want 3 record queries, got $(queries): $(cat "$FAKE/curl.log")"; FAIL=$((FAIL + 1)); fi
+case "$(cat "$FAKE/curl.log")" in
+*"-/query"*) echo "FAIL: release mode read the search-indexed listing"; FAIL=$((FAIL + 1)) ;;
+*"open-vsx.org/api/nightgauge/nightgauge/linux-x64/0.7.2"*)
+  echo "PASS: release mode reads the per-target record"; PASS=$((PASS + 1)) ;;
+*) echo "FAIL: no per-target record query: $(cat "$FAKE/curl.log")"; FAIL=$((FAIL + 1)) ;;
+esac
+
+# 23b. A record 404 on one target is BEHIND, re-polled until --wait runs out.
 fixture v0.7.2 0.7.2 '[]'
 openvsx_lists nightgauge nightgauge "${ALL_072[@]}"
+openvsx_record darwin-arm64 0.7.2
+openvsx_record darwin-x64 0.7.2
+run_listing open-vsx --release --version 0.7.2 --wait 2
+expect "a record 404 is BEHIND, naming the target" 1 "not listed within 2s on Open VSX for: linux-x64"
+expect "the report shows the 404" 1 "linux-x64\`: \`HTTP 404"
+q="$(queries)"
+if [ "$q" -ge 6 ] && [ "$q" -le 12 ]; then echo "PASS: the record wait polls a bounded number of times ($q)"; PASS=$((PASS + 1))
+else echo "FAIL: want 6-12 record queries within --wait 2, got $q"; FAIL=$((FAIL + 1)); fi
+
+# 23c. A 200 serving another version is BEHIND; so is a 5xx.
+fixture v0.7.2 0.7.2 '[]'
+openvsx_record darwin-arm64 0.7.2
+openvsx_record darwin-x64 0.7.2 0.7.1
+openvsx_record linux-x64 0.7.2
 run_listing open-vsx --release --version 0.7.2
-expect "release mode with the version listed is green" 0 "verdict: listed"
-if [ "$(queries)" = "1" ]; then echo "PASS: one Open VSX query without --wait"; PASS=$((PASS + 1))
-else echo "FAIL: want 1 Open VSX query, got $(queries)"; FAIL=$((FAIL + 1)); fi
+expect "a record version mismatch is BEHIND" 1 "Open VSX for: darwin-x64"
+
+fixture v0.7.2 0.7.2 '[]'
+openvsx_record darwin-arm64 0.7.2
+openvsx_record darwin-x64 0.7.2
+mkdir -p "$FAKE/openvsx-record" && echo 503 >"$FAKE/openvsx-record/linux-x64-0.7.2.code"
+run_listing open-vsx --release --version 0.7.2
+expect "a record 5xx is BEHIND, not cannot-determine" 1 "linux-x64\`: \`HTTP 503"
+
+# 23d. An unreachable registry in release mode is still exit 2.
+fixture v0.7.2 0.7.2 '[]'
+touch "$FAKE/curl-fail"
+run_listing open-vsx --release --version 0.7.2
+expect "an unreachable Open VSX record is exit 2" 2 "cannot query Open VSX"
 
 # 24. One issue per listing channel: opened when behind, never duplicated, closed when current.
 fixture v0.7.2 0.7.2 '[]'
