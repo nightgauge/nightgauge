@@ -352,7 +352,7 @@ pat = re.compile(
     r'  skip_step "go test -race[^\n]*\n'
     r'[^\n]*\n'
     r'else\n'
-    r'run_group "go test -race[^\n]*\n'
+    r'run_group (?:--wait )?"go test -race[^\n]*\n'
     r'[^\n]*\n'
     r'fi\n')
 out, n = pat.subn('\n', src)

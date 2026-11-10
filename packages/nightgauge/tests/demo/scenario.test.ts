@@ -82,11 +82,13 @@ function play(raw: unknown, speed = 1): { lines: string[]; state: Obj } {
 }
 
 function runProcess(args: string[], untilStderr?: RegExp) {
+  // A per-call log directory, not a fixed tmp file shared by concurrent gates (#3143).
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), "demo-scenario-log-"));
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
     const proc = spawn(process.execPath, [ENTRY, "serve", ...args], {
       env: {
         PATH: process.env.PATH,
-        NIGHTGAUGE_DEMO_IPC_LOG: path.join(os.tmpdir(), "demo-scenario-test.jsonl"),
+        NIGHTGAUGE_DEMO_IPC_LOG: path.join(logDir, "ipc.jsonl"),
       },
     });
     let stdout = "";
@@ -97,7 +99,10 @@ function runProcess(args: string[], untilStderr?: RegExp) {
       if (untilStderr && untilStderr.test(stderr)) proc.stdin.end();
     });
     if (!untilStderr) proc.stdin.end();
-    proc.on("exit", (code) => resolve({ code, stdout, stderr }));
+    proc.on("exit", (code) => {
+      fs.rmSync(logDir, { recursive: true, force: true });
+      resolve({ code, stdout, stderr });
+    });
   });
 }
 

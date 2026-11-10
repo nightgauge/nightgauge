@@ -369,7 +369,8 @@ check "--list-steps succeeds with the budget fully held" $?
 # the form present (#2360).
 ! grep -q 'jobs -rp' <<<"$(grep -vE '^[[:space:]]*#' scripts/ci-local.sh)"
 check "run_group no longer throttles on this shell's own job table" $?
-grep -q '^  slot="\$(slot_acquire)"$' scripts/ci-local.sh
+grep -q '^    slot="\$(slot_acquire)"$' scripts/ci-local.sh &&
+  grep -q '^    slot="\$(slot_try_acquire)"$' scripts/ci-local.sh
 check "run_group throttles on the machine-wide slot budget" $?
 
 # ── (13) TWO CONCURRENT drift-gate suites both complete ────────────────────
@@ -500,6 +501,11 @@ check "the summary counts the grouped step as concurrent" $?
 after_serial="$(grep -A1 '^Serial steps: ' "$TMP/timing.log" | sed -n 2p)"
 [[ $after_serial == 'Wall clock: '* ]]
 check "the serial sum is printed beside the wall clock" $?
+# The chain blocks at the drain until the 3-second grouped step ends.
+drain="$(sed -n 's/^Slot waits: \([0-9]*\)s blocking the serial chain; drain wait: \([0-9]*\)s\.$/\2/p' \
+  "$TMP/timing.log")"
+[ -n "$drain" ] && [ "$drain" -ge 2 ]
+check "the drain wait counts the time blocked on the last grouped step (${drain:-no line}s)" $?
 
 # ── (19) a failing GROUPED step is named in the verdict with its log ────────
 # Moving a suite from run_step to run_group must not change the failure report.
@@ -512,6 +518,39 @@ grep -q '^✗ 1 check(s) failed' "$TMP/timing-fail.log" &&
   grep -q '^  - timing probe concurrent step$' "$TMP/timing-fail.log" &&
   grep -q "full output: $TMP/logs-timing-f/timing-probe-concurrent-step.log" "$TMP/timing-fail.log"
 check "the failed grouped step is named in the summary with its log path" $?
+
+# ── (20) a light grouped step with no free slot runs INLINE (#3143) ────────
+# Budget 1: a 3-second `--wait` step takes the slot. The light step after it
+# must run inline as a serial step, not sleep on the slot (which stalled the
+# whole chain, uncounted). The next `--wait` step must block for the slot, and
+# that block is what `Slot waits:` counts.
+env CI_LOCAL_SLOT_ROOT="$TMP/slots-fb" CI_LOCAL_LOG_DIR="$TMP/logs-fb" CI_LOCAL_JOBS=1 \
+  CI_LOCAL_SLOT_WAIT=60 bash scripts/ci-local.sh --fallback-probe > "$TMP/fallback.log" 2>&1
+fb_rc=$?
+[ "$fb_rc" -eq 0 ]
+check "a passing fallback probe exits 0 (got $fb_rc)" $?
+grep -q '^  ✓ fallback probe light step ([0-9]*s)$' "$TMP/fallback.log" &&
+  ! grep -q '^▶ fallback probe light step (started, concurrent)$' "$TMP/fallback.log"
+check "a light grouped step with no free slot ran inline, not concurrently" $?
+grep -q 'no free heavy-step slot for "fallback probe light step"' "$TMP/fallback.log"
+check "the inline fallback says why the step ran inline" $?
+grep -q '^Serial steps: [0-9]*s summed over 1 step(s).* 2 concurrent step(s)' "$TMP/fallback.log"
+check "the inline step counts as serial and the --wait steps as concurrent" $?
+fb_wait="$(sed -n 's/^Slot waits: \([0-9]*\)s blocking the serial chain; drain wait: \([0-9]*\)s\.$/\1/p' \
+  "$TMP/fallback.log")"
+[ -n "$fb_wait" ] && [ "$fb_wait" -ge 2 ]
+check "a --wait step blocked on the full budget is counted in Slot waits (${fb_wait:-no line}s)" $?
+
+# ── (21) a failing INLINE step is named in the verdict with its log ────────
+env CI_LOCAL_SLOT_ROOT="$TMP/slots-fb-f" CI_LOCAL_LOG_DIR="$TMP/logs-fb-f" CI_LOCAL_JOBS=1 \
+  CI_LOCAL_SLOT_WAIT=60 bash scripts/ci-local.sh --fallback-probe fail > "$TMP/fallback-fail.log" 2>&1
+fb_fail_rc=$?
+[ "$fb_fail_rc" -ne 0 ]
+check "a failing inline step makes the gate exit non-zero (got $fb_fail_rc)" $?
+grep -q '^✗ 1 check(s) failed' "$TMP/fallback-fail.log" &&
+  grep -q '^  - fallback probe light step$' "$TMP/fallback-fail.log" &&
+  grep -q "full output: $TMP/logs-fb-f/fallback-probe-light-step.log" "$TMP/fallback-fail.log"
+check "the failed inline step is named in the summary with its log path" $?
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then

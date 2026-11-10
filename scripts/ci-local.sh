@@ -136,6 +136,13 @@ SUMMARY_PROBE_FAIL=0
 # with its log path exactly as it names a failed serial step.
 TIMING_PROBE=0
 TIMING_PROBE_FAIL=0
+# `--fallback-probe` drives the inline fallback (#3143) at whatever CI_LOCAL_JOBS
+# the caller sets (the test uses 1): a 3-second `--wait` step takes the slot, a
+# light grouped step then finds none and must run inline as a serial step, and a
+# second `--wait` step must block until the slot frees, which the summary's
+# `Slot waits:` line counts. `--fallback-probe fail` makes the inline step fail.
+FALLBACK_PROBE=0
+FALLBACK_PROBE_FAIL=0
 # `--deps-probe DIR` prints the dependency-bootstrap decision for DIR and exits
 # (#2562), so scripts/test-ci-local-bootstrap.sh asserts it without running npm.
 DEPS_PROBE=""
@@ -163,6 +170,11 @@ while [ "$#" -gt 0 ]; do
       TIMING_PROBE=1
       shift
       case "${1:-}" in fail) TIMING_PROBE_FAIL=1; shift ;; esac
+      ;;
+    --fallback-probe)
+      FALLBACK_PROBE=1
+      shift
+      case "${1:-}" in fail) FALLBACK_PROBE_FAIL=1; shift ;; esac
       ;;
     --slot-probe)
       SLOT_PROBE=1
@@ -716,27 +728,43 @@ slot_holders() {
   return 0
 }
 
+# One pass over slots 1..CI_LOCAL_JOBS. Takes the first free one and prints its
+# path, or prints nothing and returns 1. Never sleeps.
+slot_take_free() {
+  local i=1
+  # Re-created every pass: a root deleted under a live gate must not be
+  # waited on for the whole CI_LOCAL_SLOT_WAIT.
+  mkdir -p "$SLOT_ROOT" 2>/dev/null || true
+  while [ "$i" -le "$CI_LOCAL_JOBS" ]; do
+    if mkdir "$SLOT_ROOT/$i" 2>/dev/null; then
+      # `owner` is written once and never rewritten; `pid` is rewritten by
+      # `run_group` with the child's pid so a killed child's slot becomes
+      # reclaimable. They answer different questions: `pid` is "is the holder
+      # alive", `owner` is "is this still the same holder".
+      printf '%s\n' "$GATE_ID" > "$SLOT_ROOT/$i/owner"
+      printf '%s\n' "$$" > "$SLOT_ROOT/$i/pid"
+      printf '%s\n' "$SLOT_ROOT/$i"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Take a slot only if one is free now (#3143): one pass, then one more pass if a
+# dead holder's slot was reclaimed. Prints the slot's path, or nothing when the
+# budget is full. Never waits: a light grouped step that gets nothing runs inline
+# in the serial chain instead of stalling it.
+slot_try_acquire() {
+  slot_take_free && return 0
+  slot_reclaim_dead && slot_take_free && return 0
+  return 0
+}
+
 slot_acquire() {
-  local i waited=0 announced=0
+  local waited=0 announced=0
   while : ; do
-    # Re-created every pass: a root deleted under a live gate must not be
-    # waited on for the whole CI_LOCAL_SLOT_WAIT.
-    mkdir -p "$SLOT_ROOT" 2>/dev/null || true
-    i=1
-    while [ "$i" -le "$CI_LOCAL_JOBS" ]; do
-      if mkdir "$SLOT_ROOT/$i" 2>/dev/null; then
-        # `owner` is written once and never rewritten; `pid` is rewritten by
-        # `run_group` with the child's pid so a killed child's slot becomes
-        # reclaimable. They answer
-        # different questions: `pid` is "is the holder alive", `owner` is "is
-        # this still the same holder".
-        printf '%s\n' "$GATE_ID" > "$SLOT_ROOT/$i/owner"
-        printf '%s\n' "$$" > "$SLOT_ROOT/$i/pid"
-        printf '%s\n' "$SLOT_ROOT/$i"
-        return 0
-      fi
-      i=$((i + 1))
-    done
+    slot_take_free && return 0
     slot_reclaim_dead && continue
     if [ "$announced" -eq 0 ]; then
       echo "  (waiting for a heavy-step slot: $(slots_in_use)/$CI_LOCAL_JOBS in use" \
@@ -1009,6 +1037,13 @@ STEP_LABELS=()
 # serial steps run one after another, so their sum is the gate's critical path;
 # the concurrent ones overlap it and are not added.
 STEP_MODES=()
+# Seconds the serial chain spent blocked, outside any step (#3143). A
+# `run_group --wait` step blocks the chain until a slot frees, and the drain
+# blocks it until the last grouped step ends. Neither is a step, so neither
+# appears in the serial sum; without these the gap between that sum and the
+# wall clock had no name.
+SLOT_WAIT_SECONDS=0
+DRAIN_WAIT_SECONDS=0
 GATE_STARTED=$SECONDS
 FAILED_STEPS=()
 FAILED_LOGS=()
@@ -1173,7 +1208,9 @@ print_final_verdict() {
 # The summed serial time sits beside the wall clock (#3143). The serial steps
 # run one after another, so their sum is the floor under the wall clock however
 # many cores the box has; when it is close to the wall clock, the serial chain,
-# not the longest grouped step, is what to shorten next.
+# not the longest grouped step, is what to shorten next. The slot and drain
+# waits above it are the rest of the gap: time the chain sat blocked on the
+# budget or on the last grouped step.
 print_timing_summary() {
   local total=$((SECONDS - GATE_STARTED))
   local i serial_sum=0 serial_n=0 concurrent_n=0
@@ -1184,6 +1221,8 @@ print_timing_summary() {
     esac
   done
   echo ""
+  echo "Slot waits: ${SLOT_WAIT_SECONDS}s blocking the serial chain;" \
+    "drain wait: ${DRAIN_WAIT_SECONDS}s."
   echo "Serial steps: ${serial_sum}s summed over $serial_n step(s), the critical path;" \
     "$concurrent_n concurrent step(s) ran beside them."
   echo "Wall clock: $((total / 60))m$((total % 60))s total. Slowest steps:"
@@ -1274,7 +1313,24 @@ GROUP_STARTS=()
 # and as the answer to "is this new runner lying to me?".
 CI_LOCAL_SERIAL="${CI_LOCAL_SERIAL:-0}"
 
+# run_group [--wait] <label> <command...>
+#
+# `--wait` marks a long suite: with the budget full it blocks the serial chain
+# until a slot frees, because run inline it would pin the chain for minutes.
+# Every other grouped step takes a slot only if one is free NOW, and otherwise
+# runs inline through `run_step` (#3143). The blocking form stalled the whole
+# chain, serial steps included, for every light step issued while the budget
+# was full, and counted that time nowhere: #3148's gate summed 401s of serial
+# steps in a 792s wall clock. Inline, the chain does the step's work in the time
+# it would have spent sleeping, so the machine-wide load is unchanged (the
+# budget plus the one serial chain), and an inline step is serial, so it cannot
+# race the steps after it. Its failure is reported exactly as a serial step's.
 run_group() {
+  local wait_for_slot=0
+  if [ "${1:-}" = "--wait" ]; then
+    wait_for_slot=1
+    shift
+  fi
   local label="$1"
   shift
   if [ "$LIST_STEPS" -eq 1 ]; then
@@ -1290,10 +1346,22 @@ run_group() {
   # (#1983). `jobs -rp` counts only our own children, so three gates each
   # admitted four heavy steps and the box ran twelve — three `go test ./...`,
   # three `-race` passes and three vitest runs on 12 cores, at load 58, where
-  # children were killed before they could record an exit code. Blocking here
-  # keeps gates concurrent and the box merely busy.
-  local slot
-  slot="$(slot_acquire)"
+  # children were killed before they could record an exit code.
+  local slot wait_from
+  if [ "$wait_for_slot" -eq 1 ]; then
+    wait_from=$SECONDS
+    slot="$(slot_acquire)"
+    SLOT_WAIT_SECONDS=$((SLOT_WAIT_SECONDS + SECONDS - wait_from))
+  else
+    slot="$(slot_try_acquire)"
+    if [ -z "$slot" ]; then
+      echo ""
+      echo "  (no free heavy-step slot for \"$label\": $CI_LOCAL_JOBS/$CI_LOCAL_JOBS in use" \
+           "machine-wide; ran inline in the serial chain)"
+      run_step "$label" "$@"
+      return 0
+    fi
+  fi
   GROUP_SLOTS+=("$slot")
 
   local slug log codefile
@@ -1346,10 +1414,11 @@ run_group_wait() {
   [ "$LIST_STEPS" -eq 1 ] && return 0
   [ "${#GROUP_PIDS[@]}" -eq 0 ] && return 0
 
-  local i pid code elapsed
+  local i pid code elapsed drain_from=$SECONDS
   for pid in "${GROUP_PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
+  DRAIN_WAIT_SECONDS=$((DRAIN_WAIT_SECONDS + SECONDS - drain_from))
 
   for i in "${!GROUP_LABELS[@]}"; do
     if [ -r "${GROUP_CODEFILES[$i]}.secs" ]; then
@@ -1415,7 +1484,8 @@ if [ "$GROUP_PROBE" -gt 0 ]; then
   while [ "$i" -le "$GROUP_PROBE" ]; do
     # Each child records how many slots were held the moment it began, so the
     # maximum below is observed from inside the budget rather than inferred.
-    run_group "group probe $i" \
+    # `--wait`: this probe is the regression test for the BLOCKING acquisition.
+    run_group --wait "group probe $i" \
       env SLOT_ROOT="$SLOT_ROOT" OBS="$OBS" HOLD="$GROUP_PROBE_HOLD" \
       sh -c 'ls -d "$SLOT_ROOT"/*/ 2>/dev/null | wc -l | tr -d " " >> "$OBS"; sleep "$HOLD"'
     # Read in the parent straight after the fork, before the child can run: the
@@ -1458,6 +1528,20 @@ if [ "$TIMING_PROBE" -eq 1 ]; then
   else
     run_group "timing probe concurrent step" sleep 3
   fi
+  run_group_wait
+  print_timing_summary
+  print_final_verdict
+  exit $?
+fi
+
+if [ "$FALLBACK_PROBE" -eq 1 ]; then
+  run_group --wait "fallback probe long step" sleep 3
+  if [ "$FALLBACK_PROBE_FAIL" -eq 1 ]; then
+    run_group "fallback probe light step" false
+  else
+    run_group "fallback probe light step" true
+  fi
+  run_group --wait "fallback probe queued step" true
   run_group_wait
   print_timing_summary
   print_final_verdict
@@ -1556,7 +1640,7 @@ run_step "ci-local.sh step inventory" bash scripts/test-ci-local-inventory.sh
 #     own `mktemp -d` (logs, slot roots, fixtures), and every nested ci-local.sh
 #     it starts gets its own CI_LOCAL_SLOT_ROOT or an unbounded CI_LOCAL_JOBS,
 #     so it never waits behind the slots of the gate that is running it.
-run_group "ci-local.sh concurrency and failure-reporting contract" \
+run_group --wait "ci-local.sh concurrency and failure-reporting contract" \
   bash scripts/test-ci-local-concurrency.sh
 
 # 0b'. The gate's dependencies on its host machine (#3127): bash >= 4, a
@@ -1628,7 +1712,7 @@ if [ "$GO_SCOPE_RUN" -eq 0 ]; then
   skip_step "go test ./... -count=1 (with skip accounting)" \
     "--changed, and $GO_SCOPE_REASON"
 else
-run_group "go test ./... -count=1 (with skip accounting)" \
+run_group --wait "go test ./... -count=1 (with skip accounting)" \
   bash scripts/ci-local-go-test.sh "$GO_TEST_TIMEOUT" "$LOG_DIR/go-test-pass.tree"
 fi
 # Mirrors the race half of ci.yml's "Test (plain and race, concurrently)" step
@@ -1663,7 +1747,7 @@ if [ "$GO_SCOPE_RUN" -eq 0 ]; then
   skip_step "go test -race -count=1 ./..." \
     "--changed, and $GO_SCOPE_REASON"
 else
-run_group "go test -race -count=1 ./..." \
+run_group --wait "go test -race -count=1 ./..." \
   go test -race -count=1 -timeout "$GO_TEST_TIMEOUT" ./...
 fi
 run_step "gofmt -l ./internal ./cmd" \
@@ -1878,7 +1962,7 @@ run_group "Credential-scan scope regression suite" bash scripts/test-credential-
 #     the shared .git, which concurrent gates already share by design (#1697).
 #     The checkout is never written (#713), so the boundary scan (step 5,
 #     serial, before it) and every tree reader after it see the same tree.
-run_group "Publication boundary regression suite" bash scripts/test-publication-boundary.sh
+run_group --wait "Publication boundary regression suite" bash scripts/test-publication-boundary.sh
 
 # 5b-iii. Rename carry-over (#837) — hermetic, ~0.3s. Deliberately NOT a case
 #     in the suite above: exercising a rename means `git mv`-ing a real tracked
@@ -2073,7 +2157,7 @@ run_step "Phase markers ↔ PHASE_REGISTRY" npx tsx scripts/validate-phase-marke
 #    temp destination, link and contract scans), and the grouped suites after it
 #    run in sandboxes. It writes only temporary directories of its own under
 #    TMPDIR. It already ran beside the Go suites, so this adds no new load class.
-run_group "npm run test (all workspaces)" npm run test -- --run
+run_group --wait "npm run test (all workspaces)" npm run test -- --run
 
 # 9. Generated package contributions in sync
 run_step "Generated VSCode contributions in sync" \

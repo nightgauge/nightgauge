@@ -128,14 +128,16 @@ describe("demo/ipc-stub.cjs protocol", () => {
   });
 
   it("fails a one-shot CLI subcommand at once instead of serving", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ipc-oneshot-test-"));
     const proc = spawn(process.execPath, [STUB, "worktree", "sweep", "--json"], {
-      env: { PATH: process.env.PATH, NIGHTGAUGE_DEMO_IPC_LOG: path.join(os.tmpdir(), "x.jsonl") },
+      env: { PATH: process.env.PATH, NIGHTGAUGE_DEMO_IPC_LOG: path.join(dir, "log.jsonl") },
     });
     let stdout = "";
     let stderr = "";
     proc.stdout.on("data", (c: Buffer) => (stdout += c.toString()));
     proc.stderr.on("data", (c: Buffer) => (stderr += c.toString()));
     const code = await new Promise((resolve) => proc.on("exit", resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
     expect(code).toBe(1);
     expect(stdout).toBe("");
     expect(stderr).toMatch(/"worktree" is not available in demo mode/);
