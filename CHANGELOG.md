@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The review-cap attention card shows the worktree path and each finding's
+  location exactly, as Markdown code spans, instead of backslash-escaping
+  characters such as `_`, so the path can be copied (#3129).
 - `scripts/ci-local.sh` no longer depends on its host machine in three ways
   (#3127). Under bash older than 4 (macOS `/bin/bash`) it, and
   `scripts/validate-skill-metadata.sh`, exit 2 at once naming
