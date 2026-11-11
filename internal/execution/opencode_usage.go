@@ -926,9 +926,6 @@ type openCodeVersionKey struct {
 	mtime time.Time
 }
 
-// openCodeVersionRE is the shape of a version `opencode --version` prints.
-var openCodeVersionRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*$`)
-
 // version returns the binary's version, from the cache when the binary's
 // resolved path and modification time are unchanged.
 func (f openCodeFold) version(ctx context.Context) (string, error) {
@@ -952,8 +949,8 @@ func (f openCodeFold) version(ctx context.Context) (string, error) {
 		return "", err
 	}
 	first, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-	v := strings.TrimSpace(first)
-	if !openCodeVersionRE.MatchString(v) {
+	v, ok := adapters.ParseOpenCodeVersion(first)
+	if !ok {
 		return "", fmt.Errorf("printed no version")
 	}
 	openCodeVersions.Lock()

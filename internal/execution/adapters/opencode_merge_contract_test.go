@@ -163,7 +163,7 @@ func newMCHarness(t *testing.T, packages map[string]string) *mcHarness {
 	if res.exit != 0 {
 		t.Fatalf("opencode --version exited %d:\n%s", res.exit, res.stderr)
 	}
-	if v := strings.TrimSpace(res.stdout); v != mcVersion {
+	if v, _ := ParseOpenCodeVersion(res.stdout); v != mcVersion {
 		t.Fatalf("opencode %s is installed; this suite was observed on %s. Re-run it against the new version and re-record ADR-022's results table before changing the pin", v, mcVersion)
 	}
 	return h

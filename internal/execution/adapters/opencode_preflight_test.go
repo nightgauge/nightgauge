@@ -679,3 +679,47 @@ func processGone(pid int, within time.Duration) bool {
 	}
 	return false
 }
+
+// TestParseOpenCodeVersion: every shape opencode prints for --version (1.x
+// bare and v-prefixed, 2.x `opencode vX.Y.Z`) yields the bare version, and a
+// line without one is rejected.
+func TestParseOpenCodeVersion(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"2.2.6", "2.2.6"},
+		{"v2.2.6", "2.2.6"},
+		{"opencode v2.2.6", "2.2.6"},
+		{"opencode 2.2.6", "2.2.6"},
+		{"  opencode v2.2.6\n", "2.2.6"},
+		{"opencode v2.3.0-beta.1", "2.3.0-beta.1"},
+		{"1.18.30", "1.18.30"},
+		{"", ""},
+		{"opencode", ""},
+		{"Usage: opencode [command]", ""},
+		{"opencode vX", ""},
+		{"foo opencode v2.2.6", ""},
+		{"v2.2", ""},
+	} {
+		got, ok := ParseOpenCodeVersion(tc.in)
+		if got != tc.want || ok != (tc.want != "") {
+			t.Errorf("ParseOpenCodeVersion(%q) = %q, %v; want %q", tc.in, got, ok, tc.want)
+		}
+	}
+	if compareOpenCodeVersions("2.3.0-beta.1", "2.3.0") != 0 {
+		t.Error("a pre-release suffix changed the version comparison")
+	}
+}
+
+// TestOpenCodeDispatchesThePrefixedTwoXVersion: a binary that prints the 2.x
+// `opencode v<max_tested>` form passes the floor and records the bare version.
+func TestOpenCodeDispatchesThePrefixedTwoXVersion(t *testing.T) {
+	home := preflightEnv(t)
+	m := openCodeManifestForTest(t)
+	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: "opencode v" + m.MaxTested})
+	run := RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: gitInitTestWorktree(t)}
+	if err := pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(context.Background(), run); err != nil {
+		t.Fatalf("PreDispatch = %v, want the dispatch allowed", err)
+	}
+	if rec, ok, _ := ReadOpenCodeDispatchRecord(testStateHome(home)); !ok || rec.Version != m.MaxTested {
+		t.Errorf("dispatch record = %+v, %v; want version %s", rec, ok, m.MaxTested)
+	}
+}

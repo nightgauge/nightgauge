@@ -59,7 +59,7 @@ func TestOpenCodeCatalogEnvMatchesTheBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opencode --version: %v", err)
 	}
-	if v := strings.TrimSpace(string(out)); v != openCodeCatalogVersion {
+	if v, _ := ParseOpenCodeVersion(string(out)); v != openCodeCatalogVersion {
 		t.Fatalf("opencode %s is installed; the catalog snapshot was read from %s. Re-read it before changing the pin", v, openCodeCatalogVersion)
 	}
 	// An npm install puts a link to the platform binary on PATH.
@@ -177,7 +177,7 @@ func TestOpenCodeAnthropicModelsMatchTheBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opencode --version: %v", err)
 	}
-	if v := strings.TrimSpace(string(out)); v != openCodeCatalogVersion {
+	if v, _ := ParseOpenCodeVersion(string(out)); v != openCodeCatalogVersion {
 		t.Fatalf("opencode %s is installed; the anthropic snapshot was read from %s. Re-read it before changing the pin", v, openCodeCatalogVersion)
 	}
 

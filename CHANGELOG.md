@@ -16,6 +16,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The OpenCode adapter accepts OpenCode 2.x again (#3172).** OpenCode 2.x
+  prints `opencode vX.Y.Z` for `--version`, which both version parsers
+  rejected, so every 2.x install was refused as `adapter_incompatible`. One
+  shared parser now reads `X.Y.Z`, `vX.Y.Z` and `opencode vX.Y.Z`, with an
+  optional pre-release suffix, for the dispatch floor and the usage fold. 2.x
+  runs as a version above `max_tested`, which stays at 1.18.30 until the
+  integration suite passes on 2.x.
+
 - **The darwin universal-binary check finds the VSIXs again (#3174).** It
   looked for `nightgauge-<version>-<target>.vsix`, but `vsce` names them
   `nightgauge-<target>-<version>.vsix`, so `main`'s build and every release

@@ -2098,3 +2098,28 @@ func TestOpenCodeTerminalRejectionStaysTerminal(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenCodeFoldVersionAcceptsEveryPrintedShape: the fold reads the 2.x
+// `opencode vX.Y.Z` form as well as the 1.x forms, and stamps the bare
+// version; a line that carries none is still "printed no version".
+func TestOpenCodeFoldVersionAcceptsEveryPrintedShape(t *testing.T) {
+	for printed, want := range map[string]string{
+		"1.18.30":         "1.18.30",
+		"v2.2.6":          "2.2.6",
+		"opencode v2.2.6": "2.2.6",
+		"opencode 2.2.6":  "2.2.6",
+		"Usage: opencode": "",
+	} {
+		bin := writeFakeOpenCode(t, fmt.Sprintf("echo %q\n", printed))
+		v, err := testFold(bin, t.TempDir()).version(context.Background())
+		if want == "" {
+			if err == nil || !strings.Contains(err.Error(), "printed no version") {
+				t.Errorf("%q: version = %q, %v; want printed no version", printed, v, err)
+			}
+			continue
+		}
+		if err != nil || v != want {
+			t.Errorf("%q: version = %q, %v; want %s", printed, v, err, want)
+		}
+	}
+}
