@@ -42,6 +42,12 @@
 # model flagged the stripped Go ELF. See docs/RELEASE_BINARIES.md. Signing does
 # not remove the DWARF that release-dwarf-check verifies.
 #
+# The workflows pass one file: bin/nightgauge-darwin-universal, the x86_64 +
+# arm64 Mach-O from `make darwin-universal`, then copy it over both darwin
+# bin/ paths (#3161). The signed thin darwin/amd64 build was flagged by
+# Microsoft's model; the signed universal file was clean. codesign signs
+# each slice of a universal file.
+#
 # ## Notarization and bare executables
 #
 # A bare Mach-O cannot be stapled: `stapler` works on .app, .dmg and .pkg only.

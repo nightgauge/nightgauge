@@ -188,3 +188,70 @@ required.
 Scan each one with `scripts/vt-scan.sh`, and raise the pin in the same pull
 request only if every build is clean. If a security advisory forces a raise
 that does not scan clean, the release waits until a clean set exists.
+
+## darwin/amd64 and the code signature (#3161)
+
+v0.8.6-rc.2's darwin/amd64 binary was flagged (`Trojan:Script/Wacatac.B!ml`,
+sha256 `10008b958313…`). The VSIX and the tarball ship that one build (#3064),
+so unifying them cannot fix it. Every variant below is darwin/amd64, built
+`CGO_ENABLED=0 go build -trimpath` with go1.26.10 and scanned with
+`scripts/vt-scan.sh`. "Signed" means ad-hoc `codesign --sign - --options
+runtime`, which reproduces the Developer ID verdicts.
+
+**Session 88 (rounds 1 to 3).** Unsigned default builds were flagged at 2 of 4
+version strings. Unsigned `-compressdwarf=false` builds were clean at 7 of 7.
+Signing put the score back over the threshold. Signed, the default build was
+clean at 1 of 3 version strings, `-compressdwarf=false` at 2 of 3, and
+`CGO_ENABLED=1 -linkmode=external` at 2 of 3. The full table is on #3161.
+
+**Round 4.** Every candidate uses `-compressdwarf=false` and is signed.
+
+| Candidate                                    | 0.8.6-rc.3             | 0.8.6                | 0.8.6-rc.4           | 0.8.7-rc.1                 | 0.8.7                      |
+| -------------------------------------------- | ---------------------- | -------------------- | -------------------- | -------------------------- | -------------------------- |
+| `CGO_ENABLED=1 -linkmode=external`           | `cc58ce923761` flagged | not scanned          | not scanned          | not scanned                | not scanned                |
+| `codesign --pagesize 16384`                  | `35f857bbf97f` flagged | not scanned          | not scanned          | not scanned                | not scanned                |
+| `codesign --pagesize 65536`                  | `f7c1a48ba209` clean   | not scanned          | not scanned          | not scanned                | not scanned                |
+| `GOAMD64=v3`                                 | `49a479dddf18` flagged | not scanned          | not scanned          | not scanned                | not scanned                |
+| Probe manifest not embedded (diagnostic)     | `34e54fd85b19` clean   | `d9e78389fc61` clean | `55fb76f74ae0` clean | `843069d4ebd1` **flagged** | `008b1c75820a` **flagged** |
+| OpenCode plugin JS not embedded (diagnostic) | `ae87835f7ec2` clean   | `e1f3a73bd89e` clean | `3be849d9bd7d` clean | `827c339484ba` clean       | `a947d90717d1` **flagged** |
+
+A candidate flagged at `0.8.6-rc.3` was not scanned further. A `--pagesize`
+other than 4096 cannot ship whatever it scans. XNU refuses a CodeDirectory
+whose page shift is neither 4K nor the kernel's own page size
+(`bsd/kern/ubc_subr.c`), and an Intel Mac's page size is 4K. The two
+diagnostic builds replaced the embedded files' content and are not shippable
+code.
+
+**Round 5: universal Mach-O.** darwin/amd64 and darwin/arm64 built as above
+(`-compressdwarf=false`, the release's version and vendor strings), joined with
+`lipo -create`, then signed. Each file is 162 MB and carries `x86_64 arm64`, and
+`release-dwarf-check` passes. The round spent 31 VirusTotal requests.
+
+| Version      | sha256         | Verdict                |
+| ------------ | -------------- | ---------------------- |
+| `0.8.6-rc.3` | `ad838c98ee55` | clean, 0 of 75 engines |
+| `0.8.6`      | `bfb622fdf0d2` | clean, 0 of 75 engines |
+| `0.8.6-rc.4` | `60e88d257564` | clean, 0 of 75 engines |
+| `0.8.7-rc.1` | `748130d4d4fe` | clean, 0 of 75 engines |
+| `0.8.7`      | `42b363b59461` | clean, 0 of 75 engines |
+
+**Cause.** The thin darwin/amd64 Mach-O sits at the threshold of Microsoft's
+model. The version string or a few kilobytes of embedded data flip the verdict,
+and the 4K-page code signature pushes the score up. No build, link or signing
+option for the thin file was clean when signed at every version string tested.
+The signed universal file was clean at all five, including the two
+(`0.8.7-rc.1`, `0.8.7`) that flagged both round 4 diagnostic builds.
+
+**What ships.** `make build-all` builds the darwin binaries with
+`-compressdwarf=false`, and `make darwin-universal` joins them into
+`bin/nightgauge-darwin-universal`. staging.yml and release.yml sign that one
+file and copy it over `bin/nightgauge-darwin-amd64` and
+`bin/nightgauge-darwin-arm64`, so both darwin VSIXs, both darwin archives and
+the cask carry identical bytes. `scripts/verify-darwin-universal.sh` fails the
+run when a darwin VSIX or bin/ binary is not that file. The linux build is
+unchanged. Each darwin download is about twice the size of a thin one.
+
+**Rule.** A darwin binary change ships only if the signed build is clean at five
+or more version strings, `0.8.6-rc.3` among them. Shipping a thin darwin binary
+again is such a change. Nothing here is allowlisted or reported as a false
+positive. A flagged darwin binary holds the release.

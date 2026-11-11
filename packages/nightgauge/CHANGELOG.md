@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- The macOS extensions now bundle one universal (Intel + Apple silicon)
+  `nightgauge` binary. Microsoft's scanner flagged the Intel-only one
+  (#3161). The macOS VSIX is about twice its former size.
 - A run stopped because the host went to sleep no longer halts its repository.
   It shows a warning that it will retry, and its issue comment says how long the
   host slept and how to keep it awake (`sudo pmset -c sleep 0`) instead of

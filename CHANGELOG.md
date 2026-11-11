@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The macOS binaries are now one universal (Intel + Apple silicon) file
+  (#3161).** Microsoft's scanner flagged the signed Intel-only binary
+  (`Trojan:Script/Wacatac.B!ml`). The signed universal build was clean at
+  all five version strings measured. Both macOS VSIXs, both macOS archives
+  and the Homebrew cask ship it, so each is about twice its former size. A
+  release step fails if a macOS VSIX or binary is not that file.
 - **The opencode plugin's gates no longer deny tool calls on a loaded
   machine.** Each gate verb may now run for 15 seconds instead of 5 before
   the call is blocked closed, and a timed-out gate's error names how long it

@@ -443,6 +443,8 @@ REQUIRED_FILES=(
   scripts/test-sign-macos-binaries.sh
   scripts/test-verify-archive-binaries.sh
   scripts/verify-archive-binaries.sh
+  scripts/test-verify-darwin-universal.sh
+  scripts/verify-darwin-universal.sh
   scripts/test-check-shipped-code.sh
   packages/nightgauge/scripts/check-shipped-code.sh
   scripts/test-scrub-evidence.sh
@@ -1830,6 +1832,14 @@ run_group "release-scan-gate.sh draft-hold harness" \
 #       ambiguous input (2, HARNESS ERROR).
 run_group "verify-archive-binaries.sh regression suite" \
   bash scripts/test-verify-archive-binaries.sh
+
+# 1b2c'''. verify-darwin-universal.sh regression suite (#3161) — the check that
+#       release.yml and staging.yml run after packaging, proving both darwin
+#       VSIXs and both darwin bin/ binaries are the one signed universal
+#       Mach-O. Fixture lipo builds cover all universal (0), a thin or
+#       different binary (1) and a missing input (2, HARNESS ERROR).
+run_group "verify-darwin-universal.sh regression suite" \
+  bash scripts/test-verify-darwin-universal.sh
 
 # 1b2d. check-shipped-code.sh regression suite (#2320, #2321) — the scan of
 #       what the VSIX ships for the shapes a static malware scanner matches on
