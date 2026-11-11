@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The independent review no longer files a follow-up for the reviewed issue's
+  own unmet criterion, or for a gap another stage already recorded (#3186).** A
+  plan-compliance finding that begins `Criterion N:` is linked to that criterion;
+  `followup materialize` reports it as `tracked-by-parent` instead of filing it
+  while the same run's PR holds the criterion unmet. A review record that shares a
+  candidate file and a code identifier (a backticked span, `path:line`, or a token
+  such as `max_tested`) with another stage's record for the same issue and run is
+  reported as `duplicate`. Everything else is filed as before. `pr-<N>.json` now
+  records the `run_id`, and discovered-work records may carry a `criterion`.
 - **Skill snapshots now freeze their directories, not just their files
   (#3088).** A run's skill snapshot made files read-only but left directories
   writable, so a stage could delete or rename-replace a frozen `SKILL.md`.

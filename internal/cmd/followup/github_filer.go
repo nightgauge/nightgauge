@@ -34,7 +34,7 @@ func ReviewFiling(client *gh.Client, cfg *config.Config) func(ctx context.Contex
 	return func(ctx context.Context, workdir, repo string, capture *discoveredwork.Capture) (*Result, error) {
 		gate := filing.ResolveGate(workdir)
 		if !gate.Files() {
-			return Materialize(ctx, capture, gate, false, nil)
+			return Materialize(ctx, capture, gate, false, Tracking{}, nil)
 		}
 		// A pr-{N}.json restored for a dispatched PR carries no pr_url.
 		if repo == "" {
@@ -50,7 +50,7 @@ func ReviewFiling(client *gh.Client, cfg *config.Config) func(ctx context.Contex
 		}
 		filer := NewGitHubFiler(client, owner, name, project, gh.ParseOwnerType(cfg.OwnerType))
 		trusted := AuthorTrusted(ctx, client, workdir, owner, name, capture.IssueNumber)
-		return Materialize(ctx, capture, gate, trusted, filer)
+		return Materialize(ctx, capture, gate, trusted, Tracking{}, filer)
 	}
 }
 

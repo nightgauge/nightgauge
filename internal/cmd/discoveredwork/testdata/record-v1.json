@@ -13,7 +13,8 @@
       "suggested_priority": "medium",
       "suggested_size": "S",
       "candidate_target_files": ["internal/ci/wait.go"],
-      "recorded_at": "2026-10-26T00:00:00Z"
+      "recorded_at": "2026-10-26T00:00:00Z",
+      "criterion": "The CI waiter honours the configured retry ceiling."
     }
   ]
 }

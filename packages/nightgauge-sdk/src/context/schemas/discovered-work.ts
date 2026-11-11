@@ -100,6 +100,15 @@ export const DiscoveredWorkRecordSchema = z
     suggested_size: DiscoveredWorkSizeSchema,
     candidate_target_files: z.array(CandidateTargetFileSchema).max(20),
     recorded_at: z.string().datetime(),
+    // The issue's own acceptance criterion the record says is unmet (#3186).
+    criterion: z
+      .string()
+      .min(1)
+      .max(2000)
+      .refine((s) => s.trim() === s, "must be trimmed")
+      .refine((s) => !/[\r\n]/.test(s), "must be a single line")
+      .refine(noControl, "must not contain control or bidi characters")
+      .optional(),
   })
   .strict();
 export type DiscoveredWorkRecord = z.infer<typeof DiscoveredWorkRecordSchema>;

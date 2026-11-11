@@ -101,7 +101,7 @@ func outcomes(r *Result) []string {
 
 func TestMaterialize_FilesWithBoardFieldsAndProvenance(t *testing.T) {
 	f := newFake()
-	res, err := Materialize(context.Background(), capture(t, "Fix the thing"), fileGate, true, f)
+	res, err := Materialize(context.Background(), capture(t, "Fix the thing"), fileGate, true, Tracking{}, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestMaterialize_FilesWithBoardFieldsAndProvenance(t *testing.T) {
 func TestMaterialize_DedupAgainstOpenBacklog_CommentsInsteadOfCreating(t *testing.T) {
 	f := newFake()
 	f.titles[NormalizeTitle("fix  the THING")] = 7
-	res, err := Materialize(context.Background(), capture(t, "Fix the thing"), fileGate, true, f)
+	res, err := Materialize(context.Background(), capture(t, "Fix the thing"), fileGate, true, Tracking{}, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestMaterialize_DedupAgainstOpenBacklog_CommentsInsteadOfCreating(t *testin
 		t.Fatalf("created=%d comments=%v items=%+v", len(f.created), f.comments, res.Items)
 	}
 	// A second pass does not comment twice.
-	if _, err := Materialize(context.Background(), capture(t, "Fix the thing"), fileGate, true, f); err != nil {
+	if _, err := Materialize(context.Background(), capture(t, "Fix the thing"), fileGate, true, Tracking{}, f); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.comments[7]) != 1 {
@@ -143,7 +143,7 @@ func TestMaterialize_DedupAgainstOpenBacklog_CommentsInsteadOfCreating(t *testin
 func TestMaterialize_PerRunCap_RefusesLoudly(t *testing.T) {
 	f := newFake()
 	gate := filing.Gate{Mode: filing.ModeFile, Cap: 2}
-	res, err := Materialize(context.Background(), capture(t, "one", "two", "three"), gate, true, f)
+	res, err := Materialize(context.Background(), capture(t, "one", "two", "three"), gate, true, Tracking{}, f)
 	var ce *filing.CapError
 	if !errors.As(err, &ce) || !strings.Contains(err.Error(), "refused: 1 of 3") {
 		t.Fatalf("err = %v", err)
@@ -163,7 +163,7 @@ func TestMaterialize_KillSwitchOff_FilesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := newFake()
-	res, err := Materialize(context.Background(), capture(t, "a", "b"), filing.ResolveGate(dir), true, f)
+	res, err := Materialize(context.Background(), capture(t, "a", "b"), filing.ResolveGate(dir), true, Tracking{}, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestMaterialize_KillSwitchOff_FilesNothing(t *testing.T) {
 
 func TestMaterialize_MissingConfig_FailsClosed(t *testing.T) {
 	f := newFake()
-	res, err := Materialize(context.Background(), capture(t, "a"), filing.ResolveGate(t.TempDir()), true, f)
+	res, err := Materialize(context.Background(), capture(t, "a"), filing.ResolveGate(t.TempDir()), true, Tracking{}, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestMaterialize_MissingConfig_FailsClosed(t *testing.T) {
 func TestMaterialize_ReportOnly_EmitsListNoMutations(t *testing.T) {
 	f := newFake()
 	gate := filing.Gate{Mode: filing.ModeReport, Cap: 10}
-	res, err := Materialize(context.Background(), capture(t, "a", "b"), gate, true, f)
+	res, err := Materialize(context.Background(), capture(t, "a", "b"), gate, true, Tracking{}, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestMaterialize_ReportOnly_EmitsListNoMutations(t *testing.T) {
 
 func TestMaterialize_UntrustedAuthor_ReportsOnly(t *testing.T) {
 	f := newFake()
-	res, err := Materialize(context.Background(), capture(t, "a"), fileGate, false, f)
+	res, err := Materialize(context.Background(), capture(t, "a"), fileGate, false, Tracking{}, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestMaterialize_UntrustedAuthor_ReportsOnly(t *testing.T) {
 	}
 	allow := fileGate
 	allow.AllowUntrusted = true
-	if _, err := Materialize(context.Background(), capture(t, "a"), allow, false, f); err != nil || len(f.created) != 1 {
+	if _, err := Materialize(context.Background(), capture(t, "a"), allow, false, Tracking{}, f); err != nil || len(f.created) != 1 {
 		t.Fatalf("allow_untrusted_authors did not file: err=%v created=%d", err, len(f.created))
 	}
 }
@@ -219,12 +219,12 @@ func TestMaterialize_UntrustedAuthor_ReportsOnly(t *testing.T) {
 func TestMaterialize_Idempotent_SecondRunCreatesNothing(t *testing.T) {
 	f := newFake()
 	c := capture(t, "alpha", "beta")
-	if _, err := Materialize(context.Background(), c, fileGate, true, f); err != nil {
+	if _, err := Materialize(context.Background(), c, fileGate, true, Tracking{}, f); err != nil {
 		t.Fatal(err)
 	}
 	// Make the title dedup unable to help: only the marker can stop a duplicate.
 	f.titles = map[string]int{}
-	res, err := Materialize(context.Background(), c, fileGate, true, f)
+	res, err := Materialize(context.Background(), c, fileGate, true, Tracking{}, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestMaterialize_Idempotent_SecondRunCreatesNothing(t *testing.T) {
 func TestMaterialize_ZeroRecords_SilentNoOp(t *testing.T) {
 	f := newFake()
 	for _, c := range []*discoveredwork.Capture{nil, {SchemaVersion: "1.0", IssueNumber: 42, Records: []discoveredwork.Record{}}} {
-		res, err := Materialize(context.Background(), c, fileGate, true, f)
+		res, err := Materialize(context.Background(), c, fileGate, true, Tracking{}, f)
 		if err != nil || len(res.Items) != 0 || f.calls != 0 {
 			t.Fatalf("err=%v items=%d calls=%d", err, len(res.Items), f.calls)
 		}
@@ -250,7 +250,7 @@ func TestMaterialize_InvalidRecordKept(t *testing.T) {
 	bad.SuggestedType = "epic"
 	bad.ID = "dw-000000000000"
 	c.Records = append(c.Records, bad)
-	res, err := Materialize(context.Background(), c, fileGate, true, f)
+	res, err := Materialize(context.Background(), c, fileGate, true, Tracking{}, f)
 	if err != nil {
 		t.Fatal(err)
 	}

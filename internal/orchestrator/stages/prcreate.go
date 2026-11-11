@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/cmd/discoveredwork"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -938,7 +939,12 @@ type prContextPayload struct {
 	// ACFingerprint is the fingerprint of the criteria this PR was built
 	// against (#2623). A resumed run fast-forwards to pr-merge only while the
 	// issue's current criteria still produce it.
-	ACFingerprint    string            `json:"ac_fingerprint,omitempty"`
+	ACFingerprint string `json:"ac_fingerprint,omitempty"`
+	// RunID is the run id the checkout's run-state records for this issue
+	// (#3186), the same source discovered-work records are stamped from, so
+	// followup materialize can tell a record of this run from an older one.
+	// defaultWritePRContext fills it; empty when no run-state names the issue.
+	RunID            string            `json:"run_id,omitempty"`
 	PreflightResults map[string]string `json:"preflight_results"`
 	CIMonitoring     map[string]any    `json:"ci_monitoring"`
 	CreatedAt        string            `json:"created_at"`
@@ -987,6 +993,11 @@ func defaultWritePRContext(workdir string, p prContextPayload) error {
 	}
 	if p.CreatedAt == "" {
 		p.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if p.RunID == "" {
+		if id := discoveredwork.LiveRunID(workdir, p.IssueNumber); id != nil {
+			p.RunID = *id
+		}
 	}
 
 	dir, err := layout.PipelineStateDir(workdir)
