@@ -8922,6 +8922,43 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * The partial-delivery re-run scope block for this stage, or "" (#3095).
+   *
+   * Only feature-planning and feature-dev carry one. The block comes from the
+   * binary (`issue partial-delivery --json` → `prompt_blocks`), the same text
+   * the Go scheduler appends, re-read at stage start from the newest trusted
+   * partial-delivery comment. A failed read leaves the stage unscoped, as on
+   * the Go path; it never fails the stage.
+   */
+  private async partialRerunPromptTrailer(
+    issueNumber: number,
+    stage: PipelineStage
+  ): Promise<string> {
+    if (stage !== "feature-planning" && stage !== "feature-dev") return "";
+    try {
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) return "";
+      const { owner, repo } = await this.resolvePostMergeNwo(issueNumber);
+      if (!owner || !repo) return "";
+      const { stdout } = await execFileAsync(
+        binary,
+        ["issue", "partial-delivery", String(issueNumber), "--repo", `${owner}/${repo}`, "--json"],
+        { cwd: this.getWorkingDirectory(), encoding: "utf-8", timeout: 60_000 }
+      );
+      const parsed = JSON.parse(String(stdout)) as { prompt_blocks?: Record<string, unknown> };
+      const block = parsed.prompt_blocks?.[stage];
+      return typeof block === "string" ? block : "";
+    } catch (err) {
+      this.logger.warn("Partial-delivery remainder unreadable — the stage is not scoped to it", {
+        issueNumber,
+        stage,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return "";
+    }
+  }
+
+  /**
    * Check if feature-planning signaled that the issue is already resolved.
    *
    * Reads `planning-{N}.json` and checks for the `verify-and-close` signal:
@@ -16266,6 +16303,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
     }
 
+    // #3095: a re-run over a pending partial-delivery remainder plans and
+    // implements only the criteria it lists, as on the Go path.
+    const promptTrailer = await this.partialRerunPromptTrailer(issueNumber, stage);
+
     return new Promise((resolveStage) => {
       /**
        * Resolve with this attempt's stage-exit telemetry attached (Issue #109).
@@ -18050,7 +18091,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         undefined, // effortOverride
         // #1656: a remote run request's adapter, pinned strictly on every stage.
         this.requestedPin?.adapter,
-        this.requestedPin ? true : undefined
+        this.requestedPin ? true : undefined,
+        promptTrailer
       );
 
       // ADR-017 §7.2: the ONE `running` transition for this stage attempt,

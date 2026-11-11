@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Re-running an issue from the "not closed: PR left criteria unmet" card now
+  scopes the run to those criteria in the VS Code extension too.** The
+  extension's stage loop never applied the partial-delivery scope, so the
+  card's re-plan option started an ordinary full run there. Feature-planning
+  and feature-dev now carry the same `## Partial-Delivery Re-run Scope` block
+  as on the Go path, read from the newest trusted partial-delivery comment
+  when the stage starts; `nightgauge issue partial-delivery --json` reports it
+  as `prompt_blocks`. The option now reads "Re-run: plan only the criteria
+  PR #N left unmet" (#3095).
 - **The independent review no longer files a follow-up for the reviewed issue's
   own unmet criterion, or for a gap another stage already recorded (#3186).** A
   plan-compliance finding that begins `Criterion N:` is linked to that criterion;

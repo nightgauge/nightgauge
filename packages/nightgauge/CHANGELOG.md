@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- Re-running an issue from the "not closed: PR left criteria unmet" card now
+  plans and implements only the criteria that PR left unmet, instead of
+  starting a full run (#3095).
 - Post-merge verification no longer retries pr-merge when the stage recorded
   a non-retryable blocker; the run ends blocked with that record's
   classification and remediation (#3179).

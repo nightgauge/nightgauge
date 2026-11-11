@@ -33,6 +33,7 @@ vi.mock("../../src/services/BinaryResolver", () => ({
 
 type Internals = {
   refuseCloseOverPartialDelivery(n: number): Promise<string | null>;
+  partialRerunPromptTrailer(n: number, stage: string): Promise<string>;
   raiseRunScopedAttention: (r: unknown) => Promise<void>;
   resolvePostMergeNwo: (n: number) => Promise<{ owner: string; repo: string }>;
   blockedTerminalState: { blocker: string; prNumber?: number } | null;
@@ -108,5 +109,53 @@ describe("refuseCloseOverPartialDelivery (#3089)", () => {
     binaryImpl = () => "not json";
     const { o } = makeOrchestrator();
     expect(await o.refuseCloseOverPartialDelivery(3084)).toBeTruthy();
+  });
+});
+
+// #3095: the extension's stage loop scopes a re-run started by the card's
+// replan option, appending the binary's block to planning and feature-dev.
+describe("partialRerunPromptTrailer (#3095)", () => {
+  beforeEach(() => {
+    binaryCalls.length = 0;
+  });
+
+  const blocks = {
+    "feature-planning": "\n\n## Partial-Delivery Re-run Scope\n\nplan block",
+    "feature-dev": "\n\n## Partial-Delivery Re-run Scope\n\ndev block",
+  };
+
+  it("returns the binary's block for each scoped stage", async () => {
+    binaryImpl = () =>
+      JSON.stringify({ pending: true, pr: 3141, criteria: ["c"], prompt_blocks: blocks });
+    const { o } = makeOrchestrator();
+    expect(await o.partialRerunPromptTrailer(3160, "feature-planning")).toBe(
+      blocks["feature-planning"]
+    );
+    expect(await o.partialRerunPromptTrailer(3160, "feature-dev")).toBe(blocks["feature-dev"]);
+    expect(binaryCalls[0]).toEqual([
+      "issue",
+      "partial-delivery",
+      "3160",
+      "--repo",
+      "nightgauge/nightgauge",
+      "--json",
+    ]);
+  });
+
+  it("reads nothing for other stages", async () => {
+    binaryImpl = () => JSON.stringify({ pending: true, prompt_blocks: blocks });
+    const { o } = makeOrchestrator();
+    expect(await o.partialRerunPromptTrailer(3160, "feature-validate")).toBe("");
+    expect(binaryCalls).toHaveLength(0);
+  });
+
+  it("is empty with nothing pending and when the read fails", async () => {
+    binaryImpl = () => JSON.stringify({ pending: false, criteria: [] });
+    const { o } = makeOrchestrator();
+    expect(await o.partialRerunPromptTrailer(3160, "feature-planning")).toBe("");
+    binaryImpl = () => {
+      throw new Error("exit 2");
+    };
+    expect(await o.partialRerunPromptTrailer(3160, "feature-planning")).toBe("");
   });
 });
